@@ -493,14 +493,31 @@ def compile_all(
     if "providers" in file_paths:
         _update_reference(file_paths["providers"], "Providers", bundle.providers, writeback_allowed(file_paths["providers"]), vault_root=resolved_vault_root)
 
-    llm_routing_source_payload = _merge_sections(file_sections.get("llm_routing", {}))
+    raw_llm_routing_payload = _merge_sections(file_sections.get("llm_routing", {}))
+    # Source presence is needed to distinguish a configured route/value from a
+    # Pydantic registry default in operator diagnostics.  It is compiler-owned
+    # metadata, so a source-authored copy is removed before validation and
+    # cannot manufacture vault provenance.
+    leaked_llm_routing_metadata = "configured_keys" in raw_llm_routing_payload
+    llm_routing_source_payload = {
+        key: value
+        for key, value in raw_llm_routing_payload.items()
+        if key != "configured_keys"
+    }
+    llm_routing_source_keys = sorted(
+        key
+        for key in llm_routing_source_payload
+        if key in LLMRoutingSettings.model_fields and key != "configured_keys"
+    )
     llm_routing_source_model, llm_routing_canonical, llm_routing_fixed = _hydrate_model(
         payload=llm_routing_source_payload, model_cls=LLMRoutingSettings
     )
     resolved_llm_routing_payload = _resolve_llm_routing_model_ids(
         llm_routing_source_model.model_dump(exclude_none=True)
     )
+    resolved_llm_routing_payload["configured_keys"] = llm_routing_source_keys
     bundle.llm_routing = LLMRoutingSettings(**resolved_llm_routing_payload)
+    llm_routing_fixed = llm_routing_fixed or leaked_llm_routing_metadata
     if llm_routing_fixed and "llm_routing" in file_paths and writeback_allowed(file_paths["llm_routing"]):
         writeback_settings_block(
             file_paths["llm_routing"],

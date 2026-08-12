@@ -53,6 +53,8 @@ def test_auto_heal_rewrites_invalid_values(tmp_path, monkeypatch):
         ---
         ## Routing
         ```yaml settings
+        configured_keys:
+          - reasoning_model
         default_chat:
           primary:
             model_id: openai.chat.gpt_5_4_mini
@@ -99,6 +101,7 @@ def test_auto_heal_rewrites_invalid_values(tmp_path, monkeypatch):
     assert bundle.agents["classifier"].timeout_ms == 8000
     assert bundle.retrieval_tuning.rerank_top_k == 100
     assert bundle.retrieval_tuning.configured_keys == ["rerank_top_k"]
+    assert bundle.llm_routing.configured_keys == ["default_chat"]
 
     agent_md = (vault / "agents" / "classifier.md").read_text(encoding="utf-8")
     assert "timeout_ms: 8000" in agent_md
@@ -108,6 +111,10 @@ def test_auto_heal_rewrites_invalid_values(tmp_path, monkeypatch):
     assert "configured_keys" not in retrieval_md
     projection = (runtime_dir / "retrieval_tuning.yaml").read_text(encoding="utf-8")
     assert "configured_keys:" in projection
+    llm_routing_md = (vault / "llm_routing.md").read_text(encoding="utf-8")
+    assert "configured_keys" not in llm_routing_md
+    llm_projection = (runtime_dir / "llm_routing.yaml").read_text(encoding="utf-8")
+    assert "configured_keys:" in llm_projection
 
     # A valid-but-polluted source is also repaired at the compiler ingress
     # boundary, not accepted as user authority on a later compile.

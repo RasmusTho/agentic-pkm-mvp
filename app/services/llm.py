@@ -243,8 +243,8 @@ def _normalize_model(value: str | None) -> str | None:
     return cleaned or None
 
 
-def _default_model() -> str:
-    return default_chat_model()
+def _default_model(provider: str | None = None) -> str:
+    return default_chat_model(provider)
 
 
 def _mock_response_for_kind(kind: str | None) -> str:
@@ -338,7 +338,7 @@ def call_llm(
             return {}
 
     provider = _normalize_provider(provider_override) or _normalize_provider(os.getenv("LLM_PROVIDER")) or "mock"
-    model = _normalize_model(model_override) or _default_model()
+    model = _normalize_model(model_override) or _default_model(provider)
     temperature = llm_temperature()
     system = pack.get("system", "")
     user = pack.get("user", "")

@@ -147,6 +147,14 @@ class LLMRoutingSettings(BaseModel):
         default_factory=dict,
         description="Per task_kind routing policies.",
     )
+    configured_keys: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Compiler-derived top-level source keys used for effective provenance; "
+            "never accepted as vault authority."
+        ),
+        json_schema_extra={"internal": True},
+    )
 
 
 class RetryPolicy(BaseModel):

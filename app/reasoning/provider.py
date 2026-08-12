@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Tuple
 from uuid import UUID
 
-from app.components.llm.fabric import LLMBackendTimeout, LLMRouter, LLMTaskIntent, get_chat_client
+from app.components.llm.fabric import ChatClient, LLMBackendTimeout, LLMRouter, LLMTaskIntent, get_chat_client
 from app.components.llm.router import LLMRoute
 from app.llm.trace import log_llm_call
 from app.reasoning.prompts import SYSTEM_PROMPT, build_user_prompt
@@ -67,6 +67,10 @@ def _call_chat_with_route(
 
 
 class BaseDeliberationAgent:
+    def execution_identity(self) -> tuple[str, str] | None:
+        """Return the exact provider/model pair this instance will execute."""
+        return None
+
     def reason(self, reasoning_input: ReasoningInput) -> ReasoningOutput:  # pragma: no cover - interface
         raise NotImplementedError
 
@@ -97,10 +101,44 @@ class MockDeliberationAgent(BaseDeliberationAgent):
     def reason(self, reasoning_input: ReasoningInput) -> ReasoningOutput:
         return self._fixtures.get(reasoning_input.text, ReasoningOutput())
 
+    def execution_identity(self) -> tuple[str, str]:
+        return "mock", "mock"
+
 
 class OllamaDeliberationAgent(BaseDeliberationAgent):
     def __init__(self, *, model: str | None = None) -> None:
-        self.model = model or reasoning_model()
+        if model is None:
+            self._client = get_chat_client(
+                LLMTaskIntent(task_kind="reasoning", risk="high")
+            )
+            override_model = (os.getenv("REASONING_MODEL") or "").strip()
+            if override_model:
+                route = self._client.route
+                self._client = ChatClient(
+                    route=LLMRoute(
+                        provider=route.provider,
+                        model=override_model,
+                        mode=route.mode,
+                        reason="deprecated REASONING_MODEL override",
+                        degraded=route.degraded,
+                        embedding_identity=route.embedding_identity,
+                    )
+                )
+        else:
+            self._client = ChatClient(
+                route=LLMRoute(
+                    provider="ollama",
+                    model=model,
+                    mode="chat",
+                    reason="explicit reasoning model",
+                    degraded=False,
+                )
+            )
+        self.provider = self._client.route.provider
+        self.model = self._client.route.model
+
+    def execution_identity(self) -> tuple[str, str]:
+        return self.provider, self.model
 
     def reason(self, reasoning_input: ReasoningInput) -> ReasoningOutput:
         prompt = build_user_prompt(reasoning_input.text, [rel.model_dump() for rel in reasoning_input.relations])
@@ -109,9 +147,9 @@ class OllamaDeliberationAgent(BaseDeliberationAgent):
         agent = metadata.get("agent") or "reasoning"
         kind = metadata.get("kind") or metadata.get("reasoning_kind") or "reasoning.claims"
 
-        response = _call_chat(
-            task_kind="reasoning",
-            pack={
+        response = self._client.chat(
+            "reasoning",
+            {
                 "system": SYSTEM_PROMPT,
                 "user": prompt,
             },
@@ -179,6 +217,16 @@ def _reasoning_backend() -> str:
     return backend
 
 
+def _fallback_reasoning_identity() -> tuple[str, str]:
+    """Best-effort identity only when no executable agent was constructed."""
+    provider = os.getenv("LLM_PROVIDER", "").strip().lower()
+    if provider == "llm":
+        provider = "ollama"
+    if provider in {"", "fake"}:
+        provider = "mock" if provider == "fake" else "ollama"
+    return provider, reasoning_model(provider)
+
+
 def _reasoning_uses_mock_route() -> bool:
     if _reasoning_backend() == "mock":
         return True
@@ -243,8 +291,10 @@ def run_reasoning(
             metadata={**metadata, "trace_id": trace_id, "agent": agent_name, "kind": kind_name},
             relations=[],
         )
+        deliberation_agent: BaseDeliberationAgent | None = None
         try:
-            output = validate_output(get_deliberation_agent().reason(reasoning_input))
+            deliberation_agent = get_deliberation_agent()
+            output = validate_output(deliberation_agent.reason(reasoning_input))
         except Exception as exc:  # pragma: no cover - defensive
             output = ReasoningOutput(
                 outcome="provider_failure", degraded_reason="provider_failure"
@@ -253,10 +303,20 @@ def run_reasoning(
                 "outcome": output.outcome,
                 "degraded_reason": output.degraded_reason,
             }
+            identity_resolver = (
+                getattr(deliberation_agent, "execution_identity", None)
+                if deliberation_agent is not None
+                else None
+            )
+            execution_identity = (
+                identity_resolver() if callable(identity_resolver) else None
+            )
+            effective_provider, effective_model = (
+                execution_identity or _fallback_reasoning_identity()
+            )
             log_llm_call(
-                provider=os.getenv("LLM_PROVIDER", "").strip().lower()
-                or _reasoning_backend(),
-                model=reasoning_model(),
+                provider=effective_provider,
+                model=effective_model,
                 agent=agent_name,
                 kind=kind_name,
                 messages=[],

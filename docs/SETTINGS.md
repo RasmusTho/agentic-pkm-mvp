@@ -155,7 +155,7 @@ The registry lists canonical event IDs, producers/consumers, and optional schema
 - Use `python -m app.cli settings-validate --json` to validate registries, panel/watcher source artifacts, and locally compiled unresolved-secret sentinels.
 - Use `python -m app.cli settings-explain --json` to inspect environment/database resolution plus watcher/panel and migrated LLM/retrieval provenance. Use `python -m app.cli settings explain retrieval.rerank.top_k` for one effective key with its origin and tier.
 - When changing a registry or settings artifact, update the owning doc and validation expectations in the same change.
-- Treat `<vault>/settings/llm_routing.md` as the user-facing source of truth for chat, reasoning, embedding, and eval model choices. The compiler derives providers from the model registry.
+- Treat `<vault>/settings/llm_routing.md` as the user-facing source of truth for chat, reasoning, embedding, and eval model choices. The compiler derives provider/model pairs from the model registry; a legacy service consumer uses a configured chat model only when its selected provider matches that route, otherwise it keeps the legacy model fallback. `settings explain` distinguishes configured vault values from registry defaults.
 - Migrate an existing vault only through the explicit governed command:
   `python -m app.cli settings migrate-location --vault-root <path>`. The command
   checks WriteGuard before its first mutation, refuses canonical/legacy
