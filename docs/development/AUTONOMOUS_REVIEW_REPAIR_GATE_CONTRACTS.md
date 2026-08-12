@@ -321,6 +321,36 @@ The implementation agent must stop point-fixing and build one convergence packet
 - all prior findings and attempted fixes bound to the same mechanism key; and
 - a test matrix mapping each invariant, transition, crash point, and race to focused proof.
 
+### Stateful fallback boundary matrix
+
+For a high-risk stateful fallback mechanism, the convergence packet must also contain **one
+executable boundary matrix** before a reviewer can record a clean convergence receipt. This is not
+a second convergence gate and does not apply to low-risk ordinary work: use it when the mechanism
+selects or resumes a stateful fallback after an outcome that can affect authority, identity,
+durability, or terminality.
+
+The matrix is executable only when each row names the entrypoint and outcome being exercised, the
+expected state/receipt transition, and the focused proof that runs that row. It must cover these
+axes as applicable to the mechanism:
+
+The required axes are production entrypoints, eligible versus terminal failure classes, effective
+provider/model identity, current and legacy success/failure resume lineage, and adjacent
+authority-isolation paths.
+
+| Axis | Required boundary question |
+| --- | --- |
+| Production entrypoints | Which production entrypoints can start the mechanism, and which are test-only or forbidden from selecting fallback? |
+| Failure classification | Which failure classes are fallback-eligible versus terminal, including authentication, refusal, unsafe output, persistence, and unexpected-failure classes where they exist? |
+| Effective identity | Which effective provider/model identity (or equivalent selected target) is recorded before and after each eligible fallback? |
+| Resume lineage | How do current and legacy success/failure receipts resume, skip, retry, or terminate without replaying a completed or terminal attempt? |
+| Authority isolation | Which adjacent paths must remain unable to borrow the fallback, credentials, identity, receipt, or authority of this mechanism? |
+
+The Model Inquiry adapter chain is a motivating example: its production entrypoint, declared
+subscription targets, fallback-eligible and terminal outcomes, persisted attempt lineage, and
+non-CKM consumer boundary all need one matrix rather than separate point fixes. The same matrix
+shape applies to any comparable stateful fallback mechanism; it does not authorize Model Inquiry,
+Product/Runtime, credential, or artifact mutation outside the governing issue.
+
 A fresh independent reviewer at the strongest capability justified by `AGENTS.md :: Total Cost of
 Development` reviews the packet and local publishable SHA before another expensive validation. Any
 blocker returns to focused repair and packet review. Only a clean convergence review permits the
