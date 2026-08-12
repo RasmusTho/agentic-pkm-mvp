@@ -428,8 +428,8 @@ def _raw_created_at(raw_record: Mapping[str, Any]) -> datetime:
 
 
 def _episode_ref(value: Any) -> str | list[str]:
-    if value in {"unbound", "pending"}:
-        return str(value)
+    if isinstance(value, str) and value in {"unbound", "pending"}:
+        return value
     if (
         isinstance(value, (list, tuple))
         and value

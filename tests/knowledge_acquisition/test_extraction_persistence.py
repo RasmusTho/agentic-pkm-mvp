@@ -170,6 +170,58 @@ def test_persisted_extraction_preserves_anchor_and_lineage_across_restart() -> N
     )
 
 
+def test_bound_episode_ref_persists_with_lineage_across_restart() -> None:
+    episode_ref = ["episode:test-bound-source"]
+    raw_payload = {
+        **RAW_PAYLOAD,
+        "item_ref": "boundsource",
+        "episode_ref": episode_ref,
+    }
+    persisted_raw = persist_raw_record(
+        source_kind=str(raw_payload["source_kind"]),
+        item_ref=str(raw_payload["item_ref"]),
+        content_identity=str(raw_payload["content_identity"]),
+        payload=raw_payload,
+        source_ref="test:ysnv2-persistence:bound-episode",
+    )
+    raw_record_id = str(persisted_raw.object_id)
+    assert persisted_raw.record["episode_ref"] == episode_ref
+
+    normalized = normalize(dict(persisted_raw.record))
+    transcript = persist_normalized_transcript(
+        raw_record_id=raw_record_id,
+        raw_record=persisted_raw.record,
+        normalized=normalized,
+    )
+    extracted = run_extractor(
+        "summary",
+        normalized.as_dict(),
+        raw_record_id=raw_record_id,
+        normalized_artifact_id=transcript.object_id,
+    )
+
+    clear_extraction_results()
+    clear_registry()
+    restored_transcript = load_persisted_transcript(
+        raw_record_id=raw_record_id,
+        content_identity=str(raw_payload["content_identity"]),
+        stage_version=normalized.stage_version,
+    )
+    restored_extraction = load_latest_extraction(
+        raw_record_id=raw_record_id,
+        content_identity=str(raw_payload["content_identity"]),
+        extractor_id="summary",
+        extractor_version=extracted.extractor_version,
+    )
+
+    assert restored_transcript is not None
+    assert restored_transcript.metadata_bundle["episode_ref"] == episode_ref
+    assert restored_transcript.derived_from == (raw_record_id,)
+    assert restored_extraction is not None
+    assert restored_extraction.metadata_bundle["episode_ref"] == episode_ref
+    assert restored_extraction.raw_record_id == raw_record_id
+
+
 def test_reextraction_writes_versioned_proposal_companion_without_overwriting_candidate(
     tmp_path: Path,
 ) -> None:
