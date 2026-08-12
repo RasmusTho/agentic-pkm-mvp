@@ -22,7 +22,7 @@ from app.settings.locations import canonical_settings_root, resolve_compiled_sou
 from app.settings.watcher_settings import WatcherSettings, load_watcher_settings
 from .constraints import as_bool, clamp_int, enum_or_default
 from .docs import BEGIN, END, inject_reference, render_reference
-from .loader import read_text, split_sections
+from .loader import find_fenced_blocks, read_text, split_sections
 from .models import (
     ClassifierSettings,
     AskSettings,
@@ -44,6 +44,10 @@ from .writeback import write_markdown_via_knowledge_port, writeback_settings_blo
 
 VAULT = Path("vault/settings")
 RUNTIME = Path("runtime/settings")
+
+
+class SettingsSourceError(ValueError):
+    """Raised when a settings markdown source has ambiguous authority."""
 
 
 def merge(dst: Dict[str, Any], src: Dict[str, Any]) -> Dict[str, Any]:
@@ -68,6 +72,12 @@ def resolve_secret(val: Any) -> Any:
 
 def compile_file(path: Path) -> Dict[str, Any]:
     md = read_text(path)
+    fenced_settings = find_fenced_blocks(md, "settings")
+    if len(fenced_settings) > 1:
+        raise SettingsSourceError(
+            f"{path}: expected at most one complete `yaml settings` fence, "
+            f"found {len(fenced_settings)}"
+        )
     data: Dict[str, Any] = {}
     for name, body in split_sections(md):
         section = parse_section(body)

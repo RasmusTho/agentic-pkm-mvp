@@ -6,6 +6,7 @@ from textwrap import dedent
 import pytest
 
 from app.settings import compiler
+from app.settings import runtime as settings_runtime
 
 pytestmark = pytest.mark.not_pg
 
@@ -120,6 +121,97 @@ def test_auto_heal_rewrites_invalid_values(tmp_path, monkeypatch):
     recompiled = compiler.compile_all(auto_heal=True)
     assert recompiled.retrieval_tuning.configured_keys == ["rerank_top_k"]
     assert "configured_keys:" not in retrieval_path.read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize(
+    "later_payload",
+    (
+        "configured_keys:\n  - rerank\nrerank: always\n",
+        "configured_keys:\n  - rerank\nrerank_top_k: [\n",
+    ),
+    ids=("valid-later-fence", "invalid-later-fence"),
+)
+def test_retrieval_source_rejects_later_settings_fence_and_keeps_last_valid_bundle(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    later_payload: str,
+) -> None:
+    vault = tmp_path / "vault" / "settings"
+    runtime_dir = tmp_path / "runtime" / "settings"
+    _write_md(
+        vault / "providers.md",
+        """
+        ---
+        uuid: p
+        ---
+        ## Provider defaults
+        ```yaml settings
+        llm: {}
+        ```
+        """,
+    )
+    _write_md(
+        vault / "llm_routing.md",
+        """
+        ---
+        uuid: r
+        ---
+        ## Routing
+        ```yaml settings
+        default_chat:
+          primary:
+            model_id: openai.chat.gpt_5_4_mini
+        ```
+        """,
+    )
+    retrieval_path = vault / "retrieval.md"
+    _write_md(
+        retrieval_path,
+        """
+        ---
+        uuid: retrieval
+        ---
+        ## Rerank
+        ```yaml settings
+        rerank_top_k: 7
+        ```
+        """,
+    )
+    monkeypatch.setattr(compiler, "VAULT", vault)
+    monkeypatch.setattr(compiler, "RUNTIME", runtime_dir)
+    monkeypatch.setattr(settings_runtime, "RUNTIME", runtime_dir)
+    monkeypatch.setattr(settings_runtime, "_CURRENT", None)
+
+    compiler.compile_all(auto_heal=True)
+    canonical_source = retrieval_path.read_text(encoding="utf-8")
+    last_valid_projection = (runtime_dir / "retrieval_tuning.yaml").read_bytes()
+    assert settings_runtime.reload_settings_bundle(notify=False).retrieval_tuning.rerank_top_k == 7
+
+    ambiguous_source = (
+        canonical_source.rstrip()
+        + "\n\n## Later authority\n```yaml settings\n"
+        + later_payload
+        + "```\n"
+    )
+    retrieval_path.write_text(ambiguous_source, encoding="utf-8")
+
+    with pytest.raises(compiler.SettingsSourceError, match="expected at most one"):
+        compiler.compile_all(auto_heal=True)
+
+    assert retrieval_path.read_text(encoding="utf-8") == ambiguous_source
+    assert (runtime_dir / "retrieval_tuning.yaml").read_bytes() == last_valid_projection
+    last_valid = settings_runtime.reload_settings_bundle(notify=False)
+    assert last_valid.retrieval_tuning.rerank_top_k == 7
+    assert last_valid.retrieval_tuning.configured_keys == ["rerank_top_k"]
+
+    retrieval_path.write_text(
+        canonical_source.replace("rerank_top_k: 7", "rerank_top_k: 11"),
+        encoding="utf-8",
+    )
+    compiler.compile_all(auto_heal=True)
+    recovered = settings_runtime.reload_settings_bundle(notify=False)
+    assert recovered.retrieval_tuning.rerank_top_k == 11
+    assert recovered.retrieval_tuning.configured_keys == ["rerank_top_k"]
 
 
 def test_auto_heal_writes_settings_via_knowledge_port(tmp_path, monkeypatch) -> None:

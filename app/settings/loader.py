@@ -53,6 +53,11 @@ def find_fenced_block(md: str, tag: str) -> str | None:
     return found.group("body").strip() if found else None
 
 
+def find_fenced_blocks(md: str, tag: str) -> List[str]:
+    """Return every complete fenced block for callers that must prove uniqueness."""
+    return [match.group("body").strip() for match in _fence_pattern(tag).finditer(md)]
+
+
 def find_fenced_settings(md: str) -> str | None:
     return find_fenced_block(md, "settings")
 

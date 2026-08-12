@@ -117,7 +117,7 @@ Fields and defaults:
 - `rerank_top_k`: `100`
 - `rerank_score_margin`: `0.2` — conditional-gate threshold; used only when `rerank="conditional"`
 
-Env overrides (resolved once at process start, not per query): `RETRIEVAL_FUSION`,
+Env overrides (resolved with each runtime settings-bundle generation, not per query): `RETRIEVAL_FUSION`,
 `RETRIEVAL_LINEAR_WEIGHTS`, `RETRIEVAL_RRF_K`, `RETRIEVAL_RRF_SIGNAL_WEIGHTS`,
 `RETRIEVAL_RETRIEVE_DEPTH`, `RETRIEVAL_RERANK`, `RETRIEVAL_RERANK_TOP_K`,
 `RETRIEVAL_RERANK_SCORE_MARGIN`. A junk override value fails loud (raises) rather than silently

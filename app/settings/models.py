@@ -323,9 +323,10 @@ class RRFSignalWeights(BaseModel):
 class RetrievalTuning(BaseModel):
     """Typed, settings-backed, env-overridable retrieval tuning surface (ADR-0059 D3, #3404).
 
-    Resolved once per process via ``app.retrieval.tuning.get_retrieval_tuning()`` — never a
-    per-query ``os.getenv`` read. With no override set anywhere, every field below reproduces
-    today's ranking exactly (byte-identical parity is a hard constraint of #3404). ``fusion="rrf"``
+    Resolved once per runtime settings-bundle generation via
+    ``app.retrieval.tuning.get_retrieval_tuning()`` — never a per-query ``os.getenv`` read. With no
+    override set anywhere, every field below reproduces today's ranking exactly (byte-identical
+    parity is a hard constraint of #3404). ``fusion="rrf"``
     and ``rerank="conditional"`` are implemented (ADR-0059 D3 step 5, issue #3407) but ship dark:
     selecting either is a valid, resolvable config choice, never the shipped default. A default
     flip is a separate owner call gated on eval evidence, recorded against ADR-0059.

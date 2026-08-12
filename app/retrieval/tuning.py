@@ -1,9 +1,10 @@
 """Retrieval tuning config resolution (ADR-0059 D3, issue #3404).
 
-Resolves the typed, settings-backed :class:`app.settings.models.RetrievalTuning` surface ONCE per
-process: :func:`get_retrieval_tuning` reads the settings-bundle default, applies env-var overrides,
-validates (fail-loud, never a silent fallback), and caches the result. Callers on the retrieval hot
-path (``app/retrieval/hybrid.py``, ``app/retrieval/hook_adapter.py``,
+Resolves the typed, settings-backed :class:`app.settings.models.RetrievalTuning` surface once per
+runtime settings-bundle generation: :func:`get_retrieval_tuning` reads the settings-bundle default,
+applies env-var overrides, validates (fail-loud, never a silent fallback), and binds the cached
+result to that bundle identity. Callers on the retrieval hot path
+(``app/retrieval/hybrid.py``, ``app/retrieval/hook_adapter.py``,
 ``app/retrieval/hybrid_rerank_hook.py``) call this function instead of reading ``os.getenv`` per
 query.
 
