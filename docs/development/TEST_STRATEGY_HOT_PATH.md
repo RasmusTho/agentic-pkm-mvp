@@ -89,7 +89,21 @@ The goal is to keep docs-only and governance/skill PRs cheap while preserving di
   at step scope, where the `runner` context is available for both push and dispatch evaluation. The
   workflow retains its push-to-`main` path and deliberately has no `pull_request` trigger. The
   ordinary PR unit CI does not provide this browser proof. Neither a local screenshot nor a
-  post-merge run substitutes for the exact published #4836 candidate run.
+  post-merge run substitutes for the exact published #4836 candidate run. The exact required JUnit
+  nodeid inventory for that candidate is:
+  - `tests/companion_ui/test_devui_overview_journeys.py::test_real_gateway_overview_focus_return_journey_preserves_subject_context_and_sha`
+  - `tests/companion_ui/test_devui_overview_journeys.py::test_focus_api_failure_renders_honest_visual_error_without_url_probing`
+  - `tests/companion_ui/test_devui_overview_journeys.py::test_connected_shell_freezes_server_identity_selector_and_aria_contract`
+  - `tests/companion_ui/test_devui_overview_journeys.py::test_connected_shell_renders_full_server_state_matrix_without_reclassification`
+  - `tests/companion_ui/test_devui_overview_journeys.py::test_gateway_shell_is_safe_accessible_no_egress_and_effect_free`
+  The dispatch rejects any missing, renamed, duplicated, unexpected, skipped, or unexecuted nodeid.
+  The receipt's canonical `required_nodeids` list and `journey_assertions` map must name exactly that
+  inventory, with every nodeid reporting passed URL assertions, network assertions, and status
+  assertions plus an empty page errors list. The manifest records both required and executed nodeids
+  plus per-node collected/executed/passed/skipped results and any JUnit-inventory error while hashing
+  the bound evidence. A later #4748 receipt may authenticate and reference this artifact only by its
+  exact SHA and exact nodeid inventory; the artifact does not by itself claim that downstream #4748
+  validation has run.
 
 ## Check Levels
 

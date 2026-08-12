@@ -70,20 +70,65 @@ jobs:
             --junitxml="$DEVUI_OVERVIEW_JUNIT" \
             tests/companion_ui/test_devui_overview_journeys.py
           python - "$DEVUI_OVERVIEW_JUNIT" <<'PY'
+          from collections import Counter
           from pathlib import Path
           import sys
           import xml.etree.ElementTree as ET
 
+          TEST_MODULE = "tests/companion_ui/test_devui_overview_journeys.py"
+          TEST_CLASSNAME = "tests.companion_ui.test_devui_overview_journeys"
+          REQUIRED_NODEIDS = (
+              f"{TEST_MODULE}::"
+              "test_real_gateway_overview_focus_return_journey_preserves_subject_context_and_sha",
+              f"{TEST_MODULE}::"
+              "test_focus_api_failure_renders_honest_visual_error_without_url_probing",
+              f"{TEST_MODULE}::"
+              "test_connected_shell_freezes_server_identity_selector_and_aria_contract",
+              f"{TEST_MODULE}::"
+              "test_connected_shell_renders_full_server_state_matrix_without_reclassification",
+              f"{TEST_MODULE}::"
+              "test_gateway_shell_is_safe_accessible_no_egress_and_effect_free",
+          )
+
           junit_path = Path(sys.argv[1])
           root = ET.parse(junit_path).getroot()
-          suites = [root] if root.tag == "testsuite" else list(root.findall("testsuite"))
-          collected = sum(int(suite.attrib.get("tests", "0")) for suite in suites)
-          skipped = sum(int(suite.attrib.get("skipped", "0")) for suite in suites)
-          if collected == 0:
+          testcases = list(root.findall(".//testcase"))
+          if not testcases:
               raise SystemExit("required Overview journey collection is empty")
-          if skipped:
+          observed_nodeids = [
+              (
+                  f"{TEST_MODULE}::{case.attrib.get('name', '')}"
+                  if case.attrib.get("classname") == TEST_CLASSNAME
+                  else (
+                      f"{case.attrib.get('classname', '<missing-classname>')}::"
+                      f"{case.attrib.get('name', '<missing-name>')}"
+                  )
+              )
+              for case in testcases
+          ]
+          counts = Counter(observed_nodeids)
+          duplicates = sorted(nodeid for nodeid, count in counts.items() if count > 1)
+          if duplicates:
               raise SystemExit(
-                  f"required Overview journeys were skipped: skipped={skipped}"
+                  "required Overview journey nodeids are duplicated: "
+                  + ", ".join(duplicates)
+              )
+          missing = sorted(set(REQUIRED_NODEIDS) - set(observed_nodeids))
+          unexpected = sorted(set(observed_nodeids) - set(REQUIRED_NODEIDS))
+          if missing or unexpected:
+              raise SystemExit(
+                  "required Overview journey nodeids mismatch: "
+                  f"missing={missing} unexpected={unexpected}"
+              )
+          skipped_nodeids = sorted(
+              nodeid
+              for nodeid, case in zip(observed_nodeids, testcases, strict=True)
+              if case.find("skipped") is not None
+          )
+          if skipped_nodeids:
+              raise SystemExit(
+                  "required Overview journeys were skipped: "
+                  + ", ".join(skipped_nodeids)
               )
           PY
 
@@ -137,6 +182,7 @@ jobs:
           python - <<'PY'
           from __future__ import annotations
 
+          from collections import Counter
           import hashlib
           import json
           import os
@@ -149,6 +195,27 @@ jobs:
           RECEIPT_TEST_MODULE = (
               "tests/companion_ui/test_devui_overview_journeys.py"
           )
+          RECEIPT_TEST_CLASSNAME = (
+              "tests.companion_ui.test_devui_overview_journeys"
+          )
+          REQUIRED_NODEIDS = (
+              f"{RECEIPT_TEST_MODULE}::"
+              "test_real_gateway_overview_focus_return_journey_preserves_subject_context_and_sha",
+              f"{RECEIPT_TEST_MODULE}::"
+              "test_focus_api_failure_renders_honest_visual_error_without_url_probing",
+              f"{RECEIPT_TEST_MODULE}::"
+              "test_connected_shell_freezes_server_identity_selector_and_aria_contract",
+              f"{RECEIPT_TEST_MODULE}::"
+              "test_connected_shell_renders_full_server_state_matrix_without_reclassification",
+              f"{RECEIPT_TEST_MODULE}::"
+              "test_gateway_shell_is_safe_accessible_no_egress_and_effect_free",
+          )
+          JOURNEY_ASSERTION_KEYS = {
+              "url_assertions",
+              "network_assertions",
+              "status_assertions",
+              "page_errors",
+          }
           RECEIPT_FIXTURE_KEYS = {
               "connected-overview-focus",
               "hostile-source-state-matrix",
@@ -169,6 +236,8 @@ jobs:
               "contract_version",
               "github_sha",
               "test_module",
+              "required_nodeids",
+              "journey_assertions",
               "fixture_versions",
               "token_sha256",
               "screenshots",
@@ -241,6 +310,46 @@ jobs:
                           receipt_errors.append("github_sha mismatch")
                       if candidate.get("test_module") != RECEIPT_TEST_MODULE:
                           receipt_errors.append("test_module mismatch")
+
+                      required_nodeids = candidate.get("required_nodeids")
+                      if required_nodeids != list(REQUIRED_NODEIDS):
+                          receipt_errors.append("required_nodeids mismatch")
+
+                      journey_assertions = candidate.get("journey_assertions")
+                      if not isinstance(journey_assertions, dict) or set(
+                          journey_assertions
+                      ) != set(REQUIRED_NODEIDS):
+                          receipt_errors.append(
+                              "journey_assertions nodeids mismatch"
+                          )
+                      else:
+                          for nodeid in REQUIRED_NODEIDS:
+                              assertions = journey_assertions[nodeid]
+                              if not isinstance(assertions, dict) or set(
+                                  assertions
+                              ) != JOURNEY_ASSERTION_KEYS:
+                                  receipt_errors.append(
+                                      "journey_assertions fields mismatch: "
+                                      + nodeid
+                                  )
+                                  continue
+                              if any(
+                                  assertions[key] != "passed"
+                                  for key in (
+                                      "url_assertions",
+                                      "network_assertions",
+                                      "status_assertions",
+                                  )
+                              ):
+                                  receipt_errors.append(
+                                      "journey_assertions must pass URL, network, "
+                                      "and status: " + nodeid
+                                  )
+                              if assertions["page_errors"] != []:
+                                  receipt_errors.append(
+                                      "journey_assertions must report no page errors: "
+                                      + nodeid
+                                  )
 
                       fixture_versions = candidate.get("fixture_versions")
                       if not (
@@ -323,23 +432,107 @@ jobs:
 
           junit_summary = None
           junit_valid = False
+          executed_nodeids = []
+          junit_node_results = {}
+          junit_inventory_errors = []
           if junit_path.is_file():
-              root = ET.parse(junit_path).getroot()
-              suites = (
-                  [root]
-                  if root.tag == "testsuite"
-                  else list(root.findall("testsuite"))
-              )
-              junit_summary = {
-                  key: sum(int(suite.attrib.get(key, "0")) for suite in suites)
-                  for key in ("tests", "failures", "errors", "skipped")
-              }
-              junit_valid = (
-                  junit_summary["tests"] > 0
-                  and junit_summary["failures"] == 0
-                  and junit_summary["errors"] == 0
-                  and junit_summary["skipped"] == 0
-              )
+              try:
+                  root = ET.parse(junit_path).getroot()
+              except (OSError, ET.ParseError) as exc:
+                  junit_inventory_errors.append(f"JUnit is not valid XML: {exc}")
+              else:
+                  suites = (
+                      [root]
+                      if root.tag == "testsuite"
+                      else list(root.findall("testsuite"))
+                  )
+                  junit_summary = {
+                      key: sum(int(suite.attrib.get(key, "0")) for suite in suites)
+                      for key in ("tests", "failures", "errors", "skipped")
+                  }
+                  testcases = list(root.findall(".//testcase"))
+                  observed_nodeids = [
+                      (
+                          f"{RECEIPT_TEST_MODULE}::{case.attrib.get('name', '')}"
+                          if case.attrib.get("classname")
+                          == RECEIPT_TEST_CLASSNAME
+                          else (
+                              f"{case.attrib.get('classname', '<missing-classname>')}::"
+                              f"{case.attrib.get('name', '<missing-name>')}"
+                          )
+                      )
+                      for case in testcases
+                  ]
+                  counts = Counter(observed_nodeids)
+                  duplicates = sorted(
+                      nodeid for nodeid, count in counts.items() if count > 1
+                  )
+                  missing_nodeids = sorted(
+                      set(REQUIRED_NODEIDS) - set(observed_nodeids)
+                  )
+                  unexpected_nodeids = sorted(
+                      set(observed_nodeids) - set(REQUIRED_NODEIDS)
+                  )
+                  if duplicates:
+                      junit_inventory_errors.append(
+                          "required Overview journey nodeids are duplicated: "
+                          + ", ".join(duplicates)
+                      )
+                  if missing_nodeids or unexpected_nodeids:
+                      junit_inventory_errors.append(
+                          "required Overview journey nodeids mismatch: "
+                          f"missing={missing_nodeids} "
+                          f"unexpected={unexpected_nodeids}"
+                      )
+                  if junit_summary["tests"] != len(testcases):
+                      junit_inventory_errors.append(
+                          "JUnit aggregate/testcase count mismatch: "
+                          f"aggregate={junit_summary['tests']} "
+                          f"testcases={len(testcases)}"
+                      )
+                  for nodeid in REQUIRED_NODEIDS:
+                      matches = [
+                          case
+                          for observed, case in zip(
+                              observed_nodeids, testcases, strict=True
+                          )
+                          if observed == nodeid
+                      ]
+                      collected = len(matches) == 1
+                      skipped = collected and matches[0].find("skipped") is not None
+                      executed = collected and not skipped
+                      passed = (
+                          executed
+                          and matches[0].find("failure") is None
+                          and matches[0].find("error") is None
+                      )
+                      junit_node_results[nodeid] = {
+                          "collected": collected,
+                          "executed": executed,
+                          "passed": passed,
+                          "skipped": skipped,
+                      }
+                      if executed:
+                          executed_nodeids.append(nodeid)
+                  junit_valid = (
+                      not junit_inventory_errors
+                      and junit_summary["tests"] == len(REQUIRED_NODEIDS)
+                      and junit_summary["failures"] == 0
+                      and junit_summary["errors"] == 0
+                      and junit_summary["skipped"] == 0
+                      and all(
+                          result
+                          == {
+                              "collected": True,
+                              "executed": True,
+                              "passed": True,
+                              "skipped": False,
+                          }
+                          for result in junit_node_results.values()
+                      )
+                  )
+          else:
+              junit_inventory_errors.append("JUnit file is missing")
 
           missing = []
           if not junit_valid:
@@ -358,6 +551,10 @@ jobs:
               "github_sha": github_sha,
               "journey_outcome": os.environ["DEVUI_OVERVIEW_JOURNEY_OUTCOME"],
               "junit": junit_summary,
+              "required_nodeids": list(REQUIRED_NODEIDS),
+              "executed_nodeids": executed_nodeids,
+              "junit_node_results": junit_node_results,
+              "junit_inventory_errors": junit_inventory_errors,
               "receipt": receipt,
               "receipt_validation_errors": receipt_errors,
               "missing_evidence": missing,
@@ -382,6 +579,11 @@ jobs:
               raise SystemExit(
                   "successful Overview journeys have invalid receipt: "
                   + "; ".join(receipt_errors)
+              )
+          if payload["journey_outcome"] == "success" and junit_inventory_errors:
+              raise SystemExit(
+                  "successful Overview journeys have invalid JUnit inventory: "
+                  + "; ".join(junit_inventory_errors)
               )
           if payload["journey_outcome"] == "success" and missing:
               raise SystemExit(

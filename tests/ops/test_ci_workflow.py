@@ -19,6 +19,19 @@ IMPORT_LINTER_WORKFLOW = WORKFLOWS_DIR / "import-linter.yaml"
 INTEGRATION_NIGHTLY_WORKFLOW = WORKFLOWS_DIR / "integration-nightly.yaml"
 ARCHITECTURE_CI_WORKFLOW = WORKFLOWS_DIR / "architecture-ci.yaml"
 FAILURE_CONTEXT_WORKFLOW = WORKFLOWS_DIR / "pr-ci-failure-context.yml"
+OVERVIEW_JOURNEY_MODULE = "tests/companion_ui/test_devui_overview_journeys.py"
+OVERVIEW_REQUIRED_NODEIDS = (
+    f"{OVERVIEW_JOURNEY_MODULE}::"
+    "test_real_gateway_overview_focus_return_journey_preserves_subject_context_and_sha",
+    f"{OVERVIEW_JOURNEY_MODULE}::"
+    "test_focus_api_failure_renders_honest_visual_error_without_url_probing",
+    f"{OVERVIEW_JOURNEY_MODULE}::"
+    "test_connected_shell_freezes_server_identity_selector_and_aria_contract",
+    f"{OVERVIEW_JOURNEY_MODULE}::"
+    "test_connected_shell_renders_full_server_state_matrix_without_reclassification",
+    f"{OVERVIEW_JOURNEY_MODULE}::"
+    "test_gateway_shell_is_safe_accessible_no_egress_and_effect_free",
+)
 
 
 def _smoke_text() -> str:
@@ -328,21 +341,65 @@ def test_browser_runtime_dispatch_requires_non_skipped_overview_journeys(
     assert "tests/companion_ui/test_devui_overview_journeys.py" in step
     assert "required Overview journey collection is empty" in step
     assert "required Overview journeys were skipped" in step
+    assert "required Overview journey nodeids mismatch" in step
+    assert "required Overview journey nodeids are duplicated" in step
+    for nodeid in OVERVIEW_REQUIRED_NODEIDS:
+        module, name = nodeid.split("::", maxsplit=1)
+        assert module in step
+        assert name in step
     assert "\n        continue-on-error:" not in step
 
     junit_guard = _python_heredoc(
         _workflow_run("Run exact-ref Overview browser journeys")
     )
     junit_path = tmp_path / "junit.xml"
+
+    def junit_case(nodeid: str, *, skipped: bool = False) -> str:
+        module, name = nodeid.split("::", maxsplit=1)
+        classname = module.removesuffix(".py").replace("/", ".")
+        child = '<skipped message="not run"/>' if skipped else ""
+        return f'<testcase classname="{classname}" name="{name}">{child}</testcase>'
+
     scenarios = (
-        ({"tests": "0", "skipped": "0"}, False, "collection is empty"),
-        ({"tests": "2", "skipped": "1"}, False, "journeys were skipped"),
-        ({"tests": "2", "skipped": "0"}, True, ""),
+        ((), (), False, "collection is empty"),
+        (OVERVIEW_REQUIRED_NODEIDS[:-1], (), False, "nodeids mismatch"),
+        (
+            OVERVIEW_REQUIRED_NODEIDS[:-1]
+            + (f"{OVERVIEW_JOURNEY_MODULE}::test_renamed_required_journey",),
+            (),
+            False,
+            "nodeids mismatch",
+        ),
+        (
+            OVERVIEW_REQUIRED_NODEIDS + (OVERVIEW_REQUIRED_NODEIDS[0],),
+            (),
+            False,
+            "nodeids are duplicated",
+        ),
+        (
+            OVERVIEW_REQUIRED_NODEIDS
+            + (f"{OVERVIEW_JOURNEY_MODULE}::test_unmapped_extra_journey",),
+            (),
+            False,
+            "nodeids mismatch",
+        ),
+        (
+            OVERVIEW_REQUIRED_NODEIDS,
+            (OVERVIEW_REQUIRED_NODEIDS[-1],),
+            False,
+            "journeys were skipped",
+        ),
+        (OVERVIEW_REQUIRED_NODEIDS, (), True, ""),
     )
-    for attributes, should_pass, expected_error in scenarios:
-        rendered = " ".join(f'{key}="{value}"' for key, value in attributes.items())
+    for nodeids, skipped_nodeids, should_pass, expected_error in scenarios:
+        cases = "".join(
+            junit_case(nodeid, skipped=nodeid in skipped_nodeids)
+            for nodeid in nodeids
+        )
         junit_path.write_text(
-            f"<testsuites><testsuite {rendered}/></testsuites>\n",
+            "<testsuites><testsuite "
+            f'tests="{len(nodeids)}" skipped="{len(skipped_nodeids)}" '
+            f'failures="0" errors="0">{cases}</testsuite></testsuites>\n',
             encoding="utf-8",
         )
         result = subprocess.run(
@@ -377,6 +434,8 @@ def test_browser_runtime_dispatch_uploads_exact_sha_overview_evidence(
         "contract_version",
         "github_sha",
         "test_module",
+        "required_nodeids",
+        "journey_assertions",
         "fixture_versions",
         "token_sha256",
         "screenshots",
@@ -404,10 +463,22 @@ def test_browser_runtime_dispatch_uploads_exact_sha_overview_evidence(
         parent.mkdir(parents=True, exist_ok=True)
     trace_path.write_bytes(b"trace")
     screenshot_path.write_bytes(b"screenshot")
-    junit_path.write_text(
-        '<testsuites><testsuite tests="1" failures="0" errors="0" skipped="0"/></testsuites>\n',
-        encoding="utf-8",
-    )
+
+    def write_junit(nodeids: tuple[str, ...] = OVERVIEW_REQUIRED_NODEIDS) -> None:
+        cases = []
+        for nodeid in nodeids:
+            module, name = nodeid.split("::", maxsplit=1)
+            classname = module.removesuffix(".py").replace("/", ".")
+            cases.append(f'<testcase classname="{classname}" name="{name}"/>')
+        junit_path.write_text(
+            "<testsuites><testsuite "
+            f'tests="{len(nodeids)}" failures="0" errors="0" skipped="0">'
+            + "".join(cases)
+            + "</testsuite></testsuites>\n",
+            encoding="utf-8",
+        )
+
+    write_junit()
     head_sha = subprocess.run(
         ["git", "rev-parse", "HEAD"],
         cwd=REPO_ROOT,
@@ -434,7 +505,17 @@ def test_browser_runtime_dispatch_uploads_exact_sha_overview_evidence(
     valid_receipt = {
         "contract_version": "devui-overview-browser-accessibility.v1",
         "github_sha": head_sha,
-        "test_module": "tests/companion_ui/test_devui_overview_journeys.py",
+        "test_module": OVERVIEW_JOURNEY_MODULE,
+        "required_nodeids": list(OVERVIEW_REQUIRED_NODEIDS),
+        "journey_assertions": {
+            nodeid: {
+                "url_assertions": "passed",
+                "network_assertions": "passed",
+                "status_assertions": "passed",
+                "page_errors": [],
+            }
+            for nodeid in OVERVIEW_REQUIRED_NODEIDS
+        },
         "fixture_versions": {
             "connected-overview-focus": "v1",
             "hostile-source-state-matrix": "v1",
@@ -482,6 +563,18 @@ def test_browser_runtime_dispatch_uploads_exact_sha_overview_evidence(
     assert payload["missing_evidence"] == []
     assert payload["receipt_validation_errors"] == []
     assert payload["receipt"] == valid_receipt
+    assert payload["required_nodeids"] == list(OVERVIEW_REQUIRED_NODEIDS)
+    assert payload["executed_nodeids"] == list(OVERVIEW_REQUIRED_NODEIDS)
+    assert payload["junit_node_results"] == {
+        nodeid: {
+            "collected": True,
+            "executed": True,
+            "passed": True,
+            "skipped": False,
+        }
+        for nodeid in OVERVIEW_REQUIRED_NODEIDS
+    }
+    assert payload["junit_inventory_errors"] == []
     assert {item["path"] for item in payload["files"]} == {
         "junit.xml",
         "receipts/devui-overview-browser-accessibility.v1.json",
@@ -502,6 +595,78 @@ def test_browser_runtime_dispatch_uploads_exact_sha_overview_evidence(
         (
             valid_receipt | {"test_module": "tests/companion_ui/test_other.py"},
             "test_module mismatch",
+        ),
+        (
+            valid_receipt
+            | {"required_nodeids": list(OVERVIEW_REQUIRED_NODEIDS[:-1])},
+            "required_nodeids mismatch",
+        ),
+        (
+            valid_receipt
+            | {
+                "required_nodeids": list(OVERVIEW_REQUIRED_NODEIDS)
+                + [OVERVIEW_REQUIRED_NODEIDS[0]]
+            },
+            "required_nodeids mismatch",
+        ),
+        (
+            valid_receipt
+            | {
+                "journey_assertions": {
+                    **valid_receipt["journey_assertions"],
+                    f"{OVERVIEW_JOURNEY_MODULE}::test_unmapped_extra_journey": {
+                        "url_assertions": "passed",
+                        "network_assertions": "passed",
+                        "status_assertions": "passed",
+                        "page_errors": [],
+                    },
+                }
+            },
+            "journey_assertions nodeids mismatch",
+        ),
+        (
+            valid_receipt
+            | {
+                "journey_assertions": valid_receipt["journey_assertions"]
+                | {
+                    OVERVIEW_REQUIRED_NODEIDS[0]: {
+                        "url_assertions": "passed",
+                        "network_assertions": "passed",
+                        "status_assertions": "passed",
+                    }
+                }
+            },
+            "journey_assertions fields mismatch",
+        ),
+        (
+            valid_receipt
+            | {
+                "journey_assertions": valid_receipt["journey_assertions"]
+                | {
+                    OVERVIEW_REQUIRED_NODEIDS[0]: {
+                        "url_assertions": "passed",
+                        "network_assertions": "failed",
+                        "status_assertions": "passed",
+                        "page_errors": [],
+                    }
+                }
+            },
+            "journey_assertions must pass URL, network, and status",
+        ),
+        (
+            valid_receipt
+            | {
+                "journey_assertions": valid_receipt["journey_assertions"]
+                | {
+                    OVERVIEW_REQUIRED_NODEIDS[0]: {
+                        "url_assertions": "passed",
+                        "network_assertions": "passed",
+                        "status_assertions": "passed",
+                        "page_errors": ["console error"],
+                    }
+                }
+            },
+            "journey_assertions must report no page errors",
         ),
         (
             valid_receipt | {"fixture_versions": {}},
@@ -564,6 +729,12 @@ def test_browser_runtime_dispatch_uploads_exact_sha_overview_evidence(
     assert mismatch_result.returncode != 0
     assert "exact-ref mismatch" in mismatch_result.stderr
 
+    write_junit(OVERVIEW_REQUIRED_NODEIDS[:-1])
+    missing_nodeid_result = run_manifest(valid_receipt)
+    assert missing_nodeid_result.returncode != 0
+    assert "required Overview journey nodeids mismatch" in missing_nodeid_result.stderr
+    write_junit()
+
     screenshot_path.unlink()
     missing_result = run_manifest(valid_receipt)
     assert missing_result.returncode != 0
@@ -602,6 +773,17 @@ def test_browser_runtime_exact_ref_contract_is_owner_documented() -> None:
         "JavaScript-off",
     ):
         assert exact_receipt_identity in normalized_strategy
+    for nodeid in OVERVIEW_REQUIRED_NODEIDS:
+        assert nodeid in normalized_strategy
+    for per_journey_dimension in (
+        "required_nodeids",
+        "journey_assertions",
+        "URL assertions",
+        "network assertions",
+        "status assertions",
+        "page errors",
+    ):
+        assert per_journey_dimension in normalized_strategy
     assert "Runner-temporary paths are declared only at step scope" in normalized_strategy
 
 
