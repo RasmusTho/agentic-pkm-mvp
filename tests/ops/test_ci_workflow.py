@@ -373,3 +373,16 @@ def test_integration_nightly_prepares_pgvector_before_migrations() -> None:
     extension = workflow.index("CREATE EXTENSION IF NOT EXISTS vector")
     migration = workflow.index("alembic upgrade head")
     assert extension < migration
+
+
+def test_integration_nightly_runs_yss01_pg_contract_targets() -> None:
+    workflow = INTEGRATION_NIGHTLY_WORKFLOW.read_text(encoding="utf-8")
+    pg_contracts = workflow[
+        workflow.index("pg-contracts:") : workflow.index("  k6-search:")
+    ]
+
+    assert "tests/knowledge_acquisition/test_source_registry_pg.py::test_pg_backend_contract" in pg_contracts
+    assert (
+        "tests/migrations/test_yss01_source_registry_schema_parity.py::"
+        "test_yss01_migration_bootstrap_parity_and_legacy_repair"
+    ) in pg_contracts

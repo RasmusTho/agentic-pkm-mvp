@@ -235,12 +235,14 @@ jobs:
             tests/int/test_pg_backend.py \
             tests/api/test_status_store_pg.py \
             tests/indexer/test_outbox_roundtrip_pg.py \
+            tests/knowledge_acquisition/test_source_registry_pg.py::test_pg_backend_contract \
             tests/heimdal/test_entity_review_operation_journal.py \
             tests/migrations/test_entity_review_operation_journal_schema_parity.py \
             tests/migrations/test_file_state_adoption.py \
             tests/migrations/test_objects_adoption.py \
             tests/migrations/test_legacy_objects_fk_migration.py \
             tests/migrations/test_outbox_schema_parity.py \
+            tests/migrations/test_yss01_source_registry_schema_parity.py::test_yss01_migration_bootstrap_parity_and_legacy_repair \
             tests/services/test_outbox_bootstrap_assert_only.py \
             tests/instance/test_file_state_binding_key.py \
             tests/services/test_vault_sync_binding_scope.py \
