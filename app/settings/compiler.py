@@ -22,7 +22,7 @@ from app.settings.locations import canonical_settings_root, resolve_compiled_sou
 from app.settings.watcher_settings import WatcherSettings, load_watcher_settings
 from .constraints import as_bool, clamp_int, enum_or_default
 from .docs import BEGIN, END, inject_reference, render_reference
-from .loader import find_fenced_blocks, read_text, split_sections
+from .loader import count_fence_openers, find_fenced_blocks, read_text, split_sections
 from .models import (
     ClassifierSettings,
     AskSettings,
@@ -73,6 +73,12 @@ def resolve_secret(val: Any) -> Any:
 def compile_file(path: Path) -> Dict[str, Any]:
     md = read_text(path)
     fenced_settings = find_fenced_blocks(md, "settings")
+    fence_openers = count_fence_openers(md, "settings")
+    if fence_openers != len(fenced_settings):
+        raise SettingsSourceError(
+            f"{path}: malformed `yaml settings` fence grammar: "
+            f"found {fence_openers} opener(s) but {len(fenced_settings)} complete fence(s)"
+        )
     if len(fenced_settings) > 1:
         raise SettingsSourceError(
             f"{path}: expected at most one complete `yaml settings` fence, "

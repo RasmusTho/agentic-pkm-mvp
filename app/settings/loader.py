@@ -27,6 +27,11 @@ def _fence_pattern(tag: str) -> re.Pattern[str]:
 FENCE = _fence_pattern("settings")
 
 
+@lru_cache(maxsize=None)
+def _fence_opener_pattern(tag: str) -> re.Pattern[str]:
+    return re.compile(rf"(?m)^```yaml {re.escape(tag)}[ \t]*\r?$")
+
+
 def split_sections(md: str) -> List[Tuple[str, str]]:
     parts: List[Tuple[str, str]] = []
     last = 0
@@ -56,6 +61,11 @@ def find_fenced_block(md: str, tag: str) -> str | None:
 def find_fenced_blocks(md: str, tag: str) -> List[str]:
     """Return every complete fenced block for callers that must prove uniqueness."""
     return [match.group("body").strip() for match in _fence_pattern(tag).finditer(md)]
+
+
+def count_fence_openers(md: str, tag: str) -> int:
+    """Count tagged fence openers, including those without a matching close."""
+    return len(_fence_opener_pattern(tag).findall(md))
 
 
 def find_fenced_settings(md: str) -> str | None:

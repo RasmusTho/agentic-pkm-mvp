@@ -124,17 +124,22 @@ def test_auto_heal_rewrites_invalid_values(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize(
-    "later_payload",
+    ("later_payload", "closing_fence"),
     (
-        "configured_keys:\n  - rerank\nrerank: always\n",
-        "configured_keys:\n  - rerank\nrerank_top_k: [\n",
+        ("configured_keys:\n  - rerank\nrerank: always\n", "```\n"),
+        ("configured_keys:\n  - rerank\nrerank_top_k: [\n", "```\n"),
+        (
+            "configured_keys:\n  - rerank\n| rerank_top_k | 999 |\n",
+            "",
+        ),
     ),
-    ids=("valid-later-fence", "invalid-later-fence"),
+    ids=("valid-later-fence", "invalid-later-fence", "malformed-later-fence"),
 )
 def test_retrieval_source_rejects_later_settings_fence_and_keeps_last_valid_bundle(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     later_payload: str,
+    closing_fence: str,
 ) -> None:
     vault = tmp_path / "vault" / "settings"
     runtime_dir = tmp_path / "runtime" / "settings"
@@ -191,11 +196,11 @@ def test_retrieval_source_rejects_later_settings_fence_and_keeps_last_valid_bund
         canonical_source.rstrip()
         + "\n\n## Later authority\n```yaml settings\n"
         + later_payload
-        + "```\n"
+        + closing_fence
     )
     retrieval_path.write_text(ambiguous_source, encoding="utf-8")
 
-    with pytest.raises(compiler.SettingsSourceError, match="expected at most one"):
+    with pytest.raises(compiler.SettingsSourceError, match="`yaml settings` fence"):
         compiler.compile_all(auto_heal=True)
 
     assert retrieval_path.read_text(encoding="utf-8") == ambiguous_source
