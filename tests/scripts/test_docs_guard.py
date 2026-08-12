@@ -61,6 +61,21 @@ def test_mixed_runtime_and_governance_change_still_requires_temporal_owner_doc(
     assert "temporal code/config changed" in result.stdout
 
 
+def test_governance_script_and_high_risk_temporal_doc_require_both_owner_docs(
+    tmp_path: Path,
+) -> None:
+    repo = _guard_repo(tmp_path)
+    (repo / "scripts/git_hygiene.py").write_text("# governance\n", encoding="utf-8")
+    (repo / "docs/STATUS.md").write_text("temporal writeback\n", encoding="utf-8")
+    _run(["git", "add", "."], repo)
+    _run(["git", "commit", "-m", "mixed-governance-temporal"], repo)
+
+    result = _guard_result(repo)
+
+    assert result.returncode == 1
+    assert "temporal code/config changed" in result.stdout
+
+
 def test_primary_swedish_documentation_fails_with_evidence(tmp_path: Path) -> None:
     repo = _guard_repo(tmp_path)
     (repo / "docs/SWEDISH.md").write_text(
@@ -283,7 +298,11 @@ def test_product_vault_markdown_is_not_repository_documentation(tmp_path: Path) 
 @pytest.mark.parametrize(
     ("script_path", "doc_path"),
     [
-        pytest.param("scripts/git_hygiene.py", "docs/development/WORKFLOW.md", id="unassigned-script-any-doc"),
+        pytest.param(
+            "scripts/git_hygiene.py",
+            "docs/development/GIT_HYGIENE.md",
+            id="git-hygiene-paired-doc",
+        ),
         pytest.param(
             "scripts/select_pr_tests.py",
             "docs/development/TEST_STRATEGY_HOT_PATH.md",
@@ -386,3 +405,35 @@ def test_select_pr_tests_requires_its_specific_paired_doc(tmp_path: Path) -> Non
 
     assert result.returncode == 1
     assert "temporal code/config changed" in result.stdout
+
+
+def _assert_governance_script_rejects_unrelated_doc(tmp_path: Path, script: str) -> None:
+    repo = _guard_repo(tmp_path)
+    script_path = repo / "scripts" / script
+    if script in {"docs_guard.py", "docs_guard_logic.py"}:
+        script_path.write_text(
+            script_path.read_text(encoding="utf-8") + "\n# governance\n",
+            encoding="utf-8",
+        )
+    else:
+        script_path.write_text("# governance\n", encoding="utf-8")
+    (repo / "docs/development/UNRELATED.md").write_text("unrelated\n", encoding="utf-8")
+    _run(["git", "add", "."], repo)
+    _run(["git", "commit", "-m", "governance"], repo)
+
+    result = _guard_result(repo)
+
+    assert result.returncode == 1
+    assert "temporal code/config changed" in result.stdout
+
+
+def test_docs_guard_requires_its_specific_paired_doc(tmp_path: Path) -> None:
+    _assert_governance_script_rejects_unrelated_doc(tmp_path, "docs_guard.py")
+
+
+def test_docs_guard_logic_requires_its_specific_paired_doc(tmp_path: Path) -> None:
+    _assert_governance_script_rejects_unrelated_doc(tmp_path, "docs_guard_logic.py")
+
+
+def test_git_hygiene_requires_its_specific_paired_doc(tmp_path: Path) -> None:
+    _assert_governance_script_rejects_unrelated_doc(tmp_path, "git_hygiene.py")
