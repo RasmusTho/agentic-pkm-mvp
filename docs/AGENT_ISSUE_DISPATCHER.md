@@ -5,8 +5,8 @@ Owner: Delivery governance / multi-agent coordination
 Temporal class: operational
 Review cadence: event-driven
 Source of truth: mixed (GitHub issue contracts + repo governance docs)
-Last reviewed: 2026-07-30
-Last verified against: #3603 BCP-05 migration branch, `app/dispatcher/verification_api.py`, `app/dispatcher/verification_merge.py`, `app/dispatcher/verification_consumer.py`, `app/builderops/control_plane/{client,service,store}.py`, `AGENTS.md`, and `.codex/skills/verification-and-closure/SKILL.md`
+Last reviewed: 2026-08-12
+Last verified against: #3603 BCP-05 migration branch, #3814, `app/dispatcher/verification_api.py`, `app/dispatcher/verification_merge.py`, `app/dispatcher/verification_consumer.py`, `app/builderops/control_plane/{client,service,store}.py`, `AGENTS.md`, and `.codex/skills/verification-and-closure/SKILL.md`
 
 # Agent Issue Dispatcher (MVP Contract)
 
@@ -148,14 +148,18 @@ The dispatcher is an operational coordination layer, not a lifecycle replacement
   post-launch delivery validation, artifact replay, explicit restart, and neutralized or merged
   crash recovery all re-check that live authority before proceeding. The ledger does not raise the
   required clean-round count from risk or low-convergence evidence. Pre-v3 executable requests
-  retain their conservative two-round behavior. Repair budget is per stable
-  failure mechanism and failure domain: two standard repair attempts followed, when needed, by two
-  strongest-capability repair attempts for the same key. The closed domains are
+  retain their conservative two-round behavior. Repair history remains bound per stable failure
+  mechanism and failure domain. The closed domains are
   `review_code_correctness`, `static_quality`, `lease_concurrency`, and
   `deployment_model_schema`. Multiple findings may share a mechanism, while an existing finding
-  cannot rebind to another domain or mechanism. Capability escalation is key-local; repair budget,
-  policy version, and bindings persist across restart, head rebind, and takeover. Budget exhaustion
-  does not create a Human Exception.
+  cannot rebind to another domain or mechanism. There is no fixed repair-attempt cap or mandatory
+  standard-attempt prerequisite: TCD may select the configured strongest capability with high or
+  xhigh reasoning at any round. Every additional substantive repair still requires a fresh
+  independent blocking review of the preceding repair. Capability escalation and evidence-based
+  convergence are key-local; monotonic attempt history, policy version, and bindings persist across
+  restart, head rebind, and takeover. A round may continue only with measurable progress, while
+  documented non-progress, technical impasse, scope expansion, or authority conflict routes through
+  the existing escalation classifier. Attempt count alone does not create a Human Exception.
 - Completion never relies on coordinator receipt ids or review-event prose alone. The fresh exact-head
   GitHub read must contain a named, completed, successful `Unit tests (not pg)` check produced by
   the authoritative `github-actions` App and authenticated as a pull-request run of
@@ -168,13 +172,14 @@ The dispatcher is an operational coordination layer, not a lifecycle replacement
   lease-fenced ledger as one atomic, deterministically identified batch. Exact receipt replay is a
   no-op, and a later invalid/conflicting event rolls back the whole batch. A semantic event-batch
   rejection becomes an exact-lease technical terminal receipt before any pending-check backoff, so
-  invalid review or repair events cannot strand coordinator authority or consume a partial budget;
+  invalid review or repair events cannot strand coordinator authority or persist a partial ledger;
   a normal v3 delivery requires one distinct clean review session after its latest verification or
   repair anchor. An authenticated backward-compatible two-round declaration requires two fresh
   sessions, but ledger-visible low-convergence evidence does not raise a one-round declaration.
   The minimal coordinator context and CLI status expose only policy version plus a bounded,
-  most-recent-first list of sanitized mechanism/domain keys and used/remaining
-  standard/escalated counts. Total and omitted counts make any truncation explicit; finding
+  most-recent-first list of sanitized mechanism/domain keys and standard/escalated attempt counts.
+  The compatibility-named `*_remaining` fields preserve the existing projection shape but are not
+  repair-admission or stop authority. Total and omitted counts make any truncation explicit; finding
   identities are excluded. Schema validity does not make model-produced text durable-safe: raw coordinator prose
   remains transient and never enters
   attempts, pending replay receipts, terminal rows, Human Exception packets, or status output. Its
@@ -194,7 +199,7 @@ The dispatcher is an operational coordination layer, not a lifecycle replacement
   Check eligibility selects the latest GitHub rerun per check name. Schema-v6 health, backup, and
   restore validation covers verification runs, attempts, exceptions, head-audit fields,
   `repair_budget_policy`, exact closing authority, legacy-recovery audit, and all write-critical
-  keys. The additive sequence is explicit: v3 to v4 preserves historical global 2+2 policy as `v1`,
+  keys. The additive sequence is explicit: v3 to v4 preserves the historical global policy marker as `v1`,
   v4 to v5 backfills exact closing authority only for canonical v2 requests, and v5 to v6 adds the
   recovery-audit column. A deployed pre-head-rebinding v3 backup may omit only its documented
   additive columns; missing older audit tables, columns, unique keys, or malformed rows fail closed
@@ -218,7 +223,7 @@ The dispatcher is an operational coordination layer, not a lifecycle replacement
   `BEGIN IMMEDIATE`, promotion atomically archives the complete quarantined row and its exception
   children in `verification_legacy_recovery_audit.v2`, installs the authenticated v2 request and
   exact authorities, deletes only the now-archived live exception children, and clears stale
-  head-bound execution state. The run id, attempts, repair-policy version, and consumed 2+2 budget
+  head-bound execution state. The run id, attempts, repair-policy version, and repair history
   remain unchanged. The archived legacy current head stays bound to that recovered v2 request
   identity; the live row may later rebind to another freshly observed repair head without making
   the immutable archive unreadable or resetting the chain. An authenticated artifact for the
@@ -233,19 +238,19 @@ The dispatcher is an operational coordination layer, not a lifecycle replacement
   If normal stale-head handling supersedes a chain before the repaired-head artifact arrives, only
   a later artifact with the same repository, PR, stage, and governing issue may reopen that exact
   chain on the new head. Reopening preserves immutable requested-head audit plus all attempts and
-  2+2 budget, while clearing stale lease, session, context, retry, and terminal state. No other
+  repair accounting, while clearing stale lease, session, context, retry, and terminal state. No other
   terminal status or supersession reason is reopenable, and a different-head artifact cannot route
   around that terminal chain by creating an empty run. Exact same-artifact replay is resolved
   globally before any canonical-chain decision. A stale-head reopen is allowed only when that row
   is the unambiguous terminal set; another terminal row fails closed without mutation. Further work
   requires a governed lifecycle decision rather than a budget reset. Any legacy database containing
   both an active chain and a terminal chain for the same authority is rejected before exact or active
-  replay, so a newer empty run cannot hide older spent budget. More than one active canonical chain
+  replay, so a newer empty run cannot hide older attempt history. More than one active canonical chain
   for the same repository, pull request, and stage is likewise rejected before exact replay; the
-  dispatcher never selects a newer empty active row over an older row with spent budget.
+  dispatcher never selects a newer empty active row over an older row with attempt history.
   An expired unclaimed technical backoff follows the same authenticated live-head takeover rule:
   the first authoritative artifact for the newer live head requeues the existing canonical run,
-  preserves its immutable requested head, attempts, exceptions, and cumulative 2+2 budget, and
+  preserves its immutable requested head, attempts, exceptions, and cumulative repair accounting, and
   clears only head-bound coordinator, context, receipt, retry, and verified-head state. An
   unexpired backoff or any authority/token mismatch remains non-mutating and fail-closed. Retained
   merged or open-neutralized recovery artifacts polled before that exact `retry_after` return the
@@ -319,7 +324,7 @@ The dispatcher is an operational coordination layer, not a lifecycle replacement
   ledger-visible low convergence on the final key.
   A later artifact for that repaired head reuses the same active repository/PR/governing-issue run
   instead of opening an empty verification chain, so redispatch cannot reset prior attempts or the
-  run's policy-specific repair budget and independent fresh-review accounting. A mismatched head or governing
+  run's policy-specific repair accounting and independent fresh-review accounting. A mismatched head or governing
   authority fails closed instead of sharing the ledger.
   When the repaired head's checks are still pending, its repair event is persisted before bounded
   backoff so replay cannot bypass its keyed or legacy-global ledger; review events are rejected until
@@ -346,7 +351,7 @@ The dispatcher is an operational coordination layer, not a lifecycle replacement
   `created_at` and `updated_at` both precede #4010's merge at `2026-07-21T16:32:11Z`. Canonical
   #4010 digest equality is checked first, preserving unchanged bodies ending in two LFs; the legacy
   fallback then permits only the absent final LF and rejects CR/CRLF, spaces, or interior drift.
-  The exception preserves the receipt identity, exact head, issue sets, phase chain, and repair budget.
+  The exception preserves the receipt identity, exact head, issue sets, phase chain, and repair accounting.
 - Mutable PR text is never merge-time closure authority. Immediately before merge, the verified
   flow re-reads the exact head, title, body, and GitHub `closingIssuesReferences`, replaces every
   authenticated closing keyword with evidence-only `Refs` plus a bounded
@@ -373,13 +378,13 @@ The dispatcher is an operational coordination layer, not a lifecycle replacement
   malformed open-PR `merge_commit_sha` and passes `merge_commit_sha=null`, `merged_at=null`. If the
   PR is merged but incomplete, recovery re-authenticates the exact merge commit, authority receipt,
   checks, repair-budget policy, and highest continuous phase, then resumes at the first missing
-  phase. Neither path resets attempts, durable supporting authority, or the 2+2 budget.
+  phase. Neither path resets attempts, durable supporting authority, or repair accounting.
 - A narrow current-main/base-side recovery exists only for the pre-#4010 immutable PR #4052 head
   after a live-neutralized PR independently re-reads one unique trusted exact-head authority receipt
   and one continuous `prepared` phase. It uses the current-main `pr-contract` semantics and attaches
   an additional auditable `pr-contract` result only to that exact head after binding repository, PR,
   title, canonical body, empty closing links, governing/closing/supporting sets, authority/phase
-  identity, and unchanged repair budget. It is not a waiver or generic status API: mutable, foreign,
+  identity, and unchanged repair accounting. It is not a waiver or generic status API: mutable, foreign,
   unprepared, stale/forged/conflicting, drifted, live-closer, and noncanonical contexts fail closed
   without a result. Handoff remains the ordinary verified-merge flow; recovery does not merge, close,
   restore closers, rewrite receipts, or change dispatcher accounting.

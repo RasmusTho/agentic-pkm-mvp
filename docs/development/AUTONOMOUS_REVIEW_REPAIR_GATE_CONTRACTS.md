@@ -5,8 +5,8 @@ Owner: Builder System governance
 Temporal class: strategic
 Review cadence: event-driven
 Source of truth: mixed
-Last reviewed: 2026-07-27
-Last verified against: 2026-07-27 current main, issue #3211, issue #3224, issue #3225, `docs/development/BUILDER_SYSTEM_PROCESS_MAP.md`, `.codex/skills/issue-to-code/SKILL.md`, `.codex/skills/publish-pr/SKILL.md`, `.codex/skills/verification-and-closure/SKILL.md`, `.codex/skills/bug-to-issue/SKILL.md`, `.codex/skills/pr-integration/SKILL.md`, `.codex/skills/_shared/CI_WAIT_CONTRACT.md`
+Last reviewed: 2026-08-12
+Last verified against: 2026-08-12 current main, issue #3211, issue #3224, issue #3225, issue #3814, `docs/development/BUILDER_SYSTEM_PROCESS_MAP.md`, `.codex/skills/issue-to-code/SKILL.md`, `.codex/skills/publish-pr/SKILL.md`, `.codex/skills/verification-and-closure/SKILL.md`, `.codex/skills/bug-to-issue/SKILL.md`, `.codex/skills/pr-integration/SKILL.md`, `.codex/skills/_shared/CI_WAIT_CONTRACT.md`
 
 # Autonomous Review and Repair Gate Contracts
 
@@ -29,8 +29,8 @@ In scope:
 - Machine review gate inputs, outputs, verdicts, required evidence, and
   actionable-finding criteria.
 - CI repair gate inputs, first safe modes, future patch-branch prerequisites,
-  retry limits, and frontier-rescue budget.
-- Review repair loop routing, maximum attempts, and stop conditions.
+  bounded retry/backoff, and frontier-rescue stop conditions.
+- Review repair loop routing, evidence-based convergence, and stop conditions.
 - Human Exception packet schema, dedupe behavior, and escalation classes.
 - Closure eligibility for future autonomous closure and merge-adjacent flows.
 
@@ -174,8 +174,9 @@ contract, or closure gate. If available evidence cannot distinguish a protected
 failure from a true P2, the result is `inconclusive`, not a downgraded finding.
 
 Only P0/P1 findings enter repair/re-review, mechanism convergence, repeated
-repair budgets, or low-convergence accounting. Ordinary P2/P3 observations
-consume no attempt budget and cannot trigger those loops. This routing does not
+repair accounting, or low-convergence assessment. Ordinary P2/P3 observations
+consume no repair attempts and cannot trigger mechanism convergence or low-convergence assessment.
+This routing does not
 relax independent review, current-head-SHA CI, issue acceptance/`Verify:`
 evidence, authority checks, verified-merge controls, or closure gates.
 
@@ -254,31 +255,32 @@ met:
   secrets, migrations, broad refactors, or owner-doc authority changes unless
   the issue explicitly authorizes them.
 - Local validation command and expected proof before push.
-- Maximum attempt budget declared before the first patch.
+- Convergence evidence and the non-progress stop condition declared before the first patch.
 - PR comment receipt after every patch attempt, including SHA, files changed,
   command evidence, and remaining risk.
 
 If any prerequisite is missing, the gate may only observe, produce artifacts, or
 propose a repair.
 
-### Retry and Frontier-Rescue Budget
+### Retry and Frontier-Rescue Boundaries
 
 Retry budget:
 
 - One CI rerun is allowed for a suspected flake when logs support a flaky or
   infrastructure classification and the governing workflow allows reruns.
-- Repair budget is per stable blocking failure mechanism and failure domain: two
-  standard repair attempts followed, when needed, by two strongest-capability repair attempts.
-- A new mechanism receives a separate budget only after the gate records a stable,
-  materially different mechanism identity. A finding may not be rebound to another
-  mechanism or domain to reset accounting. P2/P3 review observations never consume
-  this budget.
+- Repair may continue only when its receipt shows measurable progress: the failure narrows or
+  clears, the mechanism changes with evidence, validation coverage improves, or diagnostic
+  uncertainty decreases.
+- Repetition without new evidence is a capability-escalation and bounded-replan trigger. It is
+  never progress merely because the attempt has a new ordinal. A finding remains bound to its
+  original mechanism and domain, and P2/P3 observations never enter repair accounting.
 
 Frontier-rescue stop conditions:
 
-- The same failure mechanism survives its two standard and two strongest-capability
-  repair attempts.
-- The cause is unknown after the context pack and one focused investigation.
+- The strongest feasible bounded diagnosis repeats the same failure mechanism without new evidence
+  or measurable progress.
+- The cause remains unknown after a bounded focused investigation and the next safe diagnostic step
+  cannot be named.
 - The proposed repair expands scope beyond the issue contract.
 - Repair would touch protected branches, workflows, secrets, migrations,
   production configuration, or high-risk runtime behavior without explicit
@@ -364,7 +366,7 @@ sequence `affected-surface validation -> publication -> current-SHA CI -> final 
 to resume. The validation scope comes from the governing contract and affected subsystem; high-risk
 classification alone does not expand it to a repo-wide full suite.
 Creating the packet or changing reviewer capability never resets the existing per-mechanism repair
-budget.
+history or binding.
 
 If `origin/main` advances after a clean convergence review or expensive validation, an eligible
 base-only rebase may reuse that evidence under
@@ -407,20 +409,21 @@ Required loop:
    evidence, and unresolved risk.
 5. Review gate reruns against the new current head SHA.
 
-Maximum attempts:
+Convergence policy:
 
-- Two standard repair attempts are allowed for the same stable failure mechanism
-  and failure domain before capability escalation. At most two strongest-capability
-  repair attempts then remain for that same key. Exhaustion triggers classifier-based
-  repair triage; it does not create a Human Exception.
+- There is no global numeric repair-attempt budget. Continue only while each repair receipt and
+  fresh re-review demonstrate measurable progress.
+- A repeated blocking finding or a round without progress triggers TCD-based capability escalation
+  and a bounded replan with the complete prior evidence; it does not trigger an owner interruption
+  by count. A strongest-capability repair uses the configured strongest capability with high or
+  xhigh reasoning.
 - P2/P3 findings do not enter this loop, consume attempts, trigger capability
   escalation, or require another review round.
 - One clean independent final review on the current head SHA is sufficient for every full-path PR,
   including declared high-risk runtime work and work that triggered the low-convergence circuit
   breaker. A P0/P1 fix invalidates the prior review authority and requires one new clean independent
   review on the repaired current head SHA; no path requires two consecutive clean final reviews.
-- Cosmetic or receipt-only corrections do not reset the substantive attempt
-  counter.
+- Cosmetic or receipt-only corrections are not substantive progress.
 
 Stop conditions:
 
@@ -456,21 +459,21 @@ repair counter is updated. A retry counter alone must never select
 | `blocked_technical` | The system failed closed, a dependency is unavailable, or the cause needs stronger diagnosis; no authority is missing. | Keep the affected service/merge path disabled or blocked, collect evidence, and create a linked bounded recovery slice when needed. |
 | `needs_owner` | Continuing needs an unapproved irreversible/external effect, a security/privacy/cost commitment, a production/release operator action, or resolution of contradictory source authority. | Emit one deduplicated Human Exception packet while preserving all CI/review/merge gates. |
 
-Repair accounting applies only to blocking failures and is per stable failure
+Repair history applies only to blocking failures and is partitioned by stable failure
 mechanism and failure domain. The closed domains are review/code correctness,
 static-quality, lease/concurrency, and deployment/model-schema compatibility. A
-failure in one domain or mechanism does not consume another key's budget.
+failure in one domain or mechanism does not establish non-convergence in another.
 Multiple blocking findings may bind to the same mechanism, but one finding may
-never rebind to reset accounting. P2/P3 findings consume no budget. Repeatedly
-identical blocking findings still hit a circuit breaker: it triggers stronger
+never rebind to reset accounting. P2/P3 findings create no repair attempt. Repeatedly
+identical blocking findings without new evidence still hit a circuit breaker: it triggers stronger
 autonomous diagnosis and a bounded replan, not an owner interruption, unless
-that replan crosses a `needs_owner` authority category. Budget exhaustion by
-itself does not create a Human Exception.
+that replan crosses a `needs_owner` authority category. Attempt count by itself
+does not create a Human Exception.
 
 Deployment/model-schema compatibility is a control-plane concern. It must be
 checked in a non-mutating preflight before a dispatcher claim or pilot; a
 mismatch is `blocked_technical`, leaves the host disabled, and must not consume
-the PR's review/code repair budget.
+or alter the PR's review/code repair history.
 
 ### Packet Schema
 
@@ -512,8 +515,8 @@ Each packet must include:
   broader than the issue/skill permits.
 - `intent-critical`: the requested behavior conflicts with owner intent,
   product/runtime boundaries, or the issue's non-goals.
-- `autonomous-failure-critical`: the autonomous loop exhausted its attempt
-  budget, cannot classify the failure after bounded diagnosis, or cannot prove
+- `autonomous-failure-critical`: the autonomous loop cannot demonstrate further
+  progress or classify the failure after bounded diagnosis, or cannot prove
   branch/head truth **and** a safe recovery would require one of the explicit
   `needs_owner` authority categories above.
 

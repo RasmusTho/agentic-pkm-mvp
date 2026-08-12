@@ -203,7 +203,7 @@ mechanism, or a later round finds an adjacent blocker in that mechanism, stop po
 the mechanism-level convergence gate in
 `docs/development/AUTONOMOUS_REVIEW_REPAIR_GATE_CONTRACTS.md` before another expensive proof cycle.
 This gate does not replace current-SHA CI or the final independent review gate, and it does not reset
-repair budgets.
+repair history or finding/mechanism binding.
 
 De-escalation triggers (lower model/reasoning, narrow context) — when:
 
@@ -394,7 +394,7 @@ TCD chooses capability *inside* the delivery chain; this section chooses how muc
 
 - **Delivery depth follows the risk tier.** Single-issue (or issue-free) Tier 1 and Tier 2 PRs take the light path: required CI green plus self-verified `Verify:` targets on the head SHA, then plain merge with `Final-Review-Rounds: 0` — no independent review round, no verified-merge ceremony. The full chain (one independent local review gate with `Final-Review-Rounds: 1`, verified-merge sequence) applies only to Tier 3 work, multi-issue PRs, and PRs touching a TCD high-risk *surface* (auth / security / data / migration / concurrency / payments / external API). A P0/P1 repair invalidates the prior review authority and requires one new clean independent review on the repaired current head SHA. Process outcomes in the escalation-trigger list — a failed attempt, a CI flake, a reviewer nit — escalate capability, never delivery depth or the number of consecutive clean final reviews.
 - **Right-size default.** Build the most boring solution that satisfies the acceptance criteria. A new gate, receipt, ledger, registry, config surface, abstraction layer, or enterprise-grade pattern (high availability, multi-tenancy, pluggable providers, defense-in-depth beyond the single-operator trust model) requires an explicit demand in the governing contract — never default posture. "A simpler mechanism satisfies the contract" is a valid blocking review finding. A new permanent governance mechanism must name what it replaces or carry an explicit review-by date.
-- **Budget and stop-loss.** A delivery gets 2 CI-repair rounds per failure mechanism (the full path keeps the 2+2 escalated repair budget in `verification-and-closure`). When the budget is spent, stop grinding: ship the smallest passing subset, or hand back a one-paragraph stop report plus a `LearningSignal`. Budgets are never rebound to reset accounting. Light work runs without sub-agent fan-out. Repeated failure on a bounded change usually means the solution is too big — shrink it before escalating capability.
+- **Budget and stop-loss.** A delivery gets 2 CI-repair rounds per failure mechanism. That CI stop-loss does not cap the separate P0/P1 review-repair loop: `verification-and-closure` uses evidence-based convergence, TCD capability escalation, fresh independent re-review, and classifier-based non-progress/technical/scope/authority stops. Findings are never rebound to reset accounting. Light work runs without sub-agent fan-out. Repeated failure on a bounded change usually means the solution is too big — shrink it before escalating capability.
 - **Do not pay twice for irrelevant base drift.** Branch freshness and validation freshness are
   separate questions. After a proof-complete local SHA is rebased only because `origin/main`
   advanced, carry expensive review/validation evidence forward when

@@ -7,9 +7,14 @@ ROOT = Path(__file__).resolve().parents[2]
 GATE_CONTRACT = ROOT / "docs/development/AUTONOMOUS_REVIEW_REPAIR_GATE_CONTRACTS.md"
 PROCESS_MAP = ROOT / "docs/development/BUILDER_SYSTEM_PROCESS_MAP.md"
 AGENTS = ROOT / "AGENTS.md"
+VERIFICATION_SKILL = ROOT / ".codex/skills/verification-and-closure/SKILL.md"
+SUBAGENT_ROLES = ROOT / "docs/development/BUILDER_SUBAGENT_ROLES.md"
+DISPATCHER_CONTRACT = ROOT / "docs/AGENT_ISSUE_DISPATCHER.md"
+VERIFICATION_ADAPTER = ROOT / ".codex/agents/verification-closer.toml"
+HOT_PATH = ROOT / "docs/development/PR_HOT_PATH.md"
 
 
-def test_retry_exhaustion_alone_cannot_require_human_exception() -> None:
+def test_attempt_count_alone_cannot_require_human_exception() -> None:
     contract = GATE_CONTRACT.read_text(encoding="utf-8")
     normalized = " ".join(contract.split())
 
@@ -18,8 +23,8 @@ def test_retry_exhaustion_alone_cannot_require_human_exception() -> None:
     assert "`needs_owner`" in contract
     for route in ("`auto_repair`", "`auto_backoff`", "`blocked_technical`"):
         assert route in contract
-    assert "before capability escalation" in normalized
-    assert "classifier-based repair triage" in normalized
+    assert "Repeatedly identical blocking findings without new evidence" in normalized
+    assert "Attempt count by itself does not create a Human Exception" in normalized
 
 
 def test_host_preflight_failure_routes_to_disabled_technical_recovery() -> None:
@@ -70,21 +75,49 @@ def test_agent_policy_reserves_owner_interruptions_for_authority() -> None:
     assert "only its explicit authority categories may create `agent:needs-human`" in agents
 
 
-def test_repair_budget_policy_is_consistent_across_governing_surfaces() -> None:
+def test_review_repair_uses_evidence_based_convergence_without_numeric_budget() -> None:
     contract = GATE_CONTRACT.read_text(encoding="utf-8")
-    dispatcher = (ROOT / "docs/AGENT_ISSUE_DISPATCHER.md").read_text(
-        encoding="utf-8"
-    )
-    closure_skill = (ROOT / ".codex/skills/verification-and-closure/SKILL.md").read_text(
-        encoding="utf-8"
-    )
+    closure_skill = VERIFICATION_SKILL.read_text(encoding="utf-8")
+    roles = SUBAGENT_ROLES.read_text(encoding="utf-8")
+    dispatcher = DISPATCHER_CONTRACT.read_text(encoding="utf-8")
+    agents = AGENTS.read_text(encoding="utf-8")
+    adapter = VERIFICATION_ADAPTER.read_text(encoding="utf-8")
+    hot_path = HOT_PATH.read_text(encoding="utf-8")
 
-    for surface in (contract, dispatcher, closure_skill):
-        normalized = " ".join(surface.split())
-        assert "per stable failure mechanism and failure domain" in normalized
-        assert "two standard repair attempts" in normalized
-        assert "two strongest-capability repair attempts" in normalized
-        assert "does not create a Human Exception" in normalized
+    assert "evidence-based convergence" in contract
+    assert "no global numeric repair-attempt budget" in closure_skill
+    assert "measurable progress" in closure_skill
+    assert "evidence-based convergence" in roles
+    assert "no fixed repair-attempt cap" in dispatcher
+    assert "does not cap the separate P0/P1 review-repair loop" in agents
+    assert "attempt count alone is never a Human Exception" in adapter
+    assert "without resetting attempts or repair" in hot_path
+
+    forbidden = (
+        "Maximum attempt budget declared",
+        "At most two repair attempts",
+        "same failure mechanism survives two repair attempts",
+        "Two substantive fix attempts",
+        "two standard repair attempts followed",
+        "at most two strongest-capability repair attempts",
+        "Once 2 standard fix attempts",
+        "Permit at most 2 additional capability-escalated fix attempts",
+        "budget of 2 standard plus 2 escalated fix attempts",
+        "two standard attempts followed by at most two",
+        "2+2 repair budget",
+        "cumulative 2+2 budget",
+    )
+    for fragment in forbidden:
+        for surface in (
+            contract,
+            closure_skill,
+            roles,
+            dispatcher,
+            agents,
+            adapter,
+            hot_path,
+        ):
+            assert fragment not in surface
 
 
 def test_stateful_fallback_convergence_requires_executable_boundary_matrix() -> None:
