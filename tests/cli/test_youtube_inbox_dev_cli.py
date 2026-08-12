@@ -6,6 +6,7 @@ import json
 import importlib
 import secrets
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -126,6 +127,7 @@ def _dev_env() -> dict[str, str]:
 
 def test_connect_select_and_sync_compose_v1_services(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     binder = _Binder(["authorization_pending", "slow_down"])
     sync = _Sync()
@@ -147,6 +149,7 @@ def test_connect_select_and_sync_compose_v1_services(
             api_client=_Api(),
             sync=sync if account_binding_id is not None else None,
             account_bindings=_Bindings(),
+            connect_lock_path=tmp_path / "connect.lock",
         )
 
     monkeypatch.setattr(youtube_cli, "build_youtube_inbox_dev_services", fake_build)
@@ -192,6 +195,7 @@ def test_connect_select_and_sync_compose_v1_services(
 
 def test_rejects_non_dev_and_redacts_secret_failures(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     planted_client_secret = "planted-client-secret-" + secrets.token_hex(8)
     planted_store_key = secrets.token_hex(32)
@@ -260,6 +264,7 @@ def test_rejects_non_dev_and_redacts_secret_failures(
             api_client=None,
             sync=None,
             account_bindings=_Bindings(),
+            connect_lock_path=tmp_path / "connect.lock",
         ),
     )
     provider_failure = runner.invoke(
@@ -272,6 +277,7 @@ def test_rejects_non_dev_and_redacts_secret_failures(
 
 def test_v1_command_remains_single_inbox_and_manual(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     sync = _Sync()
 
@@ -288,6 +294,7 @@ def test_v1_command_remains_single_inbox_and_manual(
             api_client=_Api(),
             sync=sync,
             account_bindings=_Bindings((object(),)),
+            connect_lock_path=tmp_path / "connect.lock",
         ),
     )
     runner = CliRunner()
@@ -309,11 +316,32 @@ def test_v1_command_remains_single_inbox_and_manual(
     second_account = runner.invoke(
         cli, ["youtube-inbox-dev", "connect"], env=_dev_env()
     )
+    empty_bindings = _Bindings()
+    overlap_binder = _Binder()
+    monkeypatch.setattr(
+        youtube_cli,
+        "build_youtube_inbox_dev_services",
+        lambda account_binding_id=None: youtube_cli.YouTubeInboxDevServices(
+            binder=overlap_binder,
+            api_client=_Api(),
+            sync=sync,
+            account_bindings=empty_bindings,
+            connect_lock_path=tmp_path / "connect.lock",
+        ),
+    )
+    with youtube_cli._exclusive_connect_lock(tmp_path / "connect.lock"):
+        overlapping_connect = runner.invoke(
+            cli, ["youtube-inbox-dev", "connect"], env=_dev_env()
+        )
 
     assert result.exit_code != 0
     assert "already has an enabled Inbox" in result.output
     assert second_account.exit_code != 0
     assert "already has one OAuth-connected account" in second_account.output
+    assert overlapping_connect.exit_code != 0
+    assert "already active" in overlapping_connect.output
+    assert overlap_binder.started == overlap_binder.finished == 0
+    assert empty_bindings.list_all() == ()
     assert help_result.exit_code == 0
     assert all(
         forbidden not in help_result.output.lower()
