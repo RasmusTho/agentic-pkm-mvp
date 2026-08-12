@@ -3180,6 +3180,7 @@ PRINCIPAL_COMMANDS = (
     "principal-show",
     "principal-record-floor",
     "principal-cutover",
+    "principal-verify-cutover-clean-failure",
     "principal-bootstrap",
     "principal-rotate-credential",
     "principal-add-role",
@@ -3187,6 +3188,113 @@ PRINCIPAL_COMMANDS = (
     "principal-export-auth-state",
     "principal-roll-forward",
 )
+
+_PRINCIPAL_CUTOVER_CLEAN_FAILURE_SCHEMA = (
+    "agentic-pkm.principal-cutover-clean-failure.v1"
+)
+
+
+def _principal_cutover_receipt_path(
+    *, host_global_root: Path, receipt_path: Path, attempt_id: str
+) -> Path:
+    """Resolve one private attempt receipt without permitting path injection."""
+
+    if re.fullmatch(r"[0-9a-f]{32}", attempt_id) is None:
+        raise RegistryError("principal cutover attempt id is invalid")
+    root = host_global_root.resolve(strict=True)
+    path = receipt_path.resolve(strict=False)
+    if (
+        path.parent != root
+        or path.name != f"principal-cutover-clean-failure-{attempt_id}.json"
+    ):
+        raise RegistryError(
+            "principal cutover clean-failure receipt path is invalid"
+        )
+    return path
+
+
+def _verify_principal_cutover_clean_failure(args: argparse.Namespace) -> int:
+    """Consume an authenticated clean-failure receipt for this stopped attempt."""
+
+    from app.instance.principal_fence import principal_floor_recorded
+
+    root = Path(args.host_global_root)
+    receipt_path = _principal_cutover_receipt_path(
+        host_global_root=root,
+        receipt_path=Path(args.clean_failure_receipt_path),
+        attempt_id=args.attempt_id,
+    )
+    metadata = receipt_path.lstat()
+    if (
+        not stat.S_ISREG(metadata.st_mode)
+        or metadata.st_uid != os.geteuid()
+        or metadata.st_mode & 0o777 != 0o600
+    ):
+        raise RegistryError("principal cutover receipt is unsafe")
+    document = json.loads(receipt_path.read_text(encoding="utf-8"))
+    payload = document.get("payload") if isinstance(document, dict) else None
+    authentication = (
+        document.get("authentication") if isinstance(document, dict) else None
+    )
+    if not isinstance(payload, dict) or not isinstance(authentication, dict):
+        raise RegistryError("principal cutover receipt is invalid")
+
+    proof = json.loads(Path(args.quiescence_proof_path).read_text(encoding="utf-8"))
+    lease = _require_proved_deployment_lease(
+        host_global_root=root,
+        channel=args.channel,
+        nonce=proof.get("nonce"),
+    )
+    expected = {
+        "schema": _PRINCIPAL_CUTOVER_CLEAN_FAILURE_SCHEMA,
+        "channel_id": args.channel,
+        "deployment_nonce": lease["nonce"],
+        "attempt_id": args.attempt_id,
+        "outcome": "clean_failure",
+        "floor_recorded": False,
+        "role_recorded": False,
+    }
+    if any(payload.get(key) != value for key, value in expected.items()):
+        raise RegistryError("principal cutover receipt binding is invalid")
+    floor_advanced = payload.get("floor_advanced")
+    floor_revision = payload.get("floor_registry_revision")
+    result_revision = payload.get("result_registry_revision")
+    if (
+        type(floor_advanced) is not bool
+        or not isinstance(result_revision, int)
+        or isinstance(result_revision, bool)
+        or (
+            floor_advanced
+            and (
+                not isinstance(floor_revision, int)
+                or isinstance(floor_revision, bool)
+                or result_revision <= floor_revision
+            )
+        )
+        or (not floor_advanced and floor_revision is not None)
+    ):
+        raise RegistryError("principal cutover receipt revisions are invalid")
+
+    ledger = OwnershipLedger(root)
+    ledger.verify_principal_cutover_receipt(
+        payload,
+        authentication,
+        _capability=local_operator_storage_capability(),  # type: ignore[arg-type]
+    )
+    registry = VaultRegistryStore(Path(args.registry_path))
+    store = open_local_operator_principal_store(Path(args.registry_path))
+    with store.cutover_lock():
+        if store.load() is not None or principal_floor_recorded(registry):
+            raise RegistryError(
+                "principal cutover clean-failure state is no longer current"
+            )
+        if registry.load().revision != result_revision:
+            raise RegistryError(
+                "principal cutover clean-failure revision is stale"
+            )
+        receipt_path.unlink()
+    print(json.dumps({"ok": True, "clean_failure_verified": True}, sort_keys=True))
+    return 0
 
 
 def _read_credential(args: argparse.Namespace) -> str | None:
@@ -3278,6 +3386,18 @@ def _principal_command(args: argparse.Namespace) -> int:
         principal_floor_recorded,
         record_principal_floor,
     )
+
+    if args.command == "principal-verify-cutover-clean-failure":
+        try:
+            return _verify_principal_cutover_clean_failure(args)
+        except (OSError, ValueError, LedgerError, PrincipalPreflightError, RegistryError):
+            print(
+                json.dumps(
+                    {"ok": False, "error": "principal cutover receipt is not current"},
+                    sort_keys=True,
+                )
+            )
+            return 1
 
     registry_path = Path(args.registry_path)
     registry = VaultRegistryStore(registry_path)
@@ -3576,6 +3696,61 @@ def _principal_command(args: argparse.Namespace) -> int:
                     exit_code = 75
             except (OSError, PrincipalPreflightError, RegistryError):
                 exit_code = 75
+            if exit_code == 1:
+                try:
+                    assert proof is not None
+                    receipt_path = _principal_cutover_receipt_path(
+                        host_global_root=Path(args.host_global_root),
+                        receipt_path=Path(args.clean_failure_receipt_path),
+                        attempt_id=args.attempt_id,
+                    )
+                    with store.cutover_lock():
+                        if store.load() is not None or principal_floor_recorded(registry):
+                            raise PrincipalFloorCompensationError(
+                                "principal clean-failure state became ambiguous",
+                                provisioning_action=(
+                                    "keep the deployment stopped and inspect principal state"
+                                ),
+                            )
+                        result_revision = registry.load().revision
+                        floor_revision = (
+                            floor_write.snapshot.revision
+                            if floor_write is not None and floor_write.advanced
+                            else None
+                        )
+                        payload: dict[str, object] = {
+                            "schema": _PRINCIPAL_CUTOVER_CLEAN_FAILURE_SCHEMA,
+                            "channel_id": args.channel,
+                            "deployment_nonce": proof["nonce"],
+                            "attempt_id": args.attempt_id,
+                            "outcome": "clean_failure",
+                            "floor_advanced": bool(
+                                floor_write is not None and floor_write.advanced
+                            ),
+                            "floor_registry_revision": floor_revision,
+                            "result_registry_revision": result_revision,
+                            "floor_recorded": False,
+                            "role_recorded": False,
+                        }
+                        authentication = OwnershipLedger(
+                            Path(args.host_global_root)
+                        ).authenticate_principal_cutover_receipt(
+                            payload,
+                            _capability=local_operator_storage_capability(),  # type: ignore[arg-type]
+                        )
+                        _write_private_json(
+                            receipt_path,
+                            {"payload": payload, "authentication": authentication},
+                        )
+                except (
+                    OSError,
+                    ValueError,
+                    LedgerError,
+                    PrincipalFloorCompensationError,
+                    PrincipalPreflightError,
+                    RegistryError,
+                ):
+                    exit_code = 75
         print(
             json.dumps(
                 {"ok": False, "consumer": args.consumer, "error": str(exc)},
@@ -3723,18 +3898,28 @@ def main(argv: list[str] | None = None) -> int:
         command = subparsers.add_parser(name)
         command.add_argument("--registry-path", type=Path, required=True)
         command.add_argument("--consumer", default=None)
-        if name in {"principal-record-floor", "principal-cutover"}:
+        if name in {
+            "principal-record-floor",
+            "principal-cutover",
+            "principal-verify-cutover-clean-failure",
+        }:
             # Explicit mounted source paths, matching `authority-cutover`: the runtime image
             # contains no repo checkout, so nothing here may be derived from `__file__`.
             command.add_argument("--channel", required=True)
             command.add_argument("--host-global-root", type=Path, required=True)
-            command.add_argument("--inventory-path", type=Path, required=True)
             command.add_argument("--quiescence-proof-path", type=Path, required=True)
+        if name in {"principal-record-floor", "principal-cutover"}:
+            command.add_argument("--inventory-path", type=Path, required=True)
             command.add_argument("--compose-base", type=Path, required=True)
             command.add_argument("--native-producer-root", type=Path, required=True)
             # The floor preflights the posture the subsequent role write will use, so it
             # needs the same declaration `principal-bootstrap` takes.
             command.add_argument("--loopback-listener", action="store_true")
+        if name in {"principal-cutover", "principal-verify-cutover-clean-failure"}:
+            command.add_argument("--attempt-id", required=True)
+            command.add_argument(
+                "--clean-failure-receipt-path", type=Path, required=True
+            )
         if name == "principal-revoke-subject":
             command.add_argument(
                 "--subject",

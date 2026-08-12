@@ -141,6 +141,7 @@ def _wrapper_run(
     cutover: bool,
     loopback: str = "0",
     fail_cutover: int = 0,
+    verify_cutover: int = 1,
 ) -> tuple[subprocess.CompletedProcess[str], list[str]]:
     tmp_path.mkdir(parents=True)
     event_log = tmp_path / "events.log"
@@ -181,6 +182,7 @@ def _wrapper_run(
         "fake_compose() {\n"
         "  printf 'compose:%s\\n' \"$*\" >> \"$EVENT_LOG\"\n"
         "  case \" $* \" in\n"
+        "    *' principal-verify-cutover-clean-failure '*) return \"${VERIFY_CUTOVER:-1}\" ;;\n"
         "    *' principal-cutover '*) return \"${FAIL_CUTOVER:-0}\" ;;\n"
         "  esac\n"
         "  return 0\n"
@@ -197,6 +199,7 @@ def _wrapper_run(
         "PATH": f"{fake_bin}:{os.environ['PATH']}",
         "INSTANCE_OWNERSHIP_HOST_STATE_DIR": str(ownership_root),
         "FAIL_CUTOVER": str(fail_cutover),
+        "VERIFY_CUTOVER": str(verify_cutover),
         "REAL_PYTHON": sys.executable,
     }
     env.pop("MVR03_PRINCIPAL_CUTOVER", None)
@@ -241,11 +244,18 @@ def test_wrapper_runs_the_cutover_inside_the_stopped_window(tmp_path: Path) -> N
     )
 
     cutover_failure, failure_events = _wrapper_run(
-        tmp_path / "cutover-failure", cutover=True, fail_cutover=1
+        tmp_path / "cutover-failure", cutover=True, fail_cutover=1, verify_cutover=0
     )
     assert cutover_failure.returncode == 1
     assert not any("deployment-finish" in event for event in failure_events)
     assert any("deployment-release" in event for event in failure_events)
+
+    compose_failure, compose_failure_events = _wrapper_run(
+        tmp_path / "compose-failure", cutover=True, fail_cutover=1
+    )
+    assert compose_failure.returncode == 1
+    assert not any("deployment-finish" in event for event in compose_failure_events)
+    assert not any("deployment-release" in event for event in compose_failure_events)
 
     ambiguous, ambiguous_events = _wrapper_run(
         tmp_path / "ambiguous", cutover=True, fail_cutover=75
@@ -382,6 +392,7 @@ def _record_floor_in_proved_window(
 
 
 def _cutover_args(runtime: object, *, inventory: Path, proof_path: Path) -> list[str]:
+    attempt_id = "a" * 32
     return [
         "principal-cutover",
         "--channel",
@@ -394,6 +405,10 @@ def _cutover_args(runtime: object, *, inventory: Path, proof_path: Path) -> list
         str(inventory),
         "--quiescence-proof-path",
         str(proof_path),
+        "--attempt-id",
+        attempt_id,
+        "--clean-failure-receipt-path",
+        str(runtime.ledger.root / f"principal-cutover-clean-failure-{attempt_id}.json"),  # type: ignore[attr-defined]
         "--compose-base",
         str(REPO_ROOT / "docker-compose.yaml"),
         "--native-producer-root",
@@ -403,6 +418,112 @@ def _cutover_args(runtime: object, *, inventory: Path, proof_path: Path) -> list
         "--consumer",
         "bootstrap-init",
     ]
+
+
+def _verify_cutover_receipt_args(
+    runtime: object, *, proof_path: Path, attempt_id: str = "a" * 32
+) -> list[str]:
+    return [
+        "principal-verify-cutover-clean-failure",
+        "--channel",
+        "prod",
+        "--registry-path",
+        str(runtime.layout.registry_path),  # type: ignore[attr-defined]
+        "--host-global-root",
+        str(runtime.ledger.root),  # type: ignore[attr-defined]
+        "--quiescence-proof-path",
+        str(proof_path),
+        "--attempt-id",
+        attempt_id,
+        "--clean-failure-receipt-path",
+        str(runtime.ledger.root / f"principal-cutover-clean-failure-{attempt_id}.json"),  # type: ignore[attr-defined]
+    ]
+
+
+def test_clean_failure_receipt_is_authenticated_current_and_one_shot(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Only the runtime's current attempt-bound compensation receipt authorizes release."""
+
+    def _fail_before_write(self: LocalOperatorPrincipalStore, **kwargs: object) -> None:
+        raise PrincipalPreflightError("injected clean failure", provisioning_action="retry")
+
+    runtime, _, _ = active_runtime(tmp_path / "valid")
+    _, inventory = deployment_authority(
+        runtime, runtime.layout.root / "missing-legacy.md"
+    )
+    proof = runtime.ledger.root / "deployment-quiescence-proof.json"
+    monkeypatch.setattr(LocalOperatorPrincipalStore, "bootstrap", _fail_before_write)
+    failed = _cli(*_cutover_args(runtime, inventory=inventory, proof_path=proof))
+    assert failed["_exit_code"] == 1
+    verified = _cli(*_verify_cutover_receipt_args(runtime, proof_path=proof))
+    assert verified["_exit_code"] == 0
+    replay = _cli(*_verify_cutover_receipt_args(runtime, proof_path=proof))
+    assert replay["_exit_code"] == 1
+
+    forged_runtime, _, _ = active_runtime(tmp_path / "forged")
+    _, forged_inventory = deployment_authority(
+        forged_runtime, forged_runtime.layout.root / "missing-legacy.md"
+    )
+    forged_proof = forged_runtime.ledger.root / "deployment-quiescence-proof.json"
+    forged = _cli(
+        *_cutover_args(
+            forged_runtime, inventory=forged_inventory, proof_path=forged_proof
+        )
+    )
+    assert forged["_exit_code"] == 1
+    forged_path = (
+        forged_runtime.ledger.root / "principal-cutover-clean-failure-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.json"
+    )
+    document = json.loads(forged_path.read_text(encoding="utf-8"))
+    document["payload"]["attempt_id"] = "b" * 32
+    forged_path.write_text(json.dumps(document), encoding="utf-8")
+    forged_path.chmod(0o600)
+    rejected = _cli(*_verify_cutover_receipt_args(forged_runtime, proof_path=forged_proof))
+    assert rejected["_exit_code"] == 1
+
+    stale_runtime, _, _ = active_runtime(tmp_path / "stale")
+    _, stale_inventory = deployment_authority(
+        stale_runtime, stale_runtime.layout.root / "missing-legacy.md"
+    )
+    stale_proof = stale_runtime.ledger.root / "deployment-quiescence-proof.json"
+    stale = _cli(
+        *_cutover_args(stale_runtime, inventory=stale_inventory, proof_path=stale_proof)
+    )
+    assert stale["_exit_code"] == 1
+    stale_snapshot = stale_runtime.registry.load()
+    stale_runtime.registry.commit_state(
+        registrations=dict(stale_snapshot.registrations),
+        removal_tombstones=dict(stale_snapshot.removal_tombstones),
+        transfer_lineage=stale_snapshot.transfer_lineage,
+        extensions=dict(stale_snapshot.extensions),
+        expected_revision=stale_snapshot.revision,
+        _capability=local_operator_storage_capability(),
+    )
+    stale_rejected = _cli(
+        *_verify_cutover_receipt_args(stale_runtime, proof_path=stale_proof)
+    )
+    assert stale_rejected["_exit_code"] == 1
+
+    nonce_runtime, _, _ = active_runtime(tmp_path / "nonce")
+    _, nonce_inventory = deployment_authority(
+        nonce_runtime, nonce_runtime.layout.root / "missing-legacy.md"
+    )
+    nonce_proof = nonce_runtime.ledger.root / "deployment-quiescence-proof.json"
+    nonce_failed = _cli(
+        *_cutover_args(
+            nonce_runtime, inventory=nonce_inventory, proof_path=nonce_proof
+        )
+    )
+    assert nonce_failed["_exit_code"] == 1
+    changed_proof = json.loads(nonce_proof.read_text(encoding="utf-8"))
+    changed_proof["nonce"] = "different-attempt"
+    nonce_proof.write_text(json.dumps(changed_proof), encoding="utf-8")
+    nonce_proof.chmod(0o600)
+    nonce_rejected = _cli(
+        *_verify_cutover_receipt_args(nonce_runtime, proof_path=nonce_proof)
+    )
+    assert nonce_rejected["_exit_code"] == 1
 
 
 def test_compensation_is_lease_bound_and_preserves_a_preexisting_floor(
@@ -529,6 +650,7 @@ def test_committed_role_is_ambiguous_and_never_compensated(
     assert result["_exit_code"] == 75, result
     assert principal_floor_recorded(runtime.registry)
     assert open_local_operator_principal_store(runtime.layout.registry_path).require()
+    assert not list(runtime.ledger.root.glob("principal-cutover-clean-failure-*.json"))
 
 
 def test_governed_compose_cutover_receipt_is_whitelist_redacted(tmp_path: Path) -> None:

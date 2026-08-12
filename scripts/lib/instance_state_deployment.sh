@@ -117,6 +117,8 @@ prepare_instance_state_deployment() {
   local repo_root inventory_helper controller_pid controller_start_token
   local inventory_host_path owner_inventory_host_path inventory_rc
   local quiescence_inventory_host_target_path owner_inventory_host_target_path
+  local principal_attempt_id principal_receipt_path principal_receipt_host_path
+  local receipt_verify_rc
   local native_producer
   local principal_loopback_flag=""
   repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -337,11 +339,23 @@ prepare_instance_state_deployment() {
   # caller-controlled flags. It consumes MVR-01B's proved lease, quiescence proof,
   # and drained owner inventory; it never adds a second drain/probe mechanism.
   # Before any role record commits, a bootstrap failure compensates only a floor
-  # advanced by this in-process attempt. The command's status 1 is the sole
-  # compensated/pre-floor failure receipt. Every other nonzero status is
-  # unclassified (including signals/container death), so the durable
-  # stopped-window fence remains for governed repair.
+  # advanced by this in-process attempt. A numeric child status is never a clean
+  # failure receipt: Compose itself can return the same code. Only a private,
+  # HMAC-authenticated receipt bound to this attempt and proved lease may release
+  # the stopped window. Missing/stale/invalid receipts and signals preserve it.
   if [ "${MVR03_PRINCIPAL_CUTOVER:-0}" = "1" ]; then
+    principal_attempt_id="$(python3 -c 'import uuid; print(uuid.uuid4().hex)')"
+    inventory_rc=$?
+    if [ "${inventory_rc}" -ne 0 ]; then
+      echo "instance state deployment: principal cutover attempt creation failed" >&2
+      return "${inventory_rc}"
+    fi
+    principal_receipt_path="/app/instance-ownership/principal-cutover-clean-failure-${principal_attempt_id}.json"
+    principal_receipt_host_path="$(_instance_state_deployment_host_ownership_path "${principal_receipt_path}")" || {
+      echo "instance state deployment: principal cutover receipt path is invalid" >&2
+      return 78
+    }
+    rm -f -- "${principal_receipt_host_path}"
     "${compose_function}" run --rm --no-deps -T --user "${runtime_user}" instance-state-init \
       python -m app.instance.runtime principal-cutover \
         --channel "${channel}" \
@@ -351,12 +365,24 @@ prepare_instance_state_deployment() {
         --quiescence-proof-path /app/instance-ownership/deployment-quiescence-proof.json \
         --compose-base /run/scalar-rollback-policy/docker-compose.yaml \
         --native-producer-root /run/principal-fence-native-producers \
+        --attempt-id "${principal_attempt_id}" \
+        --clean-failure-receipt-path "${principal_receipt_path}" \
         --existing-install \
         --consumer bootstrap-init \
         ${principal_loopback_flag:+"${principal_loopback_flag}"}
     inventory_rc=$?
     if [ "${inventory_rc}" -ne 0 ]; then
-      if [ "${inventory_rc}" -ne 1 ]; then
+      "${compose_function}" run --rm --no-deps -T --user "${runtime_user}" instance-state-init \
+        python -m app.instance.runtime principal-verify-cutover-clean-failure \
+          --channel "${channel}" \
+          --registry-path /app/instance-state/agentic-pkm/vault-registry.md \
+          --host-global-root /app/instance-ownership \
+          --quiescence-proof-path /app/instance-ownership/deployment-quiescence-proof.json \
+          --attempt-id "${principal_attempt_id}" \
+          --clean-failure-receipt-path "${principal_receipt_path}"
+      receipt_verify_rc=$?
+      rm -f -- "${principal_receipt_host_path}"
+      if [ "${receipt_verify_rc}" -ne 0 ]; then
         echo "instance state deployment: principal cutover requires stopped-window repair" >&2
         return "${inventory_rc}"
       fi

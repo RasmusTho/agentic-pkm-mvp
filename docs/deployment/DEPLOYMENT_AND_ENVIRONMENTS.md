@@ -350,11 +350,14 @@ for compensation. If a complete matching role became durable before a later boot
 failed, it is never rolled back or reported as success. That case, an unreadable registry,
 changed lease, any other ambiguous role state, or failed compensation returns the distinct
 fail-closed status `75`; the wrapper preserves the lease/restart fence for repair instead of
-restarting old producers. Status `1` is the only classified clean failure for which the wrapper
-may release the stopped window: the command has proved either that no floor was written or that
-its attempt-local floor was compensated. Every other nonzero child status, including a signal or
-container death after the floor write, is unclassified and preserves the lease/restart fence. A
-crash before the floor leaves old auth state authoritative and the migration untouched.
+restarting old producers. No numeric child status authorizes release: Compose can return the same
+status as the runtime without executing it. A clean failure instead writes a private, HMAC-signed,
+one-shot receipt bound to the wrapper's random attempt id, current channel/deployment nonce, and
+floor/result registry revisions. A second one-shot verifies that binding against the still-proved
+lease and current no-floor/no-role state, then consumes the receipt; only that success lets the
+wrapper release. A missing, forged, stale, unsafe, or replayed receipt — and every signal or
+container death — preserves the lease/restart fence. A crash before the floor leaves old auth state
+authoritative and the migration untouched.
 
 **Automated, explicit activation (#4524).** `scripts/lib/instance_state_deployment.sh` invokes
 step 3 between `deployment-prove` and `deployment-finish` only when
