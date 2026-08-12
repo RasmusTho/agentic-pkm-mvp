@@ -3,7 +3,8 @@ from __future__ import annotations
 import pytest
 from click.testing import CliRunner
 
-from app.retrieval.rerank.provider import MockCrossEncoderReranker, get_reranker
+from app.retrieval.rerank import provider as rerank_provider
+from app.retrieval.rerank.provider import get_reranker
 from app.retrieval.tuning import get_retrieval_tuning, reset_retrieval_tuning_cache
 import app.retrieval.tuning as retrieval_tuning
 from app.services import llm
@@ -67,7 +68,10 @@ def test_vault_settings_reach_model_and_rerank_production_consumers(monkeypatch:
     assert llm.call_llm("test", {"system": "s", "user": "u"}, provider_override="ollama") == "vault-backed response"
     assert captured == {"temperature": 0.7, "timeout": 17.0}
     assert OllamaDeliberationAgent().model == "vault-reasoning-model"
-    assert isinstance(get_reranker(), MockCrossEncoderReranker)
+    # The dedicated reranker-provider suite reloads this module. Resolve the
+    # current module class here so this integration assertion remains about the
+    # production selection, not a stale imported class identity.
+    assert type(get_reranker()) is rerank_provider.MockCrossEncoderReranker
     assert get_retrieval_tuning().rerank_top_k == 7
     explained = wave_one.wave_one_explain()
     assert explained["retrieval.rerank.top_k"]["origin"] == "vault-shared:settings/retrieval.md"
@@ -93,7 +97,7 @@ def test_empty_settings_and_legacy_env_preserve_llm_and_rerank_behavior(monkeypa
     assert wave_one.llm_timeout_seconds() == 31.0
     assert wave_one.llm_temperature() == 0.25
     assert wave_one.reasoning_model() == "legacy-reasoning"
-    assert isinstance(get_reranker(), MockCrossEncoderReranker)
+    assert type(get_reranker()) is rerank_provider.MockCrossEncoderReranker
     assert get_retrieval_tuning().rerank_top_k == 9
     assert "deprecated" in str(wave_one.wave_one_explain()["retrieval.rerank.provider"]["origin"])
     assert wave_one.wave_one_explain()["retrieval.rerank"] == {
