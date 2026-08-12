@@ -3,15 +3,15 @@ name: Validate the Overview Yggdrasil Design
 description: Produce and accept the governed Yggdrasil handoff for the stable read-only Overview fixtures and navigation journey.
 task_id: ARO-05
 github_issue: 4746
-source_anchor: "docs/DEVUI_STAGE_A_READ_ONLY_OVERVIEW/README.md :: Cross-task invariants"
+source_anchor: "docs/DEVUI_STAGE_A_READ_ONLY_OVERVIEW/README.md :: Authority-resolution gate"
 parent_capability: devUI Stage A Read-Only Overview
-prerequisites: [ARO-02, ARO-03, ARO-04]
-depends_on: [ENRICH_OVERVIEW_PRODUCER_FACTS.md, EXPOSE_LOCAL_OVERVIEW_GET_ROUTE.md, BIND_TYPED_OVERVIEW_NAVIGATION.md]
+prerequisites: [ARO-03, ARO-04]
+depends_on: [EXPOSE_LOCAL_OVERVIEW_GET_ROUTE.md, BIND_TYPED_OVERVIEW_NAVIGATION.md]
 can_parallelize_with: []
-recommended_capability: "Codex Terra / medium plus governed Yggdrasil design handoff"
+recommended_capability: "Codex Terra / high plus governed Yggdrasil design handoff"
 capability_rationale: "The semantic fixtures are fixed; visual hierarchy, responsive behavior, and accessibility require governed design-system evidence."
 execution_context: fresh_issue_agent
-issue_local_helper_budget: 1
+issue_local_helper_budget: 0
 context_cost_estimate: high
 complexity: high
 verification_difficulty: high
@@ -29,13 +29,13 @@ Accept a governed visual treatment over stable, source-honest Overview fixtures.
 
 Parent: #4741
 
-Turn stable producer, route, and navigation fixtures into accepted visual/interaction guidance
-without changing server semantics or claiming runtime implementation.
+Turn the preserved ARO-01 withdrawal and stable route/navigation fixtures into accepted
+visual/interaction guidance without changing server semantics or claiming runtime implementation.
 
 ## Scope
 
 - Run the fail-closed Yggdrasil system/token preflight.
-- Produce the state matrix from stable ARO-02/03/04 fixtures.
+- Produce the state matrix from the preserved ARO-01 withdrawal and stable ARO-03/04 fixtures.
 - Normalize accepted guidance into this capability boundary without changing server semantics.
 
 ## What This Task Does
@@ -56,6 +56,8 @@ Visual hierarchy can accidentally turn degraded evidence into confidence or prov
 ## Source Anchors
 
 - `docs/DEVUI_STAGE_A_READ_ONLY_OVERVIEW/README.md :: Cross-task invariants`
+- `docs/DEVUI_STAGE_A_READ_ONLY_OVERVIEW/README.md :: Authority-resolution gate`
+- `docs/DEVUI.md :: ARO-01 source-authority resolution (2026-08-10)`
 - `docs/DESIGN_PRINCIPLES.md :: Shared Visual Language`
 - `companion-ui/docs/DESIGN_HANDOFF_GOVERNANCE.md :: Yggdrasil design-system gate`
 
@@ -88,8 +90,9 @@ accepted guidance is normalized back into this capability specification before A
 - [ ] The live system named exactly **Yggdrasil Design System** passes selection and byte-for-byte
       token parity against `companion-ui/companion-app/colors_and_type.css`.
   - Verify: runtime receipt: yggdrasil-design-handoff.v1
-- [ ] The handoff uses the stable ARO-02/03/04 fixtures and never changes zone eligibility,
-      evidence axes, withdrawals, source authority, or typed-root separation.
+- [ ] The handoff uses the preserved ARO-01 withdrawal and stable ARO-03/04 fixtures and never
+      changes zone eligibility, evidence axes, withdrawals, source authority, or typed-root
+      separation.
   - Verify: runtime receipt: devui-overview-design-authority-boundary.v1
 - [ ] State guidance covers desktop, narrow, 200% zoom, keyboard, screen-reader naming, print,
       JavaScript-off, many-at-once, complete-empty, partial, stale, missing, refused, and unlinked.
@@ -102,7 +105,11 @@ accepted guidance is normalized back into this capability specification before A
 
 ## How to Verify (Pre-Merge)
 
-- Execute the full `.codex/skills/yggdrasil-design-handoff/SKILL.md` preflight and workflow.
+- Before design generation or readiness, execute the canonical live selection and token-parity
+  preflight in `.codex/skills/yggdrasil-design-handoff/SKILL.md`. The fresh execution receipt must
+  record the then-resolved exact design-system name and ID, binding token source, SHA-256, and
+  byte-for-byte parity. The design-system MCP is unavailable during this documentation repair, so
+  no selection, parity, readiness, or generation is proven here.
 - Walk the complete state matrix and record token SHA-256, component inputs, screenshots, and open questions.
 - Run `git diff --check` on normalized repository artifacts.
 
@@ -135,4 +142,6 @@ accepted guidance is normalized back into this capability specification before A
 ## Related GitHub Issues
 
 Filed as blocked child [#4746](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4746) on stable
-#4743/#4744/#4745 fixtures and live governed design access.
+ARO-03/#4744 and ARO-04/#4745 fixtures plus live governed design access. ARO-01/#4742 preserves
+the withdrawal that the handoff must render; ARO-02/#4743 is closed/superseded and supplies no
+fixture.

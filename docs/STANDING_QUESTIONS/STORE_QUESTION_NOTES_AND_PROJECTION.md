@@ -69,9 +69,13 @@ note-store+projection pattern (`docs/EPISODE_RESOLUTION_ENGINE/EPISODE_NOTE_STOR
    `2016-12-31T23:59:60Z` is stored as `2017-01-01 00:00:00+00`, one second later, on all 27
    announced dates; and (b) fractional seconds past the microsecond `TIMESTAMPTZ` resolves to are
    truncated, never rounded, since RFC 3339's `time-secfrac` is unbounded. Both folds happen in the
-   projector, not in Postgres: forwarding a `:60` literal or an over-long fraction to the server is a
-   hard error that aborts the whole TRUNCATE+replay rebuild, so bounding them here is what keeps the
-   projection rebuildable for every value the write seam accepts. Both are query-surface
+   projector, not in Postgres: a zero-fraction `:60` literal would be accepted and folded by the
+   server, while a fractional `:60` literal errors; ordinary fractions beyond microsecond precision
+   can be accepted and rounded, while literals exceeding the server's input-length limit error. The
+   projector folds leap seconds and truncates fractions, never rounds them, so a server-side rounding
+   carry cannot alter a second or cross a day boundary after a folded leap second. This makes the
+   projection's chosen approximation explicit and keeps every value the write seam accepts
+   rebuildable. Both are query-surface
    approximations, not a loss of canonical truth — the vault's canonical RFC 3339 strings remain
    unchanged and the projection fully rebuilds from them; `evidence[].matched_at` remains unchanged
    inside JSON rather than being adapted as a database timestamp.

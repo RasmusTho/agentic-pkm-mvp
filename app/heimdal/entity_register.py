@@ -66,6 +66,7 @@ from app.events.types import (
 )
 from app.knowledge.write_ops import write_note_relative
 from app.services.outbox import derive_idempotency_key, write_outbox_event
+from app.vault.markdown_settings import MarkdownSettingsError, MarkdownSettingsStore
 from app.vault.manager import VaultContext
 from app.write_guard import DEFAULT_WRITE_GUARD, WriteGuard
 
@@ -282,7 +283,14 @@ class EntityRegister:
         # respelling of the same selected vault must NOT re-derive
         # entity-review operation ids — that silently duplicates merge events
         # instead of resuming (review F7 on #4350).
-        self._vault_identity = vault_context.active_vault_id or str(self._vault_root)
+        active_vault_id = vault_context.active_vault_id
+        if active_vault_id == "":
+            raise EntityRegisterError(
+                "vault_context.active_vault_id must not be empty; "
+                "entity-review operation identity cannot fall back silently"
+            )
+        self._vault_identity = active_vault_id or str(self._vault_root)
+        self._active_vault_id = active_vault_id
         self._write_guard = write_guard
         self._register_dir = register_dir
         self._conn = conn
@@ -291,6 +299,53 @@ class EntityRegister:
     def vault_identity(self) -> str:
         """Stable identity of the vault this register is bound to."""
         return self._vault_identity
+
+    @property
+    def vault_root(self) -> Path:
+        """Resolved vault root bound to this register."""
+        return self._vault_root
+
+    @property
+    def operation_vault_identity(self) -> str:
+        """Return the selection-owned identity permitted for EROJ operations.
+
+        Generic register mutations can still run in an explicitly supplied
+        path-only context, but an entity-review journal row cannot: a path
+        fallback and a selection id for the same vault would otherwise mint
+        different operation namespaces.  The context id must agree with the
+        root-local, vault-selection authority in ``settings/vault.md``;
+        callers cannot establish operation identity by choosing an id shape.
+        """
+        if self._active_vault_id is None:
+            raise EntityRegisterError(
+                "entity-review operation identity requires a vault-scoped "
+                "vault_context.active_vault_id; refusing path fallback"
+            )
+        try:
+            vault_doc = MarkdownSettingsStore().read(self._vault_root / "settings" / "vault.md")
+        except (OSError, MarkdownSettingsError) as exc:
+            raise EntityRegisterError(
+                "entity-review operation identity requires a vault-scoped "
+                "settings/vault.md selection authority"
+            ) from exc
+        if vault_doc.frontmatter.get("schema") != "design-handoff.vault.v1":
+            raise EntityRegisterError(
+                "entity-review operation identity requires canonical "
+                "settings/vault.md schema design-handoff.vault.v1"
+            )
+        persisted_vault_id = vault_doc.frontmatter.get("vaultId")
+        if not isinstance(persisted_vault_id, str) or not persisted_vault_id:
+            raise EntityRegisterError(
+                "entity-review operation identity requires a non-empty vaultId "
+                "in settings/vault.md"
+            )
+        if persisted_vault_id != self._active_vault_id:
+            raise EntityRegisterError(
+                "entity-review operation identity requires active_vault_id to "
+                "match settings/vault.md vaultId; refusing synthetic identity "
+                f"{self._active_vault_id!r}"
+            )
+        return self._active_vault_id
 
     # -- internal note IO ---------------------------------------------------
 

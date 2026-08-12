@@ -7,6 +7,7 @@ import time
 import uuid
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal
 
@@ -47,6 +48,7 @@ Summary = dict[str, object]
 
 _PANEL_POLICY_ID = "panel_auto"
 _DEDUP_QUEUE = DedupTaskQueue(SystemClock(), ttl_seconds=300.0)
+_DELETE_RECONCILIATION_RETRY_LIMIT = 3
 
 
 class OutboxPathError(ValueError):
@@ -78,6 +80,98 @@ def load_snapshot(path: Path) -> Snapshot:
 def save_snapshot(path: Path, snapshot: Snapshot) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(snapshot, indent=2, sort_keys=True), encoding="utf-8")
+
+
+def _unreconciled_deletions_path(snapshot_path: Path) -> Path:
+    """Return the bounded retry state that must outlive bare snapshot refreshes."""
+    return snapshot_path.with_name(f"{snapshot_path.name}.unreconciled-deletions.json")
+
+
+def _load_unreconciled_deletions(snapshot_path: Path) -> dict[str, dict[str, object]]:
+    path = _unreconciled_deletions_path(snapshot_path)
+    if not path.exists():
+        return {}
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    if not isinstance(raw, dict):
+        return {}
+    pending: dict[str, dict[str, object]] = {}
+    for rel_path, value in raw.items():
+        if not isinstance(rel_path, str) or not isinstance(value, dict):
+            continue
+        try:
+            attempts = int(value.get("attempts", 0))
+            observed_mtime = float(value["observed_mtime"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        status = str(value.get("status", "pending"))
+        if status not in {"pending", "terminated"}:
+            continue
+        if attempts > 0 and attempts <= _DELETE_RECONCILIATION_RETRY_LIMIT:
+            pending[rel_path] = {
+                "attempts": attempts,
+                "observed_mtime": observed_mtime,
+                "status": status,
+            }
+    return pending
+
+
+def _save_unreconciled_deletions(
+    snapshot_path: Path, pending: dict[str, dict[str, object]]
+) -> None:
+    path = _unreconciled_deletions_path(snapshot_path)
+    if not pending:
+        path.unlink(missing_ok=True)
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(pending, indent=2, sort_keys=True), encoding="utf-8")
+
+
+def _snapshot_with_unreconciled_deletions(snapshot_path: Path, current: Snapshot) -> Snapshot:
+    """Retain only bounded unresolved deletes across every snapshot writer.
+
+    ``refresh_snapshot()`` has callers outside ``run_watcher_tick``.  Keeping
+    this state in a sibling file and merging it at the writer boundary means a
+    bare refresh cannot silently erase a retryable deletion.
+    """
+    retained = dict(current)
+    for rel_path, entry in _load_unreconciled_deletions(snapshot_path).items():
+        if entry["status"] == "pending":
+            retained.setdefault(rel_path, float(entry["observed_mtime"]))
+    return retained
+
+
+def _discard_reappeared_unreconciled_deletions(snapshot_path: Path, current: Snapshot) -> None:
+    """A recreated path is a new live observation, never an old delete retry."""
+    pending = _load_unreconciled_deletions(snapshot_path)
+    for rel_path in current:
+        pending.pop(rel_path, None)
+    _save_unreconciled_deletions(snapshot_path, pending)
+
+
+def _terminal_unreconciled_deletions(snapshot_path: Path) -> list[str]:
+    return [
+        rel_path
+        for rel_path, entry in _load_unreconciled_deletions(snapshot_path).items()
+        if entry["status"] == "terminated"
+    ]
+
+
+def _clear_terminal_unreconciled_deletions(snapshot_path: Path) -> None:
+    pending = _load_unreconciled_deletions(snapshot_path)
+    for rel_path in _terminal_unreconciled_deletions(snapshot_path):
+        pending.pop(rel_path, None)
+    _save_unreconciled_deletions(snapshot_path, pending)
+
+
+def _advance_terminal_delete_observations(snapshot_path: Path) -> None:
+    """Acknowledge only terminal deletes without advancing changed-note cursors."""
+    snapshot = load_snapshot(snapshot_path)
+    for rel_path in _terminal_unreconciled_deletions(snapshot_path):
+        snapshot.pop(rel_path, None)
+    save_snapshot(snapshot_path, snapshot)
 
 
 def _scan_md_files(vault_root: Path) -> dict[str, float]:
@@ -334,14 +428,22 @@ class VaultWatcher:
     def run(self, *, save: bool = True) -> VaultWatcherResult:
         snapshot = load_snapshot(self.snapshot_path)
         changed, deleted, current = compute_changes(self.vault_root, snapshot)
+        terminal = set(_terminal_unreconciled_deletions(self.snapshot_path))
+        deleted = [path for path in deleted if path.relative_to(self.vault_root).as_posix() not in terminal]
         if save:
-            save_snapshot(self.snapshot_path, current)
+            _discard_reappeared_unreconciled_deletions(self.snapshot_path, current)
+            save_snapshot(
+                self.snapshot_path,
+                _snapshot_with_unreconciled_deletions(self.snapshot_path, current),
+            )
         return VaultWatcherResult(changed=changed, deleted=deleted, snapshot=current)
 
     def refresh_snapshot(self) -> Snapshot:
         current = _scan_md_files(self.vault_root)
-        save_snapshot(self.snapshot_path, current)
-        return current
+        _discard_reappeared_unreconciled_deletions(self.snapshot_path, current)
+        retained = _snapshot_with_unreconciled_deletions(self.snapshot_path, current)
+        save_snapshot(self.snapshot_path, retained)
+        return retained
 
 
 _DeleteReconciliation = Literal["emitted", "superseded_by_rename", "not_queued"]
@@ -410,12 +512,9 @@ def _emit_watcher_delete_event(
     A required enqueue that fails raises; the caller records it as an error and
     does not count a purge.
 
-    Re-observability of a deletion that produced no tombstone is deliberately
-    NOT attempted here — it needs ``vault_sync.delete_note``'s own connection
-    classified first (it raises before this function is reached in a runtime
-    that names no database), plus a decided termination policy. Carried by
-    #4468; see ``docs/DB_SCHEMA.md :: Vault-watcher delete tombstone
-    durability``.
+    An unlanded deletion is re-observable under #4468's bounded termination
+    policy. The reconciliation loop, rather than this emission helper, owns
+    the retry state and terminal receipt.
     """
     companion = find_companion_by_source_ref(vault_root, str(rel_deleted))
     companion_uuid = companion.uuid if companion else ""
@@ -429,10 +528,17 @@ def _emit_watcher_delete_event(
             # tick already (re)ingested -- purging would orphan it.
             return "superseded_by_rename"
     payload = {
-        "path": str(deleted_path),
+        # Match delete_note's canonical payload identity. The legacy watcher
+        # accepts a relative vault root, so `deleted_path` can otherwise be
+        # relative while delete_note resolves it before fingerprinting.
+        "path": str(deleted_path.resolve()),
         "deleted": True,
         "reason": "vault_note_deleted",
-        "source": "vault_watcher.run_watcher_tick",
+        # Match delete_note's logical producer identity. If delete_note
+        # committed and the process crashed before the watcher advanced its
+        # snapshot, retrying through this fallback derives the same outbox
+        # idempotency key instead of creating a second tombstone.
+        "source": "vault_sync.delete_note",
         **canonical_event_identity(canonical_object_id, note_uuid),
     }
     required_db = db_outbox_required() or runtime_database_is_named(os.environ)
@@ -446,7 +552,16 @@ def _emit_watcher_delete_event(
         payload,
         INGEST_OBJECT_DELETED,
         None,
-        observation=str(observed_mtime) if observed_mtime is not None else None,
+        # delete_note's file_state mtime is a timezone-aware datetime. The
+        # snapshot holds that same stat value as an epoch float, so normalize
+        # it back to the service's exact string form before the outbox hashes
+        # the observation. This keeps commit-before-cleanup crash replay in
+        # the same idempotency domain as delete_note.
+        observation=(
+            str(datetime.fromtimestamp(observed_mtime, tz=timezone.utc))
+            if observed_mtime is not None
+            else None
+        ),
         required_db=required_db,
     )
     return "not_queued" if would_skip else "emitted"
@@ -495,6 +610,7 @@ def run_watcher_tick(
         "changed": len(result.changed),
         "deleted": len(result.deleted),
         "deleted_purged": 0,
+        "unreconciled_deletions_terminated": 0,
         "ingest_attempted": 0,
         "ingested": 0,
         "panel_candidates": 0,
@@ -514,6 +630,36 @@ def run_watcher_tick(
         "snapshot_path": str(watcher.snapshot_path),
     }
     messages: list[str] = []
+    recovered_terminal = _terminal_unreconciled_deletions(watcher.snapshot_path)
+    if recovered_terminal:
+        summary["unreconciled_deletions_terminated"] += len(recovered_terminal)
+        messages.extend(
+            "Warning: deletion reconciliation retry budget exhausted for "
+            f"{rel_path}; recovered terminal report"
+            for rel_path in recovered_terminal
+        )
+
+    def _finish_tick(*, preserve_changed_observations: bool = False) -> None:
+        """Persist snapshot before its receipt, then retire reported terminals.
+
+        A crash before the receipt leaves the terminal record durable and the
+        next run re-reports it; a crash after the receipt but before cleanup is
+        an at-least-once report, never a restarted retry budget.
+        """
+        if not dry_run:
+            if preserve_changed_observations:
+                _advance_terminal_delete_observations(watcher.snapshot_path)
+            else:
+                watcher.refresh_snapshot()
+        _emit_run_event(
+            summary,
+            vault_root=vault_root,
+            snapshot_path=watcher.snapshot_path,
+            outbox_path=resolved_outbox,
+            trigger="vault_watcher_run",
+        )
+        if not dry_run and _terminal_unreconciled_deletions(watcher.snapshot_path):
+            _clear_terminal_unreconciled_deletions(watcher.snapshot_path)
 
     # Reconcile watcher-detected filesystem deletions (#2990): the watcher
     # never deletes vault files itself, only derived store rows. First
@@ -530,11 +676,10 @@ def run_watcher_tick(
     # uuid5(rel_path) fallback) and emits a delete_note-compatible tombstone
     # event directly. Idempotent on replay: the outbox idempotency key is
     # scoped to this observation (the deleted version's last snapshotted
-    # mtime), and refresh_snapshot() removes the path from the snapshot so
-    # later ticks never re-see the deletion -- which is also why only a
-    # tombstone that actually landed may be counted as a purge (#4214 D3), and
-    # why making an unlanded one re-observable is a separate contract that
-    # needs vault_sync.delete_note's own connection classified first. Called
+    # mtime). Only a tombstone that actually landed counts as a purge (#4214
+    # D3). An unlanded one is retained in bounded retry state by #4468; all
+    # snapshot writers merge that state, so a bare refresh cannot erase it.
+    # Called
     # AFTER the tick's ingest
     # of changed paths, so a rename (delete(old) + result.changed entry for
     # the new path) resolves against the already-updated companion and the
@@ -547,6 +692,7 @@ def run_watcher_tick(
         if dry_run or not result.deleted:
             return
         prior_snapshot = load_snapshot(watcher.snapshot_path)
+        pending = _load_unreconciled_deletions(watcher.snapshot_path)
         for deleted_path in result.deleted:
             try:
                 rel_deleted = deleted_path.relative_to(vault_root)
@@ -558,6 +704,8 @@ def run_watcher_tick(
             observed_mtime = prior_snapshot.get(str(rel_deleted))
             if observed_mtime is None:
                 observed_mtime = prior_snapshot.get(str(deleted_path))
+            pending_key = rel_deleted.as_posix()
+            unresolved = False
             try:
                 # delete_note commits its event inside its own transaction, so
                 # True is proof the tombstone landed. False means it could not
@@ -574,16 +722,47 @@ def run_watcher_tick(
                         observed_mtime=observed_mtime,
                     )
                 # Only a tombstone that actually landed counts as a purge
-                # (#4214 D3). "not_queued" and "superseded_by_rename" are both
-                # honest non-purges, and neither is retried: see the emitter's
-                # docstring for why re-observability is a separate contract.
+                # (#4214 D3). A rename is terminal, but a missing queue is
+                # explicitly unreconciled and must take the bounded retry path.
                 if outcome == "emitted":
                     summary["deleted_purged"] += 1
+                elif outcome == "not_queued":
+                    unresolved = True
             except Exception:
-                summary["errors"] += 1
+                unresolved = True
+
+            if not unresolved:
+                pending.pop(pending_key, None)
+                continue
+
+            attempts = int(pending.get(pending_key, {}).get("attempts", 0)) + 1
+            if attempts >= _DELETE_RECONCILIATION_RETRY_LIMIT:
+                # The terminal record is intentionally an operator-visible
+                # message rather than a permanently retained snapshot row.
+                # The normal watcher.run receipt carries the matching counter.
+                pending[pending_key] = {
+                    "attempts": attempts,
+                    "observed_mtime": float(observed_mtime or 0.0),
+                    "status": "terminated",
+                }
+                summary["unreconciled_deletions_terminated"] += 1
                 messages.append(
-                    f"Warning: unable to reconcile deletion for {rel_deleted}"
+                    "Warning: deletion reconciliation retry budget exhausted for "
+                    f"{rel_deleted}; reported and no longer retained"
                 )
+                continue
+
+            # Keep only retryable observations. Each entry has at most two
+            # future attempts, and refresh_snapshot() preserves it even when
+            # called by a non-tick caller.
+            pending[pending_key] = {
+                "attempts": attempts,
+                "observed_mtime": float(observed_mtime or 0.0),
+                "status": "pending",
+            }
+            summary["errors"] += 1
+            messages.append(f"Warning: unable to reconcile deletion for {rel_deleted}")
+        _save_unreconciled_deletions(watcher.snapshot_path, pending)
 
     policy_allowed_paths: list[Path] = []
     for path in result.changed:
@@ -623,15 +802,7 @@ def run_watcher_tick(
 
     if summary["changed"] == 0:
         _reconcile_deletions()
-        if not dry_run:
-            watcher.refresh_snapshot()
-        _emit_run_event(
-            summary,
-            vault_root=vault_root,
-            snapshot_path=watcher.snapshot_path,
-            outbox_path=resolved_outbox,
-            trigger="vault_watcher_run",
-        )
+        _finish_tick()
         return summary, messages
 
     if not force and summary["changed"] > max_notes:
@@ -644,23 +815,11 @@ def run_watcher_tick(
             f") exceed max-notes={max_notes}; aborting watcher run. "
             "Use --force to override."
         )
-        _emit_run_event(
-            summary,
-            vault_root=vault_root,
-            snapshot_path=watcher.snapshot_path,
-            outbox_path=resolved_outbox,
-            trigger="vault_watcher_run",
-        )
+        _finish_tick(preserve_changed_observations=True)
         return summary, messages
 
     if dry_run:
-        _emit_run_event(
-            summary,
-            vault_root=vault_root,
-            snapshot_path=watcher.snapshot_path,
-            outbox_path=resolved_outbox,
-            trigger="vault_watcher_run",
-        )
+        _finish_tick()
         return summary, messages
 
     summary["ingest_attempted"] = summary["changed"]
@@ -870,14 +1029,7 @@ def run_watcher_tick(
     else:
         messages.append("Panel runtime skipped (no candidates or --skip-panel set).")
 
-    watcher.refresh_snapshot()
-    _emit_run_event(
-        summary,
-        vault_root=vault_root,
-        snapshot_path=watcher.snapshot_path,
-        outbox_path=resolved_outbox,
-        trigger="vault_watcher_run",
-    )
+    _finish_tick()
     return summary, messages
 
 

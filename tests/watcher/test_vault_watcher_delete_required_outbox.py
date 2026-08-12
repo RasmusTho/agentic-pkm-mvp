@@ -15,16 +15,16 @@ Two properties are pinned here:
    ``STORE_BACKEND=memory``. #4214's constraint says a properly configured
    runtime (``STORE_BACKEND=pg`` *or an explicit DSN*) must not change.
 
-Making a deletion whose tombstone never landed *re-observable* is deliberately
-NOT in scope; it needs ``vault_sync.delete_note``'s own connection classified
-first. `test_the_tick_terminates_when_no_database_is_named` pins the resulting
-behaviour so the gap is visible rather than assumed away.
+An unlanded deletion is re-observable across a bounded three-attempt policy.
+The retry marker is stored separately from the snapshot and every snapshot
+writer preserves it, so a bare ``refresh_snapshot()`` cannot erase it.
 """
 
 from __future__ import annotations
 
 import json
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -152,16 +152,11 @@ def test_an_unreachable_named_database_fails_loud_instead_of_dropping_silently(
     assert any("unable to reconcile deletion" in message for message in messages)
 
 
-def test_required_tombstone_failure_is_recorded_and_not_retried(
+def test_required_tombstone_failure_is_recorded_and_retried_with_a_budget(
     seeded_vault: tuple[Path, Path, Path],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A failed required enqueue consumes the observation — deliberately, for now.
-
-    Re-observability is a separate contract (it needs `vault_sync.delete_note`
-    classified first). This pins the CURRENT behaviour so the gap is explicit
-    and any future change to it is a visible test change, not a silent drift.
-    """
+    """A required failure is retried, but never retained indefinitely."""
     vault, note, snapshot_path = seeded_vault
     monkeypatch.setenv("PKM_SETTINGS_PROFILE", "lab")
     monkeypatch.setenv("WATCHER_REQUIRE_DB_OUTBOX", "1")
@@ -180,7 +175,15 @@ def test_required_tombstone_failure_is_recorded_and_not_retried(
     assert any("unable to reconcile deletion" in message for message in messages)
 
     second, _ = _tick(vault, snapshot_path)
-    assert second["deleted"] == 0, "the tick must terminate rather than loop on the failure"
+    assert second["deleted"] == 1
+    assert second["errors"] == 1
+
+    third, _ = _tick(vault, snapshot_path)
+    assert third["unreconciled_deletions_terminated"] == 1
+    assert third["errors"] == 0
+
+    fourth, _ = _tick(vault, snapshot_path)
+    assert fourth["deleted"] == 0
 
 
 def test_queued_tombstone_is_counted_once_and_the_snapshot_advances(
@@ -209,19 +212,11 @@ def test_queued_tombstone_is_counted_once_and_the_snapshot_advances(
     assert second["deleted"] == 0, "a reconciled deletion must not be re-reported"
 
 
-def test_the_tick_terminates_when_no_database_is_named(
+def test_unreconciled_delete_retries_then_terminates(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Run the REAL `vault_sync.delete_note`, which has its own unguarded connection.
-
-    Every other test here stubs `delete_note` out, which also stubs away the
-    `conn_rw()` it opens with no memory-mode guard. In a runtime that names no
-    database that call raises before the tombstone emitter is ever consulted, so
-    a retention policy built above it cannot terminate — that is why
-    re-observability is out of scope and carried by its own Issue. This pins the
-    property that actually matters here: the tick does not loop.
-    """
+    """The real seam retries twice, survives bare refresh, then terminates."""
     vault, note, snapshot_path = _seed(tmp_path, monkeypatch)
     monkeypatch.setenv("STORE_BACKEND", "memory")
     for key in RUNTIME_DATABASE_ENV_KEYS:
@@ -233,10 +228,200 @@ def test_the_tick_terminates_when_no_database_is_named(
     first, _ = _tick(vault, snapshot_path)
     assert first["deleted"] == 1
     assert first["deleted_purged"] == 0
+    assert first["errors"] == 1
+
+    # The runtime/CLI bare callers use this exact method; it must not erase
+    # retryability while the note remains absent from disk.
+    vault_watcher.VaultWatcher(vault, snapshot_path=snapshot_path).refresh_snapshot()
 
     second, _ = _tick(vault, snapshot_path)
-    assert second["deleted"] == 0, "the deletion must not be re-reported on every tick"
-    assert second["errors"] == 0, "the tick must not raise the same failure forever"
+    assert second["deleted"] == 1
+    assert second["errors"] == 1
+
+    third, messages = _tick(vault, snapshot_path)
+    assert third["deleted"] == 1
+    assert third["errors"] == 0
+    assert third["unreconciled_deletions_terminated"] == 1
+    assert any("retry budget exhausted" in message for message in messages)
+
+    fourth, _ = _tick(vault, snapshot_path)
+    assert fourth["deleted"] == 0
+    assert fourth["errors"] == 0
+
+
+def test_recreated_path_clears_an_old_delete_retry(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A new live note may not inherit a prior deletion's retry budget."""
+    vault, note, snapshot_path = _seed(tmp_path, monkeypatch)
+    monkeypatch.setenv("STORE_BACKEND", "memory")
+    for key in RUNTIME_DATABASE_ENV_KEYS:
+        monkeypatch.delenv(key, raising=False)
+    _tick(vault, snapshot_path)
+
+    time.sleep(0.01)
+    note.unlink()
+    _tick(vault, snapshot_path)
+
+    note.write_text("Recreated", encoding="utf-8")
+    vault_watcher.VaultWatcher(vault, snapshot_path=snapshot_path).refresh_snapshot()
+
+    note.unlink()
+    first_new_delete, _ = _tick(vault, snapshot_path)
+    assert first_new_delete["errors"] == 1
+    assert first_new_delete["unreconciled_deletions_terminated"] == 0
+
+
+def test_terminal_delete_does_not_restart_after_limit_exit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The max-notes branch advances the terminal observation too."""
+    vault, note, snapshot_path = _seed(tmp_path, monkeypatch)
+    monkeypatch.setenv("STORE_BACKEND", "memory")
+    for key in RUNTIME_DATABASE_ENV_KEYS:
+        monkeypatch.delenv(key, raising=False)
+    _tick(vault, snapshot_path)
+    time.sleep(0.01)
+    note.unlink()
+
+    for _ in range(2):
+        _tick(vault, snapshot_path)
+
+    # Force the third observation through the early limit-exceeded exit.
+    extra = vault / "Concepts" / "extra.md"
+    extra.write_text("changed", encoding="utf-8")
+    terminal, _ = vault_watcher.run_watcher_tick(
+        vault_root=vault,
+        snapshot_path=snapshot_path,
+        skip_panel=True,
+        emit_only=True,
+        dry_run=False,
+        max_notes=0,
+        force=False,
+    )
+    assert terminal["unreconciled_deletions_terminated"] == 1
+
+    next_tick, _ = _tick(vault, snapshot_path)
+    assert next_tick["deleted"] == 0
+    assert next_tick["unreconciled_deletions_terminated"] == 0
+
+
+def test_limit_exit_keeps_changed_note_observable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Deletion terminality must not advance skipped ingest/panel cursors."""
+    vault, note, snapshot_path = _seed(tmp_path, monkeypatch)
+    _tick(vault, snapshot_path)
+    time.sleep(0.01)
+    note.write_text("changed", encoding="utf-8")
+
+    limited, _ = vault_watcher.run_watcher_tick(
+        vault_root=vault,
+        snapshot_path=snapshot_path,
+        skip_panel=True,
+        emit_only=True,
+        dry_run=False,
+        max_notes=0,
+        force=False,
+    )
+    assert limited["limit_exceeded"] is True
+    assert limited["changed"] == 1
+
+    reobserved, _ = _tick(vault, snapshot_path)
+    assert reobserved["changed"] == 1
+
+
+def test_terminal_report_recovers_after_receipt_crash(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Snapshot then receipt crash leaves a recoverable terminal report."""
+    vault, note, snapshot_path = _seed(tmp_path, monkeypatch)
+    monkeypatch.setenv("STORE_BACKEND", "memory")
+    for key in RUNTIME_DATABASE_ENV_KEYS:
+        monkeypatch.delenv(key, raising=False)
+    _tick(vault, snapshot_path)
+    time.sleep(0.01)
+    note.unlink()
+    _tick(vault, snapshot_path)
+    _tick(vault, snapshot_path)
+
+    monkeypatch.setattr(vault_watcher, "_emit_run_event", lambda *a, **_: (_ for _ in ()).throw(RuntimeError("crash")))
+    with pytest.raises(RuntimeError, match="crash"):
+        _tick(vault, snapshot_path)
+
+    monkeypatch.undo()
+    recovered, messages = _tick(vault, snapshot_path)
+    assert recovered["deleted"] == 0
+    assert recovered["unreconciled_deletions_terminated"] == 1
+    assert any("recovered terminal report" in message for message in messages)
+
+
+def test_fallback_uses_delete_note_observation_identity(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A post-commit crash retries under delete_note's exact outbox key."""
+    vault, note, _ = _seed(tmp_path, monkeypatch)
+    observed_mtime = 1_770_000_000.25
+    captured: dict[str, object] = {}
+    monkeypatch.setattr(vault_watcher, "find_companion_by_source_ref", lambda *_: None)
+    monkeypatch.setattr(vault_watcher, "read_companion", lambda *_: None)
+    monkeypatch.setattr(vault_watcher, "resolve_canonical_object_id", lambda note_uuid: note_uuid)
+    monkeypatch.setattr(
+        vault_watcher,
+        "insert_object_and_outbox",
+        lambda *args, **kwargs: captured.update(kwargs),
+    )
+    monkeypatch.setenv("PKM_SETTINGS_PROFILE", "lab")
+    monkeypatch.setenv("WATCHER_REQUIRE_DB_OUTBOX", "1")
+
+    outcome = vault_watcher._emit_watcher_delete_event(
+        note,
+        rel_deleted=Path("Concepts/D.md"),
+        vault_root=vault,
+        observed_mtime=observed_mtime,
+    )
+
+    assert outcome == "emitted"
+    assert captured["observation"] == str(
+        datetime.fromtimestamp(observed_mtime, tz=timezone.utc)
+    )
+    assert captured["observation"] != str(observed_mtime)
+
+
+def test_fallback_uses_delete_note_absolute_path_identity(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Relative watcher roots retain delete_note's absolute payload identity."""
+    vault, note, _ = _seed(tmp_path, monkeypatch)
+    captured: dict[str, object] = {}
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(vault_watcher, "find_companion_by_source_ref", lambda *_: None)
+    monkeypatch.setattr(vault_watcher, "read_companion", lambda *_: None)
+    monkeypatch.setattr(vault_watcher, "resolve_canonical_object_id", lambda note_uuid: note_uuid)
+    monkeypatch.setattr(
+        vault_watcher,
+        "insert_object_and_outbox",
+        lambda payload, *args, **kwargs: captured.update(payload),
+    )
+    monkeypatch.setenv("PKM_SETTINGS_PROFILE", "lab")
+    monkeypatch.setenv("WATCHER_REQUIRE_DB_OUTBOX", "1")
+
+    relative_vault = Path("vault")
+    relative_note = relative_vault / "Concepts" / "D.md"
+    vault_watcher._emit_watcher_delete_event(
+        relative_note,
+        rel_deleted=Path("Concepts/D.md"),
+        vault_root=relative_vault,
+        observed_mtime=1_770_000_000.0,
+    )
+
+    assert captured["path"] == str(note.resolve())
 
 
 def test_rename_supersedes_the_tombstone(

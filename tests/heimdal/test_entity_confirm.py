@@ -259,6 +259,11 @@ class _LoggingRegister(EntityRegister):
 def _vault_root(tmp_path: Path) -> Path:
     root = tmp_path / "vault"
     root.mkdir(parents=True, exist_ok=True)
+    (root / "settings").mkdir(exist_ok=True)
+    (root / "settings" / "vault.md").write_text(
+        "---\nschema: design-handoff.vault.v1\nvaultId: vault-test\n---\n",
+        encoding="utf-8",
+    )
     return root
 
 
@@ -384,6 +389,37 @@ def test_merge_writes_redirect_and_is_reversible(tmp_path: Path) -> None:
     assert restored_entry.lifecycle == LIFECYCLE_CANONICAL
     assert anna_gym in restored_entry.merged_from
 
+
+def test_applicator_refuses_vault_root_register_mismatch(tmp_path: Path) -> None:
+    register_root = _vault_root(tmp_path / "register")
+    applicator_root = _vault_root(tmp_path / "applicator")
+    register = _register(register_root)
+    source = register.mint_canonical("Anna fran gymmet")
+    target = register.mint_canonical("Anna Svensson")
+    entry = queue_for_review(
+        applicator_root,
+        _mention(resolution=RESOLUTION_AMBIGUOUS, confidence=0.75),
+        candidate_entity_ids=[source, target],
+    )
+    write_settings_note(
+        applicator_root,
+        SettingsNote(
+            spec=ENTITY_REVIEW,
+            values={
+                "pending": [item.to_dict() for item in pending_review_entries(applicator_root)],
+                "decisions": [
+                    ReviewDecision(queue_entry_id=entry.queue_entry_id, action="reject").to_dict()
+                ],
+            },
+        ),
+        settings_dir=DEFAULT_SETTINGS_DIR,
+        write_guard=_allowing_guard(),
+    )
+
+    with pytest.raises(EntityConfirmError, match="does not match"):
+        apply_human_review_decisions(
+            applicator_root, register=register, journal=_InMemoryJournal()
+        )
 
 def test_reject_decision_clears_queue_without_register_mutation(tmp_path: Path) -> None:
     vault_root = _vault_root(tmp_path)

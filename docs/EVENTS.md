@@ -798,6 +798,8 @@ Payload (minimum contract):
 - `skipped_idempotent` (`int`)
 - `skipped_writes_blocked` (`int`)
 - `errors` (`int`)
+- `unreconciled_deletions_terminated` (`int`; deletions that exhausted the bounded
+  reconciliation budget and were reported to the operator)
 - `dry_run` (`bool`)
 - `limit_exceeded` (`bool`)
 

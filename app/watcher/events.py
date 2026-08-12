@@ -61,6 +61,7 @@ class WatcherRunPayload(BaseModel):
     skipped_idempotent: int = 0
     skipped_writes_blocked: int = 0
     errors: int
+    unreconciled_deletions_terminated: int = 0
     dry_run: bool
     limit_exceeded: bool
     snapshot_path: str
@@ -107,6 +108,9 @@ def build_watcher_run_event(
         skipped_idempotent=_coerce_int(summary.get("skipped_idempotent")),
         skipped_writes_blocked=_coerce_int(summary.get("skipped_writes_blocked")),
         errors=_coerce_int(summary.get("errors")),
+        unreconciled_deletions_terminated=_coerce_int(
+            summary.get("unreconciled_deletions_terminated")
+        ),
         dry_run=bool(summary.get("dry_run")),
         limit_exceeded=bool(summary.get("limit_exceeded")),
         snapshot_path=str(snapshot_path or summary.get("snapshot_path") or ""),

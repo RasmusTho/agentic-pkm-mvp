@@ -135,6 +135,42 @@ def _register(tmp_path: Path, *, conn: Any = None, guard: WriteGuard | None = No
     )
 
 
+def test_empty_active_vault_id_fails_loud(tmp_path: Path) -> None:
+    vault_root = tmp_path / "vault"
+    vault_root.mkdir()
+
+    with pytest.raises(EntityRegisterError, match="must not be empty"):
+        EntityRegister(
+            vault_context=VaultContext(
+                status="selected",
+                active_vault_id="",
+                active_vault_path=str(vault_root),
+            ),
+            write_guard=_allowing_guard(),
+        )
+
+
+def test_operation_vault_identity_refuses_noncanonical_vault_schema(tmp_path: Path) -> None:
+    vault_root = tmp_path / "vault"
+    settings_dir = vault_root / "settings"
+    settings_dir.mkdir(parents=True)
+    (settings_dir / "vault.md").write_text(
+        "---\nschema: attacker.not-a-vault.v1\nvaultId: vault-synthetic\n---\n",
+        encoding="utf-8",
+    )
+    register = EntityRegister(
+        vault_context=VaultContext(
+            status="selected",
+            active_vault_id="vault-synthetic",
+            active_vault_path=str(vault_root),
+        ),
+        write_guard=_allowing_guard(),
+    )
+
+    with pytest.raises(EntityRegisterError, match="canonical"):
+        _ = register.operation_vault_identity
+
+
 # ---------------------------------------------------------------------------
 # AC: split(entity_id, partition_criteria) exists and a merge followed by a
 # matching split restores the pre-merge identities (reversibility).

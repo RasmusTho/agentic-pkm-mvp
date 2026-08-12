@@ -1312,6 +1312,16 @@ def test_issue_readiness_checker_is_governance_lane_allowed() -> None:
     assert '"tests/fixtures/issue_readiness/"' in text
 
 
+def test_governance_allowed_exact_includes_docs_guard_logic() -> None:
+    """Pin the helper imported by docs_guard to the executable allowlist."""
+    text = _read_workflow()
+    exact = text.split("const governanceAllowedExact = new Set([", 1)[1].split(
+        "]);", 1
+    )[0]
+
+    assert '"scripts/docs_guard_logic.py"' in exact
+
+
 def test_pr_body_generator_fixtures_are_governance_lane_allowed() -> None:
     text = _read_workflow()
 

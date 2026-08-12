@@ -240,6 +240,59 @@ def test_repeated_intake_is_idempotent_and_reuses_one_registry() -> None:
     assert gateway.label_ensured == 2
 
 
+def test_known_defects_intake_dry_run_does_not_mutate_registry(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    class GatewayMustNotBeConstructed:
+        def __init__(self, _repo: str) -> None:
+            raise AssertionError("dry-run must not access registry authority")
+
+    monkeypatch.setattr(known_defects, "GhRegistryGateway", GatewayMustNotBeConstructed)
+
+    rc = known_defects.main(
+        [
+            "intake",
+            "--dry-run",
+            "--repo",
+            "RasmusTho/agentic-pkm-mvp",
+            "--classification",
+            "confirmed-defect",
+            "--severity",
+            "P2",
+            "--source-pr",
+            "4321",
+            "--source-sha",
+            "a" * 40,
+            "--review-url",
+            "https://github.com/RasmusTho/agentic-pkm-mvp/pull/4321#discussion_r123",
+            "--symptom",
+            "Retry receipts can display the stale attempt count.",
+            "--evidence",
+            "The review reproduced count=1 after the second attempt.",
+            "--impact",
+            "Operators may misread repair progress.",
+            "--workaround",
+            "Read the raw attempt events.",
+            "--trigger",
+            "Promote after a second occurrence or when this blocks closure.",
+        ]
+    )
+
+    receipt = json.loads(capsys.readouterr().out)
+    assert rc == 0
+    assert receipt["schema"] == "known-defect-receipt.v1"
+    assert receipt["status"] == "dry_run"
+    assert receipt["defect_id"].startswith("KD-")
+    assert receipt["candidate_entry"].startswith(
+        "<!-- known-defect-entry:v1 id="
+    )
+    skill = (
+        REPO_ROOT / ".codex" / "skills" / "bug-to-issue" / "SKILL.md"
+    ).read_text(encoding="utf-8")
+    assert "non-authoritative diagnostic `dry_run` status" in skill
+
+
 def test_entry_records_every_required_field() -> None:
     defect = _defect()
 

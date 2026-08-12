@@ -49,6 +49,35 @@ authority ambiguity, or owner-reserved value choice remains, do not escalate. Ta
 reversible action or route it through agent review, leave evidence in the existing authoritative
 record, and report the decision afterwards.
 
+## Contract-dominance preflight
+
+Before creating an owner ask, adding `agent:needs-human`, or presenting options, apply the portable
+method's contract-dominance preflight, then delegate terminal routing to the canonical classifier:
+
+1. Select the live contract that actually governs the work. For a governing Issue, read its current
+   body, acceptance criteria, `Verify:` targets, and named owner authority. For Issue-free work,
+   select the complete Direct Repair block, workflow contract, owner document, protected invariant,
+   or operator gate that applies. Do not manufacture an Issue or acceptance-criterion dependency
+   for work governed by another authority surface.
+2. Keep an established contract dominant over implementation or integration drift. A missing
+   implementation, integration or rebase conflict, source drift, or failed recovery is technical
+   evidence, not proof that the intended value is undecided. Remove options that would silently
+   weaken or supersede the contract unless an evidence-backed proposal to change the established
+   contract identifies an owner-reserved value, mandate, or scope that genuinely requires the owner
+   to decide. Do not require the owner to have already approved the change; the evidence establishes
+   that the decision belongs to the owner, not what the answer must be.
+3. After filtering the apparent options, apply
+   `docs/development/AUTONOMOUS_REVIEW_REPAIR_GATE_CONTRACTS.md :: Escalation Classifier` and do not
+   copy or redefine its route table here. Technical drift remains `blocked_technical` only when no
+   authority is missing. Contradictory source authority remains `needs_owner`, as does every other
+   explicit `needs_owner` authority category in that classifier. Every non-`needs_owner` route and
+   every protected-finding, follow-up, or deferred disposition remains governed by its owning
+   contract and must not be reclassified here. Retry exhaustion or technical uncertainty alone does
+   not change that authority boundary.
+
+Contractual operator gates still fire exactly as their owning workflows define. This preflight may
+shape a discretionary escalation, but it must never retest or remove an unconditional gate.
+
 ## Local vault-binding preflight
 
 When a missing local vault binding, mount, or path appears to be the blocker, first complete the

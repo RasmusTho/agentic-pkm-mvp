@@ -222,6 +222,59 @@ def test_high_risk_implementation_requires_convergence_review_before_expensive_g
     assert any("before selected expensive validation" in check for check in gate.required_local_checks)
 
 
+def test_stateful_fallback_requires_executable_boundary_matrix_before_handoff() -> None:
+    blocked = evaluate_review_before_ci_gate(
+        lane="implementation",
+        changed_files=["app/model_inquiry/runner.py"],
+        risk_surfaces=["credential-durability", "state-machine"],
+        risk_assessment_complete=True,
+        review_gate_complete=True,
+        stateful_fallback=True,
+    )
+    complete = evaluate_review_before_ci_gate(
+        lane="implementation",
+        changed_files=["app/model_inquiry/runner.py"],
+        risk_surfaces=["credential-durability", "state-machine"],
+        risk_assessment_complete=True,
+        review_gate_complete=True,
+        stateful_fallback=True,
+        stateful_fallback_matrix_complete=True,
+    )
+
+    assert blocked.status == "required"
+    assert blocked.may_handoff_to_ci is False
+    assert blocked.stateful_fallback_matrix_complete is False
+    assert any("executable stateful fallback boundary matrix" in check for check in blocked.required_local_checks)
+    assert complete.status == "satisfied"
+    assert complete.may_handoff_to_ci is True
+    assert complete.stateful_fallback_matrix_complete is True
+
+
+def test_stateful_fallback_matrix_completion_cannot_fail_open() -> None:
+    with pytest.raises(
+        ReviewBeforeCiGateError,
+        match="stateful_fallback_matrix_complete requires stateful_fallback",
+    ):
+        evaluate_review_before_ci_gate(
+            lane="implementation",
+            changed_files=["app/model_inquiry/runner.py"],
+            risk_surfaces=["state-machine"],
+            risk_assessment_complete=True,
+            stateful_fallback_matrix_complete=True,
+        )
+
+    with pytest.raises(
+        ReviewBeforeCiGateError,
+        match="stateful_fallback requires at least one declared high-risk surface",
+    ):
+        evaluate_review_before_ci_gate(
+            lane="implementation",
+            changed_files=["app/model_inquiry/runner.py"],
+            risk_assessment_complete=True,
+            stateful_fallback=True,
+        )
+
+
 def test_standard_implementation_keeps_existing_hot_path() -> None:
     gate = evaluate_review_before_ci_gate(
         lane="implementation",
