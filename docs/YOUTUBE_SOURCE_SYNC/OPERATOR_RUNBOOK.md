@@ -1,4 +1,4 @@
-State: Pragmatic V1 operator contract. No dedicated CLI or Companion UI is delivered by V1.
+State: Pragmatic V1 operator contract. A narrow dev-only Inbox CLI is delivered; no broad CLI or Companion UI is delivered by V1.
 Doc role: Operator runbook
 Authority: Owns the currently delivered manual route for one YouTube account and one Inbox.
 
@@ -15,6 +15,31 @@ V1 provides core application routes, not a broad command family:
 
 There is no automatic scheduler, next-sync promise, UI setup wizard, multi-playlist
 configuration, Takeout/RSS import, backfill command, analytics view, or full-media route.
+
+## Dev command
+
+Provision `YOUTUBE_OAUTH_CLIENT_ID`, `YOUTUBE_OAUTH_CLIENT_SECRET`, and
+`YOUTUBE_TOKEN_STORE_KEY` through the local host-secret boundary, then select the explicit dev
+environment. Do not place credential values in arguments, shell history, logs, or receipts. The
+supported entrypoint refuses any environment other than `dev` before it constructs an OAuth or
+YouTube API client:
+
+```bash
+PKM_ENVIRONMENT=dev python -m app.cli youtube-inbox-dev connect
+PKM_ENVIRONMENT=dev python -m app.cli youtube-inbox-dev select \
+  --account-binding-id <binding-id> --playlist-id <owned-playlist-id>
+PKM_ENVIRONMENT=dev python -m app.cli youtube-inbox-dev sync \
+  --account-binding-id <binding-id>
+PKM_ENVIRONMENT=dev python -m app.cli youtube-inbox-dev status \
+  --account-binding-id <binding-id>
+```
+
+`connect` prints the provider's device-consent URL and user code, waits for approval, and returns
+the non-secret binding id. `select` resolves the stable id against playlists owned by that OAuth
+account and refuses a different second Inbox. `sync` performs exactly one synchronous V1 poll;
+`status` emits only the sanitized account and Inbox views. This route uses OAuth with the minimal
+`youtube.readonly` scope for both consent and YouTube Data API access. It has no public API-key
+authentication surface and exposes no scheduler, backfill, or multi-playlist operations.
 
 ## One-time local OAuth setup
 
