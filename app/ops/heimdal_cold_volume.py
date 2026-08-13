@@ -26,6 +26,8 @@ import sys
 import threading
 
 from app.ops.host_secret_bootstrap import (
+    HOST_SECRET_BOOTSTRAP_CHANNEL,
+    HOST_SECRET_BOOTSTRAP_CONSUMER,
     load_runtime_secret_values,
     validate_secret_value,
 )
@@ -36,6 +38,7 @@ DISKUTIL = "/usr/sbin/diskutil"
 MAX_PLIST_BYTES = 1024 * 1024
 MAX_IMAGE_METADATA_BYTES = 256 * 1024
 MAX_METADATA_BYTES = 64 * 1024
+MAX_CHANNEL_CONFIG_BYTES = 64 * 1024
 COMMAND_TIMEOUT_SECONDS = 60.0
 MAX_CAPACITY_BYTES = 2**63 - 512
 ARCHIVE_SECRET = "heimdal.archive-pass"
@@ -47,6 +50,8 @@ BOUND_ACTIVE = "bound-active"
 _METADATA_STATES = frozenset(
     {PLANNED_UNBOUND, PROVISIONING_FAILED, ATTACHED_VERIFIED, BOUND_ACTIVE}
 )
+_CHANNELS = frozenset({"dev", "test", "prod"})
+_METADATA_CONFIG_KEY = "HEIMDAL_ARCHIVE_METADATA_FILE"
 _ARCHIVE_ID = re.compile(r"^[a-z][a-z0-9-]{2,63}$")
 _UUID = re.compile(r"^[0-9A-Fa-f]{8}(?:-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}$")
 _DEVICE = re.compile(r"^/dev/disk[0-9][0-9A-Za-z._-]*$")
@@ -56,6 +61,7 @@ _METADATA_KEYS = frozenset(
     {
         "generation",
         "state",
+        "channel",
         "archive_id",
         "bundle_path",
         "mountpoint",
@@ -96,6 +102,7 @@ class ArchiveVolumeRefusedError(RuntimeError):
 class ArchiveVolumeMetadata:
     generation: int
     state: str
+    channel: str
     archive_id: str
     bundle_path: Path
     mountpoint: Path
@@ -122,6 +129,8 @@ class ArchiveVolumeMetadata:
                 ATTACHED_VERIFIED: 2,
                 BOUND_ACTIVE: 3,
             }[self.state]
+            or type(self.channel) is not str
+            or self.channel not in _CHANNELS
             or type(self.archive_id) is not str
             or _ARCHIVE_ID.fullmatch(self.archive_id) is None
             or not isinstance(self.bundle_path, Path)
@@ -464,13 +473,27 @@ def load_archive_metadata(path: Path) -> ArchiveVolumeMetadata:
         if (
             not stat.S_ISREG(details.st_mode)
             or stat.S_IMODE(details.st_mode) != 0o600
+            or details.st_nlink != 1
             or details.st_size <= 0
             or details.st_size > MAX_METADATA_BYTES
         ):
             raise _refused()
-        with os.fdopen(descriptor, encoding="utf-8") as handle:
-            descriptor = -1
-            payload = json.load(handle)
+        raw = b""
+        while len(raw) < details.st_size:
+            chunk = os.read(descriptor, details.st_size - len(raw))
+            if not chunk:
+                raise _refused()
+            raw += chunk
+        if os.read(descriptor, 1):
+            raise _refused()
+        after = os.fstat(descriptor)
+        live = os.stat(path, follow_symlinks=False)
+        if (
+            not os.path.samestat(details, after)
+            or not os.path.samestat(after, live)
+        ):
+            raise _refused()
+        payload = json.loads(raw.decode("utf-8", errors="strict"))
     except ArchiveVolumeRefusedError:
         raise
     except Exception as exc:
@@ -484,6 +507,7 @@ def load_archive_metadata(path: Path) -> ArchiveVolumeMetadata:
         return ArchiveVolumeMetadata(
             generation=payload["generation"],
             state=payload["state"],
+            channel=payload["channel"],
             archive_id=payload["archive_id"],
             bundle_path=Path(payload["bundle_path"]),
             mountpoint=Path(payload["mountpoint"]),
@@ -499,6 +523,129 @@ def load_archive_metadata(path: Path) -> ArchiveVolumeMetadata:
         )
     except (KeyError, TypeError, ValueError) as exc:
         raise _refused() from exc
+
+
+def _read_channel_metadata_declaration(config_path: Path) -> str:
+    descriptor = -1
+    try:
+        descriptor = os.open(
+            config_path,
+            os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0),
+        )
+        details = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(details.st_mode)
+            or details.st_nlink != 1
+            or details.st_size <= 0
+            or details.st_size > MAX_CHANNEL_CONFIG_BYTES
+        ):
+            raise _refused()
+        raw = os.read(descriptor, details.st_size + 1)
+        if len(raw) != details.st_size:
+            raise _refused()
+        after = os.fstat(descriptor)
+        live = os.stat(config_path, follow_symlinks=False)
+        if (
+            not os.path.samestat(details, after)
+            or not os.path.samestat(after, live)
+        ):
+            raise _refused()
+        text = raw.decode("utf-8", errors="strict")
+    except ArchiveVolumeRefusedError:
+        raise
+    except (OSError, UnicodeError) as exc:
+        raise _refused() from exc
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+
+    declared: list[str] = []
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        name, separator, value = line.partition("=")
+        if separator and name.strip() == _METADATA_CONFIG_KEY:
+            candidate = value.strip()
+            if (
+                len(candidate) >= 2
+                and candidate[0] == candidate[-1]
+                and candidate[0] in {"'", '"'}
+            ):
+                candidate = candidate[1:-1]
+            declared.append(candidate)
+    if len(declared) != 1 or not declared[0]:
+        raise _refused()
+    return declared[0]
+
+
+def _channel_archive_metadata_authority(
+    *,
+    config_root: Path,
+    channel: str,
+    env: Mapping[str, str] | None = None,
+) -> tuple[Path, ArchiveVolumeMetadata]:
+    if (
+        channel not in _CHANNELS
+        or not config_root.is_absolute()
+        or config_root.is_symlink()
+    ):
+        raise _refused()
+    try:
+        resolved_root = config_root.resolve(strict=True)
+        root_details = os.stat(config_root, follow_symlinks=False)
+    except OSError as exc:
+        raise _refused() from exc
+    if resolved_root != config_root or not stat.S_ISDIR(root_details.st_mode):
+        raise _refused()
+
+    config_path = config_root / f".env.{channel}.local"
+    declared = _read_channel_metadata_declaration(config_path)
+    source = os.environ if env is None else env
+    ambient = source.get(_METADATA_CONFIG_KEY)
+    if ambient is not None and ambient != declared:
+        raise _refused()
+
+    metadata_path = Path(declared)
+    if (
+        not metadata_path.is_absolute()
+        or metadata_path.is_symlink()
+        or os.path.normpath(declared) != declared
+    ):
+        raise _refused()
+    try:
+        if metadata_path.resolve(strict=True) != metadata_path:
+            raise _refused()
+    except OSError as exc:
+        raise _refused() from exc
+    metadata = load_archive_metadata(metadata_path)
+    if metadata.channel != channel:
+        raise _refused()
+    return metadata_path, metadata
+
+
+def load_channel_archive_metadata(
+    *,
+    config_root: Path,
+    channel: str,
+    env: Mapping[str, str] | None = None,
+) -> ArchiveVolumeMetadata:
+    """Load the one channel-governed metadata file without ambient path authority."""
+    return _channel_archive_metadata_authority(
+        config_root=config_root,
+        channel=channel,
+        env=env,
+    )[1]
+
+
+def _require_expected_channel(
+    metadata: ArchiveVolumeMetadata,
+    expected_channel: str | None,
+) -> None:
+    if expected_channel is not None and (
+        expected_channel not in _CHANNELS or metadata.channel != expected_channel
+    ):
+        raise _refused()
 
 
 def create_command(metadata: ArchiveVolumeMetadata) -> tuple[str, ...]:
@@ -1063,9 +1210,11 @@ def _require_disk_info(
 def require_archive_volume_ready(
     metadata: ArchiveVolumeMetadata,
     *,
+    expected_channel: str | None = None,
     runner: CommandRunner | None = None,
     _descriptor_authority: object | None = None,
 ) -> ArchiveVolumeReady:
+    _require_expected_channel(metadata, expected_channel)
     if metadata.state != BOUND_ACTIVE:
         raise _refused()
     selected = (
@@ -1144,9 +1293,11 @@ def mount_archive_volume(
     metadata: ArchiveVolumeMetadata,
     *,
     credential: str,
+    expected_channel: str | None = None,
     runner: CommandRunner | None = None,
     _descriptor_authority: object | None = None,
 ) -> ArchiveVolumeReady:
+    _require_expected_channel(metadata, expected_channel)
     if metadata.state != BOUND_ACTIVE:
         raise _refused()
     selected = (
@@ -1411,11 +1562,13 @@ def provision_archive_volume(
     metadata: ArchiveVolumeMetadata,
     *,
     credential: str,
+    expected_channel: str | None = None,
     runner: CommandRunner | None = None,
     metadata_path: Path | None = None,
     metadata_writer: MetadataWriter = write_archive_metadata,
     _descriptor_authority: object | None = None,
 ) -> ArchiveVolumeReady:
+    _require_expected_channel(metadata, expected_channel)
     selected = (
         _runner(metadata, descriptor_authority=_descriptor_authority)
         if runner is None
@@ -1544,8 +1697,18 @@ def provision_archive_volume(
     return ArchiveVolumeReady()
 
 
-def _bootstrap_credential(env: Mapping[str, str] | None = None) -> str:
-    values = load_runtime_secret_values(os.environ if env is None else env)
+def _bootstrap_credential(
+    *,
+    expected_channel: str,
+    env: Mapping[str, str] | None = None,
+) -> str:
+    source = os.environ if env is None else env
+    if (
+        source.get(HOST_SECRET_BOOTSTRAP_CHANNEL) != expected_channel
+        or source.get(HOST_SECRET_BOOTSTRAP_CONSUMER) != "heimdal-cold-volume"
+    ):
+        raise _refused()
+    values = load_runtime_secret_values(source)
     if set(values) != {ARCHIVE_SECRET_BINDING}:
         raise _refused()
     return values[ARCHIVE_SECRET_BINDING]
@@ -1554,6 +1717,7 @@ def _bootstrap_credential(env: Mapping[str, str] | None = None) -> str:
 def provision_from_bootstrap(
     metadata: ArchiveVolumeMetadata,
     *,
+    expected_channel: str,
     env: Mapping[str, str] | None = None,
     runner: CommandRunner | None = None,
     metadata_path: Path | None = None,
@@ -1562,7 +1726,11 @@ def provision_from_bootstrap(
 ) -> ArchiveVolumeReady:
     return provision_archive_volume(
         metadata,
-        credential=_bootstrap_credential(env),
+        credential=_bootstrap_credential(
+            expected_channel=expected_channel,
+            env=env,
+        ),
+        expected_channel=expected_channel,
         runner=runner,
         metadata_path=metadata_path,
         metadata_writer=metadata_writer,
@@ -1573,13 +1741,18 @@ def provision_from_bootstrap(
 def mount_from_bootstrap(
     metadata: ArchiveVolumeMetadata,
     *,
+    expected_channel: str,
     env: Mapping[str, str] | None = None,
     runner: CommandRunner | None = None,
     _descriptor_authority: object | None = None,
 ) -> ArchiveVolumeReady:
     return mount_archive_volume(
         metadata,
-        credential=_bootstrap_credential(env),
+        credential=_bootstrap_credential(
+            expected_channel=expected_channel,
+            env=env,
+        ),
+        expected_channel=expected_channel,
         runner=runner,
         _descriptor_authority=_descriptor_authority,
     )
@@ -1588,28 +1761,35 @@ def mount_from_bootstrap(
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Manage the declared Heimdal cold volume")
     parser.add_argument("action", choices=("require-ready", "mount", "provision"))
-    parser.add_argument("--metadata", type=Path, required=True)
+    parser.add_argument("--channel", choices=sorted(_CHANNELS), required=True)
+    parser.add_argument("--config-root", type=Path, required=True)
     return parser
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     try:
-        metadata = load_archive_metadata(args.metadata)
+        metadata_path, metadata = _channel_archive_metadata_authority(
+            config_root=args.config_root,
+            channel=args.channel,
+        )
         if args.action == "require-ready":
             require_archive_volume_ready(
                 metadata,
+                expected_channel=args.channel,
                 _descriptor_authority=_ONE_SHOT_DESCRIPTOR_AUTHORITY,
             )
         elif args.action == "mount":
             mount_from_bootstrap(
                 metadata,
+                expected_channel=args.channel,
                 _descriptor_authority=_ONE_SHOT_DESCRIPTOR_AUTHORITY,
             )
         else:
             provision_from_bootstrap(
                 metadata,
-                metadata_path=args.metadata,
+                expected_channel=args.channel,
+                metadata_path=metadata_path,
                 _descriptor_authority=_ONE_SHOT_DESCRIPTOR_AUTHORITY,
             )
     except ArchiveVolumeRefusedError as exc:
@@ -1640,6 +1820,7 @@ __all__ = [
     "attach_command",
     "create_command",
     "load_archive_metadata",
+    "load_channel_archive_metadata",
     "mount_archive_volume",
     "mount_from_bootstrap",
     "provision_archive_volume",

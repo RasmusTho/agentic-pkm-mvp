@@ -25,6 +25,8 @@ from app.ops.host_secret_contract import HostSecretContract, load_host_secret_co
 
 HOST_SECRET_RUNTIME_ENV_FILE = "HOST_SECRET_RUNTIME_ENV_FILE"
 HOST_SECRET_BOOTSTRAP_FAILURE_REF = "HOST_SECRET_BOOTSTRAP_FAILURE_REF"
+HOST_SECRET_BOOTSTRAP_CHANNEL = "HOST_SECRET_BOOTSTRAP_CHANNEL"
+HOST_SECRET_BOOTSTRAP_CONSUMER = "HOST_SECRET_BOOTSTRAP_CONSUMER"
 _RAW_STORE_KEY_PATTERN = re.compile(r"^[0-9a-fA-F]{64}$")
 _ARCHIVE_PASSPHRASE_MIN_BYTES = 20
 _ARCHIVE_PASSPHRASE_MAX_BYTES = 512
@@ -665,6 +667,8 @@ def run_with_host_secrets(
         with materialized as env_file:
             child_env = _clean_child_environment(selected_contract)
             child_env[HOST_SECRET_RUNTIME_ENV_FILE] = str(env_file)
+            child_env[HOST_SECRET_BOOTSTRAP_CHANNEL] = channel
+            child_env[HOST_SECRET_BOOTSTRAP_CONSUMER] = consumer
             return runner(selected_command, child_env)
     except HostSecretCredentialUnavailableError as exc:
         if not run_on_credential_unavailable:
@@ -682,6 +686,8 @@ def run_with_host_secrets(
         # and still launches without any provider credential binding.
         child_env = _clean_child_environment(selected_contract)
         child_env[HOST_SECRET_BOOTSTRAP_FAILURE_REF] = exc.credential_identity_ref
+        child_env[HOST_SECRET_BOOTSTRAP_CHANNEL] = channel
+        child_env[HOST_SECRET_BOOTSTRAP_CONSUMER] = consumer
         return runner(selected_command, child_env)
 
 
@@ -690,6 +696,8 @@ def _clean_child_environment(contract: HostSecretContract) -> dict[str, str]:
     child_env = dict(os.environ)
     child_env.pop(HOST_SECRET_RUNTIME_ENV_FILE, None)
     child_env.pop(HOST_SECRET_BOOTSTRAP_FAILURE_REF, None)
+    child_env.pop(HOST_SECRET_BOOTSTRAP_CHANNEL, None)
+    child_env.pop(HOST_SECRET_BOOTSTRAP_CONSUMER, None)
     for env_name in contract.child_bindings:
         child_env.pop(env_name, None)
     return child_env

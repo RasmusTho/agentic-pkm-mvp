@@ -16,6 +16,8 @@ import pytest
 
 import app.ops.host_secret_bootstrap as host_secret_bootstrap
 from app.ops.host_secret_bootstrap import (
+    HOST_SECRET_BOOTSTRAP_CHANNEL,
+    HOST_SECRET_BOOTSTRAP_CONSUMER,
     HOST_SECRET_BOOTSTRAP_FAILURE_REF,
     HOST_SECRET_RUNTIME_ENV_FILE,
     HostSecretBootstrapError,
@@ -56,6 +58,8 @@ def test_archive_consumer_gets_only_private_temporary_passphrase(
         nonlocal observed_path
         assert command == ["archive-operation"]
         assert "HEIMDAL_ARCHIVE_PASS" not in env
+        assert env[HOST_SECRET_BOOTSTRAP_CHANNEL] == channel
+        assert env[HOST_SECRET_BOOTSTRAP_CONSUMER] == "heimdal-cold-volume"
         observed_path = Path(env[HOST_SECRET_RUNTIME_ENV_FILE])
         assert stat.S_IMODE(observed_path.stat().st_mode) == 0o600
         assert observed_path.read_text(encoding="utf-8") == (

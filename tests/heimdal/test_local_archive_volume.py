@@ -19,6 +19,11 @@ import threading
 import pytest
 
 from app.ops import heimdal_cold_volume as volume
+from app.ops.host_secret_bootstrap import (
+    HOST_SECRET_BOOTSTRAP_CHANNEL,
+    HOST_SECRET_BOOTSTRAP_CONSUMER,
+    HOST_SECRET_RUNTIME_ENV_FILE,
+)
 from app.ops.host_secret_contract import load_host_secret_contract
 
 
@@ -41,6 +46,7 @@ def _metadata(tmp_path: Path) -> volume.ArchiveVolumeMetadata:
     metadata = volume.ArchiveVolumeMetadata(
         generation=3,
         state=volume.BOUND_ACTIVE,
+        channel="prod",
         archive_id="heimdal-cold-v1",
         bundle_path=parent / "archive.sparsebundle",
         mountpoint=mountpoint,
@@ -423,13 +429,58 @@ def test_mount_credential_is_keychain_backed_and_redacted(tmp_path: Path) -> Non
     runner = FakeRunner(metadata, attached=False)
     result = volume.provision_from_bootstrap(
         metadata,
-        env={"HOST_SECRET_RUNTIME_ENV_FILE": str(secret_file)},
+        expected_channel="prod",
+        env={
+            HOST_SECRET_RUNTIME_ENV_FILE: str(secret_file),
+            HOST_SECRET_BOOTSTRAP_CHANNEL: "prod",
+            HOST_SECRET_BOOTSTRAP_CONSUMER: "heimdal-cold-volume",
+        },
         runner=runner,
         metadata_path=metadata_path,
     )
     assert result.ready is True
     assert _PASSPHRASE not in repr(result)
     assert all(_PASSPHRASE not in " ".join(argv) for argv, _stdin in runner.calls)
+
+
+@pytest.mark.parametrize(
+    ("bootstrap_channel", "bootstrap_consumer"),
+    [
+        pytest.param("dev", "heimdal-cold-volume", id="wrong-channel"),
+        pytest.param("prod", "different-consumer", id="wrong-consumer"),
+    ],
+)
+def test_bootstrap_channel_authority_refuses_before_secret_or_host_use(
+    tmp_path: Path,
+    bootstrap_channel: str,
+    bootstrap_consumer: str,
+) -> None:
+    metadata = _planned_metadata(tmp_path)
+    metadata_path = tmp_path / "archive-metadata.json"
+    volume.write_archive_metadata(metadata_path, metadata)
+    secret_file = tmp_path / "secret.env"
+    secret_file.write_text(
+        f"{volume.ARCHIVE_SECRET_BINDING}={_PASSPHRASE}\n",
+        encoding="utf-8",
+    )
+    secret_file.chmod(0o600)
+    runner = FakeRunner(metadata, attached=False)
+
+    with pytest.raises(volume.ArchiveVolumeRefusedError):
+        volume.provision_from_bootstrap(
+            metadata,
+            expected_channel="prod",
+            env={
+                HOST_SECRET_RUNTIME_ENV_FILE: str(secret_file),
+                HOST_SECRET_BOOTSTRAP_CHANNEL: bootstrap_channel,
+                HOST_SECRET_BOOTSTRAP_CONSUMER: bootstrap_consumer,
+            },
+            runner=runner,
+            metadata_path=metadata_path,
+        )
+
+    assert runner.calls == []
+    assert volume.load_archive_metadata(metadata_path) == metadata
 
 
 def test_partial_attach_failure_cleans_only_new_attachment(tmp_path: Path) -> None:
@@ -1169,6 +1220,78 @@ def test_metadata_state_and_identity_are_coherent(
         replace(metadata, **overrides)
 
 
+def test_channel_authority_rejects_cross_channel_legacy_and_path_override(
+    tmp_path: Path,
+) -> None:
+    config_root = tmp_path / "repo"
+    config_root.mkdir()
+    metadata_path = tmp_path / "prod-archive-metadata.json"
+    metadata = _metadata(tmp_path)
+    volume.write_archive_metadata(metadata_path, metadata)
+    channel_config = config_root / ".env.prod.local"
+    channel_config.write_text(
+        f"HEIMDAL_ARCHIVE_METADATA_FILE={metadata_path}\n", encoding="utf-8"
+    )
+
+    assert volume.load_channel_archive_metadata(
+        config_root=config_root,
+        channel="prod",
+        env={},
+    ) == metadata
+    assert volume.load_channel_archive_metadata(
+        config_root=config_root,
+        channel="prod",
+        env={"HEIMDAL_ARCHIVE_METADATA_FILE": str(metadata_path)},
+    ) == metadata
+
+    with pytest.raises(volume.ArchiveVolumeRefusedError):
+        volume.load_channel_archive_metadata(
+            config_root=config_root,
+            channel="prod",
+            env={"HEIMDAL_ARCHIVE_METADATA_FILE": f"{metadata_path.parent}/./{metadata_path.name}"},
+        )
+
+    dev_metadata_path = tmp_path / "dev-archive-metadata.json"
+    dev_metadata = replace(metadata, channel="dev")
+    volume.write_archive_metadata(dev_metadata_path, dev_metadata)
+    channel_config.write_text(
+        f"HEIMDAL_ARCHIVE_METADATA_FILE={dev_metadata_path}\n", encoding="utf-8"
+    )
+    with pytest.raises(volume.ArchiveVolumeRefusedError):
+        volume.load_channel_archive_metadata(
+            config_root=config_root,
+            channel="prod",
+            env={},
+        )
+
+    legacy_path = tmp_path / "legacy-archive-metadata.json"
+    legacy_payload = json.loads(metadata_path.read_text(encoding="utf-8"))
+    legacy_payload.pop("channel")
+    legacy_path.write_text(json.dumps(legacy_payload) + "\n", encoding="utf-8")
+    legacy_path.chmod(0o600)
+    channel_config.write_text(
+        f"HEIMDAL_ARCHIVE_METADATA_FILE={legacy_path}\n", encoding="utf-8"
+    )
+    with pytest.raises(volume.ArchiveVolumeRefusedError):
+        volume.load_channel_archive_metadata(
+            config_root=config_root,
+            channel="prod",
+            env={},
+        )
+
+    channel_config.write_text(
+        f"HEIMDAL_ARCHIVE_METADATA_FILE={metadata_path}\n", encoding="utf-8"
+    )
+    refusing_runner = FakeRunner(metadata)
+    with pytest.raises(volume.ArchiveVolumeRefusedError):
+        volume.require_archive_volume_ready(
+            metadata,
+            expected_channel="test",
+            runner=refusing_runner,
+        )
+    assert refusing_runner.calls == []
+
+
 @pytest.mark.parametrize("residual", ["bundle", "attachment"])
 def test_unbound_replay_refuses_residual_image_state(
     tmp_path: Path,
@@ -1262,6 +1385,7 @@ def test_provisioning_failed_replay_requires_fresh_attach(tmp_path: Path) -> Non
     assert sum(argv[:2] == (volume.HDIUTIL, "attach") for argv, _ in runner.calls) == 1
     active = volume.load_archive_metadata(metadata_path)
     assert active.state == volume.BOUND_ACTIVE
+    assert active.channel == "prod"
     assert active.filesystem_capacity_bytes == _FILESYSTEM_CAPACITY
     assert active.generation == 3
 
@@ -1332,6 +1456,7 @@ def test_attached_identity_replay_promotes_without_regeneration(tmp_path: Path) 
         volume.BOUND_ACTIVE,
     ]
     assert attached.state == volume.ATTACHED_VERIFIED
+    assert attached.channel == "prod"
     assert attached.volume_uuid == _UUID
     assert metadata.bundle_path.exists()
 

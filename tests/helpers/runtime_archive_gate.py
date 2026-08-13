@@ -12,9 +12,6 @@ def configure_ready_archive_gate(
     tmp_path: Path,
 ) -> Path:
     """Make one production-launcher fixture prove the archive gate ran first."""
-    metadata_path = tmp_path / "archive-metadata.json"
-    metadata_path.write_text("{}\n", encoding="utf-8")
-    metadata_path.chmod(stat.S_IRUSR | stat.S_IWUSR)
     marker_path = tmp_path / "archive-gate-ready"
     python_path = tmp_path / "archive-gate-python"
     python_path.write_text(
@@ -25,7 +22,20 @@ import os
 from pathlib import Path
 import sys
 
-if sys.argv[1:3] == ["-m", "app.ops.heimdal_cold_volume"] and len(sys.argv) >= 4 and sys.argv[3] == "require-ready":
+arguments = sys.argv[1:]
+if (
+    len(arguments) == 7
+    and arguments[:6]
+    == [
+        "-m",
+        "app.ops.heimdal_cold_volume",
+        "require-ready",
+        "--channel",
+        "prod",
+        "--config-root",
+    ]
+    and Path(arguments[6]).is_absolute()
+):
     marker = Path(os.environ["HAR03_ARCHIVE_GATE_FIXTURE_PATH"])
     marker.write_text("ready\\n", encoding="utf-8")
     progress = os.environ.get("STARTUP_HARNESS_PROGRESS_PATH")
@@ -41,7 +51,6 @@ os.execv({python!r}, [{python!r}, *sys.argv[1:]])
     python_path.chmod(python_path.stat().st_mode | stat.S_IXUSR)
     env.update(
         {
-            "HEIMDAL_ARCHIVE_METADATA_FILE": str(metadata_path),
             "HAR03_ARCHIVE_GATE_FIXTURE_PATH": str(marker_path),
             "PYTHON": str(python_path),
         }

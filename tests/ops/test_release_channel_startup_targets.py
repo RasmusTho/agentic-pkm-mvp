@@ -262,6 +262,12 @@ def test_every_supported_prod_forward_producer_routes_through_archive_gate() -> 
     midgard_ui = (REPO_ROOT / "scripts/prod/start_midgard_ui.sh").read_text(
         encoding="utf-8"
     )
+    run_verification = (REPO_ROOT / "scripts/run_verification.sh").read_text(
+        encoding="utf-8"
+    )
+    runtime_chain = (REPO_ROOT / "scripts/verify_runtime_chain.sh").read_text(
+        encoding="utf-8"
+    )
 
     assert 'heimdal_cold_volume_preflight_effective "$ROOT"' in full_start
     assert 'heimdal_cold_volume_preflight_effective "$ROOT"' in cold_boot
@@ -269,6 +275,16 @@ def test_every_supported_prod_forward_producer_routes_through_archive_gate() -> 
     assert 'heimdal_cold_volume_preflight prod "$ROOT"' in midgard_stack
     assert 'source "${SCRIPT_DIR}/../lib/companion_ui_startup.sh"' in midgard_ui
     assert "cui_run_start" in midgard_ui
+    assert 'source "${ROOT}/scripts/lib/heimdal_cold_volume_preflight.sh"' in run_verification
+    assert 'heimdal_cold_volume_preflight_effective "${ROOT}"' in run_verification
+    assert run_verification.index(
+        'heimdal_cold_volume_preflight_effective "${ROOT}"'
+    ) < run_verification.index(": >> verification_log.txt")
+    assert 'source "${ROOT}/scripts/lib/heimdal_cold_volume_preflight.sh"' in runtime_chain
+    assert 'heimdal_cold_volume_preflight_effective "${ROOT}"' in runtime_chain
+    assert runtime_chain.index(
+        'heimdal_cold_volume_preflight_effective "${ROOT}"'
+    ) < runtime_chain.index("prepare_instance_ownership_host_state_dir")
     assert 'if [ "${action}" = "deploy" ]; then' in deploy
     assert 'heimdal_cold_volume_preflight "${channel}" "${ROOT}"' in deploy
 
@@ -282,6 +298,62 @@ def test_every_supported_prod_forward_producer_routes_through_archive_gate() -> 
     gate_index = cold_boot.index('heimdal_cold_volume_preflight_effective "$ROOT"')
     assert gate_index < cold_boot.index("prepare_instance_ownership_host_state_dir")
     assert gate_index < cold_boot.index("docker compose down -v")
+
+
+@pytest.mark.parametrize(
+    "entrypoint",
+    ["scripts/run_verification.sh", "scripts/verify_runtime_chain.sh"],
+)
+def test_prod_verification_chain_refuses_before_any_host_mutation(
+    tmp_path: Path,
+    entrypoint: str,
+) -> None:
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    docker_marker = tmp_path / "docker-executed"
+    docker = fake_bin / "docker"
+    docker.write_text(
+        "#!/usr/bin/env bash\n"
+        f"touch {docker_marker!s}\n"
+        "exit 99\n",
+        encoding="utf-8",
+    )
+    docker.chmod(0o755)
+    python = tmp_path / "python-fixture"
+    python.write_text("#!/usr/bin/env bash\nexit 78\n", encoding="utf-8")
+    python.chmod(0o755)
+    log_path = tmp_path / "verification.log"
+    report_path = tmp_path / "verification.md"
+    host_state = tmp_path / "host-state"
+
+    env = os.environ.copy()
+    env.update(
+        {
+            "PATH": f"{fake_bin}:{env['PATH']}",
+            "PYTHON": str(python),
+            "PKM_ENVIRONMENT": "prod",
+            "COMPOSE_PROJECT_NAME": "pkm-prod",
+            "HEIMDAL_ARCHIVE_METADATA_FILE": str(tmp_path / "ambient-metadata.json"),
+            "INSTANCE_OWNERSHIP_HOST_STATE_DIR": str(host_state),
+            "LOG_PATH": str(log_path),
+            "REPORT_PATH": str(report_path),
+        }
+    )
+    result = subprocess.run(
+        ["bash", entrypoint],
+        cwd=REPO_ROOT,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 78
+    assert docker_marker.exists() is False
+    assert host_state.exists() is False
+    assert log_path.exists() is False
+    assert report_path.exists() is False
+    assert "archive volume preflight failed: output=redacted" in result.stderr
 
 
 def test_prod_launcher_fixture_census_declares_archive_gate_state() -> None:
