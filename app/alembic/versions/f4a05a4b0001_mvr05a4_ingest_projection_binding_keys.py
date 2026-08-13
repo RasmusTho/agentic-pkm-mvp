@@ -54,6 +54,44 @@ def upgrade() -> None:
               HINT = 'Repair to the supported fresh id or historical (object_id,set_id) shape and rerun.';
           END IF;
 
+          -- MVR-05A3 owns every canonical-object endpoint. MVR-05A4 consumes
+          -- that complete shape, so a missing/altered endpoint is terminal;
+          -- stamping success would otherwise bless a partially applied parent.
+          WITH expected(child_table, child_columns) AS (VALUES
+            ('chunks', ARRAY['vault_binding_id','object_id']::text[]),
+            ('embeddings', ARRAY['vault_binding_id','object_id']::text[]),
+            ('relations', ARRAY['vault_binding_id','src_id']::text[]),
+            ('relations', ARRAY['vault_binding_id','dst_id']::text[]),
+            ('membership', ARRAY['vault_binding_id','object_id']::text[])
+          ), actual AS (
+            SELECT child.relname::text AS child_table,
+                   array_agg(att.attname::text ORDER BY key.ordinality) AS child_columns
+              FROM pg_constraint c
+              JOIN pg_class child ON child.oid=c.conrelid
+              JOIN pg_namespace ns ON ns.oid=child.relnamespace
+              JOIN unnest(c.conkey) WITH ORDINALITY key(attnum, ordinality) ON true
+              JOIN pg_attribute att ON att.attrelid=c.conrelid AND att.attnum=key.attnum
+             WHERE c.contype='f' AND ns.nspname='public'
+               AND child.relname IN ('chunks','embeddings','relations','membership')
+               AND c.confrelid='public.store_objects'::regclass
+               AND c.confkey=ARRAY[
+                 (SELECT attnum FROM pg_attribute WHERE attrelid='public.store_objects'::regclass
+                   AND attname='vault_binding_id' AND NOT attisdropped),
+                 (SELECT attnum FROM pg_attribute WHERE attrelid='public.store_objects'::regclass
+                   AND attname='object_id' AND NOT attisdropped)
+               ]::smallint[]
+             GROUP BY child.relname,c.oid
+          )
+          SELECT string_agg(format('%s(%s)', e.child_table, array_to_string(e.child_columns,',')), ', ')
+            INTO bad
+            FROM expected e
+           WHERE NOT EXISTS (SELECT 1 FROM actual a
+             WHERE a.child_table=e.child_table AND a.child_columns=e.child_columns);
+          IF bad IS NOT NULL THEN
+            RAISE EXCEPTION USING MESSAGE=format('MVR-05A4 missing delivered object endpoint(s): %s', bad),
+              HINT='Repair MVR-05A3 composite object foreign keys and rerun.';
+          END IF;
+
           -- Every effective inbound FK is enumerated before changing a key.
           SELECT c.conname, c.confupdtype, c.confdeltype, c.confmatchtype,
                  c.condeferrable, c.condeferred
@@ -83,6 +121,14 @@ def upgrade() -> None:
           IF bad IS NOT NULL THEN
             RAISE EXCEPTION USING MESSAGE = format('MVR-05A4 unknown chunks inbound FK(s): %s', bad),
               HINT = 'Inventory the consumer before retrying.';
+          END IF;
+          IF chunk_fk.confmatchtype <> 's' THEN
+            RAISE EXCEPTION USING MESSAGE='MVR-05A4 unsupported embeddings.chunk_id MATCH type',
+              HINT='Composite MATCH FULL/PARTIAL cannot preserve nullable chunk_id with non-null binding.';
+          END IF;
+          IF chunk_fk.confupdtype IN ('n','d') THEN
+            RAISE EXCEPTION USING MESSAGE='MVR-05A4 unsupported embeddings.chunk_id ON UPDATE action',
+              HINT='SET NULL/DEFAULT cannot preserve the non-null binding column.';
           END IF;
           IF (SELECT count(*) FROM pg_constraint c
                WHERE c.contype='f' AND c.confrelid='public.chunks'::regclass) <> 1 THEN
@@ -158,10 +204,10 @@ def upgrade() -> None:
                          membership_pk, array_to_string(membership_columns, ', '));
 
           update_action := CASE chunk_fk.confupdtype WHEN 'a' THEN 'NO ACTION' WHEN 'r' THEN 'RESTRICT'
-            WHEN 'c' THEN 'CASCADE' WHEN 'n' THEN 'SET NULL' WHEN 'd' THEN 'SET DEFAULT' END;
+            WHEN 'c' THEN 'CASCADE' END;
           delete_action := CASE chunk_fk.confdeltype WHEN 'a' THEN 'NO ACTION' WHEN 'r' THEN 'RESTRICT'
-            WHEN 'c' THEN 'CASCADE' WHEN 'n' THEN 'SET NULL' WHEN 'd' THEN 'SET DEFAULT' END;
-          match_clause := CASE chunk_fk.confmatchtype WHEN 'f' THEN ' MATCH FULL' WHEN 'p' THEN ' MATCH PARTIAL' ELSE '' END;
+            WHEN 'c' THEN 'CASCADE' WHEN 'n' THEN 'SET NULL (chunk_id)' WHEN 'd' THEN 'SET DEFAULT (chunk_id)' END;
+          match_clause := '';
           deferrable_clause := CASE WHEN chunk_fk.condeferrable AND chunk_fk.condeferred THEN ' DEFERRABLE INITIALLY DEFERRED'
             WHEN chunk_fk.condeferrable THEN ' DEFERRABLE INITIALLY IMMEDIATE' ELSE ' NOT DEFERRABLE' END;
           EXECUTE format('ALTER TABLE public.embeddings DROP CONSTRAINT %I', chunk_fk.conname);

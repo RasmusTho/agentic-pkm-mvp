@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import uuid
+from ipaddress import ip_address
 from pathlib import Path
 
 import psycopg
@@ -43,8 +44,20 @@ def _is_allowed_scratch_admin_dsn(dsn: str) -> bool:
     except Exception:
         return False
     host = target.get("host")
+    hostaddr = target.get("hostaddr")
     port = target.get("port") or "5432"
     database = target.get("dbname")
+    if target.get("service"):
+        return False
+    if hostaddr:
+        try:
+            address = ip_address(hostaddr)
+        except ValueError:
+            return False
+        if not address.is_loopback:
+            return False
+        if host == "127.0.0.1" and hostaddr != "127.0.0.1":
+            return False
     return (host == "127.0.0.1" and port == "15433" and database == "app_dev") or (
         host in {"localhost", "127.0.0.1"} and port == "5432" and database == "app_test"
     )
@@ -55,9 +68,13 @@ def _is_allowed_scratch_admin_dsn(dsn: str) -> bool:
     (
         ("postgresql://app:x@127.0.0.1:15433/app_dev", True),
         ("postgresql://app:x@localhost:5432/app_test", True),
+        ("postgresql://app:x@localhost:5432/app_test?hostaddr=127.0.0.1", True),
         ("postgresql://app:x@127.0.0.1:15432/app", False),
         ("postgresql:///app_test", False),
         ("service=app_test", False),
+        ("postgresql://app:x@localhost:5432/app_test?service=foreign", False),
+        ("postgresql://app:x@localhost:5432/app_test?hostaddr=203.0.113.10", False),
+        ("postgresql://app:x@127.0.0.1:5432/app_test?hostaddr=::1", False),
     ),
 )
 def test_scratch_database_factory_accepts_only_explicit_nonprod_targets(
@@ -307,6 +324,112 @@ def test_ingest_rekey_reuses_delivered_binding_or_fails_unchanged(
             "WHERE attrelid='chunks'::regclass AND attname='vault_binding_id'), "
             "(SELECT attnum FROM pg_attribute WHERE attrelid='chunks'::regclass AND attname='id')]::smallint[]"
         ).fetchone() == (0,)
+        assert conn.execute("SELECT version_num FROM alembic_version").fetchone() == (
+            PRE_INGEST_HEAD,
+        )
+
+
+def test_missing_delivered_object_endpoint_refuses_before_rekey(
+    scratch_db_factory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    dsn = scratch_db_factory()
+    _upgrade(dsn, monkeypatch, PRE_INGEST_HEAD)
+    with psycopg.connect(dsn) as conn:
+        object_fk = conn.execute(
+            "SELECT conname FROM pg_constraint WHERE conrelid='membership'::regclass "
+            "AND contype='f' AND conkey=ARRAY["
+            "(SELECT attnum FROM pg_attribute WHERE attrelid='membership'::regclass "
+            "AND attname='vault_binding_id'),"
+            "(SELECT attnum FROM pg_attribute WHERE attrelid='membership'::regclass "
+            "AND attname='object_id')]::smallint[]"
+        ).fetchone()
+        assert object_fk is not None
+        conn.execute(
+            sql.SQL("ALTER TABLE membership DROP CONSTRAINT {}").format(
+                sql.Identifier(object_fk[0])
+            )
+        )
+    with pytest.raises(DBAPIError, match="missing delivered object endpoint"):
+        _upgrade(dsn, monkeypatch, INGEST_HEAD)
+    with psycopg.connect(dsn) as conn:
+        assert _pk(conn, "membership") == ["id"]
+        assert conn.execute("SELECT version_num FROM alembic_version").fetchone() == (
+            PRE_INGEST_HEAD,
+        )
+
+
+@pytest.mark.parametrize(
+    ("update_action", "delete_action", "deferrability", "expected"),
+    (
+        ("RESTRICT", "SET NULL", "DEFERRABLE INITIALLY DEFERRED", ("r", "n", True, True)),
+        ("CASCADE", "SET DEFAULT", "NOT DEFERRABLE", ("c", "d", False, False)),
+    ),
+)
+def test_chunk_fk_preserves_supported_action_and_deferral_semantics(
+    scratch_db_factory,
+    monkeypatch: pytest.MonkeyPatch,
+    update_action: str,
+    delete_action: str,
+    deferrability: str,
+    expected: tuple[str, str, bool, bool],
+) -> None:
+    dsn = scratch_db_factory()
+    _upgrade(dsn, monkeypatch, PRE_INGEST_HEAD)
+    with psycopg.connect(dsn) as conn:
+        conn.execute("ALTER TABLE embeddings DROP CONSTRAINT embeddings_chunk_id_fkey")
+        conn.execute(
+            "ALTER TABLE embeddings ADD CONSTRAINT embeddings_chunk_id_fkey "
+            "FOREIGN KEY (chunk_id) REFERENCES chunks(id) MATCH SIMPLE "
+            f"ON UPDATE {update_action} ON DELETE {delete_action} {deferrability}"
+        )
+        object_id, _ = _seed_fresh_parent(conn)
+        chunk_id = uuid.uuid4()
+        embedding_id = uuid.uuid4()
+        conn.execute(
+            "INSERT INTO chunks(id,vault_binding_id,object_id,idx,offset_start,offset_end,text) "
+            "VALUES (%s,%s,%s,0,0,1,'x')",
+            (chunk_id, BINDING, object_id),
+        )
+        conn.execute(
+            "INSERT INTO embeddings(id,vault_binding_id,object_id,chunk_id,dim) "
+            "VALUES (%s,%s,%s,%s,3)",
+            (embedding_id, BINDING, object_id, chunk_id),
+        )
+    _upgrade(dsn, monkeypatch, INGEST_HEAD)
+    with psycopg.connect(dsn) as conn:
+        fk = _fk(conn, "embeddings", "chunk_id")
+        assert (fk[3], fk[4], fk[6], fk[7]) == expected
+        conn.execute("DELETE FROM chunks WHERE vault_binding_id=%s AND id=%s", (BINDING, chunk_id))
+        assert conn.execute(
+            "SELECT vault_binding_id,chunk_id FROM embeddings WHERE id=%s", (embedding_id,)
+        ).fetchone() == (BINDING, None)
+
+
+@pytest.mark.parametrize(
+    ("clause", "message"),
+    (
+        ("MATCH FULL ON UPDATE NO ACTION ON DELETE CASCADE", "MATCH type"),
+        ("MATCH SIMPLE ON UPDATE SET NULL ON DELETE CASCADE", "ON UPDATE action"),
+    ),
+)
+def test_chunk_fk_refuses_unpreservable_semantics_before_change(
+    scratch_db_factory,
+    monkeypatch: pytest.MonkeyPatch,
+    clause: str,
+    message: str,
+) -> None:
+    dsn = scratch_db_factory()
+    _upgrade(dsn, monkeypatch, PRE_INGEST_HEAD)
+    with psycopg.connect(dsn) as conn:
+        conn.execute("ALTER TABLE embeddings DROP CONSTRAINT embeddings_chunk_id_fkey")
+        conn.execute(
+            "ALTER TABLE embeddings ADD CONSTRAINT embeddings_chunk_id_fkey "
+            f"FOREIGN KEY (chunk_id) REFERENCES chunks(id) {clause}"
+        )
+    with pytest.raises(DBAPIError, match=message):
+        _upgrade(dsn, monkeypatch, INGEST_HEAD)
+    with psycopg.connect(dsn) as conn:
+        assert _pk(conn, "membership") == ["id"]
         assert conn.execute("SELECT version_num FROM alembic_version").fetchone() == (
             PRE_INGEST_HEAD,
         )
