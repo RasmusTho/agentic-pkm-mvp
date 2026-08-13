@@ -21,6 +21,11 @@ _APPROVED_IMPORTS = (_GOOGLE, _BUNNY)
 _KEYS = frozenset({"schema_version", "source", "remote_font_imports", "source_tokens", "font_fallback", "transforms", "state_matrix"})
 _SOURCE_KEYS = frozenset({"commit", "path", "blob_oid"})
 _TOKENS = ("--font-ui", "--font-display", "--font-mono")
+_PRIMITIVES = {
+    "--font-display": "'EB Garamond', Georgia, serif",
+    "--font-ui": "'Space Grotesk', system-ui, sans-serif",
+    "--font-mono": "'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace",
+}
 _TRANSFORMS = ("drop_remote_font_imports", "use_declared_local_font_fallback")
 _STATES = ("normal", "empty", "loading", "degraded", "error", "narrow", "200%", "keyboard", "screen-reader", "print", "javascript-off")
 _FALLBACK = "system-ui, sans-serif"
@@ -103,8 +108,12 @@ def validate_exact_reuse(repo_root: Path, candidate_sha: str) -> ExactReuseRecei
     import_forms = re.findall(r"@import\s+([^;]+);", source_text)
     if len(import_forms) != 2 or tuple(re.findall(r"@import\s+url\(['\"]([^'\"]+)['\"]\)", source_text)) != _APPROVED_IMPORTS:
         raise ExactReuseProvenanceError("source imports are not the approved literal pair")
-    if any(token not in source_text for token in _TOKENS):
-        raise ExactReuseProvenanceError("source lacks required parsed tokens")
+    parsed_primitives = {
+        name: value.strip()
+        for name, value in re.findall(r"(--font-(?:display|ui|mono))\s*:\s*([^;]+);", source_text)
+    }
+    if parsed_primitives != _PRIMITIVES:
+        raise ExactReuseProvenanceError("source primitives are not the pinned parsed values")
     if declaration["source_tokens"] != list(_TOKENS) or declaration["font_fallback"] != _FALLBACK or declaration["transforms"] != list(_TRANSFORMS) or declaration["state_matrix"] != list(_STATES):
         raise ExactReuseProvenanceError("fallback, transforms, or state matrix is invalid")
     return ExactReuseReceipt(candidate, declaration_oid, commit, source_oid, _APPROVED_IMPORTS, _STATES)

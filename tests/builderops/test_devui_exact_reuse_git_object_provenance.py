@@ -56,7 +56,7 @@ def object_repo(tmp_path: Path) -> tuple[Path, str, str]:
     (repo / "source.css").write_text(
         "@import url('" + APPROVED_IMPORTS[0] + "');\n"
         "@import url('" + APPROVED_IMPORTS[1] + "');\n"
-        ":root { --font-display: 'EB Garamond', Georgia, serif; --font-ui: 'Space Grotesk', system-ui, sans-serif; --font-mono: 'JetBrains Mono', monospace; }\n"
+        ":root { --font-display: 'EB Garamond', Georgia, serif; --font-ui: 'Space Grotesk', system-ui, sans-serif; --font-mono: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace; }\n"
     )
     source_commit = _commit(repo, "source")
     source_blob = _git(repo, "rev-parse", f"{source_commit}:source.css")
