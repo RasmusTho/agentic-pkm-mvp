@@ -110,6 +110,30 @@ def _read_result(root: Path, path: str) -> tuple[dict[str, object], str]:
     return load_frontmatter((root / path).read_text(encoding="utf-8"))
 
 
+def _write_context_capture(
+    path: Path, *, content_identity: str, review_state: str
+) -> dict[str, object]:
+    path.write_text(
+        f"""---
+artifact_class: {ARTIFACT_CLASS}
+review_state: {review_state}
+created: 2026-07-15T09:00:00Z
+provenance:
+  content_identity: {content_identity}
+  source_kind: note
+---
+Context source
+""",
+        encoding="utf-8",
+    )
+    return {
+        "content_identity": content_identity,
+        "created_at": "2026-07-15T09:00:00+00:00",
+        "source_kind": "note",
+        "url": None,
+    }
+
+
 def test_draft_synthesizes_from_transcript_and_context(tmp_path: Path) -> None:
     root, context, session_id, _capture = _seed_inputs(tmp_path)
 
@@ -401,8 +425,10 @@ def test_context_session_ref_remains_context_across_same_day_redraft(
 ) -> None:
     root, context, session_id, _capture = _seed_inputs(tmp_path)
     context_source = root / "session:context-only.md"
-    context_source.write_text(
-        "---\nreview_state: accepted\n---\ncontext\n", encoding="utf-8"
+    context_content = _write_context_capture(
+        context_source,
+        content_identity="context-only",
+        review_state="accepted",
     )
     bundle = assemble_day_context(vault_context=context, for_date=DAY)
     sections = dict(bundle.sections)
@@ -411,9 +437,7 @@ def test_context_session_ref_remains_context_across_same_day_redraft(
             "items": (
                 DayContextItem(
                     provenance_ref="session:context-only.md",
-                    content={
-                        "summary": "Context whose public ref uses the session prefix."
-                    },
+                    content=context_content,
                 ),
             )
         }
@@ -452,8 +476,10 @@ def test_legacy_session_prefixed_source_role_ambiguity_blocks_redraft(
 ) -> None:
     root, context, session_id, _capture = _seed_inputs(tmp_path)
     context_source = root / "session:collision.md"
-    context_source.write_text(
-        "---\nreview_state: accepted\n---\ncontext\n", encoding="utf-8"
+    context_content = _write_context_capture(
+        context_source,
+        content_identity="legacy-role-collision",
+        review_state="accepted",
     )
     bundle = assemble_day_context(vault_context=context, for_date=DAY)
     sections = dict(bundle.sections)
@@ -462,7 +488,7 @@ def test_legacy_session_prefixed_source_role_ambiguity_blocks_redraft(
             "items": (
                 DayContextItem(
                     provenance_ref="session:collision.md",
-                    content={"summary": "Legacy role collision context."},
+                    content=context_content,
                 ),
             )
         }
@@ -760,6 +786,107 @@ def test_source_content_change_during_cognition_blocks_before_staging(
             reasoning_fn=mutating_reasoning,
         )
 
+    assert not list(root.glob("**/drafts/journal/*.md"))
+
+
+def test_stale_day_context_bundle_blocks_before_cognition(tmp_path: Path) -> None:
+    root, context, session_id, capture = _seed_inputs(tmp_path)
+    bundle = assemble_day_context(vault_context=context, for_date=DAY)
+    capture.write_text(
+        capture.read_text(encoding="utf-8").replace(
+            "content_identity: capture-1", "content_identity: capture-2"
+        ),
+        encoding="utf-8",
+    )
+    cognition_called = False
+
+    def cognition(
+        _object_ids: object, *, trace_id: str | None = None
+    ) -> ReasoningOutput:
+        nonlocal cognition_called
+        del trace_id
+        cognition_called = True
+        return ReasoningOutput()
+
+    with pytest.raises(
+        UnresolvableJournalCitationError,
+        match="source version changed after bundle assembly",
+    ):
+        draft_journal_entry(
+            vault_context=context,
+            for_date=DAY,
+            session_id=session_id,
+            day_context=bundle,
+            write_guard=_allowing_guard(),
+            reasoning_fn=cognition,
+        )
+
+    assert not cognition_called
+    assert not list(root.glob("**/drafts/journal/*.md"))
+
+
+def test_transcript_digest_covers_exact_raw_crlf_bytes(tmp_path: Path) -> None:
+    root, context, session_id, _capture = _seed_inputs(tmp_path)
+    transcript = next((root / ".chats" / "reflection").glob("*.md"))
+    crlf_raw = transcript.read_bytes().replace(b"\n", b"\r\n")
+    transcript.write_bytes(crlf_raw)
+
+    result = draft_journal_entry(
+        vault_context=context,
+        for_date=DAY,
+        session_id=session_id,
+        write_guard=_allowing_guard(),
+    )
+
+    frontmatter, body = _read_result(root, result.path)
+    transcript_version = next(
+        item
+        for item in frontmatter["source_occurrences"]
+        if item["kind"] == "transcript"
+    )
+    raw_digest = hashlib.sha256(crlf_raw).hexdigest()
+    normalized_digest = hashlib.sha256(crlf_raw.replace(b"\r\n", b"\n")).hexdigest()
+    assert raw_digest != normalized_digest
+    assert transcript_version["content_sha256"] == raw_digest
+    assert raw_digest in body
+
+
+def test_empty_transcript_blocks_before_cognition_and_staging(tmp_path: Path) -> None:
+    root, context, session_id, _capture = _seed_inputs(tmp_path)
+    transcript = next((root / ".chats" / "reflection").glob("*.md"))
+    transcript.write_text(
+        f"""---
+type: chat-session
+session_id: {session_id}
+---
+
+**Agent:** What mattered today?
+""",
+        encoding="utf-8",
+    )
+    cognition_called = False
+
+    def cognition(
+        _object_ids: object, *, trace_id: str | None = None
+    ) -> ReasoningOutput:
+        nonlocal cognition_called
+        del trace_id
+        cognition_called = True
+        return ReasoningOutput()
+
+    with pytest.raises(
+        UnresolvableJournalCitationError,
+        match=f"session:{session_id} contains no owner turns",
+    ):
+        draft_journal_entry(
+            vault_context=context,
+            for_date=DAY,
+            session_id=session_id,
+            write_guard=_allowing_guard(),
+            reasoning_fn=cognition,
+        )
+
+    assert not cognition_called
     assert not list(root.glob("**/drafts/journal/*.md"))
 
 
@@ -1307,8 +1434,10 @@ def _colliding_session_and_context(
         encoding="utf-8",
     )
     colliding_context = root / "session:collision.md"
-    colliding_context.write_text(
-        f"---\nreview_state: {context_review_state}\n---\ncontext\n", encoding="utf-8"
+    context_content = _write_context_capture(
+        colliding_context,
+        content_identity="distinct-collision-context",
+        review_state=context_review_state,
     )
     bundle = assemble_day_context(vault_context=context, for_date=DAY)
     sections = dict(bundle.sections)
@@ -1317,7 +1446,7 @@ def _colliding_session_and_context(
             "items": (
                 DayContextItem(
                     provenance_ref="session:collision.md",
-                    content={"summary": "distinct accepted context"},
+                    content=context_content,
                 ),
             )
         }

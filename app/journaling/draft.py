@@ -36,6 +36,7 @@ from app.journaling.day_context import (
     DayContextItem,
     assemble_day_context,
 )
+from app.knowledge_acquisition.candidate_writeback import ARTIFACT_CLASS
 from app.knowledge_compilation.proposal_builders import (
     ProposalContext,
     build_cited_unreviewed_compilation_draft,
@@ -129,6 +130,14 @@ class _SourceContentVersion:
 
     content_sha256: str
     admitted_content: str
+
+
+@dataclass(frozen=True)
+class _SourceSnapshot:
+    """Raw bytes and metadata captured from one open source-file version."""
+
+    raw_content: bytes
+    stat_result: os.stat_result
 
 
 @dataclass(frozen=True)
@@ -355,6 +364,13 @@ def draft_journal_entry(
         )
         _validate_session_citations(vault_root, fresh_sessions)
         _validate_context_citations(vault_root, context_items)
+        fresh_review_states = _source_review_states(
+            vault_root, fresh_sessions, context_items, source_identities
+        )
+        if fresh_review_states != review_states:
+            raise JournalDraftBlockedError(
+                "journal draft source admission changed before staging"
+            )
         if (
             _source_content_versions(
                 vault_root, fresh_sessions, context_items, source_identities
@@ -363,13 +379,6 @@ def draft_journal_entry(
         ):
             raise JournalDraftBlockedError(
                 "journal draft source content changed before staging"
-            )
-        fresh_review_states = _source_review_states(
-            vault_root, fresh_sessions, context_items, source_identities
-        )
-        if fresh_review_states != review_states:
-            raise JournalDraftBlockedError(
-                "journal draft source admission changed before staging"
             )
         _atomic_write_at(directory_fd, filename, note_text)
 
@@ -694,18 +703,22 @@ def _resolve_session(vault_root: Path, session_id: str) -> _ResolvedSession:
             f"session:{session_id} resolved to {len(matches)} transcript files"
         )
     path, frontmatter, body = matches[0]
-    owner_turns = tuple(
-        match.group(1).strip()
-        for match in re.finditer(
-            r"^\*\*Owner:\*\*\s*(.+?)(?=\n\n|\Z)", body, flags=re.MULTILINE | re.DOTALL
-        )
-        if match.group(1).strip()
-    )
+    owner_turns = _owner_turns(body)
     return _ResolvedSession(
         session_id=session_id,
         relative_path=path.relative_to(vault_root).as_posix(),
         owner_turns=owner_turns,
         review_state=_review_state(frontmatter, default=ReviewState.UNREVIEWED),
+    )
+
+
+def _owner_turns(body: str) -> tuple[str, ...]:
+    return tuple(
+        match.group(1).strip()
+        for match in re.finditer(
+            r"^\*\*Owner:\*\*\s*(.+?)(?=\n\n|\Z)", body, flags=re.MULTILINE | re.DOTALL
+        )
+        if match.group(1).strip()
     )
 
 
@@ -722,6 +735,10 @@ def _validate_session_citations(
             "a journal draft requires at least one resolvable conversation session"
         )
     for session in sessions:
+        if not session.owner_turns:
+            raise UnresolvableJournalCitationError(
+                f"session:{session.session_id} contains no owner turns"
+            )
         path = (vault_root / session.relative_path).resolve()
         try:
             path.relative_to(vault_root)
@@ -769,28 +786,133 @@ def _source_content_versions(
 ) -> dict[str, _SourceContentVersion]:
     """Capture exact raw-source digests plus the admitted semantic content."""
 
-    raw_contents = tuple(
-        (vault_root / session.relative_path).read_text(encoding="utf-8")
-        for session in sessions
-    ) + tuple(
-        (vault_root / _reference_path(item.provenance_ref)).read_text(
-            encoding="utf-8"
+    versions: dict[str, _SourceContentVersion] = {}
+    session_identities = source_identities[: len(sessions)]
+    context_identities = source_identities[len(sessions) :]
+    for session, identity in zip(sessions, session_identities, strict=True):
+        snapshot = _read_source_snapshot(vault_root / session.relative_path)
+        text = _decode_source_snapshot(snapshot, identity.external_id)
+        frontmatter, body = load_frontmatter(text)
+        if str(frontmatter.get("session_id") or "").strip() != session.session_id:
+            raise UnresolvableJournalCitationError(
+                f"session:{session.session_id} transcript identity changed"
+            )
+        owner_turns = _owner_turns(body)
+        if owner_turns != session.owner_turns:
+            raise UnresolvableJournalCitationError(
+                f"session:{session.session_id} source version changed after resolution"
+            )
+        versions[identity.admission_id] = _SourceContentVersion(
+            content_sha256=hashlib.sha256(snapshot.raw_content).hexdigest(),
+            admitted_content="\n".join(owner_turns),
         )
-        for item in context_items
+
+    for item, identity in zip(context_items, context_identities, strict=True):
+        snapshot = _read_source_snapshot(
+            vault_root / _reference_path(item.provenance_ref)
+        )
+        resolved_content = _resolve_context_item_content(item, snapshot)
+        if item.content != resolved_content:
+            raise UnresolvableJournalCitationError(
+                f"day-context source version changed after bundle assembly: "
+                f"{item.provenance_ref}"
+            )
+        versions[identity.admission_id] = _SourceContentVersion(
+            content_sha256=hashlib.sha256(snapshot.raw_content).hexdigest(),
+            admitted_content=json.dumps(
+                resolved_content, sort_keys=True, ensure_ascii=False
+            ),
+        )
+    return versions
+
+
+def _read_source_snapshot(path: Path) -> _SourceSnapshot:
+    """Read one stable inode version without normalizing its raw bytes."""
+
+    with path.open("rb") as source:
+        before = os.fstat(source.fileno())
+        raw_content = source.read()
+        after = os.fstat(source.fileno())
+    before_version = (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns)
+    after_version = (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns)
+    if before_version != after_version:
+        raise UnresolvableJournalCitationError(
+            f"source changed while being read: {path.as_posix()}"
+        )
+    return _SourceSnapshot(raw_content=raw_content, stat_result=after)
+
+
+def _decode_source_snapshot(snapshot: _SourceSnapshot, reference: str) -> str:
+    try:
+        return snapshot.raw_content.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise UnresolvableJournalCitationError(
+            f"citation is not valid UTF-8: {reference}"
+        ) from exc
+
+
+def _resolve_context_item_content(
+    item: DayContextItem, snapshot: _SourceSnapshot
+) -> dict[str, object]:
+    """Re-derive one day-context semantic item from its cited durable source."""
+
+    reference = item.provenance_ref
+    text = _decode_source_snapshot(snapshot, reference)
+    if "#" in reference:
+        fragment = reference.split("#", 1)[1]
+        for line in text.splitlines():
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(record, dict):
+                continue
+            created = datetime.fromisoformat(
+                str(record.get("created_at") or "").replace("Z", "+00:00")
+            )
+            candidate = f"{record.get('object_id')}:{record.get('key')}:{created.isoformat()}"
+            if candidate != fragment:
+                continue
+            return {
+                "object_id": str(record.get("object_id") or ""),
+                "vault_uuid": record.get("vault_uuid"),
+                "key": str(record.get("key") or ""),
+                "created_at": created.isoformat(),
+            }
+        raise UnresolvableJournalCitationError(
+            f"citation fragment does not resolve: {reference}"
+        )
+
+    frontmatter, _body = load_frontmatter(text)
+    if frontmatter.get("artifact_class") == ARTIFACT_CLASS:
+        provenance = frontmatter.get("provenance")
+        if not isinstance(provenance, dict):
+            raise UnresolvableJournalCitationError(
+                f"candidate provenance does not resolve: {reference}"
+            )
+        created = datetime.fromisoformat(
+            str(frontmatter.get("created") or "").replace("Z", "+00:00")
+        )
+        return {
+            "content_identity": str(provenance.get("content_identity") or ""),
+            "created_at": created.isoformat(),
+            "source_kind": provenance.get("source_kind"),
+            "url": provenance.get("url"),
+        }
+    if frontmatter.get("artifact_class") == "commitment":
+        changed = datetime.fromtimestamp(
+            snapshot.stat_result.st_mtime, tz=timezone.utc
+        ).astimezone()
+        return {
+            "commitment_id": str(frontmatter.get("commitment_id") or ""),
+            "state": frontmatter.get("commitment_state"),
+            "target_ref": frontmatter.get("target_ref"),
+            "summary": frontmatter.get("summary"),
+            "changed_at": changed.isoformat(),
+        }
+    raise UnresolvableJournalCitationError(
+        f"unsupported day-context provenance source: {reference}"
     )
-    admitted_contents = tuple("\n".join(session.owner_turns) for session in sessions) + tuple(
-        json.dumps(item.content, sort_keys=True, ensure_ascii=False)
-        for item in context_items
-    )
-    return {
-        identity.admission_id: _SourceContentVersion(
-            content_sha256=hashlib.sha256(raw_content.encode("utf-8")).hexdigest(),
-            admitted_content=admitted_content,
-        )
-        for identity, raw_content, admitted_content in zip(
-            source_identities, raw_contents, admitted_contents, strict=True
-        )
-    }
 
 
 def _reference_path(reference: str) -> str:
@@ -999,10 +1121,7 @@ def _build_body(
     session_identities = source_identities[: len(sessions)]
     context_identities = source_identities[len(sessions) :]
     for session, identity in zip(sessions, session_identities, strict=True):
-        turns = session.owner_turns or (
-            "I opened a reflection conversation and stopped before adding my own words.",
-        )
-        for turn in turns:
+        for turn in session.owner_turns:
             conversation_index += 1
             lines.append(f"I reflected: {turn} [^conversation-{conversation_index}]")
             lines.append("")
