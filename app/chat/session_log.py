@@ -13,6 +13,7 @@ from typing import Callable
 from typing import Iterator
 from uuid import uuid4
 
+from app.journaling.transcript_protocol import ROLE_MESSAGE_FORMAT_BLOCKQUOTE_V1
 from app.knowledge.write_ops import append_note_relative, write_note_relative
 from app.services.note_uuid import ensure_note_uuid
 from app.vault.manager import VaultContext
@@ -21,7 +22,6 @@ from scripts.yaml_roundtrip import load_frontmatter
 
 
 CHAT_SESSION_PERSIST_ACTION = "chat_session.persist"
-ROLE_MESSAGE_FORMAT_BLOCKQUOTE_V1 = "blockquote-v1"
 _SESSION_LOCKS_GUARD = threading.Lock()
 _SESSION_LOCKS: dict[str, threading.RLock] = {}
 

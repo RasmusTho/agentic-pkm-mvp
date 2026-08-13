@@ -31,12 +31,12 @@ from app.activation.journal_draft import (
     evaluate_journal_draft_activation,
 )
 from app.agent_memory.candidate import ReviewState
-from app.chat.session_log import ROLE_MESSAGE_FORMAT_BLOCKQUOTE_V1
 from app.journaling.day_context import (
     DayContextBundle,
     DayContextItem,
     assemble_day_context,
 )
+from app.journaling.transcript_protocol import ROLE_MESSAGE_FORMAT_BLOCKQUOTE_V1
 from app.knowledge_acquisition.candidate_writeback import ARTIFACT_CLASS
 from app.knowledge_compilation.proposal_builders import (
     ProposalContext,
