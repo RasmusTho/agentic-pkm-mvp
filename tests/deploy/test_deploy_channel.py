@@ -450,6 +450,39 @@ def _run_deploy(
     )
 
 
+def _run_rollback(
+    root: Path, env: dict[str, str], sha: str, *, channel: str = "dev"
+) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["bash", "scripts/deploy_channel.sh", "rollback", channel, sha],
+        cwd=root,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+
+def test_archive_preflight_blocks_deploy_but_never_gates_rollback(tmp_path: Path) -> None:
+    root, env, sha = _deploy_harness(tmp_path)
+    pin_path = root / "config/deploy/dev.env"
+    pin_path.write_text(
+        "APP_IMAGE_REPOSITORY=example.invalid/pkm-app\n" f"APP_IMAGE_TAG={sha}\n",
+        encoding="utf-8",
+    )
+    env["FAKE_ARCHIVE_PREFLIGHT_RC"] = "78"
+
+    deploy = _run_deploy(root, env, sha)
+    assert deploy.returncode == 78
+    assert "archive volume preflight failed: output=redacted" in deploy.stderr
+    assert _deploy_events(env) == ["archive-preflight dev"]
+
+    Path(env["FAKE_DEPLOY_EVENT_LOG"]).write_text("", encoding="utf-8")
+    rollback = _run_rollback(root, env, sha)
+    assert rollback.returncode == 0, rollback.stdout + rollback.stderr
+    assert not any(event.startswith("archive-preflight") for event in _deploy_events(env))
+
+
 def test_deploy_channel_preflights_embedding_provider_before_health_gate() -> None:
     script = (REPO_ROOT / "scripts/deploy_channel.sh").read_text(encoding="utf-8")
     preflight = 'run_postmutation_gate "embedding provider configuration preflight failed"'

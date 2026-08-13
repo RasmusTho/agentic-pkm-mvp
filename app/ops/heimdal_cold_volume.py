@@ -77,6 +77,14 @@ class ArchiveVolumeRefusedError(RuntimeError):
     """A redacted archive-volume refusal."""
 
 
+class _MountAttemptRefused(ArchiveVolumeRefusedError):
+    """Internal refusal carrying only safe compensation state."""
+
+    def __init__(self, *, created_bundle_cleanup_safe: bool) -> None:
+        super().__init__("archive volume is not ready")
+        self.created_bundle_cleanup_safe = created_bundle_cleanup_safe
+
+
 @dataclass(frozen=True)
 class ArchiveVolumeMetadata:
     state: str
@@ -322,8 +330,12 @@ def attach_command(metadata: ArchiveVolumeMetadata) -> tuple[str, ...]:
         "on",
         "-mountpoint",
         str(metadata.mountpoint),
-        str(metadata.bundle_path),
+        metadata.bundle_path.name,
     )
+
+
+def _encrypted_command(metadata: ArchiveVolumeMetadata) -> tuple[str, ...]:
+    return (HDIUTIL, "isencrypted", metadata.bundle_path.name, "-plist")
 
 
 def validate_command(
@@ -334,13 +346,15 @@ def validate_command(
 ) -> None:
     allowed = {
         (HDIUTIL, "info", "-plist"),
-        (HDIUTIL, "isencrypted", str(metadata.bundle_path), "-plist"),
-        attach_command(metadata),
         (DISKUTIL, "info", "-plist", str(metadata.bundle_path.parent)),
     }
     if argv in allowed:
         return
-    if argv == create_command(metadata):
+    if argv in {
+        create_command(metadata),
+        attach_command(metadata),
+        _encrypted_command(metadata),
+    }:
         if (
             type(cwd_fd) is not int
             or cwd_fd < 0
@@ -690,11 +704,16 @@ def _require_external_parent(
     os.close(parent_descriptor)
 
 
-def _require_encrypted(metadata: ArchiveVolumeMetadata, runner: CommandRunner) -> None:
+def _require_encrypted(
+    metadata: ArchiveVolumeMetadata,
+    runner: CommandRunner,
+    parent_descriptor: int,
+) -> None:
     payload = _parse_plist(
         _call(
             runner,
-            (HDIUTIL, "isencrypted", str(metadata.bundle_path), "-plist"),
+            _encrypted_command(metadata),
+            cwd_fd=parent_descriptor,
         ).stdout
     )
     if "encrypted" not in payload or payload["encrypted"] is not True:
@@ -735,11 +754,26 @@ def require_archive_volume_ready(
     metadata: ArchiveVolumeMetadata,
     *,
     runner: CommandRunner | None = None,
+    _descriptor_authority: object | None = None,
 ) -> ArchiveVolumeReady:
     if metadata.state != BOUND_ACTIVE:
         raise _refused()
-    selected = _runner(metadata) if runner is None else runner
-    _validate_attached_volume(metadata, selected)
+    selected = (
+        _runner(metadata, descriptor_authority=_descriptor_authority)
+        if runner is None
+        else runner
+    )
+    parent_descriptor = _open_external_parent(metadata, selected)
+    try:
+        bundle_identity = _created_bundle_identity(parent_descriptor, metadata)
+        _validate_attached_volume(
+            metadata,
+            selected,
+            parent_descriptor,
+            bundle_identity,
+        )
+    finally:
+        os.close(parent_descriptor)
     return ArchiveVolumeReady()
 
 
@@ -753,17 +787,27 @@ class _Attachment:
 def _validate_attached_volume(
     metadata: ArchiveVolumeMetadata,
     runner: CommandRunner,
+    parent_descriptor: int,
+    bundle_identity: tuple[int, int],
 ) -> tuple[str, str]:
-    _require_external_parent(metadata, runner)
-    _require_bundle_directory(metadata)
+    _require_created_bundle_postcondition(
+        parent_descriptor,
+        metadata,
+        bundle_identity,
+    )
     mount_descriptor = _open_mount_directory(metadata)
     try:
         device = _attached_device(metadata, runner)
         if device is None:
             raise _refused()
-        _require_encrypted(metadata, runner)
+        _require_encrypted(metadata, runner, parent_descriptor)
         volume_uuid = _require_disk_info(metadata, runner, device)
         _revalidate_directory(mount_descriptor, metadata.mountpoint)
+        _require_created_bundle_postcondition(
+            parent_descriptor,
+            metadata,
+            bundle_identity,
+        )
         return device, volume_uuid
     finally:
         os.close(mount_descriptor)
@@ -786,10 +830,15 @@ def mount_archive_volume(
     *,
     credential: str,
     runner: CommandRunner | None = None,
+    _descriptor_authority: object | None = None,
 ) -> ArchiveVolumeReady:
     if metadata.state != BOUND_ACTIVE:
         raise _refused()
-    selected = _runner(metadata) if runner is None else runner
+    selected = (
+        _runner(metadata, descriptor_authority=_descriptor_authority)
+        if runner is None
+        else runner
+    )
     _mount_and_validate(metadata, credential=credential, runner=selected)
     return ArchiveVolumeReady()
 
@@ -799,26 +848,80 @@ def _mount_and_validate(
     *,
     credential: str,
     runner: CommandRunner,
+    parent_descriptor: int | None = None,
+    bundle_identity: tuple[int, int] | None = None,
 ) -> _Attachment:
-    existing = _attached_device(metadata, runner)
-    attached_here = existing is None
-    device = existing
-    if attached_here:
-        attach_result = _call(
-            runner,
-            attach_command(metadata),
-            _credential_input(credential),
-        )
-        device = _device_from_attach_response(metadata, attach_result.stdout)
+    owns_parent_descriptor = parent_descriptor is None
+    if parent_descriptor is None:
+        parent_descriptor = _open_external_parent(metadata, runner)
     try:
-        validated_device, volume_uuid = _validate_attached_volume(metadata, runner)
-        if validated_device != device:
-            raise _refused()
-        return _Attachment(validated_device, volume_uuid, attached_here)
-    except ArchiveVolumeRefusedError:
-        if attached_here and device is not None:
-            _detach_exact(runner, device)
-        raise
+        if bundle_identity is None:
+            bundle_identity = _created_bundle_identity(parent_descriptor, metadata)
+        _require_created_bundle_postcondition(
+            parent_descriptor,
+            metadata,
+            bundle_identity,
+        )
+        try:
+            existing = _attached_device(metadata, runner)
+        except ArchiveVolumeRefusedError as exc:
+            raise _MountAttemptRefused(created_bundle_cleanup_safe=False) from exc
+        if existing is not None:
+            try:
+                validated_device, volume_uuid = _validate_attached_volume(
+                    metadata,
+                    runner,
+                    parent_descriptor,
+                    bundle_identity,
+                )
+                if validated_device != existing:
+                    raise _refused()
+                return _Attachment(validated_device, volume_uuid, False)
+            except ArchiveVolumeRefusedError as exc:
+                raise _MountAttemptRefused(created_bundle_cleanup_safe=False) from exc
+
+        _require_created_bundle_postcondition(
+            parent_descriptor,
+            metadata,
+            bundle_identity,
+        )
+        try:
+            attach_result = _call(
+                runner,
+                attach_command(metadata),
+                _credential_input(credential),
+                cwd_fd=parent_descriptor,
+            )
+        except ArchiveVolumeRefusedError as exc:
+            # A command failure cannot prove that no attachment was created.
+            raise _MountAttemptRefused(created_bundle_cleanup_safe=False) from exc
+        try:
+            device = _device_from_attach_response(metadata, attach_result.stdout)
+        except ArchiveVolumeRefusedError as exc:
+            # A successful attach with no provable device is operator recovery.
+            raise _MountAttemptRefused(created_bundle_cleanup_safe=False) from exc
+        try:
+            _require_created_bundle_postcondition(
+                parent_descriptor,
+                metadata,
+                bundle_identity,
+            )
+            validated_device, volume_uuid = _validate_attached_volume(
+                metadata,
+                runner,
+                parent_descriptor,
+                bundle_identity,
+            )
+            if validated_device != device:
+                raise _refused()
+            return _Attachment(validated_device, volume_uuid, True)
+        except ArchiveVolumeRefusedError as exc:
+            raise _MountAttemptRefused(
+                created_bundle_cleanup_safe=_detach_exact(runner, device)
+            ) from exc
+    finally:
+        if owns_parent_descriptor:
+            os.close(parent_descriptor)
 
 
 def _detach_exact(runner: CommandRunner, device: str) -> bool:
@@ -859,15 +962,17 @@ def _cleanup_created_bundle(
     *,
     parent_descriptor: int | None = None,
     parent_identity: tuple[int, int] | None = None,
+    attachment_device: str | None = None,
+    attachment_known_absent: bool = False,
 ) -> bool:
     """Delete only the exact bundle created by this live attempt."""
     descriptor = -1
     owns_descriptor = parent_descriptor is None
     try:
-        attached = _attached_device(metadata, runner)
-        if attached is not None and not _detach_exact(runner, attached):
-            return False
-        if _attached_device(metadata, runner) is not None:
+        if attachment_device is not None:
+            if not _detach_exact(runner, attachment_device):
+                return False
+        elif not attachment_known_absent:
             return False
         if not shutil.rmtree.avoids_symlink_attacks:
             return False
@@ -1019,11 +1124,6 @@ def provision_archive_volume(
                 metadata,
                 created_identity,
             )
-            attachment = _mount_and_validate(
-                metadata,
-                credential=credential,
-                runner=selected,
-            )
         except ArchiveVolumeRefusedError:
             _cleanup_created_bundle(
                 metadata,
@@ -1031,7 +1131,27 @@ def provision_archive_volume(
                 created_identity,
                 parent_descriptor=parent_descriptor,
                 parent_identity=parent_identity,
+                attachment_known_absent=True,
             )
+            raise
+        try:
+            attachment = _mount_and_validate(
+                metadata,
+                credential=credential,
+                runner=selected,
+                parent_descriptor=parent_descriptor,
+                bundle_identity=created_identity,
+            )
+        except _MountAttemptRefused as exc:
+            if exc.created_bundle_cleanup_safe:
+                _cleanup_created_bundle(
+                    metadata,
+                    selected,
+                    created_identity,
+                    parent_descriptor=parent_descriptor,
+                    parent_identity=parent_identity,
+                    attachment_known_absent=True,
+                )
             raise
 
         attached = replace(
@@ -1043,13 +1163,15 @@ def provision_archive_volume(
             _persist_transition(metadata_path, metadata, attached, metadata_writer)
         except ArchiveVolumeRefusedError:
             if _durable_metadata(metadata_path) != attached:
-                _cleanup_created_bundle(
-                    metadata,
-                    selected,
-                    created_identity,
-                    parent_descriptor=parent_descriptor,
-                    parent_identity=parent_identity,
-                )
+                if attachment.attached_here:
+                    _cleanup_created_bundle(
+                        metadata,
+                        selected,
+                        created_identity,
+                        parent_descriptor=parent_descriptor,
+                        parent_identity=parent_identity,
+                        attachment_device=attachment.device,
+                    )
             raise
 
         active = replace(attached, state=BOUND_ACTIVE)
@@ -1095,11 +1217,13 @@ def mount_from_bootstrap(
     *,
     env: Mapping[str, str] | None = None,
     runner: CommandRunner | None = None,
+    _descriptor_authority: object | None = None,
 ) -> ArchiveVolumeReady:
     return mount_archive_volume(
         metadata,
         credential=_bootstrap_credential(env),
         runner=runner,
+        _descriptor_authority=_descriptor_authority,
     )
 
 
@@ -1115,9 +1239,15 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         metadata = load_archive_metadata(args.metadata)
         if args.action == "require-ready":
-            require_archive_volume_ready(metadata)
+            require_archive_volume_ready(
+                metadata,
+                _descriptor_authority=_ONE_SHOT_DESCRIPTOR_AUTHORITY,
+            )
         elif args.action == "mount":
-            mount_from_bootstrap(metadata)
+            mount_from_bootstrap(
+                metadata,
+                _descriptor_authority=_ONE_SHOT_DESCRIPTOR_AUTHORITY,
+            )
         else:
             provision_from_bootstrap(
                 metadata,

@@ -152,10 +152,17 @@ class FakeRunner:
         if argv == (
             volume.HDIUTIL,
             "isencrypted",
-            str(self.metadata.bundle_path),
+            self.metadata.bundle_path.name,
             "-plist",
         ):
-            return volume.CommandResult(0, _plist({"encrypted": self.encrypted}))
+            if cwd_fd is None:
+                raise AssertionError("image validation must carry descriptor authority")
+            details = os.fstat(cwd_fd)
+            return volume.CommandResult(
+                0,
+                _plist({"encrypted": self.encrypted}),
+                cwd_identity=(details.st_dev, details.st_ino),
+            )
         if argv == (volume.DISKUTIL, "info", "-plist", _DEVICE):
             return volume.CommandResult(0, _disk_info(self.metadata, **self.disk_overrides))
         if argv == (
@@ -169,10 +176,17 @@ class FakeRunner:
                 _parent_info(self.metadata, **self.parent_overrides),
             )
         if argv[:2] == (volume.HDIUTIL, "attach"):
+            if cwd_fd is None:
+                raise AssertionError("attach must carry descriptor authority")
+            details = os.fstat(cwd_fd)
             if self.attach_rc == 0:
                 self.attached = True
                 self.metadata.mountpoint.chmod(self.metadata.mode)
-                return volume.CommandResult(0, _attach_info(self.metadata))
+                return volume.CommandResult(
+                    0,
+                    _attach_info(self.metadata),
+                    cwd_identity=(details.st_dev, details.st_ino),
+                )
             return volume.CommandResult(self.attach_rc, b"", b"fixture-private-detail")
         if argv[:2] == (volume.HDIUTIL, "create"):
             if cwd_fd is None:
@@ -357,21 +371,29 @@ def test_attach_response_establishes_compensation_before_rediscovery(
             stdin: bytes | None = None,
             cwd_fd: int | None = None,
         ) -> volume.CommandResult:
-            del cwd_fd
-            self.calls.append((argv, stdin))
             if argv == (volume.HDIUTIL, "info", "-plist"):
+                self.calls.append((argv, stdin))
                 self.info_calls += 1
                 if self.info_calls == 1:
                     return volume.CommandResult(0, _plist({"images": []}))
                 return volume.CommandResult(0, _plist({}))
             if argv[:2] == (volume.HDIUTIL, "attach"):
+                self.calls.append((argv, stdin))
+                if cwd_fd is None:
+                    raise AssertionError("attach must carry descriptor authority")
                 self.attached = True
-                return volume.CommandResult(0, _attach_info(metadata))
+                details = os.fstat(cwd_fd)
+                return volume.CommandResult(
+                    0,
+                    _attach_info(metadata),
+                    cwd_identity=(details.st_dev, details.st_ino),
+                )
             if argv == (volume.HDIUTIL, "detach", _DEVICE):
+                self.calls.append((argv, stdin))
                 if detach_rc == 0:
                     self.attached = False
                 return volume.CommandResult(detach_rc, b"", b"fixture-private-detail")
-            raise AssertionError(f"unexpected command shape: {argv!r}")
+            return super().__call__(argv, stdin, cwd_fd)
 
     runner = RediscoveryFailureRunner()
     with pytest.raises(volume.ArchiveVolumeRefusedError):
@@ -427,6 +449,71 @@ def test_create_is_descriptor_relative_across_parent_path_swap(tmp_path: Path) -
     assert not (displaced_parent / metadata.bundle_path.name).exists()
     assert not metadata.bundle_path.exists()
     assert volume.load_archive_metadata(metadata_path) == metadata
+
+
+def test_attach_refuses_bundle_swap_and_detaches_only_attempt_device(tmp_path: Path) -> None:
+    metadata = _planned_metadata(tmp_path)
+    metadata_path = tmp_path / "archive-metadata.json"
+    volume.write_archive_metadata(metadata_path, metadata)
+    original_parent = metadata.bundle_path.parent
+    displaced_parent = tmp_path / "displaced-external-parent"
+
+    class AttachSwapRunner(FakeRunner):
+        def __call__(
+            self,
+            argv: tuple[str, ...],
+            stdin: bytes | None = None,
+            cwd_fd: int | None = None,
+        ) -> volume.CommandResult:
+            result = super().__call__(argv, stdin, cwd_fd)
+            if argv[:2] == (volume.HDIUTIL, "attach"):
+                original_parent.rename(displaced_parent)
+                original_parent.mkdir()
+                metadata.bundle_path.mkdir()
+            return result
+
+    runner = AttachSwapRunner(metadata, attached=False)
+    with pytest.raises(volume.ArchiveVolumeRefusedError):
+        volume.provision_archive_volume(
+            metadata,
+            credential=_PASSPHRASE,
+            runner=runner,
+            metadata_path=metadata_path,
+        )
+
+    assert (volume.HDIUTIL, "detach", _DEVICE) in [argv for argv, _ in runner.calls]
+    assert not (displaced_parent / metadata.bundle_path.name).exists()
+    assert metadata.bundle_path.exists()
+    assert volume.load_archive_metadata(metadata_path) == metadata
+
+
+def test_created_bundle_cleanup_never_rediscovers_foreign_attachment(tmp_path: Path) -> None:
+    metadata = _planned_metadata(tmp_path)
+    held_parent = metadata.bundle_path.parent
+    metadata.bundle_path.mkdir()
+    created = metadata.bundle_path.stat()
+    descriptor = os.open(held_parent, os.O_RDONLY)
+    displaced_parent = tmp_path / "displaced-external-parent"
+    held_parent.rename(displaced_parent)
+    held_parent.mkdir()
+    metadata.bundle_path.mkdir()
+    runner = FakeRunner(metadata, attached=True)
+    try:
+        cleaned = volume._cleanup_created_bundle(
+            metadata,
+            runner,
+            (created.st_dev, created.st_ino),
+            parent_descriptor=descriptor,
+            parent_identity=(os.fstat(descriptor).st_dev, os.fstat(descriptor).st_ino),
+            attachment_known_absent=True,
+        )
+    finally:
+        os.close(descriptor)
+
+    assert cleaned is True
+    assert not any(argv[:2] == (volume.HDIUTIL, "detach") for argv, _ in runner.calls)
+    assert not (displaced_parent / metadata.bundle_path.name).exists()
+    assert metadata.bundle_path.exists()
 
 
 def test_idempotent_replay_never_overwrites_or_reattaches(tmp_path: Path) -> None:

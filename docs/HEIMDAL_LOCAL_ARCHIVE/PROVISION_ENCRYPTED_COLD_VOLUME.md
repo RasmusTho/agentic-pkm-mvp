@@ -49,9 +49,11 @@ typed output and descriptor-bound filesystem identity. Creation passes only the 
 a child process that changes directory directly through the still-open, revalidated external-root
 descriptor before executing the fixed command. That child hook is restricted to the short-lived,
 single-threaded provisioning CLI; threaded or imported runtime use refuses. The descriptor and its
-device/inode authority remain live through the creation postcondition and any exact-identity cleanup.
-A successful attach response establishes the newly attached device
-identity before rediscovery, so later validation failure compensates only that invocation's mount.
+device/inode authority remain live through creation, descriptor-relative encryption inspection and
+attach, the post-attach identity check, and any exact-identity cleanup. A successful attach response
+establishes the newly attached device identity before rediscovery, so later validation failure
+compensates only that invocation's mount. Cleanup never selects or detaches a device by rediscovering
+the mutable live bundle path; indeterminate or foreign mounts are preserved for operator recovery.
 
 The unlock secret is the required `heimdal.archive-pass` declaration for the dedicated
 `heimdal-cold-volume` consumer in the Local Secret Provisioning contract. HSP resolves it from the
@@ -61,8 +63,9 @@ variable, metadata field, log field, or receipt field.
 
 Production startup and deployment share `scripts/lib/heimdal_cold_volume_preflight.sh`. That gate
 only validates an already mounted archive and runs before generic startup or deploy mutation. It
-never creates or attaches an image. HAR-04 remains responsible for any archive write, verified copy,
-representation activation, or hot retirement.
+never creates or attaches an image. The deploy action is gated, while rollback remains reachable
+when the archive is unavailable so the previous-good service can be restored. HAR-04 remains
+responsible for any archive write, verified copy, representation activation, or hot retirement.
 
 ## Non-destructive operator runbook
 

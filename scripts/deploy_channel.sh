@@ -1076,10 +1076,12 @@ fi
 # failure must not turn safe migration refusal into avoidable runtime downtime.
 heimdal_raw_migration_secret_preflight || exit $?
 
-# Read-only and before every pin, marker, volume, Docker, or writer-stop
-# mutation. Production deploy validates the existing volume; it never creates,
-# attaches, reformats, erases, partitions, or writes archive data here.
-heimdal_cold_volume_preflight "${channel}" "${ROOT}" || exit $?
+# Read-only and before every forward-deploy pin, marker, volume, Docker, or
+# writer-stop mutation. Rollback must remain reachable when archive storage is
+# absent or unhealthy so the previous-good service can always be restored.
+if [ "${action}" = "deploy" ]; then
+  heimdal_cold_volume_preflight "${channel}" "${ROOT}" || exit $?
+fi
 
 if ! scripts/companion_ui_postdeploy_smoke.sh preflight; then
   echo "companion UI preflight failed before channel mutation" >&2
