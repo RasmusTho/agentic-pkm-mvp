@@ -507,6 +507,7 @@ Interpretation:
 ### `chunks` (legacy)
 - `vault_binding_id` (`text`, `NOT NULL` after MVR-05A3)
 - `id` (`uuid`, PK)
+- `UNIQUE (vault_binding_id, id)` (composite inbound-FK endpoint after MVR-05A4)
 - `(vault_binding_id, object_id)` (composite FK → `store_objects`, `ON DELETE CASCADE`)
 - `idx` (`int`)
 - `offset_start` / `offset_end` (`int`)
@@ -537,6 +538,17 @@ own forward-only migration.
 - `dim` (`int`, default `1536`)
 - `embedding` (either `double precision[]` with a cardinality check, or `vector` when vector extension is enabled in older branches)
 - `created_at` (`timestamptz`, default `now()`)
+
+### `relations` (legacy, retained projection)
+- `id` (`uuid`, PK; globally minted identity retained by MVR-05A4)
+- `vault_binding_id` (`text`, `NOT NULL` after MVR-05A3)
+- `src_id` / `dst_id` (`uuid`, `NOT NULL`; each forms a composite FK with
+  `vault_binding_id` to `store_objects(vault_binding_id, object_id)`, `ON DELETE CASCADE`)
+- `type` (`text`, `NOT NULL`)
+- `payload` (`jsonb`, `NOT NULL`, default `{}`)
+- Binding-aware indexes cover `(vault_binding_id, src_id)` and
+  `(vault_binding_id, dst_id)`. There is no production row writer; MVR-05A4
+  retired the incompatible `app/store/relation_index.py` SQL seam.
 
 ### `decisions` (legacy lineage, active writer schema)
 - `id` (`uuid`, PK; default `gen_random_uuid()` after `e1d2c3b4a5f6`)
@@ -600,11 +612,12 @@ copy, or delete rows.
 - `latest_decision(object_id uuid, key text) -> jsonb`
 
 The retired runtime bootstrap SQL used to `DROP VIEW IF EXISTS` the first two on every process boot,
-while Alembic revision `5b8ff54bed0f` creates them — a third instance of the same split-ownership
-pattern. Since MVR-05A1 (#4560) nothing drops them at runtime, so a freshly migrated database keeps
-both. A long-running database that had them dropped does **not** get them back, because the creating
-revision has already run there; that pre-existing divergence is unchanged by #4560 and is not
-covered by the convergence guard, which is scoped to `objects` and `agent_memories`.
+while Alembic revision `5b8ff54bed0f` originally created them — a third instance of the same
+split-ownership pattern. MVR-05A4 revision `f4a05a4b0001` now recreates both retained views during
+upgrade, including on a long-running database where the bootstrap had dropped them. Their exposed
+column order remains compatible and every chunk/embedding or decision/membership comparison joins
+on the same `vault_binding_id`; the guarded test-autocreate path reproduces the same definitions only
+when it creates a fresh fixture schema.
 
 ## Canonical Queue (DB Outbox)
 Migration-owned (KERNEL-05, #2850): Alembic revision `f3a1c9d2e4b7` creates the table exactly as the

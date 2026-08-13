@@ -151,6 +151,43 @@ def _seed_fresh_parent(conn: psycopg.Connection) -> tuple[uuid.UUID, uuid.UUID]:
     return object_id, set_id
 
 
+def _prepare_retained_historical_lineage(
+    dsn: str, monkeypatch: pytest.MonkeyPatch
+) -> tuple[uuid.UUID, uuid.UUID]:
+    _upgrade(dsn, monkeypatch, PRE_BINDING_HEAD)
+    with psycopg.connect(dsn) as conn:
+        constraints = conn.execute(
+            "SELECT conname FROM pg_constraint WHERE conrelid='membership'::regclass"
+        ).fetchall()
+        for (name,) in constraints:
+            conn.execute(
+                sql.SQL("ALTER TABLE membership DROP CONSTRAINT {}").format(sql.Identifier(name))
+            )
+        conn.execute("ALTER TABLE membership DROP COLUMN id")
+        conn.execute("ALTER TABLE membership ADD PRIMARY KEY (object_id,set_id)")
+        conn.execute(
+            "ALTER TABLE membership ADD CONSTRAINT membership_object_id_fkey "
+            "FOREIGN KEY (object_id) REFERENCES store_objects(object_id) ON DELETE CASCADE"
+        )
+        conn.execute(
+            "ALTER TABLE membership ADD CONSTRAINT membership_set_id_fkey "
+            "FOREIGN KEY (set_id) REFERENCES store_objects(object_id) ON DELETE CASCADE"
+        )
+        first, second = uuid.uuid4(), uuid.uuid4()
+        for oid in (first, second):
+            conn.execute(
+                "INSERT INTO objects (id,uuid,kind,payload,vault_binding_id) "
+                "VALUES (%s,%s,'note','{}'::jsonb,%s)",
+                (oid, oid, BINDING),
+            )
+            conn.execute(
+                "INSERT INTO store_objects (object_id,kind,payload) VALUES (%s,'note','{}'::jsonb)",
+                (oid,),
+            )
+        conn.execute("INSERT INTO membership (object_id,set_id) VALUES (%s,%s)", (first, second))
+    return first, second
+
+
 def test_membership_key_and_chunk_fk_follow_effective_lineage(
     scratch_db_factory, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -215,35 +252,7 @@ def test_retained_historical_membership_lineage_is_rekeyed(
     scratch_db_factory, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     dsn = scratch_db_factory()
-    _upgrade(dsn, monkeypatch, PRE_BINDING_HEAD)
-    with psycopg.connect(dsn) as conn:
-        constraints = conn.execute(
-            "SELECT conname FROM pg_constraint WHERE conrelid='membership'::regclass"
-        ).fetchall()
-        for (name,) in constraints:
-            conn.execute(f'ALTER TABLE membership DROP CONSTRAINT "{name}"')
-        conn.execute("ALTER TABLE membership DROP COLUMN id")
-        conn.execute("ALTER TABLE membership ADD PRIMARY KEY (object_id,set_id)")
-        conn.execute(
-            "ALTER TABLE membership ADD CONSTRAINT membership_object_id_fkey "
-            "FOREIGN KEY (object_id) REFERENCES store_objects(object_id) ON DELETE CASCADE"
-        )
-        conn.execute(
-            "ALTER TABLE membership ADD CONSTRAINT membership_set_id_fkey "
-            "FOREIGN KEY (set_id) REFERENCES store_objects(object_id) ON DELETE CASCADE"
-        )
-        first, second = uuid.uuid4(), uuid.uuid4()
-        for oid in (first, second):
-            conn.execute(
-                "INSERT INTO objects (id,uuid,kind,payload,vault_binding_id) "
-                "VALUES (%s,%s,'note','{}'::jsonb,%s)",
-                (oid, oid, BINDING),
-            )
-            conn.execute(
-                "INSERT INTO store_objects (object_id,kind,payload) VALUES (%s,'note','{}'::jsonb)",
-                (oid,),
-            )
-        conn.execute("INSERT INTO membership (object_id,set_id) VALUES (%s,%s)", (first, second))
+    first, second = _prepare_retained_historical_lineage(dsn, monkeypatch)
     _upgrade(dsn, monkeypatch, INGEST_HEAD)
     writer_object, writer_set = uuid.uuid4(), uuid.uuid4()
     with psycopg.connect(dsn) as conn:

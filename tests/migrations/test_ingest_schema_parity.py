@@ -10,6 +10,9 @@ import pytest
 
 from tests.migrations.test_multi_vault_ingest_projection_keys import (
     INGEST_HEAD,
+    _fk,
+    _pk,
+    _prepare_retained_historical_lineage,
     _upgrade,
     scratch_db_factory,  # noqa: F401 - pytest fixture export
 )
@@ -20,19 +23,19 @@ INGEST_TABLES = ("chunks", "embeddings", "relations", "sets", "membership")
 INGEST_VIEWS = ("view_chunks_missing_embeddings", "view_objects_ready_for_projection")
 
 
-def _shape(dsn: str) -> dict[str, object]:
+def _shape(dsn: str, tables: tuple[str, ...] = INGEST_TABLES) -> dict[str, object]:
     with psycopg.connect(dsn) as conn:
         columns = conn.execute(
             "SELECT table_name,column_name,data_type,is_nullable,coalesce(column_default,'') "
             "FROM information_schema.columns WHERE table_schema='public' "
             "AND table_name=ANY(%s) ORDER BY table_name,ordinal_position",
-            (list(INGEST_TABLES),),
+            (list(tables),),
         ).fetchall()
         constraints = conn.execute(
             "SELECT c.conrelid::regclass::text,c.contype,pg_get_constraintdef(c.oid) "
             "FROM pg_constraint c WHERE c.conrelid=ANY(%s::regclass[]) "
             "AND c.contype IN ('p','f','u') ORDER BY 1,2,3",
-            ([f"public.{table}" for table in INGEST_TABLES],),
+            ([f"public.{table}" for table in tables],),
         ).fetchall()
         binding_indexes = conn.execute(
             "SELECT t.relname,array_agg(a.attname ORDER BY k.ordinality) "
@@ -41,7 +44,7 @@ def _shape(dsn: str) -> dict[str, object]:
             "JOIN pg_attribute a ON a.attrelid=i.indrelid AND a.attnum=k.attnum "
             "WHERE i.indrelid=ANY(%s::regclass[]) GROUP BY t.relname,i.indexrelid "
             "HAVING 'vault_binding_id'=ANY(array_agg(a.attname)) ORDER BY 1,2",
-            ([f"public.{table}" for table in INGEST_TABLES],),
+            ([f"public.{table}" for table in tables],),
         ).fetchall()
         views = conn.execute(
             "SELECT v.table_name,array_agg(v.column_name ORDER BY v.ordinal_position),"
@@ -73,15 +76,40 @@ def test_ingest_tables_match_migration_and_autocreate(
     request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     factory = request.getfixturevalue("scratch_db_factory")
-    migrated, autocreated = factory(), factory()
+    migrated, autocreated, retained = factory(), factory(), factory()
     _upgrade(migrated, monkeypatch, INGEST_HEAD)
     _autocreate(autocreated, monkeypatch)
+    _prepare_retained_historical_lineage(retained, monkeypatch)
+    _upgrade(retained, monkeypatch, INGEST_HEAD)
     migrated_shape, autocreated_shape = _shape(migrated), _shape(autocreated)
     assert migrated_shape == autocreated_shape, (
         "MVR-05A4 Alembic/autocreate schema or retained-view parity diverged:\n"
         f"alembic={json.dumps(migrated_shape,indent=2,default=str)}\n"
         f"autocreate={json.dumps(autocreated_shape,indent=2,default=str)}"
     )
+    shared_tables = ("chunks", "embeddings", "relations", "sets")
+    assert _shape(retained, shared_tables) == _shape(migrated, shared_tables)
+    with psycopg.connect(retained) as conn:
+        assert _pk(conn, "membership") == ["vault_binding_id", "object_id", "set_id"]
+        assert _fk(conn, "membership", "object_id")[:3] == (
+            ["vault_binding_id", "object_id"],
+            "store_objects",
+            ["vault_binding_id", "object_id"],
+        )
+        assert _fk(conn, "membership", "set_id")[:3] == (
+            ["vault_binding_id", "set_id"],
+            "store_objects",
+            ["vault_binding_id", "object_id"],
+        )
+        assert conn.execute(
+            "SELECT column_name,data_type,is_nullable FROM information_schema.columns "
+            "WHERE table_schema='public' AND table_name='membership' ORDER BY ordinal_position"
+        ).fetchall() == [
+            ("set_id", "uuid", "NO"),
+            ("object_id", "uuid", "NO"),
+            ("created_at", "timestamp with time zone", "NO"),
+            ("vault_binding_id", "text", "NO"),
+        ]
 
 
 def test_ingest_views_and_reset_keep_duplicate_uuid_bindings_isolated(
@@ -113,10 +141,21 @@ def test_ingest_views_and_reset_keep_duplicate_uuid_bindings_isolated(
                     (uuid.uuid4(), binding, object_id, chunk_id),
                 )
             conn.execute(
-                "INSERT INTO membership(id,vault_binding_id,object_id,set_id) VALUES (%s,%s,%s,%s)",
-                (uuid.uuid4(), binding, object_id, set_id),
+                "INSERT INTO decisions(vault_binding_id,object_id,key,value) "
+                "VALUES (%s,%s,'classification','{\"type\":\"note\"}'::jsonb)",
+                (binding, object_id),
             )
+            if binding == "binding-a":
+                conn.execute(
+                    "INSERT INTO membership(id,vault_binding_id,object_id,set_id) "
+                    "VALUES (%s,%s,%s,%s)",
+                    (uuid.uuid4(), binding, object_id, set_id),
+                )
         missing = conn.execute(
             "SELECT vault_binding_id FROM view_chunks_missing_embeddings ORDER BY 1"
         ).fetchall()
+        ready = conn.execute(
+            "SELECT vault_binding_id FROM view_objects_ready_for_projection ORDER BY 1"
+        ).fetchall()
     assert missing == [("binding-b",)]
+    assert ready == [("binding-b",)]

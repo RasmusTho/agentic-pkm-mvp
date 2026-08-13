@@ -470,8 +470,36 @@ def test_store_object_composite_key_producer_inventory_is_exact() -> None:
 
 
 def test_ingest_projection_producer_and_consumer_inventory_is_exact() -> None:
-    """Issue #4578's exact Verify target retains the bidirectional inventory proof."""
+    """MVR-05A4's producers and live SQL readers are exact in both directions."""
     test_store_object_composite_key_producer_inventory_is_exact()
+    tables = ("chunks", "embeddings", "relations", "membership")
+    observed: set[tuple[str, str, str | None]] = set()
+    for path in sorted(APP_ROOT.rglob("*.py")):
+        if "alembic/versions" in path.as_posix():
+            continue
+        for statement in _resolver(path).sql_statements():
+            normalized = " ".join(statement.text.split()).lower()
+            if not (normalized.startswith("select ") or normalized.startswith("create view ")):
+                continue
+            for table in tables:
+                if re.search(rf"\b(?:from|join)\s+(?:public\.)?{table}\b", normalized):
+                    observed.add(
+                        (table, path.relative_to(REPO_ROOT).as_posix(), statement.function)
+                    )
+
+    assert observed == {
+        ("chunks", "app/jobs/backfill.py", "_process_chunks"),
+        ("chunks", "app/jobs/backfill.py", "_process_embeddings"),
+        ("embeddings", "app/jobs/backfill.py", "_process_embeddings"),
+        ("membership", "app/jobs/backfill.py", "_process_projection"),
+        ("chunks", "app/stores/pg.py", "_ensure_tables"),
+        ("embeddings", "app/stores/pg.py", "_ensure_tables"),
+        ("membership", "app/stores/pg.py", "_ensure_tables"),
+    }
+    backfill = (REPO_ROOT / "app" / "jobs" / "backfill.py").read_text(encoding="utf-8")
+    assert backfill.count("c.vault_binding_id = o.vault_binding_id") == 2
+    assert "e.vault_binding_id = o.vault_binding_id" in backfill
+    assert "m.vault_binding_id = d.vault_binding_id" in backfill
 
 
 def test_post_cutover_store_fixture_mutations_are_binding_scoped() -> None:
