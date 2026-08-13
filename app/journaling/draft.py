@@ -888,14 +888,22 @@ def _run_cognition(
         source.object_id: citations.get(source.source_id)
         for source in sources
     }
+    unadmitted_claim_ids = sorted(
+        {
+            str(claim.object_uuid)
+            for claim in claims
+            if citation_by_object.get(str(claim.object_uuid)) is None
+        }
+    )
+    if unadmitted_claim_ids:
+        raise UnresolvableJournalCitationError(
+            "cognition returned claims for unadmitted source UUIDs: "
+            + ", ".join(unadmitted_claim_ids)
+        )
     rendered: list[str] = []
     for claim in claims:
         citation = citation_by_object.get(str(claim.object_uuid))
-        if citation is None:
-            rendered.append(
-                f"- {claim.text} (cognition source: `{claim.object_uuid}`)"
-            )
-            continue
+        assert citation is not None
         rendered.append(
             f"- {claim.text} (cognition source: `{citation.reference}`; "
             f"source kind: `{citation.source_kind.value}`; "

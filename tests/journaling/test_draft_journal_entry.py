@@ -573,6 +573,42 @@ def test_successful_cognition_uses_resolvable_objects_and_synthesis(
     assert "cognition source: `journal-source:" not in body
 
 
+def test_journal_rejects_cognition_claim_for_unadmitted_uuid_before_staging(
+    tmp_path: Path,
+) -> None:
+    root, context, session_id, _capture = _seed_inputs(tmp_path)
+    bundle = assemble_day_context(vault_context=context, for_date=DAY)
+
+    def foreign_source_reasoning(
+        _object_ids: object, *, trace_id: str | None = None
+    ) -> ReasoningOutput:
+        del trace_id
+        return ReasoningOutput(
+            claims=[
+                Claim(
+                    id="foreign-source-claim",
+                    object_uuid="foreign-uuid",
+                    text="This claim has no admitted source.",
+                    modality="assertion",
+                    confidence=0.8,
+                )
+            ],
+            outcome="success",
+        )
+
+    with pytest.raises(UnresolvableJournalCitationError, match="foreign-uuid"):
+        draft_journal_entry(
+            vault_context=context,
+            for_date=DAY,
+            session_id=session_id,
+            day_context=bundle,
+            write_guard=_allowing_guard(),
+            reasoning_fn=foreign_source_reasoning,
+        )
+
+    assert not list(root.glob("**/drafts/journal/*.md"))
+
+
 @pytest.mark.parametrize(
     ("outcome", "provided_reason", "expected_reason"),
     (
