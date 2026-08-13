@@ -89,6 +89,14 @@ services:
         BUILT_AT: ${BUILT_AT:-unknown}
     image: ${APP_IMAGE_REPOSITORY:-ghcr.io/rasmustho/pkm-app}:${APP_IMAGE_TAG:-dev-local}
     user: "0:0"
+    # MVR-03 runs current_auth_posture() in this one-shot before it records the
+    # floor and role. Mirror the API's non-host-secret config layers so API_KEY,
+    # when configured in the governed runtime env, resolves identically without
+    # exposing the API service's unrelated Heimdal/GitHub host-secret layer.
+    env_file:
+      - ./config/runtime.defaults.env
+      - path: ${WATCHER_RUNTIME_ENV_FILE:-./tmp/runtime.env}
+        required: false
     volumes:
       - "instance-state:/app/instance-state"
       - type: bind
@@ -105,6 +113,12 @@ services:
       - "./docker-compose.yaml:/run/scalar-rollback-policy/docker-compose.yaml:ro"
       - "./docker-compose.scalar-rollback.yml:/run/scalar-rollback-policy/docker-compose.scalar-rollback.yml:ro"
       - "./ops/scalar-rollback/nginx.conf:/run/scalar-rollback-policy/nginx.conf:ro"
+      # Exact production native auth producers. The image deliberately excludes
+      # these host launchers; the cutover hashes the mounted bytes and fails
+      # closed if any declared path is absent.
+      - "./scripts/deploy_channel.sh:/run/principal-fence-native-producers/scripts/deploy_channel.sh:ro"
+      - "./scripts/start_full_system.sh:/run/principal-fence-native-producers/scripts/start_full_system.sh:ro"
+      - "./scripts/export_runtime_env.sh:/run/principal-fence-native-producers/scripts/export_runtime_env.sh:ro"
       - "/Users:/Users"
       - "/Volumes:/Volumes"
     command:
@@ -119,6 +133,9 @@ services:
       LOCAL_GID: ${LOCAL_GID:-0}
       LLM_PROVIDER: ${LLM_PROVIDER:-mock}
       DESIGN_HANDOFF_APP_LOCAL_SETTINGS: ${DESIGN_HANDOFF_APP_LOCAL_SETTINGS:-/app/tmp/agentic-pkm/app-local.md}
+      # Same server-owned proxy posture as api. The loopback subject is separate:
+      # the deployment wrapper passes its explicit per-channel declaration.
+      COMPANION_UI_PROXY_HOSTS: ${COMPANION_UI_PROXY_HOSTS:-companion-ui}
     restart: "no"
 
   api:

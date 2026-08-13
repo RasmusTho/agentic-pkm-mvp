@@ -422,6 +422,55 @@ _deploy_channel_needs_api_ingress_secret() {
   return 1
 }
 
+_deploy_channel_principal_cutover_receipt_requested() {
+  local arg
+  for arg in "$@"; do
+    [ "${arg}" = "principal-cutover" ] && return 0
+  done
+  return 1
+}
+
+# Governed Compose normally suppresses all output because config/startup text
+# can contain machine paths or environment values. The MVR-03 wrapper needs two
+# boolean fields from this one exact command; parse the private capture and emit a new
+# whitelist-only receipt rather than forwarding any raw Compose bytes.
+_deploy_channel_redact_principal_cutover_receipt() {
+  local output_file="${1:?captured output file required}"
+  "${PYTHON:-python3}" - "${output_file}" <<'PY'
+from __future__ import annotations
+
+import json
+import sys
+from pathlib import Path
+
+try:
+    lines = Path(sys.argv[1]).read_text(encoding="utf-8").splitlines()
+except OSError:
+    raise SystemExit(1)
+for line in reversed(lines):
+    try:
+        payload = json.loads(line)
+    except (TypeError, ValueError):
+        continue
+    advanced = payload.get("floor_advanced") if isinstance(payload, dict) else None
+    if (
+        payload.get("floor_recorded") is True
+        and type(advanced) is bool
+    ):
+        print(
+            json.dumps(
+                {
+                    "floor_advanced": advanced,
+                    "floor_recorded": True,
+                },
+                sort_keys=True,
+            )
+        )
+        raise SystemExit(0)
+raise SystemExit(1)
+PY
+}
+
 deploy_channel_compose() {
   local root="${1:?repo root required}"
   local channel="${2:?channel required}"
@@ -655,6 +704,11 @@ deploy_channel_compose() {
           return 92
         fi
         cat "${compose_stdout_file}"
+      elif _deploy_channel_principal_cutover_receipt_requested "$@"; then
+        if ! _deploy_channel_redact_principal_cutover_receipt "${compose_stdout_file}"; then
+          echo "governed compose output blocked: command=principal-cutover receipt=invalid" >&2
+          return 92
+        fi
       fi
       return 0
     fi

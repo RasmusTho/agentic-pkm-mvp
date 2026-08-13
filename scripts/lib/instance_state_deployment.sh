@@ -117,9 +117,44 @@ prepare_instance_state_deployment() {
   local repo_root inventory_helper controller_pid controller_start_token
   local inventory_host_path owner_inventory_host_path inventory_rc
   local quiescence_inventory_host_target_path owner_inventory_host_target_path
+  local principal_attempt_id principal_receipt_path principal_receipt_host_path
+  local receipt_verify_rc
+  local native_producer
+  local principal_loopback_flag=""
   repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
   inventory_helper="${repo_root}/scripts/instance_state_writer_inventory.py"
   controller_pid="$$"
+
+  # The principal floor is an irreversible compatibility boundary, so merely
+  # deploying a capable image never activates it. Validate the complete opt-in
+  # and channel topology declaration before init, lease acquisition, or writer
+  # stop; error receipts name variables/boolean state only, never env values.
+  case "${MVR03_PRINCIPAL_CUTOVER:-0}" in
+    0) ;;
+    1)
+      case "${MVR03_PRINCIPAL_LOOPBACK_LISTENER:-}" in
+        0) ;;
+        1) principal_loopback_flag="--loopback-listener" ;;
+        *)
+          echo "instance state deployment: MVR03_PRINCIPAL_LOOPBACK_LISTENER must be an explicit boolean" >&2
+          return 78
+          ;;
+      esac
+      for native_producer in \
+        scripts/deploy_channel.sh \
+        scripts/start_full_system.sh \
+        scripts/export_runtime_env.sh; do
+        if [ ! -f "${repo_root}/${native_producer}" ]; then
+          echo "instance state deployment: a declared principal native producer is missing" >&2
+          return 78
+        fi
+      done
+      ;;
+    *)
+      echo "instance state deployment: MVR03_PRINCIPAL_CUTOVER must be a boolean" >&2
+      return 78
+      ;;
+  esac
 
   # The host-global state dir is resolved and prepared by the caller before
   # this producer runs (deploy_channel.sh calls prepare_instance_ownership_host_state_dir
@@ -297,6 +332,65 @@ prepare_instance_state_deployment() {
       "${compose_function}" "${channel}" "${runtime_user}" \
       "${controller_pid}" "${controller_start_token}"
     return "${inventory_rc}"
+  fi
+
+  # Explicit MVR-03 authority transition. One runtime process records the floor
+  # and then bootstraps the role, keeping the attempt-local floor receipt out of
+  # caller-controlled flags. It consumes MVR-01B's proved lease, quiescence proof,
+  # and drained owner inventory; it never adds a second drain/probe mechanism.
+  # Before any role record commits, a bootstrap failure compensates only a floor
+  # advanced by this in-process attempt. A numeric child status is never a clean
+  # failure receipt: Compose itself can return the same code. Only a private,
+  # HMAC-authenticated receipt bound to this attempt and proved lease may release
+  # the stopped window. Missing/stale/invalid receipts and signals preserve it.
+  if [ "${MVR03_PRINCIPAL_CUTOVER:-0}" = "1" ]; then
+    principal_attempt_id="$(python3 -c 'import uuid; print(uuid.uuid4().hex)')"
+    inventory_rc=$?
+    if [ "${inventory_rc}" -ne 0 ]; then
+      echo "instance state deployment: principal cutover attempt creation failed" >&2
+      return "${inventory_rc}"
+    fi
+    principal_receipt_path="/app/instance-ownership/principal-cutover-clean-failure-${principal_attempt_id}.json"
+    principal_receipt_host_path="$(_instance_state_deployment_host_ownership_path "${principal_receipt_path}")" || {
+      echo "instance state deployment: principal cutover receipt path is invalid" >&2
+      return 78
+    }
+    rm -f -- "${principal_receipt_host_path}"
+    "${compose_function}" run --rm --no-deps -T --user "${runtime_user}" instance-state-init \
+      python -m app.instance.runtime principal-cutover \
+        --channel "${channel}" \
+        --registry-path /app/instance-state/agentic-pkm/vault-registry.md \
+        --host-global-root /app/instance-ownership \
+        --inventory-path "${inventory_path}" \
+        --quiescence-proof-path /app/instance-ownership/deployment-quiescence-proof.json \
+        --compose-base /run/scalar-rollback-policy/docker-compose.yaml \
+        --native-producer-root /run/principal-fence-native-producers \
+        --attempt-id "${principal_attempt_id}" \
+        --clean-failure-receipt-path "${principal_receipt_path}" \
+        --existing-install \
+        --consumer bootstrap-init \
+        ${principal_loopback_flag:+"${principal_loopback_flag}"}
+    inventory_rc=$?
+    if [ "${inventory_rc}" -ne 0 ]; then
+      "${compose_function}" run --rm --no-deps -T --user "${runtime_user}" instance-state-init \
+        python -m app.instance.runtime principal-verify-cutover-clean-failure \
+          --channel "${channel}" \
+          --registry-path /app/instance-state/agentic-pkm/vault-registry.md \
+          --host-global-root /app/instance-ownership \
+          --quiescence-proof-path /app/instance-ownership/deployment-quiescence-proof.json \
+          --attempt-id "${principal_attempt_id}" \
+          --clean-failure-receipt-path "${principal_receipt_path}"
+      receipt_verify_rc=$?
+      rm -f -- "${principal_receipt_host_path}"
+      if [ "${receipt_verify_rc}" -ne 0 ]; then
+        echo "instance state deployment: principal cutover requires stopped-window repair" >&2
+        return "${inventory_rc}"
+      fi
+      _release_abandoned_instance_state_deployment_lease \
+        "${compose_function}" "${channel}" "${runtime_user}" \
+        "${controller_pid}" "${controller_start_token}"
+      return "${inventory_rc}"
+    fi
   fi
 
   # An explicit scalar fork is imported only while the host-global lease,

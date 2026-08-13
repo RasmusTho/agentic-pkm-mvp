@@ -69,6 +69,15 @@ publish_runtime_env() {
   trap - EXIT
 }
 
+append_principal_auth_posture() {
+  # API_KEY is Product/GOV request-path posture, distinct from OPENAI_API_KEY.
+  # Keep it in the existing private generated runtime env consumed by both api
+  # and instance-state-init; never place the credential in argv or a receipt.
+  if [ -n "${API_KEY:-}" ]; then
+    printf "%s\n" "API_KEY=${API_KEY}" >> "$runtime_env_output_path"
+  fi
+}
+
 if [ "${NO_VAULT_MODE:-0}" -eq 1 ]; then
   # Preserve an explicit selector, while retaining the established no-vault
   # idle fallback. Persisting either value keeps a later pinned-image render
@@ -116,6 +125,7 @@ ENV
   if [ -n "${HEIMDAL_CAPTURE_INTERVAL_SECONDS:-}" ]; then
     printf "%s\n" "HEIMDAL_CAPTURE_INTERVAL_SECONDS=${HEIMDAL_CAPTURE_INTERVAL_SECONDS}" >> "$runtime_env_output_path"
   fi
+  append_principal_auth_posture
   publish_runtime_env
   echo "Exported no-vault idle runtime env -> $runtime_env_path"
   exit 0
@@ -186,6 +196,8 @@ ENV
 if [ -n "${SIGNBOARD_ROOT:-}" ]; then
   printf "SIGNBOARD_ROOT=%s\n" "$SIGNBOARD_ROOT" >> "$runtime_env_output_path"
 fi
+
+append_principal_auth_posture
 
 python3 - <<'PY' >> "$runtime_env_output_path"
 from __future__ import annotations

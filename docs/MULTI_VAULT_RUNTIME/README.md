@@ -1,9 +1,9 @@
 # Multi-vault runtime selection
 
 State: Active capability specification. Delivered: MVR-01A/01B/01C (#3853/#3854/#3855) mechanical
-substrate and authority cutover, MVR-02 (#3856) explicit instance default, and MVR-03 (#3857, partial) the
+substrate and authority cutover, MVR-02 (#3856) explicit instance default, and MVR-03 (#3857 plus #4524) the
 versioned request/session `ActiveContextSet` seam with its selection store, delegated-principal
-producer, and fail-closed runtime floor — whose deployment-wrapper activation is still open — and
+producer, fail-closed runtime floor, and explicit stopped-window deployment activation — and
 MVR-04 (#3858) non-authoritative dimension membership with all-or-nothing member resolution.
 Task 05 onward remains unstarted, so no global "multi-vault delivered"
 claim is allowed: production request-carrier propagation, binding-keyed persistence, and background

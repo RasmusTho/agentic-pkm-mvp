@@ -19,8 +19,9 @@ Ordering this module enforces:
       -> record the floor -> first durable delegated-role write
 
 A missing producer, a drain failure, or a crash before the floor leaves old auth state
-authoritative and this migration untouched. A failure *after* the floor requires compatible
-roll-forward and cannot restart an old producer.
+authoritative and this migration untouched. Before any role persists, the automated cutover may
+compensate only its own floor under the same stopped lease; every ambiguous or post-role failure
+preserves the fence for compatible roll-forward and cannot restart an old producer.
 """
 
 from __future__ import annotations
@@ -97,6 +98,10 @@ class PrincipalFenceError(PrincipalPreflightError):
     """The principal cutover fence is incomplete; nothing durable may be written."""
 
 
+class PrincipalFloorCompensationError(PrincipalFenceError):
+    """The cutover could not prove that its floor compensation completed safely."""
+
+
 @dataclass(frozen=True)
 class AuthProducer:
     """One enabled producer that must be drained and stopped before the floor."""
@@ -161,6 +166,14 @@ class PrincipalFenceInventory:
         return tuple(producer for producer in self.producers if not producer.quiesced)
 
 
+@dataclass(frozen=True)
+class PrincipalFloorWrite:
+    """Ephemeral result binding bootstrap compensation to this floor attempt."""
+
+    snapshot: Any
+    advanced: bool
+
+
 def discover_auth_producers(
     *,
     compose_path: Path,
@@ -219,13 +232,18 @@ def discover_auth_producers(
         if relative.startswith("scripts/"):
             path = repo_root / relative
             present = path.is_file()
-            if present:
-                evidence.append(
-                    f"native:{relative}:"
-                    f"{hashlib.sha256(path.read_bytes()).hexdigest()}"
+            if not present:
+                raise PrincipalFenceError(
+                    f"declared native auth producer is missing: {relative}",
+                    provisioning_action=(
+                        "mount every NATIVE_AUTH_PRODUCERS script under the declared "
+                        "native producer root, then re-run the cutover"
+                    ),
                 )
-            else:
-                evidence.append(f"native:{relative}:absent")
+            evidence.append(
+                f"native:{relative}:"
+                f"{hashlib.sha256(path.read_bytes()).hexdigest()}"
+            )
         else:
             present = True
             evidence.append(f"native:{relative}:module")
@@ -303,7 +321,7 @@ def record_principal_floor(
     *,
     inventory: PrincipalFenceInventory,
     _capability: Any = None,
-) -> Any:
+) -> PrincipalFloorWrite:
     """Record the `minimum_runtime_principal` floor -- and only then may a role be written.
 
     It reuses MVR-01's `runtimeFloors` extension slot rather than inventing a second floor
@@ -321,18 +339,39 @@ def record_principal_floor(
     snapshot = registry_store.load()
     extensions = snapshot.extensions or {}
     floors = dict(extensions.get("runtimeFloors") or {})
+    existing_floor = str(floors.get(MINIMUM_RUNTIME_PRINCIPAL_KEY) or "").strip()
+    if existing_floor:
+        if existing_floor != MINIMUM_RUNTIME_PRINCIPAL:
+            raise PrincipalFenceError(
+                "a different principal runtime floor is already recorded",
+                provisioning_action="keep the deployment stopped and inspect runtime floor state",
+            )
+        existing_fence = (extensions.get("principalState") or {}).get("fence")
+        if (
+            not isinstance(existing_fence, Mapping)
+            or str(existing_fence.get("channel_id") or "") != inventory.channel_id
+            or dict(existing_fence) != inventory.as_payload()
+        ):
+            raise PrincipalFenceError(
+                "the existing MVR-03 floor has no matching current producer fence",
+                provisioning_action="keep the deployment stopped and inspect principal state",
+            )
+        return PrincipalFloorWrite(snapshot=snapshot, advanced=False)
     floors[MINIMUM_RUNTIME_PRINCIPAL_KEY] = MINIMUM_RUNTIME_PRINCIPAL
     principal_state = dict(extensions.get("principalState") or {})
     principal_state["fence"] = json.loads(json.dumps(inventory.as_payload()))
-    return registry_store.set_extension_state(
-        principal_state=principal_state,
-        background_state=dict(extensions.get("backgroundState") or {}),
-        runtime_floors=floors,
-        # Pin the revision this function actually read. Without it a dimension or
-        # background write committing between that read and the locked write would be
-        # silently clobbered by the payload re-supplied above (MVR-04, #3858).
-        expected_revision=snapshot.revision,
-        _capability=_capability,
+    return PrincipalFloorWrite(
+        snapshot=registry_store.set_extension_state(
+            principal_state=principal_state,
+            background_state=dict(extensions.get("backgroundState") or {}),
+            runtime_floors=floors,
+            # Pin the revision this function actually read. Without it a dimension or
+            # background write committing between that read and the locked write would be
+            # silently clobbered by the payload re-supplied above (MVR-04, #3858).
+            expected_revision=snapshot.revision,
+            _capability=_capability,
+        ),
+        advanced=True,
     )
 
 
@@ -343,6 +382,52 @@ def principal_floor_recorded(registry_store: Any) -> bool:
     if not isinstance(floors, dict):
         return False
     return str(floors.get(MINIMUM_RUNTIME_PRINCIPAL_KEY) or "").strip() == MINIMUM_RUNTIME_PRINCIPAL
+
+
+def compensate_principal_floor(
+    registry_store: Any,
+    *,
+    channel_id: str,
+    expected_registry_revision: int,
+    _capability: Any = None,
+) -> Any:
+    """Remove only this attempt's MVR-03 floor after a pre-role bootstrap failure.
+
+    The runtime caller first proves the same deployment lease is still stopped and that no
+    delegated-role record became durable. This registry mutation preserves sibling state and
+    refuses if anything changed after the floor receipt's pinned revision.
+    """
+
+    snapshot = registry_store.load()
+    if snapshot.revision != expected_registry_revision:
+        raise PrincipalFloorCompensationError(
+            "principal state changed after this cutover advanced the floor",
+            provisioning_action="keep the stopped deployment fence and inspect principal state",
+        )
+    extensions = snapshot.extensions or {}
+    floors = dict(extensions.get("runtimeFloors") or {})
+    principal_state = dict(extensions.get("principalState") or {})
+    floor = str(floors.get(MINIMUM_RUNTIME_PRINCIPAL_KEY) or "").strip()
+    if floor != MINIMUM_RUNTIME_PRINCIPAL:
+        raise PrincipalFloorCompensationError(
+            "the recorded principal floor is not the MVR-03 cutover floor",
+            provisioning_action="keep the stopped deployment fence and inspect runtime floor state",
+        )
+    fence = principal_state.get("fence")
+    if not isinstance(fence, Mapping) or str(fence.get("channel_id") or "") != channel_id:
+        raise PrincipalFloorCompensationError(
+            "the recorded principal fence does not belong to this channel",
+            provisioning_action="keep the stopped deployment fence and inspect principal state",
+        )
+    floors.pop(MINIMUM_RUNTIME_PRINCIPAL_KEY, None)
+    principal_state.pop("fence", None)
+    return registry_store.set_extension_state(
+        principal_state=principal_state,
+        background_state=dict(extensions.get("backgroundState") or {}),
+        runtime_floors=floors,
+        expected_revision=snapshot.revision,
+        _capability=_capability,
+    )
 
 
 def inventory_from_quiescence(
@@ -434,9 +519,12 @@ __all__ = [
     "PRINCIPAL_FENCE_SCHEMA",
     "AuthProducer",
     "PrincipalFenceError",
+    "PrincipalFloorCompensationError",
     "PrincipalFenceInventory",
+    "PrincipalFloorWrite",
     "build_fence_inventory",
     "discover_auth_producers",
+    "compensate_principal_floor",
     "principal_floor_recorded",
     "record_principal_floor",
     "require_complete_fence",

@@ -38,7 +38,7 @@ import secrets
 import stat
 import tempfile
 import time
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from functools import lru_cache
@@ -305,6 +305,19 @@ class LocalOperatorPrincipalStore:
             finally:
                 fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
+    @contextmanager
+    def cutover_lock(self) -> Iterator[None]:
+        """Serialize the first-role write with attempt-local floor compensation.
+
+        The cutover coordinator uses this same lock for its failed-bootstrap role
+        recheck and compensation. Keeping the boundary public and narrow prevents a
+        stale floor sample from committing a role after another process removed that
+        floor.
+        """
+
+        with self._locked():
+            yield
+
     @staticmethod
     def _ensure_private_directory(directory: Path) -> None:
         directory.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -451,7 +464,7 @@ class LocalOperatorPrincipalStore:
         credential: str | None,
         subjects: Sequence[AuthSubject],
         migration_provenance: str,
-        floor_recorded: bool,
+        floor_guard: Callable[[], bool],
         _capability: Any = None,
     ) -> LocalOperatorPrincipalRecord:
         """Write the first durable delegated-role record.
@@ -462,30 +475,35 @@ class LocalOperatorPrincipalStore:
         """
 
         _require_storage_mutation_capability(_capability)
-        if not floor_recorded:
-            raise PrincipalFloorNotRecordedError(
-                "the minimum_runtime_principal floor must be recorded before the first "
-                "durable delegated-role write"
-            )
-        credential_fingerprint = (
-            fingerprint_credential(credential, new_credential_salt()) if credential else None
-        )
         if migration_provenance not in MIGRATION_PROVENANCES:
             raise PrincipalPreflightError(
                 f"unknown migration provenance {migration_provenance!r}",
                 provisioning_action="use a declared MVR-03 migration provenance",
             )
         normalized = _normalize_subjects(subjects)
-        if SUBJECT_API_KEY in normalized and not credential_fingerprint:
+        if SUBJECT_API_KEY in normalized and not credential:
             raise PrincipalPreflightError(
                 "the api_key_credential subject requires a credential fingerprint",
                 provisioning_action="provision a #2223 API key, then re-run principal bootstrap",
             )
         with self._locked():
+            # Sample the registry floor only after acquiring the same principal lock
+            # used by cutover compensation. A caller-sampled bool can go stale while
+            # waiting here and would permit a role to commit after its floor vanished.
+            if not floor_guard():
+                raise PrincipalFloorNotRecordedError(
+                    "the minimum_runtime_principal floor must be recorded before the first "
+                    "durable delegated-role write"
+                )
             existing = self.load()
             if existing is not None:
+                credential_matches = (
+                    verify_credential(existing.credential_fingerprint, credential)
+                    if credential
+                    else existing.credential_fingerprint is None
+                )
                 if (
-                    existing.credential_fingerprint == credential_fingerprint
+                    credential_matches
                     and existing.subjects == normalized
                     and existing.migration_provenance == migration_provenance
                 ):
@@ -497,6 +515,9 @@ class LocalOperatorPrincipalStore:
                         "re-bootstrapping"
                     ),
                 )
+            credential_fingerprint = (
+                fingerprint_credential(credential, new_credential_salt()) if credential else None
+            )
             now = _now()
             record = LocalOperatorPrincipalRecord(
                 schema=LOCAL_OPERATOR_PRINCIPAL_SCHEMA,

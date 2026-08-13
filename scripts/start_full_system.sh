@@ -38,14 +38,33 @@ unset _pkm_initial_channel _pkm_initial_channel_lower
 
 load_env_defaults_file ".env"
 load_env_defaults_file "config/runtime.defaults.env"
-_pkm_deploy_pin_channel="${PKM_ENVIRONMENT:-${ENVIRONMENT:-${CHANNEL:-${PKM_CHANNEL:-}}}}"
+# This launcher already passes an unset channel to the deployment wrapper as
+# `dev` below. Resolve the MVR-03 topology declaration from that same implicit
+# channel so an explicit cutover cannot arrive with an undeclared listener.
+_pkm_deploy_pin_channel="${PKM_ENVIRONMENT:-${ENVIRONMENT:-${CHANNEL:-${PKM_CHANNEL:-dev}}}}"
 _pkm_deploy_pin_channel="$(printf '%s' "${_pkm_deploy_pin_channel}" | tr '[:upper:]' '[:lower:]' | xargs 2>/dev/null || printf '%s' "${_pkm_deploy_pin_channel}")"
 case "${_pkm_deploy_pin_channel:-}" in
   dev|test|prod)
-    load_env_defaults_file "config/deploy/${_pkm_deploy_pin_channel}.env"
+    _pkm_deploy_pin_file="config/deploy/${_pkm_deploy_pin_channel}.env"
+    load_env_defaults_file "${_pkm_deploy_pin_file}"
+    # The channel file, not ambient shell state, owns whether this topology is
+    # proven loopback-local. Pin it exactly as deploy_channel.sh does so both
+    # native producers feed the stopped-window wrapper the same declaration.
+    _pkm_mvr03_loopback_listener="$(
+      awk -F= '/^MVR03_PRINCIPAL_LOOPBACK_LISTENER=/{print $2; exit}' "${_pkm_deploy_pin_file}"
+    )"
+    case "${_pkm_mvr03_loopback_listener}" in
+      0|1)
+        export MVR03_PRINCIPAL_LOOPBACK_LISTENER="${_pkm_mvr03_loopback_listener}"
+        ;;
+      *)
+        echo "ERROR: MVR03_PRINCIPAL_LOOPBACK_LISTENER is missing or invalid for the selected channel" >&2
+        exit 78
+        ;;
+    esac
     ;;
 esac
-unset _pkm_deploy_pin_channel
+unset _pkm_deploy_pin_channel _pkm_deploy_pin_file _pkm_mvr03_loopback_listener
 
 if [ "$_pkm_caller_vault_root_set" -eq 0 ] && [ "$_pkm_channel_vault_root_set" -eq 0 ]; then
   # A bare start with no caller- or channel-selected vault must stay in the
