@@ -557,8 +557,19 @@ def test_successful_cognition_uses_resolvable_objects_and_synthesis(
     assert len(cognition["object_ids"]) >= 2
     assert "Machine cognition (not owner utterance)" in body
     assert "I connected the real session shape." in body
-    assert f"cognition source: `session:{conversation.session.session_id}`" in body
-    assert f"cognition source: `{_capture.relative_to(root).as_posix()}`" in body
+    conversation_ref = next(
+        ref.note_path
+        for ref in result.compilation_draft.source_refs
+        if ref.role == "conversation"
+    )
+    assert (
+        f"cognition source: `{conversation_ref}`; source kind: `transcript`; "
+        "occurrence: 1"
+    ) in body
+    assert (
+        f"cognition source: `{_capture.relative_to(root).as_posix()}`; "
+        "source kind: `day_context`; occurrence: 1"
+    ) in body
     assert "cognition source: `journal-source:" not in body
 
 
@@ -804,16 +815,34 @@ def test_every_source_occurrence_independently_admitted(tmp_path: Path) -> None:
         context_review_state="accepted",
     )
 
+    def successful_reasoning(
+        object_ids: object, *, trace_id: str | None = None
+    ) -> ReasoningOutput:
+        del trace_id
+        return ReasoningOutput(
+            claims=[
+                Claim(
+                    id=f"collision-claim-{index}",
+                    object_uuid=object_id,
+                    text=f"Collision-safe claim {index}",
+                    modality="assertion",
+                    confidence=0.8,
+                )
+                for index, object_id in enumerate(tuple(object_ids), start=1)  # type: ignore[arg-type]
+            ],
+            outcome="success",
+        )
+
     result = draft_journal_entry(
         vault_context=context,
         for_date=DAY,
         session_id="collision.md",
         day_context=bundle,
         write_guard=_allowing_guard(),
-        reasoning_fn=_empty_reasoning,
+        reasoning_fn=successful_reasoning,
     )
 
-    frontmatter, _body = _read_result(root, result.path)
+    frontmatter, body = _read_result(root, result.path)
     receipt = frontmatter["activation_receipts"][-1]
     admitted = receipt["payload"]["admitted_artifact_ids"]
     assert len(admitted) == 2
@@ -823,6 +852,16 @@ def test_every_source_occurrence_independently_admitted(tmp_path: Path) -> None:
         "conversation",
         "system_context",
     ]
+    conversation_ref = result.compilation_draft.source_refs[0].note_path
+    assert (
+        f"cognition source: `{conversation_ref}`; source kind: `transcript`; "
+        "occurrence: 1"
+    ) in body
+    assert (
+        "cognition source: `session:collision.md`; source kind: `day_context`; "
+        "occurrence: 1"
+    ) in body
+    assert body.count("Collision-safe claim") == 2
 
 
 def test_noncanonical_source_reference_blocks_before_admission(tmp_path: Path) -> None:

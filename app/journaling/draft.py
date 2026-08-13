@@ -113,6 +113,15 @@ class SourceIdentity:
 
 
 @dataclass(frozen=True)
+class _CognitionCitation:
+    """Resolvable public citation for one internally typed source occurrence."""
+
+    reference: str
+    source_kind: SourceKind
+    occurrence: int
+
+
+@dataclass(frozen=True)
 class _ResolvedSession:
     session_id: str
     relative_path: str
@@ -216,10 +225,15 @@ def draft_journal_entry(
             context_items=context_items,
             source_identities=source_identities,
         )
+        cognition_citations = _cognition_citations(
+            sessions=sessions,
+            context_items=context_items,
+            source_identities=source_identities,
+        )
         cognition, cognition_body = _run_cognition(
             reasoning_fn,
             reasoning_sources,
-            source_identities,
+            cognition_citations,
             activation.receipt.receipt_id,
         )
         body = _build_body(
@@ -678,6 +692,39 @@ def _source_identities(
     )
 
 
+def _cognition_citations(
+    *,
+    sessions: tuple[_ResolvedSession, ...],
+    context_items: tuple[DayContextItem, ...],
+    source_identities: tuple[SourceIdentity, ...],
+) -> dict[str, _CognitionCitation]:
+    """Bind private admission keys to resolvable, occurrence-aware citations."""
+
+    session_identities = source_identities[: len(sessions)]
+    context_identities = source_identities[len(sessions) :]
+    citations = {
+        identity.admission_id: _CognitionCitation(
+            reference=session.relative_path,
+            source_kind=identity.source_kind,
+            occurrence=identity.occurrence,
+        )
+        for session, identity in zip(sessions, session_identities, strict=True)
+    }
+    citations.update(
+        {
+            identity.admission_id: _CognitionCitation(
+                reference=item.provenance_ref,
+                source_kind=identity.source_kind,
+                occurrence=identity.occurrence,
+            )
+            for item, identity in zip(
+                context_items, context_identities, strict=True
+            )
+        }
+    )
+    return citations
+
+
 def _review_state_value(state: ReviewState | None) -> str:
     return state.value if state is not None else "unknown"
 
@@ -801,7 +848,7 @@ def _describe_context_item(item: DayContextItem) -> str:
 def _run_cognition(
     reasoning_fn: ReasoningFunction,
     sources: tuple[MaterializedReasoningInput, ...],
-    source_identities: tuple[SourceIdentity, ...],
+    citations: Mapping[str, _CognitionCitation],
     trace_id: str,
 ) -> tuple[dict[str, object], str]:
     object_ids = tuple(source.object_id for source in sources)
@@ -837,17 +884,23 @@ def _run_cognition(
         )
     degraded = output.degraded
     degraded_reason = _bounded_reasoning_degraded_reason(output)
-    external_id_by_admission = {
-        identity.admission_id: identity.external_id for identity in source_identities
-    }
-    source_by_object = {
-        source.object_id: external_id_by_admission.get(source.source_id, source.source_id)
+    citation_by_object = {
+        source.object_id: citations.get(source.source_id)
         for source in sources
     }
     rendered: list[str] = []
     for claim in claims:
-        source_id = source_by_object.get(str(claim.object_uuid), str(claim.object_uuid))
-        rendered.append(f"- {claim.text} (cognition source: `{source_id}`)")
+        citation = citation_by_object.get(str(claim.object_uuid))
+        if citation is None:
+            rendered.append(
+                f"- {claim.text} (cognition source: `{claim.object_uuid}`)"
+            )
+            continue
+        rendered.append(
+            f"- {claim.text} (cognition source: `{citation.reference}`; "
+            f"source kind: `{citation.source_kind.value}`; "
+            f"occurrence: {citation.occurrence})"
+        )
     for inference in inferences:
         rendered.append(f"- Cross-source synthesis: {inference.rationale}")
     if degraded:
