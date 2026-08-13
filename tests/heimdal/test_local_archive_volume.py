@@ -608,6 +608,115 @@ def test_ready_refuses_stale_attachment_after_bundle_replacement(tmp_path: Path)
     assert metadata.bundle_path.exists()
 
 
+def test_ready_refuses_casefold_colliding_foreign_bundle(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Image-path spelling never substitutes for the reported bundle inode."""
+    metadata = _metadata(tmp_path)
+    _materialize_ready_fs(metadata)
+    reported = metadata.bundle_path.with_name(metadata.bundle_path.name.upper())
+    assert str(reported).casefold() == str(metadata.bundle_path).casefold()
+    expected = metadata.bundle_path.stat()
+    monkeypatch.setattr(
+        volume,
+        "_reported_bundle_identity",
+        lambda _path: (expected.st_dev, expected.st_ino + 1),
+    )
+
+    class CollisionRunner(FakeRunner):
+        def __call__(
+            self,
+            argv: tuple[str, ...],
+            stdin: bytes | None = None,
+            cwd_fd: int | None = None,
+        ) -> volume.CommandResult:
+            if argv == (volume.HDIUTIL, "info", "-plist"):
+                return volume.CommandResult(
+                    0,
+                    _plist(
+                        {
+                            "images": [
+                                {
+                                    "image-path": str(reported),
+                                    "system-entities": [
+                                        {
+                                            "dev-entry": _DEVICE,
+                                            "mount-point": str(metadata.mountpoint),
+                                        }
+                                    ],
+                                }
+                            ]
+                        }
+                    ),
+                )
+            return super().__call__(argv, stdin, cwd_fd)
+
+    with pytest.raises(volume.ArchiveVolumeRefusedError):
+        volume.require_archive_volume_ready(metadata, runner=CollisionRunner(metadata))
+
+
+def test_reported_bundle_identity_refuses_symlink(tmp_path: Path) -> None:
+    metadata = _metadata(tmp_path)
+    _materialize_ready_fs(metadata)
+    alias = tmp_path / "reported.sparsebundle"
+    alias.symlink_to(metadata.bundle_path, target_is_directory=True)
+
+    assert volume._reported_bundle_identity(alias) is None
+
+
+def test_reported_bundle_identity_observes_replacement_at_open(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    metadata = _metadata(tmp_path)
+    _materialize_ready_fs(metadata)
+    expected_details = metadata.bundle_path.stat()
+    expected = (expected_details.st_dev, expected_details.st_ino)
+    displaced = metadata.bundle_path.with_name("displaced.sparsebundle")
+    real_open = os.open
+    swapped = False
+
+    def swapping_open(
+        path: str | bytes | int,
+        flags: int,
+        mode: int = 0o777,
+        *,
+        dir_fd: int | None = None,
+    ) -> int:
+        nonlocal swapped
+        if not swapped and path == metadata.bundle_path.name and dir_fd is not None:
+            swapped = True
+            metadata.bundle_path.rename(displaced)
+            metadata.bundle_path.mkdir()
+        return real_open(path, flags, mode, dir_fd=dir_fd)
+
+    monkeypatch.setattr(volume.os, "open", swapping_open)
+    observed = volume._reported_bundle_identity(metadata.bundle_path)
+
+    assert swapped is True
+    assert observed is not None and observed != expected
+    assert displaced.exists()
+    assert metadata.bundle_path.exists()
+
+
+def test_reported_bundle_identity_accepts_alternate_spelling_of_same_inode(
+    tmp_path: Path,
+) -> None:
+    metadata = _metadata(tmp_path)
+    _materialize_ready_fs(metadata)
+    detour = metadata.bundle_path.parent / "detour"
+    detour.mkdir()
+    reported = detour / ".." / metadata.bundle_path.name
+    expected = metadata.bundle_path.stat()
+
+    assert str(reported) != str(metadata.bundle_path)
+    assert volume._reported_bundle_identity(reported) == (
+        expected.st_dev,
+        expected.st_ino,
+    )
+
+
 def test_ready_refuses_image_metadata_fingerprint_drift(tmp_path: Path) -> None:
     metadata = _metadata(tmp_path)
     _materialize_ready_fs(metadata)

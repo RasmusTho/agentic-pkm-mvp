@@ -748,9 +748,43 @@ def _parse_plist(raw: bytes) -> dict[str, object]:
     return payload
 
 
+def _reported_bundle_identity(path: Path) -> tuple[int, int] | None:
+    """Open every absolute path component without symlinks and return final identity."""
+    if not path.is_absolute():
+        return None
+    descriptor = -1
+    try:
+        components = path.parts
+        if not components or components[0] != os.sep:
+            return None
+        flags = (
+            os.O_RDONLY
+            | getattr(os, "O_DIRECTORY", 0)
+            | getattr(os, "O_NOFOLLOW", 0)
+        )
+        descriptor = os.open(os.sep, flags)
+        for component in components[1:]:
+            if component == "":
+                return None
+            next_descriptor = os.open(component, flags, dir_fd=descriptor)
+            os.close(descriptor)
+            descriptor = next_descriptor
+        details = os.fstat(descriptor)
+        if not stat.S_ISDIR(details.st_mode):
+            return None
+        return details.st_dev, details.st_ino
+    except (OSError, ValueError):
+        return None
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+
+
 def _attached_device(
     metadata: ArchiveVolumeMetadata,
     runner: CommandRunner,
+    *,
+    bundle_identity: tuple[int, int] | None = None,
 ) -> str | None:
     payload = _parse_plist(_call(runner, (HDIUTIL, "info", "-plist")).stdout)
     if "images" not in payload or not isinstance(payload["images"], list):
@@ -766,7 +800,11 @@ def _attached_device(
         entities = raw_image.get("system-entities")
         if not isinstance(image_path, str) or not isinstance(entities, list):
             raise _refused()
-        image_matches = _path_key(Path(image_path)) == expected_bundle
+        image_matches = (
+            _path_key(Path(image_path)) == expected_bundle
+            if bundle_identity is None
+            else _reported_bundle_identity(Path(image_path)) == bundle_identity
+        )
         if image_matches:
             matches.append(raw_image)
         for raw_entity in entities:
@@ -1072,7 +1110,11 @@ def _validate_attached_volume(
         raise _refused()
     mount_descriptor = _open_mount_directory(metadata)
     try:
-        device = _attached_device(metadata, runner)
+        device = _attached_device(
+            metadata,
+            runner,
+            bundle_identity=bundle_identity,
+        )
         if device is None:
             raise _refused()
         _require_encrypted(metadata, runner, parent_descriptor)
@@ -1144,7 +1186,11 @@ def _mount_and_validate(
             bundle_identity,
         )
         try:
-            existing = _attached_device(metadata, runner)
+            existing = _attached_device(
+                metadata,
+                runner,
+                bundle_identity=bundle_identity,
+            )
         except ArchiveVolumeRefusedError as exc:
             raise _refused() from exc
         if existing is not None:

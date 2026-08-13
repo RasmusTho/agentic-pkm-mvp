@@ -59,7 +59,10 @@ encryption and filesystem format are deliberately separate layer contracts: `hdi
 must prove the AES-encrypted sparsebundle wrapper, while `diskutil` must prove APFS. The default APFS
 volume inside an encrypted image is not itself asserted to carry APFS-layer encryption. Owner,
 group, mode, mountpoint, bundle path, device, filesystem UUID, volume name, external-media flag, and
-filesystem type are checked using bounded typed output and descriptor-bound filesystem identity. Creation passes only the bundle basename to
+filesystem type are checked using bounded typed output and descriptor-bound filesystem identity.
+Every image path reported by `hdiutil` is opened component by component without following symlinks;
+its final device/inode must equal the persisted bundle identity. Path spelling or case-folded text
+alone never associates an attachment with the archive. Creation passes only the bundle basename to
 a child process that changes directory directly through the still-open, revalidated external-root
 descriptor before executing the fixed command. That child hook is restricted to the short-lived,
 single-threaded provisioning CLI; threaded or imported runtime use refuses. The descriptor and its
