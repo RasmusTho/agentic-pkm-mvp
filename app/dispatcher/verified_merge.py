@@ -1094,6 +1094,7 @@ def resolve_verified_merge_phase(
 
     highest: dict[str, object] | None = None
     reconciled_evidence: tuple[tuple[int, ...], tuple[int, ...]] | None = None
+    reconciled_post_effect_digest: str | None = None
     for phase in _PHASES:
         candidates = valid_by_phase[phase]
         if not candidates:
@@ -1109,8 +1110,18 @@ def resolve_verified_merge_phase(
         )
         if phase == "reconciled":
             reconciled_evidence = phase_evidence
-        elif phase == "restored" and phase_evidence != reconciled_evidence:
-            return None
+            post_effect = highest.get("post_effect_reconciliation")
+            assert isinstance(post_effect, Mapping)
+            reconciled_post_effect_digest = _canonical_digest(post_effect)
+        elif phase == "restored":
+            post_effect = highest.get("post_effect_reconciliation")
+            assert isinstance(post_effect, Mapping)
+            if (
+                phase_evidence != reconciled_evidence
+                or _canonical_digest(post_effect)
+                != reconciled_post_effect_digest
+            ):
+                return None
     if highest is None:
         return None
     current_body = pr.get("body")

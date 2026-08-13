@@ -9,6 +9,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.builderops.control_plane import AuthorityObjectResult, Lease, TransactionResult
+from app.builderops.control_plane.api_models import OutboxPostEffectPendingRequest
 from app.builderops.control_plane.auth import (
     CredentialConfigurationError,
     CredentialRegistry,
@@ -784,3 +785,42 @@ def test_fencing_token_exemption_still_allows_the_legitimate_lease_field(
     }
     # Must not raise: the exemption still covers the genuine typed field.
     _assert_durable_payload_safe(legitimate_request, registry)
+
+
+def test_post_effect_api_payload_allows_exact_identity_fencing_token(
+    tmp_path: Path,
+) -> None:
+    """The typed post-effect API request must survive the secret scanner.
+
+    Both ``claim.fencing_token`` and ``identity.fencing_token`` are numeric
+    authority fences.  The latter is durable identity, not a credential, and
+    the authenticated production endpoint scans this exact serialized shape
+    before entering the store.
+    """
+
+    registry = _registry(tmp_path)
+    request = OutboxPostEffectPendingRequest.model_validate(
+        {
+            "envelope": _lease_payload()["envelope"],
+            "claim": {
+                "repository": "rasmustho/agentic-pkm-mvp",
+                "operation_key": "post-effect-sanitizer-parity",
+                "worker_id": "executor:verification",
+                "fencing_token": 7,
+                "intent_lsn": "0/10",
+                "claim_lsn": "0/20",
+                "receipt_sequence": 2,
+                "expires_at": "2026-08-13T13:00:00Z",
+            },
+            "identity": {
+                "operation_key": "post-effect-sanitizer-parity",
+                "fencing_token": 7,
+                "repository": "rasmustho/agentic-pkm-mvp",
+                "task_id": "vrun-post-effect-sanitizer",
+                "pr_number": 4894,
+                "head_sha": "a" * 40,
+            },
+        }
+    )
+
+    _assert_durable_payload_safe(request.model_dump(mode="json"), registry)

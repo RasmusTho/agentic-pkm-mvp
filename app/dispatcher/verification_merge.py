@@ -1060,9 +1060,6 @@ class VerificationMergeExecutor:
                 readback,
             )
 
-        readback = self.repository.merge_readback(
-            canonical, run.pr_number
-        )
         if isinstance(post_effect, Mapping):
             identity = post_effect["identity"]
             assert isinstance(identity, Mapping)
@@ -1072,6 +1069,9 @@ class VerificationMergeExecutor:
                 operation_key,
                 identity=identity,
             )
+        readback = self.repository.merge_readback(
+            canonical, run.pr_number
+        )
         self.ledger.reconcile_post_effect(
             operation_key,
             identity=identity,

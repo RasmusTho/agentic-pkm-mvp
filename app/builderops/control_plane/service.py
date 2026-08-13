@@ -78,18 +78,21 @@ _ALLOWED_SECRET_METADATA_KEYS = frozenset(
 # root (not merely the immediate parent key — a "lease" object nested at any
 # depth inside free-form payload/request content must not qualify) AND a
 # strict int value type — never the bare key name anywhere in the tree. Every
-# request model that carries a real lease puts it at the top level
-# (``TaskHeartbeatRequest.lease``, ``TaskCompleteRequest.lease``,
-# ``AttemptCommitRequest.lease``, ``PromotionCommitRequest.lease``), so the
-# only legitimate path is exactly ``("lease", "fencing_token")``. As a second,
-# independent layer, the value-type gate rejects a string even if some future
-# path were added here by mistake: no BuilderOps credential/secret in this
-# system is ever numeric (they are opaque strings from secret files), so a
-# raw credential can never satisfy the int check regardless of path.
+# request model that carries a real structural fence puts it in one of the
+# explicitly typed top-level authority objects below. ``identity`` is the
+# exact durable post-effect identity; it is not caller-owned free-form
+# payload. As a second, independent layer, the value-type gate rejects a
+# string even if some future path were added here by mistake: no BuilderOps
+# credential/secret in this system is ever numeric (they are opaque strings
+# from secret files), so a raw credential can never satisfy the int check.
 _STRUCTURAL_SAFE_KEYS = frozenset({"fencing_token"})
 _STRUCTURAL_SAFE_FIELD_PATHS: dict[str, frozenset[tuple[str, ...]]] = {
     "fencing_token": frozenset(
-        {("lease", "fencing_token"), ("claim", "fencing_token")}
+        {
+            ("lease", "fencing_token"),
+            ("claim", "fencing_token"),
+            ("identity", "fencing_token"),
+        }
     )
 }
 _FORBIDDEN_COMPACT_DURABLE_KEYS = frozenset(

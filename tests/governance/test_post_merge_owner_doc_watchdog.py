@@ -592,7 +592,7 @@ def test_watchdog_requires_exact_reconciled_post_effect_phase() -> None:
     }
 
     assert _node(
-        "resolveExactPostEffectReconciliation(inputs[0], inputs[1])",
+        "resolveExactPostEffectReconciliation(inputs[0], inputs[1], inputs[2])",
         reconciled,
         {
             "repository": REPOSITORY,
@@ -600,6 +600,7 @@ def test_watchdog_requires_exact_reconciled_post_effect_phase() -> None:
             "head_sha": HEAD,
             "merge_commit_sha": "c" * 40,
         },
+        "vrun-watchdog-3822",
     ) == reconciled
 
     rejected = (
@@ -610,11 +611,20 @@ def test_watchdog_requires_exact_reconciled_post_effect_phase() -> None:
             **reconciled,
             "readback": {**readback, "merge_commit_sha": "d" * 40},
         },
+        {
+            **reconciled,
+            "identity": {**identity, "task_id": "foreign-run"},
+        },
+        {
+            **reconciled,
+            "pending_receipt_sequence": 99,
+            "reconciled_receipt_sequence": 1,
+        },
     )
     for candidate in rejected:
         assert (
             _node(
-                "resolveExactPostEffectReconciliation(inputs[0], inputs[1])",
+                "resolveExactPostEffectReconciliation(inputs[0], inputs[1], inputs[2])",
                 candidate,
                 {
                     "repository": REPOSITORY,
@@ -622,6 +632,7 @@ def test_watchdog_requires_exact_reconciled_post_effect_phase() -> None:
                     "head_sha": HEAD,
                     "merge_commit_sha": "c" * 40,
                 },
+                "vrun-watchdog-3822",
             )
             is None
         )
@@ -646,6 +657,32 @@ def test_watchdog_requires_exact_reconciled_post_effect_phase() -> None:
         },
     )
     assert selected["mode"] == "durable_receipt"
+
+    restored = _phase_comment(
+        authority, phase="restored", merge_commit_sha=merge_sha
+    )
+    restored_receipt = _receipt_payload(restored)
+    restored_post_effect = restored_receipt["post_effect_reconciliation"]
+    assert isinstance(restored_post_effect, dict)
+    restored_identity = restored_post_effect["identity"]
+    assert isinstance(restored_identity, dict)
+    restored_identity["operation_key"] = "different-operation"
+    restored_post_effect["pending_receipt_sequence"] = 21
+    restored_post_effect["reconciled_receipt_sequence"] = 22
+    restored["body"] = (
+        "verified issue-set merge phase:\n```json\n"
+        + json.dumps(restored_receipt, separators=(",", ":"), sort_keys=True)
+        + "\n```"
+    )
+    assert _node(
+        "selectWatchdogAuthority(inputs[0])",
+        {
+            "comments": [*comments, restored],
+            "expectedRepository": REPOSITORY,
+            "linkedIssues": [4999],
+            "livePr": _merged_pr(_body()),
+        },
+    )["mode"] == "trusted_receipt_invalid"
 
     for candidate in rejected:
         broken = json.loads(json.dumps(comments))

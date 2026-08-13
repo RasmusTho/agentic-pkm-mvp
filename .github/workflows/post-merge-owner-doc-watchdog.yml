@@ -171,7 +171,9 @@ jobs:
               return JSON.stringify(value);
             };
             const canonicalSha256 = value => sha256(canonicalJson(value));
-            const resolveExactPostEffectReconciliation = (candidate, livePr) => {
+            const resolveExactPostEffectReconciliation = (
+              candidate, livePr, expectedRunId
+            ) => {
               const liveRepository = livePr.repository || livePr.base?.repo?.full_name;
               const liveNumber = livePr.pr_number ?? livePr.number;
               const liveHead = livePr.head_sha || livePr.head?.sha;
@@ -184,8 +186,8 @@ jobs:
                 candidate.identity.operation_key.length === 0 ||
                 !Number.isInteger(candidate.identity.fencing_token) ||
                 candidate.identity.fencing_token < 1 ||
-                typeof candidate.identity.task_id !== "string" ||
-                candidate.identity.task_id.length === 0 ||
+                typeof expectedRunId !== "string" || expectedRunId.length === 0 ||
+                candidate.identity.task_id !== expectedRunId ||
                 candidate.identity.repository !== liveRepository ||
                 candidate.identity.pr_number !== liveNumber ||
                 candidate.identity.head_sha !== liveHead ||
@@ -195,6 +197,8 @@ jobs:
                 candidate.reconciled_receipt_sequence === null ||
                 !Number.isInteger(candidate.reconciled_receipt_sequence) ||
                 candidate.reconciled_receipt_sequence < 1 ||
+                candidate.reconciled_receipt_sequence <=
+                  candidate.pending_receipt_sequence ||
                 candidate.readback === null ||
                 typeof candidate.readback !== "object" ||
                 Array.isArray(candidate.readback) ||
@@ -329,7 +333,7 @@ jobs:
                   (mergedPhase && receipt.merge_commit_sha !== livePr.merge_commit_sha) ||
                   (!mergedPhase && receipt.merge_commit_sha !== null) ||
                   (reconciledPhase && resolveExactPostEffectReconciliation(
-                    receipt.post_effect_reconciliation, livePr
+                    receipt.post_effect_reconciliation, livePr, authorityReceipt.run_id
                   ) === null) ||
                   (!legacyPrepared && !reconciledPhase && receipt.post_effect_reconciliation !== null)
                 ) continue;
@@ -337,6 +341,7 @@ jobs:
               }
               let highest = null;
               let reconciledEvidence = null;
+              let reconciledPostEffect = null;
               for (const phase of PHASES) {
                 const receipts = validByPhase.get(phase);
                 if (receipts.length === 0) break;
@@ -345,8 +350,18 @@ jobs:
                 const evidence = canonicalJson([
                   highest.closed_issues, highest.reopened_unauthorized_issues,
                 ]);
-                if (phase === "reconciled") reconciledEvidence = evidence;
-                if (phase === "restored" && evidence !== reconciledEvidence) return null;
+                if (phase === "reconciled") {
+                  reconciledEvidence = evidence;
+                  reconciledPostEffect = canonicalJson(
+                    highest.post_effect_reconciliation
+                  );
+                }
+                if (
+                  phase === "restored" &&
+                  (evidence !== reconciledEvidence ||
+                    canonicalJson(highest.post_effect_reconciliation) !==
+                      reconciledPostEffect)
+                ) return null;
               }
               return highest !== null && PHASES.indexOf(highest.phase) >= PHASES.indexOf("merged")
                 ? highest
@@ -414,7 +429,9 @@ jobs:
                   mergePhase !== null &&
                   PHASES.indexOf(mergePhase.phase) >= PHASES.indexOf("reconciled") &&
                   resolveExactPostEffectReconciliation(
-                    mergePhase.post_effect_reconciliation, livePr
+                    mergePhase.post_effect_reconciliation,
+                    livePr,
+                    authorityReceipt.run_id
                   ) !== null
                 ) {
                   return {

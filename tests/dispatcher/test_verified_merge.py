@@ -813,6 +813,30 @@ def test_merge_phase_receipts_form_continuous_idempotent_recovery_chain() -> Non
         is None
     )
 
+    drifted_post_effect = _post_effect(authority, restored_pr)
+    drifted_identity = dict(drifted_post_effect["identity"])
+    drifted_identity["operation_key"] = "different-operation"
+    drifted_post_effect["identity"] = drifted_identity
+    drifted_post_effect["pending_receipt_sequence"] = 21
+    drifted_post_effect["reconciled_receipt_sequence"] = 22
+    drifted_restored = build_verified_merge_phase(
+        authority_receipt=authority,
+        phase="restored",
+        pr=restored_pr,
+        post_effect_reconciliation=drifted_post_effect,
+        closed_issues=[3820, 3823],
+        reopened_unauthorized_issues=[4999],
+    )
+    assert (
+        resolve_verified_merge_phase(
+            comments[:-1]
+            + [_trusted_comment(str(drifted_restored["phase_receipt_comment"]))],
+            authority_receipt=authority,
+            pr=restored_pr,
+        )
+        is None
+    )
+
 
 def test_merge_phase_resolver_stops_at_premerge_phase_after_merge_crash() -> None:
     plan = prepare_verified_merge(

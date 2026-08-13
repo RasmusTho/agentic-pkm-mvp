@@ -215,6 +215,25 @@ class CrashOnceReadbackRepository(RepositoryAuthority):
         return super().merge_readback(repository, pr_number)
 
 
+class CrashAfterMergeReturnRepository(RepositoryAuthority):
+    """Lose the process after GitHub accepted the effect, before readback."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            base_reads=[BASE, BASE, BASE],
+            manifest_blobs=["blob-1", "blob-1", "blob-1"],
+            merged=True,
+        )
+        self.crash_after_merge = True
+
+    def conditional_merge(self, *args, **kwargs):
+        result = super().conditional_merge(*args, **kwargs)
+        if self.crash_after_merge:
+            self.crash_after_merge = False
+            raise SystemExit("simulated crash after merge return before readback")
+        return result
+
+
 class Outbox:
     def __init__(
         self,
@@ -491,6 +510,42 @@ def test_merge_recovery_reconciles_durable_pending_effect_without_replay() -> No
     assert phase is not None
     assert phase["post_effect_reconciliation"]["phase"] == "reconciled"
     assert phase["post_effect_reconciliation"]["readback"]["merged"] is True
+
+
+def test_merge_recovery_starts_pending_before_no_phase_readback() -> None:
+    ledger, run, outbox = claimed_run()
+    repository = CrashAfterMergeReturnRepository()
+    executor = VerificationMergeExecutor(
+        ledger, outbox, repository, Credentials()
+    )
+
+    with pytest.raises(SystemExit, match="after merge return before readback"):
+        executor.execute(
+            run,
+            holder="verification-host",
+            lease_id=run.lease_id or "",
+        )
+    assert outbox.post_effect is None
+
+    trace: list[str] = []
+    original_begin = outbox.begin_post_effect_reconciliation
+    original_readback = repository.merge_readback
+
+    def traced_begin(claim, *, identity):
+        trace.append("pending")
+        return original_begin(claim, identity=identity)
+
+    def traced_readback(repository_name: str, pr_number: int):
+        trace.append("readback")
+        return original_readback(repository_name, pr_number)
+
+    outbox.begin_post_effect_reconciliation = traced_begin  # type: ignore[method-assign]
+    repository.merge_readback = traced_readback  # type: ignore[method-assign]
+
+    receipt = executor.recover(run)
+
+    assert receipt.outcome == "merged"
+    assert trace[:2] == ["pending", "readback"]
 
 
 def test_blocking_review_wins_atomic_merge_intent_race() -> None:
