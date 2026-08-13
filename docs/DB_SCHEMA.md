@@ -3,7 +3,7 @@ Doc role: Reference
 Authority: Human-readable snapshot of the current database schema and DB outbox bootstrap; migrations and bootstrap code remain the executable source of truth.
 Temporal class: operational
 Source of truth: code
-Last verified against: app/stores/pg.py + app/alembic/versions/e6c4a2b8d1f3_mvr05a3_store_object_binding_keys.py + app/services/outbox.py + app/alembic/versions/f3a1c9d2e4b7_kernel05_outbox_schema_in_migrations.py + app/heimdal/observation_log.py + app/heimdal/cursor_store.py + app/alembic/versions/8b21e6a1f0c4_heim_observation_log_and_cursor.py + app/services/vault_sync.py + app/alembic/versions/c7f4b1a83d29_mvr05a0_file_state_binding_key.py + app/alembic/versions/d1e8a0c5f37b_mvr05a1_objects_agent_memories_adoption.py + app/db/db.py + tests/architecture/durable_table_classification.json (2026-08-12)
+Last verified against: app/stores/pg.py + app/alembic/versions/e6c4a2b8d1f3_mvr05a3_store_object_binding_keys.py + app/alembic/versions/f4a05a4b0001_mvr05a4_ingest_projection_binding_keys.py + app/services/outbox.py + app/alembic/versions/f3a1c9d2e4b7_kernel05_outbox_schema_in_migrations.py + app/heimdal/observation_log.py + app/heimdal/cursor_store.py + app/alembic/versions/8b21e6a1f0c4_heim_observation_log_and_cursor.py + app/services/vault_sync.py + app/alembic/versions/c7f4b1a83d29_mvr05a0_file_state_binding_key.py + app/alembic/versions/d1e8a0c5f37b_mvr05a1_objects_agent_memories_adoption.py + app/db/db.py + tests/architecture/durable_table_classification.json (2026-08-13)
 
 ## v5.5 Baseline Delta (Current Reality)
 - Registry watcher is the runtime default; legacy snapshot watcher is dev-only.
@@ -109,10 +109,9 @@ Last verified against: app/stores/pg.py + app/alembic/versions/e6c4a2b8d1f3_mvr0
   (`202510241200_sot41_amg_core.py`) and had zero readers repo-wide; its absence and the absence of
   any referrer under `app/`, `scripts/` and `.github/` are asserted by
   `tests/architecture/test_multi_vault_projection_inventory.py::test_orphaned_relation_artifacts_are_removed_or_classified`.
-  `app/store/relation_index.py` is **not** removed: `app/objects/__init__.py` re-exports it, so
-  production reachability could not be disproved. Its old six-column statement does not match the
-  Alembic-owned `relations` table; after MVR-05A3 the seam fails before SQL so it cannot create a
-  binding-less row. MVR-05A4 (#4578) owns replacing or deleting that compatibility seam.
+  MVR-05A4 (#4578) removes `app/store/relation_index.py` rather than reviving its incompatible
+  six-column SQL writer. The retained non-writing `RelationIndex`/edge/slice contract now lives at
+  `app/objects/relation_types.py`; `relations` still has no production writer.
 - The **vault-sync `file_state`** table is **migration-owned** (MVR-05A0, #4543): Alembic revision
   `c7f4b1a83d29` creates it, adopts a database where the legacy runtime bootstrap already created
   it, and rekeys it from `path` to `(vault_binding_id, path)`.

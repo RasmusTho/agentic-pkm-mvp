@@ -11,7 +11,7 @@ from alembic import op
 
 
 revision = "f4a05a4b0001"
-down_revision = "e6c4a2b8d1f3"
+down_revision = "e7b4c9d2a6f1"
 branch_labels = None
 depends_on = None
 reversibility = "forward-only"
@@ -100,10 +100,22 @@ def upgrade() -> None:
           -- historical objects endpoint was already converted by MVR-05A3.
           SELECT c.conname INTO membership_fk FROM pg_constraint c
            WHERE c.contype='f' AND c.conrelid='public.membership'::regclass
-             AND c.conkey = ARRAY[(SELECT attnum FROM pg_attribute
+             AND (
+               (membership_columns = ARRAY['id']::text[] AND
+                c.conkey = ARRAY[(SELECT attnum FROM pg_attribute
                                    WHERE attrelid='public.membership'::regclass
-                                     AND attname='set_id' AND NOT attisdropped)]
-           LIMIT 1;
+                                     AND attname='set_id' AND NOT attisdropped)]::smallint[])
+               OR
+               (membership_columns = ARRAY['object_id','set_id']::text[] AND
+                c.conkey = ARRAY[
+                  (SELECT attnum FROM pg_attribute
+                    WHERE attrelid='public.membership'::regclass
+                      AND attname='vault_binding_id' AND NOT attisdropped),
+                  (SELECT attnum FROM pg_attribute
+                    WHERE attrelid='public.membership'::regclass
+                      AND attname='set_id' AND NOT attisdropped)
+                ]::smallint[])
+             );
           IF membership_fk.conname IS NULL THEN
             RAISE EXCEPTION USING MESSAGE='MVR-05A4 membership.set_id FK missing';
           END IF;
@@ -113,12 +125,18 @@ def upgrade() -> None:
           IF membership_columns = ARRAY['id']::text[] THEN
             IF NOT EXISTS (SELECT 1 FROM pg_constraint c
               WHERE c.conname=membership_fk.conname AND c.confrelid='public.sets'::regclass
-                AND cardinality(c.conkey)=1 AND cardinality(c.confkey)=1) THEN
+                AND c.confkey = ARRAY[(SELECT attnum FROM pg_attribute
+                  WHERE attrelid='public.sets'::regclass AND attname='id' AND NOT attisdropped)]::smallint[]) THEN
               RAISE EXCEPTION USING MESSAGE='MVR-05A4 unsupported fresh membership.set_id FK';
             END IF;
           ELSIF NOT EXISTS (SELECT 1 FROM pg_constraint c
               WHERE c.conname=membership_fk.conname AND c.confrelid='public.store_objects'::regclass
-                AND cardinality(c.conkey)=2 AND cardinality(c.confkey)=2) THEN
+                AND c.confkey = ARRAY[
+                  (SELECT attnum FROM pg_attribute WHERE attrelid='public.store_objects'::regclass
+                    AND attname='vault_binding_id' AND NOT attisdropped),
+                  (SELECT attnum FROM pg_attribute WHERE attrelid='public.store_objects'::regclass
+                    AND attname='object_id' AND NOT attisdropped)
+                ]::smallint[]) THEN
             RAISE EXCEPTION USING MESSAGE='MVR-05A4 unsupported historical membership set endpoint';
           END IF;
 
@@ -154,21 +172,81 @@ def upgrade() -> None:
           -- Retained derived views are reads too: every join carries the same
           -- binding, so a duplicate UUID in B cannot satisfy a row in A.
           CREATE OR REPLACE VIEW public.view_chunks_missing_embeddings AS
-            SELECT c.vault_binding_id, c.object_id::text AS object_id,
-                   count(*) AS chunk_count
+            SELECT c.object_id::text AS object_id,
+                   count(DISTINCT c.id) AS chunk_count,
+                   count(DISTINCT e.chunk_id) AS embedded_chunks,
+                   c.vault_binding_id
               FROM public.chunks c
-             WHERE NOT EXISTS (SELECT 1 FROM public.embeddings e
-                WHERE e.vault_binding_id=c.vault_binding_id AND e.chunk_id=c.id)
-             GROUP BY c.vault_binding_id, c.object_id;
+              LEFT JOIN public.embeddings e
+                ON e.vault_binding_id=c.vault_binding_id AND e.chunk_id=c.id
+             GROUP BY c.vault_binding_id, c.object_id
+            HAVING count(DISTINCT c.id) > count(DISTINCT e.chunk_id);
           CREATE OR REPLACE VIEW public.view_objects_ready_for_projection AS
-            SELECT d.vault_binding_id, d.object_id::text AS object_id,
+            SELECT d.object_id::text AS object_id,
                    coalesce(d.value->>'type','') AS type,
-                   coalesce(d.value->>'trust','') AS trust, d.created_at
+                   coalesce(d.value->>'trust','') AS trust, d.created_at,
+                   d.vault_binding_id
               FROM public.decisions d
              WHERE d.key='classification' AND coalesce(d.value->>'type','') <> ''
                AND NOT EXISTS (SELECT 1 FROM public.membership m
                  WHERE m.vault_binding_id=d.vault_binding_id AND m.object_id=d.object_id);
         END $mvr05a4$;
+        """
+    )
+    # Terminal fresh-shape declarations make this revision the auditable owner
+    # of the post-MVR-05A4 identity/FK shape. They deliberately run *after* the
+    # catalog census and conversion: a missing/unsupported table must refuse in
+    # the DO block above, never be synthesized into a seemingly supported state.
+    # On either supported lineage these statements are transactional no-ops.
+    op.execute(
+        r"""
+        CREATE TABLE IF NOT EXISTS public.chunks (
+          id uuid PRIMARY KEY,
+          object_id uuid NOT NULL,
+          idx integer NOT NULL,
+          offset_start integer NOT NULL,
+          offset_end integer NOT NULL,
+          text text NOT NULL,
+          created_at timestamptz NOT NULL DEFAULT now(),
+          vault_binding_id text NOT NULL,
+          CONSTRAINT chunks_object_id_fkey FOREIGN KEY (vault_binding_id, object_id)
+            REFERENCES public.store_objects (vault_binding_id, object_id) ON DELETE CASCADE
+        );
+        CREATE TABLE IF NOT EXISTS public.embeddings (
+          id uuid PRIMARY KEY,
+          object_id uuid NOT NULL,
+          chunk_id uuid,
+          provider text DEFAULT 'mock',
+          dim integer NOT NULL DEFAULT 1536,
+          embedding vector,
+          created_at timestamptz NOT NULL DEFAULT now(),
+          vault_binding_id text NOT NULL,
+          CONSTRAINT embeddings_object_id_fkey FOREIGN KEY (vault_binding_id, object_id)
+            REFERENCES public.store_objects (vault_binding_id, object_id) ON DELETE CASCADE
+        );
+        CREATE TABLE IF NOT EXISTS public.relations (
+          id uuid PRIMARY KEY,
+          src_id uuid NOT NULL,
+          dst_id uuid NOT NULL,
+          type text NOT NULL,
+          payload jsonb NOT NULL DEFAULT '{}'::jsonb,
+          vault_binding_id text NOT NULL,
+          CONSTRAINT relations_src_id_fkey FOREIGN KEY (vault_binding_id, src_id)
+            REFERENCES public.store_objects (vault_binding_id, object_id) ON DELETE CASCADE,
+          CONSTRAINT relations_dst_id_fkey FOREIGN KEY (vault_binding_id, dst_id)
+            REFERENCES public.store_objects (vault_binding_id, object_id) ON DELETE CASCADE
+        );
+        CREATE TABLE IF NOT EXISTS public.membership (
+          id uuid NOT NULL,
+          set_id uuid NOT NULL CONSTRAINT membership_set_id_fkey
+            REFERENCES public.sets(id) ON DELETE CASCADE,
+          object_id uuid NOT NULL,
+          created_at timestamptz NOT NULL DEFAULT now(),
+          vault_binding_id text NOT NULL,
+          CONSTRAINT membership_object_id_fkey FOREIGN KEY (vault_binding_id, object_id)
+            REFERENCES public.store_objects (vault_binding_id, object_id) ON DELETE CASCADE,
+          PRIMARY KEY (vault_binding_id, id)
+        );
         """
     )
 

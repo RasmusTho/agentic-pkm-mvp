@@ -73,6 +73,7 @@ from tests.architecture.durable_table_classification import (
 
 pytestmark = pytest.mark.not_pg
 
+
 def _substantial_sentences(reason: str) -> list[str]:
     """Sentences long enough to carry a classification claim.
 
@@ -156,10 +157,14 @@ def test_every_production_projection_schema_and_producer_is_classified() -> None
             "true; a placeholder makes `explicitly-global` a default in everything but "
             "name."
         )
-        assert table in entry["reason"] or any(
-            producer["module"].rsplit("/", 1)[-1][:-3] in entry["reason"]
-            for producer in entry["producers"]
-        ) or entry["owning_revision"] in entry["reason"], (
+        assert (
+            table in entry["reason"]
+            or any(
+                producer["module"].rsplit("/", 1)[-1][:-3] in entry["reason"]
+                for producer in entry["producers"]
+            )
+            or entry["owning_revision"] in entry["reason"]
+        ), (
             f"{table}'s reason names neither the table, its owning revision, nor a "
             "producer module, so it cannot be checked against the code it describes."
         )
@@ -180,9 +185,7 @@ def test_every_production_projection_schema_and_producer_is_classified() -> None
                 f"owning revision {owning.name} never mentions that column."
             )
 
-        assert entry["owning_revision"] in {
-            name.split("_", 1)[0] for name in discovered[table]
-        }, (
+        assert entry["owning_revision"] in {name.split("_", 1)[0] for name in discovered[table]}, (
             f"{table}'s owning revision {entry['owning_revision']} issues no DDL for it; "
             f"the chain's declaring revisions are {sorted(discovered[table])}."
         )
@@ -246,11 +249,11 @@ def test_a_durable_table_added_by_a_later_revision_fails_until_classified(
         shutil.copy2(path, versions / path.name)
 
     (versions / "aaaa000000aa_mvr05a2_synthetic_raw.py").write_text(
-        'from alembic import op\n\n'
+        "from alembic import op\n\n"
         'revision = "aaaa000000aa"\n'
         'down_revision = "d1e8a0c5f37b"\n\n\n'
         "def upgrade() -> None:\n"
-        '    op.execute(\n'
+        "    op.execute(\n"
         '        """\n'
         "        CREATE TABLE IF NOT EXISTS public.mvr05a2_synthetic_raw (\n"
         "            id uuid PRIMARY KEY\n"
@@ -265,7 +268,7 @@ def test_a_durable_table_added_by_a_later_revision_fails_until_classified(
         'revision = "aaaa000001aa"\n'
         'down_revision = "aaaa000000aa"\n\n\n'
         "def upgrade() -> None:\n"
-        '    op.create_table(\n'
+        "    op.create_table(\n"
         '        "mvr05a2_synthetic_op_api",\n'
         '        sa.Column("id", sa.Uuid(), primary_key=True),\n'
         "    )\n\n\n"
@@ -279,7 +282,7 @@ def test_a_durable_table_added_by_a_later_revision_fails_until_classified(
         'down_revision = "aaaa000001aa"\n'
         '_TABLE = "mvr05a2_synthetic_interpolated"\n\n\n'
         "def upgrade() -> None:\n"
-        '    op.execute(\n'
+        "    op.execute(\n"
         '        f"""\n'
         "        CREATE TABLE IF NOT EXISTS {_TABLE} (\n"
         "            id uuid PRIMARY KEY\n"
@@ -324,10 +327,10 @@ def test_migration_local_temp_snapshot_is_not_a_durable_table_default(
         'revision = "aaaa000003aa"\n'
         "down_revision = None\n\n\n"
         "def upgrade() -> None:\n"
-        "    op.execute(\"\"\"\n"
+        '    op.execute("""\n'
         "        CREATE TEMP TABLE mvr05a3_fk_snapshot (id uuid);\n"
         "        CREATE TABLE durable_control (id uuid);\n"
-        "    \"\"\")\n",
+        '    """)\n',
         encoding="utf-8",
     )
 
@@ -408,9 +411,7 @@ def test_store_object_composite_key_producer_inventory_is_exact() -> None:
     }
     assert actual == declared
 
-    assert {
-        path for path in actual if path[0] in {"chunks", "embeddings"}
-    } == {
+    assert {path for path in actual if path[0] in {"chunks", "embeddings"}} == {
         ("chunks", "app/stores/pg.py", "delete"),
         ("embeddings", "app/stores/pg.py", "delete"),
     }, "the zero-writer child tables must remain zero-writer"
@@ -463,9 +464,9 @@ def test_store_object_composite_key_producer_inventory_is_exact() -> None:
             continue
         reduced = dict(manifest)
         reduced[table] = {**entry, "producers": entry["producers"][1:]}
-        assert unclassified_mutation_paths(reduced, tables), (
-            f"dropping {table}'s first producer entry did not fail the producer gate"
-        )
+        assert unclassified_mutation_paths(
+            reduced, tables
+        ), f"dropping {table}'s first producer entry did not fail the producer gate"
 
 
 def test_post_cutover_store_fixture_mutations_are_binding_scoped() -> None:
@@ -500,16 +501,10 @@ def test_post_cutover_store_fixture_mutations_are_binding_scoped() -> None:
             matches = list(mutation.finditer(statement.text))
             for index, match in enumerate(matches):
                 next_mutation = (
-                    matches[index + 1].start()
-                    if index + 1 < len(matches)
-                    else len(statement.text)
+                    matches[index + 1].start() if index + 1 < len(matches) else len(statement.text)
                 )
                 semicolon = statement.text.find(";", match.end())
-                boundary = (
-                    min(semicolon, next_mutation)
-                    if semicolon >= 0
-                    else next_mutation
-                )
+                boundary = min(semicolon, next_mutation) if semicolon >= 0 else next_mutation
                 mutation_text = statement.text[match.start() : boundary]
                 if "vault_binding_id" in mutation_text.lower():
                     continue
@@ -641,6 +636,20 @@ def test_post_cutover_store_fixture_mutations_are_binding_scoped() -> None:
                 "insert into",
                 "vector_index_meta",
             ): 1,
+            # MVR-05A4's retained-lineage proof deliberately reconstructs the
+            # pre-binding membership/store_objects shape before upgrading it.
+            (
+                "tests/migrations/test_multi_vault_ingest_projection_keys.py",
+                "test_retained_historical_membership_lineage_is_rekeyed",
+                "insert into",
+                "store_objects",
+            ): 1,
+            (
+                "tests/migrations/test_multi_vault_ingest_projection_keys.py",
+                "test_retained_historical_membership_lineage_is_rekeyed",
+                "insert into",
+                "membership",
+            ): 1,
         }
     )
     assert observed == expected, (
@@ -665,7 +674,8 @@ def test_no_executed_sql_statement_is_invisible_to_the_scan() -> None:
     sites = unresolvable_statement_sites()
     assert sites == (), (
         "these SQL calls resolve to no literal statement, so the classification "
-        "and DDL scans cannot see them at all:\n  " + "\n  ".join(sites)
+        "and DDL scans cannot see them at all:\n  "
+        + "\n  ".join(sites)
         + "\nWiden the resolver in tests/architecture/durable_table_classification.py "
         "rather than leaving a statement invisible: an INSERT written this way "
         "would never reach the producer gate."
@@ -797,9 +807,7 @@ def test_binding_cutover_worklist_is_derived_from_the_manifest() -> None:
     assert pinned not in {row.table for row in cutover_worklist(keyed)}
 
     promoted = next(
-        table
-        for table, entry in manifest.items()
-        if entry["classification"] == "explicitly-global"
+        table for table, entry in manifest.items() if entry["classification"] == "explicitly-global"
     )
     joined = {
         **manifest,

@@ -764,7 +764,7 @@ jobs:
               - 'app/services/audit.py'
               - 'app/services/decisions.py'
               - 'app/store/membership_store.py'
-              - 'app/store/relation_index.py'
+              - 'app/objects/relation_types.py'
               - 'app/stores/postgres.py'
               - 'app/alembic/versions/e6c4a2b8d1f3_mvr05a3_store_object_binding_keys.py'
               - 'app/alembic/versions/f4a05a4b0001_mvr05a4_ingest_projection_binding_keys.py'

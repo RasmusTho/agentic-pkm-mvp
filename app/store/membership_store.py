@@ -18,20 +18,37 @@ def save_membership(object_id: str, set_id: str, *, trace_id: Optional[str] = No
         with conn.cursor() as cur:
             cur.execute(
                 """
-                INSERT INTO membership (
-                    vault_binding_id, id, object_id, set_id, created_at
-                )
-                VALUES (%s, %s, %s, %s, %s)
-                ON CONFLICT DO NOTHING
-                """,
-                (
-                    COMPATIBILITY_BINDING_ID,
-                    uuid4(),
-                    object_id,
-                    set_id,
-                    datetime.now(timezone.utc),
-                ),
+                SELECT array_agg(a.attname ORDER BY key.ordinality) AS primary_key
+                  FROM pg_constraint c
+                  JOIN unnest(c.conkey) WITH ORDINALITY key(attnum, ordinality) ON true
+                  JOIN pg_attribute a
+                    ON a.attrelid=c.conrelid AND a.attnum=key.attnum
+                 WHERE c.conrelid='public.membership'::regclass AND c.contype='p'
+                """
             )
+            row = cur.fetchone()
+            primary_key = (
+                row.get("primary_key") if isinstance(row, dict) else (row[0] if row else None)
+            )
+            common = (COMPATIBILITY_BINDING_ID, object_id, set_id, datetime.now(timezone.utc))
+            if list(primary_key or []) == ["vault_binding_id", "id"]:
+                cur.execute(
+                    "INSERT INTO membership "
+                    "(vault_binding_id,id,object_id,set_id,created_at) "
+                    "VALUES (%s,%s,%s,%s,%s) ON CONFLICT DO NOTHING",
+                    (common[0], uuid4(), *common[1:]),
+                )
+            elif list(primary_key or []) == ["vault_binding_id", "object_id", "set_id"]:
+                cur.execute(
+                    "INSERT INTO membership "
+                    "(vault_binding_id,object_id,set_id,created_at) "
+                    "VALUES (%s,%s,%s,%s) ON CONFLICT DO NOTHING",
+                    common,
+                )
+            else:
+                raise RuntimeError(
+                    "unsupported membership primary key; run MVR-05A4 migrations before writing"
+                )
     return None
 
 

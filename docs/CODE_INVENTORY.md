@@ -84,9 +84,9 @@ Audit pass 2026-05-18 against the `main` baseline. For each deprecated package: 
 
 **Doc references:** `docs/CODE_INVENTORY.md`, `docs/STATUS.md`, `docs/CORE_RUNTIME_AGENTIC_LAB_BOUNDARY.md`
 
-**Removal blocker:** The remaining shim types (`RelationIndex`, `VectorIndex`) are the contract types re-exported by `app.objects`; relocating them and migrating `membership_store` are bounded follow-ups.
+**Removal blocker:** `VectorIndex` is still re-exported from the remaining `vector_index.py` shim, and `membership_store.py` still owns a direct governed projection write. The `RelationIndex` contract has already moved to `app.objects.relation_types` and no longer blocks deletion.
 
-**Recommended cleanup:** One bounded issue to move `relation_index.py`/`vector_index.py` types into `app/objects` and migrate `membership_store`; then delete the package. See [Cleanup follow-ups](#cleanup-follow-ups).
+**Recommended cleanup:** One bounded issue to move the remaining `vector_index.py` contract into `app/objects` and migrate `membership_store`; then delete the package. See [Cleanup follow-ups](#cleanup-follow-ups).
 
 ---
 
@@ -124,7 +124,7 @@ Issues recommended by the 2026-05-18 audit. Each is bounded and safe to implemen
 | --- | --- | --- |
 | ~~Remove `app/agent` + `app/plugins`~~ | **Done** — removed in #1171 (2026-05-22) | — |
 | ~~Migrate `app.store.object_store` callers + delete the legacy writers~~ | **Done** — KERNEL-03 (#2765): callers import `app.objects`; `object_store.py`/`vector_store.py` deleted | — |
-| Migrate remaining `app/store` shims | Move `relation_index.py`/`vector_index.py` contract types into `app/objects`; migrate `membership_store.py` off direct DB writes; delete `app/store` | Bounded; guard tests in `tests/architecture/` must be updated in the same change |
+| Migrate remaining `app/store` seams | Move the `vector_index.py` contract into `app/objects`; migrate `membership_store.py` off direct DB writes; delete `app/store` | Bounded; guard tests in `tests/architecture/` must be updated in the same change |
 These issues are not yet created in GitHub. When created, they should be `type:refactor`, scoped to one area each, and carry explicit `Verify:` targets before being marked `agent:ready`.
 
 ---
