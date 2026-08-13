@@ -1171,6 +1171,40 @@ role_message_format: blockquote-v1
     assert not list(root.glob("**/drafts/journal/*.md"))
 
 
+def test_blank_legacy_agent_blocks_even_beside_valid_owner_turn(
+    tmp_path: Path,
+) -> None:
+    root, context, session_id, _capture = _seed_inputs(tmp_path)
+    transcript = next((root / ".chats" / "reflection").glob("*.md"))
+    transcript.write_text(
+        f"""---
+type: chat-session
+session_id: {session_id}
+---
+
+## Session
+
+**Owner:** valid owner turn
+
+**Agent:**
+
+""",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        UnresolvableJournalCitationError, match="legacy transcript message is empty"
+    ):
+        draft_journal_entry(
+            vault_context=context,
+            for_date=DAY,
+            session_id=session_id,
+            write_guard=_allowing_guard(),
+        )
+
+    assert not list(root.glob("**/drafts/journal/*.md"))
+
+
 def test_legacy_closed_transcript_excludes_session_metadata(tmp_path: Path) -> None:
     root, context, session_id, _capture = _seed_inputs(tmp_path)
     transcript = next((root / ".chats" / "reflection").glob("*.md"))

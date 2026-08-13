@@ -833,8 +833,6 @@ def _legacy_owner_turns(body: str) -> tuple[str, ...]:
     )
     turns: list[str] = []
     for index, marker in enumerate(role_markers):
-        if marker.group(1) != "Owner":
-            continue
         next_marker_start = (
             role_markers[index + 1].start()
             if index + 1 < len(role_markers)
