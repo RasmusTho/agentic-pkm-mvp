@@ -1089,6 +1089,11 @@ if ! scripts/companion_ui_postdeploy_smoke.sh preflight; then
   exit 86
 fi
 
+if [ "${action}" = "deploy" ] && [ "${channel}" = "prod" ]; then
+  "${PYTHON}" "${ROOT}/scripts/prod_devui_gateway_preflight.py" \
+    "${ROOT}/docker-compose.prod.yml" || exit $?
+fi
+
 if [ "${scalar_rollback}" = "1" ]; then
   prepare_scalar_rollback_environment || exit $?
 fi

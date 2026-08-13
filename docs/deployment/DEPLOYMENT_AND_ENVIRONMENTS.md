@@ -70,9 +70,11 @@ Anchors for the values above: ports/DBs in `docker-compose.{dev,test,prod}.yml`;
 Notes on the current model:
 - `test` and `prod` still bind-mount the **same host checkout** at `/app`. That repo bind-mount is what removes code isolation: a `git checkout` in the one host tree changes the code under both channels' containers at once. `dev` differs only by running the baked local `pkm-app:dev-local` image, not by running a promoted GHCR SHA pin.
 - Companion UI gateways are now declared as managed compose units in the repo, but the running fleet has not yet adopted the pinned-image model. The cutover guard therefore checks gateway-unit participation in the recreate set before #2698 can treat a channel as ready.
-- Production Compose publishes Companion on `127.0.0.1:8113` by default, but devUI admission
-  additionally requires the explicit declaration `COMPANION_UI_BIND_HOST=127.0.0.1` to be passed
-  into the gateway. Missing/nonloopback declarations keep only the devUI routes closed while
+- Production Compose fixes Companion's publish to `127.0.0.1:8113` and passes the matching explicit
+  declaration `COMPANION_UI_BIND_HOST=127.0.0.1` into the gateway as one canonical producer pair;
+  ambient shell configuration cannot widen or silently disable it. The production deploy wrapper
+  fails before mutation if either half drifts. Noncanonical direct launches with missing or
+  nonloopback declarations keep only the devUI routes closed while
   unrelated Companion health remains available. Port `18000` is direct API health/version
   diagnostics, not a supported devUI browser origin; #4836's eventual canonical page is
   `http://127.0.0.1:8113/devui/overview` only after its own deployment receipt.

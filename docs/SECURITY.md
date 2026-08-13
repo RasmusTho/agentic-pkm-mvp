@@ -65,6 +65,9 @@ browser boundary is the explicitly rendered host publish
 non-loopback, mixed-resolution, or unresolvable declarations leave ordinary Companion health
 available but keep the devUI gateway routes unavailable. Port `18000` remains direct API
 health/version diagnostics only; it is not a supported devUI browser origin.
+The canonical production Compose file fixes both sides of that producer pair to loopback, and the
+production deploy wrapper fails before mutation if the publish or process declaration is absent,
+ambient, wildcard, or otherwise drifts from the exact pair.
 
 The gateway admits only a local loopback `Host` with no forwarded identity header, including
 `Forwarded`, every `X-Forwarded-*` name, and `Via`. It proxies exactly GET

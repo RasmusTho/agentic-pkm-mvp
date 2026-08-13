@@ -53,15 +53,19 @@ services:
 
   companion-ui:
     ports: !override
-      - "${COMPANION_UI_BIND_HOST:-127.0.0.1}:8113:8113"
+      # Production is intentionally loopback-only. Keep the browser-facing
+      # publish and the declaration consumed by the process as one fixed
+      # producer pair; an ambient shell value must not widen or disable it.
+      - "127.0.0.1:8113:8113"
     environment:
       PKM_ENVIRONMENT: prod
       PORT: 8113
       COMPANION_API_BASE_URL: http://api:8000
       # Separate the container listener from the browser-facing host publish.
-      # Missing/non-loopback declarations leave ordinary Companion health up
-      # but keep the devUI gateway routes fail-closed.
-      COMPANION_UI_BIND_HOST: ${COMPANION_UI_BIND_HOST:-}
+      # Noncanonical/direct process launches still fail closed in the runtime,
+      # while this canonical production producer always supplies the exact
+      # declaration matching the host publish above.
+      COMPANION_UI_BIND_HOST: 127.0.0.1
       COMPANION_UI_SERVE_MODULE: companion_ui.workspace.serve_production_page
 
   db:
