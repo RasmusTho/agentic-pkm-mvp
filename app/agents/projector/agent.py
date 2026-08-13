@@ -13,6 +13,7 @@ from app.events.types import (
     PROMOTION_PROJECT_SKIP,
 )
 from app.services.audit import audit_event
+from app.stores import resolve_store_backend
 
 AGENT = "projector"
 
@@ -35,6 +36,8 @@ def _record_membership_db(object_id: str, set_name: str, trace_id: str) -> None:
     fresh and retained supported lineages; schema, key, and missing-set defects
     deliberately propagate.
     """
+    if resolve_store_backend() == "memory":
+        return None
     save_membership(object_id, set_name, trace_id=trace_id)
     return None
 
