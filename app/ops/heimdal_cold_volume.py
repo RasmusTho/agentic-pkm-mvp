@@ -24,6 +24,7 @@ import stat
 import subprocess
 import sys
 import threading
+import unicodedata
 
 from app.ops.host_secret_bootstrap import (
     HOST_SECRET_BOOTSTRAP_CHANNEL,
@@ -282,6 +283,45 @@ def _safe_path(path: Path) -> Path:
         raise _refused() from exc
 
 
+def _require_exact_path_spelling(path: Path) -> os.stat_result:
+    """Open each component without symlinks and require its exact directory spelling."""
+    if not path.is_absolute() or path.name in {"", ".", ".."}:
+        raise _refused()
+    descriptor = -1
+    try:
+        descriptor = os.open(
+            os.sep,
+            os.O_RDONLY
+            | getattr(os, "O_DIRECTORY", 0)
+            | getattr(os, "O_NOFOLLOW", 0),
+        )
+        components = path.parts[1:]
+        for index, component in enumerate(components):
+            if component in {"", ".", ".."}:
+                raise _refused()
+            entries = os.listdir(descriptor)
+            normalized = unicodedata.normalize("NFC", component).casefold()
+            if component not in entries or sum(
+                unicodedata.normalize("NFC", entry).casefold() == normalized
+                for entry in entries
+            ) != 1:
+                raise _refused()
+            flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+            if index < len(components) - 1:
+                flags |= getattr(os, "O_DIRECTORY", 0)
+            next_descriptor = os.open(component, flags, dir_fd=descriptor)
+            os.close(descriptor)
+            descriptor = next_descriptor
+        return os.fstat(descriptor)
+    except ArchiveVolumeRefusedError:
+        raise
+    except OSError as exc:
+        raise _refused() from exc
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+
+
 def _path_key(path: Path) -> str:
     return os.path.normcase(str(_safe_path(path))).casefold()
 
@@ -295,6 +335,15 @@ def _metadata_dict(metadata: ArchiveVolumeMetadata) -> dict[str, object]:
 
 def _metadata_bytes(metadata: ArchiveVolumeMetadata) -> bytes:
     return (json.dumps(_metadata_dict(metadata), sort_keys=True) + "\n").encode("utf-8")
+
+
+def _reject_duplicate_json_keys(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    payload: dict[str, object] = {}
+    for key, value in pairs:
+        if key in payload:
+            raise _refused()
+        payload[key] = value
+    return payload
 
 
 _METADATA_LOCK_STATE = threading.local()
@@ -493,7 +542,10 @@ def load_archive_metadata(path: Path) -> ArchiveVolumeMetadata:
             or not os.path.samestat(after, live)
         ):
             raise _refused()
-        payload = json.loads(raw.decode("utf-8", errors="strict"))
+        payload = json.loads(
+            raw.decode("utf-8", errors="strict"),
+            object_pairs_hook=_reject_duplicate_json_keys,
+        )
     except ArchiveVolumeRefusedError:
         raise
     except Exception as exc:
@@ -504,7 +556,7 @@ def load_archive_metadata(path: Path) -> ArchiveVolumeMetadata:
     if not isinstance(payload, dict) or set(payload) != _METADATA_KEYS:
         raise _refused()
     try:
-        return ArchiveVolumeMetadata(
+        metadata = ArchiveVolumeMetadata(
             generation=payload["generation"],
             state=payload["state"],
             channel=payload["channel"],
@@ -523,9 +575,16 @@ def load_archive_metadata(path: Path) -> ArchiveVolumeMetadata:
         )
     except (KeyError, TypeError, ValueError) as exc:
         raise _refused() from exc
+    if raw != _metadata_bytes(metadata):
+        raise _refused()
+    return metadata
 
 
-def _read_channel_metadata_declaration(config_path: Path) -> str:
+def _read_channel_metadata_declaration(
+    config_path: Path,
+    *,
+    expected_identity: tuple[int, int] | None = None,
+) -> str:
     descriptor = -1
     try:
         descriptor = os.open(
@@ -538,6 +597,10 @@ def _read_channel_metadata_declaration(config_path: Path) -> str:
             or details.st_nlink != 1
             or details.st_size <= 0
             or details.st_size > MAX_CHANNEL_CONFIG_BYTES
+            or (
+                expected_identity is not None
+                and (details.st_dev, details.st_ino) != expected_identity
+            )
         ):
             raise _refused()
         raw = os.read(descriptor, details.st_size + 1)
@@ -591,16 +654,16 @@ def _channel_archive_metadata_authority(
         or config_root.is_symlink()
     ):
         raise _refused()
-    try:
-        resolved_root = config_root.resolve(strict=True)
-        root_details = os.stat(config_root, follow_symlinks=False)
-    except OSError as exc:
-        raise _refused() from exc
-    if resolved_root != config_root or not stat.S_ISDIR(root_details.st_mode):
+    root_details = _require_exact_path_spelling(config_root)
+    if not stat.S_ISDIR(root_details.st_mode):
         raise _refused()
 
     config_path = config_root / f".env.{channel}.local"
-    declared = _read_channel_metadata_declaration(config_path)
+    config_details = _require_exact_path_spelling(config_path)
+    declared = _read_channel_metadata_declaration(
+        config_path,
+        expected_identity=(config_details.st_dev, config_details.st_ino),
+    )
     source = os.environ if env is None else env
     ambient = source.get(_METADATA_CONFIG_KEY)
     if ambient is not None and ambient != declared:
@@ -613,11 +676,7 @@ def _channel_archive_metadata_authority(
         or os.path.normpath(declared) != declared
     ):
         raise _refused()
-    try:
-        if metadata_path.resolve(strict=True) != metadata_path:
-            raise _refused()
-    except OSError as exc:
-        raise _refused() from exc
+    _require_exact_path_spelling(metadata_path)
     metadata = load_archive_metadata(metadata_path)
     if metadata.channel != channel:
         raise _refused()
@@ -1569,13 +1628,34 @@ def provision_archive_volume(
     _descriptor_authority: object | None = None,
 ) -> ArchiveVolumeReady:
     _require_expected_channel(metadata, expected_channel)
+    if metadata_path is not None:
+        held: dict[str, int] = getattr(_METADATA_LOCK_STATE, "held", {})
+        if str(metadata_path) not in held:
+            with _metadata_lock(metadata_path):
+                return provision_archive_volume(
+                    metadata,
+                    credential=credential,
+                    expected_channel=expected_channel,
+                    runner=runner,
+                    metadata_path=metadata_path,
+                    metadata_writer=metadata_writer,
+                    _descriptor_authority=_descriptor_authority,
+                )
     selected = (
         _runner(metadata, descriptor_authority=_descriptor_authority)
         if runner is None
         else runner
     )
-    if metadata_path is not None and _durable_metadata(metadata_path) != metadata:
-        raise _refused()
+    if metadata_path is not None:
+        if _durable_metadata(metadata_path) != metadata:
+            raise _refused()
+        parent_descriptor = getattr(_METADATA_LOCK_STATE, "held", {})[
+            str(metadata_path)
+        ]
+        if _read_metadata_bytes(parent_descriptor, metadata_path.name) != _metadata_bytes(
+            metadata
+        ):
+            raise _refused()
 
     if metadata.state == BOUND_ACTIVE:
         _require_bundle_directory(metadata)
@@ -1760,15 +1840,95 @@ def mount_from_bootstrap(
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Manage the declared Heimdal cold volume")
-    parser.add_argument("action", choices=("require-ready", "mount", "provision"))
+    parser.add_argument(
+        "action", choices=("initialize", "require-ready", "mount", "provision")
+    )
     parser.add_argument("--channel", choices=sorted(_CHANNELS), required=True)
-    parser.add_argument("--config-root", type=Path, required=True)
+    parser.add_argument("--config-root", type=Path)
+    parser.add_argument("--metadata", type=Path)
+    parser.add_argument("--archive-id")
+    parser.add_argument("--bundle-path", type=Path)
+    parser.add_argument("--mountpoint", type=Path)
+    parser.add_argument("--parent-volume-uuid")
+    parser.add_argument("--capacity-bytes", type=int)
+    parser.add_argument("--owner-uid", type=int)
+    parser.add_argument("--owner-gid", type=int)
     return parser
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     try:
+        if args.action == "initialize":
+            if (
+                args.config_root is not None
+                or args.metadata is None
+                or args.archive_id is None
+                or args.bundle_path is None
+                or args.mountpoint is None
+                or args.parent_volume_uuid is None
+                or args.capacity_bytes is None
+                or args.owner_uid is None
+                or args.owner_gid is None
+            ):
+                raise _refused()
+            parent_details = _require_exact_path_spelling(args.metadata.parent)
+            if not stat.S_ISDIR(parent_details.st_mode):
+                raise _refused()
+            parent_descriptor = os.open(
+                args.metadata.parent,
+                os.O_RDONLY
+                | getattr(os, "O_DIRECTORY", 0)
+                | getattr(os, "O_NOFOLLOW", 0),
+            )
+            try:
+                normalized_name = unicodedata.normalize(
+                    "NFC", args.metadata.name
+                ).casefold()
+                if any(
+                    unicodedata.normalize("NFC", entry).casefold()
+                    == normalized_name
+                    for entry in os.listdir(parent_descriptor)
+                ):
+                    raise _refused()
+            finally:
+                os.close(parent_descriptor)
+            initial = ArchiveVolumeMetadata(
+                generation=0,
+                state=PLANNED_UNBOUND,
+                channel=args.channel,
+                archive_id=args.archive_id,
+                bundle_path=args.bundle_path,
+                mountpoint=args.mountpoint,
+                parent_volume_uuid=args.parent_volume_uuid,
+                bundle_inode=None,
+                image_metadata_sha256=None,
+                volume_uuid=None,
+                capacity_bytes=args.capacity_bytes,
+                filesystem_capacity_bytes=None,
+                owner_uid=args.owner_uid,
+                owner_gid=args.owner_gid,
+                mode=0o700,
+            )
+            write_archive_metadata(args.metadata, initial)
+            print(
+                json.dumps(
+                    {"ok": True, "archive_ref": "archive-metadata-initialized"}
+                )
+            )
+            return 0
+        if (
+            args.config_root is None
+            or args.metadata is not None
+            or args.archive_id is not None
+            or args.bundle_path is not None
+            or args.mountpoint is not None
+            or args.parent_volume_uuid is not None
+            or args.capacity_bytes is not None
+            or args.owner_uid is not None
+            or args.owner_gid is not None
+        ):
+            raise _refused()
         metadata_path, metadata = _channel_archive_metadata_authority(
             config_root=args.config_root,
             channel=args.channel,

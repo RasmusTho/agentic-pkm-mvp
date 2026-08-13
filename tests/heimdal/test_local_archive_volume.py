@@ -15,6 +15,7 @@ from pathlib import Path
 import plistlib
 import sys
 import threading
+import unicodedata
 
 import pytest
 
@@ -1292,6 +1293,259 @@ def test_channel_authority_rejects_cross_channel_legacy_and_path_override(
     assert refusing_runner.calls == []
 
 
+def test_metadata_loader_rejects_duplicate_authority_keys(tmp_path: Path) -> None:
+    metadata = _planned_metadata(tmp_path)
+    metadata_path = tmp_path / "archive-metadata.json"
+    volume.write_archive_metadata(metadata_path, metadata)
+    duplicate = metadata_path.read_text(encoding="utf-8").replace(
+        '"channel": "prod"',
+        '"channel": "dev", "channel": "prod"',
+        1,
+    )
+    metadata_path.write_text(duplicate, encoding="utf-8")
+    metadata_path.chmod(0o600)
+
+    with pytest.raises(volume.ArchiveVolumeRefusedError):
+        volume.load_archive_metadata(metadata_path)
+
+
+def test_noncanonical_initial_metadata_refuses_before_external_effect(
+    tmp_path: Path,
+) -> None:
+    metadata = _planned_metadata(tmp_path)
+    metadata_path = tmp_path / "archive-metadata.json"
+    volume.write_archive_metadata(metadata_path, metadata)
+    pretty = json.dumps(
+        json.loads(metadata_path.read_text(encoding="utf-8")),
+        indent=2,
+        sort_keys=True,
+    )
+    metadata_path.write_text(pretty + "\n", encoding="utf-8")
+    metadata_path.chmod(0o600)
+    runner = FakeRunner(metadata, attached=False)
+
+    with pytest.raises(volume.ArchiveVolumeRefusedError):
+        volume.provision_archive_volume(
+            metadata,
+            credential=_PASSPHRASE,
+            runner=runner,
+            metadata_path=metadata_path,
+        )
+
+    assert runner.calls == []
+    assert metadata.bundle_path.exists() is False
+
+
+@pytest.mark.parametrize(
+    "alias_name",
+    [
+        pytest.param("prodarchivemetadata.json", id="case-alias"),
+        pytest.param(
+            unicodedata.normalize("NFD", "prod-archivé-metadata.json"),
+            id="unicode-normalization-alias",
+        ),
+    ],
+)
+def test_channel_authority_rejects_nonexact_directory_entry_spelling(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    alias_name: str,
+) -> None:
+    """Simulate a case/normalization-insensitive filesystem without using aliases."""
+    config_root = tmp_path / "repo"
+    config_root.mkdir()
+    canonical_name = (
+        "ProdArchiveMetadata.json"
+        if alias_name == "prodarchivemetadata.json"
+        else unicodedata.normalize("NFC", "prod-archivé-metadata.json")
+    )
+    metadata_path = tmp_path / canonical_name
+    alias_path = tmp_path / alias_name
+    metadata = _planned_metadata(tmp_path)
+    volume.write_archive_metadata(metadata_path, metadata)
+    (config_root / ".env.prod.local").write_text(
+        f"HEIMDAL_ARCHIVE_METADATA_FILE={alias_path}\n",
+        encoding="utf-8",
+    )
+
+    real_open = os.open
+
+    def alias_open(
+        path: str | bytes | int | os.PathLike[str],
+        flags: int,
+        mode: int = 0o777,
+        *,
+        dir_fd: int | None = None,
+    ) -> int:
+        if dir_fd is None and Path(path) == alias_path:
+            path = metadata_path
+        return real_open(path, flags, mode, dir_fd=dir_fd)
+
+    monkeypatch.setattr(volume.os, "open", alias_open)
+
+    with pytest.raises(volume.ArchiveVolumeRefusedError):
+        volume.load_channel_archive_metadata(
+            config_root=config_root,
+            channel="prod",
+            env={},
+        )
+
+
+@pytest.mark.parametrize(
+    "defect",
+    [
+        pytest.param("missing-config", id="missing-config"),
+        pytest.param("config-symlink", id="config-symlink"),
+        pytest.param("config-hardlink", id="config-hardlink"),
+        pytest.param("config-case-alias", id="config-case-alias"),
+        pytest.param("duplicate-declaration", id="duplicate-declaration"),
+        pytest.param("metadata-symlink", id="metadata-symlink"),
+        pytest.param("metadata-hardlink", id="metadata-hardlink"),
+    ],
+)
+def test_channel_authority_rejects_ambiguous_or_aliased_producers(
+    tmp_path: Path,
+    defect: str,
+) -> None:
+    config_root = tmp_path / "repo"
+    config_root.mkdir()
+    metadata = _planned_metadata(tmp_path)
+    metadata_path = tmp_path / "archive-metadata.json"
+    volume.write_archive_metadata(metadata_path, metadata)
+    config_path = config_root / ".env.prod.local"
+    declaration = f"HEIMDAL_ARCHIVE_METADATA_FILE={metadata_path}\n"
+
+    if defect == "missing-config":
+        pass
+    elif defect == "config-symlink":
+        target = tmp_path / "channel.env"
+        target.write_text(declaration, encoding="utf-8")
+        config_path.symlink_to(target)
+    elif defect == "config-hardlink":
+        target = tmp_path / "channel.env"
+        target.write_text(declaration, encoding="utf-8")
+        os.link(target, config_path)
+    elif defect == "config-case-alias":
+        (config_root / ".ENV.PROD.LOCAL").write_text(declaration, encoding="utf-8")
+    elif defect == "duplicate-declaration":
+        config_path.write_text(declaration + declaration, encoding="utf-8")
+    elif defect == "metadata-symlink":
+        alias = tmp_path / "metadata-alias.json"
+        alias.symlink_to(metadata_path)
+        config_path.write_text(
+            f"HEIMDAL_ARCHIVE_METADATA_FILE={alias}\n", encoding="utf-8"
+        )
+    elif defect == "metadata-hardlink":
+        alias = tmp_path / "metadata-hardlink.json"
+        os.link(metadata_path, alias)
+        config_path.write_text(
+            f"HEIMDAL_ARCHIVE_METADATA_FILE={alias}\n", encoding="utf-8"
+        )
+    else:
+        raise AssertionError(defect)
+
+    with pytest.raises(volume.ArchiveVolumeRefusedError):
+        volume.load_channel_archive_metadata(
+            config_root=config_root,
+            channel="prod",
+            env={},
+        )
+
+
+def test_channel_authority_refuses_config_replacement_after_spelling_proof(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config_root = tmp_path / "repo"
+    config_root.mkdir()
+    metadata = _planned_metadata(tmp_path)
+    metadata_path = tmp_path / "archive-metadata.json"
+    volume.write_archive_metadata(metadata_path, metadata)
+    config_path = config_root / ".env.prod.local"
+    config_path.write_text(
+        f"HEIMDAL_ARCHIVE_METADATA_FILE={metadata_path}\n", encoding="utf-8"
+    )
+    displaced = config_root / ".env.prod.local.displaced"
+    real_proof = volume._require_exact_path_spelling
+    swapped = False
+
+    def swapping_proof(path: Path) -> os.stat_result:
+        nonlocal swapped
+        details = real_proof(path)
+        if path == config_path and not swapped:
+            swapped = True
+            config_path.rename(displaced)
+            config_path.write_text(
+                f"HEIMDAL_ARCHIVE_METADATA_FILE={metadata_path}\n",
+                encoding="utf-8",
+            )
+        return details
+
+    monkeypatch.setattr(volume, "_require_exact_path_spelling", swapping_proof)
+
+    with pytest.raises(volume.ArchiveVolumeRefusedError):
+        volume.load_channel_archive_metadata(
+            config_root=config_root,
+            channel="prod",
+            env={},
+        )
+
+    assert swapped is True
+    assert displaced.exists()
+
+
+def test_initialize_cli_is_the_canonical_initial_metadata_producer(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    parent = tmp_path / "external-parent"
+    parent.mkdir()
+    mountpoint = tmp_path / "archive-mount"
+    mountpoint.mkdir()
+    metadata_path = tmp_path / "archive-metadata.json"
+
+    rc = volume.main(
+        [
+            "initialize",
+            "--channel",
+            "prod",
+            "--metadata",
+            str(metadata_path),
+            "--archive-id",
+            "heimdal-cold-v1",
+            "--bundle-path",
+            str(parent / "archive.sparsebundle"),
+            "--mountpoint",
+            str(mountpoint),
+            "--parent-volume-uuid",
+            _PARENT_UUID,
+            "--capacity-bytes",
+            str(_CAPACITY),
+            "--owner-uid",
+            str(os.geteuid()),
+            "--owner-gid",
+            str(os.getegid()),
+        ]
+    )
+
+    assert rc == 0
+    created = volume.load_archive_metadata(metadata_path)
+    assert created.state == volume.PLANNED_UNBOUND
+    assert created.channel == "prod"
+    assert created.bundle_path == parent / "archive.sparsebundle"
+    assert created.mountpoint == mountpoint
+    assert created.parent_volume_uuid == _PARENT_UUID
+    assert created.capacity_bytes == _CAPACITY
+    assert created.owner_uid == os.geteuid()
+    assert created.owner_gid == os.getegid()
+    assert metadata_path.read_bytes() == volume._metadata_bytes(created)
+    assert metadata_path.stat().st_mode & 0o777 == 0o600
+    assert json.loads(capsys.readouterr().out) == {
+        "ok": True,
+        "archive_ref": "archive-metadata-initialized",
+    }
+
+
 @pytest.mark.parametrize("residual", ["bundle", "attachment"])
 def test_unbound_replay_refuses_residual_image_state(
     tmp_path: Path,
@@ -1513,6 +1767,15 @@ def test_production_startup_and_deploy_validate_without_provisioning() -> None:
     assert prod.index("heimdal_cold_volume_preflight prod") < prod.index(
         "exec scripts/start_full_system.sh"
     )
+    assert deploy.index("heimdal_cold_volume_preflight") < deploy.index(
+        'migration_materialize_dir="$(mktemp'
+    )
+    assert deploy.index("heimdal_cold_volume_preflight") < deploy.index(
+        "acquire_channel_mutation_lock"
+    )
+    assert deploy.index("heimdal_cold_volume_preflight") < deploy.index(
+        "heimdal_raw_migration_secret_preflight || exit $?"
+    )
     assert deploy.index("heimdal_cold_volume_preflight") < deploy.index("write_pin")
     assert 'source "scripts/lib/heimdal_cold_volume_preflight.sh"' in full_start
     assert 'heimdal_cold_volume_preflight_effective "$ROOT"' in full_start
@@ -1524,12 +1787,12 @@ def test_production_startup_and_deploy_validate_without_provisioning() -> None:
     ) < full_start.index('mkdir -p "$ROOT/tmp"')
     assert 'heimdal_cold_volume_preflight.sh"' in companion
     assert "heimdal_cold_volume_preflight_effective" in companion
-    companion_start = companion.split("cui_start_runtime() {", maxsplit=1)[1].split(
-        "\ncui_compose() {", maxsplit=1
+    companion_start = companion.split("cui_run_start() {", maxsplit=1)[1].split(
+        "\n# Read-only diagnostic", maxsplit=1
     )[0]
     assert companion_start.index(
         "heimdal_cold_volume_preflight_effective"
-    ) < companion_start.index("cui_api_healthy_now")
+    ) < companion_start.index("cui_docker_ok")
     prod_up = makefile.split("\nprod-up:", maxsplit=1)[1].split(
         "\nprod-down:", maxsplit=1
     )[0]

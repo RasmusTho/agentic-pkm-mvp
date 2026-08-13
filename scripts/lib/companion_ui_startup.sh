@@ -26,12 +26,12 @@
 #   CUI_WATCHER_AUTO_EXEC       passthrough to start_full_system.sh (prod wrapper sets 0 by default)
 #   CUI_DB_LABEL                expected channel DB name to report (e.g. app_dev/app_test/app)
 
+_CUI_STARTUP_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
+
 # ── repo + python resolution ────────────────────────────────────────────────
 
 cui_repo_root() {
-  local lib_dir
-  lib_dir="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
-  (cd "${lib_dir}/../.." && pwd)
+  (cd "${_CUI_STARTUP_LIB_DIR}/../.." && pwd)
 }
 
 cui_python_bin() {
@@ -223,13 +223,8 @@ cui_runtime_is_idle_channel_container() {
 }
 
 cui_start_runtime() {
-  local root _rc _skip_recreate _archive_helper
+  local root _rc _skip_recreate
   root="$(cui_repo_root)"
-  _archive_helper="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/heimdal_cold_volume_preflight.sh"
-  source "${_archive_helper}"
-  heimdal_cold_volume_preflight_effective \
-    "${root}" "${CUI_CHANNEL:-}" "${CUI_COMPOSE_PROJECT:-}" "${CUI_COMPOSE_FILES:-}" \
-    || return $?
   # Restarting the UI should not recreate an already-healthy stack. When the
   # runtime API is up, skip the full start_full_system.sh recreate (and its
   # watcher/worker health race). Set CUI_FORCE_RECREATE=1 to force a rebuild,
@@ -470,10 +465,17 @@ cui_print_summary() {
 # ── entry points ───────────────────────────────────────────────────────────────
 
 cui_run_start() {
+  local root _archive_helper
   cui_require_config
   cui_log "canonical startup begin"
   cui_load_channel_env
   cui_guard_vault_name
+  root="$(cui_repo_root)"
+  _archive_helper="${_CUI_STARTUP_LIB_DIR}/heimdal_cold_volume_preflight.sh"
+  source "${_archive_helper}"
+  heimdal_cold_volume_preflight_effective \
+    "${root}" "${CUI_CHANNEL:-}" "${CUI_COMPOSE_PROJECT:-}" "${CUI_COMPOSE_FILES:-}" \
+    || return $?
   if ! cui_docker_ok; then
     cui_die "Docker/Colima is not available. Start Docker Desktop or 'colima start', then retry."
   fi

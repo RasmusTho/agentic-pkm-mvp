@@ -483,6 +483,22 @@ def test_archive_preflight_blocks_deploy_but_never_gates_rollback(tmp_path: Path
     assert not any(event.startswith("archive-preflight") for event in _deploy_events(env))
 
 
+def test_prod_archive_preflight_precedes_keychain_lookup(tmp_path: Path) -> None:
+    root, env, sha = _deploy_harness(tmp_path)
+    pin_path = root / "config/deploy/prod.env"
+    pin_path.write_text(
+        "APP_IMAGE_REPOSITORY=example.invalid/pkm-app\n" f"APP_IMAGE_TAG={sha}\n",
+        encoding="utf-8",
+    )
+    env["FAKE_ARCHIVE_PREFLIGHT_RC"] = "78"
+    env["FAKE_SECURITY_EVENT_LOG"] = env["FAKE_DEPLOY_EVENT_LOG"]
+
+    result = _run_deploy(root, env, sha, channel="prod")
+
+    assert result.returncode == 78
+    assert _deploy_events(env) == ["archive-preflight prod"]
+
+
 def test_deploy_channel_preflights_embedding_provider_before_health_gate() -> None:
     script = (REPO_ROOT / "scripts/deploy_channel.sh").read_text(encoding="utf-8")
     preflight = 'run_postmutation_gate "embedding provider configuration preflight failed"'

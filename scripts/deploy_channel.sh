@@ -101,6 +101,14 @@ case "${channel}" in
   *) usage; exit 2 ;;
 esac
 
+# Classify the selected channel before creating temporary state, acquiring the
+# mutation lock, reading credentials, or contacting Docker. Dry-run performs no
+# deployment mutation and rollback must remain available for previous-good
+# recovery when the archive is unavailable.
+if [ "${action}" = "deploy" ] && [ "${dry_run}" != "1" ]; then
+  heimdal_cold_volume_preflight "${channel}" "${ROOT}" || exit $?
+fi
+
 pin_file="${ROOT}/config/deploy/${channel}.env"
 previous_pin_file="${ROOT}/config/deploy/${channel}.previous.env"
 migration_pending_file="${ROOT}/config/deploy/${channel}.migration-pending.env"
@@ -1072,16 +1080,9 @@ if [ "${dry_run}" = "1" ]; then
 fi
 
 # This gate must stay after dry-run (which performs no mutation) but before
-# every pin, marker, volume, Docker, or writer-stop operation. A required key
-# failure must not turn safe migration refusal into avoidable runtime downtime.
+# every pin, marker, volume, Docker, or writer-stop operation. Archive readiness
+# must be established before the Keychain-backed migration secret is read.
 heimdal_raw_migration_secret_preflight || exit $?
-
-# Read-only and before every forward-deploy pin, marker, volume, Docker, or
-# writer-stop mutation. Rollback must remain reachable when archive storage is
-# absent or unhealthy so the previous-good service can always be restored.
-if [ "${action}" = "deploy" ]; then
-  heimdal_cold_volume_preflight "${channel}" "${ROOT}" || exit $?
-fi
 
 if ! scripts/companion_ui_postdeploy_smoke.sh preflight; then
   echo "companion UI preflight failed before channel mutation" >&2
