@@ -11,12 +11,12 @@ from __future__ import annotations
 import argparse
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict, dataclass, replace
+import hashlib
 import json
 import os
 from pathlib import Path
 import plistlib
 import re
-import shutil
 import stat
 import subprocess
 import sys
@@ -32,24 +32,32 @@ from app.ops.host_secret_bootstrap import (
 HDIUTIL = "/usr/bin/hdiutil"
 DISKUTIL = "/usr/sbin/diskutil"
 MAX_PLIST_BYTES = 1024 * 1024
+MAX_IMAGE_METADATA_BYTES = 256 * 1024
 COMMAND_TIMEOUT_SECONDS = 60.0
 MAX_CAPACITY_BYTES = 2**63 - 512
 ARCHIVE_SECRET = "heimdal.archive-pass"
 ARCHIVE_SECRET_BINDING = "HEIMDAL_ARCHIVE_PASS"
 PLANNED_UNBOUND = "planned-unbound"
+PROVISIONING_FAILED = "provisioning-failed"
 ATTACHED_VERIFIED = "attached-verified"
 BOUND_ACTIVE = "bound-active"
-_METADATA_STATES = frozenset({PLANNED_UNBOUND, ATTACHED_VERIFIED, BOUND_ACTIVE})
+_METADATA_STATES = frozenset(
+    {PLANNED_UNBOUND, PROVISIONING_FAILED, ATTACHED_VERIFIED, BOUND_ACTIVE}
+)
 _ARCHIVE_ID = re.compile(r"^[a-z][a-z0-9-]{2,63}$")
 _UUID = re.compile(r"^[0-9A-Fa-f]{8}(?:-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}$")
 _DEVICE = re.compile(r"^/dev/disk[0-9][0-9A-Za-z._-]*$")
 _DEVICE_IDENTIFIER = re.compile(r"^disk[0-9][0-9A-Za-z._-]*$")
+_SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _METADATA_KEYS = frozenset(
     {
         "state",
         "archive_id",
         "bundle_path",
         "mountpoint",
+        "parent_volume_uuid",
+        "bundle_inode",
+        "image_metadata_sha256",
         "volume_uuid",
         "capacity_bytes",
         "owner_uid",
@@ -69,20 +77,14 @@ _DISK_KEYS = frozenset(
         "VolumeName",
     }
 )
-_PARENT_DISK_KEYS = frozenset({"DeviceIdentifier", "MountPoint", "Internal"})
+_PARENT_DISK_KEYS = frozenset(
+    {"DeviceIdentifier", "MountPoint", "VolumeUUID", "Internal"}
+)
 _ONE_SHOT_DESCRIPTOR_AUTHORITY = object()
 
 
 class ArchiveVolumeRefusedError(RuntimeError):
     """A redacted archive-volume refusal."""
-
-
-class _MountAttemptRefused(ArchiveVolumeRefusedError):
-    """Internal refusal carrying only safe compensation state."""
-
-    def __init__(self, *, created_bundle_cleanup_safe: bool) -> None:
-        super().__init__("archive volume is not ready")
-        self.created_bundle_cleanup_safe = created_bundle_cleanup_safe
 
 
 @dataclass(frozen=True)
@@ -91,6 +93,9 @@ class ArchiveVolumeMetadata:
     archive_id: str
     bundle_path: Path
     mountpoint: Path
+    parent_volume_uuid: str
+    bundle_inode: int | None
+    image_metadata_sha256: str | None
     volume_uuid: str | None
     capacity_bytes: int
     owner_uid: int
@@ -111,15 +116,35 @@ class ArchiveVolumeMetadata:
             or self.bundle_path == self.bundle_path.parent
             or self.mountpoint == self.mountpoint.parent
             or self.mountpoint == self.bundle_path.parent
+            or type(self.parent_volume_uuid) is not str
+            or _UUID.fullmatch(self.parent_volume_uuid) is None
             or (
                 self.state == PLANNED_UNBOUND
-                and self.volume_uuid is not None
+                and (
+                    self.volume_uuid is not None
+                    or self.bundle_inode is not None
+                    or self.image_metadata_sha256 is not None
+                )
             )
             or (
-                self.state != PLANNED_UNBOUND
+                self.state == PROVISIONING_FAILED
+                and (
+                    self.volume_uuid is not None
+                    or type(self.bundle_inode) is not int
+                    or self.bundle_inode <= 0
+                    or type(self.image_metadata_sha256) is not str
+                    or _SHA256.fullmatch(self.image_metadata_sha256) is None
+                )
+            )
+            or (
+                self.state in {ATTACHED_VERIFIED, BOUND_ACTIVE}
                 and (
                     type(self.volume_uuid) is not str
                     or _UUID.fullmatch(self.volume_uuid) is None
+                    or type(self.bundle_inode) is not int
+                    or self.bundle_inode <= 0
+                    or type(self.image_metadata_sha256) is not str
+                    or _SHA256.fullmatch(self.image_metadata_sha256) is None
                 )
             )
             or type(self.capacity_bytes) is not int
@@ -282,6 +307,9 @@ def load_archive_metadata(path: Path) -> ArchiveVolumeMetadata:
             archive_id=payload["archive_id"],
             bundle_path=Path(payload["bundle_path"]),
             mountpoint=Path(payload["mountpoint"]),
+            parent_volume_uuid=payload["parent_volume_uuid"],
+            bundle_inode=payload["bundle_inode"],
+            image_metadata_sha256=payload["image_metadata_sha256"],
             volume_uuid=payload["volume_uuid"],
             capacity_bytes=payload["capacity_bytes"],
             owner_uid=payload["owner_uid"],
@@ -676,11 +704,15 @@ def _open_external_parent(
             raise _refused()
         identifier = payload["DeviceIdentifier"]
         mountpoint = payload["MountPoint"]
+        parent_volume_uuid = payload["VolumeUUID"]
         if (
             type(identifier) is not str
             or _DEVICE_IDENTIFIER.fullmatch(identifier) is None
             or type(mountpoint) is not str
             or not Path(mountpoint).is_absolute()
+            or type(parent_volume_uuid) is not str
+            or _UUID.fullmatch(parent_volume_uuid) is None
+            or parent_volume_uuid.upper() != metadata.parent_volume_uuid.upper()
             or payload["Internal"] is not False
             or _path_key(parent) != _path_key(Path(mountpoint))
         ):
@@ -765,7 +797,7 @@ def require_archive_volume_ready(
     )
     parent_descriptor = _open_external_parent(metadata, selected)
     try:
-        bundle_identity = _created_bundle_identity(parent_descriptor, metadata)
+        bundle_identity = _require_durable_bundle_binding(parent_descriptor, metadata)
         _validate_attached_volume(
             metadata,
             selected,
@@ -856,7 +888,14 @@ def _mount_and_validate(
         parent_descriptor = _open_external_parent(metadata, runner)
     try:
         if bundle_identity is None:
-            bundle_identity = _created_bundle_identity(parent_descriptor, metadata)
+            bundle_identity = _require_durable_bundle_binding(parent_descriptor, metadata)
+        elif (
+            metadata.bundle_inode != bundle_identity[1]
+            or metadata.image_metadata_sha256 is None
+            or _image_metadata_fingerprint(parent_descriptor, metadata)
+            != metadata.image_metadata_sha256
+        ):
+            raise _refused()
         _require_created_bundle_postcondition(
             parent_descriptor,
             metadata,
@@ -865,7 +904,7 @@ def _mount_and_validate(
         try:
             existing = _attached_device(metadata, runner)
         except ArchiveVolumeRefusedError as exc:
-            raise _MountAttemptRefused(created_bundle_cleanup_safe=False) from exc
+            raise _refused() from exc
         if existing is not None:
             try:
                 validated_device, volume_uuid = _validate_attached_volume(
@@ -878,7 +917,7 @@ def _mount_and_validate(
                     raise _refused()
                 return _Attachment(validated_device, volume_uuid, False)
             except ArchiveVolumeRefusedError as exc:
-                raise _MountAttemptRefused(created_bundle_cleanup_safe=False) from exc
+                raise _refused() from exc
 
         _require_created_bundle_postcondition(
             parent_descriptor,
@@ -894,12 +933,12 @@ def _mount_and_validate(
             )
         except ArchiveVolumeRefusedError as exc:
             # A command failure cannot prove that no attachment was created.
-            raise _MountAttemptRefused(created_bundle_cleanup_safe=False) from exc
+            raise _refused() from exc
         try:
             device = _device_from_attach_response(metadata, attach_result.stdout)
         except ArchiveVolumeRefusedError as exc:
             # A successful attach with no provable device is operator recovery.
-            raise _MountAttemptRefused(created_bundle_cleanup_safe=False) from exc
+            raise _refused() from exc
         try:
             _require_created_bundle_postcondition(
                 parent_descriptor,
@@ -916,9 +955,8 @@ def _mount_and_validate(
                 raise _refused()
             return _Attachment(validated_device, volume_uuid, True)
         except ArchiveVolumeRefusedError as exc:
-            raise _MountAttemptRefused(
-                created_bundle_cleanup_safe=_detach_exact(runner, device)
-            ) from exc
+            _detach_exact(runner, device)
+            raise _refused() from exc
     finally:
         if owns_parent_descriptor:
             os.close(parent_descriptor)
@@ -955,75 +993,6 @@ def _persist_transition(
         raise _refused()
 
 
-def _cleanup_created_bundle(
-    metadata: ArchiveVolumeMetadata,
-    runner: CommandRunner,
-    created_identity: tuple[int, int],
-    *,
-    parent_descriptor: int | None = None,
-    parent_identity: tuple[int, int] | None = None,
-    attachment_device: str | None = None,
-    attachment_known_absent: bool = False,
-) -> bool:
-    """Delete only the exact bundle created by this live attempt."""
-    descriptor = -1
-    owns_descriptor = parent_descriptor is None
-    try:
-        if attachment_device is not None:
-            if not _detach_exact(runner, attachment_device):
-                return False
-        elif not attachment_known_absent:
-            return False
-        if not shutil.rmtree.avoids_symlink_attacks:
-            return False
-        if parent_descriptor is None:
-            descriptor = os.open(
-                metadata.bundle_path.parent,
-                os.O_RDONLY
-                | getattr(os, "O_DIRECTORY", 0)
-                | getattr(os, "O_NOFOLLOW", 0),
-            )
-            parent_details = os.fstat(descriptor)
-            live_parent = os.stat(metadata.bundle_path.parent, follow_symlinks=False)
-            if not os.path.samestat(parent_details, live_parent):
-                return False
-        else:
-            descriptor = parent_descriptor
-            parent_details = os.fstat(descriptor)
-            if (
-                parent_identity is None
-                or (parent_details.st_dev, parent_details.st_ino) != parent_identity
-            ):
-                return False
-        details = os.stat(
-            metadata.bundle_path.name,
-            dir_fd=descriptor,
-            follow_symlinks=False,
-        )
-        if (
-            not stat.S_ISDIR(details.st_mode)
-            or stat.S_ISLNK(details.st_mode)
-            or (details.st_dev, details.st_ino) != created_identity
-        ):
-            return False
-        shutil.rmtree(metadata.bundle_path.name, dir_fd=descriptor)
-        os.fsync(descriptor)
-        try:
-            os.stat(
-                metadata.bundle_path.name,
-                dir_fd=descriptor,
-                follow_symlinks=False,
-            )
-        except FileNotFoundError:
-            return True
-        return False
-    except (ArchiveVolumeRefusedError, OSError):
-        return False
-    finally:
-        if owns_descriptor and descriptor >= 0:
-            os.close(descriptor)
-
-
 def _created_bundle_identity(
     parent_descriptor: int,
     metadata: ArchiveVolumeMetadata,
@@ -1039,6 +1008,66 @@ def _created_bundle_identity(
     if not stat.S_ISDIR(details.st_mode) or stat.S_ISLNK(details.st_mode):
         raise _refused()
     return details.st_dev, details.st_ino
+
+
+def _image_metadata_fingerprint(
+    parent_descriptor: int,
+    metadata: ArchiveVolumeMetadata,
+) -> str:
+    bundle_descriptor = -1
+    image_descriptor = -1
+    try:
+        bundle_descriptor = os.open(
+            metadata.bundle_path.name,
+            os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0),
+            dir_fd=parent_descriptor,
+        )
+        image_descriptor = os.open(
+            "Info.plist",
+            os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0),
+            dir_fd=bundle_descriptor,
+        )
+        details = os.fstat(image_descriptor)
+        if not stat.S_ISREG(details.st_mode) or details.st_size > MAX_IMAGE_METADATA_BYTES:
+            raise _refused()
+        chunks: list[bytes] = []
+        total = 0
+        while True:
+            chunk = os.read(image_descriptor, 64 * 1024)
+            if not chunk:
+                break
+            total += len(chunk)
+            if total > MAX_IMAGE_METADATA_BYTES:
+                raise _refused()
+            chunks.append(chunk)
+        raw = b"".join(chunks)
+        payload = _parse_plist(raw)
+        if not payload:
+            raise _refused()
+        return hashlib.sha256(raw).hexdigest()
+    except ArchiveVolumeRefusedError:
+        raise
+    except OSError as exc:
+        raise _refused() from exc
+    finally:
+        if image_descriptor >= 0:
+            os.close(image_descriptor)
+        if bundle_descriptor >= 0:
+            os.close(bundle_descriptor)
+
+
+def _require_durable_bundle_binding(
+    parent_descriptor: int,
+    metadata: ArchiveVolumeMetadata,
+) -> tuple[int, int]:
+    if metadata.bundle_inode is None or metadata.image_metadata_sha256 is None:
+        raise _refused()
+    identity = _created_bundle_identity(parent_descriptor, metadata)
+    if identity[1] != metadata.bundle_inode:
+        raise _refused()
+    if _image_metadata_fingerprint(parent_descriptor, metadata) != metadata.image_metadata_sha256:
+        raise _refused()
+    return identity
 
 
 def _require_created_bundle_postcondition(
@@ -1082,12 +1111,19 @@ def provision_archive_volume(
     if metadata_path is None:
         raise _refused()
 
-    if metadata.state == ATTACHED_VERIFIED:
+    if metadata.state in {PROVISIONING_FAILED, ATTACHED_VERIFIED}:
         _require_bundle_directory(metadata)
         attachment = _mount_and_validate(metadata, credential=credential, runner=selected)
-        active = replace(metadata, state=BOUND_ACTIVE)
+        attached = replace(
+            metadata,
+            state=ATTACHED_VERIFIED,
+            volume_uuid=attachment.volume_uuid,
+        )
         try:
-            _persist_transition(metadata_path, metadata, active, metadata_writer)
+            if metadata.state == PROVISIONING_FAILED:
+                _persist_transition(metadata_path, metadata, attached, metadata_writer)
+            active = replace(attached, state=BOUND_ACTIVE)
+            _persist_transition(metadata_path, attached, active, metadata_writer)
         except ArchiveVolumeRefusedError:
             if attachment.attached_here:
                 _detach_exact(selected, attachment.device)
@@ -1108,8 +1144,6 @@ def provision_archive_volume(
         raise _refused()
     parent_descriptor = _open_external_parent(metadata, selected)
     try:
-        parent_details = os.fstat(parent_descriptor)
-        parent_identity = (parent_details.st_dev, parent_details.st_ino)
         _revalidate_directory(parent_descriptor, metadata.bundle_path.parent)
         _call(
             selected,
@@ -1118,60 +1152,40 @@ def provision_archive_volume(
             cwd_fd=parent_descriptor,
         )
         created_identity = _created_bundle_identity(parent_descriptor, metadata)
-        try:
-            _require_created_bundle_postcondition(
-                parent_descriptor,
-                metadata,
-                created_identity,
-            )
-        except ArchiveVolumeRefusedError:
-            _cleanup_created_bundle(
-                metadata,
-                selected,
-                created_identity,
-                parent_descriptor=parent_descriptor,
-                parent_identity=parent_identity,
-                attachment_known_absent=True,
-            )
-            raise
+        image_fingerprint = _image_metadata_fingerprint(parent_descriptor, metadata)
+        residual = replace(
+            metadata,
+            state=PROVISIONING_FAILED,
+            bundle_inode=created_identity[1],
+            image_metadata_sha256=image_fingerprint,
+        )
+        _persist_transition(metadata_path, metadata, residual, metadata_writer)
+        _require_created_bundle_postcondition(
+            parent_descriptor,
+            residual,
+            created_identity,
+        )
         try:
             attachment = _mount_and_validate(
-                metadata,
+                residual,
                 credential=credential,
                 runner=selected,
                 parent_descriptor=parent_descriptor,
                 bundle_identity=created_identity,
             )
-        except _MountAttemptRefused as exc:
-            if exc.created_bundle_cleanup_safe:
-                _cleanup_created_bundle(
-                    metadata,
-                    selected,
-                    created_identity,
-                    parent_descriptor=parent_descriptor,
-                    parent_identity=parent_identity,
-                    attachment_known_absent=True,
-                )
+        except ArchiveVolumeRefusedError:
             raise
 
         attached = replace(
-            metadata,
+            residual,
             state=ATTACHED_VERIFIED,
             volume_uuid=attachment.volume_uuid,
         )
         try:
-            _persist_transition(metadata_path, metadata, attached, metadata_writer)
+            _persist_transition(metadata_path, residual, attached, metadata_writer)
         except ArchiveVolumeRefusedError:
-            if _durable_metadata(metadata_path) != attached:
-                if attachment.attached_here:
-                    _cleanup_created_bundle(
-                        metadata,
-                        selected,
-                        created_identity,
-                        parent_descriptor=parent_descriptor,
-                        parent_identity=parent_identity,
-                        attachment_device=attachment.device,
-                    )
+            if attachment.attached_here:
+                _detach_exact(selected, attachment.device)
             raise
 
         active = replace(attached, state=BOUND_ACTIVE)
@@ -1278,6 +1292,7 @@ __all__ = [
     "DISKUTIL",
     "MAX_PLIST_BYTES",
     "PLANNED_UNBOUND",
+    "PROVISIONING_FAILED",
     "attach_command",
     "create_command",
     "load_archive_metadata",

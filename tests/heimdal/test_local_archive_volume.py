@@ -25,6 +25,7 @@ pytestmark = pytest.mark.not_pg
 _CAPACITY = 8 * 1024**3
 _DEVICE = "/dev/disk9s1"
 _UUID = "11111111-2222-3333-4444-555555555555"
+_PARENT_UUID = "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE"
 _PASSPHRASE = "fixture-secret-never-log"
 
 
@@ -34,23 +35,29 @@ def _metadata(tmp_path: Path) -> volume.ArchiveVolumeMetadata:
     mountpoint = tmp_path / "archive-mount"
     mountpoint.mkdir()
     mountpoint.chmod(0o700)
-    return volume.ArchiveVolumeMetadata(
+    metadata = volume.ArchiveVolumeMetadata(
         state=volume.BOUND_ACTIVE,
         archive_id="heimdal-cold-v1",
         bundle_path=parent / "archive.sparsebundle",
         mountpoint=mountpoint,
+        parent_volume_uuid=_PARENT_UUID,
+        bundle_inode=1,
+        image_metadata_sha256="0" * 64,
         volume_uuid=_UUID,
         capacity_bytes=_CAPACITY,
         owner_uid=os.geteuid(),
         owner_gid=os.getegid(),
         mode=0o700,
     )
+    return metadata
 
 
 def _planned_metadata(tmp_path: Path) -> volume.ArchiveVolumeMetadata:
     return replace(
         _metadata(tmp_path),
         state=volume.PLANNED_UNBOUND,
+        bundle_inode=None,
+        image_metadata_sha256=None,
         volume_uuid=None,
     )
 
@@ -115,6 +122,7 @@ def _parent_info(
     payload: dict[str, object] = {
         "DeviceIdentifier": "disk8s1",
         "MountPoint": str(metadata.bundle_path.parent),
+        "VolumeUUID": metadata.parent_volume_uuid,
         "Internal": False,
     }
     payload.update(overrides)
@@ -193,6 +201,27 @@ class FakeRunner:
                 raise AssertionError("create must carry descriptor-bound authority")
             details = os.fstat(cwd_fd)
             os.mkdir(self.metadata.bundle_path.name, dir_fd=cwd_fd)
+            bundle_descriptor = os.open(
+                self.metadata.bundle_path.name,
+                os.O_RDONLY,
+                dir_fd=cwd_fd,
+            )
+            try:
+                image_descriptor = os.open(
+                    "Info.plist",
+                    os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                    0o600,
+                    dir_fd=bundle_descriptor,
+                )
+                try:
+                    os.write(
+                        image_descriptor,
+                        _plist({"fixture-image-id": self.metadata.archive_id}),
+                    )
+                finally:
+                    os.close(image_descriptor)
+            finally:
+                os.close(bundle_descriptor)
             return volume.CommandResult(
                 0,
                 _plist({}),
@@ -206,7 +235,18 @@ class FakeRunner:
 
 def _materialize_ready_fs(metadata: volume.ArchiveVolumeMetadata) -> None:
     metadata.bundle_path.mkdir(exist_ok=True)
+    (metadata.bundle_path / "Info.plist").write_bytes(
+        _plist({"fixture-image-id": metadata.archive_id})
+    )
     metadata.mountpoint.chmod(metadata.mode)
+    details = metadata.bundle_path.stat()
+    parent_descriptor = os.open(metadata.bundle_path.parent, os.O_RDONLY)
+    try:
+        fingerprint = volume._image_metadata_fingerprint(parent_descriptor, metadata)
+    finally:
+        os.close(parent_descriptor)
+    object.__setattr__(metadata, "bundle_inode", details.st_ino)
+    object.__setattr__(metadata, "image_metadata_sha256", fingerprint)
 
 
 @pytest.mark.parametrize(
@@ -418,23 +458,16 @@ def test_create_is_descriptor_relative_across_parent_path_swap(tmp_path: Path) -
             argv: tuple[str, ...],
             stdin: bytes | None = None,
             cwd_fd: int | None = None,
-        ) -> volume.CommandResult:
-            if argv[:2] != (volume.HDIUTIL, "create"):
-                return super().__call__(argv, stdin, cwd_fd)
-            self.calls.append((argv, stdin))
-            original_parent.rename(displaced_parent)
-            original_parent.mkdir()
-            if cwd_fd is None:
-                metadata.bundle_path.mkdir()
-                return volume.CommandResult(0, _plist({}))
-            held = os.fstat(cwd_fd)
-            self.create_cwd_identity = (held.st_dev, held.st_ino)
-            os.mkdir(metadata.bundle_path.name, dir_fd=cwd_fd)
-            return volume.CommandResult(
-                0,
-                _plist({}),
-                cwd_identity=self.create_cwd_identity,
-            )
+            ) -> volume.CommandResult:
+                if argv[:2] != (volume.HDIUTIL, "create"):
+                    return super().__call__(argv, stdin, cwd_fd)
+                result = super().__call__(argv, stdin, cwd_fd)
+                original_parent.rename(displaced_parent)
+                original_parent.mkdir()
+                assert cwd_fd is not None
+                held = os.fstat(cwd_fd)
+                self.create_cwd_identity = (held.st_dev, held.st_ino)
+                return result
 
     runner = ParentSwapRunner(metadata, attached=False)
     with pytest.raises(volume.ArchiveVolumeRefusedError):
@@ -446,9 +479,9 @@ def test_create_is_descriptor_relative_across_parent_path_swap(tmp_path: Path) -
         )
 
     assert runner.create_cwd_identity is not None
-    assert not (displaced_parent / metadata.bundle_path.name).exists()
+    assert (displaced_parent / metadata.bundle_path.name).exists()
     assert not metadata.bundle_path.exists()
-    assert volume.load_archive_metadata(metadata_path) == metadata
+    assert volume.load_archive_metadata(metadata_path).state == volume.PROVISIONING_FAILED
 
 
 def test_attach_refuses_bundle_swap_and_detaches_only_attempt_device(tmp_path: Path) -> None:
@@ -482,38 +515,45 @@ def test_attach_refuses_bundle_swap_and_detaches_only_attempt_device(tmp_path: P
         )
 
     assert (volume.HDIUTIL, "detach", _DEVICE) in [argv for argv, _ in runner.calls]
-    assert not (displaced_parent / metadata.bundle_path.name).exists()
+    assert (displaced_parent / metadata.bundle_path.name).exists()
     assert metadata.bundle_path.exists()
-    assert volume.load_archive_metadata(metadata_path) == metadata
+    assert volume.load_archive_metadata(metadata_path).state == volume.PROVISIONING_FAILED
 
 
-def test_created_bundle_cleanup_never_rediscovers_foreign_attachment(tmp_path: Path) -> None:
-    metadata = _planned_metadata(tmp_path)
-    held_parent = metadata.bundle_path.parent
+def test_partial_failure_never_auto_deletes_a_bundle_path() -> None:
+    source = inspect.getsource(volume.provision_archive_volume)
+    assert "shutil.rmtree" not in source
+    assert "os.rmdir" not in source
+    assert ".unlink(" not in source
+
+
+def test_ready_refuses_stale_attachment_after_bundle_replacement(tmp_path: Path) -> None:
+    metadata = _metadata(tmp_path)
+    _materialize_ready_fs(metadata)
+    original = tmp_path / "original-attached.sparsebundle"
+    metadata.bundle_path.rename(original)
     metadata.bundle_path.mkdir()
-    created = metadata.bundle_path.stat()
-    descriptor = os.open(held_parent, os.O_RDONLY)
-    displaced_parent = tmp_path / "displaced-external-parent"
-    held_parent.rename(displaced_parent)
-    held_parent.mkdir()
-    metadata.bundle_path.mkdir()
+    (metadata.bundle_path / "Info.plist").write_bytes(
+        _plist({"fixture-image-id": metadata.archive_id})
+    )
     runner = FakeRunner(metadata, attached=True)
-    try:
-        cleaned = volume._cleanup_created_bundle(
-            metadata,
-            runner,
-            (created.st_dev, created.st_ino),
-            parent_descriptor=descriptor,
-            parent_identity=(os.fstat(descriptor).st_dev, os.fstat(descriptor).st_ino),
-            attachment_known_absent=True,
-        )
-    finally:
-        os.close(descriptor)
 
-    assert cleaned is True
-    assert not any(argv[:2] == (volume.HDIUTIL, "detach") for argv, _ in runner.calls)
-    assert not (displaced_parent / metadata.bundle_path.name).exists()
+    with pytest.raises(volume.ArchiveVolumeRefusedError):
+        volume.require_archive_volume_ready(metadata, runner=runner)
+
+    assert original.exists()
     assert metadata.bundle_path.exists()
+
+
+def test_ready_refuses_image_metadata_fingerprint_drift(tmp_path: Path) -> None:
+    metadata = _metadata(tmp_path)
+    _materialize_ready_fs(metadata)
+    (metadata.bundle_path / "Info.plist").write_bytes(
+        _plist({"fixture-image-id": "replacement"})
+    )
+
+    with pytest.raises(volume.ArchiveVolumeRefusedError):
+        volume.require_archive_volume_ready(metadata, runner=FakeRunner(metadata, attached=True))
 
 
 def test_idempotent_replay_never_overwrites_or_reattaches(tmp_path: Path) -> None:
@@ -559,6 +599,8 @@ def test_typed_plist_mismatch_fails_closed(
         pytest.param({"Internal": "false"}, id="parent-internal-wrong-type"),
         pytest.param({"MountPoint": "/unexpected"}, id="parent-mount-mismatch"),
         pytest.param({"DeviceIdentifier": 7}, id="parent-device-wrong-type"),
+        pytest.param({"VolumeUUID": _UUID}, id="parent-uuid-drift"),
+        pytest.param({"VolumeUUID": 7}, id="parent-uuid-wrong-type"),
     ],
 )
 def test_external_parent_identity_fails_closed_before_create(
@@ -817,21 +859,43 @@ def test_metadata_is_closed_value_free_and_atomic(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize(
-    ("state", "volume_uuid"),
+    "overrides",
     [
-        pytest.param(volume.PLANNED_UNBOUND, _UUID, id="planned-with-identity"),
-        pytest.param(volume.ATTACHED_VERIFIED, None, id="attached-without-identity"),
-        pytest.param(volume.BOUND_ACTIVE, None, id="active-without-identity"),
+        pytest.param(
+            {"state": volume.PLANNED_UNBOUND, "volume_uuid": _UUID},
+            id="planned-with-volume-identity",
+        ),
+        pytest.param(
+            {"state": volume.PLANNED_UNBOUND, "bundle_inode": 7},
+            id="planned-with-bundle-identity",
+        ),
+        pytest.param(
+            {
+                "state": volume.PROVISIONING_FAILED,
+                "volume_uuid": None,
+                "bundle_inode": None,
+            },
+            id="failed-without-bundle-identity",
+        ),
+        pytest.param(
+            {"state": volume.ATTACHED_VERIFIED, "volume_uuid": None},
+            id="attached-without-volume-identity",
+        ),
+        pytest.param(
+            {"state": volume.BOUND_ACTIVE, "volume_uuid": None},
+            id="active-without-volume-identity",
+        ),
+        pytest.param({"parent_volume_uuid": "different"}, id="bad-parent-uuid"),
+        pytest.param({"image_metadata_sha256": "short"}, id="bad-image-fingerprint"),
     ],
 )
 def test_metadata_state_and_identity_are_coherent(
     tmp_path: Path,
-    state: str,
-    volume_uuid: str | None,
+    overrides: dict[str, object],
 ) -> None:
     metadata = _metadata(tmp_path)
     with pytest.raises(volume.ArchiveVolumeRefusedError):
-        replace(metadata, state=state, volume_uuid=volume_uuid)
+        replace(metadata, **overrides)
 
 
 @pytest.mark.parametrize("residual", ["bundle", "attachment"])
@@ -860,7 +924,7 @@ def test_unbound_replay_refuses_residual_image_state(
     assert volume.load_archive_metadata(metadata_path).state == volume.PLANNED_UNBOUND
 
 
-def test_first_identity_persist_failure_cleans_only_created_image(tmp_path: Path) -> None:
+def test_first_identity_persist_failure_preserves_created_image(tmp_path: Path) -> None:
     metadata = _planned_metadata(tmp_path)
     metadata_path = tmp_path / "archive-metadata.json"
     volume.write_archive_metadata(metadata_path, metadata)
@@ -879,9 +943,9 @@ def test_first_identity_persist_failure_cleans_only_created_image(tmp_path: Path
         )
 
     assert "fixture-private-persistence-detail" not in str(error.value)
-    assert not metadata.bundle_path.exists()
+    assert metadata.bundle_path.exists()
     assert runner.attached is False
-    assert (volume.HDIUTIL, "detach", _DEVICE) in [argv for argv, _ in runner.calls]
+    assert not any(argv[:2] == (volume.HDIUTIL, "detach") for argv, _ in runner.calls)
     assert volume.load_archive_metadata(metadata_path) == metadata
 
 
@@ -911,7 +975,11 @@ def test_attached_identity_replay_promotes_without_regeneration(tmp_path: Path) 
         )
 
     attached = volume.load_archive_metadata(metadata_path)
-    assert writes == [volume.ATTACHED_VERIFIED, volume.BOUND_ACTIVE]
+    assert writes == [
+        volume.PROVISIONING_FAILED,
+        volume.ATTACHED_VERIFIED,
+        volume.BOUND_ACTIVE,
+    ]
     assert attached.state == volume.ATTACHED_VERIFIED
     assert attached.volume_uuid == _UUID
     assert metadata.bundle_path.exists()
@@ -930,8 +998,8 @@ def test_attached_identity_replay_promotes_without_regeneration(tmp_path: Path) 
 def test_attached_replay_refuses_uuid_drift_without_regeneration(tmp_path: Path) -> None:
     metadata = replace(_metadata(tmp_path), state=volume.ATTACHED_VERIFIED)
     metadata_path = tmp_path / "archive-metadata.json"
-    volume.write_archive_metadata(metadata_path, metadata)
     _materialize_ready_fs(metadata)
+    volume.write_archive_metadata(metadata_path, metadata)
     runner = FakeRunner(metadata, disk_overrides={"VolumeUUID": "different"})
 
     with pytest.raises(volume.ArchiveVolumeRefusedError):
