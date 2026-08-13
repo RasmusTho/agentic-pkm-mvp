@@ -31,6 +31,7 @@ from app.activation.journal_draft import (
     evaluate_journal_draft_activation,
 )
 from app.agent_memory.candidate import ReviewState
+from app.chat.session_log import ROLE_MESSAGE_FORMAT_BLOCKQUOTE_V1
 from app.journaling.day_context import (
     DayContextBundle,
     DayContextItem,
@@ -732,7 +733,9 @@ def _resolve_session(vault_root: Path, session_id: str) -> _ResolvedSession:
             f"session:{session_id} resolved to {len(matches)} transcript files"
         )
     path, frontmatter, body = matches[0]
-    owner_turns = _owner_turns(body)
+    owner_turns = _owner_turns(
+        body, role_message_format=frontmatter.get("role_message_format")
+    )
     return _ResolvedSession(
         session_id=session_id,
         relative_path=path.relative_to(vault_root).as_posix(),
@@ -741,12 +744,68 @@ def _resolve_session(vault_root: Path, session_id: str) -> _ResolvedSession:
     )
 
 
-def _owner_turns(body: str) -> tuple[str, ...]:
+def _owner_turns(
+    body: str, *, role_message_format: object = None
+) -> tuple[str, ...]:
     normalized_body = body.replace("\r\n", "\n").replace("\r", "\n")
+    if role_message_format == ROLE_MESSAGE_FORMAT_BLOCKQUOTE_V1:
+        return _blockquote_owner_turns(normalized_body)
+    if role_message_format not in {None, ""}:
+        raise UnresolvableJournalCitationError(
+            "transcript has an unsupported role_message_format"
+        )
+    return _legacy_owner_turns(normalized_body)
+
+
+def _blockquote_owner_turns(body: str) -> tuple[str, ...]:
+    role_markers = tuple(
+        re.finditer(r"^\*\*(Owner|Agent):\*\*$", body, flags=re.MULTILINE)
+    )
+    turns: list[str] = []
+    for index, marker in enumerate(role_markers):
+        next_marker_start = (
+            role_markers[index + 1].start()
+            if index + 1 < len(role_markers)
+            else len(body)
+        )
+        segment = body[marker.end() : next_marker_start]
+        content_lines: list[str] = []
+        segment_lines = segment.splitlines()
+        for line_index, line in enumerate(segment_lines):
+            if not line:
+                if content_lines and any(
+                    trailing_line.startswith(">")
+                    for trailing_line in segment_lines[line_index + 1 :]
+                ):
+                    raise UnresolvableJournalCitationError(
+                        "blockquote transcript message contains an unframed blank line"
+                    )
+                continue
+            if line == ">":
+                content_lines.append("")
+            elif line.startswith("> "):
+                content_lines.append(line[2:])
+            elif line == "---" and all(
+                not trailing_line
+                or trailing_line.startswith("*Session closed. Total: ")
+                for trailing_line in segment_lines[line_index + 1 :]
+            ):
+                break
+            else:
+                raise UnresolvableJournalCitationError(
+                    "blockquote transcript message contains unframed content"
+                )
+        content = "\n".join(content_lines)
+        if marker.group(1) == "Owner" and content:
+            turns.append(content)
+    return tuple(turns)
+
+
+def _legacy_owner_turns(body: str) -> tuple[str, ...]:
     role_markers = tuple(
         re.finditer(
             r"^\*\*(Owner|Agent):\*\*[ \t]*(.*)$",
-            normalized_body,
+            body,
             flags=re.MULTILINE,
         )
     )
@@ -757,13 +816,19 @@ def _owner_turns(body: str) -> tuple[str, ...]:
         next_marker_start = (
             role_markers[index + 1].start()
             if index + 1 < len(role_markers)
-            else len(normalized_body)
+            else len(body)
         )
         inline_content = marker.group(2).strip()
-        continuation = normalized_body[marker.end() : next_marker_start].strip()
-        content = "\n\n".join(
-            part for part in (inline_content, continuation) if part
-        )
+        continuation = body[marker.end() : next_marker_start]
+        if continuation.startswith("\n"):
+            continuation = continuation[1:]
+        closure_start = continuation.find("\n---\n*Session closed. Total: ")
+        if closure_start >= 0:
+            continuation = continuation[:closure_start]
+        continuation = continuation.rstrip("\n")
+        content = inline_content
+        if continuation:
+            content += ("\n" if content else "") + continuation
         if content:
             turns.append(content)
     return tuple(turns)
@@ -844,14 +909,18 @@ def _source_content_versions(
             raise UnresolvableJournalCitationError(
                 f"session:{session.session_id} transcript identity changed"
             )
-        owner_turns = _owner_turns(body)
+        owner_turns = _owner_turns(
+            body, role_message_format=frontmatter.get("role_message_format")
+        )
         if owner_turns != session.owner_turns:
             raise UnresolvableJournalCitationError(
                 f"session:{session.session_id} source version changed after resolution"
             )
         versions[identity.admission_id] = _SourceContentVersion(
             content_sha256=hashlib.sha256(snapshot.raw_content).hexdigest(),
-            admitted_content="\n".join(owner_turns),
+            admitted_content=json.dumps(
+                list(owner_turns), ensure_ascii=False
+            ),
         )
 
     for item, identity in zip(context_items, context_identities, strict=True):

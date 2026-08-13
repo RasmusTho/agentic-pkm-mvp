@@ -3,12 +3,14 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timezone
 import hashlib
+import json
 import multiprocessing
 from pathlib import Path
 import threading
 
 import pytest
 
+from app.chat.session_log import SessionLogWriter
 from app.journaling.day_context import DayContextBundle, DayContextItem, assemble_day_context
 from app.journaling.draft import (
     JOURNAL_DRAFT_WRITE_ACTION,
@@ -1016,6 +1018,103 @@ The second owner paragraph has the important qualification.
     assert "What follows from that?" not in admitted_content
     assert "The second owner paragraph has the important qualification." in body
     assert hashlib.sha256(crlf_raw).hexdigest() in body
+
+
+def test_production_framed_transcript_round_trips_exact_owner_message(
+    tmp_path: Path,
+) -> None:
+    root, context, _session_id, _capture = _seed_inputs(tmp_path)
+    for transcript in (root / ".chats" / "reflection").glob("*.md"):
+        transcript.unlink()
+    note = root / "Notes" / "Framed reflection.md"
+    note.parent.mkdir(parents=True)
+    note.write_text(
+        "---\nuuid: framed-reflection\ntype: note\n---\n\nAnchor.\n",
+        encoding="utf-8",
+    )
+    writer = SessionLogWriter(
+        vault_root=root,
+        now_fn=lambda: datetime(2026, 7, 15, 20, tzinfo=timezone.utc),
+        uuid_fn=lambda: "framed-session",
+    )
+    session = writer.open_session(note, "framed-reflection")
+    writer.append_message(session, "agent", "What mattered today?")
+    exact_owner_message = (
+        "First line\nSecond line\n**Agent:** literal owner text\n\nFinal paragraph"
+    )
+    writer.append_message(session, "owner", exact_owner_message)
+    writer.append_message(session, "agent", "What follows from that?")
+    writer.close_session(session, "complete")
+
+    result = draft_journal_entry(
+        vault_context=context,
+        for_date=DAY,
+        session_id=session.session_id,
+        write_guard=_allowing_guard(),
+    )
+
+    frontmatter, body = _read_result(root, result.path)
+    admitted_content = next(
+        item["admitted_content"]
+        for item in frontmatter["source_occurrences"]
+        if item["kind"] == "transcript"
+    )
+    assert json.loads(admitted_content) == [exact_owner_message]
+    assert exact_owner_message in body
+    assert "What follows from that?" not in admitted_content
+
+
+def test_malformed_framed_transcript_blocks_without_normalizing_semantics(
+    tmp_path: Path,
+) -> None:
+    root, context, _session_id, _capture = _seed_inputs(tmp_path)
+    transcript = next((root / ".chats" / "reflection").glob("*.md"))
+    text = transcript.read_text(encoding="utf-8").replace(
+        "session_id: session-abc",
+        "session_id: session-abc\nrole_message_format: blockquote-v1",
+    ).replace(
+        "**Owner:** I connected several loose ends.",
+        "**Owner:**\n> First paragraph\n\n> unframed blank was removed",
+    )
+    transcript.write_text(text, encoding="utf-8")
+
+    with pytest.raises(
+        UnresolvableJournalCitationError, match="unframed blank line"
+    ):
+        draft_journal_entry(
+            vault_context=context,
+            for_date=DAY,
+            session_id="session-abc",
+            write_guard=_allowing_guard(),
+        )
+
+    assert not list(root.glob("**/drafts/journal/*.md"))
+
+
+def test_legacy_closed_transcript_excludes_session_metadata(tmp_path: Path) -> None:
+    root, context, session_id, _capture = _seed_inputs(tmp_path)
+    transcript = next((root / ".chats" / "reflection").glob("*.md"))
+    transcript.write_text(
+        transcript.read_text(encoding="utf-8")
+        + "\n---\n*Session closed. Total: complete.*\n",
+        encoding="utf-8",
+    )
+
+    result = draft_journal_entry(
+        vault_context=context,
+        for_date=DAY,
+        session_id=session_id,
+        write_guard=_allowing_guard(),
+    )
+
+    frontmatter, body = _read_result(root, result.path)
+    admitted_content = next(
+        item["admitted_content"]
+        for item in frontmatter["source_occurrences"]
+        if item["kind"] == "transcript"
+    )
+    assert json.loads(admitted_content) == ["I connected several loose ends."]
+    assert "Session closed" not in body
 
 
 def test_empty_owner_marker_does_not_borrow_following_agent_text(

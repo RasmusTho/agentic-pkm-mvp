@@ -15,6 +15,7 @@ from scripts.yaml_roundtrip import load_frontmatter
 
 
 CHAT_SESSION_PERSIST_ACTION = "chat_session.persist"
+ROLE_MESSAGE_FORMAT_BLOCKQUOTE_V1 = "blockquote-v1"
 
 
 @dataclass(frozen=True)
@@ -62,6 +63,7 @@ class SessionLogWriter:
             f"note_uuid: {note_uuid}\n"
             f"date: {ts_frontmatter}\n"
             f"session_id: {session_id}\n"
+            f"role_message_format: {ROLE_MESSAGE_FORMAT_BLOCKQUOTE_V1}\n"
             "---\n\n"
             f"## Session: {label_slug}\n\n"
         )
@@ -94,13 +96,19 @@ class SessionLogWriter:
         labels = {"agent": "Agent", "owner": "Owner"}
         if normalized_role not in labels:
             raise ValueError("chat message role must be 'agent' or 'owner'")
-        normalized_content = content.strip()
+        normalized_content = (
+            content.strip().replace("\r\n", "\n").replace("\r", "\n")
+        )
         if not normalized_content:
             raise ValueError("chat message content must not be empty")
+        quoted_content = "\n".join(
+            f"> {line}" if line else ">"
+            for line in normalized_content.split("\n")
+        )
         DEFAULT_WRITE_GUARD.assert_writes_allowed(CHAT_SESSION_PERSIST_ACTION)
         append_note_relative(
             _session_log_relative_path(session),
-            f"**{labels[normalized_role]}:** {normalized_content}\n\n",
+            f"**{labels[normalized_role]}:**\n{quoted_content}\n\n",
             vault_root=self._vault_root,
         )
 

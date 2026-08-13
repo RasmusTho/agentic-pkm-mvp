@@ -6,7 +6,11 @@ import json
 
 import pytest
 
-from app.chat.session_log import SessionLogWriter, load_chat_sessions_for_note
+from app.chat.session_log import (
+    ROLE_MESSAGE_FORMAT_BLOCKQUOTE_V1,
+    SessionLogWriter,
+    load_chat_sessions_for_note,
+)
 from app.chat.session_store import SessionStore
 from app.vault.manager import VaultContext
 from app.write_guard import DEFAULT_WRITE_GUARD, WritesBlockedError
@@ -56,6 +60,7 @@ def test_frontmatter_fields_present(tmp_path: Path) -> None:
     assert "note_uuid: " in text
     assert "date: 2026-04-24T07:30" in text
     assert "session_id: session-uuid" in text
+    assert f"role_message_format: {ROLE_MESSAGE_FORMAT_BLOCKQUOTE_V1}" in text
 
 
 def test_type_field_is_chat_session_only(tmp_path: Path) -> None:
@@ -79,6 +84,23 @@ def test_append_does_not_rewrite_prior_content(tmp_path: Path) -> None:
     assert baseline in updated
     assert "**User:** Can you move the rationale?" in updated
     assert "**Change:** Moved rationale to dedicated section" in updated
+
+
+def test_append_message_frames_multiline_role_shaped_content(tmp_path: Path) -> None:
+    writer = _writer(tmp_path)
+    session = writer.open_session(_note(tmp_path), "reflection")
+    content = "First line\n**Agent:** literal owner text\n\nFinal paragraph"
+
+    writer.append_message(session, "owner", content)
+
+    text = session.log_path.read_text(encoding="utf-8")
+    assert (
+        "**Owner:**\n"
+        "> First line\n"
+        "> **Agent:** literal owner text\n"
+        ">\n"
+        "> Final paragraph\n\n"
+    ) in text
 
 
 def test_close_session_appends_closure_line(tmp_path: Path) -> None:
