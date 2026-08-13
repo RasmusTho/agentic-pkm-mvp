@@ -228,7 +228,9 @@ prod-ui:
 prod-ui-doctor:
 	@bash scripts/prod/prod_ui_doctor.sh
 
-prod-up: prepare-instance-ownership
+prod-up:
+	@bash -c 'source scripts/lib/heimdal_cold_volume_preflight.sh; heimdal_cold_volume_preflight prod "$(CURDIR)"'
+	@$(MAKE) --no-print-directory prepare-instance-ownership
 	@$(COMPOSE_PROD) up -d $(COMPOSE_UP_BUILD)
 
 prod-down:
