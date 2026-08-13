@@ -638,6 +638,7 @@ def test_invalid_legacy_source_sets_block_redraft(
 @pytest.mark.parametrize(
     "bad_occurrences",
     (
+        None,
         "not-a-list",
         ["not-a-mapping"],
         [{"kind": "unknown", "external_id": "session:session-abc", "occurrence": 1}],
@@ -673,6 +674,7 @@ def test_malformed_typed_source_occurrences_block_redraft(
     frontmatter, body = _read_result(root, first.path)
     frontmatter["source_occurrences"] = bad_occurrences
     draft_path.write_text(dump_frontmatter(frontmatter, body), encoding="utf-8")
+    before_redraft = draft_path.read_text(encoding="utf-8")
 
     with pytest.raises(
         UnresolvableJournalCitationError, match="stored (journal|transcript) source"
@@ -683,6 +685,8 @@ def test_malformed_typed_source_occurrences_block_redraft(
             session_id=session_id,
             write_guard=_allowing_guard(),
         )
+
+    assert draft_path.read_text(encoding="utf-8") == before_redraft
 
 
 def test_typed_source_occurrences_require_transcript_lineage(tmp_path: Path) -> None:
@@ -932,10 +936,18 @@ def test_stale_day_context_bundle_blocks_before_cognition(tmp_path: Path) -> Non
     assert not list(root.glob("**/drafts/journal/*.md"))
 
 
-def test_transcript_digest_covers_exact_raw_crlf_bytes(tmp_path: Path) -> None:
+def test_multi_turn_transcript_digest_covers_exact_raw_crlf_bytes(
+    tmp_path: Path,
+) -> None:
     root, context, session_id, _capture = _seed_inputs(tmp_path)
     transcript = next((root / ".chats" / "reflection").glob("*.md"))
-    crlf_raw = transcript.read_bytes().replace(b"\n", b"\r\n")
+    multi_turn_text = transcript.read_text(encoding="utf-8").replace(
+        "**Owner:** I connected several loose ends.\n",
+        "**Owner:** I connected several loose ends.\n\n"
+        "**Agent:** What else mattered?\n\n"
+        "**Owner:** I protected time for a second reflection.\n",
+    )
+    crlf_raw = multi_turn_text.encode("utf-8").replace(b"\n", b"\r\n")
     transcript.write_bytes(crlf_raw)
 
     result = draft_journal_entry(
@@ -955,6 +967,12 @@ def test_transcript_digest_covers_exact_raw_crlf_bytes(tmp_path: Path) -> None:
     normalized_digest = hashlib.sha256(crlf_raw.replace(b"\r\n", b"\n")).hexdigest()
     assert raw_digest != normalized_digest
     assert transcript_version["content_sha256"] == raw_digest
+    assert "I connected several loose ends." in transcript_version["admitted_content"]
+    assert (
+        "I protected time for a second reflection."
+        in transcript_version["admitted_content"]
+    )
+    assert "I protected time for a second reflection." in body
     assert raw_digest in body
 
 

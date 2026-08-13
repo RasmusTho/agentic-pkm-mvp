@@ -66,6 +66,7 @@ DEFAULT_STALENESS_DAYS = 14
 
 _PROCESS_LOCKS_GUARD = threading.Lock()
 _PROCESS_LOCKS: dict[str, threading.RLock] = {}
+_MISSING_SOURCE_OCCURRENCES = object()
 
 
 class UnresolvableJournalCitationError(ValueError):
@@ -209,7 +210,9 @@ def draft_journal_entry(
         previous_session_ids = (
             _session_ids(
                 existing_frontmatter.get("sources"),
-                existing_frontmatter.get("source_occurrences"),
+                existing_frontmatter.get(
+                    "source_occurrences", _MISSING_SOURCE_OCCURRENCES
+                ),
                 vault_root=vault_root,
             )
             if existing_frontmatter
@@ -578,7 +581,7 @@ def _session_ids(
     *,
     vault_root: Path,
 ) -> tuple[str, ...]:
-    if raw_source_occurrences is not None:
+    if raw_source_occurrences is not _MISSING_SOURCE_OCCURRENCES:
         if not isinstance(raw_source_occurrences, list):
             raise UnresolvableJournalCitationError(
                 "stored journal source occurrences must be a list"
@@ -739,10 +742,13 @@ def _resolve_session(vault_root: Path, session_id: str) -> _ResolvedSession:
 
 
 def _owner_turns(body: str) -> tuple[str, ...]:
+    normalized_body = body.replace("\r\n", "\n").replace("\r", "\n")
     return tuple(
         match.group(1).strip()
         for match in re.finditer(
-            r"^\*\*Owner:\*\*\s*(.+?)(?=\n\n|\Z)", body, flags=re.MULTILINE | re.DOTALL
+            r"^\*\*Owner:\*\*\s*(.+?)(?=\n\n|\Z)",
+            normalized_body,
+            flags=re.MULTILINE | re.DOTALL,
         )
         if match.group(1).strip()
     )
