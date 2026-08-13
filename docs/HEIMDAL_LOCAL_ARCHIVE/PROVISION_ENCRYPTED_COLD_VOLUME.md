@@ -38,11 +38,12 @@ durably records `provisioning-failed` with the bundle inode and SHA-256 of its b
 `Info.plist`; that deliberately named residual is safe to replay but is never startup-ready. The
 first successful attach validates the generated APFS UUID and durably advances through
 `attached-verified` to `bound-active`; startup and ordinary mounting accept only the final state. It
-permits only fixed
-`hdiutil create`, `attach`, `info`, `isencrypted`, and `detach` forms plus read-only
-`diskutil info`; all machine output is bounded and parsed as typed property lists. Shell commands,
-raw-device sources, overwrites, disk erasure, partition changes, and parent-volume targets are not
-representable.
+permits only fixed `hdiutil create`, `attach`, `info`, and `isencrypted` forms plus read-only
+`diskutil info`; all machine output is bounded and parsed as typed property lists. Detach is not
+available through the generic command adapter. A private compensation capability, issued only from
+one successful attach response, may detach exactly that response's device. Shell commands,
+caller-selected detach devices, raw-device sources, overwrites, disk erasure, partition changes,
+and parent-volume targets are not representable.
 
 The configured sparsebundle parent must be the exact root reported by `diskutil` for an external
 volume, not a child directory or symlink. The capacity is an exact positive multiple of 512 bytes,
@@ -54,7 +55,7 @@ a child process that changes directory directly through the still-open, revalida
 descriptor before executing the fixed command. That child hook is restricted to the short-lived,
 single-threaded provisioning CLI; threaded or imported runtime use refuses. The descriptor and its
 device/inode authority remain live through creation, descriptor-relative encryption inspection and
-attach, and the post-attach identity check. A successful attach response
+attach, and the post-attach parent UUID, bundle inode, and image-metadata fingerprint recheck. A successful attach response
 establishes the newly attached device identity before rediscovery, so later validation failure
 compensates only that invocation's mount. No failure path automatically deletes a sparsebundle path:
 the residual binding is preserved for replay or explicit operator recovery, and cleanup never
@@ -70,9 +71,11 @@ variable, metadata field, log field, or receipt field.
 
 Production startup and deployment share `scripts/lib/heimdal_cold_volume_preflight.sh`. That gate
 only validates an already mounted archive and runs before generic startup or deploy mutation. It
-never creates or attaches an image. The deploy action is gated, while rollback remains reachable
-when the archive is unavailable so the previous-good service can be restored. HAR-04 remains
-responsible for any archive write, verified copy, representation activation, or hot retirement.
+never creates or attaches an image. The direct full-system prod launcher, Midgård Companion UI
+(including its warm-start path), `make prod-up`, the prod wrapper, and the deploy action all invoke
+the same gate. Rollback remains reachable when the archive is unavailable so the previous-good
+service can be restored. HAR-04 remains responsible for any archive write, verified copy,
+representation activation, or hot retirement.
 
 ## Non-destructive operator runbook
 
@@ -108,7 +111,8 @@ responsible for any archive write, verified copy, representation activation, or 
    is detached by that attempt; a pre-existing mount is preserved for diagnosis. The provisioner
    never auto-deletes a sparsebundle. A normal post-create failure remains durably
    `provisioning-failed` with its exact parent/bundle/image binding and replay validates that binding
-   before mounting. If even the residual metadata write fails, the created bundle is preserved and
+   while unmounted, then requires a fresh attach from that bundle; it never adopts an attachment
+   found before replay. If even the residual metadata write fails, the created bundle is preserved and
    `planned-unbound` replay refuses its presence for explicit operator recovery. An
    `attached-verified` replay validates the already-bound UUID and may advance to `bound-active`
    without recreating anything. UUID drift or any unprovable parent UUID, bundle inode/fingerprint,

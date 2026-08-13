@@ -137,3 +137,57 @@ fi
     )
 
     assert result.stdout.strip().splitlines()[-1] == "SKIPPED"
+
+
+def test_prod_runtime_refuses_archive_before_warm_skip(tmp_path: Path) -> None:
+    """The prod UI gate runs even when the runtime already appears healthy."""
+    harness = r"""
+set -euo pipefail
+FAKE_ROOT="$1"
+
+mkdir -p "$FAKE_ROOT/scripts/lib" "$FAKE_ROOT/scripts"
+cat > "$FAKE_ROOT/scripts/lib/heimdal_cold_volume_preflight.sh" <<'EOS'
+heimdal_cold_volume_preflight() {
+  touch "$FAKE_ROOT/.archive_gate_ran"
+  return 78
+}
+EOS
+cat > "$FAKE_ROOT/scripts/start_full_system.sh" <<'EOS'
+#!/usr/bin/env bash
+touch "$FAKE_ROOT/.full_system_ran"
+EOS
+chmod +x "$FAKE_ROOT/scripts/start_full_system.sh"
+
+source "$LIB"
+cui_repo_root() { printf '%s' "$FAKE_ROOT"; }
+cui_api_healthy_now() { touch "$FAKE_ROOT/.health_probe_ran"; return 0; }
+export FAKE_ROOT
+export CUI_API_PORT=18000
+export CUI_CHANNEL=prod
+export CUI_COMPOSE_PROJECT=pkm-prod
+export CUI_COMPOSE_FILES=docker-compose.yaml
+export CUI_FORCE_RECREATE=0
+
+set +e
+cui_start_runtime >/dev/null 2>&1
+rc=$?
+set -e
+printf 'RC=%s GATE=%s HEALTH=%s START=%s\n' \
+  "$rc" \
+  "$([ -f "$FAKE_ROOT/.archive_gate_ran" ] && printf yes || printf no)" \
+  "$([ -f "$FAKE_ROOT/.health_probe_ran" ] && printf yes || printf no)" \
+  "$([ -f "$FAKE_ROOT/.full_system_ran" ] && printf yes || printf no)"
+"""
+
+    env = dict(os.environ)
+    env["LIB"] = str(LIB)
+    result = subprocess.run(
+        ["bash", "-c", harness, "harness", str(tmp_path)],
+        cwd=REPO_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+    assert result.stdout.strip() == "RC=78 GATE=yes HEALTH=no START=no"

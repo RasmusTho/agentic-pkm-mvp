@@ -742,6 +742,21 @@ def test_command_adapter_is_allowlisted_bounded_and_redacted(tmp_path: Path) -> 
     with pytest.raises(volume.ArchiveVolumeRefusedError):
         volume.validate_command(volume.create_command(metadata), metadata)
 
+    detach_executed = False
+
+    def detach_executor(*_args: object, **_kwargs: object):
+        nonlocal detach_executed
+        detach_executed = True
+        raise AssertionError("generic command adapter must not execute detach")
+
+    with pytest.raises(volume.ArchiveVolumeRefusedError):
+        volume.run_command(
+            (volume.HDIUTIL, "detach", _DEVICE),
+            metadata,
+            executor=detach_executor,
+        )
+    assert detach_executed is False
+
     signature = inspect.signature(volume.run_command)
     assert "shell" not in signature.parameters
     assert "timeout_seconds" in signature.parameters
@@ -949,6 +964,83 @@ def test_first_identity_persist_failure_preserves_created_image(tmp_path: Path) 
     assert volume.load_archive_metadata(metadata_path) == metadata
 
 
+def test_provisioning_failed_replay_refuses_preexisting_attachment(
+    tmp_path: Path,
+) -> None:
+    planned = _planned_metadata(tmp_path)
+    _materialize_ready_fs(planned)
+    residual = replace(planned, state=volume.PROVISIONING_FAILED)
+    metadata_path = tmp_path / "archive-metadata.json"
+    volume.write_archive_metadata(metadata_path, residual)
+    runner = FakeRunner(residual, attached=True)
+
+    with pytest.raises(volume.ArchiveVolumeRefusedError):
+        volume.provision_archive_volume(
+            residual,
+            credential=_PASSPHRASE,
+            runner=runner,
+            metadata_path=metadata_path,
+        )
+
+    assert not any(argv[:2] == (volume.HDIUTIL, "attach") for argv, _ in runner.calls)
+    assert not any(argv[:2] == (volume.HDIUTIL, "detach") for argv, _ in runner.calls)
+    assert volume.load_archive_metadata(metadata_path) == residual
+
+
+def test_provisioning_failed_replay_requires_fresh_attach(tmp_path: Path) -> None:
+    planned = _planned_metadata(tmp_path)
+    _materialize_ready_fs(planned)
+    residual = replace(planned, state=volume.PROVISIONING_FAILED)
+    metadata_path = tmp_path / "archive-metadata.json"
+    volume.write_archive_metadata(metadata_path, residual)
+    runner = FakeRunner(residual, attached=False)
+
+    result = volume.provision_archive_volume(
+        residual,
+        credential=_PASSPHRASE,
+        runner=runner,
+        metadata_path=metadata_path,
+    )
+
+    assert result.ready is True
+    assert sum(argv[:2] == (volume.HDIUTIL, "attach") for argv, _ in runner.calls) == 1
+    assert volume.load_archive_metadata(metadata_path).state == volume.BOUND_ACTIVE
+
+
+def test_provisioning_rechecks_image_fingerprint_after_attach(tmp_path: Path) -> None:
+    planned = _planned_metadata(tmp_path)
+    _materialize_ready_fs(planned)
+    residual = replace(planned, state=volume.PROVISIONING_FAILED)
+    metadata_path = tmp_path / "archive-metadata.json"
+    volume.write_archive_metadata(metadata_path, residual)
+
+    class FingerprintSwapRunner(FakeRunner):
+        def __call__(
+            self,
+            argv: tuple[str, ...],
+            stdin: bytes | None = None,
+            cwd_fd: int | None = None,
+        ) -> volume.CommandResult:
+            result = super().__call__(argv, stdin, cwd_fd)
+            if argv[:2] == (volume.HDIUTIL, "attach"):
+                (residual.bundle_path / "Info.plist").write_bytes(
+                    _plist({"fixture-image-id": "post-attach-replacement"})
+                )
+            return result
+
+    runner = FingerprintSwapRunner(residual, attached=False)
+    with pytest.raises(volume.ArchiveVolumeRefusedError):
+        volume.provision_archive_volume(
+            residual,
+            credential=_PASSPHRASE,
+            runner=runner,
+            metadata_path=metadata_path,
+        )
+
+    assert (volume.HDIUTIL, "detach", _DEVICE) in [argv for argv, _ in runner.calls]
+    assert volume.load_archive_metadata(metadata_path) == residual
+
+
 def test_attached_identity_replay_promotes_without_regeneration(tmp_path: Path) -> None:
     metadata = _planned_metadata(tmp_path)
     metadata_path = tmp_path / "archive-metadata.json"
@@ -1017,6 +1109,11 @@ def test_attached_replay_refuses_uuid_drift_without_regeneration(tmp_path: Path)
 def test_production_startup_and_deploy_validate_without_provisioning() -> None:
     prod = Path("scripts/prod/start_midgard_stack.sh").read_text(encoding="utf-8")
     deploy = Path("scripts/deploy_channel.sh").read_text(encoding="utf-8")
+    full_start = Path("scripts/start_full_system.sh").read_text(encoding="utf-8")
+    companion = Path("scripts/lib/companion_ui_startup.sh").read_text(
+        encoding="utf-8"
+    )
+    makefile = Path("Makefile").read_text(encoding="utf-8")
     helper = Path("scripts/lib/heimdal_cold_volume_preflight.sh").read_text(encoding="utf-8")
 
     assert "heimdal_cold_volume_preflight prod" in prod
@@ -1028,3 +1125,26 @@ def test_production_startup_and_deploy_validate_without_provisioning() -> None:
         "exec scripts/start_full_system.sh"
     )
     assert deploy.index("heimdal_cold_volume_preflight") < deploy.index("write_pin")
+    assert 'source "scripts/lib/heimdal_cold_volume_preflight.sh"' in full_start
+    assert 'heimdal_cold_volume_preflight "${_pkm_archive_channel}" "$ROOT"' in full_start
+    assert full_start.index(
+        'heimdal_cold_volume_preflight "${_pkm_archive_channel}" "$ROOT"'
+    ) < full_start.index("prepare_instance_ownership_host_state_dir")
+    assert 'source "${root}/scripts/lib/heimdal_cold_volume_preflight.sh"' in companion
+    assert 'heimdal_cold_volume_preflight "${CUI_CHANNEL}" "${root}"' in companion
+    companion_start = companion.split("cui_start_runtime() {", maxsplit=1)[1].split(
+        "\ncui_compose() {", maxsplit=1
+    )[0]
+    assert companion_start.index(
+        'heimdal_cold_volume_preflight "${CUI_CHANNEL}" "${root}"'
+    ) < companion_start.index("cui_api_healthy_now")
+    prod_up = makefile.split("\nprod-up:", maxsplit=1)[1].split(
+        "\nprod-down:", maxsplit=1
+    )[0]
+    assert "heimdal_cold_volume_preflight prod" in prod_up
+    assert prod_up.index("heimdal_cold_volume_preflight prod") < prod_up.index(
+        "prepare-instance-ownership"
+    )
+    assert prod_up.index("heimdal_cold_volume_preflight prod") < prod_up.index(
+        "$(COMPOSE_PROD) up"
+    )

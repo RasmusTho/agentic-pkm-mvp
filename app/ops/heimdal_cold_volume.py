@@ -81,6 +81,7 @@ _PARENT_DISK_KEYS = frozenset(
     {"DeviceIdentifier", "MountPoint", "VolumeUUID", "Internal"}
 )
 _ONE_SHOT_DESCRIPTOR_AUTHORITY = object()
+_DETACH_AUTHORITY_ISSUER = object()
 
 
 class ArchiveVolumeRefusedError(RuntimeError):
@@ -178,6 +179,22 @@ class ArchiveVolumeReady:
 CommandRunner = Callable[..., CommandResult]
 Executor = Callable[..., subprocess.CompletedProcess[bytes]]
 MetadataWriter = Callable[[Path, ArchiveVolumeMetadata], None]
+
+
+@dataclass(frozen=True)
+class _DetachAuthority:
+    """Private proof that one successful attach returned this exact device."""
+
+    device: str
+    issuer: object
+
+    def __post_init__(self) -> None:
+        if (
+            self.issuer is not _DETACH_AUTHORITY_ISSUER
+            or type(self.device) is not str
+            or _DEVICE.fullmatch(self.device) is None
+        ):
+            raise _refused()
 
 
 def _refused() -> ArchiveVolumeRefusedError:
@@ -394,9 +411,6 @@ def validate_command(
     if argv[:4] == (DISKUTIL, "info", "-plist") and len(argv) == 4:
         if _DEVICE.fullmatch(argv[3]) is not None:
             return
-    if argv[:2] == (HDIUTIL, "detach") and len(argv) == 3:
-        if _DEVICE.fullmatch(argv[2]) is not None:
-            return
     raise _refused()
 
 
@@ -446,25 +460,65 @@ def run_command(
     return CommandResult(int(completed.returncode), stdout, stderr, cwd_identity)
 
 
-def _runner(
-    metadata: ArchiveVolumeMetadata,
-    *,
-    descriptor_authority: object | None = None,
-) -> CommandRunner:
-    def selected(
+@dataclass(frozen=True)
+class _DefaultCommandRunner:
+    metadata: ArchiveVolumeMetadata
+    descriptor_authority: object | None
+
+    def __call__(
+        self,
         argv: tuple[str, ...],
         stdin: bytes | None = None,
         cwd_fd: int | None = None,
     ) -> CommandResult:
         return run_command(
             argv,
-            metadata,
+            self.metadata,
             stdin,
             cwd_fd,
-            _descriptor_authority=descriptor_authority,
+            _descriptor_authority=self.descriptor_authority,
         )
 
-    return selected
+    def detach(self, authority: _DetachAuthority) -> CommandResult:
+        return _run_private_detach(authority)
+
+
+def _runner(
+    metadata: ArchiveVolumeMetadata,
+    *,
+    descriptor_authority: object | None = None,
+) -> CommandRunner:
+    return _DefaultCommandRunner(metadata, descriptor_authority)
+
+
+def _run_private_detach(
+    authority: _DetachAuthority,
+    *,
+    executor: Executor = subprocess.run,
+) -> CommandResult:
+    """Execute detach only with the capability created from attach output."""
+    if (
+        not isinstance(authority, _DetachAuthority)
+        or authority.issuer is not _DETACH_AUTHORITY_ISSUER
+        or _DEVICE.fullmatch(authority.device) is None
+    ):
+        raise _refused()
+    argv = (HDIUTIL, "detach", authority.device)
+    try:
+        completed = _run_closed_child(
+            argv,
+            stdin=None,
+            timeout_seconds=COMMAND_TIMEOUT_SECONDS,
+            executor=executor,
+            cwd_fd=None,
+        )
+    except Exception as exc:
+        raise _refused() from exc
+    stdout = bytes(completed.stdout or b"")
+    stderr = bytes(completed.stderr or b"")
+    if len(stdout) > MAX_PLIST_BYTES or len(stderr) > MAX_PLIST_BYTES:
+        raise _refused()
+    return CommandResult(int(completed.returncode), stdout, stderr)
 
 
 def _call(
@@ -592,7 +646,7 @@ def _attached_device(
 def _device_from_attach_response(
     metadata: ArchiveVolumeMetadata,
     raw: bytes,
-) -> str:
+) -> _DetachAuthority:
     """Extract the one newly attached mounted device from typed plist output."""
     payload = _parse_plist(raw)
     entities = payload.get("system-entities")
@@ -617,7 +671,7 @@ def _device_from_attach_response(
             matches.append(device)
     if len(matches) != 1:
         raise _refused()
-    return matches[0]
+    return _DetachAuthority(matches[0], _DETACH_AUTHORITY_ISSUER)
 
 
 def _require_bundle_directory(metadata: ArchiveVolumeMetadata) -> None:
@@ -736,6 +790,22 @@ def _require_external_parent(
     os.close(parent_descriptor)
 
 
+def _revalidate_external_parent(
+    metadata: ArchiveVolumeMetadata,
+    runner: CommandRunner,
+    held_descriptor: int,
+) -> None:
+    """Re-prove the live external root and UUID against the held directory."""
+    live_descriptor = _open_external_parent(metadata, runner)
+    try:
+        if not os.path.samestat(os.fstat(held_descriptor), os.fstat(live_descriptor)):
+            raise _refused()
+    except OSError as exc:
+        raise _refused() from exc
+    finally:
+        os.close(live_descriptor)
+
+
 def _require_encrypted(
     metadata: ArchiveVolumeMetadata,
     runner: CommandRunner,
@@ -813,7 +883,11 @@ def require_archive_volume_ready(
 class _Attachment:
     device: str
     volume_uuid: str
-    attached_here: bool
+    detach_authority: _DetachAuthority | None
+
+    @property
+    def attached_here(self) -> bool:
+        return self.detach_authority is not None
 
 
 def _validate_attached_volume(
@@ -822,11 +896,9 @@ def _validate_attached_volume(
     parent_descriptor: int,
     bundle_identity: tuple[int, int],
 ) -> tuple[str, str]:
-    _require_created_bundle_postcondition(
-        parent_descriptor,
-        metadata,
-        bundle_identity,
-    )
+    _revalidate_external_parent(metadata, runner, parent_descriptor)
+    if _require_durable_bundle_binding(parent_descriptor, metadata) != bundle_identity:
+        raise _refused()
     mount_descriptor = _open_mount_directory(metadata)
     try:
         device = _attached_device(metadata, runner)
@@ -835,11 +907,9 @@ def _validate_attached_volume(
         _require_encrypted(metadata, runner, parent_descriptor)
         volume_uuid = _require_disk_info(metadata, runner, device)
         _revalidate_directory(mount_descriptor, metadata.mountpoint)
-        _require_created_bundle_postcondition(
-            parent_descriptor,
-            metadata,
-            bundle_identity,
-        )
+        _revalidate_external_parent(metadata, runner, parent_descriptor)
+        if _require_durable_bundle_binding(parent_descriptor, metadata) != bundle_identity:
+            raise _refused()
         return device, volume_uuid
     finally:
         os.close(mount_descriptor)
@@ -882,6 +952,7 @@ def _mount_and_validate(
     runner: CommandRunner,
     parent_descriptor: int | None = None,
     bundle_identity: tuple[int, int] | None = None,
+    require_fresh_attach: bool = False,
 ) -> _Attachment:
     owns_parent_descriptor = parent_descriptor is None
     if parent_descriptor is None:
@@ -906,6 +977,8 @@ def _mount_and_validate(
         except ArchiveVolumeRefusedError as exc:
             raise _refused() from exc
         if existing is not None:
+            if require_fresh_attach:
+                raise _refused()
             try:
                 validated_device, volume_uuid = _validate_attached_volume(
                     metadata,
@@ -915,7 +988,7 @@ def _mount_and_validate(
                 )
                 if validated_device != existing:
                     raise _refused()
-                return _Attachment(validated_device, volume_uuid, False)
+                return _Attachment(validated_device, volume_uuid, None)
             except ArchiveVolumeRefusedError as exc:
                 raise _refused() from exc
 
@@ -935,36 +1008,52 @@ def _mount_and_validate(
             # A command failure cannot prove that no attachment was created.
             raise _refused() from exc
         try:
-            device = _device_from_attach_response(metadata, attach_result.stdout)
+            detach_authority = _device_from_attach_response(metadata, attach_result.stdout)
         except ArchiveVolumeRefusedError as exc:
             # A successful attach with no provable device is operator recovery.
             raise _refused() from exc
         try:
-            _require_created_bundle_postcondition(
-                parent_descriptor,
-                metadata,
-                bundle_identity,
-            )
+            _revalidate_external_parent(metadata, runner, parent_descriptor)
+            if _require_durable_bundle_binding(parent_descriptor, metadata) != bundle_identity:
+                raise _refused()
             validated_device, volume_uuid = _validate_attached_volume(
                 metadata,
                 runner,
                 parent_descriptor,
                 bundle_identity,
             )
-            if validated_device != device:
+            if validated_device != detach_authority.device:
                 raise _refused()
-            return _Attachment(validated_device, volume_uuid, True)
+            return _Attachment(validated_device, volume_uuid, detach_authority)
         except ArchiveVolumeRefusedError as exc:
-            _detach_exact(runner, device)
+            _detach_exact(runner, detach_authority)
             raise _refused() from exc
     finally:
         if owns_parent_descriptor:
             os.close(parent_descriptor)
 
 
-def _detach_exact(runner: CommandRunner, device: str) -> bool:
+def _detach_exact(runner: CommandRunner, authority: _DetachAuthority) -> bool:
+    if (
+        not isinstance(authority, _DetachAuthority)
+        or authority.issuer is not _DETACH_AUTHORITY_ISSUER
+    ):
+        return False
     try:
-        _call(runner, (HDIUTIL, "detach", device))
+        if isinstance(runner, _DefaultCommandRunner):
+            result = runner.detach(authority)
+            if (
+                type(result.returncode) is not int
+                or result.returncode != 0
+                or not isinstance(result.stdout, bytes)
+                or not isinstance(result.stderr, bytes)
+                or result.cwd_identity is not None
+                or len(result.stdout) > MAX_PLIST_BYTES
+                or len(result.stderr) > MAX_PLIST_BYTES
+            ):
+                return False
+        else:
+            _call(runner, (HDIUTIL, "detach", authority.device))
     except ArchiveVolumeRefusedError:
         return False
     return True
@@ -1113,7 +1202,12 @@ def provision_archive_volume(
 
     if metadata.state in {PROVISIONING_FAILED, ATTACHED_VERIFIED}:
         _require_bundle_directory(metadata)
-        attachment = _mount_and_validate(metadata, credential=credential, runner=selected)
+        attachment = _mount_and_validate(
+            metadata,
+            credential=credential,
+            runner=selected,
+            require_fresh_attach=metadata.state == PROVISIONING_FAILED,
+        )
         attached = replace(
             metadata,
             state=ATTACHED_VERIFIED,
@@ -1125,8 +1219,8 @@ def provision_archive_volume(
             active = replace(attached, state=BOUND_ACTIVE)
             _persist_transition(metadata_path, attached, active, metadata_writer)
         except ArchiveVolumeRefusedError:
-            if attachment.attached_here:
-                _detach_exact(selected, attachment.device)
+            if attachment.detach_authority is not None:
+                _detach_exact(selected, attachment.detach_authority)
             raise
         return ArchiveVolumeReady()
 
@@ -1172,6 +1266,7 @@ def provision_archive_volume(
                 runner=selected,
                 parent_descriptor=parent_descriptor,
                 bundle_identity=created_identity,
+                require_fresh_attach=True,
             )
         except ArchiveVolumeRefusedError:
             raise
@@ -1184,16 +1279,16 @@ def provision_archive_volume(
         try:
             _persist_transition(metadata_path, residual, attached, metadata_writer)
         except ArchiveVolumeRefusedError:
-            if attachment.attached_here:
-                _detach_exact(selected, attachment.device)
+            if attachment.detach_authority is not None:
+                _detach_exact(selected, attachment.detach_authority)
             raise
 
         active = replace(attached, state=BOUND_ACTIVE)
         try:
             _persist_transition(metadata_path, attached, active, metadata_writer)
         except ArchiveVolumeRefusedError:
-            if attachment.attached_here:
-                _detach_exact(selected, attachment.device)
+            if attachment.detach_authority is not None:
+                _detach_exact(selected, attachment.detach_authority)
             raise
     finally:
         os.close(parent_descriptor)

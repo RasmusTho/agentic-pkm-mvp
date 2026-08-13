@@ -262,6 +262,63 @@ def test_prod_start_wrapper_executes_archive_gate_before_runtime(
         assert "output=redacted" in result.stderr
 
 
+@pytest.mark.parametrize(
+    "entrypoint",
+    [
+        pytest.param("direct-full-start", id="direct-full-start"),
+        pytest.param("make-prod-up", id="make-prod-up"),
+    ],
+)
+def test_direct_prod_entrypoints_refuse_before_host_mutation(
+    tmp_path: Path,
+    entrypoint: str,
+) -> None:
+    """Exercise direct prod paths with a refused fixture gate and fake Docker."""
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    docker_marker = tmp_path / "docker-executed"
+    docker = fake_bin / "docker"
+    docker.write_text(
+        "#!/usr/bin/env bash\n"
+        f"touch {docker_marker!s}\n"
+        "exit 99\n",
+        encoding="utf-8",
+    )
+    docker.chmod(0o755)
+    python = tmp_path / "python-fixture"
+    python.write_text("#!/usr/bin/env bash\nexit 78\n", encoding="utf-8")
+    python.chmod(0o755)
+
+    env = os.environ.copy()
+    env.update(
+        {
+            "PATH": f"{fake_bin}:{env['PATH']}",
+            "PYTHON": str(python),
+            "PKM_ENVIRONMENT": "prod",
+            "COMPOSE_PROJECT_NAME": "pkm-prod",
+            "HEIMDAL_ARCHIVE_METADATA_FILE": str(tmp_path / "archive-metadata.json"),
+        }
+    )
+    command = (
+        ["bash", "scripts/start_full_system.sh"]
+        if entrypoint == "direct-full-start"
+        else ["make", "prod-up"]
+    )
+
+    result = subprocess.run(
+        command,
+        cwd=REPO_ROOT,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode != 0
+    assert docker_marker.exists() is False
+    assert "archive volume preflight failed: output=redacted" in result.stderr
+
+
 def test_test_start_full_uses_tmp_test_runtime_artifact_paths(tmp_path: Path) -> None:
     """make test-start-full must generate a runtime.env file under tmp-test/
     that carries /app/tmp-test/ artifact paths for all six artifact variables,
