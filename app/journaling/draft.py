@@ -743,15 +743,30 @@ def _resolve_session(vault_root: Path, session_id: str) -> _ResolvedSession:
 
 def _owner_turns(body: str) -> tuple[str, ...]:
     normalized_body = body.replace("\r\n", "\n").replace("\r", "\n")
-    return tuple(
-        match.group(1).strip()
-        for match in re.finditer(
-            r"^\*\*Owner:\*\*\s*(.+?)(?=\n\n|\Z)",
+    role_markers = tuple(
+        re.finditer(
+            r"^\*\*(Owner|Agent):\*\*[ \t]*(.*)$",
             normalized_body,
-            flags=re.MULTILINE | re.DOTALL,
+            flags=re.MULTILINE,
         )
-        if match.group(1).strip()
     )
+    turns: list[str] = []
+    for index, marker in enumerate(role_markers):
+        if marker.group(1) != "Owner":
+            continue
+        next_marker_start = (
+            role_markers[index + 1].start()
+            if index + 1 < len(role_markers)
+            else len(normalized_body)
+        )
+        inline_content = marker.group(2).strip()
+        continuation = normalized_body[marker.end() : next_marker_start].strip()
+        content = "\n\n".join(
+            part for part in (inline_content, continuation) if part
+        )
+        if content:
+            turns.append(content)
+    return tuple(turns)
 
 
 def _iter_context_items(bundle: DayContextBundle) -> Iterable[DayContextItem]:

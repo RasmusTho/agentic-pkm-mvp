@@ -976,6 +976,88 @@ def test_multi_turn_transcript_digest_covers_exact_raw_crlf_bytes(
     assert raw_digest in body
 
 
+def test_multi_paragraph_owner_turn_retains_all_owner_text(tmp_path: Path) -> None:
+    root, context, session_id, _capture = _seed_inputs(tmp_path)
+    transcript = next((root / ".chats" / "reflection").glob("*.md"))
+    transcript_text = f"""---
+type: chat-session
+session_id: {session_id}
+---
+
+**Agent:** What mattered today?
+
+**Owner:** The first owner paragraph.
+
+The second owner paragraph has the important qualification.
+
+**Agent:** What follows from that?
+
+**Owner:** A separate final owner turn.
+"""
+    crlf_raw = transcript_text.encode("utf-8").replace(b"\n", b"\r\n")
+    transcript.write_bytes(crlf_raw)
+
+    result = draft_journal_entry(
+        vault_context=context,
+        for_date=DAY,
+        session_id=session_id,
+        write_guard=_allowing_guard(),
+    )
+
+    frontmatter, body = _read_result(root, result.path)
+    admitted_content = next(
+        item["admitted_content"]
+        for item in frontmatter["source_occurrences"]
+        if item["kind"] == "transcript"
+    )
+    assert "The first owner paragraph." in admitted_content
+    assert "The second owner paragraph has the important qualification." in admitted_content
+    assert "A separate final owner turn." in admitted_content
+    assert "What follows from that?" not in admitted_content
+    assert "The second owner paragraph has the important qualification." in body
+    assert hashlib.sha256(crlf_raw).hexdigest() in body
+
+
+def test_empty_owner_marker_does_not_borrow_following_agent_text(
+    tmp_path: Path,
+) -> None:
+    root, context, session_id, _capture = _seed_inputs(tmp_path)
+    first = draft_journal_entry(
+        vault_context=context,
+        for_date=DAY,
+        session_id=session_id,
+        write_guard=_allowing_guard(),
+    )
+    draft_path = root / first.path
+    before_redraft = draft_path.read_bytes()
+    transcript = next((root / ".chats" / "reflection").glob("*.md"))
+    transcript.write_text(
+        f"""---
+type: chat-session
+session_id: {session_id}
+---
+
+**Owner:**
+
+**Agent:** These agent words must never become owner prose.
+""",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        UnresolvableJournalCitationError,
+        match=f"session:{session_id} contains no owner turns",
+    ):
+        draft_journal_entry(
+            vault_context=context,
+            for_date=DAY,
+            session_id=session_id,
+            write_guard=_allowing_guard(),
+        )
+
+    assert draft_path.read_bytes() == before_redraft
+
+
 def test_empty_transcript_blocks_before_cognition_and_staging(tmp_path: Path) -> None:
     root, context, session_id, _capture = _seed_inputs(tmp_path)
     transcript = next((root / ".chats" / "reflection").glob("*.md"))
