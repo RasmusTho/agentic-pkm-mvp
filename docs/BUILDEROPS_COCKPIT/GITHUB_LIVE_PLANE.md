@@ -69,11 +69,13 @@ committed things plus one host-supplied value:
    `ffmpeg`/`espeak-ng` (a plain Debian trixie/main package; no third-party apt source). Before
    #4484 it was absent, so `_run_gh` raised `gh CLI not found` on the first call in every channel
    regardless of configuration.
-2. **The repo slug is committed for the dev channel.** `docker-compose.dev.yml :: api` sets
-   `COCKPIT_GITHUB_REPO=RasmusTho/agentic-pkm-mvp`. Dev is the channel this command names (18001).
-3. **`test` and `prod` deliberately leave it unset.** They stay byte-identical to the pre-#4484
-   refusal and render *not enabled* rather than broken (EXT-8, #4481). Turning another channel onto
-   the plane is a promotion-lane act.
+2. **The repo slug is committed for dev and prod.** `docker-compose.dev.yml :: api` and
+   `docker-compose.prod.yml :: api` set
+   `COCKPIT_GITHUB_REPO=RasmusTho/agentic-pkm-mvp`. Dev is the channel the command above names
+   (18001); prod's committed identity is consumed by the separately promoted devUI path.
+3. **`test` deliberately leaves it unset.** It renders *not enabled* rather than broken (EXT-8,
+   #4481). A committed repository identity is non-secret configuration; it does not prove that a
+   credential is present or that the corresponding revision is running on a host.
 4. **The token is host-supplied.** `GITHUB_TOKEN` reaches the container on the `api` consumer's
    already-declared host-secret env layer (`HOST_SECRET_RUNTIME_ENV_FILE_API` in
    `docker-compose.yaml :: api`, #4422) — the same layer that delivers `HEIMDAL_RAW_STORE_KEY`. No
@@ -82,6 +84,12 @@ committed things plus one host-supplied value:
 
 With the slug set and the token absent, the plane is *configured but failing* — an honest outage,
 not an opt-out. With the slug unset, nobody asked for it and nothing is claimed either way.
+
+The committed repository binding is not deployment or credential-presence evidence. For prod,
+`github.token` and the coupled `heimdal.raw-store-key` must both be present through the declared
+`heimdal-api-ingress` host-secret consumer before the governed layer can support the read. The
+value-free prerequisite command is documented in `docs/OPERATIONS.md`; it neither provisions nor
+prints either credential.
 
 ## Why This Matters
 

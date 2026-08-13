@@ -393,10 +393,11 @@ Companion docs:
   `gh` CLI, which the runtime image installs (`Dockerfile`, runtime-stage apt layer) alongside
   `ffmpeg`/`espeak-ng`. Before #4484 the binary was absent, so the plane refused on every channel
   regardless of configuration.
-- The plane is opt-in per channel. `docker-compose.dev.yml :: api` binds
-  `COCKPIT_GITHUB_REPO=RasmusTho/agentic-pkm-mvp`; `test` and `prod` deliberately leave it unset and
-  render the source as *not enabled* rather than broken. Turning another channel on is a
-  promotion-lane act, not a config default.
+- The plane is opt-in per channel. `docker-compose.dev.yml :: api` and
+  `docker-compose.prod.yml :: api` bind
+  `COCKPIT_GITHUB_REPO=RasmusTho/agentic-pkm-mvp`; `test` deliberately leaves it unset and renders
+  the source as *not enabled* rather than broken. The prod entry is committed configuration only;
+  it is not evidence that a particular revision is deployed.
 - The token is host-supplied, never committed. Provision it as the **Keychain item** for the declared
   optional identifier `github.token` under consumer `heimdal-api-ingress` (#4489) — do not hand-write
   an env file: on a governed `scripts/deploy_channel.sh` run the layer's file is bootstrap-owned and
@@ -414,6 +415,14 @@ Companion docs:
 - Note the coupling: this layer is only materialized when `heimdal.raw-store-key` also resolves, so
   provisioning the GitHub token alone is not sufficient on the governed deploy path. Identifier and
   account derivation: `docs/LOCAL_SECRET_PROVISIONING/README.md :: Declared identifier contract`.
+- On Demerzel only, after the corresponding commit is available, run
+  `python3 scripts/check_prod_devui_focus_prerequisites.py`. Its stdout is one JSON object containing
+  only the non-secret repository identity plus separate presence booleans for `github.token` and
+  `heimdal.raw-store-key`; exit 0 requires the exact repository and both values. Do not run it on a
+  laptop or copy ambient credential material into a receipt. The command is read-only and does not
+  provision, install, rotate, deploy, restart, or validate a credential by echoing it.
+- The committed repository binding is not deployment or credential-presence evidence. Only a
+  separately governed Demerzel preflight and deployment verification can establish those facts.
 - Check it with `curl -s localhost:18001/api/cockpit/registry | jq '.sources[] |
   select(.name=="github-live")'`. Full path and rationale:
   `docs/BUILDEROPS_COCKPIT/GITHUB_LIVE_PLANE.md :: What makes that command answer fresh (#4484)`.
