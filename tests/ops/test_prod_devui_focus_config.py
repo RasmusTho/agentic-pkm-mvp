@@ -67,7 +67,7 @@ def test_focus_credential_preflight_failures_are_value_account_and_path_free(
     failure: str,
 ) -> None:
     forbidden = (
-        "ghp_SUPER_SECRET_SENTINEL",
+        "credential-value-sentinel",
         "prod:heimdal-api-ingress:secret-account-sentinel",
         "/Users/operator/private/keychain-sentinel",
         "config/secrets/private-sentinel.json",
