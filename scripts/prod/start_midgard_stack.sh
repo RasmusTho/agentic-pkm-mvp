@@ -13,6 +13,7 @@ fi
 
 source "scripts/lib/load_env_defaults.sh"
 load_env_defaults_file "$env_file"
+source "scripts/lib/heimdal_cold_volume_preflight.sh"
 
 if [ -z "${VAULT_ROOT:-}" ]; then
   echo "ERROR: ${env_file} must set VAULT_ROOT to the Midgård vault." >&2
@@ -31,4 +32,5 @@ if [ ! -d "$VAULT_ROOT" ]; then
 fi
 
 export VAULT_ROOT
+heimdal_cold_volume_preflight prod "$ROOT"
 exec scripts/start_full_system.sh

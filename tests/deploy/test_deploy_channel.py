@@ -128,6 +128,7 @@ def _deploy_harness(tmp_path: Path) -> tuple[Path, dict[str, str], str]:
         "scripts/companion_ui_postdeploy_smoke.sh",
         "scripts/dev_test_environment_clobber_preflight.py",
         "scripts/lib/deploy_channel_compose.sh",
+        "scripts/lib/heimdal_cold_volume_preflight.sh",
         "scripts/lib/instance_state_deployment.sh",
         "scripts/lib/instance_ownership_host_state.sh",
         "scripts/lib/signboard_root.sh",
@@ -136,6 +137,23 @@ def _deploy_harness(tmp_path: Path) -> tuple[Path, dict[str, str], str]:
         destination = root / relative
         shutil.copy2(REPO_ROOT / relative, destination)
     _install_writer_inventory_harness(root)
+    # The host-volume mechanism itself is covered with a fully injected
+    # command runner in tests/heimdal.  This channel harness owns deploy
+    # ordering and rollback behavior, so provide the new required producer
+    # input as a deterministic, value-free preflight boundary.
+    (root / "scripts/lib/heimdal_cold_volume_preflight.sh").write_text(
+        """heimdal_cold_volume_preflight() {
+  printf 'archive-preflight %s\\n' "${1:-missing}" >> "${FAKE_DEPLOY_EVENT_LOG:?}"
+  local rc="${FAKE_ARCHIVE_PREFLIGHT_RC:-0}"
+  if [ "${rc}" -ne 0 ]; then
+    echo 'archive volume preflight failed: output=redacted' >&2
+    return "${rc}"
+  fi
+  return 0
+}
+""",
+        encoding="utf-8",
+    )
     (root / "app/instance/runtime.py").write_text(
         '"""Fixture marker for a target with the instance-state preflight."""\n',
         encoding="utf-8",

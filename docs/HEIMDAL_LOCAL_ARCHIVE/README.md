@@ -1,4 +1,4 @@
-State: Specification directory (design + bounded slices). Advisory until child issues are delivered. Defines a local, encrypted cold tier for Heimdal raw audio; it does not change the existing retention bound or claim cloud/off-site durability.
+State: Specification directory (design + bounded slices). HAR-01 through HAR-03 are delivered; archive copy/receipt, restore/expiry, and parent acceptance remain future work. Defines a local, encrypted cold tier for Heimdal raw audio; it does not change the existing retention bound or claim cloud/off-site durability.
 Doc role: Capability specification (feature-breakdown lane)
 Authority: Owns the proposed local raw-audio archive design. Subordinate to `docs/HEIMDAL/OWNER_DECISIONS.md :: R-RETENTION`, `docs/HEIMDAL/FABLE_COMPANION.md` for the raw-store boundary, and `docs/EVENTS.md` for current raw-store behavior.
 Owner: Architecture / product
@@ -43,7 +43,7 @@ BuilderOps receives neither recordings nor product data.
 | --- | --- | --- | --- | --- |
 | 1 | [Measure capture volume](MEASURE_CAPTURE_VOLUME.md) | HAR-01 | — | aggregate daily bytes/counts and capacity forecast, no content telemetry |
 | 2 | [Define location-aware raw-store migration](DEFINE_LOCATION_AWARE_RAW_STORE.md) | HAR-02 | HAR-01 | preserves `raw_ref`, read gate, provenance and all-copy deletion during relocation |
-| 3 | [Provision encrypted cold volume](PROVISION_ENCRYPTED_COLD_VOLUME.md) | HAR-03 | HSP-02, HAR-02 | sparsebundle lifecycle with no disk reformat |
+| 3 | [Provision encrypted cold volume](PROVISION_ENCRYPTED_COLD_VOLUME.md) | HAR-03 | HSP-02, HAR-02 | delivered sparsebundle lifecycle with no disk reformat |
 | 4 | [Archive with verified receipts](ARCHIVE_WITH_VERIFIED_RECEIPTS.md) | HAR-04 | HAR-03 | governed relocation, verified manifest and health |
 | 5 | [Prove restore and expiry](PROVE_RESTORE_AND_EXPIRY.md) | HAR-05 | HAR-04 | restore drill plus hot/cold deletion at retention/revocation |
 

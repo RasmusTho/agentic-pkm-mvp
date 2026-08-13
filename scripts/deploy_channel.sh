@@ -4,6 +4,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")/.." && pwd)"
 source "${ROOT}/scripts/lib/deploy_channel_compose.sh"
 source "${ROOT}/scripts/lib/instance_state_deployment.sh"
+source "${ROOT}/scripts/lib/heimdal_cold_volume_preflight.sh"
 PYTHON="${PYTHON:-}"
 if [ -z "${PYTHON}" ]; then
   if [ -x "${ROOT}/.venv/bin/python" ]; then
@@ -1074,6 +1075,11 @@ fi
 # every pin, marker, volume, Docker, or writer-stop operation. A required key
 # failure must not turn safe migration refusal into avoidable runtime downtime.
 heimdal_raw_migration_secret_preflight || exit $?
+
+# Read-only and before every pin, marker, volume, Docker, or writer-stop
+# mutation. Production deploy validates the existing volume; it never creates,
+# attaches, reformats, erases, partitions, or writes archive data here.
+heimdal_cold_volume_preflight "${channel}" "${ROOT}" || exit $?
 
 if ! scripts/companion_ui_postdeploy_smoke.sh preflight; then
   echo "companion UI preflight failed before channel mutation" >&2

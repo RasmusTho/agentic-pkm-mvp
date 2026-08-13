@@ -19,6 +19,8 @@ import re
 import subprocess
 from pathlib import Path
 
+import pytest
+
 from app.release_channels.prod_ref_fitness import (
     check_prod_head_matches_promotion_ref_and_clean,
 )
@@ -187,7 +189,77 @@ def test_prod_start_full_has_midgard_preflight() -> None:
     assert '.env.prod.local' in script
     assert 'VAULT_ROOT' in script
     assert 'midg(å|a)rd' in script
+    assert 'source "scripts/lib/heimdal_cold_volume_preflight.sh"' in script
+    assert 'heimdal_cold_volume_preflight prod "$ROOT"' in script
+    assert script.index('heimdal_cold_volume_preflight prod "$ROOT"') < script.index(
+        'exec scripts/start_full_system.sh'
+    )
     assert 'exec scripts/start_full_system.sh' in script
+
+
+@pytest.mark.parametrize(
+    ("preflight_rc", "starts_runtime"),
+    [
+        pytest.param(0, True, id="ready"),
+        pytest.param(78, False, id="archive-refused"),
+    ],
+)
+def test_prod_start_wrapper_executes_archive_gate_before_runtime(
+    tmp_path: Path,
+    preflight_rc: int,
+    starts_runtime: bool,
+) -> None:
+    """Exercise the production call site without touching host disk state."""
+    root = tmp_path / "repo"
+    for relative in (
+        "scripts/prod/start_midgard_stack.sh",
+        "scripts/lib/load_env_defaults.sh",
+        "scripts/lib/heimdal_cold_volume_preflight.sh",
+    ):
+        destination = root / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_text(
+            (REPO_ROOT / relative).read_text(encoding="utf-8"), encoding="utf-8"
+        )
+
+    vault = tmp_path / "fixture-midgard"
+    vault.mkdir()
+    metadata = tmp_path / "archive-metadata.json"
+    (root / ".env.prod.local").write_text(
+        f"VAULT_ROOT={vault}\nHEIMDAL_ARCHIVE_METADATA_FILE={metadata}\n",
+        encoding="utf-8",
+    )
+    runtime_marker = tmp_path / "runtime-started"
+    (root / "scripts/start_full_system.sh").write_text(
+        f"#!/usr/bin/env bash\ntouch {runtime_marker!s}\n", encoding="utf-8"
+    )
+    (root / "scripts/start_full_system.sh").chmod(0o755)
+    python = tmp_path / "python-fixture"
+    python.write_text(
+        "#!/usr/bin/env bash\n"
+        "test \"${1:-}\" = -m\n"
+        "test \"${2:-}\" = app.ops.heimdal_cold_volume\n"
+        "test \"${3:-}\" = require-ready\n"
+        f"exit {preflight_rc}\n",
+        encoding="utf-8",
+    )
+    python.chmod(0o755)
+
+    env = os.environ.copy()
+    env["PYTHON"] = str(python)
+    result = subprocess.run(
+        ["bash", "scripts/prod/start_midgard_stack.sh"],
+        cwd=root,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert (result.returncode == 0) is starts_runtime
+    assert runtime_marker.exists() is starts_runtime
+    if not starts_runtime:
+        assert "output=redacted" in result.stderr
 
 
 def test_test_start_full_uses_tmp_test_runtime_artifact_paths(tmp_path: Path) -> None:

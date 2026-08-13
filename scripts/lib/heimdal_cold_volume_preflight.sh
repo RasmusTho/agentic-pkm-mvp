@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+# Shared, read-only HAR-03 gate for governed production startup and deployment.
+
+heimdal_cold_volume_preflight() {
+  local channel="${1:-}"
+  local root="${2:-$(pwd)}"
+  local python_bin="${PYTHON:-python3}"
+  local metadata_file="${HEIMDAL_ARCHIVE_METADATA_FILE:-}"
+  local rc=0
+
+  # HAR-03 makes this a production invariant. Dev/test remain resettable and
+  # may exercise the same module explicitly without acquiring a host mount.
+  [ "${channel}" = "prod" ] || return 0
+
+  if [ -z "${metadata_file}" ] && [ -f "${root}/.env.prod.local" ]; then
+    # Reuse the repository's parser rather than source operator text as shell.
+    # This exports only missing values and never prints them.
+    source "${root}/scripts/lib/load_env_defaults.sh"
+    load_env_defaults_file "${root}/.env.prod.local"
+    metadata_file="${HEIMDAL_ARCHIVE_METADATA_FILE:-}"
+  fi
+
+  case "${metadata_file}" in
+    /*) ;;
+    *)
+      echo "archive volume preflight failed: output=redacted" >&2
+      return 78
+      ;;
+  esac
+
+  (
+    cd "${root}" || exit 1
+    export PYTHONPATH="${root}${PYTHONPATH:+:${PYTHONPATH}}"
+    exec "${python_bin}" -m app.ops.heimdal_cold_volume \
+      require-ready --metadata "${metadata_file}"
+  ) >/dev/null 2>/dev/null || rc=$?
+  if [ "${rc}" -ne 0 ]; then
+    echo "archive volume preflight failed: output=redacted" >&2
+    return "${rc}"
+  fi
+  echo "archive volume preflight: ready"
+}
