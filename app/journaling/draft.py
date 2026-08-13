@@ -888,6 +888,22 @@ def _run_cognition(
         source.object_id: citations.get(source.source_id)
         for source in sources
     }
+    claim_ids = [claim.id for claim in claims]
+    invalid_claim_ids = sorted(
+        claim_id for claim_id in claim_ids if not claim_id.strip()
+    )
+    duplicate_claim_ids = sorted(
+        {claim_id for claim_id in claim_ids if claim_ids.count(claim_id) > 1}
+    )
+    if invalid_claim_ids or duplicate_claim_ids:
+        problems: list[str] = []
+        if invalid_claim_ids:
+            problems.append("empty claim IDs")
+        if duplicate_claim_ids:
+            problems.append("duplicate claim IDs: " + ", ".join(duplicate_claim_ids))
+        raise UnresolvableJournalCitationError(
+            "cognition returned an ambiguous claim graph: " + "; ".join(problems)
+        )
     unadmitted_claim_ids = sorted(
         {
             str(claim.object_uuid)
@@ -900,6 +916,43 @@ def _run_cognition(
             "cognition returned claims for unadmitted source UUIDs: "
             + ", ".join(unadmitted_claim_ids)
         )
+    claims_by_id = {claim.id: claim for claim in claims}
+    inference_citations: list[tuple[_CognitionCitation, ...]] = []
+    for inference in inferences:
+        referenced_claim_ids = (*inference.premises, inference.conclusion_id)
+        if not inference.premises or any(
+            not claim_id.strip() for claim_id in referenced_claim_ids
+        ):
+            raise UnresolvableJournalCitationError(
+                f"cognition inference {inference.id!r} has an empty premise or conclusion"
+            )
+        unknown_claim_ids = sorted(
+            {
+                claim_id
+                for claim_id in referenced_claim_ids
+                if claim_id not in claims_by_id
+            }
+        )
+        if unknown_claim_ids:
+            raise UnresolvableJournalCitationError(
+                f"cognition inference {inference.id!r} references unknown claim IDs: "
+                + ", ".join(unknown_claim_ids)
+            )
+        graph_citations: list[_CognitionCitation] = []
+        seen_citations: set[tuple[str, SourceKind, int]] = set()
+        for claim_id in referenced_claim_ids:
+            claim = claims_by_id[claim_id]
+            citation = citation_by_object[str(claim.object_uuid)]
+            assert citation is not None
+            citation_key = (
+                citation.reference,
+                citation.source_kind,
+                citation.occurrence,
+            )
+            if citation_key not in seen_citations:
+                seen_citations.add(citation_key)
+                graph_citations.append(citation)
+        inference_citations.append(tuple(graph_citations))
     rendered: list[str] = []
     for claim in claims:
         citation = citation_by_object.get(str(claim.object_uuid))
@@ -909,8 +962,18 @@ def _run_cognition(
             f"source kind: `{citation.source_kind.value}`; "
             f"occurrence: {citation.occurrence})"
         )
-    for inference in inferences:
-        rendered.append(f"- Cross-source synthesis: {inference.rationale}")
+    for inference, rendered_graph_citations in zip(
+        inferences, inference_citations, strict=True
+    ):
+        rendered_citations = " | ".join(
+            f"`{citation.reference}`; source kind: "
+            f"`{citation.source_kind.value}`; occurrence: {citation.occurrence}"
+            for citation in rendered_graph_citations
+        )
+        rendered.append(
+            f"- Cross-source synthesis: {inference.rationale} "
+            f"(cognition sources: {rendered_citations})"
+        )
     if degraded:
         rendered.append(
             "Cognition degraded; the citation-grounded collation remains available."

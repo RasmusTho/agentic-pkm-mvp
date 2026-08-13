@@ -609,6 +609,84 @@ def test_journal_rejects_cognition_claim_for_unadmitted_uuid_before_staging(
     assert not list(root.glob("**/drafts/journal/*.md"))
 
 
+@pytest.mark.parametrize("outcome", ("success", "provider_failure"))
+def test_journal_rejects_inference_with_unknown_claim_graph_before_staging(
+    tmp_path: Path, outcome: str
+) -> None:
+    root, context, session_id, _capture = _seed_inputs(tmp_path)
+    bundle = assemble_day_context(vault_context=context, for_date=DAY)
+
+    def foreign_graph_reasoning(
+        _object_ids: object, *, trace_id: str | None = None
+    ) -> ReasoningOutput:
+        del trace_id
+        return ReasoningOutput(
+            inferences=[
+                Inference(
+                    id="foreign-inference",
+                    premises=["foreign-premise"],
+                    conclusion_id="foreign-conclusion",
+                    type="synthesis",
+                    rationale="This inference has no admitted claim graph.",
+                )
+            ],
+            outcome=outcome,  # type: ignore[arg-type]
+            degraded_reason=(
+                "provider_failure" if outcome == "provider_failure" else None
+            ),
+        )
+
+    with pytest.raises(
+        UnresolvableJournalCitationError, match="foreign-(conclusion|premise)"
+    ):
+        draft_journal_entry(
+            vault_context=context,
+            for_date=DAY,
+            session_id=session_id,
+            day_context=bundle,
+            write_guard=_allowing_guard(),
+            reasoning_fn=foreign_graph_reasoning,
+        )
+
+    assert not list(root.glob("**/drafts/journal/*.md"))
+
+
+def test_journal_rejects_duplicate_claim_ids_before_staging(tmp_path: Path) -> None:
+    root, context, session_id, _capture = _seed_inputs(tmp_path)
+    bundle = assemble_day_context(vault_context=context, for_date=DAY)
+
+    def duplicate_claim_reasoning(
+        object_ids: object, *, trace_id: str | None = None
+    ) -> ReasoningOutput:
+        del trace_id
+        admitted_ids = tuple(object_ids)  # type: ignore[arg-type]
+        return ReasoningOutput(
+            claims=[
+                Claim(
+                    id="duplicate",
+                    object_uuid=object_id,
+                    text=f"Claim for {object_id}",
+                    modality="assertion",
+                    confidence=0.8,
+                )
+                for object_id in admitted_ids[:2]
+            ],
+            outcome="success",
+        )
+
+    with pytest.raises(UnresolvableJournalCitationError, match="duplicate claim IDs"):
+        draft_journal_entry(
+            vault_context=context,
+            for_date=DAY,
+            session_id=session_id,
+            day_context=bundle,
+            write_guard=_allowing_guard(),
+            reasoning_fn=duplicate_claim_reasoning,
+        )
+
+    assert not list(root.glob("**/drafts/journal/*.md"))
+
+
 @pytest.mark.parametrize(
     ("outcome", "provided_reason", "expected_reason"),
     (
@@ -855,16 +933,27 @@ def test_every_source_occurrence_independently_admitted(tmp_path: Path) -> None:
         object_ids: object, *, trace_id: str | None = None
     ) -> ReasoningOutput:
         del trace_id
+        claim_ids = tuple(object_ids)  # type: ignore[arg-type]
+        claims = [
+            Claim(
+                id=f"collision-claim-{index}",
+                object_uuid=object_id,
+                text=f"Collision-safe claim {index}",
+                modality="assertion",
+                confidence=0.8,
+            )
+            for index, object_id in enumerate(claim_ids, start=1)
+        ]
         return ReasoningOutput(
-            claims=[
-                Claim(
-                    id=f"collision-claim-{index}",
-                    object_uuid=object_id,
-                    text=f"Collision-safe claim {index}",
-                    modality="assertion",
-                    confidence=0.8,
+            claims=claims,
+            inferences=[
+                Inference(
+                    id="collision-inference",
+                    premises=[claim.id for claim in claims],
+                    conclusion_id=claims[0].id,
+                    type="synthesis",
+                    rationale="Collision-safe synthesis.",
                 )
-                for index, object_id in enumerate(tuple(object_ids), start=1)  # type: ignore[arg-type]
             ],
             outcome="success",
         )
@@ -898,6 +987,12 @@ def test_every_source_occurrence_independently_admitted(tmp_path: Path) -> None:
         "occurrence: 1"
     ) in body
     assert body.count("Collision-safe claim") == 2
+    assert (
+        "Cross-source synthesis: Collision-safe synthesis. "
+        f"(cognition sources: `{conversation_ref}`; source kind: `transcript`; "
+        "occurrence: 1 | `session:collision.md`; source kind: `day_context`; "
+        "occurrence: 1)"
+    ) in body
 
 
 def test_noncanonical_source_reference_blocks_before_admission(tmp_path: Path) -> None:
