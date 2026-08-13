@@ -603,6 +603,10 @@ copy, or delete rows.
 - `set_id` (`uuid`, `ON DELETE CASCADE`; fresh lineage keeps its FK to `sets.id`, while #3510
   retargets only retained legacy objects-as-sets schemas; MVR-05A3 makes that historical endpoint
   a composite `store_objects(vault_binding_id, object_id)` FK)
+- The projector/backfill producer accepts a set name, resolves it through the retained `sets`
+  registry, and writes the resolved UUID. On the historical objects-as-sets lineage that same UUID
+  must already exist in binding-scoped `store_objects`; a missing registry or endpoint row fails
+  the write instead of fabricating membership.
 - `created_at` (`timestamptz`, default `now()`)
 - `PRIMARY KEY (vault_binding_id, object_id, set_id)` on the retained lineage
 

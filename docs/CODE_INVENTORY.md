@@ -74,7 +74,7 @@ Audit pass 2026-05-18 against the `main` baseline. For each deprecated package: 
 
 **Removed (KERNEL-03, #2765):** `object_store.py` and `vector_store.py` — the legacy write generation is gone. `DomainObject` and the `ObjectStore` facade are owned by `app/objects` and write only through the `app.stores` provider seam, with no silent in-memory fallback. Guard: `tests/architecture/test_single_store_writer.py`.
 
-**Current role:** `vector_index.py` is the remaining compatibility shim; the retired `relation_index.py` SQL seam's non-writing contract types now live in `app/objects/relation_types.py`. `membership_store.py` is a direct-DB membership writer used by `app/agents/projector`.
+**Current role:** `vector_index.py` is the remaining compatibility shim; the retired `relation_index.py` SQL seam's non-writing contract types now live in `app/objects/relation_types.py`. `membership_store.py` is a direct-DB membership writer used by `app/agents/projector`; it resolves the caller's set name through `sets` before writing the UUID endpoint shared by both supported membership lineages.
 
 **Stable canonical import boundary (shipped v5.6.1+):** `app/objects` — the canonical home for `DomainObject`, `ObjectStore`, `RelationEdge`, `GraphSlice`, `RelationIndex`, `ScoredNeighbor`, and `VectorIndex`. New code must import from `app.objects`.
 

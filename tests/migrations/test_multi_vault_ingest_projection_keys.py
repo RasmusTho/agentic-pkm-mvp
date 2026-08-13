@@ -15,6 +15,7 @@ from psycopg.conninfo import conninfo_to_dict
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import DBAPIError
 
+from app.agents.projector.agent import _record_membership_db
 from app.instance.binding_ids import COMPATIBILITY_BINDING_ID
 from app.store.membership_store import save_membership
 
@@ -241,7 +242,7 @@ def test_membership_key_and_chunk_fk_follow_effective_lineage(
             (BINDING, written_object),
         )
         conn.execute("INSERT INTO sets (id,name) VALUES (%s,'writer-proof')", (written_set,))
-    save_membership(str(written_object), str(written_set))
+    _record_membership_db(str(written_object), "writer-proof", "fresh-writer-proof")
     with psycopg.connect(dsn) as conn:
         assert _pk(conn, "membership") == ["vault_binding_id", "id"]
         assert _pk(conn, "chunks") == ["id"]
@@ -284,7 +285,13 @@ def test_retained_historical_membership_lineage_is_rekeyed(
                 "VALUES (%s,%s,'note','{}'::jsonb)",
                 (BINDING, oid),
             )
-    save_membership(str(writer_object), str(writer_set))
+        conn.execute(
+            "INSERT INTO sets (id,name) VALUES (%s,'retained-writer-proof')",
+            (writer_set,),
+        )
+    _record_membership_db(
+        str(writer_object), "retained-writer-proof", "retained-writer-proof"
+    )
     with psycopg.connect(dsn) as conn:
         assert _pk(conn, "membership") == ["vault_binding_id", "object_id", "set_id"]
         assert _fk(conn, "membership", "set_id")[:3] == (

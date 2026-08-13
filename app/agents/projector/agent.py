@@ -29,10 +29,12 @@ def _latest_evaluation(object_id: str) -> dict[str, Any] | None:
 
 def _record_membership_db(object_id: str, set_name: str, trace_id: str) -> None:
     """
-    Try to persist membership in Postgres. If DB not available, swallow.
-    Schema assumption (see migrations): membership(object_id uuid, set_id uuid, created_at timestamptz).
+    Persist membership by the public set name used by projector/backfill callers.
+
+    The membership store resolves that name to the UUID endpoint shared by the
+    fresh and retained supported lineages; schema, key, and missing-set defects
+    deliberately propagate.
     """
-    # best-effort persistence via membership store (handles DB/no-DB)
     save_membership(object_id, set_name, trace_id=trace_id)
     return None
 
