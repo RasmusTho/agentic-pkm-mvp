@@ -200,6 +200,9 @@ def draft_journal_entry(
 
         _validate_session_citations(vault_root, sessions)
         _validate_context_citations(vault_root, context_items)
+        source_content_snapshots = _source_content_snapshots(
+            vault_root, sessions, context_items
+        )
         source_identities = _source_identities(sessions, context_items)
         source_ids = tuple(identity.admission_id for identity in source_identities)
         review_states = _source_review_states(
@@ -333,6 +336,13 @@ def draft_journal_entry(
         )
         _validate_session_citations(vault_root, fresh_sessions)
         _validate_context_citations(vault_root, context_items)
+        if (
+            _source_content_snapshots(vault_root, fresh_sessions, context_items)
+            != source_content_snapshots
+        ):
+            raise JournalDraftBlockedError(
+                "journal draft source content changed before staging"
+            )
         fresh_review_states = _source_review_states(
             vault_root, fresh_sessions, context_items, source_identities
         )
@@ -710,6 +720,26 @@ def _validate_context_citations(
             )
         if "#" in reference:
             _validate_jsonl_fragment(path, reference.split("#", 1)[1], reference)
+
+
+def _source_content_snapshots(
+    vault_root: Path,
+    sessions: tuple[_ResolvedSession, ...],
+    context_items: tuple[DayContextItem, ...],
+) -> tuple[str, ...]:
+    """Capture exact admitted source bytes for the final pre-replace fence."""
+
+    session_snapshots = tuple(
+        (vault_root / session.relative_path).read_text(encoding="utf-8")
+        for session in sessions
+    )
+    context_snapshots = tuple(
+        (vault_root / _reference_path(item.provenance_ref)).read_text(
+            encoding="utf-8"
+        )
+        for item in context_items
+    )
+    return session_snapshots + context_snapshots
 
 
 def _reference_path(reference: str) -> str:

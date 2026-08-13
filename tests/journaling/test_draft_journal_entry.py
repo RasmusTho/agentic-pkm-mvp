@@ -571,6 +571,48 @@ def test_review_posture_change_during_cognition_blocks_before_staging(
     assert not list(root.glob("**/drafts/journal/*.md"))
 
 
+@pytest.mark.parametrize("mutated_source", ("transcript", "context"))
+def test_source_content_change_during_cognition_blocks_before_staging(
+    tmp_path: Path, mutated_source: str
+) -> None:
+    root, context, session_id, capture = _seed_inputs(tmp_path)
+    bundle = assemble_day_context(vault_context=context, for_date=DAY)
+    transcript = next((root / ".chats" / "reflection").glob("*.md"))
+
+    def mutating_reasoning(
+        _object_ids: object, *, trace_id: str | None = None
+    ) -> ReasoningOutput:
+        del trace_id
+        if mutated_source == "transcript":
+            transcript.write_text(
+                transcript.read_text(encoding="utf-8").replace(
+                    "I connected several loose ends.",
+                    "These replacement words were not admitted.",
+                ),
+                encoding="utf-8",
+            )
+        else:
+            capture.write_text(
+                capture.read_text(encoding="utf-8").replace(
+                    "Capture one", "Replacement context was not admitted."
+                ),
+                encoding="utf-8",
+            )
+        return ReasoningOutput(outcome="success")
+
+    with pytest.raises(JournalDraftBlockedError, match="content changed"):
+        draft_journal_entry(
+            vault_context=context,
+            for_date=DAY,
+            session_id=session_id,
+            day_context=bundle,
+            write_guard=_allowing_guard(),
+            reasoning_fn=mutating_reasoning,
+        )
+
+    assert not list(root.glob("**/drafts/journal/*.md"))
+
+
 def test_concurrent_same_day_composition_retains_both_sessions(tmp_path: Path) -> None:
     root, context, first_session_id, _capture = _seed_inputs(tmp_path)
     second_session = root / ".chats" / "reflection" / "2026-07-15-later.md"
