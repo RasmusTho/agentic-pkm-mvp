@@ -592,7 +592,10 @@ def _session_ids(
             expected_occurrences[key] = expected_occurrence
             parsed_identities.append(identity)
             if identity.source_kind is SourceKind.TRANSCRIPT:
-                if not identity.external_id.startswith("session:"):
+                if (
+                    not identity.external_id.startswith("session:")
+                    or not identity.external_id.removeprefix("session:")
+                ):
                     raise UnresolvableJournalCitationError(
                         "stored transcript source occurrence has an invalid external_id"
                     )
@@ -600,6 +603,10 @@ def _session_ids(
         if raw_sources != [identity.external_id for identity in parsed_identities]:
             raise UnresolvableJournalCitationError(
                 "stored journal sources disagree with typed source occurrences"
+            )
+        if not typed_sessions:
+            raise UnresolvableJournalCitationError(
+                "stored journal source occurrences require a transcript"
             )
         return tuple(typed_sessions)
     if not isinstance(raw_sources, list):

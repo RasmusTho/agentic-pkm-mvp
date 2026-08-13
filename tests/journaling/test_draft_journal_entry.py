@@ -515,6 +515,14 @@ def test_legacy_session_prefixed_source_role_ambiguity_blocks_redraft(
                 "occurrence": 0,
             }
         ],
+        [{"kind": "transcript", "external_id": "session:", "occurrence": 1}],
+        [
+            {
+                "kind": "day_context",
+                "external_id": "sources/capture-one.md",
+                "occurrence": 1,
+            }
+        ],
     ),
 )
 def test_malformed_typed_source_occurrences_block_redraft(
@@ -532,7 +540,9 @@ def test_malformed_typed_source_occurrences_block_redraft(
     frontmatter["source_occurrences"] = bad_occurrences
     draft_path.write_text(dump_frontmatter(frontmatter, body), encoding="utf-8")
 
-    with pytest.raises(UnresolvableJournalCitationError, match="stored journal source"):
+    with pytest.raises(
+        UnresolvableJournalCitationError, match="stored (journal|transcript) source"
+    ):
         draft_journal_entry(
             vault_context=context,
             for_date=DAY,
@@ -541,21 +551,61 @@ def test_malformed_typed_source_occurrences_block_redraft(
         )
 
 
+def test_typed_source_occurrences_require_transcript_lineage(tmp_path: Path) -> None:
+    root, context, session_id, _capture = _seed_inputs(tmp_path)
+    first = draft_journal_entry(
+        vault_context=context,
+        for_date=DAY,
+        session_id=session_id,
+        write_guard=_allowing_guard(),
+    )
+    draft_path = root / first.path
+    frontmatter, body = _read_result(root, first.path)
+    frontmatter["sources"] = ["sources/capture-one.md"]
+    frontmatter["source_occurrences"] = [
+        {
+            "kind": "day_context",
+            "external_id": "sources/capture-one.md",
+            "occurrence": 1,
+        }
+    ]
+    draft_path.write_text(dump_frontmatter(frontmatter, body), encoding="utf-8")
+
+    with pytest.raises(UnresolvableJournalCitationError, match="require a transcript"):
+        draft_journal_entry(
+            vault_context=context,
+            for_date=DAY,
+            session_id=session_id,
+            write_guard=_allowing_guard(),
+        )
+
+
+@pytest.mark.parametrize("mutated_source", ("transcript", "context"))
 def test_review_posture_change_during_cognition_blocks_before_staging(
-    tmp_path: Path,
+    tmp_path: Path, mutated_source: str
 ) -> None:
     root, context, session_id, capture = _seed_inputs(tmp_path)
     bundle = assemble_day_context(vault_context=context, for_date=DAY)
+    transcript = next((root / ".chats" / "reflection").glob("*.md"))
 
     def rejecting_reasoning(
         _object_ids: object, *, trace_id: str | None = None
     ) -> ReasoningOutput:
         del trace_id
-        capture.write_text(
-            f"---\nartifact_class: {ARTIFACT_CLASS}\nreview_state: rejected\n---\n"
-            "Rejected during cognition.\n",
-            encoding="utf-8",
-        )
+        if mutated_source == "transcript":
+            transcript.write_text(
+                transcript.read_text(encoding="utf-8").replace(
+                    "type: chat-session",
+                    "type: chat-session\nreview_state: rejected",
+                ),
+                encoding="utf-8",
+            )
+        else:
+            capture.write_text(
+                f"---\nartifact_class: {ARTIFACT_CLASS}\nreview_state: rejected\n---\n"
+                "Rejected during cognition.\n",
+                encoding="utf-8",
+            )
         return ReasoningOutput(outcome="success")
 
     with pytest.raises(JournalDraftBlockedError, match="changed before staging"):
@@ -569,6 +619,56 @@ def test_review_posture_change_during_cognition_blocks_before_staging(
         )
 
     assert not list(root.glob("**/drafts/journal/*.md"))
+
+
+def test_typed_and_compatibility_sources_mismatch_blocks_redraft(
+    tmp_path: Path,
+) -> None:
+    root, context, session_id, _capture = _seed_inputs(tmp_path)
+    first = draft_journal_entry(
+        vault_context=context,
+        for_date=DAY,
+        session_id=session_id,
+        write_guard=_allowing_guard(),
+    )
+    draft_path = root / first.path
+    frontmatter, body = _read_result(root, first.path)
+    frontmatter["sources"] = ["session:different"]
+    draft_path.write_text(dump_frontmatter(frontmatter, body), encoding="utf-8")
+
+    with pytest.raises(UnresolvableJournalCitationError, match="disagree"):
+        draft_journal_entry(
+            vault_context=context,
+            for_date=DAY,
+            session_id=session_id,
+            write_guard=_allowing_guard(),
+        )
+
+
+def test_typed_source_occurrence_sequence_mismatch_blocks_redraft(
+    tmp_path: Path,
+) -> None:
+    root, context, session_id, _capture = _seed_inputs(tmp_path)
+    first = draft_journal_entry(
+        vault_context=context,
+        for_date=DAY,
+        session_id=session_id,
+        write_guard=_allowing_guard(),
+    )
+    draft_path = root / first.path
+    frontmatter, body = _read_result(root, first.path)
+    first_occurrence = dict(frontmatter["source_occurrences"][0])
+    first_occurrence["occurrence"] = 2
+    frontmatter["source_occurrences"][0] = first_occurrence
+    draft_path.write_text(dump_frontmatter(frontmatter, body), encoding="utf-8")
+
+    with pytest.raises(UnresolvableJournalCitationError, match="sequence"):
+        draft_journal_entry(
+            vault_context=context,
+            for_date=DAY,
+            session_id=session_id,
+            write_guard=_allowing_guard(),
+        )
 
 
 @pytest.mark.parametrize("mutated_source", ("transcript", "context"))
