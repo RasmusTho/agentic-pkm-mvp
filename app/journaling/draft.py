@@ -326,9 +326,20 @@ def draft_journal_entry(
         )
 
         # Re-resolve inside the same serialized transaction immediately before
-        # replace so a removed source cannot be laundered into the proposal.
-        _validate_session_citations(vault_root, sessions)
+        # replace so a removed or newly blocked source cannot be laundered into
+        # the proposal through a stale admission snapshot.
+        fresh_sessions = tuple(
+            _resolve_session(vault_root, session.session_id) for session in sessions
+        )
+        _validate_session_citations(vault_root, fresh_sessions)
         _validate_context_citations(vault_root, context_items)
+        fresh_review_states = _source_review_states(
+            vault_root, fresh_sessions, context_items, source_identities
+        )
+        if fresh_review_states != review_states:
+            raise JournalDraftBlockedError(
+                "journal draft source admission changed before staging"
+            )
         _atomic_write_at(directory_fd, filename, note_text)
 
     return JournalDraftResult(
@@ -523,20 +534,63 @@ def _session_ids(
     *,
     vault_root: Path,
 ) -> tuple[str, ...]:
-    if isinstance(raw_source_occurrences, list):
+    if raw_source_occurrences is not None:
+        if not isinstance(raw_source_occurrences, list):
+            raise UnresolvableJournalCitationError(
+                "stored journal source occurrences must be a list"
+            )
+        if not isinstance(raw_sources, list):
+            raise UnresolvableJournalCitationError(
+                "stored journal sources must accompany typed source occurrences"
+            )
+        parsed_identities: list[SourceIdentity] = []
+        expected_occurrences: dict[tuple[SourceKind, str], int] = {}
         typed_sessions: list[str] = []
         for item in raw_source_occurrences:
-            if (
-                not isinstance(item, dict)
-                or item.get("kind") != SourceKind.TRANSCRIPT.value
-            ):
-                continue
-            external_id = item.get("external_id")
-            if not isinstance(external_id, str) or not external_id.startswith("session:"):
+            if not isinstance(item, dict):
                 raise UnresolvableJournalCitationError(
-                    "stored transcript source occurrence has an invalid external_id"
+                    "stored journal source occurrence must be a mapping"
                 )
-            typed_sessions.append(external_id.removeprefix("session:"))
+            try:
+                source_kind = SourceKind(str(item.get("kind") or ""))
+            except ValueError as exc:
+                raise UnresolvableJournalCitationError(
+                    "stored journal source occurrence has an invalid kind"
+                ) from exc
+            external_id = item.get("external_id")
+            occurrence = item.get("occurrence")
+            if (
+                not isinstance(external_id, str)
+                or isinstance(occurrence, bool)
+                or not isinstance(occurrence, int)
+            ):
+                raise UnresolvableJournalCitationError(
+                    "stored journal source occurrence is incomplete"
+                )
+            try:
+                identity = SourceIdentity(source_kind, external_id, occurrence)
+            except ValueError as exc:
+                raise UnresolvableJournalCitationError(
+                    "stored journal source occurrence is invalid"
+                ) from exc
+            key = (identity.source_kind, identity.external_id)
+            expected_occurrence = expected_occurrences.get(key, 0) + 1
+            if identity.occurrence != expected_occurrence:
+                raise UnresolvableJournalCitationError(
+                    "stored journal source occurrence sequence is invalid"
+                )
+            expected_occurrences[key] = expected_occurrence
+            parsed_identities.append(identity)
+            if identity.source_kind is SourceKind.TRANSCRIPT:
+                if not identity.external_id.startswith("session:"):
+                    raise UnresolvableJournalCitationError(
+                        "stored transcript source occurrence has an invalid external_id"
+                    )
+                typed_sessions.append(identity.external_id.removeprefix("session:"))
+        if raw_sources != [identity.external_id for identity in parsed_identities]:
+            raise UnresolvableJournalCitationError(
+                "stored journal sources disagree with typed source occurrences"
+            )
         return tuple(typed_sessions)
     if not isinstance(raw_sources, list):
         return ()
@@ -545,17 +599,33 @@ def _session_ids(
         if not isinstance(source, str) or not source.startswith("session:"):
             continue
         session_id = source.removeprefix("session:")
+        context_path = (vault_root / _reference_path(source)).resolve()
+        try:
+            context_path.relative_to(vault_root)
+        except ValueError as exc:
+            raise UnresolvableJournalCitationError(
+                f"legacy journal source escapes the active vault: {source}"
+            ) from exc
+        context_resolves = context_path.is_file()
         matching_transcripts = 0
         for path in (vault_root / ".chats").glob("**/*.md"):
             frontmatter, _body = load_frontmatter(path.read_text(encoding="utf-8"))
             if str(frontmatter.get("session_id") or "").strip() == session_id:
                 matching_transcripts += 1
+        if context_resolves and matching_transcripts:
+            raise UnresolvableJournalCitationError(
+                f"legacy journal source role is ambiguous: {source}"
+            )
         if matching_transcripts > 1:
             raise UnresolvableJournalCitationError(
                 f"session:{session_id} resolved to {matching_transcripts} transcript files"
             )
         if matching_transcripts == 1:
             legacy_sessions.append(session_id)
+        elif not context_resolves:
+            raise UnresolvableJournalCitationError(
+                f"legacy journal source no longer resolves: {source}"
+            )
     return tuple(legacy_sessions)
 
 
