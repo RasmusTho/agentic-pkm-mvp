@@ -1,0 +1,16 @@
+{
+  "schema_version": "devui.exact-reuse.git-object.v1",
+  "source": {
+    "commit": "f7237a133f239cb710c32ac3d94c7c4fb495a481",
+    "path": "companion-ui/companion-app/colors_and_type.css",
+    "blob_oid": "17fe326b415aee53791fd8ddaf43f7312b199bb7"
+  },
+  "remote_font_imports": [
+    "https://fonts.googleapis.com/css2?family=EB+Garamond:ital,wght@0,400;0,500;0,600;1,400;1,500&family=Space+Grotesk:wght@300;400;500;600&display=swap",
+    "https://fonts.bunny.net/css?family=jetbrains-mono:400,500&display=swap"
+  ],
+  "source_tokens": ["--font-ui", "--font-display", "--font-mono"],
+  "font_fallback": "system-ui, sans-serif",
+  "transforms": ["drop_remote_font_imports", "use_declared_local_font_fallback"],
+  "state_matrix": ["normal", "empty", "loading", "degraded", "error", "narrow", "200%", "keyboard", "screen-reader", "print", "javascript-off"]
+}

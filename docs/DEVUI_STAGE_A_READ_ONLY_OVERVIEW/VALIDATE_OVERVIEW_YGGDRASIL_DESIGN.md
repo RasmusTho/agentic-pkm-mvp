@@ -113,6 +113,19 @@ accepted guidance is normalized back into this capability specification before A
 - Walk the complete state matrix and record token SHA-256, component inputs, screenshots, and open questions.
 - Run `git diff --check` on normalized repository artifacts.
 
+### Narrow exact-reuse provenance route
+
+When a bounded delivery needs to reuse the shipped token sheet without a new
+design generation, the only admitted route is the checked-in
+`config/builderops/devui_exact_reuse_declaration.json` evaluated by
+`app.builderops.devui_exact_reuse_provenance`.  The declaration is read as a
+regular blob from the exact committed candidate tree; its source is a regular
+blob from an immutable commit reachable from that candidate.  The validator
+hardcodes the approved Google/Bunny import literals and rejects all other
+URLs, transforms, fallback families, or state matrices.  This route does not
+replace the live Yggdrasil gate for generated, novel, mixed, unknown, or
+out-of-envelope work.
+
 ## Suggested Validation
 
 - Validate the complete handoff receipt and state matrix before accepting normalization.
