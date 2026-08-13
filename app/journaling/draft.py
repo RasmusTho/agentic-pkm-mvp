@@ -206,10 +206,14 @@ def draft_journal_entry(
         existing_frontmatter = _load_existing_draft_frontmatter_at(
             directory_fd, filename
         )
-        previous_session_ids = _session_ids(
-            existing_frontmatter.get("sources"),
-            existing_frontmatter.get("source_occurrences"),
-            vault_root=vault_root,
+        previous_session_ids = (
+            _session_ids(
+                existing_frontmatter.get("sources"),
+                existing_frontmatter.get("source_occurrences"),
+                vault_root=vault_root,
+            )
+            if existing_frontmatter
+            else ()
         )
         all_session_ids = _deduplicate((*previous_session_ids, session_id.strip()))
         sessions = tuple(
@@ -651,12 +655,26 @@ def _session_ids(
             )
         return tuple(typed_sessions)
     if not isinstance(raw_sources, list):
-        return ()
+        raise UnresolvableJournalCitationError(
+            "stored legacy journal sources must be a list"
+        )
     legacy_sessions: list[str] = []
     for source in raw_sources:
-        if not isinstance(source, str) or not source.startswith("session:"):
+        if (
+            not isinstance(source, str)
+            or not source.strip()
+            or source != source.strip()
+        ):
+            raise UnresolvableJournalCitationError(
+                "stored legacy journal source is invalid"
+            )
+        if not source.startswith("session:"):
             continue
         session_id = source.removeprefix("session:")
+        if not session_id:
+            raise UnresolvableJournalCitationError(
+                "stored legacy transcript source has an empty session_id"
+            )
         context_path = (vault_root / _reference_path(source)).resolve()
         try:
             context_path.relative_to(vault_root)
@@ -679,11 +697,19 @@ def _session_ids(
                 f"session:{session_id} resolved to {matching_transcripts} transcript files"
             )
         if matching_transcripts == 1:
+            if session_id in legacy_sessions:
+                raise UnresolvableJournalCitationError(
+                    "stored legacy journal sources contain a duplicate transcript"
+                )
             legacy_sessions.append(session_id)
         elif not context_resolves:
             raise UnresolvableJournalCitationError(
                 f"legacy journal source no longer resolves: {source}"
             )
+    if not legacy_sessions:
+        raise UnresolvableJournalCitationError(
+            "stored legacy journal sources require a transcript"
+        )
     return tuple(legacy_sessions)
 
 

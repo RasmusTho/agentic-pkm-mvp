@@ -528,6 +528,113 @@ def test_legacy_session_prefixed_source_role_ambiguity_blocks_redraft(
     assert "Unrelated transcript" not in draft_path.read_text(encoding="utf-8")
 
 
+@pytest.mark.parametrize("legacy_sources", (None, "not-a-list"))
+def test_missing_or_non_list_legacy_sources_block_redraft(
+    tmp_path: Path, legacy_sources: object
+) -> None:
+    root, context, session_id, _capture = _seed_inputs(tmp_path)
+    first = draft_journal_entry(
+        vault_context=context,
+        for_date=DAY,
+        session_id=session_id,
+        write_guard=_allowing_guard(),
+    )
+    draft_path = root / first.path
+    frontmatter, body = _read_result(root, first.path)
+    frontmatter.pop("source_occurrences")
+    if legacy_sources is None:
+        frontmatter.pop("sources")
+    else:
+        frontmatter["sources"] = legacy_sources
+    draft_path.write_text(dump_frontmatter(frontmatter, body), encoding="utf-8")
+    before_redraft = draft_path.read_text(encoding="utf-8")
+
+    with pytest.raises(
+        UnresolvableJournalCitationError,
+        match="stored legacy journal sources must be a list",
+    ):
+        draft_journal_entry(
+            vault_context=context,
+            for_date=DAY,
+            session_id=session_id,
+            write_guard=_allowing_guard(),
+        )
+
+    assert draft_path.read_text(encoding="utf-8") == before_redraft
+
+
+def test_empty_legacy_session_id_blocks_before_matching_or_deduplication(
+    tmp_path: Path,
+) -> None:
+    root, context, session_id, _capture = _seed_inputs(tmp_path)
+    first = draft_journal_entry(
+        vault_context=context,
+        for_date=DAY,
+        session_id=session_id,
+        write_guard=_allowing_guard(),
+    )
+    draft_path = root / first.path
+    frontmatter, body = _read_result(root, first.path)
+    frontmatter.pop("source_occurrences")
+    frontmatter["sources"] = ["session:"]
+    draft_path.write_text(dump_frontmatter(frontmatter, body), encoding="utf-8")
+    before_redraft = draft_path.read_text(encoding="utf-8")
+    (root / ".chats" / "reflection" / "missing-session-id.md").write_text(
+        "---\ntype: chat-session\n---\n\n**Owner:** Must not be injected.\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        UnresolvableJournalCitationError, match="empty session_id"
+    ):
+        draft_journal_entry(
+            vault_context=context,
+            for_date=DAY,
+            session_id=session_id,
+            write_guard=_allowing_guard(),
+        )
+
+    assert draft_path.read_text(encoding="utf-8") == before_redraft
+
+
+@pytest.mark.parametrize(
+    ("legacy_sources", "message"),
+    (
+        ([], "require a transcript"),
+        ([""], "source is invalid"),
+        ([" session:session-abc"], "source is invalid"),
+        ([123], "source is invalid"),
+        (["session:session-abc", "session:session-abc"], "duplicate transcript"),
+    ),
+)
+def test_invalid_legacy_source_sets_block_redraft(
+    tmp_path: Path, legacy_sources: object, message: str
+) -> None:
+    root, context, session_id, _capture = _seed_inputs(tmp_path)
+    first = draft_journal_entry(
+        vault_context=context,
+        for_date=DAY,
+        session_id=session_id,
+        write_guard=_allowing_guard(),
+    )
+    draft_path = root / first.path
+    frontmatter, body = _read_result(root, first.path)
+    frontmatter.pop("source_occurrences")
+    frontmatter["sources"] = legacy_sources
+    draft_path.write_text(dump_frontmatter(frontmatter, body), encoding="utf-8")
+    before_redraft = draft_path.read_text(encoding="utf-8")
+
+    with pytest.raises(UnresolvableJournalCitationError, match=message):
+        draft_journal_entry(
+            vault_context=context,
+            for_date=DAY,
+            session_id=session_id,
+            write_guard=_allowing_guard(),
+        )
+
+    assert draft_path.read_text(encoding="utf-8") == before_redraft
+
+
 @pytest.mark.parametrize(
     "bad_occurrences",
     (
