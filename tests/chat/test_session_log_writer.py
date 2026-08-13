@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
 import json
+import threading
 
 import pytest
 
@@ -133,6 +135,62 @@ def test_closed_session_rejects_messages_and_duplicate_close(tmp_path: Path) -> 
         writer.close_session(session, "duplicate close")
 
     assert session.log_path.read_text(encoding="utf-8") == closed_text
+
+
+def test_concurrent_close_publishes_one_terminal_record(tmp_path: Path) -> None:
+    writer = _writer(tmp_path)
+    session = writer.open_session(_note(tmp_path), "session")
+    writer.append_message(session, "owner", "Durable owner turn")
+    start = threading.Barrier(2)
+
+    def close(summary: str) -> str:
+        start.wait(timeout=5)
+        try:
+            writer.close_session(session, summary)
+        except ValueError as exc:
+            return str(exc)
+        return "closed"
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        outcomes = tuple(pool.map(close, ("first", "second")))
+
+    text = session.log_path.read_text(encoding="utf-8")
+    assert sorted(outcomes) == ["chat session is already closed", "closed"]
+    assert text.count("**Session closed:**") == 1
+
+
+def test_concurrent_append_and_close_never_publish_post_close_content(
+    tmp_path: Path,
+) -> None:
+    writer = _writer(tmp_path)
+    session = writer.open_session(_note(tmp_path), "session")
+    writer.append_message(session, "owner", "Durable owner turn")
+    start = threading.Barrier(2)
+
+    def append() -> str:
+        start.wait(timeout=5)
+        try:
+            writer.append_message(session, "owner", "concurrent owner turn")
+        except ValueError as exc:
+            return str(exc)
+        return "appended"
+
+    def close() -> str:
+        start.wait(timeout=5)
+        writer.close_session(session, "complete")
+        return "closed"
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        append_result = pool.submit(append)
+        close_result = pool.submit(close)
+        outcomes = (append_result.result(), close_result.result())
+
+    text = session.log_path.read_text(encoding="utf-8")
+    closure_offset = text.index("**Session closed:**")
+    owner_offset = text.find("concurrent owner turn")
+    assert outcomes[1] == "closed"
+    assert outcomes[0] in {"appended", "chat session is already closed"}
+    assert owner_offset == -1 or owner_offset < closure_offset
 
 
 def test_open_session_resolves_and_writes_note_uuid(tmp_path: Path) -> None:

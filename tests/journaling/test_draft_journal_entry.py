@@ -1098,13 +1098,14 @@ def test_malformed_framed_transcript_blocks_without_normalizing_semantics(
 
 
 @pytest.mark.parametrize("framed", (False, True))
-def test_whitespace_only_owner_turn_blocks_before_cognition_and_staging(
+def test_invalid_owner_record_blocks_even_beside_valid_owner_turn(
     tmp_path: Path, framed: bool
 ) -> None:
     root, context, session_id, _capture = _seed_inputs(tmp_path)
     transcript = next((root / ".chats" / "reflection").glob("*.md"))
     format_line = "role_message_format: blockquote-v1\n" if framed else ""
-    owner_message = "**Owner:**\n>   " if framed else "**Owner:**\n   "
+    valid_message = "**Owner:**\n> valid owner turn" if framed else "**Owner:** valid owner turn"
+    invalid_message = "**Owner:**\n>   " if framed else "**Owner:**\n   "
     transcript.write_text(
         f"""---
 type: chat-session
@@ -1113,14 +1114,52 @@ session_id: {session_id}
 
 ## Session
 
-{owner_message}
+{valid_message}
+
+{invalid_message}
 """,
         encoding="utf-8",
     )
 
     with pytest.raises(
         UnresolvableJournalCitationError,
-        match=f"session:{session_id} contains no owner turns",
+        match="transcript message is empty",
+    ):
+        draft_journal_entry(
+            vault_context=context,
+            for_date=DAY,
+            session_id=session_id,
+            write_guard=_allowing_guard(),
+        )
+
+    assert not list(root.glob("**/drafts/journal/*.md"))
+
+
+@pytest.mark.parametrize("role", ("Owner", "Agent", "Session closed"))
+def test_bare_framed_record_blocks_before_cognition_and_staging(
+    tmp_path: Path, role: str
+) -> None:
+    root, context, session_id, _capture = _seed_inputs(tmp_path)
+    transcript = next((root / ".chats" / "reflection").glob("*.md"))
+    transcript.write_text(
+        f"""---
+type: chat-session
+session_id: {session_id}
+role_message_format: blockquote-v1
+---
+
+## Session
+
+**Owner:**
+> valid owner turn
+
+**{role}:**
+""",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        UnresolvableJournalCitationError, match="transcript message is empty"
     ):
         draft_journal_entry(
             vault_context=context,
@@ -1186,7 +1225,7 @@ session_id: {session_id}
 
     with pytest.raises(
         UnresolvableJournalCitationError,
-        match=f"session:{session_id} contains no owner turns",
+        match="legacy transcript message is empty",
     ):
         draft_journal_entry(
             vault_context=context,

@@ -1,10 +1,16 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime
+import fcntl
+import os
 from pathlib import Path
 import re
+import stat
+import threading
 from typing import Callable
+from typing import Iterator
 from uuid import uuid4
 
 from app.knowledge.write_ops import append_note_relative, write_note_relative
@@ -16,6 +22,8 @@ from scripts.yaml_roundtrip import load_frontmatter
 
 CHAT_SESSION_PERSIST_ACTION = "chat_session.persist"
 ROLE_MESSAGE_FORMAT_BLOCKQUOTE_V1 = "blockquote-v1"
+_SESSION_LOCKS_GUARD = threading.Lock()
+_SESSION_LOCKS: dict[str, threading.RLock] = {}
 
 
 @dataclass(frozen=True)
@@ -78,11 +86,9 @@ class SessionLogWriter:
         )
 
     def append_turn(self, session: SessionLog, user_prompt: str, change_summary: str) -> None:
-        DEFAULT_WRITE_GUARD.assert_writes_allowed(CHAT_SESSION_PERSIST_ACTION)
-        append_note_relative(
-            _session_log_relative_path(session),
+        _append_to_open_session(
+            session,
             f"**User:** {user_prompt}\n**Change:** {change_summary}\n\n",
-            vault_root=self._vault_root,
         )
 
     def append_message(self, session: SessionLog, role: str, content: str) -> None:
@@ -101,16 +107,13 @@ class SessionLogWriter:
         )
         if not normalized_content:
             raise ValueError("chat message content must not be empty")
-        _assert_session_open(session)
         quoted_content = "\n".join(
             f"> {line}" if line else ">"
             for line in normalized_content.split("\n")
         )
-        DEFAULT_WRITE_GUARD.assert_writes_allowed(CHAT_SESSION_PERSIST_ACTION)
-        append_note_relative(
-            _session_log_relative_path(session),
+        _append_to_open_session(
+            session,
             f"**{labels[normalized_role]}:**\n{quoted_content}\n\n",
-            vault_root=self._vault_root,
         )
 
     def close_session(self, session: SessionLog, total_summary: str) -> None:
@@ -119,23 +122,75 @@ class SessionLogWriter:
         )
         if not normalized_summary:
             raise ValueError("chat session summary must not be empty")
-        _assert_session_open(session)
         quoted_summary = "\n".join(
             f"> {line}" if line else ">"
             for line in normalized_summary.split("\n")
         )
-        DEFAULT_WRITE_GUARD.assert_writes_allowed(CHAT_SESSION_PERSIST_ACTION)
-        append_note_relative(
-            _session_log_relative_path(session),
+        _append_to_open_session(
+            session,
             f"**Session closed:**\n{quoted_summary}\n\n",
-            vault_root=self._vault_root,
         )
 
 
-def _assert_session_open(session: SessionLog) -> None:
-    text = session.log_path.read_text(encoding="utf-8")
-    if "\n**Session closed:**\n" in text or "\n*Session closed. Total: " in text:
-        raise ValueError("chat session is already closed")
+def _append_to_open_session(session: SessionLog, content: str) -> None:
+    vault_root = session.vault_root
+    if vault_root is None:
+        raise ValueError("SessionLog.vault_root is required for durable chat writes")
+    DEFAULT_WRITE_GUARD.assert_writes_allowed(CHAT_SESSION_PERSIST_ACTION)
+    with _locked_session_writer(session):
+        try:
+            current = session.log_path.read_text(encoding="utf-8")
+        except FileNotFoundError as exc:
+            raise ValueError("chat session transcript no longer exists") from exc
+        if (
+            "\n**Session closed:**\n" in current
+            or "\n*Session closed. Total: " in current
+        ):
+            raise ValueError("chat session is already closed")
+        append_note_relative(
+            _session_log_relative_path(session),
+            content,
+            vault_root=vault_root,
+            action=CHAT_SESSION_PERSIST_ACTION,
+            write_guard=DEFAULT_WRITE_GUARD,
+        )
+
+
+@contextmanager
+def _locked_session_writer(session: SessionLog) -> Iterator[None]:
+    vault_root = session.vault_root
+    if vault_root is None:
+        raise ValueError("SessionLog.vault_root is required for durable chat writes")
+    resolved_root = vault_root.expanduser().resolve()
+    resolved_log = session.log_path.expanduser().resolve()
+    try:
+        resolved_log.relative_to(resolved_root)
+    except ValueError as exc:
+        raise ValueError("chat session transcript escapes the active vault") from exc
+    lock_path = resolved_log.parent / f".{resolved_log.name}.session.lock"
+    lock_key = str(lock_path)
+    with _SESSION_LOCKS_GUARD:
+        process_lock = _SESSION_LOCKS.setdefault(lock_key, threading.RLock())
+    with process_lock:
+        descriptor = os.open(
+            lock_path,
+            os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0),
+            0o600,
+        )
+        try:
+            opened = os.fstat(descriptor)
+            named = os.stat(lock_path, follow_symlinks=False)
+            if (
+                not stat.S_ISREG(opened.st_mode)
+                or not stat.S_ISREG(named.st_mode)
+                or (opened.st_dev, opened.st_ino) != (named.st_dev, named.st_ino)
+            ):
+                raise ValueError("chat session lock path is not a stable regular file")
+            fcntl.flock(descriptor, fcntl.LOCK_EX)
+            yield
+        finally:
+            fcntl.flock(descriptor, fcntl.LOCK_UN)
+            os.close(descriptor)
 
 
 def load_chat_sessions_for_note(note_uuid: str, *, vault_context: VaultContext) -> list[SessionLog]:

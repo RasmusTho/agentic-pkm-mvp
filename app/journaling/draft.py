@@ -814,7 +814,11 @@ def _blockquote_owner_turns(body: str) -> tuple[str, ...]:
                     "blockquote transcript message contains unframed content"
                 )
         content = "\n".join(content_lines)
-        if marker.group(1) == "Owner" and content.strip():
+        if not content.strip():
+            raise UnresolvableJournalCitationError(
+                "blockquote transcript message is empty"
+            )
+        if marker.group(1) == "Owner":
             turns.append(content)
     return tuple(turns)
 
@@ -847,7 +851,11 @@ def _legacy_owner_turns(body: str) -> tuple[str, ...]:
         content = inline_content
         if continuation:
             content += ("\n" if content else "") + continuation
-        if content.strip():
+        if not content.strip():
+            raise UnresolvableJournalCitationError(
+                "legacy transcript message is empty"
+            )
+        if marker.group(1) == "Owner":
             turns.append(content)
     return tuple(turns)
 
