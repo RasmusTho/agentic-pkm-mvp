@@ -187,7 +187,11 @@ def draft_journal_entry(
         existing_frontmatter = _load_existing_draft_frontmatter_at(
             directory_fd, filename
         )
-        previous_session_ids = _session_ids(existing_frontmatter.get("sources"))
+        previous_session_ids = _session_ids(
+            existing_frontmatter.get("sources"),
+            existing_frontmatter.get("source_occurrences"),
+            vault_root=vault_root,
+        )
         all_session_ids = _deduplicate((*previous_session_ids, session_id.strip()))
         sessions = tuple(
             _resolve_session(vault_root, prior_session_id)
@@ -303,6 +307,14 @@ def draft_journal_entry(
                 "cognition": cognition,
             },
             "sources": [identity.external_id for identity in source_identities],
+            "source_occurrences": [
+                {
+                    "kind": identity.source_kind.value,
+                    "external_id": identity.external_id,
+                    "occurrence": identity.occurrence,
+                }
+                for identity in source_identities
+            ],
             "activation_receipt_id": activation.receipt.receipt_id,
             "activation_receipts": receipts,
             "created": created,
@@ -505,14 +517,46 @@ def _load_existing_draft_frontmatter_at(
     return frontmatter
 
 
-def _session_ids(raw_sources: object) -> tuple[str, ...]:
+def _session_ids(
+    raw_sources: object,
+    raw_source_occurrences: object,
+    *,
+    vault_root: Path,
+) -> tuple[str, ...]:
+    if isinstance(raw_source_occurrences, list):
+        typed_sessions: list[str] = []
+        for item in raw_source_occurrences:
+            if (
+                not isinstance(item, dict)
+                or item.get("kind") != SourceKind.TRANSCRIPT.value
+            ):
+                continue
+            external_id = item.get("external_id")
+            if not isinstance(external_id, str) or not external_id.startswith("session:"):
+                raise UnresolvableJournalCitationError(
+                    "stored transcript source occurrence has an invalid external_id"
+                )
+            typed_sessions.append(external_id.removeprefix("session:"))
+        return tuple(typed_sessions)
     if not isinstance(raw_sources, list):
         return ()
-    return tuple(
-        source.removeprefix("session:")
-        for source in raw_sources
-        if isinstance(source, str) and source.startswith("session:")
-    )
+    legacy_sessions: list[str] = []
+    for source in raw_sources:
+        if not isinstance(source, str) or not source.startswith("session:"):
+            continue
+        session_id = source.removeprefix("session:")
+        matching_transcripts = 0
+        for path in (vault_root / ".chats").glob("**/*.md"):
+            frontmatter, _body = load_frontmatter(path.read_text(encoding="utf-8"))
+            if str(frontmatter.get("session_id") or "").strip() == session_id:
+                matching_transcripts += 1
+        if matching_transcripts > 1:
+            raise UnresolvableJournalCitationError(
+                f"session:{session_id} resolved to {matching_transcripts} transcript files"
+            )
+        if matching_transcripts == 1:
+            legacy_sessions.append(session_id)
+    return tuple(legacy_sessions)
 
 
 def _deduplicate(values: Iterable[str]) -> tuple[str, ...]:

@@ -395,6 +395,57 @@ session_id: session-later
     )
 
 
+def test_context_session_ref_remains_context_across_same_day_redraft(
+    tmp_path: Path,
+) -> None:
+    root, context, session_id, _capture = _seed_inputs(tmp_path)
+    context_source = root / "session:context-only.md"
+    context_source.write_text(
+        "---\nreview_state: accepted\n---\ncontext\n", encoding="utf-8"
+    )
+    bundle = assemble_day_context(vault_context=context, for_date=DAY)
+    sections = dict(bundle.sections)
+    sections["captures"] = sections["captures"].model_copy(
+        update={
+            "items": (
+                DayContextItem(
+                    provenance_ref="session:context-only.md",
+                    content={
+                        "summary": "Context whose public ref uses the session prefix."
+                    },
+                ),
+            )
+        }
+    )
+    bundle = bundle.model_copy(update={"sections": sections})
+
+    first = draft_journal_entry(
+        vault_context=context,
+        for_date=DAY,
+        session_id=session_id,
+        day_context=bundle,
+        write_guard=_allowing_guard(),
+    )
+    second = draft_journal_entry(
+        vault_context=context,
+        for_date=DAY,
+        session_id=session_id,
+        day_context=bundle,
+        write_guard=_allowing_guard(),
+    )
+
+    assert second.path == first.path
+    frontmatter, _body = _read_result(root, second.path)
+    assert frontmatter["sources"].count("session:context-only.md") == 1
+    assert {
+        (item["kind"], item["external_id"], item["occurrence"])
+        for item in frontmatter["source_occurrences"]
+    } >= {
+        ("transcript", f"session:{session_id}", 1),
+        ("day_context", "session:context-only.md", 1),
+    }
+
+
 def test_concurrent_same_day_composition_retains_both_sessions(tmp_path: Path) -> None:
     root, context, first_session_id, _capture = _seed_inputs(tmp_path)
     second_session = root / ".chats" / "reflection" / "2026-07-15-later.md"
@@ -646,6 +697,46 @@ def test_journal_rejects_inference_with_unknown_claim_graph_before_staging(
             day_context=bundle,
             write_guard=_allowing_guard(),
             reasoning_fn=foreign_graph_reasoning,
+        )
+
+    assert not list(root.glob("**/drafts/journal/*.md"))
+
+
+@pytest.mark.parametrize(
+    ("premises", "conclusion_id"),
+    (([], "claim"), ([""], "claim"), (["claim"], "")),
+)
+def test_journal_rejects_inference_with_empty_claim_graph_before_staging(
+    tmp_path: Path, premises: list[str], conclusion_id: str
+) -> None:
+    root, context, session_id, _capture = _seed_inputs(tmp_path)
+    bundle = assemble_day_context(vault_context=context, for_date=DAY)
+
+    def empty_graph_reasoning(
+        _object_ids: object, *, trace_id: str | None = None
+    ) -> ReasoningOutput:
+        del trace_id
+        return ReasoningOutput(
+            inferences=[
+                Inference(
+                    id="empty-graph-inference",
+                    premises=premises,
+                    conclusion_id=conclusion_id,
+                    type="synthesis",
+                    rationale="This inference has an incomplete claim graph.",
+                )
+            ],
+            outcome="success",
+        )
+
+    with pytest.raises(UnresolvableJournalCitationError, match="empty premise"):
+        draft_journal_entry(
+            vault_context=context,
+            for_date=DAY,
+            session_id=session_id,
+            day_context=bundle,
+            write_guard=_allowing_guard(),
+            reasoning_fn=empty_graph_reasoning,
         )
 
     assert not list(root.glob("**/drafts/journal/*.md"))
