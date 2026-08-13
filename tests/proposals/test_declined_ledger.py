@@ -17,6 +17,8 @@ Covers every behavioral Acceptance Criterion from the issue:
 from __future__ import annotations
 
 import ast
+from concurrent.futures import ThreadPoolExecutor
+import multiprocessing
 from pathlib import Path
 
 import pytest
@@ -238,6 +240,72 @@ def test_recording_the_same_decline_twice_is_idempotent(tmp_path: Path) -> None:
     lines = (tmp_path / "declined.jsonl").read_text(encoding="utf-8").splitlines()
     assert len(lines) == 1
     assert ledger.is_declined("fid-1") is True
+
+
+def test_concurrent_different_declines_do_not_lose_records(tmp_path: Path) -> None:
+    path = tmp_path / "declined.jsonl"
+    finding_ids = [f"fid-{index}" for index in range(20)]
+
+    def record(finding_id: str) -> None:
+        DeclinedLedger(path).record_decline(
+            finding_id,
+            finding_class="journal.candidate",
+            declined_at="2026-07-15T20:30:00Z",
+            write_guard=_allow_all_guard(),
+        )
+
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        list(executor.map(record, finding_ids))
+
+    ledger = DeclinedLedger(path)
+    assert all(ledger.is_declined(finding_id) for finding_id in finding_ids)
+    assert len(path.read_text(encoding="utf-8").splitlines()) == len(finding_ids)
+
+
+def test_cross_process_different_declines_do_not_lose_records(tmp_path: Path) -> None:
+    path = tmp_path / "declined.jsonl"
+    context = multiprocessing.get_context("fork")
+    start = context.Barrier(6)
+
+    def record(index: int) -> None:
+        start.wait(timeout=5)
+        DeclinedLedger(path).record_decline(
+            f"process-fid-{index}",
+            finding_class="journal.candidate",
+            declined_at="2026-07-15T20:30:00Z",
+            write_guard=_allow_all_guard(),
+        )
+
+    processes = [context.Process(target=record, args=(index,)) for index in range(6)]
+    for process in processes:
+        process.start()
+    for process in processes:
+        process.join(timeout=10)
+        if process.is_alive():
+            process.terminate()
+            process.join(timeout=5)
+    assert all(process.exitcode == 0 for process in processes)
+    ledger = DeclinedLedger(path)
+    assert all(ledger.is_declined(f"process-fid-{index}") for index in range(6))
+
+
+def test_idempotent_decline_preserves_first_durable_timestamp(tmp_path: Path) -> None:
+    ledger = DeclinedLedger(tmp_path / "declined.jsonl")
+    first = ledger.record_decline(
+        "fid-1",
+        finding_class="journal.candidate",
+        declined_at="2026-07-15T20:30:00Z",
+        write_guard=_allow_all_guard(),
+    )
+    second = ledger.record_decline(
+        "fid-1",
+        finding_class="journal.candidate",
+        declined_at="2026-07-15T23:30:00Z",
+        write_guard=_allow_all_guard(),
+    )
+
+    assert second == first
+    assert ledger.get_receipt("fid-1") == first
 
 
 def test_record_decline_is_write_guard_gated(tmp_path: Path) -> None:

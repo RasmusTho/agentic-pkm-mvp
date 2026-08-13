@@ -34,9 +34,11 @@ from datetime import datetime, timedelta, timezone
 import errno
 import json
 import multiprocessing
+from concurrent.futures import ThreadPoolExecutor
 import os
 from pathlib import Path
 import queue
+import threading
 import re
 import stat
 import subprocess
@@ -80,7 +82,7 @@ def _isolated_atomic_append_host_fence(
     host_temp_root = tmp_path / "host-temp"
     host_temp_root.mkdir()
     monkeypatch.setattr(
-        steering_module.tempfile,
+        write_ops_module.tempfile,
         "gettempdir",
         lambda: os.fspath(host_temp_root),
     )
@@ -95,8 +97,8 @@ def _host_fence_root() -> Path:
 
 
 def _host_witness_paths(vault_root: Path) -> tuple[Path, ...]:
-    lock_root = Path(steering_module.tempfile.gettempdir()) / (
-        "agentic-pkm-heimdal-locks"
+    lock_root = Path(write_ops_module.tempfile.gettempdir()) / (
+        "agentic-pkm-atomic-append-locks"
     )
     with write_ops_module._open_atomic_append_authority(
         vault_root,
@@ -104,20 +106,20 @@ def _host_witness_paths(vault_root: Path) -> tuple[Path, ...]:
     ) as authority:
         return tuple(
             lock_root
-            / f"{steering_module.hashlib.sha256(key.encode('utf-8')).hexdigest()}.lock"
+            / f"{write_ops_module.hashlib.sha256(key.encode('utf-8')).hexdigest()}.lock"
             for key in authority.host_state_keys
         )
 
 
 def _host_route_paths(vault_root: Path) -> tuple[Path, Path, Path]:
-    lock_root = Path(steering_module.tempfile.gettempdir()) / (
-        "agentic-pkm-heimdal-locks"
+    lock_root = Path(write_ops_module.tempfile.gettempdir()) / (
+        "agentic-pkm-atomic-append-locks"
     )
     with write_ops_module._open_atomic_append_authority(
         vault_root,
         note_rel_path(STEERING_LOG),
     ) as authority:
-        token = steering_module.hashlib.sha256(
+        token = write_ops_module.hashlib.sha256(
             authority.route_key.encode("utf-8")
         ).hexdigest()
     return (
@@ -735,6 +737,38 @@ def test_concurrent_steering_log_appends_preserve_all_entries_and_bookkeeping(
     assert note.values["entry_count"] == writer_count
     last_entry = [line for line in body.splitlines() if '"operation_id":' in line][-1]
     assert note.values["last_appended"] == last_entry.split("]", 1)[0].removeprefix("- [")
+
+
+def test_generic_atomic_authority_and_heimdal_delegate_share_one_lock_namespace(
+    tmp_path: Path,
+) -> None:
+    vault_root = _vault(tmp_path)
+    relative = note_rel_path(STEERING_LOG)
+    generic_acquired = threading.Event()
+    release_generic = threading.Event()
+    heimdal_acquired = threading.Event()
+
+    def hold_generic() -> None:
+        with write_ops_module.locked_atomic_append_authority(
+            vault_root, relative
+        ):
+            generic_acquired.set()
+            assert release_generic.wait(timeout=5)
+
+    def acquire_heimdal() -> None:
+        assert generic_acquired.wait(timeout=5)
+        with steering_module._locked_steering_log(vault_root):
+            heimdal_acquired.set()
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        first = executor.submit(hold_generic)
+        second = executor.submit(acquire_heimdal)
+        assert generic_acquired.wait(timeout=5)
+        assert not heimdal_acquired.wait(timeout=0.1)
+        release_generic.set()
+        first.result(timeout=5)
+        second.result(timeout=5)
+    assert heimdal_acquired.is_set()
 
 
 def test_steering_log_retry_recovers_interrupted_states(
@@ -2485,12 +2519,12 @@ def test_steering_log_cross_key_unrelated_clean_cohort_blocks_unchanged(
             json.dumps(foreign_clean, ensure_ascii=True, sort_keys=True) + "\n"
         ).encode()
         state_path.write_bytes(foreign_raw)
-        witness_token = steering_module.hashlib.sha256(
+        witness_token = write_ops_module.hashlib.sha256(
             changed_key.encode("utf-8")
         ).hexdigest()
         witness_path = (
-            Path(steering_module.tempfile.gettempdir())
-            / "agentic-pkm-heimdal-locks"
+            Path(write_ops_module.tempfile.gettempdir())
+            / "agentic-pkm-atomic-append-locks"
             / f"{witness_token}.lock"
         )
         witness_path.write_bytes(foreign_raw)
@@ -2909,12 +2943,12 @@ def test_steering_log_impossible_cross_key_frontier_blocks_unchanged(
     later_state_path = state_paths[1]
     later_swap_path = later_state_path.with_suffix(".swap")
     later_key = json.loads(later_state_path.read_text())["path_lock_key"]
-    witness_token = steering_module.hashlib.sha256(
+    witness_token = write_ops_module.hashlib.sha256(
         later_key.encode("utf-8")
     ).hexdigest()
     later_witness_path = (
-        Path(steering_module.tempfile.gettempdir())
-        / "agentic-pkm-heimdal-locks"
+        Path(write_ops_module.tempfile.gettempdir())
+        / "agentic-pkm-atomic-append-locks"
         / f"{witness_token}.lock"
     )
     active = json.loads(later_witness_path.read_text())
@@ -3130,10 +3164,10 @@ def test_steering_log_cross_key_phase_barriers_block_unchanged(
 def test_steering_log_clean_state_recovers_after_temporary_witness_loss(
     tmp_path: Path,
 ) -> None:
-    isolated_temp_root = Path(steering_module.tempfile.gettempdir())
+    isolated_temp_root = Path(write_ops_module.tempfile.gettempdir())
     assert isolated_temp_root == tmp_path / "host-temp"
     unrelated_lock_root = tmp_path / "unrelated-host-temp" / (
-        "agentic-pkm-heimdal-locks"
+        "agentic-pkm-atomic-append-locks"
     )
     unrelated_lock_root.mkdir(parents=True)
     unrelated_sentinel = unrelated_lock_root / "unrelated-live-resource.lock"

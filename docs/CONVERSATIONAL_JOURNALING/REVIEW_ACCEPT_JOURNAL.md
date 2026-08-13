@@ -25,6 +25,17 @@ JRNL-03 stages a candidate; nobody has looked at it yet. This task is the review
 6. **Acceptance intent survives a blocked write path.** If WriteGuard is unhealthy/blocked at the moment of promotion, the checked box itself is already durable (it lives in the staged draft file, on disk, independent of promotion succeeding). The review surface must show an honest **"accepted, pending materialization"** state — distinct from both "not yet reviewed" and "fully materialized" — and a retry path re-attempts promotion without requiring the owner to re-click; the acceptance intent is never silently dropped.
 7. **Every action is a tap/click affordance.** Accept, dismiss, and expand/read all require zero typing; only the optional edit-before-accept step introduces free text, and it is never required.
 
+The canonical production registry watcher invokes
+`app.journaling.review.process_journal_reviews_tick` on every cycle. It scans the vault-durable
+journal candidate queue, processes checked actions, and automatically retries them; a checked
+accept blocked by WriteGuard is rediscovered by a later healthy watcher tick without another tap.
+`python -m app.cli journaling review-tick` exposes the same deterministic processor for an explicit
+operator run, while `journaling review-status` projects one date without mutation. Authority
+receipts use a dedicated `journal-review-outbox.jsonl` under the watcher state directory in
+production (or `JOURNAL_REVIEW_OUTBOX_PATH` when configured), separate from the runtime index audit
+log. Standalone callers default to `runtime/journal-review-outbox.jsonl` and must provision its
+parent directory durably.
+
 ## Concretely
 
 ```
@@ -81,7 +92,7 @@ Assembling day context (JRNL-01), leading the conversation (JRNL-02), and genera
 
 ## Restart / Durability Posture
 
-The staged draft, the checked/unchecked state of its acceptance checkbox, and any already-accepted journal note are all vault-durable — a restart at any point (before, during, or after a tap) loses none of this. The one non-durable element is an in-flight *promotion attempt* itself (the process of moving/writing the accepted note if it was interrupted mid-write): the promotion write is atomic-or-absent, so a restart mid-promotion leaves either the pre-acceptance staged state (checkbox still shows checked, note not yet at its final location — surfaced as "accepted, pending materialization") or a complete accepted note, never a half-written one. The owner experiences, at worst, a slightly delayed materialization after a restart — never a lost acceptance and never a corrupted note.
+The staged draft, the checked/unchecked state of its acceptance checkbox, and any already-accepted journal note are all vault-durable — a restart at any point (before, during, or after a tap) loses none of this. JRNL-03 and JRNL-04 share one per-day lifecycle lock across the primary candidate, addendum candidate, canonical transition, and receipt-bound candidate retirement, so draft regeneration cannot erase checked intent or stage an addendum while primary acceptance is still reconciling. Canonical publication is atomic-or-absent; deterministic canonical/addendum evidence reconciles a receipt interrupted after publication; the receipt is atomically replaced, fsynced, reread, and proven before the candidate is conditionally moved from its visible queue name to a receipt-bound, scanner-inert archive. The archive is retained as recovery evidence instead of being unlinked through a replacement race. A restart therefore resumes from the checked or receipt-bound queue item and never requires a second owner action.
 
 ## Related Docs
 

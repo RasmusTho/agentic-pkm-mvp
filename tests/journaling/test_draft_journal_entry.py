@@ -23,6 +23,7 @@ from app.journaling.draft import (
     resolve_journal_draft_activation_receipt,
 )
 from app.knowledge_acquisition.candidate_writeback import ARTIFACT_CLASS, DEFAULT_SOURCES_DIR
+from app.proposals.declined_ledger import DeclinedLedger
 from app.reasoning.schema import Claim, Inference, ReasoningOutput
 from app.vault.manager import VaultContext
 from app.write_guard import WriteGuard, WritesBlockedError
@@ -371,7 +372,7 @@ def test_symlinked_per_draft_lock_is_rejected_without_touching_target(
     outside.write_text("owner content", encoding="utf-8")
     journal_dir = root / get_vault_system_dir_rel(root) / "drafts" / "journal"
     journal_dir.mkdir(parents=True)
-    (journal_dir / ".2026-07-15.md.lock").symlink_to(outside)
+    (journal_dir / ".2026-07-15.journal-day.lock").symlink_to(outside)
 
     with pytest.raises(ValueError, match="journal draft lock path is a symlink"):
         draft_journal_entry(
@@ -2131,3 +2132,140 @@ def test_acceptance_winning_route_race_blocks_stale_primary_candidate(
 
     assert accepted.read_text(encoding="utf-8").endswith("Human-owned text.\n")
     assert not list(root.glob("**/drafts/journal/*.md"))
+
+
+@pytest.mark.parametrize(
+    ("checked_text", "expected_action"),
+    (("- [x] Accept", "accept"), ("- [x] Dismiss", "dismiss")),
+)
+def test_draft_cannot_replace_checked_pending_review_intent(
+    tmp_path: Path, checked_text: str, expected_action: str
+) -> None:
+    root, context, session_id, _capture = _seed_inputs(tmp_path)
+    first = draft_journal_entry(
+        vault_context=context,
+        for_date=DAY,
+        session_id=session_id,
+        write_guard=_allowing_guard(),
+    )
+    candidate = root / first.path
+    text = candidate.read_text(encoding="utf-8")
+    if expected_action == "accept":
+        changed = text.replace("- [ ] Accept", checked_text)
+    else:
+        changed = text.replace("- [ ] Dismiss", checked_text)
+    candidate.write_text(changed, encoding="utf-8")
+    durable = candidate.read_bytes()
+
+    with pytest.raises(
+        JournalDraftBlockedError, match=f"pending {expected_action} intent"
+    ):
+        draft_journal_entry(
+            vault_context=context,
+            for_date=DAY,
+            session_id=session_id,
+            write_guard=_allowing_guard(),
+        )
+    assert candidate.read_bytes() == durable
+
+
+def test_primary_receipt_pending_forbids_addendum_staging(tmp_path: Path) -> None:
+    root, context, session_id, _capture = _seed_inputs(tmp_path)
+    first = draft_journal_entry(
+        vault_context=context,
+        for_date=DAY,
+        session_id=session_id,
+        write_guard=_allowing_guard(),
+    )
+    primary = root / first.path
+    primary.write_text(
+        primary.read_text(encoding="utf-8").replace(
+            "- [ ] Accept", "- [x] Accept"
+        ),
+        encoding="utf-8",
+    )
+    canonical = root / "1_Calendar" / "Daily" / f"{DAY.isoformat()}.md"
+    canonical.parent.mkdir(parents=True)
+    canonical.write_text(
+        "---\nauthority_state: accepted\naccepted_by: human\n---\n\n"
+        "Receipt pending.\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(JournalDraftBlockedError, match="transition is still pending"):
+        draft_journal_entry(
+            vault_context=context,
+            for_date=DAY,
+            session_id=session_id,
+            write_guard=_allowing_guard(),
+        )
+    assert primary.exists()
+    assert not primary.with_name(f"{DAY.isoformat()}-addendum.md").exists()
+
+
+def test_unchanged_dismissed_basis_is_suppressed_but_changed_basis_reopens(
+    tmp_path: Path,
+) -> None:
+    root, context, session_id, _capture = _seed_inputs(tmp_path)
+    ledger = DeclinedLedger(tmp_path / "declined.jsonl")
+    real_atomic_write = draft_module._atomic_write_at
+    first_note: str | None = None
+
+    def capture_first_write(directory_fd: int, filename: str, content: str) -> None:
+        nonlocal first_note
+        first_note = content
+        real_atomic_write(directory_fd, filename, content)
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(draft_module, "_atomic_write_at", capture_first_write)
+    try:
+        result = draft_journal_entry(
+            vault_context=context,
+            for_date=DAY,
+            session_id=session_id,
+            write_guard=_allowing_guard(),
+            declined_ledger=ledger,
+        )
+    finally:
+        monkeypatch.undo()
+    assert first_note is not None
+    path = root / result.path
+    frontmatter, body = load_frontmatter(first_note)
+    from app.journaling.lifecycle import journal_decline_finding_id
+
+    finding_id = journal_decline_finding_id(
+        candidate_type="primary",
+        for_date=DAY.isoformat(),
+        frontmatter=frontmatter,
+        body=body,
+    )
+    ledger.record_decline(
+        finding_id,
+        finding_class="journal.candidate",
+        declined_at="2026-07-15T20:30:00Z",
+        write_guard=_allowing_guard(),
+    )
+    path.unlink()
+
+    with pytest.raises(JournalDraftBlockedError, match="previously dismissed"):
+        draft_journal_entry(
+            vault_context=context,
+            for_date=DAY,
+            session_id=session_id,
+            write_guard=_allowing_guard(),
+            declined_ledger=ledger,
+        )
+
+    transcript = next((root / ".chats" / "reflection").glob("*.md"))
+    transcript.write_text(
+        transcript.read_text(encoding="utf-8") + "\n> owner: Changed reflection.\n",
+        encoding="utf-8",
+    )
+    reopened = draft_journal_entry(
+        vault_context=context,
+        for_date=DAY,
+        session_id=session_id,
+        write_guard=_allowing_guard(),
+        declined_ledger=ledger,
+    )
+    assert (root / reopened.path).exists()

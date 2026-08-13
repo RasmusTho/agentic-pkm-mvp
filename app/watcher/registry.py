@@ -27,6 +27,7 @@ from app.events.types import INGEST_VAULT_CHANGED, PANEL_SCAN_REQUESTED
 from app.knowledge.errors import KnowledgeWriteConflict
 from app.knowledge.write_ops import read_note_text_with_version
 from app.knowledge.write_ops import write_note_from_absolute
+from app.journaling.review import process_journal_reviews_tick
 from app.objects import resolve_canonical_object_id
 from app.services.note_uuid import ensure_note_uuid
 from app.services.outbox import (
@@ -1651,6 +1652,7 @@ def run_registry_once(config_path: Path) -> dict[str, dict[str, object]]:
         now=now,
         cadence=BriefingTickCadence(),
     )
+    summaries["journal_review"] = _run_journal_review_tick(cfg)
     enqueue_failures_total = sum(state.enqueue_failures_total for state in states.values())
     write_registry_heartbeat(
         path=cfg.heartbeat_path,
@@ -1707,6 +1709,7 @@ def run_registry_forever(config_path: Path, *, max_ticks: int | None = None) -> 
             now=now,
             cadence=briefing_cadence,
         )
+        summaries["journal_review"] = _run_journal_review_tick(cfg)
         enqueue_failures_total = sum(state.enqueue_failures_total for state in states.values())
         write_registry_heartbeat(
             path=cfg.heartbeat_path,
@@ -1775,6 +1778,44 @@ def _run_briefing_tick(
     except Exception as exc:
         logger.exception("daily briefing scheduled tick failed")
         return {"triggered": False, "reason": "generation_failed", "error": str(exc)}
+
+
+def _run_journal_review_tick(cfg: RegistryConfig) -> dict[str, object]:
+    """Advance durable checked journal intent on every production watcher cycle."""
+
+    if not cfg.enable:
+        return {"scanned": 0, "reason": "watcher_disabled"}
+    if cfg.stop_file.exists():
+        return {"scanned": 0, "reason": "watcher_paused"}
+    try:
+        context = VaultManager().validate_vault(cfg.vault_path)
+        override = os.getenv("JOURNAL_REVIEW_OUTBOX_PATH", "").strip()
+        receipt_path = (
+            Path(override).expanduser()
+            if override
+            else cfg.state_dir / "journal-review-outbox.jsonl"
+        )
+        result = process_journal_reviews_tick(
+            vault_context=context,
+            outbox_path=receipt_path,
+        )
+        return {
+            "scanned": len(result.scanned_dates),
+            "materialized": result.materialized,
+            "pending": result.pending,
+            "reason": "processed",
+        }
+    except Exception as exc:
+        # The checked candidate remains the pending authority. Surface the
+        # failure and let the next production watcher cycle retry it.
+        logger.exception("journal review production tick failed")
+        return {
+            "scanned": 0,
+            "materialized": 0,
+            "pending": 1,
+            "reason": "processing_failed",
+            "error": str(exc),
+        }
 
 
 __all__ = [

@@ -36,6 +36,12 @@ from app.journaling.day_context import (
     DayContextItem,
     assemble_day_context,
 )
+from app.journaling.lifecycle import (
+    JournalCandidateType,
+    JournalCandidateContractError,
+    checked_journal_action,
+    journal_decline_finding_id,
+)
 from app.journaling.transcript_protocol import ROLE_MESSAGE_FORMAT_BLOCKQUOTE_V1
 from app.knowledge_acquisition.candidate_writeback import ARTIFACT_CLASS
 from app.knowledge_compilation.proposal_builders import (
@@ -54,6 +60,7 @@ from app.reasoning.multi import (
     run_multi_note_reasoning,
 )
 from app.reasoning.schema import ReasoningOutput
+from app.proposals.declined_ledger import DeclinedLedger, default_declined_ledger
 from app.vault.manager import VaultContext
 from app.vault.paths import get_vault_system_dir_rel
 from app.write_guard import DEFAULT_WRITE_GUARD, WriteGuard
@@ -171,6 +178,7 @@ def draft_journal_entry(
     write_guard: WriteGuard = DEFAULT_WRITE_GUARD,
     activation_posture: ActivationPosture | None = None,
     reasoning_fn: ReasoningFunction = run_multi_note_reasoning,
+    declined_ledger: DeclinedLedger | None = None,
     now: datetime | None = None,
     staleness_days: int = DEFAULT_STALENESS_DAYS,
 ) -> JournalDraftResult:
@@ -183,6 +191,7 @@ def draft_journal_entry(
     """
 
     vault_root = _vault_root(vault_context)
+    ledger = declined_ledger or default_declined_ledger()
     if not session_id.strip():
         raise ValueError("draft_journal_entry requires a non-empty session_id")
     if staleness_days <= 0:
@@ -205,7 +214,7 @@ def draft_journal_entry(
     # preventing same-day lost updates rather than merely preventing torn bytes.
     write_guard.assert_writes_allowed(JOURNAL_DRAFT_WRITE_ACTION)
     with _locked_draft(vault_root, draft_rel) as (directory_fd, filename):
-        # Acceptance and drafting share this per-candidate lock. A draft run
+        # Acceptance and drafting share this per-day lock. A draft run
         # may have selected the primary path immediately before JRNL-04
         # materialized the day's canonical entry. Re-check after acquiring the
         # lock so that stale run refuses and retries onto the addendum path;
@@ -215,9 +224,34 @@ def draft_journal_entry(
                 "journal acceptance state changed before staging; retry the draft "
                 "so the canonical primary/addendum path is resolved again"
             )
-        existing_frontmatter = _load_existing_draft_frontmatter_at(
+        primary_name = f"{for_date.isoformat()}.md"
+        addendum_name = f"{for_date.isoformat()}-addendum.md"
+        other_name = primary_name if is_addendum else addendum_name
+        if _candidate_or_retirement_exists_at(directory_fd, other_name):
+            raise JournalDraftBlockedError(
+                "journal review transition is still pending; retire the existing "
+                "candidate before staging another same-day proposal"
+            )
+        existing_frontmatter, existing_body = _load_existing_draft_at(
             directory_fd, filename
         )
+        if existing_frontmatter:
+            candidate_type: JournalCandidateType = (
+                "addendum" if is_addendum else "primary"
+            )
+            try:
+                pending_action = checked_journal_action(
+                    existing_body, candidate_type=candidate_type
+                )
+            except JournalCandidateContractError as exc:
+                raise JournalDraftBlockedError(
+                    "existing journal candidate review state is malformed"
+                ) from exc
+            if pending_action is not None:
+                raise JournalDraftBlockedError(
+                    f"journal candidate has durable pending {pending_action} intent; "
+                    "draft generation cannot replace it"
+                )
         previous_session_ids = (
             _session_ids(
                 existing_frontmatter.get("sources"),
@@ -373,6 +407,17 @@ def draft_journal_entry(
         note_text = dump_frontmatter(frontmatter, compilation.body or "") + _review_actions(
             is_addendum=is_addendum
         )
+        finding_id = journal_decline_finding_id(
+            candidate_type="addendum" if is_addendum else "primary",
+            for_date=for_date.isoformat(),
+            frontmatter=frontmatter,
+            body=(compilation.body or "") + _review_actions(is_addendum=is_addendum),
+        )
+        if ledger.is_declined(finding_id):
+            raise JournalDraftBlockedError(
+                "unchanged journal proposal was previously dismissed; a changed "
+                "content/source basis is required before reproposal"
+            )
 
         # Re-resolve inside the same serialized transaction immediately before
         # replace so a removed or newly blocked source cannot be laundered into
@@ -435,9 +480,10 @@ def _draft_relative_path(
 def _locked_draft(
     vault_root: Path, relative_path: Path
 ) -> Iterator[tuple[int, str]]:
-    """Open a no-follow staging directory and hold the per-draft lock."""
+    """Open a no-follow staging directory and hold the per-day lock."""
 
-    lock_key = f"{vault_root}:{relative_path}"
+    day_key = _journal_day_key(relative_path.name)
+    lock_key = f"{vault_root}:{relative_path.parent}:{day_key}"
     with _PROCESS_LOCKS_GUARD:
         process_lock = _PROCESS_LOCKS.setdefault(lock_key, threading.RLock())
     with process_lock:
@@ -464,6 +510,7 @@ def _locked_draft_process_safe(
             symlink_message="journal draft bootstrap lock path is a symlink",
         )
         fcntl.flock(bootstrap_fd, fcntl.LOCK_EX)
+        _require_open_lock_at(root_fd, ".journal-draft-bootstrap.lock", bootstrap_fd)
         for component in relative_path.parent.parts:
             try:
                 next_fd = os.open(
@@ -496,7 +543,7 @@ def _locked_draft_process_safe(
                 os.close(current_fd)
             current_fd = next_fd
 
-        lock_name = f".{relative_path.name}.lock"
+        lock_name = f".{_journal_day_key(relative_path.name)}.journal-day.lock"
         lock_fd = _open_lock_at(
             current_fd,
             lock_name,
@@ -504,6 +551,7 @@ def _locked_draft_process_safe(
         )
         try:
             fcntl.flock(lock_fd, fcntl.LOCK_EX)
+            _require_open_lock_at(current_fd, lock_name, lock_fd)
             fcntl.flock(bootstrap_fd, fcntl.LOCK_UN)
             os.close(bootstrap_fd)
             bootstrap_fd = None
@@ -548,33 +596,44 @@ def _open_lock_at(
         raise
 
     try:
-        opened = os.fstat(descriptor)
-        named = os.stat(filename, dir_fd=directory_fd, follow_symlinks=False)
-        if not stat.S_ISREG(opened.st_mode) or not stat.S_ISREG(named.st_mode):
-            raise ValueError("journal draft lock path is not a regular file")
-        if (opened.st_dev, opened.st_ino) != (named.st_dev, named.st_ino):
-            raise ValueError("journal draft lock path changed while opening")
+        _require_open_lock_at(directory_fd, filename, descriptor)
     except BaseException:
         os.close(descriptor)
         raise
     return descriptor
 
 
-def _load_existing_draft_frontmatter_at(
+def _require_open_lock_at(
+    directory_fd: int, filename: str, descriptor: int
+) -> None:
+    opened = os.fstat(descriptor)
+    named = os.stat(filename, dir_fd=directory_fd, follow_symlinks=False)
+    if (
+        not stat.S_ISREG(opened.st_mode)
+        or opened.st_nlink != 1
+        or not stat.S_ISREG(named.st_mode)
+        or named.st_nlink != 1
+    ):
+        raise ValueError("journal draft lock path is not one regular file")
+    if (opened.st_dev, opened.st_ino) != (named.st_dev, named.st_ino):
+        raise ValueError("journal draft lock path changed while opening")
+
+
+def _load_existing_draft_at(
     directory_fd: int, filename: str
-) -> dict[str, object]:
+) -> tuple[dict[str, object], str]:
     try:
         descriptor = os.open(
             filename, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=directory_fd
         )
     except FileNotFoundError:
-        return {}
+        return {}, ""
     except OSError as exc:
         if exc.errno == errno.ELOOP:
             raise ValueError("existing journal draft target is a symlink") from exc
         raise
     with os.fdopen(descriptor, "r", encoding="utf-8") as handle:
-        frontmatter, _body = load_frontmatter(handle.read())
+        frontmatter, body = load_frontmatter(handle.read())
     if (
         frontmatter.get("kind") != "journal-draft"
         or frontmatter.get("authority_state") != "proposal"
@@ -583,7 +642,29 @@ def _load_existing_draft_frontmatter_at(
         raise ValueError(
             f"existing journal draft at {filename} has an incompatible contract"
         )
-    return frontmatter
+    return frontmatter, body
+
+
+def _journal_day_key(filename: str) -> str:
+    name = filename
+    if name.startswith(".") and ".journal-retire-" in name:
+        name = name[1:].split(".journal-retire-", 1)[0]
+    stem = Path(name).stem
+    return stem.removesuffix("-addendum")
+
+
+def _candidate_or_retirement_exists_at(directory_fd: int, filename: str) -> bool:
+    retirement_prefix = f".{filename}.journal-retire-"
+    for entry in os.listdir(directory_fd):
+        if entry != filename and not entry.startswith(retirement_prefix):
+            continue
+        observed = os.stat(entry, dir_fd=directory_fd, follow_symlinks=False)
+        if not stat.S_ISREG(observed.st_mode):
+            raise JournalDraftBlockedError(
+                "journal candidate lifecycle path must be a regular file"
+            )
+        return True
+    return False
 
 
 def _session_ids(
