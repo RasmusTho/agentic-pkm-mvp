@@ -469,6 +469,11 @@ def test_store_object_composite_key_producer_inventory_is_exact() -> None:
         ), f"dropping {table}'s first producer entry did not fail the producer gate"
 
 
+def test_ingest_projection_producer_and_consumer_inventory_is_exact() -> None:
+    """Issue #4578's exact Verify target retains the bidirectional inventory proof."""
+    test_store_object_composite_key_producer_inventory_is_exact()
+
+
 def test_post_cutover_store_fixture_mutations_are_binding_scoped() -> None:
     """Current-shape fixtures cannot silently retain global object identity.
 
@@ -827,6 +832,15 @@ def test_binding_cutover_worklist_is_derived_from_the_manifest() -> None:
             assert row.rebuild_mechanism != "no-producer", row
 
 
+def test_ingest_group_is_fully_binding_keyed() -> None:
+    """All four MVR-05A4 rows are keyed and owned by the residual revision."""
+    manifest = load_manifest()
+    for table in ("chunks", "embeddings", "relations", "membership"):
+        assert manifest[table]["classification"] == "binding-scoped", table
+        assert manifest[table]["binding_key"] == "keyed", table
+        assert manifest[table]["owning_revision"] == "f4a05a4b0001", table
+
+
 def test_orphaned_relation_artifacts_are_removed_or_classified() -> None:
     """Both incompatible legacy `relations` schema seams are retired.
 
@@ -878,6 +892,11 @@ def test_orphaned_relation_artifacts_are_removed_or_classified() -> None:
         for producer in manifest["relations"]["producers"]
     ), "a seam that refuses before SQL is not a durable mutation producer"
     assert "retired" in manifest["relations"]["reason"]
+
+
+def test_legacy_relation_compatibility_seam_is_removed() -> None:
+    """Issue #4578's exact Verify target retains the retired-seam proof."""
+    test_orphaned_relation_artifacts_are_removed_or_classified()
 
 
 def test_the_manifest_is_checked_in_and_machine_readable() -> None:

@@ -531,7 +531,8 @@ own forward-only migration.
 - `id` (`uuid`, PK; default varies by migration)
 - `vault_binding_id` (`text`, `NOT NULL` after MVR-05A3)
 - `(vault_binding_id, object_id)` (composite FK → `store_objects`, `ON DELETE CASCADE`)
-- `chunk_id` (`uuid`, nullable FK → `chunks.id`, `ON DELETE CASCADE`)
+- `chunk_id` (`uuid`, nullable; composite FK with `vault_binding_id` →
+  `chunks(vault_binding_id, id)`, `ON DELETE CASCADE` after MVR-05A4)
 - `provider` (`text`, default `mock`)
 - `dim` (`int`, default `1536`)
 - `embedding` (either `double precision[]` with a cardinality check, or `vector` when vector extension is enabled in older branches)
