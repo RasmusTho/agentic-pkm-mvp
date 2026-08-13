@@ -76,6 +76,19 @@ def _info(metadata: volume.ArchiveVolumeMetadata) -> bytes:
     )
 
 
+def _attach_info(metadata: volume.ArchiveVolumeMetadata) -> bytes:
+    return _plist(
+        {
+            "system-entities": [
+                {
+                    "dev-entry": _DEVICE,
+                    "mount-point": str(metadata.mountpoint),
+                }
+            ]
+        }
+    )
+
+
 def _disk_info(
     metadata: volume.ArchiveVolumeMetadata,
     **overrides: object,
@@ -126,7 +139,12 @@ class FakeRunner:
         self.attach_rc = attach_rc
         self.calls: list[tuple[tuple[str, ...], bytes | None]] = []
 
-    def __call__(self, argv: tuple[str, ...], stdin: bytes | None = None) -> volume.CommandResult:
+    def __call__(
+        self,
+        argv: tuple[str, ...],
+        stdin: bytes | None = None,
+        cwd_fd: int | None = None,
+    ) -> volume.CommandResult:
         self.calls.append((argv, stdin))
         if argv == (volume.HDIUTIL, "info", "-plist"):
             return volume.CommandResult(0, _info(self.metadata) if self.attached else _plist({"images": []}))
@@ -153,11 +171,18 @@ class FakeRunner:
             if self.attach_rc == 0:
                 self.attached = True
                 self.metadata.mountpoint.chmod(self.metadata.mode)
-                return volume.CommandResult(0, _info(self.metadata))
+                return volume.CommandResult(0, _attach_info(self.metadata))
             return volume.CommandResult(self.attach_rc, b"", b"fixture-private-detail")
         if argv[:2] == (volume.HDIUTIL, "create"):
-            self.metadata.bundle_path.mkdir()
-            return volume.CommandResult(0, _plist({}))
+            if cwd_fd is None:
+                raise AssertionError("create must carry descriptor-bound authority")
+            details = os.fstat(cwd_fd)
+            os.mkdir(self.metadata.bundle_path.name, dir_fd=cwd_fd)
+            return volume.CommandResult(
+                0,
+                _plist({}),
+                cwd_identity=(details.st_dev, details.st_ino),
+            )
         if argv == (volume.HDIUTIL, "detach", _DEVICE):
             self.attached = False
             return volume.CommandResult(0, b"")
@@ -243,7 +268,8 @@ def test_provisioner_never_reformats_or_uses_parent_volume(tmp_path: Path) -> No
     assert create[create.index("-sectors") + 1] == str(_CAPACITY // 512)
     assert "-size" not in create
     assert str(metadata.bundle_path.parent) not in create
-    assert str(metadata.bundle_path) in create
+    assert create[-1] == metadata.bundle_path.name
+    assert str(metadata.bundle_path) not in create
     assert all(_PASSPHRASE not in part for part in flattened)
     secret_inputs = [stdin for _argv, stdin in runner.calls if stdin is not None]
     assert secret_inputs == [(_PASSPHRASE + "\0").encode(), (_PASSPHRASE + "\0").encode()]
@@ -309,6 +335,97 @@ def test_partial_attach_failure_cleans_only_new_attachment(tmp_path: Path) -> No
     with pytest.raises(volume.ArchiveVolumeRefusedError):
         volume.mount_archive_volume(metadata, credential=_PASSPHRASE, runner=preexisting)
     assert not any(argv[:2] == (volume.HDIUTIL, "detach") for argv, _ in preexisting.calls)
+
+
+@pytest.mark.parametrize("detach_rc", [0, 1])
+def test_attach_response_establishes_compensation_before_rediscovery(
+    tmp_path: Path,
+    detach_rc: int,
+) -> None:
+    metadata = _metadata(tmp_path)
+    _materialize_ready_fs(metadata)
+
+    class RediscoveryFailureRunner(FakeRunner):
+        def __init__(self) -> None:
+            super().__init__(metadata, attached=False)
+            self.info_calls = 0
+
+        def __call__(
+            self,
+            argv: tuple[str, ...],
+            stdin: bytes | None = None,
+            cwd_fd: int | None = None,
+        ) -> volume.CommandResult:
+            del cwd_fd
+            self.calls.append((argv, stdin))
+            if argv == (volume.HDIUTIL, "info", "-plist"):
+                self.info_calls += 1
+                if self.info_calls == 1:
+                    return volume.CommandResult(0, _plist({"images": []}))
+                return volume.CommandResult(0, _plist({}))
+            if argv[:2] == (volume.HDIUTIL, "attach"):
+                self.attached = True
+                return volume.CommandResult(0, _attach_info(metadata))
+            if argv == (volume.HDIUTIL, "detach", _DEVICE):
+                if detach_rc == 0:
+                    self.attached = False
+                return volume.CommandResult(detach_rc, b"", b"fixture-private-detail")
+            raise AssertionError(f"unexpected command shape: {argv!r}")
+
+    runner = RediscoveryFailureRunner()
+    with pytest.raises(volume.ArchiveVolumeRefusedError):
+        volume.mount_archive_volume(metadata, credential=_PASSPHRASE, runner=runner)
+
+    assert (volume.HDIUTIL, "detach", _DEVICE) in [argv for argv, _ in runner.calls]
+    assert runner.attached is (detach_rc != 0)
+
+
+def test_create_is_descriptor_relative_across_parent_path_swap(tmp_path: Path) -> None:
+    metadata = _planned_metadata(tmp_path)
+    metadata_path = tmp_path / "archive-metadata.json"
+    volume.write_archive_metadata(metadata_path, metadata)
+    original_parent = metadata.bundle_path.parent
+    displaced_parent = tmp_path / "displaced-external-parent"
+
+    class ParentSwapRunner(FakeRunner):
+        create_cwd_identity: tuple[int, int] | None = None
+
+        def __call__(
+            self,
+            argv: tuple[str, ...],
+            stdin: bytes | None = None,
+            cwd_fd: int | None = None,
+        ) -> volume.CommandResult:
+            if argv[:2] != (volume.HDIUTIL, "create"):
+                return super().__call__(argv, stdin, cwd_fd)
+            self.calls.append((argv, stdin))
+            original_parent.rename(displaced_parent)
+            original_parent.mkdir()
+            if cwd_fd is None:
+                metadata.bundle_path.mkdir()
+                return volume.CommandResult(0, _plist({}))
+            held = os.fstat(cwd_fd)
+            self.create_cwd_identity = (held.st_dev, held.st_ino)
+            os.mkdir(metadata.bundle_path.name, dir_fd=cwd_fd)
+            return volume.CommandResult(
+                0,
+                _plist({}),
+                cwd_identity=self.create_cwd_identity,
+            )
+
+    runner = ParentSwapRunner(metadata, attached=False)
+    with pytest.raises(volume.ArchiveVolumeRefusedError):
+        volume.provision_archive_volume(
+            metadata,
+            credential=_PASSPHRASE,
+            runner=runner,
+            metadata_path=metadata_path,
+        )
+
+    assert runner.create_cwd_identity is not None
+    assert not (displaced_parent / metadata.bundle_path.name).exists()
+    assert not metadata.bundle_path.exists()
+    assert volume.load_archive_metadata(metadata_path) == metadata
 
 
 def test_idempotent_replay_never_overwrites_or_reattaches(tmp_path: Path) -> None:
@@ -492,6 +609,8 @@ def test_command_adapter_is_allowlisted_bounded_and_redacted(tmp_path: Path) -> 
     ):
         with pytest.raises(volume.ArchiveVolumeRefusedError):
             volume.validate_command(forbidden, metadata)
+    with pytest.raises(volume.ArchiveVolumeRefusedError):
+        volume.validate_command(volume.create_command(metadata), metadata)
 
     signature = inspect.signature(volume.run_command)
     assert "shell" not in signature.parameters
@@ -503,6 +622,30 @@ def test_command_adapter_is_allowlisted_bounded_and_redacted(tmp_path: Path) -> 
     with pytest.raises(volume.ArchiveVolumeRefusedError) as error:
         volume.run_command((volume.HDIUTIL, "info", "-plist"), metadata, executor=timeout_runner)
     assert "fixture-private-timeout-detail" not in str(error.value)
+
+    captured: dict[str, object] = {}
+
+    def descriptor_executor(argv: list[str], **kwargs: object):
+        captured["argv"] = argv
+        captured.update(kwargs)
+        return volume.subprocess.CompletedProcess(argv, 0, _plist({}), b"")
+
+    parent_descriptor = os.open(metadata.bundle_path.parent, os.O_RDONLY)
+    try:
+        result = volume.run_command(
+            volume.create_command(metadata),
+            metadata,
+            _PASSPHRASE.encode(),
+            parent_descriptor,
+            executor=descriptor_executor,
+        )
+        details = os.fstat(parent_descriptor)
+    finally:
+        os.close(parent_descriptor)
+    assert captured["cwd"] == f"/dev/fd/{parent_descriptor}"
+    assert captured["pass_fds"] == (parent_descriptor,)
+    assert captured["argv"][-1] == metadata.bundle_path.name
+    assert result.cwd_identity == (details.st_dev, details.st_ino)
 
 
 def test_metadata_is_closed_value_free_and_atomic(tmp_path: Path) -> None:

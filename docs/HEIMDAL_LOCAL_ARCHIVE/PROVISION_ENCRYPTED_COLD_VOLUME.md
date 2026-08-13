@@ -45,7 +45,11 @@ volume, not a child directory or symlink. The capacity is an exact positive mult
 bounded by the sparsebundle format, and is passed as a checked sector count. The mounted APFS volume
 must report the same capacity. Owner, group, mode, mountpoint, bundle path, device, filesystem UUID,
 volume name, external-media flag, filesystem type, and encryption flag are all checked using bounded
-typed output and descriptor-bound filesystem identity.
+typed output and descriptor-bound filesystem identity. Creation passes only the bundle basename to
+a child process whose working directory is the still-open, revalidated external-root descriptor;
+the descriptor and its device/inode authority remain live through the creation postcondition and
+any exact-identity cleanup. A successful attach response establishes the newly attached device
+identity before rediscovery, so later validation failure compensates only that invocation's mount.
 
 The unlock secret is the required `heimdal.archive-pass` declaration for the dedicated
 `heimdal-cold-volume` consumer in the Local Secret Provisioning contract. HSP resolves it from the
