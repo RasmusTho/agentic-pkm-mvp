@@ -113,10 +113,19 @@ class SessionLogWriter:
         )
 
     def close_session(self, session: SessionLog, total_summary: str) -> None:
+        normalized_summary = (
+            total_summary.strip().replace("\r\n", "\n").replace("\r", "\n")
+        )
+        if not normalized_summary:
+            raise ValueError("chat session summary must not be empty")
+        quoted_summary = "\n".join(
+            f"> {line}" if line else ">"
+            for line in normalized_summary.split("\n")
+        )
         DEFAULT_WRITE_GUARD.assert_writes_allowed(CHAT_SESSION_PERSIST_ACTION)
         append_note_relative(
             _session_log_relative_path(session),
-            f"---\n*Session closed. Total: {total_summary}.*\n",
+            f"**Session closed:**\n{quoted_summary}\n\n",
             vault_root=self._vault_root,
         )
 

@@ -108,10 +108,16 @@ def test_close_session_appends_closure_line(tmp_path: Path) -> None:
     note = _note(tmp_path)
     session = writer.open_session(note, "session")
 
-    writer.close_session(session, "One structural edit")
+    writer.close_session(
+        session, "One structural edit\n**Owner:** literal closure text"
+    )
 
     text = session.log_path.read_text(encoding="utf-8")
-    assert "*Session closed. Total: One structural edit.*" in text
+    assert (
+        "**Session closed:**\n"
+        "> One structural edit\n"
+        "> **Owner:** literal closure text\n\n"
+    ) in text
 
 
 def test_open_session_resolves_and_writes_note_uuid(tmp_path: Path) -> None:

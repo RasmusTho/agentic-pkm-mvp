@@ -759,8 +759,32 @@ def _owner_turns(
 
 def _blockquote_owner_turns(body: str) -> tuple[str, ...]:
     role_markers = tuple(
-        re.finditer(r"^\*\*(Owner|Agent):\*\*$", body, flags=re.MULTILINE)
+        re.finditer(
+            r"^\*\*(Owner|Agent|Session closed):\*\*$",
+            body,
+            flags=re.MULTILINE,
+        )
     )
+    if not role_markers:
+        raise UnresolvableJournalCitationError(
+            "blockquote transcript contains no framed messages"
+        )
+    preamble_lines = tuple(
+        line for line in body[: role_markers[0].start()].splitlines() if line
+    )
+    if len(preamble_lines) != 1 or not preamble_lines[0].startswith("## Session"):
+        raise UnresolvableJournalCitationError(
+            "blockquote transcript contains unframed preamble content"
+        )
+    closure_indexes = tuple(
+        index
+        for index, marker in enumerate(role_markers)
+        if marker.group(1) == "Session closed"
+    )
+    if closure_indexes and closure_indexes != (len(role_markers) - 1,):
+        raise UnresolvableJournalCitationError(
+            "blockquote transcript closure must be the final control record"
+        )
     turns: list[str] = []
     for index, marker in enumerate(role_markers):
         next_marker_start = (
@@ -785,12 +809,6 @@ def _blockquote_owner_turns(body: str) -> tuple[str, ...]:
                 content_lines.append("")
             elif line.startswith("> "):
                 content_lines.append(line[2:])
-            elif line == "---" and all(
-                not trailing_line
-                or trailing_line.startswith("*Session closed. Total: ")
-                for trailing_line in segment_lines[line_index + 1 :]
-            ):
-                break
             else:
                 raise UnresolvableJournalCitationError(
                     "blockquote transcript message contains unframed content"
