@@ -16,6 +16,8 @@ import pytest
 
 import app.ops.host_secret_bootstrap as host_secret_bootstrap
 from app.ops.host_secret_bootstrap import (
+    HOST_SECRET_BOOTSTRAP_CHANNEL,
+    HOST_SECRET_BOOTSTRAP_CONSUMER,
     HOST_SECRET_BOOTSTRAP_FAILURE_REF,
     HOST_SECRET_RUNTIME_ENV_FILE,
     HostSecretBootstrapError,
@@ -32,11 +34,78 @@ _RAW_KEY = "a" * 64
 _OPENAI_KEY = "openai-key-" + ("o" * 32)
 _ANTHROPIC_KEY = "anthropic-key-" + ("a" * 32)
 _GITHUB_TOKEN = "ghp_" + ("g" * 36)
+_ARCHIVE_PASS = "fixture-archive-passphrase"
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 def _lookup(value: str = _RAW_KEY) -> KeychainLookup:
     return lambda _service, _account: value
+
+
+@pytest.mark.parametrize("channel", ["dev", "test", "prod"])
+def test_archive_consumer_gets_only_private_temporary_passphrase(
+    tmp_path: Path,
+    channel: str,
+) -> None:
+    observed_path: Path | None = None
+    requested: list[str] = []
+
+    def lookup(_service: str, account: str) -> str:
+        requested.append(account)
+        return _ARCHIVE_PASS
+
+    def runner(command: list[str], env: dict[str, str]) -> int:
+        nonlocal observed_path
+        assert command == ["archive-operation"]
+        assert "HEIMDAL_ARCHIVE_PASS" not in env
+        assert env[HOST_SECRET_BOOTSTRAP_CHANNEL] == channel
+        assert env[HOST_SECRET_BOOTSTRAP_CONSUMER] == "heimdal-cold-volume"
+        observed_path = Path(env[HOST_SECRET_RUNTIME_ENV_FILE])
+        assert stat.S_IMODE(observed_path.stat().st_mode) == 0o600
+        assert observed_path.read_text(encoding="utf-8") == (
+            f"HEIMDAL_ARCHIVE_PASS={_ARCHIVE_PASS}\n"
+        )
+        return 0
+
+    result = run_with_host_secrets(
+        channel=channel,
+        consumer="heimdal-cold-volume",
+        command=["archive-operation"],
+        keychain_lookup=lookup,
+        runner=runner,
+        directory=tmp_path,
+    )
+
+    assert result == 0
+    assert observed_path is not None and not observed_path.exists()
+    assert requested == [f"{channel}:heimdal-cold-volume:heimdal.archive-pass"]
+
+
+@pytest.mark.parametrize("value", ["short", "x" * 513, "contains\nnewline"])
+def test_archive_passphrase_rejects_malformed_value_without_launch_or_disclosure(
+    tmp_path: Path,
+    value: str,
+) -> None:
+    launched = False
+
+    def runner(_command: list[str], _env: dict[str, str]) -> int:
+        nonlocal launched
+        launched = True
+        return 0
+
+    with pytest.raises(HostSecretBootstrapError) as error:
+        run_with_host_secrets(
+            channel="prod",
+            consumer="heimdal-cold-volume",
+            command=["never-start"],
+            keychain_lookup=_lookup(value),
+            runner=runner,
+            directory=tmp_path,
+        )
+
+    assert not launched
+    assert value not in str(error.value)
+    assert list(tmp_path.iterdir()) == []
 
 
 def test_consumer_gets_only_allowlisted_values(tmp_path: Path) -> None:

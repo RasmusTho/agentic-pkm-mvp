@@ -1552,12 +1552,12 @@ def test_full_deploy_raw_migration_key_failure_is_redacted_and_nonmutating(
     assert not (root / "ops" / "deployments" / f"{channel}-latest.json").exists()
     assert not Path(env["INSTANCE_OWNERSHIP_HOST_STATE_DIR"]).exists()
     security_events = _deploy_events(env)
-    assert security_events
+    assert security_events[0] == f"archive-preflight {channel}"
     assert any(
         event == "security migrate-primary"
-        for event in security_events
+        for event in security_events[1:]
     )
-    assert all(event.startswith("security ") for event in security_events)
+    assert all(event.startswith("security ") for event in security_events[1:])
 
 
 @pytest.mark.parametrize("channel", ["dev", "test", "prod"])
@@ -1609,11 +1609,13 @@ def test_full_deploy_mixed_migration_inventory_still_gates_raw_key(
     combined = result.stdout + result.stderr
     assert result.returncode != 0
     assert combined.count("migration raw-key preflight failed: output=redacted") == 1
+    events = _deploy_events(env)
+    assert events[0] == "archive-preflight dev"
     assert any(
         event == "security migrate-primary"
-        for event in _deploy_events(env)
+        for event in events[1:]
     )
-    assert all(event.startswith("security ") for event in _deploy_events(env))
+    assert all(event.startswith("security ") for event in events[1:])
     assert not (tmp_path / "docker-called").exists()
 
 

@@ -221,6 +221,13 @@ def test_model_inquiry_secret_contract_is_exact_and_value_free() -> None:
             "optional": True,
             "shared_key_domain": False,
         },
+        {
+            "logical_id": "heimdal.archive-pass",
+            "child_binding": "HEIMDAL_ARCHIVE_PASS",
+            "kind": "archive-pass",
+            "optional": False,
+            "shared_key_domain": False,
+        },
     ]
     assert payload["consumers"] == [
         {
@@ -239,6 +246,12 @@ def test_model_inquiry_secret_contract_is_exact_and_value_free() -> None:
             "consumer": "heimdal-capture-watch",
             "channels": ["dev", "test", "prod"],
             "secrets": ["heimdal.raw-store-key"],
+            "role_requirements": {},
+        },
+        {
+            "consumer": "heimdal-cold-volume",
+            "channels": ["dev", "test", "prod"],
+            "secrets": ["heimdal.archive-pass"],
             "role_requirements": {},
         },
         {
@@ -350,6 +363,21 @@ def test_runtime_raw_store_consumers_declare_raw_store_key() -> None:
             )
     with pytest.raises(UndeclaredSecretConsumerError):
         contract.require_declared(channel="dev", consumer="heimdal-api-ingress", secret="openai.api-key")
+
+
+def test_cold_volume_consumer_declares_required_channel_scoped_passphrase() -> None:
+    contract = load_host_secret_contract()
+
+    assert contract.binding_for("heimdal.archive-pass") == "HEIMDAL_ARCHIVE_PASS"
+    assert contract.kind_for("heimdal.archive-pass") == "archive-pass"
+    assert contract.is_optional("heimdal.archive-pass") is False
+    assert contract.is_shared_key_domain("heimdal.archive-pass") is False
+    for channel in ("dev", "test", "prod"):
+        contract.require_declared(
+            channel=channel,
+            consumer="heimdal-cold-volume",
+            secret="heimdal.archive-pass",
+        )
 
 
 def test_raw_store_key_declares_shared_key_domain() -> None:

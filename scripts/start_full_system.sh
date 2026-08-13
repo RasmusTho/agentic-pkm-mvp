@@ -85,7 +85,9 @@ source "scripts/lib/worker_heartbeat_probe.sh"
 source "scripts/lib/pinned_image_guard.sh"
 source "scripts/lib/start_full_system_env.sh"
 source "scripts/lib/instance_state_deployment.sh"
+source "scripts/lib/heimdal_cold_volume_preflight.sh"
 apply_start_full_system_defaults
+heimdal_cold_volume_preflight_effective "$ROOT"
 
 # Signboard is a dispatcher projection. Resolve this on the host before the
 # BuilderOps bootstrap and forward the same absolute path into the API
@@ -755,12 +757,7 @@ resolve_channel_defaults() {
 
 export_prod_build_identity() {
   local should_export=0
-  case "${PKM_ENVIRONMENT:-${ENVIRONMENT:-${CHANNEL:-${PKM_CHANNEL:-}}}}" in
-    prod) should_export=1 ;;
-  esac
-  case "${COMPOSE_PROJECT_NAME:-}" in
-    pkm-prod) should_export=1 ;;
-  esac
+  [ "${PKM_EFFECTIVE_CHANNEL:-}" = "prod" ] && should_export=1
   if [ "$should_export" -ne 1 ]; then
     return 0
   fi

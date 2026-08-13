@@ -3,6 +3,11 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
+source "scripts/lib/load_env_defaults.sh"
+load_env_defaults_file ".env"
+load_env_defaults_file "config/runtime.defaults.env"
+source "scripts/lib/heimdal_cold_volume_preflight.sh"
+heimdal_cold_volume_preflight_effective "$ROOT"
 source "scripts/lib/instance_ownership_host_state.sh"
 prepare_instance_ownership_host_state_dir
 

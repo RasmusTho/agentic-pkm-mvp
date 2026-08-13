@@ -19,6 +19,8 @@ import re
 import subprocess
 from pathlib import Path
 
+import pytest
+
 from app.release_channels.prod_ref_fitness import (
     check_prod_head_matches_promotion_ref_and_clean,
 )
@@ -187,7 +189,464 @@ def test_prod_start_full_has_midgard_preflight() -> None:
     assert '.env.prod.local' in script
     assert 'VAULT_ROOT' in script
     assert 'midg(å|a)rd' in script
+    assert 'source "scripts/lib/heimdal_cold_volume_preflight.sh"' in script
+    assert 'heimdal_cold_volume_preflight prod "$ROOT"' in script
+    assert script.index('heimdal_cold_volume_preflight prod "$ROOT"') < script.index(
+        'exec scripts/start_full_system.sh'
+    )
     assert 'exec scripts/start_full_system.sh' in script
+
+
+@pytest.mark.parametrize(
+    ("channel", "project", "compose_file", "separator", "expected"),
+    [
+        pytest.param("prod", "custom", "docker-compose.yaml", ":", "prod", id="channel"),
+        pytest.param(" PROD ", "custom", "docker-compose.yaml", ":", "prod", id="normalized"),
+        pytest.param("", "PKM-PROD", "docker-compose.yaml", ":", "prod", id="project"),
+        pytest.param(
+            "",
+            "custom",
+            "docker-compose.yaml:/tmp/docker-compose.prod.yml",
+            ":",
+            "prod",
+            id="compose-overlay",
+        ),
+        pytest.param(
+            "",
+            "custom",
+            "docker-compose.yaml;/tmp/docker-compose.prod.yml",
+            ";",
+            "prod",
+            id="custom-compose-separator",
+        ),
+        pytest.param(
+            "test",
+            "pkm-test",
+            "docker-compose.yaml:docker-compose.test.yml",
+            ":",
+            "test",
+            id="non-prod",
+        ),
+    ],
+)
+def test_archive_gate_uses_one_effective_channel_classifier(
+    channel: str,
+    project: str,
+    compose_file: str,
+    separator: str,
+    expected: str,
+) -> None:
+    helper = REPO_ROOT / "scripts/lib/heimdal_cold_volume_preflight.sh"
+    result = subprocess.run(
+        [
+            "bash",
+            "-c",
+            'source "$1"; heimdal_cold_volume_effective_channel "$2" "$3" "$4" "$5"',
+            "harness",
+            str(helper),
+            channel,
+            project,
+            compose_file,
+            separator,
+        ],
+        cwd=REPO_ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0
+    assert result.stdout.strip() == expected
+
+
+@pytest.mark.parametrize(
+    ("channel", "compose_file", "separator"),
+    [
+        pytest.param("", "docker-compose.yaml;;docker-compose.prod.yml", ";", id="empty-segment"),
+        pytest.param("prod", "docker-compose.yaml;", ";", id="prod-trailing-empty-segment"),
+        pytest.param("", "docker-compose.yaml", "", id="empty-separator"),
+        pytest.param("", "docker-compose.yaml", "ab", id="multi-character-separator"),
+    ],
+)
+def test_archive_gate_rejects_malformed_compose_file_grammar(
+    channel: str,
+    compose_file: str,
+    separator: str,
+) -> None:
+    helper = REPO_ROOT / "scripts/lib/heimdal_cold_volume_preflight.sh"
+    result = subprocess.run(
+        [
+            "bash",
+            "-c",
+            'source "$1"; heimdal_cold_volume_effective_channel "$2" custom "$3" "$4"',
+            "harness",
+            str(helper),
+            channel,
+            compose_file,
+            separator,
+        ],
+        cwd=REPO_ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 78
+    assert result.stdout == ""
+
+
+def test_every_supported_prod_forward_producer_routes_through_archive_gate() -> None:
+    """Closed source census for all supported production forward entrypoints."""
+    makefile = MAKEFILE.read_text(encoding="utf-8")
+    full_start = (REPO_ROOT / "scripts/start_full_system.sh").read_text(encoding="utf-8")
+    cold_boot = (REPO_ROOT / "scripts/cold_boot.sh").read_text(encoding="utf-8")
+    deploy = (REPO_ROOT / "scripts/deploy_channel.sh").read_text(encoding="utf-8")
+    companion = (REPO_ROOT / "scripts/lib/companion_ui_startup.sh").read_text(
+        encoding="utf-8"
+    )
+    midgard_stack = (REPO_ROOT / "scripts/prod/start_midgard_stack.sh").read_text(
+        encoding="utf-8"
+    )
+    midgard_ui = (REPO_ROOT / "scripts/prod/start_midgard_ui.sh").read_text(
+        encoding="utf-8"
+    )
+    run_verification = (REPO_ROOT / "scripts/run_verification.sh").read_text(
+        encoding="utf-8"
+    )
+    runtime_chain = (REPO_ROOT / "scripts/verify_runtime_chain.sh").read_text(
+        encoding="utf-8"
+    )
+
+    assert 'heimdal_cold_volume_preflight_effective "$ROOT"' in full_start
+    assert 'heimdal_cold_volume_preflight_effective "$ROOT"' in cold_boot
+    assert "heimdal_cold_volume_preflight_effective" in companion
+    assert 'heimdal_cold_volume_preflight prod "$ROOT"' in midgard_stack
+    assert 'source "${SCRIPT_DIR}/../lib/companion_ui_startup.sh"' in midgard_ui
+    assert "cui_run_start" in midgard_ui
+    assert 'source "${ROOT}/scripts/lib/heimdal_cold_volume_preflight.sh"' in run_verification
+    assert 'heimdal_cold_volume_preflight_effective "${ROOT}"' in run_verification
+    assert run_verification.index(
+        'heimdal_cold_volume_preflight_effective "${ROOT}"'
+    ) < run_verification.index(": >> verification_log.txt")
+    assert 'source "${ROOT}/scripts/lib/heimdal_cold_volume_preflight.sh"' in runtime_chain
+    assert 'heimdal_cold_volume_preflight_effective "${ROOT}"' in runtime_chain
+    assert runtime_chain.index(
+        'heimdal_cold_volume_preflight_effective "${ROOT}"'
+    ) < runtime_chain.index("prepare_instance_ownership_host_state_dir")
+    assert 'if [ "${action}" = "deploy" ]; then' in deploy
+    assert 'heimdal_cold_volume_preflight "${channel}" "${ROOT}"' in deploy
+    gate_index = deploy.index('heimdal_cold_volume_preflight "${channel}" "${ROOT}"')
+    assert gate_index < deploy.index('migration_materialize_dir="$(mktemp')
+    assert gate_index < deploy.index("acquire_channel_mutation_lock")
+    assert gate_index < deploy.index("heimdal_raw_migration_secret_preflight || exit $?")
+
+    prod_up = _makefile_target_body(makefile, "prod-up")
+    prod_full = _makefile_target_body(makefile, "prod-start-full")
+    prod_ui = _makefile_target_body(makefile, "prod-ui")
+    assert prod_up is not None and "heimdal_cold_volume_preflight prod" in prod_up
+    assert prod_full is not None and "scripts/prod/start_midgard_stack.sh" in prod_full
+    assert prod_ui is not None and "scripts/prod/start_midgard_ui.sh" in prod_ui
+
+    cold_boot_gate_index = cold_boot.index(
+        'heimdal_cold_volume_preflight_effective "$ROOT"'
+    )
+    assert cold_boot_gate_index < cold_boot.index(
+        "prepare_instance_ownership_host_state_dir"
+    )
+    assert cold_boot_gate_index < cold_boot.index("docker compose down -v")
+
+
+@pytest.mark.parametrize(
+    "entrypoint",
+    ["scripts/run_verification.sh", "scripts/verify_runtime_chain.sh"],
+)
+def test_prod_verification_chain_refuses_before_any_host_mutation(
+    tmp_path: Path,
+    entrypoint: str,
+) -> None:
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    docker_marker = tmp_path / "docker-executed"
+    docker = fake_bin / "docker"
+    docker.write_text(
+        "#!/usr/bin/env bash\n"
+        f"touch {docker_marker!s}\n"
+        "exit 99\n",
+        encoding="utf-8",
+    )
+    docker.chmod(0o755)
+    python = tmp_path / "python-fixture"
+    python.write_text("#!/usr/bin/env bash\nexit 78\n", encoding="utf-8")
+    python.chmod(0o755)
+    log_path = tmp_path / "verification.log"
+    report_path = tmp_path / "verification.md"
+    host_state = tmp_path / "host-state"
+
+    env = os.environ.copy()
+    env.update(
+        {
+            "PATH": f"{fake_bin}:{env['PATH']}",
+            "PYTHON": str(python),
+            "PKM_ENVIRONMENT": "prod",
+            "COMPOSE_PROJECT_NAME": "pkm-prod",
+            "HEIMDAL_ARCHIVE_METADATA_FILE": str(tmp_path / "ambient-metadata.json"),
+            "INSTANCE_OWNERSHIP_HOST_STATE_DIR": str(host_state),
+            "LOG_PATH": str(log_path),
+            "REPORT_PATH": str(report_path),
+        }
+    )
+    result = subprocess.run(
+        ["bash", entrypoint],
+        cwd=REPO_ROOT,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 78
+    assert docker_marker.exists() is False
+    assert host_state.exists() is False
+    assert log_path.exists() is False
+    assert report_path.exists() is False
+    assert "archive volume preflight failed: output=redacted" in result.stderr
+
+
+@pytest.mark.parametrize(
+    "entrypoint",
+    [
+        "scripts/start_full_system.sh",
+        "scripts/cold_boot.sh",
+        "scripts/run_verification.sh",
+        "scripts/verify_runtime_chain.sh",
+    ],
+)
+def test_custom_compose_separator_prod_overlay_refuses_before_host_mutation(
+    tmp_path: Path,
+    entrypoint: str,
+) -> None:
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    docker_marker = tmp_path / "docker-executed"
+    docker = fake_bin / "docker"
+    docker.write_text(
+        "#!/usr/bin/env bash\n" f"touch {docker_marker!s}\n" "exit 99\n",
+        encoding="utf-8",
+    )
+    docker.chmod(0o755)
+    python = tmp_path / "python-fixture"
+    python.write_text("#!/usr/bin/env bash\nexit 78\n", encoding="utf-8")
+    python.chmod(0o755)
+    host_state = tmp_path / "host-state"
+    log_path = tmp_path / "verification.log"
+    report_path = tmp_path / "verification.md"
+    env = os.environ.copy()
+    env.update(
+        {
+            "PATH": f"{fake_bin}:{env['PATH']}",
+            "PYTHON": str(python),
+            "PKM_ENVIRONMENT": "",
+            "COMPOSE_PROJECT_NAME": "custom",
+            "COMPOSE_FILE": "docker-compose.yaml;docker-compose.prod.yml",
+            "COMPOSE_PATH_SEPARATOR": ";",
+            "INSTANCE_OWNERSHIP_HOST_STATE_DIR": str(host_state),
+            "LOG_PATH": str(log_path),
+            "REPORT_PATH": str(report_path),
+        }
+    )
+
+    result = subprocess.run(
+        ["bash", entrypoint],
+        cwd=REPO_ROOT,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 78
+    assert docker_marker.exists() is False
+    assert host_state.exists() is False
+    assert log_path.exists() is False
+    assert report_path.exists() is False
+    assert "archive volume preflight failed: output=redacted" in result.stderr
+
+
+def test_prod_launcher_fixture_census_declares_archive_gate_state() -> None:
+    """Every fake-host prod launcher either proves ready or tests refusal."""
+    version_fixture = (
+        REPO_ROOT / "tests/runtime/test_start_full_system_version_marker.py"
+    ).read_text(encoding="utf-8")
+    health_fixture = (
+        REPO_ROOT / "tests/ops/test_start_full_runtime_health.py"
+    ).read_text(encoding="utf-8")
+    release_fixture = Path(__file__).read_text(encoding="utf-8")
+    companion_fixture = (
+        REPO_ROOT / "tests/scripts/test_companion_ui_startup.py"
+    ).read_text(encoding="utf-8")
+
+    assert version_fixture.count(
+        "archive_marker = configure_ready_archive_gate(env, tmp_path)"
+    ) == 1
+    assert health_fixture.count(
+        "archive_marker = configure_ready_archive_gate(env, tmp_path)"
+    ) == 2
+    assert "test_direct_prod_entrypoints_refuse_before_host_mutation" in release_fixture
+    assert 'exit 78' in release_fixture
+    assert "test_prod_runtime_refuses_archive_before_warm_skip" in companion_fixture
+    assert "exit 78" in companion_fixture
+
+
+@pytest.mark.parametrize(
+    ("preflight_rc", "starts_runtime"),
+    [
+        pytest.param(0, True, id="ready"),
+        pytest.param(78, False, id="archive-refused"),
+    ],
+)
+def test_prod_start_wrapper_executes_archive_gate_before_runtime(
+    tmp_path: Path,
+    preflight_rc: int,
+    starts_runtime: bool,
+) -> None:
+    """Exercise the production call site without touching host disk state."""
+    root = tmp_path / "repo"
+    for relative in (
+        "scripts/prod/start_midgard_stack.sh",
+        "scripts/lib/load_env_defaults.sh",
+        "scripts/lib/heimdal_cold_volume_preflight.sh",
+    ):
+        destination = root / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_text(
+            (REPO_ROOT / relative).read_text(encoding="utf-8"), encoding="utf-8"
+        )
+
+    vault = tmp_path / "fixture-midgard"
+    vault.mkdir()
+    metadata = tmp_path / "archive-metadata.json"
+    (root / ".env.prod.local").write_text(
+        f"VAULT_ROOT={vault}\nHEIMDAL_ARCHIVE_METADATA_FILE={metadata}\n",
+        encoding="utf-8",
+    )
+    runtime_marker = tmp_path / "runtime-started"
+    (root / "scripts/start_full_system.sh").write_text(
+        f"#!/usr/bin/env bash\ntouch {runtime_marker!s}\n", encoding="utf-8"
+    )
+    (root / "scripts/start_full_system.sh").chmod(0o755)
+    python = tmp_path / "python-fixture"
+    python.write_text(
+        "#!/usr/bin/env bash\n"
+        "test \"${1:-}\" = -m\n"
+        "test \"${2:-}\" = app.ops.heimdal_cold_volume\n"
+        "test \"${3:-}\" = require-ready\n"
+        f"exit {preflight_rc}\n",
+        encoding="utf-8",
+    )
+    python.chmod(0o755)
+
+    env = os.environ.copy()
+    env["PYTHON"] = str(python)
+    result = subprocess.run(
+        ["bash", "scripts/prod/start_midgard_stack.sh"],
+        cwd=root,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert (result.returncode == 0) is starts_runtime
+    assert runtime_marker.exists() is starts_runtime
+    if not starts_runtime:
+        assert "output=redacted" in result.stderr
+
+
+@pytest.mark.parametrize(
+    ("entrypoint", "selector_env"),
+    [
+        pytest.param(
+            "direct-full-start",
+            {"PKM_ENVIRONMENT": "prod", "COMPOSE_PROJECT_NAME": "pkm-prod"},
+            id="direct-full-start-canonical",
+        ),
+        pytest.param(
+            "direct-full-start",
+            {"PKM_ENVIRONMENT": " PROD ", "COMPOSE_PROJECT_NAME": "custom-prod"},
+            id="direct-full-start-normalized-channel",
+        ),
+        pytest.param(
+            "direct-full-start",
+            {
+                "PKM_ENVIRONMENT": "",
+                "COMPOSE_PROJECT_NAME": "custom-prod",
+                "COMPOSE_FILE": "docker-compose.yaml:docker-compose.prod.yml",
+            },
+            id="direct-full-start-explicit-prod-compose",
+        ),
+        pytest.param("make-prod-up", {}, id="make-prod-up"),
+        pytest.param(
+            "cold-boot",
+            {
+                "PKM_ENVIRONMENT": "",
+                "COMPOSE_PROJECT_NAME": "custom-prod",
+                "COMPOSE_FILE": "docker-compose.yaml:docker-compose.prod.yml",
+            },
+            id="cold-boot-prod-compose",
+        ),
+    ],
+)
+def test_direct_prod_entrypoints_refuse_before_host_mutation(
+    tmp_path: Path,
+    entrypoint: str,
+    selector_env: dict[str, str],
+) -> None:
+    """Exercise direct prod paths with a refused fixture gate and fake Docker."""
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    docker_marker = tmp_path / "docker-executed"
+    docker = fake_bin / "docker"
+    docker.write_text(
+        "#!/usr/bin/env bash\n"
+        f"touch {docker_marker!s}\n"
+        "exit 99\n",
+        encoding="utf-8",
+    )
+    docker.chmod(0o755)
+    python = tmp_path / "python-fixture"
+    python.write_text("#!/usr/bin/env bash\nexit 78\n", encoding="utf-8")
+    python.chmod(0o755)
+
+    env = os.environ.copy()
+    host_state = tmp_path / "host-state"
+    env.update(selector_env)
+    env.update(
+        {
+            "PATH": f"{fake_bin}:{env['PATH']}",
+            "PYTHON": str(python),
+            "HEIMDAL_ARCHIVE_METADATA_FILE": str(tmp_path / "archive-metadata.json"),
+            "INSTANCE_OWNERSHIP_HOST_STATE_DIR": str(host_state),
+        }
+    )
+    command = {
+        "direct-full-start": ["bash", "scripts/start_full_system.sh"],
+        "make-prod-up": ["make", "prod-up"],
+        "cold-boot": ["bash", "scripts/cold_boot.sh"],
+    }[entrypoint]
+
+    result = subprocess.run(
+        command,
+        cwd=REPO_ROOT,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode != 0
+    assert docker_marker.exists() is False
+    assert host_state.exists() is False
+    assert "archive volume preflight failed: output=redacted" in result.stderr
 
 
 def test_test_start_full_uses_tmp_test_runtime_artifact_paths(tmp_path: Path) -> None:

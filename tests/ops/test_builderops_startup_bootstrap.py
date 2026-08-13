@@ -68,6 +68,10 @@ def test_prod_start_full_invokes_builderops_bootstrap() -> None:
     prod_target = makefile[makefile.index("prod-start-full:") : makefile.index("test-start-full:")]
     assert 'PKM_ENVIRONMENT="prod"' in prod_target
     assert "bash scripts/prod/start_midgard_stack.sh" in prod_target
+    assert "heimdal_cold_volume_preflight prod" in prod_wrapper
+    assert prod_wrapper.index("heimdal_cold_volume_preflight prod") < prod_wrapper.index(
+        "exec scripts/start_full_system.sh"
+    )
     assert "exec scripts/start_full_system.sh" in prod_wrapper
     assert "scripts/start_builderops_services.sh" in start_script
     assert "builderops_bootstrap" in start_script
