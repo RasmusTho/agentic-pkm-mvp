@@ -14,7 +14,11 @@ from app.heimdal.consent_ledger import (
     reset_memory_consent_ledger,
 )
 from app.heimdal.observation_log import count_observations, reset_memory_observation_log
-from app.heimdal.raw_store import all_raw_records, reset_memory_raw_store
+from app.heimdal.raw_store import (
+    all_raw_records,
+    all_raw_representations,
+    reset_memory_raw_store,
+)
 from app.heimdal import screen_capture
 from app.heimdal.screen_capture import SCREEN_CAPTURE_SCOPE, ingest_screen_bundle
 
@@ -72,6 +76,9 @@ def test_frame_bundle_lands_encrypted_idempotent():
     first = ingest_screen_bundle(bundle(), key=_KEY); second = ingest_screen_bundle(bundle(), key=_KEY)
     assert first.created and not second.created and len(all_raw_records()) == 1
     assert all_raw_records()[0].ciphertext != b'{"frame":"redacted"}'
+    assert first.record_id is not None
+    representations = all_raw_representations(first.record_id)
+    assert len(representations) == 1 and representations[0].active
 
 
 def test_both_bundle_shapes_accepted():

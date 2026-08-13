@@ -33,7 +33,12 @@ from app.heimdal.asr_stage import (
     run_asr_stage,
 )
 from app.heimdal.raw_read_gate import raw_ref_for, reset_memory_raw_read_receipts
-from app.heimdal.raw_store import encrypt_raw_bytes, insert_raw_record, reset_memory_raw_store
+from app.heimdal.raw_store import (
+    compute_raw_content_identity,
+    encrypt_raw_bytes,
+    insert_raw_record,
+    reset_memory_raw_store,
+)
 
 pytestmark = pytest.mark.not_pg
 
@@ -69,15 +74,17 @@ def _sensor_block() -> dict:
 
 
 def _insert_raw(content_identity: str, plaintext: bytes = b"fake wav bytes") -> str:
-    ciphertext, nonce = encrypt_raw_bytes(plaintext, key=_TEST_KEY)
+    unique_plaintext = plaintext + b":" + content_identity.encode()
+    ciphertext, nonce = encrypt_raw_bytes(unique_plaintext, key=_TEST_KEY)
     record, _ = insert_raw_record(
-        content_identity=content_identity,
+        content_identity=compute_raw_content_identity(unique_plaintext),
         capture_chain=["ios_voice_memos", "icloud_drive", "folder_watch"],
         sensor=_sensor_block(),
         consent=_consent_block(),
         ciphertext=ciphertext,
         nonce=nonce,
         key_ref="v1-process-key",
+        key=_TEST_KEY,
         source_path="/tmp/very/secret/memo.m4a",
     )
     return raw_ref_for(record)
@@ -331,15 +338,18 @@ def test_run_asr_stage_uses_real_gated_read_call_site(monkeypatch: pytest.Monkey
     `app.heimdal.raw_read_gate.read_raw_record` resolution + receipt path
     (not a mocked store), with only the model call itself stubbed.
     """
-    ciphertext, nonce = encrypt_raw_bytes(b"end-to-end raw wav bytes", key=_TEST_KEY)
+    plaintext = b"end-to-end raw wav bytes"
+    ciphertext, nonce = encrypt_raw_bytes(plaintext, key=_TEST_KEY)
+    identity = compute_raw_content_identity(plaintext)
     record, created = insert_raw_record(
-        content_identity="hash-asr-e2e",
+        content_identity=identity,
         capture_chain=["ios_voice_memos", "icloud_drive", "folder_watch"],
         sensor=_sensor_block(),
         consent=_consent_block(),
         ciphertext=ciphertext,
         nonce=nonce,
         key_ref="v1-process-key",
+        key=_TEST_KEY,
         source_path="/tmp/memo.m4a",
     )
     assert created is True
@@ -355,4 +365,4 @@ def test_run_asr_stage_uses_real_gated_read_call_site(monkeypatch: pytest.Monkey
 
     assert captured_bytes["plaintext"] == b"end-to-end raw wav bytes"
     assert result.raw_ref == raw_ref
-    assert raw_store.get_raw_record_by_content_identity("hash-asr-e2e") is not None
+    assert raw_store.get_raw_record_by_content_identity(identity) is not None

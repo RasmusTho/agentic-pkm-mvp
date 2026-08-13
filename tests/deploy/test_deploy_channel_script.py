@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+import sys
 from contextlib import contextmanager
 from collections.abc import Iterator
 from pathlib import Path
@@ -10,6 +11,8 @@ import pytest
 import yaml
 
 from tests.deploy.test_deploy_channel import (
+    _HEIMDAL_FIXED_OVERLAY,
+    _configure_dev_test_environment_clobber_preflight,
     _configure_prod_retry_preflight,
     _deploy_events,
     _deploy_harness,
@@ -111,6 +114,12 @@ def test_deploy_sequence_and_forward_only_ack_gate() -> None:
     assert "migration gate blocked before recreate" in text
     run_block = text.split('echo "deploy plan:', 1)[1]
     assert run_block.index("migration_gate") < run_block.index("write_pin")
+    assert run_block.index("migration_gate") < run_block.index(
+        "heimdal_raw_migration_secret_preflight"
+    )
+    assert run_block.index("heimdal_raw_migration_secret_preflight") < run_block.index(
+        "write_pin"
+    )
     assert run_block.index("write_pin") < run_block.index("compose pull")
     assert run_block.index("compose pull") < run_block.index(
         "prepare_instance_state_deployment"
@@ -1152,6 +1161,522 @@ def test_capture_watch_secret_gate_fires_for_every_channel() -> None:
         text=True,
     )
     assert syntax.returncode == 0, syntax.stderr
+
+
+def test_raw_migration_secret_gate_wraps_only_the_exact_one_shot_command() -> None:
+    """HAR-02 migration authority is present on every governed deploy lane."""
+    lib_path = str(REPO_ROOT / "scripts" / "lib" / "deploy_channel_compose.sh")
+    lib = Path(lib_path).read_text(encoding="utf-8")
+    deploy = (REPO_ROOT / "scripts" / "deploy_channel.sh").read_text(encoding="utf-8")
+
+    assert "_deploy_channel_needs_migration_secret" in lib
+    assert "--consumer heimdal-raw-migrate" in lib
+    assert (
+        'HOST_SECRET_RUNTIME_ENV_FILE_MIGRATE="${HOST_SECRET_RUNTIME_ENV_FILE:-/dev/null}"'
+        in lib
+    )
+    assert (
+        "compose up --abort-on-container-exit --exit-code-from migrate "
+        "--force-recreate migrate"
+    ) in deploy
+
+    probe = (
+        'source "$1"; shift; DEPLOY_HEIMDAL_RAW_MIGRATION_PENDING=1; '
+        "if _deploy_channel_needs_migration_secret \"$@\"; then echo yes; else echo no; fi"
+    )
+
+    def gate(*args: str) -> str:
+        run = subprocess.run(
+            ["bash", "-c", probe, "_", lib_path, *args],
+            cwd=REPO_ROOT,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        assert run.returncode == 0, run.stderr
+        return run.stdout.strip().splitlines()[-1]
+
+    for channel in ("dev", "test", "prod"):
+        assert (
+            gate(
+                channel,
+                "up",
+                "--abort-on-container-exit",
+                "--exit-code-from",
+                "migrate",
+                "--force-recreate",
+                "migrate",
+            )
+            == "yes"
+        )
+    assert gate("dev", "up", "-d", "api") == "no"
+    assert gate("test", "up", "-d", "heimdal-capture-watch") == "no"
+    assert gate("prod", "up", "-d") == "no"
+    assert gate("prod", "up", "migrate") == "no"
+    assert gate("prod", "up", "--exit-code-from", "migrate", "api") == "no"
+    assert gate("prod", "logs", "migrate") == "no"
+
+    unselected = subprocess.run(
+        [
+            "bash",
+            "-c",
+            'source "$1"; shift; '
+            "if _deploy_channel_needs_migration_secret \"$@\"; then echo yes; else echo no; fi",
+            "_",
+            lib_path,
+            "dev",
+            "up",
+            "--abort-on-container-exit",
+            "--exit-code-from",
+            "migrate",
+            "--force-recreate",
+            "migrate",
+        ],
+        cwd=REPO_ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert unselected.returncode == 0, unselected.stderr
+    assert unselected.stdout.strip().splitlines()[-1] == "no"
+
+    syntax = subprocess.run(
+        ["bash", "-n", lib_path],
+        cwd=REPO_ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert syntax.returncode == 0, syntax.stderr
+
+    compose = yaml.safe_load((REPO_ROOT / "docker-compose.yaml").read_text(encoding="utf-8"))
+    migration_layers = [
+        entry
+        for entry in compose["services"]["migrate"]["env_file"]
+        if isinstance(entry, dict)
+        and "HOST_SECRET_RUNTIME_ENV_FILE_MIGRATE" in str(entry.get("path", ""))
+    ]
+    assert migration_layers == [
+        {
+            "path": "${HOST_SECRET_RUNTIME_ENV_FILE_MIGRATE:-/dev/null}",
+            "required": False,
+        }
+    ]
+
+    # The production shim retains only its migrate-specific pointer. The raw
+    # binding and shared pointer remain absent from the child environment.
+    shim = (
+        'export HOST_SECRET_RUNTIME_ENV_FILE_MIGRATE='
+        '"${HOST_SECRET_RUNTIME_ENV_FILE:-/dev/null}"; '
+        'unset HOST_SECRET_RUNTIME_ENV_FILE; exec "$@"'
+    )
+    probe_env = (
+        'printf "%s|%s|%s" "${HOST_SECRET_RUNTIME_ENV_FILE_MIGRATE:-missing}" '
+        '"${HOST_SECRET_RUNTIME_ENV_FILE:-scrubbed}" '
+        '"${HEIMDAL_RAW_STORE_KEY:-scrubbed}"'
+    )
+    run = subprocess.run(
+        [
+            "env",
+            "HOST_SECRET_RUNTIME_ENV_FILE=fixture-handle",
+            "sh",
+            "-c",
+            shim,
+            "_",
+            "sh",
+            "-c",
+            probe_env,
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert run.returncode == 0, run.stderr
+    assert run.stdout == "fixture-handle|scrubbed|scrubbed"
+
+
+@pytest.mark.parametrize("channel", ["dev", "test", "prod"])
+def test_raw_migration_production_wrapper_bootstraps_before_compose(
+    tmp_path: Path,
+    channel: str,
+) -> None:
+    """The real channel wrapper resolves the declared key before Docker."""
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    docker_marker = tmp_path / "docker-called"
+    docker = bin_dir / "docker"
+    docker.write_text(
+        f"#!/usr/bin/env bash\nset -eu\ntouch {docker_marker!s}\n",
+        encoding="utf-8",
+    )
+    docker.chmod(0o755)
+    security = bin_dir / "security"
+    security.write_text(
+        "#!/usr/bin/env bash\nset -eu\nprintf '%064d\\n' 0\n",
+        encoding="utf-8",
+    )
+    security.chmod(0o755)
+
+    env = os.environ.copy()
+    env.update(
+        {
+            "PATH": f"{bin_dir}:{env['PATH']}",
+            "PYTHON": sys.executable,
+            "INSTANCE_OWNERSHIP_HOST_STATE_DIR": str(tmp_path / "instance-state"),
+            "DEPLOY_TTS_CONFIG_GOVERNED": "1",
+            "DEPLOY_TTS_ENABLED": "false",
+            "DEPLOY_HEIMDAL_RAW_MIGRATION_PENDING": "1",
+        }
+    )
+    env.pop("HOST_SECRET_RUNTIME_ENV_FILE", None)
+    env.pop("HOST_SECRET_RUNTIME_ENV_FILE_MIGRATE", None)
+    lib_path = REPO_ROOT / "scripts" / "lib" / "deploy_channel_compose.sh"
+    command = (
+        'source "$1"; '
+        "resolve_signboard_root_env() { unset SIGNBOARD_ROOT; }; "
+        'deploy_channel_compose "$2" "$3" "$4" "$5" "$6" '
+        "up --abort-on-container-exit --exit-code-from migrate --force-recreate migrate"
+    )
+    result = subprocess.run(
+        [
+            "bash",
+            "-c",
+            command,
+            "_",
+            str(lib_path),
+            str(REPO_ROOT),
+            channel,
+            f"docker-compose.{channel}.yml",
+            f"pkm-{channel}",
+            str(REPO_ROOT / "config" / "deploy" / f"{channel}.env"),
+        ],
+        cwd=REPO_ROOT,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert docker_marker.exists()
+    assert "HEIMDAL_RAW_STORE_KEY" not in result.stdout + result.stderr
+
+
+@pytest.mark.parametrize("failure", ["missing", "malformed", "divergent"])
+@pytest.mark.parametrize("channel", ["dev", "test", "prod"])
+def test_raw_migration_production_wrapper_fails_before_compose_and_redacts(
+    tmp_path: Path,
+    failure: str,
+    channel: str,
+) -> None:
+    """Unusable migration authority cannot reach Docker or disclose details."""
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    docker_marker = tmp_path / "docker-called"
+    docker = bin_dir / "docker"
+    docker.write_text(
+        f"#!/usr/bin/env bash\nset -eu\ntouch {docker_marker!s}\n",
+        encoding="utf-8",
+    )
+    docker.chmod(0o755)
+    security = bin_dir / "security"
+    if failure == "missing":
+        security_body = "echo private-lookup-detail >&2\nexit 44"
+    elif failure == "malformed":
+        security_body = "printf '%s\\n' private-malformed-material"
+    else:
+        security_body = (
+            'case "$*" in\n'
+            '  *heimdal-api-ingress*) printf \'%064d\\n\' 1 ;;\n'
+            "  *) printf '%064d\\n' 0 ;;\n"
+            "esac"
+        )
+    security.write_text(
+        f"#!/usr/bin/env bash\nset -eu\n{security_body}\n",
+        encoding="utf-8",
+    )
+    security.chmod(0o755)
+
+    env = os.environ.copy()
+    env.update(
+        {
+            "PATH": f"{bin_dir}:{env['PATH']}",
+            "PYTHON": sys.executable,
+            "INSTANCE_OWNERSHIP_HOST_STATE_DIR": str(tmp_path / "instance-state"),
+            "DEPLOY_TTS_CONFIG_GOVERNED": "1",
+            "DEPLOY_TTS_ENABLED": "false",
+            "DEPLOY_HEIMDAL_RAW_MIGRATION_PENDING": "1",
+        }
+    )
+    lib_path = REPO_ROOT / "scripts" / "lib" / "deploy_channel_compose.sh"
+    command = (
+        'source "$1"; '
+        "resolve_signboard_root_env() { unset SIGNBOARD_ROOT; }; "
+        'deploy_channel_compose "$2" "$3" "$4" "$5" "$6" '
+        "up --abort-on-container-exit --exit-code-from migrate --force-recreate migrate"
+    )
+    result = subprocess.run(
+        [
+            "bash",
+            "-c",
+            command,
+            "_",
+            str(lib_path),
+            str(REPO_ROOT),
+            channel,
+            f"docker-compose.{channel}.yml",
+            f"pkm-{channel}",
+            str(REPO_ROOT / "config" / "deploy" / f"{channel}.env"),
+        ],
+        cwd=REPO_ROOT,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    combined = result.stdout + result.stderr
+    assert result.returncode != 0
+    assert not docker_marker.exists()
+    assert "output=redacted" in combined
+    assert "private-lookup-detail" not in combined
+    assert "private-malformed-material" not in combined
+    assert "heimdal-raw-migrate:heimdal.raw-store-key" not in combined
+
+
+def _configure_successful_channel_preflights(
+    root: Path,
+    env: dict[str, str],
+    tmp_path: Path,
+    *,
+    channel: str,
+) -> None:
+    if channel == "prod":
+        _configure_prod_retry_preflight(root, env, tmp_path, rows=[])
+        return
+    _configure_dev_test_environment_clobber_preflight(
+        root,
+        env,
+        tmp_path,
+        channel=channel,
+        overlay_content=_HEIMDAL_FIXED_OVERLAY,
+    )
+
+
+def _commit_har_raw_migration(root: Path, name: str) -> str:
+    migration = root / "app" / "alembic" / "versions" / name
+    migration.write_text(
+        'revision = "e7b4c9d2a6f1"\n'
+        'down_revision = None\n'
+        'reversibility = "forward-only"\n'
+        "\n\ndef upgrade() -> None:\n    pass\n",
+        encoding="utf-8",
+    )
+    subprocess.run(["git", "add", "app"], cwd=root, check=True)
+    subprocess.run(["git", "commit", "-qm", "add HAR raw migration"], cwd=root, check=True)
+    return subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip()
+
+
+@pytest.mark.parametrize("channel", ["dev", "test", "prod"])
+def test_full_deploy_preflights_raw_migration_key_before_any_docker(
+    tmp_path: Path,
+    channel: str,
+) -> None:
+    """The production deploy preflight precedes every mutating Docker step."""
+    root, env, _initial_sha = _deploy_harness(tmp_path)
+    target = _commit_har_raw_migration(
+        root,
+        "e7b4c9d2a6f1_heimdal_raw_representation.py",
+    )
+    env["FAKE_SHA"] = target
+    env["DEPLOY_ACK_FORWARD_ONLY"] = "1"
+    env["FAKE_SECURITY_EVENT_LOG"] = env["FAKE_DEPLOY_EVENT_LOG"]
+    _configure_successful_channel_preflights(
+        root,
+        env,
+        tmp_path,
+        channel=channel,
+    )
+
+    result = _run_deploy(root, env, target, channel=channel)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    events = _deploy_events(env)
+    first_secret = next(
+        index
+        for index, event in enumerate(events)
+        if event == "security migrate-primary"
+    )
+    first_docker = next(index for index, event in enumerate(events) if event.startswith("docker "))
+    stop = next(index for index, event in enumerate(events) if " stop api worker watcher" in event)
+    migrate = next(index for index, event in enumerate(events) if "exit-code-from migrate" in event)
+    assert first_secret < first_docker <= stop < migrate
+
+
+@pytest.mark.parametrize("channel", ["dev", "test", "prod"])
+@pytest.mark.parametrize("failure", ["missing", "malformed", "divergent"])
+def test_full_deploy_raw_migration_key_failure_is_redacted_and_nonmutating(
+    tmp_path: Path,
+    channel: str,
+    failure: str,
+) -> None:
+    """Bad key authority refuses before pins, markers, volumes, or Docker."""
+    root, env, _initial_sha = _deploy_harness(tmp_path)
+    target = _commit_har_raw_migration(
+        root,
+        "e7b4c9d2a6f1_heimdal_raw_representation.py",
+    )
+    env["FAKE_SHA"] = target
+    env["DEPLOY_ACK_FORWARD_ONLY"] = "1"
+    env["FAKE_SECURITY_MODE"] = failure
+    env["FAKE_SECURITY_EVENT_LOG"] = env["FAKE_DEPLOY_EVENT_LOG"]
+    if channel == "test":
+        (root / "tmp-test").mkdir()
+        (root / "tmp-test" / "runtime.env").write_text(
+            "TTS_ENABLED=false\n",
+            encoding="utf-8",
+        )
+
+    result = _run_deploy(root, env, target, channel=channel)
+
+    combined = result.stdout + result.stderr
+    assert result.returncode != 0
+    assert combined.count("migration raw-key preflight failed: output=redacted") == 1
+    assert "fixture-private-lookup-detail" not in combined
+    assert "fixture-private-malformed-material" not in combined
+    assert "heimdal-raw-migrate:heimdal.raw-store-key" not in combined
+    assert not (tmp_path / "docker-called").exists()
+    assert not (root / "config" / "deploy" / f"{channel}.env").exists()
+    assert not (root / "config" / "deploy" / f"{channel}.previous.env").exists()
+    assert not (root / "config" / "deploy" / f"{channel}.migration-pending.env").exists()
+    assert not (root / "ops" / "deployments" / f"{channel}-latest.json").exists()
+    assert not Path(env["INSTANCE_OWNERSHIP_HOST_STATE_DIR"]).exists()
+    security_events = _deploy_events(env)
+    assert security_events
+    assert any(
+        event == "security migrate-primary"
+        for event in security_events
+    )
+    assert all(event.startswith("security ") for event in security_events)
+
+
+@pytest.mark.parametrize("channel", ["dev", "test", "prod"])
+def test_full_deploy_unrelated_migration_skips_raw_key_lookup(
+    tmp_path: Path,
+    channel: str,
+) -> None:
+    """An unrelated migration proceeds without borrowing HAR key authority."""
+    root, env, _initial_sha = _deploy_harness(tmp_path)
+    target = _commit_migration(root, f"unrelated_{channel}.py")
+    env["FAKE_SHA"] = target
+    env["FAKE_SECURITY_MODE"] = "matching"
+    env["FAKE_SECURITY_EVENT_LOG"] = env["FAKE_DEPLOY_EVENT_LOG"]
+    _configure_successful_channel_preflights(
+        root,
+        env,
+        tmp_path,
+        channel=channel,
+    )
+
+    result = _run_deploy(root, env, target, channel=channel)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    events = _deploy_events(env)
+    migrate_index = next(
+        index for index, event in enumerate(events) if "exit-code-from migrate" in event
+    )
+    assert not any(event.startswith("security ") for event in events[:migrate_index])
+    assert any(" stop api worker watcher" in event for event in events[:migrate_index])
+
+
+def test_full_deploy_mixed_migration_inventory_still_gates_raw_key(
+    tmp_path: Path,
+) -> None:
+    """Presence of HAR-02 among unrelated migrations keeps the gate active."""
+    root, env, _initial_sha = _deploy_harness(tmp_path)
+    _commit_migration(root, "unrelated_before_har.py")
+    target = _commit_har_raw_migration(
+        root,
+        "e7b4c9d2a6f1_heimdal_raw_representation.py",
+    )
+    env["FAKE_SHA"] = target
+    env["DEPLOY_ACK_FORWARD_ONLY"] = "1"
+    env["FAKE_SECURITY_MODE"] = "missing"
+    env["FAKE_SECURITY_EVENT_LOG"] = env["FAKE_DEPLOY_EVENT_LOG"]
+
+    result = _run_deploy(root, env, target, channel="dev")
+
+    combined = result.stdout + result.stderr
+    assert result.returncode != 0
+    assert combined.count("migration raw-key preflight failed: output=redacted") == 1
+    assert any(
+        event == "security migrate-primary"
+        for event in _deploy_events(env)
+    )
+    assert all(event.startswith("security ") for event in _deploy_events(env))
+    assert not (tmp_path / "docker-called").exists()
+
+
+@pytest.mark.parametrize(
+    "receipt",
+    [
+        {
+            "migrations_checked": 1,
+            "reversible": [],
+            "forward_only": [],
+            "classification_decisions": [],
+        },
+        {
+            "migrations_checked": 2,
+            "reversible": [
+                "e7b4c9d2a6f1_heimdal_raw_representation.py",
+                "e7b4c9d2a6f1_heimdal_raw_representation.py",
+            ],
+            "forward_only": [],
+            "classification_decisions": [
+                {
+                    "migration": "e7b4c9d2a6f1_heimdal_raw_representation.py",
+                    "classification": "reversible",
+                    "is_forward_only": False,
+                },
+                {
+                    "migration": "e7b4c9d2a6f1_heimdal_raw_representation.py",
+                    "classification": "reversible",
+                    "is_forward_only": False,
+                },
+            ],
+        },
+    ],
+    ids=["count-mismatch", "duplicate-filename"],
+)
+def test_full_deploy_invalid_migration_receipt_fails_before_mutation(
+    tmp_path: Path,
+    receipt: dict[str, object],
+) -> None:
+    """Malformed or ambiguous classifier output is never deployment authority."""
+    root, env, _initial_sha = _deploy_harness(tmp_path)
+    reversibility = root / "app" / "release_channels" / "reversibility.py"
+    with reversibility.open("a", encoding="utf-8") as handle:
+        handle.write(
+            "\n\ndef check_all_migrations(paths):\n"
+            f"    return {receipt!r}\n"
+        )
+    target = _commit_migration(root, "untrusted_receipt.py")
+    env["FAKE_SHA"] = target
+    # CI exports the real checkout on PYTHONPATH.  The harness's explicit
+    # top-level package must still make the isolated classifier authoritative.
+    env["PYTHONPATH"] = str(REPO_ROOT)
+
+    result = _run_deploy(root, env, target, channel="dev")
+
+    combined = result.stdout + result.stderr
+    assert result.returncode != 0
+    assert combined.count("migration gate blocked: invalid migration receipt") == 1
+    assert not (tmp_path / "docker-called").exists()
+    assert not (root / "config" / "deploy" / "dev.pin").exists()
+    assert not (root / "config" / "deploy" / "dev.migration-pending.env").exists()
+    assert not (root / "ops" / "deployments" / "dev-latest.json").exists()
+    assert not Path(env["INSTANCE_OWNERSHIP_HOST_STATE_DIR"]).exists()
 
 
 def test_heimdal_capture_watch_host_secret_layer_lives_in_base_compose() -> None:

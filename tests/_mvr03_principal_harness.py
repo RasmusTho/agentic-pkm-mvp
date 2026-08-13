@@ -148,7 +148,7 @@ def run_principal_cutover(
         credential=posture.credential,
         subjects=preflight_auth_posture(posture),
         migration_provenance=posture.migration_provenance(existing_install=existing_install),
-        floor_recorded=True,
+        floor_guard=lambda: True,
         _capability=STORAGE_MUTATION_CAPABILITY,
     )
 

@@ -161,7 +161,7 @@ def test_every_legacy_auth_producer_stops_before_principal_floor_write(tmp_path)
             credential=None,
             subjects=posture.subjects(),
             migration_provenance=posture.migration_provenance(existing_install=True),
-            floor_recorded=False,
+            floor_guard=lambda: False,
             _capability=STORAGE_MUTATION_CAPABILITY,
         )
     assert not principal_record_path(runtime).exists()
@@ -182,7 +182,7 @@ def test_every_legacy_auth_producer_stops_before_principal_floor_write(tmp_path)
         credential=None,
         subjects=posture.subjects(),
         migration_provenance=posture.migration_provenance(existing_install=True),
-        floor_recorded=True,
+        floor_guard=lambda: True,
         _capability=STORAGE_MUTATION_CAPABILITY,
     )
     assert record.revision == 1
@@ -331,25 +331,17 @@ def test_principal_fence_inventory_covers_every_enabled_auth_producer(tmp_path) 
         == digest
     )
 
-    # -- the deployment wrapper is deliberately NOT wired yet ---------------------------
-    # Honest scope boundary, asserted so it cannot drift into an accidental claim. The
-    # floor/fence mechanism is implemented and proven here, but automated activation from
-    # `scripts/deploy_channel.sh` is NOT shipped: it needs credential/listener posture
-    # plumbed into the `instance-state-init` one-shot and the native launcher paths mounted
-    # into it, neither of which this slice delivers. Three independent review rounds found
-    # blockers in that link; it is handed back as bounded follow-up work rather than shipped
-    # half-wired, because a cutover that records the floor and then fails to write the role
-    # leaves the instance fenced and rollback-blocked.
-    #
-    # The operator path today is the explicit governed commands documented in
-    # `docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md :: Minimum runtime principal floor`.
+    # -- the production wrapper owns the explicit cutover -------------------------------
+    # #4524 wires the floor/role operation only under the irreversible-floor opt-in.
+    # One runtime process owns same-window compensation before the wrapper releases the lease, so
+    # the old half-wired floor-without-role state is no longer an accepted failure edge.
     wrapper = (REPO_ROOT / "scripts/lib/instance_state_deployment.sh").read_text(
         encoding="utf-8"
     )
-    assert "principal-record-floor" not in wrapper, (
-        "wiring the cutover into the deployment wrapper requires the posture and launcher "
-        "mounts named in the MVR-03 follow-up; do not enable it without them"
-    )
+    assert "MVR03_PRINCIPAL_CUTOVER" in wrapper
+    assert wrapper.index("deployment-prove") < wrapper.index("principal-cutover")
+    assert wrapper.index("principal-cutover") < wrapper.index("deployment-finish")
+    assert "--floor-advanced" not in wrapper
 
     # The ordering hazard that made half-wiring dangerous is closed in code regardless:
     # `principal-record-floor` preflights the posture the subsequent role write will use, so
@@ -358,6 +350,9 @@ def test_principal_fence_inventory_covers_every_enabled_auth_producer(tmp_path) 
     assert "preflight_auth_posture(" in floor_source
     assert floor_source.index("preflight_auth_posture(") < floor_source.index(
         "record_principal_floor("
+    )
+    assert floor_source.index("record_principal_floor(") < floor_source.index(
+        "store.bootstrap("
     )
 
     # -- fail-closed inputs to the reworked inventory ------------------------------------

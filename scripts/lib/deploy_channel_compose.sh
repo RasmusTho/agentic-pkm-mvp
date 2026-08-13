@@ -324,6 +324,25 @@ _deploy_channel_needs_capture_secret() {
   return 1
 }
 
+# HAR-02's migration cryptographic preflight is itself a declared raw-store
+# consumer. Restrict this bootstrap to the explicit one-shot migration command
+# used by apply_changed_migrations: implicit dependency starts and unrelated
+# service ups must not receive or borrow its handle. Unlike the API ingress
+# layer, this required migration authority never degrades open — a missing,
+# malformed, or shared-domain-divergent key prevents Docker from starting.
+_deploy_channel_needs_migration_secret() {
+  local channel="${1:?channel required}"
+  shift
+  [ "${DEPLOY_HEIMDAL_RAW_MIGRATION_PENDING:-0}" = "1" ] || return 1
+  [ "${#}" -eq 6 ] || return 1
+  [ "${1}" = "up" ] \
+    && [ "${2}" = "--abort-on-container-exit" ] \
+    && [ "${3}" = "--exit-code-from" ] \
+    && [ "${4}" = "migrate" ] \
+    && [ "${5}" = "--force-recreate" ] \
+    && [ "${6}" = "migrate" ]
+}
+
 # The api process is a declared consumer of heimdal.raw-store-key (#4422): the
 # governed media/screen ingress lanes encrypt through the raw store. Bootstrap
 # fires whenever `up` includes the api service (named explicitly, or implied by
@@ -401,6 +420,55 @@ _deploy_channel_needs_api_ingress_secret() {
   done
   [ "${saw_service}" = "0" ] && return 0
   return 1
+}
+
+_deploy_channel_principal_cutover_receipt_requested() {
+  local arg
+  for arg in "$@"; do
+    [ "${arg}" = "principal-cutover" ] && return 0
+  done
+  return 1
+}
+
+# Governed Compose normally suppresses all output because config/startup text
+# can contain machine paths or environment values. The MVR-03 wrapper needs two
+# boolean fields from this one exact command; parse the private capture and emit a new
+# whitelist-only receipt rather than forwarding any raw Compose bytes.
+_deploy_channel_redact_principal_cutover_receipt() {
+  local output_file="${1:?captured output file required}"
+  "${PYTHON:-python3}" - "${output_file}" <<'PY'
+from __future__ import annotations
+
+import json
+import sys
+from pathlib import Path
+
+try:
+    lines = Path(sys.argv[1]).read_text(encoding="utf-8").splitlines()
+except OSError:
+    raise SystemExit(1)
+for line in reversed(lines):
+    try:
+        payload = json.loads(line)
+    except (TypeError, ValueError):
+        continue
+    advanced = payload.get("floor_advanced") if isinstance(payload, dict) else None
+    if (
+        payload.get("floor_recorded") is True
+        and type(advanced) is bool
+    ):
+        print(
+            json.dumps(
+                {
+                    "floor_advanced": advanced,
+                    "floor_recorded": True,
+                },
+                sort_keys=True,
+            )
+        )
+        raise SystemExit(0)
+raise SystemExit(1)
+PY
 }
 
 deploy_channel_compose() {
@@ -592,6 +660,21 @@ deploy_channel_compose() {
       )
     fi
 
+    if _deploy_channel_needs_migration_secret "${channel}" "$@"; then
+      # Outermost so any future nested consumer bootstrap may scrub the shared
+      # handle without erasing this migrate-only alias. The alias is only an
+      # env-file path; the bootstrap owns/removes the file and never exports a
+      # raw secret binding into the ambient process environment.
+      compose_command=(
+        sh -c 'cd "$1" && export PYTHONPATH="$1${PYTHONPATH:+:${PYTHONPATH}}" && shift && exec "$@"' _ "${root}"
+        "${PYTHON:-python3}" -m app.ops.host_secret_bootstrap
+        --channel "${channel}"
+        --consumer heimdal-raw-migrate
+        -- sh -c 'export HOST_SECRET_RUNTIME_ENV_FILE_MIGRATE="${HOST_SECRET_RUNTIME_ENV_FILE:-/dev/null}"; unset HOST_SECRET_RUNTIME_ENV_FILE; exec "$@"' _
+        "${compose_command[@]}"
+      )
+    fi
+
     # fd 0 is left untouched above (the override document is a temp file, not
     # a stdin heredoc), so it still carries whatever the caller attached to
     # this function call. A governed TTS invocation captures child output in
@@ -621,6 +704,11 @@ deploy_channel_compose() {
           return 92
         fi
         cat "${compose_stdout_file}"
+      elif _deploy_channel_principal_cutover_receipt_requested "$@"; then
+        if ! _deploy_channel_redact_principal_cutover_receipt "${compose_stdout_file}"; then
+          echo "governed compose output blocked: command=principal-cutover receipt=invalid" >&2
+          return 92
+        fi
       fi
       return 0
     fi

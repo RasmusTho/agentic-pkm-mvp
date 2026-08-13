@@ -246,6 +246,7 @@ jobs:
             tests/migrations/test_entity_review_operation_journal_schema_parity.py \
             tests/migrations/test_file_state_adoption.py \
             tests/migrations/test_objects_adoption.py \
+            tests/migrations/test_heimdal_raw_representation_migration.py \
             tests/migrations/test_legacy_objects_fk_migration.py \
             tests/migrations/test_store_schema_parity.py \
             tests/migrations/test_multi_vault_ingest_projection_keys.py \

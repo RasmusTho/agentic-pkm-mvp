@@ -91,7 +91,7 @@ def test_existing_single_user_auth_migrates_to_distinct_delegated_role(
             credential=posture.credential,
             subjects=preflight_auth_posture(posture),
             migration_provenance=PROVENANCE_EXISTING_CREDENTIAL,
-            floor_recorded=False,
+            floor_guard=lambda: False,
             _capability=STORAGE_MUTATION_CAPABILITY,
         )
     assert not principal_record_path(runtime).exists(), (

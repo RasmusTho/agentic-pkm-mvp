@@ -39,6 +39,7 @@ from app.heimdal.raw_read_gate import (
 )
 from app.heimdal.raw_store import (
     all_raw_records,
+    compute_raw_content_identity,
     encrypt_raw_bytes,
     insert_raw_record,
     reset_memory_raw_store,
@@ -98,15 +99,17 @@ def _write_retention_window(vault_root: Path, *, days: int) -> None:
 
 
 def _insert_test_record(content_identity: str, *, source_path: str = "test.wav"):
-    ciphertext, nonce = encrypt_raw_bytes(b"raw evidence bytes", key=_TEST_KEY)
+    plaintext = f"raw evidence bytes:{content_identity}".encode()
+    ciphertext, nonce = encrypt_raw_bytes(plaintext, key=_TEST_KEY)
     record, created = insert_raw_record(
-        content_identity=content_identity,
+        content_identity=compute_raw_content_identity(plaintext),
         capture_chain=["watch", "fetch"],
         sensor={"sensor_id": "test_capture_adapter"},
         consent={"grant_ref": "self_record_standing"},
         ciphertext=ciphertext,
         nonce=nonce,
         key_ref="test-key-v1",
+        key=_TEST_KEY,
         source_path=source_path,
     )
     assert created is True
@@ -137,7 +140,7 @@ def test_hard_retention_bound_and_receipt(tmp_path: Path) -> None:
 
     receipt = result.deletions[0]
     assert receipt.record_id == record.id
-    assert receipt.content_identity == "content-past-window"
+    assert receipt.content_identity == record.content_identity
     assert receipt.reason == REASON_HARD_RETENTION_BOUND
     assert receipt.retention_window_days == 30
     assert receipt.receipted is True

@@ -11,13 +11,16 @@ can_parallelize_with: []
 
 # Version Active Context Selection
 
-State: **Partially delivered** by #3857. Shipped: the V1 seam, the TTL-bound selection store and
+State: **Delivered** by #3857 plus automated deployment activation in #4524. Shipped: the V1
+seam, the TTL-bound selection store and
 resolver, per-binding GOV authorization, the delegated local-operator principal record with its
 governed commands, the `minimum_runtime_principal` floor and auth-producer fence (fail-closed,
-operator-invoked), the production create/replace/inspect/clear endpoints, and full-context cache
-identity. **Not shipped:** automated activation of the principal cutover from
-`scripts/lib/instance_state_deployment.sh` — it needs credential/listener posture and the native
-launcher paths inside the `instance-state-init` one-shot, and #3857 remains open for it. Production request-carrier propagation stays sealed for MVR-05B (#3860); the dimension field was
+explicitly activated), the production create/replace/inspect/clear endpoints, and full-context cache
+identity. `scripts/lib/instance_state_deployment.sh` now activates the principal floor and role
+inside the existing stopped window only under the explicit cutover opt-in, with matching
+credential/proxy posture, complete native-producer mounts, and attempt-bound bootstrap-failure
+compensation. Production request-carrier propagation stays sealed for MVR-05B (#3860); the
+dimension field was
 unsealed by MVR-04 (#3858) as typed `DimensionFilter` provenance. Shipped truth lives in
 `docs/contracts/ACTIVE_CONTEXT_SET.md :: Shipped V1 seam (MVR-03, #3857)`,
 `docs/SECURITY.md :: Delegated local operator principal`, and
