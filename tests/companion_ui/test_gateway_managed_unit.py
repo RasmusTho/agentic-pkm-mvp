@@ -95,6 +95,11 @@ def test_channel_overlays_define_distinct_gateway_units() -> None:
         assert env["PKM_ENVIRONMENT"] == channel
         assert env["PORT"] == port
         assert env["COMPANION_UI_SERVE_MODULE"] == module
-        assert service["ports"] == [
-            f"${{COMPANION_UI_BIND_HOST:-127.0.0.1}}:{port}:{port}"
-        ]
+        expected_publish = (
+            "127.0.0.1:8113:8113"
+            if channel == "prod"
+            else f"${{COMPANION_UI_BIND_HOST:-127.0.0.1}}:{port}:{port}"
+        )
+        assert service["ports"] == [expected_publish]
+        if channel == "prod":
+            assert env["COMPANION_UI_BIND_HOST"] == "127.0.0.1"

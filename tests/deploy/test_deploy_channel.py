@@ -161,6 +161,7 @@ def _deploy_harness(tmp_path: Path) -> tuple[Path, dict[str, str], str]:
         "scripts/deploy_channel.sh",
         "scripts/companion_ui_postdeploy_smoke.sh",
         "scripts/dev_test_environment_clobber_preflight.py",
+        "scripts/prod_devui_gateway_preflight.py",
         "scripts/lib/deploy_channel_compose.sh",
         "scripts/lib/heimdal_cold_volume_preflight.sh",
         "scripts/lib/instance_state_deployment.sh",
@@ -170,6 +171,10 @@ def _deploy_harness(tmp_path: Path) -> tuple[Path, dict[str, str], str]:
     ):
         destination = root / relative
         shutil.copy2(REPO_ROOT / relative, destination)
+    shutil.copy2(
+        REPO_ROOT / "docker-compose.prod.yml",
+        root / "docker-compose.prod.yml",
+    )
     _install_writer_inventory_harness(root)
     # The host-volume mechanism itself is covered with a fully injected
     # command runner in tests/heimdal.  This channel harness owns deploy
@@ -1979,16 +1984,17 @@ def test_prod_deploy_pending_retry_preflight_fails_open_without_dsn(
     tmp_path: Path,
 ) -> None:
     root, env, sha = _deploy_harness(tmp_path)
-    # No compose files at all: resolution is impossible (not merely "a file
-    # was empty"), so the preflight must skip visibly rather than block or
-    # crash.
+    # No compose files at all: the older pending-retry preflight would skip,
+    # but production now has an earlier fail-loud gateway-producer invariant.
+    # Missing the canonical overlay must block before any mutation.
     _configure_prod_retry_preflight(root, env, tmp_path, compose_files_present=False)
+    (root / "docker-compose.prod.yml").unlink()
 
     result = _run_deploy(root, env, sha, channel="prod")
 
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert "prod pending-retry preflight: skipped:no_dsn" in result.stdout
-    assert (tmp_path / "docker-called").exists()
+    assert result.returncode == 78
+    assert "prod devUI gateway preflight: blocked" in result.stderr
+    assert not (tmp_path / "docker-called").exists()
 
 
 # ---------------------------------------------------------------------------
