@@ -814,7 +814,7 @@ def _blockquote_owner_turns(body: str) -> tuple[str, ...]:
                     "blockquote transcript message contains unframed content"
                 )
         content = "\n".join(content_lines)
-        if marker.group(1) == "Owner" and content:
+        if marker.group(1) == "Owner" and content.strip():
             turns.append(content)
     return tuple(turns)
 
@@ -847,7 +847,7 @@ def _legacy_owner_turns(body: str) -> tuple[str, ...]:
         content = inline_content
         if continuation:
             content += ("\n" if content else "") + continuation
-        if content:
+        if content.strip():
             turns.append(content)
     return tuple(turns)
 

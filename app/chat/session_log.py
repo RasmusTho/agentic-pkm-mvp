@@ -101,6 +101,7 @@ class SessionLogWriter:
         )
         if not normalized_content:
             raise ValueError("chat message content must not be empty")
+        _assert_session_open(session)
         quoted_content = "\n".join(
             f"> {line}" if line else ">"
             for line in normalized_content.split("\n")
@@ -118,6 +119,7 @@ class SessionLogWriter:
         )
         if not normalized_summary:
             raise ValueError("chat session summary must not be empty")
+        _assert_session_open(session)
         quoted_summary = "\n".join(
             f"> {line}" if line else ">"
             for line in normalized_summary.split("\n")
@@ -128,6 +130,12 @@ class SessionLogWriter:
             f"**Session closed:**\n{quoted_summary}\n\n",
             vault_root=self._vault_root,
         )
+
+
+def _assert_session_open(session: SessionLog) -> None:
+    text = session.log_path.read_text(encoding="utf-8")
+    if "\n**Session closed:**\n" in text or "\n*Session closed. Total: " in text:
+        raise ValueError("chat session is already closed")
 
 
 def load_chat_sessions_for_note(note_uuid: str, *, vault_context: VaultContext) -> list[SessionLog]:

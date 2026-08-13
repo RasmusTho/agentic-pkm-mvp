@@ -1097,6 +1097,41 @@ def test_malformed_framed_transcript_blocks_without_normalizing_semantics(
     assert not list(root.glob("**/drafts/journal/*.md"))
 
 
+@pytest.mark.parametrize("framed", (False, True))
+def test_whitespace_only_owner_turn_blocks_before_cognition_and_staging(
+    tmp_path: Path, framed: bool
+) -> None:
+    root, context, session_id, _capture = _seed_inputs(tmp_path)
+    transcript = next((root / ".chats" / "reflection").glob("*.md"))
+    format_line = "role_message_format: blockquote-v1\n" if framed else ""
+    owner_message = "**Owner:**\n>   " if framed else "**Owner:**\n   "
+    transcript.write_text(
+        f"""---
+type: chat-session
+session_id: {session_id}
+{format_line}---
+
+## Session
+
+{owner_message}
+""",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        UnresolvableJournalCitationError,
+        match=f"session:{session_id} contains no owner turns",
+    ):
+        draft_journal_entry(
+            vault_context=context,
+            for_date=DAY,
+            session_id=session_id,
+            write_guard=_allowing_guard(),
+        )
+
+    assert not list(root.glob("**/drafts/journal/*.md"))
+
+
 def test_legacy_closed_transcript_excludes_session_metadata(tmp_path: Path) -> None:
     root, context, session_id, _capture = _seed_inputs(tmp_path)
     transcript = next((root / ".chats" / "reflection").glob("*.md"))

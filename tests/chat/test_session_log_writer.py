@@ -120,6 +120,21 @@ def test_close_session_appends_closure_line(tmp_path: Path) -> None:
     ) in text
 
 
+def test_closed_session_rejects_messages_and_duplicate_close(tmp_path: Path) -> None:
+    writer = _writer(tmp_path)
+    session = writer.open_session(_note(tmp_path), "session")
+    writer.append_message(session, "owner", "Durable owner turn")
+    writer.close_session(session, "complete")
+    closed_text = session.log_path.read_text(encoding="utf-8")
+
+    with pytest.raises(ValueError, match="already closed"):
+        writer.append_message(session, "owner", "late owner turn")
+    with pytest.raises(ValueError, match="already closed"):
+        writer.close_session(session, "duplicate close")
+
+    assert session.log_path.read_text(encoding="utf-8") == closed_text
+
+
 def test_open_session_resolves_and_writes_note_uuid(tmp_path: Path) -> None:
     session = _writer(tmp_path).open_session(_note(tmp_path), "session")
 
