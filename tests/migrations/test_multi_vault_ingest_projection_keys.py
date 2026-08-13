@@ -32,14 +32,38 @@ def _admin_dsn() -> str:
     dsn = resolve_dsn()
     if not dsn:
         pytest.skip("DATABASE_URL/DB_DSN not configured")
-    target = conninfo_to_dict(dsn)
-    if (
-        target.get("host") != "127.0.0.1"
-        or target.get("port") != "15433"
-        or target.get("dbname") != "app_dev"
-    ):
-        pytest.fail("MVR-05A4 scratch tests require the explicit local dev database target")
+    if not _is_allowed_scratch_admin_dsn(dsn):
+        pytest.fail("MVR-05A4 scratch tests require an explicit local dev or CI test target")
     return dsn
+
+
+def _is_allowed_scratch_admin_dsn(dsn: str) -> bool:
+    try:
+        target = conninfo_to_dict(dsn)
+    except Exception:
+        return False
+    host = target.get("host")
+    port = target.get("port") or "5432"
+    database = target.get("dbname")
+    return (host == "127.0.0.1" and port == "15433" and database == "app_dev") or (
+        host in {"localhost", "127.0.0.1"} and port == "5432" and database == "app_test"
+    )
+
+
+@pytest.mark.parametrize(
+    ("dsn", "allowed"),
+    (
+        ("postgresql://app:x@127.0.0.1:15433/app_dev", True),
+        ("postgresql://app:x@localhost:5432/app_test", True),
+        ("postgresql://app:x@127.0.0.1:15432/app", False),
+        ("postgresql:///app_test", False),
+        ("service=app_test", False),
+    ),
+)
+def test_scratch_database_factory_accepts_only_explicit_nonprod_targets(
+    dsn: str, allowed: bool
+) -> None:
+    assert _is_allowed_scratch_admin_dsn(dsn) is allowed
 
 
 @pytest.fixture
