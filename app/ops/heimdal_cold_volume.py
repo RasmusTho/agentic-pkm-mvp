@@ -21,6 +21,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import threading
 
 from app.ops.host_secret_bootstrap import (
     load_runtime_secret_values,
@@ -69,6 +70,7 @@ _DISK_KEYS = frozenset(
     }
 )
 _PARENT_DISK_KEYS = frozenset({"DeviceIdentifier", "MountPoint", "Internal"})
+_ONE_SHOT_DESCRIPTOR_AUTHORITY = object()
 
 
 class ArchiveVolumeRefusedError(RuntimeError):
@@ -147,6 +149,48 @@ MetadataWriter = Callable[[Path, ArchiveVolumeMetadata], None]
 
 def _refused() -> ArchiveVolumeRefusedError:
     return ArchiveVolumeRefusedError("archive volume is not ready")
+
+
+def _fchdir_preexec(descriptor: int) -> Callable[[], None]:
+    """Return the only child hook used by the one-shot provisioner."""
+
+    def enter_verified_parent() -> None:
+        os.fchdir(descriptor)
+
+    return enter_verified_parent
+
+
+def _run_closed_child(
+    argv: tuple[str, ...],
+    *,
+    stdin: bytes | None,
+    timeout_seconds: float,
+    executor: Executor,
+    cwd_fd: int | None,
+) -> subprocess.CompletedProcess[bytes]:
+    extra: dict[str, object] = {}
+    if cwd_fd is not None:
+        # preexec_fn is safe here only because provisioning is a short-lived,
+        # single-threaded CLI action. Refuse imported/threaded runtime use.
+        if (
+            threading.current_thread() is not threading.main_thread()
+            or threading.active_count() != 1
+        ):
+            raise _refused()
+        extra = {
+            "pass_fds": (cwd_fd,),
+            "preexec_fn": _fchdir_preexec(cwd_fd),
+        }
+    return executor(
+        list(argv),
+        input=stdin,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        timeout=timeout_seconds,
+        check=False,
+        env={"PATH": "/usr/bin:/usr/sbin"},
+        **extra,
+    )
 
 
 def _safe_path(path: Path) -> Path:
@@ -322,11 +366,13 @@ def run_command(
     *,
     timeout_seconds: float = COMMAND_TIMEOUT_SECONDS,
     executor: Executor = subprocess.run,
+    _descriptor_authority: object | None = None,
 ) -> CommandResult:
     validate_command(argv, metadata, cwd_fd=cwd_fd)
     cwd_identity: tuple[int, int] | None = None
-    extra: dict[str, object] = {}
     if cwd_fd is not None:
+        if _descriptor_authority is not _ONE_SHOT_DESCRIPTOR_AUTHORITY:
+            raise _refused()
         try:
             before = os.fstat(cwd_fd)
         except OSError as exc:
@@ -334,20 +380,13 @@ def run_command(
         if not stat.S_ISDIR(before.st_mode):
             raise _refused()
         cwd_identity = (before.st_dev, before.st_ino)
-        extra = {
-            "cwd": f"/dev/fd/{cwd_fd}",
-            "pass_fds": (cwd_fd,),
-        }
     try:
-        completed = executor(
-            list(argv),
-            input=stdin,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            timeout=timeout_seconds,
-            check=False,
-            env={"PATH": "/usr/bin:/usr/sbin"},
-            **extra,
+        completed = _run_closed_child(
+            argv,
+            stdin=stdin,
+            timeout_seconds=timeout_seconds,
+            executor=executor,
+            cwd_fd=cwd_fd,
         )
     except Exception as exc:
         raise _refused() from exc
@@ -365,13 +404,23 @@ def run_command(
     return CommandResult(int(completed.returncode), stdout, stderr, cwd_identity)
 
 
-def _runner(metadata: ArchiveVolumeMetadata) -> CommandRunner:
+def _runner(
+    metadata: ArchiveVolumeMetadata,
+    *,
+    descriptor_authority: object | None = None,
+) -> CommandRunner:
     def selected(
         argv: tuple[str, ...],
         stdin: bytes | None = None,
         cwd_fd: int | None = None,
     ) -> CommandResult:
-        return run_command(argv, metadata, stdin, cwd_fd)
+        return run_command(
+            argv,
+            metadata,
+            stdin,
+            cwd_fd,
+            _descriptor_authority=descriptor_authority,
+        )
 
     return selected
 
@@ -910,8 +959,13 @@ def provision_archive_volume(
     runner: CommandRunner | None = None,
     metadata_path: Path | None = None,
     metadata_writer: MetadataWriter = write_archive_metadata,
+    _descriptor_authority: object | None = None,
 ) -> ArchiveVolumeReady:
-    selected = _runner(metadata) if runner is None else runner
+    selected = (
+        _runner(metadata, descriptor_authority=_descriptor_authority)
+        if runner is None
+        else runner
+    )
     if metadata_path is not None and _durable_metadata(metadata_path) != metadata:
         raise _refused()
 
@@ -1024,6 +1078,7 @@ def provision_from_bootstrap(
     runner: CommandRunner | None = None,
     metadata_path: Path | None = None,
     metadata_writer: MetadataWriter = write_archive_metadata,
+    _descriptor_authority: object | None = None,
 ) -> ArchiveVolumeReady:
     return provision_archive_volume(
         metadata,
@@ -1031,6 +1086,7 @@ def provision_from_bootstrap(
         runner=runner,
         metadata_path=metadata_path,
         metadata_writer=metadata_writer,
+        _descriptor_authority=_descriptor_authority,
     )
 
 
@@ -1063,7 +1119,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         elif args.action == "mount":
             mount_from_bootstrap(metadata)
         else:
-            provision_from_bootstrap(metadata, metadata_path=args.metadata)
+            provision_from_bootstrap(
+                metadata,
+                metadata_path=args.metadata,
+                _descriptor_authority=_ONE_SHOT_DESCRIPTOR_AUTHORITY,
+            )
     except ArchiveVolumeRefusedError as exc:
         print(str(exc), file=sys.stderr)
         return 78

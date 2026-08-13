@@ -12,6 +12,7 @@ import os
 from dataclasses import replace
 from pathlib import Path
 import plistlib
+import threading
 
 import pytest
 
@@ -632,20 +633,85 @@ def test_command_adapter_is_allowlisted_bounded_and_redacted(tmp_path: Path) -> 
 
     parent_descriptor = os.open(metadata.bundle_path.parent, os.O_RDONLY)
     try:
+        with pytest.raises(volume.ArchiveVolumeRefusedError):
+            volume.run_command(
+                volume.create_command(metadata),
+                metadata,
+                _PASSPHRASE.encode(),
+                parent_descriptor,
+                executor=descriptor_executor,
+            )
+        assert captured == {}
         result = volume.run_command(
             volume.create_command(metadata),
             metadata,
             _PASSPHRASE.encode(),
             parent_descriptor,
             executor=descriptor_executor,
+            _descriptor_authority=volume._ONE_SHOT_DESCRIPTOR_AUTHORITY,
         )
         details = os.fstat(parent_descriptor)
     finally:
         os.close(parent_descriptor)
-    assert captured["cwd"] == f"/dev/fd/{parent_descriptor}"
+    assert "cwd" not in captured
     assert captured["pass_fds"] == (parent_descriptor,)
+    assert callable(captured["preexec_fn"])
     assert captured["argv"][-1] == metadata.bundle_path.name
     assert result.cwd_identity == (details.st_dev, details.st_ino)
+
+
+def test_descriptor_child_executes_in_held_parent_after_path_swap(tmp_path: Path) -> None:
+    parent = tmp_path / "external-parent"
+    parent.mkdir()
+    displaced = tmp_path / "displaced-external-parent"
+    descriptor = os.open(parent, os.O_RDONLY)
+    try:
+        before = os.fstat(descriptor)
+        parent.rename(displaced)
+        parent.mkdir()
+        completed = volume._run_closed_child(
+            ("/usr/bin/touch", "descriptor-child-marker"),
+            stdin=None,
+            timeout_seconds=5.0,
+            executor=volume.subprocess.run,
+            cwd_fd=descriptor,
+        )
+        after = os.fstat(descriptor)
+    finally:
+        os.close(descriptor)
+
+    assert completed.returncode == 0
+    assert (before.st_dev, before.st_ino) == (after.st_dev, after.st_ino)
+    assert (displaced / "descriptor-child-marker").is_file()
+    assert not (parent / "descriptor-child-marker").exists()
+
+
+def test_descriptor_child_refuses_threaded_runtime(tmp_path: Path) -> None:
+    descriptor = os.open(tmp_path, os.O_RDONLY)
+    errors: list[Exception] = []
+
+    def invoke_from_thread() -> None:
+        try:
+            volume._run_closed_child(
+                ("/usr/bin/true",),
+                stdin=None,
+                timeout_seconds=5.0,
+                executor=volume.subprocess.run,
+                cwd_fd=descriptor,
+            )
+        except Exception as exc:
+            errors.append(exc)
+
+    try:
+        worker = threading.Thread(target=invoke_from_thread)
+        worker.start()
+        worker.join(timeout=5)
+    finally:
+        os.close(descriptor)
+
+    assert not worker.is_alive()
+    assert len(errors) == 1
+    assert isinstance(errors[0], volume.ArchiveVolumeRefusedError)
 
 
 def test_metadata_is_closed_value_free_and_atomic(tmp_path: Path) -> None:
