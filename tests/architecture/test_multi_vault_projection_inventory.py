@@ -673,13 +673,13 @@ def test_post_cutover_store_fixture_mutations_are_binding_scoped() -> None:
             # pre-binding membership/store_objects shape before upgrading it.
             (
                 "tests/migrations/test_multi_vault_ingest_projection_keys.py",
-                "test_retained_historical_membership_lineage_is_rekeyed",
+                "_prepare_retained_historical_lineage",
                 "insert into",
                 "store_objects",
             ): 1,
             (
                 "tests/migrations/test_multi_vault_ingest_projection_keys.py",
-                "test_retained_historical_membership_lineage_is_rekeyed",
+                "_prepare_retained_historical_lineage",
                 "insert into",
                 "membership",
             ): 1,
