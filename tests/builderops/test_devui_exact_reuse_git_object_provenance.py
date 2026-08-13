@@ -100,6 +100,19 @@ def test_validator_uses_hardcoded_literal_font_pair_not_source_derived_urls(obje
     with pytest.raises(ExactReuseProvenanceError):
         validate_exact_reuse(repo, bad_candidate)
 
+    # A quoted import is still an import and must not evade the URL matcher.
+    source.write_text(
+        "@import url('" + APPROVED_IMPORTS[0] + "');\n"
+        "@import url('" + APPROVED_IMPORTS[1] + "');\n"
+        "@import 'https://evil.invalid/residual.css';\n"
+        ":root { --font-ui: x; --font-display: x; --font-mono: x; }\n"
+    )
+    source_commit = _commit(repo, "residual import")
+    source_blob = _git(repo, "rev-parse", f"{source_commit}:source.css")
+    (repo / DECLARATION_PATH).write_text(json.dumps(_declaration(source_commit, source_blob)))
+    with pytest.raises(ExactReuseProvenanceError):
+        validate_exact_reuse(repo, _commit(repo, "residual candidate"))
+
 
 def test_validator_preserves_closed_schema_fallback_transforms_and_state_matrix(object_repo: tuple[Path, str, str]) -> None:
     repo, candidate, _ = object_repo

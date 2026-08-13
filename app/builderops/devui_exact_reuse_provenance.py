@@ -98,7 +98,10 @@ def validate_exact_reuse(repo_root: Path, candidate_sha: str) -> ExactReuseRecei
     if not isinstance(imports, list) or tuple(imports) != _APPROVED_IMPORTS:
         raise ExactReuseProvenanceError("remote fonts are not the hardcoded approved literals")
     source_text = source_bytes.decode("utf-8", errors="strict")
-    if tuple(re.findall(r"@import\s+url\(['\"]([^'\"]+)['\"]\)", source_text)) != _APPROVED_IMPORTS:
+    # Every import form counts.  Matching only ``url('...')`` would let a
+    # residual quoted import evade the literal allowlist.
+    import_forms = re.findall(r"@import\s+([^;]+);", source_text)
+    if len(import_forms) != 2 or tuple(re.findall(r"@import\s+url\(['\"]([^'\"]+)['\"]\)", source_text)) != _APPROVED_IMPORTS:
         raise ExactReuseProvenanceError("source imports are not the approved literal pair")
     if any(token not in source_text for token in _TOKENS):
         raise ExactReuseProvenanceError("source lacks required parsed tokens")
