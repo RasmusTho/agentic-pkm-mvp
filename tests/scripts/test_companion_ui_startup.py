@@ -145,23 +145,25 @@ def test_prod_runtime_refuses_archive_before_warm_skip(tmp_path: Path) -> None:
 set -euo pipefail
 FAKE_ROOT="$1"
 
-mkdir -p "$FAKE_ROOT/scripts/lib" "$FAKE_ROOT/scripts"
-cat > "$FAKE_ROOT/scripts/lib/heimdal_cold_volume_preflight.sh" <<'EOS'
-heimdal_cold_volume_preflight() {
-  touch "$FAKE_ROOT/.archive_gate_ran"
-  return 78
-}
-EOS
+mkdir -p "$FAKE_ROOT/scripts"
 cat > "$FAKE_ROOT/scripts/start_full_system.sh" <<'EOS'
 #!/usr/bin/env bash
 touch "$FAKE_ROOT/.full_system_ran"
 EOS
 chmod +x "$FAKE_ROOT/scripts/start_full_system.sh"
+cat > "$FAKE_ROOT/python-fixture" <<'EOS'
+#!/usr/bin/env bash
+touch "$FAKE_ROOT/.archive_gate_ran"
+exit 78
+EOS
+chmod +x "$FAKE_ROOT/python-fixture"
 
 source "$LIB"
 cui_repo_root() { printf '%s' "$FAKE_ROOT"; }
 cui_api_healthy_now() { touch "$FAKE_ROOT/.health_probe_ran"; return 0; }
 export FAKE_ROOT
+export PYTHON="$FAKE_ROOT/python-fixture"
+export HEIMDAL_ARCHIVE_METADATA_FILE="$FAKE_ROOT/archive-metadata.json"
 export CUI_API_PORT=18000
 export CUI_CHANNEL=prod
 export CUI_COMPOSE_PROJECT=pkm-prod

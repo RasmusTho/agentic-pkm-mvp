@@ -9,18 +9,20 @@ arbitrary executable, verb, raw device, parent-volume target, or shell string.
 from __future__ import annotations
 
 import argparse
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass, replace
+import fcntl
 import hashlib
 import json
 import os
 from pathlib import Path
 import plistlib
 import re
+import secrets
 import stat
 import subprocess
 import sys
-import tempfile
 import threading
 
 from app.ops.host_secret_bootstrap import (
@@ -33,6 +35,7 @@ HDIUTIL = "/usr/bin/hdiutil"
 DISKUTIL = "/usr/sbin/diskutil"
 MAX_PLIST_BYTES = 1024 * 1024
 MAX_IMAGE_METADATA_BYTES = 256 * 1024
+MAX_METADATA_BYTES = 64 * 1024
 COMMAND_TIMEOUT_SECONDS = 60.0
 MAX_CAPACITY_BYTES = 2**63 - 512
 ARCHIVE_SECRET = "heimdal.archive-pass"
@@ -51,6 +54,7 @@ _DEVICE_IDENTIFIER = re.compile(r"^disk[0-9][0-9A-Za-z._-]*$")
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _METADATA_KEYS = frozenset(
     {
+        "generation",
         "state",
         "archive_id",
         "bundle_path",
@@ -60,6 +64,7 @@ _METADATA_KEYS = frozenset(
         "image_metadata_sha256",
         "volume_uuid",
         "capacity_bytes",
+        "filesystem_capacity_bytes",
         "owner_uid",
         "owner_gid",
         "mode",
@@ -73,7 +78,6 @@ _DISK_KEYS = frozenset(
         "FilesystemType",
         "TotalSize",
         "Internal",
-        "Encryption",
         "VolumeName",
     }
 )
@@ -90,6 +94,7 @@ class ArchiveVolumeRefusedError(RuntimeError):
 
 @dataclass(frozen=True)
 class ArchiveVolumeMetadata:
+    generation: int
     state: str
     archive_id: str
     bundle_path: Path
@@ -99,14 +104,24 @@ class ArchiveVolumeMetadata:
     image_metadata_sha256: str | None
     volume_uuid: str | None
     capacity_bytes: int
+    filesystem_capacity_bytes: int | None
     owner_uid: int
     owner_gid: int
     mode: int
 
     def __post_init__(self) -> None:
         if (
-            type(self.state) is not str
+            type(self.generation) is not int
+            or self.generation < 0
+            or type(self.state) is not str
             or self.state not in _METADATA_STATES
+            or self.generation
+            != {
+                PLANNED_UNBOUND: 0,
+                PROVISIONING_FAILED: 1,
+                ATTACHED_VERIFIED: 2,
+                BOUND_ACTIVE: 3,
+            }[self.state]
             or type(self.archive_id) is not str
             or _ARCHIVE_ID.fullmatch(self.archive_id) is None
             or not isinstance(self.bundle_path, Path)
@@ -119,12 +134,17 @@ class ArchiveVolumeMetadata:
             or self.mountpoint == self.bundle_path.parent
             or type(self.parent_volume_uuid) is not str
             or _UUID.fullmatch(self.parent_volume_uuid) is None
+            or type(self.capacity_bytes) is not int
+            or self.capacity_bytes <= 0
+            or self.capacity_bytes > MAX_CAPACITY_BYTES
+            or self.capacity_bytes % 512 != 0
             or (
                 self.state == PLANNED_UNBOUND
                 and (
                     self.volume_uuid is not None
                     or self.bundle_inode is not None
                     or self.image_metadata_sha256 is not None
+                    or self.filesystem_capacity_bytes is not None
                 )
             )
             or (
@@ -135,6 +155,7 @@ class ArchiveVolumeMetadata:
                     or self.bundle_inode <= 0
                     or type(self.image_metadata_sha256) is not str
                     or _SHA256.fullmatch(self.image_metadata_sha256) is None
+                    or self.filesystem_capacity_bytes is not None
                 )
             )
             or (
@@ -146,12 +167,12 @@ class ArchiveVolumeMetadata:
                     or self.bundle_inode <= 0
                     or type(self.image_metadata_sha256) is not str
                     or _SHA256.fullmatch(self.image_metadata_sha256) is None
+                    or type(self.filesystem_capacity_bytes) is not int
+                    or self.filesystem_capacity_bytes <= 0
+                    or self.filesystem_capacity_bytes > self.capacity_bytes
+                    or self.filesystem_capacity_bytes % 512 != 0
                 )
             )
-            or type(self.capacity_bytes) is not int
-            or self.capacity_bytes <= 0
-            or self.capacity_bytes > MAX_CAPACITY_BYTES
-            or self.capacity_bytes % 512 != 0
             or type(self.owner_uid) is not int
             or self.owner_uid < 0
             or type(self.owner_gid) is not int
@@ -263,63 +284,205 @@ def _metadata_dict(metadata: ArchiveVolumeMetadata) -> dict[str, object]:
     return payload
 
 
-def write_archive_metadata(path: Path, metadata: ArchiveVolumeMetadata) -> None:
-    """Atomically write a closed, value-free metadata document."""
-    if not path.is_absolute() or path.is_symlink():
+def _metadata_bytes(metadata: ArchiveVolumeMetadata) -> bytes:
+    return (json.dumps(_metadata_dict(metadata), sort_keys=True) + "\n").encode("utf-8")
+
+
+_METADATA_LOCK_STATE = threading.local()
+
+
+@contextmanager
+def _metadata_lock(path: Path) -> Iterator[int]:
+    """Hold the descriptor-bound adjacent lock for one metadata transaction."""
+    if not path.is_absolute() or path.is_symlink() or path.name in {"", ".", ".."}:
         raise _refused()
-    parent = path.parent
+    key = str(path)
+    held: dict[str, int] = getattr(_METADATA_LOCK_STATE, "held", {})
+    if key in held:
+        yield held[key]
+        return
+
+    parent_descriptor = -1
+    lock_descriptor = -1
     try:
-        parent_details = os.stat(parent, follow_symlinks=False)
-        if not stat.S_ISDIR(parent_details.st_mode) or stat.S_ISLNK(parent_details.st_mode):
+        parent = path.parent
+        parent_descriptor = os.open(
+            parent,
+            os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0),
+        )
+        held_parent = os.fstat(parent_descriptor)
+        live_parent = os.stat(parent, follow_symlinks=False)
+        if (
+            not stat.S_ISDIR(held_parent.st_mode)
+            or not os.path.samestat(held_parent, live_parent)
+        ):
             raise _refused()
-        if path.exists():
-            current = os.stat(path, follow_symlinks=False)
-            if not stat.S_ISREG(current.st_mode) or stat.S_IMODE(current.st_mode) != 0o600:
-                raise _refused()
+        lock_name = f".{path.name}.lock"
+        lock_descriptor = os.open(
+            lock_name,
+            os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0),
+            0o600,
+            dir_fd=parent_descriptor,
+        )
+        os.fchmod(lock_descriptor, 0o600)
+        lock_details = os.fstat(lock_descriptor)
+        if (
+            not stat.S_ISREG(lock_details.st_mode)
+            or stat.S_IMODE(lock_details.st_mode) != 0o600
+            or lock_details.st_uid != os.geteuid()
+        ):
+            raise _refused()
+        fcntl.flock(lock_descriptor, fcntl.LOCK_EX)
+        held[key] = parent_descriptor
+        _METADATA_LOCK_STATE.held = held
+        yield parent_descriptor
     except ArchiveVolumeRefusedError:
         raise
     except OSError as exc:
         raise _refused() from exc
-    descriptor, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=parent)
-    try:
-        os.fchmod(descriptor, 0o600)
-        with os.fdopen(descriptor, "w", encoding="utf-8", closefd=True) as handle:
-            descriptor = -1
-            json.dump(_metadata_dict(metadata), handle, sort_keys=True)
-            handle.write("\n")
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(temporary, path)
-        parent_descriptor = os.open(parent, os.O_RDONLY)
-        try:
-            os.fsync(parent_descriptor)
-        finally:
+    finally:
+        held.pop(key, None)
+        if lock_descriptor >= 0:
+            try:
+                fcntl.flock(lock_descriptor, fcntl.LOCK_UN)
+            finally:
+                os.close(lock_descriptor)
+        if parent_descriptor >= 0:
             os.close(parent_descriptor)
-    except Exception:
+
+
+def _read_metadata_bytes(parent_descriptor: int, name: str) -> bytes:
+    descriptor = -1
+    try:
+        descriptor = os.open(
+            name,
+            os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0),
+            dir_fd=parent_descriptor,
+        )
+        details = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(details.st_mode)
+            or stat.S_IMODE(details.st_mode) != 0o600
+            or details.st_size <= 0
+            or details.st_size > MAX_METADATA_BYTES
+        ):
+            raise _refused()
+        chunks: list[bytes] = []
+        remaining = details.st_size
+        while remaining:
+            chunk = os.read(descriptor, min(remaining, 64 * 1024))
+            if not chunk:
+                raise _refused()
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        if os.read(descriptor, 1):
+            raise _refused()
+        return b"".join(chunks)
+    except ArchiveVolumeRefusedError:
+        raise
+    except OSError as exc:
+        raise _refused() from exc
+    finally:
         if descriptor >= 0:
             os.close(descriptor)
-        Path(temporary).unlink(missing_ok=True)
+
+
+def _write_metadata_bytes(parent_descriptor: int, name: str, payload: bytes) -> None:
+    temporary = f".{name}.{secrets.token_hex(16)}"
+    descriptor = -1
+    try:
+        try:
+            current = os.stat(name, dir_fd=parent_descriptor, follow_symlinks=False)
+        except FileNotFoundError:
+            current = None
+        if current is not None and (
+            not stat.S_ISREG(current.st_mode) or stat.S_IMODE(current.st_mode) != 0o600
+        ):
+            raise _refused()
+        descriptor = os.open(
+            temporary,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
+            0o600,
+            dir_fd=parent_descriptor,
+        )
+        os.fchmod(descriptor, 0o600)
+        offset = 0
+        while offset < len(payload):
+            written = os.write(descriptor, payload[offset:])
+            if written <= 0:
+                raise _refused()
+            offset += written
+        os.fsync(descriptor)
+        os.close(descriptor)
+        descriptor = -1
+        os.replace(
+            temporary,
+            name,
+            src_dir_fd=parent_descriptor,
+            dst_dir_fd=parent_descriptor,
+        )
+        os.fsync(parent_descriptor)
+    except ArchiveVolumeRefusedError:
         raise
+    except OSError as exc:
+        raise _refused() from exc
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+        try:
+            os.unlink(temporary, dir_fd=parent_descriptor)
+        except FileNotFoundError:
+            pass
+        except OSError:
+            pass
+
+
+def write_archive_metadata(path: Path, metadata: ArchiveVolumeMetadata) -> None:
+    """Create initial metadata, or write only inside an authorized transition lock."""
+    held: dict[str, int] = getattr(_METADATA_LOCK_STATE, "held", {})
+    transition_authorized = str(path) in held
+    with _metadata_lock(path) as parent_descriptor:
+        if not transition_authorized:
+            try:
+                os.stat(path.name, dir_fd=parent_descriptor, follow_symlinks=False)
+            except FileNotFoundError:
+                pass
+            except OSError as exc:
+                raise _refused() from exc
+            else:
+                raise _refused()
+        _write_metadata_bytes(parent_descriptor, path.name, _metadata_bytes(metadata))
 
 
 def load_archive_metadata(path: Path) -> ArchiveVolumeMetadata:
     if not path.is_absolute() or path.is_symlink():
         raise _refused()
+    descriptor = -1
     try:
         descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
         details = os.fstat(descriptor)
-        if not stat.S_ISREG(details.st_mode) or stat.S_IMODE(details.st_mode) != 0o600:
+        if (
+            not stat.S_ISREG(details.st_mode)
+            or stat.S_IMODE(details.st_mode) != 0o600
+            or details.st_size <= 0
+            or details.st_size > MAX_METADATA_BYTES
+        ):
             raise _refused()
         with os.fdopen(descriptor, encoding="utf-8") as handle:
+            descriptor = -1
             payload = json.load(handle)
     except ArchiveVolumeRefusedError:
         raise
     except Exception as exc:
         raise _refused() from exc
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
     if not isinstance(payload, dict) or set(payload) != _METADATA_KEYS:
         raise _refused()
     try:
         return ArchiveVolumeMetadata(
+            generation=payload["generation"],
             state=payload["state"],
             archive_id=payload["archive_id"],
             bundle_path=Path(payload["bundle_path"]),
@@ -329,6 +492,7 @@ def load_archive_metadata(path: Path) -> ArchiveVolumeMetadata:
             image_metadata_sha256=payload["image_metadata_sha256"],
             volume_uuid=payload["volume_uuid"],
             capacity_bytes=payload["capacity_bytes"],
+            filesystem_capacity_bytes=payload["filesystem_capacity_bytes"],
             owner_uid=payload["owner_uid"],
             owner_gid=payload["owner_gid"],
             mode=payload["mode"],
@@ -826,30 +990,36 @@ def _require_disk_info(
     metadata: ArchiveVolumeMetadata,
     runner: CommandRunner,
     device: str,
-) -> str:
+) -> tuple[str, int]:
     payload = _parse_plist(
         _call(runner, (DISKUTIL, "info", "-plist", device)).stdout
     )
     if not _DISK_KEYS.issubset(payload):
         raise _refused()
     volume_uuid = payload["VolumeUUID"]
+    filesystem_capacity = payload["TotalSize"]
     if (
         payload["DeviceIdentifier"] != device.removeprefix("/dev/")
         or payload["MountPoint"] != str(metadata.mountpoint)
         or type(volume_uuid) is not str
         or _UUID.fullmatch(volume_uuid) is None
         or payload["FilesystemType"] != "apfs"
-        or type(payload["TotalSize"]) is not int
-        or payload["TotalSize"] != metadata.capacity_bytes
+        or type(filesystem_capacity) is not int
+        or filesystem_capacity <= 0
+        or filesystem_capacity > metadata.capacity_bytes
+        or filesystem_capacity % 512 != 0
+        or (
+            metadata.filesystem_capacity_bytes is not None
+            and filesystem_capacity != metadata.filesystem_capacity_bytes
+        )
         or payload["Internal"] is not False
-        or payload["Encryption"] is not True
         or payload["VolumeName"] != metadata.archive_id
     ):
         raise _refused()
     canonical_uuid = volume_uuid.upper()
     if metadata.volume_uuid is not None and canonical_uuid != metadata.volume_uuid.upper():
         raise _refused()
-    return canonical_uuid
+    return canonical_uuid, filesystem_capacity
 
 
 def require_archive_volume_ready(
@@ -883,6 +1053,7 @@ def require_archive_volume_ready(
 class _Attachment:
     device: str
     volume_uuid: str
+    filesystem_capacity_bytes: int
     detach_authority: _DetachAuthority | None
 
     @property
@@ -895,7 +1066,7 @@ def _validate_attached_volume(
     runner: CommandRunner,
     parent_descriptor: int,
     bundle_identity: tuple[int, int],
-) -> tuple[str, str]:
+) -> tuple[str, str, int]:
     _revalidate_external_parent(metadata, runner, parent_descriptor)
     if _require_durable_bundle_binding(parent_descriptor, metadata) != bundle_identity:
         raise _refused()
@@ -905,12 +1076,12 @@ def _validate_attached_volume(
         if device is None:
             raise _refused()
         _require_encrypted(metadata, runner, parent_descriptor)
-        volume_uuid = _require_disk_info(metadata, runner, device)
+        volume_uuid, filesystem_capacity = _require_disk_info(metadata, runner, device)
         _revalidate_directory(mount_descriptor, metadata.mountpoint)
         _revalidate_external_parent(metadata, runner, parent_descriptor)
         if _require_durable_bundle_binding(parent_descriptor, metadata) != bundle_identity:
             raise _refused()
-        return device, volume_uuid
+        return device, volume_uuid, filesystem_capacity
     finally:
         os.close(mount_descriptor)
 
@@ -980,7 +1151,7 @@ def _mount_and_validate(
             if require_fresh_attach:
                 raise _refused()
             try:
-                validated_device, volume_uuid = _validate_attached_volume(
+                validated_device, volume_uuid, filesystem_capacity = _validate_attached_volume(
                     metadata,
                     runner,
                     parent_descriptor,
@@ -988,7 +1159,12 @@ def _mount_and_validate(
                 )
                 if validated_device != existing:
                     raise _refused()
-                return _Attachment(validated_device, volume_uuid, None)
+                return _Attachment(
+                    validated_device,
+                    volume_uuid,
+                    filesystem_capacity,
+                    None,
+                )
             except ArchiveVolumeRefusedError as exc:
                 raise _refused() from exc
 
@@ -1016,7 +1192,7 @@ def _mount_and_validate(
             _revalidate_external_parent(metadata, runner, parent_descriptor)
             if _require_durable_bundle_binding(parent_descriptor, metadata) != bundle_identity:
                 raise _refused()
-            validated_device, volume_uuid = _validate_attached_volume(
+            validated_device, volume_uuid, filesystem_capacity = _validate_attached_volume(
                 metadata,
                 runner,
                 parent_descriptor,
@@ -1024,7 +1200,12 @@ def _mount_and_validate(
             )
             if validated_device != detach_authority.device:
                 raise _refused()
-            return _Attachment(validated_device, volume_uuid, detach_authority)
+            return _Attachment(
+                validated_device,
+                volume_uuid,
+                filesystem_capacity,
+                detach_authority,
+            )
         except ArchiveVolumeRefusedError as exc:
             _detach_exact(runner, detach_authority)
             raise _refused() from exc
@@ -1072,14 +1253,19 @@ def _persist_transition(
     target: ArchiveVolumeMetadata,
     writer: MetadataWriter,
 ) -> None:
-    if _durable_metadata(path) != current:
+    if target.generation != current.generation + 1:
         raise _refused()
-    try:
-        writer(path, target)
-    except Exception as exc:
-        raise _refused() from exc
-    if _durable_metadata(path) != target:
-        raise _refused()
+    expected_bytes = _metadata_bytes(current)
+    target_bytes = _metadata_bytes(target)
+    with _metadata_lock(path) as parent_descriptor:
+        if _read_metadata_bytes(parent_descriptor, path.name) != expected_bytes:
+            raise _refused()
+        try:
+            writer(path, target)
+        except Exception as exc:
+            raise _refused() from exc
+        if _read_metadata_bytes(parent_descriptor, path.name) != target_bytes:
+            raise _refused()
 
 
 def _created_bundle_identity(
@@ -1208,15 +1394,25 @@ def provision_archive_volume(
             runner=selected,
             require_fresh_attach=metadata.state == PROVISIONING_FAILED,
         )
-        attached = replace(
-            metadata,
-            state=ATTACHED_VERIFIED,
-            volume_uuid=attachment.volume_uuid,
+        attached = (
+            replace(
+                metadata,
+                generation=metadata.generation + 1,
+                state=ATTACHED_VERIFIED,
+                volume_uuid=attachment.volume_uuid,
+                filesystem_capacity_bytes=attachment.filesystem_capacity_bytes,
+            )
+            if metadata.state == PROVISIONING_FAILED
+            else metadata
         )
         try:
             if metadata.state == PROVISIONING_FAILED:
                 _persist_transition(metadata_path, metadata, attached, metadata_writer)
-            active = replace(attached, state=BOUND_ACTIVE)
+            active = replace(
+                attached,
+                generation=attached.generation + 1,
+                state=BOUND_ACTIVE,
+            )
             _persist_transition(metadata_path, attached, active, metadata_writer)
         except ArchiveVolumeRefusedError:
             if attachment.detach_authority is not None:
@@ -1249,6 +1445,7 @@ def provision_archive_volume(
         image_fingerprint = _image_metadata_fingerprint(parent_descriptor, metadata)
         residual = replace(
             metadata,
+            generation=metadata.generation + 1,
             state=PROVISIONING_FAILED,
             bundle_inode=created_identity[1],
             image_metadata_sha256=image_fingerprint,
@@ -1273,8 +1470,10 @@ def provision_archive_volume(
 
         attached = replace(
             residual,
+            generation=residual.generation + 1,
             state=ATTACHED_VERIFIED,
             volume_uuid=attachment.volume_uuid,
+            filesystem_capacity_bytes=attachment.filesystem_capacity_bytes,
         )
         try:
             _persist_transition(metadata_path, residual, attached, metadata_writer)
@@ -1283,7 +1482,11 @@ def provision_archive_volume(
                 _detach_exact(selected, attachment.detach_authority)
             raise
 
-        active = replace(attached, state=BOUND_ACTIVE)
+        active = replace(
+            attached,
+            generation=attached.generation + 1,
+            state=BOUND_ACTIVE,
+        )
         try:
             _persist_transition(metadata_path, attached, active, metadata_writer)
         except ArchiveVolumeRefusedError:

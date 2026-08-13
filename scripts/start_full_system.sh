@@ -87,6 +87,7 @@ source "scripts/lib/start_full_system_env.sh"
 source "scripts/lib/instance_state_deployment.sh"
 source "scripts/lib/heimdal_cold_volume_preflight.sh"
 apply_start_full_system_defaults
+heimdal_cold_volume_preflight_effective "$ROOT"
 
 # Signboard is a dispatcher projection. Resolve this on the host before the
 # BuilderOps bootstrap and forward the same absolute path into the API
@@ -756,12 +757,7 @@ resolve_channel_defaults() {
 
 export_prod_build_identity() {
   local should_export=0
-  case "${PKM_ENVIRONMENT:-${ENVIRONMENT:-${CHANNEL:-${PKM_CHANNEL:-}}}}" in
-    prod) should_export=1 ;;
-  esac
-  case "${COMPOSE_PROJECT_NAME:-}" in
-    pkm-prod) should_export=1 ;;
-  esac
+  [ "${PKM_EFFECTIVE_CHANNEL:-}" = "prod" ] && should_export=1
   if [ "$should_export" -ne 1 ]; then
     return 0
   fi
@@ -785,12 +781,6 @@ FLIGHT_RECORDER_DURATION="${FLIGHT_RECORDER_DURATION:-0}"
 VERIFY_ACTIVE="${VERIFY_ACTIVE:-0}"
 ALLOW_LEGACY_VAULT="${ALLOW_LEGACY_VAULT:-0}"
 resolve_channel_defaults
-_pkm_archive_channel="${PKM_ENVIRONMENT:-${ENVIRONMENT:-${CHANNEL:-${PKM_CHANNEL:-}}}}"
-if [ "${COMPOSE_PROJECT_NAME:-}" = "pkm-prod" ]; then
-  _pkm_archive_channel="prod"
-fi
-heimdal_cold_volume_preflight "${_pkm_archive_channel}" "$ROOT"
-unset _pkm_archive_channel
 prepare_instance_ownership_host_state_dir
 export_prod_build_identity
 API_BASE_URL="${API_BASE_URL%/}"

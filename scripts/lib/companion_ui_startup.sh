@@ -223,12 +223,13 @@ cui_runtime_is_idle_channel_container() {
 }
 
 cui_start_runtime() {
-  local root _rc _skip_recreate
+  local root _rc _skip_recreate _archive_helper
   root="$(cui_repo_root)"
-  if [ "${CUI_CHANNEL:-}" = "prod" ]; then
-    source "${root}/scripts/lib/heimdal_cold_volume_preflight.sh"
-    heimdal_cold_volume_preflight "${CUI_CHANNEL}" "${root}" || return $?
-  fi
+  _archive_helper="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/heimdal_cold_volume_preflight.sh"
+  source "${_archive_helper}"
+  heimdal_cold_volume_preflight_effective \
+    "${root}" "${CUI_CHANNEL:-}" "${CUI_COMPOSE_PROJECT:-}" "${CUI_COMPOSE_FILES:-}" \
+    || return $?
   # Restarting the UI should not recreate an already-healthy stack. When the
   # runtime API is up, skip the full start_full_system.sh recreate (and its
   # watcher/worker health race). Set CUI_FORCE_RECREATE=1 to force a rebuild,

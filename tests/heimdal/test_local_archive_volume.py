@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import inspect
 import json
+import multiprocessing
 import os
 from dataclasses import replace
 from pathlib import Path
@@ -23,6 +24,7 @@ from app.ops.host_secret_contract import load_host_secret_contract
 pytestmark = pytest.mark.not_pg
 
 _CAPACITY = 8 * 1024**3
+_FILESYSTEM_CAPACITY = _CAPACITY - (80 * 512)
 _DEVICE = "/dev/disk9s1"
 _UUID = "11111111-2222-3333-4444-555555555555"
 _PARENT_UUID = "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE"
@@ -36,6 +38,7 @@ def _metadata(tmp_path: Path) -> volume.ArchiveVolumeMetadata:
     mountpoint.mkdir()
     mountpoint.chmod(0o700)
     metadata = volume.ArchiveVolumeMetadata(
+        generation=3,
         state=volume.BOUND_ACTIVE,
         archive_id="heimdal-cold-v1",
         bundle_path=parent / "archive.sparsebundle",
@@ -45,6 +48,7 @@ def _metadata(tmp_path: Path) -> volume.ArchiveVolumeMetadata:
         image_metadata_sha256="0" * 64,
         volume_uuid=_UUID,
         capacity_bytes=_CAPACITY,
+        filesystem_capacity_bytes=_FILESYSTEM_CAPACITY,
         owner_uid=os.geteuid(),
         owner_gid=os.getegid(),
         mode=0o700,
@@ -55,10 +59,12 @@ def _metadata(tmp_path: Path) -> volume.ArchiveVolumeMetadata:
 def _planned_metadata(tmp_path: Path) -> volume.ArchiveVolumeMetadata:
     return replace(
         _metadata(tmp_path),
+        generation=0,
         state=volume.PLANNED_UNBOUND,
         bundle_inode=None,
         image_metadata_sha256=None,
         volume_uuid=None,
+        filesystem_capacity_bytes=None,
     )
 
 
@@ -107,9 +113,11 @@ def _disk_info(
         "VolumeUUID": metadata.volume_uuid or _UUID,
         "VolumeName": metadata.archive_id,
         "FilesystemType": "apfs",
-        "TotalSize": metadata.capacity_bytes,
+        "TotalSize": metadata.filesystem_capacity_bytes or _FILESYSTEM_CAPACITY,
         "Internal": False,
-        "Encryption": True,
+        # hdiutil proves encryption at the image layer. A newly formatted APFS
+        # volume is not implicitly APFS-encrypted by that image operation.
+        "Encryption": False,
     }
     payload.update(overrides)
     return _plist(payload)
@@ -233,6 +241,28 @@ class FakeRunner:
         raise AssertionError(f"unexpected command shape: {argv!r}")
 
 
+def _stale_transition_worker(
+    metadata_path: Path,
+    current: volume.ArchiveVolumeMetadata,
+    target: volume.ArchiveVolumeMetadata,
+    start: multiprocessing.synchronize.Barrier,
+    results: multiprocessing.queues.Queue,
+) -> None:
+    """Race the same expected generation in two independent processes."""
+    start.wait(timeout=10)
+    try:
+        volume._persist_transition(
+            metadata_path,
+            current,
+            target,
+            volume.write_archive_metadata,
+        )
+    except volume.ArchiveVolumeRefusedError:
+        results.put("refused")
+    else:
+        results.put("committed")
+
+
 def _materialize_ready_fs(metadata: volume.ArchiveVolumeMetadata) -> None:
     metadata.bundle_path.mkdir(exist_ok=True)
     (metadata.bundle_path / "Info.plist").write_bytes(
@@ -314,6 +344,8 @@ def test_provisioner_never_reformats_or_uses_parent_volume(tmp_path: Path) -> No
     bound = volume.load_archive_metadata(metadata_path)
     assert bound.state == volume.BOUND_ACTIVE
     assert bound.volume_uuid == _UUID
+    assert bound.filesystem_capacity_bytes == _FILESYSTEM_CAPACITY
+    assert bound.generation == 3
 
     flattened = [part for argv, _stdin in runner.calls for part in argv]
     forbidden = {"eraseDisk", "partitionDisk", "eraseVolume", "reformat", "-srcdevice", "-ov"}
@@ -328,6 +360,37 @@ def test_provisioner_never_reformats_or_uses_parent_volume(tmp_path: Path) -> No
     assert all(_PASSPHRASE not in part for part in flattened)
     secret_inputs = [stdin for _argv, stdin in runner.calls if stdin is not None]
     assert secret_inputs == [(_PASSPHRASE + "\0").encode(), (_PASSPHRASE + "\0").encode()]
+
+
+def test_image_encryption_and_filesystem_capacity_are_separate_layers(
+    tmp_path: Path,
+) -> None:
+    metadata = _metadata(tmp_path)
+    _materialize_ready_fs(metadata)
+
+    # APFS is valid even when diskutil reports that the filesystem layer is
+    # unencrypted: hdiutil isencrypted is the AES image-layer authority.
+    assert volume.require_archive_volume_ready(
+        metadata,
+        runner=FakeRunner(metadata, encrypted=True, disk_overrides={"Encryption": False}),
+    ).ready
+    with pytest.raises(volume.ArchiveVolumeRefusedError):
+        volume.require_archive_volume_ready(
+            metadata,
+            runner=FakeRunner(metadata, encrypted=False, disk_overrides={"Encryption": True}),
+        )
+
+    # hdiutil documents that filesystem/layout overhead is unavailable to the
+    # mounted filesystem. Persist and later require the first verified size.
+    assert metadata.filesystem_capacity_bytes == _FILESYSTEM_CAPACITY
+    with pytest.raises(volume.ArchiveVolumeRefusedError):
+        volume.require_archive_volume_ready(
+            metadata,
+            runner=FakeRunner(
+                metadata,
+                disk_overrides={"TotalSize": _FILESYSTEM_CAPACITY - 512},
+            ),
+        )
 
 
 def test_mount_credential_is_keychain_backed_and_redacted(tmp_path: Path) -> None:
@@ -575,8 +638,6 @@ def test_idempotent_replay_never_overwrites_or_reattaches(tmp_path: Path) -> Non
         pytest.param({"DeviceIdentifier": "other"}, id="device-mismatch"),
         pytest.param({"Internal": True}, id="internal-media"),
         pytest.param({"FilesystemType": "hfs"}, id="wrong-filesystem"),
-        pytest.param({"Encryption": False}, id="disk-encryption-false"),
-        pytest.param({"Encryption": "true"}, id="wrong-encryption-type"),
         pytest.param({"TotalSize": _CAPACITY + 1}, id="capacity-overflow"),
         pytest.param({"TotalSize": 0}, id="capacity-underflow"),
     ],
@@ -665,6 +726,7 @@ def test_external_parent_rejects_child_directory_and_symlink(tmp_path: Path) -> 
         pytest.param(513, id="unaligned"),
         pytest.param(volume.MAX_CAPACITY_BYTES + 512, id="overflow"),
         pytest.param(True, id="boolean"),
+        pytest.param("1024", id="wrong-type"),
     ],
 )
 def test_capacity_metadata_refuses_unrepresentable_sector_count(
@@ -863,14 +925,64 @@ def test_metadata_is_closed_value_free_and_atomic(tmp_path: Path) -> None:
     path = tmp_path / "archive-metadata.json"
     volume.write_archive_metadata(path, metadata)
     assert path.stat().st_mode & 0o777 == 0o600
-    assert list(tmp_path.glob(".archive-metadata.json.*")) == []
+    assert list(tmp_path.glob(".archive-metadata.json.*")) == [
+        tmp_path / ".archive-metadata.json.lock"
+    ]
     assert volume.load_archive_metadata(path) == metadata
+    with pytest.raises(volume.ArchiveVolumeRefusedError):
+        volume.write_archive_metadata(path, metadata)
 
     payload = json.loads(path.read_text(encoding="utf-8"))
     payload["credential"] = _PASSPHRASE
     path.write_text(json.dumps(payload), encoding="utf-8")
     with pytest.raises(volume.ArchiveVolumeRefusedError):
         volume.load_archive_metadata(path)
+
+
+def test_metadata_transition_is_cross_process_compare_and_swap(tmp_path: Path) -> None:
+    planned = _planned_metadata(tmp_path)
+    _materialize_ready_fs(planned)
+    current = replace(
+        planned,
+        generation=1,
+        state=volume.PROVISIONING_FAILED,
+    )
+    path = tmp_path / "archive-metadata.json"
+    volume.write_archive_metadata(path, current)
+    target_a = replace(
+        current,
+        generation=2,
+        state=volume.ATTACHED_VERIFIED,
+        volume_uuid="11111111-2222-3333-4444-555555555555",
+        filesystem_capacity_bytes=_FILESYSTEM_CAPACITY,
+    )
+    target_b = replace(
+        target_a,
+        volume_uuid="66666666-7777-8888-9999-AAAAAAAAAAAA",
+    )
+
+    context = multiprocessing.get_context("fork")
+    start = context.Barrier(2)
+    results = context.Queue()
+    workers = [
+        context.Process(
+            target=_stale_transition_worker,
+            args=(path, current, target, start, results),
+        )
+        for target in (target_a, target_b)
+    ]
+    for worker in workers:
+        worker.start()
+    for worker in workers:
+        worker.join(timeout=15)
+
+    assert all(not worker.is_alive() and worker.exitcode == 0 for worker in workers)
+    outcomes = sorted(results.get(timeout=5) for _worker in workers)
+    assert outcomes == ["committed", "refused"]
+    assert volume.load_archive_metadata(path) in {target_a, target_b}
+    lock_path = path.with_name(f".{path.name}.lock")
+    assert lock_path.is_file()
+    assert lock_path.stat().st_mode & 0o777 == 0o600
 
 
 @pytest.mark.parametrize(
@@ -885,6 +997,10 @@ def test_metadata_is_closed_value_free_and_atomic(tmp_path: Path) -> None:
             id="planned-with-bundle-identity",
         ),
         pytest.param(
+            {"state": volume.PLANNED_UNBOUND, "generation": 1},
+            id="planned-with-transition-generation",
+        ),
+        pytest.param(
             {
                 "state": volume.PROVISIONING_FAILED,
                 "volume_uuid": None,
@@ -897,11 +1013,16 @@ def test_metadata_is_closed_value_free_and_atomic(tmp_path: Path) -> None:
             id="attached-without-volume-identity",
         ),
         pytest.param(
+            {"state": volume.ATTACHED_VERIFIED, "filesystem_capacity_bytes": None},
+            id="attached-without-filesystem-capacity",
+        ),
+        pytest.param(
             {"state": volume.BOUND_ACTIVE, "volume_uuid": None},
             id="active-without-volume-identity",
         ),
         pytest.param({"parent_volume_uuid": "different"}, id="bad-parent-uuid"),
         pytest.param({"image_metadata_sha256": "short"}, id="bad-image-fingerprint"),
+        pytest.param({"generation": -1}, id="negative-generation"),
     ],
 )
 def test_metadata_state_and_identity_are_coherent(
@@ -969,7 +1090,7 @@ def test_provisioning_failed_replay_refuses_preexisting_attachment(
 ) -> None:
     planned = _planned_metadata(tmp_path)
     _materialize_ready_fs(planned)
-    residual = replace(planned, state=volume.PROVISIONING_FAILED)
+    residual = replace(planned, generation=1, state=volume.PROVISIONING_FAILED)
     metadata_path = tmp_path / "archive-metadata.json"
     volume.write_archive_metadata(metadata_path, residual)
     runner = FakeRunner(residual, attached=True)
@@ -990,7 +1111,7 @@ def test_provisioning_failed_replay_refuses_preexisting_attachment(
 def test_provisioning_failed_replay_requires_fresh_attach(tmp_path: Path) -> None:
     planned = _planned_metadata(tmp_path)
     _materialize_ready_fs(planned)
-    residual = replace(planned, state=volume.PROVISIONING_FAILED)
+    residual = replace(planned, generation=1, state=volume.PROVISIONING_FAILED)
     metadata_path = tmp_path / "archive-metadata.json"
     volume.write_archive_metadata(metadata_path, residual)
     runner = FakeRunner(residual, attached=False)
@@ -1004,13 +1125,16 @@ def test_provisioning_failed_replay_requires_fresh_attach(tmp_path: Path) -> Non
 
     assert result.ready is True
     assert sum(argv[:2] == (volume.HDIUTIL, "attach") for argv, _ in runner.calls) == 1
-    assert volume.load_archive_metadata(metadata_path).state == volume.BOUND_ACTIVE
+    active = volume.load_archive_metadata(metadata_path)
+    assert active.state == volume.BOUND_ACTIVE
+    assert active.filesystem_capacity_bytes == _FILESYSTEM_CAPACITY
+    assert active.generation == 3
 
 
 def test_provisioning_rechecks_image_fingerprint_after_attach(tmp_path: Path) -> None:
     planned = _planned_metadata(tmp_path)
     _materialize_ready_fs(planned)
-    residual = replace(planned, state=volume.PROVISIONING_FAILED)
+    residual = replace(planned, generation=1, state=volume.PROVISIONING_FAILED)
     metadata_path = tmp_path / "archive-metadata.json"
     volume.write_archive_metadata(metadata_path, residual)
 
@@ -1088,7 +1212,11 @@ def test_attached_identity_replay_promotes_without_regeneration(tmp_path: Path) 
 
 
 def test_attached_replay_refuses_uuid_drift_without_regeneration(tmp_path: Path) -> None:
-    metadata = replace(_metadata(tmp_path), state=volume.ATTACHED_VERIFIED)
+    metadata = replace(
+        _metadata(tmp_path),
+        generation=2,
+        state=volume.ATTACHED_VERIFIED,
+    )
     metadata_path = tmp_path / "archive-metadata.json"
     _materialize_ready_fs(metadata)
     volume.write_archive_metadata(metadata_path, metadata)
@@ -1110,6 +1238,7 @@ def test_production_startup_and_deploy_validate_without_provisioning() -> None:
     prod = Path("scripts/prod/start_midgard_stack.sh").read_text(encoding="utf-8")
     deploy = Path("scripts/deploy_channel.sh").read_text(encoding="utf-8")
     full_start = Path("scripts/start_full_system.sh").read_text(encoding="utf-8")
+    cold_boot = Path("scripts/cold_boot.sh").read_text(encoding="utf-8")
     companion = Path("scripts/lib/companion_ui_startup.sh").read_text(
         encoding="utf-8"
     )
@@ -1126,17 +1255,20 @@ def test_production_startup_and_deploy_validate_without_provisioning() -> None:
     )
     assert deploy.index("heimdal_cold_volume_preflight") < deploy.index("write_pin")
     assert 'source "scripts/lib/heimdal_cold_volume_preflight.sh"' in full_start
-    assert 'heimdal_cold_volume_preflight "${_pkm_archive_channel}" "$ROOT"' in full_start
+    assert 'heimdal_cold_volume_preflight_effective "$ROOT"' in full_start
     assert full_start.index(
-        'heimdal_cold_volume_preflight "${_pkm_archive_channel}" "$ROOT"'
+        'heimdal_cold_volume_preflight_effective "$ROOT"'
     ) < full_start.index("prepare_instance_ownership_host_state_dir")
-    assert 'source "${root}/scripts/lib/heimdal_cold_volume_preflight.sh"' in companion
-    assert 'heimdal_cold_volume_preflight "${CUI_CHANNEL}" "${root}"' in companion
+    assert full_start.index(
+        'heimdal_cold_volume_preflight_effective "$ROOT"'
+    ) < full_start.index('mkdir -p "$ROOT/tmp"')
+    assert 'heimdal_cold_volume_preflight.sh"' in companion
+    assert "heimdal_cold_volume_preflight_effective" in companion
     companion_start = companion.split("cui_start_runtime() {", maxsplit=1)[1].split(
         "\ncui_compose() {", maxsplit=1
     )[0]
     assert companion_start.index(
-        'heimdal_cold_volume_preflight "${CUI_CHANNEL}" "${root}"'
+        "heimdal_cold_volume_preflight_effective"
     ) < companion_start.index("cui_api_healthy_now")
     prod_up = makefile.split("\nprod-up:", maxsplit=1)[1].split(
         "\nprod-down:", maxsplit=1
@@ -1148,3 +1280,11 @@ def test_production_startup_and_deploy_validate_without_provisioning() -> None:
     assert prod_up.index("heimdal_cold_volume_preflight prod") < prod_up.index(
         "$(COMPOSE_PROD) up"
     )
+    assert 'source "scripts/lib/heimdal_cold_volume_preflight.sh"' in cold_boot
+    assert 'heimdal_cold_volume_preflight_effective "$ROOT"' in cold_boot
+    assert cold_boot.index(
+        'heimdal_cold_volume_preflight_effective "$ROOT"'
+    ) < cold_boot.index("prepare_instance_ownership_host_state_dir")
+    assert cold_boot.index(
+        'heimdal_cold_volume_preflight_effective "$ROOT"'
+    ) < cold_boot.index("docker compose down -v")
