@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timezone
+import hashlib
 import multiprocessing
 from pathlib import Path
 import threading
@@ -561,17 +562,66 @@ def test_typed_source_occurrences_require_transcript_lineage(tmp_path: Path) -> 
     )
     draft_path = root / first.path
     frontmatter, body = _read_result(root, first.path)
-    frontmatter["sources"] = ["sources/capture-one.md"]
-    frontmatter["source_occurrences"] = [
-        {
-            "kind": "day_context",
-            "external_id": "sources/capture-one.md",
-            "occurrence": 1,
-        }
-    ]
+    context_occurrence = next(
+        item
+        for item in frontmatter["source_occurrences"]
+        if item["kind"] == "day_context"
+    )
+    frontmatter["sources"] = [context_occurrence["external_id"]]
+    frontmatter["source_occurrences"] = [context_occurrence]
     draft_path.write_text(dump_frontmatter(frontmatter, body), encoding="utf-8")
 
     with pytest.raises(UnresolvableJournalCitationError, match="require a transcript"):
+        draft_journal_entry(
+            vault_context=context,
+            for_date=DAY,
+            session_id=session_id,
+            write_guard=_allowing_guard(),
+        )
+
+
+def test_duplicate_typed_transcript_occurrences_block_redraft(tmp_path: Path) -> None:
+    root, context, session_id, _capture = _seed_inputs(tmp_path)
+    first = draft_journal_entry(
+        vault_context=context,
+        for_date=DAY,
+        session_id=session_id,
+        write_guard=_allowing_guard(),
+    )
+    draft_path = root / first.path
+    frontmatter, body = _read_result(root, first.path)
+    transcript = dict(frontmatter["source_occurrences"][0])
+    duplicate = {**transcript, "occurrence": 2}
+    frontmatter["sources"] = [transcript["external_id"], duplicate["external_id"]]
+    frontmatter["source_occurrences"] = [transcript, duplicate]
+    draft_path.write_text(dump_frontmatter(frontmatter, body), encoding="utf-8")
+
+    with pytest.raises(UnresolvableJournalCitationError, match="duplicate transcript"):
+        draft_journal_entry(
+            vault_context=context,
+            for_date=DAY,
+            session_id=session_id,
+            write_guard=_allowing_guard(),
+        )
+
+
+def test_empty_typed_transcript_id_blocks_before_deduplication(tmp_path: Path) -> None:
+    root, context, session_id, _capture = _seed_inputs(tmp_path)
+    first = draft_journal_entry(
+        vault_context=context,
+        for_date=DAY,
+        session_id=session_id,
+        write_guard=_allowing_guard(),
+    )
+    draft_path = root / first.path
+    frontmatter, body = _read_result(root, first.path)
+    transcript = dict(frontmatter["source_occurrences"][0])
+    transcript["external_id"] = "session:"
+    frontmatter["sources"][0] = "session:"
+    frontmatter["source_occurrences"][0] = transcript
+    draft_path.write_text(dump_frontmatter(frontmatter, body), encoding="utf-8")
+
+    with pytest.raises(UnresolvableJournalCitationError, match="invalid external_id"):
         draft_journal_entry(
             vault_context=context,
             for_date=DAY,
@@ -711,6 +761,53 @@ def test_source_content_change_during_cognition_blocks_before_staging(
         )
 
     assert not list(root.glob("**/drafts/journal/*.md"))
+
+
+def test_post_fence_source_mutation_keeps_admitted_version_resolvable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app.journaling import draft as draft_module
+
+    root, context, session_id, _capture = _seed_inputs(tmp_path)
+    transcript = next((root / ".chats" / "reflection").glob("*.md"))
+    admitted_raw = transcript.read_text(encoding="utf-8")
+    admitted_digest = hashlib.sha256(admitted_raw.encode("utf-8")).hexdigest()
+    original_atomic_write = draft_module._atomic_write_at
+
+    def mutate_after_final_fence(
+        directory_fd: int, filename: str, content: str
+    ) -> None:
+        transcript.write_text(
+            admitted_raw.replace(
+                "I connected several loose ends.",
+                "These words changed after the final source fence.",
+            ),
+            encoding="utf-8",
+        )
+        original_atomic_write(directory_fd, filename, content)
+
+    monkeypatch.setattr(draft_module, "_atomic_write_at", mutate_after_final_fence)
+    result = draft_journal_entry(
+        vault_context=context,
+        for_date=DAY,
+        session_id=session_id,
+        write_guard=_allowing_guard(),
+    )
+
+    frontmatter, body = _read_result(root, result.path)
+    transcript_version = next(
+        item
+        for item in frontmatter["source_occurrences"]
+        if item["kind"] == "transcript"
+    )
+    assert transcript_version["content_sha256"] == admitted_digest
+    assert "I connected several loose ends." in transcript_version["admitted_content"]
+    assert "I connected several loose ends." in body
+    current_digest = hashlib.sha256(
+        transcript.read_text(encoding="utf-8").encode("utf-8")
+    ).hexdigest()
+    assert current_digest != transcript_version["content_sha256"]
+    assert admitted_digest in body
 
 
 def test_concurrent_same_day_composition_retains_both_sessions(tmp_path: Path) -> None:
@@ -1345,12 +1442,19 @@ def test_every_source_occurrence_independently_admitted(tmp_path: Path) -> None:
         "occurrence: 1"
     ) in body
     assert body.count("Collision-safe claim") == 2
+    inference_line = next(
+        line
+        for line in body.splitlines()
+        if "Cross-source synthesis: Collision-safe synthesis." in line
+    )
     assert (
-        "Cross-source synthesis: Collision-safe synthesis. "
-        f"(cognition sources: `{conversation_ref}`; source kind: `transcript`; "
-        "occurrence: 1 | `session:collision.md`; source kind: `day_context`; "
-        "occurrence: 1)"
-    ) in body
+        f"`{conversation_ref}`; source kind: `transcript`; occurrence: 1; "
+        "content sha256: `"
+    ) in inference_line
+    assert (
+        "`session:collision.md`; source kind: `day_context`; occurrence: 1; "
+        "content sha256: `"
+    ) in inference_line
 
 
 def test_noncanonical_source_reference_blocks_before_admission(tmp_path: Path) -> None:

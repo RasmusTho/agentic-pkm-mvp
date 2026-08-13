@@ -14,6 +14,7 @@ from datetime import date, datetime, timedelta, timezone
 import errno
 from enum import Enum
 import fcntl
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -119,6 +120,15 @@ class _CognitionCitation:
     reference: str
     source_kind: SourceKind
     occurrence: int
+    content_sha256: str
+
+
+@dataclass(frozen=True)
+class _SourceContentVersion:
+    """Durable identity for the exact source version admitted into a draft."""
+
+    content_sha256: str
+    admitted_content: str
 
 
 @dataclass(frozen=True)
@@ -200,10 +210,10 @@ def draft_journal_entry(
 
         _validate_session_citations(vault_root, sessions)
         _validate_context_citations(vault_root, context_items)
-        source_content_snapshots = _source_content_snapshots(
-            vault_root, sessions, context_items
-        )
         source_identities = _source_identities(sessions, context_items)
+        source_content_versions = _source_content_versions(
+            vault_root, sessions, context_items, source_identities
+        )
         source_ids = tuple(identity.admission_id for identity in source_identities)
         review_states = _source_review_states(
             vault_root, sessions, context_items, source_identities
@@ -236,6 +246,7 @@ def draft_journal_entry(
             sessions=sessions,
             context_items=context_items,
             source_identities=source_identities,
+            source_content_versions=source_content_versions,
         )
         cognition, cognition_body = _run_cognition(
             reasoning_fn,
@@ -249,6 +260,8 @@ def draft_journal_entry(
             context_items=context_items,
             is_addendum=is_addendum,
             cognition_body=cognition_body,
+            source_identities=source_identities,
+            source_content_versions=source_content_versions,
         )
         context_identities = source_identities[len(sessions) :]
         source_refs = tuple(
@@ -315,6 +328,12 @@ def draft_journal_entry(
                     "kind": identity.source_kind.value,
                     "external_id": identity.external_id,
                     "occurrence": identity.occurrence,
+                    "content_sha256": source_content_versions[
+                        identity.admission_id
+                    ].content_sha256,
+                    "admitted_content": source_content_versions[
+                        identity.admission_id
+                    ].admitted_content,
                 }
                 for identity in source_identities
             ],
@@ -337,8 +356,10 @@ def draft_journal_entry(
         _validate_session_citations(vault_root, fresh_sessions)
         _validate_context_citations(vault_root, context_items)
         if (
-            _source_content_snapshots(vault_root, fresh_sessions, context_items)
-            != source_content_snapshots
+            _source_content_versions(
+                vault_root, fresh_sessions, context_items, source_identities
+            )
+            != source_content_versions
         ):
             raise JournalDraftBlockedError(
                 "journal draft source content changed before staging"
@@ -569,10 +590,16 @@ def _session_ids(
                 ) from exc
             external_id = item.get("external_id")
             occurrence = item.get("occurrence")
+            content_sha256 = item.get("content_sha256")
+            admitted_content = item.get("admitted_content")
             if (
                 not isinstance(external_id, str)
                 or isinstance(occurrence, bool)
                 or not isinstance(occurrence, int)
+                or not isinstance(content_sha256, str)
+                or len(content_sha256) != 64
+                or any(character not in "0123456789abcdef" for character in content_sha256)
+                or not isinstance(admitted_content, str)
             ):
                 raise UnresolvableJournalCitationError(
                     "stored journal source occurrence is incomplete"
@@ -584,7 +611,12 @@ def _session_ids(
                     "stored journal source occurrence is invalid"
                 ) from exc
             key = (identity.source_kind, identity.external_id)
-            expected_occurrence = expected_occurrences.get(key, 0) + 1
+            prior_occurrences = expected_occurrences.get(key, 0)
+            if source_kind is SourceKind.TRANSCRIPT and prior_occurrences:
+                raise UnresolvableJournalCitationError(
+                    "stored journal source occurrences contain a duplicate transcript"
+                )
+            expected_occurrence = prior_occurrences + 1
             if identity.occurrence != expected_occurrence:
                 raise UnresolvableJournalCitationError(
                     "stored journal source occurrence sequence is invalid"
@@ -729,24 +761,36 @@ def _validate_context_citations(
             _validate_jsonl_fragment(path, reference.split("#", 1)[1], reference)
 
 
-def _source_content_snapshots(
+def _source_content_versions(
     vault_root: Path,
     sessions: tuple[_ResolvedSession, ...],
     context_items: tuple[DayContextItem, ...],
-) -> tuple[str, ...]:
-    """Capture exact admitted source bytes for the final pre-replace fence."""
+    source_identities: tuple[SourceIdentity, ...],
+) -> dict[str, _SourceContentVersion]:
+    """Capture exact raw-source digests plus the admitted semantic content."""
 
-    session_snapshots = tuple(
+    raw_contents = tuple(
         (vault_root / session.relative_path).read_text(encoding="utf-8")
         for session in sessions
-    )
-    context_snapshots = tuple(
+    ) + tuple(
         (vault_root / _reference_path(item.provenance_ref)).read_text(
             encoding="utf-8"
         )
         for item in context_items
     )
-    return session_snapshots + context_snapshots
+    admitted_contents = tuple("\n".join(session.owner_turns) for session in sessions) + tuple(
+        json.dumps(item.content, sort_keys=True, ensure_ascii=False)
+        for item in context_items
+    )
+    return {
+        identity.admission_id: _SourceContentVersion(
+            content_sha256=hashlib.sha256(raw_content.encode("utf-8")).hexdigest(),
+            admitted_content=admitted_content,
+        )
+        for identity, raw_content, admitted_content in zip(
+            source_identities, raw_contents, admitted_contents, strict=True
+        )
+    }
 
 
 def _reference_path(reference: str) -> str:
@@ -848,6 +892,7 @@ def _cognition_citations(
     sessions: tuple[_ResolvedSession, ...],
     context_items: tuple[DayContextItem, ...],
     source_identities: tuple[SourceIdentity, ...],
+    source_content_versions: Mapping[str, _SourceContentVersion],
 ) -> dict[str, _CognitionCitation]:
     """Bind private admission keys to resolvable, occurrence-aware citations."""
 
@@ -858,6 +903,9 @@ def _cognition_citations(
             reference=session.relative_path,
             source_kind=identity.source_kind,
             occurrence=identity.occurrence,
+            content_sha256=source_content_versions[
+                identity.admission_id
+            ].content_sha256,
         )
         for session, identity in zip(sessions, session_identities, strict=True)
     }
@@ -867,6 +915,9 @@ def _cognition_citations(
                 reference=item.provenance_ref,
                 source_kind=identity.source_kind,
                 occurrence=identity.occurrence,
+                content_sha256=source_content_versions[
+                    identity.admission_id
+                ].content_sha256,
             )
             for item, identity in zip(
                 context_items, context_identities, strict=True
@@ -938,12 +989,16 @@ def _build_body(
     context_items: tuple[DayContextItem, ...],
     is_addendum: bool,
     cognition_body: str,
+    source_identities: tuple[SourceIdentity, ...],
+    source_content_versions: Mapping[str, _SourceContentVersion],
 ) -> str:
     title = "Addendum candidate" if is_addendum else "Journal draft"
     lines = [f"# {title} — {for_date.isoformat()}", "", "## My reflection", ""]
     conversation_footnotes: list[str] = []
     conversation_index = 0
-    for session in sessions:
+    session_identities = source_identities[: len(sessions)]
+    context_identities = source_identities[len(sessions) :]
+    for session, identity in zip(sessions, session_identities, strict=True):
         turns = session.owner_turns or (
             "I opened a reflection conversation and stopped before adding my own words.",
         )
@@ -953,14 +1008,19 @@ def _build_body(
             lines.append("")
             conversation_footnotes.append(
                 f"[^conversation-{conversation_index}]: {session.source_id} "
-                f"(`{session.relative_path}`); owner's conversation words."
+                f"(`{session.relative_path}`); source kind: `transcript`; "
+                f"occurrence: {identity.occurrence}; content sha256: "
+                f"`{source_content_versions[identity.admission_id].content_sha256}`; "
+                "owner's conversation words."
             )
 
     lines.extend(["## Day context folded into the draft", ""])
     context_footnotes: list[str] = []
     if not context_items:
         lines.extend(["No additional day-context facts were available.", ""])
-    for index, item in enumerate(context_items, start=1):
+    for index, (item, identity) in enumerate(
+        zip(context_items, context_identities, strict=True), start=1
+    ):
         lines.append(
             "I also had this context available: "
             f"{_describe_context_item(item)}. [^context-{index}]"
@@ -968,6 +1028,9 @@ def _build_body(
         lines.append("")
         context_footnotes.append(
             f"[^context-{index}]: {item.provenance_ref}; system-derived day context, "
+            f"source kind: `day_context`; occurrence: {identity.occurrence}; "
+            f"content sha256: "
+            f"`{source_content_versions[identity.admission_id].content_sha256}`; "
             "not an owner utterance."
         )
 
@@ -1111,7 +1174,8 @@ def _run_cognition(
         rendered.append(
             f"- {claim.text} (cognition source: `{citation.reference}`; "
             f"source kind: `{citation.source_kind.value}`; "
-            f"occurrence: {citation.occurrence})"
+            f"occurrence: {citation.occurrence}; content sha256: "
+            f"`{citation.content_sha256}`)"
         )
     for inference, rendered_graph_citations in zip(
         inferences, inference_citations, strict=True
@@ -1119,6 +1183,7 @@ def _run_cognition(
         rendered_citations = " | ".join(
             f"`{citation.reference}`; source kind: "
             f"`{citation.source_kind.value}`; occurrence: {citation.occurrence}"
+            f"; content sha256: `{citation.content_sha256}`"
             for citation in rendered_graph_citations
         )
         rendered.append(
