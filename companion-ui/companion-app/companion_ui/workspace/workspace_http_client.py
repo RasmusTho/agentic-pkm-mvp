@@ -125,6 +125,32 @@ class WorkspaceHttpClient:
             raise WorkspaceClientHTTPError(resp.status_code, resp.text)
         return resp.json()
 
+    def get_with_status(
+        self,
+        url: str,
+        *,
+        params: dict[str, Any],
+    ) -> tuple[int, Any]:
+        """GET JSON without forwarding caller headers, retaining upstream status.
+
+        The production devUI gateway uses this narrow request shape so it can
+        construct a fresh server-side request from only its configured API
+        origin, an exact allowlisted path, and validated query parameters.  A
+        separate method keeps that no-header contract explicit and lets the
+        gateway preserve successful upstream status codes as well as JSON.
+        """
+
+        full_url = self._base_url + url
+        try:
+            resp = httpx.get(full_url, params=params, timeout=self._timeout)
+        except httpx.RequestError as exc:
+            raise WorkspaceClientNetworkError(_transport_error_message(exc)) from exc
+        try:
+            payload = resp.json()
+        except ValueError as exc:
+            raise WorkspaceClientNetworkError("runtime response was not JSON") from exc
+        return resp.status_code, payload
+
     def post(
         self,
         url: str,

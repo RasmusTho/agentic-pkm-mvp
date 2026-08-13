@@ -14,6 +14,7 @@ Per-channel coverage is added as each sibling issue ships:
 """
 from __future__ import annotations
 
+import os
 import re
 import subprocess
 from pathlib import Path
@@ -366,6 +367,98 @@ def test_prod_start_binds_midgard_channel_and_ports() -> None:
     assert "serve_production_page" in text, (
         "prod start must launch the Companion UI production page module (Issue #1360)."
     )
+
+
+def test_prod_launcher_injects_loopback_publish_declaration(tmp_path: Path) -> None:
+    """Execute the canonical prod wrapper and capture its real Compose environment."""
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    capture = tmp_path / "compose-environment"
+    fake_docker = fake_bin / "docker"
+    fake_docker.write_text(
+        """#!/bin/sh
+case "${1:-}" in
+  info)
+    exit 0
+    ;;
+  ps)
+    case "$*" in
+      *name=api*) printf '%s\n' fake-api ;;
+      *name=companion-ui*) printf '%s\n' fake-companion-ui ;;
+    esac
+    exit 0
+    ;;
+  inspect)
+    exit 0
+    ;;
+  exec)
+    case "$*" in
+      *'ls -1'*) printf '%s\n' 0 ;;
+    esac
+    exit 0
+    ;;
+  compose)
+    if [ "${2:-}" = up ]; then
+      {
+        printf 'bind=%s\n' "${COMPANION_UI_BIND_HOST-<unset>}"
+        printf 'host_port=%s\n' "${COMPANION_UI_HOST_PORT-<unset>}"
+        printf 'container_port=%s\n' "${COMPANION_UI_PORT-<unset>}"
+        printf 'api_base_url=%s\n' "${COMPANION_UI_API_BASE_URL-<unset>}"
+        printf 'serve_module=%s\n' "${COMPANION_UI_SERVE_MODULE-<unset>}"
+        printf 'environment=%s\n' "${PKM_ENVIRONMENT-<unset>}"
+        printf 'compose_file=%s\n' "${COMPOSE_FILE-<unset>}"
+        printf 'compose_project=%s\n' "${COMPOSE_PROJECT_NAME-<unset>}"
+      } > "${DOCKER_CAPTURE}"
+    fi
+    exit 0
+    ;;
+esac
+exit 0
+""",
+        encoding="utf-8",
+    )
+    fake_docker.chmod(0o700)
+    fake_curl = fake_bin / "curl"
+    fake_curl.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    fake_curl.chmod(0o700)
+
+    env = os.environ.copy()
+    env.update(
+        {
+            "PATH": f"{fake_bin}:{env['PATH']}",
+            "HOME": str(tmp_path),
+            "DOCKER_CAPTURE": str(capture),
+            "CUI_BIND_LAN": "0",
+            "CUI_HEALTH_ATTEMPTS": "1",
+            # HAR-03's cold-volume readiness is an independent production
+            # prerequisite. This test isolates the later gateway environment
+            # handoff after that gate has already passed.
+            "PYTHON": "/usr/bin/true",
+        }
+    )
+    env.pop("VAULT_ROOT", None)
+    env.pop("VAULT_HOST_ROOT", None)
+
+    result = subprocess.run(
+        ["bash", str(PROD_START)],
+        cwd=REPO_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert capture.read_text(encoding="utf-8").splitlines() == [
+        "bind=127.0.0.1",
+        "host_port=8113",
+        "container_port=8113",
+        "api_base_url=http://api:8000",
+        "serve_module=companion_ui.workspace.serve_production_page",
+        "environment=prod",
+        "compose_file=docker-compose.yaml:docker-compose.prod.yml",
+        "compose_project=pkm-prod",
+    ]
 
 
 def test_prod_defaults_to_safe_posture_and_gates_automation() -> None:

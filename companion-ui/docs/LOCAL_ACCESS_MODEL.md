@@ -103,6 +103,25 @@ Rules (implemented, #3102):
 - Set `COMPANION_UI_PROXY_HOSTS=` (empty) to opt out and fall back to the plain
   loopback/API-key gate.
 
+The production devUI reads delivered by #4841 are intentionally narrower than those general
+Companion vault routes:
+
+- Browser authority comes from an explicit all-loopback `COMPANION_UI_BIND_HOST` host-publish
+  declaration. The production compose path is `127.0.0.1:8113:8113`; the container may listen on
+  `0.0.0.0` and see a nonloopback Docker peer without treating either fact as browser authority.
+  Missing, wildcard, LAN, bridge, Tailscale, mixed-resolution, or unresolvable declarations disable
+  the devUI routes. `CUI_BIND_LAN=1` does not widen this production devUI exception.
+- The browser request must use a loopback-local `Host` and carry no forwarded identity, including
+  `Via`. The gateway sends no inbound Host, API key, authorization, forwarding, Via, client-IP, or
+  proxy identity to FastAPI.
+- FastAPI rejects forwarded identity first, then accepts the existing direct-loopback + local-Host
+  path or only the server-derived `trusted_companion_proxy` subject from
+  `resolve_auth_subject(request, None)`. An API key or arbitrary network peer cannot enter this
+  read-only exception.
+- The exception is limited to exact GET `/api/devui/overview` and strict GET
+  `/api/devui/focus?subject=...`. It grants no wildcard, write, page, asset, CORS, or remote-browser
+  access. The later #4836 presentation must consume it without widening it.
+
 ## Token or Session Auth Option
 
 When Companion UI moves beyond loopback-only dev usage, the minimal auth option

@@ -75,6 +75,20 @@ Posture:
 - This does not add token/session/CORS support; those remain future non-loopback
   hardening (below).
 
+The #4841 production devUI transport is a deliberately narrower exception. It is unavailable unless
+the process receives an explicit all-loopback `COMPANION_UI_BIND_HOST` declaration matching the
+host publish (`127.0.0.1:8113:8113`). The container's `HOST=0.0.0.0` listener and nonloopback
+Docker peer are not browser-loopback proof. Every browser request must carry one loopback-local
+`Host` and no forwarded identity, including `Via`; the gateway constructs a new upstream request
+and copies no inbound Host, API key, authorization, forwarding, Via, client-IP, or proxy identity.
+
+FastAPI rejects forwarding first and accepts only its preserved direct-loopback + local-Host path or
+the exact server-derived `trusted_companion_proxy` subject. Only GET `/api/devui/overview` and
+strict GET `/api/devui/focus?subject=...` transit; API keys, writes, wildcards, CORS relaxation,
+LAN/Tailscale browser access, and arbitrary bridge peers do not. Port `8113` is the production
+Companion browser origin; port `18000` remains API health/version diagnostics only. #4841 ships no
+page or asset route; #4836 must consume this boundary unchanged before any browser page is claimed.
+
 ## CSRF, CORS, and session assumptions
 
 Current assumptions:

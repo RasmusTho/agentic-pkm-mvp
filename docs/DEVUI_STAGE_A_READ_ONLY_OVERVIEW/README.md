@@ -29,6 +29,10 @@ for stable #4834 **Now** fixtures plus the delivered #4768 Focus API fixtures an
 Yggdrasil evidence: exact constrained reuse provenance, or the live handoff required for any novel,
 mixed, or unknown delta.
 
+#4841 supplies only the production loopback-published Companion transport for the existing two
+read APIs. #4836 must consume its exact admission and header-stripping boundary; it provides no
+page, asset, or visual destination.
+
 ## Current-to-target truth
 
 | Surface | Current delivered fact | Remaining target |
@@ -37,7 +41,7 @@ mixed, or unknown delta.
 | `devui-overview-view.v1` | Pure composer in `app/builderops/devui_overview.py`, including hostile cross-field validation and typed root-reference preservation | **Excluded from this breakdown; do not duplicate or reopen** |
 | Cockpit producer | #4834 maps only trusted, countable `working` items to source-ordered **Now** candidates with stable GitHub identity and separate Cockpit evidence | Owner-question facts remain separately source-owned or honestly withdrawn; `agent:needs-human`, delivery, and readiness are not admitted |
 | Delivery evidence | Delivery, merge, closure, and terminal verification facts exist independently | A source-owned, receipt-backed `ready_to_try` fact, or an honest withdrawal |
-| API | Local-only GET `/api/devui/composition` and delivered direct-loopback GET `/api/devui/overview`; the latter rebuilds composition once and derives #4834 candidates from that same work payload; no devUI mutation route | Typed navigation only after actual local destinations are governed |
+| API | Local-only GET `/api/devui/composition`, delivered direct-loopback Overview/Focus reads, and #4841's production Companion exact two-GET transport; no devUI mutation or page route | Typed navigation only after actual local destinations are governed |
 | Navigation | Composer validates typed root references | Resolvable local Focus and optional SoI destinations without joins |
 | Visual shell | No Overview browser shell | Accepted constrained-reuse or live-handoff evidence, read-only shell, browser/accessibility proof, owner pilot |
 
@@ -100,6 +104,10 @@ pickup issue.
   Exact shipped-pattern reuse requires an independently reviewed content-addressed
   `yggdrasil-constrained-reuse.v1` receipt with zero novel language; novel, mixed, unknown, or
   out-of-envelope work still requires the live Yggdrasil preflight and handoff receipt.
+- **ARO-INV-8 — production transport stays narrower than presentation.** #4836 must consume #4841's
+  `127.0.0.1:8113` loopback publish, local-Host/no-forwarded gateway admission, exact Overview/Focus
+  GET allowlist, stripped upstream request, and direct-loopback-or-server-derived API rule unchanged.
+  Port `18000` remains direct diagnostics and is not a browser page origin.
 
 ## Capability acceptance
 
@@ -108,6 +116,9 @@ pickup issue.
       serialized, linked, fresh enough, and never inferred.
 - [ ] The local Overview endpoint is GET-only, local-admission constrained, projection-only, and
       preserves the delivered composer contract.
+- [ ] The production shell uses #4841's exact read-only Companion transport at `127.0.0.1:8113`;
+      it never treats port `18000` as a browser page, forwards identity or credentials, adds a
+      wildcard/write route, or infers loopback from the Docker peer.
 - [ ] Every typed navigation reference resolves to an actual admitted local destination or remains
       explicitly unavailable/unsupported; no dead or synthetic link is rendered.
 - [ ] The governed design evidence and shell cover desktop, narrow, 200% zoom, keyboard, screen-reader,
@@ -138,6 +149,10 @@ delivered by PR #4771. Connected handoff #4746 remains blocked until the deliver
 producer #4834 is merged stable and one applicable governed receipt passes independent review. This governance change
 does not accept #4746 or produce its receipt. GitHub owns backlog state; this directory owns the
 stable breakdown and validation path.
+
+Production transport prerequisite [#4841](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4841)
+is consumed only by the source-authorized connected shell
+[#4836](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4836) and does not itself deliver that shell.
 
 ## Governing and supporting sources
 

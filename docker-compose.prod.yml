@@ -58,6 +58,10 @@ services:
       PKM_ENVIRONMENT: prod
       PORT: 8113
       COMPANION_API_BASE_URL: http://api:8000
+      # Separate the container listener from the browser-facing host publish.
+      # Missing/non-loopback declarations leave ordinary Companion health up
+      # but keep the devUI gateway routes fail-closed.
+      COMPANION_UI_BIND_HOST: ${COMPANION_UI_BIND_HOST:-}
       COMPANION_UI_SERVE_MODULE: companion_ui.workspace.serve_production_page
 
   db:

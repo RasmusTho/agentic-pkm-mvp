@@ -56,6 +56,31 @@ Selection carries no authority. The active-context selection bearer
 *in addition to* the #2223 gate; it stores no action, write class, or permission, and GOV
 authorizes every binding independently per call.
 
+### devUI loopback-published gateway admission (#4841)
+
+The production devUI read transport uses a narrower subset of the delegated local subjects. Its
+browser boundary is the explicitly rendered host publish
+`COMPANION_UI_BIND_HOST=127.0.0.1` → `127.0.0.1:8113:8113`, not the gateway container's
+`HOST=0.0.0.0` listener and not the request peer observed inside Docker. Missing, wildcard,
+non-loopback, mixed-resolution, or unresolvable declarations leave ordinary Companion health
+available but keep the devUI gateway routes unavailable. Port `18000` remains direct API
+health/version diagnostics only; it is not a supported devUI browser origin.
+
+The gateway admits only a local loopback `Host` with no forwarded identity header, including
+`Forwarded`, every `X-Forwarded-*` name, and `Via`. It proxies exactly GET
+`/api/devui/overview` without a query and GET `/api/devui/focus` with one nonempty `subject`
+query. It rejects unknown devUI paths, wildcards, duplicate/extra query keys, and every write verb.
+Each admitted call is a new server-side request built from the configured API origin plus that
+exact path/query; inbound `Host`, API key, authorization, forwarding, client-IP, and proxy headers
+are never copied upstream.
+
+FastAPI rejects forwarded identity before resolving a subject. It then admits either the existing
+direct-loopback + local-Host path or the exact server-derived result
+`resolve_auth_subject(request, None) == SUBJECT_TRUSTED_COMPANION_PROXY`. API-key subjects,
+arbitrary bridge/LAN/Tailscale peers, and missing or unresolvable Companion proxy configuration
+fail closed. #4841 supplies transport only: it adds no FastAPI page/static route and no remote
+browser mode; presentation consumer #4836 must reuse this boundary unchanged.
+
 ## Least privilege
 - The Postgres account (`DATABASE_URL`) uses `app:app` for local dev. In production create a dedicated role with only the required `INSERT/SELECT/UPDATE`.
 - CLI smoke commands append to the JSONL audit log (`INDEX_OUTBOX_PATH`). Runtime watcher/worker flows use the DB outbox; keep database permissions minimal and scoped to the outbox/index tables.
