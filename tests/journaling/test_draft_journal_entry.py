@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import date, datetime, timezone
 import hashlib
 import json
@@ -10,6 +12,7 @@ import threading
 
 import pytest
 
+import app.journaling.draft as draft_module
 from app.chat.session_log import SessionLogWriter
 from app.journaling.day_context import DayContextBundle, DayContextItem, assemble_day_context
 from app.journaling.draft import (
@@ -2094,3 +2097,37 @@ def test_draft_after_acceptance_produces_addendum_not_overwrite(tmp_path: Path) 
     assert frontmatter["journal_candidate_type"] == "addendum"
     assert "Addendum candidate" in body
     assert accepted.read_bytes() == before
+
+
+def test_acceptance_winning_route_race_blocks_stale_primary_candidate(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    root, context, session_id, _capture = _seed_inputs(tmp_path)
+    accepted = root / "1_Calendar" / "Daily" / "2026-07-15.md"
+    real_locked_draft = draft_module._locked_draft
+
+    @contextmanager
+    def acceptance_wins_before_lock(
+        vault_root: Path, relative_path: Path
+    ) -> Iterator[tuple[int, str]]:
+        accepted.parent.mkdir(parents=True)
+        accepted.write_text(
+            "---\nauthority_state: accepted\naccepted_by: human\n---\n\n"
+            "Human-owned text.\n",
+            encoding="utf-8",
+        )
+        with real_locked_draft(vault_root, relative_path) as locked:
+            yield locked
+
+    monkeypatch.setattr(draft_module, "_locked_draft", acceptance_wins_before_lock)
+
+    with pytest.raises(JournalDraftBlockedError, match="acceptance state changed"):
+        draft_journal_entry(
+            vault_context=context,
+            for_date=DAY,
+            session_id=session_id,
+            write_guard=_allowing_guard(),
+        )
+
+    assert accepted.read_text(encoding="utf-8").endswith("Human-owned text.\n")
+    assert not list(root.glob("**/drafts/journal/*.md"))

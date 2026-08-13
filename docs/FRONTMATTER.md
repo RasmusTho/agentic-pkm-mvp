@@ -129,8 +129,13 @@ Conversational Journaling's JRNL-03 staging path (`app/journaling/draft.py`) use
 posture without extending Create's closed output-kind enum: it writes `derived_by: conversation`,
 `authority_state: proposal`, and a `sources` list containing the reflection-session id plus every
 day-context provenance reference folded into the draft. These fields do not make the draft human
-knowledge or authorize promotion. JRNL-04's separate, explicit acceptance path owns any later move
-to `authority_state: accepted`. JRNL-03 also writes `activation_receipt_id` plus an
+knowledge or authorize promotion. JRNL-04's separate acceptance path (`app/journaling/review.py`)
+owns the only move to `authority_state: accepted`: it reads the checked in-note Panel action as the
+human decision, preserves `derived_by`/`sources`, and stamps `accepted_by: human`, `accepted_at`,
+`acceptance_receipt_id`, and `decision_token_ref`. A checked action remains a durable pending intent
+when WriteGuard blocks materialization; a later healthy retry needs no second approval. Accepted
+primary entries are never replaced, while independently accepted addenda append under their own
+receipt marker. JRNL-03 also writes `activation_receipt_id` plus an
 `activation_receipts` list of content-free gate records into the same atomically replaced proposal;
 the current id and retained earlier same-day ids therefore remain resolvable after restart without a
 separate receipt write that could diverge from the draft.

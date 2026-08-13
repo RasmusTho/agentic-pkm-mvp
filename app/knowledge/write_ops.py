@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import errno
 import ctypes
-from contextlib import contextmanager
-from dataclasses import dataclass
+from contextlib import ExitStack, contextmanager
+from dataclasses import dataclass, replace
 import fcntl
 import hashlib
 import json
@@ -12,6 +12,8 @@ from pathlib import Path, PurePosixPath
 import re
 import stat
 import sys
+import tempfile
+import threading
 from typing import TYPE_CHECKING, Callable, Iterator, Literal
 import uuid
 
@@ -66,6 +68,8 @@ _ATOMIC_APPEND_STAGE_RE = re.compile(
 _ATOMIC_APPEND_RECOVERY_TEMP_RE = re.compile(
     r"^\.atomic-append-recovery-[0-9a-f]{32}-[a-z]+-[0-9a-f]{32}\.tmp$"
 )
+_ATOMIC_APPEND_PROCESS_LOCKS_GUARD = threading.Lock()
+_ATOMIC_APPEND_PROCESS_LOCKS: dict[str, threading.RLock] = {}
 
 
 @dataclass(frozen=True)
@@ -253,6 +257,126 @@ def _open_atomic_append_authority(
         yield authority
     finally:
         os.close(root_fd)
+
+
+@contextmanager
+def locked_atomic_append_authority(
+    vault_root: Path | str,
+    note_rel_path: str,
+) -> Iterator[_AtomicAppendAuthority]:
+    """Bind the hardened atomic-append mechanism to one live path authority.
+
+    The atomic publisher needs both in-process/resource locks and independent
+    host witnesses before it may interpret or advance recovery state.  This
+    public wrapper supplies that authority for consumers beyond Heimdal while
+    keeping one lock namespace for each resolved target.
+    """
+
+    with _open_atomic_append_authority(vault_root, note_rel_path) as authority:
+        lock_keys = sorted(authority.coordination_keys)
+        with _ATOMIC_APPEND_PROCESS_LOCKS_GUARD:
+            process_locks = [
+                _ATOMIC_APPEND_PROCESS_LOCKS.setdefault(key, threading.RLock())
+                for key in lock_keys
+            ]
+
+        lock_root = Path(tempfile.gettempdir()) / "agentic-pkm-atomic-append-locks"
+        with ExitStack() as stack:
+            for process_lock in process_locks:
+                stack.enter_context(process_lock)
+            directory_flags = (
+                os.O_RDONLY
+                | getattr(os, "O_DIRECTORY", 0)
+                | getattr(os, "O_NOFOLLOW", 0)
+                | getattr(os, "O_CLOEXEC", 0)
+            )
+            lock_parent_fd = os.open(lock_root.parent, directory_flags)
+            stack.callback(os.close, lock_parent_fd)
+            try:
+                os.mkdir(lock_root.name, mode=0o700, dir_fd=lock_parent_fd)
+            except FileExistsError:
+                pass
+            os.fsync(lock_parent_fd)
+            lock_root_fd = os.open(
+                lock_root.name,
+                directory_flags,
+                dir_fd=lock_parent_fd,
+            )
+            stack.callback(os.close, lock_root_fd)
+            os.fsync(lock_root_fd)
+
+            lock_fds: list[int] = []
+            for key in lock_keys:
+                name = f"{hashlib.sha256(key.encode('utf-8')).hexdigest()}.lock"
+                file_flags = (
+                    os.O_RDWR
+                    | getattr(os, "O_NOFOLLOW", 0)
+                    | getattr(os, "O_CLOEXEC", 0)
+                )
+                try:
+                    lock_fd = os.open(
+                        name,
+                        file_flags | os.O_CREAT | os.O_EXCL,
+                        0o600,
+                        dir_fd=lock_root_fd,
+                    )
+                except FileExistsError:
+                    lock_fd = os.open(name, file_flags, dir_fd=lock_root_fd)
+                stack.callback(os.close, lock_fd)
+                observed = os.fstat(lock_fd)
+                if not stat.S_ISREG(observed.st_mode) or observed.st_nlink != 1:
+                    raise KnowledgeWriteConflict(
+                        "atomic append host lock must be one regular file"
+                    )
+                lock_fds.append(lock_fd)
+            os.fsync(lock_root_fd)
+            for lock_fd in lock_fds:
+                fcntl.flock(lock_fd, fcntl.LOCK_EX)
+
+            host_state_fd = _open_durable_host_fence_root(authority)
+            lock_fd_by_key = {
+                key: lock_fd
+                for key, lock_fd in zip(lock_keys, lock_fds, strict=True)
+            }
+            bound_authority = replace(
+                authority,
+                host_state_fd=host_state_fd,
+                host_state_stat=os.fstat(host_state_fd),
+                host_witness_root_path=lock_root,
+                host_witness_root_fd=lock_root_fd,
+                host_witness_root_stat=os.fstat(lock_root_fd),
+                host_witness_fds=tuple(
+                    (key, lock_fd_by_key[key])
+                    for key in authority.coordination_keys
+                ),
+            )
+            try:
+                bound_authority.assert_live()
+                bound_authority.assert_host_state_live()
+                bound_authority.assert_host_witness_live()
+                _bind_host_append_route(bound_authority)
+                _require_no_host_indeterminate_fence(bound_authority)
+                yield bound_authority
+                try:
+                    bound_authority.assert_live()
+                    bound_authority.assert_host_state_live()
+                    bound_authority.assert_host_witness_live()
+                    _require_no_host_indeterminate_fence(bound_authority)
+                    _require_host_append_route_live(bound_authority)
+                except KnowledgeWriteConflict:
+                    try:
+                        _mark_host_atomic_append_indeterminate(
+                            bound_authority,
+                            "post-transaction-authority-check",
+                            "root or host authority changed before lock release",
+                        )
+                    except BaseException:
+                        pass
+                    raise
+            finally:
+                os.close(host_state_fd)
+                for lock_fd in reversed(lock_fds):
+                    fcntl.flock(lock_fd, fcntl.LOCK_UN)
 
 
 @dataclass(frozen=True)
@@ -4579,6 +4703,7 @@ __all__ = [
     "candidate_note_exists_durable",
     "create_candidate_note_once",
     "default_vault_root_for_path",
+    "locked_atomic_append_authority",
     "read_note_text_with_version",
     "write_note_from_absolute",
     "write_note_relative",

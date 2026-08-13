@@ -205,6 +205,16 @@ def draft_journal_entry(
     # preventing same-day lost updates rather than merely preventing torn bytes.
     write_guard.assert_writes_allowed(JOURNAL_DRAFT_WRITE_ACTION)
     with _locked_draft(vault_root, draft_rel) as (directory_fd, filename):
+        # Acceptance and drafting share this per-candidate lock. A draft run
+        # may have selected the primary path immediately before JRNL-04
+        # materialized the day's canonical entry. Re-check after acquiring the
+        # lock so that stale run refuses and retries onto the addendum path;
+        # it must never recreate a primary candidate beside accepted content.
+        if accepted_path.exists() != is_addendum:
+            raise JournalDraftBlockedError(
+                "journal acceptance state changed before staging; retry the draft "
+                "so the canonical primary/addendum path is resolved again"
+            )
         existing_frontmatter = _load_existing_draft_frontmatter_at(
             directory_fd, filename
         )
