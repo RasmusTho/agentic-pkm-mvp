@@ -814,6 +814,8 @@ DURABLE_OWNERSHIP_PG_TARGETS = (
     # MVR-05A3 (#4577): composite parent/children, projection isolation,
     # reset scope, and audited fixture parity are one PostgreSQL mechanism.
     "tests/migrations/test_store_schema_parity.py",
+    "tests/migrations/test_multi_vault_ingest_projection_keys.py",
+    "tests/migrations/test_ingest_schema_parity.py",
     "tests/migrations/test_decisions_fk_set_null.py",
     "tests/integration/test_decisions_rebuild_from_log_only.py",
     "tests/integration/test_multi_vault_projection_isolation.py",
