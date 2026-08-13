@@ -557,6 +557,9 @@ def test_successful_cognition_uses_resolvable_objects_and_synthesis(
     assert len(cognition["object_ids"]) >= 2
     assert "Machine cognition (not owner utterance)" in body
     assert "I connected the real session shape." in body
+    assert f"cognition source: `session:{conversation.session.session_id}`" in body
+    assert f"cognition source: `{_capture.relative_to(root).as_posix()}`" in body
+    assert "cognition source: `journal-source:" not in body
 
 
 @pytest.mark.parametrize(

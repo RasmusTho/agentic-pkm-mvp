@@ -219,6 +219,7 @@ def draft_journal_entry(
         cognition, cognition_body = _run_cognition(
             reasoning_fn,
             reasoning_sources,
+            source_identities,
             activation.receipt.receipt_id,
         )
         body = _build_body(
@@ -800,6 +801,7 @@ def _describe_context_item(item: DayContextItem) -> str:
 def _run_cognition(
     reasoning_fn: ReasoningFunction,
     sources: tuple[MaterializedReasoningInput, ...],
+    source_identities: tuple[SourceIdentity, ...],
     trace_id: str,
 ) -> tuple[dict[str, object], str]:
     object_ids = tuple(source.object_id for source in sources)
@@ -835,7 +837,13 @@ def _run_cognition(
         )
     degraded = output.degraded
     degraded_reason = _bounded_reasoning_degraded_reason(output)
-    source_by_object = {source.object_id: source.source_id for source in sources}
+    external_id_by_admission = {
+        identity.admission_id: identity.external_id for identity in source_identities
+    }
+    source_by_object = {
+        source.object_id: external_id_by_admission.get(source.source_id, source.source_id)
+        for source in sources
+    }
     rendered: list[str] = []
     for claim in claims:
         source_id = source_by_object.get(str(claim.object_uuid), str(claim.object_uuid))
