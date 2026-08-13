@@ -451,6 +451,45 @@ def test_verification_adapter_round_trips_only_through_authenticated_api(
     )
     assert control_plane_store.outbox_status(REPO, completed_key) == "succeeded"
 
+    phased_key = ledger.begin_effect(
+        run.run_id,
+        effect_type="github.post_effect_reconciliation.test",
+        payload={
+            "repository": REPO.lower(),
+            "pr_number": 3603,
+            "head_sha": "a" * 40,
+        },
+        holder="executor:demerzel-verifier",
+        lease_id=claimed.lease_id,
+        idempotency_key="api-roundtrip-post-effect-phase",
+    )
+    phased_claim = ledger.effect_claim(phased_key)
+    phased_identity = {
+        "operation_key": phased_key,
+        "fencing_token": phased_claim["fencing_token"],
+        "repository": REPO.lower(),
+        "task_id": run.run_id,
+        "pr_number": 3603,
+        "head_sha": "a" * 40,
+    }
+    pending_phase = ledger.begin_post_effect_reconciliation(
+        phased_key, identity=phased_identity
+    )
+    reconciled_phase = ledger.reconcile_post_effect(
+        phased_key,
+        identity=phased_identity,
+        readback={
+            "merged": False,
+            "head_sha": "a" * 40,
+            "outcome": "exact_no_effect_readback",
+        },
+    )
+    assert pending_phase["phase"] == "pending"
+    assert reconciled_phase["phase"] == "reconciled"
+    assert client.get_outbox_status(
+        repository=REPO, operation_key=phased_key
+    )["post_effect_reconciliation"] == reconciled_phase
+
     indeterminate_key = ledger.begin_effect(
         run.run_id,
         effect_type="model.verification_coordinator",
@@ -925,4 +964,28 @@ def test_api_binds_task_lease_to_principal_and_restricts_public_lifecycle(
             claim=claim_identity,
             observed_applied=False,
             evidence={"outcome": "cross-principal mutation must fail"},
+        )
+    identity = {
+        "operation_key": operation_key,
+        "fencing_token": claim_identity["fencing_token"],
+        "repository": REPO.lower(),
+        "task_id": verification_run.run_id,
+        "pr_number": verification_run.pr_number,
+        "head_sha": verification_run.current_head_sha,
+    }
+    with pytest.raises(ControlPlaneScopeError):
+        client_b.begin_post_effect_reconciliation(
+            envelope=envelope,
+            claim=claim_identity,
+            identity=identity,
+        )
+    with pytest.raises(ControlPlaneScopeError):
+        client_b.reconcile_post_effect(
+            envelope=envelope,
+            claim=claim_identity,
+            identity=identity,
+            readback={
+                "merged": False,
+                "head_sha": verification_run.current_head_sha,
+            },
         )

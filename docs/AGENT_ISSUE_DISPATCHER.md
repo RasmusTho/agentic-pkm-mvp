@@ -379,6 +379,23 @@ The dispatcher is an operational coordination layer, not a lifecycle replacement
   PR is merged but incomplete, recovery re-authenticates the exact merge commit, authority receipt,
   checks, repair-budget policy, and highest continuous phase, then resumes at the first missing
   phase. Neither path resets attempts, durable supporting authority, or repair accounting.
+- Merge effect readback now has one durable BuilderOps outbox boundary before the issue-set
+  `reconciled` phase can be published. The authenticated API stores `pending` against the exact
+  operation key, current fenced claim, repository, verification run, PR, and head before accepting
+  external readback, then advances exactly once to `reconciled` with the authoritative readback.
+  Identical replay is idempotent; stale or expired fences, missing pending state, reordered
+  transitions, identity drift, malformed evidence, and conflicting readback fail closed. A restart
+  may recover the outbox under a newer fence while retaining the original effect identity, perform
+  bounded GitHub readback, and finish both phase and legacy outbox settlement without reissuing an
+  already-observed merge. Existing callers of `BuilderOpsVerificationLedger.finish_effect` keep
+  their prior behavior and are not silently upgraded to this protocol.
+- `verified_issue_set_merge_phase.v2` is the sole projection bridge from that BuilderOps authority
+  to the GitHub-side closure flow: `reconciled` and `restored` receipts must embed the exact durable
+  post-effect record, while earlier phases must not. The owner-doc watchdog authenticates the
+  continuous v2 chain and accepts targets only when the embedded record is `reconciled` and matches
+  the live repository, PR, head, and merge commit. Missing, pending-only, conflicting, or drifted
+  records produce no terminal targets. Legacy v1 `prepared` evidence remains readable solely to
+  preserve an interrupted pre-merge recovery chain; it cannot authorize post-merge terminal truth.
 - A narrow current-main/base-side recovery exists only for the pre-#4010 immutable PR #4052 head
   after a live-neutralized PR independently re-reads one unique trusted exact-head authority receipt
   and one continuous `prepared` phase. It uses the current-main `pr-contract` semantics and attaches
@@ -407,6 +424,8 @@ The dispatcher is an operational coordination layer, not a lifecycle replacement
   missing actor/time evidence are absence of authority, never permission to merge or close.
 - The post-merge owner-doc watchdog prefers the trusted exact-head merge authority receipt; a
   trusted-but-invalid receipt fails closed instead of falling back to mutable linked-issue state.
+  Receipt-backed target selection additionally requires the exact reconciled BuilderOps
+  post-effect authority carried by the continuous v2 phase chain.
   Its required targets are every authenticated closed issue plus a distinct open governing parent,
   or the PR for an issue-free lane. Only a trusted collaborator's exact
   `post-merge owner-doc check: PR #<PR>;` line is a closure receipt. A watchdog nudge, a generic

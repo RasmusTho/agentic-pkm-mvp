@@ -165,6 +165,19 @@ class OutboxReconcileRequest(BaseModel):
     evidence: dict[str, Any] = Field(default_factory=dict)
 
 
+class OutboxPostEffectPendingRequest(BaseModel):
+    envelope: AuthorityEnvelopeInput
+    claim: OutboxClaimInput
+    identity: dict[str, Any]
+
+
+class OutboxPostEffectReconcileRequest(BaseModel):
+    envelope: AuthorityEnvelopeInput
+    claim: OutboxClaimInput
+    identity: dict[str, Any]
+    readback: dict[str, Any]
+
+
 __all__ = [
     "AttemptCommitRequest",
     "AuthorityEnvelopeInput",
@@ -174,6 +187,8 @@ __all__ = [
     "OutboxClaimRequest",
     "OutboxClaimInput",
     "OutboxRecoverRequest",
+    "OutboxPostEffectPendingRequest",
+    "OutboxPostEffectReconcileRequest",
     "OutboxReconcileRequest",
     "OutboxUnknownRequest",
     "PromotionCommitRequest",

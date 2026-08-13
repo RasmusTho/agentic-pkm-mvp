@@ -61,6 +61,130 @@ def _commit_outbox_task(
     )
 
 
+def test_post_effect_phase_is_exact_idempotent_and_recoverable(
+    control_plane_store, envelope
+) -> None:
+    head = "a" * 40
+    result = _commit_outbox_task(
+        control_plane_store,
+        envelope,
+        task_id="post-effect-phase",
+        key="post-effect-phase",
+        effect_type="github.merge",
+        payload={"repository": envelope.repository, "pr_number": 4892, "head_sha": head},
+    )
+    assert result.operation_key is not None
+    claim = control_plane_store.claim_outbox(
+        envelope=envelope,
+        operation_key=result.operation_key,
+        worker_id="verification-host",
+        claim_ttl_seconds=1,
+    )
+    identity = {
+        "operation_key": result.operation_key,
+        "fencing_token": claim.fencing_token,
+        "repository": envelope.repository,
+        "task_id": "post-effect-phase",
+        "pr_number": 4892,
+        "head_sha": head,
+    }
+    readback = {
+        "merged": True,
+        "head_sha": head,
+        "merge_commit_sha": "b" * 40,
+    }
+
+    pending = control_plane_store.begin_post_effect_reconciliation(
+        claim, identity=identity
+    )
+    assert pending["phase"] == "pending"
+    assert control_plane_store.begin_post_effect_reconciliation(
+        claim, identity=identity
+    ) == pending
+    with pytest.raises((StateConflict, StaleFencingToken)):
+        control_plane_store.begin_post_effect_reconciliation(
+            replace(claim, fencing_token=claim.fencing_token + 1),
+            identity={**identity, "fencing_token": claim.fencing_token + 1},
+        )
+
+    _expire_outbox_claim(
+        control_plane_store, envelope.repository, result.operation_key
+    )
+    with pytest.raises(StaleFencingToken):
+        control_plane_store.begin_post_effect_reconciliation(
+            claim, identity=identity
+        )
+    recovered = control_plane_store.outbox_claim(
+        envelope=envelope,
+        operation_key=result.operation_key,
+        worker_id="recovery-verifier",
+    )
+    reconciled = control_plane_store.reconcile_post_effect(
+        recovered,
+        identity=identity,
+        readback=readback,
+    )
+    assert reconciled["phase"] == "reconciled"
+    assert reconciled["identity"] == identity
+    assert reconciled["readback"] == readback
+    assert reconciled["reconciled_receipt_sequence"] > pending[
+        "pending_receipt_sequence"
+    ]
+    assert control_plane_store.reconcile_post_effect(
+        recovered,
+        identity=identity,
+        readback=readback,
+    ) == reconciled
+    with pytest.raises(StateConflict, match="evidence is conflicting"):
+        control_plane_store.reconcile_post_effect(
+            recovered,
+            identity=identity,
+            readback={**readback, "merged": False},
+        )
+    with pytest.raises(StateConflict, match="reordered"):
+        control_plane_store.begin_post_effect_reconciliation(
+            recovered, identity=identity
+        )
+
+    intent = control_plane_store.outbox_intent(
+        envelope.repository, result.operation_key
+    )
+    assert intent["post_effect_reconciliation"] == reconciled
+    assert control_plane_store.receipt(
+        envelope.repository, pending["pending_receipt_sequence"]
+    )["event_type"] == "outbox.post_effect.pending"
+    assert control_plane_store.receipt(
+        envelope.repository, reconciled["reconciled_receipt_sequence"]
+    )["event_type"] == "outbox.post_effect.reconciled"
+
+    missing = _commit_outbox_task(
+        control_plane_store,
+        envelope,
+        task_id="post-effect-missing-pending",
+        key="post-effect-missing-pending",
+        effect_type="github.merge",
+        payload={"repository": envelope.repository, "pr_number": 4893, "head_sha": head},
+    )
+    assert missing.operation_key is not None
+    missing_claim = control_plane_store.claim_outbox(
+        envelope=envelope,
+        operation_key=missing.operation_key,
+        worker_id="verification-host",
+    )
+    with pytest.raises(StateConflict, match="requires pending"):
+        control_plane_store.reconcile_post_effect(
+            missing_claim,
+            identity={
+                **identity,
+                "operation_key": missing.operation_key,
+                "fencing_token": missing_claim.fencing_token,
+                "task_id": "post-effect-missing-pending",
+                "pr_number": 4893,
+            },
+            readback=readback,
+        )
+
+
 def test_unknown_external_effect_requires_readback_before_retry(
     control_plane_store, envelope
 ) -> None:

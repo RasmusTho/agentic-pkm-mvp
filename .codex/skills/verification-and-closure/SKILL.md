@@ -433,7 +433,7 @@ same exact head back to the ordinary verified-merge sequence below.
    body, title, and empty closing references once more. Never reuse the pre-edit green `pr-contract`
    result as merge authority
 4. use `scripts/build_verified_issue_set_merge_phase.py` to post an authenticated
-   `verified_issue_set_merge_phase.v1` `prepared` receipt bound to the durable authority receipt and
+   `verified_issue_set_merge_phase.v2` `prepared` receipt bound to the durable authority receipt and
    exact neutralized PR snapshot. For the pre-#4010 legacy exception, also pass the complete trusted
    authority comment through `--authority-comment-json`; the receipt payload alone does not prove
    cutoff provenance. Require a single continuous prepared/merged/reconciled/restored
@@ -475,10 +475,19 @@ same exact head back to the ordinary verified-merge sequence below.
    an unauthorized closure GitHub attributes to this PR, and block the final receipt on any unresolved
    unauthorized closure. This is the defensive race reconciliation, not a substitute for pre-effect
    neutralization
-9. explicitly close every and only the authenticated `closing_issues`, verify their state, post the
-   `reconciled` phase receipt, then
+9. explicitly close every and only the authenticated `closing_issues`, verify their state, read the
+   exact durable `builderops_post_effect_reconciliation.v1` record for this operation/PR/head and
+   pass it through `--post-effect-json` when posting the `reconciled` phase receipt, then
    restore the authenticated original PR body and prove its governing/closing identities equal the
    durable receipt, and post the `restored` phase receipt; bounded monotonic supporting additions may be retained only as evidence and may not expand closure authority
+
+   Read the record through the authenticated API-only boundary (no database fallback), then extract
+   only its `post_effect_reconciliation` object for the phase writer:
+
+   ```bash
+   scripts/builderops_api_client.sh outbox-status \
+     --repository <owner/repo> --operation-key <operation-key>
+   ```
 10. authenticate the durable authority receipt and complete phase ledger again, then repeat the
     bounded repository-event enumeration and live-read each bounded candidate's state and closure
     attribution. A terminal delivery receipt is forbidden unless every and only authenticated

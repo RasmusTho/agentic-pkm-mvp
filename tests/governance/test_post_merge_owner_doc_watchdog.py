@@ -102,6 +102,30 @@ def _phase_comment(
 ) -> dict[str, object]:
     authority = _receipt_payload(authority_comment)
     reconciled = phase in {"reconciled", "restored"}
+    merged = phase in {"reconciled", "restored"}
+    post_effect = (
+        {
+            "contract": "builderops_post_effect_reconciliation.v1",
+            "phase": "reconciled",
+            "identity": {
+                "operation_key": "verification-post-effect-3822",
+                "fencing_token": 7,
+                "repository": authority["repository"],
+                "task_id": authority["run_id"],
+                "pr_number": authority["pr_number"],
+                "head_sha": authority["head_sha"],
+            },
+            "readback": {
+                "merged": True,
+                "head_sha": authority["head_sha"],
+                "merge_commit_sha": merge_commit_sha,
+            },
+            "pending_receipt_sequence": 11,
+            "reconciled_receipt_sequence": 12,
+        }
+        if merged
+        else None
+    )
     receipt = {
         "authority_sha256": hashlib.sha256(
             json.dumps(authority, separators=(",", ":"), sort_keys=True).encode()
@@ -112,10 +136,11 @@ def _phase_comment(
             else authority["neutralized_body_sha256"]
         ),
         "closed_issues": authority["closing_issues"] if reconciled else [],
-        "contract": "verified_issue_set_merge_phase.v1",
+        "contract": "verified_issue_set_merge_phase.v2",
         "head_sha": authority["head_sha"],
         "merge_commit_sha": merge_commit_sha,
         "phase": phase,
+        "post_effect_reconciliation": post_effect,
         "pr_number": authority["pr_number"],
         "reopened_unauthorized_issues": [],
         "repository": authority["repository"],
@@ -135,6 +160,7 @@ def _merged_pr(body: str) -> dict[str, object]:
     pr = _pr(body)
     pr.update(
         {
+            "repository": REPOSITORY,
             "merge_commit_sha": "c" * 40,
             "merged": True,
             "merged_at": "2026-07-16T00:00:00Z",
@@ -438,6 +464,9 @@ def test_watchdog_target_selection_recovers_raced_body_from_continuous_phase_cha
         authority,
         _phase_comment(authority, phase="prepared", merge_commit_sha=None),
         _phase_comment(authority, phase="merged", merge_commit_sha=merge_sha),
+        _phase_comment(
+            authority, phase="reconciled", merge_commit_sha=merge_sha
+        ),
     ]
     raced_body = "Governing-Issue: #4999\n\nFixes #4999\n"
 
@@ -531,6 +560,111 @@ def test_watchdog_target_selection_rejects_forged_stale_or_conflicting_phase_cha
             "governing_issue": None,
             "mode": "trusted_receipt_invalid",
         }
+
+
+def test_watchdog_requires_exact_reconciled_post_effect_phase() -> None:
+    identity = {
+        "operation_key": "verification-post-effect-3822",
+        "fencing_token": 7,
+        "repository": REPOSITORY,
+        "task_id": "vrun-watchdog-3822",
+        "pr_number": 3822,
+        "head_sha": HEAD,
+    }
+    readback = {
+        "merged": True,
+        "head_sha": HEAD,
+        "merge_commit_sha": "c" * 40,
+    }
+    reconciled = {
+        "contract": "builderops_post_effect_reconciliation.v1",
+        "phase": "reconciled",
+        "identity": identity,
+        "readback": readback,
+        "pending_receipt_sequence": 11,
+        "reconciled_receipt_sequence": 12,
+    }
+    pending = {
+        **reconciled,
+        "phase": "pending",
+        "readback": None,
+        "reconciled_receipt_sequence": None,
+    }
+
+    assert _node(
+        "resolveExactPostEffectReconciliation(inputs[0], inputs[1])",
+        reconciled,
+        {
+            "repository": REPOSITORY,
+            "pr_number": 3822,
+            "head_sha": HEAD,
+            "merge_commit_sha": "c" * 40,
+        },
+    ) == reconciled
+
+    rejected = (
+        None,
+        pending,
+        {**reconciled, "identity": {**identity, "pr_number": 4999}},
+        {
+            **reconciled,
+            "readback": {**readback, "merge_commit_sha": "d" * 40},
+        },
+    )
+    for candidate in rejected:
+        assert (
+            _node(
+                "resolveExactPostEffectReconciliation(inputs[0], inputs[1])",
+                candidate,
+                {
+                    "repository": REPOSITORY,
+                    "pr_number": 3822,
+                    "head_sha": HEAD,
+                    "merge_commit_sha": "c" * 40,
+                },
+            )
+            is None
+        )
+
+    authority = _authority_comment()
+    merge_sha = "c" * 40
+    comments = [
+        authority,
+        _phase_comment(authority, phase="prepared", merge_commit_sha=None),
+        _phase_comment(authority, phase="merged", merge_commit_sha=merge_sha),
+        _phase_comment(
+            authority, phase="reconciled", merge_commit_sha=merge_sha
+        ),
+    ]
+    selected = _node(
+        "selectWatchdogAuthority(inputs[0])",
+        {
+            "comments": comments,
+            "expectedRepository": REPOSITORY,
+            "linkedIssues": [4999],
+            "livePr": _merged_pr(_body()),
+        },
+    )
+    assert selected["mode"] == "durable_receipt"
+
+    for candidate in rejected:
+        broken = json.loads(json.dumps(comments))
+        receipt = _receipt_payload(broken[-1])
+        receipt["post_effect_reconciliation"] = candidate
+        broken[-1]["body"] = (
+            "verified issue-set merge phase:\n```json\n"
+            + json.dumps(receipt, separators=(",", ":"), sort_keys=True)
+            + "\n```"
+        )
+        assert _node(
+            "selectWatchdogAuthority(inputs[0])",
+            {
+                "comments": broken,
+                "expectedRepository": REPOSITORY,
+                "linkedIssues": [4999],
+                "livePr": _merged_pr(_body()),
+            },
+        )["mode"] == "trusted_receipt_invalid"
 
 
 def test_watchdog_target_selection_never_falls_back_for_forged_stale_or_conflicting_receipt() -> None:

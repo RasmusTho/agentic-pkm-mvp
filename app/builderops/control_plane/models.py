@@ -378,6 +378,21 @@ class StorePort(Protocol):
         fault_at: str | None = None,
     ) -> OutboxReconciliation: ...
 
+    def begin_post_effect_reconciliation(
+        self,
+        claim: OutboxClaim,
+        *,
+        identity: Mapping[str, Any],
+    ) -> Mapping[str, Any]: ...
+
+    def reconcile_post_effect(
+        self,
+        claim: OutboxClaim,
+        *,
+        identity: Mapping[str, Any],
+        readback: Mapping[str, Any],
+    ) -> Mapping[str, Any]: ...
+
     def outbox_status(
         self,
         repository: str,

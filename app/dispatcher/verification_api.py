@@ -70,6 +70,21 @@ class VerificationEffectOutbox(Protocol):
         evidence: Mapping[str, object],
     ) -> Mapping[str, object]: ...
 
+    def begin_post_effect_reconciliation(
+        self,
+        claim: Mapping[str, object],
+        *,
+        identity: Mapping[str, object],
+    ) -> Mapping[str, object]: ...
+
+    def reconcile_post_effect(
+        self,
+        claim: Mapping[str, object],
+        *,
+        identity: Mapping[str, object],
+        readback: Mapping[str, object],
+    ) -> Mapping[str, object]: ...
+
 
 def _canonical(value: object) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
@@ -1352,6 +1367,9 @@ class BuilderOpsVerificationLedger:
             "reconciliation_receipt_sequence": outbox.get(
                 "reconciliation_receipt_sequence"
             ),
+            "post_effect_reconciliation": outbox.get(
+                "post_effect_reconciliation"
+            ),
         }
 
     def exception(
@@ -1725,6 +1743,114 @@ class BuilderOpsVerificationLedger:
                 raise
         self._unknown_effects.discard(operation_key)
         self._effect_claims.pop(operation_key, None)
+
+    @staticmethod
+    def _post_effect_identity(
+        operation_key: str,
+        claim: Mapping[str, object],
+        identity: Mapping[str, object],
+        *,
+        allow_recovery_fence: bool = False,
+        durable_phase: Mapping[str, object] | None = None,
+    ) -> dict[str, object]:
+        exact = dict(identity)
+        fence = claim.get("fencing_token")
+        identity_fence = exact.get("fencing_token")
+        pr_number = exact.get("pr_number")
+        head_sha = exact.get("head_sha")
+        if (
+            set(exact)
+            != {
+                "operation_key",
+                "fencing_token",
+                "repository",
+                "task_id",
+                "pr_number",
+                "head_sha",
+            }
+            or exact.get("operation_key") != operation_key
+            or exact.get("operation_key") != claim.get("operation_key")
+            or exact.get("repository") != claim.get("repository")
+            or exact.get("task_id") != claim.get("task_id")
+            or not isinstance(fence, int)
+            or isinstance(fence, bool)
+            or (
+                exact.get("fencing_token") != fence
+                and not (
+                    allow_recovery_fence
+                    and isinstance(identity_fence, int)
+                    and not isinstance(identity_fence, bool)
+                    and identity_fence < fence
+                    and isinstance(durable_phase, Mapping)
+                    and durable_phase.get("phase") == "pending"
+                    and durable_phase.get("identity") == exact
+                )
+            )
+            or not isinstance(pr_number, int)
+            or isinstance(pr_number, bool)
+            or pr_number < 1
+            or not isinstance(head_sha, str)
+            or re.fullmatch(r"[0-9a-f]{40}", head_sha) is None
+        ):
+            raise ValueError(
+                "post-effect reconciliation requires exact fenced identity"
+            )
+        return exact
+
+    def begin_post_effect_reconciliation(
+        self,
+        operation_key: str,
+        *,
+        identity: Mapping[str, object],
+    ) -> Mapping[str, object]:
+        if self.effect_outbox is None:
+            raise ValueError("verification effect outbox is unavailable")
+        try:
+            claim = self._effect_claims[operation_key]
+        except KeyError as exc:
+            raise ValueError("verification effect claim is unavailable") from exc
+        exact = self._post_effect_identity(operation_key, claim, identity)
+        return self.effect_outbox.begin_post_effect_reconciliation(
+            claim,
+            identity=exact,
+        )
+
+    def reconcile_post_effect(
+        self,
+        operation_key: str,
+        *,
+        identity: Mapping[str, object],
+        readback: Mapping[str, object],
+    ) -> Mapping[str, object]:
+        if self.effect_outbox is None:
+            raise ValueError("verification effect outbox is unavailable")
+        try:
+            claim = self._effect_claims[operation_key]
+        except KeyError as exc:
+            raise ValueError("verification effect claim is unavailable") from exc
+        status = self.effect_outbox.status(operation_key)
+        durable_phase = status.get("post_effect_reconciliation")
+        exact = self._post_effect_identity(
+            operation_key,
+            claim,
+            identity,
+            allow_recovery_fence=True,
+            durable_phase=(
+                durable_phase if isinstance(durable_phase, Mapping) else None
+            ),
+        )
+        if (
+            isinstance(durable_phase, Mapping)
+            and durable_phase.get("identity") != exact
+        ):
+            raise ValueError(
+                "post-effect reconciliation requires exact fenced identity"
+            )
+        return self.effect_outbox.reconcile_post_effect(
+            claim,
+            identity=exact,
+            readback=readback,
+        )
 
     def abandon_effect(self, operation_key: str, *, detail: str) -> None:
         if self.effect_outbox is None:

@@ -1767,6 +1767,25 @@ def _merge_comments(
         **merged_neutral,
         "body": plan["original_body"],
     }
+    post_effect = {
+        "contract": "builderops_post_effect_reconciliation.v1",
+        "phase": "reconciled",
+        "identity": {
+            "operation_key": "verification-post-effect-3603",
+            "fencing_token": 7,
+            "repository": authority["repository"],
+            "task_id": authority["run_id"],
+            "pr_number": authority["pr_number"],
+            "head_sha": authority["head_sha"],
+        },
+        "readback": {
+            "merged": True,
+            "head_sha": authority["head_sha"],
+            "merge_commit_sha": merged_neutral["merge_commit_sha"],
+        },
+        "pending_receipt_sequence": 11,
+        "reconciled_receipt_sequence": 12,
+    }
     phases = [
         build_verified_merge_phase(
             authority_receipt=authority, phase="prepared", pr=neutral
@@ -1778,6 +1797,7 @@ def _merge_comments(
             authority_receipt=authority,
             phase="reconciled",
             pr=merged_neutral,
+            post_effect_reconciliation=post_effect,
             closed_issues=[3603],
             reopened_unauthorized_issues=list(reopened_unauthorized),
         ),
@@ -1785,6 +1805,7 @@ def _merge_comments(
             authority_receipt=authority,
             phase="restored",
             pr=restored,
+            post_effect_reconciliation=post_effect,
             closed_issues=[3603],
             reopened_unauthorized_issues=list(reopened_unauthorized),
         ),
@@ -4469,7 +4490,7 @@ def test_eligible_request_invokes_registered_verification_closer_with_minimal_co
     assert pack["agent_adapter"] == ".codex/agents/verification-closer.toml"
     assert pack["verification_skill"] == ".codex/skills/verification-and-closure/SKILL.md"
     assert pack["verified_merge_phase_contract"] == (
-        "verified_issue_set_merge_phase.v1"
+        "verified_issue_set_merge_phase.v2"
     )
     assert pack["verified_merge_phase_writer"] == (
         "scripts/build_verified_issue_set_merge_phase.py"

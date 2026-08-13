@@ -62,7 +62,7 @@ fi
 
 cd "$APP_ROOT"
 case "${1:-}" in
-    status|receipt|-h|--help)
+    status|receipt|outbox-status|-h|--help)
         exec "$PYTHON" -m app.builderops.control_plane "$@"
         ;;
     "")

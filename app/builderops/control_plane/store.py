@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from collections.abc import Mapping
 from datetime import datetime, timedelta
 from typing import Any
@@ -44,6 +45,81 @@ def _operation_key(repository: str, idempotency_key: str, effect_type: str) -> s
     return _hash(
         {"repository": repository, "idempotency_key": idempotency_key, "effect_type": effect_type}
     )
+
+
+_POST_EFFECT_IDENTITY_FIELDS = frozenset(
+    {
+        "operation_key",
+        "fencing_token",
+        "repository",
+        "task_id",
+        "pr_number",
+        "head_sha",
+    }
+)
+
+
+def _validated_post_effect_identity(
+    identity: Mapping[str, Any],
+) -> dict[str, Any]:
+    result = dict(identity)
+    fence = result.get("fencing_token")
+    pr_number = result.get("pr_number")
+    if (
+        set(result) != _POST_EFFECT_IDENTITY_FIELDS
+        or not isinstance(result.get("operation_key"), str)
+        or not result["operation_key"]
+        or not isinstance(fence, int)
+        or isinstance(fence, bool)
+        or fence < 1
+        or not isinstance(result.get("task_id"), str)
+        or not result["task_id"]
+        or not isinstance(pr_number, int)
+        or isinstance(pr_number, bool)
+        or pr_number < 1
+        or not isinstance(result.get("head_sha"), str)
+        or re.fullmatch(r"[0-9a-f]{40}", result["head_sha"]) is None
+    ):
+        raise ValueError("post-effect reconciliation requires exact fenced identity")
+    result["repository"] = canonical_repository(str(result.get("repository", "")))
+    return result
+
+
+def _post_effect_document(row: Mapping[str, Any]) -> dict[str, Any] | None:
+    phase = row.get("post_effect_phase")
+    if phase is None:
+        return None
+    identity = row.get("post_effect_identity")
+    readback = row.get("post_effect_readback")
+    pending_sequence = row.get("post_effect_pending_receipt_sequence")
+    reconciled_sequence = row.get("post_effect_reconciled_receipt_sequence")
+    if (
+        phase not in {"pending", "reconciled"}
+        or not isinstance(identity, Mapping)
+        or not isinstance(pending_sequence, int)
+        or isinstance(pending_sequence, bool)
+        or (
+            phase == "pending"
+            and (readback is not None or reconciled_sequence is not None)
+        )
+        or (
+            phase == "reconciled"
+            and (
+                not isinstance(readback, Mapping)
+                or not isinstance(reconciled_sequence, int)
+                or isinstance(reconciled_sequence, bool)
+            )
+        )
+    ):
+        raise DurabilityPending("post-effect reconciliation authority is malformed")
+    return {
+        "contract": "builderops_post_effect_reconciliation.v1",
+        "phase": phase,
+        "identity": dict(identity),
+        "readback": dict(readback) if isinstance(readback, Mapping) else None,
+        "pending_receipt_sequence": pending_sequence,
+        "reconciled_receipt_sequence": reconciled_sequence,
+    }
 
 
 def _assert_terminal_unknown_model_evidence(
@@ -2120,6 +2196,9 @@ class PostgresBuilderOpsStore:
                 "SELECT repository, operation_key, task_id, effect_type, payload, "
                 "status, intent_receipt_sequence, intent_lsn::text AS intent_lsn, "
                 "reconciliation_evidence, reconciliation_receipt_sequence, "
+                "post_effect_phase, post_effect_identity, post_effect_readback, "
+                "post_effect_pending_receipt_sequence, "
+                "post_effect_reconciled_receipt_sequence, "
                 "authority_envelope "
                 "FROM builderops_outbox "
                 "WHERE repository = %s AND operation_key = %s",
@@ -2129,7 +2208,9 @@ class PostgresBuilderOpsStore:
             raise KeyError(operation_key)
         if row["intent_lsn"] is None:
             raise DurabilityPending("outbox intent durability binding is incomplete")
-        return dict(row)
+        result = dict(row)
+        result["post_effect_reconciliation"] = _post_effect_document(row)
+        return result
 
     def _repair_outbox_claim_binding(self, repository: str, operation_key: str) -> None:
         """Bind a locally committed claim/receipt before recovery marks it unknown."""
@@ -2360,6 +2441,213 @@ class PostgresBuilderOpsStore:
             ).fetchone()
             if row is None:
                 raise StaleFencingToken("outbox claim is stale")
+
+    @staticmethod
+    def _assert_post_effect_claim(
+        row: Mapping[str, Any], claim: OutboxClaim
+    ) -> None:
+        if (
+            row.get("repository") != claim.repository
+            or row.get("operation_key") != claim.operation_key
+            or row.get("worker_id") != claim.worker_id
+            or row.get("claim_fencing_token") != claim.fencing_token
+            or row.get("claim_receipt_sequence") != claim.receipt_sequence
+            or str(row.get("claim_lsn")) != claim.claim_lsn
+            or row.get("status") not in {"claimed", "unknown"}
+            or row.get("claim_expires_at") is None
+            or row.get("database_now") is None
+            or row["claim_expires_at"] <= row["database_now"]
+        ):
+            raise StaleFencingToken(
+                "post-effect reconciliation claim is stale"
+            )
+
+    @staticmethod
+    def _assert_post_effect_binding(
+        row: Mapping[str, Any], identity: Mapping[str, Any]
+    ) -> None:
+        payload = row.get("payload")
+        if (
+            identity.get("repository") != row.get("repository")
+            or identity.get("operation_key") != row.get("operation_key")
+            or identity.get("task_id") != row.get("task_id")
+            or not isinstance(payload, Mapping)
+            or identity.get("pr_number") != payload.get("pr_number")
+            or identity.get("head_sha") != payload.get("head_sha")
+        ):
+            raise ValueError(
+                "post-effect reconciliation requires exact fenced identity"
+            )
+
+    def begin_post_effect_reconciliation(
+        self,
+        claim: OutboxClaim,
+        *,
+        identity: Mapping[str, Any],
+    ) -> Mapping[str, Any]:
+        exact = _validated_post_effect_identity(identity)
+        with self._connect() as conn:
+            conn.execute("SET LOCAL synchronous_commit = on")
+            row = conn.execute(
+                "SELECT repository, operation_key, task_id, payload, status, "
+                "worker_id, claim_fencing_token, claim_receipt_sequence, "
+                "claim_lsn::text AS claim_lsn, claim_expires_at, "
+                "clock_timestamp() AS database_now, authority_envelope, "
+                "post_effect_phase, post_effect_identity, post_effect_readback, "
+                "post_effect_pending_receipt_sequence, "
+                "post_effect_reconciled_receipt_sequence "
+                "FROM builderops_outbox WHERE repository = %s "
+                "AND operation_key = %s FOR UPDATE",
+                (claim.repository, claim.operation_key),
+            ).fetchone()
+            if row is None:
+                raise KeyError(claim.operation_key)
+            self._assert_post_effect_binding(row, exact)
+            self._assert_post_effect_claim(row, claim)
+            existing = _post_effect_document(row)
+            if existing is not None:
+                if existing["phase"] == "reconciled":
+                    raise StateConflict(
+                        "post-effect reconciliation transition is reordered"
+                    )
+                if existing["identity"] != exact:
+                    raise StateConflict(
+                        "post-effect reconciliation identity is conflicting"
+                    )
+                return existing
+            if exact["fencing_token"] != claim.fencing_token:
+                raise ValueError(
+                    "post-effect reconciliation requires exact fenced identity"
+                )
+            receipt = conn.execute(
+                "INSERT INTO builderops_receipts(repository, task_id, event_type, "
+                "idempotency_key, lease_holder, lease_fencing_token, "
+                "authority_envelope) VALUES (%s, %s, "
+                "'outbox.post_effect.pending', %s, %s, %s, %s) "
+                "RETURNING receipt_sequence",
+                (
+                    claim.repository,
+                    row["task_id"],
+                    f"outbox:{claim.operation_key}:post-effect:pending:"
+                    f"{claim.fencing_token}",
+                    claim.worker_id,
+                    claim.fencing_token,
+                    Jsonb(dict(row["authority_envelope"])),
+                ),
+            ).fetchone()
+            assert receipt is not None
+            updated = conn.execute(
+                "UPDATE builderops_outbox SET post_effect_phase = 'pending', "
+                "post_effect_identity = %s, "
+                "post_effect_pending_receipt_sequence = %s, "
+                "updated_at = clock_timestamp() WHERE repository = %s "
+                "AND operation_key = %s AND post_effect_phase IS NULL "
+                "RETURNING post_effect_phase, post_effect_identity, "
+                "post_effect_readback, post_effect_pending_receipt_sequence, "
+                "post_effect_reconciled_receipt_sequence",
+                (
+                    Jsonb(exact),
+                    int(receipt["receipt_sequence"]),
+                    claim.repository,
+                    claim.operation_key,
+                ),
+            ).fetchone()
+            if updated is None:
+                raise StateConflict(
+                    "post-effect reconciliation transition raced"
+                )
+        result = _post_effect_document(updated)
+        assert result is not None
+        return result
+
+    def reconcile_post_effect(
+        self,
+        claim: OutboxClaim,
+        *,
+        identity: Mapping[str, Any],
+        readback: Mapping[str, Any],
+    ) -> Mapping[str, Any]:
+        exact = _validated_post_effect_identity(identity)
+        exact_readback = dict(readback)
+        if (
+            not exact_readback
+            or not isinstance(exact_readback.get("merged"), bool)
+            or exact_readback.get("head_sha") != exact["head_sha"]
+        ):
+            raise ValueError("post-effect authoritative readback is malformed")
+        with self._connect() as conn:
+            conn.execute("SET LOCAL synchronous_commit = on")
+            row = conn.execute(
+                "SELECT repository, operation_key, task_id, payload, status, "
+                "worker_id, claim_fencing_token, claim_receipt_sequence, "
+                "claim_lsn::text AS claim_lsn, claim_expires_at, "
+                "clock_timestamp() AS database_now, authority_envelope, "
+                "post_effect_phase, post_effect_identity, post_effect_readback, "
+                "post_effect_pending_receipt_sequence, "
+                "post_effect_reconciled_receipt_sequence "
+                "FROM builderops_outbox WHERE repository = %s "
+                "AND operation_key = %s FOR UPDATE",
+                (claim.repository, claim.operation_key),
+            ).fetchone()
+            if row is None:
+                raise KeyError(claim.operation_key)
+            self._assert_post_effect_binding(row, exact)
+            self._assert_post_effect_claim(row, claim)
+            existing = _post_effect_document(row)
+            if existing is None:
+                raise StateConflict(
+                    "post-effect reconciliation requires pending state"
+                )
+            if existing["identity"] != exact:
+                raise StateConflict(
+                    "post-effect reconciliation identity is conflicting"
+                )
+            if existing["phase"] == "reconciled":
+                if existing["readback"] != exact_readback:
+                    raise StateConflict(
+                        "post-effect reconciliation evidence is conflicting"
+                    )
+                return existing
+            receipt = conn.execute(
+                "INSERT INTO builderops_receipts(repository, task_id, event_type, "
+                "idempotency_key, lease_holder, lease_fencing_token, "
+                "authority_envelope) VALUES (%s, %s, "
+                "'outbox.post_effect.reconciled', %s, %s, %s, %s) "
+                "RETURNING receipt_sequence",
+                (
+                    claim.repository,
+                    row["task_id"],
+                    f"outbox:{claim.operation_key}:post-effect:reconciled:"
+                    f"{claim.fencing_token}",
+                    claim.worker_id,
+                    claim.fencing_token,
+                    Jsonb(dict(row["authority_envelope"])),
+                ),
+            ).fetchone()
+            assert receipt is not None
+            updated = conn.execute(
+                "UPDATE builderops_outbox SET post_effect_phase = 'reconciled', "
+                "post_effect_readback = %s, "
+                "post_effect_reconciled_receipt_sequence = %s, "
+                "updated_at = clock_timestamp() WHERE repository = %s "
+                "AND operation_key = %s AND post_effect_phase = 'pending' "
+                "RETURNING post_effect_phase, post_effect_identity, "
+                "post_effect_readback, post_effect_pending_receipt_sequence, "
+                "post_effect_reconciled_receipt_sequence",
+                (
+                    Jsonb(exact_readback),
+                    int(receipt["receipt_sequence"]),
+                    claim.repository,
+                    claim.operation_key,
+                ),
+            ).fetchone()
+            if updated is None:
+                raise StateConflict(
+                    "post-effect reconciliation transition raced"
+                )
+        result = _post_effect_document(updated)
+        assert result is not None
+        return result
 
     def reconcile_outbox(
         self,

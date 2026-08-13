@@ -487,8 +487,10 @@ Builder-agent rules:
   revalidate the live exact head/body/empty closing-link set, merge with a fixed non-closing message,
   and explicitly close only the authenticated issue set. Preserve the exact v2 authority and repair
   budget in a trusted durable receipt and advance a continuous prepared -> merged -> reconciled ->
-  restored `verified_issue_set_merge_phase.v1` ledger with
-  `scripts/build_verified_issue_set_merge_phase.py`. A crashed exact-head merge resumes idempotently
+  restored `verified_issue_set_merge_phase.v2` ledger with
+  `scripts/build_verified_issue_set_merge_phase.py`; post-merge reconciled/restored receipts require
+  `--post-effect-json` with the exact durable BuilderOps post-effect reconciliation authority. A
+  crashed exact-head merge resumes idempotently
   from that ledger and live merge truth; terminal delivery additionally proves that every and only
   authenticated issue is closed with closure attribution to this delivery. Detect race-added closing
   references and reopen only closures GitHub attributes to that PR before restoring the authenticated

@@ -39,6 +39,13 @@ class _RecordingClient:
         self.calls.append(("status", {}))
         return {"authority_epoch": 1, "schema_version": 1}
 
+    def get_outbox_status(self, **kwargs: Any) -> dict[str, Any]:
+        self.calls.append(("get_outbox_status", kwargs))
+        return {
+            "operation_key": kwargs["operation_key"],
+            "post_effect_reconciliation": {"phase": "reconciled"},
+        }
+
     def claim_task(self, **kwargs: Any) -> dict[str, Any]:
         self.calls.append(("claim_task", kwargs))
         return {
@@ -567,3 +574,27 @@ def test_routing_not_engaged_for_read_only_commands(tmp_path: Path, factory) -> 
     assert exit_code == 0
     [client] = factory.created
     assert client.calls == [("status", {})]
+
+
+def test_outbox_status_reads_exact_phase_without_mutation_route(factory) -> None:
+    exit_code = main(
+        [
+            "outbox-status",
+            "--repository",
+            "RasmusTho/agentic-pkm-mvp",
+            "--operation-key",
+            "verification-effect-4892",
+        ],
+        client_factory=factory,
+    )
+    assert exit_code == 0
+    [client] = factory.created
+    assert client.calls == [
+        (
+            "get_outbox_status",
+            {
+                "repository": "rasmustho/agentic-pkm-mvp",
+                "operation_key": "verification-effect-4892",
+            },
+        )
+    ]

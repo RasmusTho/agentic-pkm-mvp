@@ -37,6 +37,7 @@ def _parser() -> argparse.ArgumentParser:
         required=True,
     )
     parser.add_argument("--pr-json", type=Path, required=True)
+    parser.add_argument("--post-effect-json", type=Path)
     parser.add_argument("--closed-issues-json", type=Path)
     parser.add_argument("--reopened-issues-json", type=Path)
     parser.add_argument("--output-json", type=Path, required=True)
@@ -54,6 +55,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         ),
         phase=args.phase,
         pr=_mapping(args.pr_json),
+        post_effect_reconciliation=(
+            _mapping(args.post_effect_json)
+            if args.post_effect_json is not None
+            else None
+        ),
         closed_issues=_issue_numbers(args.closed_issues_json),
         reopened_unauthorized_issues=_issue_numbers(args.reopened_issues_json),
     )

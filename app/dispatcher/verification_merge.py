@@ -198,6 +198,21 @@ class EffectIntentLedger(Protocol):
         evidence: Mapping[str, object],
     ) -> None: ...
 
+    def begin_post_effect_reconciliation(
+        self,
+        operation_key: str,
+        *,
+        identity: Mapping[str, object],
+    ) -> Mapping[str, object]: ...
+
+    def reconcile_post_effect(
+        self,
+        operation_key: str,
+        *,
+        identity: Mapping[str, object],
+        readback: Mapping[str, object],
+    ) -> Mapping[str, object]: ...
+
 
 class OutboxExecutorAuthority(Protocol):
     def claim(self, operation_key: str) -> Mapping[str, object]: ...
@@ -217,6 +232,21 @@ class OutboxExecutorAuthority(Protocol):
         observed_applied: bool,
         terminal_unknown: bool = False,
         evidence: Mapping[str, object],
+    ) -> Mapping[str, object]: ...
+
+    def begin_post_effect_reconciliation(
+        self,
+        claim: Mapping[str, object],
+        *,
+        identity: Mapping[str, object],
+    ) -> Mapping[str, object]: ...
+
+    def reconcile_post_effect(
+        self,
+        claim: Mapping[str, object],
+        *,
+        identity: Mapping[str, object],
+        readback: Mapping[str, object],
     ) -> Mapping[str, object]: ...
 
 
@@ -306,6 +336,32 @@ class BuilderOpsOutboxExecutor:
             observed_applied=observed_applied,
             terminal_unknown=terminal_unknown,
             evidence=evidence,
+        )
+
+    def begin_post_effect_reconciliation(
+        self,
+        claim: Mapping[str, object],
+        *,
+        identity: Mapping[str, object],
+    ) -> Mapping[str, object]:
+        return self.client.begin_post_effect_reconciliation(
+            envelope=self.envelope,
+            claim=self._claim_identity(claim),
+            identity=identity,
+        )
+
+    def reconcile_post_effect(
+        self,
+        claim: Mapping[str, object],
+        *,
+        identity: Mapping[str, object],
+        readback: Mapping[str, object],
+    ) -> Mapping[str, object]:
+        return self.client.reconcile_post_effect(
+            envelope=self.envelope,
+            claim=self._claim_identity(claim),
+            identity=identity,
+            readback=readback,
         )
 
 
@@ -436,6 +492,20 @@ class VerificationMergeExecutor:
             evidence={"outcome": "terminal_no_effect", **dict(evidence)},
         )
 
+    @staticmethod
+    def _post_effect_identity(
+        run: VerificationRun,
+        claim: Mapping[str, object],
+    ) -> dict[str, object]:
+        return {
+            "operation_key": claim.get("operation_key"),
+            "fencing_token": claim.get("fencing_token"),
+            "repository": run.repository.lower(),
+            "task_id": run.run_id,
+            "pr_number": run.pr_number,
+            "head_sha": run.current_head_sha,
+        }
+
     def _readback_and_reconcile(
         self,
         claim: Mapping[str, object],
@@ -443,12 +513,23 @@ class VerificationMergeExecutor:
         run: VerificationRun,
         detail: str,
     ) -> tuple[Mapping[str, object], bool]:
+        operation_key = str(claim["operation_key"])
+        identity = self._post_effect_identity(run, claim)
+        self.ledger.begin_post_effect_reconciliation(
+            operation_key,
+            identity=identity,
+        )
         readback = self.repository.merge_readback(
             run.repository.lower(), run.pr_number
         )
         applied = self._merged_exactly(readback, run)
+        self.ledger.reconcile_post_effect(
+            operation_key,
+            identity=identity,
+            readback=readback,
+        )
         self.ledger.finish_effect(
-            str(claim["operation_key"]),
+            operation_key,
             observed_applied=applied,
             evidence={"detail": detail, **dict(readback)},
         )
@@ -779,6 +860,114 @@ class VerificationMergeExecutor:
             and isinstance(reconciliation_sequence, int)
             and not isinstance(reconciliation_sequence, bool)
         )
+        post_effect = pending.get("post_effect_reconciliation")
+        if post_effect is not None and (
+            not isinstance(post_effect, Mapping)
+            or post_effect.get("contract")
+            != "builderops_post_effect_reconciliation.v1"
+            or post_effect.get("phase") not in {"pending", "reconciled"}
+            or not isinstance(post_effect.get("identity"), Mapping)
+            or post_effect["identity"].get("operation_key") != operation_key
+            or post_effect["identity"].get("repository") != canonical
+            or post_effect["identity"].get("task_id") != run.run_id
+            or post_effect["identity"].get("pr_number") != run.pr_number
+            or post_effect["identity"].get("head_sha")
+            != run.current_head_sha
+        ):
+            raise MergeAuthorityError(
+                "merge recovery post-effect authority is malformed"
+            )
+        if (
+            isinstance(post_effect, Mapping)
+            and post_effect.get("phase") == "reconciled"
+        ):
+            post_readback = post_effect.get("readback")
+            if not isinstance(post_readback, Mapping):
+                raise MergeAuthorityError(
+                    "reconciled post-effect authority lacks readback"
+                )
+            comparable_keys = {
+                "merged",
+                "head_sha",
+                "merge_commit_sha",
+                "merge_commit_title",
+                "merge_commit_message",
+                "outcome",
+            }
+            exact_reconciliation_evidence = (
+                reconciliation_evidence
+                if isinstance(reconciliation_evidence, Mapping)
+                else {}
+            )
+            if durable_reconciliation and any(
+                key in exact_reconciliation_evidence
+                and key in post_readback
+                and exact_reconciliation_evidence[key] != post_readback[key]
+                for key in comparable_keys
+            ):
+                raise MergeAuthorityError(
+                    "durable merge reconciliation lacks exact governed commit text"
+                )
+            if (
+                not dry_run
+                and post_readback.get("merged") is True
+                and not self._merged_exactly(post_readback, run)
+            ):
+                raise MergeAuthorityError(
+                    "durable merge reconciliation lacks exact governed commit text"
+                )
+            self._resolve_recovery_credential(canonical, manifest)
+            post_effect_applied = bool(
+                dry_run or self._merged_exactly(post_readback, run)
+            )
+            outbox_status = pending.get("outbox_status")
+            if outbox_status in {"succeeded", "pending"}:
+                if not durable_reconciliation:
+                    raise MergeAuthorityError(
+                        "terminal legacy outbox state lacks durable reconciliation"
+                    )
+            elif outbox_status in {"claimed", "unknown"}:
+                try:
+                    self.ledger.recover_effect(
+                        operation_key,
+                        run_id=run.run_id,
+                        effect_type=effect_type,
+                        expected_payload=payload,
+                    )
+                except ValueError as exc:
+                    raise MergeAuthorityError(
+                        "merge recovery could not acquire current fenced authority"
+                    ) from exc
+                self.ledger.finish_effect(
+                    operation_key,
+                    observed_applied=post_effect_applied,
+                    evidence={
+                        "detail": (
+                            "durable post-effect readback recovered before "
+                            "legacy outbox finalization"
+                        ),
+                        **dict(post_readback),
+                    },
+                )
+            else:
+                raise MergeAuthorityError(
+                    "reconciled post-effect authority has incompatible outbox state"
+                )
+            return self._receipt(
+                (
+                    "dry_run_no_merge"
+                    if dry_run
+                    else (
+                        "merged"
+                        if self._merged_exactly(post_readback, run)
+                        else "retry_after_readback"
+                    )
+                ),
+                operation_key,
+                run,
+                manifest,
+                post_readback,
+            )
         if dry_run and durable_reconciliation:
             assert isinstance(reconciliation_evidence, Mapping)
             if (
@@ -841,7 +1030,7 @@ class VerificationMergeExecutor:
                 reconciliation_evidence,
             )
         try:
-            self.ledger.recover_effect(
+            recovery_claim = self.ledger.recover_effect(
                 operation_key,
                 run_id=run.run_id,
                 effect_type=effect_type,
@@ -873,6 +1062,20 @@ class VerificationMergeExecutor:
 
         readback = self.repository.merge_readback(
             canonical, run.pr_number
+        )
+        if isinstance(post_effect, Mapping):
+            identity = post_effect["identity"]
+            assert isinstance(identity, Mapping)
+        else:
+            identity = self._post_effect_identity(run, recovery_claim)
+            self.ledger.begin_post_effect_reconciliation(
+                operation_key,
+                identity=identity,
+            )
+        self.ledger.reconcile_post_effect(
+            operation_key,
+            identity=identity,
+            readback=readback,
         )
         if self._merged_exactly(readback, run):
             self.ledger.finish_effect(

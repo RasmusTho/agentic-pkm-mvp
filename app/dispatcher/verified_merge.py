@@ -29,7 +29,8 @@ from app.dispatcher.verification_contract import (
 
 VERIFIED_MERGE_AUTHORITY_CONTRACT = "verified_issue_set_merge_authority.v1"
 VERIFIED_MERGE_AUTHORITY_MARKER = "verified issue-set merge authority:"
-VERIFIED_MERGE_PHASE_CONTRACT = "verified_issue_set_merge_phase.v1"
+VERIFIED_MERGE_PHASE_CONTRACT = "verified_issue_set_merge_phase.v2"
+LEGACY_VERIFIED_MERGE_PHASE_CONTRACT = "verified_issue_set_merge_phase.v1"
 VERIFIED_MERGE_PHASE_MARKER = "verified issue-set merge phase:"
 VERIFIED_MERGE_READINESS_CONTRACT = "verified_issue_set_merge_readiness.v1"
 FIXED_VERIFIED_MERGE_COMMIT_MESSAGE = (
@@ -99,16 +100,76 @@ _PHASE_RECEIPT_FIELDS: Final = frozenset(
         "head_sha",
         "merge_commit_sha",
         "phase",
+        "post_effect_reconciliation",
         "pr_number",
         "reopened_unauthorized_issues",
         "repository",
         "run_id",
     }
 )
+_LEGACY_PHASE_RECEIPT_FIELDS: Final = _PHASE_RECEIPT_FIELDS - {
+    "post_effect_reconciliation"
+}
+_POST_EFFECT_FIELDS: Final = frozenset(
+    {
+        "contract",
+        "identity",
+        "pending_receipt_sequence",
+        "phase",
+        "readback",
+        "reconciled_receipt_sequence",
+    }
+)
+_POST_EFFECT_IDENTITY_FIELDS: Final = frozenset(
+    {
+        "fencing_token",
+        "head_sha",
+        "operation_key",
+        "pr_number",
+        "repository",
+        "task_id",
+    }
+)
 
 
 def _positive_int(value: object) -> bool:
     return isinstance(value, int) and not isinstance(value, bool) and value > 0
+
+
+def _exact_post_effect_reconciliation(
+    value: object,
+    *,
+    authority_receipt: Mapping[str, object],
+    pr: Mapping[str, object],
+) -> dict[str, object] | None:
+    if not isinstance(value, Mapping) or set(value) != _POST_EFFECT_FIELDS:
+        return None
+    identity = value.get("identity")
+    readback = value.get("readback")
+    pending_sequence = value.get("pending_receipt_sequence")
+    reconciled_sequence = value.get("reconciled_receipt_sequence")
+    if (
+        value.get("contract") != "builderops_post_effect_reconciliation.v1"
+        or value.get("phase") != "reconciled"
+        or not isinstance(identity, Mapping)
+        or set(identity) != _POST_EFFECT_IDENTITY_FIELDS
+        or not isinstance(identity.get("operation_key"), str)
+        or not identity.get("operation_key")
+        or not _positive_int(identity.get("fencing_token"))
+        or identity.get("repository") != authority_receipt.get("repository")
+        or identity.get("task_id") != authority_receipt.get("run_id")
+        or identity.get("pr_number") != authority_receipt.get("pr_number")
+        or identity.get("head_sha") != authority_receipt.get("head_sha")
+        or not isinstance(readback, Mapping)
+        or readback.get("merged") is not True
+        or readback.get("head_sha") != authority_receipt.get("head_sha")
+        or readback.get("merge_commit_sha") != pr.get("merge_commit_sha")
+        or not _positive_int(pending_sequence)
+        or not _positive_int(reconciled_sequence)
+        or cast(int, reconciled_sequence) <= cast(int, pending_sequence)
+    ):
+        return None
+    return dict(value)
 
 
 def _issue_tuple(
@@ -844,6 +905,7 @@ def build_verified_merge_phase(
     phase: str,
     pr: Mapping[str, object],
     authority_comment: Mapping[str, object] | None = None,
+    post_effect_reconciliation: Mapping[str, object] | None = None,
     closed_issues: Sequence[int] = (),
     reopened_unauthorized_issues: Sequence[int] = (),
 ) -> dict[str, object]:
@@ -870,6 +932,11 @@ def build_verified_merge_phase(
     )
     merged_phase = _PHASES.index(phase) >= _PHASES.index("merged")
     reconciled_phase = _PHASES.index(phase) >= _PHASES.index("reconciled")
+    exact_post_effect = _exact_post_effect_reconciliation(
+        post_effect_reconciliation,
+        authority_receipt=authority_receipt,
+        pr=pr,
+    )
     expected_body_digest = (
         authority_receipt.get("body_sha256")
         if phase == "restored"
@@ -912,6 +979,8 @@ def build_verified_merge_phase(
         or (reconciled_phase and closed != closing)
         or (not reconciled_phase and (closed or reopened))
         or bool(set(reopened) & set(closing))
+        or (reconciled_phase and exact_post_effect is None)
+        or (not reconciled_phase and post_effect_reconciliation is not None)
     ):
         raise ValueError("verified merge phase live state is malformed")
     receipt = {
@@ -922,6 +991,7 @@ def build_verified_merge_phase(
         "head_sha": authority_receipt["head_sha"],
         "merge_commit_sha": merge_commit_sha if merged_phase else None,
         "phase": phase,
+        "post_effect_reconciliation": exact_post_effect,
         "pr_number": authority_receipt["pr_number"],
         "reopened_unauthorized_issues": list(reopened),
         "repository": authority_receipt["repository"],
@@ -952,9 +1022,21 @@ def resolve_verified_merge_phase(
     }
     for candidate in _comment_receipts(comments, VERIFIED_MERGE_PHASE_MARKER):
         phase = candidate.get("phase")
+        contract = candidate.get("contract")
+        fields = set(candidate)
+        legacy_prepared = (
+            contract == LEGACY_VERIFIED_MERGE_PHASE_CONTRACT
+            and fields == _LEGACY_PHASE_RECEIPT_FIELDS
+            and phase == "prepared"
+        )
         if (
-            set(candidate) != _PHASE_RECEIPT_FIELDS
-            or candidate.get("contract") != VERIFIED_MERGE_PHASE_CONTRACT
+            not (
+                legacy_prepared
+                or (
+                    contract == VERIFIED_MERGE_PHASE_CONTRACT
+                    and fields == _PHASE_RECEIPT_FIELDS
+                )
+            )
             or phase not in _PHASES
             or candidate.get("authority_sha256") != authority_digest
             or candidate.get("repository") != authority_receipt.get("repository")
@@ -971,6 +1053,11 @@ def resolve_verified_merge_phase(
         merged_phase = _PHASES.index(str(phase)) >= _PHASES.index("merged")
         reconciled_phase = _PHASES.index(str(phase)) >= _PHASES.index(
             "reconciled"
+        )
+        exact_post_effect = _exact_post_effect_reconciliation(
+            candidate.get("post_effect_reconciliation"),
+            authority_receipt=authority_receipt,
+            pr=pr,
         )
         try:
             closed = _issue_tuple(
@@ -996,6 +1083,11 @@ def resolve_verified_merge_phase(
                 != pr.get("merge_commit_sha")
             )
             or (not merged_phase and candidate.get("merge_commit_sha") is not None)
+            or (reconciled_phase and exact_post_effect is None)
+            or (
+                not reconciled_phase
+                and candidate.get("post_effect_reconciliation") is not None
+            )
         ):
             continue
         valid_by_phase[str(phase)].append(dict(candidate))

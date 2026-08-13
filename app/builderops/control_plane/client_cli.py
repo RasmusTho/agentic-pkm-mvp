@@ -40,7 +40,7 @@ _CONFIG_EXIT = 2
 
 # Every authority-bearing CLI command carries an envelope and must resolve the
 # addressed repository's delivery-manifest route before it can dispatch.  Read
-# commands (status, receipt) intentionally stay outside this mutation gate.
+# commands (status, receipt, outbox-status) intentionally stay outside this mutation gate.
 _MUTATING_COMMANDS = frozenset(
     {
         "record",
@@ -131,6 +131,13 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command", required=True)
 
     sub.add_parser("status", help="Read the current authority epoch and schema version.")
+
+    outbox_status = sub.add_parser(
+        "outbox-status",
+        help="Read one exact effect-outbox intent and its durable reconciliation phase.",
+    )
+    outbox_status.add_argument("--repository", required=True)
+    outbox_status.add_argument("--operation-key", required=True)
 
     record = sub.add_parser("record", help="Commit a record authority object.")
     _add_envelope_arguments(record)
@@ -228,6 +235,11 @@ def _dispatch(
     command = args.command
     if command == "status":
         return client.status()
+    if command == "outbox-status":
+        return client.get_outbox_status(
+            repository=RepoRef.parse(args.repository).canonical,
+            operation_key=args.operation_key,
+        )
     if command == "record":
         return client.commit_record(
             envelope=_envelope(args),

@@ -180,6 +180,7 @@ class FakeVerificationOutbox:
         self.evidence: dict[str, dict[str, Any]] = {}
         self.claims: dict[str, dict[str, Any]] = {}
         self.recovered_claims: set[str] = set()
+        self.post_effect: dict[str, dict[str, Any]] = {}
 
     def claim(self, operation_key: str):
         self.calls.append("claim")
@@ -247,7 +248,54 @@ class FakeVerificationOutbox:
             "reconciliation_receipt_sequence": (
                 3 if operation_key in self.evidence else None
             ),
+            "post_effect_reconciliation": deepcopy(
+                self.post_effect.get(operation_key)
+            ),
         }
+
+    def begin_post_effect_reconciliation(self, claim, *, identity):
+        self.calls.append("post_effect_pending")
+        self._assert_current_claim(claim)
+        key = claim["operation_key"]
+        existing = self.post_effect.get(key)
+        if existing is not None:
+            if existing["phase"] == "reconciled":
+                raise ValueError("post-effect reconciliation transition is reordered")
+            if existing["identity"] != dict(identity):
+                raise ValueError("post-effect reconciliation identity is conflicting")
+            return deepcopy(existing)
+        pending = {
+            "contract": "builderops_post_effect_reconciliation.v1",
+            "phase": "pending",
+            "identity": dict(identity),
+            "readback": None,
+            "pending_receipt_sequence": 4,
+            "reconciled_receipt_sequence": None,
+        }
+        self.post_effect[key] = pending
+        return deepcopy(pending)
+
+    def reconcile_post_effect(self, claim, *, identity, readback):
+        self.calls.append("post_effect_reconcile")
+        self._assert_current_claim(claim)
+        key = claim["operation_key"]
+        existing = self.post_effect.get(key)
+        if existing is None:
+            raise ValueError("post-effect reconciliation requires pending state")
+        if existing["identity"] != dict(identity):
+            raise ValueError("post-effect reconciliation identity is conflicting")
+        if existing["phase"] == "reconciled":
+            if existing["readback"] != dict(readback):
+                raise ValueError("post-effect reconciliation evidence is conflicting")
+            return deepcopy(existing)
+        result = {
+            **existing,
+            "phase": "reconciled",
+            "readback": dict(readback),
+            "reconciled_receipt_sequence": 5,
+        }
+        self.post_effect[key] = result
+        return deepcopy(result)
 
     def mark_unknown(self, claim, *, detail: str):
         self.calls.append("unknown")

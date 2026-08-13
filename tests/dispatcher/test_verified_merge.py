@@ -36,6 +36,30 @@ REPOSITORY = "RasmusTho/agentic-pkm-mvp"
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
+def _post_effect(
+    authority: dict[str, object], pr: dict[str, object]
+) -> dict[str, object]:
+    return {
+        "contract": "builderops_post_effect_reconciliation.v1",
+        "phase": "reconciled",
+        "identity": {
+            "operation_key": f"verification-post-effect-{authority['pr_number']}",
+            "fencing_token": 7,
+            "repository": authority["repository"],
+            "task_id": authority["run_id"],
+            "pr_number": authority["pr_number"],
+            "head_sha": authority["head_sha"],
+        },
+        "readback": {
+            "merged": True,
+            "head_sha": authority["head_sha"],
+            "merge_commit_sha": pr["merge_commit_sha"],
+        },
+        "pending_receipt_sequence": 11,
+        "reconciled_receipt_sequence": 12,
+    }
+
+
 def _context() -> dict[str, object]:
     return {
         "contract": "verification_closer_dispatch_context.v2",
@@ -385,6 +409,7 @@ def test_legacy_authority_receipt_preserves_continuous_phase_recovery() -> None:
         authority_comment=authority_comment,
         phase="reconciled",
         pr=merged_pr,
+        post_effect_reconciliation=_post_effect(authority, merged_pr),
         closed_issues=[3820, 3823],
     )
     restored_pr = {**merged_pr, "body": original}
@@ -393,6 +418,7 @@ def test_legacy_authority_receipt_preserves_continuous_phase_recovery() -> None:
         authority_comment=authority_comment,
         phase="restored",
         pr=restored_pr,
+        post_effect_reconciliation=_post_effect(authority, restored_pr),
         closed_issues=[3820, 3823],
     )
     comments = [
@@ -431,6 +457,7 @@ def test_canonical_authority_receipt_preserves_unchanged_double_terminal_lf() ->
         authority_receipt=authority,
         phase="restored",
         pr=restored_pr,
+        post_effect_reconciliation=_post_effect(authority, restored_pr),
         closed_issues=[3820, 3823],
     )
 
@@ -741,6 +768,7 @@ def test_merge_phase_receipts_form_continuous_idempotent_recovery_chain() -> Non
         authority_receipt=authority,
         phase="reconciled",
         pr=merged_pr,
+        post_effect_reconciliation=_post_effect(authority, merged_pr),
         closed_issues=[3820, 3823],
         reopened_unauthorized_issues=[4999],
     )
@@ -749,6 +777,7 @@ def test_merge_phase_receipts_form_continuous_idempotent_recovery_chain() -> Non
         authority_receipt=authority,
         phase="restored",
         pr=restored_pr,
+        post_effect_reconciliation=_post_effect(authority, restored_pr),
         closed_issues=[3820, 3823],
         reopened_unauthorized_issues=[4999],
     )
@@ -771,6 +800,7 @@ def test_merge_phase_receipts_form_continuous_idempotent_recovery_chain() -> Non
         authority_receipt=authority,
         phase="restored",
         pr=restored_pr,
+        post_effect_reconciliation=_post_effect(authority, restored_pr),
         closed_issues=[3820, 3823],
     )
     assert (
@@ -902,6 +932,7 @@ def test_merged_body_race_rejects_forged_stale_and_conflicting_evidence() -> Non
         authority_receipt=authority,
         phase="reconciled",
         pr=merged_neutral,
+        post_effect_reconciliation=_post_effect(authority, merged_neutral),
         closed_issues=[3820, 3823],
         reopened_unauthorized_issues=[4999],
     )
@@ -909,6 +940,7 @@ def test_merged_body_race_rejects_forged_stale_and_conflicting_evidence() -> Non
         authority_receipt=authority,
         phase="reconciled",
         pr=merged_neutral,
+        post_effect_reconciliation=_post_effect(authority, merged_neutral),
         closed_issues=[3820, 3823],
         reopened_unauthorized_issues=[5000],
     )
@@ -1006,12 +1038,17 @@ def test_merge_phase_cli_uses_production_phase_builder(tmp_path: Path) -> None:
     authority_path = tmp_path / "authority.json"
     pr_path = tmp_path / "pr.json"
     closed_path = tmp_path / "closed.json"
+    post_effect_path = tmp_path / "post-effect.json"
     output_path = tmp_path / "phase.json"
     authority_path.write_text(
         json.dumps(plan["authority_receipt"]), encoding="utf-8"
     )
     pr_path.write_text(json.dumps(merged_pr), encoding="utf-8")
     closed_path.write_text(json.dumps([3820, 3823]), encoding="utf-8")
+    post_effect_path.write_text(
+        json.dumps(_post_effect(plan["authority_receipt"], merged_pr)),
+        encoding="utf-8",
+    )
 
     completed = subprocess.run(
         [
@@ -1024,6 +1061,8 @@ def test_merge_phase_cli_uses_production_phase_builder(tmp_path: Path) -> None:
             "restored",
             "--pr-json",
             str(pr_path),
+            "--post-effect-json",
+            str(post_effect_path),
             "--closed-issues-json",
             str(closed_path),
             "--output-json",

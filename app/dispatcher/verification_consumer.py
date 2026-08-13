@@ -3744,7 +3744,7 @@ def _context_pack_from_authority(
         "stage": run.stage,
         "verification_skill": ".codex/skills/verification-and-closure/SKILL.md",
         "agent_adapter": ".codex/agents/verification-closer.toml",
-        "verified_merge_phase_contract": "verified_issue_set_merge_phase.v1",
+        "verified_merge_phase_contract": "verified_issue_set_merge_phase.v2",
         "verified_merge_phase_writer": (
             "scripts/build_verified_issue_set_merge_phase.py"
         ),

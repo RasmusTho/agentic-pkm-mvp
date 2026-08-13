@@ -135,8 +135,18 @@ jobs:
             ].sort();
             const PHASE_FIELDS = [
               "authority_sha256", "body_sha256", "closed_issues", "contract", "head_sha",
-              "merge_commit_sha", "phase", "pr_number", "reopened_unauthorized_issues",
-              "repository", "run_id",
+              "merge_commit_sha", "phase", "post_effect_reconciliation", "pr_number",
+              "reopened_unauthorized_issues", "repository", "run_id",
+            ].sort();
+            const LEGACY_PHASE_FIELDS = PHASE_FIELDS
+              .filter(field => field !== "post_effect_reconciliation");
+            const POST_EFFECT_FIELDS = [
+              "contract", "phase", "identity", "readback",
+              "pending_receipt_sequence", "reconciled_receipt_sequence",
+            ].sort();
+            const POST_EFFECT_IDENTITY_FIELDS = [
+              "operation_key", "fencing_token", "repository", "task_id",
+              "pr_number", "head_sha",
             ].sort();
 
             const arraysEqual = (left, right) =>
@@ -161,6 +171,39 @@ jobs:
               return JSON.stringify(value);
             };
             const canonicalSha256 = value => sha256(canonicalJson(value));
+            const resolveExactPostEffectReconciliation = (candidate, livePr) => {
+              const liveRepository = livePr.repository || livePr.base?.repo?.full_name;
+              const liveNumber = livePr.pr_number ?? livePr.number;
+              const liveHead = livePr.head_sha || livePr.head?.sha;
+              if (
+                !hasExactFields(candidate, POST_EFFECT_FIELDS) ||
+                candidate.contract !== "builderops_post_effect_reconciliation.v1" ||
+                candidate.phase !== "reconciled" ||
+                !hasExactFields(candidate.identity, POST_EFFECT_IDENTITY_FIELDS) ||
+                typeof candidate.identity.operation_key !== "string" ||
+                candidate.identity.operation_key.length === 0 ||
+                !Number.isInteger(candidate.identity.fencing_token) ||
+                candidate.identity.fencing_token < 1 ||
+                typeof candidate.identity.task_id !== "string" ||
+                candidate.identity.task_id.length === 0 ||
+                candidate.identity.repository !== liveRepository ||
+                candidate.identity.pr_number !== liveNumber ||
+                candidate.identity.head_sha !== liveHead ||
+                candidate.pending_receipt_sequence === null ||
+                !Number.isInteger(candidate.pending_receipt_sequence) ||
+                candidate.pending_receipt_sequence < 1 ||
+                candidate.reconciled_receipt_sequence === null ||
+                !Number.isInteger(candidate.reconciled_receipt_sequence) ||
+                candidate.reconciled_receipt_sequence < 1 ||
+                candidate.readback === null ||
+                typeof candidate.readback !== "object" ||
+                Array.isArray(candidate.readback) ||
+                candidate.readback.merged !== true ||
+                candidate.readback.head_sha !== liveHead ||
+                candidate.readback.merge_commit_sha !== livePr.merge_commit_sha
+              ) return null;
+              return candidate;
+            };
             const LEGACY_TERMINAL_LF_CUTOFF = Date.parse("2026-07-21T16:32:11Z");
             const canonicalUtcInstant = value => {
               if (
@@ -267,9 +310,12 @@ jobs:
                 const expectedDigest = phase === "restored"
                   ? authorityReceipt.body_sha256
                   : authorityReceipt.neutralized_body_sha256;
+                const legacyPrepared = phase === "prepared" &&
+                  receipt.contract === "verified_issue_set_merge_phase.v1" &&
+                  hasExactFields(receipt, LEGACY_PHASE_FIELDS);
                 if (
-                  !hasExactFields(receipt, PHASE_FIELDS) || phaseIndex < 0 ||
-                  receipt.contract !== "verified_issue_set_merge_phase.v1" ||
+                  (!legacyPrepared && !hasExactFields(receipt, PHASE_FIELDS)) || phaseIndex < 0 ||
+                  (!legacyPrepared && receipt.contract !== "verified_issue_set_merge_phase.v2") ||
                   receipt.authority_sha256 !== authorityDigest ||
                   receipt.repository !== authorityReceipt.repository ||
                   receipt.pr_number !== authorityReceipt.pr_number ||
@@ -281,7 +327,11 @@ jobs:
                   (reconciledPhase && !arraysEqual(closed, authorityReceipt.closing_issues)) ||
                   (!reconciledPhase && (closed.length > 0 || reopened.length > 0)) ||
                   (mergedPhase && receipt.merge_commit_sha !== livePr.merge_commit_sha) ||
-                  (!mergedPhase && receipt.merge_commit_sha !== null)
+                  (!mergedPhase && receipt.merge_commit_sha !== null) ||
+                  (reconciledPhase && resolveExactPostEffectReconciliation(
+                    receipt.post_effect_reconciliation, livePr
+                  ) === null) ||
+                  (!legacyPrepared && !reconciledPhase && receipt.post_effect_reconciliation !== null)
                 ) continue;
                 validByPhase.get(phase).push(receipt);
               }
@@ -357,10 +407,26 @@ jobs:
               const liveAuthority = resolveIssueAuthority(livePr.body || "");
               const canonicalLiveAuthority = liveAuthority?.mode === "canonical" ? liveAuthority : null;
               if (authorityReceipt !== null) {
+                const mergePhase = resolveContinuousMergePhase(
+                  comments, authorityReceipt, livePr
+                );
+                if (
+                  mergePhase !== null &&
+                  PHASES.indexOf(mergePhase.phase) >= PHASES.indexOf("reconciled") &&
+                  resolveExactPostEffectReconciliation(
+                    mergePhase.post_effect_reconciliation, livePr
+                  ) !== null
+                ) {
+                  return {
+                    closing_issues: authorityReceipt.closing_issues,
+                    governing_issue: authorityReceipt.governing_issue,
+                    mode: "durable_receipt",
+                  };
+                }
                 return {
-                  closing_issues: authorityReceipt.closing_issues,
-                  governing_issue: authorityReceipt.governing_issue,
-                  mode: "durable_receipt",
+                  closing_issues: [],
+                  governing_issue: null,
+                  mode: "trusted_receipt_invalid",
                 };
               }
               if (hasTrustedAuthorityAttempt(comments)) {

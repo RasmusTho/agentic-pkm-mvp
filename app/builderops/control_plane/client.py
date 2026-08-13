@@ -583,6 +583,42 @@ class BuilderOpsControlPlaneClient:
             },
         )
 
+    def begin_post_effect_reconciliation(
+        self,
+        *,
+        envelope: Mapping[str, Any],
+        claim: Mapping[str, Any],
+        identity: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        return self._request(
+            "POST",
+            f"/{API_VERSION}/executor/outbox/post-effect/pending",
+            json_body={
+                "envelope": dict(envelope),
+                "claim": dict(claim),
+                "identity": dict(identity),
+            },
+        )
+
+    def reconcile_post_effect(
+        self,
+        *,
+        envelope: Mapping[str, Any],
+        claim: Mapping[str, Any],
+        identity: Mapping[str, Any],
+        readback: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        return self._request(
+            "POST",
+            f"/{API_VERSION}/executor/outbox/post-effect/reconcile",
+            json_body={
+                "envelope": dict(envelope),
+                "claim": dict(claim),
+                "identity": dict(identity),
+                "readback": dict(readback),
+            },
+        )
+
     # -- transport -----------------------------------------------------------
     def _headers(self, *, pin_epoch: bool) -> dict[str, str]:
         headers = {"Authorization": f"Bearer {self._config.token}"}

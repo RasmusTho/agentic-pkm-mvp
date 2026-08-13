@@ -18,6 +18,8 @@ from app.builderops.control_plane.api_models import (
     LeaseClaimRequest,
     LeaseInput,
     OutboxClaimRequest,
+    OutboxPostEffectPendingRequest,
+    OutboxPostEffectReconcileRequest,
     OutboxRecoverRequest,
     OutboxReconcileRequest,
     OutboxUnknownRequest,
@@ -1102,7 +1104,69 @@ def create_app(
             "reconciliation_receipt_sequence": intent.get(
                 "reconciliation_receipt_sequence"
             ),
+            "post_effect_reconciliation": intent.get(
+                "post_effect_reconciliation"
+            ),
         }
+
+    @application.post("/v1/executor/outbox/post-effect/pending")
+    async def begin_post_effect_reconciliation(
+        request: OutboxPostEffectPendingRequest,
+        credential: Credential = Depends(outbox_write),
+        _epoch: None = Depends(require_authority_epoch),
+    ) -> dict[str, Any]:
+        _enforce_repo_scope(credential, request.envelope.repository)
+        try:
+            _assert_durable_payload_safe(
+                request.model_dump(mode="json"), credentials
+            )
+            claim = _outbox_claim_from_input(
+                request.claim, repository=request.envelope.repository
+            )
+            intent = await run_in_threadpool(
+                store.outbox_intent,
+                request.envelope.repository,
+                claim.operation_key,
+            )
+            _enforce_outbox_principal(intent, credential)
+            result = await run_in_threadpool(
+                store.begin_post_effect_reconciliation,
+                claim,
+                identity=request.identity,
+            )
+        except Exception as exc:
+            raise _control_plane_error(exc) from exc
+        return dict(result)
+
+    @application.post("/v1/executor/outbox/post-effect/reconcile")
+    async def reconcile_post_effect(
+        request: OutboxPostEffectReconcileRequest,
+        credential: Credential = Depends(outbox_write),
+        _epoch: None = Depends(require_authority_epoch),
+    ) -> dict[str, Any]:
+        _enforce_repo_scope(credential, request.envelope.repository)
+        try:
+            _assert_durable_payload_safe(
+                request.model_dump(mode="json"), credentials
+            )
+            claim = _outbox_claim_from_input(
+                request.claim, repository=request.envelope.repository
+            )
+            intent = await run_in_threadpool(
+                store.outbox_intent,
+                request.envelope.repository,
+                claim.operation_key,
+            )
+            _enforce_outbox_principal(intent, credential)
+            result = await run_in_threadpool(
+                store.reconcile_post_effect,
+                claim,
+                identity=request.identity,
+                readback=request.readback,
+            )
+        except Exception as exc:
+            raise _control_plane_error(exc) from exc
+        return dict(result)
 
     @application.post("/v1/executor/outbox/reconcile")
     async def reconcile_outbox(

@@ -220,6 +220,14 @@ def test_initialize_upgrades_v2_preserving_data_and_replacing_reconciliation_con
                 "WHERE repository = %s AND operation_key = %s",
                 (envelope.repository, pending.operation_key),
             ).fetchone()
+            legacy_phase = conn.execute(
+                "SELECT post_effect_phase, post_effect_identity, "
+                "post_effect_readback, post_effect_pending_receipt_sequence, "
+                "post_effect_reconciled_receipt_sequence "
+                "FROM builderops_outbox WHERE repository = %s "
+                "AND operation_key = %s",
+                (envelope.repository, pending.operation_key),
+            ).fetchone()
             versions = [
                 int(row["version"])
                 for row in conn.execute(
@@ -228,6 +236,8 @@ def test_initialize_upgrades_v2_preserving_data_and_replacing_reconciliation_con
             ]
         assert reconciliation is not None
         assert reconciliation["status"] == "pending"
+        assert legacy_phase is not None
+        assert all(value is None for value in legacy_phase.values())
         assert versions == list(range(1, SCHEMA_VERSION + 1))
 
         store.commit_transition(

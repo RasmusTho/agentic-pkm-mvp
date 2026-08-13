@@ -229,6 +229,7 @@ class Outbox:
         self.evidence = None
         self.payload_loader = payload_loader
         self.intent_payload_override = None
+        self.post_effect = None
 
     def _payload(self):
         if self.intent_payload_override is not None:
@@ -272,7 +273,44 @@ class Outbox:
             "reconciliation_receipt_sequence": (
                 3 if self.evidence is not None else None
             ),
+            "post_effect_reconciliation": self.post_effect,
         }
+
+    def begin_post_effect_reconciliation(self, claim, *, identity):
+        self.calls.append("post_effect_pending")
+        if self.post_effect is not None:
+            if self.post_effect["phase"] == "reconciled":
+                raise ValueError("post-effect reconciliation transition is reordered")
+            if self.post_effect["identity"] != dict(identity):
+                raise ValueError("post-effect reconciliation identity is conflicting")
+            return self.post_effect
+        self.post_effect = {
+            "contract": "builderops_post_effect_reconciliation.v1",
+            "phase": "pending",
+            "identity": dict(identity),
+            "readback": None,
+            "pending_receipt_sequence": 4,
+            "reconciled_receipt_sequence": None,
+        }
+        return self.post_effect
+
+    def reconcile_post_effect(self, claim, *, identity, readback):
+        self.calls.append("post_effect_reconcile")
+        if self.post_effect is None:
+            raise ValueError("post-effect reconciliation requires pending state")
+        if self.post_effect["identity"] != dict(identity):
+            raise ValueError("post-effect reconciliation identity is conflicting")
+        if self.post_effect["phase"] == "reconciled":
+            if self.post_effect["readback"] != dict(readback):
+                raise ValueError("post-effect reconciliation evidence is conflicting")
+            return self.post_effect
+        self.post_effect = {
+            **self.post_effect,
+            "phase": "reconciled",
+            "readback": dict(readback),
+            "reconciled_receipt_sequence": 5,
+        }
+        return self.post_effect
 
     def mark_unknown(self, claim, *, detail: str):
         self.calls.append("unknown")
@@ -312,6 +350,25 @@ class CrashAfterReconcileOutbox(Outbox):
             evidence=evidence,
         )
         raise SystemExit("simulated crash after durable reconciliation")
+
+
+class CrashAfterPostEffectReconcileOutbox(Outbox):
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self.crashed = False
+
+    def reconcile_post_effect(self, claim, *, identity, readback):
+        phase = super().reconcile_post_effect(
+            claim,
+            identity=identity,
+            readback=readback,
+        )
+        if not self.crashed:
+            self.crashed = True
+            raise SystemExit(
+                "simulated crash after durable post-effect reconciliation"
+            )
+        return phase
 
 
 class BlockingReviewWinsIntentRaceClient(FakeBuilderOpsClient):
@@ -401,6 +458,39 @@ def claimed_run(
     )
     ledger.effect_outbox = outbox
     return ledger, ready, outbox
+
+
+def test_merge_recovery_reconciles_durable_pending_effect_without_replay() -> None:
+    ledger, run, outbox = claimed_run()
+    repository = CrashOnceReadbackRepository()
+    with pytest.raises(SystemExit, match="before merge readback"):
+        VerificationMergeExecutor(
+            ledger, outbox, repository, Credentials()
+        ).execute(
+            run,
+            holder="verification-host",
+            lease_id=run.lease_id or "",
+        )
+    pending_before = ledger.pending_effect_binding(run.run_id)
+    assert pending_before is not None
+    assert pending_before["post_effect_reconciliation"]["phase"] == "pending"
+    merge_calls_before = repository.calls.count("merge")
+
+    restarted = BuilderOpsVerificationLedger(
+        ledger.client,
+        repository=REPO,
+        effect_outbox=outbox,
+    )
+    receipt = VerificationMergeExecutor(
+        restarted, outbox, repository, Credentials()
+    ).recover(run)
+
+    assert receipt.outcome == "merged"
+    assert repository.calls.count("merge") == merge_calls_before
+    phase = restarted.pending_effect_binding(run.run_id)
+    assert phase is not None
+    assert phase["post_effect_reconciliation"]["phase"] == "reconciled"
+    assert phase["post_effect_reconciliation"]["readback"]["merged"] is True
 
 
 def test_blocking_review_wins_atomic_merge_intent_race() -> None:
@@ -1049,6 +1139,55 @@ def test_merge_reconstructs_receipt_after_durable_reconciliation_crash() -> None
     assert receipt.outcome == "merged"
     assert receipt.readback["merge_commit_sha"] == "d" * 40
     assert "recover" not in outbox.calls[len(calls_before) :]
+    assert original_outbox.state == "missing"
+
+
+def test_merge_recovery_finishes_legacy_outbox_after_post_effect_phase_crash() -> None:
+    ledger, run, original_outbox = claimed_run()
+
+    def _pending_payload():
+        snapshot = ledger._snapshot(run.run_id)["payload"]
+        pending = snapshot.get("pending_privileged_effect")
+        return pending["payload"] if isinstance(pending, Mapping) else {}
+
+    outbox = CrashAfterPostEffectReconcileOutbox(
+        run.run_id,
+        payload_loader=_pending_payload,
+    )
+    ledger.effect_outbox = outbox
+    repository = RepositoryAuthority(
+        base_reads=[BASE, BASE, BASE],
+        manifest_blobs=["blob-1", "blob-1", "blob-1"],
+    )
+
+    with pytest.raises(SystemExit, match="post-effect reconciliation"):
+        VerificationMergeExecutor(
+            ledger, outbox, repository, Credentials()
+        ).execute(
+            run,
+            holder="verification-host",
+            lease_id=run.lease_id or "",
+        )
+
+    assert outbox.post_effect is not None
+    assert outbox.post_effect["phase"] == "reconciled"
+    assert outbox.state == "claimed"
+    merge_calls_before = repository.calls.count("merge")
+    readback_calls_before = repository.calls.count("readback")
+
+    restarted = BuilderOpsVerificationLedger(
+        ledger.client,
+        repository=REPO,
+        effect_outbox=outbox,
+    )
+    receipt = VerificationMergeExecutor(
+        restarted, outbox, repository, Credentials()
+    ).recover(run)
+
+    assert receipt.outcome == "merged"
+    assert outbox.state == "succeeded"
+    assert repository.calls.count("merge") == merge_calls_before
+    assert repository.calls.count("readback") == readback_calls_before
     assert original_outbox.state == "missing"
 
 
