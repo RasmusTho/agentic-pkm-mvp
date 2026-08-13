@@ -39,10 +39,13 @@ def test_per_channel_pin_files_present() -> None:
             if line.strip() and not line.strip().startswith("#")
         ]
 
-        assert len(lines) == 1
-        key, value = lines[0].split("=", 1)
-        assert key == "APP_IMAGE_TAG"
-        assert re.fullmatch(r"[0-9a-f]{40}", value)
+        values = dict(line.split("=", 1) for line in lines)
+        assert set(values) == {
+            "APP_IMAGE_TAG",
+            "MVR03_PRINCIPAL_LOOPBACK_LISTENER",
+        }
+        assert re.fullmatch(r"[0-9a-f]{40}", values["APP_IMAGE_TAG"])
+        assert values["MVR03_PRINCIPAL_LOOPBACK_LISTENER"] == "0"
 
 
 def test_compose_image_uses_pinned_tag_and_mount_is_flagged() -> None:
@@ -62,7 +65,8 @@ def test_compose_image_uses_pinned_tag_and_mount_is_flagged() -> None:
     assert "COMPOSE_FILE=\"$(COMPOSE_DEV_FILES)\"" in makefile
     assert "-f $(APP_CODE_BIND_COMPOSE)" in makefile
     assert 'APP_CODE_BIND_MOUNT:-1' in start_full_system
-    assert 'load_env_defaults_file "config/deploy/${_pkm_deploy_pin_channel}.env"' in start_full_system
+    assert '_pkm_deploy_pin_file="config/deploy/${_pkm_deploy_pin_channel}.env"' in start_full_system
+    assert 'load_env_defaults_file "${_pkm_deploy_pin_file}"' in start_full_system
     assert 'compose_up_build_args=("--build")' in start_full_system
     assert "compose_up_build_args=()" in start_full_system
     assert 'app_code_bind_overlay=":docker-compose.app-bind.yml"' in start_full_system
