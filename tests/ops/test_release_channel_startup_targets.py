@@ -284,6 +284,31 @@ def test_every_supported_prod_forward_producer_routes_through_archive_gate() -> 
     assert gate_index < cold_boot.index("docker compose down -v")
 
 
+def test_prod_launcher_fixture_census_declares_archive_gate_state() -> None:
+    """Every fake-host prod launcher either proves ready or tests refusal."""
+    version_fixture = (
+        REPO_ROOT / "tests/runtime/test_start_full_system_version_marker.py"
+    ).read_text(encoding="utf-8")
+    health_fixture = (
+        REPO_ROOT / "tests/ops/test_start_full_runtime_health.py"
+    ).read_text(encoding="utf-8")
+    release_fixture = Path(__file__).read_text(encoding="utf-8")
+    companion_fixture = (
+        REPO_ROOT / "tests/scripts/test_companion_ui_startup.py"
+    ).read_text(encoding="utf-8")
+
+    assert version_fixture.count(
+        "archive_marker = configure_ready_archive_gate(env, tmp_path)"
+    ) == 1
+    assert health_fixture.count(
+        "archive_marker = configure_ready_archive_gate(env, tmp_path)"
+    ) == 2
+    assert "test_direct_prod_entrypoints_refuse_before_host_mutation" in release_fixture
+    assert 'exit 78' in release_fixture
+    assert "test_prod_runtime_refuses_archive_before_warm_skip" in companion_fixture
+    assert "exit 78" in companion_fixture
+
+
 @pytest.mark.parametrize(
     ("preflight_rc", "starts_runtime"),
     [

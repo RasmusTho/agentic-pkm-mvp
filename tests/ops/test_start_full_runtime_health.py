@@ -8,6 +8,10 @@ import sys
 import textwrap
 from pathlib import Path
 
+from tests.helpers.runtime_archive_gate import (
+    assert_archive_gate_preceded_host_mutation,
+    configure_ready_archive_gate,
+)
 from tests.helpers.runtime_start_harness import run_runtime_start
 
 
@@ -390,6 +394,7 @@ def test_prod_start_full_rejects_deferred_index_rebuild(tmp_path: Path) -> None:
     env["COMPOSE_FILE"] = "docker-compose.yaml:docker-compose.prod.yml"
     env["COMPOSE_PROJECT_NAME"] = "pkm-prod"
     env["PKM_ENVIRONMENT"] = "prod"
+    archive_marker = configure_ready_archive_gate(env, tmp_path)
 
     result = run_runtime_start(
         ["bash", "scripts/start_full_system.sh"],
@@ -402,6 +407,10 @@ def test_prod_start_full_rejects_deferred_index_rebuild(tmp_path: Path) -> None:
     assert result.returncode == 1
     assert "required health ok=true not met" in result.stdout
     assert "runtime verified: true" not in result.stdout
+    assert_archive_gate_preceded_host_mutation(
+        archive_marker,
+        Path(env["STARTUP_HARNESS_PROGRESS_PATH"]),
+    )
 
 
 def test_runtime_verify_rejects_hard_health_failures(tmp_path: Path) -> None:
@@ -439,6 +448,7 @@ def test_launcher_tests_do_not_write_repo_runtime_env(tmp_path: Path) -> None:
     env["COMPOSE_FILE"] = "docker-compose.yaml:docker-compose.prod.yml"
     env["COMPOSE_PROJECT_NAME"] = "pkm-prod"
     env["PKM_ENVIRONMENT"] = "prod"
+    archive_marker = configure_ready_archive_gate(env, tmp_path)
 
     result = run_runtime_start(
         ["bash", "scripts/start_full_system.sh"],
@@ -456,6 +466,10 @@ def test_launcher_tests_do_not_write_repo_runtime_env(tmp_path: Path) -> None:
     assert scoped_runtime_env.exists(), result.stderr + result.stdout
     scoped_content = scoped_runtime_env.read_text(encoding="utf-8")
     assert f"VAULT_HOST_ROOT={tmp_path / 'vault'}" in scoped_content
+    assert_archive_gate_preceded_host_mutation(
+        archive_marker,
+        Path(env["STARTUP_HARNESS_PROGRESS_PATH"]),
+    )
 
     # The repository's own operator state stayed byte-identical.
     assert _read_optional_bytes(repo_runtime_env) == before
