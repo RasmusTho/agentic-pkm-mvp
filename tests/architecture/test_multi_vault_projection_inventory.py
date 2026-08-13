@@ -828,7 +828,7 @@ def test_binding_cutover_worklist_is_derived_from_the_manifest() -> None:
 
 
 def test_orphaned_relation_artifacts_are_removed_or_classified() -> None:
-    """`relations_init.sql` is gone; `relation_index.py` is classified instead.
+    """Both incompatible legacy `relations` schema seams are retired.
 
     Two artifacts of the class MVR-05A0/05A1 retired, handled differently
     because the evidence differs:
@@ -837,14 +837,11 @@ def test_orphaned_relation_artifacts_are_removed_or_classified() -> None:
       a primary-key-less ``relations`` shape that disagreed with its Alembic
       owner. Unreachability is provable — nothing names the file — so it is
       removed, and this test is the proof it cannot come back unnoticed.
-        * ``app/store/relation_index.py`` is *not* removable on the same evidence.
-      ``app/objects/__init__.py`` re-exports it as a compatibility shim (an
-      allowlisted entry in
-      ``tests/architecture/test_deprecated_store_callers.py``), so it is
-      reachable from production. Its ``link()`` inserts six columns that do not
-          exist on the Alembic-owned table. MVR-05A3 makes that compatibility
-          seam fail before SQL so it cannot omit the new binding column;
-          MVR-05A4 (#4578) still owns replacing or deleting it.
+    * ``app/store/relation_index.py`` was reachable through the public
+      ``app.objects`` contract but its ``link()`` statement targeted the wrong
+      schema. MVR-05A4 moves only its non-writing contract types to
+      ``app.objects.relation_types`` and deletes the SQL seam, without creating
+      a replacement writer for the Alembic-owned table.
     """
     assert not RELATIONS_INIT_SQL.exists(), (
         "app/db/sql/relations_init.sql is back. It declared `relations` without a "

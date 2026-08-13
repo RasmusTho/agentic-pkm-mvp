@@ -99,7 +99,6 @@ ALLOW_FILES = (
     # app/jobs/episodes_projection.py / decisions_projection.py, rather than a separate
     # module under the deprecated app.store package (ADR-0013). Bounded conn_rw use.
     'app/standing_questions/projection.py',
-    'app/store/relation_index.py',
     'app/memory_kv/store.py',
     'app/agent/repository.py',
     # #2989: /search now reads the canonical retrieval capability
