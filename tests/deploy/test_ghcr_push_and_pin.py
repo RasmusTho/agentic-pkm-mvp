@@ -39,7 +39,10 @@ def test_per_channel_pin_files_present() -> None:
             if line.strip() and not line.strip().startswith("#")
         ]
 
-        values = dict(line.split("=", 1) for line in lines)
+        assert len(lines) == 2
+        pairs = [line.split("=", 1) for line in lines]
+        assert len({key for key, _ in pairs}) == len(pairs)
+        values = dict(pairs)
         assert set(values) == {
             "APP_IMAGE_TAG",
             "MVR03_PRINCIPAL_LOOPBACK_LISTENER",
