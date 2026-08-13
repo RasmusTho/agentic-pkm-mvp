@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+from app.builderops import devui_exact_reuse_provenance as provenance
 from app.builderops.devui_exact_reuse_provenance import (
     DECLARATION_PATH,
     ExactReuseProvenanceError,
@@ -49,7 +50,7 @@ def _declaration(source_commit: str, source_blob: str, **overrides: object) -> d
 
 
 @pytest.fixture()
-def object_repo(tmp_path: Path) -> tuple[Path, str, str]:
+def object_repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, str, str]:
     repo = tmp_path / "objects"
     repo.mkdir()
     _git(repo, "init")
@@ -60,6 +61,9 @@ def object_repo(tmp_path: Path) -> tuple[Path, str, str]:
     )
     source_commit = _commit(repo, "source")
     source_blob = _git(repo, "rev-parse", f"{source_commit}:source.css")
+    monkeypatch.setattr(provenance, "_PINNED_SOURCE_COMMIT", source_commit)
+    monkeypatch.setattr(provenance, "_PINNED_SOURCE_PATH", "source.css")
+    monkeypatch.setattr(provenance, "_PINNED_SOURCE_BLOB", source_blob)
     declaration = repo / DECLARATION_PATH
     declaration.parent.mkdir(parents=True)
     declaration.write_text(json.dumps(_declaration(source_commit, source_blob)))
@@ -123,6 +127,25 @@ def test_validator_preserves_closed_schema_fallback_transforms_and_state_matrix(
     bad_candidate = _commit(repo, "duplicate state")
     with pytest.raises(ExactReuseProvenanceError):
         validate_exact_reuse(repo, bad_candidate)
+
+
+def test_validator_rejects_wrong_schema_version_and_comment_obfuscated_import(object_repo: tuple[Path, str, str]) -> None:
+    repo, candidate, _ = object_repo
+    declaration = json.loads(_git(repo, "show", f"{candidate}:{DECLARATION_PATH}"))
+    declaration["schema_version"] = "devui.exact-reuse.git-object.v2"
+    (repo / DECLARATION_PATH).write_text(json.dumps(declaration))
+    with pytest.raises(ExactReuseProvenanceError):
+        validate_exact_reuse(repo, _commit(repo, "wrong schema"))
+
+    # The production route is pinned to the real approved source object; a
+    # syntactically disguised arbitrary import must never become an authority.
+    source = repo / "source.css"
+    source.write_text("@import/**/url('https://evil.invalid/font.css');\n")
+    source_commit = _commit(repo, "obfuscated source")
+    source_blob = _git(repo, "rev-parse", f"{source_commit}:source.css")
+    (repo / DECLARATION_PATH).write_text(json.dumps(_declaration(source_commit, source_blob)))
+    with pytest.raises(ExactReuseProvenanceError):
+        validate_exact_reuse(repo, _commit(repo, "obfuscated candidate"))
 
 
 def test_review_input_requires_committed_candidate_sha_and_declaration_blob_receipt(object_repo: tuple[Path, str, str]) -> None:

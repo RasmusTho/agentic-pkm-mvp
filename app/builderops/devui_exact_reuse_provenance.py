@@ -29,6 +29,10 @@ _PRIMITIVES = {
 _TRANSFORMS = ("drop_remote_font_imports", "use_declared_local_font_fallback")
 _STATES = ("normal", "empty", "loading", "degraded", "error", "narrow", "200%", "keyboard", "screen-reader", "print", "javascript-off")
 _FALLBACK = "system-ui, sans-serif"
+_SCHEMA_VERSION = "devui.exact-reuse.git-object.v1"
+_PINNED_SOURCE_COMMIT = "f7237a133f239cb710c32ac3d94c7c4fb495a481"
+_PINNED_SOURCE_PATH = "companion-ui/companion-app/colors_and_type.css"
+_PINNED_SOURCE_BLOB = "17fe326b415aee53791fd8ddaf43f7312b199bb7"
 _HEX40 = re.compile(r"^[0-9a-f]{40}$")
 _HEX64 = re.compile(r"^[0-9a-f]{64}$")
 
@@ -82,6 +86,8 @@ def _declaration(repo: Path, candidate: str) -> tuple[str, dict[str, object]]:
         raise ExactReuseProvenanceError("candidate declaration is not valid JSON") from exc
     if not isinstance(value, dict) or set(value) != _KEYS:
         raise ExactReuseProvenanceError("candidate declaration schema is closed")
+    if value["schema_version"] != _SCHEMA_VERSION:
+        raise ExactReuseProvenanceError("candidate declaration schema version is invalid")
     return oid, value
 
 
@@ -94,6 +100,8 @@ def validate_exact_reuse(repo_root: Path, candidate_sha: str) -> ExactReuseRecei
     commit, path, claimed_blob = source["commit"], source["path"], source["blob_oid"]
     if not all(isinstance(value, str) for value in (commit, path, claimed_blob)) or not _HEX40.fullmatch(commit) or not _HEX40.fullmatch(claimed_blob):
         raise ExactReuseProvenanceError("source identity is invalid")
+    if (commit, path, claimed_blob) != (_PINNED_SOURCE_COMMIT, _PINNED_SOURCE_PATH, _PINNED_SOURCE_BLOB):
+        raise ExactReuseProvenanceError("source identity is not the approved immutable source object")
     if subprocess.run(("git", "-C", str(repo_root), "merge-base", "--is-ancestor", commit, candidate)).returncode:
         raise ExactReuseProvenanceError("source commit is not reachable from candidate")
     source_oid, source_bytes = _regular_blob(repo_root, commit, path)
