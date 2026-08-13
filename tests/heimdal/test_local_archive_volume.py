@@ -13,6 +13,7 @@ import os
 from dataclasses import replace
 from pathlib import Path
 import plistlib
+import sys
 import threading
 
 import pytest
@@ -900,7 +901,9 @@ def test_duplicate_image_match_and_symlink_mountpoint_fail_closed(tmp_path: Path
         volume.require_archive_volume_ready(metadata, runner=FakeRunner(metadata))
 
 
-def test_command_adapter_is_allowlisted_bounded_and_redacted(tmp_path: Path) -> None:
+def test_command_adapter_is_allowlisted_bounded_and_redacted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     metadata = _metadata(tmp_path)
     for forbidden in (
         (volume.DISKUTIL, "eraseDisk", _DEVICE),
@@ -946,6 +949,10 @@ def test_command_adapter_is_allowlisted_bounded_and_redacted(tmp_path: Path) -> 
         captured.update(kwargs)
         return volume.subprocess.CompletedProcess(argv, 0, _plist({}), b"")
 
+    # This adapter assertion injects a harmless executor and never forks. Keep it
+    # independent of unrelated background threads started elsewhere in the suite;
+    # the real subprocess contract is exercised in a fresh one-shot process below.
+    monkeypatch.setattr(volume.threading, "active_count", lambda: 1)
     parent_descriptor = os.open(metadata.bundle_path.parent, os.O_RDONLY)
     try:
         with pytest.raises(volume.ArchiveVolumeRefusedError):
@@ -979,24 +986,43 @@ def test_descriptor_child_executes_in_held_parent_after_path_swap(tmp_path: Path
     parent = tmp_path / "external-parent"
     parent.mkdir()
     displaced = tmp_path / "displaced-external-parent"
-    descriptor = os.open(parent, os.O_RDONLY)
-    try:
-        before = os.fstat(descriptor)
-        parent.rename(displaced)
-        parent.mkdir()
-        completed = volume._run_closed_child(
-            ("/usr/bin/touch", "descriptor-child-marker"),
-            stdin=None,
-            timeout_seconds=5.0,
-            executor=volume.subprocess.run,
-            cwd_fd=descriptor,
-        )
-        after = os.fstat(descriptor)
-    finally:
-        os.close(descriptor)
+    proof = """
+import os
+import sys
+from pathlib import Path
+
+from app.ops import heimdal_cold_volume as volume
+
+parent = Path(sys.argv[1])
+displaced = Path(sys.argv[2])
+descriptor = os.open(parent, os.O_RDONLY)
+try:
+    before = os.fstat(descriptor)
+    parent.rename(displaced)
+    parent.mkdir()
+    completed = volume._run_closed_child(
+        ("/usr/bin/touch", "descriptor-child-marker"),
+        stdin=None,
+        timeout_seconds=5.0,
+        executor=volume.subprocess.run,
+        cwd_fd=descriptor,
+    )
+    after = os.fstat(descriptor)
+finally:
+    os.close(descriptor)
+
+if completed.returncode != 0 or (before.st_dev, before.st_ino) != (after.st_dev, after.st_ino):
+    raise SystemExit(1)
+"""
+    completed = volume.subprocess.run(
+        [sys.executable, "-c", proof, str(parent), str(displaced)],
+        stdout=volume.subprocess.PIPE,
+        stderr=volume.subprocess.PIPE,
+        check=False,
+        timeout=10.0,
+    )
 
     assert completed.returncode == 0
-    assert (before.st_dev, before.st_ino) == (after.st_dev, after.st_ino)
     assert (displaced / "descriptor-child-marker").is_file()
     assert not (parent / "descriptor-child-marker").exists()
 

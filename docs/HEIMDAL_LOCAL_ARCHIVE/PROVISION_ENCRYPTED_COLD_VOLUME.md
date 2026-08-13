@@ -85,7 +85,7 @@ Production startup and deployment share `scripts/lib/heimdal_cold_volume_preflig
 effective-channel classifier treats a normalized prod channel, the prod Compose project, or an
 explicit prod Compose overlay as production. That gate
 only validates an already mounted archive and runs before generic startup or deploy mutation. It
-never creates or attaches an image. The direct full-system prod launcher, Midgård Companion UI
+never creates or attaches an image. The direct full-system prod launcher, the Companion UI
 (including its warm-start path), `cold_boot` before host-state preparation or Compose teardown,
 `make prod-up`, the prod wrapper, and the deploy action all invoke
 the same gate. Rollback remains reachable when the archive is unavailable so the previous-good
