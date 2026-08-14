@@ -24,6 +24,7 @@ from datetime import datetime, timezone
 import pytest
 from jsonschema.exceptions import ValidationError
 
+from app.instance.binding_ids import COMPATIBILITY_BINDING_ID
 from tests.invariants._helpers import assert_validates, load_schema
 
 from mimer_runtime import capture, corpus, dri
@@ -219,14 +220,17 @@ def test_observation_episode_binding_survives__ere05_end_to_end(
                 self._result = (BINDING_TABLE,)
             elif stripped.startswith("SELECT payload FROM store_"):
                 table = "store_objects" if "store_objects" in stripped else "store_vector_index"
-                row = store_rows.get((table, params[0]))
+                binding_id, obj_id = params
+                assert binding_id == COMPATIBILITY_BINDING_ID
+                row = store_rows.get((table, obj_id))
                 self._result = (json.dumps(row),) if row is not None else None
             elif stripped.startswith("UPDATE store_"):
                 # Finding 3: targeted jsonb_set on the episode_ref key only, never a full-column
                 # overwrite (params carry the episode_ref value, not a whole payload).
                 table = "store_objects" if "store_objects" in stripped else "store_vector_index"
                 assert "jsonb_set" in stripped and "'{episode_ref}'" in stripped
-                episode_ref_json, obj_id = params
+                episode_ref_json, binding_id, obj_id = params
+                assert binding_id == COMPATIBILITY_BINDING_ID
                 existing = store_rows.get((table, obj_id))
                 if existing is not None:
                     existing["episode_ref"] = json.loads(episode_ref_json)

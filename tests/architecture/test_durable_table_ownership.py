@@ -205,11 +205,20 @@ STORE_TABLES = frozenset(
     }
 )
 
+# MVR-05A3's test-only producer also reproduces the minimum child binding/FK
+# mechanism. `sets` only supports the deliberately unchanged fresh
+# membership.set_id FK; its key remains outside #4577.
+MVR05A3_CHILD_FIXTURE_TABLES = frozenset(
+    {"chunks", "embeddings", "relations", "sets", "membership", "decisions", "audit"}
+)
+AUTOCREATE_TABLES = STORE_TABLES | MVR05A3_CHILD_FIXTURE_TABLES
+
 
 class _StoreRecordingCursor:
     def __init__(self, conn: "_StoreRecordingConn") -> None:
         self._conn = conn
         self._last_params: tuple = ()
+        self._last_statement = ""
 
     def __enter__(self) -> "_StoreRecordingCursor":
         return self
@@ -220,6 +229,7 @@ class _StoreRecordingCursor:
     def execute(self, statement: str, params: tuple = (), *args, **kwargs) -> None:
         self._conn.executed.append(statement)
         self._last_params = tuple(params or ())
+        self._last_statement = statement
 
     def fetchone(self):
         # The `to_regclass` existence probe answers **for the table it was
@@ -233,6 +243,26 @@ class _StoreRecordingCursor:
         return {"present": probed in self._conn.tables_present, "oid": 1}
 
     def fetchall(self):
+        if "AS pk_columns" in self._last_statement:
+            return [
+                {
+                    "table_name": table,
+                    "pk_columns": pk,
+                    "has_binding": True,
+                }
+                for table, pk in {
+                    "store_objects": ["vault_binding_id", "object_id"],
+                    "store_vector_index": ["vault_binding_id", "object_id"],
+                    "store_relations": ["vault_binding_id", "src_id", "dst_id", "rel"],
+                    "store_relation_memberships": [
+                        "vault_binding_id",
+                        "src_id",
+                        "rel",
+                        "value",
+                    ],
+                    "vector_index_meta": ["vault_binding_id", "id"],
+                }.items()
+            ]
         # `assert_store_schema_with_connection`'s identity-column census.
         return [{"column_name": column} for column in ("dim", "model", "provider", "normalize")]
 
@@ -329,11 +359,13 @@ def test_every_autocreate_group_only_touches_the_table_it_probes() -> None:
     """
     from app.stores.pg import _MIGRATION_OWNED_AUTOCREATE_SQL
 
-    assert {table for table, _ in _MIGRATION_OWNED_AUTOCREATE_SQL} == set(STORE_TABLES)
+    assert {table for table, _ in _MIGRATION_OWNED_AUTOCREATE_SQL} == set(
+        AUTOCREATE_TABLES
+    )
     for table, statements in _MIGRATION_OWNED_AUTOCREATE_SQL:
         for statement in statements:
             targets = set(re.findall(r"(?i)\b(?:table|index|on)\s+(?:if\s+not\s+exists\s+)?"
-                                     r"(?:public\.)?(\w+)", statement)) & set(STORE_TABLES)
+                                     r"(?:public\.)?(\w+)", statement)) & set(AUTOCREATE_TABLES)
             assert targets <= {table}, (
                 f"the {table!r} autocreate group issues {statement.split()[0:4]} against "
                 f"{sorted(targets - {table})}. A group runs when *its* table is absent, so a "
@@ -349,7 +381,8 @@ def test_the_store_seam_never_reshapes_a_table_that_already_exists() -> None:
     * with no `STORE_SCHEMA_AUTOCREATE` opt-in, production issues **no schema
       statement at all** — only the read-only assertions;
     * with the opt-in against an empty database, it creates the five store
-      tables, and may `ALTER` the one it has just created;
+      tables plus MVR-05A3's minimum child-FK fixture shape, and may `ALTER`
+      only a table it has just created;
     * with the opt-in against a database that already holds them, it issues
       **zero** schema statements.
 
@@ -369,7 +402,7 @@ def test_the_store_seam_never_reshapes_a_table_that_already_exists() -> None:
     # *defaults the opt-in on* — `os.getenv("STORE_SCHEMA_AUTOCREATE", "1") != "0"`,
     # autocreate enabled in production — still looks clean: the existence probe
     # skips every group, so nothing is issued. On an empty database it creates
-    # all five tables, which is the behaviour that distinguishes the two.
+    # the complete fixture group, which is the behavior that distinguishes it.
     for tables_present in (STORE_TABLES, frozenset()):
         production = _schema_statements(
             _statements_executed_by_ensure_tables(autocreate=False, tables_present=tables_present)
@@ -390,12 +423,14 @@ def test_the_store_seam_never_reshapes_a_table_that_already_exists() -> None:
         for match in [re.match(r"(?i)^CREATE TABLE IF NOT EXISTS (\w+)", statement)]
         if match
     }
-    assert created == set(STORE_TABLES), (
+    assert created == set(AUTOCREATE_TABLES), (
         f"the fixture path created {sorted(created)} on an empty database"
     )
 
     existing = _schema_statements(
-        _statements_executed_by_ensure_tables(autocreate=True, tables_present=STORE_TABLES)
+        _statements_executed_by_ensure_tables(
+            autocreate=True, tables_present=AUTOCREATE_TABLES
+        )
     )
     assert existing == [], (
         f"_ensure_tables issued {existing!r} against tables that already exist. The "
@@ -579,8 +614,8 @@ def test_the_attached_object_ddl_debt_is_exactly_what_is_recorded() -> None:
     MVR-05A2 widened this scan's vocabulary past table-level DDL, because an
     index or trigger dropped and recreated against a migration-owned table is
     the same drop-and-re-add mechanism MVR-05A1 (#4560) removed from
-    `objects_pkey`. Forty-five such statements across fourteen modules already
-    run without an existence probe, including six
+    `objects_pkey`. Forty-one such statements across thirteen modules already
+    run without an existence probe, including five
     `DROP TRIGGER` / `CREATE TRIGGER` pairs —
     `app/heimdal/raw_read_gate.py`'s own docstring records that migration
     `f1c7e2a9b4d6` installs an identical trigger, so a migration owns the object
@@ -776,6 +811,31 @@ DURABLE_OWNERSHIP_PG_TARGETS = (
     "tests/instance/test_file_state_binding_key.py",
     "tests/services/test_vault_sync_binding_scope.py",
     "tests/integration/test_single_vault_compatibility.py",
+    # MVR-05A3 (#4577): composite parent/children, projection isolation,
+    # reset scope, and audited fixture parity are one PostgreSQL mechanism.
+    "tests/migrations/test_store_schema_parity.py",
+    "tests/migrations/test_decisions_fk_set_null.py",
+    "tests/integration/test_decisions_rebuild_from_log_only.py",
+    "tests/integration/test_multi_vault_projection_isolation.py",
+    "tests/integration/test_vault_sync_atomicity.py",
+    "tests/ingest/test_vault_root_ingest_pg.py",
+    "tests/invariants/test_retrieval_spine_invariants.py",
+    "tests/jobs/test_decisions_export.py",
+    "tests/jobs/test_decisions_projection_rebuild.py",
+    "tests/cli/test_index_doctor_mixed.py",
+    "tests/cli/test_index_rebuild_cli.py",
+    "tests/cli/test_index_reconcile.py",
+    "tests/index/test_identity_migration.py",
+    "tests/index/test_provenance_stamp.py",
+    "tests/indexer/test_mixed_identity_detection.py",
+    "tests/stores/test_decisions_fk_semantics.py",
+    "tests/stores/test_ensure_tables_assert_only.py",
+    "tests/stores/test_multi_vault_store_reset_scope.py",
+    "tests/stores/test_pg_truncate_reset.py",
+    "tests/stores/test_pg_vector_index.py",
+    "tests/stores/test_store_contract_pg.py",
+    "tests/stores/test_vector_generation_identity.py",
+    "tests/services/test_audit_writer.py",
 )
 
 
@@ -832,6 +892,30 @@ def test_the_pr_path_pg_lane_is_triggered_by_the_sources_it_guards() -> None:
         "app/db/db.py",
         "app/memory_kv/store.py",
         "app/services/vault_sync.py",
+        "app/alembic/versions/e6c4a2b8d1f3_mvr05a3_store_object_binding_keys.py",
+        "app/stores/pg.py",
+        "app/stores/__init__.py",
+        "app/stores/base.py",
+        "app/objects/__init__.py",
+        "app/objects/identity.py",
+        "app/db/decisions_schema.py",
+        "app/episodes/assignment.py",
+        "app/ingest/vault_alpha.py",
+        "app/jobs/backfill.py",
+        "app/jobs/decisions_projection.py",
+        "app/observability/status_service.py",
+        "app/instance/binding_ids.py",
+        "app/knowledge_acquisition/extraction_persistence.py",
+        "app/knowledge_acquisition/raw_record.py",
+        "app/services/audit.py",
+        "app/services/decisions.py",
+        "app/store/membership_store.py",
+        "app/store/relation_index.py",
+        "app/stores/postgres.py",
+        "tests/architecture/durable_table_classification.py",
+        "tests/architecture/test_durable_table_ownership.py",
+        "tests/architecture/test_multi_vault_projection_inventory.py",
+        "tests/architecture/durable_table_classification.json",
     )
     missing = [
         source

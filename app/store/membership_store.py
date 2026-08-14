@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Optional
 
-from app.db.db import conn_rw
+from app.db.db import COMPATIBILITY_BINDING_ID, conn_rw
 
 
 def save_membership(object_id: str, set_id: str, *, trace_id: Optional[str] = None) -> None:
@@ -16,11 +16,18 @@ def save_membership(object_id: str, set_id: str, *, trace_id: Optional[str] = No
             with conn.cursor() as cur:
                 cur.execute(
                     """
-                    INSERT INTO membership (object_id, set_id, created_at)
-                    VALUES (%s, %s, %s)
+                    INSERT INTO membership (
+                        vault_binding_id, object_id, set_id, created_at
+                    )
+                    VALUES (%s, %s, %s, %s)
                     ON CONFLICT DO NOTHING
                     """,
-                    (object_id, set_id, datetime.now(timezone.utc)),
+                    (
+                        COMPATIBILITY_BINDING_ID,
+                        object_id,
+                        set_id,
+                        datetime.now(timezone.utc),
+                    ),
                 )
     except Exception:
         # offline/pytest path with no DB

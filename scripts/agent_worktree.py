@@ -149,24 +149,48 @@ def _worktree_generation(cwd: Path, worktree: Path, *, create: bool) -> str:
     if not create:
         raise WorktreeLifecycleError("worktree generation marker is missing")
 
-    generation = uuid.uuid4().hex
+    # Creation must stay outside the shared lifecycle-registry lock, but it
+    # still needs a per-checkout serialization boundary. Otherwise concurrent
+    # fresh registrations or legacy migrations can each create a generation,
+    # and the losing registry writer can replace the marker after the winner
+    # commits, leaving the durable registry immediately inconsistent with the
+    # live checkout.
     marker.parent.mkdir(parents=True, exist_ok=True)
-    descriptor, temporary_name = tempfile.mkstemp(
-        dir=marker.parent,
-        prefix=f".{marker.name}.",
-    )
-    temporary = Path(temporary_name)
-    try:
-        with os.fdopen(descriptor, "w", encoding="utf-8", closefd=True) as handle:
-            os.fchmod(handle.fileno(), 0o600)
-            handle.write(f"{generation}\n")
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(temporary, marker)
-        _fsync_directory(marker.parent)
-    finally:
-        temporary.unlink(missing_ok=True)
-    return generation
+    lock_path = marker.with_name(f"{marker.name}.lock")
+    lock_descriptor = os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o600)
+    os.fchmod(lock_descriptor, 0o600)
+    with os.fdopen(lock_descriptor, "a+b", closefd=True) as lock_handle:
+        fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX)
+        try:
+            if marker.exists():
+                generation = marker.read_text(encoding="utf-8").strip()
+                if not _valid_generation(generation):
+                    raise WorktreeLifecycleError(
+                        "worktree generation marker is invalid"
+                    )
+                return generation
+
+            generation = uuid.uuid4().hex
+            descriptor, temporary_name = tempfile.mkstemp(
+                dir=marker.parent,
+                prefix=f".{marker.name}.",
+            )
+            temporary = Path(temporary_name)
+            try:
+                with os.fdopen(
+                    descriptor, "w", encoding="utf-8", closefd=True
+                ) as handle:
+                    os.fchmod(handle.fileno(), 0o600)
+                    handle.write(f"{generation}\n")
+                    handle.flush()
+                    os.fsync(handle.fileno())
+                os.replace(temporary, marker)
+                _fsync_directory(marker.parent)
+            finally:
+                temporary.unlink(missing_ok=True)
+            return generation
+        finally:
+            fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN)
 
 
 @contextmanager
@@ -529,6 +553,53 @@ def load_lifecycle_records(
     return _lifecycle_records(_read_registry(path))
 
 
+def _assert_registration_available(
+    record: dict[str, Any] | None,
+    *,
+    owner: str,
+    now: float,
+) -> None:
+    expiry = record.get("expires_at") if record is not None else None
+    active_for_other_owner = (
+        record is not None
+        and record.get("owner") != owner
+        and record.get("status") == "active"
+        and (
+            not isinstance(expiry, (int, float))
+            or isinstance(expiry, bool)
+            or not math.isfinite(expiry)
+            or expiry > now
+        )
+    )
+    if active_for_other_owner:
+        raise WorktreeLifecycleError("worktree has an active lifecycle owner")
+
+
+def _lifecycle_update_snapshot(
+    registry_path: Path,
+    *,
+    worktree: Path,
+    owner: str,
+    statuses: set[str],
+    error: str,
+) -> tuple[Path, dict[str, Any]]:
+    """Capture target authority under a short lock for optimistic revalidation."""
+
+    requested = _canonical(worktree)
+    with _registry_lock(registry_path):
+        payload = _read_registry(registry_path)
+        value = payload["worktrees"].get(str(requested))
+        record = dict(value) if isinstance(value, dict) else None
+        if (
+            record is None
+            or record.get("path") != str(requested)
+            or record.get("owner") != owner
+            or record.get("status") not in statuses
+        ):
+            raise WorktreeLifecycleError(error)
+        return requested, record
+
+
 def register_worktree(
     cwd: Path,
     *,
@@ -542,29 +613,31 @@ def register_worktree(
         raise WorktreeLifecycleError("owner and positive ttl are required")
     timestamp = time.time() if now is None else now
     path = _canonical(registry_path or _default_registry_path(cwd))
+    requested = _canonical(worktree)
+    with _registry_lock(path):
+        initial_payload = _read_registry(path)
+        initial = initial_payload["worktrees"].get(str(requested))
+        initial_record = dict(initial) if isinstance(initial, dict) else None
+        _assert_registration_available(initial_record, owner=owner, now=timestamp)
+
+    # Git subprocesses and generation-marker IO can be arbitrarily slow. Keep
+    # them outside the shared registry lock, then compare the target record to
+    # the snapshot again at the atomic write boundary below.
+    canonical, branch = _worktree_identity(cwd, worktree)
+    if canonical != requested:
+        raise WorktreeLifecycleError("worktree identity changed before lifecycle write")
+    generation = _worktree_generation(cwd, canonical, create=True)
     with _locked_registry(path) as payload:
-        canonical, branch = _worktree_identity(cwd, worktree)
         worktrees = payload["worktrees"]
         existing = worktrees.get(str(canonical))
-        existing_expiry = (
-            existing.get("expires_at") if isinstance(existing, dict) else None
-        )
-        existing_active_for_other_owner = (
-            isinstance(existing, dict)
-            and existing.get("owner") != owner
-            and existing.get("status") == "active"
-            and (
-                not isinstance(existing_expiry, (int, float))
-                or isinstance(existing_expiry, bool)
-                or not math.isfinite(existing_expiry)
-                or existing_expiry > timestamp
+        current_record = dict(existing) if isinstance(existing, dict) else None
+        _assert_registration_available(current_record, owner=owner, now=timestamp)
+        if current_record != initial_record:
+            raise WorktreeLifecycleError(
+                "worktree lifecycle registration changed before commit"
             )
-        )
-        if existing_active_for_other_owner:
-            raise WorktreeLifecycleError("worktree has an active lifecycle owner")
-        generation = _worktree_generation(cwd, canonical, create=True)
         prior_bindings = _carried_prior_bindings(
-            existing, new_branch=branch, timestamp=timestamp
+            current_record, new_branch=branch, timestamp=timestamp
         )
         record = {
             "path": str(canonical),
@@ -595,22 +668,32 @@ def heartbeat_worktree(
         raise WorktreeLifecycleError("positive ttl is required")
     timestamp = time.time() if now is None else now
     path = _canonical(registry_path or _default_registry_path(cwd))
+    requested, snapshot = _lifecycle_update_snapshot(
+        path,
+        worktree=worktree,
+        owner=owner,
+        statuses={"active"},
+        error="active matching lifecycle registration is required",
+    )
+    canonical, branch = _worktree_identity(cwd, worktree)
+    if canonical != requested:
+        raise WorktreeLifecycleError("active matching lifecycle registration is required")
+    recorded_generation = snapshot.get("generation")
+    generation = _worktree_generation(
+        cwd,
+        canonical,
+        create=recorded_generation is None,
+    )
     with _locked_registry(path) as payload:
-        canonical, branch = _worktree_identity(cwd, worktree)
         record = payload["worktrees"].get(str(canonical))
         if (
             not isinstance(record, dict)
+            or record != snapshot
             or record.get("owner") != owner
             or record.get("branch") != branch
             or record.get("status") != "active"
         ):
             raise WorktreeLifecycleError("active matching lifecycle registration is required")
-        recorded_generation = record.get("generation")
-        generation = _worktree_generation(
-            cwd,
-            canonical,
-            create=recorded_generation is None,
-        )
         if recorded_generation is not None and recorded_generation != generation:
             raise WorktreeLifecycleError("active matching lifecycle registration is required")
         record["generation"] = generation
@@ -630,22 +713,32 @@ def _finish_worktree(
 ) -> dict[str, Any]:
     timestamp = time.time() if now is None else now
     path = _canonical(registry_path or _default_registry_path(cwd))
+    requested, snapshot = _lifecycle_update_snapshot(
+        path,
+        worktree=worktree,
+        owner=owner,
+        statuses={"active", "released", "complete"},
+        error="matching lifecycle registration is required",
+    )
+    canonical, branch = _worktree_identity(cwd, worktree)
+    if canonical != requested:
+        raise WorktreeLifecycleError("matching lifecycle registration is required")
+    recorded_generation = snapshot.get("generation")
+    generation = _worktree_generation(
+        cwd,
+        canonical,
+        create=recorded_generation is None,
+    )
     with _locked_registry(path) as payload:
-        canonical, branch = _worktree_identity(cwd, worktree)
         record = payload["worktrees"].get(str(canonical))
         if (
             not isinstance(record, dict)
+            or record != snapshot
             or record.get("owner") != owner
             or record.get("branch") != branch
             or record.get("status") not in {"active", "released", "complete"}
         ):
             raise WorktreeLifecycleError("matching lifecycle registration is required")
-        recorded_generation = record.get("generation")
-        generation = _worktree_generation(
-            cwd,
-            canonical,
-            create=recorded_generation is None,
-        )
         if recorded_generation is not None and recorded_generation != generation:
             raise WorktreeLifecycleError("matching lifecycle registration is required")
         record["generation"] = generation

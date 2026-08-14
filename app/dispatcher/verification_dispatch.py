@@ -28,7 +28,7 @@ TERMINAL_STATES = frozenset({"completed", "failed", "needs_human", "superseded"}
 ACTIVE_STATES = frozenset({"claimed", "running"})
 REPAIR_BUDGET_POLICY_LEGACY = "v1"
 REPAIR_BUDGET_POLICY_MECHANISM = "v2"
-REPAIR_ATTEMPT_LIMITS = {"standard_repair": 2, "escalated_repair": 2}
+REPAIR_ATTEMPT_KINDS = frozenset({"standard_repair", "escalated_repair"})
 REPAIR_FAILURE_DOMAINS = frozenset(
     {
         "review_code_correctness",
@@ -1168,7 +1168,7 @@ def _validated_attempt_identity(
 ) -> tuple[str | None, str | None, str | None]:
     if policy not in {REPAIR_BUDGET_POLICY_LEGACY, REPAIR_BUDGET_POLICY_MECHANISM}:
         raise ValueError("invalid verification repair budget policy")
-    if kind not in {*REPAIR_ATTEMPT_LIMITS, "review"}:
+    if kind not in {*REPAIR_ATTEMPT_KINDS, "review"}:
         return None, None, None
 
     # Runs migrated from v3 retain the original global v1 accounting model.
@@ -1182,7 +1182,7 @@ def _validated_attempt_identity(
     mechanism = receipt.get("mechanism_id") if receipt is not None else None
     identity = (finding, domain, mechanism)
     identity_present = any(value is not None for value in identity)
-    requires_identity = kind in REPAIR_ATTEMPT_LIMITS or (
+    requires_identity = kind in REPAIR_ATTEMPT_KINDS or (
         kind == "review" and outcome == "blocking"
     )
     if policy == REPAIR_BUDGET_POLICY_MECHANISM and requires_identity and not all(
@@ -1230,35 +1230,6 @@ def _attempt_plan(
         policy=policy,
     )
     ordinal = sum(row.get("kind") == kind for row in attempts) + 1
-    if kind not in REPAIR_ATTEMPT_LIMITS:
-        return ordinal, finding, domain, mechanism
-    if policy == REPAIR_BUDGET_POLICY_LEGACY:
-        keyed = [row for row in attempts if row.get("kind") == kind]
-        standard = [
-            row for row in attempts if row.get("kind") == "standard_repair"
-        ]
-    else:
-        keyed = [
-            row
-            for row in attempts
-            if row.get("kind") == kind
-            and row.get("failure_domain") == domain
-            and row.get("mechanism_id") == mechanism
-        ]
-        standard = [
-            row
-            for row in attempts
-            if row.get("kind") == "standard_repair"
-            and row.get("failure_domain") == domain
-            and row.get("mechanism_id") == mechanism
-        ]
-    if len(keyed) >= REPAIR_ATTEMPT_LIMITS[kind]:
-        raise ValueError(f"{kind} budget exhausted")
-    if kind == "escalated_repair" and len(standard) < 2:
-        raise ValueError(
-            "strongest capability is only allowed after two standard attempts "
-            "for the same failure mechanism"
-        )
     return ordinal, finding, domain, mechanism
 
 
@@ -2108,7 +2079,7 @@ class VerificationDispatchLedger:
         lease_id: str,
         idempotency_key: str | None = None,
     ) -> int:
-        allowed = {*REPAIR_ATTEMPT_LIMITS, "review", "verification"}
+        allowed = {*REPAIR_ATTEMPT_KINDS, "review", "verification"}
         if kind not in allowed:
             raise ValueError("invalid verification attempt kind")
         context_hash = hashlib.sha256(_json(dict(context)).encode()).hexdigest()
@@ -2397,7 +2368,7 @@ class VerificationDispatchLedger:
         last_seen: dict[tuple[str, str], int] = {}
         for index, row in enumerate(attempts):
             if (
-                row["kind"] in REPAIR_ATTEMPT_LIMITS
+                row["kind"] in REPAIR_ATTEMPT_KINDS
                 and isinstance(row["failure_domain"], str)
                 and isinstance(row["mechanism_id"], str)
             ):

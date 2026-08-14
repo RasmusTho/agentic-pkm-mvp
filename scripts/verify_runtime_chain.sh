@@ -2,6 +2,9 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+cd "${ROOT}"
+source "${ROOT}/scripts/lib/heimdal_cold_volume_preflight.sh"
+heimdal_cold_volume_preflight_effective "${ROOT}"
 source "${ROOT}/scripts/lib/instance_ownership_host_state.sh"
 prepare_instance_ownership_host_state_dir
 

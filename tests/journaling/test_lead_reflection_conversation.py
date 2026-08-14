@@ -76,8 +76,8 @@ def test_conversation_opens_informed_by_day_context(tmp_path: Path) -> None:
         == "What made that significant?"
     )
     transcript = conversation.session.log_path.read_text(encoding="utf-8")
-    assert "**Owner:** It connected several loose ends." in transcript
-    assert "**Agent:** What made that significant?" in transcript
+    assert "**Owner:**\n> It connected several loose ends." in transcript
+    assert "**Agent:**\n> What made that significant?" in transcript
 
 
 def test_opening_names_degraded_context_honestly(

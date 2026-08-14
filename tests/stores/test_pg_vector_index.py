@@ -22,6 +22,7 @@ import pytest
 
 from app.components.embeddings import EmbeddingIdentity
 from app.db.dsn import resolve_dsn
+from app.instance.binding_ids import COMPATIBILITY_BINDING_ID
 from app.stores import pg as pg_store
 
 pytestmark = pytest.mark.pg
@@ -112,8 +113,9 @@ def test_identity_columns_backfill_from_index_meta(_pg_index):
     with psycopg.connect(_dsn()) as conn:
         with conn.cursor() as cur:
             cur.execute(
-                "UPDATE store_vector_index SET provider = NULL, normalize = NULL WHERE object_id = %s",
-                (oid,),
+                "UPDATE store_vector_index SET provider = NULL, normalize = NULL "
+                "WHERE vault_binding_id = %s AND object_id = %s",
+                (COMPATIBILITY_BINDING_ID, oid),
             )
         conn.commit()
 

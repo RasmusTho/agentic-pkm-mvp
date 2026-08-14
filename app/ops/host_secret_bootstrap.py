@@ -25,7 +25,11 @@ from app.ops.host_secret_contract import HostSecretContract, load_host_secret_co
 
 HOST_SECRET_RUNTIME_ENV_FILE = "HOST_SECRET_RUNTIME_ENV_FILE"
 HOST_SECRET_BOOTSTRAP_FAILURE_REF = "HOST_SECRET_BOOTSTRAP_FAILURE_REF"
+HOST_SECRET_BOOTSTRAP_CHANNEL = "HOST_SECRET_BOOTSTRAP_CHANNEL"
+HOST_SECRET_BOOTSTRAP_CONSUMER = "HOST_SECRET_BOOTSTRAP_CONSUMER"
 _RAW_STORE_KEY_PATTERN = re.compile(r"^[0-9a-fA-F]{64}$")
+_ARCHIVE_PASSPHRASE_MIN_BYTES = 20
+_ARCHIVE_PASSPHRASE_MAX_BYTES = 512
 _CHILD_WAIT_POLL_SECONDS = 0.1
 _CHILD_TERMINATION_GRACE_SECONDS = 5.0
 _CHILD_POST_KILL_REAP_SECONDS = 1.0
@@ -104,7 +108,11 @@ def _security_keychain_lookup(service: str, account: str) -> str:
     # Every kind validated by that grammar must take the exact-bytes path — so
     # `token` joins `api-key` here rather than inheriting the CLI's trimming
     # (#4489).
-    if account.endswith(".api-key") or account.endswith(".token"):
+    if (
+        account.endswith(".api-key")
+        or account.endswith(".token")
+        or account.endswith(".archive-pass")
+    ):
         return _security_framework_keychain_lookup(service, account)
     try:
         result = subprocess.run(
@@ -227,6 +235,17 @@ def _validate_secret(kind: str, value: str) -> bool:
             value == value.strip()
             and 20 <= len(value) <= 512
             and all(char.isprintable() and not char.isspace() for char in value)
+        )
+    if kind == "archive-pass":
+        try:
+            encoded = value.encode("utf-8", errors="strict")
+        except UnicodeError:
+            return False
+        return (
+            value == value.strip()
+            and _ARCHIVE_PASSPHRASE_MIN_BYTES <= len(encoded) <= _ARCHIVE_PASSPHRASE_MAX_BYTES
+            and "\x00" not in value
+            and all(char.isprintable() and char not in {"\r", "\n"} for char in value)
         )
     return False
 
@@ -648,6 +667,8 @@ def run_with_host_secrets(
         with materialized as env_file:
             child_env = _clean_child_environment(selected_contract)
             child_env[HOST_SECRET_RUNTIME_ENV_FILE] = str(env_file)
+            child_env[HOST_SECRET_BOOTSTRAP_CHANNEL] = channel
+            child_env[HOST_SECRET_BOOTSTRAP_CONSUMER] = consumer
             return runner(selected_command, child_env)
     except HostSecretCredentialUnavailableError as exc:
         if not run_on_credential_unavailable:
@@ -665,6 +686,8 @@ def run_with_host_secrets(
         # and still launches without any provider credential binding.
         child_env = _clean_child_environment(selected_contract)
         child_env[HOST_SECRET_BOOTSTRAP_FAILURE_REF] = exc.credential_identity_ref
+        child_env[HOST_SECRET_BOOTSTRAP_CHANNEL] = channel
+        child_env[HOST_SECRET_BOOTSTRAP_CONSUMER] = consumer
         return runner(selected_command, child_env)
 
 
@@ -673,6 +696,8 @@ def _clean_child_environment(contract: HostSecretContract) -> dict[str, str]:
     child_env = dict(os.environ)
     child_env.pop(HOST_SECRET_RUNTIME_ENV_FILE, None)
     child_env.pop(HOST_SECRET_BOOTSTRAP_FAILURE_REF, None)
+    child_env.pop(HOST_SECRET_BOOTSTRAP_CHANNEL, None)
+    child_env.pop(HOST_SECRET_BOOTSTRAP_CONSUMER, None)
     for env_name in contract.child_bindings:
         child_env.pop(env_name, None)
     return child_env

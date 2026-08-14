@@ -29,7 +29,15 @@ class FakeCanonicalStore:
             "created_at": datetime.now(timezone.utc),
         }
 
-    def list_objects(self, kind: str | None = None, *, limit: int = 100):
+    def put_if_absent(
+        self, object_id, *, kind: str, source_ref: str, payload: dict
+    ) -> bool:
+        if self.record is not None:
+            return False
+        self.put(object_id, kind=kind, source_ref=source_ref, payload=payload)
+        return True
+
+    def list_objects(self, kind: str | None = None, *, limit: int | None = 100):
         rows = list(self.rows)
         if kind is not None:
             rows = [row for row in rows if row.get("kind") == kind]
@@ -214,3 +222,30 @@ def test_count_objects_delegates_to_canonical_store(monkeypatch):
     monkeypatch.setattr("app.objects.resolve_object_store_port", lambda: _fake_binding("pg", store))
 
     assert ObjectStore().count_objects() == 1
+
+
+def test_create_object_once_delegates_atomic_winner_to_store_port(monkeypatch):
+    oid = uuid4()
+    store = FakeCanonicalStore()
+    monkeypatch.setattr(
+        "app.objects.resolve_object_store_port", lambda: _fake_binding("pg", store)
+    )
+    first = DomainObject(
+        uuid=str(oid),
+        kind="immutable",
+        payload={"winner": "first"},
+        source_ref="test:first",
+        created_at=datetime.now(timezone.utc),
+    )
+    second = DomainObject(
+        uuid=str(oid),
+        kind="immutable",
+        payload={"winner": "second"},
+        source_ref="test:second",
+        created_at=datetime.now(timezone.utc),
+    )
+
+    assert ObjectStore().create_object_once(first) is True
+    assert ObjectStore().create_object_once(second) is False
+    assert store.record is not None
+    assert store.record["payload"] == {"winner": "first"}

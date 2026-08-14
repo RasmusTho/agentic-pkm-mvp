@@ -42,7 +42,7 @@ import os
 import secrets
 import threading
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
 from urllib.parse import urlencode, urlsplit
@@ -52,6 +52,7 @@ import httpx
 from app.knowledge_acquisition.source_registry import SourceRegistry
 from app.knowledge_acquisition.youtube_account_binding import AccountBinding, AccountBindingStore
 from app.knowledge_acquisition.youtube_token_store import (
+    OAuthWriterAdmission,
     StoredToken,
     TokenStoreKeyMissingError,
     YouTubeTokenStore,
@@ -320,6 +321,9 @@ class DeviceConnection:
 
     handle: DeviceFlowHandle
     reconnect_binding_id: str | None = None
+    _writer_admission: OAuthWriterAdmission | None = field(
+        default=None, repr=False, compare=False
+    )
 
     def public_view(self) -> dict[str, Any]:
         return self.handle.public_view()
@@ -541,7 +545,7 @@ class TokenProvider:
         binding_id: str,
         token_store: YouTubeTokenStore,
         oauth_client: OAuthClient,
-        binding_store: AccountBindingStore | None = None,
+        binding_store: AccountBindingStore,
         source_registry: SourceRegistry | None = None,
         skew_seconds: int = _ACCESS_TOKEN_SKEW_SECONDS,
     ) -> None:
@@ -564,6 +568,11 @@ class TokenProvider:
             return self._refresh(token)
 
     def _read_token(self) -> StoredToken:
+        binding = self._bindings.get(self._binding_id)
+        if binding is None:
+            raise AuthDegradedError(
+                "auth_missing", "no durable account binding for this credential"
+            )
         try:
             token = self._store.get(self._binding_id)
         except TokenStoreKeyMissingError:
@@ -572,6 +581,11 @@ class TokenProvider:
         if token is None:
             self._degrade("auth_missing")
             raise AuthDegradedError("auth_missing", "no token stored for this binding")
+        if token.provider_channel_id != binding.provider_channel_id:
+            self._degrade("auth_missing")
+            raise AuthDegradedError(
+                "auth_missing", "stored credential identity does not match its binding"
+            )
         return token
 
     def _is_fresh(self, token: StoredToken) -> bool:
@@ -606,17 +620,14 @@ class TokenProvider:
 
     def _degrade(self, reason_code: str) -> None:
         """Stamp the reason on the binding + dependent sources; no cursor touched."""
-        if self._bindings is not None:
-            binding = self._bindings.get(self._binding_id)
-            if binding is not None:
-                self._bindings.set_state(self._binding_id, state="degraded", reason_code=reason_code)
+        binding = self._bindings.get(self._binding_id)
+        if binding is not None:
+            self._bindings.set_state(self._binding_id, state="degraded", reason_code=reason_code)
         if self._registry is not None:
             for source in self._registry.list_for_account(self._binding_id):
                 self._registry.record_source_degradation(source.binding_id, reason_code=reason_code)
 
     def _clear_degradation(self) -> None:
-        if self._bindings is None:
-            return
         binding = self._bindings.get(self._binding_id)
         if binding is not None and binding.state != "connected":
             self._bindings.set_state(self._binding_id, state="connected", reason_code=None)
@@ -651,12 +662,37 @@ class YouTubeAccountBinder:
     # -- connect (device flow) ------------------------------------------------
 
     def start_device_connection(self) -> DeviceConnection:
-        return DeviceConnection(handle=self._client.start_device_flow(), reconnect_binding_id=None)
+        return self._start_connection(reconnect_binding_id=None)
 
     def start_reconnect(self, binding_id: str) -> DeviceConnection:
-        if self._bindings.get(binding_id) is None:
-            raise KeyError(f"no such account binding: {binding_id}")
-        return DeviceConnection(handle=self._client.start_device_flow(), reconnect_binding_id=binding_id)
+        return self._start_connection(reconnect_binding_id=binding_id)
+
+    def _start_connection(self, *, reconnect_binding_id: str | None) -> DeviceConnection:
+        admission = self._store.acquire_writer_admission()
+        try:
+            self._reconcile_orphan_credentials()
+            self._bindings.admit_single_account_writer(
+                reconnect_binding_id=reconnect_binding_id
+            )
+            handle = self._client.start_device_flow()
+        except BaseException:
+            admission.release()
+            raise
+        return DeviceConnection(
+            handle=handle,
+            reconnect_binding_id=reconnect_binding_id,
+            _writer_admission=admission,
+        )
+
+    def _reconcile_orphan_credentials(self) -> None:
+        """Delete only ciphertext ids with no durable account-binding ancestor."""
+
+        bound_ids = {
+            binding.account_binding_id for binding in self._bindings.list_all()
+        }
+        for binding_id in self._store.binding_ids():
+            if binding_id not in bound_ids:
+                self._store.delete(binding_id)
 
     def finish_device_connection(self, connection: DeviceConnection) -> dict[str, Any]:
         """Complete one device poll, persist tokens encrypted, bind the account.
@@ -665,8 +701,20 @@ class YouTubeAccountBinder:
         material. Raises :class:`DeviceAuthorizationPending` if the user has not
         approved yet (the caller re-polls after ``interval``).
         """
-        bundle = self._client.poll_device_flow(connection.handle.device_code)
-        return self._bind_from_bundle(bundle, connection.reconnect_binding_id)
+        admission = connection._writer_admission
+        if admission is None or admission.released:
+            raise RuntimeError("device connection has no active OAuth writer admission")
+        try:
+            bundle = self._client.poll_device_flow(connection.handle.device_code)
+        except DeviceAuthorizationPending:
+            raise
+        except BaseException:
+            admission.release()
+            raise
+        try:
+            return self._bind_from_bundle(bundle, connection.reconnect_binding_id)
+        finally:
+            admission.release()
 
     def _bind_from_bundle(self, bundle: TokenBundle, reconnect_binding_id: str | None) -> dict[str, Any]:
         if not bundle.refresh_token:
@@ -692,6 +740,10 @@ class YouTubeAccountBinder:
         # leave a connected projection with no credential behind it (#3990).
         self._store.put(binding_id, token)
         if binding is None:
+            # Do not delete the token if this write raises: a transport failure
+            # can be an indeterminate commit. The token remains non-authoritative
+            # without a binding row, and the next admitted start reconciles it
+            # from durable binding truth without risking a committed credential.
             binding = self._bindings.create(
                 provider_channel_id=identity.channel_id,
                 display_label=identity.channel_title,
@@ -751,7 +803,10 @@ class YouTubeAccountBinder:
                     state, reason_code = "degraded", "auth_missing"
                 else:
                     token = self._store.get(binding_id)
-                    if token is None:
+                    if (
+                        token is None
+                        or token.provider_channel_id != binding.provider_channel_id
+                    ):
                         state, reason_code = "degraded", "auth_missing"
             except Exception:  # fail closed without exposing store/decryption detail
                 state, reason_code = "degraded", "auth_key_missing"

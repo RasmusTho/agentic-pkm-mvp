@@ -7,6 +7,7 @@ import pytest
 
 from app.components.embeddings import EmbeddingIdentity
 from app.db.dsn import resolve_dsn
+from app.instance.binding_ids import COMPATIBILITY_BINDING_ID
 from app.stores import reset_store_backends, get_object_store, get_vector_index, get_relation_index
 
 TEST_PG_IDENTITY = EmbeddingIdentity(provider="test", model="pg-test", dim=4)
@@ -147,7 +148,11 @@ def test_pg_vector_index_detects_mixed_dims(monkeypatch):
     url = resolve_dsn()
     with psycopg.connect(url) as conn:
         with conn.cursor() as cur:
-            cur.execute("UPDATE store_vector_index SET dim = %s WHERE object_id = %s", (8, secondary))
+            cur.execute(
+                "UPDATE store_vector_index SET dim = %s "
+                "WHERE vault_binding_id = %s AND object_id = %s",
+                (8, COMPATIBILITY_BINDING_ID, secondary),
+            )
     with pytest.raises(RuntimeError, match="mixed embedding dimensions"):
         idx.search([1, 0, 0, 0], k=1, identity=TEST_PG_IDENTITY)
 

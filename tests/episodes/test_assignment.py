@@ -675,7 +675,8 @@ class _BundleCursor:
             "SELECT payload FROM store_vector_index"
         ):
             table = "store_objects" if "store_objects" in stripped else "store_vector_index"
-            object_id = params[0]
+            binding_id, object_id = params
+            assert binding_id == assignment_module.COMPATIBILITY_BINDING_ID
             row = self._rows.get((table, object_id))
             self._result = (json.dumps(row),) if row is not None else None
             return
@@ -689,7 +690,8 @@ class _BundleCursor:
             # asserting a sibling key survives is meaningful.
             assert "jsonb_set" in stripped and "'{episode_ref}'" in stripped, stripped
             assert "SET payload = %s::jsonb" not in stripped, "must not blind-overwrite the column"
-            episode_ref_json, object_id = params
+            episode_ref_json, binding_id, object_id = params
+            assert binding_id == assignment_module.COMPATIBILITY_BINDING_ID
             existing = self._rows.get((table, object_id))
             if existing is not None:
                 existing["episode_ref"] = json.loads(episode_ref_json)
@@ -1038,7 +1040,8 @@ def test_commit_jsonb_set_preserves_concurrent_sibling_key_change(
                 return
             if stripped.startswith("SELECT payload FROM store_"):
                 table = "store_objects" if "store_objects" in stripped else "store_vector_index"
-                obj = params[0]
+                binding_id, obj = params
+                assert binding_id == assignment_module.COMPATIBILITY_BINDING_ID
                 row = rows.get((table, obj))
                 self._result = (json.dumps(row),) if row is not None else None
                 # A concurrent writer lands a DIFFERENT-key change AFTER our read, BEFORE our
@@ -1049,7 +1052,8 @@ def test_commit_jsonb_set_preserves_concurrent_sibling_key_change(
             if stripped.startswith("UPDATE store_"):
                 assert "jsonb_set" in stripped and "'{episode_ref}'" in stripped, stripped
                 table = "store_objects" if "store_objects" in stripped else "store_vector_index"
-                episode_ref_json, obj = params
+                episode_ref_json, binding_id, obj = params
+                assert binding_id == assignment_module.COMPATIBILITY_BINDING_ID
                 existing = rows.get((table, obj))
                 if existing is not None:
                     existing["episode_ref"] = json.loads(episode_ref_json)

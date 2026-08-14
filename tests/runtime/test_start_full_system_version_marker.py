@@ -15,6 +15,10 @@ from tests.helpers.runtime_start_harness import (
     RuntimeStartHarnessTimeout,
     run_runtime_start,
 )
+from tests.helpers.runtime_archive_gate import (
+    assert_archive_gate_preceded_host_mutation,
+    configure_ready_archive_gate,
+)
 from tests.helpers import runtime_start_harness
 
 pytestmark = pytest.mark.not_pg
@@ -203,6 +207,7 @@ exec {sys.executable!s} "$@"
             "STARTUP_HARNESS_PROGRESS_PATH": str(progress_file),
         }
     )
+    archive_marker = configure_ready_archive_gate(env, tmp_path)
 
     proc = run_runtime_start(
         ["bash", "scripts/start_full_system.sh"],
@@ -221,6 +226,7 @@ exec {sys.executable!s} "$@"
     assert captured["VCS_REF"] == expected_sha
     assert captured["BUILT_AT"] != "unknown"
     assert TIMESTAMP_RE.fullmatch(captured["BUILT_AT"])
+    assert_archive_gate_preceded_host_mutation(archive_marker, progress_file)
 
 
 def test_runtime_start_harness_allows_delayed_scheduling_while_progress_continues(

@@ -51,17 +51,26 @@ from app.knowledge_acquisition.candidate_writeback import (
     CandidateAssemblyError,
     CandidateWritebackError,
     CandidateWriteResult,
+    ExtractionFailure,
     assemble_candidate,
     write_candidate_note,
 )
+from app.knowledge_acquisition.extraction_persistence import (
+    ExtractionPersistenceError,
+    persist_normalized_transcript,
+)
+from app.knowledge_acquisition.extraction_registry import (
+    UnknownExtractorError,
+    validate_registered_extractors,
+)
 from app.knowledge_acquisition.normalize import STAGE_NAME as NORMALIZE_STAGE
 from app.knowledge_acquisition.normalize import STAGE_VERSION as NORMALIZE_STAGE_VERSION
-from app.knowledge_acquisition.normalize import NormalizeError, has_usable_transcript, normalize
+from app.knowledge_acquisition.normalize import NormalizeError, normalize
 from app.knowledge_acquisition.replay import CANDIDATE_STAGE, CANDIDATE_STAGE_VERSION
 from app.knowledge_acquisition.stage_events import (
-    ExtractionRunReport,
     emit_stage_completed,
     emit_stage_dead_letter,
+    resolve_extractor_requirements,
     run_extractors,
 )
 from app.vault.manager import VaultContext
@@ -72,6 +81,10 @@ YOUTUBE_SOURCE_KIND = youtube_plugin.SOURCE_KIND
 
 class AcquisitionError(RuntimeError):
     """A new-item acquisition could not complete (item-scoped, loud, traced)."""
+
+
+class TerminalAcquisitionError(AcquisitionError):
+    """A deterministic pipeline/configuration failure that queue retry cannot repair."""
 
 
 class RetryableSourceAcquisitionError(AcquisitionError):
@@ -175,6 +188,8 @@ class AcquisitionReceipt:
     acquisition_method: str
     stages: tuple[AcquireStageReceipt, ...]
     dead_lettered: tuple[str, ...] = ()
+    required_dead_lettered: tuple[str, ...] = ()
+    optional_dead_lettered: tuple[str, ...] = ()
     blocked: bool = False
 
     @property
@@ -184,7 +199,23 @@ class AcquisitionReceipt:
         # ``replay.run_replay``, which folds a blocked candidate write into ``equivalent=False``
         # via ``_candidate_equivalence`` returning ``(False, "none")`` so ``acquire-replay``
         # exits nonzero. A blocked write must never read as success.
-        return not self.dead_lettered and not self.blocked
+        blocking = tuple(
+            dict.fromkeys(
+                (
+                    *self.required_dead_lettered,
+                    *(
+                        item
+                        for item in self.dead_lettered
+                        if item not in self.optional_dead_lettered
+                    ),
+                )
+            )
+        )
+        return not blocking and not self.blocked
+
+    @property
+    def degraded(self) -> bool:
+        return bool(self.optional_dead_lettered) and not self.required_dead_lettered
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -196,6 +227,9 @@ class AcquisitionReceipt:
             "acquisition_method": self.acquisition_method,
             "ok": self.ok,
             "dead_lettered": list(self.dead_lettered),
+            "required_dead_lettered": list(self.required_dead_lettered),
+            "optional_dead_lettered": list(self.optional_dead_lettered),
+            "degraded": self.degraded,
             "blocked": self.blocked,
             "stages": [s.as_dict() for s in self.stages],
         }
@@ -223,6 +257,7 @@ def acquire_youtube(
     *,
     vault_context: VaultContext,
     extractor_ids: Sequence[str] = ("summary",),
+    extractor_requirements: Mapping[str, str] | None = None,
     write_guard: WriteGuard = DEFAULT_WRITE_GUARD,
     trace_id: str | None = None,
     conn: Any = None,
@@ -298,6 +333,35 @@ def acquire_youtube(
         ) from exc
 
     normalized_dict = normalized.as_dict()
+    raw_record_id = str(outcome.object_id)
+    try:
+        resolved_requirements = resolve_extractor_requirements(
+            extractor_ids, extractor_requirements
+        )
+        validate_registered_extractors(list(extractor_ids))
+    except (ValueError, UnknownExtractorError) as exc:
+        raise TerminalAcquisitionError(
+            f"invalid extractor materialization plan: {exc}"
+        ) from exc
+    try:
+        normalized_artifact = persist_normalized_transcript(
+            raw_record_id=raw_record_id,
+            raw_record=raw_record,
+            normalized=normalized,
+        )
+    except ExtractionPersistenceError as exc:
+        emit_stage_dead_letter(
+            stage=NORMALIZE_STAGE,
+            stage_version=NORMALIZE_STAGE_VERSION,
+            content_identity=content_identity,
+            reason="persistence_failed",
+            error=str(exc),
+            trace_id=trace_id,
+            conn=conn,
+        )
+        raise TerminalAcquisitionError(
+            f"normalized artifact persistence failed for content_identity={content_identity!r}"
+        ) from exc
     normalize_event_row = emit_stage_completed(
         stage=normalized.stage,
         stage_version=normalized.stage_version,
@@ -314,12 +378,14 @@ def acquire_youtube(
     )
 
     # --- extracted -------------------------------------------------------------------
-    report = (
-        run_extractors(
-            normalized_dict, extractor_ids=extractor_ids, trace_id=trace_id, conn=conn
-        )
-        if has_usable_transcript(normalized)
-        else ExtractionRunReport(successes=(), outcomes=())
+    report = run_extractors(
+        normalized_dict,
+        extractor_ids=extractor_ids,
+        extractor_requirements=resolved_requirements,
+        raw_record_id=raw_record_id,
+        normalized_artifact_id=normalized_artifact.object_id,
+        trace_id=trace_id,
+        conn=conn,
     )
     for out in report.outcomes:
         if out.status == "ok" and out.result is not None:
@@ -342,16 +408,24 @@ def acquire_youtube(
                 )
             )
 
-    dead_lettered = tuple(o.extractor_id for o in report.dead_lettered)
-    if dead_lettered:
-        # A selected extraction dead-lettered — candidate assembly cannot fulfill its inputs.
-        # The extraction dead-letter above already recorded the failure durably; report the
-        # skip explicitly (never silent, never a partial candidate note).
+    dead_lettered = tuple(outcome.extractor_id for outcome in report.dead_lettered)
+    required_dead_lettered = tuple(
+        outcome.extractor_id for outcome in report.required_dead_lettered
+    )
+    optional_dead_lettered = tuple(
+        outcome.extractor_id for outcome in report.optional_dead_lettered
+    )
+    if required_dead_lettered:
+        # Successful siblings are already durable. Required evidence still blocks candidate
+        # materialization, and the dead-letter is the visible rerun handle.
         stages.append(
             AcquireStageReceipt(
                 stage=CANDIDATE_STAGE,
                 status="skipped_upstream_dead_letter",
-                detail=f"extractor(s) dead-lettered: {', '.join(dead_lettered)}",
+                detail=(
+                    "required extractor(s) dead-lettered: "
+                    + ", ".join(required_dead_lettered)
+                ),
             )
         )
         return AcquisitionReceipt(
@@ -363,13 +437,38 @@ def acquire_youtube(
             acquisition_method=outcome.acquisition_method,
             stages=tuple(stages),
             dead_lettered=dead_lettered,
+            required_dead_lettered=required_dead_lettered,
+            optional_dead_lettered=optional_dead_lettered,
         )
 
     # --- candidate ---------------------------------------------------------------------
     try:
-        candidate = assemble_candidate(raw_record, extractor_ids=tuple(extractor_ids))
+        optional_failures = tuple(
+            ExtractionFailure(
+                extractor_id=outcome.extractor_id,
+                requirement=outcome.materialization_requirement,
+                rerun_handle=outcome.rerun_handle or f"extractor:{outcome.extractor_id}",
+                error=outcome.error or "extraction failed",
+            )
+            for outcome in report.optional_dead_lettered
+        )
+        candidate = assemble_candidate(
+            raw_record,
+            extractor_ids=tuple(extractor_ids),
+            normalized=normalized,
+            extraction_results=report.successes,
+            raw_record_id=raw_record_id,
+            normalized_artifact_id=normalized_artifact.object_id,
+            optional_failures=optional_failures,
+        )
         write_result: CandidateWriteResult = write_candidate_note(
-            candidate, vault_context=vault_context, write_guard=write_guard
+            candidate,
+            vault_context=vault_context,
+            write_guard=write_guard,
+            # An ordinary same-version restart hit has no new proposal. A fresh extractor
+            # version (or other newly executed successful extraction) is an upgrade under D5
+            # and must become a companion when the canonical candidate already exists.
+            proposal_on_existing=any(not result.replayed for result in report.successes),
         )
     except (CandidateAssemblyError, CandidateWritebackError) as exc:
         emit_stage_dead_letter(
@@ -427,6 +526,9 @@ def acquire_youtube(
         is_new_raw=outcome.is_new,
         acquisition_method=outcome.acquisition_method,
         stages=tuple(stages),
+        dead_lettered=dead_lettered,
+        required_dead_lettered=required_dead_lettered,
+        optional_dead_lettered=optional_dead_lettered,
         blocked=candidate_blocked,
     )
 
@@ -454,6 +556,7 @@ def _reload_raw(*, source_kind: str, item_ref: str, content_identity: str) -> di
 __all__ = [
     "YOUTUBE_SOURCE_KIND",
     "AcquisitionError",
+    "TerminalAcquisitionError",
     "RetryableSourceAcquisitionError",
     "DatabaseNotConfiguredError",
     "AcquireStageReceipt",

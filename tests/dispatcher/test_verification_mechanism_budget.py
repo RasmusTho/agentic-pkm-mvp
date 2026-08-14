@@ -111,8 +111,8 @@ def test_repair_event_requires_stable_domain_mechanism_binding(tmp_path) -> None
     assert attempts[0]["finding_id"] == "F1"
 
 
-def test_standard_budget_is_partitioned_by_domain_and_mechanism(tmp_path) -> None:
-    _state, _run, loop = _claimed_loop(tmp_path)
+def test_uncapped_history_remains_partitioned_by_domain_and_mechanism(tmp_path) -> None:
+    state, run, loop = _claimed_loop(tmp_path)
 
     _repair(loop, "F1", "parser", 1)
     _blocking_review(loop, "F1", "parser", 1)
@@ -124,11 +124,13 @@ def test_standard_budget_is_partitioned_by_domain_and_mechanism(tmp_path) -> Non
     _repair(loop, "F4", "parser", 4, domain=STATIC)
     _blocking_review(loop, "F4", "parser", 4, domain=STATIC)
 
-    with pytest.raises(ValueError, match="standard_repair budget exhausted"):
-        _repair(loop, "F5", "parser", 5)
+    assert _repair(loop, "F5", "parser", 5) == 5
+    latest = state.attempts(run.run_id)[-1]
+    assert latest["failure_domain"] == CODE
+    assert latest["mechanism_id"] == "parser"
 
 
-def test_capability_escalation_is_scoped_to_the_exhausted_mechanism(tmp_path) -> None:
+def test_tcd_selected_capability_preserves_mechanism_binding(tmp_path) -> None:
     _state, _run, loop = _claimed_loop(tmp_path)
 
     _repair(loop, "F1", "parser", 1)
@@ -136,12 +138,12 @@ def test_capability_escalation_is_scoped_to_the_exhausted_mechanism(tmp_path) ->
     _repair(loop, "F2", "parser", 2)
     _blocking_review(loop, "F2", "parser", 2)
 
-    with pytest.raises(ValueError, match="same failure mechanism"):
-        _repair(loop, "F3", "formatter", 3, strongest=True)
-    _repair(loop, "F3", "parser", 3, strongest=True)
+    assert _repair(loop, "F3", "formatter", 3, strongest=True) == 1
+    _blocking_review(loop, "F3", "formatter", 3)
+    assert _repair(loop, "F4", "parser", 4, strongest=True) == 2
 
 
-def test_keyed_budget_batch_is_atomic_and_replay_safe(tmp_path) -> None:
+def test_keyed_convergence_batch_is_atomic_and_replay_safe(tmp_path) -> None:
     state, run, loop = _claimed_loop(tmp_path)
     context = {"head_sha": HEAD}
     valid = [
@@ -208,9 +210,9 @@ def test_keyed_budget_batch_is_atomic_and_replay_safe(tmp_path) -> None:
         *valid[:-1],
         {
             "kind": "repair",
-            "finding_id": "F3",
+            "finding_id": "F1",
             "failure_domain": CODE,
-            "mechanism_id": "parser",
+            "mechanism_id": "formatter",
             "session_id": "repair-3",
             "capability": "terra",
             "reasoning_effort": "high",
@@ -219,7 +221,7 @@ def test_keyed_budget_batch_is_atomic_and_replay_safe(tmp_path) -> None:
         },
     ]
 
-    with pytest.raises(ValueError, match="standard_repair budget exhausted"):
+    with pytest.raises(ValueError, match="finding binding"):
         loop.apply_events(invalid, context=context)
     assert state.attempts(run.run_id) == []
 
@@ -229,7 +231,7 @@ def test_keyed_budget_batch_is_atomic_and_replay_safe(tmp_path) -> None:
     assert state.attempts(run.run_id) == before
 
 
-def test_v1_migration_preserves_legacy_budget_and_v2_takeover_is_monotonic(
+def test_v1_migration_preserves_uncapped_history_and_v2_takeover_is_monotonic(
     tmp_path,
 ) -> None:
     db = tmp_path / "dispatcher.sqlite3"
@@ -287,24 +289,23 @@ def test_v1_migration_preserves_legacy_budget_and_v2_takeover_is_monotonic(
         holder="legacy-host",
         lease_id=claimed.lease_id,
     )
-    with pytest.raises(ValueError, match="standard_repair budget exhausted"):
-        migrated.record_attempt(
-            legacy.run_id,
-            "standard_repair",
-            "legacy-3",
-            "terra",
-            "high",
-            {"head_sha": HEAD},
-            "fixed",
-            {
-                "finding_id": "F3",
-                "failure_domain": CODE,
-                "mechanism_id": "third",
-                "head_sha": HEAD,
-            },
-            holder="legacy-host",
-            lease_id=claimed.lease_id,
-        )
+    assert migrated.record_attempt(
+        legacy.run_id,
+        "standard_repair",
+        "legacy-3",
+        "terra",
+        "high",
+        {"head_sha": HEAD},
+        "fixed",
+        {
+            "finding_id": "F3",
+            "failure_domain": CODE,
+            "mechanism_id": "third",
+            "head_sha": HEAD,
+        },
+        holder="legacy-host",
+        lease_id=claimed.lease_id,
+    ) == 3
     migrated.terminal(
         legacy.run_id,
         "failed",
@@ -409,15 +410,14 @@ def test_projection_signals_truncation_and_keeps_most_recent_mechanisms(
     assert mechanisms[0]["escalated_used"] == 0
 
 
-def test_budget_exhaustion_never_mints_human_exception(tmp_path) -> None:
+def test_attempt_count_never_mints_human_exception(tmp_path) -> None:
     state, run, loop = _claimed_loop(tmp_path)
     _repair(loop, "F1", "parser", 1)
     _blocking_review(loop, "F1", "parser", 1)
     _repair(loop, "F2", "parser", 2)
     _blocking_review(loop, "F2", "parser", 2)
 
-    with pytest.raises(ValueError, match="standard_repair budget exhausted"):
-        _repair(loop, "F3", "parser", 3)
+    assert _repair(loop, "F3", "parser", 3) == 3
 
     current = state.get(run.run_id)
     assert current is not None

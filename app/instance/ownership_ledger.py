@@ -184,6 +184,55 @@ class OwnershipLedger:
             ):
                 raise LedgerKeyError("scalar rollback session authentication failed")
 
+    def authenticate_principal_cutover_receipt(
+        self,
+        payload: Mapping[str, object],
+        *,
+        _capability: _StorageMutationCapability | None = None,
+    ) -> dict[str, object]:
+        """Authenticate one attempt-local clean-failure receipt."""
+
+        _require_storage_mutation_capability(_capability)
+        self._assert_existing_artifacts()
+        with self._locked():
+            key = self._load_or_create_key_locked(allow_create=False)
+            self._load_or_create_ledger_locked(key, allow_create=False)
+            encoded = json.dumps(
+                dict(payload), sort_keys=True, separators=(",", ":")
+            ).encode("utf-8")
+            return {
+                "keyId": key.key_id,
+                "keyGeneration": key.generation,
+                "hmacSha256": hmac.new(key.secret, encoded, hashlib.sha256).hexdigest(),
+            }
+
+    def verify_principal_cutover_receipt(
+        self,
+        payload: Mapping[str, object],
+        authentication: Mapping[str, object],
+        *,
+        _capability: _StorageMutationCapability | None = None,
+    ) -> None:
+        """Reject a forged or stale-key principal cutover receipt."""
+
+        _require_storage_mutation_capability(_capability)
+        self._assert_existing_artifacts()
+        with self._locked():
+            key = self._load_or_create_key_locked(allow_create=False)
+            self._load_or_create_ledger_locked(key, allow_create=False)
+            encoded = json.dumps(
+                dict(payload), sort_keys=True, separators=(",", ":")
+            ).encode("utf-8")
+            expected = hmac.new(key.secret, encoded, hashlib.sha256).hexdigest()
+            if (
+                authentication.get("keyId") != key.key_id
+                or authentication.get("keyGeneration") != key.generation
+                or not hmac.compare_digest(
+                    str(authentication.get("hmacSha256") or ""), expected
+                )
+            ):
+                raise LedgerKeyError("principal cutover receipt authentication failed")
+
     def require_scalar_rollback_ready(
         self,
         *,

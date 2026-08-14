@@ -239,8 +239,8 @@ class _FkFallbackCursor:
         return None
 
     def execute(self, statement: str, params: tuple[object, ...]) -> None:
-        # params order: (id, object_id, agent, action, ts, trace_id, details)
-        object_id = params[1]
+        # params order: (id, vault_binding_id, object_id, agent, action, ts, trace_id, details)
+        object_id = params[2]
         self._recorder.append((statement, params))
         if object_id is not None:
             # Simulate the audit.object_id FK violation against `objects`.
@@ -312,16 +312,18 @@ def test_audit_object_fk_violation_falls_back_to_null_object_id(
     assert "INSERT INTO audit" in second_stmt
 
     # First attempt carried the real object_id.
-    assert first_params[1] == orphan_object_id
+    assert first_params[1] == "legacy-compatibility-binding"
+    assert first_params[2] == orphan_object_id
     # Retry wrote NULL object_id.
-    assert second_params[1] is None, (
-        f"Retry must write NULL object_id, got {second_params[1]!r}"
+    assert second_params[1] == "legacy-compatibility-binding"
+    assert second_params[2] is None, (
+        f"Retry must write NULL object_id, got {second_params[2]!r}"
     )
 
     # The original id is preserved in the retry's details payload.
     import json as _json  # noqa: PLC0415
 
-    retry_details = _json.loads(second_params[6])
+    retry_details = _json.loads(second_params[7])
     assert retry_details.get("object_ref") == orphan_object_id, (
         f"Retry details must preserve original id in object_ref; got {retry_details!r}"
     )
@@ -344,14 +346,14 @@ def test_audit_columns_match_migration() -> None:
         / "app"
         / "alembic"
         / "versions"
-        / "202510241200_sot41_amg_core.py"
+        / "e6c4a2b8d1f3_mvr05a3_store_object_binding_keys.py"
     )
     assert migration_path.exists(), f"Migration file not found: {migration_path}"
 
     migration_src = migration_path.read_text(encoding="utf-8")
 
     # Find the start of the CREATE TABLE audit block.
-    start_marker = "CREATE TABLE IF NOT EXISTS audit"
+    start_marker = "CREATE TABLE IF NOT EXISTS public.audit"
     start_idx = migration_src.lower().find(start_marker.lower())
     assert start_idx != -1, "Could not find CREATE TABLE audit block in migration"
 
@@ -384,7 +386,16 @@ def test_audit_columns_match_migration() -> None:
             migration_columns.add(col_name)
 
     # Expected from the migration: id, object_id, agent, action, ts, trace_id, details
-    expected = {"id", "object_id", "agent", "action", "ts", "trace_id", "details"}
+    expected = {
+        "id",
+        "vault_binding_id",
+        "object_id",
+        "agent",
+        "action",
+        "ts",
+        "trace_id",
+        "details",
+    }
     assert migration_columns == expected, (
         f"Migration columns parsed as {migration_columns!r}; expected {expected!r}. "
         "Update this test if the migration schema changes."

@@ -17,7 +17,11 @@ from __future__ import annotations
 
 import pytest
 
-from app.knowledge_acquisition.source_registry import SourceRegistry, reset_memory_source_registry
+from app.knowledge_acquisition.source_registry import (
+    SourceRegistry,
+    SourceRegistryValidationError,
+    reset_memory_source_registry,
+)
 from tests.knowledge_acquisition._source_registry_contract import (
     assert_account_binding_nullability_by_kind,
     assert_account_binding_uuid_contract,
@@ -28,6 +32,7 @@ from tests.knowledge_acquisition._source_registry_contract import (
     assert_provenance_is_strict_portable_json,
     assert_round_trip_and_contract_fields,
     assert_single_enabled_inbox_and_swap,
+    assert_v1_inbox_selection_is_atomic,
     assert_title_rename_preserves_binding,
     assert_watch_later_and_history_refused,
 )
@@ -56,6 +61,10 @@ def test_registry_round_trip_memory_and_contract_fields() -> None:
 
 def test_single_enabled_inbox_enforced_and_swap_atomic() -> None:
     assert_single_enabled_inbox_and_swap(_make_registry)
+
+
+def test_v1_inbox_selection_is_atomic() -> None:
+    assert_v1_inbox_selection_is_atomic(_make_registry)
 
 
 def test_duplicate_binding_refused() -> None:
@@ -92,3 +101,40 @@ def test_provenance_is_strict_portable_json_memory() -> None:
 
 def test_inbox_poll_outcomes_memory() -> None:
     assert_inbox_poll_outcomes(_make_registry)
+
+
+def test_registry_accepts_exact_declared_extractor_materialization_policy() -> None:
+    registry = _make_registry()
+    row = registry.register(
+        collection_kind="public_playlist",
+        collection_ref="PLfixturePolicy",
+        title="Synthetic policy fixture",
+        acquisition_policy={
+            "extractor_ids": ["summary", "claims"],
+            "extractor_requirements": {
+                "summary": "required_for_materialization",
+                "claims": "optional_for_materialization",
+            },
+        },
+    )
+
+    assert row.acquisition_policy["extractor_requirements"] == {
+        "summary": "required_for_materialization",
+        "claims": "optional_for_materialization",
+    }
+
+
+def test_registry_rejects_incomplete_extractor_materialization_policy() -> None:
+    registry = _make_registry()
+    with pytest.raises(SourceRegistryValidationError):
+        registry.register(
+            collection_kind="public_playlist",
+            collection_ref="PLfixtureBadPolicy",
+            title="Synthetic invalid policy fixture",
+            acquisition_policy={
+                "extractor_ids": ["summary", "claims"],
+                "extractor_requirements": {
+                    "summary": "required_for_materialization"
+                },
+            },
+        )

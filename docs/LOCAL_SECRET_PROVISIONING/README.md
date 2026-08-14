@@ -5,7 +5,7 @@ Owner: Architecture / operations
 Temporal class: strategic
 Review cadence: event-driven (task merge, host-topology change, or first CI/multi-host use)
 Source of truth: this directory for the proposed capability; GitHub parent/child issues are execution artifacts once filed
-Last reviewed: 2026-07-16
+Last reviewed: 2026-08-12
 
 # Local Secret Provisioning
 
@@ -48,14 +48,33 @@ ingress transport only; it is never a secret store or raw-audio archive.
 
 ### Declared identifier contract
 
-The value-free contract declares `heimdal.raw-store-key`, `openai.api-key`, `anthropic.api-key`, and
-`github.token`, their child bindings, their validation kinds, and whether each is optional. The
-raw-store key is granted to `heimdal-capture-watch` and `heimdal-api-ingress`; both model-provider
-identifiers are granted only to `builderops-model-inquiry`, with exact `fable` and `gpt_codex` role
-requirements. Every grant is declared for `dev`, `test`, and `prod` in
+The value-free contract declares `heimdal.raw-store-key`, `heimdal.archive-pass`, `openai.api-key`,
+`anthropic.api-key`, and `github.token`, their child bindings, validation kinds, and whether each is optional. The
+raw-store key is granted to `heimdal-capture-watch`, `heimdal-api-ingress`, and the one-shot
+`heimdal-raw-migrate` transformer; both model-provider identifiers are granted only to
+`builderops-model-inquiry`, with exact `fable` and `gpt_codex` role requirements. Every grant is
+declared for `dev`, `test`, and `prod` in
 `config/secrets/host_secret_contract.json`; no value or host path is stored in that file. This is the
 ADR-0064 declared-API-key scope. It declares the credential boundary but does not authorize provider
 selection, calls, CKM access, or fallback.
+
+HAR-02 adds no key, rotation, or provisioning authority. Its governed deploy path bootstraps the
+`heimdal-raw-migrate` consumer only when the trusted migration inventory contains HAR-02's exact
+revision filename. A value-free preflight then runs before any pin, marker, volume, Docker, or
+writer-stop mutation. The exact one-shot migration invocation resolves the consumer again, renames
+the temporary bootstrap handle for the `migrate` service, and removes it when that invocation exits.
+This second resolution closes the check/use window: missing, malformed, or shared-domain-divergent
+material stops before deployment mutation, while a later change still stops before Alembic.
+Unrelated migration inventories do not resolve or borrow this consumer. Long-lived services cannot
+read the migrate-only handle, and an ordinary Compose invocation does not acquire one. The
+repository declares and validates this delivery path; it does not claim that a host item was
+created or changed.
+
+HAR-03 adds the required `heimdal.archive-pass` identifier for the dedicated
+`heimdal-cold-volume` consumer on `dev`, `test`, and `prod`. It is not shared with the raw-store
+cipher domain. The consumer receives it only through HSP's mode-0600 temporary file and feeds it to
+the fixed sparsebundle command over standard input. The tracked metadata, startup/deploy gates,
+runbook, and receipts remain value-free; provisioning a host item is an explicit operator action.
 
 `github.token` (#4489) is the one **optional** declaration. It is granted to `heimdal-api-ingress`
 so the BuilderOps cockpit's `github-live` plane can read GitHub from inside the `api` container via

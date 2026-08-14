@@ -13,6 +13,7 @@ from app.agents.indexer.graph import invoke as index_invoke
 from app.agents.reviewer.graph import invoke as review_invoke
 from app.agents.set_evaluator.graph import invoke as evaluate_invoke
 from app.agents.projector.graph import invoke as project_invoke
+from app.db.db import COMPATIBILITY_BINDING_ID
 
 
 def _dsn() -> str:
@@ -59,10 +60,12 @@ class BackfillJob:
         sql = (
             "SELECT o.object_id "
             "FROM store_objects o "
-            "WHERE NOT EXISTS (SELECT 1 FROM chunks c WHERE c.object_id = o.object_id) "
+            "WHERE o.vault_binding_id = %s "
+            "AND NOT EXISTS (SELECT 1 FROM chunks c "
+            "WHERE c.vault_binding_id = o.vault_binding_id AND c.object_id = o.object_id) "
             "ORDER BY o.object_id LIMIT %s"
         )
-        object_ids = _fetch_ids(sql, tuple(), self.limit)
+        object_ids = _fetch_ids(sql, (COMPATIBILITY_BINDING_ID,), self.limit)
         for oid in object_ids:
             if self.dry_run:
                 print(f"[dry-run] chunk: {oid}")
@@ -74,11 +77,14 @@ class BackfillJob:
         sql = (
             "SELECT o.object_id "
             "FROM store_objects o "
-            "WHERE EXISTS (SELECT 1 FROM chunks c WHERE c.object_id = o.object_id) "
-            "AND NOT EXISTS (SELECT 1 FROM embeddings e WHERE e.object_id = o.object_id) "
+            "WHERE o.vault_binding_id = %s "
+            "AND EXISTS (SELECT 1 FROM chunks c "
+            "WHERE c.vault_binding_id = o.vault_binding_id AND c.object_id = o.object_id) "
+            "AND NOT EXISTS (SELECT 1 FROM embeddings e "
+            "WHERE e.vault_binding_id = o.vault_binding_id AND e.object_id = o.object_id) "
             "ORDER BY o.object_id LIMIT %s"
         )
-        object_ids = _fetch_ids(sql, tuple(), self.limit)
+        object_ids = _fetch_ids(sql, (COMPATIBILITY_BINDING_ID,), self.limit)
         for oid in object_ids:
             if self.dry_run:
                 print(f"[dry-run] index: {oid}")
@@ -90,10 +96,13 @@ class BackfillJob:
         sql = (
             "SELECT o.object_id "
             "FROM store_objects o "
-            "WHERE NOT EXISTS (SELECT 1 FROM decisions d WHERE d.object_id = o.object_id AND d.key = 'review') "
+            "WHERE o.vault_binding_id = %s "
+            "AND NOT EXISTS (SELECT 1 FROM decisions d "
+            "WHERE d.vault_binding_id = o.vault_binding_id "
+            "AND d.object_id = o.object_id AND d.key = 'review') "
             "ORDER BY o.object_id LIMIT %s"
         )
-        object_ids = _fetch_ids(sql, tuple(), self.limit)
+        object_ids = _fetch_ids(sql, (COMPATIBILITY_BINDING_ID,), self.limit)
         for oid in object_ids:
             if self.dry_run:
                 print(f"[dry-run] review: {oid}")
@@ -105,10 +114,13 @@ class BackfillJob:
         sql = (
             "SELECT o.object_id "
             "FROM store_objects o "
-            "WHERE NOT EXISTS (SELECT 1 FROM decisions d WHERE d.object_id = o.object_id AND d.key = 'evaluate') "
+            "WHERE o.vault_binding_id = %s "
+            "AND NOT EXISTS (SELECT 1 FROM decisions d "
+            "WHERE d.vault_binding_id = o.vault_binding_id "
+            "AND d.object_id = o.object_id AND d.key = 'evaluate') "
             "ORDER BY o.object_id LIMIT %s"
         )
-        object_ids = _fetch_ids(sql, tuple(), self.limit)
+        object_ids = _fetch_ids(sql, (COMPATIBILITY_BINDING_ID,), self.limit)
         for oid in object_ids:
             if self.dry_run:
                 print(f"[dry-run] evaluate: {oid}")
@@ -120,16 +132,19 @@ class BackfillJob:
         sql = (
             "SELECT d.object_id "
             "FROM decisions d "
-            "WHERE d.key = 'evaluate' "
+            "WHERE d.vault_binding_id = %s AND d.key = 'evaluate' "
             "AND COALESCE((d.value ->> 'promote')::boolean, false) = true "
             "AND NOT EXISTS ("
             "  SELECT 1 FROM membership m "
             "  JOIN sets s ON s.id = m.set_id "
-            "  WHERE s.name = %s AND m.object_id = d.object_id"
+            "  WHERE s.name = %s AND m.vault_binding_id = d.vault_binding_id "
+            "  AND m.object_id = d.object_id"
             ") "
             "ORDER BY d.created_at DESC LIMIT %s"
         )
-        object_ids = _fetch_ids(sql, (self.set_name,), self.limit)
+        object_ids = _fetch_ids(
+            sql, (COMPATIBILITY_BINDING_ID, self.set_name), self.limit
+        )
         for oid in object_ids:
             if self.dry_run:
                 print(f"[dry-run] project: {oid}")

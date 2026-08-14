@@ -16,6 +16,9 @@ from typing import Iterable
 REVERSIBLE = "reversible"
 FORWARD_ONLY = "forward-only"
 VALID_MARKERS: frozenset[str] = frozenset({REVERSIBLE, FORWARD_ONLY})
+HEIMDAL_RAW_REPRESENTATION_MIGRATION = (
+    "e7b4c9d2a6f1_heimdal_raw_representation.py"
+)
 
 # Matches `reversibility = "..."` or `reversibility: str = "..."` at line start.
 _MARKER_RE = re.compile(
@@ -98,3 +101,73 @@ def check_all_migrations(paths: Iterable[Path]) -> dict:
         "forward_only": [r.migration for r in results if r.is_forward_only],
         "classification_decisions": [r.to_receipt() for r in results],
     }
+
+
+def heimdal_raw_representation_migration_pending(receipt: object) -> bool:
+    """Select the HAR-02 migration from a complete classification receipt.
+
+    The deploy path uses this value-free predicate to decide whether the
+    migration-only raw-store key consumer must be preflighted.  Receipt shape,
+    filenames, classifications, and duplicate entries are all checked before
+    the selector is trusted so malformed or ambiguous input fails closed.
+    """
+
+    def invalid() -> MigrationMarkerError:
+        return MigrationMarkerError("invalid migration receipt")
+
+    def valid_filename(value: object) -> bool:
+        return (
+            isinstance(value, str)
+            and bool(value)
+            and value.endswith(".py")
+            and "/" not in value
+            and "\\" not in value
+            and value not in {".", ".."}
+        )
+
+    if not isinstance(receipt, dict):
+        raise invalid()
+
+    expected_count = receipt.get("migrations_checked")
+    decisions = receipt.get("classification_decisions")
+    reversible = receipt.get("reversible")
+    forward_only = receipt.get("forward_only")
+    if (
+        type(expected_count) is not int
+        or expected_count < 0
+        or not isinstance(decisions, list)
+        or not isinstance(reversible, list)
+        or not isinstance(forward_only, list)
+        or expected_count != len(decisions)
+    ):
+        raise invalid()
+
+    names: list[str] = []
+    expected_reversible: list[str] = []
+    expected_forward_only: list[str] = []
+    for decision in decisions:
+        if not isinstance(decision, dict):
+            raise invalid()
+        migration = decision.get("migration")
+        classification = decision.get("classification")
+        is_forward_only = decision.get("is_forward_only")
+        if (
+            not valid_filename(migration)
+            or classification not in VALID_MARKERS
+            or type(is_forward_only) is not bool
+            or is_forward_only != (classification == FORWARD_ONLY)
+        ):
+            raise invalid()
+        assert isinstance(migration, str)
+        names.append(migration)
+        if is_forward_only:
+            expected_forward_only.append(migration)
+        else:
+            expected_reversible.append(migration)
+
+    if len(names) != len(set(names)):
+        raise invalid()
+    if reversible != expected_reversible or forward_only != expected_forward_only:
+        raise invalid()
+
+    return HEIMDAL_RAW_REPRESENTATION_MIGRATION in names

@@ -137,3 +137,113 @@ fi
     )
 
     assert result.stdout.strip().splitlines()[-1] == "SKIPPED"
+
+
+def test_prod_runtime_refuses_archive_before_warm_skip(tmp_path: Path) -> None:
+    """The prod UI gate runs even when the runtime already appears healthy."""
+    harness = r"""
+set -euo pipefail
+FAKE_ROOT="$1"
+
+mkdir -p "$FAKE_ROOT/scripts"
+cat > "$FAKE_ROOT/scripts/start_full_system.sh" <<'EOS'
+#!/usr/bin/env bash
+touch "$FAKE_ROOT/.full_system_ran"
+EOS
+chmod +x "$FAKE_ROOT/scripts/start_full_system.sh"
+cat > "$FAKE_ROOT/python-fixture" <<'EOS'
+#!/usr/bin/env bash
+touch "$FAKE_ROOT/.archive_gate_ran"
+exit 78
+EOS
+chmod +x "$FAKE_ROOT/python-fixture"
+
+source "$LIB"
+cui_repo_root() { printf '%s' "$FAKE_ROOT"; }
+cui_require_config() { return 0; }
+cui_load_channel_env() { return 0; }
+cui_guard_vault_name() { return 0; }
+cui_docker_ok() { return 0; }
+cui_api_healthy_now() { touch "$FAKE_ROOT/.health_probe_ran"; return 0; }
+export FAKE_ROOT
+export PYTHON="$FAKE_ROOT/python-fixture"
+export HEIMDAL_ARCHIVE_METADATA_FILE="$FAKE_ROOT/archive-metadata.json"
+export CUI_API_PORT=18000
+export CUI_CHANNEL=prod
+export CUI_COMPOSE_PROJECT=pkm-prod
+export CUI_COMPOSE_FILES=docker-compose.yaml
+export CUI_FORCE_RECREATE=0
+
+set +e
+cui_run_start >/dev/null 2>&1
+rc=$?
+set -e
+printf 'RC=%s GATE=%s HEALTH=%s START=%s\n' \
+  "$rc" \
+  "$([ -f "$FAKE_ROOT/.archive_gate_ran" ] && printf yes || printf no)" \
+  "$([ -f "$FAKE_ROOT/.health_probe_ran" ] && printf yes || printf no)" \
+  "$([ -f "$FAKE_ROOT/.full_system_ran" ] && printf yes || printf no)"
+"""
+
+    env = dict(os.environ)
+    env["LIB"] = str(LIB)
+    result = subprocess.run(
+        ["bash", "-c", harness, "harness", str(tmp_path)],
+        cwd=REPO_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+    assert result.stdout.strip() == "RC=78 GATE=yes HEALTH=no START=no"
+
+
+def test_prod_ui_refuses_archive_before_docker_probe(tmp_path: Path) -> None:
+    harness = r"""
+set -euo pipefail
+FAKE_ROOT="$1"
+
+source "$LIB"
+cui_repo_root() { printf '%s' "$FAKE_ROOT"; }
+cui_require_config() { return 0; }
+cui_load_channel_env() { return 0; }
+cui_guard_vault_name() { return 0; }
+cui_docker_ok() { touch "$FAKE_ROOT/.docker_probe_ran"; return 0; }
+cui_start_runtime() { touch "$FAKE_ROOT/.runtime_start_ran"; return 0; }
+cat > "$FAKE_ROOT/python-fixture" <<'EOS'
+#!/usr/bin/env bash
+touch "$FAKE_ROOT/.archive_gate_ran"
+exit 78
+EOS
+chmod +x "$FAKE_ROOT/python-fixture"
+
+export FAKE_ROOT
+export PYTHON="$FAKE_ROOT/python-fixture"
+export CUI_CHANNEL=prod
+export CUI_COMPOSE_PROJECT=pkm-prod
+export CUI_COMPOSE_FILES=docker-compose.yaml
+
+set +e
+cui_run_start >/dev/null 2>&1
+rc=$?
+set -e
+printf 'RC=%s GATE=%s DOCKER=%s START=%s\n' \
+  "$rc" \
+  "$([ -f "$FAKE_ROOT/.archive_gate_ran" ] && printf yes || printf no)" \
+  "$([ -f "$FAKE_ROOT/.docker_probe_ran" ] && printf yes || printf no)" \
+  "$([ -f "$FAKE_ROOT/.runtime_start_ran" ] && printf yes || printf no)"
+"""
+
+    env = dict(os.environ)
+    env["LIB"] = str(LIB)
+    result = subprocess.run(
+        ["bash", "-c", harness, "harness", str(tmp_path)],
+        cwd=REPO_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+    assert result.stdout.strip() == "RC=78 GATE=yes DOCKER=no START=no"

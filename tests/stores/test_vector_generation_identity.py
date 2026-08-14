@@ -13,6 +13,7 @@ These tests require a live Postgres backend; they are skipped under `not pg`.
 from __future__ import annotations
 
 import json
+from dataclasses import asdict
 from uuid import uuid4
 
 import psycopg
@@ -20,6 +21,7 @@ import pytest
 
 from app.components.embeddings import EmbeddingIdentity
 from app.db.dsn import resolve_dsn
+from app.instance.binding_ids import COMPATIBILITY_BINDING_ID
 from app.stores import pg as pg_store
 
 pytestmark = pytest.mark.pg
@@ -63,14 +65,12 @@ def _rewrite_identity_only(new_identity: EmbeddingIdentity) -> None:
                 """
                 UPDATE vector_index_meta
                 SET identity_json = %s, updated_at = now()
-                WHERE id = 1
+                WHERE vault_binding_id = %s AND id = 1
                 """,
-                (json.dumps({
-                    "provider": new_identity.provider,
-                    "model": new_identity.model,
-                    "dim": new_identity.dim,
-                    "normalize": new_identity.normalize,
-                }),),
+                (
+                    json.dumps(asdict(new_identity), ensure_ascii=False),
+                    COMPATIBILITY_BINDING_ID,
+                ),
             )
         conn.commit()
 

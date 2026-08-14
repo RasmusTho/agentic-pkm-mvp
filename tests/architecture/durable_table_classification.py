@@ -110,6 +110,10 @@ _DDL_VERB_PATTERNS: tuple[tuple[str, str], ...] = (
     ("drop table", r"drop\s+table\s+(?:if\s+exists\s+)?"),
 )
 
+_TEMP_TABLE_CREATE = re.compile(
+    r"(?is)\bcreate\s+(?:(?:global|local)\s+)?(?:temporary|temp)\s+table\b"
+)
+
 #: DDL that reshapes an object *attached to* a durable table rather than the
 #: table itself. An index, trigger or rule dropped and recreated against a
 #: migration-owned table is the same drop-and-re-add mechanism MVR-05A1 (#4560)
@@ -948,6 +952,20 @@ def _statement_matches(
             yield verb, match.group(1), match.start()
 
 
+def _is_provably_temporary_create(text: str, offset: int) -> bool:
+    """Whether one matched CREATE TABLE is explicitly transaction-local.
+
+    Alembic revisions may use a PostgreSQL TEMP table as an in-transaction
+    catalog snapshot.  Such a relation is dropped by PostgreSQL at session (or
+    explicitly at transaction) end and is not part of the durable schema this
+    classifier governs.  The exclusion is syntax-derived at the exact match
+    offset: a named table, revision, prefix, or allow-list cannot bypass the
+    durable population gate.
+    """
+    match = _TEMP_TABLE_CREATE.match(text, offset)
+    return match is not None
+
+
 # --------------------------------------------------------------------------- #
 # 1. The durable-table population, derived from the revision chain
 # --------------------------------------------------------------------------- #
@@ -1045,7 +1063,9 @@ def _created_tables(resolver: _ModuleResolver, node: ast.AST, path: Path) -> Ite
             if not isinstance(text, str) or len(text) < 6:
                 continue
             statement_resolved = True
-            for _, table, _offset in _statement_matches(text, _DDL_VERB_PATTERNS[:1]):
+            for _, table, offset in _statement_matches(text, _DDL_VERB_PATTERNS[:1]):
+                if _is_provably_temporary_create(text, offset):
+                    continue
                 yield _normalize(table, path, node.lineno)
     if not statement_resolved:
         # No argument reduced to a statement at all. Inspecting the raw source
@@ -1554,7 +1574,7 @@ def _statement_sites(*, durable_source: bool) -> tuple[str, ...]:
 #: https://github.com/RasmusTho/agentic-pkm-mvp/issues/4598, which owns both the
 #: repair and shrinking this mapping as statements retire.
 #:
-#: The load-bearing entries are the six `drop trigger` / `create trigger` pairs.
+#: The load-bearing entries are the five `drop trigger` / `create trigger` pairs.
 #: `app/heimdal/raw_read_gate.py`'s own module docstring records that migration
 #: `f1c7e2a9b4d6` installs an identical reject-mutation trigger — so a migration
 #: owns the object and the runtime drops and recreates it, which is structurally
@@ -1591,9 +1611,6 @@ RECORDED_ATTACHED_DDL_DEBT: Mapping[tuple[str, str, str], int] = MappingProxyTyp
         ("app/heimdal/raw_read_gate.py", "create index", "heimdal_raw_read_receipt"): 2,
         ("app/heimdal/raw_read_gate.py", "create trigger", "heimdal_raw_read_receipt"): 1,
         ("app/heimdal/raw_read_gate.py", "drop trigger", "heimdal_raw_read_receipt"): 1,
-        ("app/heimdal/raw_store.py", "create index", "heimdal_raw_record"): 2,
-        ("app/heimdal/raw_store.py", "create trigger", "heimdal_raw_record"): 1,
-        ("app/heimdal/raw_store.py", "drop trigger", "heimdal_raw_record"): 1,
         ("app/heimdal/retention.py", "create index", "heimdal_raw_deletion_receipt"): 2,
         ("app/heimdal/retention.py", "create trigger", "heimdal_raw_deletion_receipt"): 1,
         ("app/heimdal/retention.py", "drop trigger", "heimdal_raw_deletion_receipt"): 1,

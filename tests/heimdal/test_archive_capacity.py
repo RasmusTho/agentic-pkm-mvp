@@ -19,6 +19,7 @@ from app.heimdal.archive_capacity import (
 )
 from app.heimdal.raw_store import (
     RawRecordCapacityMetadata,
+    compute_raw_content_identity,
     encrypt_raw_bytes,
     insert_raw_record,
     reset_memory_raw_store,
@@ -58,13 +59,14 @@ def _vault(tmp_path: Path, *, retention_days: int | None = 30) -> Path:
 def _record(content_identity: str, payload: bytes):
     ciphertext, nonce = encrypt_raw_bytes(payload, key=_TEST_KEY)
     record, created = insert_raw_record(
-        content_identity=content_identity,
+        content_identity=compute_raw_content_identity(payload),
         capture_chain=["test"],
         sensor={"sensor_id": "test"},
         consent={"grant_ref": "self-record"},
         ciphertext=ciphertext,
         nonce=nonce,
         key_ref="test",
+        key=_TEST_KEY,
         source_path="private-recording.m4a",
     )
     assert created

@@ -4,6 +4,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")/.." && pwd)"
 source "${ROOT}/scripts/lib/deploy_channel_compose.sh"
 source "${ROOT}/scripts/lib/instance_state_deployment.sh"
+source "${ROOT}/scripts/lib/heimdal_cold_volume_preflight.sh"
 PYTHON="${PYTHON:-}"
 if [ -z "${PYTHON}" ]; then
   if [ -x "${ROOT}/.venv/bin/python" ]; then
@@ -29,6 +30,8 @@ Environment:
   DEPLOY_ACK_EMBEDDING_REBUILD_REQUIRED=1
                                     acknowledge only the embedding-index rebuild transition
   DEPLOY_HEALTH_TIMEOUT_SECONDS=90  health gate timeout
+  MVR03_PRINCIPAL_CUTOVER=1         explicitly activate the one-time principal floor/role cutover
+  MVR03_PRINCIPAL_LOOPBACK_LISTENER is pinned from config/deploy/<channel>.env (0 or 1)
 EOF
 }
 
@@ -98,6 +101,14 @@ case "${channel}" in
   *) usage; exit 2 ;;
 esac
 
+# Classify the selected channel before creating temporary state, acquiring the
+# mutation lock, reading credentials, or contacting Docker. Dry-run performs no
+# deployment mutation and rollback must remain available for previous-good
+# recovery when the archive is unavailable.
+if [ "${action}" = "deploy" ] && [ "${dry_run}" != "1" ]; then
+  heimdal_cold_volume_preflight "${channel}" "${ROOT}" || exit $?
+fi
+
 pin_file="${ROOT}/config/deploy/${channel}.env"
 previous_pin_file="${ROOT}/config/deploy/${channel}.previous.env"
 migration_pending_file="${ROOT}/config/deploy/${channel}.migration-pending.env"
@@ -106,6 +117,26 @@ receipt_dir="${ROOT}/ops/deployments"
 promotion_dir="${ROOT}/ops/promotions"
 image_repository="${APP_IMAGE_REPOSITORY:-ghcr.io/rasmustho/pkm-app}"
 health_timeout="${DEPLOY_HEALTH_TIMEOUT_SECONDS:-90}"
+
+# Pin the topology declaration from the governed channel file before the
+# shared deployment wrapper runs. Do not inherit an ambient shell value across
+# channels: Docker-published dev/test/prod API traffic is not proven loopback
+# inside the container, while a future channel may explicitly declare 1.
+if [ "${action}" = "deploy" ] && [ "${MVR03_PRINCIPAL_CUTOVER:-0}" = "1" ]; then
+  mvr03_principal_loopback_listener="$(
+    awk -F= '/^MVR03_PRINCIPAL_LOOPBACK_LISTENER=/{print $2; exit}' "${pin_file}"
+  )"
+  case "${mvr03_principal_loopback_listener}" in
+    0|1)
+      export MVR03_PRINCIPAL_LOOPBACK_LISTENER="${mvr03_principal_loopback_listener}"
+      ;;
+    *)
+      echo "MVR03_PRINCIPAL_LOOPBACK_LISTENER is missing or invalid for the selected channel" >&2
+      exit 78
+      ;;
+  esac
+  unset mvr03_principal_loopback_listener
+fi
 
 read_pin() {
   local file="$1"
@@ -149,6 +180,8 @@ resolve_target_sha() {
 
 MIGRATIONS_CHECKED=0
 FORWARD_ONLY_COUNT=0
+DEPLOY_HEIMDAL_RAW_MIGRATION_PENDING=0
+export DEPLOY_HEIMDAL_RAW_MIGRATION_PENDING
 FORWARD_ONLY_MIGRATION_STARTED=0
 FORWARD_ONLY_MIGRATION_APPLIED=0
 MIGRATION_EXECUTION_STARTED=0
@@ -331,7 +364,10 @@ list_changed_migrations() {
 
 migration_gate() {
   local from_sha="$1" to_sha="$2" receipt_json forward_count migration_output rc
+  local har_raw_pending
   local -a migration_paths
+  DEPLOY_HEIMDAL_RAW_MIGRATION_PENDING=0
+  export DEPLOY_HEIMDAL_RAW_MIGRATION_PENDING
   migration_paths=()
   set +e
   migration_output="$(list_changed_migrations "${from_sha}" "${to_sha}")"
@@ -387,12 +423,59 @@ PY
     fi
     return "${rc}"
   }
-  forward_count="$("${PYTHON}" -c 'import json,sys; print(len(json.loads(sys.stdin.read()).get("forward_only", [])))' <<<"${receipt_json}")"
+  har_raw_pending="$("${PYTHON}" -c '
+import json
+import sys
+
+from app.release_channels.reversibility import (
+    MigrationMarkerError,
+    heimdal_raw_representation_migration_pending,
+)
+
+try:
+    payload = json.loads(sys.stdin.read())
+    pending = heimdal_raw_representation_migration_pending(payload)
+except (json.JSONDecodeError, MigrationMarkerError):
+    raise SystemExit(2) from None
+print("1" if pending else "0")
+' <<<"${receipt_json}")" || {
+    DEPLOY_HEIMDAL_RAW_MIGRATION_PENDING=0
+    export DEPLOY_HEIMDAL_RAW_MIGRATION_PENDING
+    echo "migration gate blocked: invalid migration receipt" >&2
+    return 1
+  }
+  forward_count="$("${PYTHON}" -c 'import json,sys; print(len(json.loads(sys.stdin.read())["forward_only"]))' <<<"${receipt_json}")"
   echo "migration gate ok: ${#migration_paths[@]} migration(s), forward_only=${forward_count}"
   MIGRATIONS_CHECKED="${#migration_paths[@]}"
   FORWARD_ONLY_COUNT="${forward_count}"
   MIGRATION_RECEIPT_JSON="${receipt_json}"
-  export MIGRATION_RECEIPT_JSON
+  DEPLOY_HEIMDAL_RAW_MIGRATION_PENDING="${har_raw_pending}"
+  export MIGRATION_RECEIPT_JSON DEPLOY_HEIMDAL_RAW_MIGRATION_PENDING
+}
+
+heimdal_raw_migration_secret_preflight() {
+  if [ "${action}" != "deploy" ] \
+      || [ "${DEPLOY_HEIMDAL_RAW_MIGRATION_PENDING:-0}" != "1" ]; then
+    return 0
+  fi
+
+  # Resolve and validate the exact migration consumer before any deployment
+  # mutation (pin/marker/volume/Docker/writer stop). The later one-shot
+  # Compose wrapper resolves it again immediately before Alembic, closing the
+  # check/use window without retaining a secret value or temporary handle.
+  local rc=0
+  (
+    cd "${ROOT}" || exit 1
+    export PYTHONPATH="${ROOT}${PYTHONPATH:+:${PYTHONPATH}}"
+    exec "${PYTHON}" -m app.ops.host_secret_bootstrap \
+      --channel "${channel}" \
+      --consumer heimdal-raw-migrate \
+      -- /bin/sh -c 'exit 0'
+  ) >/dev/null 2>/dev/null || rc=$?
+  if [ "${rc}" -ne 0 ]; then
+    echo "migration raw-key preflight failed: output=redacted" >&2
+    return "${rc}"
+  fi
 }
 
 compose() {
@@ -995,6 +1078,11 @@ if [ "${dry_run}" = "1" ]; then
   echo "dry-run: stopping before pin write, docker recreate, health gate, and receipt write"
   exit 0
 fi
+
+# This gate must stay after dry-run (which performs no mutation) but before
+# every pin, marker, volume, Docker, or writer-stop operation. Archive readiness
+# must be established before the Keychain-backed migration secret is read.
+heimdal_raw_migration_secret_preflight || exit $?
 
 if ! scripts/companion_ui_postdeploy_smoke.sh preflight; then
   echo "companion UI preflight failed before channel mutation" >&2

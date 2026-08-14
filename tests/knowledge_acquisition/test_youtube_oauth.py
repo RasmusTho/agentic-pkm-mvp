@@ -400,15 +400,18 @@ def test_disconnect_revokes_without_deleting_artifacts(store, bindings, registry
 
     raw_store.reset_memory_raw_store()
     key = raw_store.resolve_raw_store_key()
-    ciphertext, nonce = raw_store.encrypt_raw_bytes(b"acquired-evidence", key=key)
+    plaintext = b"acquired-evidence"
+    ciphertext, nonce = raw_store.encrypt_raw_bytes(plaintext, key=key)
+    content_identity = raw_store.compute_raw_content_identity(plaintext)
     raw_row, _created = raw_store.insert_raw_record(
-        content_identity="cid-artifact-1",
+        content_identity=content_identity,
         capture_chain=["youtube"],
         sensor={"id": "yt"},
         consent={"grant_ref": "g1"},
         ciphertext=ciphertext,
         nonce=nonce,
         key_ref="k1",
+        key=key,
         source_path="mem://x",
     )
 
@@ -427,7 +430,7 @@ def test_disconnect_revokes_without_deleting_artifacts(store, bindings, registry
     assert disabled.last_error["reason_code"] == "auth_disconnected"
     assert disabled.collection_ref == SYNTH_PLAYLIST_REF
     # Acquired artifacts are never deleted by a disconnect.
-    assert raw_store.get_raw_record_by_content_identity("cid-artifact-1") is not None
+    assert raw_store.get_raw_record_by_content_identity(content_identity) is not None
     assert raw_store.all_raw_records()[0].id == raw_row.id
 
 
@@ -508,15 +511,18 @@ def test_disconnect_preserves_token_when_provider_revoke_fails(
 
     raw_store.reset_memory_raw_store()
     key = raw_store.resolve_raw_store_key()
-    ciphertext, nonce = raw_store.encrypt_raw_bytes(b"acquired-evidence", key=key)
+    plaintext = b"acquired-evidence"
+    ciphertext, nonce = raw_store.encrypt_raw_bytes(plaintext, key=key)
+    content_identity = raw_store.compute_raw_content_identity(plaintext)
     raw_store.insert_raw_record(
-        content_identity="cid-artifact-revoke-retry",
+        content_identity=content_identity,
         capture_chain=["youtube"],
         sensor={"id": "yt"},
         consent={"grant_ref": "g1"},
         ciphertext=ciphertext,
         nonce=nonce,
         key_ref="k1",
+        key=key,
         source_path="mem://retry",
     )
 
@@ -538,7 +544,7 @@ def test_disconnect_preserves_token_when_provider_revoke_fails(
     assert preserved_source.enabled is True
     assert preserved_source.cursor == cursor_before
     assert preserved_source.last_error is None
-    assert raw_store.get_raw_record_by_content_identity("cid-artifact-revoke-retry") is not None
+    assert raw_store.get_raw_record_by_content_identity(content_identity) is not None
 
 
 def test_disconnect_permanent_provider_error_keeps_existing_local_teardown(

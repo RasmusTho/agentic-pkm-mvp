@@ -194,8 +194,8 @@ def test_model_inquiry_secret_contract_is_exact_and_value_free() -> None:
             "child_binding": "HEIMDAL_RAW_STORE_KEY",
             "kind": "raw-store-key",
             "optional": False,
-            # #4512: fed by two consumers (heimdal-capture-watch,
-            # heimdal-api-ingress) into one AES-256-GCM cipher domain.
+            # #4512/#3848: fed by the capture, API ingress, and one-shot
+            # migration consumers into one AES-256-GCM cipher domain.
             "shared_key_domain": True,
         },
         {
@@ -221,6 +221,13 @@ def test_model_inquiry_secret_contract_is_exact_and_value_free() -> None:
             "optional": True,
             "shared_key_domain": False,
         },
+        {
+            "logical_id": "heimdal.archive-pass",
+            "child_binding": "HEIMDAL_ARCHIVE_PASS",
+            "kind": "archive-pass",
+            "optional": False,
+            "shared_key_domain": False,
+        },
     ]
     assert payload["consumers"] == [
         {
@@ -230,9 +237,21 @@ def test_model_inquiry_secret_contract_is_exact_and_value_free() -> None:
             "role_requirements": {},
         },
         {
+            "consumer": "heimdal-raw-migrate",
+            "channels": ["dev", "test", "prod"],
+            "secrets": ["heimdal.raw-store-key"],
+            "role_requirements": {},
+        },
+        {
             "consumer": "heimdal-capture-watch",
             "channels": ["dev", "test", "prod"],
             "secrets": ["heimdal.raw-store-key"],
+            "role_requirements": {},
+        },
+        {
+            "consumer": "heimdal-cold-volume",
+            "channels": ["dev", "test", "prod"],
+            "secrets": ["heimdal.archive-pass"],
             "role_requirements": {},
         },
         {
@@ -323,29 +342,46 @@ def test_channel_isolation_holds_for_model_provider_secrets() -> None:
         )
 
 
-def test_api_consumer_declares_raw_store_key() -> None:
-    """#4422: the api process (consumer heimdal-api-ingress) is declared of heimdal.raw-store-key.
+def test_runtime_raw_store_consumers_declare_raw_store_key() -> None:
+    """Every producer/transformer is declared for the shared raw-key domain.
 
-    Loaded through the production loader with its existing validation, for
-    every channel the ingress lane serves — and the pre-existing
-    heimdal-capture-watch declaration is unchanged.
+    #4422 owns API ingress, capture-watch remains the original producer, and
+    #3848 adds the exact one-shot migration transformer. All declarations are
+    loaded through the production loader for every governed channel.
     """
     contract = load_host_secret_contract()
     for channel in ("dev", "test", "prod"):
-        contract.require_declared(
-            channel=channel, consumer="heimdal-api-ingress", secret="heimdal.raw-store-key"
-        )
-        contract.require_declared(
-            channel=channel,
-            consumer="heimdal-capture-watch",
-            secret="heimdal.raw-store-key",
-        )
+        for consumer in (
+            "heimdal-api-ingress",
+            "heimdal-raw-migrate",
+            "heimdal-capture-watch",
+        ):
+            contract.require_declared(
+                channel=channel,
+                consumer=consumer,
+                secret="heimdal.raw-store-key",
+            )
     with pytest.raises(UndeclaredSecretConsumerError):
         contract.require_declared(channel="dev", consumer="heimdal-api-ingress", secret="openai.api-key")
 
 
+def test_cold_volume_consumer_declares_required_channel_scoped_passphrase() -> None:
+    contract = load_host_secret_contract()
+
+    assert contract.binding_for("heimdal.archive-pass") == "HEIMDAL_ARCHIVE_PASS"
+    assert contract.kind_for("heimdal.archive-pass") == "archive-pass"
+    assert contract.is_optional("heimdal.archive-pass") is False
+    assert contract.is_shared_key_domain("heimdal.archive-pass") is False
+    for channel in ("dev", "test", "prod"):
+        contract.require_declared(
+            channel=channel,
+            consumer="heimdal-cold-volume",
+            secret="heimdal.archive-pass",
+        )
+
+
 def test_raw_store_key_declares_shared_key_domain() -> None:
-    """#4512: heimdal.raw-store-key backs one cipher domain fed by two consumers.
+    """The raw key backs one cipher domain fed by all three consumers.
 
     Every declared consumer of `heimdal.raw-store-key` must resolve to
     identical material, so it is marked shared-domain. The model-provider
@@ -359,7 +395,13 @@ def test_raw_store_key_declares_shared_key_domain() -> None:
     assert contract.is_shared_key_domain("github.token") is False
     assert contract.consumers_declared_for(
         channel="dev", secret="heimdal.raw-store-key"
-    ) == frozenset({"heimdal-capture-watch", "heimdal-api-ingress"})
+    ) == frozenset(
+        {
+            "heimdal-capture-watch",
+            "heimdal-api-ingress",
+            "heimdal-raw-migrate",
+        }
+    )
     with pytest.raises(UndeclaredSecretConsumerError):
         contract.is_shared_key_domain("unrelated-key")
 

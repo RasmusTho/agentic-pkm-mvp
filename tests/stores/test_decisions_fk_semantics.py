@@ -24,6 +24,8 @@ from pathlib import Path
 import psycopg
 import pytest
 
+from app.instance.binding_ids import COMPATIBILITY_BINDING_ID
+
 pytestmark = pytest.mark.pg
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -100,8 +102,9 @@ def _insert_object(dsn: str) -> str:
     object_id = str(uuid.uuid4())
     with psycopg.connect(dsn, autocommit=True) as conn:
         conn.execute(
-            "INSERT INTO store_objects (object_id, kind, payload) VALUES (%s, %s, %s::jsonb)",
-            (object_id, "note", "{}"),
+            "INSERT INTO store_objects (vault_binding_id, object_id, kind, payload) "
+            "VALUES (%s, %s, %s, %s::jsonb)",
+            (COMPATIBILITY_BINDING_ID, object_id, "note", "{}"),
         )
         conn.execute(
             "INSERT INTO objects (id, kind, payload) VALUES (%s, %s, %s::jsonb)",
@@ -135,7 +138,10 @@ def test_object_delete_preserves_decisions(
 
         # The FK action itself: deleting the object must not cascade-delete
         # the decision row, it must null out object_id (mirrors `audit`).
-        conn.execute("DELETE FROM store_objects WHERE object_id = %s", (object_id,))
+        conn.execute(
+            "DELETE FROM store_objects WHERE vault_binding_id = %s AND object_id = %s",
+            (COMPATIBILITY_BINDING_ID, object_id),
+        )
 
         rows_after = conn.execute(
             "SELECT object_id FROM decisions WHERE key = 'classification'"

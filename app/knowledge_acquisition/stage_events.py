@@ -76,7 +76,7 @@ Design decisions (binding for this slice):
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Mapping, Sequence
+from typing import Any, Literal, Mapping, Sequence
 
 from app.events.models import new_event
 from app.events.types import (
@@ -88,6 +88,7 @@ from app.knowledge_acquisition.extraction_registry import (
     ExtractionError,
     ExtractionResult,
     run_extractor,
+    validate_registered_extractors,
 )
 from app.services.outbox import derive_idempotency_key, write_outbox_event
 
@@ -127,7 +128,12 @@ def stage_completed_key(
 
 
 def stage_dead_letter_key(
-    *, stage: str, stage_version: int, content_identity: str, extractor_id: str | None = None
+    *,
+    stage: str,
+    stage_version: int,
+    content_identity: str,
+    extractor_id: str | None = None,
+    failure_scope: str | None = None,
 ) -> str:
     """Deterministic idempotency key for a stage dead-letter audit event.
 
@@ -136,10 +142,11 @@ def stage_dead_letter_key(
     key, so a re-run of an improved-but-still-failing stage is a genuinely new dead-letter.
     """
     scope = _stage_scope(stage=stage, extractor_id=extractor_id)
+    scoped_suffix = f":{failure_scope}" if failure_scope else ""
     return derive_idempotency_key(
         STAGE_DEAD_LETTERED_TOPIC,
         content_identity,
-        f"{scope}:{stage_version}:dead_letter",
+        f"{scope}:{stage_version}:dead_letter{scoped_suffix}",
     )
 
 
@@ -204,6 +211,7 @@ def emit_stage_dead_letter(
     extractor_id: str | None = None,
     trace_id: str | None = None,
     conn: Any = None,
+    extra_payload: Mapping[str, Any] | None = None,
 ) -> str:
     """Emit exactly one `knowledge_acquisition.stage.dead_lettered` outbox event.
 
@@ -219,12 +227,20 @@ def emit_stage_dead_letter(
     }
     if extractor_id is not None:
         payload["extractor_id"] = extractor_id
+    if extra_payload:
+        for key, value in extra_payload.items():
+            payload.setdefault(key, value)
 
     key = stage_dead_letter_key(
         stage=stage,
         stage_version=stage_version,
         content_identity=content_identity,
         extractor_id=extractor_id,
+        failure_scope=(
+            str(extra_payload["materialization_requirement"])
+            if extra_payload and extra_payload.get("materialization_requirement")
+            else None
+        ),
     )
     event = new_event(
         event_type=STAGE_DEAD_LETTERED_TOPIC,
@@ -265,6 +281,8 @@ class StageOutcome:
     result: ExtractionResult | None = None
     error: str | None = None
     event_row_id: str | None = None
+    materialization_requirement: Literal["required", "optional"] = "required"
+    rerun_handle: str | None = None
 
 
 @dataclass(frozen=True)
@@ -278,6 +296,66 @@ class ExtractionRunReport:
     def dead_lettered(self) -> tuple[StageOutcome, ...]:
         return tuple(o for o in self.outcomes if o.status == "dead_lettered")
 
+    @property
+    def required_dead_lettered(self) -> tuple[StageOutcome, ...]:
+        return tuple(
+            outcome
+            for outcome in self.dead_lettered
+            if outcome.materialization_requirement == "required"
+        )
+
+    @property
+    def optional_dead_lettered(self) -> tuple[StageOutcome, ...]:
+        return tuple(
+            outcome
+            for outcome in self.dead_lettered
+            if outcome.materialization_requirement == "optional"
+        )
+
+
+def resolve_extractor_requirements(
+    extractor_ids: Sequence[str],
+    extractor_requirements: Mapping[str, str] | None,
+) -> dict[str, Literal["required", "optional"]]:
+    """Resolve a complete pre-execution materialization declaration.
+
+    Legacy call sites select only required extractors, preserving shipped all-or-nothing
+    semantics. A v2 caller that supplies a declaration must classify every selected extractor
+    exactly once; missing/extra/unknown classifications fail before any extractor executes.
+    """
+    selected = tuple(extractor_ids)
+    if len(set(selected)) != len(selected) or any(not item for item in selected):
+        raise ValueError("extractor_ids must contain unique non-empty ids")
+    if extractor_requirements is None:
+        return {extractor_id: "required" for extractor_id in selected}
+    if set(extractor_requirements) != set(selected):
+        missing = sorted(set(selected) - set(extractor_requirements))
+        extra = sorted(set(extractor_requirements) - set(selected))
+        raise ValueError(
+            "extractor_requirements must classify every selected extractor before execution "
+            f"(missing={missing}, extra={extra})"
+        )
+    aliases = {
+        "required": "required",
+        "optional": "optional",
+        "required_for_materialization": "required",
+        "optional_for_materialization": "optional",
+    }
+    resolved: dict[str, Literal["required", "optional"]] = {}
+    for extractor_id in selected:
+        value = extractor_requirements[extractor_id]
+        if value not in aliases:
+            raise ValueError(
+                f"extractor requirement for {extractor_id!r} must be "
+                "'required_for_materialization' or 'optional_for_materialization'"
+            )
+        resolved[extractor_id] = (
+            "required"
+            if value in {"required", "required_for_materialization"}
+            else "optional"
+        )
+    return resolved
+
 
 def run_extractors(
     normalized: Mapping[str, Any],
@@ -285,6 +363,10 @@ def run_extractors(
     extractor_ids: Sequence[str],
     trace_id: str | None = None,
     conn: Any = None,
+    extractor_requirements: Mapping[str, str] | None = None,
+    raw_record_id: str | None = None,
+    normalized_artifact_id: str | None = None,
+    force_reextract: bool = False,
 ) -> ExtractionRunReport:
     """Run a set of extractors over one normalized artifact, item-scoped per extractor.
 
@@ -316,12 +398,26 @@ def run_extractors(
             "run_extractors requires a normalized artifact with a string source_content_identity"
         )
 
+    requirements = resolve_extractor_requirements(extractor_ids, extractor_requirements)
+    validate_registered_extractors(list(extractor_ids))
     successes: list[ExtractionResult] = []
     outcomes: list[StageOutcome] = []
     for extractor_id in extractor_ids:
         try:
-            result = run_extractor(extractor_id, normalized)
+            result = run_extractor(
+                extractor_id,
+                normalized,
+                raw_record_id=raw_record_id,
+                normalized_artifact_id=normalized_artifact_id,
+                force_reextract=force_reextract,
+            )
         except ExtractionError as exc:
+            requirement = requirements[extractor_id]
+            rerun_handle = (
+                f"acquire-replay:{raw_record_id}:extractor:{extractor_id}"
+                if raw_record_id is not None
+                else f"extractor:{extractor_id}"
+            )
             emit_stage_dead_letter(
                 stage=EXTRACTED_STAGE_NAME,
                 stage_version=exc.version,
@@ -331,9 +427,19 @@ def run_extractors(
                 error=str(exc),
                 trace_id=trace_id,
                 conn=conn,
+                extra_payload={
+                    "materialization_requirement": requirement,
+                    "rerun_handle": rerun_handle,
+                },
             )
             outcomes.append(
-                StageOutcome(extractor_id=extractor_id, status="dead_lettered", error=str(exc))
+                StageOutcome(
+                    extractor_id=extractor_id,
+                    status="dead_lettered",
+                    error=str(exc),
+                    materialization_requirement=requirement,
+                    rerun_handle=rerun_handle,
+                )
             )
             continue
         event_row_id = emit_stage_completed(
@@ -352,6 +458,7 @@ def run_extractors(
                 status="ok",
                 result=result,
                 event_row_id=event_row_id,
+                materialization_requirement=requirements[extractor_id],
             )
         )
 
@@ -368,5 +475,6 @@ __all__ = [
     "stage_dead_letter_key",
     "emit_stage_completed",
     "emit_stage_dead_letter",
+    "resolve_extractor_requirements",
     "run_extractors",
 ]

@@ -3179,6 +3179,8 @@ def _dimension_command(args: argparse.Namespace) -> int:
 PRINCIPAL_COMMANDS = (
     "principal-show",
     "principal-record-floor",
+    "principal-cutover",
+    "principal-verify-cutover-clean-failure",
     "principal-bootstrap",
     "principal-rotate-credential",
     "principal-add-role",
@@ -3186,6 +3188,113 @@ PRINCIPAL_COMMANDS = (
     "principal-export-auth-state",
     "principal-roll-forward",
 )
+
+_PRINCIPAL_CUTOVER_CLEAN_FAILURE_SCHEMA = (
+    "agentic-pkm.principal-cutover-clean-failure.v1"
+)
+
+
+def _principal_cutover_receipt_path(
+    *, host_global_root: Path, receipt_path: Path, attempt_id: str
+) -> Path:
+    """Resolve one private attempt receipt without permitting path injection."""
+
+    if re.fullmatch(r"[0-9a-f]{32}", attempt_id) is None:
+        raise RegistryError("principal cutover attempt id is invalid")
+    root = host_global_root.resolve(strict=True)
+    path = receipt_path.resolve(strict=False)
+    if (
+        path.parent != root
+        or path.name != f"principal-cutover-clean-failure-{attempt_id}.json"
+    ):
+        raise RegistryError(
+            "principal cutover clean-failure receipt path is invalid"
+        )
+    return path
+
+
+def _verify_principal_cutover_clean_failure(args: argparse.Namespace) -> int:
+    """Consume an authenticated clean-failure receipt for this stopped attempt."""
+
+    from app.instance.principal_fence import principal_floor_recorded
+
+    root = Path(args.host_global_root)
+    receipt_path = _principal_cutover_receipt_path(
+        host_global_root=root,
+        receipt_path=Path(args.clean_failure_receipt_path),
+        attempt_id=args.attempt_id,
+    )
+    metadata = receipt_path.lstat()
+    if (
+        not stat.S_ISREG(metadata.st_mode)
+        or metadata.st_uid != os.geteuid()
+        or metadata.st_mode & 0o777 != 0o600
+    ):
+        raise RegistryError("principal cutover receipt is unsafe")
+    document = json.loads(receipt_path.read_text(encoding="utf-8"))
+    payload = document.get("payload") if isinstance(document, dict) else None
+    authentication = (
+        document.get("authentication") if isinstance(document, dict) else None
+    )
+    if not isinstance(payload, dict) or not isinstance(authentication, dict):
+        raise RegistryError("principal cutover receipt is invalid")
+
+    proof = json.loads(Path(args.quiescence_proof_path).read_text(encoding="utf-8"))
+    lease = _require_proved_deployment_lease(
+        host_global_root=root,
+        channel=args.channel,
+        nonce=proof.get("nonce"),
+    )
+    expected = {
+        "schema": _PRINCIPAL_CUTOVER_CLEAN_FAILURE_SCHEMA,
+        "channel_id": args.channel,
+        "deployment_nonce": lease["nonce"],
+        "attempt_id": args.attempt_id,
+        "outcome": "clean_failure",
+        "floor_recorded": False,
+        "role_recorded": False,
+    }
+    if any(payload.get(key) != value for key, value in expected.items()):
+        raise RegistryError("principal cutover receipt binding is invalid")
+    floor_advanced = payload.get("floor_advanced")
+    floor_revision = payload.get("floor_registry_revision")
+    result_revision = payload.get("result_registry_revision")
+    if (
+        type(floor_advanced) is not bool
+        or not isinstance(result_revision, int)
+        or isinstance(result_revision, bool)
+        or (
+            floor_advanced
+            and (
+                not isinstance(floor_revision, int)
+                or isinstance(floor_revision, bool)
+                or result_revision <= floor_revision
+            )
+        )
+        or (not floor_advanced and floor_revision is not None)
+    ):
+        raise RegistryError("principal cutover receipt revisions are invalid")
+
+    ledger = OwnershipLedger(root)
+    ledger.verify_principal_cutover_receipt(
+        payload,
+        authentication,
+        _capability=local_operator_storage_capability(),  # type: ignore[arg-type]
+    )
+    registry = VaultRegistryStore(Path(args.registry_path))
+    store = open_local_operator_principal_store(Path(args.registry_path))
+    with store.cutover_lock():
+        if store.load() is not None or principal_floor_recorded(registry):
+            raise RegistryError(
+                "principal cutover clean-failure state is no longer current"
+            )
+        if registry.load().revision != result_revision:
+            raise RegistryError(
+                "principal cutover clean-failure revision is stale"
+            )
+        receipt_path.unlink()
+    print(json.dumps({"ok": True, "clean_failure_verified": True}, sort_keys=True))
+    return 0
 
 
 def _read_credential(args: argparse.Namespace) -> str | None:
@@ -3267,20 +3376,40 @@ def _principal_command(args: argparse.Namespace) -> int:
     from app.instance.local_operator_principal import (
         PrincipalPreflightError,
         preflight_auth_posture,
+        verify_credential,
     )
     from app.instance.principal_fence import (
         PrincipalFenceError,
+        PrincipalFloorCompensationError,
+        compensate_principal_floor,
         inventory_from_quiescence,
         principal_floor_recorded,
         record_principal_floor,
     )
+
+    if args.command == "principal-verify-cutover-clean-failure":
+        try:
+            return _verify_principal_cutover_clean_failure(args)
+        except (OSError, ValueError, LedgerError, PrincipalPreflightError, RegistryError):
+            print(
+                json.dumps(
+                    {"ok": False, "error": "principal cutover receipt is not current"},
+                    sort_keys=True,
+                )
+            )
+            return 1
 
     registry_path = Path(args.registry_path)
     registry = VaultRegistryStore(registry_path)
     store = open_local_operator_principal_store(registry_path)
     extra: dict[str, object] = {}
     try:
-        if args.command == "principal-record-floor":
+        floor_write = None
+        inventory = None
+        posture = None
+        subjects = None
+        proof = None
+        if args.command in {"principal-record-floor", "principal-cutover"}:
             # Runs INSIDE MVR-01B's existing stopped window, after `deployment-prove`, with
             # the compose policy mounted read-only -- the same shape as
             # `authority-cutover`. It consumes that window's proof rather than inventing a
@@ -3301,9 +3430,10 @@ def _principal_command(args: argparse.Namespace) -> int:
             # deployment that records it and then fails to write the role would leave the
             # instance fenced, rollback-blocked, and principal-less. Refusing here makes
             # that ordering unreachable rather than merely unlikely.
-            preflight_auth_posture(
-                current_auth_posture(loopback_listener_proven=args.loopback_listener)
+            posture = current_auth_posture(
+                loopback_listener_proven=args.loopback_listener
             )
+            subjects = preflight_auth_posture(posture)
             inventory = inventory_from_quiescence(
                 channel_id=args.channel,
                 quiescence_proof=proof,
@@ -3311,41 +3441,205 @@ def _principal_command(args: argparse.Namespace) -> int:
                 compose_path=Path(args.compose_base),
                 repo_root=Path(args.native_producer_root),
             )
-            snapshot = record_principal_floor(
-                registry,
-                inventory=inventory,
-                _capability=local_operator_storage_capability(),
-            )
-            print(
-                json.dumps(
-                    {
-                        "ok": True,
-                        "consumer": args.consumer,
-                        "floor_recorded": True,
-                        "registry_revision": snapshot.revision,
-                        "fenced_producers": len(inventory.producers),
-                    },
-                    sort_keys=True,
+            try:
+                floor_write = record_principal_floor(
+                    registry,
+                    inventory=inventory,
+                    _capability=local_operator_storage_capability(),
                 )
-            )
-            return 0
+            except (OSError, RegistryError) as error:
+                if args.command == "principal-cutover":
+                    # Once the registry mutation starts, an unreadable outcome is not an
+                    # ordinary preflight failure: preserve the stopped lease because the
+                    # floor may be durable even though no receipt could be returned.
+                    raise PrincipalFloorCompensationError(
+                        "principal floor write outcome is ambiguous",
+                        provisioning_action=(
+                            "keep the deployment stopped and inspect principal state"
+                        ),
+                    ) from error
+                raise
+            if args.command == "principal-record-floor":
+                print(
+                    json.dumps(
+                        {
+                            "ok": True,
+                            "consumer": args.consumer,
+                            "floor_recorded": True,
+                            "floor_advanced": floor_write.advanced,
+                            "registry_revision": floor_write.snapshot.revision,
+                            "fenced_producers": len(inventory.producers),
+                        },
+                        sort_keys=True,
+                    )
+                )
+                return 0
         if args.command == "principal-show":
             record = store.require()
-        elif args.command == "principal-bootstrap":
+        elif args.command in {"principal-bootstrap", "principal-cutover"}:
             # The posture is read from server configuration, not asserted by flags, so the
             # bound subjects match what the request path will actually admit.
-            posture = current_auth_posture(
-                loopback_listener_proven=args.loopback_listener,
+            if posture is None:
+                posture = current_auth_posture(
+                    loopback_listener_proven=args.loopback_listener,
+                )
+            provenance = posture.migration_provenance(
+                existing_install=args.existing_install
             )
-            record = store.bootstrap(
-                credential=posture.credential,
-                subjects=preflight_auth_posture(posture),
-                migration_provenance=posture.migration_provenance(
-                    existing_install=args.existing_install
-                ),
-                floor_recorded=principal_floor_recorded(registry),
-                _capability=local_operator_storage_capability(),
-            )
+            compensation_enabled = args.command == "principal-cutover"
+            if compensation_enabled:
+                assert floor_write is not None
+                assert proof is not None
+
+                def _require_same_cutover_authority() -> None:
+                    """Re-prove this process's stopped lease before either mutation."""
+
+                    try:
+                        current_proof = json.loads(
+                            Path(args.quiescence_proof_path).read_text(encoding="utf-8")
+                        )
+                        _require_proved_deployment_lease(
+                            host_global_root=Path(args.host_global_root),
+                            channel=args.channel,
+                            nonce=current_proof.get("nonce"),
+                        )
+                        if current_proof.get("nonce") != proof.get("nonce"):
+                            raise PrincipalFloorCompensationError(
+                                "principal cutover lease changed after the floor write",
+                                provisioning_action=(
+                                    "keep the deployment stopped and inspect principal state"
+                                ),
+                            )
+                    except (
+                        OSError,
+                        ValueError,
+                        PrincipalFenceError,
+                        RegistryError,
+                    ) as error:
+                        raise PrincipalFloorCompensationError(
+                            "principal cutover cannot re-prove its stopped deployment window",
+                            provisioning_action=(
+                                "keep the deployment stopped and restore its proved lease before retrying"
+                            ),
+                        ) from error
+
+                _require_same_cutover_authority()
+                try:
+                    if registry.load().revision != floor_write.snapshot.revision:
+                        raise PrincipalFloorCompensationError(
+                            "principal state changed between floor and bootstrap",
+                            provisioning_action=(
+                                "keep the deployment stopped and inspect principal state"
+                            ),
+                        )
+                except (OSError, ValueError, PrincipalFenceError, RegistryError) as error:
+                    raise PrincipalFloorCompensationError(
+                        "principal cutover cannot re-prove its stopped deployment window",
+                        provisioning_action=(
+                            "keep the deployment stopped and restore its proved lease before retrying"
+                        ),
+                    ) from error
+            if subjects is None:
+                subjects = preflight_auth_posture(posture)
+            try:
+                record = store.bootstrap(
+                    credential=posture.credential,
+                    subjects=subjects,
+                    migration_provenance=provenance,
+                    floor_guard=lambda: principal_floor_recorded(registry),
+                    _capability=local_operator_storage_capability(),
+                )
+            except Exception as bootstrap_error:
+                if not compensation_enabled:
+                    raise
+                # Serialize the post-failure role read and compensation with bootstrap's
+                # floor guard + first-role write. Either bootstrap commits first and this
+                # path preserves its floor, or compensation completes first and a waiting
+                # bootstrap re-samples the missing floor and refuses to write.
+                with store.cutover_lock():
+                    try:
+                        committed = store.load()
+                    except (OSError, PrincipalPreflightError, RegistryError) as state_error:
+                        raise PrincipalFloorCompensationError(
+                            "bootstrap failed with ambiguous delegated-role state",
+                            provisioning_action=(
+                                "keep the deployment stopped and inspect the private principal record"
+                            ),
+                        ) from state_error
+                    if committed is not None:
+                        credential_matches = (
+                            verify_credential(
+                                committed.credential_fingerprint, posture.credential
+                            )
+                            if posture.credential
+                            else committed.credential_fingerprint is None
+                        )
+                        if (
+                            credential_matches
+                            and committed.subjects == subjects
+                            and committed.migration_provenance == provenance
+                        ):
+                            # Atomic persistence won before a later bootstrap step raised. Never
+                            # lower the floor beneath that role and never misreport the raised
+                            # bootstrap as success: preserve the stopped fence for a clean retry.
+                            raise PrincipalFloorCompensationError(
+                                "bootstrap reported failure after matching delegated-role state became durable",
+                                provisioning_action=(
+                                    "keep the deployment stopped and retry the idempotent bootstrap"
+                                ),
+                            ) from bootstrap_error
+                        raise PrincipalFloorCompensationError(
+                            "bootstrap failed after different delegated-role state became durable",
+                            provisioning_action=(
+                                "keep the deployment stopped and reconcile principal state"
+                            ),
+                        ) from bootstrap_error
+
+                    assert floor_write is not None
+                    if not floor_write.advanced:
+                        raise PrincipalFloorCompensationError(
+                            "bootstrap failed while a pre-existing principal floor remained active",
+                            provisioning_action=(
+                                "keep the deployment stopped and reconcile principal state"
+                            ),
+                        ) from bootstrap_error
+                    try:
+                        # Lease recheck, role absence, and compensation remain one
+                        # principal-lock-serialized decision.
+                        _require_same_cutover_authority()
+                        compensate_principal_floor(
+                            registry,
+                            channel_id=args.channel,
+                            expected_registry_revision=floor_write.snapshot.revision,
+                            _capability=local_operator_storage_capability(),
+                        )
+                    except Exception as compensation_error:
+                        raise PrincipalFloorCompensationError(
+                            "bootstrap failed and the principal floor could not be compensated",
+                            provisioning_action=(
+                                "keep the deployment stopped and repair the cutover before retrying"
+                            ),
+                        ) from compensation_error
+                if isinstance(
+                    bootstrap_error,
+                    (PrincipalPreflightError, CapabilityNotReadyError),
+                ):
+                    raise bootstrap_error
+                raise PrincipalPreflightError(
+                    "principal bootstrap failed before role persistence and the floor was compensated",
+                    provisioning_action=(
+                        "repair the bootstrap producer, then retry the cutover"
+                    ),
+                ) from bootstrap_error
+            if compensation_enabled:
+                assert floor_write is not None
+                assert inventory is not None
+                extra = {
+                    "floor_recorded": True,
+                    "floor_advanced": floor_write.advanced,
+                    "floor_registry_revision": floor_write.snapshot.revision,
+                    "fenced_producers": len(inventory.producers),
+                }
         elif args.command == "principal-rotate-credential":
             record = store.rotate_credential(
                 credential=_read_credential(args),
@@ -3384,14 +3678,100 @@ def _principal_command(args: argparse.Namespace) -> int:
             record = store.reconcile_roll_forward(
                 _capability=local_operator_storage_capability(),
             )
-    except (PrincipalFenceError, PrincipalPreflightError, CapabilityNotReadyError) as exc:
+    except PrincipalFloorCompensationError as exc:
         print(
             json.dumps(
                 {"ok": False, "consumer": args.consumer, "error": str(exc)},
                 sort_keys=True,
             )
         )
-        return 1
+        # Preserve the proved deployment fence for governed repair when role/floor
+        # state is ambiguous or compensation itself could not be proven.
+        return 75
+    except (PrincipalFenceError, PrincipalPreflightError, CapabilityNotReadyError) as exc:
+        exit_code = 1
+        if args.command == "principal-cutover":
+            try:
+                if principal_floor_recorded(registry):
+                    exit_code = 75
+            except (OSError, PrincipalPreflightError, RegistryError):
+                exit_code = 75
+            if exit_code == 1:
+                try:
+                    assert proof is not None
+                    receipt_path = _principal_cutover_receipt_path(
+                        host_global_root=Path(args.host_global_root),
+                        receipt_path=Path(args.clean_failure_receipt_path),
+                        attempt_id=args.attempt_id,
+                    )
+                    with store.cutover_lock():
+                        if store.load() is not None or principal_floor_recorded(registry):
+                            raise PrincipalFloorCompensationError(
+                                "principal clean-failure state became ambiguous",
+                                provisioning_action=(
+                                    "keep the deployment stopped and inspect principal state"
+                                ),
+                            )
+                        result_revision = registry.load().revision
+                        floor_revision = (
+                            floor_write.snapshot.revision
+                            if floor_write is not None and floor_write.advanced
+                            else None
+                        )
+                        payload: dict[str, object] = {
+                            "schema": _PRINCIPAL_CUTOVER_CLEAN_FAILURE_SCHEMA,
+                            "channel_id": args.channel,
+                            "deployment_nonce": proof["nonce"],
+                            "attempt_id": args.attempt_id,
+                            "outcome": "clean_failure",
+                            "floor_advanced": bool(
+                                floor_write is not None and floor_write.advanced
+                            ),
+                            "floor_registry_revision": floor_revision,
+                            "result_registry_revision": result_revision,
+                            "floor_recorded": False,
+                            "role_recorded": False,
+                        }
+                        authentication = OwnershipLedger(
+                            Path(args.host_global_root)
+                        ).authenticate_principal_cutover_receipt(
+                            payload,
+                            _capability=local_operator_storage_capability(),  # type: ignore[arg-type]
+                        )
+                        _write_private_json(
+                            receipt_path,
+                            {"payload": payload, "authentication": authentication},
+                        )
+                except (
+                    OSError,
+                    ValueError,
+                    LedgerError,
+                    PrincipalFloorCompensationError,
+                    PrincipalPreflightError,
+                    RegistryError,
+                ):
+                    exit_code = 75
+        print(
+            json.dumps(
+                {"ok": False, "consumer": args.consumer, "error": str(exc)},
+                sort_keys=True,
+            )
+        )
+        return exit_code
+    except (OSError, ValueError, RegistryError):
+        if args.command != "principal-cutover":
+            raise
+        print(
+            json.dumps(
+                {
+                    "ok": False,
+                    "consumer": args.consumer,
+                    "error": "principal cutover state is ambiguous; keep the deployment stopped",
+                },
+                sort_keys=True,
+            )
+        )
+        return 75
     print(
         json.dumps(
             {
@@ -3518,18 +3898,28 @@ def main(argv: list[str] | None = None) -> int:
         command = subparsers.add_parser(name)
         command.add_argument("--registry-path", type=Path, required=True)
         command.add_argument("--consumer", default=None)
-        if name == "principal-record-floor":
+        if name in {
+            "principal-record-floor",
+            "principal-cutover",
+            "principal-verify-cutover-clean-failure",
+        }:
             # Explicit mounted source paths, matching `authority-cutover`: the runtime image
             # contains no repo checkout, so nothing here may be derived from `__file__`.
             command.add_argument("--channel", required=True)
             command.add_argument("--host-global-root", type=Path, required=True)
-            command.add_argument("--inventory-path", type=Path, required=True)
             command.add_argument("--quiescence-proof-path", type=Path, required=True)
+        if name in {"principal-record-floor", "principal-cutover"}:
+            command.add_argument("--inventory-path", type=Path, required=True)
             command.add_argument("--compose-base", type=Path, required=True)
             command.add_argument("--native-producer-root", type=Path, required=True)
             # The floor preflights the posture the subsequent role write will use, so it
             # needs the same declaration `principal-bootstrap` takes.
             command.add_argument("--loopback-listener", action="store_true")
+        if name in {"principal-cutover", "principal-verify-cutover-clean-failure"}:
+            command.add_argument("--attempt-id", required=True)
+            command.add_argument(
+                "--clean-failure-receipt-path", type=Path, required=True
+            )
         if name == "principal-revoke-subject":
             command.add_argument(
                 "--subject",
@@ -3547,6 +3937,7 @@ def main(argv: list[str] | None = None) -> int:
             # configuration. This flag only declares that the deployment exposes a
             # loopback-local listener, and every request still proves loopback itself.
             command.add_argument("--loopback-listener", action="store_true")
+        if name in {"principal-bootstrap", "principal-cutover"}:
             command.add_argument("--existing-install", action="store_true")
         if name == "principal-rotate-credential":
             command.add_argument("--credential-stdin", action="store_true")

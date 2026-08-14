@@ -11,6 +11,19 @@ import pytest
 pytestmark = pytest.mark.pg
 REPO_ROOT = Path(__file__).resolve().parents[2]
 PRE_CUTOVER_REVISION = "4d1e0c9a3329"
+PRE_BINDING_REKEY_REVISION = "d1e8a0c5f37b"
+COMPATIBILITY_BINDING_ID = "legacy-compatibility-binding"
+
+SUPPORTED_STORE_OBJECT_CONSUMERS = {
+    ("chunks", "object_id"),
+    ("embeddings", "object_id"),
+    ("relations", "src_id"),
+    ("relations", "dst_id"),
+    ("membership", "object_id"),
+    ("membership", "set_id"),
+    ("decisions", "object_id"),
+    ("audit", "object_id"),
+}
 
 
 def _admin_dsn() -> str:
@@ -53,6 +66,268 @@ def _upgrade(revision: str) -> None:
     cfg = Config(str(REPO_ROOT / "alembic.ini"))
     cfg.set_main_option("script_location", str(REPO_ROOT / "app" / "alembic"))
     command.upgrade(cfg, revision)
+
+
+def _store_object_fk_inventory(conn: psycopg.Connection) -> dict[tuple[str, str], dict]:
+    rows = conn.execute(
+        """
+        SELECT child.relname AS table_name,
+               child_att.attname AS endpoint,
+               array_agg(all_child_att.attname ORDER BY ck.ordinality) AS child_columns,
+               array_agg(parent_att.attname ORDER BY ck.ordinality) AS parent_columns,
+               c.confupdtype::text,
+               c.confdeltype::text,
+               c.condeferrable,
+               c.condeferred,
+               COALESCE((
+                   SELECT array_agg(set_att.attname ORDER BY sk.ordinality)
+                   FROM unnest(c.confdelsetcols) WITH ORDINALITY sk(attnum, ordinality)
+                   JOIN pg_attribute set_att
+                     ON set_att.attrelid = c.conrelid AND set_att.attnum = sk.attnum
+               ), ARRAY[]::name[]) AS delete_set_columns
+          FROM pg_constraint c
+          JOIN pg_class child ON child.oid = c.conrelid
+          JOIN unnest(c.conkey) WITH ORDINALITY ck(attnum, ordinality) ON true
+          JOIN pg_attribute all_child_att
+            ON all_child_att.attrelid = c.conrelid AND all_child_att.attnum = ck.attnum
+          JOIN pg_attribute parent_att
+            ON parent_att.attrelid = c.confrelid
+           AND parent_att.attnum = c.confkey[ck.ordinality]
+          JOIN pg_attribute child_att
+            ON child_att.attrelid = c.conrelid
+           AND child_att.attname <> 'vault_binding_id'
+           AND child_att.attnum = ANY(c.conkey)
+         WHERE c.contype = 'f'
+           AND c.confrelid = 'public.store_objects'::regclass
+         GROUP BY c.oid, child.relname, child_att.attname
+        """
+    ).fetchall()
+    return {
+        (str(row[0]), str(row[1])): {
+            "child_columns": list(row[2]),
+            "parent_columns": list(row[3]),
+            "update": row[4],
+            "delete": row[5],
+            "deferrable": row[6],
+            "deferred": row[7],
+            "delete_set_columns": list(row[8]),
+        }
+        for row in rows
+    }
+
+
+def test_every_supported_store_objects_child_fk_is_binding_keyed(scratch_dsn: str) -> None:
+    """The historical eighth endpoint is converted only on that lineage."""
+    _upgrade(PRE_CUTOVER_REVISION)
+    with psycopg.connect(scratch_dsn) as conn:
+        fk_name = conn.execute(
+            "SELECT conname FROM pg_constraint "
+            "WHERE conrelid = 'public.membership'::regclass AND contype = 'f' "
+            "AND conkey = ARRAY[(SELECT attnum FROM pg_attribute "
+            "WHERE attrelid = 'public.membership'::regclass AND attname = 'set_id')]::smallint[]"
+        ).fetchone()[0]
+        conn.execute(f'ALTER TABLE public.membership DROP CONSTRAINT "{fk_name}"')
+        conn.execute(
+            "ALTER TABLE public.membership ADD CONSTRAINT membership_set_id_fkey "
+            "FOREIGN KEY (set_id) REFERENCES public.objects(id) ON DELETE CASCADE"
+        )
+
+    _upgrade("head")
+
+    with psycopg.connect(scratch_dsn) as conn:
+        inventory = _store_object_fk_inventory(conn)
+    assert set(inventory) == SUPPORTED_STORE_OBJECT_CONSUMERS
+    for endpoint, shape in inventory.items():
+        assert shape["child_columns"] == ["vault_binding_id", endpoint[1]]
+        assert shape["parent_columns"] == ["vault_binding_id", "object_id"]
+
+
+def test_binding_rekey_rejects_known_consumer_targeting_wrong_parent_column(
+    scratch_dsn: str,
+) -> None:
+    """A familiar child name cannot make an alternate parent key supported."""
+    _upgrade(PRE_BINDING_REKEY_REVISION)
+    with psycopg.connect(scratch_dsn) as conn:
+        conn.execute("ALTER TABLE store_objects ADD COLUMN alternate_id uuid UNIQUE")
+        fk_name = conn.execute(
+            "SELECT conname FROM pg_constraint "
+            "WHERE conrelid = 'public.decisions'::regclass AND contype = 'f' "
+            "AND confrelid = 'public.store_objects'::regclass"
+        ).fetchone()[0]
+        conn.execute(f'ALTER TABLE decisions DROP CONSTRAINT "{fk_name}"')
+        conn.execute(
+            "ALTER TABLE decisions ADD CONSTRAINT decisions_object_id_fkey "
+            "FOREIGN KEY (object_id) REFERENCES store_objects(alternate_id) ON DELETE SET NULL"
+        )
+
+    with pytest.raises(Exception, match=r"store_objects\.alternate_id"):
+        _upgrade("head")
+
+    with psycopg.connect(scratch_dsn) as conn:
+        target = conn.execute(
+            "SELECT referenced.attname FROM pg_constraint c "
+            "JOIN pg_attribute referenced ON referenced.attrelid = c.confrelid "
+            "AND referenced.attnum = c.confkey[1] "
+            "WHERE c.conrelid = 'public.decisions'::regclass AND c.contype = 'f'"
+        ).fetchone()[0]
+        binding_column = conn.execute(
+            "SELECT 1 FROM information_schema.columns "
+            "WHERE table_schema = 'public' AND table_name = 'store_objects' "
+            "AND column_name = 'vault_binding_id'"
+        ).fetchone()
+    assert target == "alternate_id"
+    assert binding_column is None
+
+
+def test_composite_store_object_fk_rejects_cross_binding_reference(
+    scratch_dsn: str,
+) -> None:
+    _upgrade("head")
+    object_id = uuid.uuid4()
+    with psycopg.connect(scratch_dsn) as conn:
+        with conn.cursor() as cur:
+            cur.executemany(
+                "INSERT INTO store_objects "
+                "(vault_binding_id, object_id, kind, payload) "
+                "VALUES (%s, %s, 'note', '{}'::jsonb)",
+                [("binding-a", object_id), ("binding-b", object_id)],
+            )
+            cur.executemany(
+                "INSERT INTO decisions (vault_binding_id, object_id, key, value) "
+                "VALUES (%s, %s, 'review', '{}'::jsonb)",
+                [("binding-a", object_id), ("binding-b", object_id)],
+            )
+        with pytest.raises(psycopg.errors.ForeignKeyViolation):
+            with conn.transaction():
+                conn.execute(
+                    "INSERT INTO decisions (vault_binding_id, object_id, key, value) "
+                    "VALUES ('binding-c', %s, 'review', '{}'::jsonb)",
+                    (object_id,),
+                )
+        assert conn.execute(
+            "SELECT count(*) FROM decisions WHERE object_id = %s", (object_id,)
+        ).fetchone() == (2,)
+
+
+@pytest.mark.parametrize("failure_mode", ["zero-parent", "many-parent", "endpoint", "meta"])
+def test_binding_backfill_is_parent_provable_or_fails_before_conversion(
+    scratch_dsn: str,
+    failure_mode: str,
+) -> None:
+    _upgrade(PRE_BINDING_REKEY_REVISION)
+    first = uuid.uuid4()
+    second = uuid.uuid4()
+    with psycopg.connect(scratch_dsn) as conn:
+        if failure_mode == "zero-parent":
+            conn.execute(
+                "INSERT INTO store_objects (object_id, kind, payload) "
+                "VALUES (%s, 'note', '{}'::jsonb)",
+                (first,),
+            )
+        elif failure_mode == "many-parent":
+            with conn.cursor() as cur:
+                cur.executemany(
+                    "INSERT INTO objects (id, uuid, kind, payload, vault_binding_id) "
+                    "VALUES (%s, %s, 'note', '{}'::jsonb, %s)",
+                    [(first, first, "binding-a"), (first, first, "binding-b")],
+                )
+            conn.execute(
+                "INSERT INTO store_objects (object_id, kind, payload) "
+                "VALUES (%s, 'note', '{}'::jsonb)",
+                (first,),
+            )
+        elif failure_mode == "endpoint":
+            with conn.cursor() as cur:
+                cur.executemany(
+                    "INSERT INTO objects (id, uuid, kind, payload, vault_binding_id) "
+                    "VALUES (%s, %s, 'note', '{}'::jsonb, %s)",
+                    [(first, first, "binding-a"), (second, second, "binding-b")],
+                )
+                cur.executemany(
+                    "INSERT INTO store_objects (object_id, kind, payload) "
+                    "VALUES (%s, 'note', '{}'::jsonb)",
+                    [(first,), (second,)],
+                )
+            conn.execute(
+                "INSERT INTO store_relations (src_id, dst_id, rel) VALUES (%s, %s, 'links')",
+                (first, second),
+            )
+        else:
+            conn.execute(
+                "INSERT INTO vector_index_meta (id, identity_json) VALUES (1, '{}')"
+            )
+
+    with pytest.raises(Exception, match=r"MVR-05A3"):
+        _upgrade("head")
+
+    with psycopg.connect(scratch_dsn) as conn:
+        binding_column = conn.execute(
+            "SELECT 1 FROM information_schema.columns "
+            "WHERE table_schema = 'public' AND table_name = 'store_objects' "
+            "AND column_name = 'vault_binding_id'"
+        ).fetchone()
+        pk = conn.execute(
+            "SELECT array_agg(a.attname ORDER BY k.ordinality) "
+            "FROM pg_constraint c "
+            "JOIN unnest(c.conkey) WITH ORDINALITY k(attnum, ordinality) ON true "
+            "JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = k.attnum "
+            "WHERE c.conrelid = 'public.store_objects'::regclass AND c.contype = 'p'"
+        ).fetchone()[0]
+        quarantine = conn.execute("SELECT to_regclass('public.mvr05a3_quarantine')").fetchone()[0]
+    assert binding_column is None
+    assert list(pk) == ["object_id"]
+    assert quarantine is None
+
+
+def test_binding_keyed_fks_preserve_actions_and_nullable_receipt_provenance(
+    scratch_dsn: str,
+) -> None:
+    _upgrade(PRE_BINDING_REKEY_REVISION)
+    object_id = uuid.uuid4()
+    with psycopg.connect(scratch_dsn) as conn:
+        before = {
+            key: (value["update"], value["delete"], value["deferrable"], value["deferred"])
+            for key, value in _store_object_fk_inventory(conn).items()
+        }
+        conn.execute(
+            "INSERT INTO objects (id, uuid, kind, payload, vault_binding_id) "
+            "VALUES (%s, %s, 'note', '{}'::jsonb, %s)",
+            (object_id, object_id, COMPATIBILITY_BINDING_ID),
+        )
+        conn.execute(
+            "INSERT INTO store_objects (object_id, kind, payload) "
+            "VALUES (%s, 'note', '{}'::jsonb)",
+            (object_id,),
+        )
+        conn.execute(
+            "INSERT INTO decisions (object_id, key, value) VALUES (%s, 'review', '{}'::jsonb)",
+            (object_id,),
+        )
+        conn.execute(
+            "INSERT INTO audit (id, object_id, agent, action) VALUES (%s, %s, 'test', 'read')",
+            (uuid.uuid4(), object_id),
+        )
+
+    _upgrade("head")
+
+    with psycopg.connect(scratch_dsn) as conn:
+        after = _store_object_fk_inventory(conn)
+        assert {
+            key: (value["update"], value["delete"], value["deferrable"], value["deferred"])
+            for key, value in after.items()
+        } == before
+        assert after[("decisions", "object_id")]["delete_set_columns"] == ["object_id"]
+        assert after[("audit", "object_id")]["delete_set_columns"] == ["object_id"]
+        conn.execute(
+            "DELETE FROM store_objects WHERE vault_binding_id = %s AND object_id = %s",
+            (COMPATIBILITY_BINDING_ID, object_id),
+        )
+        decision = conn.execute(
+            "SELECT vault_binding_id, object_id FROM decisions"
+        ).fetchone()
+        audit = conn.execute("SELECT vault_binding_id, object_id FROM audit").fetchone()
+    assert decision == (COMPATIBILITY_BINDING_ID, None)
+    assert audit == (COMPATIBILITY_BINDING_ID, None)
 
 
 def test_legacy_objects_fk_migration_fails_loudly_on_unsupported_state(scratch_dsn: str) -> None:
@@ -285,8 +560,9 @@ def test_unchanged_post_migration_sync_heals_incomplete_canonical_locator(
             "SELECT source_ref FROM store_objects WHERE object_id = %s", (object_id,)
         ).fetchone() == (str(note.resolve()),)
         conn.execute(
-            "UPDATE store_objects SET source_ref = NULL WHERE object_id = %s",
-            (object_id,),
+            "UPDATE store_objects SET source_ref = NULL "
+            "WHERE vault_binding_id = %s AND object_id = %s",
+            (COMPATIBILITY_BINDING_ID, object_id),
         )
 
     monkeypatch.setenv("VAULT_ROOT", str(vault))
@@ -635,8 +911,9 @@ def test_runtime_identity_resolver_rejects_post_cutover_cross_key_collision(
     # cross-key collision invariant after an earlier successful lookup.
     with psycopg.connect(scratch_dsn) as conn:
         conn.execute(
-            "INSERT INTO store_objects (object_id, kind, payload) VALUES (%s, 'note', '{}'::jsonb)",
-            (vault_uuid,),
+            "INSERT INTO store_objects (vault_binding_id, object_id, kind, payload) "
+            "VALUES (%s, %s, 'note', '{}'::jsonb)",
+            (COMPATIBILITY_BINDING_ID, vault_uuid),
         )
 
     with pytest.raises(RuntimeError, match="cross-key identity collision"):
@@ -705,6 +982,21 @@ def test_migration_locks_both_identity_producer_tables() -> None:
     ).read_text(encoding="utf-8")
 
     assert "LOCK TABLE public.objects, public.store_objects IN SHARE ROW EXCLUSIVE MODE" in migration
+
+
+def test_binding_rekey_snapshots_fk_inventory_only_after_full_lock() -> None:
+    migration = (
+        REPO_ROOT
+        / "app"
+        / "alembic"
+        / "versions"
+        / "e6c4a2b8d1f3_mvr05a3_store_object_binding_keys.py"
+    ).read_text(encoding="utf-8")
+
+    lock = migration.index("LOCK TABLE\n                public.objects")
+    snapshot = migration.index("CREATE TEMP TABLE mvr05a3_fk_snapshot ON COMMIT DROP AS")
+    inventory_check = migration.index("MVR-05A3 unaccounted store_objects FK consumer")
+    assert lock < snapshot < inventory_check
 
 
 def test_runtime_bootstrap_preserves_objects_primary_key_after_cutover(scratch_dsn: str) -> None:
@@ -785,7 +1077,9 @@ def test_migration_retargets_every_reviewed_consumer_with_live_rows(scratch_dsn:
         rows = conn.execute(
             "SELECT conrelid::regclass::text, a.attname, confrelid::regclass::text, c.confdeltype "
             "FROM pg_constraint c "
-            "JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = c.conkey[1] "
+            "JOIN unnest(c.conkey) WITH ORDINALITY child_key(attnum, ordinality) ON true "
+            "JOIN pg_attribute a ON a.attrelid = c.conrelid "
+            "AND a.attnum = child_key.attnum AND a.attname <> 'vault_binding_id' "
             "WHERE c.contype = 'f' "
             "  AND c.confrelid IN ('public.store_objects'::regclass, 'public.objects'::regclass) "
             "ORDER BY 1, 2"
@@ -804,3 +1098,151 @@ def test_migration_retargets_every_reviewed_consumer_with_live_rows(scratch_dsn:
     assert retargeted[("audit", "object_id")] == ("store_objects", "n")
     assert not any(target == "objects" for target, _ in retargeted.values())
     assert all(count == 1 for count in counts.values())
+
+
+def test_binding_backfill_counts_distinct_store_relation_assignments(
+    scratch_dsn: str,
+) -> None:
+    """Several relation values for one endpoint pair are one binding proof."""
+    _upgrade(PRE_BINDING_REKEY_REVISION)
+    src_id = uuid.uuid4()
+    dst_id = uuid.uuid4()
+    with psycopg.connect(scratch_dsn) as conn:
+        with conn.cursor() as cur:
+            cur.executemany(
+                "INSERT INTO objects "
+                "(id, uuid, kind, payload, vault_binding_id) "
+                "VALUES (%s, %s, 'note', '{}'::jsonb, %s)",
+                [
+                    (src_id, src_id, COMPATIBILITY_BINDING_ID),
+                    (dst_id, dst_id, COMPATIBILITY_BINDING_ID),
+                ],
+            )
+            cur.executemany(
+                "INSERT INTO store_objects (object_id, kind, payload) "
+                "VALUES (%s, 'note', '{}'::jsonb)",
+                [(src_id,), (dst_id,)],
+            )
+            cur.executemany(
+                "INSERT INTO store_relations (src_id, dst_id, rel) "
+                "VALUES (%s, %s, %s)",
+                [(src_id, dst_id, "links"), (src_id, dst_id, "quotes")],
+            )
+
+    _upgrade("head")
+
+    with psycopg.connect(scratch_dsn) as conn:
+        rows = conn.execute(
+            "SELECT rel, vault_binding_id FROM store_relations "
+            "WHERE src_id = %s AND dst_id = %s ORDER BY rel",
+            (src_id, dst_id),
+        ).fetchall()
+    assert rows == [
+        ("links", COMPATIBILITY_BINDING_ID),
+        ("quotes", COMPATIBILITY_BINDING_ID),
+    ]
+
+
+def test_binding_backfill_counts_distinct_parent_assignments_not_child_rows(
+    scratch_dsn: str,
+) -> None:
+    """Repeated children of one parent are not mistaken for many parents."""
+    _upgrade(PRE_BINDING_REKEY_REVISION)
+    object_id = uuid.uuid4()
+    other_id = uuid.uuid4()
+    chunk_ids = [uuid.uuid4(), uuid.uuid4()]
+    with psycopg.connect(scratch_dsn) as conn:
+        with conn.cursor() as cur:
+            membership_set_fk = cur.execute(
+                "SELECT conname FROM pg_constraint "
+                "WHERE conrelid = 'public.membership'::regclass AND contype = 'f' "
+                "AND conkey = ARRAY[(SELECT attnum FROM pg_attribute "
+                "WHERE attrelid = 'public.membership'::regclass "
+                "AND attname = 'set_id')]::smallint[]"
+            ).fetchone()[0]
+            cur.execute(
+                f'ALTER TABLE membership DROP CONSTRAINT "{membership_set_fk}"'
+            )
+            cur.execute(
+                "ALTER TABLE membership ADD CONSTRAINT membership_set_id_fkey "
+                "FOREIGN KEY (set_id) REFERENCES store_objects(object_id) ON DELETE CASCADE"
+            )
+            cur.executemany(
+                "INSERT INTO objects "
+                "(id, uuid, kind, payload, vault_binding_id) "
+                "VALUES (%s, %s, 'note', '{}'::jsonb, %s)",
+                [
+                    (object_id, object_id, COMPATIBILITY_BINDING_ID),
+                    (other_id, other_id, COMPATIBILITY_BINDING_ID),
+                ],
+            )
+            cur.executemany(
+                "INSERT INTO store_objects (object_id, kind, payload) "
+                "VALUES (%s, 'note', '{}'::jsonb)",
+                [(object_id,), (other_id,)],
+            )
+            cur.executemany(
+                "INSERT INTO chunks "
+                "(id, object_id, idx, offset_start, offset_end, text) "
+                "VALUES (%s, %s, %s, 0, 1, 'x')",
+                [
+                    (chunk_ids[0], object_id, 0),
+                    (chunk_ids[1], object_id, 1),
+                ],
+            )
+            cur.executemany(
+                "INSERT INTO embeddings (id, object_id, chunk_id, dim) "
+                "VALUES (%s, %s, %s, 3)",
+                [
+                    (uuid.uuid4(), object_id, chunk_ids[0]),
+                    (uuid.uuid4(), object_id, chunk_ids[1]),
+                ],
+            )
+            cur.executemany(
+                "INSERT INTO relations (id, src_id, dst_id, type) "
+                "VALUES (%s, %s, %s, %s)",
+                [
+                    (uuid.uuid4(), object_id, other_id, "links"),
+                    (uuid.uuid4(), object_id, other_id, "quotes"),
+                ],
+            )
+            cur.executemany(
+                "INSERT INTO membership (id, set_id, object_id) VALUES (%s, %s, %s)",
+                [
+                    (uuid.uuid4(), other_id, object_id),
+                    (uuid.uuid4(), object_id, object_id),
+                ],
+            )
+            cur.executemany(
+                "INSERT INTO decisions (object_id, key, value) "
+                "VALUES (%s, %s, '{}'::jsonb)",
+                [(object_id, "first"), (object_id, "second")],
+            )
+            cur.executemany(
+                "INSERT INTO audit (id, object_id, agent, action) "
+                "VALUES (%s, %s, 'test', %s)",
+                [
+                    (uuid.uuid4(), object_id, "first"),
+                    (uuid.uuid4(), object_id, "second"),
+                ],
+            )
+
+    _upgrade("head")
+
+    with psycopg.connect(scratch_dsn) as conn:
+        for table in (
+            "chunks",
+            "embeddings",
+            "relations",
+            "membership",
+            "decisions",
+            "audit",
+        ):
+            rows = conn.execute(
+                f"SELECT count(*), count(DISTINCT vault_binding_id) FROM {table}"
+            ).fetchone()
+            assert rows == (2, 1), table
+        bindings = conn.execute(
+            "SELECT DISTINCT vault_binding_id FROM chunks"
+        ).fetchall()
+    assert bindings == [(COMPATIBILITY_BINDING_ID,)]

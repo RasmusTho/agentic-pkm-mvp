@@ -361,23 +361,28 @@ def test_every_candidate_create_once_seam_has_port_coverage() -> None:
         # human note created in the check/write window blocks the projection
         # instead of being overwritten by a versionless write.
         ("app/heimdal/time_spend.py", "write_time_spend_note"),
+        (
+            "app/knowledge_acquisition/candidate_writeback.py",
+            "_write_versioned_proposal",
+        ),
         ("app/knowledge_acquisition/candidate_writeback.py", "write_candidate_note"),
     ]
 
     writeback_tree = ast.parse(writeback_path.read_text(encoding="utf-8"))
-    write_candidate = next(
-        node
-        for node in ast.walk(writeback_tree)
-        if isinstance(node, ast.FunctionDef) and node.name == "write_candidate_note"
-    )
-    assert (
-        sum(
-            call_name(call) == "create_candidate_note_once"
-            for call in ast.walk(write_candidate)
-            if isinstance(call, ast.Call)
+    for function_name in ("_write_versioned_proposal", "write_candidate_note"):
+        write_candidate = next(
+            node
+            for node in ast.walk(writeback_tree)
+            if isinstance(node, ast.FunctionDef) and node.name == function_name
         )
-        == 1
-    )
+        assert (
+            sum(
+                call_name(call) == "create_candidate_note_once"
+                for call in ast.walk(write_candidate)
+                if isinstance(call, ast.Call)
+            )
+            == 1
+        )
 
     mutant_tree = ast.parse(
         write_ops_path.read_text(encoding="utf-8").replace(

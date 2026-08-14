@@ -410,7 +410,7 @@ def test_long_running_transcription_does_not_block_unrelated_writes(
     assert any(stage.status == "written" for stage in acquisition_result.stages)
 
 
-def test_acquire_valid_empty_asr_skips_extraction_and_writes_false_candidate(
+def test_acquire_valid_empty_asr_blocks_candidate_when_summary_is_required(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     raw_record = {
@@ -453,19 +453,68 @@ def test_acquire_valid_empty_asr_skips_extraction_and_writes_false_candidate(
         fetch_fn=lambda _url: outcome,
     )
 
-    assert receipt.ok is True
-    assert [stage.stage for stage in receipt.stages] == ["raw", "normalize", "candidate"]
+    assert receipt.ok is False
+    assert [stage.stage for stage in receipt.stages] == [
+        "raw",
+        "normalize",
+        "extracted",
+        "candidate",
+    ]
     candidate_stage = receipt.stages[-1]
-    assert candidate_stage.status == "written"
-    note = (tmp_path / "vault" / candidate_stage.artifact_path).read_text(encoding="utf-8")
-    assert "transcript_available: false" in note
-    assert "Model confidence" not in note
-    assert conn.rows_for(STAGE_DEAD_LETTERED_TOPIC) == []
+    assert candidate_stage.status == "skipped_upstream_dead_letter"
+    assert receipt.required_dead_lettered == ("summary",)
+    assert list((tmp_path / "vault").rglob("*.md")) == []
+    assert len(conn.rows_for(STAGE_DEAD_LETTERED_TOPIC)) == 1
     completed_stages = {
         json.loads(row["payload"])["payload"]["stage"]
         for row in conn.rows_for(STAGE_COMPLETED_TOPIC)
     }
-    assert completed_stages == {"normalize", "candidate"}
+    assert completed_stages == {"normalize"}
+
+
+def test_acquire_valid_empty_asr_materializes_degraded_when_summary_is_optional(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    raw_record = {
+        "source_kind": "youtube_url",
+        "item_ref": VIDEO_ID,
+        "url": FAKE_URL,
+        "content_identity": "sha256:acquire-empty-asr-optional",
+        "acquisition_method": "asr",
+        "caption_language": "en",
+        "caption_body": "",
+        "asr_segments": [],
+        "metadata": {"title": "Silent Video", "chapters": []},
+        "provenance": {"source_kind": "youtube_url", "url": FAKE_URL},
+    }
+    outcome = plugin.FetchOutcome(
+        object_id="raw-empty-asr-optional",
+        content_identity=raw_record["content_identity"],
+        is_new=True,
+        acquisition_method="asr",
+        language="en",
+        record=raw_record,
+    )
+    conn = FakeOutboxConn()
+    vault = _vault(tmp_path / "vault")
+
+    receipt = acquire_youtube(
+        FAKE_URL,
+        vault_context=vault,
+        extractor_requirements={"summary": "optional_for_materialization"},
+        write_guard=_allowing_guard(),
+        conn=conn,
+        fetch_fn=lambda _url: outcome,
+    )
+
+    assert receipt.ok is True
+    assert receipt.optional_dead_lettered == ("summary",)
+    candidate_stage = receipt.stages[-1]
+    assert candidate_stage.status == "written_degraded"
+    assert candidate_stage.artifact_path is not None
+    note = (tmp_path / "vault" / candidate_stage.artifact_path).read_text(encoding="utf-8")
+    assert "transcript_available: false" in note
+    assert "acquire-replay:raw-empty-asr-optional:extractor:summary" in note
 
 
 def test_acquire_malformed_asr_evidence_dead_letters_before_extraction(
@@ -606,6 +655,228 @@ def test_acquire_youtube_extractor_dead_letter_skips_candidate(
     payload = json.loads(dl_rows[0]["payload"])["payload"]
     assert payload["stage"] == "extracted"
     assert payload["extractor_id"] == "always_fails"
+
+
+def test_optional_extractor_dead_letter_materializes_degraded_candidate_without_erasing_evidence(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app.knowledge_acquisition.extraction_persistence import load_latest_extraction
+    from app.knowledge_acquisition.extraction_registry import ExtractorSpec, register_extractor
+    from app.knowledge_acquisition.raw_record import get_raw_record
+
+    def _boom(_normalized):
+        raise RuntimeError("optional section unavailable")
+
+    register_extractor(
+        ExtractorSpec(
+            extractor_id="optional_fails",
+            version=1,
+            input_content_type="transcript",
+            output_schema_ref="test.optional-failure.v1",
+            run=_boom,
+            model_identity=lambda: {"provider": "test", "model": "test"},
+        )
+    )
+    _stub_caption_fetch(monkeypatch)
+    conn = FakeOutboxConn()
+    vault = _vault(tmp_path / "vault")
+
+    receipt = acquire_youtube(
+        FAKE_URL,
+        vault_context=vault,
+        extractor_ids=("summary", "optional_fails"),
+        extractor_requirements={
+            "summary": "required_for_materialization",
+            "optional_fails": "optional_for_materialization",
+        },
+        write_guard=_allowing_guard(),
+        conn=conn,
+    )
+
+    assert receipt.ok is True
+    assert receipt.required_dead_lettered == ()
+    assert receipt.optional_dead_lettered == ("optional_fails",)
+    assert receipt.degraded is True
+    candidate_stage = next(stage for stage in receipt.stages if stage.stage == "candidate")
+    assert candidate_stage.status == "written_degraded"
+    note = (Path(vault.active_vault_path) / candidate_stage.artifact_path).read_text(
+        encoding="utf-8"
+    )
+    assert "degraded" in note.lower()
+    assert "optional_fails" in note
+    assert f"acquire-replay:{receipt.raw_record_id}:extractor:optional_fails" in note
+    assert get_raw_record(receipt.raw_record_id) is not None
+    summary = load_latest_extraction(
+        raw_record_id=receipt.raw_record_id,
+        content_identity=receipt.content_identity,
+        extractor_id="summary",
+        extractor_version=summary_extractor.EXTRACTOR_VERSION,
+    )
+    assert summary is not None
+    assert summary.result.output["summary"] == "A deterministic test summary."
+    assert len(conn.rows_for(STAGE_DEAD_LETTERED_TOPIC)) == 1
+
+
+def test_required_extractor_dead_letter_blocks_candidate_and_preserves_successes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app.knowledge_acquisition.extraction_persistence import load_latest_extraction
+    from app.knowledge_acquisition.extraction_registry import ExtractorSpec, register_extractor
+    from app.knowledge_acquisition.raw_record import get_raw_record
+
+    def _boom(_normalized):
+        raise RuntimeError("required evidence unavailable")
+
+    register_extractor(
+        ExtractorSpec(
+            extractor_id="required_fails",
+            version=1,
+            input_content_type="transcript",
+            output_schema_ref="test.required-failure.v1",
+            run=_boom,
+            model_identity=lambda: {"provider": "test", "model": "test"},
+        )
+    )
+    _stub_caption_fetch(monkeypatch)
+    conn = FakeOutboxConn()
+    vault = _vault(tmp_path / "vault")
+
+    receipt = acquire_youtube(
+        FAKE_URL,
+        vault_context=vault,
+        extractor_ids=("summary", "required_fails"),
+        extractor_requirements={
+            "summary": "required_for_materialization",
+            "required_fails": "required_for_materialization",
+        },
+        write_guard=_allowing_guard(),
+        conn=conn,
+    )
+
+    assert receipt.ok is False
+    assert receipt.required_dead_lettered == ("required_fails",)
+    assert receipt.optional_dead_lettered == ()
+    candidate_stage = next(stage for stage in receipt.stages if stage.stage == "candidate")
+    assert candidate_stage.status == "skipped_upstream_dead_letter"
+    assert list(Path(vault.active_vault_path).rglob("*.md")) == []
+    assert get_raw_record(receipt.raw_record_id) is not None
+    summary = load_latest_extraction(
+        raw_record_id=receipt.raw_record_id,
+        content_identity=receipt.content_identity,
+        extractor_id="summary",
+        extractor_version=summary_extractor.EXTRACTOR_VERSION,
+    )
+    assert summary is not None
+    assert summary.result.output["summary"] == "A deterministic test summary."
+    dead_letter = json.loads(conn.rows_for(STAGE_DEAD_LETTERED_TOPIC)[0]["payload"])[
+        "payload"
+    ]
+    assert dead_letter["extractor_id"] == "required_fails"
+    assert dead_letter["materialization_requirement"] == "required"
+
+
+def test_ordinary_extractor_version_upgrade_writes_proposal_without_overwrite(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import app.knowledge_acquisition.acquire as acquire_module
+    from app.knowledge_acquisition.extraction_registry import (
+        ExtractorSpec,
+        register_extractor,
+    )
+
+    _stub_caption_fetch(monkeypatch)
+    conn = FakeOutboxConn()
+    vault = _vault(tmp_path / "vault")
+    first = acquire_youtube(
+        FAKE_URL,
+        vault_context=vault,
+        write_guard=_allowing_guard(),
+        conn=conn,
+    )
+    first_candidate = next(stage for stage in first.stages if stage.stage == "candidate")
+    assert first_candidate.status == "written"
+    assert first_candidate.artifact_path is not None
+    candidate = Path(vault.active_vault_path) / first_candidate.artifact_path
+    owner_bytes = candidate.read_bytes() + b"\nOWNER AUTHORED UPGRADE NOTE\n"
+    candidate.write_bytes(owner_bytes)
+
+    observed_writes: list[tuple[tuple[bool, ...], bool]] = []
+    original_write = acquire_module.write_candidate_note
+
+    def _observed_write(candidate, **kwargs):
+        observed_writes.append(
+            (
+                tuple(result.replayed for result in candidate.extractions),
+                bool(kwargs.get("proposal_on_existing")),
+            )
+        )
+        return original_write(candidate, **kwargs)
+
+    monkeypatch.setattr(acquire_module, "write_candidate_note", _observed_write)
+
+    register_extractor(
+        ExtractorSpec(
+            extractor_id="summary",
+            version=summary_extractor.EXTRACTOR_VERSION + 1,
+            input_content_type="transcript",
+            output_schema_ref="test.summary.upgrade",
+            run=lambda _normalized: {
+                "summary": "Version two durable summary.",
+                "confidence": 0.9,
+            },
+            model_identity=lambda: {"provider": "test", "model": "summary-v2"},
+        )
+    )
+    upgraded = acquire_youtube(
+        FAKE_URL,
+        vault_context=vault,
+        write_guard=_allowing_guard(),
+        conn=conn,
+    )
+
+    assert candidate.read_bytes() == owner_bytes
+    assert observed_writes == [((False,), True)]
+    upgraded_candidate = next(
+        stage for stage in upgraded.stages if stage.stage == "candidate"
+    )
+    assert upgraded_candidate.status == "proposal_written"
+    assert upgraded_candidate.artifact_path is not None
+    proposal = Path(vault.active_vault_path) / upgraded_candidate.artifact_path
+    assert proposal != candidate
+    assert "Version two durable summary." in proposal.read_text(encoding="utf-8")
+    assert len(list(candidate.parent.glob("*.meta.md"))) == 1
+
+
+def test_normalized_persistence_failure_is_durable_terminal_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import app.knowledge_acquisition.acquire as acquire_module
+    from app.knowledge_acquisition.acquire import TerminalAcquisitionError
+    from app.knowledge_acquisition.extraction_persistence import ExtractionPersistenceError
+
+    _stub_caption_fetch(monkeypatch)
+    monkeypatch.setattr(
+        acquire_module,
+        "persist_normalized_transcript",
+        lambda **_kwargs: (_ for _ in ()).throw(
+            ExtractionPersistenceError("normalized store unavailable")
+        ),
+    )
+    conn = FakeOutboxConn()
+
+    with pytest.raises(TerminalAcquisitionError):
+        acquire_youtube(
+            FAKE_URL,
+            vault_context=_vault(tmp_path / "vault"),
+            write_guard=_allowing_guard(),
+            conn=conn,
+        )
+
+    rows = conn.rows_for(STAGE_DEAD_LETTERED_TOPIC)
+    assert len(rows) == 1
+    payload = json.loads(rows[0]["payload"])["payload"]
+    assert payload["stage"] == "normalize"
+    assert payload["reason"] == "persistence_failed"
 
 
 def test_acquire_youtube_normalize_failure_dead_letters_and_raises(

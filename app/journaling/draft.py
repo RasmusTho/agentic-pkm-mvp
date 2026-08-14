@@ -12,7 +12,9 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 import errno
+from enum import Enum
 import fcntl
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -34,6 +36,8 @@ from app.journaling.day_context import (
     DayContextItem,
     assemble_day_context,
 )
+from app.journaling.transcript_protocol import ROLE_MESSAGE_FORMAT_BLOCKQUOTE_V1
+from app.knowledge_acquisition.candidate_writeback import ARTIFACT_CLASS
 from app.knowledge_compilation.proposal_builders import (
     ProposalContext,
     build_cited_unreviewed_compilation_draft,
@@ -63,6 +67,7 @@ DEFAULT_STALENESS_DAYS = 14
 
 _PROCESS_LOCKS_GUARD = threading.Lock()
 _PROCESS_LOCKS: dict[str, threading.RLock] = {}
+_MISSING_SOURCE_OCCURRENCES = object()
 
 
 class UnresolvableJournalCitationError(ValueError):
@@ -77,6 +82,64 @@ class ReasoningFunction(Protocol):
     def __call__(
         self, object_ids: Sequence[str], *, trace_id: str | None = None
     ) -> ReasoningOutput: ...
+
+
+class SourceKind(str, Enum):
+    """Typed origin of one journal input occurrence."""
+
+    TRANSCRIPT = "transcript"
+    DAY_CONTEXT = "day_context"
+
+
+@dataclass(frozen=True)
+class SourceIdentity:
+    """Collision-free identity for one occurrence entering trust admission."""
+
+    source_kind: SourceKind
+    external_id: str
+    occurrence: int
+
+    def __post_init__(self) -> None:
+        if not self.external_id.strip():
+            raise ValueError("journal source identity requires a non-empty external_id")
+        if self.external_id != self.external_id.strip():
+            raise ValueError("journal source identity external_id must be canonical")
+        if self.occurrence <= 0:
+            raise ValueError("journal source identity occurrence must be positive")
+
+    @property
+    def admission_id(self) -> str:
+        external_id = self.external_id.strip()
+        return (
+            f"journal-source:{self.source_kind.value}:{self.occurrence}:"
+            f"{len(external_id)}:{external_id}"
+        )
+
+
+@dataclass(frozen=True)
+class _CognitionCitation:
+    """Resolvable public citation for one internally typed source occurrence."""
+
+    reference: str
+    source_kind: SourceKind
+    occurrence: int
+    content_sha256: str
+
+
+@dataclass(frozen=True)
+class _SourceContentVersion:
+    """Durable identity for the exact source version admitted into a draft."""
+
+    content_sha256: str
+    admitted_content: str
+
+
+@dataclass(frozen=True)
+class _SourceSnapshot:
+    """Raw bytes and metadata captured from one open source-file version."""
+
+    raw_content: bytes
+    stat_result: os.stat_result
 
 
 @dataclass(frozen=True)
@@ -145,7 +208,17 @@ def draft_journal_entry(
         existing_frontmatter = _load_existing_draft_frontmatter_at(
             directory_fd, filename
         )
-        previous_session_ids = _session_ids(existing_frontmatter.get("sources"))
+        previous_session_ids = (
+            _session_ids(
+                existing_frontmatter.get("sources"),
+                existing_frontmatter.get(
+                    "source_occurrences", _MISSING_SOURCE_OCCURRENCES
+                ),
+                vault_root=vault_root,
+            )
+            if existing_frontmatter
+            else ()
+        )
         all_session_ids = _deduplicate((*previous_session_ids, session_id.strip()))
         sessions = tuple(
             _resolve_session(vault_root, prior_session_id)
@@ -154,14 +227,20 @@ def draft_journal_entry(
 
         _validate_session_citations(vault_root, sessions)
         _validate_context_citations(vault_root, context_items)
-        source_ids = tuple(session.source_id for session in sessions) + tuple(
-            item.provenance_ref for item in context_items
+        source_identities = _source_identities(sessions, context_items)
+        source_content_versions = _source_content_versions(
+            vault_root, sessions, context_items, source_identities
         )
-        _reject_colliding_source_ids(source_ids)
-        review_states = _source_review_states(vault_root, sessions, context_items)
+        source_ids = tuple(identity.admission_id for identity in source_identities)
+        review_states = _source_review_states(
+            vault_root, sessions, context_items, source_identities
+        )
         activation = evaluate_journal_draft_activation(
             source_ids,
-            review_states=review_states,
+            review_states={
+                identity.admission_id: review_states[identity]
+                for identity in source_identities
+            },
             posture=activation_posture,
             now=now,
         )
@@ -178,10 +257,18 @@ def draft_journal_entry(
             vault_root=vault_root,
             sessions=sessions,
             context_items=context_items,
+            source_identities=source_identities,
+        )
+        cognition_citations = _cognition_citations(
+            sessions=sessions,
+            context_items=context_items,
+            source_identities=source_identities,
+            source_content_versions=source_content_versions,
         )
         cognition, cognition_body = _run_cognition(
             reasoning_fn,
             reasoning_sources,
+            cognition_citations,
             activation.receipt.receipt_id,
         )
         body = _build_body(
@@ -190,7 +277,10 @@ def draft_journal_entry(
             context_items=context_items,
             is_addendum=is_addendum,
             cognition_body=cognition_body,
+            source_identities=source_identities,
+            source_content_versions=source_content_versions,
         )
+        context_identities = source_identities[len(sessions) :]
         source_refs = tuple(
             SourceRef(
                 artifact_id=session.source_id,
@@ -201,12 +291,12 @@ def draft_journal_entry(
             for session in sessions
         ) + tuple(
             SourceRef(
-                artifact_id=item.provenance_ref,
-                note_path=_reference_path(item.provenance_ref),
+                artifact_id=identity.external_id,
+                note_path=_reference_path(identity.external_id),
                 role="system_context",
-                review_state=_review_state_value(review_states[item.provenance_ref]),
+                review_state=_review_state_value(review_states[identity]),
             )
-            for item in context_items
+            for item, identity in zip(context_items, context_identities, strict=True)
         )
         compilation = build_cited_unreviewed_compilation_draft(
             ProposalContext(
@@ -249,7 +339,21 @@ def draft_journal_entry(
                 "capability": JOURNAL_DRAFT_CAPABILITY_ID,
                 "cognition": cognition,
             },
-            "sources": list(source_ids),
+            "sources": [identity.external_id for identity in source_identities],
+            "source_occurrences": [
+                {
+                    "kind": identity.source_kind.value,
+                    "external_id": identity.external_id,
+                    "occurrence": identity.occurrence,
+                    "content_sha256": source_content_versions[
+                        identity.admission_id
+                    ].content_sha256,
+                    "admitted_content": source_content_versions[
+                        identity.admission_id
+                    ].admitted_content,
+                }
+                for identity in source_identities
+            ],
             "activation_receipt_id": activation.receipt.receipt_id,
             "activation_receipts": receipts,
             "created": created,
@@ -261,9 +365,29 @@ def draft_journal_entry(
         )
 
         # Re-resolve inside the same serialized transaction immediately before
-        # replace so a removed source cannot be laundered into the proposal.
-        _validate_session_citations(vault_root, sessions)
+        # replace so a removed or newly blocked source cannot be laundered into
+        # the proposal through a stale admission snapshot.
+        fresh_sessions = tuple(
+            _resolve_session(vault_root, session.session_id) for session in sessions
+        )
+        _validate_session_citations(vault_root, fresh_sessions)
         _validate_context_citations(vault_root, context_items)
+        fresh_review_states = _source_review_states(
+            vault_root, fresh_sessions, context_items, source_identities
+        )
+        if fresh_review_states != review_states:
+            raise JournalDraftBlockedError(
+                "journal draft source admission changed before staging"
+            )
+        if (
+            _source_content_versions(
+                vault_root, fresh_sessions, context_items, source_identities
+            )
+            != source_content_versions
+        ):
+            raise JournalDraftBlockedError(
+                "journal draft source content changed before staging"
+            )
         _atomic_write_at(directory_fd, filename, note_text)
 
     return JournalDraftResult(
@@ -452,14 +576,145 @@ def _load_existing_draft_frontmatter_at(
     return frontmatter
 
 
-def _session_ids(raw_sources: object) -> tuple[str, ...]:
+def _session_ids(
+    raw_sources: object,
+    raw_source_occurrences: object,
+    *,
+    vault_root: Path,
+) -> tuple[str, ...]:
+    if raw_source_occurrences is not _MISSING_SOURCE_OCCURRENCES:
+        if not isinstance(raw_source_occurrences, list):
+            raise UnresolvableJournalCitationError(
+                "stored journal source occurrences must be a list"
+            )
+        if not isinstance(raw_sources, list):
+            raise UnresolvableJournalCitationError(
+                "stored journal sources must accompany typed source occurrences"
+            )
+        parsed_identities: list[SourceIdentity] = []
+        expected_occurrences: dict[tuple[SourceKind, str], int] = {}
+        typed_sessions: list[str] = []
+        for item in raw_source_occurrences:
+            if not isinstance(item, dict):
+                raise UnresolvableJournalCitationError(
+                    "stored journal source occurrence must be a mapping"
+                )
+            try:
+                source_kind = SourceKind(str(item.get("kind") or ""))
+            except ValueError as exc:
+                raise UnresolvableJournalCitationError(
+                    "stored journal source occurrence has an invalid kind"
+                ) from exc
+            external_id = item.get("external_id")
+            occurrence = item.get("occurrence")
+            content_sha256 = item.get("content_sha256")
+            admitted_content = item.get("admitted_content")
+            if (
+                not isinstance(external_id, str)
+                or isinstance(occurrence, bool)
+                or not isinstance(occurrence, int)
+                or not isinstance(content_sha256, str)
+                or len(content_sha256) != 64
+                or any(character not in "0123456789abcdef" for character in content_sha256)
+                or not isinstance(admitted_content, str)
+            ):
+                raise UnresolvableJournalCitationError(
+                    "stored journal source occurrence is incomplete"
+                )
+            try:
+                identity = SourceIdentity(source_kind, external_id, occurrence)
+            except ValueError as exc:
+                raise UnresolvableJournalCitationError(
+                    "stored journal source occurrence is invalid"
+                ) from exc
+            key = (identity.source_kind, identity.external_id)
+            prior_occurrences = expected_occurrences.get(key, 0)
+            if source_kind is SourceKind.TRANSCRIPT and prior_occurrences:
+                raise UnresolvableJournalCitationError(
+                    "stored journal source occurrences contain a duplicate transcript"
+                )
+            expected_occurrence = prior_occurrences + 1
+            if identity.occurrence != expected_occurrence:
+                raise UnresolvableJournalCitationError(
+                    "stored journal source occurrence sequence is invalid"
+                )
+            expected_occurrences[key] = expected_occurrence
+            parsed_identities.append(identity)
+            if identity.source_kind is SourceKind.TRANSCRIPT:
+                if (
+                    not identity.external_id.startswith("session:")
+                    or not identity.external_id.removeprefix("session:")
+                ):
+                    raise UnresolvableJournalCitationError(
+                        "stored transcript source occurrence has an invalid external_id"
+                    )
+                typed_sessions.append(identity.external_id.removeprefix("session:"))
+        if raw_sources != [identity.external_id for identity in parsed_identities]:
+            raise UnresolvableJournalCitationError(
+                "stored journal sources disagree with typed source occurrences"
+            )
+        if not typed_sessions:
+            raise UnresolvableJournalCitationError(
+                "stored journal source occurrences require a transcript"
+            )
+        return tuple(typed_sessions)
     if not isinstance(raw_sources, list):
-        return ()
-    return tuple(
-        source.removeprefix("session:")
-        for source in raw_sources
-        if isinstance(source, str) and source.startswith("session:")
-    )
+        raise UnresolvableJournalCitationError(
+            "stored legacy journal sources must be a list"
+        )
+    legacy_sessions: list[str] = []
+    for source in raw_sources:
+        if (
+            not isinstance(source, str)
+            or not source.strip()
+            or source != source.strip()
+        ):
+            raise UnresolvableJournalCitationError(
+                "stored legacy journal source is invalid"
+            )
+        if not source.startswith("session:"):
+            continue
+        session_id = source.removeprefix("session:")
+        if not session_id:
+            raise UnresolvableJournalCitationError(
+                "stored legacy transcript source has an empty session_id"
+            )
+        context_path = (vault_root / _reference_path(source)).resolve()
+        try:
+            context_path.relative_to(vault_root)
+        except ValueError as exc:
+            raise UnresolvableJournalCitationError(
+                f"legacy journal source escapes the active vault: {source}"
+            ) from exc
+        context_resolves = context_path.is_file()
+        matching_transcripts = 0
+        for path in (vault_root / ".chats").glob("**/*.md"):
+            frontmatter, _body = load_frontmatter(path.read_text(encoding="utf-8"))
+            if str(frontmatter.get("session_id") or "").strip() == session_id:
+                matching_transcripts += 1
+        if context_resolves and matching_transcripts:
+            raise UnresolvableJournalCitationError(
+                f"legacy journal source role is ambiguous: {source}"
+            )
+        if matching_transcripts > 1:
+            raise UnresolvableJournalCitationError(
+                f"session:{session_id} resolved to {matching_transcripts} transcript files"
+            )
+        if matching_transcripts == 1:
+            if session_id in legacy_sessions:
+                raise UnresolvableJournalCitationError(
+                    "stored legacy journal sources contain a duplicate transcript"
+                )
+            legacy_sessions.append(session_id)
+        elif not context_resolves:
+            raise UnresolvableJournalCitationError(
+                f"legacy journal source no longer resolves: {source}"
+            )
+    if not legacy_sessions:
+        raise UnresolvableJournalCitationError(
+            "stored legacy journal sources require a transcript"
+        )
+    return tuple(legacy_sessions)
 
 
 def _deduplicate(values: Iterable[str]) -> tuple[str, ...]:
@@ -478,12 +733,8 @@ def _resolve_session(vault_root: Path, session_id: str) -> _ResolvedSession:
             f"session:{session_id} resolved to {len(matches)} transcript files"
         )
     path, frontmatter, body = matches[0]
-    owner_turns = tuple(
-        match.group(1).strip()
-        for match in re.finditer(
-            r"^\*\*Owner:\*\*\s*(.+?)(?=\n\n|\Z)", body, flags=re.MULTILINE | re.DOTALL
-        )
-        if match.group(1).strip()
+    owner_turns = _owner_turns(
+        body, role_message_format=frontmatter.get("role_message_format")
     )
     return _ResolvedSession(
         session_id=session_id,
@@ -491,6 +742,120 @@ def _resolve_session(vault_root: Path, session_id: str) -> _ResolvedSession:
         owner_turns=owner_turns,
         review_state=_review_state(frontmatter, default=ReviewState.UNREVIEWED),
     )
+
+
+def _owner_turns(
+    body: str, *, role_message_format: object = None
+) -> tuple[str, ...]:
+    normalized_body = body.replace("\r\n", "\n").replace("\r", "\n")
+    if role_message_format == ROLE_MESSAGE_FORMAT_BLOCKQUOTE_V1:
+        return _blockquote_owner_turns(normalized_body)
+    if role_message_format not in {None, ""}:
+        raise UnresolvableJournalCitationError(
+            "transcript has an unsupported role_message_format"
+        )
+    return _legacy_owner_turns(normalized_body)
+
+
+def _blockquote_owner_turns(body: str) -> tuple[str, ...]:
+    role_markers = tuple(
+        re.finditer(
+            r"^\*\*(Owner|Agent|Session closed):\*\*$",
+            body,
+            flags=re.MULTILINE,
+        )
+    )
+    if not role_markers:
+        raise UnresolvableJournalCitationError(
+            "blockquote transcript contains no framed messages"
+        )
+    preamble_lines = tuple(
+        line for line in body[: role_markers[0].start()].splitlines() if line
+    )
+    if len(preamble_lines) != 1 or not preamble_lines[0].startswith("## Session"):
+        raise UnresolvableJournalCitationError(
+            "blockquote transcript contains unframed preamble content"
+        )
+    closure_indexes = tuple(
+        index
+        for index, marker in enumerate(role_markers)
+        if marker.group(1) == "Session closed"
+    )
+    if closure_indexes and closure_indexes != (len(role_markers) - 1,):
+        raise UnresolvableJournalCitationError(
+            "blockquote transcript closure must be the final control record"
+        )
+    turns: list[str] = []
+    for index, marker in enumerate(role_markers):
+        next_marker_start = (
+            role_markers[index + 1].start()
+            if index + 1 < len(role_markers)
+            else len(body)
+        )
+        segment = body[marker.end() : next_marker_start]
+        content_lines: list[str] = []
+        segment_lines = segment.splitlines()
+        for line_index, line in enumerate(segment_lines):
+            if not line:
+                if content_lines and any(
+                    trailing_line.startswith(">")
+                    for trailing_line in segment_lines[line_index + 1 :]
+                ):
+                    raise UnresolvableJournalCitationError(
+                        "blockquote transcript message contains an unframed blank line"
+                    )
+                continue
+            if line == ">":
+                content_lines.append("")
+            elif line.startswith("> "):
+                content_lines.append(line[2:])
+            else:
+                raise UnresolvableJournalCitationError(
+                    "blockquote transcript message contains unframed content"
+                )
+        content = "\n".join(content_lines)
+        if not content.strip():
+            raise UnresolvableJournalCitationError(
+                "blockquote transcript message is empty"
+            )
+        if marker.group(1) == "Owner":
+            turns.append(content)
+    return tuple(turns)
+
+
+def _legacy_owner_turns(body: str) -> tuple[str, ...]:
+    role_markers = tuple(
+        re.finditer(
+            r"^\*\*(Owner|Agent):\*\*[ \t]*(.*)$",
+            body,
+            flags=re.MULTILINE,
+        )
+    )
+    turns: list[str] = []
+    for index, marker in enumerate(role_markers):
+        next_marker_start = (
+            role_markers[index + 1].start()
+            if index + 1 < len(role_markers)
+            else len(body)
+        )
+        inline_content = marker.group(2).strip()
+        continuation = body[marker.end() : next_marker_start]
+        if continuation.startswith("\n"):
+            continuation = continuation[1:]
+        closure_start = continuation.find("\n---\n*Session closed. Total: ")
+        if closure_start >= 0:
+            continuation = continuation[:closure_start]
+        continuation = continuation.rstrip("\n")
+        content = inline_content
+        if continuation:
+            content += ("\n" if content else "") + continuation
+        if not content.strip():
+            raise UnresolvableJournalCitationError(
+                "legacy transcript message is empty"
+            )
+        if marker.group(1) == "Owner":
+            turns.append(content)
+    return tuple(turns)
 
 
 def _iter_context_items(bundle: DayContextBundle) -> Iterable[DayContextItem]:
@@ -506,6 +871,10 @@ def _validate_session_citations(
             "a journal draft requires at least one resolvable conversation session"
         )
     for session in sessions:
+        if not session.owner_turns:
+            raise UnresolvableJournalCitationError(
+                f"session:{session.session_id} contains no owner turns"
+            )
         path = (vault_root / session.relative_path).resolve()
         try:
             path.relative_to(vault_root)
@@ -543,6 +912,147 @@ def _validate_context_citations(
             )
         if "#" in reference:
             _validate_jsonl_fragment(path, reference.split("#", 1)[1], reference)
+
+
+def _source_content_versions(
+    vault_root: Path,
+    sessions: tuple[_ResolvedSession, ...],
+    context_items: tuple[DayContextItem, ...],
+    source_identities: tuple[SourceIdentity, ...],
+) -> dict[str, _SourceContentVersion]:
+    """Capture exact raw-source digests plus the admitted semantic content."""
+
+    versions: dict[str, _SourceContentVersion] = {}
+    session_identities = source_identities[: len(sessions)]
+    context_identities = source_identities[len(sessions) :]
+    for session, identity in zip(sessions, session_identities, strict=True):
+        snapshot = _read_source_snapshot(vault_root / session.relative_path)
+        text = _decode_source_snapshot(snapshot, identity.external_id)
+        frontmatter, body = load_frontmatter(text)
+        if str(frontmatter.get("session_id") or "").strip() != session.session_id:
+            raise UnresolvableJournalCitationError(
+                f"session:{session.session_id} transcript identity changed"
+            )
+        owner_turns = _owner_turns(
+            body, role_message_format=frontmatter.get("role_message_format")
+        )
+        if owner_turns != session.owner_turns:
+            raise UnresolvableJournalCitationError(
+                f"session:{session.session_id} source version changed after resolution"
+            )
+        versions[identity.admission_id] = _SourceContentVersion(
+            content_sha256=hashlib.sha256(snapshot.raw_content).hexdigest(),
+            admitted_content=json.dumps(
+                list(owner_turns), ensure_ascii=False
+            ),
+        )
+
+    for item, identity in zip(context_items, context_identities, strict=True):
+        snapshot = _read_source_snapshot(
+            vault_root / _reference_path(item.provenance_ref)
+        )
+        resolved_content = _resolve_context_item_content(item, snapshot)
+        if item.content != resolved_content:
+            raise UnresolvableJournalCitationError(
+                f"day-context source version changed after bundle assembly: "
+                f"{item.provenance_ref}"
+            )
+        versions[identity.admission_id] = _SourceContentVersion(
+            content_sha256=hashlib.sha256(snapshot.raw_content).hexdigest(),
+            admitted_content=json.dumps(
+                resolved_content, sort_keys=True, ensure_ascii=False
+            ),
+        )
+    return versions
+
+
+def _read_source_snapshot(path: Path) -> _SourceSnapshot:
+    """Read one stable inode version without normalizing its raw bytes."""
+
+    with path.open("rb") as source:
+        before = os.fstat(source.fileno())
+        raw_content = source.read()
+        after = os.fstat(source.fileno())
+    before_version = (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns)
+    after_version = (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns)
+    if before_version != after_version:
+        raise UnresolvableJournalCitationError(
+            f"source changed while being read: {path.as_posix()}"
+        )
+    return _SourceSnapshot(raw_content=raw_content, stat_result=after)
+
+
+def _decode_source_snapshot(snapshot: _SourceSnapshot, reference: str) -> str:
+    try:
+        return snapshot.raw_content.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise UnresolvableJournalCitationError(
+            f"citation is not valid UTF-8: {reference}"
+        ) from exc
+
+
+def _resolve_context_item_content(
+    item: DayContextItem, snapshot: _SourceSnapshot
+) -> dict[str, object]:
+    """Re-derive one day-context semantic item from its cited durable source."""
+
+    reference = item.provenance_ref
+    text = _decode_source_snapshot(snapshot, reference)
+    if "#" in reference:
+        fragment = reference.split("#", 1)[1]
+        for line in text.splitlines():
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(record, dict):
+                continue
+            created = datetime.fromisoformat(
+                str(record.get("created_at") or "").replace("Z", "+00:00")
+            )
+            candidate = f"{record.get('object_id')}:{record.get('key')}:{created.isoformat()}"
+            if candidate != fragment:
+                continue
+            return {
+                "object_id": str(record.get("object_id") or ""),
+                "vault_uuid": record.get("vault_uuid"),
+                "key": str(record.get("key") or ""),
+                "created_at": created.isoformat(),
+            }
+        raise UnresolvableJournalCitationError(
+            f"citation fragment does not resolve: {reference}"
+        )
+
+    frontmatter, _body = load_frontmatter(text)
+    if frontmatter.get("artifact_class") == ARTIFACT_CLASS:
+        provenance = frontmatter.get("provenance")
+        if not isinstance(provenance, dict):
+            raise UnresolvableJournalCitationError(
+                f"candidate provenance does not resolve: {reference}"
+            )
+        created = datetime.fromisoformat(
+            str(frontmatter.get("created") or "").replace("Z", "+00:00")
+        )
+        return {
+            "content_identity": str(provenance.get("content_identity") or ""),
+            "created_at": created.isoformat(),
+            "source_kind": provenance.get("source_kind"),
+            "url": provenance.get("url"),
+        }
+    if frontmatter.get("artifact_class") == "commitment":
+        changed = datetime.fromtimestamp(
+            snapshot.stat_result.st_mtime, tz=timezone.utc
+        ).astimezone()
+        return {
+            "commitment_id": str(frontmatter.get("commitment_id") or ""),
+            "state": frontmatter.get("commitment_state"),
+            "target_ref": frontmatter.get("target_ref"),
+            "summary": frontmatter.get("summary"),
+            "changed_at": changed.isoformat(),
+        }
+    raise UnresolvableJournalCitationError(
+        f"unsupported day-context provenance source: {reference}"
+    )
 
 
 def _reference_path(reference: str) -> str:
@@ -596,29 +1106,87 @@ def _source_review_states(
     vault_root: Path,
     sessions: tuple[_ResolvedSession, ...],
     context_items: tuple[DayContextItem, ...],
-) -> dict[str, ReviewState | None]:
-    states = {session.source_id: session.review_state for session in sessions}
-    for item in context_items:
-        path = vault_root / _reference_path(item.provenance_ref)
+    source_identities: tuple[SourceIdentity, ...],
+) -> dict[SourceIdentity, ReviewState | None]:
+    session_identities = source_identities[: len(sessions)]
+    context_identities = source_identities[len(sessions) :]
+    states = {
+        identity: session.review_state
+        for session, identity in zip(sessions, session_identities, strict=True)
+    }
+    for item, identity in zip(context_items, context_identities, strict=True):
+        path = vault_root / _reference_path(identity.external_id)
         state: ReviewState | None = None
         if path.suffix.lower() == ".md":
             frontmatter, _body = load_frontmatter(path.read_text(encoding="utf-8"))
             state = _review_state(frontmatter, default=None)
-        states[item.provenance_ref] = state
+        states[identity] = state
     return states
 
 
-def _reject_colliding_source_ids(source_ids: tuple[str, ...]) -> None:
-    seen: set[str] = set()
-    collisions: list[str] = []
-    for source_id in source_ids:
-        if source_id in seen and source_id not in collisions:
-            collisions.append(source_id)
-        seen.add(source_id)
-    if collisions:
-        raise JournalDraftBlockedError(
-            "journal draft source identity collision: " + ", ".join(collisions)
+def _source_identities(
+    sessions: tuple[_ResolvedSession, ...],
+    context_items: tuple[DayContextItem, ...],
+) -> tuple[SourceIdentity, ...]:
+    counts: dict[tuple[SourceKind, str], int] = {}
+
+    def occurrence(source_kind: SourceKind, external_id: str) -> SourceIdentity:
+        normalized_id = external_id.strip()
+        if external_id != normalized_id:
+            raise UnresolvableJournalCitationError(
+                "journal source identity contains surrounding whitespace: "
+                f"{external_id!r}"
+            )
+        key = (source_kind, normalized_id)
+        counts[key] = counts.get(key, 0) + 1
+        return SourceIdentity(source_kind, normalized_id, counts[key])
+
+    return tuple(
+        occurrence(SourceKind.TRANSCRIPT, session.source_id) for session in sessions
+    ) + tuple(
+        occurrence(SourceKind.DAY_CONTEXT, item.provenance_ref)
+        for item in context_items
+    )
+
+
+def _cognition_citations(
+    *,
+    sessions: tuple[_ResolvedSession, ...],
+    context_items: tuple[DayContextItem, ...],
+    source_identities: tuple[SourceIdentity, ...],
+    source_content_versions: Mapping[str, _SourceContentVersion],
+) -> dict[str, _CognitionCitation]:
+    """Bind private admission keys to resolvable, occurrence-aware citations."""
+
+    session_identities = source_identities[: len(sessions)]
+    context_identities = source_identities[len(sessions) :]
+    citations = {
+        identity.admission_id: _CognitionCitation(
+            reference=session.relative_path,
+            source_kind=identity.source_kind,
+            occurrence=identity.occurrence,
+            content_sha256=source_content_versions[
+                identity.admission_id
+            ].content_sha256,
         )
+        for session, identity in zip(sessions, session_identities, strict=True)
+    }
+    citations.update(
+        {
+            identity.admission_id: _CognitionCitation(
+                reference=item.provenance_ref,
+                source_kind=identity.source_kind,
+                occurrence=identity.occurrence,
+                content_sha256=source_content_versions[
+                    identity.admission_id
+                ].content_sha256,
+            )
+            for item, identity in zip(
+                context_items, context_identities, strict=True
+            )
+        }
+    )
+    return citations
 
 
 def _review_state_value(state: ReviewState | None) -> str:
@@ -643,6 +1211,7 @@ def _materialize_reasoning_sources(
     vault_root: Path,
     sessions: tuple[_ResolvedSession, ...],
     context_items: tuple[DayContextItem, ...],
+    source_identities: tuple[SourceIdentity, ...],
 ) -> tuple[MaterializedReasoningInput, ...]:
     """Project JRNL inputs into UUID-addressable reasoning objects.
 
@@ -651,19 +1220,21 @@ def _materialize_reasoning_sources(
     instead of manufacturing new identities on every pass.
     """
 
+    session_identities = source_identities[: len(sessions)]
+    context_identities = source_identities[len(sessions) :]
     raw_sources: list[ReasoningSourceInput] = [
         ReasoningSourceInput(
-            source_id=session.source_id,
+            source_id=identity.admission_id,
             text="\n".join(session.owner_turns),
         )
-        for session in sessions
+        for session, identity in zip(sessions, session_identities, strict=True)
     ]
     raw_sources.extend(
         ReasoningSourceInput(
-            source_id=item.provenance_ref,
+            source_id=identity.admission_id,
             text=json.dumps(item.content, sort_keys=True, ensure_ascii=False),
         )
-        for item in context_items
+        for item, identity in zip(context_items, context_identities, strict=True)
     )
     try:
         return materialize_reasoning_inputs(
@@ -680,29 +1251,35 @@ def _build_body(
     context_items: tuple[DayContextItem, ...],
     is_addendum: bool,
     cognition_body: str,
+    source_identities: tuple[SourceIdentity, ...],
+    source_content_versions: Mapping[str, _SourceContentVersion],
 ) -> str:
     title = "Addendum candidate" if is_addendum else "Journal draft"
     lines = [f"# {title} — {for_date.isoformat()}", "", "## My reflection", ""]
     conversation_footnotes: list[str] = []
     conversation_index = 0
-    for session in sessions:
-        turns = session.owner_turns or (
-            "I opened a reflection conversation and stopped before adding my own words.",
-        )
-        for turn in turns:
+    session_identities = source_identities[: len(sessions)]
+    context_identities = source_identities[len(sessions) :]
+    for session, identity in zip(sessions, session_identities, strict=True):
+        for turn in session.owner_turns:
             conversation_index += 1
             lines.append(f"I reflected: {turn} [^conversation-{conversation_index}]")
             lines.append("")
             conversation_footnotes.append(
                 f"[^conversation-{conversation_index}]: {session.source_id} "
-                f"(`{session.relative_path}`); owner's conversation words."
+                f"(`{session.relative_path}`); source kind: `transcript`; "
+                f"occurrence: {identity.occurrence}; content sha256: "
+                f"`{source_content_versions[identity.admission_id].content_sha256}`; "
+                "owner's conversation words."
             )
 
     lines.extend(["## Day context folded into the draft", ""])
     context_footnotes: list[str] = []
     if not context_items:
         lines.extend(["No additional day-context facts were available.", ""])
-    for index, item in enumerate(context_items, start=1):
+    for index, (item, identity) in enumerate(
+        zip(context_items, context_identities, strict=True), start=1
+    ):
         lines.append(
             "I also had this context available: "
             f"{_describe_context_item(item)}. [^context-{index}]"
@@ -710,6 +1287,9 @@ def _build_body(
         lines.append("")
         context_footnotes.append(
             f"[^context-{index}]: {item.provenance_ref}; system-derived day context, "
+            f"source kind: `day_context`; occurrence: {identity.occurrence}; "
+            f"content sha256: "
+            f"`{source_content_versions[identity.admission_id].content_sha256}`; "
             "not an owner utterance."
         )
 
@@ -741,6 +1321,7 @@ def _describe_context_item(item: DayContextItem) -> str:
 def _run_cognition(
     reasoning_fn: ReasoningFunction,
     sources: tuple[MaterializedReasoningInput, ...],
+    citations: Mapping[str, _CognitionCitation],
     trace_id: str,
 ) -> tuple[dict[str, object], str]:
     object_ids = tuple(source.object_id for source in sources)
@@ -776,13 +1357,98 @@ def _run_cognition(
         )
     degraded = output.degraded
     degraded_reason = _bounded_reasoning_degraded_reason(output)
-    source_by_object = {source.object_id: source.source_id for source in sources}
+    citation_by_object = {
+        source.object_id: citations.get(source.source_id)
+        for source in sources
+    }
+    claim_ids = [claim.id for claim in claims]
+    invalid_claim_ids = sorted(
+        claim_id for claim_id in claim_ids if not claim_id.strip()
+    )
+    duplicate_claim_ids = sorted(
+        {claim_id for claim_id in claim_ids if claim_ids.count(claim_id) > 1}
+    )
+    if invalid_claim_ids or duplicate_claim_ids:
+        problems: list[str] = []
+        if invalid_claim_ids:
+            problems.append("empty claim IDs")
+        if duplicate_claim_ids:
+            problems.append("duplicate claim IDs: " + ", ".join(duplicate_claim_ids))
+        raise UnresolvableJournalCitationError(
+            "cognition returned an ambiguous claim graph: " + "; ".join(problems)
+        )
+    unadmitted_claim_ids = sorted(
+        {
+            str(claim.object_uuid)
+            for claim in claims
+            if citation_by_object.get(str(claim.object_uuid)) is None
+        }
+    )
+    if unadmitted_claim_ids:
+        raise UnresolvableJournalCitationError(
+            "cognition returned claims for unadmitted source UUIDs: "
+            + ", ".join(unadmitted_claim_ids)
+        )
+    claims_by_id = {claim.id: claim for claim in claims}
+    inference_citations: list[tuple[_CognitionCitation, ...]] = []
+    for inference in inferences:
+        referenced_claim_ids = (*inference.premises, inference.conclusion_id)
+        if not inference.premises or any(
+            not claim_id.strip() for claim_id in referenced_claim_ids
+        ):
+            raise UnresolvableJournalCitationError(
+                f"cognition inference {inference.id!r} has an empty premise or conclusion"
+            )
+        unknown_claim_ids = sorted(
+            {
+                claim_id
+                for claim_id in referenced_claim_ids
+                if claim_id not in claims_by_id
+            }
+        )
+        if unknown_claim_ids:
+            raise UnresolvableJournalCitationError(
+                f"cognition inference {inference.id!r} references unknown claim IDs: "
+                + ", ".join(unknown_claim_ids)
+            )
+        graph_citations: list[_CognitionCitation] = []
+        seen_citations: set[tuple[str, SourceKind, int]] = set()
+        for claim_id in referenced_claim_ids:
+            claim = claims_by_id[claim_id]
+            citation = citation_by_object[str(claim.object_uuid)]
+            assert citation is not None
+            citation_key = (
+                citation.reference,
+                citation.source_kind,
+                citation.occurrence,
+            )
+            if citation_key not in seen_citations:
+                seen_citations.add(citation_key)
+                graph_citations.append(citation)
+        inference_citations.append(tuple(graph_citations))
     rendered: list[str] = []
     for claim in claims:
-        source_id = source_by_object.get(str(claim.object_uuid), str(claim.object_uuid))
-        rendered.append(f"- {claim.text} (cognition source: `{source_id}`)")
-    for inference in inferences:
-        rendered.append(f"- Cross-source synthesis: {inference.rationale}")
+        citation = citation_by_object.get(str(claim.object_uuid))
+        assert citation is not None
+        rendered.append(
+            f"- {claim.text} (cognition source: `{citation.reference}`; "
+            f"source kind: `{citation.source_kind.value}`; "
+            f"occurrence: {citation.occurrence}; content sha256: "
+            f"`{citation.content_sha256}`)"
+        )
+    for inference, rendered_graph_citations in zip(
+        inferences, inference_citations, strict=True
+    ):
+        rendered_citations = " | ".join(
+            f"`{citation.reference}`; source kind: "
+            f"`{citation.source_kind.value}`; occurrence: {citation.occurrence}"
+            f"; content sha256: `{citation.content_sha256}`"
+            for citation in rendered_graph_citations
+        )
+        rendered.append(
+            f"- Cross-source synthesis: {inference.rationale} "
+            f"(cognition sources: {rendered_citations})"
+        )
     if degraded:
         rendered.append(
             "Cognition degraded; the citation-grounded collation remains available."
@@ -923,6 +1589,8 @@ __all__ = [
     "JOURNAL_DRAFT_WRITE_ACTION",
     "JournalDraftBlockedError",
     "JournalDraftResult",
+    "SourceIdentity",
+    "SourceKind",
     "UnresolvableJournalCitationError",
     "draft_journal_entry",
     "resolve_journal_draft_activation_receipt",

@@ -10,7 +10,8 @@ read plaintext when the key is absent.
 Boundary (INV-YSS-5 / INV-YSS-7):
 
 - The store file path is an **app-local** binding, defaulting under the
-  channel runtime dir (``runtime/knowledge_acquisition/``); it is never placed
+  canonical channel runtime-artifact root (``tmp*/knowledge_acquisition/``);
+  it is independent of process CWD/worktree and is never placed
   inside a vault and never tracked by git. Per-channel isolation (dev/test/prod
   never share OAuth state) comes from the per-channel runtime dir / the
   ``YOUTUBE_TOKEN_STORE_PATH`` override, exactly as the dispatcher isolates its
@@ -30,9 +31,12 @@ Boundary (INV-YSS-5 / INV-YSS-7):
 from __future__ import annotations
 
 import base64
+import fcntl
 import json
 import os
+import stat
 import threading
+import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -40,13 +44,19 @@ from typing import Any
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
+from app.config.environment import active_environment
+from app.config.paths import resolve_runtime_artifact_path
+
 KEY_ENV_VAR = "YOUTUBE_TOKEN_STORE_KEY"
 PATH_ENV_VAR = "YOUTUBE_TOKEN_STORE_PATH"
 
 _AES_KEY_BYTES = 32  # AES-256
 _NONCE_BYTES = 12  # standard AES-GCM nonce size
 _SCHEMA = "youtube-token-store.v1"
-_DEFAULT_REL_PATH = Path("runtime/knowledge_acquisition/youtube_token_store.enc")
+_STATE_DIRECTORY = "knowledge_acquisition"
+_TOKEN_STORE_FILENAME = "youtube_token_store.enc"
+_WRITER_LOCK_FILENAME = "youtube_oauth_writer.lock"
+_REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 class TokenStoreKeyMissingError(RuntimeError):
@@ -56,6 +66,14 @@ class TokenStoreKeyMissingError(RuntimeError):
     ``auth_key_missing`` reason code (INV-YSS-4); it is never swallowed into a
     silent plaintext path.
     """
+
+
+class OAuthStateBoundaryError(RuntimeError):
+    """The private channel OAuth state boundary is absent or unsafe."""
+
+
+class OAuthWriterAdmissionError(RuntimeError):
+    """Another process owns the channel's one OAuth writer transition."""
 
 
 def resolve_token_store_key() -> bytes:
@@ -84,12 +102,73 @@ def resolve_token_store_key() -> bytes:
     return key
 
 
-def default_token_store_path() -> Path:
-    """App-local default path, overridable per channel via ``YOUTUBE_TOKEN_STORE_PATH``."""
+def _canonical_repository_root() -> Path:
+    """Resolve the shared checkout root when running from a Git worktree."""
+
+    try:
+        dot_git = _REPO_ROOT / ".git"
+        if dot_git.is_dir():
+            return _REPO_ROOT
+        if dot_git.is_file():
+            marker = dot_git.read_text(encoding="utf-8").strip()
+            if marker.startswith("gitdir:"):
+                git_dir = Path(marker.removeprefix("gitdir:").strip())
+                if not git_dir.is_absolute():
+                    git_dir = _REPO_ROOT / git_dir
+                common_marker = git_dir / "commondir"
+                if common_marker.is_file():
+                    common = Path(common_marker.read_text(encoding="utf-8").strip())
+                    if not common.is_absolute():
+                        common = git_dir / common
+                    return common.resolve(strict=True).parent
+    except OSError:
+        pass
+    raise OAuthStateBoundaryError(
+        "canonical channel runtime-artifact root is not configured"
+    )
+
+
+def canonical_oauth_state_root() -> Path:
+    """Resolve one checkout-independent private root inside channel artifacts."""
+
+    configured_outbox = (os.environ.get("INDEX_OUTBOX_PATH") or "").strip()
+    if configured_outbox:
+        outbox = Path(configured_outbox).expanduser()
+        if not outbox.is_absolute():
+            raise OAuthStateBoundaryError(
+                "channel runtime-artifact authority must be an absolute path"
+            )
+        runtime_root = Path(os.path.abspath(outbox.parent))
+    else:
+        scoped = resolve_runtime_artifact_path(
+            Path("tmp/index-outbox.jsonl"), environment=active_environment()
+        )
+        runtime_root = _canonical_repository_root() / scoped.parent
+    if not runtime_root.is_absolute():
+        raise OAuthStateBoundaryError(
+            "channel runtime-artifact authority must be an absolute path"
+        )
+    return runtime_root / _STATE_DIRECTORY
+
+
+def _token_store_path(state_root: Path) -> Path:
     override = (os.environ.get(PATH_ENV_VAR) or "").strip()
-    if override:
-        return Path(override).expanduser()
-    return _DEFAULT_REL_PATH
+    candidate = Path(override).expanduser() if override else state_root / _TOKEN_STORE_FILENAME
+    if not candidate.is_absolute():
+        candidate = state_root / candidate
+    candidate = Path(os.path.abspath(candidate))
+    normalized_root = Path(os.path.abspath(state_root))
+    if candidate.parent != normalized_root or candidate.name in {"", ".", ".."}:
+        raise OAuthStateBoundaryError(
+            "YouTube OAuth state must remain inside the private channel runtime boundary"
+        )
+    return candidate
+
+
+def default_token_store_path() -> Path:
+    """Channel-rooted path, optionally renamed only inside the same private root."""
+
+    return _token_store_path(canonical_oauth_state_root())
 
 
 def _now_iso() -> str:
@@ -153,19 +232,53 @@ class StoredToken:
         )
 
 
+class OAuthWriterAdmission:
+    """Held file descriptor for one start-to-finish OAuth writer transition."""
+
+    def __init__(self, descriptor: int) -> None:
+        self._descriptor = descriptor
+        self._released = False
+
+    @property
+    def released(self) -> bool:
+        return self._released
+
+    def release(self) -> None:
+        if self._released:
+            return
+        self._released = True
+        try:
+            fcntl.flock(self._descriptor, fcntl.LOCK_UN)
+        finally:
+            os.close(self._descriptor)
+
+    def __repr__(self) -> str:
+        return "OAuthWriterAdmission(path=***)"
+
+
 class YouTubeTokenStore:
     """AES-256-GCM encrypted token store, one JSON file, one record per binding.
 
-    Thread-safe for concurrent access within a process; cross-process safety is
-    provided by an atomic replace on every write.
+    Thread-safe for concurrent access within a process. Atomic replacement
+    prevents partial records; the writer admission serializes connect/reconnect
+    transitions across processes.
     """
 
     def __init__(self, path: Path | str | None = None) -> None:
-        self._path = Path(path) if path is not None else default_token_store_path()
+        if path is None:
+            state_root = canonical_oauth_state_root()
+            self._path = _token_store_path(state_root)
+            self._channel_runtime_root: Path | None = state_root.parent
+        else:
+            explicit = Path(path).expanduser()
+            if not explicit.is_absolute():
+                raise OAuthStateBoundaryError("explicit OAuth state path must be absolute")
+            self._path = Path(os.path.abspath(explicit))
+            self._channel_runtime_root = None
         self._lock = threading.Lock()
 
     def __repr__(self) -> str:
-        return f"YouTubeTokenStore(path={str(self._path)!r})"
+        return "YouTubeTokenStore(path=***)"
 
     @property
     def path(self) -> Path:
@@ -173,21 +286,248 @@ class YouTubeTokenStore:
 
     # --- file helpers (no key required) -------------------------------------
 
-    def _load_file(self) -> dict[str, Any]:
+    @staticmethod
+    def _assert_private_directory(metadata: os.stat_result) -> None:
+        if (
+            not stat.S_ISDIR(metadata.st_mode)
+            or metadata.st_mode & 0o777 != 0o700
+            or metadata.st_uid != os.geteuid()
+        ):
+            raise OAuthStateBoundaryError(
+                "YouTube OAuth state directory must be a current-user-owned mode-0700 directory"
+            )
+
+    @staticmethod
+    def _assert_private_file(metadata: os.stat_result) -> None:
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or metadata.st_mode & 0o777 != 0o600
+            or metadata.st_uid != os.geteuid()
+        ):
+            raise OAuthStateBoundaryError(
+                "YouTube OAuth state file must be a current-user-owned mode-0600 regular file"
+            )
+
+    @staticmethod
+    def _assert_safe_runtime_directory(metadata: os.stat_result) -> None:
+        """Accept a private root or the shipped sticky shared scratch root."""
+
+        if not stat.S_ISDIR(metadata.st_mode):
+            raise OAuthStateBoundaryError(
+                "channel runtime-artifact root is not a safe directory"
+            )
+        writable_by_others = bool(metadata.st_mode & 0o022)
+        sticky = bool(metadata.st_mode & stat.S_ISVTX)
+        if writable_by_others and not sticky:
+            raise OAuthStateBoundaryError(
+                "channel runtime-artifact root is not a safe directory"
+            )
+
+    @staticmethod
+    def _assert_no_symlink_ancestry(path: Path, *, allow_missing_leaf: bool) -> None:
+        """Reject traversal through a symlink before opening private state."""
+
+        if not path.is_absolute():
+            raise OAuthStateBoundaryError("OAuth state boundary must be absolute")
+        current = Path(path.anchor)
+        parts = path.parts[1:]
+        for index, component in enumerate(parts):
+            current /= component
+            try:
+                metadata = current.lstat()
+            except FileNotFoundError:
+                if allow_missing_leaf and index == len(parts) - 1:
+                    return
+                raise OAuthStateBoundaryError(
+                    "OAuth state boundary has a missing ancestor"
+                ) from None
+            except OSError:
+                raise OAuthStateBoundaryError(
+                    "OAuth state boundary ancestry is unavailable"
+                ) from None
+            if stat.S_ISLNK(metadata.st_mode):
+                raise OAuthStateBoundaryError(
+                    "OAuth state boundary must not traverse symlinks"
+                )
+            if index != len(parts) - 1 and not stat.S_ISDIR(metadata.st_mode):
+                raise OAuthStateBoundaryError(
+                    "OAuth state boundary ancestry must contain only directories"
+                )
+
+    def _open_state_directory(self) -> int:
+        parent = self._path.parent
+        self._assert_no_symlink_ancestry(parent, allow_missing_leaf=True)
+        if self._channel_runtime_root is not None:
+            try:
+                self._assert_no_symlink_ancestry(
+                    self._channel_runtime_root, allow_missing_leaf=False
+                )
+                flags = (
+                    os.O_RDONLY
+                    | getattr(os, "O_DIRECTORY", 0)
+                    | getattr(os, "O_NOFOLLOW", 0)
+                )
+                runtime_fd = os.open(self._channel_runtime_root, flags)
+            except FileNotFoundError:
+                raise OAuthStateBoundaryError(
+                    "canonical channel runtime-artifact root does not exist"
+                ) from None
+            except OSError:
+                raise OAuthStateBoundaryError(
+                    "canonical channel runtime-artifact root is unavailable"
+                ) from None
+            runtime_metadata = os.fstat(runtime_fd)
+            try:
+                self._assert_safe_runtime_directory(runtime_metadata)
+            except OAuthStateBoundaryError:
+                os.close(runtime_fd)
+                raise
+            try:
+                try:
+                    os.mkdir(_STATE_DIRECTORY, mode=0o700, dir_fd=runtime_fd)
+                except FileExistsError:
+                    pass
+                descriptor = os.open(_STATE_DIRECTORY, flags, dir_fd=runtime_fd)
+            except OSError:
+                raise OAuthStateBoundaryError(
+                    "private YouTube OAuth state directory is unavailable"
+                ) from None
+            finally:
+                os.close(runtime_fd)
+        else:
+            try:
+                metadata = parent.lstat()
+            except FileNotFoundError:
+                try:
+                    parent.mkdir(mode=0o700)
+                except FileExistsError:
+                    pass
+                except OSError:
+                    raise OAuthStateBoundaryError(
+                        "private YouTube OAuth state directory is unavailable"
+                    ) from None
+                metadata = parent.lstat()
+            self._assert_private_directory(metadata)
+            flags = (
+                os.O_RDONLY
+                | getattr(os, "O_DIRECTORY", 0)
+                | getattr(os, "O_NOFOLLOW", 0)
+            )
+            try:
+                descriptor = os.open(parent, flags)
+            except OSError:
+                raise OAuthStateBoundaryError(
+                    "private YouTube OAuth state directory is unavailable"
+                ) from None
         try:
-            raw = self._path.read_text(encoding="utf-8")
-        except FileNotFoundError:
-            return {"schema": _SCHEMA, "records": {}}
+            self._assert_private_directory(os.fstat(descriptor))
+        except BaseException:
+            os.close(descriptor)
+            raise
+        return descriptor
+
+    def _load_file(self) -> dict[str, Any]:
+        directory_fd = self._open_state_directory()
+        try:
+            try:
+                descriptor = os.open(
+                    self._path.name,
+                    os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0),
+                    dir_fd=directory_fd,
+                )
+            except FileNotFoundError:
+                return {"schema": _SCHEMA, "records": {}}
+            try:
+                self._assert_private_file(os.fstat(descriptor))
+                with os.fdopen(descriptor, "r", encoding="utf-8") as handle:
+                    raw = handle.read()
+            except BaseException:
+                try:
+                    os.close(descriptor)
+                except OSError:
+                    pass
+                raise
+        finally:
+            os.close(directory_fd)
         data = json.loads(raw)
         if not isinstance(data, dict) or "records" not in data:
-            raise ValueError(f"corrupt token store file at {self._path}")
+            raise ValueError("corrupt YouTube token store")
         return data
 
     def _write_file(self, data: dict[str, Any]) -> None:
-        self._path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = self._path.with_suffix(self._path.suffix + ".tmp")
-        tmp.write_text(json.dumps(data, sort_keys=True), encoding="utf-8")
-        os.replace(tmp, self._path)
+        directory_fd = self._open_state_directory()
+        temporary_name = f".{self._path.name}.{uuid.uuid4().hex}.tmp"
+        descriptor: int | None = None
+        try:
+            try:
+                existing = os.open(
+                    self._path.name,
+                    os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0),
+                    dir_fd=directory_fd,
+                )
+            except FileNotFoundError:
+                existing = None
+            if existing is not None:
+                try:
+                    self._assert_private_file(os.fstat(existing))
+                finally:
+                    os.close(existing)
+            descriptor = os.open(
+                temporary_name,
+                os.O_WRONLY
+                | os.O_CREAT
+                | os.O_EXCL
+                | getattr(os, "O_NOFOLLOW", 0),
+                0o600,
+                dir_fd=directory_fd,
+            )
+            payload = json.dumps(data, sort_keys=True).encode("utf-8")
+            with os.fdopen(descriptor, "wb") as handle:
+                descriptor = None
+                handle.write(payload)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(
+                temporary_name,
+                self._path.name,
+                src_dir_fd=directory_fd,
+                dst_dir_fd=directory_fd,
+            )
+            os.fsync(directory_fd)
+        finally:
+            if descriptor is not None:
+                os.close(descriptor)
+            try:
+                os.unlink(temporary_name, dir_fd=directory_fd)
+            except FileNotFoundError:
+                pass
+            os.close(directory_fd)
+
+    def acquire_writer_admission(self) -> OAuthWriterAdmission:
+        """Acquire the channel's nonblocking cross-process OAuth writer lease."""
+
+        directory_fd = self._open_state_directory()
+        try:
+            descriptor = os.open(
+                _WRITER_LOCK_FILENAME,
+                os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0),
+                0o600,
+                dir_fd=directory_fd,
+            )
+            try:
+                self._assert_private_file(os.fstat(descriptor))
+                try:
+                    fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                except BlockingIOError:
+                    raise OAuthWriterAdmissionError(
+                        "another YouTube OAuth writer transition is active"
+                    ) from None
+            except BaseException:
+                os.close(descriptor)
+                raise
+            return OAuthWriterAdmission(descriptor)
+        finally:
+            os.close(directory_fd)
 
     def has_record(self, binding_id: str) -> bool:
         """True if a token record exists for ``binding_id`` (no key required)."""
@@ -249,10 +589,14 @@ class YouTubeTokenStore:
 
 __all__ = [
     "KEY_ENV_VAR",
+    "OAuthStateBoundaryError",
+    "OAuthWriterAdmission",
+    "OAuthWriterAdmissionError",
     "PATH_ENV_VAR",
     "StoredToken",
     "TokenStoreKeyMissingError",
     "YouTubeTokenStore",
+    "canonical_oauth_state_root",
     "default_token_store_path",
     "resolve_token_store_key",
 ]

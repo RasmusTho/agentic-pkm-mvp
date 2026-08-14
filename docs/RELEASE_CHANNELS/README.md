@@ -291,8 +291,11 @@ Currently recorded floors:
 | `minimumRuntimeSchema` | per MVR-01 | MVR-01B/01C (#3854/#3855) | scalar API/worker startup before the registry/queue schema it needs |
 | `minimumRuntimePrincipal` | `mvr-03` | MVR-03 (#3857) | a credential-only image with no delegated-principal producer |
 
-`minimumRuntimePrincipal` is set once the private delegated operator-role record becomes
-authoritative. A pre-MVR-03 image cannot resolve a principal at all, so
+`minimumRuntimePrincipal` is set together with the private delegated operator-role cutover only
+when a channel deployment carries the explicit `MVR03_PRINCIPAL_CUTOVER=1` opt-in. The governed
+dev/test/prod channel files each declare that their Docker-published API is not a proven loopback
+listener; the deployment wrapper resolves that channel declaration and passes the same posture to
+the single-process floor/role cutover. A pre-MVR-03 image cannot resolve a principal at all, so
 `app/instance/runtime.py::_require_runtime_floor` refuses it during scalar-rollback preflight,
 *before* any legacy projection is materialized. The compatible path is roll-forward: the prior
 image's final credential/auth revision is exported under lock and reconciled into the same
@@ -300,7 +303,7 @@ role id, and an ambiguous or divergent lineage fails closed without overwriting 
 
 A floor is lowered only by a later explicitly verified reversible migration. Rolling the
 `stable` ref back does not lower it, and forward-only acknowledgement at promotion time does
-not authorize crossing it. Full operator preflight and the exact commands live in
+not authorize crossing it. Full operator preflight and the automated cutover operation live in
 `docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md :: Minimum runtime principal floor`.
 
 ### Vault is not release state

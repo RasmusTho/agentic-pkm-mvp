@@ -2,13 +2,16 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timezone
+import hashlib
+import json
 import multiprocessing
 from pathlib import Path
 import threading
 
 import pytest
 
-from app.journaling.day_context import DayContextItem, assemble_day_context
+from app.chat.session_log import SessionLogWriter
+from app.journaling.day_context import DayContextBundle, DayContextItem, assemble_day_context
 from app.journaling.draft import (
     JOURNAL_DRAFT_WRITE_ACTION,
     JournalDraftBlockedError,
@@ -20,7 +23,7 @@ from app.knowledge_acquisition.candidate_writeback import ARTIFACT_CLASS, DEFAUL
 from app.reasoning.schema import Claim, Inference, ReasoningOutput
 from app.vault.manager import VaultContext
 from app.write_guard import WriteGuard, WritesBlockedError
-from scripts.yaml_roundtrip import load_frontmatter
+from scripts.yaml_roundtrip import dump_frontmatter, load_frontmatter
 
 
 DAY = date(2026, 7, 15)
@@ -107,6 +110,30 @@ session_id: {session_id}
 
 def _read_result(root: Path, path: str) -> tuple[dict[str, object], str]:
     return load_frontmatter((root / path).read_text(encoding="utf-8"))
+
+
+def _write_context_capture(
+    path: Path, *, content_identity: str, review_state: str
+) -> dict[str, object]:
+    path.write_text(
+        f"""---
+artifact_class: {ARTIFACT_CLASS}
+review_state: {review_state}
+created: 2026-07-15T09:00:00Z
+provenance:
+  content_identity: {content_identity}
+  source_kind: note
+---
+Context source
+""",
+        encoding="utf-8",
+    )
+    return {
+        "content_identity": content_identity,
+        "created_at": "2026-07-15T09:00:00+00:00",
+        "source_kind": "note",
+        "url": None,
+    }
 
 
 def test_draft_synthesizes_from_transcript_and_context(tmp_path: Path) -> None:
@@ -395,6 +422,941 @@ session_id: session-later
     )
 
 
+def test_context_session_ref_remains_context_across_same_day_redraft(
+    tmp_path: Path,
+) -> None:
+    root, context, session_id, _capture = _seed_inputs(tmp_path)
+    context_source = root / "session:context-only.md"
+    context_content = _write_context_capture(
+        context_source,
+        content_identity="context-only",
+        review_state="accepted",
+    )
+    bundle = assemble_day_context(vault_context=context, for_date=DAY)
+    sections = dict(bundle.sections)
+    sections["captures"] = sections["captures"].model_copy(
+        update={
+            "items": (
+                DayContextItem(
+                    provenance_ref="session:context-only.md",
+                    content=context_content,
+                ),
+            )
+        }
+    )
+    bundle = bundle.model_copy(update={"sections": sections})
+
+    first = draft_journal_entry(
+        vault_context=context,
+        for_date=DAY,
+        session_id=session_id,
+        day_context=bundle,
+        write_guard=_allowing_guard(),
+    )
+    second = draft_journal_entry(
+        vault_context=context,
+        for_date=DAY,
+        session_id=session_id,
+        day_context=bundle,
+        write_guard=_allowing_guard(),
+    )
+
+    assert second.path == first.path
+    frontmatter, _body = _read_result(root, second.path)
+    assert frontmatter["sources"].count("session:context-only.md") == 1
+    assert {
+        (item["kind"], item["external_id"], item["occurrence"])
+        for item in frontmatter["source_occurrences"]
+    } >= {
+        ("transcript", f"session:{session_id}", 1),
+        ("day_context", "session:context-only.md", 1),
+    }
+
+
+def test_legacy_session_prefixed_source_role_ambiguity_blocks_redraft(
+    tmp_path: Path,
+) -> None:
+    root, context, session_id, _capture = _seed_inputs(tmp_path)
+    context_source = root / "session:collision.md"
+    context_content = _write_context_capture(
+        context_source,
+        content_identity="legacy-role-collision",
+        review_state="accepted",
+    )
+    bundle = assemble_day_context(vault_context=context, for_date=DAY)
+    sections = dict(bundle.sections)
+    sections["captures"] = sections["captures"].model_copy(
+        update={
+            "items": (
+                DayContextItem(
+                    provenance_ref="session:collision.md",
+                    content=context_content,
+                ),
+            )
+        }
+    )
+    bundle = bundle.model_copy(update={"sections": sections})
+    first = draft_journal_entry(
+        vault_context=context,
+        for_date=DAY,
+        session_id=session_id,
+        day_context=bundle,
+        write_guard=_allowing_guard(),
+    )
+    draft_path = root / first.path
+    frontmatter, body = _read_result(root, first.path)
+    frontmatter.pop("source_occurrences")
+    draft_path.write_text(
+        dump_frontmatter(frontmatter, body), encoding="utf-8"
+    )
+    colliding_transcript = root / ".chats" / "reflection" / "collision.md"
+    colliding_transcript.write_text(
+        "---\ntype: chat-session\nsession_id: collision.md\n---\n\n"
+        "**Owner:** Unrelated transcript.\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        UnresolvableJournalCitationError, match="source role is ambiguous"
+    ):
+        draft_journal_entry(
+            vault_context=context,
+            for_date=DAY,
+            session_id=session_id,
+            day_context=bundle,
+            write_guard=_allowing_guard(),
+        )
+
+    assert "Unrelated transcript" not in draft_path.read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize("legacy_sources", (None, "not-a-list"))
+def test_missing_or_non_list_legacy_sources_block_redraft(
+    tmp_path: Path, legacy_sources: object
+) -> None:
+    root, context, session_id, _capture = _seed_inputs(tmp_path)
+    first = draft_journal_entry(
+        vault_context=context,
+        for_date=DAY,
+        session_id=session_id,
+        write_guard=_allowing_guard(),
+    )
+    draft_path = root / first.path
+    frontmatter, body = _read_result(root, first.path)
+    frontmatter.pop("source_occurrences")
+    if legacy_sources is None:
+        frontmatter.pop("sources")
+    else:
+        frontmatter["sources"] = legacy_sources
+    draft_path.write_text(dump_frontmatter(frontmatter, body), encoding="utf-8")
+    before_redraft = draft_path.read_text(encoding="utf-8")
+
+    with pytest.raises(
+        UnresolvableJournalCitationError,
+        match="stored legacy journal sources must be a list",
+    ):
+        draft_journal_entry(
+            vault_context=context,
+            for_date=DAY,
+            session_id=session_id,
+            write_guard=_allowing_guard(),
+        )
+
+    assert draft_path.read_text(encoding="utf-8") == before_redraft
+
+
+def test_empty_legacy_session_id_blocks_before_matching_or_deduplication(
+    tmp_path: Path,
+) -> None:
+    root, context, session_id, _capture = _seed_inputs(tmp_path)
+    first = draft_journal_entry(
+        vault_context=context,
+        for_date=DAY,
+        session_id=session_id,
+        write_guard=_allowing_guard(),
+    )
+    draft_path = root / first.path
+    frontmatter, body = _read_result(root, first.path)
+    frontmatter.pop("source_occurrences")
+    frontmatter["sources"] = ["session:"]
+    draft_path.write_text(dump_frontmatter(frontmatter, body), encoding="utf-8")
+    before_redraft = draft_path.read_text(encoding="utf-8")
+    (root / ".chats" / "reflection" / "missing-session-id.md").write_text(
+        "---\ntype: chat-session\n---\n\n**Owner:** Must not be injected.\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        UnresolvableJournalCitationError, match="empty session_id"
+    ):
+        draft_journal_entry(
+            vault_context=context,
+            for_date=DAY,
+            session_id=session_id,
+            write_guard=_allowing_guard(),
+        )
+
+    assert draft_path.read_text(encoding="utf-8") == before_redraft
+
+
+@pytest.mark.parametrize(
+    ("legacy_sources", "message"),
+    (
+        ([], "require a transcript"),
+        ([""], "source is invalid"),
+        ([" session:session-abc"], "source is invalid"),
+        ([123], "source is invalid"),
+        (["session:session-abc", "session:session-abc"], "duplicate transcript"),
+    ),
+)
+def test_invalid_legacy_source_sets_block_redraft(
+    tmp_path: Path, legacy_sources: object, message: str
+) -> None:
+    root, context, session_id, _capture = _seed_inputs(tmp_path)
+    first = draft_journal_entry(
+        vault_context=context,
+        for_date=DAY,
+        session_id=session_id,
+        write_guard=_allowing_guard(),
+    )
+    draft_path = root / first.path
+    frontmatter, body = _read_result(root, first.path)
+    frontmatter.pop("source_occurrences")
+    frontmatter["sources"] = legacy_sources
+    draft_path.write_text(dump_frontmatter(frontmatter, body), encoding="utf-8")
+    before_redraft = draft_path.read_text(encoding="utf-8")
+
+    with pytest.raises(UnresolvableJournalCitationError, match=message):
+        draft_journal_entry(
+            vault_context=context,
+            for_date=DAY,
+            session_id=session_id,
+            write_guard=_allowing_guard(),
+        )
+
+    assert draft_path.read_text(encoding="utf-8") == before_redraft
+
+
+@pytest.mark.parametrize(
+    "bad_occurrences",
+    (
+        None,
+        "not-a-list",
+        ["not-a-mapping"],
+        [{"kind": "unknown", "external_id": "session:session-abc", "occurrence": 1}],
+        [{"kind": "transcript", "external_id": "session:session-abc"}],
+        [
+            {
+                "kind": "transcript",
+                "external_id": "session:session-abc",
+                "occurrence": 0,
+            }
+        ],
+        [{"kind": "transcript", "external_id": "session:", "occurrence": 1}],
+        [
+            {
+                "kind": "day_context",
+                "external_id": "sources/capture-one.md",
+                "occurrence": 1,
+            }
+        ],
+    ),
+)
+def test_malformed_typed_source_occurrences_block_redraft(
+    tmp_path: Path, bad_occurrences: object
+) -> None:
+    root, context, session_id, _capture = _seed_inputs(tmp_path)
+    first = draft_journal_entry(
+        vault_context=context,
+        for_date=DAY,
+        session_id=session_id,
+        write_guard=_allowing_guard(),
+    )
+    draft_path = root / first.path
+    frontmatter, body = _read_result(root, first.path)
+    frontmatter["source_occurrences"] = bad_occurrences
+    draft_path.write_text(dump_frontmatter(frontmatter, body), encoding="utf-8")
+    before_redraft = draft_path.read_text(encoding="utf-8")
+
+    with pytest.raises(
+        UnresolvableJournalCitationError, match="stored (journal|transcript) source"
+    ):
+        draft_journal_entry(
+            vault_context=context,
+            for_date=DAY,
+            session_id=session_id,
+            write_guard=_allowing_guard(),
+        )
+
+    assert draft_path.read_text(encoding="utf-8") == before_redraft
+
+
+def test_typed_source_occurrences_require_transcript_lineage(tmp_path: Path) -> None:
+    root, context, session_id, _capture = _seed_inputs(tmp_path)
+    first = draft_journal_entry(
+        vault_context=context,
+        for_date=DAY,
+        session_id=session_id,
+        write_guard=_allowing_guard(),
+    )
+    draft_path = root / first.path
+    frontmatter, body = _read_result(root, first.path)
+    context_occurrence = next(
+        item
+        for item in frontmatter["source_occurrences"]
+        if item["kind"] == "day_context"
+    )
+    frontmatter["sources"] = [context_occurrence["external_id"]]
+    frontmatter["source_occurrences"] = [context_occurrence]
+    draft_path.write_text(dump_frontmatter(frontmatter, body), encoding="utf-8")
+
+    with pytest.raises(UnresolvableJournalCitationError, match="require a transcript"):
+        draft_journal_entry(
+            vault_context=context,
+            for_date=DAY,
+            session_id=session_id,
+            write_guard=_allowing_guard(),
+        )
+
+
+def test_duplicate_typed_transcript_occurrences_block_redraft(tmp_path: Path) -> None:
+    root, context, session_id, _capture = _seed_inputs(tmp_path)
+    first = draft_journal_entry(
+        vault_context=context,
+        for_date=DAY,
+        session_id=session_id,
+        write_guard=_allowing_guard(),
+    )
+    draft_path = root / first.path
+    frontmatter, body = _read_result(root, first.path)
+    transcript = dict(frontmatter["source_occurrences"][0])
+    duplicate = {**transcript, "occurrence": 2}
+    frontmatter["sources"] = [transcript["external_id"], duplicate["external_id"]]
+    frontmatter["source_occurrences"] = [transcript, duplicate]
+    draft_path.write_text(dump_frontmatter(frontmatter, body), encoding="utf-8")
+
+    with pytest.raises(UnresolvableJournalCitationError, match="duplicate transcript"):
+        draft_journal_entry(
+            vault_context=context,
+            for_date=DAY,
+            session_id=session_id,
+            write_guard=_allowing_guard(),
+        )
+
+
+def test_empty_typed_transcript_id_blocks_before_deduplication(tmp_path: Path) -> None:
+    root, context, session_id, _capture = _seed_inputs(tmp_path)
+    first = draft_journal_entry(
+        vault_context=context,
+        for_date=DAY,
+        session_id=session_id,
+        write_guard=_allowing_guard(),
+    )
+    draft_path = root / first.path
+    frontmatter, body = _read_result(root, first.path)
+    transcript = dict(frontmatter["source_occurrences"][0])
+    transcript["external_id"] = "session:"
+    frontmatter["sources"][0] = "session:"
+    frontmatter["source_occurrences"][0] = transcript
+    draft_path.write_text(dump_frontmatter(frontmatter, body), encoding="utf-8")
+
+    with pytest.raises(UnresolvableJournalCitationError, match="invalid external_id"):
+        draft_journal_entry(
+            vault_context=context,
+            for_date=DAY,
+            session_id=session_id,
+            write_guard=_allowing_guard(),
+        )
+
+
+@pytest.mark.parametrize("mutated_source", ("transcript", "context"))
+def test_review_posture_change_during_cognition_blocks_before_staging(
+    tmp_path: Path, mutated_source: str
+) -> None:
+    root, context, session_id, capture = _seed_inputs(tmp_path)
+    bundle = assemble_day_context(vault_context=context, for_date=DAY)
+    transcript = next((root / ".chats" / "reflection").glob("*.md"))
+
+    def rejecting_reasoning(
+        _object_ids: object, *, trace_id: str | None = None
+    ) -> ReasoningOutput:
+        del trace_id
+        if mutated_source == "transcript":
+            transcript.write_text(
+                transcript.read_text(encoding="utf-8").replace(
+                    "type: chat-session",
+                    "type: chat-session\nreview_state: rejected",
+                ),
+                encoding="utf-8",
+            )
+        else:
+            capture.write_text(
+                f"---\nartifact_class: {ARTIFACT_CLASS}\nreview_state: rejected\n---\n"
+                "Rejected during cognition.\n",
+                encoding="utf-8",
+            )
+        return ReasoningOutput(outcome="success")
+
+    with pytest.raises(JournalDraftBlockedError, match="changed before staging"):
+        draft_journal_entry(
+            vault_context=context,
+            for_date=DAY,
+            session_id=session_id,
+            day_context=bundle,
+            write_guard=_allowing_guard(),
+            reasoning_fn=rejecting_reasoning,
+        )
+
+    assert not list(root.glob("**/drafts/journal/*.md"))
+
+
+def test_typed_and_compatibility_sources_mismatch_blocks_redraft(
+    tmp_path: Path,
+) -> None:
+    root, context, session_id, _capture = _seed_inputs(tmp_path)
+    first = draft_journal_entry(
+        vault_context=context,
+        for_date=DAY,
+        session_id=session_id,
+        write_guard=_allowing_guard(),
+    )
+    draft_path = root / first.path
+    frontmatter, body = _read_result(root, first.path)
+    frontmatter["sources"] = ["session:different"]
+    draft_path.write_text(dump_frontmatter(frontmatter, body), encoding="utf-8")
+
+    with pytest.raises(UnresolvableJournalCitationError, match="disagree"):
+        draft_journal_entry(
+            vault_context=context,
+            for_date=DAY,
+            session_id=session_id,
+            write_guard=_allowing_guard(),
+        )
+
+
+def test_typed_source_occurrence_sequence_mismatch_blocks_redraft(
+    tmp_path: Path,
+) -> None:
+    root, context, session_id, _capture = _seed_inputs(tmp_path)
+    first = draft_journal_entry(
+        vault_context=context,
+        for_date=DAY,
+        session_id=session_id,
+        write_guard=_allowing_guard(),
+    )
+    draft_path = root / first.path
+    frontmatter, body = _read_result(root, first.path)
+    first_occurrence = dict(frontmatter["source_occurrences"][0])
+    first_occurrence["occurrence"] = 2
+    frontmatter["source_occurrences"][0] = first_occurrence
+    draft_path.write_text(dump_frontmatter(frontmatter, body), encoding="utf-8")
+
+    with pytest.raises(UnresolvableJournalCitationError, match="sequence"):
+        draft_journal_entry(
+            vault_context=context,
+            for_date=DAY,
+            session_id=session_id,
+            write_guard=_allowing_guard(),
+        )
+
+
+@pytest.mark.parametrize("mutated_source", ("transcript", "context"))
+def test_source_content_change_during_cognition_blocks_before_staging(
+    tmp_path: Path, mutated_source: str
+) -> None:
+    root, context, session_id, capture = _seed_inputs(tmp_path)
+    bundle = assemble_day_context(vault_context=context, for_date=DAY)
+    transcript = next((root / ".chats" / "reflection").glob("*.md"))
+
+    def mutating_reasoning(
+        _object_ids: object, *, trace_id: str | None = None
+    ) -> ReasoningOutput:
+        del trace_id
+        if mutated_source == "transcript":
+            transcript.write_text(
+                transcript.read_text(encoding="utf-8").replace(
+                    "I connected several loose ends.",
+                    "These replacement words were not admitted.",
+                ),
+                encoding="utf-8",
+            )
+        else:
+            capture.write_text(
+                capture.read_text(encoding="utf-8").replace(
+                    "Capture one", "Replacement context was not admitted."
+                ),
+                encoding="utf-8",
+            )
+        return ReasoningOutput(outcome="success")
+
+    with pytest.raises(JournalDraftBlockedError, match="content changed"):
+        draft_journal_entry(
+            vault_context=context,
+            for_date=DAY,
+            session_id=session_id,
+            day_context=bundle,
+            write_guard=_allowing_guard(),
+            reasoning_fn=mutating_reasoning,
+        )
+
+    assert not list(root.glob("**/drafts/journal/*.md"))
+
+
+def test_stale_day_context_bundle_blocks_before_cognition(tmp_path: Path) -> None:
+    root, context, session_id, capture = _seed_inputs(tmp_path)
+    bundle = assemble_day_context(vault_context=context, for_date=DAY)
+    capture.write_text(
+        capture.read_text(encoding="utf-8").replace(
+            "content_identity: capture-1", "content_identity: capture-2"
+        ),
+        encoding="utf-8",
+    )
+    cognition_called = False
+
+    def cognition(
+        _object_ids: object, *, trace_id: str | None = None
+    ) -> ReasoningOutput:
+        nonlocal cognition_called
+        del trace_id
+        cognition_called = True
+        return ReasoningOutput()
+
+    with pytest.raises(
+        UnresolvableJournalCitationError,
+        match="source version changed after bundle assembly",
+    ):
+        draft_journal_entry(
+            vault_context=context,
+            for_date=DAY,
+            session_id=session_id,
+            day_context=bundle,
+            write_guard=_allowing_guard(),
+            reasoning_fn=cognition,
+        )
+
+    assert not cognition_called
+    assert not list(root.glob("**/drafts/journal/*.md"))
+
+
+def test_multi_turn_transcript_digest_covers_exact_raw_crlf_bytes(
+    tmp_path: Path,
+) -> None:
+    root, context, session_id, _capture = _seed_inputs(tmp_path)
+    transcript = next((root / ".chats" / "reflection").glob("*.md"))
+    multi_turn_text = transcript.read_text(encoding="utf-8").replace(
+        "**Owner:** I connected several loose ends.\n",
+        "**Owner:** I connected several loose ends.\n\n"
+        "**Agent:** What else mattered?\n\n"
+        "**Owner:** I protected time for a second reflection.\n",
+    )
+    crlf_raw = multi_turn_text.encode("utf-8").replace(b"\n", b"\r\n")
+    transcript.write_bytes(crlf_raw)
+
+    result = draft_journal_entry(
+        vault_context=context,
+        for_date=DAY,
+        session_id=session_id,
+        write_guard=_allowing_guard(),
+    )
+
+    frontmatter, body = _read_result(root, result.path)
+    transcript_version = next(
+        item
+        for item in frontmatter["source_occurrences"]
+        if item["kind"] == "transcript"
+    )
+    raw_digest = hashlib.sha256(crlf_raw).hexdigest()
+    normalized_digest = hashlib.sha256(crlf_raw.replace(b"\r\n", b"\n")).hexdigest()
+    assert raw_digest != normalized_digest
+    assert transcript_version["content_sha256"] == raw_digest
+    assert "I connected several loose ends." in transcript_version["admitted_content"]
+    assert (
+        "I protected time for a second reflection."
+        in transcript_version["admitted_content"]
+    )
+    assert "I protected time for a second reflection." in body
+    assert raw_digest in body
+
+
+def test_multi_paragraph_owner_turn_retains_all_owner_text(tmp_path: Path) -> None:
+    root, context, session_id, _capture = _seed_inputs(tmp_path)
+    transcript = next((root / ".chats" / "reflection").glob("*.md"))
+    transcript_text = f"""---
+type: chat-session
+session_id: {session_id}
+---
+
+**Agent:** What mattered today?
+
+**Owner:** The first owner paragraph.
+
+The second owner paragraph has the important qualification.
+
+**Agent:** What follows from that?
+
+**Owner:** A separate final owner turn.
+"""
+    crlf_raw = transcript_text.encode("utf-8").replace(b"\n", b"\r\n")
+    transcript.write_bytes(crlf_raw)
+
+    result = draft_journal_entry(
+        vault_context=context,
+        for_date=DAY,
+        session_id=session_id,
+        write_guard=_allowing_guard(),
+    )
+
+    frontmatter, body = _read_result(root, result.path)
+    admitted_content = next(
+        item["admitted_content"]
+        for item in frontmatter["source_occurrences"]
+        if item["kind"] == "transcript"
+    )
+    assert "The first owner paragraph." in admitted_content
+    assert "The second owner paragraph has the important qualification." in admitted_content
+    assert "A separate final owner turn." in admitted_content
+    assert "What follows from that?" not in admitted_content
+    assert "The second owner paragraph has the important qualification." in body
+    assert hashlib.sha256(crlf_raw).hexdigest() in body
+
+
+def test_production_framed_transcript_round_trips_exact_owner_message(
+    tmp_path: Path,
+) -> None:
+    root, context, _session_id, _capture = _seed_inputs(tmp_path)
+    for transcript in (root / ".chats" / "reflection").glob("*.md"):
+        transcript.unlink()
+    note = root / "Notes" / "Framed reflection.md"
+    note.parent.mkdir(parents=True)
+    note.write_text(
+        "---\nuuid: framed-reflection\ntype: note\n---\n\nAnchor.\n",
+        encoding="utf-8",
+    )
+    writer = SessionLogWriter(
+        vault_root=root,
+        now_fn=lambda: datetime(2026, 7, 15, 20, tzinfo=timezone.utc),
+        uuid_fn=lambda: "framed-session",
+    )
+    session = writer.open_session(note, "framed-reflection")
+    writer.append_message(session, "agent", "What mattered today?")
+    exact_owner_message = (
+        "First line\nSecond line\n**Agent:** literal owner text\n\nFinal paragraph"
+    )
+    writer.append_message(session, "owner", exact_owner_message)
+    writer.append_message(session, "agent", "What follows from that?")
+    writer.close_session(
+        session, "complete\n**Owner:** literal closure text must not be admitted"
+    )
+
+    result = draft_journal_entry(
+        vault_context=context,
+        for_date=DAY,
+        session_id=session.session_id,
+        write_guard=_allowing_guard(),
+    )
+
+    frontmatter, body = _read_result(root, result.path)
+    admitted_content = next(
+        item["admitted_content"]
+        for item in frontmatter["source_occurrences"]
+        if item["kind"] == "transcript"
+    )
+    assert json.loads(admitted_content) == [exact_owner_message]
+    assert exact_owner_message in body
+    assert "What follows from that?" not in admitted_content
+    assert "literal closure text must not be admitted" not in admitted_content
+
+
+def test_malformed_framed_transcript_blocks_without_normalizing_semantics(
+    tmp_path: Path,
+) -> None:
+    root, context, _session_id, _capture = _seed_inputs(tmp_path)
+    transcript = next((root / ".chats" / "reflection").glob("*.md"))
+    text = transcript.read_text(encoding="utf-8").replace(
+        "session_id: session-abc",
+        "session_id: session-abc\nrole_message_format: blockquote-v1",
+    ).replace(
+        "**Agent:** What mattered today?",
+        "**Agent:**\n> What mattered today?",
+    ).replace(
+        "**Owner:** I connected several loose ends.",
+        "**Owner:**\n> First paragraph\n\n> unframed blank was removed",
+    )
+    transcript.write_text(text, encoding="utf-8")
+
+    with pytest.raises(
+        UnresolvableJournalCitationError, match="unframed blank line"
+    ):
+        draft_journal_entry(
+            vault_context=context,
+            for_date=DAY,
+            session_id="session-abc",
+            write_guard=_allowing_guard(),
+        )
+
+    assert not list(root.glob("**/drafts/journal/*.md"))
+
+
+@pytest.mark.parametrize("framed", (False, True))
+def test_invalid_owner_record_blocks_even_beside_valid_owner_turn(
+    tmp_path: Path, framed: bool
+) -> None:
+    root, context, session_id, _capture = _seed_inputs(tmp_path)
+    transcript = next((root / ".chats" / "reflection").glob("*.md"))
+    format_line = "role_message_format: blockquote-v1\n" if framed else ""
+    valid_message = "**Owner:**\n> valid owner turn" if framed else "**Owner:** valid owner turn"
+    invalid_message = "**Owner:**\n>   " if framed else "**Owner:**\n   "
+    transcript.write_text(
+        f"""---
+type: chat-session
+session_id: {session_id}
+{format_line}---
+
+## Session
+
+{valid_message}
+
+{invalid_message}
+""",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        UnresolvableJournalCitationError,
+        match="transcript message is empty",
+    ):
+        draft_journal_entry(
+            vault_context=context,
+            for_date=DAY,
+            session_id=session_id,
+            write_guard=_allowing_guard(),
+        )
+
+    assert not list(root.glob("**/drafts/journal/*.md"))
+
+
+@pytest.mark.parametrize("role", ("Owner", "Agent", "Session closed"))
+def test_bare_framed_record_blocks_before_cognition_and_staging(
+    tmp_path: Path, role: str
+) -> None:
+    root, context, session_id, _capture = _seed_inputs(tmp_path)
+    transcript = next((root / ".chats" / "reflection").glob("*.md"))
+    transcript.write_text(
+        f"""---
+type: chat-session
+session_id: {session_id}
+role_message_format: blockquote-v1
+---
+
+## Session
+
+**Owner:**
+> valid owner turn
+
+**{role}:**
+""",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        UnresolvableJournalCitationError, match="transcript message is empty"
+    ):
+        draft_journal_entry(
+            vault_context=context,
+            for_date=DAY,
+            session_id=session_id,
+            write_guard=_allowing_guard(),
+        )
+
+    assert not list(root.glob("**/drafts/journal/*.md"))
+
+
+def test_blank_legacy_agent_blocks_even_beside_valid_owner_turn(
+    tmp_path: Path,
+) -> None:
+    root, context, session_id, _capture = _seed_inputs(tmp_path)
+    transcript = next((root / ".chats" / "reflection").glob("*.md"))
+    transcript.write_text(
+        f"""---
+type: chat-session
+session_id: {session_id}
+---
+
+## Session
+
+**Owner:** valid owner turn
+
+**Agent:**
+
+""",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        UnresolvableJournalCitationError, match="legacy transcript message is empty"
+    ):
+        draft_journal_entry(
+            vault_context=context,
+            for_date=DAY,
+            session_id=session_id,
+            write_guard=_allowing_guard(),
+        )
+
+    assert not list(root.glob("**/drafts/journal/*.md"))
+
+
+def test_legacy_closed_transcript_excludes_session_metadata(tmp_path: Path) -> None:
+    root, context, session_id, _capture = _seed_inputs(tmp_path)
+    transcript = next((root / ".chats" / "reflection").glob("*.md"))
+    transcript.write_text(
+        transcript.read_text(encoding="utf-8")
+        + "\n---\n*Session closed. Total: complete.*\n",
+        encoding="utf-8",
+    )
+
+    result = draft_journal_entry(
+        vault_context=context,
+        for_date=DAY,
+        session_id=session_id,
+        write_guard=_allowing_guard(),
+    )
+
+    frontmatter, body = _read_result(root, result.path)
+    admitted_content = next(
+        item["admitted_content"]
+        for item in frontmatter["source_occurrences"]
+        if item["kind"] == "transcript"
+    )
+    assert json.loads(admitted_content) == ["I connected several loose ends."]
+    assert "Session closed" not in body
+
+
+def test_empty_owner_marker_does_not_borrow_following_agent_text(
+    tmp_path: Path,
+) -> None:
+    root, context, session_id, _capture = _seed_inputs(tmp_path)
+    first = draft_journal_entry(
+        vault_context=context,
+        for_date=DAY,
+        session_id=session_id,
+        write_guard=_allowing_guard(),
+    )
+    draft_path = root / first.path
+    before_redraft = draft_path.read_bytes()
+    transcript = next((root / ".chats" / "reflection").glob("*.md"))
+    transcript.write_text(
+        f"""---
+type: chat-session
+session_id: {session_id}
+---
+
+**Owner:**
+
+**Agent:** These agent words must never become owner prose.
+""",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        UnresolvableJournalCitationError,
+        match="legacy transcript message is empty",
+    ):
+        draft_journal_entry(
+            vault_context=context,
+            for_date=DAY,
+            session_id=session_id,
+            write_guard=_allowing_guard(),
+        )
+
+    assert draft_path.read_bytes() == before_redraft
+
+
+def test_empty_transcript_blocks_before_cognition_and_staging(tmp_path: Path) -> None:
+    root, context, session_id, _capture = _seed_inputs(tmp_path)
+    transcript = next((root / ".chats" / "reflection").glob("*.md"))
+    transcript.write_text(
+        f"""---
+type: chat-session
+session_id: {session_id}
+---
+
+**Agent:** What mattered today?
+""",
+        encoding="utf-8",
+    )
+    cognition_called = False
+
+    def cognition(
+        _object_ids: object, *, trace_id: str | None = None
+    ) -> ReasoningOutput:
+        nonlocal cognition_called
+        del trace_id
+        cognition_called = True
+        return ReasoningOutput()
+
+    with pytest.raises(
+        UnresolvableJournalCitationError,
+        match=f"session:{session_id} contains no owner turns",
+    ):
+        draft_journal_entry(
+            vault_context=context,
+            for_date=DAY,
+            session_id=session_id,
+            write_guard=_allowing_guard(),
+            reasoning_fn=cognition,
+        )
+
+    assert not cognition_called
+    assert not list(root.glob("**/drafts/journal/*.md"))
+
+
+def test_post_fence_source_mutation_keeps_admitted_version_resolvable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app.journaling import draft as draft_module
+
+    root, context, session_id, _capture = _seed_inputs(tmp_path)
+    transcript = next((root / ".chats" / "reflection").glob("*.md"))
+    admitted_raw = transcript.read_text(encoding="utf-8")
+    admitted_digest = hashlib.sha256(admitted_raw.encode("utf-8")).hexdigest()
+    original_atomic_write = draft_module._atomic_write_at
+
+    def mutate_after_final_fence(
+        directory_fd: int, filename: str, content: str
+    ) -> None:
+        transcript.write_text(
+            admitted_raw.replace(
+                "I connected several loose ends.",
+                "These words changed after the final source fence.",
+            ),
+            encoding="utf-8",
+        )
+        original_atomic_write(directory_fd, filename, content)
+
+    monkeypatch.setattr(draft_module, "_atomic_write_at", mutate_after_final_fence)
+    result = draft_journal_entry(
+        vault_context=context,
+        for_date=DAY,
+        session_id=session_id,
+        write_guard=_allowing_guard(),
+    )
+
+    frontmatter, body = _read_result(root, result.path)
+    transcript_version = next(
+        item
+        for item in frontmatter["source_occurrences"]
+        if item["kind"] == "transcript"
+    )
+    assert transcript_version["content_sha256"] == admitted_digest
+    assert "I connected several loose ends." in transcript_version["admitted_content"]
+    assert "I connected several loose ends." in body
+    current_digest = hashlib.sha256(
+        transcript.read_text(encoding="utf-8").encode("utf-8")
+    ).hexdigest()
+    assert current_digest != transcript_version["content_sha256"]
+    assert admitted_digest in body
+
+
 def test_concurrent_same_day_composition_retains_both_sessions(tmp_path: Path) -> None:
     root, context, first_session_id, _capture = _seed_inputs(tmp_path)
     second_session = root / ".chats" / "reflection" / "2026-07-15-later.md"
@@ -557,6 +1519,174 @@ def test_successful_cognition_uses_resolvable_objects_and_synthesis(
     assert len(cognition["object_ids"]) >= 2
     assert "Machine cognition (not owner utterance)" in body
     assert "I connected the real session shape." in body
+    conversation_ref = next(
+        ref.note_path
+        for ref in result.compilation_draft.source_refs
+        if ref.role == "conversation"
+    )
+    assert (
+        f"cognition source: `{conversation_ref}`; source kind: `transcript`; "
+        "occurrence: 1"
+    ) in body
+    assert (
+        f"cognition source: `{_capture.relative_to(root).as_posix()}`; "
+        "source kind: `day_context`; occurrence: 1"
+    ) in body
+    assert "cognition source: `journal-source:" not in body
+
+
+def test_journal_rejects_cognition_claim_for_unadmitted_uuid_before_staging(
+    tmp_path: Path,
+) -> None:
+    root, context, session_id, _capture = _seed_inputs(tmp_path)
+    bundle = assemble_day_context(vault_context=context, for_date=DAY)
+
+    def foreign_source_reasoning(
+        _object_ids: object, *, trace_id: str | None = None
+    ) -> ReasoningOutput:
+        del trace_id
+        return ReasoningOutput(
+            claims=[
+                Claim(
+                    id="foreign-source-claim",
+                    object_uuid="foreign-uuid",
+                    text="This claim has no admitted source.",
+                    modality="assertion",
+                    confidence=0.8,
+                )
+            ],
+            outcome="success",
+        )
+
+    with pytest.raises(UnresolvableJournalCitationError, match="foreign-uuid"):
+        draft_journal_entry(
+            vault_context=context,
+            for_date=DAY,
+            session_id=session_id,
+            day_context=bundle,
+            write_guard=_allowing_guard(),
+            reasoning_fn=foreign_source_reasoning,
+        )
+
+    assert not list(root.glob("**/drafts/journal/*.md"))
+
+
+@pytest.mark.parametrize("outcome", ("success", "provider_failure"))
+def test_journal_rejects_inference_with_unknown_claim_graph_before_staging(
+    tmp_path: Path, outcome: str
+) -> None:
+    root, context, session_id, _capture = _seed_inputs(tmp_path)
+    bundle = assemble_day_context(vault_context=context, for_date=DAY)
+
+    def foreign_graph_reasoning(
+        _object_ids: object, *, trace_id: str | None = None
+    ) -> ReasoningOutput:
+        del trace_id
+        return ReasoningOutput(
+            inferences=[
+                Inference(
+                    id="foreign-inference",
+                    premises=["foreign-premise"],
+                    conclusion_id="foreign-conclusion",
+                    type="synthesis",
+                    rationale="This inference has no admitted claim graph.",
+                )
+            ],
+            outcome=outcome,  # type: ignore[arg-type]
+            degraded_reason=(
+                "provider_failure" if outcome == "provider_failure" else None
+            ),
+        )
+
+    with pytest.raises(
+        UnresolvableJournalCitationError, match="foreign-(conclusion|premise)"
+    ):
+        draft_journal_entry(
+            vault_context=context,
+            for_date=DAY,
+            session_id=session_id,
+            day_context=bundle,
+            write_guard=_allowing_guard(),
+            reasoning_fn=foreign_graph_reasoning,
+        )
+
+    assert not list(root.glob("**/drafts/journal/*.md"))
+
+
+@pytest.mark.parametrize(
+    ("premises", "conclusion_id"),
+    (([], "claim"), ([""], "claim"), (["claim"], "")),
+)
+def test_journal_rejects_inference_with_empty_claim_graph_before_staging(
+    tmp_path: Path, premises: list[str], conclusion_id: str
+) -> None:
+    root, context, session_id, _capture = _seed_inputs(tmp_path)
+    bundle = assemble_day_context(vault_context=context, for_date=DAY)
+
+    def empty_graph_reasoning(
+        _object_ids: object, *, trace_id: str | None = None
+    ) -> ReasoningOutput:
+        del trace_id
+        return ReasoningOutput(
+            inferences=[
+                Inference(
+                    id="empty-graph-inference",
+                    premises=premises,
+                    conclusion_id=conclusion_id,
+                    type="synthesis",
+                    rationale="This inference has an incomplete claim graph.",
+                )
+            ],
+            outcome="success",
+        )
+
+    with pytest.raises(UnresolvableJournalCitationError, match="empty premise"):
+        draft_journal_entry(
+            vault_context=context,
+            for_date=DAY,
+            session_id=session_id,
+            day_context=bundle,
+            write_guard=_allowing_guard(),
+            reasoning_fn=empty_graph_reasoning,
+        )
+
+    assert not list(root.glob("**/drafts/journal/*.md"))
+
+
+def test_journal_rejects_duplicate_claim_ids_before_staging(tmp_path: Path) -> None:
+    root, context, session_id, _capture = _seed_inputs(tmp_path)
+    bundle = assemble_day_context(vault_context=context, for_date=DAY)
+
+    def duplicate_claim_reasoning(
+        object_ids: object, *, trace_id: str | None = None
+    ) -> ReasoningOutput:
+        del trace_id
+        admitted_ids = tuple(object_ids)  # type: ignore[arg-type]
+        return ReasoningOutput(
+            claims=[
+                Claim(
+                    id="duplicate",
+                    object_uuid=object_id,
+                    text=f"Claim for {object_id}",
+                    modality="assertion",
+                    confidence=0.8,
+                )
+                for object_id in admitted_ids[:2]
+            ],
+            outcome="success",
+        )
+
+    with pytest.raises(UnresolvableJournalCitationError, match="duplicate claim IDs"):
+        draft_journal_entry(
+            vault_context=context,
+            for_date=DAY,
+            session_id=session_id,
+            day_context=bundle,
+            write_guard=_allowing_guard(),
+            reasoning_fn=duplicate_claim_reasoning,
+        )
+
+    assert not list(root.glob("**/drafts/journal/*.md"))
 
 
 @pytest.mark.parametrize(
@@ -706,20 +1836,28 @@ def test_non_proposal_capture_posture_blocks_before_cognition_or_staging(
     assert not list(root.glob("**/drafts/journal/*.md"))
 
 
-def test_colliding_session_and_context_identity_blocks_before_cognition(
+def _colliding_session_and_context(
     tmp_path: Path,
-) -> None:
+    *,
+    transcript_review_state: str,
+    context_review_state: str,
+) -> tuple[Path, VaultContext, DayContextBundle]:
     root, context, original_session_id, _capture = _seed_inputs(tmp_path)
     session = next((root / ".chats" / "reflection").glob("*.md"))
     session.write_text(
-        session.read_text(encoding="utf-8").replace(
-            f"session_id: {original_session_id}", "session_id: collision.md"
+        session.read_text(encoding="utf-8")
+        .replace(f"session_id: {original_session_id}", "session_id: collision.md")
+        .replace(
+            "type: chat-session",
+            f"type: chat-session\nreview_state: {transcript_review_state}",
         ),
         encoding="utf-8",
     )
     colliding_context = root / "session:collision.md"
-    colliding_context.write_text(
-        "---\nreview_state: accepted\n---\ncontext\n", encoding="utf-8"
+    context_content = _write_context_capture(
+        colliding_context,
+        content_identity="distinct-collision-context",
+        review_state=context_review_state,
     )
     bundle = assemble_day_context(vault_context=context, for_date=DAY)
     sections = dict(bundle.sections)
@@ -728,12 +1866,42 @@ def test_colliding_session_and_context_identity_blocks_before_cognition(
             "items": (
                 DayContextItem(
                     provenance_ref="session:collision.md",
-                    content={"summary": "distinct accepted context"},
+                    content=context_content,
                 ),
             )
         }
     )
-    bundle = bundle.model_copy(update={"sections": sections})
+    return root, context, bundle.model_copy(update={"sections": sections})
+
+
+def test_colliding_source_ids_do_not_share_admission(tmp_path: Path) -> None:
+    root, context, bundle = _colliding_session_and_context(
+        tmp_path,
+        transcript_review_state="revised",
+        context_review_state="accepted",
+    )
+
+    with pytest.raises(JournalDraftBlockedError, match="revised_read_only"):
+        draft_journal_entry(
+            vault_context=context,
+            for_date=DAY,
+            session_id="collision.md",
+            day_context=bundle,
+            write_guard=_allowing_guard(),
+            reasoning_fn=_empty_reasoning,
+        )
+
+    assert not list(root.glob("**/drafts/journal/*.md"))
+
+
+def test_rejected_source_with_colliding_id_blocks_before_cognition(
+    tmp_path: Path,
+) -> None:
+    root, context, bundle = _colliding_session_and_context(
+        tmp_path,
+        transcript_review_state="rejected",
+        context_review_state="accepted",
+    )
     cognition_called = False
 
     def forbidden_cognition(
@@ -744,12 +1912,137 @@ def test_colliding_session_and_context_identity_blocks_before_cognition(
         cognition_called = True
         return ReasoningOutput()
 
-    with pytest.raises(JournalDraftBlockedError, match="source identity collision"):
+    with pytest.raises(JournalDraftBlockedError, match="contradicted_or_rejected"):
         draft_journal_entry(
             vault_context=context,
             for_date=DAY,
             session_id="collision.md",
             day_context=bundle,
+            write_guard=_allowing_guard(),
+            reasoning_fn=forbidden_cognition,
+        )
+
+    assert cognition_called is False
+    assert not list(root.glob("**/drafts/journal/*.md"))
+
+
+def test_every_source_occurrence_independently_admitted(tmp_path: Path) -> None:
+    root, context, bundle = _colliding_session_and_context(
+        tmp_path,
+        transcript_review_state="draft",
+        context_review_state="accepted",
+    )
+
+    def successful_reasoning(
+        object_ids: object, *, trace_id: str | None = None
+    ) -> ReasoningOutput:
+        del trace_id
+        claim_ids = tuple(object_ids)  # type: ignore[arg-type]
+        claims = [
+            Claim(
+                id=f"collision-claim-{index}",
+                object_uuid=object_id,
+                text=f"Collision-safe claim {index}",
+                modality="assertion",
+                confidence=0.8,
+            )
+            for index, object_id in enumerate(claim_ids, start=1)
+        ]
+        return ReasoningOutput(
+            claims=claims,
+            inferences=[
+                Inference(
+                    id="collision-inference",
+                    premises=[claim.id for claim in claims],
+                    conclusion_id=claims[0].id,
+                    type="synthesis",
+                    rationale="Collision-safe synthesis.",
+                )
+            ],
+            outcome="success",
+        )
+
+    result = draft_journal_entry(
+        vault_context=context,
+        for_date=DAY,
+        session_id="collision.md",
+        day_context=bundle,
+        write_guard=_allowing_guard(),
+        reasoning_fn=successful_reasoning,
+    )
+
+    frontmatter, body = _read_result(root, result.path)
+    receipt = frontmatter["activation_receipts"][-1]
+    admitted = receipt["payload"]["admitted_artifact_ids"]
+    assert len(admitted) == 2
+    assert len(set(admitted)) == 2
+    assert frontmatter["sources"] == ["session:collision.md", "session:collision.md"]
+    assert [source.role for source in result.compilation_draft.source_refs] == [
+        "conversation",
+        "system_context",
+    ]
+    conversation_ref = result.compilation_draft.source_refs[0].note_path
+    assert (
+        f"cognition source: `{conversation_ref}`; source kind: `transcript`; "
+        "occurrence: 1"
+    ) in body
+    assert (
+        "cognition source: `session:collision.md`; source kind: `day_context`; "
+        "occurrence: 1"
+    ) in body
+    assert body.count("Collision-safe claim") == 2
+    inference_line = next(
+        line
+        for line in body.splitlines()
+        if "Cross-source synthesis: Collision-safe synthesis." in line
+    )
+    assert (
+        f"`{conversation_ref}`; source kind: `transcript`; occurrence: 1; "
+        "content sha256: `"
+    ) in inference_line
+    assert (
+        "`session:collision.md`; source kind: `day_context`; occurrence: 1; "
+        "content sha256: `"
+    ) in inference_line
+
+
+def test_noncanonical_source_reference_blocks_before_admission(tmp_path: Path) -> None:
+    root, context, session_id, _capture = _seed_inputs(tmp_path)
+    rejected = root / "source.md"
+    rejected.write_text("---\nreview_state: rejected\n---\nrejected\n", encoding="utf-8")
+    aliased = root / " source.md"
+    aliased.write_text("---\nreview_state: accepted\n---\naccepted\n", encoding="utf-8")
+    bundle = assemble_day_context(vault_context=context, for_date=DAY)
+    sections = dict(bundle.sections)
+    sections["captures"] = sections["captures"].model_copy(
+        update={
+            "items": (
+                DayContextItem(
+                    provenance_ref=" source.md",
+                    content={"summary": "ambiguous whitespace alias"},
+                ),
+            )
+        }
+    )
+    cognition_called = False
+
+    def forbidden_cognition(
+        _object_ids: object, *, trace_id: str | None = None
+    ) -> ReasoningOutput:
+        nonlocal cognition_called
+        del trace_id
+        cognition_called = True
+        return ReasoningOutput()
+
+    with pytest.raises(
+        UnresolvableJournalCitationError,
+        match="source identity contains surrounding whitespace",
+    ):
+        draft_journal_entry(
+            vault_context=context,
+            for_date=DAY,
+            session_id=session_id,
+            day_context=bundle.model_copy(update={"sections": sections}),
             write_guard=_allowing_guard(),
             reasoning_fn=forbidden_cognition,
         )

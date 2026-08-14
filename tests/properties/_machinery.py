@@ -106,7 +106,7 @@ REGISTERED_MIRRORS: dict[tuple[str, int], str] = {
         "hardcoded _EMBED_MODEL phantom with the _requested_embedding_identity() resolver "
         "defined above this call."
     ),
-    ("app/ingest/vault_alpha.py", 566): (
+    ("app/ingest/vault_alpha.py", 569): (
         "Legacy vault-alpha ingest path: keeps classifier/normalizer flows working "
         "against the memory backend during tests/alpha runs; the alpha ingest pipeline "
         "emits its own ingest event upstream of this call in the same run. Line drifted "
@@ -114,13 +114,6 @@ REGISTERED_MIRRORS: dict[tuple[str, int], str] = {
         "extracted the episode_ref helper into app/ingest/episode_ref.py, shifting this line "
         "back up. The census gate only fires when this machinery is touched, so the drift "
         "surfaces on the first PR to edit this file."
-    ),
-    ("app/knowledge_acquisition/raw_record.py", 128): (
-        "KA-01 immutable raw record (pre-pipeline by design): emitting the default "
-        "INGEST_OBJECT_CREATED here would route the unprocessed raw payload straight "
-        "into the indexer/embedding consumer, which the acquisition slice must not "
-        "trigger; refinement stages emit their own stage events later (#2801, "
-        "REFINEMENT_PIPELINE_CONTRACT.md lineage/replay model -- module docstring)."
     ),
 }
 
@@ -1467,16 +1460,16 @@ STORE_PAYLOAD_SINK_CLASSIFICATION: dict[tuple[str, int], str] = {
         "carries_frontmatter: same payload (store_payload = {**payload, 'text': ...}) -> store.put "
         "-> store_objects."
     ),
-    ("app/ingest/vault_alpha.py", 566): (
+    ("app/ingest/vault_alpha.py", 569): (
         "carries_frontmatter: obj.payload carries episode_ref_from_frontmatter(frontmatter); "
         "ObjectStore().save_object(obj) -> (pg) store.put -> store_objects (round-5: the carrying "
         "get_object_store().put below is in try/except:pass, so THIS row must carry it too)."
     ),
-    ("app/ingest/vault_alpha.py", 601): (
+    ("app/ingest/vault_alpha.py", 604): (
         "carries_frontmatter: store_payload carries episode_ref; get_object_store().put -> "
         "store_objects."
     ),
-    ("app/ingest/vault_alpha.py", 615): (
+    ("app/ingest/vault_alpha.py", 618): (
         "carries_frontmatter: same store_payload -> index_ingest_object -> store_vector_index."
     ),
     ("app/ingest/vault_root.py", 91): (
@@ -1519,21 +1512,17 @@ STORE_PAYLOAD_SINK_CLASSIFICATION: dict[tuple[str, int], str] = {
         "mirrors, not episode-bound vault knowledge; payload explicitly carries honest "
         "episode_ref='unbound'; store.put -> store_objects."
     ),
-    ("app/knowledge_acquisition/raw_record.py", 128): (
-        "carries_unbound_default: raw acquisition record is a frontmatter-less external source; "
-        "explicit 'unbound' via {**record_payload, ...}; save_object -> store_objects."
-    ),
     # -- carries_normalized: normalize episode_ref from an upstream-authored payload --------------
     ("app/ingest/reflection_consumer.py", 37): (
         "carries_normalized: reflection re-ingest normalizes episode_ref from the queued "
         "derived-artifact payload; ingest_object -> store_vector_index."
     ),
     # -- carries_via_indexed_unit_builder: payload = build_indexed_unit_payload(...) (the choke) --
-    ("app/cli/index_rebuild.py", 319): (
+    ("app/cli/index_rebuild.py", 320): (
         "carries_via_indexed_unit_builder: cold rebuild re-embeds store_objects rows through "
         "build_indexed_unit_payload (defaults episode_ref) -> idx.upsert -> store_vector_index."
     ),
-    ("app/cli/index_rebuild.py", 710): (
+    ("app/cli/index_rebuild.py", 726): (
         "carries_via_indexed_unit_builder: fallback rebuild upsert via build_indexed_unit_payload "
         "-> store_vector_index."
     ),
@@ -1599,12 +1588,18 @@ STORE_PAYLOAD_SINK_CLASSIFICATION: dict[tuple[str, int], str] = {
         "-> store_objects. Verified by test_plan_to_object_carries_episode_ref."
     ),
     # -- transport_passthrough: facade/plumbing forwarding a caller-built (verified) payload ------
-    ("app/objects/__init__.py", 116): (
+    ("app/objects/__init__.py", 122): (
         "transport_passthrough: ObjectStore.save_object facade forwards dict(obj.payload) to the "
         "backing store.put -> store_objects; the caller that builds obj.payload carries episode_ref "
-        "(every save_object caller is itself a classified producer above)."
+        "(every save_object caller is itself a classified producer above). Line drifted 116 -> 122 "
+        "when atomic create support was added above this facade call (#4111)."
     ),
-    ("app/stores/postgres.py", 27): (
+    ("app/stores/memory.py", 98): (
+        "transport_passthrough: MemoryObjectStore.put_if_absent delegates the caller-supplied "
+        "payload unchanged to put; the atomic-create facade caller constructs and classifies the "
+        "payload before crossing this backing-store boundary (#4111)."
+    ),
+    ("app/stores/postgres.py", 28): (
         "transport_passthrough: PgObjects.upsert forwards its caller-supplied payload arg to "
         "canonical_store.put (PgObjectStore.put) -> store_objects; the caller (vault_root:92/96) "
         "carries episode_ref in canonical_payload."

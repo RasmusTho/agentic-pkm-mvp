@@ -16,6 +16,8 @@ import pytest
 
 import app.ops.host_secret_bootstrap as host_secret_bootstrap
 from app.ops.host_secret_bootstrap import (
+    HOST_SECRET_BOOTSTRAP_CHANNEL,
+    HOST_SECRET_BOOTSTRAP_CONSUMER,
     HOST_SECRET_BOOTSTRAP_FAILURE_REF,
     HOST_SECRET_RUNTIME_ENV_FILE,
     HostSecretBootstrapError,
@@ -32,11 +34,78 @@ _RAW_KEY = "a" * 64
 _OPENAI_KEY = "openai-key-" + ("o" * 32)
 _ANTHROPIC_KEY = "anthropic-key-" + ("a" * 32)
 _GITHUB_TOKEN = "ghp_" + ("g" * 36)
+_ARCHIVE_PASS = "fixture-archive-passphrase"
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 def _lookup(value: str = _RAW_KEY) -> KeychainLookup:
     return lambda _service, _account: value
+
+
+@pytest.mark.parametrize("channel", ["dev", "test", "prod"])
+def test_archive_consumer_gets_only_private_temporary_passphrase(
+    tmp_path: Path,
+    channel: str,
+) -> None:
+    observed_path: Path | None = None
+    requested: list[str] = []
+
+    def lookup(_service: str, account: str) -> str:
+        requested.append(account)
+        return _ARCHIVE_PASS
+
+    def runner(command: list[str], env: dict[str, str]) -> int:
+        nonlocal observed_path
+        assert command == ["archive-operation"]
+        assert "HEIMDAL_ARCHIVE_PASS" not in env
+        assert env[HOST_SECRET_BOOTSTRAP_CHANNEL] == channel
+        assert env[HOST_SECRET_BOOTSTRAP_CONSUMER] == "heimdal-cold-volume"
+        observed_path = Path(env[HOST_SECRET_RUNTIME_ENV_FILE])
+        assert stat.S_IMODE(observed_path.stat().st_mode) == 0o600
+        assert observed_path.read_text(encoding="utf-8") == (
+            f"HEIMDAL_ARCHIVE_PASS={_ARCHIVE_PASS}\n"
+        )
+        return 0
+
+    result = run_with_host_secrets(
+        channel=channel,
+        consumer="heimdal-cold-volume",
+        command=["archive-operation"],
+        keychain_lookup=lookup,
+        runner=runner,
+        directory=tmp_path,
+    )
+
+    assert result == 0
+    assert observed_path is not None and not observed_path.exists()
+    assert requested == [f"{channel}:heimdal-cold-volume:heimdal.archive-pass"]
+
+
+@pytest.mark.parametrize("value", ["short", "x" * 513, "contains\nnewline"])
+def test_archive_passphrase_rejects_malformed_value_without_launch_or_disclosure(
+    tmp_path: Path,
+    value: str,
+) -> None:
+    launched = False
+
+    def runner(_command: list[str], _env: dict[str, str]) -> int:
+        nonlocal launched
+        launched = True
+        return 0
+
+    with pytest.raises(HostSecretBootstrapError) as error:
+        run_with_host_secrets(
+            channel="prod",
+            consumer="heimdal-cold-volume",
+            command=["never-start"],
+            keychain_lookup=_lookup(value),
+            runner=runner,
+            directory=tmp_path,
+        )
+
+    assert not launched
+    assert value not in str(error.value)
+    assert list(tmp_path.iterdir()) == []
 
 
 def test_consumer_gets_only_allowlisted_values(tmp_path: Path) -> None:
@@ -55,8 +124,8 @@ def test_consumer_gets_only_allowlisted_values(tmp_path: Path) -> None:
         assert env_file.read_text(encoding="utf-8") == f"HEIMDAL_RAW_STORE_KEY={_RAW_KEY}\n"
 
     # heimdal.raw-store-key is shared-domain (#4512): resolving it for one
-    # consumer also looks up the other declared consumer's account on the same
-    # channel to compare digests, so both accounts are requested even though
+    # consumer also looks up the other declared consumers' accounts on the same
+    # channel to compare digests, so all accounts are requested even though
     # only the requested consumer's value is materialized.
     assert requested == [
         (
@@ -66,6 +135,10 @@ def test_consumer_gets_only_allowlisted_values(tmp_path: Path) -> None:
         (
             "yggdrasil.host-secrets",
             "dev:heimdal-api-ingress:heimdal.raw-store-key",
+        ),
+        (
+            "yggdrasil.host-secrets",
+            "dev:heimdal-raw-migrate:heimdal.raw-store-key",
         ),
     ]
 
@@ -1063,10 +1136,9 @@ def test_loader_rejects_a_declaration_without_an_explicit_boolean_optional(
 
 # --- Shared-domain divergence check (#4512) ---------------------------------
 #
-# `heimdal.raw-store-key` feeds one AES-256-GCM cipher domain from two
-# independently bootstrapped consumers (heimdal-capture-watch,
-# heimdal-api-ingress). Nothing previously required the two Keychain items to
-# hold the same value; these tests prove the production bootstrap entrypoint
+# `heimdal.raw-store-key` feeds one AES-256-GCM cipher domain from three
+# independently bootstrapped consumers (capture, API ingress, and one-shot
+# migration). These tests prove the production bootstrap entrypoint
 # (`run_with_host_secrets`, and `main` below it) refuses rather than
 # proceeding into a split cipher domain, that matching material bootstraps
 # byte-for-byte unchanged, and that the check never discloses either value.
@@ -1082,11 +1154,104 @@ def _divergent_raw_store_key_lookup(
     def lookup(_service: str, account: str) -> str:
         if account.endswith(":heimdal-api-ingress:heimdal.raw-store-key"):
             return sibling
+        if account.endswith(":heimdal-raw-migrate:heimdal.raw-store-key"):
+            return primary
         if account.endswith(":heimdal-capture-watch:heimdal.raw-store-key"):
             return primary
         pytest.fail(f"unexpected account lookup: {account}")
 
     return lookup
+
+
+@pytest.mark.parametrize("channel", ["dev", "test", "prod"])
+def test_migration_consumer_bootstraps_shared_key_for_every_channel(
+    tmp_path: Path,
+    channel: str,
+) -> None:
+    """The production bootstrap grants the one-shot consumer on every lane."""
+    requested_accounts: list[str] = []
+    observed_path: Path | None = None
+
+    def lookup(_service: str, account: str) -> str:
+        requested_accounts.append(account)
+        return _RAW_KEY
+
+    def runner(command: list[str], env: dict[str, str]) -> int:
+        nonlocal observed_path
+        assert command == ["migration-one-shot"]
+        assert "HEIMDAL_RAW_STORE_KEY" not in env
+        observed_path = Path(env[HOST_SECRET_RUNTIME_ENV_FILE])
+        assert observed_path.read_text(encoding="utf-8") == (
+            f"HEIMDAL_RAW_STORE_KEY={_RAW_KEY}\n"
+        )
+        return 0
+
+    result = run_with_host_secrets(
+        channel=channel,
+        consumer="heimdal-raw-migrate",
+        command=["migration-one-shot"],
+        keychain_lookup=lookup,
+        runner=runner,
+        directory=tmp_path,
+    )
+
+    assert result == 0
+    assert observed_path is not None and not observed_path.exists()
+    assert requested_accounts == [
+        f"{channel}:heimdal-raw-migrate:heimdal.raw-store-key",
+        f"{channel}:heimdal-api-ingress:heimdal.raw-store-key",
+        f"{channel}:heimdal-capture-watch:heimdal.raw-store-key",
+    ]
+
+
+@pytest.mark.parametrize("channel", ["dev", "test", "prod"])
+@pytest.mark.parametrize("failure", ["missing", "malformed", "divergent"])
+def test_migration_consumer_refuses_secret_failure_without_launch_or_disclosure(
+    tmp_path: Path,
+    channel: str,
+    failure: str,
+) -> None:
+    """Every governed lane fails before migration on unusable key authority."""
+    launched = False
+    unavailable_detail = "private-lookup-detail"
+    malformed_value = "private-malformed-material"
+
+    def lookup(_service: str, account: str) -> str:
+        if account.endswith(":heimdal-raw-migrate:heimdal.raw-store-key"):
+            if failure == "missing":
+                raise OSError(unavailable_detail)
+            if failure == "malformed":
+                return malformed_value
+            return _RAW_KEY
+        if account.endswith(":heimdal-api-ingress:heimdal.raw-store-key"):
+            return _SIBLING_RAW_KEY if failure == "divergent" else _RAW_KEY
+        if account.endswith(":heimdal-capture-watch:heimdal.raw-store-key"):
+            return _RAW_KEY
+        pytest.fail("unexpected account class")
+
+    def runner(_command: list[str], _env: dict[str, str]) -> int:
+        nonlocal launched
+        launched = True
+        return 0
+
+    with pytest.raises(HostSecretBootstrapError) as error:
+        run_with_host_secrets(
+            channel=channel,
+            consumer="heimdal-raw-migrate",
+            command=["migration-must-not-start"],
+            keychain_lookup=lookup,
+            runner=runner,
+            directory=tmp_path,
+        )
+
+    message = str(error.value)
+    assert not launched
+    assert list(tmp_path.iterdir()) == []
+    assert unavailable_detail not in message
+    assert malformed_value not in message
+    assert _RAW_KEY not in message
+    assert _SIBLING_RAW_KEY not in message
+    assert f"{channel}:heimdal-raw-migrate" not in message
 
 
 def test_divergent_shared_domain_secret_fails_loud(tmp_path: Path) -> None:
@@ -1116,7 +1281,7 @@ def test_divergent_shared_domain_secret_fails_loud(tmp_path: Path) -> None:
 
 
 def test_matching_shared_domain_secret_bootstraps_unchanged(tmp_path: Path) -> None:
-    """Identical material across both consumers bootstraps unchanged (#4489/#4512)."""
+    """Identical material across all consumers bootstraps unchanged."""
     observed_path: Path | None = None
 
     def runner(_command: list[str], env: dict[str, str]) -> int:
@@ -1297,4 +1462,5 @@ def test_shared_domain_check_never_logs_key_material(
         assert _SIBLING_RAW_KEY not in stream
         assert "heimdal-capture-watch:heimdal.raw-store-key" not in stream
         assert "heimdal-api-ingress:heimdal.raw-store-key" not in stream
+        assert "heimdal-raw-migrate:heimdal.raw-store-key" not in stream
     assert "heimdal.raw-store-key" in captured.err

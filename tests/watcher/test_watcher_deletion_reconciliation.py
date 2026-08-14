@@ -45,6 +45,7 @@ import pytest
 from app.events.types import INGEST_OBJECT_DELETED
 from app.services import vault_sync
 from app.stores.memory import MemoryVectorIndex
+from app.instance.binding_ids import COMPATIBILITY_BINDING_ID
 from app.watcher import vault_watcher
 
 
@@ -93,7 +94,9 @@ class _FakeCursor:
             self.rowcount = 1 if self.conn.file_state.pop(path, None) else 0
             return
         if normalized.startswith("select id::text, count(*) over ()"):
-            canonical_alias, uuid_value = params
+            alias_binding_id, canonical_alias, object_binding_id, uuid_value = params
+            assert alias_binding_id == object_binding_id == COMPATIBILITY_BINDING_ID
+            assert canonical_alias == uuid_value
             self._fetchone = (
                 (uuid_value, 1, str(canonical_alias) in self.conn.store_objects)
                 if uuid_value in self.conn.objects
@@ -101,10 +104,30 @@ class _FakeCursor:
             )
             return
         if normalized.startswith("select exists(select 1 from store_objects"):
-            canonical_id, _id, uuid_value, expected, _again = params
+            (
+                canonical_binding_id,
+                canonical_id,
+                mirror_binding_id,
+                mirror_id,
+                uuid_value,
+                expected,
+                locator_binding_id,
+                locator_id,
+            ) = params
+            assert {
+                canonical_binding_id,
+                mirror_binding_id,
+                locator_binding_id,
+            } == {COMPATIBILITY_BINDING_ID}
+            assert canonical_id == mirror_id == uuid_value == locator_id
             canonical = str(canonical_id) in self.conn.store_objects
-            mirror = uuid_value in self.conn.objects
-            self._fetchone = (canonical, mirror, canonical and self.conn.store_objects[str(canonical_id)]["source_ref"] == expected)
+            mirror = mirror_id in self.conn.objects or uuid_value in self.conn.objects
+            self._fetchone = (
+                canonical,
+                mirror,
+                canonical
+                and self.conn.store_objects[str(canonical_id)]["source_ref"] == expected,
+            )
             return
         if normalized.startswith(
             "select count(*) from file_state where vault_binding_id = %s and uuid = %s"
@@ -126,7 +149,8 @@ class _FakeCursor:
                 self.rowcount = 1
             return
         if normalized.startswith("update store_objects"):
-            source_ref, object_id = params
+            source_ref, binding_id, object_id = params
+            assert binding_id == COMPATIBILITY_BINDING_ID
             row = self.conn.store_objects.get(str(object_id))
             if row is not None:
                 row["source_ref"] = source_ref

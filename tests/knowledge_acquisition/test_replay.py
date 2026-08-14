@@ -8,15 +8,17 @@ The slice's proof-of-architecture. No network, no real DB, no real LLM:
   without a DB;
 - the outbox insert is driven through the in-memory `FakeOutboxConn` PK-conflict emulation;
 - the `summary` extractor's completion is stubbed via the `complete=` injection seam;
-- zero source egress is asserted TWO ways: (1) the test monkeypatches the three egress
-  seams to raise if called, and the replay still succeeds (proving the code path never
-  reaches them), and (2) `run_replay` installs its own runtime guard over the same seams.
+- zero source egress is asserted by the context-local runtime policy at every canonical
+  YouTube/ASR seam, including overlap/restoration and concurrent-acquisition coverage.
 """
 
 from __future__ import annotations
 
 import json
+from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timezone
 from pathlib import Path
+import threading
 from typing import Any
 
 import pytest
@@ -31,7 +33,10 @@ from app.knowledge_acquisition.candidate_writeback import (
 from app.knowledge_acquisition.extraction_registry import clear_registry
 from app.knowledge_acquisition.extractors import summary_extractor
 from app.knowledge_acquisition.normalize import normalize
-from app.knowledge_acquisition.raw_record import persist_raw_record
+from app.knowledge_acquisition.raw_record import (
+    persist_raw_record,
+    raw_record_object_id,
+)
 from app.knowledge_acquisition.replay import (
     ReplayError,
     ReplayReceipt,
@@ -41,6 +46,11 @@ from app.knowledge_acquisition.replay import (
 )
 from app.knowledge_acquisition.stage_events import (
     STAGE_COMPLETED_TOPIC,
+)
+from app.objects import DomainObject, ObjectStore
+from app.source_egress import (
+    assert_source_egress_allowed,
+    block_source_egress,
 )
 from app.vault.manager import VaultContext
 from app.write_guard import WriteGuard
@@ -132,30 +142,6 @@ def _reset_registry():
     summary_extractor.register()
 
 
-@pytest.fixture(autouse=True)
-def _block_source_egress(monkeypatch: pytest.MonkeyPatch):
-    """Independent egress assertion: fail if replay reaches any source-egress seam.
-
-    Belt-and-suspenders alongside `run_replay`'s own guard — this proves at the TEST level
-    that the replay code path never touches acquisition, not merely that the guard was
-    installed."""
-
-    def _forbidden(name: str):
-        def _raise(*_a: Any, **_k: Any):
-            raise AssertionError(f"source egress seam {name!r} was called during replay")
-
-        return _raise
-
-    import app.media.transcribe as transcribe_mod
-
-    monkeypatch.setattr(youtube_plugin, "yt_dlp_extract_info", _forbidden("yt_dlp_extract_info"))
-    monkeypatch.setattr(youtube_plugin, "fetch_caption_body", _forbidden("fetch_caption_body"))
-    monkeypatch.setattr(youtube_plugin, "fetch", _forbidden("fetch"))
-    monkeypatch.setattr(transcribe_mod, "transcribe_source", _forbidden("transcribe_source"))
-    monkeypatch.setattr(youtube_plugin, "transcribe_source", _forbidden("transcribe_source"))
-    yield
-
-
 def _vault(root: Path) -> VaultContext:
     root.mkdir(parents=True, exist_ok=True)
     return VaultContext(
@@ -227,13 +213,14 @@ def test_replay_fresh_write_not_equivalent_then_preserved(tmp_path: Path) -> Non
     assert stages["extracted"].extractor_id == "summary"
     assert stages["extracted"].extractor_version == 2
 
-    # candidate: byte-identical by first-write-wins preservation on the second replay.
-    assert stages["candidate"].status == "already_exists"
-    assert stages["candidate"].equivalence == "byte_identical_first_write_preserved"
+    # candidate: first-write-wins, with the fresh re-extraction surfaced as a companion proposal.
+    assert stages["candidate"].status == "proposal_written"
+    assert stages["candidate"].equivalence == "versioned_proposal_original_preserved"
 
-    # Exactly one candidate note on disk after two replays (idempotent write).
+    # The original candidate plus one proposal companion exist; the candidate is untouched.
     notes = list((tmp_path / "vault").rglob("*.md"))
-    assert len(notes) == 1
+    assert len(notes) == 2
+    assert len([path for path in notes if path.name.endswith(".meta.md")]) == 1
 
     # Stage events were emitted on the outbox for normalize + extracted + candidate.
     completed = conn.rows_for(STAGE_COMPLETED_TOPIC)
@@ -277,7 +264,8 @@ def test_candidate_write_self_heals_missing_completed_event(tmp_path: Path) -> N
     )
 
     candidate_stage = next(stage for stage in receipt.stages if stage.stage == "candidate")
-    assert candidate_stage.status == "already_exists"
+    assert candidate_stage.status == "proposal_written"
+    assert candidate_stage.equivalence == "versioned_proposal_original_preserved"
     candidate_events = [
         row
         for row in conn.rows_for(STAGE_COMPLETED_TOPIC)
@@ -304,7 +292,7 @@ def test_fresh_candidate_write_does_not_claim_byte_identity(tmp_path: Path) -> N
     assert receipt.equivalent is False
 
 
-def test_replay_valid_empty_asr_skips_extraction_and_writes_false_candidate(
+def test_replay_valid_empty_asr_blocks_candidate_when_summary_is_required(
     tmp_path: Path,
 ) -> None:
     empty_asr = {
@@ -336,17 +324,81 @@ def test_replay_valid_empty_asr_skips_extraction_and_writes_false_candidate(
         conn=conn,
     )
 
-    assert [stage.stage for stage in receipt.stages] == ["normalize", "candidate"]
+    assert [stage.stage for stage in receipt.stages] == [
+        "normalize",
+        "extracted",
+        "candidate",
+    ]
     candidate = receipt.stages[-1]
-    assert candidate.status == "written"
-    note = (tmp_path / "vault" / candidate.artifact_path).read_text(encoding="utf-8")
-    assert "transcript_available: false" in note
-    assert "Model confidence" not in note
+    assert candidate.status == "skipped_upstream_dead_letter"
+    assert receipt.required_dead_lettered == ("summary",)
+    assert list((tmp_path / "vault").rglob("*.md")) == []
     completed_stages = {
         json.loads(row["payload"])["payload"]["stage"]
         for row in conn.rows_for(STAGE_COMPLETED_TOPIC)
     }
-    assert completed_stages == {"normalize", "candidate"}
+    assert completed_stages == {"normalize"}
+
+
+def test_replay_valid_empty_asr_materializes_degraded_when_summary_is_optional(
+    tmp_path: Path,
+) -> None:
+    empty_asr = {
+        **RAW_PAYLOAD,
+        "content_identity": "sha256:replay-empty-asr-optional",
+        "acquisition_method": "asr",
+        "caption_body": "",
+        "asr_segments": [],
+    }
+    persisted = persist_raw_record(
+        source_kind=empty_asr["source_kind"],
+        item_ref=empty_asr["item_ref"],
+        content_identity=empty_asr["content_identity"],
+        payload=empty_asr,
+        source_ref="test:replay-empty-asr-optional",
+    )
+
+    receipt = run_replay(
+        persisted.object_id,
+        vault_context=_vault(tmp_path / "vault"),
+        extractor_requirements={"summary": "optional_for_materialization"},
+        write_guard=_allowing_guard(),
+        conn=FakeOutboxConn(),
+    )
+
+    assert receipt.optional_dead_lettered == ("summary",)
+    assert receipt.required_dead_lettered == ()
+    candidate = receipt.stages[-1]
+    assert candidate.status == "written_degraded"
+    assert candidate.artifact_path is not None
+    note = (tmp_path / "vault" / candidate.artifact_path).read_text(encoding="utf-8")
+    assert "transcript_available: false" in note
+
+
+def test_replay_rejects_non_raw_object_at_deterministic_raw_identity(tmp_path: Path) -> None:
+    object_id = raw_record_object_id(
+        source_kind=RAW_PAYLOAD["source_kind"],
+        item_ref=RAW_PAYLOAD["item_ref"],
+        content_identity="sha256:replay-not-raw",
+    )
+    ObjectStore().save_object(
+        DomainObject(
+            uuid=str(object_id),
+            kind="knowledge_acquisition.normalized_transcript",
+            payload={**RAW_PAYLOAD, "content_identity": "sha256:replay-not-raw"},
+            source_ref="test:replay-not-raw",
+            created_at=datetime.now(timezone.utc),
+        ),
+        emit_outbox=False,
+    )
+
+    with pytest.raises(ReplayError, match="not immutable raw evidence"):
+        run_replay(
+            object_id,
+            vault_context=_vault(tmp_path / "vault"),
+            write_guard=_allowing_guard(),
+            conn=FakeOutboxConn(),
+        )
 
 
 def test_replay_malformed_asr_evidence_dead_letters_before_extraction(
@@ -500,6 +552,118 @@ def test_replay_runtime_guard_stays_on_when_flag_false(
             write_guard=_allowing_guard(),
             assert_no_source_egress=False,
         )
+
+
+def test_overlapping_replay_guards_restore_locally_and_allow_concurrent_acquisition(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No replay scope mutates another scope or a concurrent acquisition context."""
+    entered = threading.Barrier(3)
+    release = (threading.Event(), threading.Event())
+
+    def replay_scope(index: int) -> str:
+        with block_source_egress():
+            entered.wait(timeout=5)
+            with pytest.raises(SourceEgressBlockedError):
+                assert_source_egress_allowed(f"replay-{index}")
+            release[index].wait(timeout=5)
+            with pytest.raises(SourceEgressBlockedError):
+                assert_source_egress_allowed(f"replay-{index}-still-blocked")
+        assert_source_egress_allowed(f"replay-{index}-restored")
+        return "restored"
+
+    monkeypatch.setattr(youtube_plugin, "yt_dlp_extract_info", lambda _url: {
+        "id": "abcdefghijk",
+        "title": "Concurrent acquisition",
+        "description": "desc",
+        "duration": 1,
+        "language": "en",
+        "subtitles": {"en": [{"ext": "vtt", "url": "test:vtt"}]},
+        "automatic_captions": {},
+    })
+    monkeypatch.setattr(
+        youtube_plugin,
+        "fetch_caption_body",
+        lambda _url: "WEBVTT\n\n00:00:00.000 --> 00:00:01.000\nhello\n",
+    )
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        futures = [executor.submit(replay_scope, index) for index in range(2)]
+        entered.wait(timeout=5)
+        # The main execution context is an ordinary acquisition while both replay contexts
+        # remain blocked. It must reach its source seam and persist normally.
+        acquired = youtube_plugin.fetch(
+            "https://www.youtube.com/watch?v=abcdefghijk"
+        )
+        assert acquired.ok is True
+        release[0].set()
+        assert futures[0].result(timeout=5) == "restored"
+        # Scope 1 is still independently blocked; releasing scope 0 did not restore it.
+        release[1].set()
+        assert futures[1].result(timeout=5) == "restored"
+
+    assert_source_egress_allowed("post-overlap")
+
+
+def test_replay_context_policy_is_checked_by_every_canonical_egress_seam() -> None:
+    import app.media.transcribe as transcribe_mod
+
+    seams = (
+        lambda: youtube_plugin.yt_dlp_extract_info("test:blocked"),
+        lambda: youtube_plugin.fetch_caption_body("test:blocked"),
+        lambda: youtube_plugin.fetch("abcdefghijk"),
+        lambda: transcribe_mod.transcribe_source("test:blocked"),
+    )
+    with block_source_egress():
+        for seam in seams:
+            with pytest.raises(SourceEgressBlockedError):
+                seam()
+
+
+def test_replay_reads_raw_not_transcript_derivative(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A replay re-normalizes immutable raw and bypasses persisted extraction reads."""
+    from app.knowledge_acquisition import extraction_persistence
+    from app.knowledge_acquisition.extraction_persistence import persist_normalized_transcript
+
+    raw_id = _persist_raw()
+    normalized = normalize(dict(RAW_PAYLOAD))
+    persisted = persist_normalized_transcript(
+        raw_record_id=raw_id,
+        raw_record=dict(RAW_PAYLOAD),
+        normalized=normalized,
+    )
+    # A transcript derivative exists. Replay may persist a replacement-equivalent projection,
+    # but it must never load that derivative as the source for normalize/extract/candidate.
+    assert persisted.extensions["segments"]
+
+    import app.knowledge_acquisition.replay as replay_mod
+
+    original_normalize = replay_mod.normalize
+    seen_inputs: list[dict[str, Any]] = []
+
+    def _assert_raw_input(raw_record: dict[str, Any]):
+        seen_inputs.append(dict(raw_record))
+        assert raw_record["caption_body"] == RAW_PAYLOAD["caption_body"]
+        assert "segments" not in raw_record
+        return original_normalize(raw_record)
+
+    def _forbid_derivative_load(**_kwargs):
+        raise AssertionError("force re-extraction replay must not load a transcript derivative")
+
+    monkeypatch.setattr(replay_mod, "normalize", _assert_raw_input)
+    monkeypatch.setattr(extraction_persistence, "load_latest_extraction", _forbid_derivative_load)
+    receipt = run_replay(
+        raw_id,
+        vault_context=_vault(tmp_path / "vault"),
+        write_guard=_allowing_guard(),
+        conn=FakeOutboxConn(),
+    )
+
+    assert receipt.source_egress == 0
+    assert seen_inputs
+    assert all(item["content_identity"] == RAW_PAYLOAD["content_identity"] for item in seen_inputs)
 
 
 def test_replay_dead_letters_normalize_failure(tmp_path: Path) -> None:

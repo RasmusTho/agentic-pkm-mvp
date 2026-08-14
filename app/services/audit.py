@@ -9,15 +9,17 @@ import uuid
 
 from psycopg import IntegrityError
 
-from app.db.db import conn_rw
+from app.db.db import COMPATIBILITY_BINDING_ID, conn_rw
 from app.settings import settings
 from app.stores import resolved_store_backend_hint
 
 logger = logging.getLogger(__name__)
 
 _AUDIT_INSERT_SQL = """
-INSERT INTO audit (id, object_id, agent, action, ts, trace_id, details)
-VALUES (%s, %s, %s, %s, %s, %s, %s::jsonb)
+INSERT INTO audit (
+    id, vault_binding_id, object_id, agent, action, ts, trace_id, details
+)
+VALUES (%s, %s, %s, %s, %s, %s, %s, %s::jsonb)
 """
 
 
@@ -108,6 +110,7 @@ def _insert_audit_row(
                 _AUDIT_INSERT_SQL,
                 (
                     str(uuid.uuid4()),
+                    COMPATIBILITY_BINDING_ID,
                     None,
                     agent,
                     action,
@@ -127,6 +130,7 @@ def _insert_audit_row(
                     _AUDIT_INSERT_SQL,
                     (
                         str(uuid.uuid4()),
+                        COMPATIBILITY_BINDING_ID,
                         object_id,
                         agent,
                         action,
@@ -152,6 +156,7 @@ def _insert_audit_row(
             _AUDIT_INSERT_SQL,
             (
                 str(uuid.uuid4()),
+                COMPATIBILITY_BINDING_ID,
                 None,
                 agent,
                 action,

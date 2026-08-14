@@ -65,13 +65,14 @@
     },
     "audit": {
       "classification": "binding-scoped",
-      "reason": "The agent-action audit trail for vault objects (`object_id` referencing the canonical object). It is `decisions`' sibling in every respect the DB owner doc records — both survive object deletion via ON DELETE SET NULL so history is not silently lost — but no MVR-05A child currently owns it. Its `id uuid PRIMARY KEY` does not collide, so the binding column is additive.",
-      "owning_revision": "202510241200",
+      "reason": "MVR-05A3 revision e6c4a2b8d1f3 adds `audit.vault_binding_id` and a composite canonical-object reference while its globally minted receipt id remains collision-safe. Object deletion clears only object_id, preserving the receipt's known binding provenance.",
+      "owning_revision": "e6c4a2b8d1f3",
       "declaring_revisions": [
-        "202510241200"
+        "202510241200",
+        "e6c4a2b8d1f3"
       ],
-      "binding_key": "pending",
-      "binding_column": null,
+      "binding_key": "keyed",
+      "binding_column": "vault_binding_id",
       "producers": [
         {
           "module": "app/services/audit.py",
@@ -87,13 +88,13 @@
     },
     "chunks": {
       "classification": "binding-scoped",
-      "reason": "Text chunks of a vault artifact, `object_id` referencing the canonical object. No module under app/** inserts into it today — app/stores/pg.py's reset path is its only remaining producer — but the rows that exist are vault-derived and are read by the backfill predicate.",
+      "reason": "Text chunks now carry the minimum `vault_binding_id` composite parent reference delivered by e6c4a2b8d1f3. No app/** writer exists; app/stores/pg.py deletes only the selected binding, while MVR-05A4 still owns full child-key cutover.",
       "owning_revision": "202510241200",
       "declaring_revisions": [
         "202510241200"
       ],
       "binding_key": "pending",
-      "binding_column": null,
+      "binding_column": "vault_binding_id",
       "producers": [
         {
           "module": "app/stores/pg.py",
@@ -131,7 +132,7 @@
     },
     "decisions": {
       "classification": "binding-scoped",
-      "reason": "The decision receipt log for vault objects, rebuilt by TRUNCATE + replay in app/jobs/decisions_projection.py. Rows survive object deletion (`object_id` goes NULL) precisely so judgment history is not lost, so a rebuild must preserve source attribution rather than re-mint it. Its `id uuid DEFAULT gen_random_uuid()` key is minted per row and does not collide, so an additive binding column plus an additive index is sufficient.",
+      "reason": "The decisions projection now carries a composite canonical-object reference and app/jobs/decisions_projection.py replaces only the compatibility binding with DELETE plus replay. MVR-05A5 still owns full active-context rebuild semantics; object deletion preserves vault_binding_id while clearing object_id.",
       "owning_revision": "e1d2c3b4a5f6",
       "declaring_revisions": [
         "202510241200",
@@ -139,13 +140,13 @@
         "e1d2c3b4a5f6"
       ],
       "binding_key": "pending",
-      "binding_column": null,
+      "binding_column": "vault_binding_id",
       "producers": [
         {
           "module": "app/jobs/decisions_projection.py",
           "operations": [
-            "insert",
-            "truncate"
+            "delete",
+            "insert"
           ]
         },
         {
@@ -168,14 +169,14 @@
     },
     "embeddings": {
       "classification": "binding-scoped",
-      "reason": "`embeddings` is the deprecated per-chunk embedding table (KERNEL-04, #2766: kept, not dropped, because the zero-readers precondition is unmet). Its rows are vault-derived. Zero writers remain under app/**.",
+      "reason": "The deprecated `embeddings` rows now carry e6c4a2b8d1f3's minimum composite object reference and have zero app/** writers. app/stores/pg.py deletes only a named binding; MVR-05A4 retains ownership of the full child-table key.",
       "owning_revision": "a80043832e29",
       "declaring_revisions": [
         "202510241200",
         "a80043832e29"
       ],
       "binding_key": "pending",
-      "binding_column": null,
+      "binding_column": "vault_binding_id",
       "producers": [
         {
           "module": "app/stores/pg.py",
@@ -626,7 +627,7 @@
     },
     "heimdal_raw_record": {
       "classification": "explicitly-global",
-      "reason": "`heimdal_raw_record` is the encrypted raw capture record itself, keyed by content identity and written by `app/heimdal/raw_store.py` at ingest. The row exists because a sensor produced bytes, before and independently of any vault; it stores ciphertext, a capture chain and a consent reference, and no vault path. Explicitly global per MVR-05's acceptance criteria.",
+      "reason": "`heimdal_raw_record` is the immutable raw capture identity/provenance row, keyed by content identity and written by `app/heimdal/raw_store.py` at ingest. The row exists because a sensor produced bytes, before and independently of any vault; encrypted copies live in `heimdal_raw_representation`. Explicitly global per MVR-05's acceptance criteria.",
       "owning_revision": "d5a8e2f1b6c3",
       "declaring_revisions": [
         "d5a8e2f1b6c3"
@@ -645,16 +646,38 @@
       "rebuild_mechanism": "row-scoped",
       "escalation_conditions": []
     },
+    "heimdal_raw_representation": {
+      "classification": "explicitly-global",
+      "reason": "`heimdal_raw_representation` stores registered encrypted copies for a global `heimdal_raw_record` identity. It carries no vault binding and is created, activated, resolved and erased only through `app/heimdal/raw_store.py`; its scope follows the global raw identity it references.",
+      "owning_revision": "e7b4c9d2a6f1",
+      "declaring_revisions": [
+        "e7b4c9d2a6f1"
+      ],
+      "binding_key": "not-applicable",
+      "binding_column": null,
+      "producers": [
+        {
+          "module": "app/heimdal/raw_store.py",
+          "operations": [
+            "delete",
+            "insert",
+            "update"
+          ]
+        }
+      ],
+      "rebuild_mechanism": "row-scoped",
+      "escalation_conditions": []
+    },
     "membership": {
       "classification": "binding-scoped",
-      "reason": "Set membership for vault artifacts. Two revisions declare it with different primary keys — 202510241200 as `id UUID PRIMARY KEY`, a80043832e29 as PRIMARY KEY(object_id, set_id) — and both use CREATE TABLE IF NOT EXISTS, so the effective key on a database is whichever revision ran first. Either shape is built from colliding object ids.",
+      "reason": "membership rows now carry e6c4a2b8d1f3's minimum `vault_binding_id` object reference; the historical store_objects-backed set_id endpoint is composite too, while the fresh sets(id) FK remains unchanged. MVR-05A4 still owns full key convergence.",
       "owning_revision": "a80043832e29",
       "declaring_revisions": [
         "202510241200",
         "a80043832e29"
       ],
       "binding_key": "pending",
-      "binding_column": null,
+      "binding_column": "vault_binding_id",
       "producers": [
         {
           "module": "app/store/membership_store.py",
@@ -735,20 +758,14 @@
     },
     "relations": {
       "classification": "binding-scoped",
-      "reason": "Legacy relation edges between vault artifacts. Its Alembic-owned shape is (id, src_id, dst_id, type, payload), but its only insert producer app/store/relation_index.py::RelationIndex.link writes (src_uuid, dst_uuid, relation_type, weight, provenance, created_at) — six columns that do not exist on the table. The producer is reachable from production through the app/objects compatibility shim, so it is classified here rather than removed; MVR-05A4 (#4578) owns scoping or deleting it.",
+      "reason": "Legacy relations now carry one `vault_binding_id` shared by both composite object endpoints. The malformed app/store/relation_index.py compatibility producer fails before SQL, so app/stores/pg.py's per-binding delete is the only durable mutation until MVR-05A4 resolves the table.",
       "owning_revision": "202510241200",
       "declaring_revisions": [
         "202510241200"
       ],
       "binding_key": "pending",
-      "binding_column": null,
+      "binding_column": "vault_binding_id",
       "producers": [
-        {
-          "module": "app/store/relation_index.py",
-          "operations": [
-            "insert"
-          ]
-        },
         {
           "module": "app/stores/pg.py",
           "operations": [
@@ -799,13 +816,14 @@
     },
     "store_objects": {
       "classification": "binding-scoped",
-      "reason": "The canonical object projection: one row per indexed vault artifact, written by app/stores/pg.py. Two bindings holding the same artifact resolve to the same `object_id` (app/objects/identity.py::resolve_vault_uuid_with_connection), so the rows collide.",
-      "owning_revision": "c2766a04d001",
+      "reason": "MVR-05A3 revision e6c4a2b8d1f3 makes the canonical store_objects identity `(vault_binding_id, object_id)` and removes global object-id uniqueness. app/stores/pg.py writes, reads, updates, and deletes only within an explicit binding.",
+      "owning_revision": "e6c4a2b8d1f3",
       "declaring_revisions": [
-        "c2766a04d001"
+        "c2766a04d001",
+        "e6c4a2b8d1f3"
       ],
-      "binding_key": "pending",
-      "binding_column": null,
+      "binding_key": "keyed",
+      "binding_column": "vault_binding_id",
       "producers": [
         {
           "module": "app/episodes/assignment.py",
@@ -831,13 +849,14 @@
     },
     "store_relation_memberships": {
       "classification": "binding-scoped",
-      "reason": "`store_relation_memberships` holds artifact membership facts, PRIMARY KEY (src_id, rel, value) over store_objects ids; same colliding endpoint identity as store_relations.",
-      "owning_revision": "c2766a04d001",
+      "reason": "MVR-05A3 revision e6c4a2b8d1f3 namespaces store_relation_memberships by `(vault_binding_id, src_id, rel, value)`. The PgRelationIndex producer and reset seam always name that binding.",
+      "owning_revision": "e6c4a2b8d1f3",
       "declaring_revisions": [
-        "c2766a04d001"
+        "c2766a04d001",
+        "e6c4a2b8d1f3"
       ],
-      "binding_key": "pending",
-      "binding_column": null,
+      "binding_key": "keyed",
+      "binding_column": "vault_binding_id",
       "producers": [
         {
           "module": "app/stores/pg.py",
@@ -854,13 +873,14 @@
     },
     "store_relations": {
       "classification": "binding-scoped",
-      "reason": "`store_relations` holds edges between vault artifacts, PRIMARY KEY (src_id, dst_id, rel) over store_objects ids; the endpoints collide across bindings exactly as their objects do.",
-      "owning_revision": "c2766a04d001",
+      "reason": "MVR-05A3 revision e6c4a2b8d1f3 namespaces store_relations by `(vault_binding_id, src_id, dst_id, rel)`, and requires both endpoints to resolve inside that same binding. PgRelationIndex scopes every mutation and read.",
+      "owning_revision": "e6c4a2b8d1f3",
       "declaring_revisions": [
-        "c2766a04d001"
+        "c2766a04d001",
+        "e6c4a2b8d1f3"
       ],
-      "binding_key": "pending",
-      "binding_column": null,
+      "binding_key": "keyed",
+      "binding_column": "vault_binding_id",
       "producers": [
         {
           "module": "app/stores/pg.py",
@@ -877,13 +897,14 @@
     },
     "store_vector_index": {
       "classification": "binding-scoped",
-      "reason": "`store_vector_index` is the per-artifact embedding projection, one row per `object_id`, rebuildable from store_objects. It shares store_objects' colliding key.",
-      "owning_revision": "c2766a04d001",
+      "reason": "MVR-05A3 revision e6c4a2b8d1f3 makes store_vector_index identity `(vault_binding_id, object_id)`. PgVectorIndex scopes vectors, metadata joins, diagnostics, rebuild reset, and source-object joins to one binding.",
+      "owning_revision": "e6c4a2b8d1f3",
       "declaring_revisions": [
-        "c2766a04d001"
+        "c2766a04d001",
+        "e6c4a2b8d1f3"
       ],
-      "binding_key": "pending",
-      "binding_column": null,
+      "binding_key": "keyed",
+      "binding_column": "vault_binding_id",
       "producers": [
         {
           "module": "app/episodes/assignment.py",
@@ -907,13 +928,14 @@
     },
     "vector_index_meta": {
       "classification": "binding-scoped",
-      "reason": "`vector_index_meta` holds the index-level embedding identity for the vector projection it describes. It is a single-row table (`id INTEGER PRIMARY KEY CHECK (id = 1)`), so one binding's embedding identity is currently the whole instance's; per-binding identity needs that singleton constraint replaced, not merely a column added.",
-      "owning_revision": "c2766a04d001",
+      "reason": "MVR-05A3 revision e6c4a2b8d1f3 replaces the global vector_index_meta singleton with one checked id=1 row per vault_binding_id. PgVectorIndex reads, creates, repairs, generations, and resets only its binding's identity row.",
+      "owning_revision": "e6c4a2b8d1f3",
       "declaring_revisions": [
-        "c2766a04d001"
+        "c2766a04d001",
+        "e6c4a2b8d1f3"
       ],
-      "binding_key": "pending",
-      "binding_column": null,
+      "binding_key": "keyed",
+      "binding_column": "vault_binding_id",
       "producers": [
         {
           "module": "app/stores/pg.py",

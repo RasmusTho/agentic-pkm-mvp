@@ -1,11 +1,13 @@
-"""Store schema parity between Alembic and `_ensure_tables()` (KERNEL-04, #2766).
+"""Store schema parity between Alembic and `_ensure_tables()`.
 
-Audit invariant I-S3: one schema authority per database. The `c2766a04d001`
-migration must produce exactly the store-table shape the audited
+Audit invariant I-S3: one schema authority per database. The current
+MVR-05A3 head must produce exactly the store-table shape the audited
 `_ensure_tables()` bootstrap produced, and re-running migrations on an
 existing environment must be a no-op (no data movement).
 
 Spec: docs/RUNTIME_CORRECTNESS_KERNEL/STORE_SCHEMA_IN_MIGRATIONS.md
+MVR-05A3 adds a second parity assertion at the current composite-key head;
+the historical KERNEL-04 tests remain pinned to their owning revision.
 """
 
 from __future__ import annotations
@@ -29,16 +31,18 @@ STORE_TABLES = (
     "vector_index_meta",
 )
 
-# The last schema revision before the store tables became migration-owned.
-PRE_STORE_HEAD = "5b8ff54bed0f"
-
-# The KERNEL-04 store-schema-owning revision this test asserts parity against.
-# Pinned explicitly (not "head"): later migrations are free to add indexes or
-# other DDL on top of the store tables (e.g. KERNEL-06/#2768's content_hash
-# lookup index) without this test comparing against a moving target — this
-# test's job is verifying c2766a04d001 itself matches _ensure_tables(), not
-# every subsequent migration.
-STORE_SCHEMA_HEAD = "c2766a04d001"
+# Pinned to the revision which owns the current binding-key shape. A later
+# migration may evolve another surface without silently moving this contract.
+STORE_SCHEMA_HEAD = "e6c4a2b8d1f3"
+STORE_BINDING_HEAD = STORE_SCHEMA_HEAD
+MINIMUM_CHILD_TABLES = (
+    "chunks",
+    "embeddings",
+    "relations",
+    "membership",
+    "decisions",
+    "audit",
+)
 
 
 def _admin_dsn() -> str:
@@ -178,6 +182,112 @@ def _schema_snapshot(dsn: str) -> dict:
     return snapshot
 
 
+def _binding_shape_snapshot(dsn: str) -> dict:
+    """Binding columns, store PKs, and canonical child FKs at MVR-05A3 head."""
+    tables = (*STORE_TABLES, *MINIMUM_CHILD_TABLES)
+    snapshot: dict[str, dict] = {}
+    with psycopg.connect(dsn) as conn:
+        for table in tables:
+            columns = conn.execute(
+                "SELECT column_name, data_type, is_nullable, COALESCE(column_default, '') "
+                "FROM information_schema.columns "
+                "WHERE table_schema = 'public' AND table_name = %s ORDER BY ordinal_position",
+                (table,),
+            ).fetchall()
+            pk = conn.execute(
+                "SELECT a.attname FROM pg_constraint c "
+                "JOIN unnest(c.conkey) WITH ORDINALITY k(attnum, ordinality) ON true "
+                "JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = k.attnum "
+                "WHERE c.conrelid = (%s)::regclass AND c.contype = 'p' ORDER BY k.ordinality",
+                (f"public.{table}",),
+            ).fetchall()
+            fks = conn.execute(
+                """
+                SELECT c.conname,
+                       array_agg(child.attname ORDER BY ck.ordinality),
+                       parent.relname,
+                       array_agg(parent_att.attname ORDER BY ck.ordinality),
+                       c.confupdtype::text, c.confdeltype::text,
+                       c.condeferrable, c.condeferred,
+                       COALESCE((
+                           SELECT array_agg(set_att.attname ORDER BY sk.ordinality)
+                           FROM unnest(c.confdelsetcols) WITH ORDINALITY sk(attnum, ordinality)
+                           JOIN pg_attribute set_att
+                             ON set_att.attrelid = c.conrelid AND set_att.attnum = sk.attnum
+                       ), ARRAY[]::name[])
+                  FROM pg_constraint c
+                  JOIN pg_class parent ON parent.oid = c.confrelid
+                  JOIN unnest(c.conkey) WITH ORDINALITY ck(attnum, ordinality) ON true
+                  JOIN pg_attribute child
+                    ON child.attrelid = c.conrelid AND child.attnum = ck.attnum
+                  JOIN pg_attribute parent_att
+                    ON parent_att.attrelid = c.confrelid
+                   AND parent_att.attnum = c.confkey[ck.ordinality]
+                 WHERE c.conrelid = (%s)::regclass AND c.contype = 'f'
+                 GROUP BY c.oid, parent.relname ORDER BY c.conname
+                """,
+                (f"public.{table}",),
+            ).fetchall()
+            checks = conn.execute(
+                "SELECT pg_get_constraintdef(oid) FROM pg_constraint "
+                "WHERE conrelid = (%s)::regclass AND contype = 'c' ORDER BY 1",
+                (f"public.{table}",),
+            ).fetchall()
+            snapshot[table] = {
+                "columns": [tuple(row) for row in columns],
+                "pk": [row[0] for row in pk],
+                "fks": [
+                    (
+                        row[0],
+                        list(row[1]),
+                        row[2],
+                        list(row[3]),
+                        *row[4:8],
+                        list(row[8]),
+                    )
+                    for row in fks
+                ],
+                "checks": sorted(row[0] for row in checks),
+            }
+    return snapshot
+
+
+def _minimum_child_binding_shape(snapshot: dict) -> dict:
+    """Normalize exactly the MVR-05A3 child invariant for parity.
+
+    MVR-05A4/A5 retain ownership of full child keys and rebuild semantics, so
+    this projection deliberately compares the namespace column, existing PK,
+    every effective FK (including unchanged membership.set_id/chunk_id), and
+    the nullable-receipt check — not unrelated child payload columns.
+    """
+    endpoints = {
+        "chunks": ("object_id",),
+        "embeddings": ("object_id",),
+        "relations": ("src_id", "dst_id"),
+        "membership": ("object_id", "set_id"),
+        "decisions": ("object_id",),
+        "audit": ("object_id",),
+    }
+    result: dict[str, dict] = {}
+    for table, endpoint_names in endpoints.items():
+        row = snapshot[table]
+        columns = {column[0]: tuple(column[1:]) for column in row["columns"]}
+        result[table] = {
+            "binding_column": columns.get("vault_binding_id"),
+            "endpoint_columns": {
+                endpoint: columns.get(endpoint) for endpoint in endpoint_names
+            },
+            "pk": row["pk"],
+            # Constraint names are not semantics; everything after the name is.
+            "fks": sorted(
+                tuple(json.dumps(value, default=str) for value in fk[1:])
+                for fk in row["fks"]
+            ),
+            "checks": row["checks"] if table in {"decisions", "audit"} else [],
+        }
+    return result
+
+
 def test_fresh_db_parity(scratch_db_factory, monkeypatch: pytest.MonkeyPatch) -> None:
     """Fresh-DB `alembic upgrade <STORE_SCHEMA_HEAD>` == the audited `_ensure_tables()` shape."""
     migrated = scratch_db_factory()
@@ -200,35 +310,65 @@ def test_fresh_db_parity(scratch_db_factory, monkeypatch: pytest.MonkeyPatch) ->
 
 
 def test_upgrade_idempotent_on_existing(scratch_db_factory, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Existing environments (pre-KERNEL-04 head + bootstrap-created store tables) no-op."""
+    """Reapplying the current head is a schema/data no-op."""
     dsn = scratch_db_factory()
-
-    # Simulate an existing environment: schema lineage at the pre-store head,
-    # store tables created by the historical create-on-demand bootstrap.
-    _alembic_upgrade(dsn, monkeypatch, PRE_STORE_HEAD)
-    _run_ensure_tables(dsn, monkeypatch)
-
+    _alembic_upgrade(dsn, monkeypatch, STORE_SCHEMA_HEAD)
     object_id = uuid.uuid4()
     with psycopg.connect(dsn) as conn:
         conn.execute(
-            "INSERT INTO store_objects (object_id, kind, source_ref, payload) "
-            "VALUES (%s, 'note', 'test://existing', '{}'::jsonb)",
+            "INSERT INTO store_objects "
+            "(vault_binding_id, object_id, kind, source_ref, payload) "
+            "VALUES ('binding-a', %s, 'note', 'test://existing', '{}'::jsonb)",
             (object_id,),
-        )
-        conn.execute(
-            "INSERT INTO vector_index_meta (id, identity_json) VALUES (1, %s)",
-            (json.dumps({"provider": "ollama", "model": "m", "dim": 8, "normalize": True}),),
         )
 
     before = _schema_snapshot(dsn)
-    _alembic_upgrade(dsn, monkeypatch, STORE_SCHEMA_HEAD)  # applies only the store-schema revision
+    _alembic_upgrade(dsn, monkeypatch, STORE_SCHEMA_HEAD)
     after = _schema_snapshot(dsn)
 
     assert before == after, "Migration changed an existing environment's store schema"
     with psycopg.connect(dsn) as conn:
         row = conn.execute(
-            "SELECT count(*) FROM store_objects WHERE object_id = %s", (object_id,)
+            "SELECT count(*) FROM store_objects "
+            "WHERE vault_binding_id = 'binding-a' AND object_id = %s",
+            (object_id,),
         ).fetchone()
         assert row is not None and row[0] == 1, "Migration moved/destroyed existing data"
-        meta = conn.execute("SELECT count(*) FROM vector_index_meta WHERE id = 1").fetchone()
-        assert meta is not None and meta[0] == 1
+
+
+def test_store_and_child_binding_shapes_match_migration_and_autocreate(
+    scratch_db_factory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Final Alembic shape equals audited store autocreate plus child migration."""
+    migrated = scratch_db_factory()
+    bootstrapped = scratch_db_factory()
+    _alembic_upgrade(migrated, monkeypatch, STORE_BINDING_HEAD)
+    _run_ensure_tables(bootstrapped, monkeypatch)
+
+    migrated_store_shape = _schema_snapshot(migrated)
+    bootstrapped_store_shape = _schema_snapshot(bootstrapped)
+    assert migrated_store_shape == bootstrapped_store_shape, (
+        "MVR-05A3 Alembic/autocreate binding shape diverged:\n"
+        f"alembic: {json.dumps(migrated_store_shape, indent=2, default=str)}\n"
+        f"autocreate: {json.dumps(bootstrapped_store_shape, indent=2, default=str)}"
+    )
+    migrated_shape = _binding_shape_snapshot(migrated)
+    bootstrapped_shape = _binding_shape_snapshot(bootstrapped)
+    assert _minimum_child_binding_shape(migrated_shape) == _minimum_child_binding_shape(
+        bootstrapped_shape
+    ), (
+        "MVR-05A3 child binding/FK autocreate parity diverged:\n"
+        f"alembic: {json.dumps(_minimum_child_binding_shape(migrated_shape), indent=2, default=str)}\n"
+        f"autocreate: {json.dumps(_minimum_child_binding_shape(bootstrapped_shape), indent=2, default=str)}"
+    )
+    for table in STORE_TABLES:
+        assert migrated_shape[table]["pk"][0] == "vault_binding_id", table
+    for table in MINIMUM_CHILD_TABLES:
+        columns = {row[0] for row in migrated_shape[table]["columns"]}
+        assert "vault_binding_id" in columns, table
+        canonical_fks = [fk for fk in migrated_shape[table]["fks"] if fk[2] == "store_objects"]
+        assert canonical_fks, f"{table} has no composite store_objects FK"
+        for fk in canonical_fks:
+            assert fk[1][0] == "vault_binding_id", (table, fk)
+            assert fk[3] == ["vault_binding_id", "object_id"], (table, fk)
