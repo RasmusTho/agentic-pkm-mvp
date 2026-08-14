@@ -52,6 +52,29 @@ def test_ci_smoke_gates_heavy_pytest_for_docs_only_prs() -> None:
     assert "github.event_name != 'pull_request' || steps.changes.outputs.heavy_smoke == 'true'" in workflow
 
 
+def test_full_ci_smoke_excludes_pr_metadata_edits_but_keeps_code_events() -> None:
+    """PR contract edits have their own lightweight governance workflow.
+
+    CI Smoke's expensive Unit/smoke/Docker jobs must only begin when the PR's
+    code or integration inputs can have changed.  The Issue and PR Governance
+    workflow continues to validate `edited` events, so removing the event here
+    does not make PR metadata unvalidated.
+    """
+    workflow = _workflow_text()
+    trigger = workflow.split("  pull_request:", maxsplit=1)[1].split(
+        "\n\nconcurrency:", maxsplit=1
+    )[0]
+    governance = (REPO_ROOT / ".github" / "workflows" / "issue-pr-governance.yml").read_text(
+        encoding="utf-8"
+    )
+
+    trigger_types = next(
+        line.strip() for line in trigger.splitlines() if line.strip().startswith("types:")
+    )
+    assert trigger_types == "types: [opened, synchronize, reopened, edited]"
+    assert "types: [opened, edited, reopened, synchronize]" in governance
+
+
 def test_no_workflow_step_is_green_on_absent_provider_secret() -> None:
     workflow_dir = REPO_ROOT / ".github" / "workflows"
     all_workflows = "\n".join(
