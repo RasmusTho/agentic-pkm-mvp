@@ -132,12 +132,33 @@ python3 scripts/review_before_ci_gate.py \
   --review-gate-complete
 ```
 
+For `.github/workflows/*.yml` and `.yaml`, the gate inspects the actual `origin/main...HEAD` patch.
+Changes to workflow concurrency groups or cancellation infer `concurrency`; changes to PR trigger
+sets or event/ref-based `if:` admission infer `state-machine`. Inferred risks are unioned with the
+manual declaration and cannot be suppressed by omitting or narrowing `--risk-surface`.
+
+An inferred workflow risk also requires one local `review-before-ci-workflow-risk.v1` receipt. The
+receipt is bound to the exact publishable head SHA, current base SHA, canonical workflow-diff digest,
+inferred risk set, clean reviewer verdict, and the closed scenario matrix: opened, synchronize,
+reopened, pure metadata edit, base-ref retarget, source revision during active CI, metadata during
+code CI, main push during PR CI, and same-SHA rerun. Generate a bound pending template with
+`--write-workflow-review-template <ignored-path>`, have the required local reviewer mark every scenario
+and the overall verdict `pass`, then rerun with `--workflow-review-receipt <path>` and
+`--review-gate-complete`. `.codex-tmp/review-before-ci/` is ignored and is the default discovery
+location when the file is named `<HEAD>.json`.
+
+The local receipt is ordering evidence only. It does not replace required GitHub checks, branch
+protection, current-head hosted CI, or the final independent review. Any changed delivery blob,
+head, base, diff digest, inferred risk, missing scenario, or non-pass verdict invalidates it before
+expensive validation or publication.
+
 The gate is a local ordering check: it exposes whether PR-body preflight, docs guard, and targeted
 governance/contract review should run before CI waiting becomes the main feedback loop. It does not
 replace required GitHub checks, branch protection, or final review triage.
 
 An emergency direct repair may bypass the local gate only after an explicit completed risk
-assessment finds no high-risk surface. A declared high-risk surface is never bypassable:
+assessment finds no high-risk surface. A declared high-risk surface is never bypassable; inferred
+workflow high-risk surfaces are never bypassable either:
 
 ```bash
 python3 scripts/review_before_ci_gate.py \
