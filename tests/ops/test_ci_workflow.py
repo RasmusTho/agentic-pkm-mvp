@@ -130,7 +130,7 @@ def test_smoke_docker_runs_for_stable_targeting_pull_requests() -> None:
     assert workflow.count(f"if: {stable_or_post_merge}") == 2
     assert f"if: {ordinary_pull_request}" in workflow
     assert "Docker smoke is skipped only for ordinary pull requests." in workflow
-    assert "types: [opened, synchronize, reopened, edited]" in workflow
+    assert "types: [opened, synchronize, reopened]" in workflow
 
 
 def test_vaultwide_panel_verifier_diagnostic_reads_runner_paths() -> None:

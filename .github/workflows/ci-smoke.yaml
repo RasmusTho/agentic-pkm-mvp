@@ -6,7 +6,12 @@ on:
     branches: [main]
     tags: ['v*']
   pull_request:
-    types: [opened, synchronize, reopened, edited]
+    # A PR body/title edit does not change the checked-out source or merge
+    # inputs. Its contract is validated by Issue and PR Governance, which
+    # handles `pull_request: edited` separately. Keep this workflow for
+    # code/integration events so a new head (or reopened PR) still receives
+    # the complete hosted merge certification.
+    types: [opened, synchronize, reopened]
 
 concurrency:
   group: ci-smoke-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
