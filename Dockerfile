@@ -74,6 +74,8 @@ COPY --from=builder /usr/local/bin /usr/local/bin
 #                               migrations + app/alembic.ini used by
 #                               scripts/run_migrations.sh)
 # - mimer_runtime/              imported directly by app/** (cross_scope, dri, ...)
+# - llm_contract/               neutral model-access contract imported by
+#                               app/builderops/model_access_resolver.py
 # - schemas/                    JSON schemas resolved via REPO_ROOT at runtime
 #                               (app/episodes/schema.py, app/retrieval/envelope.py, ...)
 # - config/ + configs/          runtime defaults/settings files (config/agent.yaml,
@@ -108,6 +110,7 @@ COPY --from=builder /usr/local/bin /usr/local/bin
 #                               the set from the source imports.
 COPY app/ ./app/
 COPY mimer_runtime/ ./mimer_runtime/
+COPY llm_contract/ ./llm_contract/
 COPY schemas/ ./schemas/
 COPY config/ ./config/
 COPY configs/ ./configs/
