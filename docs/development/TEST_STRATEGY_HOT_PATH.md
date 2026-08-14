@@ -20,10 +20,11 @@ The goal is to keep docs-only and governance/skill PRs cheap while preserving di
 - The broad runtime smoke workflow lives in `.github/workflows/ci-smoke.yaml`; it also carries the skills-consistency lint that previously ran in the retired duplicate `smoke` workflow.
 - Pure PR title/body metadata edits are validated by `Issue and PR Governance` while CI Smoke jobs
   remain skipped. An `edited` event carrying `changes.base.ref.from` is a merge-input retarget and
-  therefore keeps full CI Smoke enabled. CI Smoke retains PR-number versus push-ref concurrency
-  identities and latest-wins cancellation for source/integration events, without allowing a PR run
-  to cancel an unrelated `main` push (or the reverse); `tests/governance/test_ci_smoke_post_merge_proof_concurrency.py`
-  is the executable proof.
+  therefore keeps full CI Smoke enabled. Metadata events use a separate concurrency suffix so a
+  skipped metadata run cannot cancel a same-PR source/integration run. CI Smoke retains PR-number
+  versus push-ref concurrency identities and latest-wins cancellation for source/integration events,
+  without allowing a PR run to cancel an unrelated `main` push (or the reverse);
+  `tests/governance/test_ci_smoke_post_merge_proof_concurrency.py` is the executable proof.
 - Governance PR contract checks live in `.github/workflows/issue-pr-governance.yml`.
 - The hot-path and direct-repair invariants are covered by `tests/architecture/test_pr_hot_path_governance.py`.
 - PR unit CI uses `scripts/select_pr_tests.py` to map changed files to subsystem-scoped pytest targets. Shared CI/test configuration, migrations, dependencies, and shared fixtures run the deterministic broad suite; E2E coverage is deferred to post-merge and nightly validation. This document is `scripts/select_pr_tests.py`'s `docs/development/` contract for the `scripts/docs_guard_logic.py :: GOVERNANCE_TEMPORAL_ENFORCEMENT` temporal-owner-doc exemption, and the check enforces that pairing specifically: update this doc, not `docs/STATUS.md`/`docs/ROADMAP.md`/etc., when the selection script's behavior changes.

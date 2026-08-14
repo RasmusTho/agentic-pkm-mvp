@@ -12,7 +12,9 @@ on:
     types: [opened, synchronize, reopened, edited]
 
 concurrency:
-  group: ci-smoke-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  # Pure metadata edits still trigger this workflow so a base-ref retarget can
+  # be admitted, but they must not cancel a same-PR source/integration run.
+  group: ci-smoke-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}-${{ github.event.action == 'edited' && github.event.changes.base.ref.from == null && 'metadata' || 'code' }}
   cancel-in-progress: true
 
 permissions: read-all

@@ -21,7 +21,9 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 CI_SMOKE = REPO_ROOT / ".github" / "workflows" / "ci-smoke.yaml"
 EXPECTED_GROUP_EXPRESSION = (
     "ci-smoke-${{ github.event_name }}-"
-    "${{ github.event.pull_request.number || github.ref }}"
+    "${{ github.event.pull_request.number || github.ref }}-"
+    "${{ github.event.action == 'edited' && "
+    "github.event.changes.base.ref.from == null && 'metadata' || 'code' }}"
 )
 
 
@@ -84,7 +86,11 @@ def _render_group(fixture: dict[str, Any]) -> str:
     pull_request = payload.get("pull_request", {})
     pull_request_number = pull_request.get("number")
     identity = pull_request_number or fixture["ref"]
-    return f"ci-smoke-{fixture['event_name']}-{identity}"
+    changes = payload.get("changes", {})
+    base_ref_from = changes.get("base", {}).get("ref", {}).get("from")
+    pure_metadata = payload.get("action") == "edited" and base_ref_from is None
+    suffix = "metadata" if pure_metadata else "code"
+    return f"ci-smoke-{fixture['event_name']}-{identity}-{suffix}"
 
 
 def test_ci_smoke_skips_pure_metadata_but_runs_base_ref_edits() -> None:
@@ -130,11 +136,30 @@ def test_ci_smoke_skips_pure_metadata_but_runs_base_ref_edits() -> None:
     assert allows_ci(base_ref_edit) is True
 
 
+def test_metadata_edit_does_not_cancel_same_pr_code_run() -> None:
+    source_run = _pull_request_event(
+        action="synchronize",
+        number=4812,
+        merged=False,
+        ref="refs/pull/4812/merge",
+    )
+    metadata_edit = _pull_request_event(
+        action="edited",
+        number=4812,
+        merged=True,
+        ref="refs/heads/main",
+    )
+
+    assert _render_group(source_run) == "ci-smoke-pull_request-4812-code"
+    assert _render_group(metadata_edit) == "ci-smoke-pull_request-4812-metadata"
+    assert _render_group(source_run) != _render_group(metadata_edit)
+
+
 def test_main_pushes_retain_cancel_in_progress_group() -> None:
     first_push = _push_event(ref="refs/heads/main", after="c" * 40)
     later_push = _push_event(ref="refs/heads/main", after="d" * 40)
 
-    assert _render_group(first_push) == "ci-smoke-push-refs/heads/main"
+    assert _render_group(first_push) == "ci-smoke-push-refs/heads/main-code"
     assert _render_group(first_push) == _render_group(later_push)
     assert "cancel-in-progress: true" in _concurrency_block()
 
@@ -174,9 +199,9 @@ def test_same_pr_event_runs_share_only_their_pr_concurrency_group() -> None:
         "reopened",
     }
     assert {_render_group(event) for event in same_pr_events} == {
-        "ci-smoke-pull_request-4812"
+        "ci-smoke-pull_request-4812-code"
     }
-    assert _render_group(another_pr) == "ci-smoke-pull_request-4813"
+    assert _render_group(another_pr) == "ci-smoke-pull_request-4813-code"
     assert _render_group(another_pr) != _render_group(same_pr_events[0])
     assert _render_group(main_push) != _render_group(same_pr_events[0])
 
@@ -197,7 +222,7 @@ def test_source_and_integration_events_keep_required_unit_job_enabled() -> None:
 
     assert "pull_request:" in trigger_block
     assert "types: [opened, synchronize, reopened, edited]" in trigger_block
-    assert _render_group(synchronize) == "ci-smoke-pull_request-4803"
+    assert _render_group(synchronize) == "ci-smoke-pull_request-4803-code"
     assert required_unit_job["name"] == "Unit tests (not pg)"
     assert required_unit_job["if"] == (
         "github.event_name == 'pull_request' && (github.event.action != 'edited' "
@@ -210,10 +235,10 @@ def test_push_tags_and_other_refs_keep_event_scoped_ref_namespace() -> None:
     another_tag_push = _push_event(ref="refs/tags/v5.5.1", after="f" * 40)
     other_ref_push = _push_event(ref="refs/heads/recovery", after="0" * 40)
 
-    assert _render_group(tag_push) == "ci-smoke-push-refs/tags/v5.5.0"
-    assert _render_group(another_tag_push) == "ci-smoke-push-refs/tags/v5.5.1"
+    assert _render_group(tag_push) == "ci-smoke-push-refs/tags/v5.5.0-code"
+    assert _render_group(another_tag_push) == "ci-smoke-push-refs/tags/v5.5.1-code"
     assert _render_group(tag_push) != _render_group(another_tag_push)
-    assert _render_group(other_ref_push) == "ci-smoke-push-refs/heads/recovery"
+    assert _render_group(other_ref_push) == "ci-smoke-push-refs/heads/recovery-code"
 
 
 def test_reruns_retain_the_original_event_identity() -> None:
