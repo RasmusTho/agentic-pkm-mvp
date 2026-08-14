@@ -1,12 +1,10 @@
-"""Regression coverage for CI Smoke event-class concurrency (#4812).
+"""Regression coverage for CI Smoke concurrency and metadata-event routing (#4812).
 
-The verified-merge flow restores a pull request's canonical body after merge.
-That edit emits a ``pull_request: edited`` event whose ``github.ref`` is the
-base branch, not the deleted PR merge ref. A ref-only concurrency key therefore
-lets an unrelated push to ``main`` cancel the required post-restore proof.
-
-These tests pin the workflow expression and exercise the GitHub event shapes
-that must share, or must not share, a concurrency group.
+Pure pull-request metadata edits do not alter the checked-out source or merge
+inputs. They are therefore validated by Issue and PR Governance rather than
+starting the full CI Smoke workflow. For the remaining source/integration
+events, CI Smoke keeps event-class concurrency so push runs and PR runs cannot
+cancel one another.
 """
 
 from __future__ import annotations
@@ -88,23 +86,26 @@ def _render_group(fixture: dict[str, Any]) -> str:
     return f"ci-smoke-{fixture['event_name']}-{identity}"
 
 
-def test_merged_pr_edit_does_not_share_main_push_concurrency_group() -> None:
+def test_ci_smoke_does_not_start_for_metadata_edits() -> None:
     restored_body_edit = _pull_request_event(
         action="edited",
         number=4803,
         merged=True,
         ref="refs/heads/main",
     )
-    main_push = _push_event(ref="refs/heads/main", after="b" * 40)
+    smoke_trigger = _workflow_text().split("\non:\n", maxsplit=1)[1].split(
+        "\n\nconcurrency:", maxsplit=1
+    )[0]
+    governance_trigger = (
+        REPO_ROOT / ".github" / "workflows" / "issue-pr-governance.yml"
+    ).read_text(encoding="utf-8").split("\non:\n", maxsplit=1)[1].split(
+        "\n\npermissions:", maxsplit=1
+    )[0]
 
-    assert restored_body_edit["event"]["number"] == 4803
-    assert restored_body_edit["event"]["pull_request"]["number"] == 4803
-    assert restored_body_edit["event"]["pull_request"]["merged"] is True
     assert restored_body_edit["event"]["action"] == "edited"
     assert restored_body_edit["ref"] == "refs/heads/main"
-    assert _render_group(restored_body_edit) == "ci-smoke-pull_request-4803"
-    assert _render_group(main_push) == "ci-smoke-push-refs/heads/main"
-    assert _render_group(restored_body_edit) != _render_group(main_push)
+    assert "types: [opened, synchronize, reopened]" in smoke_trigger
+    assert "types: [opened, edited, reopened, synchronize]" in governance_trigger
 
 
 def test_main_pushes_retain_cancel_in_progress_group() -> None:
@@ -136,18 +137,12 @@ def test_same_pr_event_runs_share_only_their_pr_concurrency_group() -> None:
             merged=False,
             ref="refs/pull/4812/merge",
         ),
-        _pull_request_event(
-            action="edited",
-            number=4812,
-            merged=True,
-            ref="refs/heads/main",
-        ),
     )
     another_pr = _pull_request_event(
-        action="edited",
+        action="synchronize",
         number=4813,
-        merged=True,
-        ref="refs/heads/main",
+        merged=False,
+        ref="refs/pull/4813/merge",
     )
     main_push = _push_event(ref="refs/heads/main")
 
@@ -155,7 +150,6 @@ def test_same_pr_event_runs_share_only_their_pr_concurrency_group() -> None:
         "opened",
         "synchronize",
         "reopened",
-        "edited",
     }
     assert {_render_group(event) for event in same_pr_events} == {
         "ci-smoke-pull_request-4812"
@@ -165,12 +159,12 @@ def test_same_pr_event_runs_share_only_their_pr_concurrency_group() -> None:
     assert _render_group(main_push) != _render_group(same_pr_events[0])
 
 
-def test_restored_body_edit_keeps_required_unit_job_enabled() -> None:
-    restored_body_edit = _pull_request_event(
-        action="edited",
+def test_source_and_integration_events_keep_required_unit_job_enabled() -> None:
+    synchronize = _pull_request_event(
+        action="synchronize",
         number=4803,
-        merged=True,
-        ref="refs/heads/main",
+        merged=False,
+        ref="refs/pull/4803/merge",
     )
     workflow = _workflow_text()
     trigger_block = workflow.split("\non:\n", maxsplit=1)[1].split(
@@ -180,8 +174,8 @@ def test_restored_body_edit_keeps_required_unit_job_enabled() -> None:
     required_unit_job = jobs["pr-unit-tests-not-pg"]
 
     assert "pull_request:" in trigger_block
-    assert "types: [opened, synchronize, reopened, edited]" in trigger_block
-    assert _render_group(restored_body_edit) == "ci-smoke-pull_request-4803"
+    assert "types: [opened, synchronize, reopened]" in trigger_block
+    assert _render_group(synchronize) == "ci-smoke-pull_request-4803"
     assert required_unit_job["name"] == "Unit tests (not pg)"
     assert required_unit_job["if"] == "github.event_name == 'pull_request'"
 
@@ -199,17 +193,17 @@ def test_push_tags_and_other_refs_keep_event_scoped_ref_namespace() -> None:
 
 def test_reruns_retain_the_original_event_identity() -> None:
     original_pr_run = _pull_request_event(
-        action="edited",
+        action="synchronize",
         number=4803,
-        merged=True,
-        ref="refs/heads/main",
+        merged=False,
+        ref="refs/pull/4803/merge",
         run_attempt=1,
     )
     rerun_pr_attempt = _pull_request_event(
-        action="edited",
+        action="synchronize",
         number=4803,
-        merged=True,
-        ref="refs/heads/main",
+        merged=False,
+        ref="refs/pull/4803/merge",
         run_attempt=2,
     )
     original_main_run = _push_event(ref="refs/heads/main", run_attempt=1)
