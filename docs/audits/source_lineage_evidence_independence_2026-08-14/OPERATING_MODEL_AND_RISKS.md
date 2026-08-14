@@ -81,22 +81,26 @@ Strong split reasons are real differences in security, ownership, lifecycle, syn
 
 ---
 
-## 9. SBS allocation
+## 9. SBS reconciliation and allocation
 
-| Boundary | Responsibility |
+This table is a reconciliation against the current SBS, not a silent reassignment
+of responsibility. The SBS and the cited owner contracts remain authoritative;
+the audit only states where a later, owner-approved contract delta would fit.
+
+| Boundary | Proposed responsibility if promoted | Posture against current SBS |
 | --- | --- |
-| SIP | define source-lineage and evidence-lineage semantics; own typed relations/assessments and provenance continuity |
-| EBF / Knowledge Acquisition | produce source-specific identity, content identity, acquisition evidence, and adapter provenance |
-| HKA | preserve durable source bundles, human-confirmed semantic relations, scoped reviews where human meaning would otherwise be lost, and accepted syntheses |
-| DRI | build rebuildable source-lineage groups, collapse metadata, resolver, and index projections |
-| RCA | retrieve finely; group, collapse, select representatives, diversify, and assemble context without changing authority |
-| GOV | govern review assessments, confirmation of epistemically material relations, admissibility, and authority transitions |
-| HIX | render source-family cards, evidence posture, uncertainty, and “why shown” explanations |
-| WSP | resolve active vault/context bindings; does not grant authority |
-| PDM | store and migrate objects without redefining semantic identity |
-| SFC | preserve lineage and identity across replicas/federation |
-| OEF | measure duplicate rate, lineage quality, diversity, latency, freshness, rebuild, and recovery |
-| CES | steward the contract delta and prevent parallel terminology or ownership drift |
+| SIP | define source-lineage and evidence-lineage semantics; own typed relations/assessments and provenance continuity | **Conforms.** Extends the existing provenance/typed-relation responsibility only if an owner approves the delta. |
+| EBF / Knowledge Acquisition | produce source-specific identity, content identity, acquisition evidence, and adapter provenance | **Conforms.** Uses existing acquisition and provenance producers; creates no new acquisition owner. |
+| HKA | preserve durable source bundles, human-confirmed semantic relations, scoped reviews where human meaning would otherwise be lost, and accepted syntheses | **Conforms.** Retains HKA's durable-knowledge role; a scoped-review record would be a proposed contract extension. |
+| DRI | build rebuildable source-lineage groups, collapse metadata, resolver, and index projections | **Conforms.** Reuses the projection boundary; family collapse is a proposed new projection behavior. |
+| RCA | retrieve finely; group, collapse, select representatives, diversify, and assemble context without changing authority | **Extends.** Family-aware ranking/presentation is a proposed retrieval-contract delta, not shipped behavior. |
+| GOV | govern review assessments, confirmation of epistemically material relations, admissibility, and authority transitions | **Conforms.** Reuses governed confirmation and authority transitions; no new authority path is proposed. |
+| HIX | render source-family cards, evidence posture, uncertainty, and “why shown” explanations | **Extends.** The family card is a proposed HIX projection, pending an approved interface contract. |
+| WSP | resolve active vault/context bindings; does not grant authority | **Conforms.** Consumes the existing binding seam only. |
+| PDM | store and migrate objects without redefining semantic identity | **Conforms.** Storage remains subordinate to semantic identity and does not gain an evidence role. |
+| SFC | preserve lineage and identity across replicas/federation | **Conforms.** Retains replica/convergence responsibility; no federation model is selected. |
+| OEF | measure duplicate rate, lineage quality, diversity, latency, freshness, rebuild, and recovery | **Conforms.** Adds proposed measures to the existing observability role, pending acceptance. |
+| CES | steward the contract delta and prevent parallel terminology or ownership drift | **Conforms.** Architecture stewardship only; it does not create a runtime subsystem. |
 
 This is a cross-boundary capability, not a proposal for another runtime subsystem.
 
@@ -138,20 +142,27 @@ This is a cross-boundary capability, not a proposal for another runtime subsyste
 
 ## 12. Invariant kernel for a promoted design
 
-A future promoted design should preserve at least these invariants:
+The following is a proposed enforcement classification, not a statement that the
+listed enforcement exists today. `MUST` is a behavior that a promoted design must
+preserve; `GATE` is a fail-closed admission or delivery check; `DOCTOR` is a
+read-only reconciliation or measurement signal. The minimal proposed kernel is
+SLEI-01, SLEI-03 through SLEI-11. SLEI-02 is an explanatory corollary of
+SLEI-01/SLEI-03, while SLEI-12 is a topology-health rule and therefore not in the
+minimal kernel.
 
-- **SLEI-01:** derivatives never increase the counted number of independent evidence lineages;
-- **SLEI-02:** different locators or publications never imply independence;
-- **SLEI-03:** `unknown` independence remains explicit and conservative;
-- **SLEI-04:** exact source-fragment citation survives grouping and representative selection;
-- **SLEI-05:** scope/policy eligibility precedes ranking and grouping;
-- **SLEI-06:** machine-inferred lineage is non-authoritative until governed confirmation;
-- **SLEI-07:** review scope never implies broader review or authority;
-- **SLEI-08:** source lineage, evidence lineage, source role, authority state, and evidence role remain distinct;
-- **SLEI-09:** index and resolver loss causes no semantic or authority loss;
-- **SLEI-10:** artifact and lineage identity survive path and vault movement;
-- **SLEI-11:** human-authored or decision-relevant changes remain attributable and receipted;
-- **SLEI-12:** physical partitioning is reversible and justified by measured boundaries.
+| ID | Proposed invariant | Class | Current enforcement posture | Kernel |
+| --- | --- | --- | --- | --- |
+| SLEI-01 | Derivatives never increase the counted number of independent evidence lineages. | MUST | **New.** Existing projection-not-evidence rules support it, but no lineage counter exists. | yes |
+| SLEI-02 | Different locators or publications never imply independence. | MUST | **New.** The current source/provenance model does not infer independence. | no — corollary |
+| SLEI-03 | `unknown` independence remains explicit and conservative. | MUST | **New.** Requires an approved assessment vocabulary. | yes |
+| SLEI-04 | Exact source-fragment citation survives grouping and representative selection. | MUST | **Partially exists.** Retrieval/segment contracts preserve citation; grouping preservation is new. | yes |
+| SLEI-05 | Scope/policy eligibility precedes ranking and grouping. | GATE | **Partially exists.** Retrieval admissibility exists; family grouping must be constrained by it. | yes |
+| SLEI-06 | Machine-inferred lineage is non-authoritative until governed confirmation. | GATE | **Partially exists.** Existing authority transitions support the posture; lineage confirmation is new. | yes |
+| SLEI-07 | Review scope never implies broader review or authority. | MUST | **New.** Requires the proposed scoped-assessment envelope. | yes |
+| SLEI-08 | Source lineage, evidence lineage, source role, authority state, and evidence role remain distinct. | MUST | **Partially exists.** Current semantic dimensions separate the latter three; the two lineage concepts are new. | yes |
+| SLEI-09 | Index and resolver loss causes no semantic or authority loss. | GATE | **Partially exists.** Rebuildable-projection and topology rules exist; source-lineage projection recovery is new. | yes |
+| SLEI-10 | Artifact and lineage identity survive path and vault movement. | MUST | **Partially exists.** Vault identity survives relocation; lineage identity is new. | yes |
+| SLEI-11 | Human-authored or decision-relevant changes remain attributable and receipted. | GATE | **Partially exists.** Existing governance/receipt posture applies; promoted lineage changes need explicit coverage. | yes |
+| SLEI-12 | Physical partitioning is reversible and justified by measured boundaries. | DOCTOR | **Partially exists.** Topology reversibility exists; the measurement set is proposed. | no — health rule |
 
 ---
-

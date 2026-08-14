@@ -22,6 +22,21 @@ Yggdrasil does **not** need a second general knowledge-artifact architecture to 
 - cognitive-load projections preserve source visibility and separate source, interpretation, uncertainty, and action; and
 - multi-vault selection and binding identity are modeled independently from scope and authority.
 
+### Repository anchor matrix
+
+The observations below are anchored to the declared baseline, `main` at
+`c79026ab38171f269f14a53d96112dd196a830f9`. These anchors are evidence, not
+an amendment to the cited owner contracts.
+
+| Observation used by this audit | Exact baseline anchors |
+| --- | --- |
+| Functional objects, provenance, and derived projections are already distinct. | `docs/architecture/functional-ontology.md:62-68`, `docs/architecture/functional-ontology.md:103-110`, `docs/architecture/functional-ontology.md:135-139` |
+| Candidate retrieval preserves identity, source/evidence roles, and provenance rather than treating a projection as primary evidence. | `docs/architecture/retrieval-contract.md:17-18`, `docs/architecture/retrieval-contract.md:38-47`, `docs/architecture/retrieval-contract.md:80-95` |
+| A projection is bounded and must remain linked to its underlying artifact and provenance. | `docs/CONCEPTS/ARTIFACT_PROJECTION_AND_SOURCE_CONTRACT.md:62-89` |
+| Existing vault rules preserve one artifact identity, human orientation, and reversibility rather than letting paths or topology define meaning. | `docs/CONCEPTS/VAULT_TOPOLOGY_CONTRACT.md:113-120`, `docs/MULTI_VAULT_RUNTIME/README.md:139-150`, `docs/MULTI_VAULT_RUNTIME/README.md:308-315` |
+| Existing retrieval contracts do not define source-family collapse or evidence-lineage diversification. | `docs/architecture/retrieval-contract.md:17-95` (the candidate/admissibility contract contains no family or independence grouping rule) |
+| Existing cross-cutting review vocabulary does not supply the proposed target/version/scope/method/outcome assessment envelope. | `docs/architecture/retrieval-contract.md:38-95`, `docs/CONCEPTS/ARTIFACT_PROJECTION_AND_SOURCE_CONTRACT.md:79-89` |
+
 The remaining material gap is narrower:
 
 > Yggdrasil can largely explain how an object was derived, but it cannot yet consistently express or use the fact that several artifacts share one source lineage, or that several apparently different sources rely on the same underlying study, observation, dataset, event, or argument line.
