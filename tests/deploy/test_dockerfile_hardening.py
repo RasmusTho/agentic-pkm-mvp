@@ -36,6 +36,7 @@ docs, .git, ops). Contracts guarded here:
 
 from __future__ import annotations
 
+import ast
 import re
 from pathlib import Path
 
@@ -56,6 +57,31 @@ _SCRIPTS_IMPORT_RE = re.compile(
     r"^\s*(?:from\s+scripts\.([A-Za-z0-9_]+)\s+import\b|import\s+scripts\.([A-Za-z0-9_]+))",
     flags=re.MULTILINE,
 )
+
+
+def _runtime_imported_repo_packages() -> set[str]:
+    """Return checked-in top-level packages imported by baked runtime trees.
+
+    ``scripts`` is intentionally excluded: it is copied as a curated module
+    list and guarded separately by ``test_runtime_imported_scripts_modules``.
+    """
+    packages: set[str] = set()
+    for package_dir in RUNTIME_PACKAGE_DIRS:
+        for path in sorted((REPO_ROOT / package_dir).rglob("*.py")):
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Import):
+                    candidates = (alias.name.split(".", 1)[0] for alias in node.names)
+                elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+                    candidates = (node.module.split(".", 1)[0],)
+                else:
+                    continue
+                for candidate in candidates:
+                    if candidate == "scripts":
+                        continue
+                    if (REPO_ROOT / candidate / "__init__.py").is_file():
+                        packages.add(candidate)
+    return packages
 
 
 def _dockerfile_text() -> str:
@@ -219,6 +245,27 @@ def test_runtime_imported_scripts_modules_are_baked_into_image() -> None:
         ), (
             f"runtime stage must COPY {needed} — app/** imports it at runtime "
             "(worker/watcher/heimdal services crash at boot without it)"
+        )
+
+
+def test_runtime_imported_repo_packages_are_baked_into_image() -> None:
+    """Every checked-in package imported by baked runtime code is allowlisted.
+
+    This exercises the Dockerfile/runtime-entrypoint seam rather than host
+    imports, preventing a buildable image whose watcher crashes at startup.
+    """
+    packages = _runtime_imported_repo_packages()
+    assert packages, "expected baked runtime trees to import a checked-in package"
+
+    final_stage = _dockerfile_text()[_dockerfile_text().rindex("FROM ") :]
+    for package in sorted(packages):
+        assert re.search(
+            rf"^\s*COPY\s+{re.escape(package)}/\s+\./{re.escape(package)}/\s*$",
+            final_stage,
+            flags=re.MULTILINE,
+        ), (
+            f"runtime stage must COPY checked-in package {package}/ imported by "
+            "a baked runtime package"
         )
 
 
