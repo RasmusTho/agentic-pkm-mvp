@@ -71,7 +71,7 @@ def test_full_ci_smoke_excludes_pr_metadata_edits_but_keeps_code_events() -> Non
     trigger_types = next(
         line.strip() for line in trigger.splitlines() if line.strip().startswith("types:")
     )
-    assert trigger_types == "types: [opened, synchronize, reopened]"
+    assert trigger_types == "types: [opened, synchronize, reopened, edited]"
     assert "types: [opened, edited, reopened, synchronize]" in governance
 
 

@@ -1,10 +1,11 @@
 """Regression coverage for CI Smoke concurrency and metadata-event routing (#4812).
 
-Pure pull-request metadata edits do not alter the checked-out source or merge
-inputs. They are therefore validated by Issue and PR Governance rather than
-starting the full CI Smoke workflow. For the remaining source/integration
-events, CI Smoke keeps event-class concurrency so push runs and PR runs cannot
-cancel one another.
+Pure pull-request title/body metadata edits do not alter the checked-out source
+or merge inputs. Their CI Smoke jobs are skipped and Issue and PR Governance
+validates the contract. A base-ref retarget is also an ``edited`` event, but it
+changes a merge input and must keep the full CI Smoke jobs enabled. For the
+remaining source/integration events, CI Smoke keeps event-class concurrency so
+push runs and PR runs cannot cancel one another.
 """
 
 from __future__ import annotations
@@ -86,14 +87,15 @@ def _render_group(fixture: dict[str, Any]) -> str:
     return f"ci-smoke-{fixture['event_name']}-{identity}"
 
 
-def test_ci_smoke_does_not_start_for_metadata_edits() -> None:
+def test_ci_smoke_skips_pure_metadata_but_runs_base_ref_edits() -> None:
     restored_body_edit = _pull_request_event(
         action="edited",
         number=4803,
         merged=True,
         ref="refs/heads/main",
     )
-    smoke_trigger = _workflow_text().split("\non:\n", maxsplit=1)[1].split(
+    workflow = _workflow_text()
+    smoke_trigger = workflow.split("\non:\n", maxsplit=1)[1].split(
         "\n\nconcurrency:", maxsplit=1
     )[0]
     governance_trigger = (
@@ -104,8 +106,28 @@ def test_ci_smoke_does_not_start_for_metadata_edits() -> None:
 
     assert restored_body_edit["event"]["action"] == "edited"
     assert restored_body_edit["ref"] == "refs/heads/main"
-    assert "types: [opened, synchronize, reopened]" in smoke_trigger
+    assert "types: [opened, synchronize, reopened, edited]" in smoke_trigger
     assert "types: [opened, edited, reopened, synchronize]" in governance_trigger
+
+    smoke_job = workflow.split("  smoke:\n", maxsplit=1)[1].split(
+        "  smoke-docker:\n", maxsplit=1
+    )[0]
+    assert "github.event.action != 'edited'" in smoke_job
+    assert "github.event.changes.base.ref.from != null" in smoke_job
+
+    pure_metadata = {"action": "edited", "changes": {}}
+    base_ref_edit = {
+        "action": "edited",
+        "changes": {"base": {"ref": {"from": "main"}}},
+    }
+    def allows_ci(event: dict[str, Any]) -> bool:
+        return (
+            event["action"] != "edited"
+            or event.get("changes", {}).get("base", {}).get("ref", {}).get("from")
+            is not None
+        )
+    assert allows_ci(pure_metadata) is False
+    assert allows_ci(base_ref_edit) is True
 
 
 def test_main_pushes_retain_cancel_in_progress_group() -> None:
@@ -174,10 +196,13 @@ def test_source_and_integration_events_keep_required_unit_job_enabled() -> None:
     required_unit_job = jobs["pr-unit-tests-not-pg"]
 
     assert "pull_request:" in trigger_block
-    assert "types: [opened, synchronize, reopened]" in trigger_block
+    assert "types: [opened, synchronize, reopened, edited]" in trigger_block
     assert _render_group(synchronize) == "ci-smoke-pull_request-4803"
     assert required_unit_job["name"] == "Unit tests (not pg)"
-    assert required_unit_job["if"] == "github.event_name == 'pull_request'"
+    assert required_unit_job["if"] == (
+        "github.event_name == 'pull_request' && (github.event.action != 'edited' "
+        "|| github.event.changes.base.ref.from != null)"
+    )
 
 
 def test_push_tags_and_other_refs_keep_event_scoped_ref_namespace() -> None:

@@ -74,7 +74,7 @@ def test_pr_index_pg_contracts_run_exact_acceptance_surface() -> None:
     job = workflow[
         workflow.index("pr-index-pg-contracts:") : workflow.index("contract-validation:")
     ]
-    assert "if: github.event_name == 'pull_request'" in job
+    assert "github.event_name == 'pull_request'" in job
     assert "pgvector/pgvector:pg16" in job
     assert "dorny/paths-filter@v3" in job
     assert "app/cli/index_rebuild.py" in job
@@ -130,7 +130,7 @@ def test_smoke_docker_runs_for_stable_targeting_pull_requests() -> None:
     assert workflow.count(f"if: {stable_or_post_merge}") == 2
     assert f"if: {ordinary_pull_request}" in workflow
     assert "Docker smoke is skipped only for ordinary pull requests." in workflow
-    assert "types: [opened, synchronize, reopened]" in workflow
+    assert "types: [opened, synchronize, reopened, edited]" in workflow
 
 
 def test_vaultwide_panel_verifier_diagnostic_reads_runner_paths() -> None:

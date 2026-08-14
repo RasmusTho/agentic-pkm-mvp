@@ -18,10 +18,11 @@ The goal is to keep docs-only and governance/skill PRs cheap while preserving di
 - Skill entrypoints and shared skill-index routing are covered by `tests/architecture/test_agent_skill_entrypoints.py`.
 - Dispatcher-oriented skill sequencing is covered by `tests/architecture/test_dispatcher_skill_integration.py`.
 - The broad runtime smoke workflow lives in `.github/workflows/ci-smoke.yaml`; it also carries the skills-consistency lint that previously ran in the retired duplicate `smoke` workflow.
-- Pure PR title/body metadata edits are validated by `Issue and PR Governance`, not by the full
-  `CI Smoke` code workflow. `CI Smoke` retains PR-number versus push-ref concurrency identities and
-  latest-wins cancellation for source/integration events, without allowing a PR run to cancel an
-  unrelated `main` push (or the reverse); `tests/governance/test_ci_smoke_post_merge_proof_concurrency.py`
+- Pure PR title/body metadata edits are validated by `Issue and PR Governance` while CI Smoke jobs
+  remain skipped. An `edited` event carrying `changes.base.ref.from` is a merge-input retarget and
+  therefore keeps full CI Smoke enabled. CI Smoke retains PR-number versus push-ref concurrency
+  identities and latest-wins cancellation for source/integration events, without allowing a PR run
+  to cancel an unrelated `main` push (or the reverse); `tests/governance/test_ci_smoke_post_merge_proof_concurrency.py`
   is the executable proof.
 - Governance PR contract checks live in `.github/workflows/issue-pr-governance.yml`.
 - The hot-path and direct-repair invariants are covered by `tests/architecture/test_pr_hot_path_governance.py`.

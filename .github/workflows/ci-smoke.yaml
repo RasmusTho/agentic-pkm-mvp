@@ -6,12 +6,10 @@ on:
     branches: [main]
     tags: ['v*']
   pull_request:
-    # A PR body/title edit does not change the checked-out source or merge
-    # inputs. Its contract is validated by Issue and PR Governance, which
-    # handles `pull_request: edited` separately. Keep this workflow for
-    # code/integration events so a new head (or reopened PR) still receives
-    # the complete hosted merge certification.
-    types: [opened, synchronize, reopened]
+    # Keep `edited` available so a base-ref retarget receives fresh CI. Job
+    # guards below skip pure title/body metadata edits; Issue and PR Governance
+    # remains their contract-validation path.
+    types: [opened, synchronize, reopened, edited]
 
 concurrency:
   group: ci-smoke-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
@@ -21,6 +19,10 @@ permissions: read-all
 
 jobs:
   smoke:
+    if: >-
+      github.event_name != 'pull_request'
+      || github.event.action != 'edited'
+      || github.event.changes.base.ref.from != null
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
@@ -297,6 +299,10 @@ jobs:
           python -m app.cli health --json || true
 
   smoke-docker:
+    if: >-
+      github.event_name != 'pull_request'
+      || github.event.action != 'edited'
+      || github.event.changes.base.ref.from != null
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
@@ -571,7 +577,10 @@ jobs:
     # lane, the mandatory repo-wide mypy gate, and the intent-classification
     # golden gate keep running on the PR path. Docs-only PRs skip the heavy
     # steps via the paths filter below.
-    if: github.event_name == 'pull_request'
+    if: >-
+      github.event_name == 'pull_request'
+      && (github.event.action != 'edited'
+      || github.event.changes.base.ref.from != null)
     runs-on: ubuntu-latest
     env:
       # API tests import the nested Companion package directly. Keep both
@@ -717,7 +726,10 @@ jobs:
 
   pr-index-pg-contracts:
     name: Index PG contracts
-    if: github.event_name == 'pull_request'
+    if: >-
+      github.event_name == 'pull_request'
+      && (github.event.action != 'edited'
+      || github.event.changes.base.ref.from != null)
     runs-on: ubuntu-latest
     timeout-minutes: 15
     services:
@@ -928,6 +940,10 @@ jobs:
     # architecture-ci.yaml (validate-contracts + arch-imports jobs) so they
     # run automatically on every PR touching their surfaces. Docs-only PRs
     # skip every heavy step via the paths filters below.
+    if: >-
+      github.event_name != 'pull_request'
+      || github.event.action != 'edited'
+      || github.event.changes.base.ref.from != null
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
