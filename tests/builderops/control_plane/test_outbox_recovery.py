@@ -373,6 +373,39 @@ def test_expired_unknown_post_effect_identity_is_reset_before_recovery_rebind(
         )
 
 
+def test_reconciled_pending_post_effect_identity_is_reset_before_retry_rebind(
+    control_plane_store, envelope
+) -> None:
+    result = _commit_outbox_task(
+        control_plane_store, envelope, task_id="post-effect-ordinary-rebind",
+        key="post-effect-ordinary-rebind", effect_type="github.comment", payload={"issue": 4898},
+    )
+    original = control_plane_store.claim_outbox(
+        envelope=envelope, operation_key=result.operation_key, worker_id="executor-1"
+    )
+    control_plane_store.begin_post_effect_pending(
+        repository=envelope.repository, operation_key=result.operation_key,
+        minimum_fencing_token=original.fencing_token,
+    )
+    control_plane_store.mark_effect_unknown(original, detail="readback required")
+    control_plane_store.reconcile_post_effect(
+        repository=envelope.repository, operation_key=result.operation_key,
+        minimum_fencing_token=original.fencing_token, observed_applied=False,
+        evidence={"readback": "not-found"},
+    )
+
+    retry = control_plane_store.claim_outbox(
+        envelope=envelope, operation_key=result.operation_key, worker_id="executor-2"
+    )
+    rebound = control_plane_store.begin_post_effect_pending(
+        repository=envelope.repository, operation_key=result.operation_key,
+        minimum_fencing_token=retry.fencing_token,
+    )
+    assert retry.fencing_token > original.fencing_token
+    assert rebound["fencing_token"] == retry.fencing_token
+    assert rebound["claim_lsn"] == retry.claim_lsn
+
+
 def test_concurrent_identical_post_effect_reconciliation_replays_one_row_identity(
     control_plane_store, envelope
 ) -> None:

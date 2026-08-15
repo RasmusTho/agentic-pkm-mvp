@@ -2071,6 +2071,11 @@ class PostgresBuilderOpsStore:
                 conn.execute(
                     "UPDATE builderops_outbox SET status = 'claimed', worker_id = %s, claim_fencing_token = %s, "
                     "claim_expires_at = %s, claim_lsn = NULL, claim_receipt_sequence = %s, "
+                    "post_effect_phase = NULL, post_effect_fencing_token = NULL, "
+                    "post_effect_intent_lsn = NULL, post_effect_claim_lsn = NULL, "
+                    "post_effect_claim_receipt_sequence = NULL, post_effect_receipt_sequence = NULL, "
+                    "post_effect_recovery_lsn = NULL, post_effect_evidence = NULL, "
+                    "post_effect_observed_applied = NULL, post_effect_terminal_unknown = NULL, "
                     "authority_envelope = %s, "
                     "updated_at = clock_timestamp() WHERE repository = %s AND operation_key = %s",
                     (
