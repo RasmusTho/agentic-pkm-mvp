@@ -34,7 +34,11 @@ def _shape(dsn: str) -> dict[str, object]:
         columns = conn.execute(
             "SELECT table_name,column_name,data_type,is_nullable,coalesce(column_default,'') "
             "FROM information_schema.columns WHERE table_schema='public' AND table_name=ANY(%s) "
-            "ORDER BY table_name,ordinal_position",
+            # Column order is not part of the table contract: Alembic adds the
+            # binding key to legacy tables while fresh autocreate declares it
+            # in the primary-key position. Sort by identity so parity compares
+            # type, nullability, default, and constraints instead of DDL history.
+            "ORDER BY table_name,column_name",
             (list(REPLAY_TABLES),),
         ).fetchall()
         constraints = conn.execute(

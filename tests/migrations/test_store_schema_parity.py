@@ -32,9 +32,10 @@ STORE_TABLES = (
 )
 
 # Keep store-table parity pinned to its owning revision. Child binding parity
-# follows the revision that owns the current ingest key/FK shape.
+# follows the latest revision that changes a child binding invariant; MVR-05A5
+# makes the previously nullable decisions binding final and NOT NULL.
 STORE_SCHEMA_HEAD = "e6c4a2b8d1f3"
-STORE_BINDING_HEAD = "f4a05a4b0001"
+STORE_BINDING_HEAD = "f5a05a5b0001"
 MINIMUM_CHILD_TABLES = (
     "chunks",
     "embeddings",
