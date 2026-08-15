@@ -114,15 +114,16 @@ repair accounting.
 
 ## Implementation tasks and order
 
-1. [Establish verification execution authority](ESTABLISH_VERIFICATION_EXECUTION_AUTHORITY.md)
-   (AVC-01, existing #3603) makes the durable, API-backed host consumer eligible for an
-   installed-main pilot. It is an external prerequisite for this capability's closure task.
+1. Existing [BCP-05 / #3603](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3603) is the
+   external execution-authority prerequisite. Its canonical task contract remains
+   `docs/BUILDEROPS_CONTROL_PLANE/DEMERZEL_REVIEW_MERGE_ORCHESTRATION.md`; this directory does not
+   remap that Issue or duplicate its acceptance ledger.
 2. [Dispatch and reconcile post-merge closure](DISPATCH_AND_RECONCILE_POST_MERGE_CLOSURE.md)
-   (AVC-02, existing #3604) consumes that authority to make post-merge closure self-healing.
+   (AVC-01, existing #3604) consumes that authority to make post-merge closure self-healing.
 
-The first task must finish its host-authority and pilot proof before the second becomes ready. The
-two tasks intentionally do not run in parallel because they share the same execution authority and
-one-active-chain safety invariant.
+BCP-05 / #3603 must finish its host-authority and pilot proof before AVC-01 becomes ready. The
+dependency and AVC-01 intentionally do not run in parallel because they share the same execution
+authority and one-active-chain safety invariant.
 
 ## Verification and pilot / acceptance path
 

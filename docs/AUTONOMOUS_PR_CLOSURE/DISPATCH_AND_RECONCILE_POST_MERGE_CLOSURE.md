@@ -1,12 +1,12 @@
 ---
 name: Dispatch And Reconcile Post-Merge Closure
 description: Turn merged PRs into idempotent closure cases and recover missed or partial terminal work.
-task_id: AVC-02
+task_id: AVC-01
 github_issue: 3604
 source_anchor: docs/AUTONOMOUS_PR_CLOSURE/README.md :: Post-merge reconciliation and orphan recovery
 parent_capability: Autonomous PR verification and closure
-prerequisites: [AVC-01]
-depends_on: [ESTABLISH_VERIFICATION_EXECUTION_AUTHORITY.md]
+prerequisites: []
+depends_on: []
 can_parallelize_with: []
 ---
 
@@ -29,8 +29,9 @@ readback/receipt or one concrete governed block.
 
 For `repository + PR + merge SHA + closure stage`, event delivery and scheduled recovery collapse
 to one case. The closer re-fetches exact merge and Issue authority, receipt, label, parent,
-owner-document, and optional Project evidence. It may close only the authenticated Issue set and
-only after the required owner-document receipt; a replay of completed state makes no GitHub write.
+owner-document, and optional Project evidence. It may close only the authenticated Issue set in the
+existing closure sequence; terminal lane release requires the required owner-document receipt. A
+replay of completed state makes no GitHub write.
 
 ## Why This Matters
 
@@ -67,7 +68,7 @@ to recover an orphaned merge without treating CI green or an old comment as clos
 
 ## Out of Scope
 
-- Pre-merge consumer migration/authority, owned by AVC-01 / #3603.
+- Pre-merge consumer migration/authority, owned by canonical BCP-05 / #3603.
 - Source-code repair, a second closure policy or queue, CI mutation, API-key fallback, Product/Runtime
   deployment, or changing the two currently open docs-only PRs.
 
