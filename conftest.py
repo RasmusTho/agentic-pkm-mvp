@@ -5,12 +5,9 @@ from pathlib import Path
 
 import pytest
 
-# companion_ui lives at companion-ui/companion-app, outside the rootdir pythonpath,
-# and is imported at module level by test trees beyond tests/companion_ui (tests/api,
-# tests/uat, tests/tts). It must be importable for every collection target and for
-# ini-less CI invocations (`pytest -c /dev/null`), which skip pytest.ini pythonpath
-# but still load this conftest.
-# See: https://github.com/RasmusTho/agentic-pkm-mvp/issues/3941
+# Test collection from a fresh source worktree is the pytest consumer class that
+# has no editable-install prerequisite. Keep this one root-level fallback;
+# package consumers use the pyproject.toml editable-install declaration.
 _COMPANION_APP_ROOT = Path(__file__).resolve().parent / "companion-ui" / "companion-app"
 if str(_COMPANION_APP_ROOT) not in sys.path:
     sys.path.insert(0, str(_COMPANION_APP_ROOT))

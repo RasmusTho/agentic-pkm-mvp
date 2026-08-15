@@ -585,10 +585,6 @@ jobs:
       || github.event.changes.base.ref.from != null)
     runs-on: ubuntu-latest
     env:
-      # API tests import the nested Companion package directly. Keep both
-      # package roots explicit so subsystem selection cannot make collection
-      # depend on a prior Companion-specific setup step.
-      PYTHONPATH: ${{ github.workspace }}:${{ github.workspace }}/companion-ui/companion-app
       # NOTE: do NOT set PYTEST_DISABLE_PLUGIN_AUTOLOAD here. Disabling autoload
       # suppresses pytest-asyncio (and others), so every @pytest.mark.asyncio
       # test in tests/sync/* and tests/agents/* false-fails. This job must mirror

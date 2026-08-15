@@ -441,13 +441,6 @@ def test_queue_review_client_routes_picker_payload_to_picker() -> None:
     instead of marking the action ``pending_intent`` (the masquerade fixed by
     #2184).
     """
-    import sys
-
-    companion_app_root = (
-        _REPO_ROOT / "companion-ui" / "companion-app"
-    )
-    if str(companion_app_root) not in sys.path:
-        sys.path.insert(0, str(companion_app_root))
     from companion_ui.workspace.serve_dev_page import render_index_html
 
     html = render_index_html(

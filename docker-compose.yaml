@@ -557,7 +557,6 @@ services:
       COMPANION_API_BASE_URL: ${COMPANION_UI_API_BASE_URL:-http://api:8000}
       COMPANION_UI_SERVE_MODULE: ${COMPANION_UI_SERVE_MODULE:-companion_ui.workspace.serve_dev_page}
       PKM_ENVIRONMENT: ${PKM_ENVIRONMENT:-dev}
-      PYTHONPATH: /app/companion-ui/companion-app:/app
     ports:
       - "${COMPANION_UI_BIND_HOST:-127.0.0.1}:${COMPANION_UI_HOST_PORT:-8111}:${COMPANION_UI_PORT:-8111}"
     depends_on:

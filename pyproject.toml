@@ -91,8 +91,8 @@ browser = [
 ]
 
 [tool.setuptools.packages.find]
-where = ["."]
-include = ["app*", "llm_contract*"]
+where = [".", "companion-ui/companion-app"]
+include = ["app*", "llm_contract*", "companion_ui*"]
 
 [tool.setuptools.package-data]
 "app.settings" = ["*.yaml"]
