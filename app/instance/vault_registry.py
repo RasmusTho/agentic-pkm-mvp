@@ -13,7 +13,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Iterable, Iterator, Mapping, Protocol
+from typing import TYPE_CHECKING, Any, Iterable, Iterator, Mapping, Protocol, cast
 from uuid import uuid4
 
 import yaml
@@ -90,6 +90,110 @@ _REGISTRATION_FIELDS = {
     "localInstanceId",
     "lastOpenedAt",
 }
+_BINDING_EFFECT_LEASE_SCHEMA = "agentic-pkm.binding-effect-lease.v1"
+
+
+def _validate_binding_effect_holder(value: object, *, mode: str) -> dict[str, object]:
+    if not isinstance(value, dict) or set(value) != {
+        "holderId",
+        "pid",
+        "processStart",
+        "ticket",
+        "mode",
+    }:
+        raise RegistryError("binding effect lease state has an invalid holder")
+    if (
+        not isinstance(value.get("holderId"), str)
+        or not str(value["holderId"]).strip()
+        or not isinstance(value.get("pid"), int)
+        or isinstance(value.get("pid"), bool)
+        or int(value["pid"]) <= 0
+        or not isinstance(value.get("processStart"), str)
+        or not str(value["processStart"]).strip()
+        or not isinstance(value.get("ticket"), int)
+        or isinstance(value.get("ticket"), bool)
+        or int(value["ticket"]) <= 0
+        or value.get("mode") != mode
+    ):
+        raise RegistryError("binding effect lease state has an invalid holder")
+    return copy.deepcopy(value)
+
+
+def _validate_binding_effect_lease_state(
+    vault_binding_id: str,
+    value: object,
+) -> dict[str, object]:
+    if not isinstance(value, dict) or set(value) != {
+        "schema",
+        "vaultBindingId",
+        "generation",
+        "nextTicket",
+        "sharedHolders",
+        "exclusivePending",
+        "exclusiveHolder",
+    }:
+        raise RegistryError("binding effect lease state has an invalid shape")
+    if value.get("schema") != _BINDING_EFFECT_LEASE_SCHEMA:
+        raise RegistryError("binding effect lease state has an invalid schema")
+    if value.get("vaultBindingId") != vault_binding_id:
+        raise RegistryError("binding effect lease state has a mismatched binding")
+    generation = value.get("generation")
+    next_ticket = value.get("nextTicket")
+    if (
+        not isinstance(generation, int)
+        or isinstance(generation, bool)
+        or generation < 0
+        or not isinstance(next_ticket, int)
+        or isinstance(next_ticket, bool)
+        or next_ticket <= 0
+    ):
+        raise RegistryError("binding effect lease state has an invalid generation")
+    raw_shared = value.get("sharedHolders")
+    raw_pending = value.get("exclusivePending")
+    if not isinstance(raw_shared, list) or not isinstance(raw_pending, list):
+        raise RegistryError("binding effect lease state holders must be lists")
+    shared = [_validate_binding_effect_holder(item, mode="shared") for item in raw_shared]
+    pending = [_validate_binding_effect_holder(item, mode="pending") for item in raw_pending]
+    raw_exclusive = value.get("exclusiveHolder")
+    exclusive = (
+        None
+        if raw_exclusive is None
+        else _validate_binding_effect_holder(raw_exclusive, mode="exclusive")
+    )
+    holders = shared + pending + ([] if exclusive is None else [exclusive])
+    holder_ids = [str(item["holderId"]) for item in holders]
+    tickets = [cast(int, item["ticket"]) for item in holders]
+    if len(holder_ids) != len(set(holder_ids)) or len(tickets) != len(set(tickets)):
+        raise RegistryError("binding effect lease state has duplicate holders")
+    if exclusive is not None and shared:
+        raise RegistryError("binding effect lease state overlaps shared and exclusive holders")
+    if any(ticket >= next_ticket for ticket in tickets):
+        raise RegistryError("binding effect lease state ticket is outside its sequence")
+    return {
+        "schema": _BINDING_EFFECT_LEASE_SCHEMA,
+        "vaultBindingId": vault_binding_id,
+        "generation": generation,
+        "nextTicket": next_ticket,
+        "sharedHolders": shared,
+        "exclusivePending": pending,
+        "exclusiveHolder": exclusive,
+    }
+
+
+def _validate_binding_effect_lease_extension(
+    extensions: Mapping[str, object],
+    registrations: Mapping[str, VaultRegistration],
+) -> None:
+    raw_states = extensions.get("bindingEffectLeases")
+    if raw_states is None:
+        return
+    if not isinstance(raw_states, dict):
+        raise RegistryError("binding effect lease state must be a mapping")
+    for binding_id, value in raw_states.items():
+        normalized = str(binding_id)
+        if normalized not in registrations:
+            raise RegistryError("binding effect lease state names an unknown binding")
+        _validate_binding_effect_lease_state(normalized, value)
 
 
 class RegistryMigrationError(RegistryError):
@@ -677,6 +781,12 @@ class VaultRegistryStore:
             next_extensions = copy.deepcopy(
                 current.extensions if extensions is None else extensions
             )
+            if next_extensions.get("bindingEffectLeases") != current.extensions.get(
+                "bindingEffectLeases"
+            ):
+                raise RegistryError(
+                    "binding effect lease state requires its dedicated producer"
+                )
             if current.authority == REGISTRY_AUTHORITY_ACTIVE:
                 floor = next_extensions.get("scalarRollback")
                 if not isinstance(floor, dict):
@@ -741,6 +851,34 @@ class VaultRegistryStore:
             self._assert_revision(current, expected_revision)
             updated = self._with_registrations(current, dict(current.registrations))
             updated.extensions["dimensions"] = copy.deepcopy(dict(dimensions))
+            self._write_locked(updated)
+            return updated
+
+    def set_binding_effect_lease_state(
+        self,
+        vault_binding_id: str,
+        state: Mapping[str, object],
+        *,
+        expected_revision: int | None = None,
+        _capability: _StorageMutationCapability | None = None,
+    ) -> RegistrySnapshot:
+        """Persist exactly one validated MVR-05A6 lease-state generation."""
+
+        _require_storage_mutation_capability(_capability)
+        normalized_binding = vault_binding_id.strip()
+        validated = _validate_binding_effect_lease_state(normalized_binding, state)
+        with self._locked():
+            self._assert_no_scalar_rollback_session_locked()
+            current = self._read_current_locked(recover=True)
+            self._assert_revision(current, expected_revision)
+            if normalized_binding not in current.registrations:
+                raise RegistryError("binding effect lease state names an unknown binding")
+            updated = self._with_registrations(current, dict(current.registrations))
+            states = copy.deepcopy(updated.extensions.get("bindingEffectLeases") or {})
+            if not isinstance(states, dict):
+                raise RegistryError("binding effect lease state must be a mapping")
+            states[normalized_binding] = validated
+            updated.extensions["bindingEffectLeases"] = states
             self._write_locked(updated)
             return updated
 
@@ -1701,6 +1839,7 @@ class VaultRegistryStore:
         if app_install_id is None:
             raise RegistryError("registry appInstallId is required")
         extensions = {key: copy.deepcopy(value) for key, value in frontmatter.items() if key not in _REGISTRY_FIELDS}
+        _validate_binding_effect_lease_extension(extensions, registrations)
         if authority == REGISTRY_AUTHORITY_ACTIVE:
             floor = extensions.get("scalarRollback")
             if (
