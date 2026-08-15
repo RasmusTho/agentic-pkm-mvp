@@ -19,6 +19,23 @@ def test_static_openapi_contract_test_path_is_owned() -> None:
     assert "companion_ui" in selection.subsystems
 
 
+def test_startup_redesign_contract_surface_selects_its_static_gates() -> None:
+    selection = select_tests(
+        [
+            "docs/DEV_TEST_PROD_STARTUP_REDESIGN/README.md",
+            "tests/fixtures/startup_redesign/channel_manifest.valid.json",
+            "tests/architecture/test_startup_redesign_contract.py",
+            "tests/runtime/test_startup_artifact_call_sites.py",
+        ]
+    )
+
+    assert selection.full_suite is False
+    assert selection.unowned_paths == ()
+    assert "startup_redesign_contract" in selection.subsystems
+    assert "tests/architecture/test_startup_redesign_contract.py" in selection.targets
+    assert "tests/runtime/test_startup_artifact_call_sites.py" in selection.targets
+
+
 def test_companion_api_paths_select_api_targets() -> None:
     selection = select_tests(["companion-ui/companion-app/src/workspace.ts", "tests/api/test_status_api.py"])
 

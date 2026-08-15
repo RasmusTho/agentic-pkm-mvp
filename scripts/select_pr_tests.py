@@ -915,6 +915,22 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
         ("tests/release_channels", "tests/deploy"),
     ),
     (
+        # Startup redesign contract/specification surface (#4914). The first
+        # slice is docs + fixtures + static enforcement tests; owning the
+        # complete surface runs the gates that certify the frozen contract.
+        "startup_redesign_contract",
+        (
+            "docs/DEV_TEST_PROD_STARTUP_REDESIGN/",
+            "tests/fixtures/startup_redesign/",
+            "tests/architecture/test_startup_redesign_contract.py",
+            "tests/runtime/test_startup_artifact_call_sites.py",
+        ),
+        (
+            "tests/architecture/test_startup_redesign_contract.py",
+            "tests/runtime/test_startup_artifact_call_sites.py",
+        ),
+    ),
+    (
         # Skill-contract and cross-subsystem docs-contract surfaces: owned so
         # they resolve via the subsystem loop instead of falling to
         # unowned_paths when mixed with a path that already matches another
