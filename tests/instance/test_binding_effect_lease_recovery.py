@@ -30,6 +30,19 @@ def _crash_inside_exclusive(root: str, acquired) -> None:
         os._exit(19)
 
 
+def _fork_child_then_crash_effect_holder(root: str, mode: str, acquired, release_child) -> None:
+    manager = _manager_for_existing(root)
+    vault = Path(root) / "vaults" / "binding-a"
+    effect = manager.shared_effect if mode == "shared" else manager.exclusive_change
+    with effect("binding-a", channel_id="dev", root=vault, timeout=5):
+        pid = os.fork()
+        if pid == 0:
+            release_child.wait(5)
+            os._exit(0)
+        acquired.set()
+        os._exit(23)
+
+
 def test_crashed_holder_recovers_without_deadlock_or_false_completion(tmp_path) -> None:
     _build_manager(tmp_path, "binding-a")
     context = multiprocessing.get_context("spawn")
@@ -66,6 +79,64 @@ def test_crashed_exclusive_holder_recovers_for_a_later_shared_effect(tmp_path) -
     vault = tmp_path / "vaults" / "binding-a"
     with manager.shared_effect("binding-a", channel_id="dev", root=vault, timeout=2):
         assert manager.observe("binding-a").shared_count == 1
+
+
+@pytest.mark.skipif(not hasattr(os, "fork"), reason="requires fork inheritance proof")
+@pytest.mark.parametrize(
+    ("holder_mode", "later_mode"),
+    [("shared", "exclusive"), ("exclusive", "shared")],
+)
+def test_fork_child_cannot_extend_a_crashed_effect_holder(
+    tmp_path, holder_mode, later_mode
+) -> None:
+    _build_manager(tmp_path, "binding-a")
+    context = multiprocessing.get_context("spawn")
+    acquired = context.Event()
+    release_child = context.Event()
+    process = context.Process(
+        target=_fork_child_then_crash_effect_holder,
+        args=(str(tmp_path), holder_mode, acquired, release_child),
+    )
+    process.start()
+    assert acquired.wait(3)
+    process.join(5)
+    assert process.exitcode == 23
+
+    manager = _manager_for_existing(str(tmp_path))
+    vault = tmp_path / "vaults" / "binding-a"
+    effect = manager.shared_effect if later_mode == "shared" else manager.exclusive_change
+    try:
+        with effect("binding-a", channel_id="dev", root=vault, timeout=1):
+            observation = manager.observe("binding-a")
+            assert observation.shared_count == (1 if later_mode == "shared" else 0)
+            assert observation.exclusive_held is (later_mode == "exclusive")
+    finally:
+        release_child.set()
+
+
+@pytest.mark.skipif(not hasattr(os, "fork"), reason="requires fork ownership proof")
+def test_fork_child_cannot_release_the_parent_effect(tmp_path) -> None:
+    manager = _build_manager(tmp_path, "binding-a")
+    vault = tmp_path / "vaults" / "binding-a"
+    held = manager._acquire(
+        "binding-a",
+        mode="shared",
+        channel_id="dev",
+        root=vault,
+        timeout=1,
+    )
+    pid = os.fork()
+    if pid == 0:
+        try:
+            manager._release(held)
+        except BindingEffectLeaseError:
+            os._exit(0)
+        os._exit(2)
+
+    _, status = os.waitpid(pid, 0)
+    assert os.waitstatus_to_exitcode(status) == 0
+    assert manager.observe("binding-a").shared_count == 1
+    manager._release(held)
 
 
 @pytest.mark.parametrize("crash_point", ["journal", "state"])

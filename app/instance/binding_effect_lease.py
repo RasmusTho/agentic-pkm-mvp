@@ -29,36 +29,58 @@ LEASE_SCHEMA = "agentic-pkm.binding-effect-lease.v1"
 JOURNAL_SCHEMA = "agentic-pkm.binding-effect-lease-journal.v1"
 
 
-_PENDING_ACTIVITY_FDS: set[int] = set()
-_PENDING_ACTIVITY_FDS_LOCK = threading.Lock()
+_LEASE_LOCK_FDS: set[int] = set()
+_LEASE_LOCK_FDS_LOCK = threading.Lock()
 
 
-def _pending_activity_before_fork() -> None:
-    _PENDING_ACTIVITY_FDS_LOCK.acquire()
+def _lease_locks_before_fork() -> None:
+    _LEASE_LOCK_FDS_LOCK.acquire()
 
 
-def _pending_activity_after_fork_parent() -> None:
-    _PENDING_ACTIVITY_FDS_LOCK.release()
+def _lease_locks_after_fork_parent() -> None:
+    _LEASE_LOCK_FDS_LOCK.release()
 
 
-def _pending_activity_after_fork_child() -> None:
+def _lease_locks_after_fork_child() -> None:
     try:
-        for descriptor in _PENDING_ACTIVITY_FDS:
+        for descriptor in _LEASE_LOCK_FDS:
             try:
                 os.close(descriptor)
             except OSError:
                 pass
-        _PENDING_ACTIVITY_FDS.clear()
+        _LEASE_LOCK_FDS.clear()
     finally:
-        _PENDING_ACTIVITY_FDS_LOCK.release()
+        _LEASE_LOCK_FDS_LOCK.release()
 
 
 if hasattr(os, "register_at_fork"):
     os.register_at_fork(
-        before=_pending_activity_before_fork,
-        after_in_parent=_pending_activity_after_fork_parent,
-        after_in_child=_pending_activity_after_fork_child,
+        before=_lease_locks_before_fork,
+        after_in_parent=_lease_locks_after_fork_parent,
+        after_in_child=_lease_locks_after_fork_child,
     )
+
+
+def _open_lease_descriptor(path: Path, flags: int, mode: int = 0o600) -> int:
+    with _LEASE_LOCK_FDS_LOCK:
+        descriptor = os.open(
+            path,
+            flags | getattr(os, "O_CLOEXEC", 0),
+            mode,
+        )
+        try:
+            os.set_inheritable(descriptor, False)
+            _LEASE_LOCK_FDS.add(descriptor)
+            return descriptor
+        except BaseException:
+            os.close(descriptor)
+            raise
+
+
+def _close_lease_descriptor(descriptor: int) -> None:
+    with _LEASE_LOCK_FDS_LOCK:
+        _LEASE_LOCK_FDS.discard(descriptor)
+        os.close(descriptor)
 
 
 class _DarwinProcBsdInfo(ctypes.Structure):
@@ -151,6 +173,7 @@ class _HeldLease:
     holder_id: str
     mode: str
     descriptor: int
+    owner_pid: int
 
 
 class BindingEffectLeaseManager:
@@ -250,12 +273,7 @@ class BindingEffectLeaseManager:
         if not vault_binding_id.strip() or mode not in {"shared", "exclusive"}:
             raise BindingEffectLeaseError("binding and lease mode must be explicit")
         self._ensure_state_root()
-        descriptor = os.open(
-            self._gate_path(vault_binding_id),
-            os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0),
-            0o600,
-        )
-        os.fchmod(descriptor, 0o600)
+        descriptor = self._open_private_lease_lock(self._gate_path(vault_binding_id))
         holder_id = f"holder-{uuid4()}"
         deadline = None if timeout is None else time.monotonic() + timeout
         pending: _HolderState | None = None
@@ -352,7 +370,13 @@ class BindingEffectLeaseManager:
                                     )
                                     pending_descriptor = None
                                     pending = None
-                                return _HeldLease(vault_binding_id, holder_id, mode, descriptor)
+                                return _HeldLease(
+                                    vault_binding_id,
+                                    holder_id,
+                                    mode,
+                                    descriptor,
+                                    os.getpid(),
+                                )
                 if deadline is not None and time.monotonic() >= deadline:
                     raise BindingEffectLeaseTimeout(
                         f"timed out waiting for {mode} binding effect lease"
@@ -376,10 +400,14 @@ class BindingEffectLeaseManager:
                     try:
                         fcntl.flock(descriptor, fcntl.LOCK_UN)
                     finally:
-                        os.close(descriptor)
+                        _close_lease_descriptor(descriptor)
             raise
 
     def _release(self, held: _HeldLease) -> None:
+        if held.owner_pid != os.getpid():
+            raise BindingEffectLeaseError(
+                "a fork child cannot release its parent's binding effect lease"
+            )
         try:
             with self._state_locked(held.vault_binding_id):
                 current = self._load_reconciled_locked(held.vault_binding_id)
@@ -406,7 +434,7 @@ class BindingEffectLeaseManager:
             try:
                 fcntl.flock(held.descriptor, fcntl.LOCK_UN)
             finally:
-                os.close(held.descriptor)
+                _close_lease_descriptor(held.descriptor)
 
     def _discard_pending(
         self,
@@ -433,19 +461,16 @@ class BindingEffectLeaseManager:
     @contextmanager
     def _state_locked(self, vault_binding_id: str) -> Iterator[None]:
         self._ensure_state_root()
-        descriptor = os.open(
-            self._lock_path(vault_binding_id),
-            os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0),
-            0o600,
-        )
-        os.fchmod(descriptor, 0o600)
-        with os.fdopen(descriptor, "a+b", closefd=True) as handle:
-            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        descriptor = self._open_private_lease_lock(self._lock_path(vault_binding_id))
+        fcntl.flock(descriptor, fcntl.LOCK_EX)
+        try:
+            self._recover_journal_locked(vault_binding_id)
+            yield
+        finally:
             try:
-                self._recover_journal_locked(vault_binding_id)
-                yield
+                fcntl.flock(descriptor, fcntl.LOCK_UN)
             finally:
-                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+                _close_lease_descriptor(descriptor)
 
     def _load_reconciled_locked(self, vault_binding_id: str) -> _LeaseState:
         state = self._load_state_locked(vault_binding_id)
@@ -464,12 +489,7 @@ class BindingEffectLeaseManager:
             else:
                 abandoned.append((item, descriptor))
         updated["exclusivePending"] = pending
-        gate = os.open(
-            self._gate_path(vault_binding_id),
-            os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0),
-            0o600,
-        )
-        os.fchmod(gate, 0o600)
+        gate = self._open_private_lease_lock(self._gate_path(vault_binding_id))
         try:
             try:
                 fcntl.flock(gate, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -485,7 +505,7 @@ class BindingEffectLeaseManager:
                 updated["exclusiveHolder"] = None
                 fcntl.flock(gate, fcntl.LOCK_UN)
         finally:
-            os.close(gate)
+            _close_lease_descriptor(gate)
         try:
             if updated != state:
                 for item, descriptor in abandoned:
@@ -677,33 +697,28 @@ class BindingEffectLeaseManager:
         )
 
     def _open_pending_activity_path(self, path: Path, *, create: bool = False) -> int:
-        flags = os.O_RDWR | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0)
+        flags = os.O_RDWR | getattr(os, "O_NOFOLLOW", 0)
         if create:
             flags |= os.O_CREAT | os.O_EXCL
-        with _PENDING_ACTIVITY_FDS_LOCK:
-            descriptor = os.open(path, flags, 0o600)
-            try:
-                os.set_inheritable(descriptor, False)
-                if create:
-                    os.fchmod(descriptor, 0o600)
-                metadata = os.fstat(descriptor)
-                if (
-                    not stat.S_ISREG(metadata.st_mode)
-                    or metadata.st_uid != os.geteuid()
-                    or metadata.st_mode & 0o777 != 0o600
-                ):
-                    raise BindingEffectLeaseError("exclusive waiter activity file is unsafe")
-                _PENDING_ACTIVITY_FDS.add(descriptor)
-                return descriptor
-            except BaseException:
-                os.close(descriptor)
-                raise
+        descriptor = _open_lease_descriptor(path, flags)
+        try:
+            if create:
+                os.fchmod(descriptor, 0o600)
+            metadata = os.fstat(descriptor)
+            if (
+                not stat.S_ISREG(metadata.st_mode)
+                or metadata.st_uid != os.geteuid()
+                or metadata.st_mode & 0o777 != 0o600
+            ):
+                raise BindingEffectLeaseError("exclusive waiter activity file is unsafe")
+            return descriptor
+        except BaseException:
+            _close_lease_descriptor(descriptor)
+            raise
 
     @staticmethod
     def _close_pending_activity(descriptor: int) -> None:
-        with _PENDING_ACTIVITY_FDS_LOCK:
-            _PENDING_ACTIVITY_FDS.discard(descriptor)
-            os.close(descriptor)
+        _close_lease_descriptor(descriptor)
 
     def _unlink_pending_activity_locked(
         self,
@@ -941,6 +956,22 @@ class BindingEffectLeaseManager:
             or metadata.st_mode & 0o777 != 0o700
         ):
             raise BindingEffectLeaseError("binding effect lease directory is unsafe")
+
+    @staticmethod
+    def _open_private_lease_lock(path: Path) -> int:
+        descriptor = _open_lease_descriptor(
+            path,
+            os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0),
+        )
+        try:
+            os.fchmod(descriptor, 0o600)
+            metadata = os.fstat(descriptor)
+            if not stat.S_ISREG(metadata.st_mode) or metadata.st_uid != os.geteuid():
+                raise BindingEffectLeaseError(f"binding effect lease lock is unsafe: {path.name}")
+            return descriptor
+        except BaseException:
+            _close_lease_descriptor(descriptor)
+            raise
 
     @staticmethod
     def _assert_private_file(path: Path) -> None:

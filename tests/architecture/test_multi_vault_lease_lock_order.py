@@ -80,3 +80,19 @@ def test_pending_activity_locks_never_add_a_blocking_lock_order_edge() -> None:
         ]
         assert calls
         assert all("LOCK_NB" in ast.unparse(call.args[1]) for call in calls)
+
+
+def test_every_live_lease_lock_descriptor_uses_the_fork_close_registry() -> None:
+    source = Path("app/instance/binding_effect_lease.py").read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    methods = {
+        node.name: node
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+
+    for name in ("_acquire", "_state_locked", "_load_reconciled_locked"):
+        rendered = ast.unparse(methods[name])
+        assert "_open_private_lease_lock" in rendered
+        assert "os.open" not in rendered
+    assert "_open_lease_descriptor" in ast.unparse(methods["_open_pending_activity_path"])
