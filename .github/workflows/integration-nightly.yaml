@@ -256,6 +256,7 @@ jobs:
             tests/migrations/test_decisions_fk_set_null.py \
             tests/integration/test_decisions_rebuild_from_log_only.py \
             tests/integration/test_multi_vault_projection_isolation.py \
+            tests/episodes/test_episode_projection.py \
             tests/integration/test_vault_sync_atomicity.py \
             tests/ingest/test_vault_root_ingest_pg.py \
             tests/invariants/test_retrieval_spine_invariants.py \

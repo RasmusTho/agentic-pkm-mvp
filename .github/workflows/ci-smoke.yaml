@@ -798,6 +798,7 @@ jobs:
               - 'app/episodes/closure_decay.py'
               - 'app/episodes/recut.py'
               - 'app/episodes/segmenter.py'
+              - 'app/receipts/outcome_receipt_log.py'
               - 'app/receipts/outcome_receipt_projection.py'
               - 'tests/migrations/test_multi_vault_ingest_projection_keys.py'
               - 'tests/migrations/test_ingest_schema_parity.py'
@@ -805,6 +806,7 @@ jobs:
               - 'tests/migrations/test_replay_schema_parity.py'
               - 'tests/jobs/test_multi_vault_decisions_rebuild_scope.py'
               - 'tests/integration/test_multi_vault_projection_isolation.py'
+              - 'tests/episodes/test_episode_projection.py'
               - 'app/knowledge_acquisition/youtube_api_client.py'
               - 'app/alembic/versions/d9e0f1a2b3c4_yss03_youtube_api_quota.py'
               - 'tests/indexer/test_outbox_roundtrip_pg.py'
@@ -925,6 +927,7 @@ jobs:
             tests/migrations/test_decisions_fk_set_null.py \
             tests/integration/test_decisions_rebuild_from_log_only.py \
             tests/integration/test_multi_vault_projection_isolation.py \
+            tests/episodes/test_episode_projection.py \
             tests/integration/test_vault_sync_atomicity.py \
             tests/ingest/test_vault_root_ingest_pg.py \
             tests/invariants/test_retrieval_spine_invariants.py \
