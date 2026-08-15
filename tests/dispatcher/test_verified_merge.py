@@ -19,6 +19,7 @@ from app.dispatcher.verified_merge import (
     NEUTRALIZED_BODY_RESTORATION_CONTRACT,
     VERIFIED_MERGE_AUTHORITY_CONTRACT,
     build_verified_merge_phase,
+    plan_issue_free_post_merge_reconciliation,
     classify_neutralized_body_state,
     plan_post_merge_reconciliation,
     prepare_verified_merge,
@@ -88,6 +89,131 @@ def _pr(body: str | None = None) -> dict[str, object]:
         "title": "governance: deterministic issue-set closure",
         "body": _body() if body is None else body,
         "head": {"sha": HEAD},
+    }
+
+
+def _issue_free_reviewed_lane_context() -> dict[str, object]:
+    return {
+        "contract": "verification_closer_dispatch_context.v2",
+        "run_id": "vrun-issue-free",
+        "repository": REPOSITORY,
+        "pr_number": 4904,
+        "governing_issue": None,
+        "closing_issues": [],
+        "supporting_issues": [],
+        "head_sha": HEAD,
+        "repair_budget": {"policy_version": "v2", "mechanisms": []},
+    }
+
+
+def _issue_free_reviewed_lane_pr(body: str | None = None) -> dict[str, object]:
+    return {
+        **_pr(
+            body
+            or (
+                "## Change Lane\n- [x] Docs authoring lane\n\n"
+                "Final-Review-Rounds: 1\n"
+            )
+        ),
+        "number": 4904,
+    }
+
+
+def test_prepare_verified_merge_accepts_issue_free_reviewed_lane() -> None:
+    plan = prepare_verified_merge(
+        context=_issue_free_reviewed_lane_context(),
+        pr=_issue_free_reviewed_lane_pr(),
+        live_closing_issues=[],
+        merge_readiness=_readiness(),
+    )
+
+    receipt = plan["issue_free_receipt"]
+    assert isinstance(receipt, dict)
+    assert receipt["pr_number"] == 4904
+    assert receipt["head_sha"] == HEAD
+    assert "issue-free reviewed lane receipt:" in plan["issue_free_receipt_comment"]
+
+
+def test_issue_free_reviewed_lane_does_not_create_issue_authority() -> None:
+    plan = prepare_verified_merge(
+        context=_issue_free_reviewed_lane_context(),
+        pr=_issue_free_reviewed_lane_pr(),
+        live_closing_issues=[],
+        merge_readiness=_readiness(),
+    )
+
+    assert "authority_receipt" not in plan
+    assert "neutralized_body" not in plan
+    assert plan["original_body"] == _issue_free_reviewed_lane_pr()["body"]
+
+
+def test_issue_free_reviewed_lane_rejects_closing_issue_authority() -> None:
+    context = _issue_free_reviewed_lane_context()
+    context["closing_issues"] = [3820]
+
+    with pytest.raises(ValueError, match="issue-free reviewed lane authority"):
+        prepare_verified_merge(
+            context=context,
+            pr=_issue_free_reviewed_lane_pr("Fixes #3820\n\nFinal-Review-Rounds: 1\n"),
+            live_closing_issues=[3820],
+            merge_readiness=_readiness(),
+        )
+
+
+def test_issue_free_reviewed_lane_reopens_only_pr_attributed_closures() -> None:
+    plan = plan_issue_free_post_merge_reconciliation(
+        pr_number=4904,
+        observed_closing_issues=[3820, 3823],
+        issue_evidence=[
+            {"number": 3820, "state": "closed", "closed_by_pull_requests": [4904]},
+            {"number": 3823, "state": "closed", "closed_by_pull_requests": [9999]},
+        ],
+    )
+
+    assert plan == {
+        "reopen_unauthorized": [3820],
+        "unresolved_unauthorized_closures": [3823],
+    }
+
+
+def test_issue_free_post_merge_reconciliation_cli_uses_production_planner(
+    tmp_path: Path,
+) -> None:
+    observed_path = tmp_path / "observed.json"
+    evidence_path = tmp_path / "evidence.json"
+    output_path = tmp_path / "plan.json"
+    observed_path.write_text("[3820]", encoding="utf-8")
+    evidence_path.write_text(
+        json.dumps(
+            [{"number": 3820, "state": "closed", "closed_by_pull_requests": [4904]}]
+        ),
+        encoding="utf-8",
+    )
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "scripts.plan_issue_free_post_merge_reconciliation",
+            "--pr-number",
+            "4904",
+            "--observed-closing-json",
+            str(observed_path),
+            "--issue-evidence-json",
+            str(evidence_path),
+            "--output-json",
+            str(output_path),
+        ],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert json.loads(output_path.read_text(encoding="utf-8")) == {
+        "reopen_unauthorized": [3820],
+        "unresolved_unauthorized_closures": [],
     }
 
 

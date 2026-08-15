@@ -160,6 +160,26 @@ Delivery depth follows `AGENTS.md :: Proportional delivery` and
 - **Full path — everything else:** Tier 3 PRs, multi-issue PRs, TCD high-risk surfaces, or an
   explicitly requested review round. The remainder of this section applies unchanged.
 
+#### Issue-free reviewed lane compatibility path
+
+An issue-free Tier 1 docs-authoring or governance PR that truthfully declares
+`Final-Review-Rounds: 1` is a full-path exception only for its authenticated review decision. It
+does not acquire, infer, neutralize, close, or mutate GitHub Issue authority. After the full-path
+current-head CI and local-review prerequisites are green, freeze a context with
+`governing_issue: null`, empty `closing_issues` and `supporting_issues`, and the exact head. Then
+run `scripts/prepare_verified_issue_set_merge.py` with the live empty closing-links snapshot and
+the head-bound readiness statement. Require its `issue_free_reviewed_lane_receipt.v1` result, post
+that exact receipt on the PR thread from an authenticated repository collaborator, and re-read the
+unchanged head, body, title, and empty closing links before merging through the returned fixed
+exact-head title/message. After merge, enumerate the bounded closing-link and repository-event
+candidates, live-read their state/attribution, and use
+`scripts/plan_issue_free_post_merge_reconciliation.py` to produce the exact reopen/unresolved
+plan. Reopen only a closure GitHub attributes to this exact PR; any other closure is unresolved
+evidence and blocks the receipt. Verify the resulting Issue state is unchanged, run
+`post-merge-owner-doc`, and write the PR-thread delivery receipt. Do not use the issue-set
+authority receipt, body neutralization, phase ledger, dispatcher completion, or inferred
+issue-label mutation on this path.
+
 For autonomous delivery, run the governing path's gate chain unattended per `AGENTS.md :: Agency default`: wait for required checks and repo-standard checks that cover the PR to go green, classify any red check before merge, and — on the full path — resolve the local review gate; do not ask the owner to babysit. Within the governing path, the prerequisites are never waived (an unprotected branch or non-required GitHub check does not relax them); only the human watching is removed.
 
 Wait **how** matters for CI: follow `_shared/CI_WAIT_CONTRACT.md` — use the shared `app.dispatcher.poll_backoff` helper through `scripts/await_pr_checks.sh <PR>` (no `--codex`; the review gate now runs locally per `Running the local review gate` below, not through the shared verdict poller), REST check-runs only, interval + cap + exponential backoff, honor `Retry-After` and x-ratelimit-reset headers, sleep the bulk of CI up front, and back off ≥60–120s. Never tight-poll `gh pr checks` or `gh pr view --json mergeStateStatus`; they are GraphQL and drain the budget shared by every concurrent agent.
