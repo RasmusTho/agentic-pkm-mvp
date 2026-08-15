@@ -198,6 +198,43 @@ def test_mount_alias_without_reviewed_canonical_identity_is_refused(tmp_path: Pa
     assert result.returncode != 0
 
 
+def test_bind_mount_source_suffixes_share_the_reviewed_device_identity(tmp_path: Path) -> None:
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    for name, body in {
+        "findmnt": (
+            "case \"$*\" in *UUID*) printf 'reviewed-uuid\\n';; "
+            "*FSTYPE*) printf 'ext4\\n';; "
+            "*docker*) printf '/dev/persistent[/docker]\\n';; "
+            "*containerd*) printf '/dev/persistent[/containerd]\\n';; "
+            "*) printf '/dev/persistent\\n';; esac\n"
+        ),
+        "mountpoint": "exit 0\n",
+        "df": "printf 'Filesystem 1024-blocks Used Available Capacity Mounted on\\n/dev/x 1 0 999999 0%% /\\n'\n",
+    }.items():
+        path = fake_bin / name
+        path.write_text(f"#!/bin/sh\n{body}", encoding="utf-8")
+        path.chmod(0o755)
+    persistent = tmp_path / "persistent"
+    docker_data = tmp_path / "docker"
+    containerd_data = tmp_path / "containerd"
+    for path in (persistent, docker_data, containerd_data):
+        path.mkdir()
+    result = _run_bash(
+        f"source '{HELPER}'; "
+        f"COLIMA_PERSISTENT_DATA_PATH='{persistent}' "
+        f"COLIMA_DOCKER_DATA_PATH='{docker_data}' "
+        f"COLIMA_CONTAINERD_DATA_PATH='{containerd_data}' "
+        "COLIMA_EXPECTED_PERSISTENT_SOURCE=/dev/persistent "
+        "COLIMA_EXPECTED_PERSISTENT_IDENTITY=UUID=reviewed-uuid "
+        "COLIMA_EXPECTED_PERSISTENT_FSTYPE=ext4 "
+        "colima_guest_check_persistent_substrate",
+        env={"PATH": f"{fake_bin}:{os.environ['PATH']}"},
+    )
+
+    assert result.returncode == 0
+
+
 def test_non_colima_provider_passthrough_does_not_change_docker_binding(tmp_path: Path) -> None:
     fake_colima = tmp_path / "colima"
     fake_colima.write_text("#!/bin/sh\nexit 99\n", encoding="utf-8")

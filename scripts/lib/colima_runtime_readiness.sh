@@ -102,11 +102,12 @@ _colima_runtime_findmnt() {
 }
 
 _colima_runtime_require_writable_mount() {
-  local path="$1" expected_source="$2" expected_identity="${COLIMA_EXPECTED_PERSISTENT_IDENTITY:-}" source fstype identity_field identity_value blocks inodes
+  local path="$1" expected_source="$2" expected_identity="${COLIMA_EXPECTED_PERSISTENT_IDENTITY:-}" source source_base fstype identity_field identity_value blocks inodes
   "${COLIMA_MOUNTPOINT_BIN:-mountpoint}" -q "$path" 2>/dev/null || return 1
   [ -d "$path" ] && [ -w "$path" ] || return 1
   source="$(_colima_runtime_findmnt SOURCE "$path")" || return 1
-  [ "$source" = "$expected_source" ] || return 1
+  source_base="${source%%\[*}"
+  [ "$source_base" = "$expected_source" ] || return 1
   case "$expected_identity" in
     UUID=*) identity_field=UUID; identity_value="${expected_identity#UUID=}";;
     LABEL=*) identity_field=LABEL; identity_value="${expected_identity#LABEL=}";;
