@@ -235,7 +235,17 @@ def test_schema_violation_dead_letters_at_dispatch(monkeypatch: pytest.MonkeyPat
 
     dead_letters: list[dict[str, Any]] = []
 
-    def _capture_dead_letter(topic, payload, *, message_id, reason, attempts, trace_id, error):
+    def _capture_dead_letter(
+        topic,
+        payload,
+        *,
+        message_id,
+        reason,
+        attempts,
+        trace_id,
+        error,
+        source_vault_binding_id,
+    ):
         dead_letters.append(
             {
                 "topic": topic,

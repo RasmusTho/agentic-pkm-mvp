@@ -21,6 +21,7 @@ import pytest
 
 import app.workers.outbox_worker as outbox_worker
 from app.events.models import Event, new_event
+from app.instance.binding_ids import COMPATIBILITY_BINDING_ID
 from app.events.topic_schema_registry import (
     TopicSchemaViolation,
     UnregisteredTopicError,
@@ -29,7 +30,7 @@ from app.events.topic_schema_registry import (
     resolve_payload_schema_version,
     validate_topic_payload,
 )
-from app.services.outbox import write_outbox_event
+from app.services.outbox import derive_binding_scoped_idempotency_key, write_outbox_event
 
 pytestmark = pytest.mark.not_pg
 
@@ -117,7 +118,9 @@ def test_write_validates_and_stamps_schema() -> None:
     # index.embedding.requested.v1 requires payload.object_id (string).
     valid_event = new_event(event_type="index.embedding.requested", payload={"object_id": "obj-123"})
     row_id = write_outbox_event(valid_event, conn=_FakeConn(), idempotency_key="key-valid-1")
-    assert row_id == "key-valid-1"
+    assert row_id == derive_binding_scoped_idempotency_key(
+        "index.embedding.requested", COMPATIBILITY_BINDING_ID, "key-valid-1"
+    )
 
     invalid_event = new_event(event_type="index.embedding.requested", payload={"not_object_id": "x"})
     with pytest.raises(TopicSchemaViolation):
@@ -185,7 +188,9 @@ def test_unregistered_topic_is_written_unvalidated() -> None:
     assert not is_registered_topic("some.unregistered.topic")
     event = new_event(event_type="some.unregistered.topic", payload={"anything": "goes"})
     row_id = write_outbox_event(event, conn=_FakeConn(), idempotency_key="key-unreg-1")
-    assert row_id == "key-unreg-1"
+    assert row_id == derive_binding_scoped_idempotency_key(
+        "some.unregistered.topic", COMPATIBILITY_BINDING_ID, "key-unreg-1"
+    )
 
 
 def test_pre_registry_rows_grandfathered_v0() -> None:
