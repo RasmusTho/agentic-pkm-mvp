@@ -49,6 +49,11 @@ GitHub state.
 
 ### Phase 1 — Parallel subsystem exploration
 
+- Before dispatch, resolve the live repository default branch/ref with a read-only query and record
+  the UTC retrieval time plus exact commit SHA. Bind every explorer to that immutable snapshot;
+  the current checkout alone is not authority. Recheck the live default ref before synthesis. If it
+  moved, keep reports snapshot-bound and apply the coordinator's explicit stale/reread rule; never
+  mix SHAs while claiming comparability or currentness.
 - Cut the system into explorer briefs along subsystem/SBS boundaries (stores, event/outbox
   pipeline, LLM boundaries, eval framework, etc.), one explorer per brief. Explorers run in
   parallel in read-only mode.
@@ -59,8 +64,20 @@ GitHub state.
   says one thing and the code does another, each with both anchors.
 - An explorer that cannot anchor a claim drops the claim.
 
+Each explorer returns one compact structured receipt, not a transcript:
+`boundary`, `owner_surfaces`, `authority_snapshot` (ref, SHA, retrieved UTC), `started_at_utc`,
+`evidence_complete_at_utc`, `receipt_complete_at_utc`, `result_classes` (enum/set, such as
+`conforms`, `diverges`, `unavailable`), finding-level classification, anchors, current/target
+posture, route, confidence, and `unavailable(reason)` telemetry where applicable. The coordinator
+centrally records dispatch, receive, queue, and overlap timing whenever measurement claims are made.
+Runtime token telemetry is unavailable unless directly measured; capacity, quota, or provider UI
+must never be used as a proxy.
+
 ### Phase 2 — Cross-system synthesis
 
+- Preserve raw finding → normalized finding → deduplicated mechanism-family mappings. Predeclare
+  coordinator rereads for conflicts, rejected findings, changed anchors, and a proportional sample
+  of conforms/no-change receipts.
 - The coordinator merges explorer reports and looks for what no single explorer can see: shared
   root causes, split-truth substrates, silent-default patterns, enforcement that exists in tests
   but not in the runtime.
@@ -130,6 +147,12 @@ GitHub state.
   authority.
 - Keep the pass bounded: charter the subsystems and RQs up front; scope creep in research is as
   real as in implementation.
+- The default goal is efficient architecture evidence for real delivery. Do not run large synthetic
+  experiments merely to prove consistency, completeness, throughput, or cost. Validate protocol
+  changes opportunistically on the next two real eligible research/delivery runs; add automation
+  only if the same failure recurs or coordinator cleanup is materially expensive.
+- Do not claim semantic completeness, delivery throughput, parallel speedup, agent-selection effect,
+  or token efficiency without an appropriate comparable baseline and exposed measurements.
 
 ## TCD guidance
 
