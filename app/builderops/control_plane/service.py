@@ -138,11 +138,28 @@ _ROW_DERIVED_FORBIDDEN_EVIDENCE_KEYS = frozenset(
         "fence",
     }
 )
-_POSTGRES_LSN_LITERAL = re.compile(r"[0-9A-F]+/[0-9A-F]+", re.IGNORECASE)
 _ROW_DERIVED_AUTHORITY_TEXT = re.compile(
     r"claim|intent|worker|receipt|fenc(?:e|ing)|lsn|expires?_at|authority[_ -]?envelope",
     re.IGNORECASE,
 )
+
+
+def _contains_postgres_lsn_literal(value: str) -> bool:
+    """Detect a bounded hexadecimal LSN without a backtracking regex."""
+
+    hexadecimal = frozenset("0123456789abcdefABCDEF")
+    for slash_index, character in enumerate(value):
+        if character != "/" or slash_index == 0 or slash_index == len(value) - 1:
+            continue
+        left = slash_index - 1
+        while left >= 0 and value[left] in hexadecimal:
+            left -= 1
+        right = slash_index + 1
+        while right < len(value) and value[right] in hexadecimal:
+            right += 1
+        if left < slash_index - 1 and right > slash_index + 1:
+            return True
+    return False
 
 
 def _canonical_durable_key(key: str) -> str:
@@ -171,7 +188,7 @@ def _row_derived_evidence_text(value: Any) -> str:
 def _assert_row_derived_evidence_safe(value: Any) -> None:
     """Keep caller evidence from becoming dormant claim or LSN authority."""
     evidence_text = _row_derived_evidence_text(value)
-    if _POSTGRES_LSN_LITERAL.search(evidence_text) or _ROW_DERIVED_AUTHORITY_TEXT.search(evidence_text):
+    if _contains_postgres_lsn_literal(evidence_text) or _ROW_DERIVED_AUTHORITY_TEXT.search(evidence_text):
         raise ValueError("row-derived reconciliation evidence cannot contain claim authority")
     if isinstance(value, Mapping):
         for key, child in value.items():
@@ -190,7 +207,7 @@ def _assert_row_derived_evidence_safe(value: Any) -> None:
     elif isinstance(value, (list, tuple)):
         for child in value:
             _assert_row_derived_evidence_safe(child)
-    elif isinstance(value, str) and _POSTGRES_LSN_LITERAL.search(value):
+    elif isinstance(value, str) and _contains_postgres_lsn_literal(value):
         raise ValueError("row-derived reconciliation evidence cannot contain durability LSNs")
 
 
