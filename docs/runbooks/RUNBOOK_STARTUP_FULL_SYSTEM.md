@@ -217,16 +217,18 @@ signal. The shared entrypoints (`scripts/dev_bootstrap.sh`,
 approved Docker context through `scripts/lib/colima_runtime_readiness.sh` and
 then require the checked-in guest gate to prove all of the following:
 
-- the exact configured persistent source is mounted read-write at the Docker
-  and containerd data paths, with the expected filesystem type and minimum
+- the exact configured persistent source and reviewed canonical identity
+  (`UUID=`, `LABEL=`, or `PARTUUID=`) are mounted read-write at the Docker and
+  containerd data paths, with the expected filesystem type and minimum
   block/inode headroom. The target topology is a directly mounted native
   filesystem; a nested interchange-filesystem image is not an accepted
   durability substrate. Until a separately approved migration exists, bulk
   Git/common-dir I/O and Colima cold restore are serialized;
 - containerd answers bounded `ctr version`, container metadata, and snapshot
   metadata requests; and
-- the persisted Docker-config inventory count equals the Docker API inventory
-  count.
+- the persisted Docker-config inventory count equals the operator-reviewed
+  expected count before the Docker service starts, and then equals the Docker
+  API inventory count after the daemon responds.
 
 The checked-in `colima-data-mount.service` is the explicit adapter boundary
 for the existing Colima/Lima per-boot mount provisioner; it verifies the
@@ -244,8 +246,11 @@ authority and must not be treated as an activation receipt. A startup path
 only enters the Colima gate when `COLIMA_RUNTIME_PROVIDER=colima` is explicitly
 declared; non-Colima Docker providers retain their existing context binding.
 
-If any gate fails, leave Docker off and do not run `docker system prune`,
-`docker compose down`, container recreation, or metadata deletion as a repair.
+If a pre-start gate fails, leave Docker off. If the post-start API comparison
+finds a mismatch, the startup helper refuses readiness and writes a refusal
+receipt; the governed host procedure must then stop the channel before further
+diagnosis. In either case, do not run `docker system prune`, `docker compose
+down`, container recreation, or metadata deletion as a repair.
 The helper writes only a redacted `colima-docker-startup-gate.v1` receipt when
 `COLIMA_RUNTIME_RECEIPT_PATH` is configured. A green helper receipt proves only
 repo/guest readiness; it does not prove host activation, default-profile cold

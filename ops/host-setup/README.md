@@ -54,11 +54,14 @@ source and bind mounts but does not guess a device, perform an unsafe mount,
 or modify Docker/containerd metadata.
 
 The gate binds one explicit Docker context, verifies the exact configured
-persistent source at `/var/lib/docker` and `/var/lib/containerd`, waits for
-containerd RPC and metadata readiness, and refuses a Docker API whose
-persisted inventory is truncated. It never prunes, recreates, deletes, or
-edits existing Docker/containerd metadata. The example profile is an input
-template only; the live source identity, free-space floor, and profile approval
+persistent source and canonical UUID/LABEL/PARTUUID identity at
+`/var/lib/docker` and `/var/lib/containerd`, waits for containerd RPC and
+metadata readiness, and refuses a pre-start persisted inventory count that
+differs from the reviewed expected count. After Docker responds, it also
+refuses a Docker API whose persisted inventory is truncated. It never prunes,
+recreates, deletes, or edits existing Docker/containerd metadata. The example
+profile is an input template only; the live source identity, free-space floor,
+and profile approval
 must be supplied by the managed-host operator in the explicit
 `COLIMA_RUNTIME_ENV_FILE` and recorded in a redacted receipt. The startup gate
 is selected only by `COLIMA_RUNTIME_PROVIDER=colima`; another Docker provider

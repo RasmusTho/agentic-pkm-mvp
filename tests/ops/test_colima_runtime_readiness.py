@@ -85,6 +85,8 @@ def test_startup_entrypoints_share_one_bounded_colima_readiness_helper() -> None
     assert "colima start >/dev/null" not in full_start
     assert "DOCKER_CONTEXT" in helper
     assert "COLIMA_RUNTIME_PROVIDER" in helper
+    assert "COLIMA_EXPECTED_PERSISTENT_IDENTITY" in helper
+    assert "COLIMA_EXPECTED_PERSISTED_INVENTORY" in helper
     assert "COLIMA_USERNET_TIMEOUT" in helper
     assert "COLIMA_RESOURCE_PROFILE_FILE" in helper
     assert "timeout" in helper
@@ -94,6 +96,7 @@ def test_startup_entrypoints_share_one_bounded_colima_readiness_helper() -> None
     )
     assert "COLIMA_RUNTIME_ENV_FILE" in installer
     assert "install_guest_file_atomic" in installer
+    assert "COLIMA_EXPECTED_PERSISTENT_IDENTITY" in installer
 
 
 def test_persisted_inventory_mismatch_fails_without_mutating_metadata(tmp_path: Path) -> None:
@@ -139,6 +142,62 @@ def test_persisted_inventory_mismatch_fails_without_mutating_metadata(tmp_path: 
     assert str(persisted) not in receipt_text
 
 
+def test_prestart_inventory_mismatch_refuses_before_docker_api(tmp_path: Path) -> None:
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    docker_calls = tmp_path / "docker.calls"
+    docker = fake_bin / "docker"
+    docker.write_text(
+        f"#!/bin/sh\nprintf '%s\\n' \"$*\" >> '{docker_calls}'\nexit 0\n",
+        encoding="utf-8",
+    )
+    docker.chmod(0o755)
+    persisted = tmp_path / "persisted"
+    (persisted / "a").mkdir(parents=True)
+    (persisted / "b").mkdir()
+    result = _run_bash(
+        f"source '{HELPER}'; "
+        f"COLIMA_PERSISTED_CONFIG_ROOT='{persisted}' "
+        "COLIMA_EXPECTED_PERSISTED_INVENTORY=3 "
+        "colima_guest_assert_persisted_inventory",
+        env={"PATH": f"{fake_bin}:{os.environ['PATH']}"},
+    )
+
+    assert result.returncode != 0
+    assert "inventory" in result.stderr.lower()
+    assert not docker_calls.exists()
+
+
+def test_mount_alias_without_reviewed_canonical_identity_is_refused(tmp_path: Path) -> None:
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    for name, body in {
+        "findmnt": (
+            "case \"$*\" in *SOURCE*) printf '/dev/persistent\\n';; "
+            "*UUID*) printf 'unreviewed-alias\\n';; "
+            "*FSTYPE*) printf 'ext4\\n';; esac\n"
+        ),
+        "mountpoint": "exit 0\n",
+        "df": "printf 'Filesystem 1024-blocks Used Available Capacity Mounted on\\n/dev/x 1 0 999999 0%% /\\n'\n",
+    }.items():
+        path = fake_bin / name
+        path.write_text(f"#!/bin/sh\n{body}", encoding="utf-8")
+        path.chmod(0o755)
+    mount = tmp_path / "persistent"
+    mount.mkdir()
+    result = _run_bash(
+        f"source '{HELPER}'; "
+        f"COLIMA_PERSISTENT_DATA_PATH='{mount}' "
+        "COLIMA_EXPECTED_PERSISTENT_SOURCE=/dev/persistent "
+        "COLIMA_EXPECTED_PERSISTENT_IDENTITY=UUID=reviewed-identity "
+        "COLIMA_EXPECTED_PERSISTENT_FSTYPE=ext4 "
+        "colima_guest_check_persistent_substrate",
+        env={"PATH": f"{fake_bin}:{os.environ['PATH']}"},
+    )
+
+    assert result.returncode != 0
+
+
 def test_non_colima_provider_passthrough_does_not_change_docker_binding(tmp_path: Path) -> None:
     fake_colima = tmp_path / "colima"
     fake_colima.write_text("#!/bin/sh\nexit 99\n", encoding="utf-8")
@@ -159,6 +218,7 @@ def test_guest_gate_waits_for_containerd_rpc_and_metadata_after_mounts(tmp_path:
     for name, body in {
         "findmnt": (
             "case \"$*\" in *SOURCE*) printf '/dev/persistent\\n';; "
+            "*UUID*) printf 'test-uuid\\n';; "
             "*FSTYPE*) printf 'ext4\\n';; esac\n"
         ),
         "mountpoint": "exit 0\n",
@@ -174,13 +234,18 @@ def test_guest_gate_waits_for_containerd_rpc_and_metadata_after_mounts(tmp_path:
     persistent.mkdir()
     docker_data.mkdir()
     containerd_data.mkdir()
+    persisted = tmp_path / "persisted"
+    persisted.mkdir()
 
     result = _run_bash(
         f"source '{HELPER}'; "
         f"COLIMA_PERSISTENT_DATA_PATH='{persistent}' "
         f"COLIMA_DOCKER_DATA_PATH='{docker_data}' "
         f"COLIMA_CONTAINERD_DATA_PATH='{containerd_data}' "
+        f"COLIMA_PERSISTED_CONFIG_ROOT='{persisted}' "
         "COLIMA_EXPECTED_PERSISTENT_SOURCE=/dev/persistent "
+        "COLIMA_EXPECTED_PERSISTENT_IDENTITY=UUID=test-uuid "
+        "COLIMA_EXPECTED_PERSISTED_INVENTORY=0 "
         "COLIMA_EXPECTED_PERSISTENT_FSTYPE=ext4 "
         "COLIMA_MIN_FREE_BLOCKS=1 COLIMA_MIN_FREE_INODES=1 "
         "COLIMA_READINESS_SLEEP_SECONDS=0 "

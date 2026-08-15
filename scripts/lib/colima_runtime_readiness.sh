@@ -102,11 +102,20 @@ _colima_runtime_findmnt() {
 }
 
 _colima_runtime_require_writable_mount() {
-  local path="$1" expected_source="$2" source fstype blocks inodes
+  local path="$1" expected_source="$2" expected_identity="${COLIMA_EXPECTED_PERSISTENT_IDENTITY:-}" source fstype identity_field identity_value blocks inodes
   "${COLIMA_MOUNTPOINT_BIN:-mountpoint}" -q "$path" 2>/dev/null || return 1
   [ -d "$path" ] && [ -w "$path" ] || return 1
   source="$(_colima_runtime_findmnt SOURCE "$path")" || return 1
   [ "$source" = "$expected_source" ] || return 1
+  case "$expected_identity" in
+    UUID=*) identity_field=UUID; identity_value="${expected_identity#UUID=}";;
+    LABEL=*) identity_field=LABEL; identity_value="${expected_identity#LABEL=}";;
+    PARTUUID=*) identity_field=PARTUUID; identity_value="${expected_identity#PARTUUID=}";;
+    *) return 1;;
+  esac
+  [ -n "$identity_value" ] || return 1
+  identity="$(_colima_runtime_findmnt "$identity_field" "$path")" || return 1
+  [ "$identity" = "$identity_value" ] || return 1
   fstype="$(_colima_runtime_findmnt FSTYPE "$path")" || return 1
   [ "$fstype" = "${COLIMA_EXPECTED_PERSISTENT_FSTYPE:-}" ] || return 1
   blocks="$(${COLIMA_DF_BIN:-df} -Pk "$path" 2>/dev/null | awk 'NR == 2 {print $4}')" || return 1
@@ -149,6 +158,24 @@ colima_guest_wait_containerd() {
   done
 }
 
+colima_guest_assert_persisted_inventory() {
+  local persisted expected
+  persisted="$(_colima_runtime_persisted_count)" || {
+    _colima_runtime_fail persisted-inventory-root-not-readable
+    return 1
+  }
+  case "$persisted" in ''|*[!0-9]*) _colima_runtime_fail persisted-inventory-count-unreadable; return 1;; esac
+  expected="${COLIMA_EXPECTED_PERSISTED_INVENTORY:-}"
+  case "$expected" in ''|*[!0-9]*) _colima_runtime_fail expected-inventory-count-not-configured "$persisted"; return 1;; esac
+  if [ "$persisted" -ne "$expected" ]; then
+    _colima_runtime_fail persisted-inventory-mismatch "$expected" "$persisted"
+    return 1
+  fi
+  COLIMA_PERSISTED_INVENTORY_READY=true
+  export COLIMA_PERSISTED_INVENTORY_READY
+  _colima_runtime_receipt ready persisted-inventory-exact "$expected" "$persisted"
+}
+
 colima_guest_readiness_gate() {
   COLIMA_SUBSTRATE_READY=false
   COLIMA_CONTAINERD_READY=false
@@ -160,6 +187,9 @@ colima_guest_readiness_gate() {
   fi
   if ! colima_guest_wait_containerd; then
     _colima_runtime_fail containerd-rpc-or-metadata-not-ready
+    return 1
+  fi
+  if [ "${COLIMA_INVENTORY_PREFLIGHT_REQUIRED:-1}" = "1" ] && ! colima_guest_assert_persisted_inventory; then
     return 1
   fi
   return 0
@@ -217,7 +247,7 @@ _colima_runtime_load_profile() {
   [ -r "$profile_file" ] || return 1
   while IFS='=' read -r key value; do
     case "$key" in
-      COLIMA_RUNTIME_PROVIDER|COLIMA_PROFILE|COLIMA_DOCKER_CONTEXT|COLIMA_USERNET_TIMEOUT|LIMA_USERNET_TIMEOUT|COLIMA_EXPECTED_PERSISTENT_SOURCE|COLIMA_EXPECTED_PERSISTENT_FSTYPE|COLIMA_PERSISTENT_DATA_PATH|COLIMA_DOCKER_DATA_PATH|COLIMA_CONTAINERD_DATA_PATH|COLIMA_PERSISTED_CONFIG_ROOT|COLIMA_MIN_FREE_BLOCKS|COLIMA_MIN_FREE_INODES|COLIMA_CPU|COLIMA_MEMORY|COLIMA_DISK)
+      COLIMA_RUNTIME_PROVIDER|COLIMA_PROFILE|COLIMA_DOCKER_CONTEXT|COLIMA_USERNET_TIMEOUT|LIMA_USERNET_TIMEOUT|COLIMA_EXPECTED_PERSISTENT_SOURCE|COLIMA_EXPECTED_PERSISTENT_IDENTITY|COLIMA_EXPECTED_PERSISTED_INVENTORY|COLIMA_EXPECTED_PERSISTENT_FSTYPE|COLIMA_PERSISTENT_DATA_PATH|COLIMA_DOCKER_DATA_PATH|COLIMA_CONTAINERD_DATA_PATH|COLIMA_PERSISTED_CONFIG_ROOT|COLIMA_MIN_FREE_BLOCKS|COLIMA_MIN_FREE_INODES|COLIMA_CPU|COLIMA_MEMORY|COLIMA_DISK)
         [ -n "$value" ] && export "$key=$value"
         ;;
     esac
@@ -259,5 +289,7 @@ colima_runtime_bind_and_ready() {
 if [ "${1:-}" = "--substrate" ]; then
   colima_guest_check_persistent_substrate || _colima_runtime_fail persistent-substrate-not-ready
 elif [ "${1:-}" = "--guest" ] || [ "${1:-}" = "--docker-preflight" ]; then
+  COLIMA_INVENTORY_PREFLIGHT_REQUIRED=1
+  export COLIMA_INVENTORY_PREFLIGHT_REQUIRED
   colima_guest_readiness_gate
 fi
