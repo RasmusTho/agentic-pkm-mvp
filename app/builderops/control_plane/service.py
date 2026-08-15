@@ -1258,7 +1258,7 @@ def create_app(
                 expected_principal=credential.principal,
                 observed_applied=request.observed_applied,
                 terminal_unknown=request.terminal_unknown,
-                evidence=request.evidence,
+                evidence=request.evidence.model_dump(mode="json"),
             )
         except Exception as exc:
             raise _control_plane_error(exc) from exc

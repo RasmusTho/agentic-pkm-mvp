@@ -104,13 +104,13 @@ def test_unknown_external_effect_requires_readback_before_retry(
         restarted_store.reconcile_outbox(
             first_claim,
             observed_applied=True,
-            evidence={"readback": "stale-worker-forged"},
+            evidence={"readback": "not-found"},
         )
     with pytest.raises(StaleFencingToken):
         restarted_store.reconcile_outbox(
             replace(orphaned_claim, worker_id="wrong-holder"),
             observed_applied=False,
-            evidence={"readback": "forged"},
+            evidence={"readback": "not-found"},
         )
     with pytest.raises(RuntimeError, match="after_reconciliation_commit"):
         restarted_store.reconcile_outbox(
@@ -133,7 +133,7 @@ def test_unknown_external_effect_requires_readback_before_retry(
         restarted_store.reconcile_outbox(
             orphaned_claim,
             observed_applied=False,
-            evidence={"readback": "different"},
+            evidence={"readback": "found"},
         )
     assert restarted_store.outbox_status(envelope.repository, result.operation_key) == "pending"
     claim = restarted_store.claim_outbox(
@@ -302,7 +302,7 @@ def test_post_effect_reconcile_and_replay_reject_forged_or_stale_claim_lsns(
             operation_key=result.operation_key,
             minimum_fencing_token=claim.fencing_token - 1,
             observed_applied=False,
-            evidence={"readback": "forged"},
+            evidence={"readback": "not-found"},
         )
 
 

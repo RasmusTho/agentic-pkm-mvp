@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -176,10 +176,20 @@ class RowDerivedPostEffectPendingRequest(BaseModel):
     minimum_fencing_token: int = Field(ge=1)
 
 
+class RowDerivedPostEffectEvidence(BaseModel):
+    """Closed readback vocabulary; claim/LSN authority never enters evidence."""
+
+    model_config = ConfigDict(extra="forbid")
+    readback: Literal["found", "not-found", "unknown"]
+    merge_sha: str | None = Field(default=None, pattern=r"^[0-9a-fA-F]{40}$")
+    provider_session_id: str | None = Field(default=None, min_length=1, max_length=256)
+    relaunch_performed: bool | None = None
+
+
 class RowDerivedPostEffectReconcileRequest(RowDerivedPostEffectPendingRequest):
     observed_applied: bool
     terminal_unknown: bool = False
-    evidence: dict[str, Any] = Field(default_factory=dict)
+    evidence: RowDerivedPostEffectEvidence
 
 
 __all__ = [
@@ -194,6 +204,7 @@ __all__ = [
     "OutboxReconcileRequest",
     "OutboxUnknownRequest",
     "RowDerivedPostEffectPendingRequest",
+    "RowDerivedPostEffectEvidence",
     "RowDerivedPostEffectReconcileRequest",
     "PromotionCommitRequest",
     "RecordCommitRequest",
