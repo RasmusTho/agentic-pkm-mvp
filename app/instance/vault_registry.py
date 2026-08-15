@@ -865,20 +865,27 @@ class VaultRegistryStore:
         """Persist exactly one validated MVR-05A6 lease-state generation."""
 
         _require_storage_mutation_capability(_capability)
-        normalized_binding = vault_binding_id.strip()
-        validated = _validate_binding_effect_lease_state(normalized_binding, state)
+        if not isinstance(vault_binding_id, str) or not vault_binding_id.strip():
+            raise RegistryError("vault_binding_id is required")
+        validated = _validate_binding_effect_lease_state(vault_binding_id, state)
         with self._locked():
             self._assert_no_scalar_rollback_session_locked()
             current = self._read_current_locked(recover=True)
             self._assert_revision(current, expected_revision)
-            if normalized_binding not in current.registrations:
+            if vault_binding_id not in current.registrations:
                 raise RegistryError("binding effect lease state names an unknown binding")
-            updated = self._with_registrations(current, dict(current.registrations))
-            states = copy.deepcopy(updated.extensions.get("bindingEffectLeases") or {})
+            extensions = copy.deepcopy(current.extensions)
+            states = copy.deepcopy(extensions.get("bindingEffectLeases") or {})
             if not isinstance(states, dict):
                 raise RegistryError("binding effect lease state must be a mapping")
-            states[normalized_binding] = validated
-            updated.extensions["bindingEffectLeases"] = states
+            states[vault_binding_id] = validated
+            extensions["bindingEffectLeases"] = states
+            # Lease bookkeeping is mechanical state, not binding authority. Keep
+            # the registry revision and scalar-rollback floor unchanged so an
+            # in-flight context does not rotate merely because an effect enters
+            # or leaves its lease window. The registry lock plus `_write_locked`
+            # still serialises and journals complete previous/next payloads.
+            updated = replace(current, extensions=extensions)
             self._write_locked(updated)
             return updated
 

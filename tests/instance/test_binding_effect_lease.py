@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pytest
 
+from app.instance.active_context_service import binding_revision_for
 from app.instance.binding_effect_lease import (
     BindingEffectLeaseManager,
     BindingEffectLeaseTimeout,
@@ -142,6 +143,37 @@ def test_leases_for_distinct_bindings_do_not_serialise(tmp_path) -> None:
         with manager.exclusive_change("binding-b", channel_id="dev", root=vault_b, timeout=0.2):
             assert manager.observe("binding-a").shared_count == 1
             assert manager.observe("binding-b").exclusive_held
+
+
+def test_lease_bookkeeping_does_not_rotate_binding_revision(tmp_path) -> None:
+    manager = _build_manager(tmp_path, "binding-a")
+    vault = tmp_path / "vaults" / "binding-a"
+    before = manager.registry_store.load()
+    binding_revision = binding_revision_for(before, "binding-a")
+
+    with manager.shared_effect("binding-a", channel_id="dev", root=vault, timeout=1):
+        inside = manager.registry_store.load()
+        assert inside.revision == before.revision
+        assert binding_revision_for(inside, "binding-a") == binding_revision
+        assert manager.persisted_state("binding-a")["generation"] == 1
+
+    after = manager.registry_store.load()
+    assert after.revision == before.revision
+    assert binding_revision_for(after, "binding-a") == binding_revision
+    assert manager.persisted_state("binding-a")["generation"] == 2
+
+
+def test_opaque_binding_id_round_trips_through_acquire_and_release(tmp_path) -> None:
+    binding_id = " binding-a "
+    manager = _build_manager(tmp_path, binding_id)
+    vault = tmp_path / "vaults" / binding_id
+
+    with manager.shared_effect(binding_id, channel_id="dev", root=vault, timeout=1):
+        persisted = manager.persisted_state(binding_id)
+        assert persisted["vaultBindingId"] == binding_id
+        assert binding_id in manager.registry_store.load().extensions["bindingEffectLeases"]
+
+    assert manager.persisted_state(binding_id)["vaultBindingId"] == binding_id
 
 
 def test_exclusion_holds_across_separate_processes(tmp_path) -> None:

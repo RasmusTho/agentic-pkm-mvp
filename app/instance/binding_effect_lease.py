@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import copy
+import ctypes
 import fcntl
 import hashlib
 import json
 import os
 import stat
 import subprocess
+import sys
 import tempfile
 import time
 from contextlib import contextmanager
@@ -24,6 +26,55 @@ from app.instance.vault_registry import VaultRegistryStore
 
 LEASE_SCHEMA = "agentic-pkm.binding-effect-lease.v1"
 JOURNAL_SCHEMA = "agentic-pkm.binding-effect-lease-journal.v1"
+
+
+class _DarwinProcBsdInfo(ctypes.Structure):
+    """Native ``proc_bsdinfo`` layout from Darwin ``sys/proc_info.h``."""
+
+    _fields_ = [
+        ("pbi_flags", ctypes.c_uint32),
+        ("pbi_status", ctypes.c_uint32),
+        ("pbi_xstatus", ctypes.c_uint32),
+        ("pbi_pid", ctypes.c_uint32),
+        ("pbi_ppid", ctypes.c_uint32),
+        ("pbi_uid", ctypes.c_uint32),
+        ("pbi_gid", ctypes.c_uint32),
+        ("pbi_ruid", ctypes.c_uint32),
+        ("pbi_rgid", ctypes.c_uint32),
+        ("pbi_svuid", ctypes.c_uint32),
+        ("pbi_svgid", ctypes.c_uint32),
+        ("rfu_1", ctypes.c_uint32),
+        ("pbi_comm", ctypes.c_char * 16),
+        ("pbi_name", ctypes.c_char * 32),
+        ("pbi_nfiles", ctypes.c_uint32),
+        ("pbi_pgid", ctypes.c_uint32),
+        ("pbi_pjobc", ctypes.c_uint32),
+        ("e_tdev", ctypes.c_uint32),
+        ("e_tpgid", ctypes.c_uint32),
+        ("pbi_nice", ctypes.c_int32),
+        ("pbi_start_tvsec", ctypes.c_uint64),
+        ("pbi_start_tvusec", ctypes.c_uint64),
+    ]
+
+
+class _DarwinProcBsdShortInfo(ctypes.Structure):
+    """Native ``proc_bsdshortinfo`` used to identify an unreaped zombie."""
+
+    _fields_ = [
+        ("pbsi_pid", ctypes.c_uint32),
+        ("pbsi_ppid", ctypes.c_uint32),
+        ("pbsi_pgid", ctypes.c_uint32),
+        ("pbsi_status", ctypes.c_uint32),
+        ("pbsi_comm", ctypes.c_char * 16),
+        ("pbsi_flags", ctypes.c_uint32),
+        ("pbsi_uid", ctypes.c_uint32),
+        ("pbsi_gid", ctypes.c_uint32),
+        ("pbsi_ruid", ctypes.c_uint32),
+        ("pbsi_rgid", ctypes.c_uint32),
+        ("pbsi_svuid", ctypes.c_uint32),
+        ("pbsi_svgid", ctypes.c_uint32),
+        ("pbsi_rfu", ctypes.c_uint32),
+    ]
 
 
 class BindingEffectLeaseError(RuntimeError):
@@ -484,20 +535,86 @@ class BindingEffectLeaseManager:
             remainder = raw[raw.rindex(")") + 2 :].split()
             return f"proc:{remainder[19]}", remainder[0]
         except (OSError, IndexError, ValueError):
-            try:
-                result = subprocess.run(
-                    ["ps", "-o", "stat=", "-o", "lstart=", "-p", str(pid)],
-                    check=True,
-                    capture_output=True,
-                    text=True,
-                    timeout=1,
-                )
-                output = result.stdout.strip().split(maxsplit=1)
-                if len(output) == 2:
-                    return f"ps:{output[1]}", output[0][:1]
-            except (OSError, subprocess.SubprocessError):
-                pass
+            if sys.platform == "darwin":
+                return BindingEffectLeaseManager._darwin_process_identity(pid)
             raise BindingEffectLeaseError("a trustworthy process-incarnation token is unavailable")
+
+    @staticmethod
+    def _darwin_process_identity(pid: int) -> tuple[str, str]:
+        """Return a microsecond-resolution native process incarnation on Darwin."""
+
+        try:
+            library = ctypes.CDLL("/usr/lib/libproc.dylib", use_errno=True)
+            proc_pidinfo = library.proc_pidinfo
+        except (AttributeError, OSError) as exc:
+            raise BindingEffectLeaseError(
+                "a trustworthy process-incarnation token is unavailable"
+            ) from exc
+        proc_pidinfo.argtypes = [
+            ctypes.c_int,
+            ctypes.c_int,
+            ctypes.c_uint64,
+            ctypes.c_void_p,
+            ctypes.c_int,
+        ]
+        proc_pidinfo.restype = ctypes.c_int
+        info = _DarwinProcBsdInfo()
+        result = proc_pidinfo(
+            pid,
+            3,  # PROC_PIDTBSDINFO
+            0,
+            ctypes.byref(info),
+            ctypes.sizeof(info),
+        )
+        if (
+            result == ctypes.sizeof(info)
+            and info.pbi_pid == pid
+            and info.pbi_status in {1, 2, 3, 4, 5}
+            and info.pbi_start_tvsec > 0
+            and info.pbi_start_tvusec < 1_000_000
+        ):
+            state = "Z" if info.pbi_status == 5 else "?"
+            return (
+                f"darwin:{info.pbi_start_tvsec}:{info.pbi_start_tvusec}",
+                state,
+            )
+
+        # Full BSD info may disappear after process exit while an unreaped PID
+        # still answers `kill(0)`. The native short flavor retains `p_stat`, so
+        # it can prove a zombie is dead without supplying a weak live token.
+        short = _DarwinProcBsdShortInfo()
+        short_result = proc_pidinfo(
+            pid,
+            13,  # PROC_PIDT_SHORTBSDINFO
+            0,
+            ctypes.byref(short),
+            ctypes.sizeof(short),
+        )
+        if (
+            short_result == ctypes.sizeof(short)
+            and short.pbsi_pid == pid
+            and short.pbsi_status == 5
+        ):
+            return f"darwin:zombie:{pid}", "Z"
+        if BindingEffectLeaseManager._darwin_process_is_zombie(pid):
+            return f"darwin:zombie:{pid}", "Z"
+        raise BindingEffectLeaseError("a trustworthy process-incarnation token is unavailable")
+
+    @staticmethod
+    def _darwin_process_is_zombie(pid: int) -> bool:
+        """Use ``ps`` only as terminal-state proof, never as an identity token."""
+
+        try:
+            result = subprocess.run(
+                ["ps", "-o", "stat=", "-p", str(pid)],
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=1,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return False
+        return result.stdout.strip().startswith("Z")
 
     @staticmethod
     def _empty_state(vault_binding_id: str) -> _LeaseState:

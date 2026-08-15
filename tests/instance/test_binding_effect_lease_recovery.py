@@ -3,6 +3,7 @@ from __future__ import annotations
 import multiprocessing
 import os
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -199,9 +200,43 @@ def test_third_registry_endpoint_retains_journal_and_fails_closed(tmp_path, monk
     assert recovered._journal_path("binding-a").exists()
 
 
-def test_process_identity_refuses_untrustworthy_fallback_and_pid_reuse(
-    tmp_path, monkeypatch
-) -> None:
+class _FakeProcPidInfo:
+    def __init__(self, *, status: int, second: int, microsecond: int, result: int | None = None):
+        self.status = status
+        self.second = second
+        self.microsecond = microsecond
+        self.result = result
+        self.argtypes = None
+        self.restype = None
+
+    def __call__(self, pid, flavor, arg, buffer, size):
+        assert arg == 0
+        if flavor == 3:
+            info = lease_module.ctypes.cast(
+                buffer,
+                lease_module.ctypes.POINTER(lease_module._DarwinProcBsdInfo),
+            ).contents
+            info.pbi_pid = pid
+            info.pbi_status = self.status
+            info.pbi_start_tvsec = self.second
+            info.pbi_start_tvusec = self.microsecond
+            return size if self.result is None else self.result
+        assert flavor == 13
+        short = lease_module.ctypes.cast(
+            buffer,
+            lease_module.ctypes.POINTER(lease_module._DarwinProcBsdShortInfo),
+        ).contents
+        short.pbsi_pid = pid
+        short.pbsi_status = self.status
+        return size
+
+
+class _FakeLibproc:
+    def __init__(self, proc_pidinfo) -> None:
+        self.proc_pidinfo = proc_pidinfo
+
+
+def test_process_identity_refuses_pid_reuse(tmp_path, monkeypatch) -> None:
     manager = _build_manager(tmp_path, "binding-a")
     start, _ = manager._process_identity(os.getpid())
     stale = {
@@ -213,13 +248,126 @@ def test_process_identity_refuses_untrustworthy_fallback_and_pid_reuse(
     }
     assert not manager._holder_alive(stale)
 
+    native = _FakeProcPidInfo(status=2, second=100, microsecond=222)
+    monkeypatch.setattr(
+        lease_module.ctypes,
+        "CDLL",
+        lambda *args, **kwargs: _FakeLibproc(native),
+    )
+    token, state = manager._darwin_process_identity(os.getpid())
+    assert token == "darwin:100:222"
+    assert state == "?"
+
+    same_second_stale = {**stale, "processStart": "darwin:100:221"}
+    monkeypatch.setattr(manager, "_process_identity", lambda pid: (token, state))
+    assert not manager._holder_alive(same_second_stale)
+
+
+def test_darwin_zombie_is_stale_even_with_matching_native_identity(tmp_path, monkeypatch) -> None:
+    manager = _build_manager(tmp_path, "binding-a")
+    native = _FakeProcPidInfo(status=5, second=100, microsecond=222)
+    monkeypatch.setattr(
+        lease_module.ctypes,
+        "CDLL",
+        lambda *args, **kwargs: _FakeLibproc(native),
+    )
+    monkeypatch.setattr(Path, "read_text", lambda *args, **kwargs: (_ for _ in ()).throw(OSError()))
+    monkeypatch.setattr(lease_module.sys, "platform", "darwin")
+
+    holder = {
+        "holderId": "zombie",
+        "pid": os.getpid(),
+        "processStart": "darwin:100:222",
+        "ticket": 1,
+        "mode": "pending",
+    }
+    assert not manager._holder_alive(holder)
+
+
+def test_darwin_ps_is_terminal_zombie_proof_not_a_live_identity(tmp_path, monkeypatch) -> None:
+    manager = _build_manager(tmp_path, "binding-a")
+    unavailable_full_info = _FakeProcPidInfo(
+        status=2,
+        second=100,
+        microsecond=222,
+        result=0,
+    )
+    monkeypatch.setattr(
+        lease_module.ctypes,
+        "CDLL",
+        lambda *args, **kwargs: _FakeLibproc(unavailable_full_info),
+    )
+    monkeypatch.setattr(
+        lease_module.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(stdout="Z+\n"),
+    )
+    assert manager._darwin_process_identity(os.getpid()) == (
+        f"darwin:zombie:{os.getpid()}",
+        "Z",
+    )
+
+    monkeypatch.setattr(
+        lease_module.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(stdout="S+\n"),
+    )
+    with pytest.raises(BindingEffectLeaseError, match="trustworthy process-incarnation"):
+        manager._darwin_process_identity(os.getpid())
+
+
+@pytest.mark.parametrize(
+    ("status", "second", "microsecond", "result"),
+    [
+        (2, 100, 222, 0),
+        (6, 100, 222, None),
+        (2, 0, 222, None),
+        (2, 100, 1_000_000, None),
+    ],
+)
+def test_darwin_identity_rejects_short_or_malformed_native_results(
+    tmp_path, monkeypatch, status, second, microsecond, result
+) -> None:
+    manager = _build_manager(tmp_path, "binding-a")
+    native = _FakeProcPidInfo(
+        status=status,
+        second=second,
+        microsecond=microsecond,
+        result=result,
+    )
+    monkeypatch.setattr(
+        lease_module.ctypes,
+        "CDLL",
+        lambda *args, **kwargs: _FakeLibproc(native),
+    )
+    with pytest.raises(BindingEffectLeaseError, match="trustworthy process-incarnation"):
+        manager._darwin_process_identity(os.getpid())
+
+
+def test_process_identity_refuses_unavailable_native_fallback(tmp_path, monkeypatch) -> None:
+    manager = _build_manager(tmp_path, "binding-a")
+
     def no_procfs(*args, **kwargs):
         raise OSError("procfs unavailable")
 
-    def no_ps(*args, **kwargs):
-        raise FileNotFoundError("ps unavailable")
+    def no_libproc(*args, **kwargs):
+        raise OSError("libproc unavailable")
 
     monkeypatch.setattr(Path, "read_text", no_procfs)
-    monkeypatch.setattr(lease_module.subprocess, "run", no_ps)
+    monkeypatch.setattr(lease_module.sys, "platform", "darwin")
+    monkeypatch.setattr(lease_module.ctypes, "CDLL", no_libproc)
     with pytest.raises(BindingEffectLeaseError, match="trustworthy process-incarnation"):
         manager._process_identity(os.getpid())
+
+
+@pytest.mark.skipif(lease_module.sys.platform != "darwin", reason="Darwin-only libproc proof")
+def test_live_darwin_process_identity_uses_native_microseconds(tmp_path) -> None:
+    manager = _build_manager(tmp_path, "binding-a")
+    token, state = manager._darwin_process_identity(os.getpid())
+
+    assert lease_module.ctypes.sizeof(lease_module._DarwinProcBsdInfo) == 136
+    prefix, second, microsecond = token.split(":")
+    assert prefix == "darwin"
+    assert int(second) > 0
+    assert 0 <= int(microsecond) < 1_000_000
+    assert state != "Z"
