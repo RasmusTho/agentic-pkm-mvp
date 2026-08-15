@@ -1235,10 +1235,6 @@ def _attempt_plan(
         receipt=receipt,
         policy=policy,
     )
-    if kind == "review" and outcome == "blocking" and (
-        receipt is None or receipt.get("head_sha") != current_head_sha
-    ):
-        raise ValueError("blocking review must be bound to the current verification head")
     if kind in REPAIR_ATTEMPT_KINDS and finding is not None:
         assert receipt is not None
         prior_repairs = [
