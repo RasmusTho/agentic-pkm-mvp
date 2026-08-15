@@ -205,18 +205,14 @@ class BindingEffectLeaseManager:
         root: Path,
         timeout: float | None = None,
     ) -> Iterator[BindingEffectLeaseObservation]:
-        held = self._acquire(
+        with self._acquire(
             vault_binding_id,
             mode="shared",
             channel_id=channel_id,
             root=root,
             timeout=timeout,
-        )
-        try:
+        ):
             yield self.observe(vault_binding_id)
-        finally:
-            if held is not None:
-                self._release(held)
 
     @contextmanager
     def exclusive_change(
@@ -227,18 +223,14 @@ class BindingEffectLeaseManager:
         root: Path,
         timeout: float | None = None,
     ) -> Iterator[BindingEffectLeaseObservation]:
-        held = self._acquire(
+        with self._acquire(
             vault_binding_id,
             mode="exclusive",
             channel_id=channel_id,
             root=root,
             timeout=timeout,
-        )
-        try:
+        ):
             yield self.observe(vault_binding_id)
-        finally:
-            if held is not None:
-                self._release(held)
 
     def observe(self, vault_binding_id: str) -> BindingEffectLeaseObservation:
         with self._state_locked(vault_binding_id):
@@ -263,6 +255,7 @@ class BindingEffectLeaseManager:
             time.sleep(self.poll_interval)
         return False
 
+    @contextmanager
     def _acquire(
         self,
         vault_binding_id: str,
@@ -271,7 +264,7 @@ class BindingEffectLeaseManager:
         channel_id: str,
         root: Path,
         timeout: float | None,
-    ) -> _HeldLease:
+    ) -> Iterator[_HeldLease]:
         if not vault_binding_id.strip() or mode not in {"shared", "exclusive"}:
             raise BindingEffectLeaseError("binding and lease mode must be explicit")
         self._ensure_state_root()
@@ -279,6 +272,7 @@ class BindingEffectLeaseManager:
         pending: _HolderState | None = None
         pending_descriptor: int | None = None
         descriptor: int | None = None
+        held: _HeldLease | None = None
         try:
             descriptor = self._open_private_lease_lock(self._gate_path(vault_binding_id))
             holder_id = f"holder-{uuid4()}"
@@ -374,21 +368,27 @@ class BindingEffectLeaseManager:
                                     )
                                     pending_descriptor = None
                                     pending = None
-                                return _HeldLease(
+                                held = _HeldLease(
                                     vault_binding_id,
                                     holder_id,
                                     mode,
                                     descriptor,
                                     os.getpid(),
                                 )
+                                break
                 if deadline is not None and time.monotonic() >= deadline:
                     raise BindingEffectLeaseTimeout(
                         f"timed out waiting for {mode} binding effect lease"
                     )
                 time.sleep(self.poll_interval)
-        except BaseException:
+            if held is None:
+                raise BindingEffectLeaseError("binding effect acquisition ended without a holder")
+            yield held
+        finally:
             try:
-                if pending is not None:
+                if held is not None:
+                    self._release(held)
+                elif pending is not None:
                     self._discard_pending(
                         vault_binding_id,
                         holder_id,
@@ -401,12 +401,11 @@ class BindingEffectLeaseManager:
                             pending_descriptor,
                         )
                 finally:
-                    if descriptor is not None:
+                    if descriptor is not None and held is None:
                         try:
                             fcntl.flock(descriptor, fcntl.LOCK_UN)
                         finally:
                             _close_lease_descriptor(descriptor)
-            raise
 
     def _release(self, held: _HeldLease) -> None:
         if held.owner_pid != os.getpid():
@@ -491,11 +490,12 @@ class BindingEffectLeaseManager:
         abandoned: list[tuple[_HolderState, int | None]] = []
         try:
             for item in state["exclusivePending"]:
-                active, descriptor = self._pending_waiter_status(vault_binding_id, item)
-                if active:
+                if self._pending_waiter_active(
+                    vault_binding_id,
+                    item,
+                    abandoned,
+                ):
                     pending.append(item)
-                else:
-                    abandoned.append((item, descriptor))
             updated["exclusivePending"] = pending
             gate: int | None = None
             try:
@@ -668,31 +668,35 @@ class BindingEffectLeaseManager:
         start, state = self._process_identity(pid)
         return state != "Z" and str(holder.get("processStart") or "") == start
 
-    def _pending_waiter_status(
+    def _pending_waiter_active(
         self,
         vault_binding_id: str,
-        holder: Mapping[str, object],
-    ) -> tuple[bool, int | None]:
+        holder: _HolderState,
+        abandoned: list[tuple[_HolderState, int | None]],
+    ) -> bool:
         """Require both a live process incarnation and an active waiter lock."""
 
         holder_id = str(holder.get("holderId") or "")
         if not self._holder_alive(holder):
-            return False, None
+            abandoned.append((holder, None))
+            return False
         descriptor: int | None = None
-        transfer_descriptor = False
         try:
             try:
                 descriptor = self._open_pending_activity(vault_binding_id, holder_id, create=False)
             except FileNotFoundError:
-                return False, None
+                abandoned.append((holder, None))
+                return False
             try:
                 fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
             except BlockingIOError:
-                return True, None
-            transfer_descriptor = True
-            return False, descriptor
+                return True
+            abandoned.append((holder, descriptor))
+            return False
         finally:
-            if descriptor is not None and not transfer_descriptor:
+            if descriptor is not None and not any(
+                owned_descriptor == descriptor for _, owned_descriptor in abandoned
+            ):
                 self._close_pending_activity(descriptor)
 
     def _open_pending_activity(

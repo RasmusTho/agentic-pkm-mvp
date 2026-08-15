@@ -44,6 +44,11 @@ def test_production_callers_take_the_ownership_fence_before_the_binding_lease() 
 
     for name in ("shared_effect", "exclusive_change"):
         assert "self._acquire" in ast.unparse(methods[name])
+        assert any(
+            isinstance(node, ast.With)
+            and any("self._acquire" in ast.unparse(item.context_expr) for item in node.items)
+            for node in ast.walk(methods[name])
+        )
 
     assert not any(
         isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
@@ -69,7 +74,7 @@ def test_pending_activity_locks_never_add_a_blocking_lock_order_edge() -> None:
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
     }
 
-    for name in ("_acquire", "_pending_waiter_status", "_scavenge_pending_activity_locked"):
+    for name in ("_acquire", "_pending_waiter_active", "_scavenge_pending_activity_locked"):
         calls = [
             node
             for node in ast.walk(methods[name])

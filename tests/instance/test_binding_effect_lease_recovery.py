@@ -144,13 +144,14 @@ def test_fork_child_cannot_extend_a_crashed_effect_holder(
 def test_fork_child_cannot_release_the_parent_effect(tmp_path) -> None:
     manager = _build_manager(tmp_path, "binding-a")
     vault = tmp_path / "vaults" / "binding-a"
-    held = manager._acquire(
+    lease_context = manager._acquire(
         "binding-a",
         mode="shared",
         channel_id="dev",
         root=vault,
         timeout=1,
     )
+    held = lease_context.__enter__()
     pid = os.fork()
     if pid == 0:
         try:
@@ -162,7 +163,7 @@ def test_fork_child_cannot_release_the_parent_effect(tmp_path) -> None:
     _, status = os.waitpid(pid, 0)
     assert os.waitstatus_to_exitcode(status) == 0
     assert manager.observe("binding-a").shared_count == 1
-    manager._release(held)
+    lease_context.__exit__(None, None, None)
 
 
 def test_state_lock_cancellation_closes_the_acquired_descriptor(tmp_path, monkeypatch) -> None:
@@ -219,6 +220,39 @@ def test_holder_identity_failure_closes_the_effect_descriptor(tmp_path, monkeypa
         os.close(probe)
 
 
+@pytest.mark.parametrize("mode", ["shared", "exclusive"])
+def test_public_context_cancellation_releases_the_adopted_effect(
+    tmp_path, monkeypatch, mode
+) -> None:
+    manager = _build_manager(tmp_path, "binding-a")
+    vault = tmp_path / "vaults" / "binding-a"
+    baseline = set(lease_module._LEASE_LOCK_FDS)
+    real_observe = manager.observe
+    effect = manager.shared_effect if mode == "shared" else manager.exclusive_change
+
+    def cancel_after_acquisition(vault_binding_id):
+        raise KeyboardInterrupt("cancel after held lease adoption")
+
+    monkeypatch.setattr(manager, "observe", cancel_after_acquisition)
+    with pytest.raises(KeyboardInterrupt, match="held lease adoption"):
+        with effect("binding-a", channel_id="dev", root=vault, timeout=1):
+            pytest.fail("cancellation cannot expose the effect body")
+    monkeypatch.setattr(manager, "observe", real_observe)
+
+    assert set(lease_module._LEASE_LOCK_FDS) == baseline
+    observation = real_observe("binding-a")
+    assert observation.shared_count == 0
+    assert not observation.exclusive_held
+    probe = os.open(manager._gate_path("binding-a"), os.O_RDWR)
+    try:
+        lease_module.fcntl.flock(
+            probe,
+            lease_module.fcntl.LOCK_EX | lease_module.fcntl.LOCK_NB,
+        )
+    finally:
+        os.close(probe)
+
+
 def test_reconciliation_cancellation_closes_transferred_pending_descriptor(
     tmp_path, monkeypatch
 ) -> None:
@@ -262,20 +296,20 @@ def test_later_pending_probe_failure_closes_an_earlier_transfer(tmp_path, monkey
         "holder-abandoned-second",
     )
     baseline = set(lease_module._LEASE_LOCK_FDS)
-    real_status = manager._pending_waiter_status
+    real_status = manager._pending_waiter_active
     calls = 0
 
-    def fail_second_probe(vault_binding_id, holder):
+    def fail_second_probe(vault_binding_id, holder, abandoned):
         nonlocal calls
         calls += 1
         if calls == 2:
             raise KeyboardInterrupt("later pending probe failed")
-        return real_status(vault_binding_id, holder)
+        return real_status(vault_binding_id, holder, abandoned)
 
-    monkeypatch.setattr(manager, "_pending_waiter_status", fail_second_probe)
+    monkeypatch.setattr(manager, "_pending_waiter_active", fail_second_probe)
     with pytest.raises(KeyboardInterrupt, match="later pending probe"):
         manager.observe("binding-a")
-    monkeypatch.setattr(manager, "_pending_waiter_status", real_status)
+    monkeypatch.setattr(manager, "_pending_waiter_active", real_status)
 
     assert set(lease_module._LEASE_LOCK_FDS) == baseline
     probe = os.open(first, os.O_RDWR)
@@ -465,12 +499,15 @@ def test_pending_activity_requires_a_held_lock_from_the_live_waiter(tmp_path) ->
     descriptor = manager._open_pending_activity("binding-a", holder["holderId"], create=True)
     lease_module.fcntl.flock(descriptor, lease_module.fcntl.LOCK_EX)
     try:
-        assert manager._pending_waiter_status("binding-a", holder) == (True, None)
+        abandoned = []
+        assert manager._pending_waiter_active("binding-a", holder, abandoned)
+        assert abandoned == []
     finally:
         manager._close_pending_activity(descriptor)
 
-    active, stale_descriptor = manager._pending_waiter_status("binding-a", holder)
-    assert not active
+    abandoned = []
+    assert not manager._pending_waiter_active("binding-a", holder, abandoned)
+    [(_, stale_descriptor)] = abandoned
     assert stale_descriptor is not None
     manager._close_pending_activity(stale_descriptor)
     manager._pending_activity_path("binding-a", holder["holderId"]).unlink()
@@ -569,7 +606,7 @@ def test_pending_activity_probe_error_fails_closed(tmp_path, monkeypatch) -> Non
 
     monkeypatch.setattr(lease_module.fcntl, "flock", unsupported)
     with pytest.raises(OSError, match="flock unsupported"):
-        manager._pending_waiter_status("binding-a", holder)
+        manager._pending_waiter_active("binding-a", holder, [])
     monkeypatch.setattr(lease_module.fcntl, "flock", real_flock)
     manager._close_pending_activity(descriptor)
 
