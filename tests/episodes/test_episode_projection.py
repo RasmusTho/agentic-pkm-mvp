@@ -19,6 +19,8 @@ from pathlib import Path
 
 import pytest
 
+from app.instance.binding_ids import COMPATIBILITY_BINDING_ID
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
@@ -256,7 +258,7 @@ def test_episodes_projection_migration_applies(scratch_db: str) -> None:
             ).fetchall()
         }
     expected = {
-        "episode_id", "scope", "title", "time_start", "time_end", "closed",
+        "vault_binding_id", "episode_id", "scope", "title", "time_start", "time_end", "closed",
         "segmentation", "parent_episode", "space", "protagonists", "goal",
         "causation", "derived_from", "note_path", "updated_at",
     }
@@ -268,10 +270,11 @@ def test_episodes_projection_migration_applies(scratch_db: str) -> None:
     with psycopg.connect(scratch_db, autocommit=True) as conn:
         with pytest.raises(psycopg.errors.CheckViolation):
             conn.execute(
-                "INSERT INTO episodes (episode_id, scope, title, time_start, closed, "
-                "segmentation, note_path) VALUES "
-                f"('ep-{'a' * 36}', 'work', 'bad-id', now(), false, 'proposed', "
-                "'episodes/bad.md')"
+                "INSERT INTO episodes (vault_binding_id, episode_id, scope, title, "
+                "time_start, closed, segmentation, note_path) VALUES "
+                "(%s, %s, 'work', 'bad-id', now(), false, 'proposed', "
+                "'episodes/bad.md')",
+                (COMPATIBILITY_BINDING_ID, f"ep-{'a' * 36}"),
             )
 
     # Forward-only: the migration module declares no usable downgrade.
@@ -371,10 +374,11 @@ def test_projection_rebuilds_from_vault(
     # the projection must never be written except by rebuild_episodes_projection().
     with psycopg.connect(scratch_db, autocommit=True) as conn:
         conn.execute(
-            "INSERT INTO episodes (episode_id, scope, title, time_start, closed, "
-            "segmentation, note_path) VALUES "
-            "('ep-99999999-9999-4999-8999-999999999999', 'work', 'rogue', now(), "
-            "false, 'proposed', 'episodes/rogue.md')"
+            "INSERT INTO episodes (vault_binding_id, episode_id, scope, title, "
+            "time_start, closed, segmentation, note_path) VALUES "
+            "(%s, 'ep-99999999-9999-4999-8999-999999999999', 'work', 'rogue', "
+            "now(), false, 'proposed', 'episodes/rogue.md')",
+            (COMPATIBILITY_BINDING_ID,),
         )
     drifted = doctor_episodes_projection(vault)
     assert not drifted.ok
