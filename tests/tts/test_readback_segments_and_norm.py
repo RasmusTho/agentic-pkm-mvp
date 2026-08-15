@@ -16,7 +16,6 @@ Each test asserts the fixed behaviour on the production call path:
 from __future__ import annotations
 
 import subprocess
-import sys
 import wave
 from array import array
 from pathlib import Path
@@ -28,13 +27,6 @@ from app.tts.planning import build_tts_plan
 from app.tts.providers import TTSVoice, resolve_voice
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-
-# The Companion UI dev page (read-back surface) lives in a sibling package that
-# is only on sys.path via tests/companion_ui/conftest.py. Add it here too so the
-# AC1/AC2 UI assertions below can import the production render function.
-_COMPANION_APP = REPO_ROOT / "companion-ui" / "companion-app"
-if str(_COMPANION_APP) not in sys.path:
-    sys.path.insert(0, str(_COMPANION_APP))
 
 
 def _config(tmp_path: Path) -> TTSConfig:

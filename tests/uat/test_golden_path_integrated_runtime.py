@@ -13,7 +13,6 @@ import io
 import json
 import os
 import subprocess
-import sys
 import time
 from dataclasses import dataclass
 from functools import lru_cache
@@ -22,10 +21,6 @@ from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
-
-_COMPANION_APP_ROOT = Path(__file__).resolve().parents[2] / "companion-ui" / "companion-app"
-if str(_COMPANION_APP_ROOT) not in sys.path:
-    sys.path.insert(0, str(_COMPANION_APP_ROOT))
 
 import app.api.routes.canvas as canvas_module
 import app.api.routes.companion as companion_module
