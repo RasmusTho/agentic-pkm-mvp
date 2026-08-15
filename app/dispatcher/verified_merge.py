@@ -22,6 +22,8 @@ from app.dispatcher.verification_contract import (
     has_closing_issue_attempt,
     has_neutralized_closing_marker,
     neutralize_closing_issue_references,
+    resolve_builderops_routing_status,
+    resolve_final_review_rounds,
     resolve_issue_authority,
     resolve_neutralized_issue_authority,
 )
@@ -32,6 +34,8 @@ VERIFIED_MERGE_AUTHORITY_MARKER = "verified issue-set merge authority:"
 VERIFIED_MERGE_PHASE_CONTRACT = "verified_issue_set_merge_phase.v1"
 VERIFIED_MERGE_PHASE_MARKER = "verified issue-set merge phase:"
 VERIFIED_MERGE_READINESS_CONTRACT = "verified_issue_set_merge_readiness.v1"
+ISSUE_FREE_REVIEWED_LANE_RECEIPT_CONTRACT = "issue_free_reviewed_lane_receipt.v1"
+ISSUE_FREE_REVIEWED_LANE_RECEIPT_MARKER = "issue-free reviewed lane receipt:"
 FIXED_VERIFIED_MERGE_COMMIT_MESSAGE = (
     "Exact-head delivery; issue closure is performed explicitly from the "
     "authenticated issue-set receipt."
@@ -1063,18 +1067,34 @@ def prepare_verified_merge(
     head_sha = context.get("head_sha")
     run_id = context.get("run_id")
     repair_budget = context.get("repair_budget")
-    if (
+    context_is_well_formed = (
         context.get("contract") != _CONTEXT_CONTRACT
         or not isinstance(repository, str)
         or not repository
         or not _positive_int(pr_number)
-        or not _positive_int(governing_issue)
         or not isinstance(head_sha, str)
         or _SHA_PATTERN.fullmatch(head_sha) is None
         or not isinstance(run_id, str)
         or not run_id
         or not isinstance(repair_budget, Mapping)
-    ):
+    )
+    if context_is_well_formed:
+        raise ValueError("verified merge context is malformed")
+
+    assert isinstance(repository, str)
+    assert isinstance(pr_number, int)
+    assert isinstance(head_sha, str)
+    assert isinstance(run_id, str)
+    assert isinstance(repair_budget, Mapping)
+
+    if governing_issue is None:
+        return _prepare_issue_free_reviewed_lane_merge(
+            context=context,
+            pr=pr,
+            live_closing_issues=live_closing_issues,
+            merge_readiness=merge_readiness,
+        )
+    if not _positive_int(governing_issue):
         raise ValueError("verified merge context is malformed")
 
     closing = _issue_tuple(
@@ -1154,6 +1174,89 @@ def prepare_verified_merge(
         "fixed_commit_message": FIXED_VERIFIED_MERGE_COMMIT_MESSAGE,
         "fixed_commit_title": fixed_verified_merge_commit_title(pr_number),
         "neutralized_body": neutralized_body,
+        "original_body": body,
+    }
+
+
+def _prepare_issue_free_reviewed_lane_merge(
+    *,
+    context: Mapping[str, object],
+    pr: Mapping[str, object],
+    live_closing_issues: object,
+    merge_readiness: Mapping[str, object],
+) -> dict[str, object]:
+    """Bind an issue-free reviewed lane to its exact merge-ready PR head.
+
+    Unlike issue-backed delivery, this path never neutralizes a body or creates
+    issue authority.  The PR-thread receipt records the authenticated review
+    lane before the ordinary exact-head merge owned by verification-and-closure.
+    """
+
+    repository = context["repository"]
+    pr_number = context["pr_number"]
+    head_sha = context["head_sha"]
+    run_id = context["run_id"]
+    assert isinstance(repository, str)
+    assert isinstance(pr_number, int)
+    assert isinstance(head_sha, str)
+    assert isinstance(run_id, str)
+
+    try:
+        closing = _issue_tuple(
+            context.get("closing_issues"), field="closing issues", allow_empty=True
+        )
+        supporting = _issue_tuple(
+            context.get("supporting_issues"),
+            field="supporting issues",
+            allow_empty=True,
+        )
+        observed_closing = _live_closing_issues(
+            live_closing_issues, repository=repository
+        )
+    except ValueError as exc:
+        raise ValueError("issue-free reviewed lane authority is malformed") from exc
+    if closing or supporting or observed_closing:
+        raise ValueError("issue-free reviewed lane authority is malformed")
+
+    pr_head = pr.get("head")
+    body = pr.get("body")
+    title = pr.get("title")
+    if (
+        pr.get("number") != pr_number
+        or pr.get("state") != "open"
+        or pr.get("merged_at") is not None
+        or pr.get("draft") is not False
+        or not isinstance(pr_head, Mapping)
+        or pr_head.get("sha") != head_sha
+        or not isinstance(body, str)
+        or not isinstance(title, str)
+        or has_closing_issue_attempt(title)
+        or has_closing_issue_attempt(body)
+        or resolve_issue_authority(body) is not None
+        or resolve_final_review_rounds(body) != 1
+        or not resolve_builderops_routing_status(
+            body, has_issue_authority=False
+        ).is_tier1_lane
+    ):
+        raise ValueError("issue-free reviewed lane PR snapshot is ineligible")
+
+    _assert_neutralization_precondition(merge_readiness, head_sha=head_sha)
+    receipt = {
+        "body_sha256": _body_digest(body),
+        "contract": ISSUE_FREE_REVIEWED_LANE_RECEIPT_CONTRACT,
+        "head_sha": head_sha,
+        "pr_number": pr_number,
+        "repository": repository,
+        "run_id": run_id,
+    }
+    receipt_json = json.dumps(receipt, sort_keys=True, separators=(",", ":"))
+    return {
+        "fixed_commit_message": FIXED_VERIFIED_MERGE_COMMIT_MESSAGE,
+        "fixed_commit_title": fixed_verified_merge_commit_title(pr_number),
+        "issue_free_receipt": receipt,
+        "issue_free_receipt_comment": (
+            f"{ISSUE_FREE_REVIEWED_LANE_RECEIPT_MARKER}\n```json\n{receipt_json}\n```"
+        ),
         "original_body": body,
     }
 
