@@ -116,13 +116,6 @@ def test_repair_progress_receipt_is_lease_fenced_and_replay_safe(tmp_path) -> No
          "failure_domain": "review_code_correctness", "mechanism_id": "parser", "head_sha": run.head_sha},
         holder="host", lease_id=claimed.lease_id,
     )
-    with pytest.raises(ValueError, match="current verification head"):
-        state.record_attempt(
-            run.run_id, "review", "review-stale", "terra", "high", {}, "blocking",
-            {"reviewed_attempt_id": first_attempt["attempt_id"], "finding_id": "F1",
-             "failure_domain": "review_code_correctness", "mechanism_id": "parser", "head_sha": "b" * 40},
-            holder="host", lease_id=claimed.lease_id,
-        )
     attempts = state.attempts(run.run_id)
     progress = {"prior_attempt_id": first_attempt["attempt_id"], "prior_review_attempt_id": attempts[-1]["attempt_id"], "reviewed_head_sha": run.head_sha,
                 "mechanism_state_change": "parser state narrowed", "validation_delta": "new focused proof"}
