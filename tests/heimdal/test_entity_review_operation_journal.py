@@ -77,6 +77,7 @@ from app.heimdal.settings_notes import (
     read_settings_note,
     write_settings_note,
 )
+from app.instance.binding_ids import COMPATIBILITY_BINDING_ID
 from app.services import outbox as outbox_module
 from app.vault.manager import VaultContext
 from app.write_guard import WriteGuard
@@ -563,7 +564,11 @@ def test_merge_event_commit_is_visible_on_fresh_connection_before_pending_clear(
     events = _merged_event_rows(scratch_dsn)
     assert len(events) == 1
     event_id, payload = events[0]
-    assert event_id == operation.outbox_event_id
+    assert event_id == outbox_module.derive_binding_scoped_idempotency_key(
+        MERGED_TOPIC,
+        COMPATIBILITY_BINDING_ID,
+        operation.outbox_event_id,
+    )
     assert payload["from_id"] == from_id
     assert payload["into_id"] == into_id
     assert payload["operation_id"] == operation.operation_id
@@ -604,11 +609,18 @@ class _CallerTransactionJournal(EntityReviewOperationJournal):
             source="heimdal.entity_review",
         )
         outbox_module.write_outbox_event(
-            event, conn=self.caller_conn, idempotency_key=operation.outbox_event_id
+            event,
+            conn=self.caller_conn,
+            idempotency_key=operation.outbox_event_id,
         )
         # Same-transaction read-your-own-write: the caller can see the row...
+        scoped_event_id = outbox_module.derive_binding_scoped_idempotency_key(
+            MERGED_TOPIC,
+            COMPATIBILITY_BINDING_ID,
+            operation.outbox_event_id,
+        )
         seen = self.caller_conn.execute(
-            "SELECT count(*) FROM outbox WHERE id = %s", (operation.outbox_event_id,)
+            "SELECT count(*) FROM outbox WHERE id = %s", (scoped_event_id,)
         ).fetchone()
         assert seen == (1,), "the caller transaction must see its own uncommitted insert"
         # ...and on the #4253 path that visibility was treated as durability.

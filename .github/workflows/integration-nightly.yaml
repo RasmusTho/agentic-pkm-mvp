@@ -231,7 +231,7 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
-          pytest -c /dev/null -q \
+          pytest -c /dev/null --rootdir=. -q \
             tests/int/test_pg_backend.py \
             tests/api/test_status_store_pg.py \
             tests/indexer/test_outbox_roundtrip_pg.py \

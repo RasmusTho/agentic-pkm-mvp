@@ -24,8 +24,8 @@ pytestmark = pytest.mark.pg
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
-# The head revision before the outbox table became migration-owned.
-PRE_OUTBOX_HEAD = "699c97b7c007"
+# The head revision immediately before outbox binding metadata was added.
+PRE_BINDING_HEAD = "f5a05a5b0001"
 
 # The current outbox-schema-owning revision this test asserts parity against.
 # Pinned explicitly (not "head") so unrelated later DDL cannot move the target.
@@ -200,10 +200,10 @@ def test_upgrade_preserves_existing_rows_and_installs_binding_metadata(
     """Existing scalar rows survive and become explicit compatibility history."""
     dsn = scratch_db_factory()
 
-    # Simulate an existing environment: schema lineage at the pre-outbox head,
-    # outbox table created by the historical create-on-demand bootstrap.
-    _alembic_upgrade(dsn, monkeypatch, PRE_OUTBOX_HEAD)
-    _run_bootstrap(dsn, monkeypatch)
+    # Simulate the exact pre-cutover production schema. Advancing from the old
+    # pre-outbox head would also exercise unrelated intervening migrations;
+    # this proof owns only the f5a05a5b0001 -> f6a05a7b0001 outbox transition.
+    _alembic_upgrade(dsn, monkeypatch, PRE_BINDING_HEAD)
 
     row_id = uuid.uuid4()
     with psycopg.connect(dsn) as conn:

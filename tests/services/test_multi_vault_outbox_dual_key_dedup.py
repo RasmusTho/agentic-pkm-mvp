@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import psycopg
 from psycopg import sql
@@ -140,6 +140,6 @@ def test_distinct_bindings_do_not_dedup_against_each_other(
             "SELECT vault_binding_id, legacy_key FROM outbox ORDER BY vault_binding_id"
         ).fetchall()
         assert rows == [
-            ("binding-b", legacy_key),
-            (COMPATIBILITY_BINDING_ID, legacy_key),
+            ("binding-b", UUID(legacy_key)),
+            (COMPATIBILITY_BINDING_ID, UUID(legacy_key)),
         ]

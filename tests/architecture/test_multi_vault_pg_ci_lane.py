@@ -21,6 +21,7 @@ def test_mvr05_pg_targets_run_on_provisioned_postgres_and_cannot_skip() -> None:
     """MVR-05A7's PostgreSQL proofs run in both real-DB lanes without skip guards."""
     nightly = (REPO_ROOT / ".github/workflows/integration-nightly.yaml").read_text()
     pr_path = (REPO_ROOT / ".github/workflows/ci-smoke.yaml").read_text()
+    assert "--rootdir=." in _pytest_step(nightly, "Bounded PG verification lane")
 
     for target in PG_TARGETS:
         assert target in _pytest_step(nightly, "Bounded PG verification lane")
