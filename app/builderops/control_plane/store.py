@@ -2006,7 +2006,7 @@ class PostgresBuilderOpsStore:
             self._assert_executor_enabled(conn)
             row = conn.execute(
                 "SELECT task_id, status, intent_receipt_sequence, intent_lsn::text AS intent_lsn, "
-                "claim_fencing_token, claim_expires_at, reconciliation_receipt_sequence, "
+                "claim_fencing_token, claim_expires_at, post_effect_phase, reconciliation_receipt_sequence, "
                 "reconciliation_lsn::text AS reconciliation_lsn "
                 "FROM builderops_outbox WHERE repository = %s AND operation_key = %s FOR UPDATE",
                 (envelope.repository, operation_key),
@@ -2027,6 +2027,8 @@ class PostgresBuilderOpsStore:
                 raise LeaseUnavailable("outbox operation is terminal: succeeded")
             if row["status"] == "dead_letter":
                 raise LeaseUnavailable("outbox operation is terminal: dead_letter")
+            if row["status"] == "pending" and row["post_effect_phase"] == "pending":
+                raise LeaseUnavailable("row-derived post-effect reconciliation must finish before reclaim")
             if row["status"] == "pending" and row["reconciliation_receipt_sequence"] is not None:
                 self._load_reconciliation(
                     conn,
@@ -2145,6 +2147,7 @@ class PostgresBuilderOpsStore:
                 "claim_lsn::text AS claim_lsn, claim_receipt_sequence, claim_expires_at, "
                 "post_effect_phase, post_effect_fencing_token, "
                 "post_effect_intent_lsn::text AS post_effect_intent_lsn, "
+                "post_effect_intent_lsn::text AS post_effect_intent_lsn, "
                 "post_effect_claim_lsn::text AS post_effect_claim_lsn, "
                 "clock_timestamp() AS database_now FROM builderops_outbox "
                 "WHERE repository = %s AND operation_key = %s FOR UPDATE",
@@ -2205,6 +2208,13 @@ class PostgresBuilderOpsStore:
                 raise StaleFencingToken("post-effect reconciliation requires current locked fence")
             if row["post_effect_phase"] == "reconciled":
                 if (
+                    row["post_effect_fencing_token"] != row["claim_fencing_token"]
+                    or row["post_effect_intent_lsn"] != row["intent_lsn"]
+                    or row["post_effect_claim_lsn"] != row["claim_lsn"]
+                    or row["post_effect_claim_receipt_sequence"] != row["claim_receipt_sequence"]
+                ):
+                    raise StaleFencingToken("reconciled post-effect identity drifted from locked row")
+                if (
                     dict(row["post_effect_evidence"] or {}) != dict(evidence)
                     or row["post_effect_observed_applied"] is not observed_applied
                     or row["post_effect_terminal_unknown"] is not terminal_unknown
@@ -2246,6 +2256,7 @@ class PostgresBuilderOpsStore:
             result = {"status": reconciled.status, "fencing_token": reconciled.fencing_token,
                       "receipt_sequence": reconciled.receipt_sequence, "recovery_lsn": reconciled.recovery_lsn,
                       "replayed": reconciled.replayed}
+        race_retry = False
         with self._connect() as conn:
             updated = conn.execute(
                 "UPDATE builderops_outbox SET post_effect_phase = 'reconciled', "
@@ -2257,7 +2268,16 @@ class PostgresBuilderOpsStore:
                  terminal_unknown, repository, operation_key, minimum_fencing_token),
             ).fetchone()
             if updated is None:
-                raise StaleFencingToken("post-effect reconciliation was superseded")
+                race_retry = True
+        if race_retry:
+            return self.reconcile_post_effect(
+                repository=repository,
+                operation_key=operation_key,
+                minimum_fencing_token=minimum_fencing_token,
+                observed_applied=observed_applied,
+                terminal_unknown=terminal_unknown,
+                evidence=evidence,
+            )
         return result
 
     def _repair_outbox_claim_binding(self, repository: str, operation_key: str) -> None:
