@@ -899,7 +899,7 @@ if [ "${BUILDEROPS_BOOTSTRAP:-1}" = "1" ]; then
         )
       fi
       if ! scripts/start_builderops_services.sh "${builderops_bootstrap_args[@]}"; then
-        echo "WARNING: BuilderOps bootstrap failed unexpectedly; continuing runtime startup in degraded BuilderOps mode" >&2
+        echo "WARNING: BuilderOps bootstrap failed unexpectedly; Builder System routing is degraded to GitHub-label-only claims where GitHub is reachable; continuing runtime startup" >&2
       fi
       mark_phase_ok "builderops_bootstrap"
       ;;
