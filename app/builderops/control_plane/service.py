@@ -138,7 +138,7 @@ _ROW_DERIVED_FORBIDDEN_EVIDENCE_KEYS = frozenset(
         "fence",
     }
 )
-_POSTGRES_LSN_LITERAL = re.compile(r"(?<![A-Za-z0-9])[0-9A-F]+/[0-9A-F]+(?![A-Za-z0-9])", re.IGNORECASE)
+_POSTGRES_LSN_LITERAL = re.compile(r"[0-9A-F]+/[0-9A-F]+", re.IGNORECASE)
 
 
 def _canonical_durable_key(key: str) -> str:
@@ -149,8 +149,18 @@ def _canonical_durable_key(key: str) -> str:
     return re.sub(r"[^A-Za-z0-9]+", "_", camel_split).strip("_").lower()
 
 
+def _row_derived_evidence_text(value: Any) -> str:
+    if isinstance(value, Mapping):
+        return "".join(_row_derived_evidence_text(item) for item in value.values())
+    if isinstance(value, (list, tuple)):
+        return "".join(_row_derived_evidence_text(item) for item in value)
+    return value if isinstance(value, str) else ""
+
+
 def _assert_row_derived_evidence_safe(value: Any) -> None:
     """Keep caller evidence from becoming dormant claim or LSN authority."""
+    if _POSTGRES_LSN_LITERAL.search(_row_derived_evidence_text(value)):
+        raise ValueError("row-derived reconciliation evidence cannot contain durability LSNs")
     if isinstance(value, Mapping):
         for key, child in value.items():
             normalized = _canonical_durable_key(str(key))
