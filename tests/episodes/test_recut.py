@@ -42,7 +42,6 @@ from app.episodes import store as store_module
 from app.episodes.assignment import (
     BASIS_PROVENANCE,
     BINDING_STATE_ACTIVE,
-    BINDING_TABLE,
 )
 from app.episodes.notes import episode_note_rel_path, parse_episode_note, parse_episode_note_document
 from app.episodes.recut import (
