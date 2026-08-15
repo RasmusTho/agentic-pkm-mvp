@@ -131,6 +131,11 @@ _ROW_DERIVED_FORBIDDEN_EVIDENCE_KEYS = frozenset(
         "receipt_sequence",
         "recovery_lsn",
         "authority_envelope",
+        "claim",
+        "intent",
+        "worker",
+        "receipt",
+        "fence",
     }
 )
 

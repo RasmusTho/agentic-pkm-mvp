@@ -631,7 +631,16 @@ def test_row_derived_post_effect_api_rejects_caller_attested_claim_evidence(
             "operation_key": operation_key,
             "minimum_fencing_token": 1,
             "observed_applied": False,
-            "evidence": {"nested": {"claim_lsn": "0/0"}},
+            "evidence": {
+                "nested": {
+                    "claim": {
+                        "lsn": "0/0",
+                        "worker": {"id": "forged"},
+                        "receipt": {"sequence": 99},
+                        "fence": 7,
+                    }
+                }
+            },
         },
     )
     assert response.status_code == 422
