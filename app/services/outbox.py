@@ -813,7 +813,9 @@ def poll_outbox_one(
         cur = _exec(
             conn,
             "select id, topic, payload, vault_binding_id from outbox "
-            "where delivered_at is null order by created_at asc limit 1",
+            "where delivered_at is null and vault_binding_id <> %s "
+            "order by created_at asc limit 1",
+            (OUTBOX_QUARANTINE_BINDING_ID,),
         )
         row = cur.fetchone()
         if not row:

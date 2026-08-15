@@ -752,12 +752,12 @@ class EntityReviewOperationJournal:
             cur = _exec(
                 conn,
                 "SELECT topic, payload FROM outbox "
-                "WHERE id = %s OR (legacy_key = %s AND vault_binding_id = %s) "
+                "WHERE vault_binding_id = %s AND (id = %s OR legacy_key = %s) "
                 "ORDER BY (id = %s) DESC LIMIT 1",
                 (
-                    record.outbox_event_id,
-                    record.outbox_event_id,
                     COMPATIBILITY_BINDING_ID,
+                    record.outbox_event_id,
+                    record.outbox_event_id,
                     record.outbox_event_id,
                 ),
             )
