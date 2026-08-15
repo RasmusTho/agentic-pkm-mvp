@@ -136,6 +136,16 @@ The gate is a local ordering check: it exposes whether PR-body preflight, docs g
 governance/contract review should run before CI waiting becomes the main feedback loop. It does not
 replace required GitHub checks, branch protection, or final review triage.
 
+For actual `.github/workflows/*.yml` or `.yaml` changes, the gate derives risk from the Git diff
+between its resolved base and head; callers cannot suppress that inference by omitting a changed
+file or risk flag. The bounded structural interpretation covers root `concurrency` (including
+quoted keys and block scalars), `pull_request` trigger forms, and direct `jobs.<job>.if` admission
+only. Step conditions and nested reusable-workflow input names are not admission. When inference
+finds a high-risk form, supply `--workflow-review-receipt <ignored-json-path>`: it must bind the
+resolved base SHA, head SHA, workflow-diff digest, inferred risk set, a pass verdict, reviewer, and
+scenario-matrix completion. This is local ordering evidence; hosted current-head CI and final
+independent review remain the merge authorities.
+
 An emergency direct repair may bypass the local gate only after an explicit completed risk
 assessment finds no high-risk surface. A declared high-risk surface is never bypassable:
 
