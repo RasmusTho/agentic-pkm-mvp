@@ -240,9 +240,7 @@ class BindingEffectLeaseManager:
                                     ]
                                     updated["exclusiveHolder"] = holder
                                 self._commit_locked(vault_binding_id, current, updated)
-                                return _HeldLease(
-                                    vault_binding_id, holder_id, mode, descriptor
-                                )
+                                return _HeldLease(vault_binding_id, holder_id, mode, descriptor)
                 if deadline is not None and time.monotonic() >= deadline:
                     raise BindingEffectLeaseTimeout(
                         f"timed out waiting for {mode} binding effect lease"
@@ -291,9 +289,7 @@ class BindingEffectLeaseManager:
             current = self._load_reconciled_locked(vault_binding_id)
             updated = copy.deepcopy(current)
             updated["exclusivePending"] = [
-                item
-                for item in updated["exclusivePending"]
-                if item["holderId"] != holder_id
+                item for item in updated["exclusivePending"] if item["holderId"] != holder_id
             ]
             if updated != current:
                 self._commit_locked(vault_binding_id, current, updated)
@@ -501,14 +497,7 @@ class BindingEffectLeaseManager:
                     return f"ps:{output[1]}", output[0][:1]
             except (OSError, subprocess.SubprocessError):
                 pass
-            try:
-                boot = Path("/proc/sys/kernel/random/boot_id")
-                return (
-                    f"pid:{pid}:boot:{boot.read_text(encoding='ascii').strip()}",
-                    "?",
-                )
-            except OSError:
-                return f"pid:{pid}", "?"
+            raise BindingEffectLeaseError("a trustworthy process-incarnation token is unavailable")
 
     @staticmethod
     def _empty_state(vault_binding_id: str) -> _LeaseState:
@@ -522,9 +511,7 @@ class BindingEffectLeaseManager:
             "exclusiveHolder": None,
         }
 
-    def _validate_state(
-        self, vault_binding_id: str, value: object
-    ) -> _LeaseState:
+    def _validate_state(self, vault_binding_id: str, value: object) -> _LeaseState:
         if not isinstance(value, dict):
             raise BindingEffectLeaseError("binding effect lease state is not a mapping")
         expected = set(self._empty_state(vault_binding_id))

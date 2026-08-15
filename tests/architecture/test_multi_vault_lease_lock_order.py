@@ -9,19 +9,19 @@ def _unordered_state_lock_lines(source: str) -> list[int]:
     acquisition = next(
         node
         for node in ast.walk(tree)
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-        and node.name == "_acquire"
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == "_acquire"
     )
     violations: list[int] = []
 
     def visit(node: ast.AST, *, ownership_fenced: bool) -> None:
         if isinstance(node, ast.With):
             contexts = [ast.unparse(item.context_expr) for item in node.items]
-            fenced = ownership_fenced or any(
-                "active_binding_fence" in context for context in contexts
-            )
-            if any("_state_locked" in context for context in contexts) and not fenced:
-                violations.append(node.lineno)
+            fenced = ownership_fenced
+            for context in contexts:
+                if "_state_locked" in context and not fenced:
+                    violations.append(node.lineno)
+                if "active_binding_fence" in context:
+                    fenced = True
             for statement in node.body:
                 visit(statement, ownership_fenced=fenced)
             return
@@ -54,7 +54,7 @@ def test_production_callers_take_the_ownership_fence_before_the_binding_lease() 
     inverted = """
 class Example:
     def _acquire(self):
-        with self._state_locked('binding-a'):
+        with self._state_locked('binding-a'), self.active_binding_fence('binding-a'):
             self._mutate()
 """
     assert _unordered_state_lock_lines(inverted)

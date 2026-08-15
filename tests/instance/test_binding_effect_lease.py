@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import multiprocessing
 import os
+import queue
 import threading
 import time
 from pathlib import Path
@@ -57,11 +58,17 @@ def _manager_for_existing(root: str) -> BindingEffectLeaseManager:
 def _hold_shared(root: str, acquired, release) -> None:
     manager = _manager_for_existing(root)
     vault = Path(root) / "vaults" / "binding-a"
-    with manager.shared_effect(
-        "binding-a", channel_id="dev", root=vault, timeout=5
-    ):
+    with manager.shared_effect("binding-a", channel_id="dev", root=vault, timeout=5):
         acquired.set()
         release.wait(5)
+
+
+def _record_exclusive(root: str, name: str, entered) -> None:
+    manager = _manager_for_existing(root)
+    vault = Path(root) / "vaults" / "binding-a"
+    with manager.exclusive_change("binding-a", channel_id="dev", root=vault, timeout=5):
+        entered.put(name)
+        time.sleep(0.03)
 
 
 def test_exclusive_acquirer_waits_for_an_in_flight_shared_holder(tmp_path) -> None:
@@ -72,16 +79,12 @@ def test_exclusive_acquirer_waits_for_an_in_flight_shared_holder(tmp_path) -> No
     exclusive_entered = threading.Event()
 
     def hold_shared() -> None:
-        with manager.shared_effect(
-            "binding-a", channel_id="dev", root=vault, timeout=2
-        ):
+        with manager.shared_effect("binding-a", channel_id="dev", root=vault, timeout=2):
             shared_entered.set()
             shared_release.wait(2)
 
     def acquire_exclusive() -> None:
-        with manager.exclusive_change(
-            "binding-a", channel_id="dev", root=vault, timeout=2
-        ):
+        with manager.exclusive_change("binding-a", channel_id="dev", root=vault, timeout=2):
             exclusive_entered.set()
 
     shared = threading.Thread(target=hold_shared)
@@ -105,16 +108,12 @@ def test_pending_exclusive_blocks_new_shared_acquisition(tmp_path) -> None:
     exclusive_entered = threading.Event()
 
     def first_shared() -> None:
-        with manager.shared_effect(
-            "binding-a", channel_id="dev", root=vault, timeout=2
-        ):
+        with manager.shared_effect("binding-a", channel_id="dev", root=vault, timeout=2):
             first_entered.set()
             first_release.wait(2)
 
     def exclusive() -> None:
-        with manager.exclusive_change(
-            "binding-a", channel_id="dev", root=vault, timeout=2
-        ):
+        with manager.exclusive_change("binding-a", channel_id="dev", root=vault, timeout=2):
             exclusive_entered.set()
 
     shared_thread = threading.Thread(target=first_shared)
@@ -125,9 +124,7 @@ def test_pending_exclusive_blocks_new_shared_acquisition(tmp_path) -> None:
     assert manager.wait_for_exclusive_pending("binding-a", timeout=1)
 
     with pytest.raises(BindingEffectLeaseTimeout):
-        with manager.shared_effect(
-            "binding-a", channel_id="dev", root=vault, timeout=0.05
-        ):
+        with manager.shared_effect("binding-a", channel_id="dev", root=vault, timeout=0.05):
             pytest.fail("a new shared holder barged ahead of a pending exclusive")
 
     first_release.set()
@@ -141,12 +138,8 @@ def test_leases_for_distinct_bindings_do_not_serialise(tmp_path) -> None:
     vault_a = tmp_path / "vaults" / "binding-a"
     vault_b = tmp_path / "vaults" / "binding-b"
 
-    with manager.shared_effect(
-        "binding-a", channel_id="dev", root=vault_a, timeout=1
-    ):
-        with manager.exclusive_change(
-            "binding-b", channel_id="dev", root=vault_b, timeout=0.2
-        ):
+    with manager.shared_effect("binding-a", channel_id="dev", root=vault_a, timeout=1):
+        with manager.exclusive_change("binding-b", channel_id="dev", root=vault_b, timeout=0.2):
             assert manager.observe("binding-a").shared_count == 1
             assert manager.observe("binding-b").exclusive_held
 
@@ -163,17 +156,13 @@ def test_exclusion_holds_across_separate_processes(tmp_path) -> None:
     manager = _manager_for_existing(str(tmp_path))
     vault = tmp_path / "vaults" / "binding-a"
     with pytest.raises(BindingEffectLeaseTimeout):
-        with manager.exclusive_change(
-            "binding-a", channel_id="dev", root=vault, timeout=0.1
-        ):
+        with manager.exclusive_change("binding-a", channel_id="dev", root=vault, timeout=0.1):
             pytest.fail("cross-process exclusive overlapped a shared holder")
 
     release.set()
     process.join(5)
     assert process.exitcode == 0
-    with manager.exclusive_change(
-        "binding-a", channel_id="dev", root=vault, timeout=1
-    ):
+    with manager.exclusive_change("binding-a", channel_id="dev", root=vault, timeout=1):
         assert manager.observe("binding-a").exclusive_held
 
 
@@ -181,16 +170,12 @@ def test_unreaped_dead_exclusive_waiter_does_not_occupy_fifo_head(tmp_path) -> N
     manager = _build_manager(tmp_path, "binding-a")
     vault = tmp_path / "vaults" / "binding-a"
 
-    with manager.shared_effect(
-        "binding-a", channel_id="dev", root=vault, timeout=1
-    ):
+    with manager.shared_effect("binding-a", channel_id="dev", root=vault, timeout=1):
         pid = os.fork()
         if pid == 0:
             child = _manager_for_existing(str(tmp_path))
             try:
-                with child.exclusive_change(
-                    "binding-a", channel_id="dev", root=vault, timeout=10
-                ):
+                with child.exclusive_change("binding-a", channel_id="dev", root=vault, timeout=10):
                     os._exit(0)
             except BaseException:
                 os._exit(2)
@@ -199,9 +184,35 @@ def test_unreaped_dead_exclusive_waiter_does_not_occupy_fifo_head(tmp_path) -> N
         time.sleep(0.05)
 
     try:
-        with manager.exclusive_change(
-            "binding-a", channel_id="dev", root=vault, timeout=2
-        ):
+        with manager.exclusive_change("binding-a", channel_id="dev", root=vault, timeout=2):
             assert manager.observe("binding-a").exclusive_held
     finally:
         os.waitpid(pid, 0)
+
+
+def test_cross_process_exclusive_waiters_preserve_fifo_order(tmp_path) -> None:
+    manager = _build_manager(tmp_path, "binding-a")
+    vault = tmp_path / "vaults" / "binding-a"
+    context = multiprocessing.get_context("spawn")
+    entered = context.Queue()
+
+    with manager.shared_effect("binding-a", channel_id="dev", root=vault, timeout=1):
+        first = context.Process(target=_record_exclusive, args=(str(tmp_path), "first", entered))
+        first.start()
+        assert manager.wait_for_exclusive_pending("binding-a", timeout=3)
+        second = context.Process(target=_record_exclusive, args=(str(tmp_path), "second", entered))
+        second.start()
+        deadline = time.monotonic() + 3
+        while (
+            manager.observe("binding-a").exclusive_pending_count < 2 and time.monotonic() < deadline
+        ):
+            time.sleep(0.01)
+        assert manager.observe("binding-a").exclusive_pending_count == 2
+
+    assert entered.get(timeout=3) == "first"
+    assert entered.get(timeout=3) == "second"
+    with pytest.raises(queue.Empty):
+        entered.get_nowait()
+    first.join(5)
+    second.join(5)
+    assert first.exitcode == second.exitcode == 0
