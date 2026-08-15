@@ -325,6 +325,42 @@ def test_post_effect_recovers_after_legacy_reconcile_commits_before_phase_marker
     assert repaired["replayed"] is True
 
 
+def test_expired_unknown_post_effect_identity_is_reset_before_recovery_rebind(
+    control_plane_store, envelope
+) -> None:
+    """A new recovery fence cannot inherit a stranded pending phase identity."""
+    result = _commit_outbox_task(
+        control_plane_store, envelope, task_id="post-effect-expired-rebind",
+        key="post-effect-expired-rebind", effect_type="github.comment", payload={"issue": 4898},
+    )
+    original = control_plane_store.claim_outbox(
+        envelope=envelope, operation_key=result.operation_key, worker_id="executor-1"
+    )
+    control_plane_store.begin_post_effect_pending(
+        repository=envelope.repository, operation_key=result.operation_key,
+        minimum_fencing_token=original.fencing_token,
+    )
+    control_plane_store.mark_effect_unknown(original, detail="readback required")
+    _expire_outbox_claim(control_plane_store, envelope.repository, result.operation_key)
+
+    recovered = control_plane_store.outbox_claim(
+        envelope=envelope, operation_key=result.operation_key, worker_id="executor-2"
+    )
+    assert recovered.fencing_token > original.fencing_token
+    rebound = control_plane_store.begin_post_effect_pending(
+        repository=envelope.repository, operation_key=result.operation_key,
+        minimum_fencing_token=recovered.fencing_token,
+    )
+    assert rebound["fencing_token"] == recovered.fencing_token
+    assert rebound["claim_lsn"] == recovered.claim_lsn
+    with pytest.raises(StaleFencingToken):
+        control_plane_store.reconcile_post_effect(
+            repository=envelope.repository, operation_key=result.operation_key,
+            minimum_fencing_token=original.fencing_token, observed_applied=False,
+            evidence={"readback": "not-found"},
+        )
+
+
 def test_concurrent_identical_post_effect_reconciliation_replays_one_row_identity(
     control_plane_store, envelope
 ) -> None:
