@@ -55,7 +55,10 @@ def _validate_row_derived_evidence(evidence: Mapping[str, Any]) -> None:
     ):
         raise ValueError("row-derived readback evidence has an invalid merge SHA")
     session = evidence.get("provider_session_id")
-    if session is not None and (not isinstance(session, str) or not 0 < len(session) <= 256):
+    if session is not None and (
+        not isinstance(session, str)
+        or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.:@-]{0,127}", session) is None
+    ):
         raise ValueError("row-derived readback evidence has an invalid provider session")
     relaunch = evidence.get("relaunch_performed")
     if relaunch is not None and type(relaunch) is not bool:
@@ -2165,7 +2168,7 @@ class PostgresBuilderOpsStore:
 
     def begin_post_effect_pending(
         self, *, repository: str, operation_key: str, minimum_fencing_token: int,
-        expected_principal: str | None = None,
+        expected_principal: str,
     ) -> Mapping[str, Any]:
         """Persist dormant phase identity from a locked row, never request evidence."""
         repository = canonical_repository(repository)
@@ -2189,7 +2192,7 @@ class PostgresBuilderOpsStore:
                 or int(row["claim_fencing_token"]) != minimum_fencing_token
             ):
                 raise StaleFencingToken("post-effect pending requires current locked fence")
-            if expected_principal is not None and dict(row["authority_envelope"] or {}).get("actor") != expected_principal:
+            if dict(row["authority_envelope"] or {}).get("actor") != expected_principal:
                 raise PermissionError("post-effect claim does not belong to authenticated principal")
             derived = {
                 "fencing_token": int(row["claim_fencing_token"]),
@@ -2217,7 +2220,7 @@ class PostgresBuilderOpsStore:
 
     def reconcile_post_effect(
         self, *, repository: str, operation_key: str, minimum_fencing_token: int,
-        observed_applied: bool, evidence: Mapping[str, Any], expected_principal: str | None = None,
+        observed_applied: bool, evidence: Mapping[str, Any], expected_principal: str,
         terminal_unknown: bool = False,
     ) -> Mapping[str, Any]:
         """Use the stored row-derived claim for dormant reconciliation only."""
@@ -2242,7 +2245,7 @@ class PostgresBuilderOpsStore:
             ).fetchone()
             if row is None or int(row["claim_fencing_token"]) != minimum_fencing_token:
                 raise StaleFencingToken("post-effect reconciliation requires current locked fence")
-            if expected_principal is not None and dict(row["authority_envelope"] or {}).get("actor") != expected_principal:
+            if dict(row["authority_envelope"] or {}).get("actor") != expected_principal:
                 raise PermissionError("post-effect claim does not belong to authenticated principal")
             if row["post_effect_phase"] == "reconciled":
                 if (

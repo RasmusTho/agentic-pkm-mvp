@@ -225,11 +225,13 @@ def test_post_effect_pending_derives_claim_and_lsns_from_locked_outbox_row(
         repository=envelope.repository,
         operation_key=result.operation_key,
         minimum_fencing_token=claim.fencing_token,
+        expected_principal=envelope.actor,
     )
     assert pending == control_plane_store.begin_post_effect_pending(
         repository=envelope.repository,
         operation_key=result.operation_key,
         minimum_fencing_token=claim.fencing_token,
+        expected_principal=envelope.actor,
     )
     assert pending["intent_lsn"] == claim.intent_lsn
     assert pending["claim_lsn"] == claim.claim_lsn
@@ -238,6 +240,7 @@ def test_post_effect_pending_derives_claim_and_lsns_from_locked_outbox_row(
             repository=envelope.repository,
             operation_key=result.operation_key,
             minimum_fencing_token=claim.fencing_token - 1,
+            expected_principal=envelope.actor,
         )
     with control_plane_store._connect() as conn:
         conn.execute(
@@ -250,6 +253,7 @@ def test_post_effect_pending_derives_claim_and_lsns_from_locked_outbox_row(
             repository=envelope.repository,
             operation_key=result.operation_key,
             minimum_fencing_token=claim.fencing_token,
+            expected_principal=envelope.actor,
         )
 
 
@@ -271,12 +275,14 @@ def test_post_effect_reconcile_and_replay_reject_forged_or_stale_claim_lsns(
         repository=envelope.repository,
         operation_key=result.operation_key,
         minimum_fencing_token=claim.fencing_token,
+        expected_principal=envelope.actor,
     )
     control_plane_store.mark_effect_unknown(claim, detail="readback required")
     reconciled = control_plane_store.reconcile_post_effect(
         repository=envelope.repository,
         operation_key=result.operation_key,
         minimum_fencing_token=claim.fencing_token,
+        expected_principal=envelope.actor,
         observed_applied=False,
         evidence={"readback": "not-found"},
     )
@@ -285,6 +291,7 @@ def test_post_effect_reconcile_and_replay_reject_forged_or_stale_claim_lsns(
         repository=envelope.repository,
         operation_key=result.operation_key,
         minimum_fencing_token=claim.fencing_token,
+        expected_principal=envelope.actor,
         observed_applied=False,
         evidence={"readback": "not-found"},
     )
@@ -293,6 +300,7 @@ def test_post_effect_reconcile_and_replay_reject_forged_or_stale_claim_lsns(
             repository=envelope.repository,
             operation_key=result.operation_key,
             minimum_fencing_token=claim.fencing_token,
+            expected_principal=envelope.actor,
             observed_applied=True,
             evidence={"readback": "not-found"},
         )
@@ -301,6 +309,7 @@ def test_post_effect_reconcile_and_replay_reject_forged_or_stale_claim_lsns(
             repository=envelope.repository,
             operation_key=result.operation_key,
             minimum_fencing_token=claim.fencing_token - 1,
+            expected_principal=envelope.actor,
             observed_applied=False,
             evidence={"readback": "not-found"},
         )
@@ -323,14 +332,14 @@ def test_post_effect_reconcile_rejects_wrong_principal_and_contradictory_termina
     control_plane_store.mark_effect_unknown(claim, detail="readback required")
     with pytest.raises(PermissionError):
         control_plane_store.reconcile_post_effect(
-            repository=envelope.repository, operation_key=result.operation_key,
-            minimum_fencing_token=claim.fencing_token, expected_principal="other-principal",
+        repository=envelope.repository, operation_key=result.operation_key,
+        minimum_fencing_token=claim.fencing_token, expected_principal="other-principal",
             observed_applied=False, evidence={"readback": "not-found"},
         )
     with pytest.raises(ValueError, match="terminal-unknown"):
         control_plane_store.reconcile_post_effect(
-            repository=envelope.repository, operation_key=result.operation_key,
-            minimum_fencing_token=claim.fencing_token, expected_principal=envelope.actor,
+        repository=envelope.repository, operation_key=result.operation_key,
+        minimum_fencing_token=claim.fencing_token, expected_principal=envelope.actor,
             observed_applied=True, terminal_unknown=True, evidence={"readback": "not-found"},
         )
 
@@ -348,6 +357,7 @@ def test_post_effect_recovers_after_legacy_reconcile_commits_before_phase_marker
     control_plane_store.begin_post_effect_pending(
         repository=envelope.repository, operation_key=result.operation_key,
         minimum_fencing_token=claim.fencing_token,
+        expected_principal=envelope.actor,
     )
     control_plane_store.mark_effect_unknown(claim, detail="readback required")
     legacy = control_plane_store.reconcile_outbox(
@@ -360,6 +370,7 @@ def test_post_effect_recovers_after_legacy_reconcile_commits_before_phase_marker
     repaired = control_plane_store.reconcile_post_effect(
         repository=envelope.repository, operation_key=result.operation_key,
         minimum_fencing_token=claim.fencing_token, observed_applied=False,
+        expected_principal=envelope.actor,
         evidence={"readback": "not-found"},
     )
     assert repaired["receipt_sequence"] == legacy.receipt_sequence
@@ -380,6 +391,7 @@ def test_expired_unknown_post_effect_identity_is_reset_before_recovery_rebind(
     control_plane_store.begin_post_effect_pending(
         repository=envelope.repository, operation_key=result.operation_key,
         minimum_fencing_token=original.fencing_token,
+        expected_principal=envelope.actor,
     )
     control_plane_store.mark_effect_unknown(original, detail="readback required")
     _expire_outbox_claim(control_plane_store, envelope.repository, result.operation_key)
@@ -391,6 +403,7 @@ def test_expired_unknown_post_effect_identity_is_reset_before_recovery_rebind(
     rebound = control_plane_store.begin_post_effect_pending(
         repository=envelope.repository, operation_key=result.operation_key,
         minimum_fencing_token=recovered.fencing_token,
+        expected_principal=envelope.actor,
     )
     assert rebound["fencing_token"] == recovered.fencing_token
     assert rebound["claim_lsn"] == recovered.claim_lsn
@@ -398,6 +411,7 @@ def test_expired_unknown_post_effect_identity_is_reset_before_recovery_rebind(
         control_plane_store.reconcile_post_effect(
             repository=envelope.repository, operation_key=result.operation_key,
             minimum_fencing_token=original.fencing_token, observed_applied=False,
+            expected_principal=envelope.actor,
             evidence={"readback": "not-found"},
         )
 
@@ -415,11 +429,13 @@ def test_reconciled_pending_post_effect_identity_is_reset_before_retry_rebind(
     control_plane_store.begin_post_effect_pending(
         repository=envelope.repository, operation_key=result.operation_key,
         minimum_fencing_token=original.fencing_token,
+        expected_principal=envelope.actor,
     )
     control_plane_store.mark_effect_unknown(original, detail="readback required")
     control_plane_store.reconcile_post_effect(
         repository=envelope.repository, operation_key=result.operation_key,
         minimum_fencing_token=original.fencing_token, observed_applied=False,
+        expected_principal=envelope.actor,
         evidence={"readback": "not-found"},
     )
 
@@ -429,6 +445,7 @@ def test_reconciled_pending_post_effect_identity_is_reset_before_retry_rebind(
     rebound = control_plane_store.begin_post_effect_pending(
         repository=envelope.repository, operation_key=result.operation_key,
         minimum_fencing_token=retry.fencing_token,
+        expected_principal=envelope.actor,
     )
     assert retry.fencing_token > original.fencing_token
     assert rebound["fencing_token"] == retry.fencing_token
@@ -448,13 +465,14 @@ def test_concurrent_identical_post_effect_reconciliation_replays_one_row_identit
     control_plane_store.begin_post_effect_pending(
         repository=envelope.repository, operation_key=result.operation_key,
         minimum_fencing_token=claim.fencing_token,
+        expected_principal=envelope.actor,
     )
     control_plane_store.mark_effect_unknown(claim, detail="readback required")
 
     def reconcile() -> dict:
         return dict(control_plane_store.reconcile_post_effect(
             repository=envelope.repository, operation_key=result.operation_key,
-            minimum_fencing_token=claim.fencing_token, observed_applied=False,
+            minimum_fencing_token=claim.fencing_token, expected_principal=envelope.actor, observed_applied=False,
             evidence={"readback": "not-found"},
         ))
 
