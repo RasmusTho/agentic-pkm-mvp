@@ -489,33 +489,33 @@ class BindingEffectLeaseManager:
         self._scavenge_pending_activity_locked(vault_binding_id, referenced_activity)
         pending: list[_HolderState] = []
         abandoned: list[tuple[_HolderState, int | None]] = []
-        for item in state["exclusivePending"]:
-            active, descriptor = self._pending_waiter_status(vault_binding_id, item)
-            if active:
-                pending.append(item)
-            else:
-                abandoned.append((item, descriptor))
-        updated["exclusivePending"] = pending
-        gate: int | None = None
         try:
-            gate = self._open_private_lease_lock(self._gate_path(vault_binding_id))
+            for item in state["exclusivePending"]:
+                active, descriptor = self._pending_waiter_status(vault_binding_id, item)
+                if active:
+                    pending.append(item)
+                else:
+                    abandoned.append((item, descriptor))
+            updated["exclusivePending"] = pending
+            gate: int | None = None
             try:
-                fcntl.flock(gate, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            except BlockingIOError:
-                updated["sharedHolders"] = [
-                    item for item in state["sharedHolders"] if self._holder_alive(item)
-                ]
-                holder = state["exclusiveHolder"]
-                if holder is not None and not self._holder_alive(holder):
+                gate = self._open_private_lease_lock(self._gate_path(vault_binding_id))
+                try:
+                    fcntl.flock(gate, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                except BlockingIOError:
+                    updated["sharedHolders"] = [
+                        item for item in state["sharedHolders"] if self._holder_alive(item)
+                    ]
+                    holder = state["exclusiveHolder"]
+                    if holder is not None and not self._holder_alive(holder):
+                        updated["exclusiveHolder"] = None
+                else:
+                    updated["sharedHolders"] = []
                     updated["exclusiveHolder"] = None
-            else:
-                updated["sharedHolders"] = []
-                updated["exclusiveHolder"] = None
-                fcntl.flock(gate, fcntl.LOCK_UN)
-        finally:
-            if gate is not None:
-                _close_lease_descriptor(gate)
-        try:
+                    fcntl.flock(gate, fcntl.LOCK_UN)
+            finally:
+                if gate is not None:
+                    _close_lease_descriptor(gate)
             if updated != state:
                 for item, descriptor in abandoned:
                     if descriptor is not None:

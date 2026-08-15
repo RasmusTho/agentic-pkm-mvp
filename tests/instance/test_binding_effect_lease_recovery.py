@@ -43,6 +43,32 @@ def _fork_child_then_crash_effect_holder(root: str, mode: str, acquired, release
         os._exit(23)
 
 
+def _persist_abandoned_pending(manager, *holder_ids: str) -> list[Path]:
+    descriptors: list[int] = []
+    paths: list[Path] = []
+    try:
+        with manager._state_locked("binding-a"):
+            current = manager._load_reconciled_locked("binding-a")
+            updated = dict(current)
+            updated["exclusivePending"] = list(current["exclusivePending"])
+            next_ticket = int(current["nextTicket"])
+            for holder_id in holder_ids:
+                descriptor = manager._open_pending_activity("binding-a", holder_id, create=True)
+                descriptors.append(descriptor)
+                lease_module.fcntl.flock(descriptor, lease_module.fcntl.LOCK_EX)
+                updated["exclusivePending"].append(
+                    manager._holder(holder_id, ticket=next_ticket, mode="pending")
+                )
+                paths.append(manager._pending_activity_path("binding-a", holder_id))
+                next_ticket += 1
+            updated["nextTicket"] = next_ticket
+            manager._commit_locked("binding-a", current, updated)
+    finally:
+        for descriptor in descriptors:
+            manager._close_pending_activity(descriptor)
+    return paths
+
+
 def test_crashed_holder_recovers_without_deadlock_or_false_completion(tmp_path) -> None:
     _build_manager(tmp_path, "binding-a")
     context = multiprocessing.get_context("spawn")
@@ -191,6 +217,76 @@ def test_holder_identity_failure_closes_the_effect_descriptor(tmp_path, monkeypa
         )
     finally:
         os.close(probe)
+
+
+def test_reconciliation_cancellation_closes_transferred_pending_descriptor(
+    tmp_path, monkeypatch
+) -> None:
+    manager = _build_manager(tmp_path, "binding-a")
+    [sentinel] = _persist_abandoned_pending(manager, "holder-abandoned")
+    baseline = set(lease_module._LEASE_LOCK_FDS)
+    real_flock = lease_module.fcntl.flock
+    nonblocking_exclusive_calls = 0
+
+    def cancel_at_gate_probe(descriptor, operation):
+        nonlocal nonblocking_exclusive_calls
+        result = real_flock(descriptor, operation)
+        if operation == lease_module.fcntl.LOCK_EX | lease_module.fcntl.LOCK_NB:
+            nonblocking_exclusive_calls += 1
+            if nonblocking_exclusive_calls == 2:
+                raise KeyboardInterrupt("cancel after pending descriptor transfer")
+        return result
+
+    monkeypatch.setattr(lease_module.fcntl, "flock", cancel_at_gate_probe)
+    with pytest.raises(KeyboardInterrupt, match="pending descriptor transfer"):
+        manager.observe("binding-a")
+    monkeypatch.setattr(lease_module.fcntl, "flock", real_flock)
+
+    assert set(lease_module._LEASE_LOCK_FDS) == baseline
+    probe = os.open(sentinel, os.O_RDWR)
+    try:
+        real_flock(
+            probe,
+            lease_module.fcntl.LOCK_EX | lease_module.fcntl.LOCK_NB,
+        )
+    finally:
+        os.close(probe)
+    assert manager.observe("binding-a").exclusive_pending_count == 0
+
+
+def test_later_pending_probe_failure_closes_an_earlier_transfer(tmp_path, monkeypatch) -> None:
+    manager = _build_manager(tmp_path, "binding-a")
+    first, _ = _persist_abandoned_pending(
+        manager,
+        "holder-abandoned-first",
+        "holder-abandoned-second",
+    )
+    baseline = set(lease_module._LEASE_LOCK_FDS)
+    real_status = manager._pending_waiter_status
+    calls = 0
+
+    def fail_second_probe(vault_binding_id, holder):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise KeyboardInterrupt("later pending probe failed")
+        return real_status(vault_binding_id, holder)
+
+    monkeypatch.setattr(manager, "_pending_waiter_status", fail_second_probe)
+    with pytest.raises(KeyboardInterrupt, match="later pending probe"):
+        manager.observe("binding-a")
+    monkeypatch.setattr(manager, "_pending_waiter_status", real_status)
+
+    assert set(lease_module._LEASE_LOCK_FDS) == baseline
+    probe = os.open(first, os.O_RDWR)
+    try:
+        lease_module.fcntl.flock(
+            probe,
+            lease_module.fcntl.LOCK_EX | lease_module.fcntl.LOCK_NB,
+        )
+    finally:
+        os.close(probe)
+    assert manager.observe("binding-a").exclusive_pending_count == 0
 
 
 @pytest.mark.parametrize("crash_point", ["journal", "state"])
