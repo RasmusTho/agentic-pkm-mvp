@@ -631,7 +631,7 @@ def test_row_derived_post_effect_api_rejects_caller_attested_claim_evidence(
             "operation_key": operation_key,
             "minimum_fencing_token": 1,
             "observed_applied": False,
-            "evidence": {"readback": "0/DEADBEEF"},
+            "evidence": {"readback": " 0/DEADBEEF\t"},
         },
     )
     assert response.status_code == 422

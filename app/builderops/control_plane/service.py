@@ -168,7 +168,7 @@ def _assert_row_derived_evidence_safe(value: Any) -> None:
     elif isinstance(value, (list, tuple)):
         for child in value:
             _assert_row_derived_evidence_safe(child)
-    elif isinstance(value, str) and _POSTGRES_LSN_LITERAL.fullmatch(value):
+    elif isinstance(value, str) and _POSTGRES_LSN_LITERAL.fullmatch(value.strip()):
         raise ValueError("row-derived reconciliation evidence cannot contain durability LSNs")
 
 
