@@ -110,13 +110,14 @@
     },
     "decision_outcomes": {
       "classification": "binding-scoped",
-      "reason": "The `decision_outcomes` receipt projection, written by app/receipts/outcome_receipt_projection.py: one row per (decision, rung) judgement. Rows carry receipt provenance for a vault object's decision lineage. Its `id uuid DEFAULT gen_random_uuid()` key is minted per row and does not collide.",
+      "reason": "The `decision_outcomes` receipt projection now stamps every judgment with vault_binding_id; its per-binding decision/rung uniqueness prevents one vault's receipt from colliding with another.",
       "owning_revision": "b1c2d3e4f5a6",
       "declaring_revisions": [
-        "b1c2d3e4f5a6"
+        "b1c2d3e4f5a6",
+        "f5a05a5b0001"
       ],
-      "binding_key": "pending",
-      "binding_column": null,
+      "binding_key": "keyed",
+      "binding_column": "vault_binding_id",
       "producers": [
         {
           "module": "app/receipts/outcome_receipt_projection.py",
@@ -132,14 +133,15 @@
     },
     "decisions": {
       "classification": "binding-scoped",
-      "reason": "The decisions projection now carries a composite canonical-object reference and app/jobs/decisions_projection.py replaces only the compatibility binding with DELETE plus replay. MVR-05A5 still owns full active-context rebuild semantics; object deletion preserves vault_binding_id while clearing object_id.",
+      "reason": "The decisions projection carries a mandatory vault_binding_id and app/jobs/decisions_projection.py replaces only the selected binding with DELETE plus replay while preserving other vault rows.",
       "owning_revision": "e1d2c3b4a5f6",
       "declaring_revisions": [
         "202510241200",
         "a80043832e29",
-        "e1d2c3b4a5f6"
+        "e1d2c3b4a5f6",
+        "f5a05a5b0001"
       ],
-      "binding_key": "pending",
+      "binding_key": "keyed",
       "binding_column": "vault_binding_id",
       "producers": [
         {
@@ -162,7 +164,7 @@
           ]
         }
       ],
-      "rebuild_mechanism": "whole-table-replacement",
+      "rebuild_mechanism": "binding-scoped-replacement",
       "escalation_conditions": [
         "authority-or-receipt-rows"
       ]
@@ -213,13 +215,14 @@
     },
     "episode_artifact_binding": {
       "classification": "binding-scoped",
-      "reason": "The episode/artifact assignment ledger, PRIMARY KEY (artifact_ref, episode_id). Both halves are vault-derived identities and collide across bindings.",
+      "reason": "The episode_artifact_binding assignment ledger uses PRIMARY KEY (vault_binding_id, artifact_ref, episode_id), so identical vault-derived references remain isolated across bindings.",
       "owning_revision": "b7c8d9e0f1a2",
       "declaring_revisions": [
-        "b7c8d9e0f1a2"
+        "b7c8d9e0f1a2",
+        "f5a05a5b0001"
       ],
-      "binding_key": "pending",
-      "binding_column": null,
+      "binding_key": "keyed",
+      "binding_column": "vault_binding_id",
       "producers": [
         {
           "module": "app/episodes/assignment.py",
@@ -236,13 +239,14 @@
     },
     "episode_engine_state": {
       "classification": "binding-scoped",
-      "reason": "`episode_engine_state` holds segmentation-engine tick state for the episode resolver, keyed `key TEXT PRIMARY KEY`. The key set is fixed, so one binding's cursor is currently the instance's cursor; per-binding state needs the key itself widened.",
+      "reason": "`episode_engine_state` holds segmentation-engine cursors and open segments under PRIMARY KEY (vault_binding_id, key), keeping identical runtime state families independent per vault binding.",
       "owning_revision": "a1b2c3d4e5f6",
       "declaring_revisions": [
-        "a1b2c3d4e5f6"
+        "a1b2c3d4e5f6",
+        "f5a05a5b0001"
       ],
-      "binding_key": "pending",
-      "binding_column": null,
+      "binding_key": "keyed",
+      "binding_column": "vault_binding_id",
       "producers": [
         {
           "module": "app/episodes/engine_state.py",
@@ -259,13 +263,14 @@
     },
     "episodes": {
       "classification": "binding-scoped",
-      "reason": "The derived projection of vault episode notes, rebuilt by TRUNCATE + replay in app/jobs/episodes_projection.py. `episode_id TEXT PRIMARY KEY` is the note's `ep-<uuid>` identity and collides across bindings.",
+      "reason": "The episodes projection is keyed by (vault_binding_id, episode_id), and app/jobs/episodes_projection.py deletes and replays only the requested binding's vault notes.",
       "owning_revision": "e0f2a9c4b7d1",
       "declaring_revisions": [
-        "e0f2a9c4b7d1"
+        "e0f2a9c4b7d1",
+        "f5a05a5b0001"
       ],
-      "binding_key": "pending",
-      "binding_column": null,
+      "binding_key": "keyed",
+      "binding_column": "vault_binding_id",
       "producers": [
         {
           "module": "app/episodes/closure.py",
@@ -289,11 +294,11 @@
           "module": "app/jobs/episodes_projection.py",
           "operations": [
             "insert",
-            "truncate"
+            "delete"
           ]
         }
       ],
-      "rebuild_mechanism": "whole-table-replacement",
+      "rebuild_mechanism": "binding-scoped-replacement",
       "escalation_conditions": [
         "key-rewrite"
       ]
@@ -793,23 +798,24 @@
     },
     "standing_questions": {
       "classification": "binding-scoped",
-      "reason": "The derived projection of vault-canonical Question notes, rebuilt by TRUNCATE + replay in app/standing_questions/projection.py. `question_id TEXT PRIMARY KEY` and `source_path TEXT NOT NULL UNIQUE` are both vault-derived, so a second binding's identical question id or relative source path collides.",
+      "reason": "The standing_questions projection keys question and source-path identity inside vault_binding_id; app/standing_questions/projection.py deletes and replays only one binding at a time.",
       "owning_revision": "4d1e0c9a3329",
       "declaring_revisions": [
-        "4d1e0c9a3329"
+        "4d1e0c9a3329",
+        "f5a05a5b0001"
       ],
-      "binding_key": "pending",
-      "binding_column": null,
+      "binding_key": "keyed",
+      "binding_column": "vault_binding_id",
       "producers": [
         {
           "module": "app/standing_questions/projection.py",
           "operations": [
             "insert",
-            "truncate"
+            "delete"
           ]
         }
       ],
-      "rebuild_mechanism": "whole-table-replacement",
+      "rebuild_mechanism": "binding-scoped-replacement",
       "escalation_conditions": [
         "key-rewrite"
       ]

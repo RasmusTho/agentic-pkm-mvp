@@ -304,7 +304,11 @@ def test_assignment_write_guarded_proposal_class(monkeypatch: pytest.MonkeyPatch
             # Schema preflight (Finding 2): commit_assignment_diff now asserts the ledger table
             # exists via to_regclass before issuing any real write -- a healthy fake DB reports the
             # table present.
-            self._result = (BINDING_TABLE,) if "to_regclass" in sql else None
+            self._result = (
+                (True, True, ["vault_binding_id", "artifact_ref", "episode_id"])
+                if "to_regclass" in sql
+                else None
+            )
 
         def fetchone(self):
             return self._result
@@ -443,7 +447,11 @@ def test_commit_assignment_diff_persists_correction_with_provenance(
 
         def execute(self, sql: str, params: tuple[Any, ...] = ()) -> None:
             executed.append((sql, params))
-            self._result = (BINDING_TABLE,) if "to_regclass" in sql else None
+            self._result = (
+                (True, True, ["vault_binding_id", "artifact_ref", "episode_id"])
+                if "to_regclass" in sql
+                else None
+            )
 
         def fetchone(self):
             return self._result
@@ -588,7 +596,7 @@ def test_assert_table_schema_fails_loud_with_migration_hint() -> None:
     UndefinedTable traceback from inside a query (mirrors
     app.episodes.engine_state.EngineStateSchemaMissingError / _assert_schema)."""
     with pytest.raises(EpisodeAssignmentSchemaMissingError) as exc_info:
-        _assert_table_schema(_RegclassConn((None,)), BINDING_TABLE)
+        _assert_table_schema(_RegclassConn((False, False, [])), BINDING_TABLE)
     assert "alembic upgrade head" in str(exc_info.value)
     assert "b7c8d9e0f1a2" in str(exc_info.value)
 
@@ -596,18 +604,32 @@ def test_assert_table_schema_fails_loud_with_migration_hint() -> None:
         _assert_table_schema(_RegclassConn(None), BINDING_TABLE)  # no row at all
 
     with pytest.raises(EpisodeAssignmentSchemaMissingError) as exc_info:
-        _assert_table_schema(_RegclassConn((None,)), EPISODES_TABLE)
+        _assert_table_schema(_RegclassConn((False, False, [])), EPISODES_TABLE)
     assert "alembic upgrade head" in str(exc_info.value)
 
-    # Table present (either row shape) -> no raise.
-    _assert_table_schema(_RegclassConn((BINDING_TABLE,)), BINDING_TABLE)
-    _assert_table_schema(_RegclassConn({"to_regclass": BINDING_TABLE}), BINDING_TABLE)
+    # Final MVR-05A5 table shape -> no raise.
+    _assert_table_schema(
+        _RegclassConn((True, True, ["vault_binding_id", "artifact_ref", "episode_id"])),
+        BINDING_TABLE,
+    )
+    _assert_table_schema(
+        _RegclassConn(
+            {
+                "table_exists": True,
+                "binding_column_exists": True,
+                "primary_key": ["vault_binding_id", "artifact_ref", "episode_id"],
+            }
+        ),
+        BINDING_TABLE,
+    )
 
 
 def test_read_candidate_episodes_for_scopes_asserts_schema(monkeypatch: pytest.MonkeyPatch) -> None:
     from app.episodes.assignment import read_candidate_episodes_for_scopes
 
-    monkeypatch.setattr(assignment_module, "conn_rw", lambda *a, **k: _RegclassConn((None,)))
+    monkeypatch.setattr(
+        assignment_module, "conn_rw", lambda *a, **k: _RegclassConn((False, False, []))
+    )
     with pytest.raises(EpisodeAssignmentSchemaMissingError):
         read_candidate_episodes_for_scopes(["work"])
 
@@ -615,19 +637,25 @@ def test_read_candidate_episodes_for_scopes_asserts_schema(monkeypatch: pytest.M
 def test_read_existing_bindings_asserts_schema(monkeypatch: pytest.MonkeyPatch) -> None:
     from app.episodes.assignment import read_existing_bindings
 
-    monkeypatch.setattr(assignment_module, "conn_rw", lambda *a, **k: _RegclassConn((None,)))
+    monkeypatch.setattr(
+        assignment_module, "conn_rw", lambda *a, **k: _RegclassConn((False, False, []))
+    )
     with pytest.raises(EpisodeAssignmentSchemaMissingError):
         read_existing_bindings(["vault.activity:x"])
 
 
 def test_read_existing_bindings_for_episodes_asserts_schema(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(assignment_module, "conn_rw", lambda *a, **k: _RegclassConn((None,)))
+    monkeypatch.setattr(
+        assignment_module, "conn_rw", lambda *a, **k: _RegclassConn((False, False, []))
+    )
     with pytest.raises(EpisodeAssignmentSchemaMissingError):
         read_existing_bindings_for_episodes(["ep-1"])
 
 
 def test_commit_assignment_diff_asserts_schema(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(assignment_module, "conn_rw", lambda *a, **k: _RegclassConn((None,)))
+    monkeypatch.setattr(
+        assignment_module, "conn_rw", lambda *a, **k: _RegclassConn((False, False, []))
+    )
     decision = AssignmentDecision(
         artifact_ref="vault.activity:schema-check",
         episode_id="ep-schema-1111-4333-8444-555555555555",
@@ -669,7 +697,7 @@ class _BundleCursor:
         self._executed.append((sql, params))
         stripped = sql.strip()
         if "to_regclass" in stripped:
-            self._result = (BINDING_TABLE,)
+            self._result = (True, True, ["vault_binding_id", "artifact_ref", "episode_id"])
             return
         if stripped.startswith("SELECT payload FROM store_objects") or stripped.startswith(
             "SELECT payload FROM store_vector_index"
@@ -928,7 +956,11 @@ def test_commit_stamps_frontmatter_before_touching_the_db(
 
         def execute(self, sql: str, params: tuple[Any, ...] = ()) -> None:
             order.append("db")
-            self._result = (BINDING_TABLE,) if "to_regclass" in sql else None
+            self._result = (
+                (True, True, ["vault_binding_id", "artifact_ref", "episode_id"])
+                if "to_regclass" in sql
+                else None
+            )
 
         def fetchone(self):
             return self._result
@@ -1036,7 +1068,7 @@ def test_commit_jsonb_set_preserves_concurrent_sibling_key_change(
         def execute(self, sql: str, params: tuple[Any, ...] = ()) -> None:
             stripped = sql.strip()
             if "to_regclass" in stripped:
-                self._result = (BINDING_TABLE,)
+                self._result = (True, True, ["vault_binding_id", "artifact_ref", "episode_id"])
                 return
             if stripped.startswith("SELECT payload FROM store_"):
                 table = "store_objects" if "store_objects" in stripped else "store_vector_index"

@@ -14,7 +14,7 @@ The operator-safe order for the slice-4 prod backfill (issue #2973) is:
     python -m app.cli decisions rebuild --yes      # 3. only after (1)+(2) confirm parity
 
 Running `rebuild` before `export` on an environment with historical DB-only rows
-TRUNCATEs the `decisions` table and replays only what the log already has,
+replaces the compatibility binding's `decisions` rows and replays only what the log already has,
 losing anything not yet exported (issue #2973, 2026-07-05 comment). `rebuild`
 therefore requires an explicit `--yes` confirmation flag; there is no default-on
 path to the truncating operation from this CLI.
@@ -110,7 +110,7 @@ def decisions_doctor(vault_root: str | None, as_json: bool, strict: bool) -> Non
 
 @decisions.command(
     "rebuild",
-    help="TRUNCATE and replay the `decisions` DB projection from the receipt log. Destructive — requires --yes.",
+    help="Replace and replay the compatibility binding's `decisions` DB projection from the receipt log. Destructive — requires --yes.",
 )
 @click.option("--vault-root", type=click.Path(exists=False), default=None, help="Override vault root (else VAULT_ROOT).")
 @click.option("--json", "as_json", is_flag=True, default=False, help="Emit machine-readable JSON summary.")
@@ -126,7 +126,7 @@ def decisions_rebuild(vault_root: str | None, as_json: bool, confirmed: bool) ->
 
     if not confirmed:
         raise click.ClickException(
-            "decisions rebuild TRUNCATEs the `decisions` table and replays the receipt log. "
+            "decisions rebuild replaces the compatibility binding's rows and replays the receipt log. "
             "Any DB row not yet represented in the log is lost. Run `decisions export` then "
             "`decisions doctor` (confirm ok=true) first, then re-run with --yes."
         )

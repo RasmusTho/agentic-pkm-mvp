@@ -8,7 +8,6 @@ import psycopg
 import pytest
 
 from tests.migrations.test_multi_vault_ingest_projection_keys import (
-    INGEST_HEAD,
     _upgrade,
     scratch_db_factory,  # noqa: F401 - pytest fixture export
 )
@@ -20,8 +19,69 @@ pytestmark = pytest.mark.pg
 def migrated_store_dsn(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> str:
     factory = request.getfixturevalue("scratch_db_factory")
     dsn = factory()
-    _upgrade(dsn, monkeypatch, INGEST_HEAD)
+    _upgrade(dsn, monkeypatch, "head")
     return dsn
+
+
+def test_binding_scoped_rebuild_preserves_standing_question_and_episode_rows(
+    migrated_store_dsn: str,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    """Rebuilding binding B cannot erase binding A, even for identical vault ids."""
+    from app.jobs import episodes_projection
+    from app.standing_questions.projection import _replace_projection_rows
+
+    question_id = "sq-11111111-2222-4333-8444-555555555555"
+    question = {
+        "question_id": question_id,
+        "scope": "work",
+        "text": "Same vault-derived question",
+        "status": "open",
+        "created_at": "2026-08-15T10:00:00Z",
+        "registered_via": "explicit",
+        "standing_answer_ref": None,
+        "candidate_answer_ref": None,
+        "evidence": [],
+        "last_matched_at": None,
+        "last_refreshed_at": None,
+    }
+    for binding in ("binding-a", "binding-b"):
+        _replace_projection_rows(
+            [(f"questions/{question_id}.md", question)], vault_binding_id=binding
+        )
+    _replace_projection_rows([], vault_binding_id="binding-b")
+
+    episode_id = "ep-11111111-2222-4333-8444-555555555555"
+    fields = {
+        "episode_id": episode_id,
+        "scope": "work",
+        "title": "Same vault-derived episode",
+        "time": {"start": "2026-08-15T10:00:00Z", "closed": False},
+        "segmentation": "proposed",
+        "parent_episode": None,
+        "space": [],
+        "protagonists": [],
+        "goal": [],
+        "causation": [],
+        "derived_from": [],
+    }
+    episode_path = tmp_path / "episode.md"
+    episode_path.write_text("placeholder", encoding="utf-8")
+    monkeypatch.setattr(episodes_projection, "_episode_note_paths", lambda _root: [episode_path])
+    monkeypatch.setattr(episodes_projection, "parse_validated_episode_note", lambda _text: fields)
+    episodes_projection.rebuild_episodes_projection(tmp_path, vault_binding_id="binding-a")
+    episodes_projection.rebuild_episodes_projection(tmp_path, vault_binding_id="binding-b")
+    monkeypatch.setattr(episodes_projection, "_episode_note_paths", lambda _root: [])
+    episodes_projection.rebuild_episodes_projection(tmp_path, vault_binding_id="binding-b")
+
+    with psycopg.connect(migrated_store_dsn) as conn:
+        assert conn.execute(
+            "SELECT vault_binding_id,question_id FROM standing_questions ORDER BY 1"
+        ).fetchall() == [("binding-a", question_id)]
+        assert conn.execute(
+            "SELECT vault_binding_id,episode_id FROM episodes ORDER BY 1"
+        ).fetchall() == [("binding-a", episode_id)]
 
 
 def test_duplicate_uuid_is_namespaced_by_binding_in_ingest_projections(

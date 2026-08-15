@@ -19,6 +19,7 @@ from app.config.paths import resolve_optional_vault_root
 from app.receipts.outcome_receipt_projection import (
     insert_outcome_receipt_projection as _insert_projection,
 )
+from app.instance.binding_ids import COMPATIBILITY_BINDING_ID
 from app.vault.paths import NoVaultSelectedError, resolve_vault_system_dir_rel_or_default
 from app.write_guard import DEFAULT_WRITE_GUARD
 
@@ -134,6 +135,7 @@ def append_outcome_receipt(
     note: str | None = None,
     created_at: datetime | None = None,
     vault_root: Path | None = None,
+    vault_binding_id: str = COMPATIBILITY_BINDING_ID,
 ) -> dict[str, Any]:
     """Durably append an outcome, then write its derived Postgres projection.
 
@@ -180,7 +182,10 @@ def append_outcome_receipt(
 
     # Receipt-before-ack: this happens strictly after the append.  A projection
     # failure is visible to the caller; CAL-04 rebuild tooling can repair it.
-    _insert_projection(receipt)
+    if vault_binding_id == COMPATIBILITY_BINDING_ID:
+        _insert_projection(receipt)
+    else:
+        _insert_projection(receipt, vault_binding_id=vault_binding_id)
     return receipt
 
 

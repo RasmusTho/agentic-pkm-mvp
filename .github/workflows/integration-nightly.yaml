@@ -251,6 +251,8 @@ jobs:
             tests/migrations/test_store_schema_parity.py \
             tests/migrations/test_multi_vault_ingest_projection_keys.py \
             tests/migrations/test_ingest_schema_parity.py \
+            tests/migrations/test_multi_vault_replay_projection_backfill.py \
+            tests/migrations/test_replay_schema_parity.py \
             tests/migrations/test_decisions_fk_set_null.py \
             tests/integration/test_decisions_rebuild_from_log_only.py \
             tests/integration/test_multi_vault_projection_isolation.py \
@@ -259,6 +261,7 @@ jobs:
             tests/invariants/test_retrieval_spine_invariants.py \
             tests/jobs/test_decisions_export.py \
             tests/jobs/test_decisions_projection_rebuild.py \
+            tests/jobs/test_multi_vault_decisions_rebuild_scope.py \
             tests/stores/test_decisions_fk_semantics.py \
             tests/stores/test_ensure_tables_assert_only.py \
             tests/stores/test_multi_vault_store_reset_scope.py \

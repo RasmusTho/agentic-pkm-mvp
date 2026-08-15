@@ -72,7 +72,7 @@ class _RegclassCursor:
 
     def execute(self, sql: str, params: tuple[Any, ...] = ()) -> None:
         if "to_regclass" in sql:
-            self._result = ("episodes",)
+            self._result = (True, True, ["vault_binding_id", "episode_id"])
         elif "FROM episodes" in sql:
             self._result = list(self._rows)
         else:  # pragma: no cover -- defensive
@@ -120,9 +120,9 @@ class _SyncCursor:
     def execute(self, sql: str, params: tuple[Any, ...] = ()) -> None:
         self._calls.append((sql, params))
         if "to_regclass" in sql:
-            self._result = ("episodes",)
+            self._result = (True, True, ["vault_binding_id", "episode_id"])
         elif sql.strip().upper().startswith("UPDATE"):
-            episode_id = params[0]
+            episode_id = params[-1]
             self.rowcount = 1 if episode_id in self._existing_ids else 0
         else:  # pragma: no cover -- defensive
             raise AssertionError(f"unexpected SQL in fake sync cursor: {sql}")
@@ -226,7 +226,7 @@ def test_close_episode_flips_closed_and_emits_event(
     # THAT column, never the vault note directly, and nothing else refreshes it incrementally.
     update_calls = [c for c in sync_conn.calls if c[0].strip().upper().startswith("UPDATE")]
     assert len(update_calls) == 1
-    assert update_calls[0][1] == (episode_id,)
+    assert update_calls[0][1] == (closure_module.COMPATIBILITY_BINDING_ID, episode_id)
 
 
 def test_close_episode_already_closed_note_reconciles_outbox_and_projection(
@@ -282,7 +282,7 @@ def test_close_episode_already_closed_note_reconciles_outbox_and_projection(
     assert len(emitted) == 1
     update_calls = [c for c in sync_conn.calls if c[0].strip().upper().startswith("UPDATE")]
     assert len(update_calls) == 1
-    assert update_calls[0][1] == (episode_id,)
+    assert update_calls[0][1] == (closure_module.COMPATIBILITY_BINDING_ID, episode_id)
 
 
 def _blocked_guard() -> WriteGuard:
@@ -461,7 +461,7 @@ def test_sync_projection_closed_issues_incremental_update(monkeypatch: pytest.Mo
     assert len(update_calls) == 1
     sql, params = update_calls[0]
     assert "SET closed = true" in sql
-    assert params == (episode_id,)
+    assert params == (closure_module.COMPATIBILITY_BINDING_ID, episode_id)
     # Never a TRUNCATE+replay -- this must stay a targeted single-row update, not a rebuild.
     assert not any("TRUNCATE" in c[0].upper() for c in conn.calls)
 

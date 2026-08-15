@@ -342,7 +342,7 @@ from-scratch concurrency risk from compounding with migration risk.
 | MVR-05A2 | [#4576](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4576) | durable-table classification inventory and the architecture gate that derives its population from the revision chain | 05A1 | Sol/high |
 | MVR-05A3 | [#4577](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4577) | `store_*` projection group and `app/stores/pg.py` producers | 05A2 | Terra/high |
 | MVR-05A4 | [#4578](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4578) | keyed ingest projection group, effective membership lineage, and retired relation shim | 05A3 | Terra/high |
-| MVR-05A5 | [#4579](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4579) | replay projection group and the binding-scoped rebuild paths | 05A4 | Terra/high |
+| MVR-05A5 | [#4579](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4579) | replay projection group and the binding-scoped rebuild paths | 05A4 | delivered |
 | MVR-05A6 | [#4580](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4580) | the per-binding shared/exclusive effect lease | 05A5 | Sol/xhigh |
 | MVR-05A7 | [#4581](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4581) | outbox binding column and dual-key compatibility dedup | 05A6 | Sol/xhigh |
 | MVR-05A8 | [#4582](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4582) | all-process fence, minimum-runtime floor, worker gate, owner-doc writebacks, stage closure | 05A7 | Sol/high |
@@ -354,6 +354,11 @@ schema mutation. The projector resolves its public set name through `sets` and
 writes that UUID on both supported membership shapes; a retained objects-as-sets
 database must already carry the same UUID in binding-scoped `store_objects`.
 Its retained ingest views join by `vault_binding_id`.
+
+MVR-05A5 keys all six replay projections by `vault_binding_id`, scopes standing-question,
+episode, and decision rebuilds to one binding, and fails startup migration before mutation when a
+legacy row cannot be attributed uniquely. The no-vault/single-vault floor continues to use the
+explicit `legacy-compatibility-binding` sentinel; active-context routing remains owned by MVR-05B.
 
 The three table groups route to Terra/high because the classification contract is frozen by 05A2
 before they start, which is what makes them mechanical. A group escalates to Sol/high when any table

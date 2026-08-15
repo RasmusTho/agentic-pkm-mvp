@@ -7,7 +7,7 @@ Episode notes (``app/episodes/store.py``, one markdown note per episode under
 ``episodes`` table is a rebuildable projection index over them (DRI discipline), following
 the ``decisions`` projection precedent (``app/jobs/decisions_projection.py``). This module:
 
-- ``rebuild_episodes_projection()`` -- truncate the ``episodes`` table and replay every
+- ``rebuild_episodes_projection()`` -- replace one binding's rows and replay every
   episode note found under the vault's ``episodes/`` subtree back into it. A note that fails
   schema validation is skipped as an orphan (never partially inserted), so a rebuild never
   silently corrupts the projection from a malformed note.
@@ -28,8 +28,10 @@ from pathlib import Path
 from typing import Any
 
 from app.db.db import conn_rw
+from app.db.replay_projection_schema import assert_replay_projection_schema
 from app.episodes.notes import EPISODE_NOTES_DIR, parse_validated_episode_note
 from app.episodes.schema import EpisodeSchemaValidationError
+from app.instance.binding_ids import COMPATIBILITY_BINDING_ID
 from app.vault.manager import iter_vault_markdown_files
 
 EPISODES_TABLE = "episodes"
@@ -82,17 +84,21 @@ def row_tuple(fields: dict[str, Any], note_path: str) -> tuple[Any, ...]:
     )
 
 
-def rebuild_episodes_projection(vault_root: Path) -> RebuildSummary:
-    """Truncate and repopulate the ``episodes`` table from vault episode notes.
+def rebuild_episodes_projection(
+    vault_root: Path,
+    *,
+    vault_binding_id: str = COMPATIBILITY_BINDING_ID,
+) -> RebuildSummary:
+    """Replace one binding's ``episodes`` rows from vault episode notes.
 
-    Runs in one transaction: the truncate and every replayed insert commit together, so a
+    Runs in one transaction: the delete and every replayed insert commit together, so a
     failure mid-replay leaves the prior projection intact.
     """
     note_paths = _episode_note_paths(vault_root)
     summary = RebuildSummary(total_notes=len(note_paths))
     validated_rows: list[tuple[dict[str, Any], str]] = []
 
-    # Read and validate before entering the truncating transaction. Schema-invalid
+    # Read and validate before entering the replacement transaction. Schema-invalid
     # notes are deliberately excluded from this derived index, while a vault I/O,
     # decode, or frontmatter parse failure preserves the prior projection.
     for path in note_paths:
@@ -105,22 +111,26 @@ def rebuild_episodes_projection(vault_root: Path) -> RebuildSummary:
         validated_rows.append((fields, note_path))
 
     with conn_rw() as conn:
+        assert_replay_projection_schema(conn, EPISODES_TABLE)
         with conn.cursor() as cur:
-            cur.execute(f"TRUNCATE TABLE {EPISODES_TABLE}")
+            cur.execute(
+                f"DELETE FROM {EPISODES_TABLE} WHERE vault_binding_id = %s",
+                (vault_binding_id,),
+            )
 
             for fields, note_path in validated_rows:
                 cur.execute(
                     f"""
                     INSERT INTO {EPISODES_TABLE} (
-                        episode_id, scope, title, time_start, time_end, closed,
+                        vault_binding_id, episode_id, scope, title, time_start, time_end, closed,
                         segmentation, parent_episode, space, protagonists, goal,
                         causation, derived_from, note_path
                     ) VALUES (
-                        %s, %s, %s, %s, %s, %s, %s, %s,
+                        %s, %s, %s, %s, %s, %s, %s, %s, %s,
                         %s::jsonb, %s::jsonb, %s::jsonb, %s::jsonb, %s::jsonb, %s
                     )
                     """,
-                    row_tuple(fields, note_path),
+                    (vault_binding_id, *row_tuple(fields, note_path)),
                 )
                 summary.inserted += 1
 
@@ -185,9 +195,12 @@ def _comparison_row(fields: dict[str, Any], note_path: str) -> tuple[Any, ...]:
     )
 
 
-def _db_projection_rows() -> list[tuple[Any, ...]]:
+def _db_projection_rows(
+    *, vault_binding_id: str = COMPATIBILITY_BINDING_ID
+) -> list[tuple[Any, ...]]:
     rows: list[tuple[Any, ...]] = []
     with conn_rw() as conn:
+        assert_replay_projection_schema(conn, EPISODES_TABLE)
         with conn.cursor() as cur:
             cur.execute(
                 f"""
@@ -195,7 +208,9 @@ def _db_projection_rows() -> list[tuple[Any, ...]]:
                        segmentation, parent_episode, space, protagonists, goal,
                        causation, derived_from, note_path
                 FROM {EPISODES_TABLE}
-                """
+                WHERE vault_binding_id = %s
+                """,
+                (vault_binding_id,),
             )
             for r in cur.fetchall():
                 if isinstance(r, dict):
@@ -249,10 +264,14 @@ def _vault_projection_rows(
     return sorted(rows, key=lambda row: row[0]), unreadable
 
 
-def doctor_episodes_projection(vault_root: Path) -> DoctorReport:
+def doctor_episodes_projection(
+    vault_root: Path,
+    *,
+    vault_binding_id: str = COMPATIBILITY_BINDING_ID,
+) -> DoctorReport:
     """Assert the DB projection matches the vault notes row-for-row."""
     vault_rows, unreadable_vault_notes = _vault_projection_rows(vault_root)
-    db_rows = _db_projection_rows()
+    db_rows = _db_projection_rows(vault_binding_id=vault_binding_id)
 
     vault_counter = Counter(vault_rows)
     db_counter = Counter(db_rows)

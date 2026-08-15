@@ -25,7 +25,8 @@ import logging
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
-from app.db.db import conn_rw
+from app.db.db import COMPATIBILITY_BINDING_ID, conn_rw
+from app.db.replay_projection_schema import assert_replay_projection_schema
 from app.domain.state_axes import normalize_maturity, normalize_review_state
 from app.jobs.episodes_projection import EPISODES_TABLE
 
@@ -101,14 +102,12 @@ def _assert_schema(conn: Any) -> None:
     """Fail-loud preflight (invariant -> producers rule, mirrors
     ``app.episodes.engine_state._assert_schema`` / ``app.episodes.assignment._assert_table_schema``):
     the ``episodes`` projection must exist before any query touches it."""
-    with conn.cursor() as cur:
-        cur.execute("SELECT to_regclass(%s)", (EPISODES_TABLE,))
-        row = cur.fetchone()
-    oid = (row.get("to_regclass") if isinstance(row, dict) else row[0]) if row else None
-    if not oid:
+    try:
+        assert_replay_projection_schema(conn, EPISODES_TABLE)
+    except RuntimeError as exc:
         raise ClosureDecaySchemaMissingError(
-            f"Missing table '{EPISODES_TABLE}'. {EPISODES_SCHEMA_MIGRATION_HINT}"
-        )
+            f"Stale table '{EPISODES_TABLE}'. {EPISODES_SCHEMA_MIGRATION_HINT}"
+        ) from exc
 
 
 def resolve_episode_ids(episode_ref: Any) -> tuple[str, ...]:
@@ -182,13 +181,13 @@ def read_closed_episode_scopes(episode_ids: Iterable[str]) -> dict[str, str]:
     placeholders = ", ".join(["%s"] * len(ids))
     query = (
         f"SELECT episode_id, scope FROM {EPISODES_TABLE} "
-        f"WHERE closed = true AND episode_id IN ({placeholders})"
+        f"WHERE vault_binding_id = %s AND closed = true AND episode_id IN ({placeholders})"
     )
     out: dict[str, str] = {}
     with conn_rw() as conn:
         _assert_schema(conn)
         with conn.cursor() as cur:
-            cur.execute(query, tuple(ids))
+            cur.execute(query, (COMPATIBILITY_BINDING_ID, *ids))
             for row in cur.fetchall():
                 if isinstance(row, dict):
                     eid, scope = row["episode_id"], row["scope"]
@@ -269,13 +268,14 @@ def read_closed_episode_ids(episode_ids: Iterable[str]) -> set[str]:
         return set()
     placeholders = ", ".join(["%s"] * len(ids))
     query = (
-        f"SELECT episode_id FROM {EPISODES_TABLE} WHERE closed = true AND episode_id IN ({placeholders})"
+        f"SELECT episode_id FROM {EPISODES_TABLE} "
+        f"WHERE vault_binding_id = %s AND closed = true AND episode_id IN ({placeholders})"
     )
     out: set[str] = set()
     with conn_rw() as conn:
         _assert_schema(conn)
         with conn.cursor() as cur:
-            cur.execute(query, tuple(ids))
+            cur.execute(query, (COMPATIBILITY_BINDING_ID, *ids))
             for row in cur.fetchall():
                 value = row["episode_id"] if isinstance(row, dict) else row[0]
                 out.add(str(value))

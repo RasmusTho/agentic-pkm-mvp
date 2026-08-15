@@ -299,7 +299,7 @@ _MIGRATION_OWNED_AUTOCREATE_SQL: tuple[tuple[str, tuple[str, ...]], ...] = (
                 key TEXT NOT NULL,
                 value JSONB NOT NULL,
                 created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-                vault_binding_id TEXT,
+                vault_binding_id TEXT NOT NULL,
                 CONSTRAINT decisions_object_binding_check
                     CHECK (object_id IS NULL OR vault_binding_id IS NOT NULL),
                 CONSTRAINT decisions_object_id_fkey

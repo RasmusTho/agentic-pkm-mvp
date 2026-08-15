@@ -87,7 +87,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Final, Mapping
 
-from app.db.db import conn_rw
+from app.db.db import COMPATIBILITY_BINDING_ID, conn_rw
+from app.db.replay_projection_schema import assert_replay_projection_schema
 from app.episodes import engine_state
 from app.episodes.assignment import reconcile_episode_bindings, withdraw_episode_bindings
 from app.episodes.notes import (
@@ -116,14 +117,12 @@ class EpisodeRecutSchemaMissingError(RuntimeError):
 
 
 def _assert_schema(conn: Any) -> None:
-    with conn.cursor() as cur:
-        cur.execute("SELECT to_regclass(%s)", (EPISODES_TABLE,))
-        row = cur.fetchone()
-    oid = (row.get("to_regclass") if isinstance(row, dict) else row[0]) if row else None
-    if not oid:
+    try:
+        assert_replay_projection_schema(conn, EPISODES_TABLE)
+    except RuntimeError as exc:
         raise EpisodeRecutSchemaMissingError(
-            f"Missing table '{EPISODES_TABLE}'. {_EPISODES_SCHEMA_MIGRATION_HINT}"
-        )
+            f"Stale table '{EPISODES_TABLE}'. {_EPISODES_SCHEMA_MIGRATION_HINT}"
+        ) from exc
 
 
 #: Distinct action string (code-review round-1 fix, mirrors
@@ -404,7 +403,7 @@ def _sync_projection_row(episode_id: str, fields: Mapping[str, Any]) -> None:
                     segmentation = %s, parent_episode = %s, space = %s::jsonb,
                     protagonists = %s::jsonb, goal = %s::jsonb, causation = %s::jsonb,
                     derived_from = %s::jsonb, updated_at = now()
-                WHERE episode_id = %s
+                WHERE vault_binding_id = %s AND episode_id = %s
                 """,
                 (
                     fields.get("scope"),
@@ -419,6 +418,7 @@ def _sync_projection_row(episode_id: str, fields: Mapping[str, Any]) -> None:
                     json.dumps(fields.get("goal") or []),
                     json.dumps(fields.get("causation") or []),
                     json.dumps(fields.get("derived_from") or []),
+                    COMPATIBILITY_BINDING_ID,
                     episode_id,
                 ),
             )

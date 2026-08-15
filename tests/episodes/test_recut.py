@@ -160,7 +160,7 @@ class _ProjectionSyncCursor:
     def execute(self, sql: str, params: tuple[Any, ...] = ()) -> None:
         self._calls.append((sql, params))
         if "to_regclass" in sql:
-            self._result = ("episodes",)
+            self._result = (True, True, ["vault_binding_id", "episode_id"])
         elif sql.strip().upper().startswith("UPDATE"):
             episode_id = params[-1]
             self.rowcount = 1 if episode_id in self._existing_ids else 0
@@ -720,7 +720,7 @@ class _FakeCursor:
         self._executed.append((sql, params))
         stripped = sql.strip()
         if "to_regclass" in stripped:
-            self._result = (BINDING_TABLE,)
+            self._result = (True, True, ["vault_binding_id", "artifact_ref", "episode_id"])
             return
         if stripped.startswith("SELECT artifact_ref, episode_id"):
             # episode_ids IN (...) -- params are the episode_id placeholders.
@@ -1320,8 +1320,9 @@ def test_sync_projection_row_issues_incremental_update_with_full_cut(
         "[]",
         json.dumps(["g-1"]),
         "[]",
-        json.dumps(["heimdal.observations:seed"]),
-        episode_id,
+            json.dumps(["heimdal.observations:seed"]),
+            recut_module.COMPATIBILITY_BINDING_ID,
+            episode_id,
     )
     # Never a TRUNCATE+replay -- this must stay a targeted single-row update, not a rebuild.
     assert not any("TRUNCATE" in c[0].upper() for c in conn.calls)

@@ -132,7 +132,7 @@ def test_doctor_reports_unreadable_vault_notes(
     broken = tmp_path / "episodes" / "ep-unreadable.md"
     broken.parent.mkdir()
     broken.write_bytes(b"\xff")
-    monkeypatch.setattr(episodes_projection, "_db_projection_rows", lambda: [])
+    monkeypatch.setattr(episodes_projection, "_db_projection_rows", lambda **_kwargs: [])
 
     report = episodes_projection.doctor_episodes_projection(tmp_path)
 
@@ -159,7 +159,7 @@ def test_rebuild_and_doctor_surface_malformed_yaml(
     with pytest.raises(EpisodeFrontmatterParseError):
         episodes_projection.rebuild_episodes_projection(tmp_path)
 
-    monkeypatch.setattr(episodes_projection, "_db_projection_rows", lambda: [])
+    monkeypatch.setattr(episodes_projection, "_db_projection_rows", lambda **_kwargs: [])
     report = episodes_projection.doctor_episodes_projection(tmp_path)
     assert report.ok is False
     assert report.unreadable_vault_notes[0]["note_path"] == "episodes/ep-malformed.md"
@@ -184,7 +184,7 @@ def test_rebuild_and_doctor_surface_unterminated_frontmatter(
     with pytest.raises(EpisodeFrontmatterParseError):
         episodes_projection.rebuild_episodes_projection(tmp_path)
 
-    monkeypatch.setattr(episodes_projection, "_db_projection_rows", lambda: [])
+    monkeypatch.setattr(episodes_projection, "_db_projection_rows", lambda **_kwargs: [])
     report = episodes_projection.doctor_episodes_projection(tmp_path)
     assert report.ok is False
     assert report.unreadable_vault_notes[0]["note_path"] == "episodes/ep-truncated.md"
