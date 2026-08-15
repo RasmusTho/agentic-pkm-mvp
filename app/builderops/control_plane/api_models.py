@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class AuthorityEnvelopeInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     repository: str
     scope: str
     stack: str
@@ -165,6 +167,29 @@ class OutboxReconcileRequest(BaseModel):
     evidence: dict[str, Any] = Field(default_factory=dict)
 
 
+class RowDerivedPostEffectPendingRequest(BaseModel):
+    """Dormant #4898 phase: only a row locator and current fence are accepted."""
+
+    model_config = ConfigDict(extra="forbid")
+    envelope: AuthorityEnvelopeInput
+    operation_key: str = Field(min_length=1)
+    minimum_fencing_token: int = Field(ge=1)
+
+
+class RowDerivedPostEffectEvidence(BaseModel):
+    """Closed readback vocabulary; claim/LSN authority never enters evidence."""
+
+    model_config = ConfigDict(extra="forbid")
+    readback: Literal["found", "not-found", "unknown"]
+    relaunch_performed: bool | None = None
+
+
+class RowDerivedPostEffectReconcileRequest(RowDerivedPostEffectPendingRequest):
+    observed_applied: bool
+    terminal_unknown: bool = False
+    evidence: RowDerivedPostEffectEvidence
+
+
 __all__ = [
     "AttemptCommitRequest",
     "AuthorityEnvelopeInput",
@@ -176,6 +201,9 @@ __all__ = [
     "OutboxRecoverRequest",
     "OutboxReconcileRequest",
     "OutboxUnknownRequest",
+    "RowDerivedPostEffectPendingRequest",
+    "RowDerivedPostEffectEvidence",
+    "RowDerivedPostEffectReconcileRequest",
     "PromotionCommitRequest",
     "RecordCommitRequest",
     "TaskClaimRequest",

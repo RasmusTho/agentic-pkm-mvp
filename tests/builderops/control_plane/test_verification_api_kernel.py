@@ -599,6 +599,78 @@ def test_authenticated_outbox_recovery_rejects_durable_secret_fields(
     assert "verification-executor-token" not in str(row)
 
 
+def test_row_derived_post_effect_api_rejects_caller_attested_claim_evidence(
+    control_plane_store, tmp_path
+) -> None:
+    ledger, client, _outbox = _authenticated_api_ledger(control_plane_store, tmp_path)
+    run = ledger.ingest(request())
+    claimed = ledger.claim(run.run_id, "ignored-client-holder")
+    operation_key = ledger.begin_effect(
+        run.run_id,
+        effect_type="github.comment",
+        payload={"repository": REPO.lower(), "pr_number": 3603, "head_sha": "a" * 40},
+        holder="executor:demerzel-verifier",
+        lease_id=claimed.lease_id,
+        idempotency_key="row-derived-api",
+    )
+    response = client._http.post(  # type: ignore[attr-defined]
+        "/v1/executor/outbox/post-effect/pending",
+        headers=client._headers(pin_epoch=True),  # type: ignore[attr-defined]
+        json={
+            "envelope": {**ledger.envelope, "claim_lsn": "0/0", "credential": "forbidden"},
+            "operation_key": operation_key,
+            "minimum_fencing_token": 1,
+        },
+    )
+    assert response.status_code == 422
+    response = client._http.post(  # type: ignore[attr-defined]
+        "/v1/executor/outbox/post-effect/reconcile",
+        headers=client._headers(pin_epoch=True),  # type: ignore[attr-defined]
+        json={
+            "envelope": ledger.envelope,
+            "operation_key": operation_key,
+            "minimum_fencing_token": 1,
+            "observed_applied": False,
+            "evidence": {"readback": "not-found", "provider_session_id": "claim_lsn"},
+        },
+    )
+    assert response.status_code == 422
+    response = client._http.post(  # type: ignore[attr-defined]
+        "/v1/executor/outbox/post-effect/reconcile",
+        headers=client._headers(pin_epoch=True),  # type: ignore[attr-defined]
+        json={
+            "envelope": ledger.envelope,
+            "operation_key": operation_key,
+            "minimum_fencing_token": 1,
+            "observed_applied": False,
+            "evidence": {"readback": "claim_lsn=0/DEADBEEF"},
+        },
+    )
+    assert response.status_code == 422
+    response = client._http.post(  # type: ignore[attr-defined]
+        "/v1/executor/outbox/post-effect/reconcile",
+        headers=client._headers(pin_epoch=True),  # type: ignore[attr-defined]
+        json={
+            "envelope": ledger.envelope,
+            "operation_key": operation_key,
+            "minimum_fencing_token": 1,
+            "observed_applied": False,
+            "evidence": {
+                "nested": {
+                    "claim": {
+                        "lsn": "0/0",
+                        "worker": {"id": "forged"},
+                        "receipt": {"sequence": 99},
+                        "fence": 7,
+                    }
+                }
+            },
+        },
+    )
+    assert response.status_code == 422
+    assert control_plane_store.outbox_intent(REPO, operation_key).get("post_effect_phase") is None
+
+
 def test_authenticated_api_rejects_github_terminal_unknown(
     control_plane_store, tmp_path
 ) -> None:

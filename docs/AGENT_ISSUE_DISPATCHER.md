@@ -335,6 +335,12 @@ The dispatcher is an operational coordination layer, not a lifecycle replacement
 
 **Verified issue-set merge and exact closure: SHIPPED IN REPO**
 
+- #4898 adds a dormant, nullable row-derived post-effect recovery substrate. Its pending and
+  reconciliation endpoints accept only an outbox locator and current fence, lock that existing row,
+  and derive all claim/LSN identity from it. It does not activate a consumer, v2 phase projection,
+  watchdog, deployment, or replacement for legacy `finish_effect` / current self-closure; any later
+  activation requires an independently deployed and proven substrate.
+
 - Verification dispatch request v3 binds one non-empty, sorted set of at most 10 closing issues and
   one authenticated `final_review_rounds` value to
   the exact repository, PR, and head. `supporting_authority_json` is durable, cumulative evidence

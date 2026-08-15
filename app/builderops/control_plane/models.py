@@ -378,6 +378,17 @@ class StorePort(Protocol):
         fault_at: str | None = None,
     ) -> OutboxReconciliation: ...
 
+    def begin_post_effect_pending(
+        self, *, repository: str, operation_key: str, minimum_fencing_token: int,
+        expected_principal: str,
+    ) -> Mapping[str, Any]: ...
+
+    def reconcile_post_effect(
+        self, *, repository: str, operation_key: str, minimum_fencing_token: int,
+        observed_applied: bool, evidence: Mapping[str, Any], expected_principal: str,
+        terminal_unknown: bool = False,
+    ) -> Mapping[str, Any]: ...
+
     def outbox_status(
         self,
         repository: str,

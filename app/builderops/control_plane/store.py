@@ -40,6 +40,19 @@ def _hash(value: Mapping[str, Any]) -> str:
     return hashlib.sha256(_canonical(value).encode()).hexdigest()
 
 
+def _validate_row_derived_evidence(evidence: Mapping[str, Any]) -> None:
+    """Validate the closed dormant readback schema at the persistence boundary."""
+    allowed = {"readback", "relaunch_performed"}
+    if not isinstance(evidence, Mapping) or not set(evidence).issubset(allowed):
+        raise ValueError("row-derived readback evidence contains unknown fields")
+    readback = evidence.get("readback")
+    if readback not in {"found", "not-found", "unknown"}:
+        raise ValueError("row-derived readback evidence has an invalid outcome")
+    relaunch = evidence.get("relaunch_performed")
+    if relaunch is not None and type(relaunch) is not bool:
+        raise ValueError("row-derived readback evidence has an invalid relaunch flag")
+
+
 def _operation_key(repository: str, idempotency_key: str, effect_type: str) -> str:
     return _hash(
         {"repository": repository, "idempotency_key": idempotency_key, "effect_type": effect_type}
@@ -2006,7 +2019,7 @@ class PostgresBuilderOpsStore:
             self._assert_executor_enabled(conn)
             row = conn.execute(
                 "SELECT task_id, status, intent_receipt_sequence, intent_lsn::text AS intent_lsn, "
-                "claim_fencing_token, claim_expires_at, reconciliation_receipt_sequence, "
+                "claim_fencing_token, claim_expires_at, post_effect_phase, reconciliation_receipt_sequence, "
                 "reconciliation_lsn::text AS reconciliation_lsn "
                 "FROM builderops_outbox WHERE repository = %s AND operation_key = %s FOR UPDATE",
                 (envelope.repository, operation_key),
@@ -2027,6 +2040,8 @@ class PostgresBuilderOpsStore:
                 raise LeaseUnavailable("outbox operation is terminal: succeeded")
             if row["status"] == "dead_letter":
                 raise LeaseUnavailable("outbox operation is terminal: dead_letter")
+            if row["status"] == "pending" and row["post_effect_phase"] == "pending":
+                raise LeaseUnavailable("row-derived post-effect reconciliation must finish before reclaim")
             if row["status"] == "pending" and row["reconciliation_receipt_sequence"] is not None:
                 self._load_reconciliation(
                     conn,
@@ -2069,6 +2084,11 @@ class PostgresBuilderOpsStore:
                 conn.execute(
                     "UPDATE builderops_outbox SET status = 'claimed', worker_id = %s, claim_fencing_token = %s, "
                     "claim_expires_at = %s, claim_lsn = NULL, claim_receipt_sequence = %s, "
+                    "post_effect_phase = NULL, post_effect_fencing_token = NULL, "
+                    "post_effect_intent_lsn = NULL, post_effect_claim_lsn = NULL, "
+                    "post_effect_claim_receipt_sequence = NULL, post_effect_receipt_sequence = NULL, "
+                    "post_effect_recovery_lsn = NULL, post_effect_evidence = NULL, "
+                    "post_effect_observed_applied = NULL, post_effect_terminal_unknown = NULL, "
                     "authority_envelope = %s, "
                     "updated_at = clock_timestamp() WHERE repository = %s AND operation_key = %s",
                     (
@@ -2120,7 +2140,10 @@ class PostgresBuilderOpsStore:
                 "SELECT repository, operation_key, task_id, effect_type, payload, "
                 "status, intent_receipt_sequence, intent_lsn::text AS intent_lsn, "
                 "reconciliation_evidence, reconciliation_receipt_sequence, "
-                "authority_envelope "
+                "authority_envelope, post_effect_phase, post_effect_fencing_token, "
+                "post_effect_intent_lsn::text AS post_effect_intent_lsn, "
+                "post_effect_claim_lsn::text AS post_effect_claim_lsn, "
+                "post_effect_observed_applied, post_effect_terminal_unknown "
                 "FROM builderops_outbox "
                 "WHERE repository = %s AND operation_key = %s",
                 (canonical, operation_key),
@@ -2130,6 +2153,171 @@ class PostgresBuilderOpsStore:
         if row["intent_lsn"] is None:
             raise DurabilityPending("outbox intent durability binding is incomplete")
         return dict(row)
+
+    def begin_post_effect_pending(
+        self, *, repository: str, operation_key: str, minimum_fencing_token: int,
+        expected_principal: str,
+    ) -> Mapping[str, Any]:
+        """Persist dormant phase identity from a locked row, never request evidence."""
+        repository = canonical_repository(repository)
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT status, worker_id, claim_fencing_token, intent_lsn::text AS intent_lsn, "
+                "claim_lsn::text AS claim_lsn, claim_receipt_sequence, claim_expires_at, authority_envelope, "
+                "post_effect_phase, post_effect_fencing_token, "
+                "post_effect_intent_lsn::text AS post_effect_intent_lsn, "
+                "post_effect_claim_lsn::text AS post_effect_claim_lsn, "
+                "post_effect_claim_receipt_sequence, "
+                "clock_timestamp() AS database_now FROM builderops_outbox "
+                "WHERE repository = %s AND operation_key = %s FOR UPDATE",
+                (repository, operation_key),
+            ).fetchone()
+            if (
+                row is None or row["status"] not in {"claimed", "unknown"} or row["worker_id"] is None
+                or row["intent_lsn"] is None or row["claim_lsn"] is None
+                or row["claim_receipt_sequence"] is None or row["claim_expires_at"] is None
+                or row["claim_expires_at"] <= row["database_now"]
+                or int(row["claim_fencing_token"]) != minimum_fencing_token
+            ):
+                raise StaleFencingToken("post-effect pending requires current locked fence")
+            if dict(row["authority_envelope"] or {}).get("actor") != expected_principal:
+                raise PermissionError("post-effect claim does not belong to authenticated principal")
+            derived = {
+                "fencing_token": int(row["claim_fencing_token"]),
+                "intent_lsn": str(row["intent_lsn"]),
+                "claim_lsn": str(row["claim_lsn"]),
+                "claim_receipt_sequence": int(row["claim_receipt_sequence"]),
+            }
+            if row["post_effect_phase"] is None:
+                conn.execute(
+                    "UPDATE builderops_outbox SET post_effect_phase = 'pending', "
+                    "post_effect_fencing_token = %s, post_effect_intent_lsn = %s, "
+                    "post_effect_claim_lsn = %s, post_effect_claim_receipt_sequence = %s "
+                    "WHERE repository = %s AND operation_key = %s",
+                    (derived["fencing_token"], derived["intent_lsn"], derived["claim_lsn"],
+                     derived["claim_receipt_sequence"], repository, operation_key),
+                )
+            elif (
+                row["post_effect_fencing_token"] != derived["fencing_token"]
+                or row["post_effect_intent_lsn"] != derived["intent_lsn"]
+                or row["post_effect_claim_lsn"] != derived["claim_lsn"]
+                or row["post_effect_claim_receipt_sequence"] != derived["claim_receipt_sequence"]
+            ):
+                raise StaleFencingToken("post-effect identity drifted from locked row")
+        return derived
+
+    def reconcile_post_effect(
+        self, *, repository: str, operation_key: str, minimum_fencing_token: int,
+        observed_applied: bool, evidence: Mapping[str, Any], expected_principal: str,
+        terminal_unknown: bool = False,
+    ) -> Mapping[str, Any]:
+        """Use the stored row-derived claim for dormant reconciliation only."""
+        _validate_row_derived_evidence(evidence)
+        readback = evidence["readback"]
+        expected_readback = "unknown" if terminal_unknown else "found" if observed_applied else "not-found"
+        if readback != expected_readback:
+            raise ValueError("readback evidence contradicts the requested outcome")
+        if terminal_unknown and observed_applied:
+            raise ValueError("terminal-unknown reconciliation cannot claim an applied effect")
+        repository = canonical_repository(repository)
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT status, worker_id, claim_fencing_token, intent_lsn::text AS intent_lsn, "
+                "claim_lsn::text AS claim_lsn, claim_receipt_sequence, claim_expires_at, authority_envelope, "
+                "post_effect_phase, post_effect_fencing_token, "
+                "post_effect_intent_lsn::text AS post_effect_intent_lsn, "
+                "post_effect_claim_lsn::text AS post_effect_claim_lsn, "
+                "post_effect_claim_receipt_sequence, post_effect_evidence, "
+                "post_effect_observed_applied, post_effect_terminal_unknown, "
+                "post_effect_receipt_sequence, post_effect_recovery_lsn::text AS post_effect_recovery_lsn, "
+                "reconciliation_evidence, reconciliation_receipt_sequence, reconciliation_lsn::text AS reconciliation_lsn, "
+                "clock_timestamp() AS database_now FROM builderops_outbox "
+                "WHERE repository = %s AND operation_key = %s FOR UPDATE",
+                (repository, operation_key),
+            ).fetchone()
+            if row is None or int(row["claim_fencing_token"]) != minimum_fencing_token:
+                raise StaleFencingToken("post-effect reconciliation requires current locked fence")
+            if dict(row["authority_envelope"] or {}).get("actor") != expected_principal:
+                raise PermissionError("post-effect claim does not belong to authenticated principal")
+            if row["post_effect_phase"] == "reconciled":
+                if (
+                    row["post_effect_fencing_token"] != row["claim_fencing_token"]
+                    or row["post_effect_intent_lsn"] != row["intent_lsn"]
+                    or row["post_effect_claim_lsn"] != row["claim_lsn"]
+                    or row["post_effect_claim_receipt_sequence"] != row["claim_receipt_sequence"]
+                ):
+                    raise StaleFencingToken("reconciled post-effect identity drifted from locked row")
+                if (
+                    dict(row["post_effect_evidence"] or {}) != dict(evidence)
+                    or row["post_effect_observed_applied"] is not observed_applied
+                    or row["post_effect_terminal_unknown"] is not terminal_unknown
+                ):
+                    raise IdempotencyConflict("post-effect replay has conflicting evidence")
+                return {"status": row["status"], "fencing_token": minimum_fencing_token,
+                        "receipt_sequence": int(row["post_effect_receipt_sequence"]),
+                        "recovery_lsn": str(row["post_effect_recovery_lsn"]), "replayed": True}
+            if row["post_effect_phase"] == "pending" and row["status"] in {"pending", "succeeded", "dead_letter"}:
+                expected_status = "dead_letter" if terminal_unknown else ("succeeded" if observed_applied else "pending")
+                if (
+                    row["status"] != expected_status
+                    or row["post_effect_fencing_token"] != row["claim_fencing_token"]
+                    or row["post_effect_intent_lsn"] != row["intent_lsn"]
+                    or row["post_effect_claim_lsn"] != row["claim_lsn"]
+                    or row["post_effect_claim_receipt_sequence"] != row["claim_receipt_sequence"]
+                    or dict(row["reconciliation_evidence"] or {}) != dict(evidence)
+                    or row["reconciliation_receipt_sequence"] is None
+                    or row["reconciliation_lsn"] is None
+                ):
+                    raise IdempotencyConflict("post-effect recovery has conflicting reconciliation identity")
+                result = {"status": expected_status, "fencing_token": minimum_fencing_token,
+                          "receipt_sequence": int(row["reconciliation_receipt_sequence"]),
+                          "recovery_lsn": str(row["reconciliation_lsn"]), "replayed": True}
+            elif (
+                row["status"] != "unknown" or row["post_effect_phase"] != "pending"
+                or row["worker_id"] is None or row["intent_lsn"] is None or row["claim_lsn"] is None
+                or row["claim_receipt_sequence"] is None or row["claim_expires_at"] is None
+                or row["claim_expires_at"] <= row["database_now"]
+                or row["post_effect_fencing_token"] != row["claim_fencing_token"]
+                or row["post_effect_intent_lsn"] != row["intent_lsn"]
+                or row["post_effect_claim_lsn"] != row["claim_lsn"]
+                or row["post_effect_claim_receipt_sequence"] != row["claim_receipt_sequence"]
+            ):
+                raise StaleFencingToken("post-effect reconciliation is stale or reordered")
+            else:
+                claim = OutboxClaim(repository, operation_key, str(row["worker_id"]), minimum_fencing_token,
+                                    str(row["intent_lsn"]), str(row["claim_lsn"]),
+                                    int(row["claim_receipt_sequence"]), row["claim_expires_at"])
+                result = None
+        if result is None:
+            reconciled = self.reconcile_outbox(claim, observed_applied=observed_applied,
+                                               terminal_unknown=terminal_unknown, evidence=evidence)
+            result = {"status": reconciled.status, "fencing_token": reconciled.fencing_token,
+                      "receipt_sequence": reconciled.receipt_sequence, "recovery_lsn": reconciled.recovery_lsn,
+                      "replayed": reconciled.replayed}
+        race_retry = False
+        with self._connect() as conn:
+            updated = conn.execute(
+                "UPDATE builderops_outbox SET post_effect_phase = 'reconciled', "
+                "post_effect_evidence = %s, post_effect_receipt_sequence = %s, "
+                "post_effect_recovery_lsn = %s, post_effect_observed_applied = %s, "
+                "post_effect_terminal_unknown = %s WHERE repository = %s AND operation_key = %s "
+                "AND post_effect_phase = 'pending' AND post_effect_fencing_token = %s RETURNING operation_key",
+                (Jsonb(dict(evidence)), result["receipt_sequence"], result["recovery_lsn"], observed_applied,
+                 terminal_unknown, repository, operation_key, minimum_fencing_token),
+            ).fetchone()
+            if updated is None:
+                race_retry = True
+        if race_retry:
+            return self.reconcile_post_effect(
+                repository=repository,
+                operation_key=operation_key,
+                minimum_fencing_token=minimum_fencing_token,
+                expected_principal=expected_principal,
+                observed_applied=observed_applied,
+                terminal_unknown=terminal_unknown,
+                evidence=evidence,
+            )
+        return result
 
     def _repair_outbox_claim_binding(self, repository: str, operation_key: str) -> None:
         """Bind a locally committed claim/receipt before recovery marks it unknown."""
@@ -2212,7 +2400,7 @@ class PostgresBuilderOpsStore:
                 "outbox.claim_fencing_token, "
                 "outbox.intent_lsn::text AS intent_lsn, "
                 "outbox.claim_lsn::text AS claim_lsn, "
-                "outbox.claim_receipt_sequence, outbox.claim_expires_at, "
+                "outbox.claim_receipt_sequence, outbox.claim_expires_at, outbox.post_effect_phase, "
                 "clock_timestamp() AS database_now, receipt.event_type AS claim_event_type "
                 "FROM builderops_outbox AS outbox "
                 "JOIN builderops_receipts AS receipt "
@@ -2263,7 +2451,11 @@ class PostgresBuilderOpsStore:
                 "UPDATE builderops_outbox SET status = 'unknown', "
                 "worker_id = %s, claim_fencing_token = %s, "
                 "claim_expires_at = %s, claim_lsn = NULL, "
-                "claim_receipt_sequence = %s, "
+                "claim_receipt_sequence = %s, post_effect_phase = NULL, post_effect_fencing_token = NULL, "
+                "post_effect_intent_lsn = NULL, post_effect_claim_lsn = NULL, "
+                "post_effect_claim_receipt_sequence = NULL, post_effect_receipt_sequence = NULL, "
+                "post_effect_recovery_lsn = NULL, post_effect_evidence = NULL, "
+                "post_effect_observed_applied = NULL, post_effect_terminal_unknown = NULL, "
                 "unknown_detail = 'worker process lost; external readback "
                 "required', authority_envelope = %s, "
                 "updated_at = clock_timestamp() "

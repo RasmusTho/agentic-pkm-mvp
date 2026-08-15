@@ -61,6 +61,12 @@ can carry the store-required fenced lease through the client CLI. This remains
 client-side request formation only; temporal protected-base manifest freshness
 stays with BCP-05, and BCP-06 cutover authority is unchanged.
 
+Issue #4898 adds the nullable, dormant row-derived post-effect recovery substrate. Its post-effect
+claim and LSN identity are derived only from the locked outbox row; the API accepts only a row
+locator, minimum fence, and closed readback outcome. This is mechanism support only: consumers,
+production authority activation, and legacy `finish_effect`/self-closure behavior remain unchanged
+and are not claimed as delivered here.
+
 ## Target boundary
 
 - Demerzel hosts the independently deployed BuilderOps API, PostgreSQL store, migration gate, and

@@ -1766,6 +1766,25 @@ class BuilderOpsVerificationLedger:
                 "verification effect claim is unavailable"
             ) from exc
 
+    def begin_post_effect_pending(
+        self, operation_key: str, *, minimum_fencing_token: int
+    ) -> Mapping[str, object]:
+        """Dormant #4898 control-plane substrate; legacy finish_effect does not call this."""
+        return self.client.begin_post_effect_pending(
+            envelope=self.envelope, operation_key=operation_key,
+            minimum_fencing_token=minimum_fencing_token,
+        )
+
+    def reconcile_post_effect(
+        self, operation_key: str, *, minimum_fencing_token: int,
+        observed_applied: bool, evidence: Mapping[str, object], terminal_unknown: bool = False,
+    ) -> Mapping[str, object]:
+        return self.client.reconcile_post_effect(
+            envelope=self.envelope, operation_key=operation_key,
+            minimum_fencing_token=minimum_fencing_token, observed_applied=observed_applied,
+            terminal_unknown=terminal_unknown, evidence=evidence,
+        )
+
 
 __all__ = [
     "BuilderOpsVerificationLedger",

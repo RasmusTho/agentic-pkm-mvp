@@ -28,6 +28,8 @@ from app.builderops.control_plane.api_models import (
     TaskHeartbeatRequest,
     TaskReleaseRequest,
     TaskTransitionRequest,
+    RowDerivedPostEffectPendingRequest,
+    RowDerivedPostEffectReconcileRequest,
 )
 from app.builderops.control_plane.auth import (
     Credential,
@@ -87,7 +89,7 @@ _ALLOWED_SECRET_METADATA_KEYS = frozenset(
 _STRUCTURAL_SAFE_KEYS = frozenset({"fencing_token"})
 _STRUCTURAL_SAFE_FIELD_PATHS: dict[str, frozenset[tuple[str, ...]]] = {
     "fencing_token": frozenset(
-        {("lease", "fencing_token"), ("claim", "fencing_token")}
+        {("lease", "fencing_token"), ("claim", "fencing_token"), ("minimum_fencing_token",)}
     )
 }
 _FORBIDDEN_COMPACT_DURABLE_KEYS = frozenset(
@@ -116,14 +118,120 @@ _EMBEDDED_SECRET_VALUE = re.compile(
 _MAX_DURABLE_TEXT_LENGTH = 16_384
 _MAX_DURABLE_TEXT_SCAN_CHARS = 262_144
 _MAX_DURABLE_VALUE_NODES = 10_000
+_ROW_DERIVED_FORBIDDEN_EVIDENCE_KEYS = frozenset(
+    {
+        "claim_lsn",
+        "intent_lsn",
+        "claim_receipt_sequence",
+        "claim_fencing_token",
+        "fencing_token",
+        "worker_id",
+        "claim_expires_at",
+        "expires_at",
+        "receipt_sequence",
+        "recovery_lsn",
+        "authority_envelope",
+        "claim",
+        "intent",
+        "worker",
+        "receipt",
+        "fence",
+    }
+)
+_ROW_DERIVED_AUTHORITY_TOKENS = (
+    "claim",
+    "intent",
+    "worker",
+    "receipt",
+    "fence",
+    "lsn",
+    "expires_at",
+    "authority_envelope",
+)
+
+
+def _contains_postgres_lsn_literal(value: str) -> bool:
+    """Detect a bounded hexadecimal LSN without a backtracking regex."""
+
+    hexadecimal = frozenset("0123456789abcdefABCDEF")
+    for slash_index, character in enumerate(value):
+        if character != "/" or slash_index == 0 or slash_index == len(value) - 1:
+            continue
+        left = slash_index - 1
+        while left >= 0 and value[left] in hexadecimal:
+            left -= 1
+        right = slash_index + 1
+        while right < len(value) and value[right] in hexadecimal:
+            right += 1
+        if left < slash_index - 1 and right > slash_index + 1:
+            return True
+    return False
 
 
 def _canonical_durable_key(key: str) -> str:
     """Normalize common structured-key spellings before secret classification."""
 
-    acronym_split = re.sub(r"([A-Z]+)([A-Z][a-z])", r"\1_\2", key.strip())
-    camel_split = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", acronym_split)
-    return re.sub(r"[^A-Za-z0-9]+", "_", camel_split).strip("_").lower()
+    source = key.strip()
+    normalized: list[str] = []
+    for index, character in enumerate(source):
+        if not character.isascii() or not character.isalnum():
+            if normalized and normalized[-1] != "_":
+                normalized.append("_")
+            continue
+        previous = source[index - 1] if index else ""
+        following = source[index + 1] if index + 1 < len(source) else ""
+        if character.isupper() and normalized and (
+            previous.islower()
+            or previous.isdigit()
+            or (previous.isupper() and following.islower())
+        ) and normalized[-1] != "_":
+            normalized.append("_")
+        normalized.append(character)
+    return "".join(normalized).strip("_").lower()
+
+
+def _row_derived_evidence_text(value: Any) -> str:
+    if isinstance(value, Mapping):
+        return "".join(
+            f"{key}{_row_derived_evidence_text(item)}"
+            for key, item in value.items()
+        )
+    if isinstance(value, (list, tuple)):
+        return "".join(_row_derived_evidence_text(item) for item in value)
+    if isinstance(value, str):
+        return value
+    if isinstance(value, int) and not isinstance(value, bool):
+        return str(value)
+    return ""
+
+
+def _assert_row_derived_evidence_safe(value: Any) -> None:
+    """Keep caller evidence from becoming dormant claim or LSN authority."""
+    evidence_text = _row_derived_evidence_text(value)
+    normalized_text = evidence_text.casefold().replace("-", "_").replace(" ", "_")
+    if _contains_postgres_lsn_literal(evidence_text) or any(
+        token in normalized_text for token in _ROW_DERIVED_AUTHORITY_TOKENS
+    ):
+        raise ValueError("row-derived reconciliation evidence cannot contain claim authority")
+    if isinstance(value, Mapping):
+        for key, child in value.items():
+            normalized = _canonical_durable_key(str(key))
+            if (
+                normalized in _ROW_DERIVED_FORBIDDEN_EVIDENCE_KEYS
+                or normalized.replace("_", "")
+                in {item.replace("_", "") for item in _ROW_DERIVED_FORBIDDEN_EVIDENCE_KEYS}
+                or any(
+                    fragment in normalized.split("_")
+                    for fragment in _ROW_DERIVED_FORBIDDEN_EVIDENCE_KEYS
+                )
+            ):
+                raise ValueError("row-derived reconciliation evidence cannot contain claim authority")
+            _assert_row_derived_evidence_safe(child)
+    elif isinstance(value, (list, tuple)):
+        for child in value:
+            _assert_row_derived_evidence_safe(child)
+    elif isinstance(value, str) and _contains_postgres_lsn_literal(value):
+        raise ValueError("row-derived reconciliation evidence cannot contain durability LSNs")
 
 
 def _assert_secret_metadata_shape(key: str, value: Any) -> None:
@@ -1002,6 +1110,30 @@ def create_app(
             "effect_eligible": eligible,
         }
 
+    @application.post("/v1/executor/outbox/post-effect/pending")
+    async def begin_row_derived_post_effect_pending(
+        request: RowDerivedPostEffectPendingRequest,
+        credential: Credential = Depends(outbox_write),
+        _epoch: None = Depends(require_authority_epoch),
+    ) -> dict[str, Any]:
+        _enforce_repo_scope(credential, request.envelope.repository)
+        try:
+            _assert_durable_payload_safe(request.model_dump(mode="json"), credentials)
+            intent = await run_in_threadpool(
+                store.outbox_intent, request.envelope.repository, request.operation_key
+            )
+            _enforce_outbox_principal(intent, credential)
+            pending = await run_in_threadpool(
+                store.begin_post_effect_pending,
+                repository=request.envelope.repository,
+                operation_key=request.operation_key,
+                minimum_fencing_token=request.minimum_fencing_token,
+                expected_principal=credential.principal,
+            )
+        except Exception as exc:
+            raise _control_plane_error(exc) from exc
+        return dict(pending)
+
     @application.post("/v1/executor/outbox/unknown")
     async def mark_outbox_unknown(
         request: OutboxUnknownRequest,
@@ -1143,6 +1275,34 @@ def create_app(
             "recovery_lsn": result.recovery_lsn,
             "replayed": result.replayed,
         }
+
+    @application.post("/v1/executor/outbox/post-effect/reconcile")
+    async def reconcile_row_derived_post_effect(
+        request: RowDerivedPostEffectReconcileRequest,
+        credential: Credential = Depends(outbox_write),
+        _epoch: None = Depends(require_authority_epoch),
+    ) -> dict[str, Any]:
+        _enforce_repo_scope(credential, request.envelope.repository)
+        try:
+            _assert_row_derived_evidence_safe(request.evidence)
+            _assert_durable_payload_safe(request.model_dump(mode="json"), credentials)
+            intent = await run_in_threadpool(
+                store.outbox_intent, request.envelope.repository, request.operation_key
+            )
+            _enforce_outbox_principal(intent, credential)
+            result = await run_in_threadpool(
+                store.reconcile_post_effect,
+                repository=request.envelope.repository,
+                operation_key=request.operation_key,
+                minimum_fencing_token=request.minimum_fencing_token,
+                expected_principal=credential.principal,
+                observed_applied=request.observed_applied,
+                terminal_unknown=request.terminal_unknown,
+                evidence=request.evidence.model_dump(mode="json"),
+            )
+        except Exception as exc:
+            raise _control_plane_error(exc) from exc
+        return dict(result)
 
     return application
 

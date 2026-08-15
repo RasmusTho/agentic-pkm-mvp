@@ -583,6 +583,27 @@ class BuilderOpsControlPlaneClient:
             },
         )
 
+    def begin_post_effect_pending(
+        self, *, envelope: Mapping[str, Any], operation_key: str, minimum_fencing_token: int
+    ) -> dict[str, Any]:
+        return self._request(
+            "POST", f"/{API_VERSION}/executor/outbox/post-effect/pending",
+            json_body={"envelope": dict(envelope), "operation_key": operation_key,
+                       "minimum_fencing_token": minimum_fencing_token},
+        )
+
+    def reconcile_post_effect(
+        self, *, envelope: Mapping[str, Any], operation_key: str, minimum_fencing_token: int,
+        observed_applied: bool, evidence: Mapping[str, Any], terminal_unknown: bool = False,
+    ) -> dict[str, Any]:
+        return self._request(
+            "POST", f"/{API_VERSION}/executor/outbox/post-effect/reconcile",
+            json_body={"envelope": dict(envelope), "operation_key": operation_key,
+                       "minimum_fencing_token": minimum_fencing_token,
+                       "observed_applied": observed_applied,
+                       "terminal_unknown": terminal_unknown, "evidence": dict(evidence)},
+        )
+
     # -- transport -----------------------------------------------------------
     def _headers(self, *, pin_epoch: bool) -> dict[str, str]:
         headers = {"Authorization": f"Bearer {self._config.token}"}
