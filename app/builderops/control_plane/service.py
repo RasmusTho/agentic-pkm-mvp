@@ -139,6 +139,10 @@ _ROW_DERIVED_FORBIDDEN_EVIDENCE_KEYS = frozenset(
     }
 )
 _POSTGRES_LSN_LITERAL = re.compile(r"[0-9A-F]+/[0-9A-F]+", re.IGNORECASE)
+_ROW_DERIVED_AUTHORITY_TEXT = re.compile(
+    r"claim|intent|worker|receipt|fenc(?:e|ing)|lsn|expires?_at|authority[_ -]?envelope",
+    re.IGNORECASE,
+)
 
 
 def _canonical_durable_key(key: str) -> str:
@@ -166,8 +170,9 @@ def _row_derived_evidence_text(value: Any) -> str:
 
 def _assert_row_derived_evidence_safe(value: Any) -> None:
     """Keep caller evidence from becoming dormant claim or LSN authority."""
-    if _POSTGRES_LSN_LITERAL.search(_row_derived_evidence_text(value)):
-        raise ValueError("row-derived reconciliation evidence cannot contain durability LSNs")
+    evidence_text = _row_derived_evidence_text(value)
+    if _POSTGRES_LSN_LITERAL.search(evidence_text) or _ROW_DERIVED_AUTHORITY_TEXT.search(evidence_text):
+        raise ValueError("row-derived reconciliation evidence cannot contain claim authority")
     if isinstance(value, Mapping):
         for key, child in value.items():
             normalized = _canonical_durable_key(str(key))
