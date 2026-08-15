@@ -1,0 +1,21 @@
+{
+  "schema_version": "channel-manifest.v1",
+  "channel": "promotion-test",
+  "intent": "promotion",
+  "compose_project": "pkm-promotion-test",
+  "artifact": {
+    "repository": "ghcr.io/example/pkm-app",
+    "image_index_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "platform_digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "source_sha": "0123456789abcdef0123456789abcdef01234567"
+  },
+  "identities": {
+    "database": "promotion-test-db-v1",
+    "vault": "promotion-test-vault-v1",
+    "config": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "migration": "alembic:head-example"
+  },
+  "llm_policy": "declared-required",
+  "gateway": {"port": 8112, "identity": "promotion-test-gateway-v1"},
+  "secret_references": ["keychain://agentic-pkm/promotion-test/runtime"]
+}
