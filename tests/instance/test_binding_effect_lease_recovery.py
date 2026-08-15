@@ -196,6 +196,47 @@ def test_state_lock_cancellation_closes_the_acquired_descriptor(tmp_path, monkey
         os.close(probe)
 
 
+@pytest.mark.skipif(not hasattr(os, "fork"), reason="requires fork descriptor proof")
+def test_descriptor_registration_cancellation_rolls_back_before_fd_reuse(
+    tmp_path, monkeypatch
+) -> None:
+    manager = _build_manager(tmp_path, "binding-a")
+    assert lease_module._LEASE_LOCK_FDS == set()
+
+    class InterruptingRegistry(set):
+        added_descriptor: int | None = None
+
+        def add(self, descriptor) -> None:
+            super().add(descriptor)
+            self.added_descriptor = descriptor
+            raise KeyboardInterrupt("cancel after descriptor registration")
+
+    registry = InterruptingRegistry()
+    monkeypatch.setattr(lease_module, "_LEASE_LOCK_FDS", registry)
+    with pytest.raises(KeyboardInterrupt, match="descriptor registration"):
+        manager.observe("binding-a")
+
+    assert registry == set()
+    assert registry.added_descriptor is not None
+    with pytest.raises(OSError):
+        os.fstat(registry.added_descriptor)
+
+    unrelated = os.open("/dev/null", os.O_RDONLY)
+    assert unrelated == registry.added_descriptor
+    pid = os.fork()
+    if pid == 0:
+        try:
+            os.fstat(unrelated)
+        except OSError:
+            os._exit(2)
+        os._exit(0)
+    try:
+        _, status = os.waitpid(pid, 0)
+        assert os.waitstatus_to_exitcode(status) == 0
+    finally:
+        os.close(unrelated)
+
+
 def test_holder_identity_failure_closes_the_effect_descriptor(tmp_path, monkeypatch) -> None:
     manager = _build_manager(tmp_path, "binding-a")
     vault = tmp_path / "vaults" / "binding-a"

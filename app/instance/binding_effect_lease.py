@@ -75,6 +75,7 @@ def _open_lease_descriptor(path: Path, flags: int, mode: int = 0o600) -> int:
             return descriptor
         except BaseException:
             if descriptor is not None:
+                _LEASE_LOCK_FDS.discard(descriptor)
                 os.close(descriptor)
             raise
 
