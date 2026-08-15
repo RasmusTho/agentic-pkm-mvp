@@ -45,7 +45,7 @@ def _shape(dsn: str) -> dict[str, object]:
     }
 
 
-def test_replay_tables_match_migration_and_autocreate(
+def test_replay_tables_declare_the_binding_column_in_both_shapes(
     request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     factory = request.getfixturevalue("scratch_db_factory")

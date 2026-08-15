@@ -553,7 +553,8 @@ own forward-only migration.
 
 ### `decisions` (legacy lineage, active writer schema)
 - `id` (`uuid`, PK; default `gen_random_uuid()` after `e1d2c3b4a5f6`)
-- `vault_binding_id` (`text`, nullable only for a receipt whose `object_id` was already null)
+- `vault_binding_id` (`text`, `NOT NULL` after MVR-05A5; object deletion clears only `object_id`
+  and preserves binding provenance)
 - `object_id` (`uuid`, nullable; composite FK with `vault_binding_id` → `store_objects`,
   `ON DELETE SET NULL (object_id)` after MVR-05A3, preserving binding provenance; previously
   #3510; the pre-cutover `objects.id` FK was realigned to the `audit.object_id` posture by
