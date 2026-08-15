@@ -151,7 +151,10 @@ def _canonical_durable_key(key: str) -> str:
 
 def _row_derived_evidence_text(value: Any) -> str:
     if isinstance(value, Mapping):
-        return "".join(_row_derived_evidence_text(item) for item in value.values())
+        return "".join(
+            f"{key}{_row_derived_evidence_text(item)}"
+            for key, item in value.items()
+        )
     if isinstance(value, (list, tuple)):
         return "".join(_row_derived_evidence_text(item) for item in value)
     if isinstance(value, str):
