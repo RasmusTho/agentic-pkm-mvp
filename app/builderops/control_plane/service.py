@@ -138,7 +138,7 @@ _ROW_DERIVED_FORBIDDEN_EVIDENCE_KEYS = frozenset(
         "fence",
     }
 )
-_POSTGRES_LSN_LITERAL = re.compile(r"^[0-9A-F]+/[0-9A-F]+$", re.IGNORECASE)
+_POSTGRES_LSN_LITERAL = re.compile(r"(?<![A-Za-z0-9])[0-9A-F]+/[0-9A-F]+(?![A-Za-z0-9])", re.IGNORECASE)
 
 
 def _canonical_durable_key(key: str) -> str:
@@ -168,7 +168,7 @@ def _assert_row_derived_evidence_safe(value: Any) -> None:
     elif isinstance(value, (list, tuple)):
         for child in value:
             _assert_row_derived_evidence_safe(child)
-    elif isinstance(value, str) and _POSTGRES_LSN_LITERAL.fullmatch(value.strip()):
+    elif isinstance(value, str) and _POSTGRES_LSN_LITERAL.search(value):
         raise ValueError("row-derived reconciliation evidence cannot contain durability LSNs")
 
 
