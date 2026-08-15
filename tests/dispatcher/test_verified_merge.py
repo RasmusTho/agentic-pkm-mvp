@@ -19,6 +19,7 @@ from app.dispatcher.verified_merge import (
     NEUTRALIZED_BODY_RESTORATION_CONTRACT,
     VERIFIED_MERGE_AUTHORITY_CONTRACT,
     build_verified_merge_phase,
+    plan_issue_free_post_merge_reconciliation,
     classify_neutralized_body_state,
     plan_post_merge_reconciliation,
     prepare_verified_merge,
@@ -157,6 +158,63 @@ def test_issue_free_reviewed_lane_rejects_closing_issue_authority() -> None:
             live_closing_issues=[3820],
             merge_readiness=_readiness(),
         )
+
+
+def test_issue_free_reviewed_lane_reopens_only_pr_attributed_closures() -> None:
+    plan = plan_issue_free_post_merge_reconciliation(
+        pr_number=4904,
+        observed_closing_issues=[3820, 3823],
+        issue_evidence=[
+            {"number": 3820, "state": "closed", "closed_by_pull_requests": [4904]},
+            {"number": 3823, "state": "closed", "closed_by_pull_requests": [9999]},
+        ],
+    )
+
+    assert plan == {
+        "reopen_unauthorized": [3820],
+        "unresolved_unauthorized_closures": [3823],
+    }
+
+
+def test_issue_free_post_merge_reconciliation_cli_uses_production_planner(
+    tmp_path: Path,
+) -> None:
+    observed_path = tmp_path / "observed.json"
+    evidence_path = tmp_path / "evidence.json"
+    output_path = tmp_path / "plan.json"
+    observed_path.write_text("[3820]", encoding="utf-8")
+    evidence_path.write_text(
+        json.dumps(
+            [{"number": 3820, "state": "closed", "closed_by_pull_requests": [4904]}]
+        ),
+        encoding="utf-8",
+    )
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "scripts.plan_issue_free_post_merge_reconciliation",
+            "--pr-number",
+            "4904",
+            "--observed-closing-json",
+            str(observed_path),
+            "--issue-evidence-json",
+            str(evidence_path),
+            "--output-json",
+            str(output_path),
+        ],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert json.loads(output_path.read_text(encoding="utf-8")) == {
+        "reopen_unauthorized": [3820],
+        "unresolved_unauthorized_closures": [],
+    }
 
 
 def _trusted_comment(body: str) -> dict[str, object]:

@@ -171,9 +171,14 @@ run `scripts/prepare_verified_issue_set_merge.py` with the live empty closing-li
 the head-bound readiness statement. Require its `issue_free_reviewed_lane_receipt.v1` result, post
 that exact receipt on the PR thread from an authenticated repository collaborator, and re-read the
 unchanged head, body, title, and empty closing links before merging through the returned fixed
-exact-head title/message. After merge, verify no Issue state changed, run `post-merge-owner-doc`,
-and write the PR-thread delivery receipt. Do not use the issue-set authority receipt, body
-neutralization, phase ledger, dispatcher completion, or issue-label mutation on this path.
+exact-head title/message. After merge, enumerate the bounded closing-link and repository-event
+candidates, live-read their state/attribution, and use
+`scripts/plan_issue_free_post_merge_reconciliation.py` to produce the exact reopen/unresolved
+plan. Reopen only a closure GitHub attributes to this exact PR; any other closure is unresolved
+evidence and blocks the receipt. Verify the resulting Issue state is unchanged, run
+`post-merge-owner-doc`, and write the PR-thread delivery receipt. Do not use the issue-set
+authority receipt, body neutralization, phase ledger, dispatcher completion, or inferred
+issue-label mutation on this path.
 
 For autonomous delivery, run the governing path's gate chain unattended per `AGENTS.md :: Agency default`: wait for required checks and repo-standard checks that cover the PR to go green, classify any red check before merge, and — on the full path — resolve the local review gate; do not ask the owner to babysit. Within the governing path, the prerequisites are never waived (an unprotected branch or non-required GitHub check does not relax them); only the human watching is removed.
 

@@ -40,6 +40,9 @@ FIXED_VERIFIED_MERGE_COMMIT_MESSAGE = (
     "Exact-head delivery; issue closure is performed explicitly from the "
     "authenticated issue-set receipt."
 )
+ISSUE_FREE_REVIEWED_LANE_MERGE_COMMIT_MESSAGE = (
+    "Exact-head delivery for an authenticated issue-free reviewed lane."
+)
 NEUTRALIZED_BODY_RESTORATION_CONTRACT = (
     "verified_issue_set_neutralized_body_restoration.v1"
 )
@@ -1251,13 +1254,75 @@ def _prepare_issue_free_reviewed_lane_merge(
     }
     receipt_json = json.dumps(receipt, sort_keys=True, separators=(",", ":"))
     return {
-        "fixed_commit_message": FIXED_VERIFIED_MERGE_COMMIT_MESSAGE,
+        "fixed_commit_message": ISSUE_FREE_REVIEWED_LANE_MERGE_COMMIT_MESSAGE,
         "fixed_commit_title": fixed_verified_merge_commit_title(pr_number),
         "issue_free_receipt": receipt,
         "issue_free_receipt_comment": (
             f"{ISSUE_FREE_REVIEWED_LANE_RECEIPT_MARKER}\n```json\n{receipt_json}\n```"
         ),
         "original_body": body,
+    }
+
+
+def plan_issue_free_post_merge_reconciliation(
+    *,
+    pr_number: int,
+    observed_closing_issues: Sequence[int],
+    issue_evidence: Sequence[Mapping[str, object]],
+) -> dict[str, list[int]]:
+    """Reopen only issue closures GitHub attributes to an issue-free PR.
+
+    An issue-free reviewed lane grants no closure authority.  A PR-body edit can
+    race an exact-head merge without changing its SHA, so the closure workflow
+    must compensate only the resulting closures GitHub identifies as caused by
+    that exact PR.  Other closed Issues remain unresolved evidence, never
+    candidates for inferred mutation.
+    """
+
+    observed = tuple(observed_closing_issues)
+    if (
+        not _positive_int(pr_number)
+        or len(observed) > MAX_CLOSING_ISSUES
+        or any(not _positive_int(item) for item in observed)
+        or len(set(observed)) != len(observed)
+    ):
+        raise ValueError("issue-free post-merge reconciliation is malformed")
+
+    by_number: dict[int, Mapping[str, object]] = {}
+    for item in issue_evidence:
+        number = item.get("number")
+        state = item.get("state")
+        closed_by = item.get("closed_by_pull_requests")
+        if (
+            not _positive_int(number)
+            or state not in {"open", "closed"}
+            or not isinstance(closed_by, list)
+            or any(not _positive_int(value) for value in closed_by)
+            or len(set(closed_by)) != len(closed_by)
+            or number in by_number
+        ):
+            raise ValueError("issue-free post-merge evidence is malformed")
+        assert isinstance(number, int)
+        by_number[number] = item
+
+    if not set(observed).issubset(by_number):
+        raise ValueError("issue-free post-merge evidence is incomplete")
+
+    reopen: list[int] = []
+    unresolved: list[int] = []
+    for number in sorted(observed):
+        evidence = by_number[number]
+        if evidence["state"] != "closed":
+            continue
+        closed_by = evidence["closed_by_pull_requests"]
+        assert isinstance(closed_by, list)
+        if pr_number in closed_by:
+            reopen.append(number)
+        else:
+            unresolved.append(number)
+    return {
+        "reopen_unauthorized": reopen,
+        "unresolved_unauthorized_closures": unresolved,
     }
 
 

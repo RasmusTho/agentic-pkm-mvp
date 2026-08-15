@@ -29,6 +29,10 @@ Default rule:
 - touching a skill does not itself escalate delivery depth; escalate only when the skill change
   alters high-risk runtime/release behavior or another trigger below applies
 - if any escalation trigger is true, use the escalation path instead of adding heavyweight checks here
+- an already-authenticated issue-free Tier 1 docs-authoring or governance PR with
+  `Final-Review-Rounds: 1` preserves that review decision through
+  `verification-and-closure :: Issue-free reviewed lane compatibility path`; it does not gain
+  Issue authority or a new review-round option
 
 ## Mandatory Hot-Path Gates
 
