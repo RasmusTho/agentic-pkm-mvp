@@ -293,6 +293,7 @@ def test_instance_storage_mutation_import_contract_is_complete() -> None:
         "app.instance.ownership_ledger",
     }
     assert _module_list(section["allowed_importers"]) == {
+        "app.instance.binding_effect_lease",
         "app.instance.instance_state",
         "app.instance.runtime",
     }
@@ -304,9 +305,10 @@ def test_instance_storage_mutation_import_contract_is_complete() -> None:
     }
     # This set is deliberately enumerated rather than pattern-matched: every durable
     # instance-state writer must be a named, reviewed entry. MVR-03 (#3857) added
-    # `local_operator_principal`, the private delegated operator-role record, which writes
-    # under the same boundary and therefore takes the same seal.
+    # `local_operator_principal`; MVR-05A6 (#4580) adds the per-binding effect lease.
+    # Both write under the same boundary and therefore take the same seal.
     assert _module_list(capability_section["allowed_importers"]) == {
+        "app.instance.binding_effect_lease",
         "app.instance.local_operator_principal",
         "app.instance.ownership_ledger",
         "app.instance.runtime",

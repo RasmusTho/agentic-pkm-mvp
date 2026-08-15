@@ -851,6 +851,32 @@ class OwnershipLedger:
         lease = self.load().leases.get(vault_binding_id)
         return lease if lease is not None and lease.state == "active" else None
 
+    @contextmanager
+    def active_binding_fence(
+        self,
+        vault_binding_id: str,
+        *,
+        channel_id: str,
+        root: Path,
+    ) -> Iterator[OwnershipLease]:
+        """Hold the host-global fence while a per-binding fence is acquired."""
+
+        self._assert_existing_artifacts()
+        with self._locked():
+            key = self._load_or_create_key_locked(allow_create=False)
+            current = self._load_or_create_ledger_locked(key, allow_create=False)
+            lease = current.leases.get(vault_binding_id)
+            if (
+                lease is None
+                or lease.state != "active"
+                or lease.channel_id != channel_id
+                or not self._matches_root(lease, root, key)
+            ):
+                raise LedgerError(
+                    "binding effect acquisition requires the matching active ownership lease"
+                )
+            yield lease
+
     def begin_transfer(
         self,
         *,
