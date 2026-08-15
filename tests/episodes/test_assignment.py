@@ -616,7 +616,7 @@ def test_assert_table_schema_fails_loud_with_migration_hint() -> None:
         _RegclassConn(
             {
                 "table_exists": True,
-                "binding_column_exists": True,
+                "binding_shape_exists": True,
                 "primary_key": ["vault_binding_id", "artifact_ref", "episode_id"],
             }
         ),
