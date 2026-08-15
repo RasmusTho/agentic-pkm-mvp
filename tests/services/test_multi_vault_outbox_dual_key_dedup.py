@@ -73,7 +73,7 @@ def test_binding_keyed_producer_suppresses_against_pending_and_delivered_legacy_
                     _event(source_id),
                     conn,
                     idempotency_key=legacy_key,
-                    vault_binding_id="binding-a",
+                    vault_binding_id=COMPATIBILITY_BINDING_ID,
                 )
                 == ""
             )
@@ -111,21 +111,35 @@ def test_distinct_bindings_do_not_dedup_against_each_other(
 ) -> None:
     with _isolated_outbox(monkeypatch) as conn:
         legacy_key = derive_idempotency_key("mvr.test", "shared-logical-event", "same")
-        ids = {
+        conn.execute(
+            "INSERT INTO outbox "
+            "(id, legacy_key, vault_binding_id, topic, payload) "
+            "VALUES (%s, %s, %s, %s, '{}'::jsonb)",
+            (legacy_key, legacy_key, COMPATIBILITY_BINDING_ID, "mvr.test"),
+        )
+
+        scoped_id = write_outbox_event(
+            _event("shared-logical-event"),
+            conn,
+            idempotency_key=legacy_key,
+            vault_binding_id="binding-b",
+        )
+        assert scoped_id == derive_binding_scoped_idempotency_key(
+            "mvr.test", "binding-b", legacy_key
+        )
+        assert (
             write_outbox_event(
                 _event("shared-logical-event"),
                 conn,
                 idempotency_key=legacy_key,
-                vault_binding_id=binding,
+                vault_binding_id="binding-b",
             )
-            for binding in ("binding-a", "binding-b")
-        }
-
-        assert ids == {
-            derive_binding_scoped_idempotency_key("mvr.test", "binding-a", legacy_key),
-            derive_binding_scoped_idempotency_key("mvr.test", "binding-b", legacy_key),
-        }
+            == ""
+        )
         rows = conn.execute(
             "SELECT vault_binding_id, legacy_key FROM outbox ORDER BY vault_binding_id"
         ).fetchall()
-        assert rows == [("binding-a", legacy_key), ("binding-b", legacy_key)]
+        assert rows == [
+            ("binding-b", legacy_key),
+            (COMPATIBILITY_BINDING_ID, legacy_key),
+        ]

@@ -79,10 +79,11 @@ Notes:
 - During the multi-vault compatibility window, `write_outbox_event` is the sole binding-aware choke
   point. It preserves the unchanged producer key in `legacy_key`, derives the row `id` from
   `(topic, vault_binding_id, legacy_key)`, and atomically suppresses an insert when either that scoped
-  `id` or any pre-cutover `id = legacy_key` row already exists. Delivered history participates in
-  the same check. New scoped rows do not collide merely because two bindings share a `legacy_key`.
-  The fixed `OUTBOX_IDEMPOTENCY_NAMESPACE` is not rotated; both derivations use its existing literal
-  promise, and no stored key is rewritten.
+  `id` or a pre-cutover `id = legacy_key` row for the same classified binding already exists.
+  Delivered history participates in the same check; quarantined history suppresses every binding as
+  fail-safe collision evidence. New scoped rows do not collide merely because two bindings share a
+  `legacy_key`. The fixed `OUTBOX_IDEMPOTENCY_NAMESPACE` is not rotated; both derivations use its
+  existing literal promise, and no stored key is rewritten.
 - Per-topic fingerprints are chosen deliberately: vault-sync and watcher ingest events key on
   `(topic, object uuid/path, content fingerprint + observation marker)`, where the observation
   marker is the observed file stat mtime (vault-sync passes it as a fingerprint-only component; the

@@ -611,7 +611,7 @@ def write_outbox_event(
             "select 1 from outbox existing where "
             "existing.id = %s or ("
             "existing.legacy_key = %s and ("
-            "existing.id = %s or "
+            "(existing.id = %s and existing.vault_binding_id = %s) or "
             "existing.vault_binding_id = %s"
             ")"
             ")"
@@ -627,6 +627,7 @@ def write_outbox_event(
                 scoped_key,
                 idempotency_key,
                 idempotency_key,
+                resolved_binding_id,
                 OUTBOX_QUARANTINE_BINDING_ID,
             ),
         )
