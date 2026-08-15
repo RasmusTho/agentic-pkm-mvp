@@ -118,6 +118,21 @@ _EMBEDDED_SECRET_VALUE = re.compile(
 _MAX_DURABLE_TEXT_LENGTH = 16_384
 _MAX_DURABLE_TEXT_SCAN_CHARS = 262_144
 _MAX_DURABLE_VALUE_NODES = 10_000
+_ROW_DERIVED_FORBIDDEN_EVIDENCE_KEYS = frozenset(
+    {
+        "claim_lsn",
+        "intent_lsn",
+        "claim_receipt_sequence",
+        "claim_fencing_token",
+        "fencing_token",
+        "worker_id",
+        "claim_expires_at",
+        "expires_at",
+        "receipt_sequence",
+        "recovery_lsn",
+        "authority_envelope",
+    }
+)
 
 
 def _canonical_durable_key(key: str) -> str:
@@ -126,6 +141,18 @@ def _canonical_durable_key(key: str) -> str:
     acronym_split = re.sub(r"([A-Z]+)([A-Z][a-z])", r"\1_\2", key.strip())
     camel_split = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", acronym_split)
     return re.sub(r"[^A-Za-z0-9]+", "_", camel_split).strip("_").lower()
+
+
+def _assert_row_derived_evidence_safe(value: Any) -> None:
+    """Keep caller evidence from becoming dormant claim or LSN authority."""
+    if isinstance(value, Mapping):
+        for key, child in value.items():
+            if _canonical_durable_key(str(key)) in _ROW_DERIVED_FORBIDDEN_EVIDENCE_KEYS:
+                raise ValueError("row-derived reconciliation evidence cannot contain claim authority")
+            _assert_row_derived_evidence_safe(child)
+    elif isinstance(value, (list, tuple)):
+        for child in value:
+            _assert_row_derived_evidence_safe(child)
 
 
 def _assert_secret_metadata_shape(key: str, value: Any) -> None:
@@ -1177,6 +1204,7 @@ def create_app(
     ) -> dict[str, Any]:
         _enforce_repo_scope(credential, request.envelope.repository)
         try:
+            _assert_row_derived_evidence_safe(request.evidence)
             _assert_durable_payload_safe(request.model_dump(mode="json"), credentials)
             intent = await run_in_threadpool(
                 store.outbox_intent, request.envelope.repository, request.operation_key

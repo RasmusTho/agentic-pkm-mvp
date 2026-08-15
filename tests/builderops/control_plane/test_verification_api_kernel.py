@@ -623,6 +623,18 @@ def test_row_derived_post_effect_api_rejects_caller_attested_claim_evidence(
         },
     )
     assert response.status_code == 422
+    response = client._http.post(  # type: ignore[attr-defined]
+        "/v1/executor/outbox/post-effect/reconcile",
+        headers=client._headers(pin_epoch=True),  # type: ignore[attr-defined]
+        json={
+            "envelope": ledger.envelope,
+            "operation_key": operation_key,
+            "minimum_fencing_token": 1,
+            "observed_applied": False,
+            "evidence": {"nested": {"claim_lsn": "0/0"}},
+        },
+    )
+    assert response.status_code == 422
     assert control_plane_store.outbox_intent(REPO, operation_key).get("post_effect_phase") is None
 
 
