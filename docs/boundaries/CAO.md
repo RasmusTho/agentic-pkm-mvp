@@ -27,7 +27,10 @@ without side effects.
 ## Does not own
 
 - Direct mutation → **HKA**/**GOV**; direct tool execution → **EXE**.
-- Policy → **GOV**; raw vault/index access → bounded context from **RCA**/**MEM** only.
+- Policy → **GOV**; raw vault/index access is forbidden. CAO may consume an explicit, bounded
+  **HKA read contract** for relevant knowledge artifacts when that contract supplies scope,
+  provenance, sensitivity, and authority metadata. RCA/MEM remain the normal context and recall
+  paths; the HKA read contract is a precision path, not raw-store access.
 - Durable memory promotion → **MEM**/**GOV**; authority receipts → **GOV**.
 
 > **Ownership-drift rule.** An agent is **not a superuser**. When an action needs authority, CAO emits
@@ -46,25 +49,25 @@ without side effects.
 
 - **RCA** (request context), **MEM** (request recall), **GOV** (request authorization), **EXE** (request execution), **EBF** (model providers).
 
-> **CES-pending divergence.** `docs/SYSTEM_BREAKDOWN_STRUCTURE.md` Part 5's dependency table
+> **Resolved dependency boundary.** `docs/SYSTEM_BREAKDOWN_STRUCTURE.md` Part 5's dependency table
 > (`:1446`) lists `CAO | RCA, MEM, HKA read contracts, SIP, GOV, EXE request contracts, EBF model
-> providers` — i.e. it grants CAO an "HKA read contracts" dependency this charter does not list.
-> That grant is **not** applied here: it would widen CAO's authority surface against this charter's
-> own reach-around caution ("must consume bounded context, never the raw store" — see Calls
-> forbidden below), so it is routed through CES stewardship
-> (`docs/boundaries/CES.md`) rather than mechanically synced. See
-> `docs/audits/YGGDRASIL_SYSTEM_BOUNDARY_INCOSE_2026-07-03.md` §6 (C4) and
-> `docs/architecture/SBS_TRANSITION_DEBT.md` for tracking.
+> providers`. This charter adopts that dependency narrowly: an HKA read contract is an explicit,
+> metadata-bearing, scope-bound read surface, not direct table, filesystem, or raw-index access.
+> CAO still consumes RCA/MEM context by default and must preserve provenance and scope on every
+> result. This resolves the former divergence without granting CAO authority to mutate, execute,
+> self-authorize, or reach around PDM/RCA/MEM.
 
 ## Calls forbidden
 
 - **Direct mutation / tool calls** — must not write HKA or call tools without EXE + GOV.
-- **Raw vault/index access** — must consume bounded context, never the raw store.
+- **Raw vault/index access** — forbidden. HKA reads are allowed only through an explicit bounded
+  read contract carrying scope, provenance, sensitivity, and authority metadata.
 - **Self-authorization** — must not mint authority or treat its own proposal as accepted.
 
 ## Required metadata
 
-CAO **reads** bounded context carrying the full metadata bundle and **produces** proposals tagged
+CAO **reads** bounded context carrying the full metadata bundle, or a bounded HKA read result
+carrying equivalent metadata, and **produces** proposals tagged
 `authority_state: proposed`, `evidence_role` per source. It must preserve `scope_binding` and
 provenance from the context it consumes; it sets no canonical `authority_state` itself.
 
@@ -81,14 +84,16 @@ provenance from the context it consumes; it sets no canonical `authority_state` 
 ## Invariants owned
 
 - Agents reason and propose; they do not mutate or execute directly (matrix #10, with GOV/EXE).
-- Agents consume bounded context, not raw vault access (matrix #8, #17).
+- Agents consume bounded context or explicit metadata-bearing HKA read results, never raw vault
+  access (matrix #8, #17).
 - Durable mutation requires a governed authority transition (matrix #9).
 - Under uncertainty, propose/confirm/escalate (matrix #17).
 
 ## Failure modes
 
 - **Agent-as-superuser:** CAO writing durable state or calling tools directly.
-- **Raw-store reach-around:** bypassing RCA/MEM to read the vault/index.
+- **Raw-store reach-around:** bypassing the explicit HKA read contract or RCA/MEM to read the
+  vault/index.
 - **Silent action:** acting under uncertainty instead of proposing/escalating.
 
 ## Required tests
