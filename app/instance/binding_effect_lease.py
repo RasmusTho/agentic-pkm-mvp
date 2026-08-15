@@ -542,11 +542,10 @@ class BindingEffectLeaseManager:
 
     def _load_state_locked(self, vault_binding_id: str) -> _LeaseState:
         path = self._state_path(vault_binding_id)
-        if path.exists():
-            self._assert_private_file(path)
+        if os.path.lexists(path):
             try:
-                value = json.loads(path.read_text(encoding="utf-8"))
-            except (OSError, json.JSONDecodeError) as exc:
+                value = json.loads(self._read_private_text(path))
+            except (OSError, UnicodeError, json.JSONDecodeError) as exc:
                 raise BindingEffectLeaseError("binding effect lease state is corrupt") from exc
             local_state = self._validate_state(vault_binding_id, value)
             registry_state = self._registry_state(vault_binding_id)
@@ -606,11 +605,10 @@ class BindingEffectLeaseManager:
 
     def _recover_journal_locked(self, vault_binding_id: str) -> None:
         path = self._journal_path(vault_binding_id)
-        if not path.exists():
+        if not os.path.lexists(path):
             return
-        self._assert_private_file(path)
         try:
-            value = json.loads(path.read_text(encoding="utf-8"))
+            value = json.loads(self._read_private_text(path))
             if (
                 not isinstance(value, dict)
                 or value.get("schema") != JOURNAL_SCHEMA
@@ -619,7 +617,14 @@ class BindingEffectLeaseManager:
                 raise ValueError
             previous = self._validate_state(vault_binding_id, value["previous"])
             next_state = self._validate_state(vault_binding_id, value["next"])
-        except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
+        except (
+            OSError,
+            UnicodeError,
+            KeyError,
+            TypeError,
+            ValueError,
+            json.JSONDecodeError,
+        ) as exc:
             raise BindingEffectLeaseError("binding effect lease journal is invalid") from exc
         registry_state = self._registry_state(vault_binding_id)
         if registry_state == next_state:
@@ -996,14 +1001,36 @@ class BindingEffectLeaseManager:
             raise
 
     @staticmethod
-    def _assert_private_file(path: Path) -> None:
-        metadata = path.stat()
-        if (
-            not stat.S_ISREG(metadata.st_mode)
-            or metadata.st_uid != os.geteuid()
-            or metadata.st_mode & 0o777 != 0o600
-        ):
-            raise BindingEffectLeaseError(f"binding effect lease file is unsafe: {path.name}")
+    def _read_private_text(path: Path) -> str:
+        nofollow = getattr(os, "O_NOFOLLOW", None)
+        if nofollow is None:
+            raise BindingEffectLeaseError(
+                f"binding effect lease file cannot be opened safely: {path.name}"
+            )
+        descriptor: int | None = None
+        try:
+            try:
+                descriptor = os.open(
+                    path,
+                    os.O_RDONLY | nofollow | getattr(os, "O_CLOEXEC", 0),
+                )
+            except OSError as exc:
+                raise BindingEffectLeaseError(
+                    f"binding effect lease file is unsafe: {path.name}"
+                ) from exc
+            os.set_inheritable(descriptor, False)
+            metadata = os.fstat(descriptor)
+            if (
+                not stat.S_ISREG(metadata.st_mode)
+                or metadata.st_uid != os.geteuid()
+                or metadata.st_mode & 0o777 != 0o600
+            ):
+                raise BindingEffectLeaseError(f"binding effect lease file is unsafe: {path.name}")
+            with os.fdopen(descriptor, "r", encoding="utf-8", closefd=False) as handle:
+                return handle.read()
+        finally:
+            if descriptor is not None:
+                os.close(descriptor)
 
     def _binding_stem(self, vault_binding_id: str) -> str:
         return hashlib.sha256(vault_binding_id.encode("utf-8")).hexdigest()

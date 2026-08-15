@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-import multiprocessing
 import errno
+import json
+import multiprocessing
 import os
 from pathlib import Path
 from types import SimpleNamespace
@@ -436,6 +437,50 @@ def test_journal_less_registry_state_divergence_fails_closed(tmp_path) -> None:
     )
 
     with pytest.raises(BindingEffectLeaseError, match="diverges from registry"):
+        manager.observe("binding-a")
+
+
+def test_state_symlink_is_rejected_without_reading_its_target(tmp_path) -> None:
+    manager = _build_manager(tmp_path, "binding-a")
+    vault = tmp_path / "vaults" / "binding-a"
+    with manager.shared_effect("binding-a", channel_id="dev", root=vault, timeout=1):
+        pass
+
+    state_path = manager._state_path("binding-a")
+    external = tmp_path / "external-state.json"
+    external.write_bytes(state_path.read_bytes())
+    external.chmod(0o600)
+    state_path.unlink()
+    state_path.symlink_to(external)
+
+    with pytest.raises(BindingEffectLeaseError, match="file is unsafe"):
+        manager.observe("binding-a")
+
+
+def test_journal_symlink_is_rejected_without_reading_its_target(tmp_path) -> None:
+    manager = _build_manager(tmp_path, "binding-a")
+    vault = tmp_path / "vaults" / "binding-a"
+    with manager.shared_effect("binding-a", channel_id="dev", root=vault, timeout=1):
+        pass
+
+    state = manager.persisted_state("binding-a")
+    external = tmp_path / "external-journal.json"
+    external.write_text(
+        json.dumps(
+            {
+                "schema": lease_module.JOURNAL_SCHEMA,
+                "vaultBindingId": "binding-a",
+                "previous": state,
+                "next": state,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    external.chmod(0o600)
+    manager._journal_path("binding-a").symlink_to(external)
+
+    with pytest.raises(BindingEffectLeaseError, match="file is unsafe"):
         manager.observe("binding-a")
 
 
