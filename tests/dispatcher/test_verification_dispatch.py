@@ -12,7 +12,7 @@ import pytest
 
 import app.dispatcher.verification_dispatch as verification_dispatch
 from app.dispatcher.verification_contract import MAX_CLOSING_ISSUES
-from app.dispatcher.verification_dispatch import VerificationRun
+from app.dispatcher.verification_dispatch import VerificationDispatchLedger, VerificationRun
 from tests.dispatcher.verification_helpers import (
     b4e2310_pre_trust_request,
     downgrade_verification_schema_to_v3,
@@ -87,6 +87,57 @@ def test_attempt_recording_remains_lease_fenced_without_numeric_repair_cap(
         lease_id=claimed.lease_id,
         idempotency_key="repair-1",
     ) == 1
+
+
+def test_repair_progress_receipt_is_lease_fenced_and_replay_safe(tmp_path) -> None:
+    state = ledger(tmp_path)
+    run = state.ingest(request())
+    claimed = state.claim(run.run_id, "host")
+    first = state.record_attempt(
+        run.run_id, "standard_repair", "fix-1", "terra", "high", {"head": run.head_sha},
+        "fixed", {"finding_id": "F1", "failure_domain": "review_code_correctness",
+                  "mechanism_id": "parser", "head_sha": run.head_sha},
+        holder="host", lease_id=claimed.lease_id,
+    )
+    assert first == 1
+    first_attempt = state.attempts(run.run_id)[-1]
+    with pytest.raises(ValueError, match="fresh blocking review"):
+        state.record_attempt(
+            run.run_id, "standard_repair", "fix-2", "terra", "high", {}, "fixed",
+            {"finding_id": "F1", "failure_domain": "review_code_correctness", "mechanism_id": "parser",
+             "head_sha": run.head_sha, "progress_evidence": {"prior_attempt_id": first_attempt["attempt_id"],
+             "prior_review_attempt_id": "missing", "reviewed_head_sha": run.head_sha,
+             "mechanism_state_change": "parser state narrowed", "validation_delta": "new focused proof"}},
+            holder="host", lease_id=claimed.lease_id,
+        )
+    state.record_attempt(
+        run.run_id, "review", "review-1", "terra", "high", {"head": run.head_sha}, "blocking",
+        {"reviewed_attempt_id": first_attempt["attempt_id"], "finding_id": "F1",
+         "failure_domain": "review_code_correctness", "mechanism_id": "parser", "head_sha": run.head_sha},
+        holder="host", lease_id=claimed.lease_id,
+    )
+    with pytest.raises(ValueError, match="current verification head"):
+        state.record_attempt(
+            run.run_id, "review", "review-stale", "terra", "high", {}, "blocking",
+            {"reviewed_attempt_id": first_attempt["attempt_id"], "finding_id": "F1",
+             "failure_domain": "review_code_correctness", "mechanism_id": "parser", "head_sha": "b" * 40},
+            holder="host", lease_id=claimed.lease_id,
+        )
+    attempts = state.attempts(run.run_id)
+    progress = {"prior_attempt_id": first_attempt["attempt_id"], "prior_review_attempt_id": attempts[-1]["attempt_id"], "reviewed_head_sha": run.head_sha,
+                "mechanism_state_change": "parser state narrowed", "validation_delta": "new focused proof"}
+    receipt = {"finding_id": "F1", "failure_domain": "review_code_correctness", "mechanism_id": "parser",
+               "head_sha": run.head_sha, "progress_evidence": progress}
+    with pytest.raises(ValueError, match="ownership mismatch"):
+        state.record_attempt(run.run_id, "standard_repair", "fix-2", "terra", "high", {}, "fixed", receipt,
+                             holder="host", lease_id="wrong")
+    assert state.record_attempt(run.run_id, "standard_repair", "fix-2", "terra", "high", {}, "fixed", receipt,
+                                holder="host", lease_id=claimed.lease_id, idempotency_key="progress-2") == 2
+    assert state.record_attempt(run.run_id, "standard_repair", "fix-2", "terra", "high", {}, "fixed", receipt,
+                                holder="host", lease_id=claimed.lease_id, idempotency_key="progress-2") == 2
+    assert state.attempts(run.run_id)[-1]["receipt"] == receipt
+    reloaded = VerificationDispatchLedger(state.store)
+    assert reloaded.attempts(run.run_id)[-1]["receipt"] == receipt
 
 
 def _canonical_v1_request(*, supporting_issues: list[int]) -> dict[str, object]:
