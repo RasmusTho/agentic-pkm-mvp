@@ -54,19 +54,19 @@ def _persist_abandoned_pending(manager, *holder_ids: str) -> list[Path]:
             updated["exclusivePending"] = list(current["exclusivePending"])
             next_ticket = int(current["nextTicket"])
             for holder_id in holder_ids:
-                descriptor = manager._open_pending_activity("binding-a", holder_id, create=True)
+                descriptor = manager._open_holder_activity("binding-a", holder_id, create=True)
                 descriptors.append(descriptor)
                 lease_module.fcntl.flock(descriptor, lease_module.fcntl.LOCK_EX)
                 updated["exclusivePending"].append(
                     manager._holder(holder_id, ticket=next_ticket, mode="pending")
                 )
-                paths.append(manager._pending_activity_path("binding-a", holder_id))
+                paths.append(manager._holder_activity_path("binding-a", holder_id))
                 next_ticket += 1
             updated["nextTicket"] = next_ticket
             manager._commit_locked("binding-a", current, updated)
     finally:
         for descriptor in descriptors:
-            manager._close_pending_activity(descriptor)
+            manager._close_holder_activity(descriptor)
     return paths
 
 
@@ -338,7 +338,7 @@ def test_later_pending_probe_failure_closes_an_earlier_transfer(tmp_path, monkey
         "holder-abandoned-second",
     )
     baseline = set(lease_module._LEASE_LOCK_FDS)
-    real_status = manager._pending_waiter_active
+    real_status = manager._holder_activity_active
     calls = 0
 
     def fail_second_probe(vault_binding_id, holder, abandoned):
@@ -348,10 +348,10 @@ def test_later_pending_probe_failure_closes_an_earlier_transfer(tmp_path, monkey
             raise KeyboardInterrupt("later pending probe failed")
         return real_status(vault_binding_id, holder, abandoned)
 
-    monkeypatch.setattr(manager, "_pending_waiter_active", fail_second_probe)
+    monkeypatch.setattr(manager, "_holder_activity_active", fail_second_probe)
     with pytest.raises(KeyboardInterrupt, match="later pending probe"):
         manager.observe("binding-a")
-    monkeypatch.setattr(manager, "_pending_waiter_active", real_status)
+    monkeypatch.setattr(manager, "_holder_activity_active", real_status)
 
     assert set(lease_module._LEASE_LOCK_FDS) == baseline
     probe = os.open(first, os.O_RDWR)
@@ -582,29 +582,29 @@ def test_pending_activity_requires_a_held_lock_from_the_live_waiter(tmp_path) ->
     manager = _build_manager(tmp_path, "binding-a")
     manager._ensure_state_root()
     holder = manager._holder("holder-active", ticket=1, mode="pending")
-    descriptor = manager._open_pending_activity("binding-a", holder["holderId"], create=True)
+    descriptor = manager._open_holder_activity("binding-a", holder["holderId"], create=True)
     lease_module.fcntl.flock(descriptor, lease_module.fcntl.LOCK_EX)
     try:
         abandoned = []
-        assert manager._pending_waiter_active("binding-a", holder, abandoned)
+        assert manager._holder_activity_active("binding-a", holder, abandoned)
         assert abandoned == []
     finally:
-        manager._close_pending_activity(descriptor)
+        manager._close_holder_activity(descriptor)
 
     abandoned = []
-    assert not manager._pending_waiter_active("binding-a", holder, abandoned)
+    assert not manager._holder_activity_active("binding-a", holder, abandoned)
     [(_, stale_descriptor)] = abandoned
     assert stale_descriptor is not None
-    manager._close_pending_activity(stale_descriptor)
-    manager._pending_activity_path("binding-a", holder["holderId"]).unlink()
+    manager._close_holder_activity(stale_descriptor)
+    manager._holder_activity_path("binding-a", holder["holderId"]).unlink()
 
 
 @pytest.mark.skipif(not hasattr(os, "fork"), reason="requires fork inheritance proof")
 def test_forked_child_neither_unlocks_nor_extends_pending_activity(tmp_path) -> None:
     manager = _build_manager(tmp_path, "binding-a")
     manager._ensure_state_root()
-    path = manager._pending_activity_path("binding-a", "holder-fork")
-    descriptor = manager._open_pending_activity("binding-a", "holder-fork", create=True)
+    path = manager._holder_activity_path("binding-a", "holder-fork")
+    descriptor = manager._open_holder_activity("binding-a", "holder-fork", create=True)
     lease_module.fcntl.flock(descriptor, lease_module.fcntl.LOCK_EX)
     child_read, parent_write = os.pipe()
     parent_read, child_write = os.pipe()
@@ -637,7 +637,7 @@ def test_forked_child_neither_unlocks_nor_extends_pending_activity(tmp_path) -> 
     os.close(child_write)
     try:
         assert os.read(parent_read, 1) == b"B"
-        manager._close_pending_activity(descriptor)
+        manager._close_holder_activity(descriptor)
         os.write(parent_write, b"R")
         assert os.read(parent_read, 1) == b"A"
         _, status = os.waitpid(pid, 0)
@@ -683,7 +683,7 @@ def test_pending_activity_probe_error_fails_closed(tmp_path, monkeypatch) -> Non
     manager = _build_manager(tmp_path, "binding-a")
     manager._ensure_state_root()
     holder = manager._holder("holder-probe", ticket=1, mode="pending")
-    descriptor = manager._open_pending_activity("binding-a", holder["holderId"], create=True)
+    descriptor = manager._open_holder_activity("binding-a", holder["holderId"], create=True)
     lease_module.fcntl.flock(descriptor, lease_module.fcntl.LOCK_EX)
     real_flock = lease_module.fcntl.flock
 
@@ -692,27 +692,27 @@ def test_pending_activity_probe_error_fails_closed(tmp_path, monkeypatch) -> Non
 
     monkeypatch.setattr(lease_module.fcntl, "flock", unsupported)
     with pytest.raises(OSError, match="flock unsupported"):
-        manager._pending_waiter_active("binding-a", holder, [])
+        manager._holder_activity_active("binding-a", holder, [])
     monkeypatch.setattr(lease_module.fcntl, "flock", real_flock)
-    manager._close_pending_activity(descriptor)
+    manager._close_holder_activity(descriptor)
 
 
 def test_pending_activity_unlink_rejects_path_replacement(tmp_path) -> None:
     manager = _build_manager(tmp_path, "binding-a")
     manager._ensure_state_root()
     holder_id = "holder-replaced"
-    path = manager._pending_activity_path("binding-a", holder_id)
-    descriptor = manager._open_pending_activity("binding-a", holder_id, create=True)
+    path = manager._holder_activity_path("binding-a", holder_id)
+    descriptor = manager._open_holder_activity("binding-a", holder_id, create=True)
     lease_module.fcntl.flock(descriptor, lease_module.fcntl.LOCK_EX)
     displaced = path.with_suffix(".displaced")
     path.rename(displaced)
     path.touch(mode=0o600)
     try:
         with pytest.raises(BindingEffectLeaseError, match="path identity changed"):
-            manager._unlink_pending_activity_locked("binding-a", holder_id, descriptor)
+            manager._unlink_holder_activity_locked("binding-a", holder_id, descriptor)
         assert path.exists()
     finally:
-        manager._close_pending_activity(descriptor)
+        manager._close_holder_activity(descriptor)
         path.unlink(missing_ok=True)
         displaced.unlink(missing_ok=True)
 

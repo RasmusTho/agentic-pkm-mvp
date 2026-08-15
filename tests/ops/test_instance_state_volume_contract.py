@@ -19,6 +19,7 @@ import app.instance.instance_state as instance_state_module
 import app.instance.ownership_ledger as ownership_ledger_module
 import app.instance.runtime as runtime_module
 
+from app.instance.binding_effect_lease import BindingEffectLeaseManager
 from app.instance.instance_state import (
     DeploymentQuiescenceProof,
     InstanceStateBackup,
@@ -4536,6 +4537,68 @@ def test_prod_instance_state_and_ledger_survive_volume_loss_with_verified_restor
             quiescence_proof=restore_proof,
             owner_receipt_path=owner_receipt,
         )
+
+
+def test_restore_rebuilds_binding_effect_lease_state_from_restored_registry(tmp_path) -> None:
+    layout = InstanceStateLayout.for_channel(tmp_path / "prod-state", "prod")
+    runtime = InstanceRegistryRuntime.for_paths(layout, tmp_path / "host-global")
+    root = tmp_path / "vault"
+    root.mkdir()
+    registration = runtime.bootstrap_env_binding(
+        vault_root=root,
+        watcher_vault_path=root,
+    )
+    backup_root = tmp_path / "backup"
+    legacy_path = tmp_path / "missing-legacy.md"
+    _create_canonical_backup(
+        runtime=runtime,
+        backup_root=backup_root,
+        legacy_path=legacy_path,
+    )
+    _clear_test_deployment_authority(
+        layout=layout,
+        host_global_root=runtime.ledger.root,
+    )
+
+    state_root = layout.root / "binding-effect-leases"
+    manager = BindingEffectLeaseManager(
+        registry_store=runtime.registry,
+        ownership_ledger=runtime.ledger,
+        state_root=state_root,
+        capability=STORAGE_MUTATION_CAPABILITY,
+        poll_interval=0.005,
+    )
+    with manager.shared_effect(
+        registration.vault_binding_id,
+        channel_id="prod",
+        root=root,
+        timeout=1,
+    ):
+        pass
+    assert manager.persisted_state(registration.vault_binding_id)["generation"] == 2
+
+    restore_proof, owner_receipt = _canonical_test_quiescence_authority(
+        layout=layout,
+        host_global_root=runtime.ledger.root,
+        legacy_path=legacy_path,
+        owners=_current_registry_owners(runtime),
+    )
+    InstanceStateBackup(layout, runtime.ledger).restore(
+        backup_root,
+        quiescence_proof=restore_proof,
+        owner_receipt_path=owner_receipt,
+    )
+
+    assert not state_root.exists()
+    observation = manager.observe(registration.vault_binding_id)
+    assert observation.generation == 0
+    with manager.shared_effect(
+        registration.vault_binding_id,
+        channel_id="prod",
+        root=root,
+        timeout=1,
+    ):
+        assert manager.observe(registration.vault_binding_id).shared_count == 1
 
 
 @pytest.mark.parametrize(

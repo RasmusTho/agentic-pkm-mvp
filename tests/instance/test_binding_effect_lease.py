@@ -134,6 +134,44 @@ def test_pending_exclusive_blocks_new_shared_acquisition(tmp_path) -> None:
     assert exclusive_entered.is_set()
 
 
+def test_foreign_pid_namespace_preserves_live_shared_and_pending_authority(
+    tmp_path, monkeypatch
+) -> None:
+    manager = _build_manager(tmp_path, "binding-a")
+    foreign_observer = _manager_for_existing(str(tmp_path))
+    vault = tmp_path / "vaults" / "binding-a"
+    exclusive_entered = threading.Event()
+
+    def exclusive() -> None:
+        with manager.exclusive_change("binding-a", channel_id="dev", root=vault, timeout=2):
+            exclusive_entered.set()
+
+    def reject_observer_local_pid_identity(holder) -> bool:
+        raise AssertionError("observer-local PID identity is not lease authority")
+
+    monkeypatch.setattr(
+        foreign_observer,
+        "_holder_alive",
+        reject_observer_local_pid_identity,
+    )
+    with manager.shared_effect("binding-a", channel_id="dev", root=vault, timeout=1):
+        exclusive_thread = threading.Thread(target=exclusive)
+        exclusive_thread.start()
+        assert manager.wait_for_exclusive_pending("binding-a", timeout=1)
+
+        observation = foreign_observer.observe("binding-a")
+        assert observation.shared_count == 1
+        assert observation.exclusive_pending_count == 1
+        with pytest.raises(BindingEffectLeaseTimeout):
+            with foreign_observer.shared_effect(
+                "binding-a", channel_id="dev", root=vault, timeout=0.05
+            ):
+                pytest.fail("a foreign observer cannot erase a live pending waiter")
+
+    exclusive_thread.join(2)
+    assert exclusive_entered.is_set()
+
+
 def test_leases_for_distinct_bindings_do_not_serialise(tmp_path) -> None:
     manager = _build_manager(tmp_path, "binding-a", "binding-b")
     vault_a = tmp_path / "vaults" / "binding-a"
@@ -164,9 +202,7 @@ def test_lease_bookkeeping_does_not_rotate_binding_revision(tmp_path) -> None:
 
 
 @pytest.mark.parametrize("binding_id", [" binding-a ", "vault-å"])
-def test_opaque_binding_id_round_trips_through_acquire_and_release(
-    tmp_path, binding_id
-) -> None:
+def test_opaque_binding_id_round_trips_through_acquire_and_release(tmp_path, binding_id) -> None:
     manager = _build_manager(tmp_path, binding_id)
     vault = tmp_path / "vaults" / binding_id
 

@@ -4,6 +4,7 @@ import hashlib
 import hmac
 import json
 import os
+import shutil
 import stat
 import tempfile
 from dataclasses import dataclass
@@ -786,6 +787,7 @@ class InstanceStateBackup:
                 "backup key identity is inconsistent; keep the global fence until "
                 "fenced re-key and ledger reconstruction complete"
             )
+        self._clear_binding_effect_lease_state_for_restore()
         self.layout.ensure()
         self.ledger.root.mkdir(parents=True, exist_ok=True, mode=0o700)
         os.chmod(self.ledger.root, 0o700)
@@ -828,6 +830,40 @@ class InstanceStateBackup:
             restored_ledger.key_id,
             restored_ledger.generation,
         )
+
+    def _clear_binding_effect_lease_state_for_restore(self) -> None:
+        """Detach rebuildable lease files before restoring registry authority."""
+
+        state_root = self.layout.root / "binding-effect-leases"
+        quarantine = self.layout.root / ".binding-effect-leases.restore-stale"
+        if os.path.lexists(quarantine):
+            self._require_private_lease_directory(quarantine)
+            shutil.rmtree(quarantine)
+            _fsync_directory(self.layout.root)
+        if not os.path.lexists(state_root):
+            return
+        self._require_private_lease_directory(state_root)
+        os.replace(state_root, quarantine)
+        _fsync_directory(self.layout.root)
+        shutil.rmtree(quarantine)
+        _fsync_directory(self.layout.root)
+
+    @staticmethod
+    def _require_private_lease_directory(path: Path) -> None:
+        try:
+            metadata = path.lstat()
+        except OSError as exc:
+            raise InstanceStatePreflightError(
+                "binding effect lease restore state is unsafe"
+            ) from exc
+        if (
+            not stat.S_ISDIR(metadata.st_mode)
+            or metadata.st_uid != os.geteuid()
+            or metadata.st_mode & 0o777 != 0o700
+        ):
+            raise InstanceStatePreflightError(
+                "binding effect lease restore state is unsafe"
+            )
 
     def _verify_staged_backup(
         self,
@@ -1045,6 +1081,14 @@ def _atomic_private_write(path: Path, payload: bytes) -> None:
     except BaseException:
         temporary.unlink(missing_ok=True)
         raise
+
+
+def _fsync_directory(path: Path) -> None:
+    descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
 
 
 def _read_private_bytes(path: Path) -> bytes:

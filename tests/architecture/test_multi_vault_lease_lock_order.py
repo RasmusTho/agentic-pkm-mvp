@@ -74,7 +74,7 @@ def test_pending_activity_locks_never_add_a_blocking_lock_order_edge() -> None:
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
     }
 
-    for name in ("_acquire", "_pending_waiter_active", "_scavenge_pending_activity_locked"):
+    for name in ("_acquire", "_holder_activity_active", "_scavenge_holder_activity_locked"):
         calls = [
             node
             for node in ast.walk(methods[name])
@@ -100,4 +100,4 @@ def test_every_live_lease_lock_descriptor_uses_the_fork_close_registry() -> None
         rendered = ast.unparse(methods[name])
         assert "_open_private_lease_lock" in rendered
         assert "os.open" not in rendered
-    assert "_open_lease_descriptor" in ast.unparse(methods["_open_pending_activity_path"])
+    assert "_open_lease_descriptor" in ast.unparse(methods["_open_holder_activity_path"])

@@ -175,7 +175,8 @@ class _HeldLease:
     vault_binding_id: str
     holder_id: str
     mode: str
-    descriptor: int
+    gate_descriptor: int
+    activity_descriptor: int
     owner_pid: int
 
 
@@ -271,7 +272,7 @@ class BindingEffectLeaseManager:
         self._ensure_state_root()
         holder_id = ""
         pending: _HolderState | None = None
-        pending_descriptor: int | None = None
+        activity_descriptor: int | None = None
         descriptor: int | None = None
         held: _HeldLease | None = None
         try:
@@ -284,12 +285,12 @@ class BindingEffectLeaseManager:
                 ):
                     with self._state_locked(vault_binding_id):
                         current = self._load_reconciled_locked(vault_binding_id)
-                        pending_descriptor = self._open_pending_activity(
+                        activity_descriptor = self._open_holder_activity(
                             vault_binding_id, holder_id, create=True
                         )
                         try:
                             fcntl.flock(
-                                pending_descriptor,
+                                activity_descriptor,
                                 fcntl.LOCK_EX | fcntl.LOCK_NB,
                             )
                         except BlockingIOError as exc:
@@ -333,6 +334,21 @@ class BindingEffectLeaseManager:
                             except BlockingIOError:
                                 pass
                             else:
+                                if activity_descriptor is None:
+                                    activity_descriptor = self._open_holder_activity(
+                                        vault_binding_id,
+                                        holder_id,
+                                        create=True,
+                                    )
+                                    try:
+                                        fcntl.flock(
+                                            activity_descriptor,
+                                            fcntl.LOCK_EX | fcntl.LOCK_NB,
+                                        )
+                                    except BlockingIOError as exc:
+                                        raise BindingEffectLeaseError(
+                                            "effect holder activity identity is already locked"
+                                        ) from exc
                                 holder = self._holder(
                                     holder_id,
                                     ticket=(
@@ -353,29 +369,25 @@ class BindingEffectLeaseManager:
                                         if item["holderId"] != holder_id
                                     ]
                                     updated["exclusiveHolder"] = holder
-                                    if pending_descriptor is None:
+                                    if activity_descriptor is None:
                                         raise BindingEffectLeaseError(
                                             "exclusive waiter activity identity is missing"
                                         )
-                                    self._unlink_pending_activity_locked(
-                                        vault_binding_id,
-                                        holder_id,
-                                        pending_descriptor,
-                                    )
                                 self._commit_locked(vault_binding_id, current, updated)
-                                if pending_descriptor is not None:
-                                    self._close_pending_activity(
-                                        pending_descriptor,
+                                if activity_descriptor is None:
+                                    raise BindingEffectLeaseError(
+                                        "effect holder activity identity is missing"
                                     )
-                                    pending_descriptor = None
-                                    pending = None
                                 held = _HeldLease(
                                     vault_binding_id,
                                     holder_id,
                                     mode,
                                     descriptor,
+                                    activity_descriptor,
                                     os.getpid(),
                                 )
+                                activity_descriptor = None
+                                pending = None
                                 break
                 if deadline is not None and time.monotonic() >= deadline:
                     raise BindingEffectLeaseTimeout(
@@ -393,14 +405,12 @@ class BindingEffectLeaseManager:
                     self._discard_pending(
                         vault_binding_id,
                         holder_id,
-                        pending_descriptor,
+                        activity_descriptor,
                     )
             finally:
                 try:
-                    if pending_descriptor is not None:
-                        self._close_pending_activity(
-                            pending_descriptor,
-                        )
+                    if activity_descriptor is not None:
+                        self._close_holder_activity(activity_descriptor)
                 finally:
                     if descriptor is not None and held is None:
                         try:
@@ -435,17 +445,28 @@ class BindingEffectLeaseManager:
                 if not found:
                     raise BindingEffectLeaseError("held binding effect lease state is missing")
                 self._commit_locked(held.vault_binding_id, current, updated)
+                self._unlink_holder_activity_locked(
+                    held.vault_binding_id,
+                    held.holder_id,
+                    held.activity_descriptor,
+                )
         finally:
             try:
-                fcntl.flock(held.descriptor, fcntl.LOCK_UN)
+                fcntl.flock(held.gate_descriptor, fcntl.LOCK_UN)
             finally:
-                _close_lease_descriptor(held.descriptor)
+                try:
+                    _close_lease_descriptor(held.gate_descriptor)
+                finally:
+                    try:
+                        fcntl.flock(held.activity_descriptor, fcntl.LOCK_UN)
+                    finally:
+                        self._close_holder_activity(held.activity_descriptor)
 
     def _discard_pending(
         self,
         vault_binding_id: str,
         holder_id: str,
-        pending_descriptor: int | None,
+        activity_descriptor: int | None,
     ) -> None:
         with self._state_locked(vault_binding_id):
             current = self._load_reconciled_locked(vault_binding_id)
@@ -454,14 +475,14 @@ class BindingEffectLeaseManager:
                 item for item in updated["exclusivePending"] if item["holderId"] != holder_id
             ]
             if updated != current:
-                if pending_descriptor is None:
+                if activity_descriptor is None:
                     raise BindingEffectLeaseError("exclusive waiter activity identity is missing")
-                self._unlink_pending_activity_locked(
+                self._commit_locked(vault_binding_id, current, updated)
+                self._unlink_holder_activity_locked(
                     vault_binding_id,
                     holder_id,
-                    pending_descriptor,
+                    activity_descriptor,
                 )
-                self._commit_locked(vault_binding_id, current, updated)
 
     @contextmanager
     def _state_locked(self, vault_binding_id: str) -> Iterator[None]:
@@ -483,15 +504,19 @@ class BindingEffectLeaseManager:
         state = self._load_state_locked(vault_binding_id)
         updated = copy.deepcopy(state)
         referenced_activity = {
-            self._pending_activity_path(vault_binding_id, item["holderId"])
-            for item in state["exclusivePending"]
+            self._holder_activity_path(vault_binding_id, item["holderId"])
+            for item in (
+                state["sharedHolders"]
+                + state["exclusivePending"]
+                + ([state["exclusiveHolder"]] if state["exclusiveHolder"] is not None else [])
+            )
         }
-        self._scavenge_pending_activity_locked(vault_binding_id, referenced_activity)
+        self._scavenge_holder_activity_locked(vault_binding_id, referenced_activity)
         pending: list[_HolderState] = []
         abandoned: list[tuple[_HolderState, int | None]] = []
         try:
             for item in state["exclusivePending"]:
-                if self._pending_waiter_active(
+                if self._holder_activity_active(
                     vault_binding_id,
                     item,
                     abandoned,
@@ -504,11 +529,21 @@ class BindingEffectLeaseManager:
                 try:
                     fcntl.flock(gate, fcntl.LOCK_EX | fcntl.LOCK_NB)
                 except BlockingIOError:
-                    updated["sharedHolders"] = [
-                        item for item in state["sharedHolders"] if self._holder_alive(item)
-                    ]
+                    shared: list[_HolderState] = []
+                    for item in state["sharedHolders"]:
+                        if self._holder_activity_active(
+                            vault_binding_id,
+                            item,
+                            abandoned,
+                        ):
+                            shared.append(item)
+                    updated["sharedHolders"] = shared
                     holder = state["exclusiveHolder"]
-                    if holder is not None and not self._holder_alive(holder):
+                    if holder is not None and not self._holder_activity_active(
+                        vault_binding_id,
+                        holder,
+                        abandoned,
+                    ):
                         updated["exclusiveHolder"] = None
                 else:
                     updated["sharedHolders"] = []
@@ -518,19 +553,27 @@ class BindingEffectLeaseManager:
                 if gate is not None:
                     _close_lease_descriptor(gate)
             if updated != state:
+                committed = self._commit_locked(vault_binding_id, state, updated)
                 for item, descriptor in abandoned:
                     if descriptor is not None:
-                        self._unlink_pending_activity_locked(
+                        self._unlink_holder_activity_locked(
                             vault_binding_id,
                             item["holderId"],
                             descriptor,
                         )
-                committed = self._commit_locked(vault_binding_id, state, updated)
-                self._scavenge_pending_activity_locked(
+                self._scavenge_holder_activity_locked(
                     vault_binding_id,
                     {
-                        self._pending_activity_path(vault_binding_id, item["holderId"])
-                        for item in committed["exclusivePending"]
+                        self._holder_activity_path(vault_binding_id, item["holderId"])
+                        for item in (
+                            committed["sharedHolders"]
+                            + committed["exclusivePending"]
+                            + (
+                                [committed["exclusiveHolder"]]
+                                if committed["exclusiveHolder"] is not None
+                                else []
+                            )
+                        )
                     },
                 )
                 return committed
@@ -538,7 +581,7 @@ class BindingEffectLeaseManager:
         finally:
             for _, descriptor in abandoned:
                 if descriptor is not None:
-                    self._close_pending_activity(descriptor)
+                    self._close_holder_activity(descriptor)
 
     def _load_state_locked(self, vault_binding_id: str) -> _LeaseState:
         path = self._state_path(vault_binding_id)
@@ -674,22 +717,19 @@ class BindingEffectLeaseManager:
         start, state = self._process_identity(pid)
         return state != "Z" and str(holder.get("processStart") or "") == start
 
-    def _pending_waiter_active(
+    def _holder_activity_active(
         self,
         vault_binding_id: str,
         holder: _HolderState,
         abandoned: list[tuple[_HolderState, int | None]],
     ) -> bool:
-        """Require both a live process incarnation and an active waiter lock."""
+        """Use the cross-namespace activity lock as holder liveness authority."""
 
         holder_id = str(holder.get("holderId") or "")
-        if not self._holder_alive(holder):
-            abandoned.append((holder, None))
-            return False
         descriptor: int | None = None
         try:
             try:
-                descriptor = self._open_pending_activity(vault_binding_id, holder_id, create=False)
+                descriptor = self._open_holder_activity(vault_binding_id, holder_id, create=False)
             except FileNotFoundError:
                 abandoned.append((holder, None))
                 return False
@@ -703,21 +743,21 @@ class BindingEffectLeaseManager:
             if descriptor is not None and not any(
                 owned_descriptor == descriptor for _, owned_descriptor in abandoned
             ):
-                self._close_pending_activity(descriptor)
+                self._close_holder_activity(descriptor)
 
-    def _open_pending_activity(
+    def _open_holder_activity(
         self,
         vault_binding_id: str,
         holder_id: str,
         *,
         create: bool,
     ) -> int:
-        return self._open_pending_activity_path(
-            self._pending_activity_path(vault_binding_id, holder_id),
+        return self._open_holder_activity_path(
+            self._holder_activity_path(vault_binding_id, holder_id),
             create=create,
         )
 
-    def _open_pending_activity_path(self, path: Path, *, create: bool = False) -> int:
+    def _open_holder_activity_path(self, path: Path, *, create: bool = False) -> int:
         flags = os.O_RDWR | getattr(os, "O_NOFOLLOW", 0)
         if create:
             flags |= os.O_CREAT | os.O_EXCL
@@ -732,7 +772,7 @@ class BindingEffectLeaseManager:
                 or metadata.st_uid != os.geteuid()
                 or metadata.st_mode & 0o777 != 0o600
             ):
-                raise BindingEffectLeaseError("exclusive waiter activity file is unsafe")
+                raise BindingEffectLeaseError("effect holder activity file is unsafe")
             return descriptor
         except BaseException:
             if descriptor is not None:
@@ -740,30 +780,30 @@ class BindingEffectLeaseManager:
             raise
 
     @staticmethod
-    def _close_pending_activity(descriptor: int) -> None:
+    def _close_holder_activity(descriptor: int) -> None:
         _close_lease_descriptor(descriptor)
 
-    def _unlink_pending_activity_locked(
+    def _unlink_holder_activity_locked(
         self,
         vault_binding_id: str,
         holder_id: str,
         descriptor: int,
     ) -> None:
-        self._unlink_pending_activity_path_locked(
-            self._pending_activity_path(vault_binding_id, holder_id),
+        self._unlink_holder_activity_path_locked(
+            self._holder_activity_path(vault_binding_id, holder_id),
             descriptor,
         )
 
-    def _scavenge_pending_activity_locked(
+    def _scavenge_holder_activity_locked(
         self,
         vault_binding_id: str,
         referenced: set[Path],
     ) -> None:
         stem = self._binding_stem(vault_binding_id)
-        for path in self.state_root.glob(f"{stem}.*.pending.lock"):
+        for path in self.state_root.glob(f"{stem}.*.activity.lock"):
             if path in referenced:
                 continue
-            suffix = path.name.removeprefix(f"{stem}.").removesuffix(".pending.lock")
+            suffix = path.name.removeprefix(f"{stem}.").removesuffix(".activity.lock")
             if len(suffix) != 64 or any(
                 character not in "0123456789abcdef" for character in suffix
             ):
@@ -771,19 +811,19 @@ class BindingEffectLeaseManager:
             descriptor: int | None = None
             try:
                 try:
-                    descriptor = self._open_pending_activity_path(path)
+                    descriptor = self._open_holder_activity_path(path)
                 except FileNotFoundError:
                     continue
                 try:
                     fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
                 except BlockingIOError:
                     continue
-                self._unlink_pending_activity_path_locked(path, descriptor)
+                self._unlink_holder_activity_path_locked(path, descriptor)
             finally:
                 if descriptor is not None:
-                    self._close_pending_activity(descriptor)
+                    self._close_holder_activity(descriptor)
 
-    def _unlink_pending_activity_path_locked(self, path: Path, descriptor: int) -> None:
+    def _unlink_holder_activity_path_locked(self, path: Path, descriptor: int) -> None:
         try:
             path_metadata = path.stat(follow_symlinks=False)
         except FileNotFoundError:
@@ -1047,10 +1087,10 @@ class BindingEffectLeaseManager:
     def _gate_path(self, vault_binding_id: str) -> Path:
         return self.state_root / f"{self._binding_stem(vault_binding_id)}.effect.lock"
 
-    def _pending_activity_path(self, vault_binding_id: str, holder_id: str) -> Path:
+    def _holder_activity_path(self, vault_binding_id: str, holder_id: str) -> Path:
         binding_stem = self._binding_stem(vault_binding_id)
         holder_stem = hashlib.sha256(holder_id.encode("utf-8")).hexdigest()
-        return self.state_root / f"{binding_stem}.{holder_stem}.pending.lock"
+        return self.state_root / f"{binding_stem}.{holder_stem}.activity.lock"
 
     def _atomic_private_json(self, path: Path, value: Mapping[str, object]) -> None:
         payload = (json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n").encode()
