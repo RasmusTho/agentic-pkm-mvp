@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from app.dispatcher.verification_contract import MAX_CLOSING_ISSUES
+from app.dispatcher.verification_contract import resolve_final_review_rounds
 from scripts.build_verification_dispatch_request import (
     build_request,
     resolve_issue_contract,
@@ -111,6 +112,24 @@ def test_light_path_emits_no_verification_dispatch_request() -> None:
     )
 
     assert build_request(event=_event(), pr=pr, issue=_issue()) is None
+
+
+def test_one_and_two_rounds_remain_dispatchable() -> None:
+    assert resolve_final_review_rounds(_pr()["body"]) == 1
+    pr = _pr()
+    pr["body"] = str(pr["body"]).replace(
+        "Final-Review-Rounds: 1", "Final-Review-Rounds: 2"
+    )
+    assert resolve_final_review_rounds(pr["body"]) == 2
+
+
+def test_zero_rounds_is_explicit_light_path() -> None:
+    pr = _pr()
+    pr["body"] = str(pr["body"]).replace(
+        "Final-Review-Rounds: 1", "Final-Review-Rounds: 0"
+    )
+
+    assert resolve_final_review_rounds(pr["body"]) == 0
 
 
 @pytest.mark.parametrize(

@@ -168,6 +168,8 @@ def build_request(
     final_review_rounds = resolve_final_review_rounds(pr.get("body"))
     if issue_authority is None or final_review_rounds is None:
         return None
+    if final_review_rounds == 0:
+        return None
     live_closing_issues = _resolve_live_closing_issues(
         pr.get("live_closing_issues"), repository=repository
     )
@@ -246,11 +248,15 @@ def render_markdown(request: dict[str, object]) -> str:
     return "\n".join(lines)
 
 
-def _write_github_output(path: Path | None, *, emitted: bool) -> None:
+def _write_github_output(
+    path: Path | None, *, emitted: bool, reason: str = ""
+) -> None:
     if path is None:
         return
     with path.open("a", encoding="utf-8") as output:
         output.write(f"emitted={'true' if emitted else 'false'}\n")
+        if reason:
+            output.write(f"reason={reason}\n")
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -276,7 +282,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         issue=_load_json(args.issue_json),
     )
     if request is None:
-        _write_github_output(args.github_output, emitted=False)
+        final_review_rounds = resolve_final_review_rounds(
+            _load_json(args.pr_json).get("body")
+        )
+        reason = "light-path" if final_review_rounds == 0 else "ineligible"
+        _write_github_output(args.github_output, emitted=False, reason=reason)
         return 0
 
     args.output_json.parent.mkdir(parents=True, exist_ok=True)
