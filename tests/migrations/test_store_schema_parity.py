@@ -31,10 +31,10 @@ STORE_TABLES = (
     "vector_index_meta",
 )
 
-# Pinned to the revision which owns the current binding-key shape. A later
-# migration may evolve another surface without silently moving this contract.
+# Keep store-table parity pinned to its owning revision. Child binding parity
+# follows the revision that owns the current ingest key/FK shape.
 STORE_SCHEMA_HEAD = "e6c4a2b8d1f3"
-STORE_BINDING_HEAD = STORE_SCHEMA_HEAD
+STORE_BINDING_HEAD = "f4a05a4b0001"
 MINIMUM_CHILD_TABLES = (
     "chunks",
     "embeddings",
@@ -183,7 +183,7 @@ def _schema_snapshot(dsn: str) -> dict:
 
 
 def _binding_shape_snapshot(dsn: str) -> dict:
-    """Binding columns, store PKs, and canonical child FKs at MVR-05A3 head."""
+    """Binding columns, store PKs, and canonical child FKs at the current head."""
     tables = (*STORE_TABLES, *MINIMUM_CHILD_TABLES)
     snapshot: dict[str, dict] = {}
     with psycopg.connect(dsn) as conn:
@@ -253,12 +253,11 @@ def _binding_shape_snapshot(dsn: str) -> dict:
 
 
 def _minimum_child_binding_shape(snapshot: dict) -> dict:
-    """Normalize exactly the MVR-05A3 child invariant for parity.
+    """Normalize the current child binding/key invariant for parity.
 
-    MVR-05A4/A5 retain ownership of full child keys and rebuild semantics, so
-    this projection deliberately compares the namespace column, existing PK,
-    every effective FK (including unchanged membership.set_id/chunk_id), and
-    the nullable-receipt check — not unrelated child payload columns.
+    MVR-05A5 retains ownership of rebuild semantics, so this projection compares
+    the namespace column, effective PK, every effective FK, and the
+    nullable-receipt check — not unrelated child payload columns.
     """
     endpoints = {
         "chunks": ("object_id",),
@@ -358,7 +357,7 @@ def test_store_and_child_binding_shapes_match_migration_and_autocreate(
     assert _minimum_child_binding_shape(migrated_shape) == _minimum_child_binding_shape(
         bootstrapped_shape
     ), (
-        "MVR-05A3 child binding/FK autocreate parity diverged:\n"
+        "MVR-05A4 child binding/key/FK autocreate parity diverged:\n"
         f"alembic: {json.dumps(_minimum_child_binding_shape(migrated_shape), indent=2, default=str)}\n"
         f"autocreate: {json.dumps(_minimum_child_binding_shape(bootstrapped_shape), indent=2, default=str)}"
     )
