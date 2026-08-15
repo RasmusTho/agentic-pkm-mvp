@@ -2148,6 +2148,7 @@ class PostgresBuilderOpsStore:
                 "post_effect_phase, post_effect_fencing_token, "
                 "post_effect_intent_lsn::text AS post_effect_intent_lsn, "
                 "post_effect_claim_lsn::text AS post_effect_claim_lsn, "
+                "post_effect_claim_receipt_sequence, "
                 "clock_timestamp() AS database_now FROM builderops_outbox "
                 "WHERE repository = %s AND operation_key = %s FOR UPDATE",
                 (repository, operation_key),
