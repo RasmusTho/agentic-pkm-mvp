@@ -59,8 +59,8 @@ role map; the rows below are a quick pointer, not a replacement for the full tab
 - Target architecture operationalization: `docs/architecture/SBS_OPERATIONALIZATION_PLAN.md`,
   `docs/architecture/SBS_CURRENT_TO_TARGET_MAPPING.md`, `docs/architecture/SBS_BOUNDARY_REGISTER.md`,
   `docs/architecture/SBS_TRANSITION_DEBT.md`, and `docs/architecture/SBS_FITNESS_RULES.md`
-- SBS operating model and roadmap (how Product/Runtime System work, Builder System work, and boundary
-  work are classified; Builder Learning/evaluation/TCD governance; how SBS work is readied, done, reviewed, and
+- SBS operating model and roadmap (how Product/Runtime System work, Builder System work, Platform and
+  Operations System work, and boundary work are classified; Builder Learning/evaluation/TCD governance; how SBS work is readied, done, reviewed, and
   recorded; review-gate fallback policy; source-of-truth matrix): `docs/architecture/SBS_OPERATING_MODEL.md` and
   `docs/architecture/SBS_ROADMAP.md`
 - Semantic topology and authority map: `docs/SEMANTIC_SYSTEM_ARCHITECTURE.md`
@@ -286,7 +286,7 @@ The 2026 docs cleanup work is not retained as live documentation. The active rea
 | docs/boundaries/EBF.md | EBF boundary charter (External Boundary Fabric) | Architecture / boundary charter | 2026-07-03 | Owns external attachment/adapter isolation (sources, watchers, providers, tools/MCP); not semantic authority/policy/durable knowledge. States integration-lifecycle-management as owned-but-not-yet-built. External mechanisms do not become authority (#2836). |
 | docs/boundaries/DRI.md | DRI boundary charter (Derived Representation & Indexing) | Architecture / boundary charter | 2026-07-03 | Owns rebuildable embeddings/chunks/indexes/projections and their invalidation/rebuild machinery; not storage backend/human knowledge/retrieval ranking. Derived representations are rebuildable and never source of truth (#2836). |
 | docs/architecture/SBS_OPERATIONALIZATION_PLAN.md | SBS operationalization plan | Target-state transition plan | 2026-06-21 | Contract-first/module-lazy adoption plan, phase plan, and source-of-truth matrix for making the target SBS operational without claiming shipped behavior. |
-| docs/architecture/SBS_OPERATING_MODEL.md | SBS operating model and Builder System boundary | Target-state process surface | 2026-08-15 | Owns how the target SBS is used operationally: classifies Product/Runtime System vs Builder System vs boundary work, and covers TCD governance, provider-capacity admission, Definition of Ready/Done, and issue/PR lifecycle. Not a physical module map or shipped-runtime claim. |
+| docs/architecture/SBS_OPERATING_MODEL.md | SBS operating model and enabling-system boundaries | Target-state process surface | 2026-08-15 | Owns how the target SBS is used operationally: classifies Product/Runtime System, Builder System, Platform and Operations System, and boundary work, and covers TCD governance, provider-capacity admission, Definition of Ready/Done, and issue/PR lifecycle. Not a physical module map or shipped-runtime claim. |
 | docs/architecture/SBS_ROADMAP.md | SBS roadmap (initiative phases) | Target-state initiative roadmap | 2026-06-21 | Phase model (0 architecture residency → 5 opportunistic physical separation) for the SBS operationalization initiative. Linked from `docs/ROADMAP.md`. |
 | docs/architecture/SBS_CURRENT_TO_TARGET_MAPPING.md | SBS current-to-target mapping | Target-state mapping register | 2026-07-03 | Maps current architecture areas (vault, retrieval, memory, agents, execution, persistence, sync, observability) to target SBS owners without claiming implementation conformance; also carries a row-level spine-subsystem-to-SBS-code crosswalk. |
 | docs/architecture/SBS_BOUNDARY_REGISTER.md | SBS boundary register | Target-state boundary register | 2026-06-21 | Tracks target boundary charter, contract, enforcement, and physical-module posture per SBS subsystem plus CES practice. |

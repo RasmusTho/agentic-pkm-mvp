@@ -60,7 +60,7 @@ The SBS is described across several docs, each with a single owner. Do not dupli
 | Issue lifecycle | this doc §7 + `.github/ISSUE_TEMPLATE/task.yml` + `.github/github-governance.yml` | Required sections and labels are enforced by governance config. |
 | PR lifecycle | this doc §8 + `.github/pull_request_template.md` | SBS impact block and owner-doc writeback checklist live in the template. |
 | Review-gate fallback policy | this doc §12 | What to do when a required automated review gate is unavailable. |
-| Builder System boundary, authority model, and artifact map | this doc §3 | Defines the continuous-development enabling system, its relationship to the Product/Runtime SBS and CES, how builder agents classify Product, Builder, and boundary work, and the owner/authority/writeback map for Builder System artifacts and workflows. |
+| Enabling-system boundaries, authority model, and artifact map | this doc §3 | Defines the Builder System and Platform and Operations System as distinct enabling systems around the Product/Runtime SBS, how work is classified across Product, Builder, Platform, and boundary surfaces, and the owner/authority/writeback map for Builder System artifacts and workflows. |
 | Product Owner development experience (`devUI`) | `docs/DEVUI.md` | Owns the accepted see → decide → act → verify experience and its cognitive-load guardrails. CKM, DDO, BuilderOps, and GitHub contracts retain their mechanism and authority ownership; the unified surface remains target state. |
 | Builder Learning, evaluation, and TCD governance loop | this doc §3 + `docs/development/DELIVERY_FEEDBACK_LOOP.md` | Defines the allowed inputs, durable destinations, TCD signals, reevaluation inputs, terminal outcomes, and promotion path for builder learning without contaminating Product/Runtime memory. |
 | Cross-repo constituent-surface governance | `docs/adr/ADR-0050-cross-repo-governance-and-bifrost-client-repo.md` | Owns the accepted Bifrost constituent-repo decision and the temporary hub-tracking posture (until Bifrost has its own board); this operating model owns the Builder System's classification and process implications. |
@@ -421,8 +421,10 @@ Fourteen Level-2 control-boundary subsystems plus the CES stewardship practice (
 
 An SBS-relevant issue is Ready (`agent:ready`, Status=Ready) only when its `SBS Impact` block resolves all of the following. Use "none"/"unaffected" explicitly rather than leaving a field blank.
 
-- **Primary SBS owner** named (one subsystem), or `Builder System / CES boundary` for Builder System
-  work that does not change a Product/Runtime SBS subsystem.
+- **Primary owner** named: one Product/Runtime SBS subsystem; `Builder System / CES boundary` for
+  Builder System work that does not change a Product/Runtime SBS subsystem; or `Yggdrasil Platform
+  and Operations System` for platform work outside the Product/Runtime SBS. Boundary work names
+  every affected owner rather than assigning the work to one system by path alone.
 - **Secondary subsystem(s)** named or marked none.
 - **Durable vs rebuildable** classification stated for any record the work creates or changes.
 - **Authority-bearing write** classification stated (authority-bearing / mechanical / derived / none).
