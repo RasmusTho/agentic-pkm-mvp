@@ -70,6 +70,20 @@ The target SBS V2 is not a compromise average. It is hierarchical: small enough 
 
 The Level-2 boundaries are target control boundaries, not a command to instantiate fourteen teams, services, packages, owner docs, or runtime components on day one. Commit now to the eight macro-domains, dependency rules, and boundary litmus tests. Split a macro-domain into a distinct Level-2 implementation surface when a second independent volatility clock proves that the separation reduces TCD.
 
+### Ecosystem enabling systems outside the SBS
+
+This SBS decomposes the **Mimer Product/Runtime System**. It does not absorb the lifecycle systems
+that build or operate that product. The Builder System is the continuous-development enabling system;
+the **Yggdrasil Platform and Operations System** is the distinct, parallel ecosystem enabling system
+for host lifecycle, Docker/Colima, Compose and channel topology, operational startup/stop/recovery,
+host provisioning, platform health, and operational runbooks. Its authoritative target-scope
+specification is `docs/YGGDRASIL_PLATFORM_AND_OPERATIONS_SYSTEM/README.md`.
+
+Neither enabling system is an additional SBS macro-domain, Level-2 control boundary, or
+Product/Runtime capability. Product-runtime lifecycle authority remains assigned to the existing SBS
+owners; platform scripts and mechanisms operate that environment without redefining product data,
+observability, evaluation, or runtime authority.
+
 ### Level 1 macro-domains
 
 | L1 | Macro-domain | Purpose |

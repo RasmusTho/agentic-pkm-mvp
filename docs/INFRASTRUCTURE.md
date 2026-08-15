@@ -1,5 +1,10 @@
 State: SoT v5.5 baseline (descriptive, ops-oriented). If a detail drifts, prefer scripts/compose and update this doc.
 
+Documentation hierarchy: `docs/YGGDRASIL_PLATFORM_AND_OPERATIONS_SYSTEM/README.md` owns the
+target operational-platform boundary. This document remains the current local Docker/Colima runtime
+description; it does not claim that the target platform boundary is already a separately delivered
+implementation.
+
 ## v5.5 Baseline Delta (Current Reality)
 - Registry watcher is the runtime default; legacy snapshot watcher is dev-only.
 - DB outbox (Postgres) is the canonical queue; JSONL audit log is non-canonical and used for lag inspection.

@@ -16,6 +16,9 @@ Specialized companion documents:
 - `docs/OBSERVABILITY.md` - runtime observability signals, counters, and span/log contracts
 - `docs/INFRASTRUCTURE.md` - local runtime stack, Docker/Colima setup, and local observability stack
 - `docs/SECURITY_ARCHITECTURE.md` - security review routing, threat-model tiers, and security invariants
+- `docs/YGGDRASIL_PLATFORM_AND_OPERATIONS_SYSTEM/README.md` - target ownership boundary for the
+  ecosystem operational platform; this playbook remains the current operator entrypoint and runbook
+  router
 
 Reading order:
 1. Start here for runtime expectations, core checks, and escalation paths.
@@ -29,6 +32,9 @@ Reading order:
 9. Use `docs/SECURITY_ARCHITECTURE.md` and `docs/security/API_SECURITY_MATRIX.md` before changing
    API exposure, auth/rate-limit posture, external provider/tool execution, or mutation-capable
    route behavior.
+10. Use `docs/YGGDRASIL_PLATFORM_AND_OPERATIONS_SYSTEM/README.md` when deciding whether a host,
+    Docker/Colima, Compose, channel-topology, lifecycle-wrapper, platform-health, or runbook change
+    belongs to the operational platform rather than to a Product/Runtime or Builder System owner.
 
 CLI note:
 - `python -m app.cli --help` and `python -m app.cli <command> --help` remain the authoritative command discovery surface because the CLI evolves faster than the docs.

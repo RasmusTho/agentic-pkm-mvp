@@ -69,19 +69,33 @@ This matrix is the **source-of-truth verification matrix** required for SBS oper
 
 ## 3. Builder System Boundary And Work Classification
 
-Mimer has two related but distinct systems:
+Mimer has three related but distinct systems:
 
 - **Product/Runtime System** - the human-first cognitive platform described by `docs/PROJECT_KERNEL.md`,
   `docs/COGNITIVE_PROSTHESIS_CHARTER.md`, current runtime owner docs, and the target SBS in
   `docs/SYSTEM_BREAKDOWN_STRUCTURE.md`.
 - **Builder System** - the continuous-development enabling system that builds, verifies, releases,
   governs, and learns from changes to the Product/Runtime System.
+- **Yggdrasil Platform and Operations System** - the ecosystem enabling system that owns the
+  operational-platform specification for host lifecycle, Docker/Colima, Compose and channel
+  topology, runtime startup/stop/recovery wrappers, host provisioning, platform health, and
+  operational runbooks. Its target-scope owner is
+  `docs/YGGDRASIL_PLATFORM_AND_OPERATIONS_SYSTEM/README.md`.
 
 The Builder System includes builder agents, repo-local skills, issue creation and delivery workflows,
 PR governance, CI and architecture fitness, release/UAT/promotion workflows, owner-doc writeback,
 delivery receipts, BuilderOps Vault records and projections, TCD governance, and builder-learning
 feedback loops. It also includes external model, tool, GitHub, CI, and connector dependencies when
 they are used to produce or verify repo-governed changes.
+
+The Platform and Operations System is **not** a Product/Runtime SBS subsystem and is not a second
+Builder System. It owns operational-platform mechanisms by their effect, not by their repository
+path: a host/Compose/channel lifecycle wrapper is platform work, whereas a product-function script
+or build/test/PR/CI workflow remains Product/Runtime or Builder System work respectively. It does
+not own PDM product-data semantics, OEF product observability/evaluation, or Builder delivery
+governance. Product-runtime lifecycle-binding authority remains with the SBS owners named in
+`docs/SYSTEM_BREAKDOWN_STRUCTURE.md`; the platform owns the operational envelope and runbooks, not
+that product authority.
 
 ### Cross-repo constituent-surface scope
 
@@ -125,15 +139,21 @@ verification:
    BuilderOps object/projection docs, delivery receipts, worklogs, learning/retrospective workflows,
    TCD policy, or agent workflow docs. Route it through this Builder System model, the repo-local
    skill index, and the development workflow docs.
-3. **Boundary work** changes how Builder System machinery affects Product/Runtime truth, for example
-   owner-doc writeback, issue/PR classification, release promotion, architecture fitness enforcement,
-   Product SBS contract updates, or BuilderOps promotion into GitHub/repo artifacts. Route it through
-   both sides: this Builder System model and the relevant Product/Runtime owner docs.
+3. **Platform and Operations System work** changes host provisioning, Docker/Colima, Compose or
+   channel topology, operational lifecycle wrappers, platform health, or operational runbooks.
+   Route it through `docs/YGGDRASIL_PLATFORM_AND_OPERATIONS_SYSTEM/README.md` and the most local
+   current deployment, infrastructure, operations, environment, release-channel, or host-setup
+   owner document. Do not classify product-function scripts or Builder delivery workflow by path.
+4. **Boundary work** changes how an enabling system affects Product/Runtime truth, for example
+   owner-doc writeback, channel promotion, platform wrappers invoking a product lifecycle effect,
+   architecture fitness enforcement, Product SBS contract updates, or BuilderOps promotion into
+   GitHub/repo artifacts. Route it through all affected owner sides rather than assigning the work
+   to the platform, Builder System, or Product/Runtime System alone.
 
-If the classification is still unclear, choose the stricter boundary route and name both owner surfaces
-in the Issue/PR. Do not treat Builder System records, projections, skills, prompts, or delivery
-learning as runtime/user memory or Human Knowledge Artifacts unless a Product/Runtime authority path
-explicitly promotes them.
+If the classification is still unclear, choose the stricter boundary route and name every affected
+owner surface in the Issue/PR. Do not treat Builder System records, projections, skills, prompts, or
+delivery learning as runtime/user memory or Human Knowledge Artifacts unless a Product/Runtime
+authority path explicitly promotes them.
 
 ### Builder-Agent Authority Model
 
