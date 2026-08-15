@@ -129,6 +129,43 @@ If any of the above is missing or unclear, first try to resolve it from the SoT 
 - when Project repair is explicitly in scope, add missing cards and reconcile Status through
   `.codex/skills/_shared/PROJECT_STATUS_OPERATIONS.md`
 
+## Authoritative Issue body edits and verification
+
+Use a Markdown body file for every canonical Issue-body rewrite. Do not construct an edit by
+JSON-string replacement, shell-escaped `\\n` substitution, or an inline API payload: those paths
+can persist the two literal characters `\\` and `n`, leaving required headings such as `## SBS
+Impact` unparseable.
+
+1. Read the live body into a file, edit the file as Markdown, and submit that file:
+   ```bash
+   set -euo pipefail
+   body_file="$(mktemp)"
+   gh issue view <N> --repo <owner/repo> --json body --jq .body >"$body_file"
+   # Edit "$body_file" while preserving real newlines.
+   gh issue edit <N> --repo <owner/repo> --body-file "$body_file"
+   ```
+2. Re-read the authoritative GitHub body into a fresh file after the mutation. Do not validate the
+   pre-write local copy as evidence that GitHub stored the intended newlines:
+   ```bash
+   verified_body_file="$(mktemp)"
+   gh issue view <N> --repo <owner/repo> --json body --jq .body >"$verified_body_file"
+   python3 scripts/validate_issue_readiness.py \
+     --body-file "$verified_body_file" \
+     --issue-number <N> \
+     --label agent:ready
+   cmp -s "$body_file" "$verified_body_file" || {
+     echo "GitHub did not store the submitted Issue body exactly" >&2
+     exit 1
+   }
+   ```
+3. Add or preserve `agent:ready` only after both the edit and post-write comparison/validation
+   commands exit successfully. If any step fails, leave or restore the Issue to a non-ready truthful
+   state and record the malformed-body repair needed.
+
+The fresh read and strict validator are the post-condition verification for a body rewrite. Keep
+the temporary body files only for the command sequence, and re-read labels and Issue state after
+any accompanying label mutation.
+
 When closing stale or duplicate open issues:
 
 - leave an explicit maintenance receipt comment naming the canonical delivered Issue/PR replacing the open backlog item
