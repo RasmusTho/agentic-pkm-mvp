@@ -282,6 +282,27 @@
       "issue": "#2892"
     },
     {
+      "artifact": "docs/AUTONOMOUS_PR_CLOSURE/ESTABLISH_VERIFICATION_EXECUTION_AUTHORITY.md",
+      "category": "iii",
+      "why_load_bearing": "The capability task names the established Demerzel execution-host boundary required to make the existing verifier's installed-main pilot explicit.",
+      "disposition": "stay",
+      "issue": "#3603"
+    },
+    {
+      "artifact": "docs/AUTONOMOUS_PR_CLOSURE/PARENT_FEATURE_ISSUE.md",
+      "category": "iii",
+      "why_load_bearing": "The parent linkage records the existing Demerzel-dependent verification prerequisite so the closure dependency is not misrepresented as runnable.",
+      "disposition": "stay",
+      "issue": "#3224"
+    },
+    {
+      "artifact": "docs/AUTONOMOUS_PR_CLOSURE/README.md",
+      "category": "iii",
+      "why_load_bearing": "The capability boundary names the established Demerzel host only to preserve the accountable verification-execution dependency; it carries no credential or private binding.",
+      "disposition": "stay",
+      "issue": "#3603"
+    },
+    {
       "artifact": "docs/ARCHITECTURE.md",
       "category": "iv",
       "why_load_bearing": "The current-runtime owner doc names Bifrost custody and the Hub-only authority boundary for the delivered CDLM vertical.",
