@@ -57,6 +57,16 @@ def test_ready_candidate_reports_required_detail() -> None:
     assert report.human_exception_required is False
 
 
+def test_rejects_literal_newline_escaped_headings() -> None:
+    body = (FIXTURE_DIR / "valid_ready_candidate.md").read_text(encoding="utf-8")
+    body = body.replace("\n## SBS Impact", r"\n## SBS Impact")
+
+    report = classify_issue_body(body, labels=["agent:ready"])
+
+    assert report.readiness_classification == "missing_required_sections"
+    assert "SBS Impact" in report.required_sections.missing
+
+
 def test_missing_verify_reports_exact_item_guidance() -> None:
     body = (FIXTURE_DIR / "ac_without_verify.md").read_text(encoding="utf-8")
 
