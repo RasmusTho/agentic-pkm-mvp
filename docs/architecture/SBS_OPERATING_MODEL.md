@@ -5,7 +5,7 @@ Owner: Architecture spine / CES practice
 Temporal class: strategic
 Review cadence: event-driven
 Source of truth: this doc for SBS operating process; mixed for everything it points to
-Last reviewed: 2026-08-07
+Last reviewed: 2026-08-15
 Last verified against: docs/SYSTEM_BREAKDOWN_STRUCTURE.md, docs/architecture/SBS_OPERATIONALIZATION_PLAN.md, docs/architecture/SBS_CURRENT_TO_TARGET_MAPPING.md, docs/architecture/SBS_BOUNDARY_REGISTER.md, docs/architecture/SBS_TRANSITION_DEBT.md, docs/architecture/SBS_FITNESS_RULES.md, docs/development/DELIVERY_FEEDBACK_LOOP.md, docs/development/BUILDER_SYSTEM_PROCESS_MAP.md, docs/DEVUI.md, docs/CAPABILITY_KNOWLEDGE_MODEL/README.md, .github/ISSUE_TEMPLATE/task.yml, .github/pull_request_template.md, .github/github-governance.yml
 
 # SBS Operating Model
@@ -264,6 +264,42 @@ records and delivery receipts may reference the observed TCD factors: human time
 reasoning/context cost, parallelization and coordination cost, rework, defect risk, delay, failed
 gates, quota/context failures, and review/verification depth. Per-delivery TCD decisions are evidence;
 only a repo-governed PR changes the TCD policy itself.
+
+### Provider-Capacity Admission Policy
+
+External provider quota, usage-limit, and available-capacity indications are **Builder System
+scheduling signals**, not Platform and Operations System concerns. They govern whether, when, and at
+what capability a Builder System delivery or verification attempt is admitted; they do not change
+Product/Runtime truth, task priority, acceptance criteria, or any required proof gate.
+
+The policy is deliberately conservative because provider status is external, variable, and may be
+stale:
+
+- Treat a provider indication only as an observation. Record its source category, observation time,
+  applicable provider/capability scope, freshness (`fresh`, `stale`, or `unknown`), and uncertainty.
+  Do not represent availability, reset time, or future capacity as exact truth or as a forecast.
+- This policy creates no provider scraping, polling, or credential-storage path. It may use only a
+  status received during an ordinary authorized delivery/verification interaction or an
+  operator-supplied observation; the resulting receipt contains no credentials or secret material.
+- When capacity is low or uncertain, reserve the high-capability budget needed for
+  high-priority/time-critical delivery and required planning, review, CI repair, or verification.
+  Do not admit lower-priority work at a capability or timing that could consume that reserve.
+- For lower-priority work that risks the reserve, choose one visible disposition: defer/pause it, or
+  use a lower-capability path only when its governing contract, risk, and required proof remain
+  satisfied. Downgrading never waives a required CI, review, security, or merge gate.
+- A capacity decision does not itself create `agent:needs-human`. It is ordinary Builder System
+  flow control; an owner escalation remains limited to a separately applicable authority category.
+
+Every pause or deferral for capacity risk requires a visible decision/deferral receipt in the
+responsible Issue/PR delivery record or BuilderOps receipt. The receipt names the work reference,
+decision time, observed status and its freshness/uncertainty, affected reserve, chosen disposition,
+and a bounded reassessment trigger. It records scheduling evidence, not provider truth or a
+prediction.
+
+**Current policy boundary:** this policy governs conservative manual or agent scheduling now; it does
+not claim reliable automated capacity observation or control. Actively spending apparently surplus
+capacity before a reported reset is explicitly deferred until the Builder System can reliably observe
+and control capacity. No delivery may treat that deferred idea as current admission policy.
 
 Allowed learning destinations:
 
