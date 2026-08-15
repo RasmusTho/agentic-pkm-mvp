@@ -2147,14 +2147,13 @@ class PostgresBuilderOpsStore:
                 "claim_lsn::text AS claim_lsn, claim_receipt_sequence, claim_expires_at, "
                 "post_effect_phase, post_effect_fencing_token, "
                 "post_effect_intent_lsn::text AS post_effect_intent_lsn, "
-                "post_effect_intent_lsn::text AS post_effect_intent_lsn, "
                 "post_effect_claim_lsn::text AS post_effect_claim_lsn, "
                 "clock_timestamp() AS database_now FROM builderops_outbox "
                 "WHERE repository = %s AND operation_key = %s FOR UPDATE",
                 (repository, operation_key),
             ).fetchone()
             if (
-                row is None or row["status"] != "claimed" or row["worker_id"] is None
+                row is None or row["status"] not in {"claimed", "unknown"} or row["worker_id"] is None
                 or row["intent_lsn"] is None or row["claim_lsn"] is None
                 or row["claim_receipt_sequence"] is None or row["claim_expires_at"] is None
                 or row["claim_expires_at"] <= row["database_now"]
@@ -2195,6 +2194,7 @@ class PostgresBuilderOpsStore:
                 "SELECT status, worker_id, claim_fencing_token, intent_lsn::text AS intent_lsn, "
                 "claim_lsn::text AS claim_lsn, claim_receipt_sequence, claim_expires_at, "
                 "post_effect_phase, post_effect_fencing_token, "
+                "post_effect_intent_lsn::text AS post_effect_intent_lsn, "
                 "post_effect_claim_lsn::text AS post_effect_claim_lsn, "
                 "post_effect_claim_receipt_sequence, post_effect_evidence, "
                 "post_effect_observed_applied, post_effect_terminal_unknown, "
@@ -2227,6 +2227,10 @@ class PostgresBuilderOpsStore:
                 expected_status = "dead_letter" if terminal_unknown else ("succeeded" if observed_applied else "pending")
                 if (
                     row["status"] != expected_status
+                    or row["post_effect_fencing_token"] != row["claim_fencing_token"]
+                    or row["post_effect_intent_lsn"] != row["intent_lsn"]
+                    or row["post_effect_claim_lsn"] != row["claim_lsn"]
+                    or row["post_effect_claim_receipt_sequence"] != row["claim_receipt_sequence"]
                     or dict(row["reconciliation_evidence"] or {}) != dict(evidence)
                     or row["reconciliation_receipt_sequence"] is None
                     or row["reconciliation_lsn"] is None
@@ -2241,6 +2245,7 @@ class PostgresBuilderOpsStore:
                 or row["claim_receipt_sequence"] is None or row["claim_expires_at"] is None
                 or row["claim_expires_at"] <= row["database_now"]
                 or row["post_effect_fencing_token"] != row["claim_fencing_token"]
+                or row["post_effect_intent_lsn"] != row["intent_lsn"]
                 or row["post_effect_claim_lsn"] != row["claim_lsn"]
                 or row["post_effect_claim_receipt_sequence"] != row["claim_receipt_sequence"]
             ):
@@ -2361,7 +2366,7 @@ class PostgresBuilderOpsStore:
                 "outbox.claim_fencing_token, "
                 "outbox.intent_lsn::text AS intent_lsn, "
                 "outbox.claim_lsn::text AS claim_lsn, "
-                "outbox.claim_receipt_sequence, outbox.claim_expires_at, "
+                "outbox.claim_receipt_sequence, outbox.claim_expires_at, outbox.post_effect_phase, "
                 "clock_timestamp() AS database_now, receipt.event_type AS claim_event_type "
                 "FROM builderops_outbox AS outbox "
                 "JOIN builderops_receipts AS receipt "
@@ -2412,7 +2417,11 @@ class PostgresBuilderOpsStore:
                 "UPDATE builderops_outbox SET status = 'unknown', "
                 "worker_id = %s, claim_fencing_token = %s, "
                 "claim_expires_at = %s, claim_lsn = NULL, "
-                "claim_receipt_sequence = %s, "
+                "claim_receipt_sequence = %s, post_effect_phase = NULL, post_effect_fencing_token = NULL, "
+                "post_effect_intent_lsn = NULL, post_effect_claim_lsn = NULL, "
+                "post_effect_claim_receipt_sequence = NULL, post_effect_receipt_sequence = NULL, "
+                "post_effect_recovery_lsn = NULL, post_effect_evidence = NULL, "
+                "post_effect_observed_applied = NULL, post_effect_terminal_unknown = NULL, "
                 "unknown_detail = 'worker process lost; external readback "
                 "required', authority_envelope = %s, "
                 "updated_at = clock_timestamp() "
