@@ -5,8 +5,8 @@ task_id: AVC-01
 github_issue: 3604
 source_anchor: docs/AUTONOMOUS_PR_CLOSURE/README.md :: Post-merge reconciliation and orphan recovery
 parent_capability: Autonomous PR verification and closure
-prerequisites: []
-depends_on: []
+prerequisites: [BCP-05]
+depends_on: [../BUILDEROPS_CONTROL_PLANE/DEMERZEL_REVIEW_MERGE_ORCHESTRATION.md]
 can_parallelize_with: []
 ---
 
