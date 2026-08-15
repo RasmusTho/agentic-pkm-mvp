@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import re
 from collections.abc import Mapping
 from datetime import datetime, timedelta
 from typing import Any
@@ -43,23 +42,12 @@ def _hash(value: Mapping[str, Any]) -> str:
 
 def _validate_row_derived_evidence(evidence: Mapping[str, Any]) -> None:
     """Validate the closed dormant readback schema at the persistence boundary."""
-    allowed = {"readback", "merge_sha", "provider_session_id", "relaunch_performed"}
+    allowed = {"readback", "relaunch_performed"}
     if not isinstance(evidence, Mapping) or not set(evidence).issubset(allowed):
         raise ValueError("row-derived readback evidence contains unknown fields")
     readback = evidence.get("readback")
     if readback not in {"found", "not-found", "unknown"}:
         raise ValueError("row-derived readback evidence has an invalid outcome")
-    merge_sha = evidence.get("merge_sha")
-    if merge_sha is not None and (
-        not isinstance(merge_sha, str) or re.fullmatch(r"[0-9a-fA-F]{40}", merge_sha) is None
-    ):
-        raise ValueError("row-derived readback evidence has an invalid merge SHA")
-    session = evidence.get("provider_session_id")
-    if session is not None and (
-        not isinstance(session, str)
-        or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.:@-]{0,127}", session) is None
-    ):
-        raise ValueError("row-derived readback evidence has an invalid provider session")
     relaunch = evidence.get("relaunch_performed")
     if relaunch is not None and type(relaunch) is not bool:
         raise ValueError("row-derived readback evidence has an invalid relaunch flag")
@@ -2225,6 +2213,11 @@ class PostgresBuilderOpsStore:
     ) -> Mapping[str, Any]:
         """Use the stored row-derived claim for dormant reconciliation only."""
         _validate_row_derived_evidence(evidence)
+        readback = evidence["readback"]
+        if (terminal_unknown and readback != "unknown") or (observed_applied and readback != "found") or (
+            not terminal_unknown and not observed_applied and readback == "found"
+        ):
+            raise ValueError("readback evidence contradicts the requested outcome")
         if terminal_unknown and observed_applied:
             raise ValueError("terminal-unknown reconciliation cannot claim an applied effect")
         repository = canonical_repository(repository)

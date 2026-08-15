@@ -380,12 +380,12 @@ class StorePort(Protocol):
 
     def begin_post_effect_pending(
         self, *, repository: str, operation_key: str, minimum_fencing_token: int,
-        expected_principal: str | None = None,
+        expected_principal: str,
     ) -> Mapping[str, Any]: ...
 
     def reconcile_post_effect(
         self, *, repository: str, operation_key: str, minimum_fencing_token: int,
-        observed_applied: bool, evidence: Mapping[str, Any], expected_principal: str | None = None,
+        observed_applied: bool, evidence: Mapping[str, Any], expected_principal: str,
         terminal_unknown: bool = False,
     ) -> Mapping[str, Any]: ...
 

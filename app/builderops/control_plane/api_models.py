@@ -181,10 +181,6 @@ class RowDerivedPostEffectEvidence(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
     readback: Literal["found", "not-found", "unknown"]
-    merge_sha: str | None = Field(default=None, pattern=r"^[0-9a-fA-F]{40}$")
-    provider_session_id: str | None = Field(
-        default=None, pattern=r"^[A-Za-z0-9][A-Za-z0-9_.:@-]{0,127}$"
-    )
     relaunch_performed: bool | None = None
 
 
