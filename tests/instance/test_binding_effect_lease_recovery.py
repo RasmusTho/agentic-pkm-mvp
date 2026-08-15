@@ -139,6 +139,60 @@ def test_fork_child_cannot_release_the_parent_effect(tmp_path) -> None:
     manager._release(held)
 
 
+def test_state_lock_cancellation_closes_the_acquired_descriptor(tmp_path, monkeypatch) -> None:
+    manager = _build_manager(tmp_path, "binding-a")
+    baseline = set(lease_module._LEASE_LOCK_FDS)
+    real_flock = lease_module.fcntl.flock
+    interrupted = False
+
+    def acquire_then_interrupt(descriptor, operation):
+        nonlocal interrupted
+        result = real_flock(descriptor, operation)
+        if not interrupted and operation == lease_module.fcntl.LOCK_EX:
+            interrupted = True
+            raise KeyboardInterrupt("cancel after state lock acquisition")
+        return result
+
+    monkeypatch.setattr(lease_module.fcntl, "flock", acquire_then_interrupt)
+    with pytest.raises(KeyboardInterrupt, match="state lock acquisition"):
+        manager.observe("binding-a")
+    monkeypatch.setattr(lease_module.fcntl, "flock", real_flock)
+
+    assert set(lease_module._LEASE_LOCK_FDS) == baseline
+    probe = os.open(manager._lock_path("binding-a"), os.O_RDWR)
+    try:
+        real_flock(
+            probe,
+            lease_module.fcntl.LOCK_EX | lease_module.fcntl.LOCK_NB,
+        )
+    finally:
+        os.close(probe)
+
+
+def test_holder_identity_failure_closes_the_effect_descriptor(tmp_path, monkeypatch) -> None:
+    manager = _build_manager(tmp_path, "binding-a")
+    vault = tmp_path / "vaults" / "binding-a"
+    baseline = set(lease_module._LEASE_LOCK_FDS)
+
+    def fail_holder_identity():
+        raise KeyboardInterrupt("holder identity unavailable")
+
+    monkeypatch.setattr(lease_module, "uuid4", fail_holder_identity)
+    with pytest.raises(KeyboardInterrupt, match="holder identity unavailable"):
+        with manager.shared_effect("binding-a", channel_id="dev", root=vault, timeout=1):
+            pytest.fail("holder identity failure cannot expose an effect")
+
+    assert set(lease_module._LEASE_LOCK_FDS) == baseline
+    probe = os.open(manager._gate_path("binding-a"), os.O_RDWR)
+    try:
+        lease_module.fcntl.flock(
+            probe,
+            lease_module.fcntl.LOCK_EX | lease_module.fcntl.LOCK_NB,
+        )
+    finally:
+        os.close(probe)
+
+
 @pytest.mark.parametrize("crash_point", ["journal", "state"])
 def test_pre_registry_commit_crash_rolls_back_from_the_separate_journal(
     tmp_path, monkeypatch, crash_point
