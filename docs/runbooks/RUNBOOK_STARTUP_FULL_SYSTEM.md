@@ -232,10 +232,14 @@ The guest unit and drop-ins are checked in under
 `ops/host-setup/mac-mini/systemd/`. The installer
 `ops/host-setup/mac-mini/install_colima_runtime_readiness.sh` is refusal-first:
 without `COLIMA_RUNTIME_APPLY=1` it only prints a redacted plan, and even an
-apply installs artifacts plus `daemon-reload` without restarting a service.
+apply requires an operator-reviewed `COLIMA_RUNTIME_ENV_FILE`, validates its
+allowlisted mount/profile keys, installs that file atomically with the helper
+and unit artifacts, and runs `daemon-reload` without restarting a service.
 The resource profile is an operator-reviewed input via
 `COLIMA_RESOURCE_PROFILE_FILE`; `runtime-profile.env.example` is not host
-authority and must not be treated as an activation receipt.
+authority and must not be treated as an activation receipt. A startup path
+only enters the Colima gate when `COLIMA_RUNTIME_PROVIDER=colima` is explicitly
+declared; non-Colima Docker providers retain their existing context binding.
 
 If any gate fails, leave Docker off and do not run `docker system prune`,
 `docker compose down`, container recreation, or metadata deletion as a repair.

@@ -8,7 +8,7 @@ Before=containerd.service docker.service
 [Service]
 Type=oneshot
 EnvironmentFile=-/etc/yggdrasil/colima-runtime.env
-ExecStart=/usr/local/libexec/yggdrasil-colima-runtime-readiness --guest
+ExecStart=/usr/local/libexec/yggdrasil-colima-runtime-readiness --substrate
 RemainAfterExit=yes
 TimeoutStartSec=180s
 

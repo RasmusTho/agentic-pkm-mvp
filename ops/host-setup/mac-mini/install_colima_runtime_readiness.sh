@@ -9,6 +9,7 @@ ROOT="$(cd "$HERE/../../.." && pwd)"
 PROFILE="${COLIMA_PROFILE:-default}"
 COLIMA_BIN="${COLIMA_BIN:-colima}"
 GUEST_LIBEXEC="/usr/local/libexec"
+GUEST_CONFIG="/etc/yggdrasil"
 GUEST_SYSTEMD="/etc/systemd/system"
 
 if ! command -v "$COLIMA_BIN" >/dev/null 2>&1; then
@@ -25,10 +26,42 @@ else
   exit 0
 fi
 
+RUNTIME_ENV_FILE="${COLIMA_RUNTIME_ENV_FILE:-}"
+if [ -z "$RUNTIME_ENV_FILE" ] || [ ! -r "$RUNTIME_ENV_FILE" ]; then
+  echo "COLIMA_RUNTIME_ENV_FILE must name an operator-reviewed guest environment file" >&2
+  exit 78
+fi
+for required_key in COLIMA_RUNTIME_PROVIDER COLIMA_EXPECTED_PERSISTENT_SOURCE COLIMA_EXPECTED_PERSISTENT_FSTYPE COLIMA_PERSISTENT_DATA_PATH; do
+  if ! awk -F= -v key="$required_key" '$1 == key && $2 != "" {found=1} END {exit(found ? 0 : 1)}' "$RUNTIME_ENV_FILE"; then
+    echo "guest environment is missing required key: $required_key" >&2
+    exit 78
+  fi
+done
+if ! awk -F= '
+  BEGIN {
+    split("COLIMA_RUNTIME_PROVIDER COLIMA_PROFILE COLIMA_DOCKER_CONTEXT COLIMA_USERNET_TIMEOUT LIMA_USERNET_TIMEOUT COLIMA_EXPECTED_PERSISTENT_SOURCE COLIMA_EXPECTED_PERSISTENT_FSTYPE COLIMA_PERSISTENT_DATA_PATH COLIMA_DOCKER_DATA_PATH COLIMA_CONTAINERD_DATA_PATH COLIMA_PERSISTED_CONFIG_ROOT COLIMA_MIN_FREE_BLOCKS COLIMA_MIN_FREE_INODES COLIMA_CPU COLIMA_MEMORY COLIMA_DISK", keys, " ")
+    for (i in keys) allowed[keys[i]] = 1
+  }
+  /^[[:space:]]*#/ || NF == 0 {next}
+  !allowed[$1] {bad=1}
+  END {exit(bad ? 1 : 0)}
+' "$RUNTIME_ENV_FILE"; then
+  echo "guest environment contains an unapproved key" >&2
+  exit 78
+fi
+
 install_guest_file() {
   local source="$1" target="$2" mode="$3"
   "$COLIMA_BIN" ssh --profile "$PROFILE" -- sudo mkdir -p "$(dirname "$target")"
   "$COLIMA_BIN" ssh --profile "$PROFILE" -- sudo install -m "$mode" /dev/stdin "$target" < "$source"
+}
+
+install_guest_file_atomic() {
+  local source="$1" target="$2" mode="$3"
+  local temporary="${target}.new"
+  "$COLIMA_BIN" ssh --profile "$PROFILE" -- sudo mkdir -p "$(dirname "$target")"
+  "$COLIMA_BIN" ssh --profile "$PROFILE" -- sudo install -m "$mode" /dev/stdin "$temporary" < "$source"
+  "$COLIMA_BIN" ssh --profile "$PROFILE" -- sudo mv "$temporary" "$target"
 }
 
 install_guest_file "$ROOT/scripts/lib/colima_runtime_readiness.sh" \
@@ -39,6 +72,7 @@ install_guest_file "$HERE/systemd/containerd.service.d/20-yggdrasil-persistent-s
   "$GUEST_SYSTEMD/containerd.service.d/20-yggdrasil-persistent-substrate.conf" 0644
 install_guest_file "$HERE/systemd/docker.service.d/20-yggdrasil-containerd-readiness.conf" \
   "$GUEST_SYSTEMD/docker.service.d/20-yggdrasil-containerd-readiness.conf" 0644
+install_guest_file_atomic "$RUNTIME_ENV_FILE" "$GUEST_CONFIG/colima-runtime.env" 0644
 
 "$COLIMA_BIN" ssh --profile "$PROFILE" -- sudo systemctl daemon-reload
 "$COLIMA_BIN" ssh --profile "$PROFILE" -- sudo systemctl enable yggdrasil-colima-persistent-substrate.service

@@ -54,8 +54,10 @@ containerd RPC and metadata readiness, and refuses a Docker API whose
 persisted inventory is truncated. It never prunes, recreates, deletes, or
 edits existing Docker/containerd metadata. The example profile is an input
 template only; the live source identity, free-space floor, and profile approval
-must be supplied by the managed-host operator and recorded in a redacted
-receipt.
+must be supplied by the managed-host operator in the explicit
+`COLIMA_RUNTIME_ENV_FILE` and recorded in a redacted receipt. The startup gate
+is selected only by `COLIMA_RUNTIME_PROVIDER=colima`; another Docker provider
+is left on its existing context.
 
 Host activation, isolated candidate activation, default-profile cold start,
 and final dev/test/prod channel isolation are separate gates. Repository

@@ -152,13 +152,15 @@ colima_guest_readiness_gate() {
 }
 
 _colima_runtime_persisted_count() {
-  local root="${COLIMA_PERSISTED_CONFIG_ROOT:-/var/lib/docker/containers}" count
+  local root="${COLIMA_PERSISTED_CONFIG_ROOT:-/var/lib/docker/containers}" count entries
   if [ -d "$root" ]; then
-    find "$root" -mindepth 1 -maxdepth 1 -type d -print 2>/dev/null | wc -l | tr -d '[:space:]'
+    entries="$(find "$root" -mindepth 1 -maxdepth 1 -type d -print 2>/dev/null)" || return 1
+    printf '%s\n' "$entries" | awk 'NF {count++} END {print count + 0}'
     return 0
   fi
   if command -v "${COLIMA_BIN:-colima}" >/dev/null 2>&1; then
-    count="$(${COLIMA_BIN:-colima} ssh --profile "${COLIMA_PROFILE:-default}" -- sh -c "find '$root' -mindepth 1 -maxdepth 1 -type d -print 2>/dev/null | wc -l" 2>/dev/null | tr -d '[:space:]')"
+    entries="$(_colima_runtime_bounded "${COLIMA_SSH_TIMEOUT_SECONDS:-30}" "${COLIMA_BIN:-colima}" ssh --profile "${COLIMA_PROFILE:-default}" -- sh -c "find '$root' -mindepth 1 -maxdepth 1 -type d -print 2>/dev/null")" || return 1
+    count="$(printf '%s\n' "$entries" | awk 'NF {count++} END {print count + 0}')"
     printf '%s\n' "$count"
     return 0
   fi
@@ -180,8 +182,12 @@ colima_runtime_assert_inventory() {
     _colima_runtime_fail docker-context-not-ready "$expected" ""
     return 1
   }
-  docker_count="$(docker ps -aq 2>/dev/null | awk 'NF {count++} END {print count + 0}')" || docker_count=""
-  case "$docker_count" in ''|*[!0-9]*) _colima_runtime_fail docker-inventory-unreadable "$expected" "$docker_count"; return 1;; esac
+  local docker_listing
+  docker_listing="$(_colima_runtime_bounded "${COLIMA_DOCKER_COMMAND_TIMEOUT_SECONDS:-15}" docker ps -aq 2>/dev/null)" || {
+    _colima_runtime_fail docker-inventory-unreadable "$expected" ""
+    return 1
+  }
+  docker_count="$(printf '%s\n' "$docker_listing" | awk 'NF {count++} END {print count + 0}')"
   if [ "$docker_count" -ne "$expected" ]; then
     _colima_runtime_fail persisted-inventory-mismatch "$expected" "$docker_count"
     return 1
@@ -197,7 +203,7 @@ _colima_runtime_load_profile() {
   [ -r "$profile_file" ] || return 1
   while IFS='=' read -r key value; do
     case "$key" in
-      COLIMA_PROFILE|COLIMA_DOCKER_CONTEXT|COLIMA_USERNET_TIMEOUT|LIMA_USERNET_TIMEOUT|COLIMA_EXPECTED_PERSISTENT_SOURCE|COLIMA_EXPECTED_PERSISTENT_FSTYPE|COLIMA_PERSISTENT_DATA_PATH|COLIMA_DOCKER_DATA_PATH|COLIMA_CONTAINERD_DATA_PATH|COLIMA_PERSISTED_CONFIG_ROOT|COLIMA_MIN_FREE_BLOCKS|COLIMA_MIN_FREE_INODES|COLIMA_CPU|COLIMA_MEMORY|COLIMA_DISK)
+      COLIMA_RUNTIME_PROVIDER|COLIMA_PROFILE|COLIMA_DOCKER_CONTEXT|COLIMA_USERNET_TIMEOUT|LIMA_USERNET_TIMEOUT|COLIMA_EXPECTED_PERSISTENT_SOURCE|COLIMA_EXPECTED_PERSISTENT_FSTYPE|COLIMA_PERSISTENT_DATA_PATH|COLIMA_DOCKER_DATA_PATH|COLIMA_CONTAINERD_DATA_PATH|COLIMA_PERSISTED_CONFIG_ROOT|COLIMA_MIN_FREE_BLOCKS|COLIMA_MIN_FREE_INODES|COLIMA_CPU|COLIMA_MEMORY|COLIMA_DISK)
         [ -n "$value" ] && export "$key=$value"
         ;;
     esac
@@ -208,6 +214,11 @@ colima_runtime_bind_and_ready() {
   local root="${1:-.}" profile="${COLIMA_PROFILE:-default}" colima_bin="${COLIMA_BIN:-colima}"
   _colima_runtime_load_profile || { _colima_runtime_fail resource-profile-unreadable; return 1; }
   profile="${COLIMA_PROFILE:-$profile}"
+  if [ "${COLIMA_RUNTIME_PROVIDER:-}" != "colima" ]; then
+    [ "${COLIMA_READINESS_REQUIRED:-0}" = "1" ] || return 0
+    _colima_runtime_fail colima-provider-not-declared
+    return 1
+  fi
   if ! command -v "$colima_bin" >/dev/null 2>&1; then
     [ "${COLIMA_READINESS_REQUIRED:-0}" = "1" ] || return 0
     _colima_runtime_fail colima-command-unavailable
@@ -218,7 +229,7 @@ colima_runtime_bind_and_ready() {
   export DOCKER_CONTEXT COLIMA_PROFILE="$profile" LIMA_USERNET_TIMEOUT
   if ! _colima_runtime_bounded "${COLIMA_STATUS_TIMEOUT_SECONDS:-30}" "$colima_bin" status --profile "$profile" --json >/dev/null 2>&1; then
     if [ "${AUTO_START_COLIMA:-0}" = "1" ]; then
-      "$colima_bin" start --profile "$profile" >/dev/null 2>&1 || { _colima_runtime_fail colima-start-failed; return 1; }
+      _colima_runtime_bounded "${COLIMA_START_TIMEOUT_SECONDS:-180}" "$colima_bin" start --profile "$profile" >/dev/null 2>&1 || { _colima_runtime_fail colima-start-failed; return 1; }
     else
       _colima_runtime_fail colima-not-ready
       return 1
@@ -226,11 +237,13 @@ colima_runtime_bind_and_ready() {
   fi
   _colima_runtime_bounded "${COLIMA_DOCKER_COMMAND_TIMEOUT_SECONDS:-15}" docker context inspect "$DOCKER_CONTEXT" >/dev/null 2>&1 || { _colima_runtime_fail docker-context-not-ready; return 1; }
   _colima_runtime_bounded "${COLIMA_DOCKER_COMMAND_TIMEOUT_SECONDS:-15}" docker info >/dev/null 2>&1 || { _colima_runtime_fail docker-api-not-ready; return 1; }
-  "$colima_bin" ssh --profile "$profile" -- "${COLIMA_GUEST_READINESS_COMMAND:-/usr/local/libexec/yggdrasil-colima-runtime-readiness}" --guest || { _colima_runtime_fail guest-substrate-or-containerd-not-ready; return 1; }
+  _colima_runtime_bounded "${COLIMA_SSH_TIMEOUT_SECONDS:-30}" "$colima_bin" ssh --profile "$profile" -- "${COLIMA_GUEST_READINESS_COMMAND:-/usr/local/libexec/yggdrasil-colima-runtime-readiness}" --docker-preflight || { _colima_runtime_fail guest-substrate-or-containerd-not-ready; return 1; }
   colima_runtime_assert_inventory || return 1
   printf 'Colima runtime readiness: ready (profile=%s context=%s root=%s)\n' "$profile" "$DOCKER_CONTEXT" "$root" >&2
 }
 
-if [ "${1:-}" = "--guest" ] || [ "${1:-}" = "--docker-preflight" ]; then
+if [ "${1:-}" = "--substrate" ]; then
+  colima_guest_check_persistent_substrate || _colima_runtime_fail persistent-substrate-not-ready
+elif [ "${1:-}" = "--guest" ] || [ "${1:-}" = "--docker-preflight" ]; then
   colima_guest_readiness_gate
 fi

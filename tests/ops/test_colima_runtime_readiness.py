@@ -62,8 +62,10 @@ def test_installed_units_fail_closed_until_exact_persistent_substrate_is_ready(
     assert "Requires=yggdrasil-colima-persistent-substrate.service" in containerd_dropin.read_text(
         encoding="utf-8"
     )
+    assert "--substrate" in substrate_unit.read_text(encoding="utf-8")
     docker_dropin_text = docker_dropin.read_text(encoding="utf-8")
     assert "Requires=containerd.service" in docker_dropin_text
+    assert "--docker-preflight" in docker_dropin_text
     assert "ExecStartPre=" in docker_dropin_text
 
 
@@ -77,6 +79,7 @@ def test_startup_entrypoints_share_one_bounded_colima_readiness_helper() -> None
     assert "source \"scripts/lib/colima_runtime_readiness.sh\"" in full_start
     assert "source \"${ROOT}/scripts/lib/colima_runtime_readiness.sh\"" in dev_bootstrap
     assert "DOCKER_CONTEXT" in helper
+    assert "COLIMA_RUNTIME_PROVIDER" in helper
     assert "COLIMA_USERNET_TIMEOUT" in helper
     assert "COLIMA_RESOURCE_PROFILE_FILE" in helper
     assert "timeout" in helper
@@ -120,4 +123,63 @@ def test_persisted_inventory_mismatch_fails_without_mutating_metadata(tmp_path: 
     assert "recreate" not in calls.read_text(encoding="utf-8")
     assert "delete" not in calls.read_text(encoding="utf-8")
     assert receipt.exists()
-    assert "failure_reason" in receipt.read_text(encoding="utf-8")
+    receipt_text = receipt.read_text(encoding="utf-8")
+    assert "failure_reason" in receipt_text
+    assert str(persisted) not in receipt_text
+
+
+def test_non_colima_provider_passthrough_does_not_change_docker_binding(tmp_path: Path) -> None:
+    fake_colima = tmp_path / "colima"
+    fake_colima.write_text("#!/bin/sh\nexit 99\n", encoding="utf-8")
+    fake_colima.chmod(0o755)
+    result = _run_bash(
+        f"source '{HELPER}'; "
+        "export DOCKER_CONTEXT=desktop COLIMA_BIN='" + str(fake_colima) + "'; "
+        "colima_runtime_bind_and_ready /repo; printf '%s' \"$DOCKER_CONTEXT\"",
+    )
+    assert result.returncode == 0
+    assert result.stdout == "desktop"
+
+
+def test_guest_gate_waits_for_containerd_rpc_and_metadata_after_mounts(tmp_path: Path) -> None:
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    calls = tmp_path / "ctr.calls"
+    for name, body in {
+        "findmnt": (
+            "case \"$*\" in *SOURCE*) printf '/dev/persistent\\n';; "
+            "*FSTYPE*) printf 'ext4\\n';; esac\n"
+        ),
+        "mountpoint": "exit 0\n",
+        "df": "printf 'Filesystem 1024-blocks Used Available Capacity Mounted on\\n/dev/x 1 0 999999 0%% /\\n'\n",
+        "ctr": f"printf '%s\\n' \"$*\" >> '{calls}'\nexit 0\n",
+    }.items():
+        path = fake_bin / name
+        path.write_text(f"#!/bin/sh\n{body}", encoding="utf-8")
+        path.chmod(0o755)
+    persistent = tmp_path / "persistent"
+    docker_data = tmp_path / "docker"
+    containerd_data = tmp_path / "containerd"
+    persistent.mkdir()
+    docker_data.mkdir()
+    containerd_data.mkdir()
+
+    result = _run_bash(
+        f"source '{HELPER}'; "
+        f"COLIMA_PERSISTENT_DATA_PATH='{persistent}' "
+        f"COLIMA_DOCKER_DATA_PATH='{docker_data}' "
+        f"COLIMA_CONTAINERD_DATA_PATH='{containerd_data}' "
+        "COLIMA_EXPECTED_PERSISTENT_SOURCE=/dev/persistent "
+        "COLIMA_EXPECTED_PERSISTENT_FSTYPE=ext4 "
+        "COLIMA_MIN_FREE_BLOCKS=1 COLIMA_MIN_FREE_INODES=1 "
+        "COLIMA_READINESS_SLEEP_SECONDS=0 "
+        "colima_guest_readiness_gate",
+        env={"PATH": f"{fake_bin}:{os.environ['PATH']}"},
+    )
+
+    assert result.returncode == 0
+    assert calls.read_text(encoding="utf-8").splitlines() == [
+        "version",
+        "--namespace moby containers list",
+        "--namespace moby snapshots list",
+    ]
