@@ -47,6 +47,14 @@ All outbox records MUST include this minimal envelope:
   not emit an all-null block. Distinct from generic unknown additionals — this field has a defined
   contract. See `docs/SCOPE_SPHERE_SITUATED_IDENTITY/EXPOSE_CONTEXT_DIMENSIONS_IN_STATUS_AND_RECEIPTS.md` (SSI-03) for field semantics and guardrail notes.
 
+The canonical DB-outbox row also carries durable routing identity outside the serialized event
+envelope: `vault_binding_id` names the source binding, and nullable `legacy_key` preserves the
+pre-cutover idempotency key. Existing pending and delivered rows are backfilled by copying `id` to
+`legacy_key`; the migration never attempts to reconstruct inputs that were not persisted. Rows whose
+partially upgraded binding cannot be proved carry the explicit quarantine marker and remain
+collision evidence. Worker retry, dead-letter, and knowledge-signal re-emissions inherit this stored
+binding from their source row rather than resolving ambient context.
+
 Notes:
 
 - Producers MAY add additional top-level fields for compatibility or convenience; consumers MUST ignore unknown fields (see `docs/CONCEPTS/EVENT_COMPATIBILITY_CONTRACT.md`).
@@ -64,11 +72,17 @@ Notes:
 - Consumers MUST deduplicate by `event_id` and treat duplicates as no-ops.
 - Every DB outbox insert MUST carry a deterministic idempotency key (KERNEL-02, #2764):
   `app/services/outbox.py::write_outbox_event` requires `idempotency_key` (a keyless call is a
-  `TypeError`), the key becomes the row `id` with `ON CONFLICT (id) DO NOTHING`, and producers MUST
-  derive it through the single shared helper
+  `TypeError`), and producers MUST derive the unchanged legacy key through the single shared helper
   `app/services/outbox.py::derive_idempotency_key(topic, source_id, content_fingerprint)`
   (`uuid5(namespace, sha256(topic ‖ source_id ‖ fingerprint))`). Ad-hoc key schemes are forbidden;
   `tests/architecture/test_outbox_producer_idempotency.py` gates every callsite.
+- During the multi-vault compatibility window, `write_outbox_event` is the sole binding-aware choke
+  point. It preserves the unchanged producer key in `legacy_key`, derives the row `id` from
+  `(topic, vault_binding_id, legacy_key)`, and atomically suppresses an insert when either that scoped
+  `id` or any pre-cutover `id = legacy_key` row already exists. Delivered history participates in
+  the same check. New scoped rows do not collide merely because two bindings share a `legacy_key`.
+  The fixed `OUTBOX_IDEMPOTENCY_NAMESPACE` is not rotated; both derivations use its existing literal
+  promise, and no stored key is rewritten.
 - Per-topic fingerprints are chosen deliberately: vault-sync and watcher ingest events key on
   `(topic, object uuid/path, content fingerprint + observation marker)`, where the observation
   marker is the observed file stat mtime (vault-sync passes it as a fingerprint-only component; the

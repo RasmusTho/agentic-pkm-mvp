@@ -3,10 +3,9 @@
 Follow-up to KERNEL-04 (#2766): the same create-on-boot class existed for the
 DB outbox (`app/services/outbox.py::bootstrap()`), including a nested
 `except Exception: pass` around `ensure_schema` (silent-failure seam on the
-canonical queue). This test asserts the `f3a1c9d2e4b7` migration produces
-exactly the outbox-table shape the audited `bootstrap()` produced, and that
-re-running migrations on an existing environment is a no-op (no data
-movement).
+canonical queue). This test asserts the current outbox migration produces
+exactly the table shape the audited `bootstrap()` produces, and that upgrading
+an existing environment preserves its rows while installing binding metadata.
 
 Spec: docs/RUNTIME_CORRECTNESS_KERNEL/STORE_SCHEMA_IN_MIGRATIONS.md (pattern
 precedent); docs/audits/SYSTEM_REDESIGN_CORRECTNESS_KERNEL_2026-07-02.md :: I-S3
@@ -28,10 +27,9 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 # The head revision before the outbox table became migration-owned.
 PRE_OUTBOX_HEAD = "699c97b7c007"
 
-# The KERNEL-05 outbox-schema-owning revision this test asserts parity against.
-# Pinned explicitly (not "head") so later migrations adding DDL on top of the
-# outbox table don't make this test compare against a moving target.
-OUTBOX_SCHEMA_HEAD = "f3a1c9d2e4b7"
+# The current outbox-schema-owning revision this test asserts parity against.
+# Pinned explicitly (not "head") so unrelated later DDL cannot move the target.
+OUTBOX_SCHEMA_HEAD = "f6a05a7b0001"
 
 
 def _admin_dsn() -> str:
@@ -182,8 +180,24 @@ def test_fresh_db_parity(scratch_db_factory, monkeypatch: pytest.MonkeyPatch) ->
     assert migrated_shape["columns"], "outbox table missing after alembic upgrade"
 
 
-def test_upgrade_idempotent_on_existing(scratch_db_factory, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Existing environments (pre-KERNEL-05 head + bootstrap-created outbox table) no-op."""
+def test_outbox_declares_the_binding_and_legacy_key_columns_in_both_shapes(
+    scratch_db_factory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    migrated = scratch_db_factory()
+    bootstrapped = scratch_db_factory()
+    _alembic_upgrade(migrated, monkeypatch, OUTBOX_SCHEMA_HEAD)
+    _run_bootstrap(bootstrapped, monkeypatch)
+
+    for shape in (_schema_snapshot(migrated), _schema_snapshot(bootstrapped)):
+        columns = {row[0]: row for row in shape["columns"]}
+        assert columns["vault_binding_id"][1:3] == ("text", "NO")
+        assert columns["legacy_key"][1:3] == ("uuid", "YES")
+
+
+def test_upgrade_preserves_existing_rows_and_installs_binding_metadata(
+    scratch_db_factory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Existing scalar rows survive and become explicit compatibility history."""
     dsn = scratch_db_factory()
 
     # Simulate an existing environment: schema lineage at the pre-outbox head,
@@ -198,11 +212,14 @@ def test_upgrade_idempotent_on_existing(scratch_db_factory, monkeypatch: pytest.
             (row_id, "test.topic", "{}"),
         )
 
-    before = _schema_snapshot(dsn)
-    _alembic_upgrade(dsn, monkeypatch, OUTBOX_SCHEMA_HEAD)  # applies only the outbox-schema revision
+    _alembic_upgrade(dsn, monkeypatch, OUTBOX_SCHEMA_HEAD)
     after = _schema_snapshot(dsn)
 
-    assert before == after, "Migration changed an existing environment's outbox schema"
+    columns = {row[0]: row for row in after["columns"]}
+    assert columns["vault_binding_id"][1:3] == ("text", "NO")
+    assert columns["legacy_key"][1:3] == ("uuid", "YES")
     with psycopg.connect(dsn) as conn:
-        row = conn.execute("SELECT count(*) FROM outbox WHERE id = %s", (row_id,)).fetchone()
-        assert row is not None and row[0] == 1, "Migration moved/destroyed existing outbox data"
+        row = conn.execute(
+            "SELECT id, legacy_key, vault_binding_id FROM outbox WHERE id = %s", (row_id,)
+        ).fetchone()
+        assert row == (row_id, row_id, "legacy-compatibility-binding")

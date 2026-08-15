@@ -66,7 +66,7 @@ class FakeOutboxConn:
         text = " ".join(sql.lower().split())
         if text.startswith("insert into outbox (id,"):
             assert "on conflict (id) do nothing" in text
-            row_id, topic, payload, created_at, attempts = params
+            row_id, topic, payload, created_at, attempts, legacy_key, vault_binding_id, *_ = params
             if row_id in self.rows:
                 return _FakeCursor([])
             self.rows[row_id] = {
@@ -76,6 +76,8 @@ class FakeOutboxConn:
                 "created_at": created_at,
                 "delivered_at": None,
                 "attempts": attempts,
+                "legacy_key": legacy_key,
+                "vault_binding_id": vault_binding_id,
             }
             return _FakeCursor([(row_id,)])
         raise AssertionError(f"unexpected SQL shape reached the outbox: {text!r}")

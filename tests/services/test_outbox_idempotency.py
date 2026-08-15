@@ -26,6 +26,7 @@ import pytest
 from app.events.models import new_event
 from app.events.types import INGEST_OBJECT_CREATED, INGEST_VAULT_CHANGED
 from app.services.outbox import (
+    derive_binding_scoped_idempotency_key,
     derive_idempotency_key,
     insert_object_and_outbox,
     payload_fingerprint,
@@ -57,7 +58,7 @@ class FakeOutboxConn:
         text = " ".join(sql.lower().split())
         if text.startswith("insert into outbox (id,"):
             assert "on conflict (id) do nothing" in text
-            row_id, topic, payload, created_at, attempts = params
+            row_id, topic, payload, created_at, attempts, legacy_key, vault_binding_id, *_ = params
             if row_id in self.rows:
                 return _FakeCursor([])  # conflict: no row inserted, nothing returned
             self.rows[row_id] = {
@@ -67,6 +68,8 @@ class FakeOutboxConn:
                 "created_at": created_at,
                 "delivered_at": None,
                 "attempts": attempts,
+                "legacy_key": legacy_key,
+                "vault_binding_id": vault_binding_id,
             }
             return _FakeCursor([(row_id,)])
         raise AssertionError(f"unexpected SQL shape reached the outbox: {text!r}")
@@ -109,7 +112,9 @@ def test_duplicate_emit_single_row() -> None:
     first = write_outbox_event(_event(uuid="note-uuid-1"), conn, idempotency_key=key)
     second = write_outbox_event(_event(uuid="note-uuid-1"), conn, idempotency_key=key)
 
-    assert first == key
+    assert first == derive_binding_scoped_idempotency_key(
+        INGEST_OBJECT_CREATED, "legacy-compatibility-binding", key
+    )
     assert second == ""  # swallowed duplicate returns no row id
     assert len(conn.rows) == 1
 
@@ -366,6 +371,7 @@ def _capture_worker_keys(
         inner_conn=None,
         *,
         idempotency_key: str,
+        vault_binding_id: str | None = None,
         required_db: bool = False,
     ) -> str:
         keys.append(idempotency_key)
@@ -374,7 +380,12 @@ def _capture_worker_keys(
         # The supplied fake connection owns the test transaction. Keeping it
         # explicit preserves this harness on the pre-#4064 base while the spy
         # accepts the newer caller contract when #4064 is rebased.
-        return real(event, conn, idempotency_key=idempotency_key)
+        return real(
+            event,
+            conn,
+            idempotency_key=idempotency_key,
+            vault_binding_id=vault_binding_id,
+        )
 
     monkeypatch.setattr(outbox_worker, "write_outbox_event", _spy)
     monkeypatch.setattr(outbox_worker, "_use_db_outbox", lambda: True)

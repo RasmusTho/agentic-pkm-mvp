@@ -18,6 +18,10 @@ from app.events.topic_schema_registry import (
     is_registered_topic,
     validate_topic_payload,
 )
+from app.instance.binding_ids import (
+    COMPATIBILITY_BINDING_ID,
+    OUTBOX_QUARANTINE_BINDING_ID,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -38,7 +42,16 @@ except Exception:  # pragma: no cover
 
 
 # The outbox table this module owns (Alembic revision f3a1c9d2e4b7, KERNEL-05).
-_OUTBOX_COLUMNS = ("id", "topic", "payload", "created_at", "delivered_at", "attempts")
+_OUTBOX_COLUMNS = (
+    "id",
+    "topic",
+    "payload",
+    "created_at",
+    "delivered_at",
+    "attempts",
+    "vault_binding_id",
+    "legacy_key",
+)
 
 _OUTBOX_MIGRATION_HINT = (
     "Outbox schema is migration-owned (KERNEL-05, #2850): run 'alembic upgrade head' "
@@ -325,7 +338,9 @@ def bootstrap(conn: Any = None) -> None:
             payload jsonb not null,
             created_at timestamptz not null default now(),
             delivered_at timestamptz,
-            attempts int not null default 0
+            attempts int not null default 0,
+            vault_binding_id text not null default 'legacy-compatibility-binding',
+            legacy_key uuid
         )""",
         )
         _exec(conn, "create index if not exists outbox_created_idx on outbox (created_at)")
@@ -482,6 +497,39 @@ def derive_idempotency_key(topic: str, source_id: str, content_fingerprint: str)
     return str(uuid_module.uuid5(OUTBOX_IDEMPOTENCY_NAMESPACE, digest))
 
 
+def derive_binding_scoped_idempotency_key(
+    topic: str,
+    vault_binding_id: str,
+    legacy_key: str,
+) -> str:
+    """Derive the post-cutover row id without changing the legacy namespace.
+
+    ``legacy_key`` is the unchanged key produced by the existing per-topic
+    derivation.  Folding that durable identity together with the binding keeps
+    equal logical emissions independent across bindings while preserving the
+    fixed :data:`OUTBOX_IDEMPOTENCY_NAMESPACE`.
+    """
+    return derive_idempotency_key(topic, vault_binding_id, legacy_key)
+
+
+def _resolve_outbox_vault_binding_id(vault_binding_id: str | None) -> str:
+    """Resolve the one binding at the outbox choke point.
+
+    Existing 05A compatibility producers intentionally omit the binding and
+    resolve to the single scalar compatibility identity here.  Native callers
+    pass their already-authorized binding explicitly.  The quarantine marker
+    is evidence-only and can never be selected by a producer.
+    """
+    if vault_binding_id is None:
+        return COMPATIBILITY_BINDING_ID
+    if not isinstance(vault_binding_id, str) or not vault_binding_id.strip():
+        raise ValueError(f"write_outbox_event requires a non-empty vault_binding_id, got {vault_binding_id!r}")
+    resolved = vault_binding_id.strip()
+    if resolved == OUTBOX_QUARANTINE_BINDING_ID:
+        raise ValueError("the outbox quarantine marker cannot authorize an emission")
+    return resolved
+
+
 def payload_fingerprint(payload: Mapping[str, Any] | None, *, exclude: tuple[str, ...] = ("trace_id",)) -> str:
     """Stable sha256 fingerprint of an event payload for key derivation.
 
@@ -499,6 +547,7 @@ def write_outbox_event(
     conn: Any = None,
     *,
     idempotency_key: str,
+    vault_binding_id: str | None = None,
     required_db: bool = False,
 ) -> str:
     """Insert one event into the DB outbox, keyed by a mandatory idempotency key.
@@ -527,6 +576,12 @@ def write_outbox_event(
     if not isinstance(idempotency_key, str) or not idempotency_key.strip():
         raise ValueError(f"write_outbox_event requires a non-empty idempotency_key, got {idempotency_key!r}")
     envelope = _coerce_event(event)
+    resolved_binding_id = _resolve_outbox_vault_binding_id(vault_binding_id)
+    scoped_key = derive_binding_scoped_idempotency_key(
+        envelope.event_type,
+        resolved_binding_id,
+        idempotency_key,
+    )
     if is_registered_topic(envelope.event_type):
         validate_topic_payload(envelope.event_type, envelope.payload)
         # Stamp on a copy: `envelope` may be the caller's own `Event` instance
@@ -550,8 +605,30 @@ def write_outbox_event(
     try:
         cur = _exec(
             conn,
-            "insert into outbox (id, topic, payload, created_at, attempts) values (%s, %s, %s::jsonb, %s, %s) on conflict (id) do nothing returning id",
-            (idempotency_key, envelope.event_type, stored, created_at, 0),
+            "insert into outbox (id, topic, payload, created_at, attempts, legacy_key, vault_binding_id) "
+            "select %s, %s, %s::jsonb, %s, %s, %s, %s "
+            "where not exists ("
+            "select 1 from outbox existing where "
+            "existing.id = %s or ("
+            "existing.legacy_key = %s and ("
+            "existing.id = %s or "
+            "existing.vault_binding_id = %s"
+            ")"
+            ")"
+            ") on conflict (id) do nothing returning id",
+            (
+                scoped_key,
+                envelope.event_type,
+                stored,
+                created_at,
+                0,
+                idempotency_key,
+                resolved_binding_id,
+                scoped_key,
+                idempotency_key,
+                idempotency_key,
+                OUTBOX_QUARANTINE_BINDING_ID,
+            ),
         )
         if hasattr(cur, "fetchone"):
             row = cur.fetchone()
@@ -645,6 +722,7 @@ def insert_object_and_outbox(
     conn: Any = None,
     observation: str | None = None,
     required_db: bool = False,
+    vault_binding_id: str | None = None,
 ) -> str:
     """Helper som bygger ett Event och skickar det till outbox.
 
@@ -697,6 +775,7 @@ def insert_object_and_outbox(
         event,
         conn=conn,
         idempotency_key=key,
+        vault_binding_id=vault_binding_id,
         required_db=required_db,
     )
 
@@ -730,15 +809,26 @@ def poll_outbox_one(
     """
     conn, close = _use_conn(conn)
     try:
-        cur = _exec(conn, "select id, topic, payload from outbox where delivered_at is null order by created_at asc limit 1")
+        cur = _exec(
+            conn,
+            "select id, topic, payload, vault_binding_id from outbox "
+            "where delivered_at is null order by created_at asc limit 1",
+        )
         row = cur.fetchone()
         if not row:
             return None
         row_id = _row_value(row, 0, "id")
         row_topic = _row_value(row, 1, "topic")
         row_payload = _row_value(row, 2, "payload")
+        row_binding_id = _row_value(row, 3, "vault_binding_id")
         event = _coerce_event_from_db(row_payload, row_topic)
-        msg = {"id": str(row_id), "topic": event.event_type, "payload": dict(event.payload), "event": event}
+        msg = {
+            "id": str(row_id),
+            "topic": event.event_type,
+            "payload": dict(event.payload),
+            "event": event,
+            "vault_binding_id": str(row_binding_id),
+        }
         if handler:
             try:
                 handler(event.event_type, event.payload)
@@ -827,6 +917,7 @@ __all__ = [
     "OUTBOX_DEAD_LETTER_TOPIC",
     "OUTBOX_IDEMPOTENCY_NAMESPACE",
     "dead_letter_stats",
+    "derive_binding_scoped_idempotency_key",
     "derive_idempotency_key",
     "payload_fingerprint",
     "write_outbox_event",

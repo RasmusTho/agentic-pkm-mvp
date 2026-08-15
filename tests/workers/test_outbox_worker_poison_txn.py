@@ -92,7 +92,7 @@ class FakeTxnConn:
             self.ops.append("dead_letter_insert")
             if "dead_letter_insert" in self.fail_on:
                 raise RuntimeError("injected dead-letter insert failure")
-            row_id, topic, payload, created_at, attempts = params
+            row_id, topic, payload, created_at, attempts, legacy_key, vault_binding_id, *_ = params
             if row_id in rows:
                 return _FakeCursor([])
             rows[row_id] = {
@@ -102,6 +102,8 @@ class FakeTxnConn:
                 "created_at": created_at,
                 "delivered_at": None,
                 "attempts": attempts,
+                "legacy_key": legacy_key,
+                "vault_binding_id": vault_binding_id,
             }
             return _FakeCursor([(row_id,)])
 
