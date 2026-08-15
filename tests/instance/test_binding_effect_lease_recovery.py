@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import errno
+import inspect
 import json
 import multiprocessing
 import os
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -260,6 +262,54 @@ def test_holder_identity_failure_closes_the_effect_descriptor(tmp_path, monkeypa
         )
     finally:
         os.close(probe)
+
+
+def test_held_activity_descriptor_has_one_cleanup_owner_at_cancellation_boundary(
+    tmp_path, monkeypatch
+) -> None:
+    manager = _build_manager(tmp_path, "binding-a")
+    vault = tmp_path / "vaults" / "binding-a"
+    wrapped_acquire = manager._acquire.__wrapped__
+    source, start = inspect.getsourcelines(wrapped_acquire)
+    cancellation_line = next(
+        start + offset for offset, line in enumerate(source) if line.strip() == "pending = None"
+    )
+    real_close = manager._close_holder_activity
+    reused: list[int] = []
+
+    def close_then_force_reuse(descriptor: int) -> None:
+        real_close(descriptor)
+        if not reused:
+            replacement = os.open("/dev/null", os.O_RDONLY)
+            assert replacement == descriptor
+            reused.append(replacement)
+
+    def cancel_after_held_assignment(frame, event, arg):
+        del arg
+        if (
+            event == "line"
+            and frame.f_code is wrapped_acquire.__code__
+            and frame.f_lineno == cancellation_line
+        ):
+            sys.settrace(None)
+            raise KeyboardInterrupt("cancel after held activity assignment")
+        return cancel_after_held_assignment
+
+    monkeypatch.setattr(manager, "_close_holder_activity", close_then_force_reuse)
+    sys.settrace(cancel_after_held_assignment)
+    try:
+        with pytest.raises(KeyboardInterrupt, match="held activity assignment"):
+            with manager.shared_effect("binding-a", channel_id="dev", root=vault, timeout=1):
+                pytest.fail("cancellation cannot expose the effect window")
+    finally:
+        sys.settrace(None)
+
+    assert len(reused) == 1
+    try:
+        os.fstat(reused[0])
+    finally:
+        os.close(reused[0])
+    assert manager.observe("binding-a").shared_count == 0
 
 
 @pytest.mark.parametrize("mode", ["shared", "exclusive"])

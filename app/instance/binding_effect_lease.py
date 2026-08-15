@@ -386,7 +386,6 @@ class BindingEffectLeaseManager:
                                     activity_descriptor,
                                     os.getpid(),
                                 )
-                                activity_descriptor = None
                                 pending = None
                                 break
                 if deadline is not None and time.monotonic() >= deadline:
@@ -409,7 +408,9 @@ class BindingEffectLeaseManager:
                     )
             finally:
                 try:
-                    if activity_descriptor is not None:
+                    if activity_descriptor is not None and (
+                        held is None or held.owner_pid == os.getpid()
+                    ):
                         self._close_holder_activity(activity_descriptor)
                 finally:
                     if descriptor is not None and held is None:
@@ -454,13 +455,7 @@ class BindingEffectLeaseManager:
             try:
                 fcntl.flock(held.gate_descriptor, fcntl.LOCK_UN)
             finally:
-                try:
-                    _close_lease_descriptor(held.gate_descriptor)
-                finally:
-                    try:
-                        fcntl.flock(held.activity_descriptor, fcntl.LOCK_UN)
-                    finally:
-                        self._close_holder_activity(held.activity_descriptor)
+                _close_lease_descriptor(held.gate_descriptor)
 
     def _discard_pending(
         self,
