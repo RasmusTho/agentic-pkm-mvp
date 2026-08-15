@@ -1013,6 +1013,10 @@ def create_app(
         _enforce_repo_scope(credential, request.envelope.repository)
         try:
             _assert_durable_payload_safe(request.model_dump(mode="json"), credentials)
+            intent = await run_in_threadpool(
+                store.outbox_intent, request.envelope.repository, request.operation_key
+            )
+            _enforce_outbox_principal(intent, credential)
             pending = await run_in_threadpool(
                 store.begin_post_effect_pending,
                 repository=request.envelope.repository,
@@ -1174,6 +1178,10 @@ def create_app(
         _enforce_repo_scope(credential, request.envelope.repository)
         try:
             _assert_durable_payload_safe(request.model_dump(mode="json"), credentials)
+            intent = await run_in_threadpool(
+                store.outbox_intent, request.envelope.repository, request.operation_key
+            )
+            _enforce_outbox_principal(intent, credential)
             result = await run_in_threadpool(
                 store.reconcile_post_effect,
                 repository=request.envelope.repository,

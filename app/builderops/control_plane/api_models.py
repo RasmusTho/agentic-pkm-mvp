@@ -9,6 +9,8 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 class AuthorityEnvelopeInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     repository: str
     scope: str
     stack: str

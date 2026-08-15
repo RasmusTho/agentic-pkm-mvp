@@ -2122,7 +2122,8 @@ class PostgresBuilderOpsStore:
                 "reconciliation_evidence, reconciliation_receipt_sequence, "
                 "authority_envelope, post_effect_phase, post_effect_fencing_token, "
                 "post_effect_intent_lsn::text AS post_effect_intent_lsn, "
-                "post_effect_claim_lsn::text AS post_effect_claim_lsn "
+                "post_effect_claim_lsn::text AS post_effect_claim_lsn, "
+                "post_effect_observed_applied, post_effect_terminal_unknown "
                 "FROM builderops_outbox "
                 "WHERE repository = %s AND operation_key = %s",
                 (canonical, operation_key),
@@ -2193,7 +2194,9 @@ class PostgresBuilderOpsStore:
                 "post_effect_phase, post_effect_fencing_token, "
                 "post_effect_claim_lsn::text AS post_effect_claim_lsn, "
                 "post_effect_claim_receipt_sequence, post_effect_evidence, "
+                "post_effect_observed_applied, post_effect_terminal_unknown, "
                 "post_effect_receipt_sequence, post_effect_recovery_lsn::text AS post_effect_recovery_lsn, "
+                "reconciliation_evidence, reconciliation_receipt_sequence, reconciliation_lsn::text AS reconciliation_lsn, "
                 "clock_timestamp() AS database_now FROM builderops_outbox "
                 "WHERE repository = %s AND operation_key = %s FOR UPDATE",
                 (repository, operation_key),
@@ -2201,12 +2204,28 @@ class PostgresBuilderOpsStore:
             if row is None or int(row["claim_fencing_token"]) != minimum_fencing_token:
                 raise StaleFencingToken("post-effect reconciliation requires current locked fence")
             if row["post_effect_phase"] == "reconciled":
-                if dict(row["post_effect_evidence"] or {}) != dict(evidence):
+                if (
+                    dict(row["post_effect_evidence"] or {}) != dict(evidence)
+                    or row["post_effect_observed_applied"] is not observed_applied
+                    or row["post_effect_terminal_unknown"] is not terminal_unknown
+                ):
                     raise IdempotencyConflict("post-effect replay has conflicting evidence")
                 return {"status": row["status"], "fencing_token": minimum_fencing_token,
                         "receipt_sequence": int(row["post_effect_receipt_sequence"]),
                         "recovery_lsn": str(row["post_effect_recovery_lsn"]), "replayed": True}
-            if (
+            if row["post_effect_phase"] == "pending" and row["status"] in {"pending", "succeeded", "dead_letter"}:
+                expected_status = "dead_letter" if terminal_unknown else ("succeeded" if observed_applied else "pending")
+                if (
+                    row["status"] != expected_status
+                    or dict(row["reconciliation_evidence"] or {}) != dict(evidence)
+                    or row["reconciliation_receipt_sequence"] is None
+                    or row["reconciliation_lsn"] is None
+                ):
+                    raise IdempotencyConflict("post-effect recovery has conflicting reconciliation identity")
+                result = {"status": expected_status, "fencing_token": minimum_fencing_token,
+                          "receipt_sequence": int(row["reconciliation_receipt_sequence"]),
+                          "recovery_lsn": str(row["reconciliation_lsn"]), "replayed": True}
+            elif (
                 row["status"] != "unknown" or row["post_effect_phase"] != "pending"
                 or row["worker_id"] is None or row["intent_lsn"] is None or row["claim_lsn"] is None
                 or row["claim_receipt_sequence"] is None or row["claim_expires_at"] is None
@@ -2216,25 +2235,30 @@ class PostgresBuilderOpsStore:
                 or row["post_effect_claim_receipt_sequence"] != row["claim_receipt_sequence"]
             ):
                 raise StaleFencingToken("post-effect reconciliation is stale or reordered")
-            claim = OutboxClaim(repository, operation_key, str(row["worker_id"]), minimum_fencing_token,
-                                str(row["intent_lsn"]), str(row["claim_lsn"]),
-                                int(row["claim_receipt_sequence"]), row["claim_expires_at"])
-        result = self.reconcile_outbox(claim, observed_applied=observed_applied,
-                                       terminal_unknown=terminal_unknown, evidence=evidence)
+            else:
+                claim = OutboxClaim(repository, operation_key, str(row["worker_id"]), minimum_fencing_token,
+                                    str(row["intent_lsn"]), str(row["claim_lsn"]),
+                                    int(row["claim_receipt_sequence"]), row["claim_expires_at"])
+                result = None
+        if result is None:
+            reconciled = self.reconcile_outbox(claim, observed_applied=observed_applied,
+                                               terminal_unknown=terminal_unknown, evidence=evidence)
+            result = {"status": reconciled.status, "fencing_token": reconciled.fencing_token,
+                      "receipt_sequence": reconciled.receipt_sequence, "recovery_lsn": reconciled.recovery_lsn,
+                      "replayed": reconciled.replayed}
         with self._connect() as conn:
             updated = conn.execute(
                 "UPDATE builderops_outbox SET post_effect_phase = 'reconciled', "
                 "post_effect_evidence = %s, post_effect_receipt_sequence = %s, "
-                "post_effect_recovery_lsn = %s WHERE repository = %s AND operation_key = %s "
+                "post_effect_recovery_lsn = %s, post_effect_observed_applied = %s, "
+                "post_effect_terminal_unknown = %s WHERE repository = %s AND operation_key = %s "
                 "AND post_effect_phase = 'pending' AND post_effect_fencing_token = %s RETURNING operation_key",
-                (Jsonb(dict(evidence)), result.receipt_sequence, result.recovery_lsn,
-                 repository, operation_key, minimum_fencing_token),
+                (Jsonb(dict(evidence)), result["receipt_sequence"], result["recovery_lsn"], observed_applied,
+                 terminal_unknown, repository, operation_key, minimum_fencing_token),
             ).fetchone()
             if updated is None:
                 raise StaleFencingToken("post-effect reconciliation was superseded")
-        return {"status": result.status, "fencing_token": result.fencing_token,
-                "receipt_sequence": result.receipt_sequence, "recovery_lsn": result.recovery_lsn,
-                "replayed": result.replayed}
+        return result
 
     def _repair_outbox_claim_binding(self, repository: str, operation_key: str) -> None:
         """Bind a locally committed claim/receipt before recovery marks it unknown."""

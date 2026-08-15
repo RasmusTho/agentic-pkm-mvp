@@ -617,11 +617,9 @@ def test_row_derived_post_effect_api_rejects_caller_attested_claim_evidence(
         "/v1/executor/outbox/post-effect/pending",
         headers=client._headers(pin_epoch=True),  # type: ignore[attr-defined]
         json={
-            "envelope": ledger.envelope,
+            "envelope": {**ledger.envelope, "claim_lsn": "0/0", "credential": "forbidden"},
             "operation_key": operation_key,
             "minimum_fencing_token": 1,
-            "claim_lsn": "0/0",
-            "nested": {"intent_lsn": "0/0", "credential": "forbidden"},
         },
     )
     assert response.status_code == 422

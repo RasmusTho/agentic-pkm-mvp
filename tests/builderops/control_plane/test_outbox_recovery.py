@@ -276,6 +276,14 @@ def test_post_effect_reconcile_and_replay_reject_forged_or_stale_claim_lsns(
         observed_applied=False,
         evidence={"readback": "not-found"},
     )
+    with pytest.raises(IdempotencyConflict):
+        control_plane_store.reconcile_post_effect(
+            repository=envelope.repository,
+            operation_key=result.operation_key,
+            minimum_fencing_token=claim.fencing_token,
+            observed_applied=True,
+            evidence={"readback": "not-found"},
+        )
     with pytest.raises((StaleFencingToken, IdempotencyConflict)):
         control_plane_store.reconcile_post_effect(
             repository=envelope.repository,
@@ -284,6 +292,33 @@ def test_post_effect_reconcile_and_replay_reject_forged_or_stale_claim_lsns(
             observed_applied=False,
             evidence={"readback": "forged"},
         )
+
+
+def test_post_effect_recovers_after_legacy_reconcile_commits_before_phase_marker(
+    control_plane_store, envelope
+) -> None:
+    result = _commit_outbox_task(
+        control_plane_store, envelope, task_id="post-effect-crash-window",
+        key="post-effect-crash-window", effect_type="github.comment", payload={"issue": 4898},
+    )
+    claim = control_plane_store.claim_outbox(
+        envelope=envelope, operation_key=result.operation_key, worker_id="executor-1"
+    )
+    control_plane_store.begin_post_effect_pending(
+        repository=envelope.repository, operation_key=result.operation_key,
+        minimum_fencing_token=claim.fencing_token,
+    )
+    control_plane_store.mark_effect_unknown(claim, detail="readback required")
+    legacy = control_plane_store.reconcile_outbox(
+        claim, observed_applied=False, evidence={"readback": "not-found"}
+    )
+    repaired = control_plane_store.reconcile_post_effect(
+        repository=envelope.repository, operation_key=result.operation_key,
+        minimum_fencing_token=claim.fencing_token, observed_applied=False,
+        evidence={"readback": "not-found"},
+    )
+    assert repaired["receipt_sequence"] == legacy.receipt_sequence
+    assert repaired["replayed"] is True
 
 
 def test_indeterminate_effect_dead_letters_without_retry(
