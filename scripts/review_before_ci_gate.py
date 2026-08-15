@@ -7,7 +7,21 @@ import argparse
 import json
 import sys
 from dataclasses import asdict, dataclass
+from pathlib import Path
 from typing import Sequence
+
+try:  # Supports both ``python scripts/...`` and package imports in tests.
+    from scripts.workflow_review_risk import (
+        WorkflowReviewRiskError,
+        validate_workflow_review_receipt,
+        workflow_risk_evidence_from_git,
+    )
+except ModuleNotFoundError:  # pragma: no cover - direct script invocation only
+    from workflow_review_risk import (  # type: ignore[no-redef]
+        WorkflowReviewRiskError,
+        validate_workflow_review_receipt,
+        workflow_risk_evidence_from_git,
+    )
 
 
 DOCS_PREFIXES = ("docs/", "companion-ui/docs/", "companion-ui/design_handoff/")
@@ -290,23 +304,38 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--risk-assessment-complete", action="store_true")
     parser.add_argument("--stateful-fallback", action="store_true")
     parser.add_argument("--stateful-fallback-matrix-complete", action="store_true")
+    parser.add_argument("--workflow-review-receipt")
+    parser.add_argument("--workflow-risk-base", default="origin/main")
+    parser.add_argument("--workflow-risk-head", default="HEAD")
     return parser
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     try:
+        evidence = workflow_risk_evidence_from_git(
+            Path.cwd(), base=args.workflow_risk_base, head=args.workflow_risk_head
+        )
+        inferred_risks = list(evidence.risks)
+        if inferred_risks:
+            if not args.workflow_review_receipt:
+                raise WorkflowReviewRiskError(
+                    "actual workflow risk requires --workflow-review-receipt bound to this Git diff"
+                )
+            validate_workflow_review_receipt(
+                Path(args.workflow_review_receipt).read_text(encoding="utf-8"), evidence
+            )
         result = evaluate_review_before_ci_gate(
             lane=args.lane,
             changed_files=args.changed_file,
             review_gate_complete=args.review_gate_complete,
             bypass_reason=args.bypass_reason,
-            risk_surfaces=args.risk_surface,
+            risk_surfaces=[*args.risk_surface, *inferred_risks],
             risk_assessment_complete=args.risk_assessment_complete,
             stateful_fallback=args.stateful_fallback,
             stateful_fallback_matrix_complete=args.stateful_fallback_matrix_complete,
         )
-    except ReviewBeforeCiGateError as exc:
+    except (OSError, ReviewBeforeCiGateError, WorkflowReviewRiskError) as exc:
         print(json.dumps({"ok": False, "error": str(exc)}, sort_keys=True), file=sys.stderr)
         return 2
     print(json.dumps({"ok": True, **asdict(result)}, sort_keys=True))
