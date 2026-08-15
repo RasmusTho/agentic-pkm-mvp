@@ -776,6 +776,7 @@ jobs:
               - 'app/ingest/vault_alpha.py'
               - 'app/agents/projector/agent.py'
               - 'app/jobs/backfill.py'
+              - 'app/jobs/decisions_export.py'
               - 'app/jobs/decisions_projection.py'
               - 'app/observability/status_service.py'
               - 'app/instance/binding_ids.py'

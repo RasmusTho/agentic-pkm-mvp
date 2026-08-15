@@ -908,6 +908,7 @@ def test_the_pr_path_pg_lane_is_triggered_by_the_sources_it_guards() -> None:
         "app/ingest/vault_alpha.py",
         "app/agents/projector/agent.py",
         "app/jobs/backfill.py",
+        "app/jobs/decisions_export.py",
         "app/jobs/decisions_projection.py",
         "app/jobs/episodes_projection.py",
         "app/standing_questions/projection.py",
