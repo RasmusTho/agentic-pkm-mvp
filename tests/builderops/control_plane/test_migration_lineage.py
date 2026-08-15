@@ -114,6 +114,27 @@ def test_initialize_is_idempotent_for_exact_current_lineage(control_plane_store,
     }
 
 
+def test_row_derived_post_effect_migration_is_backward_compatible(
+    control_plane_store, envelope
+) -> None:
+    schema = f"builderops_row_derived_{uuid4().hex}"
+    with control_plane_store._connect() as conn:
+        conn.execute(sql.SQL("CREATE SCHEMA {}").format(sql.Identifier(schema)))
+    store = PostgresBuilderOpsStore(_isolated_schema_dsn(control_plane_store.dsn, schema))
+    try:
+        _initialize_schema_at_version(store, SCHEMA_VERSION - 1)
+        store.initialize()
+        with store._connect() as conn:
+            row = conn.execute(
+                "SELECT post_effect_phase, post_effect_claim_lsn::text AS claim_lsn "
+                "FROM builderops_outbox LIMIT 1"
+            ).fetchone()
+        assert row is None
+    finally:
+        with psycopg.connect(control_plane_store.dsn, autocommit=True) as conn:
+            conn.execute(sql.SQL("DROP SCHEMA {} CASCADE").format(sql.Identifier(schema)))
+
+
 @pytest.mark.parametrize(
     "schema_drift",
     (

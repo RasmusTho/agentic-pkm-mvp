@@ -207,6 +207,85 @@ def test_live_unknown_claim_cannot_be_stolen_during_readback(
     assert reconciliation.fencing_token == original.fencing_token
 
 
+def test_post_effect_pending_derives_claim_and_lsns_from_locked_outbox_row(
+    control_plane_store, envelope
+) -> None:
+    result = _commit_outbox_task(
+        control_plane_store,
+        envelope,
+        task_id="row-derived-pending",
+        key="row-derived-pending",
+        effect_type="github.comment",
+        payload={"issue": 4898},
+    )
+    claim = control_plane_store.claim_outbox(
+        envelope=envelope, operation_key=result.operation_key, worker_id="executor-1"
+    )
+    pending = control_plane_store.begin_post_effect_pending(
+        repository=envelope.repository,
+        operation_key=result.operation_key,
+        minimum_fencing_token=claim.fencing_token,
+    )
+    assert pending == control_plane_store.begin_post_effect_pending(
+        repository=envelope.repository,
+        operation_key=result.operation_key,
+        minimum_fencing_token=claim.fencing_token,
+    )
+    assert pending["intent_lsn"] == claim.intent_lsn
+    assert pending["claim_lsn"] == claim.claim_lsn
+    with pytest.raises(StaleFencingToken):
+        control_plane_store.begin_post_effect_pending(
+            repository=envelope.repository,
+            operation_key=result.operation_key,
+            minimum_fencing_token=claim.fencing_token - 1,
+        )
+
+
+def test_post_effect_reconcile_and_replay_reject_forged_or_stale_claim_lsns(
+    control_plane_store, envelope
+) -> None:
+    result = _commit_outbox_task(
+        control_plane_store,
+        envelope,
+        task_id="row-derived-reconcile",
+        key="row-derived-reconcile",
+        effect_type="github.comment",
+        payload={"issue": 4898},
+    )
+    claim = control_plane_store.claim_outbox(
+        envelope=envelope, operation_key=result.operation_key, worker_id="executor-1"
+    )
+    control_plane_store.begin_post_effect_pending(
+        repository=envelope.repository,
+        operation_key=result.operation_key,
+        minimum_fencing_token=claim.fencing_token,
+    )
+    control_plane_store.mark_effect_unknown(claim, detail="readback required")
+    reconciled = control_plane_store.reconcile_post_effect(
+        repository=envelope.repository,
+        operation_key=result.operation_key,
+        minimum_fencing_token=claim.fencing_token,
+        observed_applied=False,
+        evidence={"readback": "not-found"},
+    )
+    assert reconciled["status"] == "pending"
+    assert reconciled == control_plane_store.reconcile_post_effect(
+        repository=envelope.repository,
+        operation_key=result.operation_key,
+        minimum_fencing_token=claim.fencing_token,
+        observed_applied=False,
+        evidence={"readback": "not-found"},
+    )
+    with pytest.raises((StaleFencingToken, IdempotencyConflict)):
+        control_plane_store.reconcile_post_effect(
+            repository=envelope.repository,
+            operation_key=result.operation_key,
+            minimum_fencing_token=claim.fencing_token - 1,
+            observed_applied=False,
+            evidence={"readback": "forged"},
+        )
+
+
 def test_indeterminate_effect_dead_letters_without_retry(
     control_plane_store, envelope
 ) -> None:

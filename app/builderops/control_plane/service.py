@@ -28,6 +28,8 @@ from app.builderops.control_plane.api_models import (
     TaskHeartbeatRequest,
     TaskReleaseRequest,
     TaskTransitionRequest,
+    RowDerivedPostEffectPendingRequest,
+    RowDerivedPostEffectReconcileRequest,
 )
 from app.builderops.control_plane.auth import (
     Credential,
@@ -87,7 +89,7 @@ _ALLOWED_SECRET_METADATA_KEYS = frozenset(
 _STRUCTURAL_SAFE_KEYS = frozenset({"fencing_token"})
 _STRUCTURAL_SAFE_FIELD_PATHS: dict[str, frozenset[tuple[str, ...]]] = {
     "fencing_token": frozenset(
-        {("lease", "fencing_token"), ("claim", "fencing_token")}
+        {("lease", "fencing_token"), ("claim", "fencing_token"), ("minimum_fencing_token",)}
     )
 }
 _FORBIDDEN_COMPACT_DURABLE_KEYS = frozenset(
@@ -1002,6 +1004,25 @@ def create_app(
             "effect_eligible": eligible,
         }
 
+    @application.post("/v1/executor/outbox/post-effect/pending")
+    async def begin_row_derived_post_effect_pending(
+        request: RowDerivedPostEffectPendingRequest,
+        credential: Credential = Depends(outbox_write),
+        _epoch: None = Depends(require_authority_epoch),
+    ) -> dict[str, Any]:
+        _enforce_repo_scope(credential, request.envelope.repository)
+        try:
+            _assert_durable_payload_safe(request.model_dump(mode="json"), credentials)
+            pending = await run_in_threadpool(
+                store.begin_post_effect_pending,
+                repository=request.envelope.repository,
+                operation_key=request.operation_key,
+                minimum_fencing_token=request.minimum_fencing_token,
+            )
+        except Exception as exc:
+            raise _control_plane_error(exc) from exc
+        return dict(pending)
+
     @application.post("/v1/executor/outbox/unknown")
     async def mark_outbox_unknown(
         request: OutboxUnknownRequest,
@@ -1143,6 +1164,28 @@ def create_app(
             "recovery_lsn": result.recovery_lsn,
             "replayed": result.replayed,
         }
+
+    @application.post("/v1/executor/outbox/post-effect/reconcile")
+    async def reconcile_row_derived_post_effect(
+        request: RowDerivedPostEffectReconcileRequest,
+        credential: Credential = Depends(outbox_write),
+        _epoch: None = Depends(require_authority_epoch),
+    ) -> dict[str, Any]:
+        _enforce_repo_scope(credential, request.envelope.repository)
+        try:
+            _assert_durable_payload_safe(request.model_dump(mode="json"), credentials)
+            result = await run_in_threadpool(
+                store.reconcile_post_effect,
+                repository=request.envelope.repository,
+                operation_key=request.operation_key,
+                minimum_fencing_token=request.minimum_fencing_token,
+                observed_applied=request.observed_applied,
+                terminal_unknown=request.terminal_unknown,
+                evidence=request.evidence,
+            )
+        except Exception as exc:
+            raise _control_plane_error(exc) from exc
+        return dict(result)
 
     return application
 

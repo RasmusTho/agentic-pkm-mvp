@@ -101,6 +101,26 @@ def test_restart_resumes_from_api_receipts_without_duplicate_attempt() -> None:
     assert outbox.calls[-2:] == ["recover", "reconcile"]
 
 
+def test_row_derived_substrate_preserves_legacy_finish_effect_and_self_closure() -> None:
+    api = FakeBuilderOpsClient()
+    outbox = FakeVerificationOutbox(api)
+    ledger = BuilderOpsVerificationLedger(api, repository=REPO, effect_outbox=outbox)
+    run = ledger.ingest(request())
+    claimed = ledger.claim(run.run_id, "verification-host")
+    operation_key = ledger.begin_effect(
+        run.run_id,
+        effect_type="github.comment",
+        payload={"repository": REPO, "pr_number": 3603, "head_sha": HEAD},
+        holder="verification-host",
+        lease_id=claimed.lease_id,
+        idempotency_key="legacy-finish-effect-remains-v1",
+    )
+    ledger.finish_effect(
+        operation_key, observed_applied=True, evidence={"outcome": "comment_created"}
+    )
+    assert outbox.calls[-2:] == ["unknown", "reconcile"]
+
+
 def test_api_consumer_recovery_requires_a_fresh_task_fence(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class AuthorityEnvelopeInput(BaseModel):
@@ -165,6 +165,21 @@ class OutboxReconcileRequest(BaseModel):
     evidence: dict[str, Any] = Field(default_factory=dict)
 
 
+class RowDerivedPostEffectPendingRequest(BaseModel):
+    """Dormant #4898 phase: only a row locator and current fence are accepted."""
+
+    model_config = ConfigDict(extra="forbid")
+    envelope: AuthorityEnvelopeInput
+    operation_key: str = Field(min_length=1)
+    minimum_fencing_token: int = Field(ge=1)
+
+
+class RowDerivedPostEffectReconcileRequest(RowDerivedPostEffectPendingRequest):
+    observed_applied: bool
+    terminal_unknown: bool = False
+    evidence: dict[str, Any] = Field(default_factory=dict)
+
+
 __all__ = [
     "AttemptCommitRequest",
     "AuthorityEnvelopeInput",
@@ -176,6 +191,8 @@ __all__ = [
     "OutboxRecoverRequest",
     "OutboxReconcileRequest",
     "OutboxUnknownRequest",
+    "RowDerivedPostEffectPendingRequest",
+    "RowDerivedPostEffectReconcileRequest",
     "PromotionCommitRequest",
     "RecordCommitRequest",
     "TaskClaimRequest",
