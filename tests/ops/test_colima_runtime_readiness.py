@@ -259,3 +259,61 @@ def test_guest_gate_waits_for_containerd_rpc_and_metadata_after_mounts(tmp_path:
         "--namespace moby containers list",
         "--namespace moby snapshots list",
     ]
+
+
+def test_docker_preflight_selector_orders_substrate_ctr_and_inventory_before_docker(
+    tmp_path: Path,
+) -> None:
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    calls = tmp_path / "calls.log"
+    for name, body in {
+        "findmnt": (
+            f"printf 'findmnt:%s\\n' \"$*\" >> '{calls}'\n"
+            "case \"$*\" in *SOURCE*) printf '/dev/persistent\\n';; "
+            "*UUID*) printf 'test-uuid\\n';; "
+            "*FSTYPE*) printf 'ext4\\n';; esac\n"
+        ),
+        "mountpoint": f"printf 'mountpoint:%s\\n' \"$*\" >> '{calls}'\nexit 0\n",
+        "df": (
+            f"printf 'df:%s\\n' \"$*\" >> '{calls}'\n"
+            "printf 'Filesystem 1024-blocks Used Available Capacity Mounted on\\n/dev/x 1 0 999999 0%% /\\n'\n"
+        ),
+        "ctr": f"printf 'ctr:%s\\n' \"$*\" >> '{calls}'\nexit 0\n",
+        "docker": f"printf 'docker:%s\\n' \"$*\" >> '{calls}'\nexit 99\n",
+    }.items():
+        path = fake_bin / name
+        path.write_text(f"#!/bin/sh\n{body}", encoding="utf-8")
+        path.chmod(0o755)
+    persistent = tmp_path / "persistent"
+    docker_data = tmp_path / "docker"
+    containerd_data = tmp_path / "containerd"
+    persisted = tmp_path / "persisted"
+    for path in (persistent, docker_data, containerd_data, persisted):
+        path.mkdir()
+
+    result = _run_bash(
+        f"COLIMA_PERSISTENT_DATA_PATH='{persistent}' "
+        f"COLIMA_DOCKER_DATA_PATH='{docker_data}' "
+        f"COLIMA_CONTAINERD_DATA_PATH='{containerd_data}' "
+        f"COLIMA_PERSISTED_CONFIG_ROOT='{persisted}' "
+        "COLIMA_EXPECTED_PERSISTENT_SOURCE=/dev/persistent "
+        "COLIMA_EXPECTED_PERSISTENT_IDENTITY=UUID=test-uuid "
+        "COLIMA_EXPECTED_PERSISTED_INVENTORY=0 "
+        "COLIMA_EXPECTED_PERSISTENT_FSTYPE=ext4 "
+        "COLIMA_MIN_FREE_BLOCKS=1 COLIMA_MIN_FREE_INODES=1 "
+        f"bash '{HELPER}' --docker-preflight",
+        env={"PATH": f"{fake_bin}:{os.environ['PATH']}"},
+    )
+
+    assert result.returncode == 0
+    lines = calls.read_text(encoding="utf-8").splitlines()
+    assert not any(line.startswith("docker:") for line in lines)
+    last_mount_check = max(index for index, line in enumerate(lines) if line.startswith("df:"))
+    first_ctr = min(index for index, line in enumerate(lines) if line.startswith("ctr:"))
+    assert last_mount_check < first_ctr
+    assert [line for line in lines if line.startswith("ctr:")] == [
+        "ctr:version",
+        "ctr:--namespace moby containers list",
+        "ctr:--namespace moby snapshots list",
+    ]
