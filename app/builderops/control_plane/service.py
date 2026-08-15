@@ -138,6 +138,7 @@ _ROW_DERIVED_FORBIDDEN_EVIDENCE_KEYS = frozenset(
         "fence",
     }
 )
+_POSTGRES_LSN_LITERAL = re.compile(r"^[0-9A-F]+/[0-9A-F]+$", re.IGNORECASE)
 
 
 def _canonical_durable_key(key: str) -> str:
@@ -155,6 +156,8 @@ def _assert_row_derived_evidence_safe(value: Any) -> None:
             normalized = _canonical_durable_key(str(key))
             if (
                 normalized in _ROW_DERIVED_FORBIDDEN_EVIDENCE_KEYS
+                or normalized.replace("_", "")
+                in {item.replace("_", "") for item in _ROW_DERIVED_FORBIDDEN_EVIDENCE_KEYS}
                 or any(
                     fragment in normalized.split("_")
                     for fragment in _ROW_DERIVED_FORBIDDEN_EVIDENCE_KEYS
@@ -165,6 +168,8 @@ def _assert_row_derived_evidence_safe(value: Any) -> None:
     elif isinstance(value, (list, tuple)):
         for child in value:
             _assert_row_derived_evidence_safe(child)
+    elif isinstance(value, str) and _POSTGRES_LSN_LITERAL.fullmatch(value):
+        raise ValueError("row-derived reconciliation evidence cannot contain durability LSNs")
 
 
 def _assert_secret_metadata_shape(key: str, value: Any) -> None:
