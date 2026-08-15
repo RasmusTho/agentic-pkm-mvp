@@ -355,17 +355,14 @@ class BindingEffectLeaseManager:
                 value = json.loads(path.read_text(encoding="utf-8"))
             except (OSError, json.JSONDecodeError) as exc:
                 raise BindingEffectLeaseError("binding effect lease state is corrupt") from exc
-            return self._validate_state(vault_binding_id, value)
-        snapshot = self.registry_store.load()
-        raw_states = snapshot.extensions.get("bindingEffectLeases") or {}
-        if not isinstance(raw_states, Mapping):
-            raise BindingEffectLeaseError("registry binding effect lease state is invalid")
-        value = raw_states.get(vault_binding_id)
-        return (
-            self._empty_state(vault_binding_id)
-            if value is None
-            else self._validate_state(vault_binding_id, value)
-        )
+            local_state = self._validate_state(vault_binding_id, value)
+            registry_state = self._registry_state(vault_binding_id)
+            if local_state != registry_state:
+                raise BindingEffectLeaseError(
+                    "binding effect lease state diverges from registry without a journal"
+                )
+            return local_state
+        return self._registry_state(vault_binding_id)
 
     def _commit_locked(
         self,
@@ -393,10 +390,23 @@ class BindingEffectLeaseManager:
                 _capability=self.capability,
             )
         except Exception:
-            self._atomic_private_json(self._state_path(vault_binding_id), previous_state)
-            self._journal_path(vault_binding_id).unlink(missing_ok=True)
-            self._fsync_directory(self.state_root)
-            raise
+            try:
+                registry_state = self._registry_state(vault_binding_id)
+            except Exception:
+                raise
+            if registry_state == next_state:
+                self._atomic_private_json(self._state_path(vault_binding_id), next_state)
+                self._journal_path(vault_binding_id).unlink(missing_ok=True)
+                self._fsync_directory(self.state_root)
+                return next_state
+            if registry_state == previous_state:
+                self._atomic_private_json(self._state_path(vault_binding_id), previous_state)
+                self._journal_path(vault_binding_id).unlink(missing_ok=True)
+                self._fsync_directory(self.state_root)
+                raise
+            raise BindingEffectLeaseError(
+                "binding effect lease commit diverges from both journal endpoints"
+            )
         self._journal_path(vault_binding_id).unlink(missing_ok=True)
         self._fsync_directory(self.state_root)
         return next_state
@@ -418,16 +428,7 @@ class BindingEffectLeaseManager:
             next_state = self._validate_state(vault_binding_id, value["next"])
         except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
             raise BindingEffectLeaseError("binding effect lease journal is invalid") from exc
-        snapshot = self.registry_store.load()
-        states = snapshot.extensions.get("bindingEffectLeases") or {}
-        if not isinstance(states, Mapping):
-            raise BindingEffectLeaseError("registry binding effect lease state is invalid")
-        registry_state = states.get(vault_binding_id)
-        registry_state = (
-            self._empty_state(vault_binding_id)
-            if registry_state is None
-            else self._validate_state(vault_binding_id, registry_state)
-        )
+        registry_state = self._registry_state(vault_binding_id)
         if registry_state == next_state:
             recovered = next_state
         elif registry_state == previous:
@@ -439,6 +440,18 @@ class BindingEffectLeaseManager:
         self._atomic_private_json(self._state_path(vault_binding_id), recovered)
         path.unlink()
         self._fsync_directory(self.state_root)
+
+    def _registry_state(self, vault_binding_id: str) -> _LeaseState:
+        snapshot = self.registry_store.load()
+        states = snapshot.extensions.get("bindingEffectLeases") or {}
+        if not isinstance(states, Mapping):
+            raise BindingEffectLeaseError("registry binding effect lease state is invalid")
+        value = states.get(vault_binding_id)
+        return (
+            self._empty_state(vault_binding_id)
+            if value is None
+            else self._validate_state(vault_binding_id, value)
+        )
 
     def _holder(self, holder_id: str, *, ticket: int, mode: str) -> _HolderState:
         return {
@@ -460,33 +473,42 @@ class BindingEffectLeaseManager:
             return False
         except PermissionError:
             pass
-        return str(holder.get("processStart") or "") == self._process_start(pid)
+        start, state = self._process_identity(pid)
+        return state != "Z" and str(holder.get("processStart") or "") == start
 
     @staticmethod
     def _process_start(pid: int) -> str:
+        return BindingEffectLeaseManager._process_identity(pid)[0]
+
+    @staticmethod
+    def _process_identity(pid: int) -> tuple[str, str]:
         stat_path = Path(f"/proc/{pid}/stat")
         try:
-            fields = stat_path.read_text(encoding="utf-8").split()
-            return f"proc:{fields[21]}"
-        except (OSError, IndexError):
+            raw = stat_path.read_text(encoding="utf-8")
+            remainder = raw[raw.rindex(")") + 2 :].split()
+            return f"proc:{remainder[19]}", remainder[0]
+        except (OSError, IndexError, ValueError):
             try:
                 result = subprocess.run(
-                    ["ps", "-o", "lstart=", "-p", str(pid)],
+                    ["ps", "-o", "stat=", "-o", "lstart=", "-p", str(pid)],
                     check=True,
                     capture_output=True,
                     text=True,
                     timeout=1,
                 )
-                started = result.stdout.strip()
-                if started:
-                    return f"ps:{started}"
+                output = result.stdout.strip().split(maxsplit=1)
+                if len(output) == 2:
+                    return f"ps:{output[1]}", output[0][:1]
             except (OSError, subprocess.SubprocessError):
                 pass
             try:
                 boot = Path("/proc/sys/kernel/random/boot_id")
-                return f"pid:{pid}:boot:{boot.read_text(encoding='ascii').strip()}"
+                return (
+                    f"pid:{pid}:boot:{boot.read_text(encoding='ascii').strip()}",
+                    "?",
+                )
             except OSError:
-                return f"pid:{pid}"
+                return f"pid:{pid}", "?"
 
     @staticmethod
     def _empty_state(vault_binding_id: str) -> _LeaseState:

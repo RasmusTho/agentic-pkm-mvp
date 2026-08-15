@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import multiprocessing
+import os
 import threading
 import time
 from pathlib import Path
@@ -174,3 +175,33 @@ def test_exclusion_holds_across_separate_processes(tmp_path) -> None:
         "binding-a", channel_id="dev", root=vault, timeout=1
     ):
         assert manager.observe("binding-a").exclusive_held
+
+
+def test_unreaped_dead_exclusive_waiter_does_not_occupy_fifo_head(tmp_path) -> None:
+    manager = _build_manager(tmp_path, "binding-a")
+    vault = tmp_path / "vaults" / "binding-a"
+
+    with manager.shared_effect(
+        "binding-a", channel_id="dev", root=vault, timeout=1
+    ):
+        pid = os.fork()
+        if pid == 0:
+            child = _manager_for_existing(str(tmp_path))
+            try:
+                with child.exclusive_change(
+                    "binding-a", channel_id="dev", root=vault, timeout=10
+                ):
+                    os._exit(0)
+            except BaseException:
+                os._exit(2)
+        assert manager.wait_for_exclusive_pending("binding-a", timeout=3)
+        os.kill(pid, 9)
+        time.sleep(0.05)
+
+    try:
+        with manager.exclusive_change(
+            "binding-a", channel_id="dev", root=vault, timeout=2
+        ):
+            assert manager.observe("binding-a").exclusive_held
+    finally:
+        os.waitpid(pid, 0)
