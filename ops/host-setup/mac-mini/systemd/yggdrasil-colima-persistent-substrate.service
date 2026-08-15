@@ -1,0 +1,16 @@
+[Unit]
+Description=Yggdrasil Colima persistent Docker substrate readiness gate
+DefaultDependencies=no
+After=local-fs.target colima-data-mount.service
+Requires=colima-data-mount.service
+Before=containerd.service docker.service
+
+[Service]
+Type=oneshot
+EnvironmentFile=-/etc/yggdrasil/colima-runtime.env
+ExecStart=/usr/local/libexec/yggdrasil-colima-runtime-readiness --guest
+RemainAfterExit=yes
+TimeoutStartSec=180s
+
+[Install]
+WantedBy=containerd.service

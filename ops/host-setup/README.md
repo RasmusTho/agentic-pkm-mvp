@@ -39,6 +39,29 @@ each box does the rest by reading that box's playbook.
 The product hosts are separate from this optional inference setup. They must be
 deployed and verified through the governed deployment handoff.
 
+## Colima Docker startup durability gate
+
+The Mac mini's Colima guest has a separate, refusal-first startup artifact set
+for Docker/containerd persistence. It lives in
+`ops/host-setup/mac-mini/systemd/` and is installed by
+`install_colima_runtime_readiness.sh`. The installer is a dry-run unless the
+governed host procedure explicitly sets `COLIMA_RUNTIME_APPLY=1`; installation
+does not restart Colima, containerd, Docker, or any application channel.
+
+The gate binds one explicit Docker context, verifies the exact configured
+persistent source at `/var/lib/docker` and `/var/lib/containerd`, waits for
+containerd RPC and metadata readiness, and refuses a Docker API whose
+persisted inventory is truncated. It never prunes, recreates, deletes, or
+edits existing Docker/containerd metadata. The example profile is an input
+template only; the live source identity, free-space floor, and profile approval
+must be supplied by the managed-host operator and recorded in a redacted
+receipt.
+
+Host activation, isolated candidate activation, default-profile cold start,
+and final dev/test/prod channel isolation are separate gates. Repository
+artifacts and a passing fake-command test do not claim that any live channel is
+fixed.
+
 ## What each playbook does
 
 | Machine | Role | Installs |

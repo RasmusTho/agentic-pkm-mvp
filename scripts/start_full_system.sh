@@ -86,8 +86,10 @@ source "scripts/lib/pinned_image_guard.sh"
 source "scripts/lib/start_full_system_env.sh"
 source "scripts/lib/instance_state_deployment.sh"
 source "scripts/lib/heimdal_cold_volume_preflight.sh"
+source "scripts/lib/colima_runtime_readiness.sh"
 apply_start_full_system_defaults
 heimdal_cold_volume_preflight_effective "$ROOT"
+colima_runtime_bind_and_ready "$ROOT"
 
 # Signboard is a dispatcher projection. Resolve this on the host before the
 # BuilderOps bootstrap and forward the same absolute path into the API

@@ -27,6 +27,7 @@
 #   CUI_DB_LABEL                expected channel DB name to report (e.g. app_dev/app_test/app)
 
 _CUI_STARTUP_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
+source "${_CUI_STARTUP_LIB_DIR}/colima_runtime_readiness.sh"
 
 # ── repo + python resolution ────────────────────────────────────────────────
 
@@ -182,6 +183,7 @@ cui_guard_vault_name() {
 # Returns 0 if the Docker daemon is reachable.
 cui_docker_ok() {
   command -v docker >/dev/null 2>&1 || return 1
+  colima_runtime_bind_and_ready "$(cui_repo_root)" || return 1
   docker info >/dev/null 2>&1 || return 1
   return 0
 }

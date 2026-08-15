@@ -209,6 +209,42 @@ Do not use prod targets and do not move the `stable` ref.
    curl -sS http://localhost:18001/healthz
    ```
 
+### Colima persistent substrate readiness
+
+When Colima is the Docker provider, Docker API reachability is not a readiness
+signal. The shared entrypoints (`scripts/dev_bootstrap.sh`,
+`scripts/start_full_system.sh`, and the Companion UI launcher) bind the
+approved Docker context through `scripts/lib/colima_runtime_readiness.sh` and
+then require the checked-in guest gate to prove all of the following:
+
+- the exact configured persistent source is mounted read-write at the Docker
+  and containerd data paths, with the expected filesystem type and minimum
+  block/inode headroom. The target topology is a directly mounted native
+  filesystem; a nested interchange-filesystem image is not an accepted
+  durability substrate. Until a separately approved migration exists, bulk
+  Git/common-dir I/O and Colima cold restore are serialized;
+- containerd answers bounded `ctr version`, container metadata, and snapshot
+  metadata requests; and
+- the persisted Docker-config inventory count equals the Docker API inventory
+  count.
+
+The guest unit and drop-ins are checked in under
+`ops/host-setup/mac-mini/systemd/`. The installer
+`ops/host-setup/mac-mini/install_colima_runtime_readiness.sh` is refusal-first:
+without `COLIMA_RUNTIME_APPLY=1` it only prints a redacted plan, and even an
+apply installs artifacts plus `daemon-reload` without restarting a service.
+The resource profile is an operator-reviewed input via
+`COLIMA_RESOURCE_PROFILE_FILE`; `runtime-profile.env.example` is not host
+authority and must not be treated as an activation receipt.
+
+If any gate fails, leave Docker off and do not run `docker system prune`,
+`docker compose down`, container recreation, or metadata deletion as a repair.
+The helper writes only a redacted `colima-docker-startup-gate.v1` receipt when
+`COLIMA_RUNTIME_RECEIPT_PATH` is configured. A green helper receipt proves only
+repo/guest readiness; it does not prove host activation, default-profile cold
+start recovery, or dev/test/prod channel isolation. Those remain separate
+operator-gated receipts.
+
 ### How channel-specific env loading works
 
 When `PKM_ENVIRONMENT` (or `CHANNEL` / `PKM_CHANNEL`) is set, `start_full_system.sh` loads

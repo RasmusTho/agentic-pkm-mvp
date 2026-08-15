@@ -3,7 +3,10 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 source "${ROOT}/scripts/lib/instance_ownership_host_state.sh"
+source "${ROOT}/scripts/lib/colima_runtime_readiness.sh"
 prepare_instance_ownership_host_state_dir
+
+colima_runtime_bind_and_ready "$ROOT"
 
 docker info >/dev/null 2>&1 || true
 if ! docker info >/dev/null 2>&1; then
