@@ -963,6 +963,7 @@ class BuilderOpsVerificationLedger:
             outcome=outcome,
             receipt=receipt,
             policy=run.repair_budget_policy,
+            current_head_sha=run.current_head_sha,
         )
         identity = idempotency_key or _digest(
             run_id, kind, session_id, ordinal, receipt, _now()
@@ -1047,6 +1048,7 @@ class BuilderOpsVerificationLedger:
                 outcome=str(item["outcome"]),
                 receipt=receipt,
                 policy=run.repair_budget_policy,
+                current_head_sha=run.current_head_sha,
             )
             if item.get("ordinal") != ordinal:
                 raise ValueError("verification event batch ordinal is malformed")

@@ -157,7 +157,9 @@ The dispatcher is an operational coordination layer, not a lifecycle replacement
   xhigh reasoning at any round. Every additional substantive repair still requires a fresh
   independent blocking review of the preceding repair. Capability escalation and evidence-based
   convergence are key-local; monotonic attempt history, policy version, and bindings persist across
-  restart, head rebind, and takeover. A round may continue only with measurable progress, while
+  restart, head rebind, and takeover. A repeated finding/mechanism repair records a durable receipt
+  bound to the prior attempt and reviewed head, naming its mechanism-state change and validation
+  delta; a round may continue only with that measurable progress evidence, while
   documented non-progress, technical impasse, scope expansion, or authority conflict routes through
   the existing escalation classifier. Attempt count alone does not create a Human Exception.
 - Completion never relies on coordinator receipt ids or review-event prose alone. The fresh exact-head

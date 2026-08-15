@@ -6,7 +6,7 @@ from app.dispatcher.verification_agent_loop import VerificationAgentLoop
 from tests.dispatcher.verification_helpers import ledger, request
 
 
-def test_progressing_repair_rounds_have_no_numeric_stop_and_require_rereview(
+def test_distinct_findings_have_no_numeric_stop_and_require_rereview(
     tmp_path,
 ) -> None:
     state = ledger(tmp_path)
@@ -56,6 +56,66 @@ def test_progressing_repair_rounds_have_no_numeric_stop_and_require_rereview(
             capability=capability,
             reasoning_effort=reasoning,
             context=context,
+            outcome="blocking",
+        )
+
+
+def test_repeated_non_converging_repair_requires_progress_evidence(tmp_path) -> None:
+    state = ledger(tmp_path)
+    run = state.ingest(request())
+    claimed = state.claim(run.run_id, "host")
+    loop = VerificationAgentLoop(state, run.run_id, holder="host", lease_id=claimed.lease_id)
+    context = {"head": run.head_sha}
+    loop.repair(
+        finding_id="F1", failure_domain="review_code_correctness", mechanism_id="parser",
+        session_id="fix-1", capability="terra", reasoning_effort="high", context=context,
+        outcome="fixed",
+    )
+    loop.review(
+        finding_id="F1", failure_domain="review_code_correctness", mechanism_id="parser",
+        session_id="review-1", capability="terra", reasoning_effort="high", context=context,
+        outcome="blocking",
+    )
+    with pytest.raises(ValueError, match="durable progress evidence"):
+        loop.repair(
+            finding_id="F1", failure_domain="review_code_correctness", mechanism_id="parser",
+            session_id="fix-2", capability="terra", reasoning_effort="high", context=context,
+            outcome="fixed",
+        )
+
+
+def test_progressing_repair_rounds_have_no_numeric_stop_and_require_rereview(tmp_path) -> None:
+    state = ledger(tmp_path)
+    run = state.ingest(request())
+    claimed = state.claim(run.run_id, "host")
+    loop = VerificationAgentLoop(state, run.run_id, holder="host", lease_id=claimed.lease_id)
+    context = {"head": run.head_sha}
+    for index in range(6):
+        if index:
+            prior = [
+                row for row in state.attempts(run.run_id)
+                if row["kind"] in {"standard_repair", "escalated_repair"}
+            ][-1]
+            evidence = {
+                "prior_attempt_id": prior["attempt_id"],
+                "prior_review_attempt_id": [
+                    row for row in state.attempts(run.run_id)
+                    if row["kind"] == "review"
+                ][-1]["attempt_id"],
+                "reviewed_head_sha": run.head_sha,
+                "mechanism_state_change": f"narrowed-{index}",
+                "validation_delta": f"covered-{index}",
+            }
+        else:
+            evidence = None
+        loop.repair(
+            finding_id="F1", failure_domain="review_code_correctness", mechanism_id="parser",
+            session_id=f"fix-{index}", capability="terra", reasoning_effort="high", context=context,
+            outcome="fixed", progress_evidence=evidence,
+        )
+        loop.review(
+            finding_id="F1", failure_domain="review_code_correctness", mechanism_id="parser",
+            session_id=f"review-{index}", capability="terra", reasoning_effort="high", context=context,
             outcome="blocking",
         )
 

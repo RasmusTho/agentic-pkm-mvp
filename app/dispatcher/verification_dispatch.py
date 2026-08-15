@@ -1214,6 +1214,11 @@ def _validated_attempt_identity(
     return finding, domain, mechanism
 
 
+def _attempt_receipt_value(row: Mapping[str, object], field: str) -> object:
+    receipt = row.get("receipt")
+    return receipt.get(field) if isinstance(receipt, Mapping) else None
+
+
 def _attempt_plan(
     attempts: Sequence[Mapping[str, object]],
     *,
@@ -1221,6 +1226,7 @@ def _attempt_plan(
     outcome: str,
     receipt: Mapping[str, object] | None,
     policy: str,
+    current_head_sha: str,
 ) -> tuple[int, str | None, str | None, str | None]:
     finding, domain, mechanism = _validated_attempt_identity(
         attempts,
@@ -1229,6 +1235,68 @@ def _attempt_plan(
         receipt=receipt,
         policy=policy,
     )
+    if kind == "review" and outcome == "blocking" and (
+        receipt is None or receipt.get("head_sha") != current_head_sha
+    ):
+        raise ValueError("blocking review must be bound to the current verification head")
+    if kind in REPAIR_ATTEMPT_KINDS and finding is not None:
+        assert receipt is not None
+        prior_repairs = [
+            row
+            for row in attempts
+            if row.get("kind") in REPAIR_ATTEMPT_KINDS
+            and row.get("finding_id") == finding
+            and row.get("failure_domain") == domain
+            and row.get("mechanism_id") == mechanism
+        ]
+        if prior_repairs:
+            progress = receipt.get("progress_evidence") if receipt else None
+            required_progress_fields = {
+                "prior_attempt_id",
+                "prior_review_attempt_id",
+                "reviewed_head_sha",
+                "mechanism_state_change",
+                "validation_delta",
+            }
+            if (
+                not isinstance(progress, Mapping)
+                or set(progress) != required_progress_fields
+                or any(
+                    not isinstance(value, str) or not value.strip()
+                    for value in (progress[field] for field in required_progress_fields)
+                )
+            ):
+                raise ValueError(
+                    "repeated repair requires durable progress evidence"
+                )
+            prior = prior_repairs[-1]
+            prior_reviews = [
+                row
+                for row in attempts
+                if row.get("kind") == "review"
+                and row.get("outcome") == "blocking"
+                and row.get("finding_id") == finding
+                and row.get("failure_domain") == domain
+                and row.get("mechanism_id") == mechanism
+                and isinstance(row.get("receipt"), Mapping)
+                and _attempt_receipt_value(row, "reviewed_attempt_id")
+                == prior.get("attempt_id")
+            ]
+            if not prior_reviews:
+                raise ValueError("repeated repair requires a fresh blocking review")
+            prior_review = prior_reviews[-1]
+            prior_review_receipt = prior_review.get("receipt")
+            assert isinstance(prior_review_receipt, Mapping)
+            if (
+                progress["prior_attempt_id"] != prior.get("attempt_id")
+                or progress["prior_review_attempt_id"] != prior_review.get("attempt_id")
+                or progress["reviewed_head_sha"]
+                != prior_review_receipt.get("head_sha")
+                or prior_review_receipt.get("head_sha") != current_head_sha
+            ):
+                raise ValueError(
+                    "repair progress evidence is not bound to the prior reviewed repair"
+                )
     ordinal = sum(row.get("kind") == kind for row in attempts) + 1
     return ordinal, finding, domain, mechanism
 
@@ -2160,6 +2228,7 @@ class VerificationDispatchLedger:
                 outcome=outcome,
                 receipt=receipt,
                 policy=owner["repair_budget_policy"],
+                current_head_sha=owner["current_head_sha"],
             )
             conn.execute(
                 """
@@ -2264,6 +2333,7 @@ class VerificationDispatchLedger:
                     outcome=str(item["outcome"]),
                     receipt=item_receipt,
                     policy=owner["repair_budget_policy"],
+                    current_head_sha=owner["current_head_sha"],
                 )
                 if item.get("ordinal") != ordinal:
                     raise ValueError("verification event batch ordinal is malformed")

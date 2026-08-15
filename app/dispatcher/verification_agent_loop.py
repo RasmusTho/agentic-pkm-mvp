@@ -113,6 +113,78 @@ class VerificationAgentLoop:
             raise ValueError("verification run not found")
         return run.head_sha
 
+    @staticmethod
+    def _progress_receipt(
+        attempts: Sequence[Mapping[str, object]],
+        *,
+        finding_id: str,
+        failure_domain: str,
+        mechanism_id: str,
+        head_sha: str,
+        progress_evidence: Mapping[str, object] | None,
+    ) -> dict[str, object] | None:
+        """Bind a repeated repair to concrete progress on its prior repair."""
+        def identity(row: Mapping[str, object], field: str) -> object:
+            receipt = row.get("receipt")
+            return row.get(field) or (
+                receipt.get(field) if isinstance(receipt, Mapping) else None
+            )
+
+        prior_repairs = [
+            row
+            for row in attempts
+            if row["kind"] in {"standard_repair", "escalated_repair"}
+            and identity(row, "finding_id") == finding_id
+            and identity(row, "failure_domain") == failure_domain
+            and identity(row, "mechanism_id") == mechanism_id
+        ]
+        if not prior_repairs:
+            return None
+        if not isinstance(progress_evidence, Mapping):
+            raise ValueError(
+                "repeated repair requires durable progress evidence"
+            )
+        required = {
+            "prior_attempt_id",
+            "prior_review_attempt_id",
+            "reviewed_head_sha",
+            "mechanism_state_change",
+            "validation_delta",
+        }
+        if set(progress_evidence) != required:
+            raise ValueError("repair progress evidence is malformed")
+        progress_values = [progress_evidence[field] for field in required]
+        if any(
+            not isinstance(value, str) or not value.strip() for value in progress_values
+        ):
+            raise ValueError("repair progress evidence is malformed")
+        prior = prior_repairs[-1]
+        prior_reviews = [
+            row
+            for row in attempts
+            if row["kind"] == "review"
+            and row["outcome"] == "blocking"
+            and row.get("finding_id") == finding_id
+            and row.get("failure_domain") == failure_domain
+            and row.get("mechanism_id") == mechanism_id
+            and isinstance(row.get("receipt"), Mapping)
+            and identity(row, "reviewed_attempt_id") == prior["attempt_id"]
+        ]
+        if not prior_reviews:
+            raise ValueError("repeated repair requires a fresh blocking review")
+        prior_review = prior_reviews[-1]
+        prior_review_receipt = prior_review.get("receipt")
+        assert isinstance(prior_review_receipt, Mapping)
+        if (
+            progress_evidence["prior_attempt_id"] != prior["attempt_id"]
+            or progress_evidence["prior_review_attempt_id"] != prior_review["attempt_id"]
+            or progress_evidence["reviewed_head_sha"]
+            != prior_review_receipt.get("head_sha")
+            or prior_review_receipt.get("head_sha") != head_sha
+        ):
+            raise ValueError("repair progress evidence is not bound to the prior reviewed repair")
+        return dict(progress_evidence)
+
     def repair(
         self,
         *,
@@ -125,6 +197,7 @@ class VerificationAgentLoop:
         context: Mapping[str, object],
         outcome: str,
         strongest: bool = False,
+        progress_evidence: Mapping[str, object] | None = None,
     ) -> int:
         if not finding_id:
             raise ValueError("repair requires a stable finding id")
@@ -145,6 +218,22 @@ class VerificationAgentLoop:
             or reasoning_effort not in {"high", "xhigh"}
         ):
             raise ValueError("escalated repair must use the configured strongest capability")
+        progress_receipt = self._progress_receipt(
+            attempts,
+            finding_id=finding_id,
+            failure_domain=failure_domain,
+            mechanism_id=mechanism_id,
+            head_sha=self._head(),
+            progress_evidence=progress_evidence,
+        )
+        receipt: dict[str, object] = {
+            "finding_id": finding_id,
+            "failure_domain": failure_domain,
+            "mechanism_id": mechanism_id,
+            "head_sha": self._head(),
+        }
+        if progress_receipt is not None:
+            receipt["progress_evidence"] = progress_receipt
         ordinal = self.ledger.record_attempt(
             self.run_id,
             "escalated_repair" if strongest else "standard_repair",
@@ -153,12 +242,7 @@ class VerificationAgentLoop:
             reasoning_effort,
             context,
             outcome,
-            {
-                "finding_id": finding_id,
-                "failure_domain": failure_domain,
-                "mechanism_id": mechanism_id,
-                "head_sha": self._head(),
-            },
+            receipt,
             holder=self.holder,
             lease_id=self.lease_id,
         )
@@ -301,6 +385,19 @@ class VerificationAgentLoop:
                         raise ValueError(
                             "escalated repair must use the configured strongest capability"
                         )
+                    progress_evidence = event.get("progress_evidence")
+                    progress_receipt = self._progress_receipt(
+                        working,
+                        finding_id=finding_id,
+                        failure_domain=str(failure_domain),
+                        mechanism_id=str(mechanism_id),
+                        head_sha=head_sha,
+                        progress_evidence=(
+                            progress_evidence
+                            if isinstance(progress_evidence, Mapping)
+                            else None
+                        ),
+                    )
                     kind = "escalated_repair" if strongest else "standard_repair"
                     ordinal = sum(row["kind"] == kind for row in working) + 1
                     receipt: dict[str, object] = {
@@ -309,6 +406,8 @@ class VerificationAgentLoop:
                         "mechanism_id": mechanism_id,
                         "head_sha": head_sha,
                     }
+                    if progress_receipt is not None:
+                        receipt["progress_evidence"] = progress_receipt
                 elif event_kind == "review":
                     normalized = outcome.lower()
                     if normalized not in {"blocking", "clean"}:
