@@ -192,6 +192,8 @@ _MIGRATION_OWNED_AUTOCREATE_SQL: tuple[tuple[str, tuple[str, ...]], ...] = (
             """,
             "CREATE INDEX IF NOT EXISTS chunks_object_binding_idx "
             "ON chunks (vault_binding_id, object_id)",
+            "ALTER TABLE chunks ADD CONSTRAINT chunks_binding_id_key "
+            "UNIQUE (vault_binding_id, id)",
         ),
     ),
     (
@@ -201,7 +203,7 @@ _MIGRATION_OWNED_AUTOCREATE_SQL: tuple[tuple[str, tuple[str, ...]], ...] = (
             CREATE TABLE IF NOT EXISTS embeddings (
                 id UUID PRIMARY KEY,
                 object_id UUID NOT NULL,
-                chunk_id UUID REFERENCES chunks(id) ON DELETE CASCADE,
+                chunk_id UUID,
                 provider TEXT DEFAULT 'mock',
                 dim INTEGER NOT NULL DEFAULT 1536,
                 embedding VECTOR,
@@ -210,11 +212,17 @@ _MIGRATION_OWNED_AUTOCREATE_SQL: tuple[tuple[str, tuple[str, ...]], ...] = (
                 CONSTRAINT embeddings_object_id_fkey
                     FOREIGN KEY (vault_binding_id, object_id)
                     REFERENCES store_objects (vault_binding_id, object_id)
+                    ON DELETE CASCADE,
+                CONSTRAINT embeddings_chunk_id_fkey
+                    FOREIGN KEY (vault_binding_id, chunk_id)
+                    REFERENCES chunks (vault_binding_id, id)
                     ON DELETE CASCADE
             )
             """,
             "CREATE INDEX IF NOT EXISTS embeddings_object_binding_idx "
             "ON embeddings (vault_binding_id, object_id)",
+            "CREATE INDEX IF NOT EXISTS embeddings_chunk_binding_idx "
+            "ON embeddings (vault_binding_id, chunk_id)",
         ),
     ),
     (
@@ -261,7 +269,7 @@ _MIGRATION_OWNED_AUTOCREATE_SQL: tuple[tuple[str, tuple[str, ...]], ...] = (
         (
             """
             CREATE TABLE IF NOT EXISTS membership (
-                id UUID PRIMARY KEY,
+                id UUID NOT NULL,
                 set_id UUID NOT NULL
                     CONSTRAINT membership_set_id_fkey
                     REFERENCES sets(id) ON DELETE CASCADE,
@@ -271,7 +279,8 @@ _MIGRATION_OWNED_AUTOCREATE_SQL: tuple[tuple[str, tuple[str, ...]], ...] = (
                 CONSTRAINT membership_object_id_fkey
                     FOREIGN KEY (vault_binding_id, object_id)
                     REFERENCES store_objects (vault_binding_id, object_id)
-                    ON DELETE CASCADE
+                    ON DELETE CASCADE,
+                PRIMARY KEY (vault_binding_id, id)
             )
             """,
             "CREATE INDEX IF NOT EXISTS membership_object_binding_idx "
@@ -330,6 +339,39 @@ _MIGRATION_OWNED_AUTOCREATE_SQL: tuple[tuple[str, tuple[str, ...]], ...] = (
     ),
 )
 
+_MIGRATION_OWNED_AUTOCREATE_VIEWS: tuple[tuple[str, str], ...] = (
+    (
+        "view_chunks_missing_embeddings",
+        """
+        CREATE VIEW view_chunks_missing_embeddings AS
+        SELECT c.object_id::text AS object_id,
+               count(DISTINCT c.id) AS chunk_count,
+               count(DISTINCT e.chunk_id) AS embedded_chunks,
+               c.vault_binding_id
+          FROM chunks c
+          LEFT JOIN embeddings e
+            ON e.vault_binding_id=c.vault_binding_id AND e.chunk_id=c.id
+         GROUP BY c.vault_binding_id, c.object_id
+        HAVING count(DISTINCT c.id) > count(DISTINCT e.chunk_id)
+        """,
+    ),
+    (
+        "view_objects_ready_for_projection",
+        """
+        CREATE VIEW view_objects_ready_for_projection AS
+        SELECT d.object_id::text AS object_id,
+               coalesce(d.value->>'type','') AS type,
+               coalesce(d.value->>'trust','') AS trust,
+               d.created_at,
+               d.vault_binding_id
+          FROM decisions d
+         WHERE d.key='classification' AND coalesce(d.value->>'type','') <> ''
+           AND NOT EXISTS (SELECT 1 FROM membership m
+             WHERE m.vault_binding_id=d.vault_binding_id AND m.object_id=d.object_id)
+        """,
+    ),
+)
+
 
 def _ensure_tables() -> None:
     """Assert (or, in tests, create) the migration-owned store schema.
@@ -356,6 +398,7 @@ def _ensure_tables() -> None:
         _TABLES_READY = True
         return
     with _connect() as conn:
+        created_any_table = False
         for table, statements in _MIGRATION_OWNED_AUTOCREATE_SQL:
             with conn.cursor() as cur:
                 # Bound to the *current* schema rather than resolved through the
@@ -384,9 +427,26 @@ def _ensure_tables() -> None:
             present = (row.get("present") if isinstance(row, dict) else row[0]) if row else False
             if present:
                 continue
+            created_any_table = True
             for statement in statements:
                 with conn.cursor() as cur:
                     cur.execute(statement)
+        if created_any_table:
+            for view, view_sql in _MIGRATION_OWNED_AUTOCREATE_VIEWS:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "SELECT to_regclass("
+                        "quote_ident(current_schema()) || '.' || quote_ident(%s)"
+                        ") IS NOT NULL AS present",
+                        (view,),
+                    )
+                    row = cur.fetchone()
+                present = (
+                    (row.get("present") if isinstance(row, dict) else row[0]) if row else False
+                )
+                if not present:
+                    with conn.cursor() as cur:
+                        cur.execute(view_sql)
         with conn.cursor() as cur:
             _run_data_repairs(cur)
     _TABLES_READY = True
@@ -465,11 +525,7 @@ def assert_store_schema_with_connection(conn, *, repair_data: bool = False) -> N
             pk_columns = row.get("pk_columns") if isinstance(row, dict) else row[1]
             has_binding = row.get("has_binding") if isinstance(row, dict) else row[2]
             shapes[str(table_name)] = (list(pk_columns or []), bool(has_binding))
-        stale = [
-            table
-            for table, pk in expected_pks.items()
-            if shapes.get(table) != (pk, True)
-        ]
+        stale = [table for table, pk in expected_pks.items() if shapes.get(table) != (pk, True)]
         cur.execute(
             """
             SELECT attname AS column_name FROM pg_attribute
@@ -478,8 +534,7 @@ def assert_store_schema_with_connection(conn, *, repair_data: bool = False) -> N
             """
         )
         present = {
-            row.get("column_name") if isinstance(row, dict) else row[0]
-            for row in cur.fetchall()
+            row.get("column_name") if isinstance(row, dict) else row[0] for row in cur.fetchall()
         }
         missing_identity = [col for col in _IDENTITY_COLUMNS if col not in present]
         if stale or missing_identity:
@@ -631,9 +686,7 @@ def pg_available() -> bool:
         return False
 
 
-def truncate_pg_tables(
-    *, vault_binding_id: str = COMPATIBILITY_BINDING_ID
-) -> None:
+def truncate_pg_tables(*, vault_binding_id: str = COMPATIBILITY_BINDING_ID) -> None:
     if not pg_available():
         return
     _ensure_tables()
@@ -680,9 +733,7 @@ def truncate_pg_tables(
             )
 
 
-def reset_vector_index(
-    cur, *, vault_binding_id: str = COMPATIBILITY_BINDING_ID
-) -> None:
+def reset_vector_index(cur, *, vault_binding_id: str = COMPATIBILITY_BINDING_ID) -> None:
     cur.execute(
         "DELETE FROM store_vector_index WHERE vault_binding_id = %s",
         (vault_binding_id,),
@@ -749,14 +800,10 @@ def resolve_vault_uuid_with_connection(
     conn, vault_uuid: str, *, vault_binding_id: str = COMPATIBILITY_BINDING_ID
 ) -> str:
     """Resolve a retained vault UUID to one unambiguous canonical object id."""
-    return _resolve_vault_uuid_with_connection(
-        conn, vault_uuid, vault_binding_id=vault_binding_id
-    )
+    return _resolve_vault_uuid_with_connection(conn, vault_uuid, vault_binding_id=vault_binding_id)
 
 
-def resolve_vault_uuid(
-    vault_uuid: str, *, vault_binding_id: str = COMPATIBILITY_BINDING_ID
-) -> str:
+def resolve_vault_uuid(vault_uuid: str, *, vault_binding_id: str = COMPATIBILITY_BINDING_ID) -> str:
     """Resolve retained identity through a fresh collision-checked snapshot."""
     with _connect() as conn:
         return resolve_vault_uuid_with_connection(
@@ -768,18 +815,14 @@ def vault_uuid_to_canonical_id_map_with_connection(
     conn, *, vault_binding_id: str = COMPATIBILITY_BINDING_ID
 ) -> dict[str, str]:
     """Return retained vault UUID -> canonical id from the shared identity join."""
-    return _vault_uuid_to_canonical_id_map_with_connection(
-        conn, vault_binding_id=vault_binding_id
-    )
+    return _vault_uuid_to_canonical_id_map_with_connection(conn, vault_binding_id=vault_binding_id)
 
 
 def retained_vault_uuid_with_connection(
     conn, object_id: str, *, vault_binding_id: str = COMPATIBILITY_BINDING_ID
 ) -> str | None:
     """Resolve canonical id -> retained vault UUID without inventing an alias."""
-    return _retained_vault_uuid_with_connection(
-        conn, object_id, vault_binding_id=vault_binding_id
-    )
+    return _retained_vault_uuid_with_connection(conn, object_id, vault_binding_id=vault_binding_id)
 
 
 def update_object_source_ref_with_connection(
@@ -810,9 +853,7 @@ class PgObjectStore(ObjectStore):
     rebuild_source = "vault ingest (vault notes → app/ingest/vault_alpha.py → store_objects)"
     _OBJECTS_TABLE = "store_objects"
 
-    def __init__(
-        self, *, vault_binding_id: str = COMPATIBILITY_BINDING_ID
-    ) -> None:
+    def __init__(self, *, vault_binding_id: str = COMPATIBILITY_BINDING_ID) -> None:
         self.vault_binding_id = vault_binding_id
         _ensure_tables()
 
@@ -847,9 +888,7 @@ class PgObjectStore(ObjectStore):
                 vault_binding_id=self.vault_binding_id,
             )
 
-    def put_if_absent(
-        self, object_id: UUID, *, kind: str, source_ref: str, payload: dict
-    ) -> bool:
+    def put_if_absent(self, object_id: UUID, *, kind: str, source_ref: str, payload: dict) -> bool:
         _ensure_tables()
         with _connect() as conn:
             return put_object_if_absent_with_connection(
@@ -876,9 +915,7 @@ class PgObjectStore(ObjectStore):
                 )
                 return cur.fetchall()
 
-    def list_objects(
-        self, kind: str | None = None, *, limit: int | None = 100
-    ) -> Iterable[dict]:
+    def list_objects(self, kind: str | None = None, *, limit: int | None = 100) -> Iterable[dict]:
         with _connect() as conn:
             with conn.cursor() as cur:
                 table = self._active_table(conn)
@@ -916,16 +953,12 @@ class PgObjectStore(ObjectStore):
                     stmt = sql.SQL(
                         "SELECT count(*) AS total FROM {table} "
                         "WHERE vault_binding_id = %s AND kind = %s"
-                    ).format(
-                        table=sql.Identifier(table)
-                    )
+                    ).format(table=sql.Identifier(table))
                     params = (self.vault_binding_id, kind)
                 else:
                     stmt = sql.SQL(
                         "SELECT count(*) AS total FROM {table} WHERE vault_binding_id = %s"
-                    ).format(
-                        table=sql.Identifier(table)
-                    )
+                    ).format(table=sql.Identifier(table))
                     params = (self.vault_binding_id,)
                 cur.execute(stmt, params)
                 row = cur.fetchone()
@@ -956,9 +989,7 @@ class ConditionalVectorPurgeResult:
 class PgVectorIndex(VectorIndex):
     rebuild_source = "PgObjectStore payloads + embedding model (see docs/EMBEDDINGS.md)"
 
-    def __init__(
-        self, *, vault_binding_id: str = COMPATIBILITY_BINDING_ID
-    ) -> None:
+    def __init__(self, *, vault_binding_id: str = COMPATIBILITY_BINDING_ID) -> None:
         self.vault_binding_id = vault_binding_id
         _ensure_tables()
 
@@ -1306,9 +1337,7 @@ class PgRelationIndex(RelationIndex):
         "vault frontmatter links + PgObjectStore (see docs/CONCEPTS/RELATION_TAXONOMY.md)"
     )
 
-    def __init__(
-        self, *, vault_binding_id: str = COMPATIBILITY_BINDING_ID
-    ) -> None:
+    def __init__(self, *, vault_binding_id: str = COMPATIBILITY_BINDING_ID) -> None:
         self.vault_binding_id = vault_binding_id
         _ensure_tables()
 
@@ -1414,9 +1443,7 @@ class PgRelationIndex(RelationIndex):
         ]
 
 
-def inspect_pg_identity_tuples(
-    *, vault_binding_id: str = COMPATIBILITY_BINDING_ID
-) -> list[dict]:
+def inspect_pg_identity_tuples(*, vault_binding_id: str = COMPATIBILITY_BINDING_ID) -> list[dict]:
     """Return the distinct per-vector identity tuples present in store_vector_index.
 
     Each entry is ``{"provider", "model", "dim", "normalize", "count"}``. This is the
@@ -1564,9 +1591,7 @@ def inspect_pg_content_hash_staleness(
     }
 
 
-def inspect_pg_index_state(
-    *, vault_binding_id: str = COMPATIBILITY_BINDING_ID
-) -> dict:
+def inspect_pg_index_state(*, vault_binding_id: str = COMPATIBILITY_BINDING_ID) -> dict:
     """Return diagnostics for the Postgres vector index (identity + dims)."""
     _ensure_tables()
     state: dict[str, object] = {}

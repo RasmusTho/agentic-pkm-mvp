@@ -73,6 +73,7 @@ from tests.architecture.durable_table_classification import (
 
 pytestmark = pytest.mark.not_pg
 
+
 def _substantial_sentences(reason: str) -> list[str]:
     """Sentences long enough to carry a classification claim.
 
@@ -156,10 +157,14 @@ def test_every_production_projection_schema_and_producer_is_classified() -> None
             "true; a placeholder makes `explicitly-global` a default in everything but "
             "name."
         )
-        assert table in entry["reason"] or any(
-            producer["module"].rsplit("/", 1)[-1][:-3] in entry["reason"]
-            for producer in entry["producers"]
-        ) or entry["owning_revision"] in entry["reason"], (
+        assert (
+            table in entry["reason"]
+            or any(
+                producer["module"].rsplit("/", 1)[-1][:-3] in entry["reason"]
+                for producer in entry["producers"]
+            )
+            or entry["owning_revision"] in entry["reason"]
+        ), (
             f"{table}'s reason names neither the table, its owning revision, nor a "
             "producer module, so it cannot be checked against the code it describes."
         )
@@ -180,9 +185,7 @@ def test_every_production_projection_schema_and_producer_is_classified() -> None
                 f"owning revision {owning.name} never mentions that column."
             )
 
-        assert entry["owning_revision"] in {
-            name.split("_", 1)[0] for name in discovered[table]
-        }, (
+        assert entry["owning_revision"] in {name.split("_", 1)[0] for name in discovered[table]}, (
             f"{table}'s owning revision {entry['owning_revision']} issues no DDL for it; "
             f"the chain's declaring revisions are {sorted(discovered[table])}."
         )
@@ -246,11 +249,11 @@ def test_a_durable_table_added_by_a_later_revision_fails_until_classified(
         shutil.copy2(path, versions / path.name)
 
     (versions / "aaaa000000aa_mvr05a2_synthetic_raw.py").write_text(
-        'from alembic import op\n\n'
+        "from alembic import op\n\n"
         'revision = "aaaa000000aa"\n'
         'down_revision = "d1e8a0c5f37b"\n\n\n'
         "def upgrade() -> None:\n"
-        '    op.execute(\n'
+        "    op.execute(\n"
         '        """\n'
         "        CREATE TABLE IF NOT EXISTS public.mvr05a2_synthetic_raw (\n"
         "            id uuid PRIMARY KEY\n"
@@ -265,7 +268,7 @@ def test_a_durable_table_added_by_a_later_revision_fails_until_classified(
         'revision = "aaaa000001aa"\n'
         'down_revision = "aaaa000000aa"\n\n\n'
         "def upgrade() -> None:\n"
-        '    op.create_table(\n'
+        "    op.create_table(\n"
         '        "mvr05a2_synthetic_op_api",\n'
         '        sa.Column("id", sa.Uuid(), primary_key=True),\n'
         "    )\n\n\n"
@@ -279,7 +282,7 @@ def test_a_durable_table_added_by_a_later_revision_fails_until_classified(
         'down_revision = "aaaa000001aa"\n'
         '_TABLE = "mvr05a2_synthetic_interpolated"\n\n\n'
         "def upgrade() -> None:\n"
-        '    op.execute(\n'
+        "    op.execute(\n"
         '        f"""\n'
         "        CREATE TABLE IF NOT EXISTS {_TABLE} (\n"
         "            id uuid PRIMARY KEY\n"
@@ -324,10 +327,10 @@ def test_migration_local_temp_snapshot_is_not_a_durable_table_default(
         'revision = "aaaa000003aa"\n'
         "down_revision = None\n\n\n"
         "def upgrade() -> None:\n"
-        "    op.execute(\"\"\"\n"
+        '    op.execute("""\n'
         "        CREATE TEMP TABLE mvr05a3_fk_snapshot (id uuid);\n"
         "        CREATE TABLE durable_control (id uuid);\n"
-        "    \"\"\")\n",
+        '    """)\n',
         encoding="utf-8",
     )
 
@@ -408,9 +411,7 @@ def test_store_object_composite_key_producer_inventory_is_exact() -> None:
     }
     assert actual == declared
 
-    assert {
-        path for path in actual if path[0] in {"chunks", "embeddings"}
-    } == {
+    assert {path for path in actual if path[0] in {"chunks", "embeddings"}} == {
         ("chunks", "app/stores/pg.py", "delete"),
         ("embeddings", "app/stores/pg.py", "delete"),
     }, "the zero-writer child tables must remain zero-writer"
@@ -463,9 +464,42 @@ def test_store_object_composite_key_producer_inventory_is_exact() -> None:
             continue
         reduced = dict(manifest)
         reduced[table] = {**entry, "producers": entry["producers"][1:]}
-        assert unclassified_mutation_paths(reduced, tables), (
-            f"dropping {table}'s first producer entry did not fail the producer gate"
-        )
+        assert unclassified_mutation_paths(
+            reduced, tables
+        ), f"dropping {table}'s first producer entry did not fail the producer gate"
+
+
+def test_ingest_projection_producer_and_consumer_inventory_is_exact() -> None:
+    """MVR-05A4's producers and live SQL readers are exact in both directions."""
+    test_store_object_composite_key_producer_inventory_is_exact()
+    tables = ("chunks", "embeddings", "relations", "membership")
+    observed: set[tuple[str, str, str | None]] = set()
+    for path in sorted(APP_ROOT.rglob("*.py")):
+        if "alembic/versions" in path.as_posix():
+            continue
+        for statement in _resolver(path).sql_statements():
+            normalized = " ".join(statement.text.split()).lower()
+            if not (normalized.startswith("select ") or normalized.startswith("create view ")):
+                continue
+            for table in tables:
+                if re.search(rf"\b(?:from|join)\s+(?:public\.)?{table}\b", normalized):
+                    observed.add(
+                        (table, path.relative_to(REPO_ROOT).as_posix(), statement.function)
+                    )
+
+    assert observed == {
+        ("chunks", "app/jobs/backfill.py", "_process_chunks"),
+        ("chunks", "app/jobs/backfill.py", "_process_embeddings"),
+        ("embeddings", "app/jobs/backfill.py", "_process_embeddings"),
+        ("membership", "app/jobs/backfill.py", "_process_projection"),
+        ("chunks", "app/stores/pg.py", "_ensure_tables"),
+        ("embeddings", "app/stores/pg.py", "_ensure_tables"),
+        ("membership", "app/stores/pg.py", "_ensure_tables"),
+    }
+    backfill = (REPO_ROOT / "app" / "jobs" / "backfill.py").read_text(encoding="utf-8")
+    assert backfill.count("c.vault_binding_id = o.vault_binding_id") == 2
+    assert "e.vault_binding_id = o.vault_binding_id" in backfill
+    assert "m.vault_binding_id = d.vault_binding_id" in backfill
 
 
 def test_post_cutover_store_fixture_mutations_are_binding_scoped() -> None:
@@ -500,16 +534,10 @@ def test_post_cutover_store_fixture_mutations_are_binding_scoped() -> None:
             matches = list(mutation.finditer(statement.text))
             for index, match in enumerate(matches):
                 next_mutation = (
-                    matches[index + 1].start()
-                    if index + 1 < len(matches)
-                    else len(statement.text)
+                    matches[index + 1].start() if index + 1 < len(matches) else len(statement.text)
                 )
                 semicolon = statement.text.find(";", match.end())
-                boundary = (
-                    min(semicolon, next_mutation)
-                    if semicolon >= 0
-                    else next_mutation
-                )
+                boundary = min(semicolon, next_mutation) if semicolon >= 0 else next_mutation
                 mutation_text = statement.text[match.start() : boundary]
                 if "vault_binding_id" in mutation_text.lower():
                     continue
@@ -641,6 +669,20 @@ def test_post_cutover_store_fixture_mutations_are_binding_scoped() -> None:
                 "insert into",
                 "vector_index_meta",
             ): 1,
+            # MVR-05A4's retained-lineage proof deliberately reconstructs the
+            # pre-binding membership/store_objects shape before upgrading it.
+            (
+                "tests/migrations/test_multi_vault_ingest_projection_keys.py",
+                "_prepare_retained_historical_lineage",
+                "insert into",
+                "store_objects",
+            ): 1,
+            (
+                "tests/migrations/test_multi_vault_ingest_projection_keys.py",
+                "_prepare_retained_historical_lineage",
+                "insert into",
+                "membership",
+            ): 1,
         }
     )
     assert observed == expected, (
@@ -665,7 +707,8 @@ def test_no_executed_sql_statement_is_invisible_to_the_scan() -> None:
     sites = unresolvable_statement_sites()
     assert sites == (), (
         "these SQL calls resolve to no literal statement, so the classification "
-        "and DDL scans cannot see them at all:\n  " + "\n  ".join(sites)
+        "and DDL scans cannot see them at all:\n  "
+        + "\n  ".join(sites)
         + "\nWiden the resolver in tests/architecture/durable_table_classification.py "
         "rather than leaving a statement invisible: an INSERT written this way "
         "would never reach the producer gate."
@@ -797,9 +840,7 @@ def test_binding_cutover_worklist_is_derived_from_the_manifest() -> None:
     assert pinned not in {row.table for row in cutover_worklist(keyed)}
 
     promoted = next(
-        table
-        for table, entry in manifest.items()
-        if entry["classification"] == "explicitly-global"
+        table for table, entry in manifest.items() if entry["classification"] == "explicitly-global"
     )
     joined = {
         **manifest,
@@ -819,8 +860,17 @@ def test_binding_cutover_worklist_is_derived_from_the_manifest() -> None:
             assert row.rebuild_mechanism != "no-producer", row
 
 
+def test_ingest_group_is_fully_binding_keyed() -> None:
+    """All four MVR-05A4 rows are keyed and owned by the residual revision."""
+    manifest = load_manifest()
+    for table in ("chunks", "embeddings", "relations", "membership"):
+        assert manifest[table]["classification"] == "binding-scoped", table
+        assert manifest[table]["binding_key"] == "keyed", table
+        assert manifest[table]["owning_revision"] == "f4a05a4b0001", table
+
+
 def test_orphaned_relation_artifacts_are_removed_or_classified() -> None:
-    """`relations_init.sql` is gone; `relation_index.py` is classified instead.
+    """Both incompatible legacy `relations` schema seams are retired.
 
     Two artifacts of the class MVR-05A0/05A1 retired, handled differently
     because the evidence differs:
@@ -829,14 +879,11 @@ def test_orphaned_relation_artifacts_are_removed_or_classified() -> None:
       a primary-key-less ``relations`` shape that disagreed with its Alembic
       owner. Unreachability is provable — nothing names the file — so it is
       removed, and this test is the proof it cannot come back unnoticed.
-        * ``app/store/relation_index.py`` is *not* removable on the same evidence.
-      ``app/objects/__init__.py`` re-exports it as a compatibility shim (an
-      allowlisted entry in
-      ``tests/architecture/test_deprecated_store_callers.py``), so it is
-      reachable from production. Its ``link()`` inserts six columns that do not
-          exist on the Alembic-owned table. MVR-05A3 makes that compatibility
-          seam fail before SQL so it cannot omit the new binding column;
-          MVR-05A4 (#4578) still owns replacing or deleting it.
+    * ``app/store/relation_index.py`` was reachable through the public
+      ``app.objects`` contract but its ``link()`` statement targeted the wrong
+      schema. MVR-05A4 moves only its non-writing contract types to
+      ``app.objects.relation_types`` and deletes the SQL seam, without creating
+      a replacement writer for the Alembic-owned table.
     """
     assert not RELATIONS_INIT_SQL.exists(), (
         "app/db/sql/relations_init.sql is back. It declared `relations` without a "
@@ -866,24 +913,18 @@ def test_orphaned_relation_artifacts_are_removed_or_classified() -> None:
     )
 
     manifest = load_manifest()
-    assert LEGACY_RELATION_INDEX.exists(), (
-        "app/store/relation_index.py was removed, but its unreachability was not "
-        "provable when this slice ran: app/objects/__init__.py re-exports it. If it is "
-        "genuinely unreachable now, replace this assertion with the proof."
-    )
+    assert not LEGACY_RELATION_INDEX.exists()
     assert manifest["relations"]["classification"] in CLASSIFICATIONS
     assert all(
         producer["module"] != "app/store/relation_index.py"
         for producer in manifest["relations"]["producers"]
     ), "a seam that refuses before SQL is not a durable mutation producer"
-    from app.store.relation_index import RelationIndex
+    assert "retired" in manifest["relations"]["reason"]
 
-    with pytest.raises(RuntimeError, match=r"MVR-05A4.*before SQL"):
-        RelationIndex().link("src", "dst", "rel", 1.0, {})
-    assert "relation_index" in manifest["relations"]["reason"], (
-        "the `relations` classification reason must state the producer mismatch it is "
-        "standing in for, so MVR-05A4 inherits the finding rather than rediscovering it."
-    )
+
+def test_legacy_relation_compatibility_seam_is_removed() -> None:
+    """Issue #4578's exact Verify target retains the retired-seam proof."""
+    test_orphaned_relation_artifacts_are_removed_or_classified()
 
 
 def test_the_manifest_is_checked_in_and_machine_readable() -> None:

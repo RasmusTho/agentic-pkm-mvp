@@ -6,7 +6,9 @@ from app.events.types import (
 import uuid
 from datetime import datetime, timezone
 
-from app.agents.projector.agent import run as project_run
+import pytest
+
+from app.agents.projector.agent import _record_membership_db, run as project_run
 from app.objects import ObjectStore, DomainObject
 
 
@@ -36,3 +38,12 @@ def test_projector_returns_structure() -> None:
         assert result.get("object_id")
         assert "set_name" in result
         assert "promote" in result
+
+
+def test_projector_memory_backend_does_not_open_membership_database(monkeypatch) -> None:
+    monkeypatch.setenv("STORE_BACKEND", "memory")
+    monkeypatch.setattr(
+        "app.agents.projector.agent.save_membership",
+        lambda *_args, **_kwargs: pytest.fail("memory backend opened membership database"),
+    )
+    _record_membership_db("object", "published", "trace")

@@ -68,6 +68,17 @@ def _upgrade(revision: str) -> None:
     command.upgrade(cfg, revision)
 
 
+def _use_retained_historical_membership_identity(conn: psycopg.Connection) -> None:
+    """Make the fixture match the supported pre-MVR-05A3 membership lineage."""
+    primary_key = conn.execute(
+        "SELECT conname FROM pg_constraint "
+        "WHERE conrelid = 'public.membership'::regclass AND contype = 'p'"
+    ).fetchone()[0]
+    conn.execute(f'ALTER TABLE public.membership DROP CONSTRAINT "{primary_key}"')
+    conn.execute("ALTER TABLE public.membership DROP COLUMN id")
+    conn.execute("ALTER TABLE public.membership ADD PRIMARY KEY (object_id, set_id)")
+
+
 def _store_object_fk_inventory(conn: psycopg.Connection) -> dict[tuple[str, str], dict]:
     rows = conn.execute(
         """
@@ -120,6 +131,7 @@ def test_every_supported_store_objects_child_fk_is_binding_keyed(scratch_dsn: st
     """The historical eighth endpoint is converted only on that lineage."""
     _upgrade(PRE_CUTOVER_REVISION)
     with psycopg.connect(scratch_dsn) as conn:
+        _use_retained_historical_membership_identity(conn)
         fk_name = conn.execute(
             "SELECT conname FROM pg_constraint "
             "WHERE conrelid = 'public.membership'::regclass AND contype = 'f' "
@@ -1152,6 +1164,7 @@ def test_binding_backfill_counts_distinct_parent_assignments_not_child_rows(
     other_id = uuid.uuid4()
     chunk_ids = [uuid.uuid4(), uuid.uuid4()]
     with psycopg.connect(scratch_dsn) as conn:
+        _use_retained_historical_membership_identity(conn)
         with conn.cursor() as cur:
             membership_set_fk = cur.execute(
                 "SELECT conname FROM pg_constraint "
@@ -1207,10 +1220,10 @@ def test_binding_backfill_counts_distinct_parent_assignments_not_child_rows(
                 ],
             )
             cur.executemany(
-                "INSERT INTO membership (id, set_id, object_id) VALUES (%s, %s, %s)",
+                "INSERT INTO membership (set_id, object_id) VALUES (%s, %s)",
                 [
-                    (uuid.uuid4(), other_id, object_id),
-                    (uuid.uuid4(), object_id, object_id),
+                    (other_id, object_id),
+                    (object_id, object_id),
                 ],
             )
             cur.executemany(

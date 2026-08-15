@@ -1588,7 +1588,7 @@ STORE_PAYLOAD_SINK_CLASSIFICATION: dict[tuple[str, int], str] = {
         "-> store_objects. Verified by test_plan_to_object_carries_episode_ref."
     ),
     # -- transport_passthrough: facade/plumbing forwarding a caller-built (verified) payload ------
-    ("app/objects/__init__.py", 122): (
+    ("app/objects/__init__.py", 120): (
         "transport_passthrough: ObjectStore.save_object facade forwards dict(obj.payload) to the "
         "backing store.put -> store_objects; the caller that builds obj.payload carries episode_ref "
         "(every save_object caller is itself a classified producer above). Line drifted 116 -> 122 "

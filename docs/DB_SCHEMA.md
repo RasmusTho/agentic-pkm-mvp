@@ -3,7 +3,7 @@ Doc role: Reference
 Authority: Human-readable snapshot of the current database schema and DB outbox bootstrap; migrations and bootstrap code remain the executable source of truth.
 Temporal class: operational
 Source of truth: code
-Last verified against: app/stores/pg.py + app/alembic/versions/e6c4a2b8d1f3_mvr05a3_store_object_binding_keys.py + app/services/outbox.py + app/alembic/versions/f3a1c9d2e4b7_kernel05_outbox_schema_in_migrations.py + app/heimdal/observation_log.py + app/heimdal/cursor_store.py + app/alembic/versions/8b21e6a1f0c4_heim_observation_log_and_cursor.py + app/services/vault_sync.py + app/alembic/versions/c7f4b1a83d29_mvr05a0_file_state_binding_key.py + app/alembic/versions/d1e8a0c5f37b_mvr05a1_objects_agent_memories_adoption.py + app/db/db.py + tests/architecture/durable_table_classification.json (2026-08-12)
+Last verified against: app/stores/pg.py + app/alembic/versions/e6c4a2b8d1f3_mvr05a3_store_object_binding_keys.py + app/alembic/versions/f4a05a4b0001_mvr05a4_ingest_projection_binding_keys.py + app/services/outbox.py + app/alembic/versions/f3a1c9d2e4b7_kernel05_outbox_schema_in_migrations.py + app/heimdal/observation_log.py + app/heimdal/cursor_store.py + app/alembic/versions/8b21e6a1f0c4_heim_observation_log_and_cursor.py + app/services/vault_sync.py + app/alembic/versions/c7f4b1a83d29_mvr05a0_file_state_binding_key.py + app/alembic/versions/d1e8a0c5f37b_mvr05a1_objects_agent_memories_adoption.py + app/db/db.py + tests/architecture/durable_table_classification.json (2026-08-13)
 
 ## v5.5 Baseline Delta (Current Reality)
 - Registry watcher is the runtime default; legacy snapshot watcher is dev-only.
@@ -109,10 +109,9 @@ Last verified against: app/stores/pg.py + app/alembic/versions/e6c4a2b8d1f3_mvr0
   (`202510241200_sot41_amg_core.py`) and had zero readers repo-wide; its absence and the absence of
   any referrer under `app/`, `scripts/` and `.github/` are asserted by
   `tests/architecture/test_multi_vault_projection_inventory.py::test_orphaned_relation_artifacts_are_removed_or_classified`.
-  `app/store/relation_index.py` is **not** removed: `app/objects/__init__.py` re-exports it, so
-  production reachability could not be disproved. Its old six-column statement does not match the
-  Alembic-owned `relations` table; after MVR-05A3 the seam fails before SQL so it cannot create a
-  binding-less row. MVR-05A4 (#4578) owns replacing or deleting that compatibility seam.
+  MVR-05A4 (#4578) removes `app/store/relation_index.py` rather than reviving its incompatible
+  six-column SQL writer. The retained non-writing `RelationIndex`/edge/slice contract now lives at
+  `app/objects/relation_types.py`; `relations` still has no production writer.
 - The **vault-sync `file_state`** table is **migration-owned** (MVR-05A0, #4543): Alembic revision
   `c7f4b1a83d29` creates it, adopts a database where the legacy runtime bootstrap already created
   it, and rekeys it from `path` to `(vault_binding_id, path)`.
@@ -508,6 +507,7 @@ Interpretation:
 ### `chunks` (legacy)
 - `vault_binding_id` (`text`, `NOT NULL` after MVR-05A3)
 - `id` (`uuid`, PK)
+- `UNIQUE (vault_binding_id, id)` (composite inbound-FK endpoint after MVR-05A4)
 - `(vault_binding_id, object_id)` (composite FK → `store_objects`, `ON DELETE CASCADE`)
 - `idx` (`int`)
 - `offset_start` / `offset_end` (`int`)
@@ -532,11 +532,23 @@ own forward-only migration.
 - `id` (`uuid`, PK; default varies by migration)
 - `vault_binding_id` (`text`, `NOT NULL` after MVR-05A3)
 - `(vault_binding_id, object_id)` (composite FK → `store_objects`, `ON DELETE CASCADE`)
-- `chunk_id` (`uuid`, nullable FK → `chunks.id`, `ON DELETE CASCADE`)
+- `chunk_id` (`uuid`, nullable; composite FK with `vault_binding_id` →
+  `chunks(vault_binding_id, id)`, `ON DELETE CASCADE` after MVR-05A4)
 - `provider` (`text`, default `mock`)
 - `dim` (`int`, default `1536`)
 - `embedding` (either `double precision[]` with a cardinality check, or `vector` when vector extension is enabled in older branches)
 - `created_at` (`timestamptz`, default `now()`)
+
+### `relations` (legacy, retained projection)
+- `id` (`uuid`, PK; globally minted identity retained by MVR-05A4)
+- `vault_binding_id` (`text`, `NOT NULL` after MVR-05A3)
+- `src_id` / `dst_id` (`uuid`, `NOT NULL`; each forms a composite FK with
+  `vault_binding_id` to `store_objects(vault_binding_id, object_id)`, `ON DELETE CASCADE`)
+- `type` (`text`, `NOT NULL`)
+- `payload` (`jsonb`, `NOT NULL`, default `{}`)
+- Binding-aware indexes cover `(vault_binding_id, src_id)` and
+  `(vault_binding_id, dst_id)`. There is no production row writer; MVR-05A4
+  retired the incompatible `app/store/relation_index.py` SQL seam.
 
 ### `decisions` (legacy lineage, active writer schema)
 - `id` (`uuid`, PK; default `gen_random_uuid()` after `e1d2c3b4a5f6`)
@@ -580,14 +592,23 @@ Interpretation:
   `details.object_ref`, clears only `object_id`, and retains `vault_binding_id`.
 
 ### `membership` (legacy)
-The legacy baseline retains the **composite** key form:
+MVR-05A4 derives the effective primary-key lineage from the catalog: the fresh
+chain uses `(vault_binding_id, id)` while the retained historical chain uses
+`(vault_binding_id, object_id, set_id)`. It never infers a key from a later
+`CREATE TABLE IF NOT EXISTS` declaration. Unsupported key or inbound-FK state
+fails before any schema or row change; it does not re-attribute, quarantine,
+copy, or delete rows.
 - `vault_binding_id` (`text`, `NOT NULL` after MVR-05A3)
 - `(vault_binding_id, object_id)` (composite FK → `store_objects`, `ON DELETE CASCADE`)
 - `set_id` (`uuid`, `ON DELETE CASCADE`; fresh lineage keeps its FK to `sets.id`, while #3510
   retargets only retained legacy objects-as-sets schemas; MVR-05A3 makes that historical endpoint
   a composite `store_objects(vault_binding_id, object_id)` FK)
+- The projector/backfill producer accepts a set name, resolves it through the retained `sets`
+  registry, and writes the resolved UUID. On the historical objects-as-sets lineage that same UUID
+  must already exist in binding-scoped `store_objects`; a missing registry or endpoint row fails
+  the write instead of fabricating membership.
 - `created_at` (`timestamptz`, default `now()`)
-- `PRIMARY KEY (object_id, set_id)`
+- `PRIMARY KEY (vault_binding_id, object_id, set_id)` on the retained lineage
 
 ### Views / Helpers (legacy)
 - `view_chunks_missing_embeddings`
@@ -595,11 +616,12 @@ The legacy baseline retains the **composite** key form:
 - `latest_decision(object_id uuid, key text) -> jsonb`
 
 The retired runtime bootstrap SQL used to `DROP VIEW IF EXISTS` the first two on every process boot,
-while Alembic revision `5b8ff54bed0f` creates them — a third instance of the same split-ownership
-pattern. Since MVR-05A1 (#4560) nothing drops them at runtime, so a freshly migrated database keeps
-both. A long-running database that had them dropped does **not** get them back, because the creating
-revision has already run there; that pre-existing divergence is unchanged by #4560 and is not
-covered by the convergence guard, which is scoped to `objects` and `agent_memories`.
+while Alembic revision `5b8ff54bed0f` originally created them — a third instance of the same
+split-ownership pattern. MVR-05A4 revision `f4a05a4b0001` now recreates both retained views during
+upgrade, including on a long-running database where the bootstrap had dropped them. Their exposed
+column order remains compatible and every chunk/embedding or decision/membership comparison joins
+on the same `vault_binding_id`; the guarded test-autocreate path reproduces the same definitions only
+when it creates a fresh fixture schema.
 
 ## Canonical Queue (DB Outbox)
 Migration-owned (KERNEL-05, #2850): Alembic revision `f3a1c9d2e4b7` creates the table exactly as the

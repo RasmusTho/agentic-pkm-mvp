@@ -88,12 +88,12 @@
     },
     "chunks": {
       "classification": "binding-scoped",
-      "reason": "Text chunks now carry the minimum `vault_binding_id` composite parent reference delivered by e6c4a2b8d1f3. No app/** writer exists; app/stores/pg.py deletes only the selected binding, while MVR-05A4 still owns full child-key cutover.",
-      "owning_revision": "202510241200",
+      "reason": "Text chunks use their minted UUID id plus binding-aware uniqueness and composite canonical-parent reference; app/stores/pg.py deletes only the selected binding.",
+      "owning_revision": "f4a05a4b0001",
       "declaring_revisions": [
         "202510241200"
       ],
-      "binding_key": "pending",
+      "binding_key": "keyed",
       "binding_column": "vault_binding_id",
       "producers": [
         {
@@ -169,13 +169,13 @@
     },
     "embeddings": {
       "classification": "binding-scoped",
-      "reason": "The deprecated `embeddings` rows now carry e6c4a2b8d1f3's minimum composite object reference and have zero app/** writers. app/stores/pg.py deletes only a named binding; MVR-05A4 retains ownership of the full child-table key.",
-      "owning_revision": "a80043832e29",
+      "reason": "Deprecated embeddings retain their minted UUID id and use binding-matched composite object and chunk references; app/stores/pg.py deletes only a named binding.",
+      "owning_revision": "f4a05a4b0001",
       "declaring_revisions": [
         "202510241200",
         "a80043832e29"
       ],
-      "binding_key": "pending",
+      "binding_key": "keyed",
       "binding_column": "vault_binding_id",
       "producers": [
         {
@@ -670,13 +670,13 @@
     },
     "membership": {
       "classification": "binding-scoped",
-      "reason": "membership rows now carry e6c4a2b8d1f3's minimum `vault_binding_id` object reference; the historical store_objects-backed set_id endpoint is composite too, while the fresh sets(id) FK remains unchanged. MVR-05A4 still owns full key convergence.",
-      "owning_revision": "a80043832e29",
+      "reason": "membership identity prepends vault_binding_id to the effective catalog primary key: fresh id or retained historical (object_id,set_id). The fresh sets(id) FK remains unchanged.",
+      "owning_revision": "f4a05a4b0001",
       "declaring_revisions": [
         "202510241200",
         "a80043832e29"
       ],
-      "binding_key": "pending",
+      "binding_key": "keyed",
       "binding_column": "vault_binding_id",
       "producers": [
         {
@@ -758,12 +758,12 @@
     },
     "relations": {
       "classification": "binding-scoped",
-      "reason": "Legacy relations now carry one `vault_binding_id` shared by both composite object endpoints. The malformed app/store/relation_index.py compatibility producer fails before SQL, so app/stores/pg.py's per-binding delete is the only durable mutation until MVR-05A4 resolves the table.",
-      "owning_revision": "202510241200",
+      "reason": "Legacy relations retain their minted UUID key and one vault_binding_id shared by both composite object endpoints. The disabled app/store/relation_index.py SQL seam is retired; app/stores/pg.py's per-binding delete is the only durable mutation.",
+      "owning_revision": "f4a05a4b0001",
       "declaring_revisions": [
         "202510241200"
       ],
-      "binding_key": "pending",
+      "binding_key": "keyed",
       "binding_column": "vault_binding_id",
       "producers": [
         {

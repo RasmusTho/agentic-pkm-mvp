@@ -3,56 +3,36 @@
 from __future__ import annotations
 
 import uuid
-from pathlib import Path
 
 import psycopg
 import pytest
 
+from tests.migrations.test_multi_vault_ingest_projection_keys import (
+    INGEST_HEAD,
+    _upgrade,
+    scratch_db_factory,  # noqa: F401 - pytest fixture export
+)
 
 pytestmark = pytest.mark.pg
-REPO_ROOT = Path(__file__).resolve().parents[2]
-
-
-def _admin_dsn() -> str:
-    from app.db.dsn import resolve_dsn
-
-    dsn = resolve_dsn()
-    if not dsn:
-        pytest.skip("DATABASE_URL/DB_DSN not configured")
-    return dsn
 
 
 @pytest.fixture
-def migrated_store_dsn(monkeypatch: pytest.MonkeyPatch):
-    admin_dsn = _admin_dsn()
-    name = f"scratch_mvr05a3_isolation_{uuid.uuid4().hex[:12]}"
-    with psycopg.connect(admin_dsn, autocommit=True) as conn:
-        conn.execute(f'CREATE DATABASE "{name}"')
-    base, _, _ = admin_dsn.rpartition("/")
-    dsn = f"{base}/{name}"
-    monkeypatch.setenv("DATABASE_URL", dsn)
-    monkeypatch.delenv("DB_DSN", raising=False)
-    try:
-        with psycopg.connect(dsn, autocommit=True) as conn:
-            conn.execute("CREATE EXTENSION IF NOT EXISTS vector")
-        from alembic import command
-        from alembic.config import Config
-
-        cfg = Config(str(REPO_ROOT / "alembic.ini"))
-        cfg.set_main_option("script_location", str(REPO_ROOT / "app" / "alembic"))
-        command.upgrade(cfg, "head")
-        yield dsn
-    finally:
-        with psycopg.connect(admin_dsn, autocommit=True) as conn:
-            conn.execute(f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)')
+def migrated_store_dsn(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> str:
+    factory = request.getfixturevalue("scratch_db_factory")
+    dsn = factory()
+    _upgrade(dsn, monkeypatch, INGEST_HEAD)
+    return dsn
 
 
-def test_duplicate_uuid_is_namespaced_by_binding_in_store_projections(
+def test_duplicate_uuid_is_namespaced_by_binding_in_ingest_projections(
     migrated_store_dsn: str,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     object_id = uuid.uuid4()
+    set_id = uuid.uuid4()
     rows = [("binding-a", object_id), ("binding-b", object_id)]
     with psycopg.connect(migrated_store_dsn) as conn:
+        conn.execute("INSERT INTO sets (id, name) VALUES (%s, 'shared-isolation-set')", (set_id,))
         with conn.cursor() as cur:
             cur.executemany(
                 "INSERT INTO store_objects "
@@ -81,13 +61,43 @@ def test_duplicate_uuid_is_namespaced_by_binding_in_store_projections(
                 "VALUES (%s, 1, '{}')",
                 [(binding,) for binding, _ in rows],
             )
+            for binding, oid in rows:
+                chunk_id = uuid.uuid4()
+                cur.execute(
+                    "INSERT INTO chunks "
+                    "(id, vault_binding_id, object_id, idx, offset_start, offset_end, text) "
+                    "VALUES (%s, %s, %s, 0, 0, 1, 'x')",
+                    (chunk_id, binding, oid),
+                )
+                cur.execute(
+                    "INSERT INTO embeddings "
+                    "(id, vault_binding_id, object_id, chunk_id, provider, dim, embedding) "
+                    "VALUES (%s, %s, %s, %s, 'mock', 1, '[1]'::vector)",
+                    (uuid.uuid4(), binding, oid, chunk_id),
+                )
+                cur.execute(
+                    "INSERT INTO relations "
+                    "(id, vault_binding_id, src_id, dst_id, type) "
+                    "VALUES (%s, %s, %s, %s, 'self')",
+                    (uuid.uuid4(), binding, oid, oid),
+                )
+                cur.execute(
+                    "INSERT INTO membership "
+                    "(id, vault_binding_id, object_id, set_id) VALUES (%s, %s, %s, %s)",
+                    (uuid.uuid4(), binding, oid, set_id),
+                )
 
+        # Ingest projections have independent provenance even for the same UUID.
         for table in (
             "store_objects",
             "store_vector_index",
             "store_relations",
             "store_relation_memberships",
             "vector_index_meta",
+            "chunks",
+            "embeddings",
+            "relations",
+            "membership",
         ):
             assert conn.execute(f"SELECT count(*) FROM {table}").fetchone() == (2,), table
 
@@ -104,6 +114,29 @@ def test_duplicate_uuid_is_namespaced_by_binding_in_store_projections(
         ).fetchall()
     assert ["object_id"] not in [list(row[0]) for row in unique_keys]
     assert ["vault_binding_id", "object_id"] in [list(row[0]) for row in unique_keys]
+
+    from app.stores import pg
+
+    monkeypatch.setattr(pg, "_TABLES_READY", False)
+    pg.truncate_pg_tables(vault_binding_id="binding-b")
+    with psycopg.connect(migrated_store_dsn) as conn:
+        for table in (
+            "store_objects",
+            "store_vector_index",
+            "store_relations",
+            "store_relation_memberships",
+            "vector_index_meta",
+            "chunks",
+            "embeddings",
+            "relations",
+            "membership",
+        ):
+            assert conn.execute(
+                f"SELECT count(*) FROM {table} WHERE vault_binding_id='binding-a'"
+            ).fetchone() == (1,), table
+            assert conn.execute(
+                f"SELECT count(*) FROM {table} WHERE vault_binding_id='binding-b'"
+            ).fetchone() == (0,), table
 
 
 def test_atomic_create_once_conflict_identity_is_binding_scoped(

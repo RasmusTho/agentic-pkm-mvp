@@ -359,13 +359,15 @@ def test_every_autocreate_group_only_touches_the_table_it_probes() -> None:
     """
     from app.stores.pg import _MIGRATION_OWNED_AUTOCREATE_SQL
 
-    assert {table for table, _ in _MIGRATION_OWNED_AUTOCREATE_SQL} == set(
-        AUTOCREATE_TABLES
-    )
+    assert {table for table, _ in _MIGRATION_OWNED_AUTOCREATE_SQL} == set(AUTOCREATE_TABLES)
     for table, statements in _MIGRATION_OWNED_AUTOCREATE_SQL:
         for statement in statements:
-            targets = set(re.findall(r"(?i)\b(?:table|index|on)\s+(?:if\s+not\s+exists\s+)?"
-                                     r"(?:public\.)?(\w+)", statement)) & set(AUTOCREATE_TABLES)
+            targets = set(
+                re.findall(
+                    r"(?i)\b(?:table|index|on)\s+(?:if\s+not\s+exists\s+)?" r"(?:public\.)?(\w+)",
+                    statement,
+                )
+            ) & set(AUTOCREATE_TABLES)
             assert targets <= {table}, (
                 f"the {table!r} autocreate group issues {statement.split()[0:4]} against "
                 f"{sorted(targets - {table})}. A group runs when *its* table is absent, so a "
@@ -423,14 +425,12 @@ def test_the_store_seam_never_reshapes_a_table_that_already_exists() -> None:
         for match in [re.match(r"(?i)^CREATE TABLE IF NOT EXISTS (\w+)", statement)]
         if match
     }
-    assert created == set(AUTOCREATE_TABLES), (
-        f"the fixture path created {sorted(created)} on an empty database"
-    )
+    assert created == set(
+        AUTOCREATE_TABLES
+    ), f"the fixture path created {sorted(created)} on an empty database"
 
     existing = _schema_statements(
-        _statements_executed_by_ensure_tables(
-            autocreate=True, tables_present=AUTOCREATE_TABLES
-        )
+        _statements_executed_by_ensure_tables(autocreate=True, tables_present=AUTOCREATE_TABLES)
     )
     assert existing == [], (
         f"_ensure_tables issued {existing!r} against tables that already exist. The "
@@ -466,9 +466,9 @@ def test_no_durable_ddl_executes_outside_the_revision_chain() -> None:
     )
 
     db_source = DB_MODULE.read_text(encoding="utf-8")
-    assert "_MIGRATION_SQL_PATH" not in db_source, (
-        "app/db/db.py reads a bootstrap SQL file again (MVR-05A1, #4560)."
-    )
+    assert (
+        "_MIGRATION_SQL_PATH" not in db_source
+    ), "app/db/db.py reads a bootstrap SQL file again (MVR-05A1, #4560)."
     executed_sql_file = re.search(r"(?im)^[^#\n]*\.sql\b", db_source)
     assert executed_sql_file is None, (
         f"app/db/db.py references a SQL file again ({executed_sql_file.group(0).strip()!r}); "
@@ -560,7 +560,8 @@ def test_no_durable_ddl_executes_outside_the_revision_chain() -> None:
         f"{seam.path}:{seam.lineno} {seam.verb.upper()} {seam.table} "
         f"(in {seam.function or '<module level>'})"
         for seam in seams
-        if seam.durable_database_source and seam.owned_by_revision_chain
+        if seam.durable_database_source
+        and seam.owned_by_revision_chain
         and not seam.autocreate_gated
     ]
     assert ungated == [], (
@@ -652,9 +653,9 @@ def test_no_durable_ddl_has_two_owners() -> None:
     second owner written in the repo's other native style walk straight past.
     """
     file_state_owners = _table_ddl_owners("file_state")
-    assert len(file_state_owners) == 1, (
-        f"expected exactly one Alembic revision to own file_state DDL, got {file_state_owners}"
-    )
+    assert (
+        len(file_state_owners) == 1
+    ), f"expected exactly one Alembic revision to own file_state DDL, got {file_state_owners}"
     assert file_state_owners[0].startswith(FILE_STATE_OWNING_REVISION), file_state_owners
 
     agent_memories_owners = _table_ddl_owners("agent_memories")
@@ -677,9 +678,9 @@ def test_no_durable_ddl_has_two_owners() -> None:
         for name, text in _revision_sources().items()
         if objects_path_raw_ddl.search(text) or objects_path_op_ddl.search(text)
     )
-    assert len(objects_path_owners) == 1, (
-        f"expected exactly one Alembic revision to own objects.path, got {objects_path_owners}"
-    )
+    assert (
+        len(objects_path_owners) == 1
+    ), f"expected exactly one Alembic revision to own objects.path, got {objects_path_owners}"
     assert objects_path_owners[0].startswith(FILE_STATE_OWNING_REVISION), objects_path_owners
 
 
@@ -703,7 +704,8 @@ def test_the_objects_key_shape_has_exactly_one_owner() -> None:
     assert pkey_writers == [_owning_revision_filename(OBJECTS_OWNING_REVISION)], pkey_writers
 
     uuid_index_writers = sorted(
-        name for name, text in _revision_sources().items()
+        name
+        for name, text in _revision_sources().items()
         if re.search(r"(?is)\bobjects_uuid_idx\b", text)
     )
     assert uuid_index_writers == sorted(
@@ -750,9 +752,7 @@ def test_adopted_tables_are_reachable_from_the_alembic_revision_chain() -> None:
         creating = sorted(
             name
             for name, text in sources.items()
-            if re.search(
-                rf"(?is)create\s+table\s+if\s+not\s+exists\s+(?:public\.)?{table}\b", text
-            )
+            if re.search(rf"(?is)create\s+table\s+if\s+not\s+exists\s+(?:public\.)?{table}\b", text)
         )
         assert creating, (
             f"no Alembic revision creates {table}; MVR-05A's AC-1 becomes "
@@ -814,6 +814,8 @@ DURABLE_OWNERSHIP_PG_TARGETS = (
     # MVR-05A3 (#4577): composite parent/children, projection isolation,
     # reset scope, and audited fixture parity are one PostgreSQL mechanism.
     "tests/migrations/test_store_schema_parity.py",
+    "tests/migrations/test_multi_vault_ingest_projection_keys.py",
+    "tests/migrations/test_ingest_schema_parity.py",
     "tests/migrations/test_decisions_fk_set_null.py",
     "tests/integration/test_decisions_rebuild_from_log_only.py",
     "tests/integration/test_multi_vault_projection_isolation.py",
@@ -865,9 +867,7 @@ def test_durable_ownership_pg_targets_run_in_both_pg_lanes() -> None:
     for workflow_path, step_fragment in PG_LANES:
         workflow = workflow_path.read_text(encoding="utf-8")
         invocation = _pytest_invocation_after(workflow, step_fragment)
-        missing = [
-            target for target in DURABLE_OWNERSHIP_PG_TARGETS if target not in invocation
-        ]
+        missing = [target for target in DURABLE_OWNERSHIP_PG_TARGETS if target not in invocation]
         assert missing == [], (
             f"{missing} are pg-marked but absent from the {step_fragment!r} pytest "
             f"invocation in {workflow_path.name}; they would not run in that lane."
@@ -901,6 +901,7 @@ def test_the_pr_path_pg_lane_is_triggered_by_the_sources_it_guards() -> None:
         "app/db/decisions_schema.py",
         "app/episodes/assignment.py",
         "app/ingest/vault_alpha.py",
+        "app/agents/projector/agent.py",
         "app/jobs/backfill.py",
         "app/jobs/decisions_projection.py",
         "app/observability/status_service.py",
@@ -910,7 +911,7 @@ def test_the_pr_path_pg_lane_is_triggered_by_the_sources_it_guards() -> None:
         "app/services/audit.py",
         "app/services/decisions.py",
         "app/store/membership_store.py",
-        "app/store/relation_index.py",
+        "app/objects/relation_types.py",
         "app/stores/postgres.py",
         "tests/architecture/durable_table_classification.py",
         "tests/architecture/test_durable_table_ownership.py",

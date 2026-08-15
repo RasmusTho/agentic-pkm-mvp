@@ -10,6 +10,9 @@ import pytest
 from tests.integration.test_multi_vault_projection_isolation import (
     migrated_store_dsn as _migrated_store_dsn,
 )
+from tests.migrations.test_multi_vault_ingest_projection_keys import (
+    scratch_db_factory,  # noqa: F401 - pytest fixture export
+)
 
 
 migrated_store_dsn = _migrated_store_dsn

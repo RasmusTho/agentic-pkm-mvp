@@ -1,5 +1,5 @@
 from datetime import datetime, timezone
-from app.store.relation_index import RelationIndex, RelationEdge, GraphSlice
+from app.objects import RelationIndex, RelationEdge, GraphSlice
 
 def test_relation_index_interface_shape():
     ri = RelationIndex

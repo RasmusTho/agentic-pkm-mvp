@@ -14,9 +14,9 @@ legacy ``app.store.object_store`` module). Durable writes route exclusively
 through the ``app.stores`` provider seam (``resolve_object_store_port``);
 store failures propagate — there is no silent in-memory fallback.
 
-``app.store.relation_index`` and ``app.store.vector_index`` remain as
-backward-compatibility shims for existing callers and will be migrated
-per-area in follow-up issues. See docs/CODE_INVENTORY.md :: Cleanup follow-ups.
+The disabled ``app.store.relation_index`` SQL seam is retired. Its non-writing
+contract types live in ``app.objects.relation_types``; ``app.store.vector_index``
+remains as a bounded compatibility shim. See docs/CODE_INVENTORY.md.
 """
 
 from __future__ import annotations
@@ -30,7 +30,7 @@ from uuid import UUID
 from app.events.models import new_trace_id
 from app.events.types import INGEST_OBJECT_CREATED
 from app.services.outbox import insert_object_and_outbox, payload_fingerprint
-from app.store.relation_index import RelationEdge, GraphSlice, RelationIndex
+from app.objects.relation_types import RelationEdge, GraphSlice, RelationIndex
 from app.store.vector_index import ScoredNeighbor, VectorIndex
 from app.stores import resolve_object_store_port
 
@@ -59,9 +59,7 @@ def _normalize_ts(ts: datetime | None) -> datetime:
     return ts.astimezone(timezone.utc)
 
 
-def _list_from_memory(
-    kind: Optional[str] = None, limit: int | None = 100
-) -> List[DomainObject]:
+def _list_from_memory(kind: Optional[str] = None, limit: int | None = 100) -> List[DomainObject]:
     values = list(_MEMORY_STORE.values())
     if kind is not None:
         values = [o for o in values if o.kind == kind]
