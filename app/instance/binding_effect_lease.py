@@ -413,7 +413,7 @@ class BindingEffectLeaseManager:
                     ):
                         self._close_holder_activity(activity_descriptor)
                 finally:
-                    if descriptor is not None and held is None:
+                    if descriptor is not None and (held is None or held.owner_pid == os.getpid()):
                         try:
                             fcntl.flock(descriptor, fcntl.LOCK_UN)
                         finally:
@@ -424,38 +424,30 @@ class BindingEffectLeaseManager:
             raise BindingEffectLeaseError(
                 "a fork child cannot release its parent's binding effect lease"
             )
-        try:
-            with self._state_locked(held.vault_binding_id):
-                current = self._load_reconciled_locked(held.vault_binding_id)
-                updated = copy.deepcopy(current)
-                if held.mode == "shared":
-                    before = len(updated["sharedHolders"])
-                    updated["sharedHolders"] = [
-                        item
-                        for item in updated["sharedHolders"]
-                        if item["holderId"] != held.holder_id
-                    ]
-                    found = len(updated["sharedHolders"]) != before
-                else:
-                    found = bool(
-                        updated["exclusiveHolder"]
-                        and updated["exclusiveHolder"]["holderId"] == held.holder_id
-                    )
-                    if found:
-                        updated["exclusiveHolder"] = None
-                if not found:
-                    raise BindingEffectLeaseError("held binding effect lease state is missing")
-                self._commit_locked(held.vault_binding_id, current, updated)
-                self._unlink_holder_activity_locked(
-                    held.vault_binding_id,
-                    held.holder_id,
-                    held.activity_descriptor,
+        with self._state_locked(held.vault_binding_id):
+            current = self._load_reconciled_locked(held.vault_binding_id)
+            updated = copy.deepcopy(current)
+            if held.mode == "shared":
+                before = len(updated["sharedHolders"])
+                updated["sharedHolders"] = [
+                    item for item in updated["sharedHolders"] if item["holderId"] != held.holder_id
+                ]
+                found = len(updated["sharedHolders"]) != before
+            else:
+                found = bool(
+                    updated["exclusiveHolder"]
+                    and updated["exclusiveHolder"]["holderId"] == held.holder_id
                 )
-        finally:
-            try:
-                fcntl.flock(held.gate_descriptor, fcntl.LOCK_UN)
-            finally:
-                _close_lease_descriptor(held.gate_descriptor)
+                if found:
+                    updated["exclusiveHolder"] = None
+            if not found:
+                raise BindingEffectLeaseError("held binding effect lease state is missing")
+            self._commit_locked(held.vault_binding_id, current, updated)
+            self._unlink_holder_activity_locked(
+                held.vault_binding_id,
+                held.holder_id,
+                held.activity_descriptor,
+            )
 
     def _discard_pending(
         self,

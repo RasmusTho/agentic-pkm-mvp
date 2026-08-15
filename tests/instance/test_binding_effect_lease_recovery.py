@@ -313,6 +313,79 @@ def test_held_activity_descriptor_has_one_cleanup_owner_at_cancellation_boundary
 
 
 @pytest.mark.parametrize("mode", ["shared", "exclusive"])
+def test_held_gate_descriptor_has_one_outer_owner_at_release_entry(
+    tmp_path, monkeypatch, mode
+) -> None:
+    manager = _build_manager(tmp_path, "binding-a")
+    vault = tmp_path / "vaults" / "binding-a"
+    real_release = manager._release
+    source, start = inspect.getsourcelines(real_release)
+    cancellation_line = next(
+        start + offset
+        for offset, line in enumerate(source)
+        if line.strip() == "if held.owner_pid != os.getpid():"
+    )
+    real_close = lease_module._close_lease_descriptor
+    gate_descriptor: list[int] = []
+    reused: list[int] = []
+
+    def recording_release(held) -> None:
+        gate_descriptor.append(held.gate_descriptor)
+        real_release(held)
+
+    def close_then_force_reuse(descriptor: int) -> None:
+        real_close(descriptor)
+        if gate_descriptor and descriptor == gate_descriptor[0] and not reused:
+            replacement = os.open("/dev/null", os.O_RDONLY)
+            assert replacement == descriptor
+            reused.append(replacement)
+
+    def cancel_at_release_entry(frame, event, arg):
+        del arg
+        if (
+            event == "line"
+            and frame.f_code is real_release.__func__.__code__
+            and frame.f_lineno == cancellation_line
+        ):
+            sys.settrace(None)
+            raise KeyboardInterrupt("cancel at held gate release entry")
+        return cancel_at_release_entry
+
+    monkeypatch.setattr(manager, "_release", recording_release)
+    monkeypatch.setattr(
+        lease_module,
+        "_close_lease_descriptor",
+        close_then_force_reuse,
+    )
+    effect = manager.shared_effect if mode == "shared" else manager.exclusive_change
+    sys.settrace(cancel_at_release_entry)
+    try:
+        with pytest.raises(KeyboardInterrupt, match="held gate release entry"):
+            with effect("binding-a", channel_id="dev", root=vault, timeout=1):
+                pass
+    finally:
+        sys.settrace(None)
+
+    assert len(reused) == 1
+    try:
+        os.fstat(reused[0])
+        probe = os.open(manager._gate_path("binding-a"), os.O_RDWR)
+        try:
+            lease_module.fcntl.flock(
+                probe,
+                lease_module.fcntl.LOCK_EX | lease_module.fcntl.LOCK_NB,
+            )
+        finally:
+            os.close(probe)
+    finally:
+        os.close(reused[0])
+
+    observation = manager.observe("binding-a")
+    assert observation.shared_count == 0
+    assert not observation.exclusive_held
+
+
+@pytest.mark.parametrize("mode", ["shared", "exclusive"])
 def test_public_context_cancellation_releases_the_adopted_effect(
     tmp_path, monkeypatch, mode
 ) -> None:
