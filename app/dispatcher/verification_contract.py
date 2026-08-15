@@ -43,12 +43,12 @@ FINAL_REVIEW_ROUNDS_LINE_PATTERN = re.compile(
     r"(?m)^Final-Review-Rounds:[ \t]*.*$"
 )
 FINAL_REVIEW_ROUNDS_PATTERN = re.compile(
-    r"(?m)^Final-Review-Rounds:[ \t]*([12])[ \t]*$"
+    r"(?m)^Final-Review-Rounds:[ \t]*([012])[ \t]*$"
 )
 
 
 def resolve_final_review_rounds(body: object) -> int | None:
-    """Return one strict declaration; missing, malformed, or duplicate fails closed."""
+    """Return one strict declaration; zero explicitly selects the light path."""
     if not isinstance(body, str):
         return None
     if re.search(r"\r(?!\n)|[\u2028\u2029]", body):
