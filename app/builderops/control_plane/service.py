@@ -154,7 +154,11 @@ def _row_derived_evidence_text(value: Any) -> str:
         return "".join(_row_derived_evidence_text(item) for item in value.values())
     if isinstance(value, (list, tuple)):
         return "".join(_row_derived_evidence_text(item) for item in value)
-    return value if isinstance(value, str) else ""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, int) and not isinstance(value, bool):
+        return str(value)
+    return ""
 
 
 def _assert_row_derived_evidence_safe(value: Any) -> None:
