@@ -60,12 +60,14 @@ class _Connection:
         ),
     ),
 )
-def test_preflight_rejects_missing_binding_unique_or_residual_global_unique(
+def test_preflight_queries_binding_unique_and_residual_global_unique_contracts(
     table: str,
     primary_key: list[str],
     required_unique: list[str],
     prohibited_unique: list[str],
 ) -> None:
+    # This unit proof pins query/parameter construction. The real catalog
+    # outcomes are exercised against scratch PostgreSQL in test_replay_schema_parity.py.
     connection = _Connection((True, False, primary_key))
     with pytest.raises(ReplayProjectionSchemaError, match="binding_and_uniqueness=False"):
         assert_replay_projection_schema(connection, table)
