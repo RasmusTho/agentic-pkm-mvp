@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import multiprocessing
+import errno
 import os
 from pathlib import Path
 from types import SimpleNamespace
@@ -198,6 +199,178 @@ def test_third_registry_endpoint_retains_journal_and_fails_closed(tmp_path, monk
     with pytest.raises(BindingEffectLeaseError, match="diverges from registry"):
         recovered.observe("binding-a")
     assert recovered._journal_path("binding-a").exists()
+
+
+def test_failed_pending_discard_does_not_leave_a_live_process_at_fifo_head(
+    tmp_path, monkeypatch
+) -> None:
+    manager = _build_manager(tmp_path, "binding-a")
+    vault = tmp_path / "vaults" / "binding-a"
+    real_producer = manager.registry_store.set_binding_effect_lease_state
+    discard_failed = False
+
+    with manager.shared_effect("binding-a", channel_id="dev", root=vault, timeout=1):
+
+        def fail_pending_discard(binding_id, state, **kwargs) -> None:
+            nonlocal discard_failed
+            current = manager.registry_store.load().extensions["bindingEffectLeases"][binding_id]
+            if not discard_failed and current["exclusivePending"] and not state["exclusivePending"]:
+                discard_failed = True
+                raise RegistryError("pending discard unavailable")
+            real_producer(binding_id, state, **kwargs)
+
+        monkeypatch.setattr(
+            manager.registry_store,
+            "set_binding_effect_lease_state",
+            fail_pending_discard,
+        )
+        with pytest.raises(RegistryError, match="pending discard unavailable"):
+            with manager.exclusive_change("binding-a", channel_id="dev", root=vault, timeout=0.02):
+                pytest.fail("exclusive acquisition cannot overlap a shared holder")
+
+    monkeypatch.setattr(
+        manager.registry_store,
+        "set_binding_effect_lease_state",
+        real_producer,
+    )
+    with manager.shared_effect("binding-a", channel_id="dev", root=vault, timeout=1):
+        assert manager.observe("binding-a").exclusive_pending_count == 0
+
+
+def test_pending_activity_requires_a_held_lock_from_the_live_waiter(tmp_path) -> None:
+    manager = _build_manager(tmp_path, "binding-a")
+    manager._ensure_state_root()
+    holder = manager._holder("holder-active", ticket=1, mode="pending")
+    descriptor = manager._open_pending_activity("binding-a", holder["holderId"], create=True)
+    lease_module.fcntl.flock(descriptor, lease_module.fcntl.LOCK_EX)
+    try:
+        assert manager._pending_waiter_status("binding-a", holder) == (True, None)
+    finally:
+        manager._close_pending_activity(descriptor)
+
+    active, stale_descriptor = manager._pending_waiter_status("binding-a", holder)
+    assert not active
+    assert stale_descriptor is not None
+    manager._close_pending_activity(stale_descriptor)
+    manager._pending_activity_path("binding-a", holder["holderId"]).unlink()
+
+
+@pytest.mark.skipif(not hasattr(os, "fork"), reason="requires fork inheritance proof")
+def test_forked_child_neither_unlocks_nor_extends_pending_activity(tmp_path) -> None:
+    manager = _build_manager(tmp_path, "binding-a")
+    manager._ensure_state_root()
+    path = manager._pending_activity_path("binding-a", "holder-fork")
+    descriptor = manager._open_pending_activity("binding-a", "holder-fork", create=True)
+    lease_module.fcntl.flock(descriptor, lease_module.fcntl.LOCK_EX)
+    child_read, parent_write = os.pipe()
+    parent_read, child_write = os.pipe()
+    pid = os.fork()
+    if pid == 0:
+        os.close(parent_write)
+        os.close(parent_read)
+        probe = os.open(path, os.O_RDWR)
+        try:
+            try:
+                lease_module.fcntl.flock(
+                    probe,
+                    lease_module.fcntl.LOCK_EX | lease_module.fcntl.LOCK_NB,
+                )
+            except BlockingIOError:
+                os.write(child_write, b"B")
+            else:
+                os._exit(2)
+            os.read(child_read, 1)
+            lease_module.fcntl.flock(
+                probe,
+                lease_module.fcntl.LOCK_EX | lease_module.fcntl.LOCK_NB,
+            )
+            os.write(child_write, b"A")
+            os._exit(0)
+        except BaseException:
+            os._exit(3)
+
+    os.close(child_read)
+    os.close(child_write)
+    try:
+        assert os.read(parent_read, 1) == b"B"
+        manager._close_pending_activity(descriptor)
+        os.write(parent_write, b"R")
+        assert os.read(parent_read, 1) == b"A"
+        _, status = os.waitpid(pid, 0)
+        assert os.waitstatus_to_exitcode(status) == 0
+    finally:
+        os.close(parent_write)
+        os.close(parent_read)
+        path.unlink(missing_ok=True)
+
+
+@pytest.mark.parametrize("crash_point", ["before-pending", "after-exclusive"])
+def test_pending_activity_crash_windows_converge_without_file_leaks(
+    tmp_path, monkeypatch, crash_point
+) -> None:
+    manager = _build_manager(tmp_path, "binding-a")
+    vault = tmp_path / "vaults" / "binding-a"
+    real_commit = manager._commit_locked
+
+    def crash(vault_binding_id, previous, candidate):
+        pending = candidate["exclusivePending"]
+        exclusive = candidate["exclusiveHolder"]
+        if crash_point == "before-pending" and pending and not previous["exclusivePending"]:
+            raise KeyboardInterrupt("crash before pending commit")
+        committed = real_commit(vault_binding_id, previous, candidate)
+        if crash_point == "after-exclusive" and exclusive is not None:
+            raise KeyboardInterrupt("crash after exclusive commit")
+        return committed
+
+    monkeypatch.setattr(manager, "_commit_locked", crash)
+    with pytest.raises(KeyboardInterrupt, match="crash"):
+        with manager.exclusive_change("binding-a", channel_id="dev", root=vault, timeout=1):
+            if crash_point == "before-pending":
+                pytest.fail("pending commit was expected to crash")
+
+    monkeypatch.setattr(manager, "_commit_locked", real_commit)
+    observation = manager.observe("binding-a")
+    assert observation.exclusive_pending_count == 0
+    assert not observation.exclusive_held
+    assert list(manager.state_root.glob("*.pending.lock")) == []
+
+
+def test_pending_activity_probe_error_fails_closed(tmp_path, monkeypatch) -> None:
+    manager = _build_manager(tmp_path, "binding-a")
+    manager._ensure_state_root()
+    holder = manager._holder("holder-probe", ticket=1, mode="pending")
+    descriptor = manager._open_pending_activity("binding-a", holder["holderId"], create=True)
+    lease_module.fcntl.flock(descriptor, lease_module.fcntl.LOCK_EX)
+    real_flock = lease_module.fcntl.flock
+
+    def unsupported(*args, **kwargs):
+        raise OSError(errno.ENOTSUP, "flock unsupported")
+
+    monkeypatch.setattr(lease_module.fcntl, "flock", unsupported)
+    with pytest.raises(OSError, match="flock unsupported"):
+        manager._pending_waiter_status("binding-a", holder)
+    monkeypatch.setattr(lease_module.fcntl, "flock", real_flock)
+    manager._close_pending_activity(descriptor)
+
+
+def test_pending_activity_unlink_rejects_path_replacement(tmp_path) -> None:
+    manager = _build_manager(tmp_path, "binding-a")
+    manager._ensure_state_root()
+    holder_id = "holder-replaced"
+    path = manager._pending_activity_path("binding-a", holder_id)
+    descriptor = manager._open_pending_activity("binding-a", holder_id, create=True)
+    lease_module.fcntl.flock(descriptor, lease_module.fcntl.LOCK_EX)
+    displaced = path.with_suffix(".displaced")
+    path.rename(displaced)
+    path.touch(mode=0o600)
+    try:
+        with pytest.raises(BindingEffectLeaseError, match="path identity changed"):
+            manager._unlink_pending_activity_locked("binding-a", holder_id, descriptor)
+        assert path.exists()
+    finally:
+        manager._close_pending_activity(descriptor)
+        path.unlink(missing_ok=True)
+        displaced.unlink(missing_ok=True)
 
 
 class _FakeProcPidInfo:

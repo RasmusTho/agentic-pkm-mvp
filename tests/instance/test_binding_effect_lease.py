@@ -163,8 +163,10 @@ def test_lease_bookkeeping_does_not_rotate_binding_revision(tmp_path) -> None:
     assert manager.persisted_state("binding-a")["generation"] == 2
 
 
-def test_opaque_binding_id_round_trips_through_acquire_and_release(tmp_path) -> None:
-    binding_id = " binding-a "
+@pytest.mark.parametrize("binding_id", [" binding-a ", "vault-å"])
+def test_opaque_binding_id_round_trips_through_acquire_and_release(
+    tmp_path, binding_id
+) -> None:
     manager = _build_manager(tmp_path, binding_id)
     vault = tmp_path / "vaults" / binding_id
 

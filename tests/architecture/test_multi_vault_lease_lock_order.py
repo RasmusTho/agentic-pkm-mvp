@@ -58,3 +58,25 @@ class Example:
             self._mutate()
 """
     assert _unordered_state_lock_lines(inverted)
+
+
+def test_pending_activity_locks_never_add_a_blocking_lock_order_edge() -> None:
+    source = Path("app/instance/binding_effect_lease.py").read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    methods = {
+        node.name: node
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+
+    for name in ("_acquire", "_pending_waiter_status", "_scavenge_pending_activity_locked"):
+        calls = [
+            node
+            for node in ast.walk(methods[name])
+            if isinstance(node, ast.Call)
+            and ast.unparse(node.func).endswith("fcntl.flock")
+            and len(node.args) >= 2
+            and "LOCK_EX" in ast.unparse(node.args[1])
+        ]
+        assert calls
+        assert all("LOCK_NB" in ast.unparse(call.args[1]) for call in calls)
