@@ -457,6 +457,24 @@ def test_state_symlink_is_rejected_without_reading_its_target(tmp_path) -> None:
         manager.observe("binding-a")
 
 
+def test_state_root_symlink_is_rejected_without_mutating_its_target(tmp_path) -> None:
+    manager = _build_manager(tmp_path, "binding-a")
+    external = tmp_path / "external-state-root"
+    external.mkdir(mode=0o755)
+    sentinel = external / "sentinel.txt"
+    sentinel.write_text("unchanged\n", encoding="utf-8")
+    state_root = manager.state_root
+    state_root.symlink_to(external, target_is_directory=True)
+    before = external.stat().st_mode & 0o777
+
+    with pytest.raises(BindingEffectLeaseError, match="directory is unsafe"):
+        manager.observe("binding-a")
+
+    assert state_root.is_symlink()
+    assert external.stat().st_mode & 0o777 == before == 0o755
+    assert sentinel.read_text(encoding="utf-8") == "unchanged\n"
+
+
 def test_journal_symlink_is_rejected_without_reading_its_target(tmp_path) -> None:
     manager = _build_manager(tmp_path, "binding-a")
     vault = tmp_path / "vaults" / "binding-a"

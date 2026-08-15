@@ -1012,15 +1012,35 @@ class BindingEffectLeaseManager:
         return cast(_LeaseState, copy.deepcopy(value))
 
     def _ensure_state_root(self) -> None:
-        self.state_root.mkdir(parents=True, exist_ok=True, mode=0o700)
-        os.chmod(self.state_root, 0o700)
-        metadata = self.state_root.lstat()
-        if (
-            not stat.S_ISDIR(metadata.st_mode)
-            or metadata.st_uid != os.geteuid()
-            or metadata.st_mode & 0o777 != 0o700
-        ):
-            raise BindingEffectLeaseError("binding effect lease directory is unsafe")
+        nofollow = getattr(os, "O_NOFOLLOW", None)
+        if nofollow is None:
+            raise BindingEffectLeaseError("binding effect lease directory cannot be opened safely")
+        try:
+            self.state_root.mkdir(mode=0o700)
+        except FileExistsError:
+            pass
+        descriptor: int | None = None
+        try:
+            try:
+                descriptor = os.open(
+                    self.state_root,
+                    os.O_RDONLY
+                    | getattr(os, "O_DIRECTORY", 0)
+                    | nofollow
+                    | getattr(os, "O_CLOEXEC", 0),
+                )
+            except OSError as exc:
+                raise BindingEffectLeaseError("binding effect lease directory is unsafe") from exc
+            os.set_inheritable(descriptor, False)
+            metadata = os.fstat(descriptor)
+            if not stat.S_ISDIR(metadata.st_mode) or metadata.st_uid != os.geteuid():
+                raise BindingEffectLeaseError("binding effect lease directory is unsafe")
+            os.fchmod(descriptor, 0o700)
+            if os.fstat(descriptor).st_mode & 0o777 != 0o700:
+                raise BindingEffectLeaseError("binding effect lease directory is unsafe")
+        finally:
+            if descriptor is not None:
+                os.close(descriptor)
 
     @staticmethod
     def _open_private_lease_lock(path: Path) -> int:
