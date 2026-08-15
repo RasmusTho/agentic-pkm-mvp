@@ -171,9 +171,23 @@ def _contains_postgres_lsn_literal(value: str) -> bool:
 def _canonical_durable_key(key: str) -> str:
     """Normalize common structured-key spellings before secret classification."""
 
-    acronym_split = re.sub(r"([A-Z]+)([A-Z][a-z])", r"\1_\2", key.strip())
-    camel_split = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", acronym_split)
-    return re.sub(r"[^A-Za-z0-9]+", "_", camel_split).strip("_").lower()
+    source = key.strip()
+    normalized: list[str] = []
+    for index, character in enumerate(source):
+        if not character.isascii() or not character.isalnum():
+            if normalized and normalized[-1] != "_":
+                normalized.append("_")
+            continue
+        previous = source[index - 1] if index else ""
+        following = source[index + 1] if index + 1 < len(source) else ""
+        if character.isupper() and normalized and (
+            previous.islower()
+            or previous.isdigit()
+            or (previous.isupper() and following.islower())
+        ) and normalized[-1] != "_":
+            normalized.append("_")
+        normalized.append(character)
+    return "".join(normalized).strip("_").lower()
 
 
 def _row_derived_evidence_text(value: Any) -> str:
