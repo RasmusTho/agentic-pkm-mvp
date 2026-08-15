@@ -5,7 +5,7 @@ Owner: Builder System governance
 Temporal class: operational
 Review cadence: event-driven
 Source of truth: observed repo files and read-only GitHub command output cited inline
-Last reviewed: 2026-08-11
+Last reviewed: 2026-08-15
 
 # Builder System Process Map
 
@@ -268,7 +268,7 @@ processes attach where relevant across V1-V4; none is a serial value-stream stag
 | --- | --- | --- |
 | **G1 Govern intent and portfolio** | **G1.1** maintain owner intent/constraints; **G1.2** prioritize or defer capabilities; **G1.3** preserve dispositions and supersession | Primarily V1 and V2, with operational evidence from V4 |
 | **G2 Govern architecture and contracts** | **G2.1** assign system/interface ownership; **G2.2** maintain ADRs/contracts/SBS registers; **G2.3** define and evolve invariants/fitness rules | All value-stream nodes that read or change architecture or contracts |
-| **G3 Govern change, flow, and release** | **G3.1** classify risk/proportional path; **G3.2** control claims, isolation, publication, and explicit merge; **G3.3** control WIP, dependencies, shared resources, review/CI backpressure, and preservation of independent ready work; **G3.4** control channel promotion, migration, rollback, and external effects | V2 readiness and all of V3 |
+| **G3 Govern change, flow, and release** | **G3.1** classify risk/proportional path; **G3.2** control claims, isolation, publication, and explicit merge; **G3.3** control WIP, dependencies, shared resources, provider-capacity admission, review/CI backpressure, and preservation of independent ready work; **G3.4** control channel promotion, migration, rollback, and external effects | V2 readiness and all of V3 |
 | **G4 Govern agent/tool security, operational risk, incidents, and exceptions** | **G4.1** admit principals/tools through the security contract; **G4.2** define safety/stop/recovery/revocation posture; **G4.3** classify technical block versus canonical Human Exception; **G4.4** retain protected operator decisions | Every agent/tool execution boundary, V3 release, and V4 operation/response; exception attachments may occur anywhere |
 | **G5 Govern evidence and audit** | **G5.1** define proof/freshness requirements; **G5.2** preserve exact identity/provenance/receipts; **G5.3** reconcile live truth and stale projections | Every value-stream handoff |
 | **G6 Govern process and learning** | **G6.1** capture Builder-process divergence; **G6.2** run retrospective/reevaluation; **G6.3** route each signal to governance edit, Issue, debt/fitness, promotion, or discard | Receives signals from V1-V4 and changes their governing L3 artifacts through normal authority |
@@ -287,6 +287,10 @@ maximizing concurrent starts. The coordinator or owning workflow must:
   shared-resource-critical phases;
 - treat host-global validation leases, CI runners, GitHub API budget, review capacity, and merge
   capacity as shared constraints;
+- apply `docs/architecture/SBS_OPERATING_MODEL.md :: Provider-Capacity Admission Policy` to
+  external provider capacity: low or uncertain capacity protects high-priority/time-critical
+  delivery and verification, while lower-priority work is deferred or safely downgraded with a
+  visible receipt;
 - stop adding work when review, CI, recovery, or integration queues are the bottleneck;
 - keep independent, strictly ready work available when one lane blocks, rather than imposing a
   global singleton; and
@@ -416,7 +420,7 @@ without duplicating its parentage.
 | V4.2 | `RUNBOOK_AGENTOPS_INCIDENT_TRIAGE`; go-live/restore runbooks; applicable rollback instructions | Runbooks/state transitions; stabilization and rollback require verification |
 | V4.3 | `bug-to-issue` classification; `architecture-research` for structural recurrence; evidence-bridge classifiers | Skills/report-only helpers; candidates do not mutate backlog or Product truth |
 | V4.4 | Corrective-action Issue/receipt; owner-doc writeback; feature validation receipt | Destination-specific work instructions; closes the product/value-stream loop |
-| G3.3 | `deliver-issue-set`; host-global lease script; CI wait contract; dispatcher/worktree conflict rules | Flow-control skills/scripts/contracts; preserve independent ready work while respecting backpressure |
+| G3.3 | `deliver-issue-set`; host-global lease script; CI wait contract; dispatcher/worktree conflict rules; SBS provider-capacity admission policy | Flow-control skills/scripts/contracts; preserve independent ready work while respecting backpressure and the high-capability reserve |
 | G4.1 | Security owner docs; tool/workflow permission declarations; credential and environment contracts; admission fields above | Current controls are distributed; uniform containment/RBAC is target |
 | G4.3 | Canonical escalation classifier; `owner-decision-brief`; Human Exception packet | Policy/skill/template; technical failure alone cannot select owner escalation |
 | G5.2 | Exact-SHA check/review receipts, merge/closure readback, BuilderOpsReceipt, promotion/rollback receipts | Evidence contracts; each receipt is limited to its named authority/effect |
