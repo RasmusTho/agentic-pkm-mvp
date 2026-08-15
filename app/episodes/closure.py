@@ -50,7 +50,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Final
 
-from app.db.db import conn_rw
+from app.db.db import COMPATIBILITY_BINDING_ID, conn_rw
+from app.db.replay_projection_schema import assert_replay_projection_schema
 from app.episodes.assignment import BINDING_STATE_ACTIVE, BINDING_TABLE
 from app.episodes.notes import parse_episode_note
 from app.episodes.segmenter import TIME_GAP_MINUTES
@@ -97,14 +98,12 @@ class EpisodeClosureSchemaMissingError(RuntimeError):
 
 
 def _assert_schema(conn: Any) -> None:
-    with conn.cursor() as cur:
-        cur.execute("SELECT to_regclass(%s)", (EPISODES_TABLE,))
-        row = cur.fetchone()
-    oid = (row.get("to_regclass") if isinstance(row, dict) else row[0]) if row else None
-    if not oid:
+    try:
+        assert_replay_projection_schema(conn, EPISODES_TABLE)
+    except RuntimeError as exc:
         raise EpisodeClosureSchemaMissingError(
-            f"Missing table '{EPISODES_TABLE}'. {_EPISODES_SCHEMA_MIGRATION_HINT}"
-        )
+            f"Stale table '{EPISODES_TABLE}'. {_EPISODES_SCHEMA_MIGRATION_HINT}"
+        ) from exc
 
 
 @dataclass(frozen=True)
@@ -144,7 +143,8 @@ def find_closable_episodes(
         with conn.cursor() as cur:
             cur.execute(
                 f"SELECT episode_id, scope, time_end, note_path FROM {EPISODES_TABLE} "
-                "WHERE closed = false AND time_end IS NOT NULL"
+                "WHERE vault_binding_id = %s AND closed = false AND time_end IS NOT NULL",
+                (COMPATIBILITY_BINDING_ID,),
             )
             rows = cur.fetchall()
     for r in rows:
@@ -172,10 +172,15 @@ def find_closable_episodes(
 
 def _count_active_bound_artifacts(episode_id: str) -> int:
     with conn_rw() as conn:
+        try:
+            assert_replay_projection_schema(conn, BINDING_TABLE)
+        except RuntimeError as exc:
+            raise EpisodeClosureSchemaMissingError(str(exc)) from exc
         with conn.cursor() as cur:
             cur.execute(
-                f"SELECT count(*) AS n FROM {BINDING_TABLE} WHERE episode_id = %s AND binding_state = %s",
-                (episode_id, BINDING_STATE_ACTIVE),
+                f"SELECT count(*) AS n FROM {BINDING_TABLE} "
+                "WHERE vault_binding_id = %s AND episode_id = %s AND binding_state = %s",
+                (COMPATIBILITY_BINDING_ID, episode_id, BINDING_STATE_ACTIVE),
             )
             row = cur.fetchone()
     if row is None:
@@ -204,8 +209,9 @@ def _sync_projection_closed(episode_id: str) -> None:
         _assert_schema(conn)
         with conn.cursor() as cur:
             cur.execute(
-                f"UPDATE {EPISODES_TABLE} SET closed = true WHERE episode_id = %s",
-                (episode_id,),
+                f"UPDATE {EPISODES_TABLE} SET closed = true "
+                "WHERE vault_binding_id = %s AND episode_id = %s",
+                (COMPATIBILITY_BINDING_ID, episode_id),
             )
             rowcount = getattr(cur, "rowcount", None)
     if not rowcount:

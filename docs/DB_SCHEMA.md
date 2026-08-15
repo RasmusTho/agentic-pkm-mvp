@@ -3,7 +3,7 @@ Doc role: Reference
 Authority: Human-readable snapshot of the current database schema and DB outbox bootstrap; migrations and bootstrap code remain the executable source of truth.
 Temporal class: operational
 Source of truth: code
-Last verified against: app/stores/pg.py + app/alembic/versions/e6c4a2b8d1f3_mvr05a3_store_object_binding_keys.py + app/alembic/versions/f4a05a4b0001_mvr05a4_ingest_projection_binding_keys.py + app/services/outbox.py + app/alembic/versions/f3a1c9d2e4b7_kernel05_outbox_schema_in_migrations.py + app/heimdal/observation_log.py + app/heimdal/cursor_store.py + app/alembic/versions/8b21e6a1f0c4_heim_observation_log_and_cursor.py + app/services/vault_sync.py + app/alembic/versions/c7f4b1a83d29_mvr05a0_file_state_binding_key.py + app/alembic/versions/d1e8a0c5f37b_mvr05a1_objects_agent_memories_adoption.py + app/db/db.py + tests/architecture/durable_table_classification.json (2026-08-13)
+Last verified against: app/stores/pg.py + app/alembic/versions/e6c4a2b8d1f3_mvr05a3_store_object_binding_keys.py + app/alembic/versions/f4a05a4b0001_mvr05a4_ingest_projection_binding_keys.py + app/alembic/versions/f5a05a5b0001_mvr05a5_replay_projection_binding_keys.py + app/services/outbox.py + app/alembic/versions/f3a1c9d2e4b7_kernel05_outbox_schema_in_migrations.py + app/heimdal/observation_log.py + app/heimdal/cursor_store.py + app/alembic/versions/8b21e6a1f0c4_heim_observation_log_and_cursor.py + app/services/vault_sync.py + app/alembic/versions/c7f4b1a83d29_mvr05a0_file_state_binding_key.py + app/alembic/versions/d1e8a0c5f37b_mvr05a1_objects_agent_memories_adoption.py + app/db/db.py + tests/architecture/durable_table_classification.json (2026-08-15)
 
 ## v5.5 Baseline Delta (Current Reality)
 - Registry watcher is the runtime default; legacy snapshot watcher is dev-only.
@@ -143,9 +143,10 @@ Last verified against: app/stores/pg.py + app/alembic/versions/e6c4a2b8d1f3_mvr0
   adoption idempotency, existing-row survival, and bootstrap-origin/Alembic-origin convergence are
   asserted by `tests/migrations/test_file_state_adoption.py` and
   `tests/migrations/test_objects_adoption.py`.
-- The active legacy **`decisions`** writer schema is **migration-owned** (#3488): Alembic revision
-  `e1d2c3b4a5f6` carries forward the table's creation, compatibility columns, generated UUID default,
-  and nullable `object_id` / `ON DELETE SET NULL` FK. The neutral database seam
+- The active legacy **`decisions`** writer schema is **migration-owned** (#3488, MVR-05A5):
+  Alembic revisions `e1d2c3b4a5f6` and `f5a05a5b0001` carry forward the table's creation,
+  compatibility columns, generated UUID default, mandatory `vault_binding_id`, and nullable
+  `object_id` / `ON DELETE SET NULL` FK. The neutral database seam
   `app/db/decisions_schema.py::assert_decisions_schema()` is shared by the retained compatibility
   adapter and projection rebuild, and only asserts that shape before either can mutate the
   projection; it directs a stale database to `alembic upgrade head` and never runs runtime DDL.
@@ -552,7 +553,8 @@ own forward-only migration.
 
 ### `decisions` (legacy lineage, active writer schema)
 - `id` (`uuid`, PK; default `gen_random_uuid()` after `e1d2c3b4a5f6`)
-- `vault_binding_id` (`text`, nullable only for a receipt whose `object_id` was already null)
+- `vault_binding_id` (`text`, `NOT NULL` after MVR-05A5; object deletion clears only `object_id`
+  and preserves binding provenance)
 - `object_id` (`uuid`, nullable; composite FK with `vault_binding_id` → `store_objects`,
   `ON DELETE SET NULL (object_id)` after MVR-05A3, preserving binding provenance; previously
   #3510; the pre-cutover `objects.id` FK was realigned to the `audit.object_id` posture by
@@ -865,15 +867,35 @@ Interpretation:
 
 ## Episode Resolution Engine tick-runtime state
 
-Migration-owned (ERE-04, #3179): Alembic revision `a1b2c3d4e5f6` creates the table;
-`app/episodes/engine_state.py` is assert-only (fail-loud `EngineStateSchemaMissingError` preflight
-with a migration hint on every query; **no autocreate path at all** — unlike the Heimdal stores
-there is no `STORE_SCHEMA_AUTOCREATE` opt-in here, test fixtures run the migration). See
+MVR-05A5 revision `f5a05a5b0001` binds all six replay projections. Existing rows are assigned to
+`legacy-compatibility-binding` only when that attribution is provably unambiguous; a partially
+converted database carrying another binding raises before DDL or row mutation. Every binding
+column below is `text NOT NULL`, and test-only `STORE_SCHEMA_AUTOCREATE=1` reproduces the same final shapes:
+
+- `standing_questions`: primary key `(vault_binding_id, question_id)` and unique
+  `(vault_binding_id, source_path)`; rebuild deletes and replays one binding.
+- `episodes`: primary key `(vault_binding_id, episode_id)`; rebuild and incremental episode writers
+  address one binding.
+- `episode_engine_state`: primary key `(vault_binding_id, key)`.
+- `episode_artifact_binding`: primary key
+  `(vault_binding_id, artifact_ref, episode_id)`.
+- `decisions`: UUID `id` remains the primary key; `vault_binding_id` is mandatory and rebuild deletes
+  and replays only that binding.
+- `decision_outcomes`: UUID `id` remains the primary key; uniqueness is
+  `(vault_binding_id, decision_uuid, rung_index)`.
+
+The shared `app/db/replay_projection_schema.py` preflight rejects pre-MVR-05A5 key shapes before a
+producer mutates them. No replay producer performs a table-wide replacement.
+
+Migration-owned (ERE-04, #3179): Alembic revision `a1b2c3d4e5f6` creates the table and MVR-05A5
+rekeys it; `app/episodes/engine_state.py` is assert-only in production (fail-loud
+`EngineStateSchemaMissingError` preflight with a migration hint on every query). See
 `docs/EVENTS.md :: Secondary per-consumer cursor readers` for the consumer contract.
 
 - `episode_engine_state` — generic key/value state for the segmentation tick
   (`app/episodes/segmenter.py::run_segmentation_tick`).
-  - `key` (`text`, PK) — namespaced row families:
+  - `vault_binding_id` (`text`, first part of PK)
+  - `key` (`text`, second part of PK) — namespaced row families:
     - `cursor:vault.activity:<consumer_id>` — the engine's own durable read position over the
       `outbox` table's vault-activity topics (independent of `outbox.delivered_at`, which the
       worker dispatcher owns);
@@ -900,16 +922,18 @@ Interpretation:
 
 ## Episode-artifact binding ledger
 
-Migration-owned (ERE-05, #3180): Alembic revision `b7c8d9e0f1a2` creates the table;
+Migration-owned (ERE-05, #3180): Alembic revision `b7c8d9e0f1a2` creates the table and MVR-05A5
+rekeys it;
 `app/episodes/assignment.py` is assert-only (fail-loud `EpisodeAssignmentSchemaMissingError`
 preflight with a migration hint on every query that touches `episode_artifact_binding` OR
-`episodes` — **no autocreate path at all**, same posture as `episode_engine_state`). See
+`episodes`; production remains assert-only). See
 `docs/EPISODE_RESOLUTION_ENGINE/ASSIGN_EPISODE_REF_TO_ARTIFACTS.md` for the assignment rule and
 write discipline.
 
-- `episode_artifact_binding` — one row per `(artifact_ref, episode_id)` pair: the assignment
+- `episode_artifact_binding` — one row per `(vault_binding_id, artifact_ref, episode_id)` tuple: the assignment
   PROVENANCE record (which episode, which rule, basis, confidence, when), not the artifact's own
   bundle.
+  - `vault_binding_id` (`text`, first part of PK)
   - `artifact_ref` (`text`, part of PK) — the SAME provenance-ref shape segmentation signals carry
     (`heimdal.observations:<observation_id>` / `vault.activity:<outbox_row_id>`,
     `app/episodes/segmenter.py`), so a binding always resolves back to the exact signal/event that
@@ -928,7 +952,7 @@ write discipline.
   - `corrected_at` (`timestamptz`, nullable) — stamped when a re-cut (ERE-07) invalidates a prior
     `active` binding; the row is flipped to `corrected`, never deleted (provenance survives the
     correction).
-  - PRIMARY KEY `(artifact_ref, episode_id)` — the idempotency mechanism per (artifact, episode):
+  - PRIMARY KEY `(vault_binding_id, artifact_ref, episode_id)` — the idempotency mechanism per binding and (artifact, episode):
     re-ticking the same pair is an UPSERT, never a duplicate row.
   - Indexes: `episode_artifact_binding_episode_idx`, `episode_artifact_binding_scope_idx`,
     `episode_artifact_binding_state_idx`.

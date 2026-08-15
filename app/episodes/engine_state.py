@@ -57,6 +57,8 @@ import json
 from typing import Any
 
 from app.db.db import conn_rw
+from app.db.replay_projection_schema import assert_replay_projection_schema
+from app.instance.binding_ids import COMPATIBILITY_BINDING_ID
 
 STATE_TABLE = "episode_engine_state"
 
@@ -72,20 +74,23 @@ class EngineStateSchemaMissingError(RuntimeError):
 
 def _assert_schema(conn: Any) -> None:
     """Fail-loud preflight: the state table must exist before any query touches it."""
-    with conn.cursor() as cur:
-        cur.execute("SELECT to_regclass(%s)", (STATE_TABLE,))
-        row = cur.fetchone()
-    oid = (row.get("to_regclass") if isinstance(row, dict) else row[0]) if row else None
-    if not oid:
-        raise EngineStateSchemaMissingError(f"Missing table '{STATE_TABLE}'. {_MIGRATION_HINT}")
+    try:
+        assert_replay_projection_schema(conn, STATE_TABLE)
+    except RuntimeError as exc:
+        raise EngineStateSchemaMissingError(f"{exc} {_MIGRATION_HINT}") from exc
 
 
-def get_state(key: str) -> dict[str, Any] | None:
+def get_state(
+    key: str, *, vault_binding_id: str = COMPATIBILITY_BINDING_ID
+) -> dict[str, Any] | None:
     """Return the JSON value stored at ``key``, or ``None`` if absent."""
     with conn_rw() as conn:
         _assert_schema(conn)
         with conn.cursor() as cur:
-            cur.execute(f"SELECT value FROM {STATE_TABLE} WHERE key = %s", (key,))
+            cur.execute(
+                f"SELECT value FROM {STATE_TABLE} WHERE vault_binding_id = %s AND key = %s",
+                (vault_binding_id, key),
+            )
             row = cur.fetchone()
     if row is None:
         return None
@@ -95,30 +100,43 @@ def get_state(key: str) -> dict[str, Any] | None:
     return dict(value) if value is not None else None
 
 
-def set_state(key: str, value: dict[str, Any]) -> None:
+def set_state(
+    key: str,
+    value: dict[str, Any],
+    *,
+    vault_binding_id: str = COMPATIBILITY_BINDING_ID,
+) -> None:
     """Upsert the JSON value at ``key`` (last-write-wins, single tick-runtime writer)."""
     with conn_rw() as conn:
         _assert_schema(conn)
         with conn.cursor() as cur:
             cur.execute(
                 f"""
-                INSERT INTO {STATE_TABLE} (key, value, updated_at)
-                VALUES (%s, %s::jsonb, now())
-                ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()
+                INSERT INTO {STATE_TABLE} (vault_binding_id, key, value, updated_at)
+                VALUES (%s, %s, %s::jsonb, now())
+                ON CONFLICT (vault_binding_id, key)
+                DO UPDATE SET value = EXCLUDED.value, updated_at = now()
                 """,
-                (key, json.dumps(value)),
+                (vault_binding_id, key, json.dumps(value)),
             )
 
 
-def delete_state(key: str) -> None:
+def delete_state(
+    key: str, *, vault_binding_id: str = COMPATIBILITY_BINDING_ID
+) -> None:
     """Remove the row at ``key`` (a closed segment no longer needs its open-state row)."""
     with conn_rw() as conn:
         _assert_schema(conn)
         with conn.cursor() as cur:
-            cur.execute(f"DELETE FROM {STATE_TABLE} WHERE key = %s", (key,))
+            cur.execute(
+                f"DELETE FROM {STATE_TABLE} WHERE vault_binding_id = %s AND key = %s",
+                (vault_binding_id, key),
+            )
 
 
-def all_state_with_prefix(prefix: str) -> dict[str, dict[str, Any]]:
+def all_state_with_prefix(
+    prefix: str, *, vault_binding_id: str = COMPATIBILITY_BINDING_ID
+) -> dict[str, dict[str, Any]]:
     """Return every ``key -> value`` pair whose key starts with ``prefix``.
 
     Used to load every currently-open segment (``open_segment:``) at tick
@@ -128,7 +146,11 @@ def all_state_with_prefix(prefix: str) -> dict[str, dict[str, Any]]:
     with conn_rw() as conn:
         _assert_schema(conn)
         with conn.cursor() as cur:
-            cur.execute(f"SELECT key, value FROM {STATE_TABLE} WHERE key LIKE %s", (f"{prefix}%",))
+            cur.execute(
+                f"SELECT key, value FROM {STATE_TABLE} "
+                "WHERE vault_binding_id = %s AND key LIKE %s",
+                (vault_binding_id, f"{prefix}%"),
+            )
             rows = cur.fetchall()
     for r in rows:
         key = r["key"] if isinstance(r, dict) else r[0]

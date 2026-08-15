@@ -776,6 +776,7 @@ jobs:
               - 'app/ingest/vault_alpha.py'
               - 'app/agents/projector/agent.py'
               - 'app/jobs/backfill.py'
+              - 'app/jobs/decisions_export.py'
               - 'app/jobs/decisions_projection.py'
               - 'app/observability/status_service.py'
               - 'app/instance/binding_ids.py'
@@ -788,9 +789,24 @@ jobs:
               - 'app/stores/postgres.py'
               - 'app/alembic/versions/e6c4a2b8d1f3_mvr05a3_store_object_binding_keys.py'
               - 'app/alembic/versions/f4a05a4b0001_mvr05a4_ingest_projection_binding_keys.py'
+              - 'app/alembic/versions/f5a05a5b0001_mvr05a5_replay_projection_binding_keys.py'
+              - 'app/db/replay_projection_schema.py'
+              - 'app/jobs/episodes_projection.py'
+              - 'app/standing_questions/projection.py'
+              - 'app/episodes/engine_state.py'
+              - 'app/episodes/closure.py'
+              - 'app/episodes/closure_decay.py'
+              - 'app/episodes/recut.py'
+              - 'app/episodes/segmenter.py'
+              - 'app/receipts/outcome_receipt_log.py'
+              - 'app/receipts/outcome_receipt_projection.py'
               - 'tests/migrations/test_multi_vault_ingest_projection_keys.py'
               - 'tests/migrations/test_ingest_schema_parity.py'
+              - 'tests/migrations/test_multi_vault_replay_projection_backfill.py'
+              - 'tests/migrations/test_replay_schema_parity.py'
+              - 'tests/jobs/test_multi_vault_decisions_rebuild_scope.py'
               - 'tests/integration/test_multi_vault_projection_isolation.py'
+              - 'tests/episodes/test_episode_projection.py'
               - 'app/knowledge_acquisition/youtube_api_client.py'
               - 'app/alembic/versions/d9e0f1a2b3c4_yss03_youtube_api_quota.py'
               - 'tests/indexer/test_outbox_roundtrip_pg.py'
@@ -906,14 +922,18 @@ jobs:
             tests/migrations/test_store_schema_parity.py \
             tests/migrations/test_multi_vault_ingest_projection_keys.py \
             tests/migrations/test_ingest_schema_parity.py \
+            tests/migrations/test_multi_vault_replay_projection_backfill.py \
+            tests/migrations/test_replay_schema_parity.py \
             tests/migrations/test_decisions_fk_set_null.py \
             tests/integration/test_decisions_rebuild_from_log_only.py \
             tests/integration/test_multi_vault_projection_isolation.py \
+            tests/episodes/test_episode_projection.py \
             tests/integration/test_vault_sync_atomicity.py \
             tests/ingest/test_vault_root_ingest_pg.py \
             tests/invariants/test_retrieval_spine_invariants.py \
             tests/jobs/test_decisions_export.py \
             tests/jobs/test_decisions_projection_rebuild.py \
+            tests/jobs/test_multi_vault_decisions_rebuild_scope.py \
             tests/stores/test_decisions_fk_semantics.py \
             tests/stores/test_ensure_tables_assert_only.py \
             tests/stores/test_multi_vault_store_reset_scope.py \

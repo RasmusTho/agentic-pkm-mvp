@@ -865,13 +865,21 @@ def test_engine_state_schema_preflight_fails_loud_with_migration_hint() -> None:
     a raw UndefinedTable traceback from inside a query (mirrors
     app/heimdal/cursor_store._assert_pg_schema)."""
     with pytest.raises(EngineStateSchemaMissingError) as exc_info:
-        _assert_schema(_FakeConn((None,)))
+        _assert_schema(_FakeConn((False, False, [])))
     assert "alembic upgrade head" in str(exc_info.value)
     assert "a1b2c3d4e5f6" in str(exc_info.value)
 
     with pytest.raises(EngineStateSchemaMissingError):
         _assert_schema(_FakeConn(None))  # no row at all
 
-    # Table present (either row shape) -> no raise.
-    _assert_schema(_FakeConn(("episode_engine_state",)))
-    _assert_schema(_FakeConn({"to_regclass": "episode_engine_state"}))
+    # Final MVR-05A5 table shape -> no raise.
+    _assert_schema(_FakeConn((True, True, ["vault_binding_id", "key"])))
+    _assert_schema(
+        _FakeConn(
+            {
+                "table_exists": True,
+                "binding_shape_exists": True,
+                "primary_key": ["vault_binding_id", "key"],
+            }
+        )
+    )

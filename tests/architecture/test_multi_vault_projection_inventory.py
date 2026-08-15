@@ -73,6 +73,17 @@ from tests.architecture.durable_table_classification import (
 
 pytestmark = pytest.mark.not_pg
 
+REPLAY_PROJECTION_TABLES = frozenset(
+    {
+        "standing_questions",
+        "episodes",
+        "episode_engine_state",
+        "episode_artifact_binding",
+        "decisions",
+        "decision_outcomes",
+    }
+)
+
 
 def _substantial_sentences(reason: str) -> list[str]:
     """Sentences long enough to carry a classification claim.
@@ -174,21 +185,52 @@ def test_every_production_projection_schema_and_producer_is_classified() -> None
         else:
             assert entry["binding_key"] in {"keyed", "pending"}, table
         if entry["binding_key"] == "keyed":
-            owning = next(
-                path
-                for path in (REPO_ROOT / "app" / "alembic" / "versions").glob(
-                    f"{entry['owning_revision']}_*.py"
-                )
+            keyed_revisions = (
+                entry["declaring_revisions"]
+                if table in REPLAY_PROJECTION_TABLES
+                else [entry["owning_revision"]]
             )
-            assert entry["binding_column"] in owning.read_text(encoding="utf-8"), (
-                f"{table} is declared keyed by {entry['binding_column']!r}, but its "
-                f"owning revision {owning.name} never mentions that column."
+            declaring_paths = [
+                path
+                for revision in keyed_revisions
+                for path in (REPO_ROOT / "app" / "alembic" / "versions").glob(f"{revision}_*.py")
+            ]
+            assert any(
+                entry["binding_column"] in path.read_text(encoding="utf-8")
+                for path in declaring_paths
+            ), (
+                f"{table} is declared keyed by {entry['binding_column']!r}, but none of "
+                f"its declaring revisions mention that column."
             )
 
         assert entry["owning_revision"] in {name.split("_", 1)[0] for name in discovered[table]}, (
             f"{table}'s owning revision {entry['owning_revision']} issues no DDL for it; "
             f"the chain's declaring revisions are {sorted(discovered[table])}."
         )
+
+
+def test_replay_group_is_fully_binding_keyed() -> None:
+    """MVR-05A5's six replay projections are no longer on the pending worklist."""
+    manifest = load_manifest()
+    for table in sorted(REPLAY_PROJECTION_TABLES):
+        entry = manifest[table]
+        assert entry["classification"] == "binding-scoped", table
+        assert entry["binding_key"] == "keyed", table
+        assert entry["binding_column"] == "vault_binding_id", table
+
+
+def test_no_replay_producer_replaces_a_whole_durable_table() -> None:
+    """Replay producers may replace one binding, never issue table-wide replacement."""
+    manifest = load_manifest()
+    for table in sorted(REPLAY_PROJECTION_TABLES):
+        entry = manifest[table]
+        assert entry["rebuild_mechanism"] != "whole-table-replacement", table
+        for producer in entry["producers"]:
+            source = (REPO_ROOT / producer["module"]).read_text(encoding="utf-8")
+            assert not re.search(rf"TRUNCATE\s+(?:TABLE\s+)?(?:public\.)?{table}\b", source, re.I), (
+                table,
+                producer["module"],
+            )
 
 
 def test_the_manifest_carries_no_default_and_no_wildcard_entry() -> None:
@@ -677,14 +719,22 @@ def test_post_cutover_store_fixture_mutations_are_binding_scoped() -> None:
                 "insert into",
                 "store_objects",
             ): 1,
-            (
-                "tests/migrations/test_multi_vault_ingest_projection_keys.py",
-                "_prepare_retained_historical_lineage",
-                "insert into",
-                "membership",
-            ): 1,
-        }
-    )
+                (
+                    "tests/migrations/test_multi_vault_ingest_projection_keys.py",
+                    "_prepare_retained_historical_lineage",
+                    "insert into",
+                    "membership",
+                ): 1,
+                # MVR-05A5's migration proof deliberately seeds the pre-replay
+                # decisions shape before applying the binding migration.
+                (
+                    "tests/migrations/test_multi_vault_replay_projection_backfill.py",
+                    "_seed_legacy_rows",
+                    "insert into",
+                    "decisions",
+                ): 1,
+            }
+        )
     assert observed == expected, (
         "every current-shape object-identity fixture mutation must name vault_binding_id; "
         f"unbound fixture delta: added={observed - expected}, removed={expected - observed}"

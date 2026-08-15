@@ -6,7 +6,7 @@ The decision-receipt log (``app/receipts/decision_receipt_log.py``) is the canon
 judgment record; the ``decisions`` table is a rebuildable projection index over it
 (KERNEL-05 / ARCHITECTURAL_CONSTITUTION C-4). This module:
 
-- ``rebuild_decisions_projection()`` — truncate the ``decisions`` table and replay every
+- ``rebuild_decisions_projection()`` — replace one binding's ``decisions`` rows and replay every
   JSONL receipt (all shards, ordered by ``created_at``) back into it. It re-links each
   receipt's runtime ``object_id`` when the DB was rebuilt and ids were re-minted: if the
   receipt's ``object_id`` is no longer a current ``store_objects.object_id`` but its
@@ -63,10 +63,12 @@ def _parse_ts(raw: Any) -> datetime | None:
     return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
 
 
-def _existing_object_ids(cur) -> set[str]:
+def _existing_object_ids(
+    cur, *, vault_binding_id: str = COMPATIBILITY_BINDING_ID
+) -> set[str]:
     cur.execute(
         "SELECT object_id FROM store_objects WHERE vault_binding_id = %s",
-        (COMPATIBILITY_BINDING_ID,),
+        (vault_binding_id,),
     )
     return {str(r["object_id"] if isinstance(r, dict) else r[0]) for r in cur.fetchall()}
 
@@ -92,10 +94,14 @@ def _resolve_target_object_id(
     return None
 
 
-def rebuild_decisions_projection(vault_root: Path | None = None) -> RebuildSummary:
-    """Truncate and repopulate the ``decisions`` table from the receipt log.
+def rebuild_decisions_projection(
+    vault_root: Path | None = None,
+    *,
+    vault_binding_id: str = COMPATIBILITY_BINDING_ID,
+) -> RebuildSummary:
+    """Replace one binding's ``decisions`` rows from the receipt log.
 
-    Runs in one transaction: the truncate and every replayed insert commit
+    Runs in one transaction: the binding-scoped delete and every replayed insert commit
     together, so a failure mid-replay leaves the prior projection intact.
     """
     receipts = iter_decision_receipts(vault_root)
@@ -104,14 +110,14 @@ def rebuild_decisions_projection(vault_root: Path | None = None) -> RebuildSumma
     with conn_rw() as conn:
         with conn.cursor() as cur:
             assert_decisions_schema(conn)
-            existing_ids = _existing_object_ids(cur)
+            existing_ids = _existing_object_ids(cur, vault_binding_id=vault_binding_id)
             uuid_to_id = vault_uuid_to_canonical_id_map_with_connection(
-                conn, vault_binding_id=COMPATIBILITY_BINDING_ID
+                conn, vault_binding_id=vault_binding_id
             )
 
             cur.execute(
                 "DELETE FROM decisions WHERE vault_binding_id = %s",
-                (COMPATIBILITY_BINDING_ID,),
+                (vault_binding_id,),
             )
 
             for receipt in receipts:
@@ -145,7 +151,7 @@ def rebuild_decisions_projection(vault_root: Path | None = None) -> RebuildSumma
                     VALUES (%s, %s, %s, %s::jsonb, %s)
                     """,
                     (
-                        COMPATIBILITY_BINDING_ID,
+                        vault_binding_id,
                         target_id,
                         key,
                         json.dumps(value),
@@ -157,7 +163,11 @@ def rebuild_decisions_projection(vault_root: Path | None = None) -> RebuildSumma
     return summary
 
 
-def _log_projection_rows(vault_root: Path | None = None) -> list[tuple[str, str, str, str]]:
+def _log_projection_rows(
+    vault_root: Path | None = None,
+    *,
+    vault_binding_id: str = COMPATIBILITY_BINDING_ID,
+) -> list[tuple[str, str, str, str]]:
     """The comparable ``(object_id, key, created_at_iso, value_json)`` tuples the
     log implies for the projection — after re-linking, matching what a rebuild
     would have written. Orphaned receipts (no resolvable object) are excluded,
@@ -166,9 +176,9 @@ def _log_projection_rows(vault_root: Path | None = None) -> list[tuple[str, str,
     rows: list[tuple[str, str, str, str]] = []
     with conn_rw() as conn:
         with conn.cursor() as cur:
-            existing_ids = _existing_object_ids(cur)
+            existing_ids = _existing_object_ids(cur, vault_binding_id=vault_binding_id)
             uuid_to_id = vault_uuid_to_canonical_id_map_with_connection(
-                conn, vault_binding_id=COMPATIBILITY_BINDING_ID
+                conn, vault_binding_id=vault_binding_id
             )
     for receipt in receipts:
         key = receipt.get("key")
@@ -184,14 +194,16 @@ def _log_projection_rows(vault_root: Path | None = None) -> list[tuple[str, str,
     return sorted(rows)
 
 
-def _db_projection_rows() -> list[tuple[str, str, str, str]]:
+def _db_projection_rows(
+    *, vault_binding_id: str = COMPATIBILITY_BINDING_ID
+) -> list[tuple[str, str, str, str]]:
     rows: list[tuple[str, str, str, str]] = []
     with conn_rw() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 "SELECT object_id, key, value, created_at FROM decisions "
                 "WHERE vault_binding_id = %s",
-                (COMPATIBILITY_BINDING_ID,),
+                (vault_binding_id,),
             )
             for r in cur.fetchall():
                 object_id = str(r["object_id"] if isinstance(r, dict) else r[0])
@@ -209,14 +221,18 @@ def _db_projection_rows() -> list[tuple[str, str, str, str]]:
     return sorted(rows)
 
 
-def doctor_decisions_projection(vault_root: Path | None = None) -> DoctorReport:
+def doctor_decisions_projection(
+    vault_root: Path | None = None,
+    *,
+    vault_binding_id: str = COMPATIBILITY_BINDING_ID,
+) -> DoctorReport:
     """Assert the DB projection matches the log row-for-row.
 
     Compares ``(object_id, key, created_at, value)``. ``ok`` is True only when
     the multiset of DB rows equals the multiset of (resolvable) log rows.
     """
-    log_rows = _log_projection_rows(vault_root)
-    db_rows = _db_projection_rows()
+    log_rows = _log_projection_rows(vault_root, vault_binding_id=vault_binding_id)
+    db_rows = _db_projection_rows(vault_binding_id=vault_binding_id)
 
     from collections import Counter
 

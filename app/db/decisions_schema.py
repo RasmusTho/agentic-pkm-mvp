@@ -108,7 +108,7 @@ def assert_decisions_schema(conn: Any) -> None:
         if (
             shape_row is None
             or _row_value(shape_row, "is_nullable", 0) != "YES"
-            or _row_value(shape_row, "binding_nullable", 1) != "YES"
+            or _row_value(shape_row, "binding_nullable", 1) != "NO"
             or "gen_random_uuid" not in (_row_value(shape_row, "column_default", 2) or "")
             or _row_value(shape_row, "fk_count", 3) != 1
             or list(_row_value(shape_row, "child_columns", 4) or [])

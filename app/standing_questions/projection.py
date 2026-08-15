@@ -18,6 +18,8 @@ from typing import Any
 from jsonschema import ValidationError
 
 from app.db.db import conn_rw
+from app.db.replay_projection_schema import assert_replay_projection_schema
+from app.instance.binding_ids import COMPATIBILITY_BINDING_ID
 from app.standing_questions.question_store import (
     QUESTION_DIRECTORY,
     parse_question_note,
@@ -152,26 +154,35 @@ def _postgres_timestamptz_value(value: str | None) -> str | None:
     )
 
 
-def _replace_projection_rows(notes: list[tuple[str, dict[str, Any]]]) -> None:
+def _replace_projection_rows(
+    notes: list[tuple[str, dict[str, Any]]],
+    *,
+    vault_binding_id: str = COMPATIBILITY_BINDING_ID,
+) -> None:
     """Replace every derived row from vault-canonical Question notes in one transaction.
 
-    The TRUNCATE and every replayed INSERT commit together, so a failure mid-replay
+    The binding-scoped DELETE and every replayed INSERT commit together, so a failure mid-replay
     leaves the prior projection intact -- mirroring the episodes projection job's
     single-transaction rebuild.
     """
     with conn_rw() as conn:
+        assert_replay_projection_schema(conn, STANDING_QUESTIONS_TABLE)
         with conn.cursor() as cur:
-            cur.execute(f"TRUNCATE TABLE {STANDING_QUESTIONS_TABLE}")
+            cur.execute(
+                f"DELETE FROM {STANDING_QUESTIONS_TABLE} WHERE vault_binding_id = %s",
+                (vault_binding_id,),
+            )
             for source_path, note in notes:
                 cur.execute(
                     f"""
                     INSERT INTO {STANDING_QUESTIONS_TABLE} (
-                        question_id, scope, text, status, created_at, registered_via,
+                        vault_binding_id, question_id, scope, text, status, created_at, registered_via,
                         standing_answer_ref, candidate_answer_ref, evidence,
                         last_matched_at, last_refreshed_at, source_path
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s, %s, %s)
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s, %s, %s)
                     """,
                     (
+                        vault_binding_id,
                         note["question_id"],
                         note["scope"],
                         note["text"],
@@ -188,7 +199,11 @@ def _replace_projection_rows(notes: list[tuple[str, dict[str, Any]]]) -> None:
                 )
 
 
-def rebuild_standing_questions_projection(vault_root: Path | str) -> ProjectionRebuildSummary:
+def rebuild_standing_questions_projection(
+    vault_root: Path | str,
+    *,
+    vault_binding_id: str = COMPATIBILITY_BINDING_ID,
+) -> ProjectionRebuildSummary:
     """Replace every derived row with the canonical vault state in one transaction.
 
     A malformed note is skipped, not fatal, to the rest of the rebuild. If the
@@ -196,7 +211,7 @@ def rebuild_standing_questions_projection(vault_root: Path | str) -> ProjectionR
     projection down to nothing -- see :class:`QuestionsDirectoryMissingError`.
     """
     notes, skipped = _read_question_notes(vault_root)
-    _replace_projection_rows(notes)
+    _replace_projection_rows(notes, vault_binding_id=vault_binding_id)
     return ProjectionRebuildSummary(inserted=len(notes), skipped_invalid=tuple(skipped))
 
 

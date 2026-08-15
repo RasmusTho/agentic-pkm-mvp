@@ -158,7 +158,6 @@ def test_observation_episode_binding_survives__ere05_end_to_end(
     from app.episodes.assignment import (
         ArtifactCandidate,
         BASIS_PROVENANCE,
-        BINDING_TABLE,
         EpisodeBoundsRecord,
         PROVENANCE_CONFIDENCE,
         commit_assignment_diff,
@@ -217,7 +216,11 @@ def test_observation_episode_binding_survives__ere05_end_to_end(
         def execute(self, sql, params=()):
             stripped = sql.strip()
             if "to_regclass" in stripped:
-                self._result = (BINDING_TABLE,)
+                    self._result = (
+                        True,
+                        True,
+                        ["vault_binding_id", "artifact_ref", "episode_id"],
+                    )
             elif stripped.startswith("SELECT payload FROM store_"):
                 table = "store_objects" if "store_objects" in stripped else "store_vector_index"
                 binding_id, obj_id = params

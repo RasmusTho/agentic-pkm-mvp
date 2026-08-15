@@ -6,7 +6,7 @@ Slices 1-3 made the receipt log (``app/receipts/decision_receipt_log.py``) canon
 for *new* decisions going forward (dual-write, then read-cutover in docs). They did
 not touch decision rows written *before* the dual-write cutover — those exist only
 in Postgres. ``rebuild_decisions_projection()`` (slice 2, ``app/jobs/decisions_projection.py``)
-``TRUNCATE``s the ``decisions`` table and replays the log; running it before this
+replaces the compatibility binding's ``decisions`` rows and replays the log; running it before this
 export exists would silently lose those historical DB-only rows (issue #2973,
 2026-07-05 comment: prod holds 2 such rows, key ``classification``, written via the
 deprecated ``app/stores/postgres.py::PgDecisions.put`` path pre-cutover).
@@ -59,6 +59,7 @@ from pathlib import Path
 from typing import Any
 
 from app.db.db import conn_rw
+from app.instance.binding_ids import COMPATIBILITY_BINDING_ID
 from app.receipts.decision_receipt_log import (
     RECEIPT_WRITE_ACTION,
     SCHEMA_VERSION,
@@ -119,7 +120,9 @@ def _db_rows() -> list[dict[str, Any]]:
     with conn_rw() as conn:
         with conn.cursor() as cur:
             cur.execute(
-                "SELECT id, object_id, key, value, created_at FROM decisions ORDER BY created_at"
+                "SELECT id, object_id, key, value, created_at FROM decisions "
+                "WHERE vault_binding_id = %s ORDER BY created_at",
+                (COMPATIBILITY_BINDING_ID,),
             )
             for r in cur.fetchall():
                 row_id = r["id"] if isinstance(r, dict) else r[0]

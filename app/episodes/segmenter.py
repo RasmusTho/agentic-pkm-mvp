@@ -81,7 +81,8 @@ from pathlib import Path
 from typing import Any, Final, Mapping, Protocol, Sequence, runtime_checkable
 
 from app.components.concurrency import DedupTaskQueue
-from app.db.db import conn_rw
+from app.db.db import COMPATIBILITY_BINDING_ID, conn_rw
+from app.db.replay_projection_schema import assert_replay_projection_schema
 from app.episodes import cross_scope_fusion, engine_state
 from app.episodes.assignment import (
     ArtifactCandidate,
@@ -897,20 +898,21 @@ def _sync_new_episode_row(fields: Mapping[str, Any], note_path: str) -> None:
         # redelivery of an existing vault note. Never let an unreachable DB
         # consume a segmenter's default driver connect timeout.
         with conn_rw(connect_timeout=1) as conn:
+            assert_replay_projection_schema(conn, EPISODES_TABLE)
             with conn.cursor() as cur:
                 cur.execute(
                     f"""
                     INSERT INTO {EPISODES_TABLE} (
-                        episode_id, scope, title, time_start, time_end, closed,
+                        vault_binding_id, episode_id, scope, title, time_start, time_end, closed,
                         segmentation, parent_episode, space, protagonists, goal,
                         causation, derived_from, note_path
                     ) VALUES (
-                        %s, %s, %s, %s, %s, %s, %s, %s,
+                        %s, %s, %s, %s, %s, %s, %s, %s, %s,
                         %s::jsonb, %s::jsonb, %s::jsonb, %s::jsonb, %s::jsonb, %s
                     )
-                    ON CONFLICT (episode_id) DO NOTHING
+                    ON CONFLICT (vault_binding_id, episode_id) DO NOTHING
                     """,
-                    row_tuple(dict(fields), note_path),
+                    (COMPATIBILITY_BINDING_ID, *row_tuple(dict(fields), note_path)),
                 )
     except Exception:
         logger.warning(

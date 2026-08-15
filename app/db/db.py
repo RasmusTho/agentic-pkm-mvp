@@ -56,6 +56,134 @@ FILE_STATE_COMPATIBILITY_BINDING_ID = COMPATIBILITY_BINDING_ID
 # the same ownership rule the slice enforces everywhere else.
 _MIGRATION_OWNED_AUTOCREATE_SQL: tuple[tuple[str, tuple[str, ...]], ...] = (
     (
+        "public.standing_questions",
+        (
+            """
+            CREATE TABLE public.standing_questions (
+                vault_binding_id text NOT NULL,
+                question_id text NOT NULL,
+                scope text NOT NULL,
+                text text NOT NULL,
+                status text NOT NULL CHECK (status IN ('open', 'answered', 'closed')),
+                created_at timestamptz NOT NULL,
+                registered_via text NOT NULL CHECK (registered_via IN ('capture_intent', 'explicit')),
+                standing_answer_ref text,
+                candidate_answer_ref text,
+                evidence jsonb NOT NULL DEFAULT '[]'::jsonb,
+                last_matched_at timestamptz,
+                last_refreshed_at timestamptz,
+                source_path text NOT NULL,
+                PRIMARY KEY (vault_binding_id, question_id),
+                UNIQUE (vault_binding_id, source_path)
+            )
+            """,
+            "CREATE INDEX standing_questions_binding_status_idx "
+            "ON public.standing_questions (vault_binding_id, status)",
+            "CREATE INDEX standing_questions_scope_idx ON public.standing_questions (scope)",
+        ),
+    ),
+    (
+        "public.episodes",
+        (
+            """
+            CREATE TABLE public.episodes (
+                vault_binding_id text NOT NULL,
+                episode_id text NOT NULL,
+                scope text NOT NULL,
+                title text NOT NULL,
+                time_start timestamptz NOT NULL,
+                time_end timestamptz,
+                closed boolean NOT NULL DEFAULT false,
+                segmentation text NOT NULL,
+                parent_episode text,
+                space jsonb NOT NULL DEFAULT '[]'::jsonb,
+                protagonists jsonb NOT NULL DEFAULT '[]'::jsonb,
+                goal jsonb NOT NULL DEFAULT '[]'::jsonb,
+                causation jsonb NOT NULL DEFAULT '[]'::jsonb,
+                derived_from jsonb NOT NULL DEFAULT '[]'::jsonb,
+                note_path text NOT NULL,
+                updated_at timestamptz NOT NULL DEFAULT now(),
+                PRIMARY KEY (vault_binding_id, episode_id),
+                CONSTRAINT episodes_id_shape_chk CHECK (
+                    episode_id ~ '^ep-[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
+                ),
+                CONSTRAINT episodes_segmentation_chk
+                    CHECK (segmentation IN ('proposed', 'accepted', 're-cut'))
+            )
+            """,
+            "CREATE INDEX episodes_binding_scope_idx ON public.episodes (vault_binding_id, scope)",
+            "CREATE INDEX episodes_time_start_idx ON public.episodes (time_start)",
+            "CREATE INDEX episodes_closed_idx ON public.episodes (closed)",
+            "CREATE INDEX episodes_parent_episode_idx ON public.episodes (parent_episode)",
+        ),
+    ),
+    (
+        "public.episode_engine_state",
+        (
+            """
+            CREATE TABLE public.episode_engine_state (
+                vault_binding_id text NOT NULL,
+                key text NOT NULL,
+                value jsonb NOT NULL,
+                updated_at timestamptz NOT NULL DEFAULT now(),
+                PRIMARY KEY (vault_binding_id, key)
+            )
+            """,
+        ),
+    ),
+    (
+        "public.episode_artifact_binding",
+        (
+            """
+            CREATE TABLE public.episode_artifact_binding (
+                vault_binding_id text NOT NULL,
+                artifact_ref text NOT NULL,
+                episode_id text NOT NULL,
+                scope text NOT NULL,
+                basis text NOT NULL,
+                confidence double precision NOT NULL,
+                binding_state text NOT NULL DEFAULT 'active',
+                rule text NOT NULL,
+                assigned_at timestamptz NOT NULL DEFAULT now(),
+                corrected_at timestamptz,
+                PRIMARY KEY (vault_binding_id, artifact_ref, episode_id),
+                CONSTRAINT episode_artifact_binding_basis_chk
+                    CHECK (basis IN ('provenance', 'time_overlap')),
+                CONSTRAINT episode_artifact_binding_state_chk
+                    CHECK (binding_state IN ('active', 'corrected'))
+            )
+            """,
+            "CREATE INDEX episode_artifact_binding_binding_episode_idx "
+            "ON public.episode_artifact_binding (vault_binding_id, episode_id)",
+            "CREATE INDEX episode_artifact_binding_scope_idx "
+            "ON public.episode_artifact_binding (scope)",
+            "CREATE INDEX episode_artifact_binding_state_idx "
+            "ON public.episode_artifact_binding (binding_state)",
+        ),
+    ),
+    (
+        "public.decision_outcomes",
+        (
+            """
+            CREATE TABLE public.decision_outcomes (
+                id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+                vault_binding_id text NOT NULL,
+                decision_object_id uuid NOT NULL,
+                decision_uuid uuid NOT NULL,
+                rung_index integer NOT NULL CHECK (rung_index >= 0),
+                outcome text NOT NULL CHECK (
+                    outcome IN ('held', 'partly_held', 'did_not_hold', 'unknown_yet')
+                ),
+                note text,
+                created_at timestamptz NOT NULL DEFAULT now(),
+                UNIQUE (vault_binding_id, decision_uuid, rung_index)
+            )
+            """,
+            "CREATE INDEX decision_outcomes_binding_object_idx "
+            "ON public.decision_outcomes (vault_binding_id, decision_object_id)",
+        ),
+    ),
+    (
         "public.file_state",
         (
             f"""

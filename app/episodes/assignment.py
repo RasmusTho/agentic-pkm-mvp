@@ -106,6 +106,7 @@ from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping, Sequence
 
 from app.db.db import COMPATIBILITY_BINDING_ID, conn_rw
+from app.db.replay_projection_schema import assert_replay_projection_schema
 from app.jobs.episodes_projection import EPISODES_TABLE
 from app.write_guard import DEFAULT_WRITE_GUARD, WriteGuard
 
@@ -167,13 +168,11 @@ class EpisodeAssignmentSchemaMissingError(RuntimeError):
 
 def _assert_table_schema(conn: Any, table: str) -> None:
     """Fail-loud preflight: ``table`` must exist before any query touches it."""
-    with conn.cursor() as cur:
-        cur.execute("SELECT to_regclass(%s)", (table,))
-        row = cur.fetchone()
-    oid = (row.get("to_regclass") if isinstance(row, dict) else row[0]) if row else None
-    if not oid:
+    try:
+        assert_replay_projection_schema(conn, table)
+    except RuntimeError as exc:
         hint = _SCHEMA_MIGRATION_HINTS.get(table, f"Run 'alembic upgrade head' for '{table}'.")
-        raise EpisodeAssignmentSchemaMissingError(f"Missing table '{table}'. {hint}")
+        raise EpisodeAssignmentSchemaMissingError(f"Stale table '{table}'. {hint}") from exc
 
 
 # ---------------------------------------------------------------------------
@@ -435,13 +434,13 @@ def read_candidate_episodes_for_scopes(scopes: Iterable[str]) -> list[EpisodeBou
     placeholders = ", ".join(["%s"] * len(scope_list))
     query = (
         f"SELECT episode_id, scope, time_start, time_end, derived_from "
-        f"FROM {EPISODES_TABLE} WHERE scope IN ({placeholders})"
+        f"FROM {EPISODES_TABLE} WHERE vault_binding_id = %s AND scope IN ({placeholders})"
     )
     rows: list[EpisodeBoundsRecord] = []
     with conn_rw() as conn:
         _assert_table_schema(conn, EPISODES_TABLE)
         with conn.cursor() as cur:
-            cur.execute(query, tuple(scope_list))
+            cur.execute(query, (COMPATIBILITY_BINDING_ID, *scope_list))
             for r in cur.fetchall():
                 if isinstance(r, dict):
                     episode_id, scope, start, end, derived_from = (
@@ -479,13 +478,14 @@ def read_existing_bindings(artifact_refs: Iterable[str]) -> dict[tuple[str, str]
     placeholders = ", ".join(["%s"] * len(ref_list))
     query = (
         "SELECT artifact_ref, episode_id, scope, basis, confidence, binding_state, rule, "
-        f"assigned_at, corrected_at FROM {BINDING_TABLE} WHERE artifact_ref IN ({placeholders})"
+        f"assigned_at, corrected_at FROM {BINDING_TABLE} "
+        f"WHERE vault_binding_id = %s AND artifact_ref IN ({placeholders})"
     )
     out: dict[tuple[str, str], dict[str, Any]] = {}
     with conn_rw() as conn:
         _assert_table_schema(conn, BINDING_TABLE)
         with conn.cursor() as cur:
-            cur.execute(query, tuple(ref_list))
+            cur.execute(query, (COMPATIBILITY_BINDING_ID, *ref_list))
             for r in cur.fetchall():
                 row = dict(r) if isinstance(r, dict) else {
                     "artifact_ref": r[0],
@@ -524,13 +524,14 @@ def read_existing_bindings_for_episodes(
     placeholders = ", ".join(["%s"] * len(episode_list))
     query = (
         "SELECT artifact_ref, episode_id, scope, basis, confidence, binding_state, rule, "
-        f"assigned_at, corrected_at FROM {BINDING_TABLE} WHERE episode_id IN ({placeholders})"
+        f"assigned_at, corrected_at FROM {BINDING_TABLE} "
+        f"WHERE vault_binding_id = %s AND episode_id IN ({placeholders})"
     )
     out: dict[tuple[str, str], dict[str, Any]] = {}
     with conn_rw() as conn:
         _assert_table_schema(conn, BINDING_TABLE)
         with conn.cursor() as cur:
-            cur.execute(query, tuple(episode_list))
+            cur.execute(query, (COMPATIBILITY_BINDING_ID, *episode_list))
             for r in cur.fetchall():
                 row = dict(r) if isinstance(r, dict) else {
                     "artifact_ref": r[0],
@@ -836,10 +837,10 @@ def commit_assignment_diff(
                 cur.execute(
                     f"""
                     INSERT INTO {BINDING_TABLE} (
-                        artifact_ref, episode_id, scope, basis, confidence, binding_state,
+                        vault_binding_id, artifact_ref, episode_id, scope, basis, confidence, binding_state,
                         rule, assigned_at, corrected_at
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, now(), NULL)
-                    ON CONFLICT (artifact_ref, episode_id) DO UPDATE SET
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, now(), NULL)
+                    ON CONFLICT (vault_binding_id, artifact_ref, episode_id) DO UPDATE SET
                         scope = EXCLUDED.scope,
                         basis = EXCLUDED.basis,
                         confidence = EXCLUDED.confidence,
@@ -849,6 +850,7 @@ def commit_assignment_diff(
                         corrected_at = NULL
                     """,
                     (
+                        COMPATIBILITY_BINDING_ID,
                         decision.artifact_ref,
                         decision.episode_id,
                         decision.scope,
@@ -866,9 +868,14 @@ def commit_assignment_diff(
                     f"""
                     UPDATE {BINDING_TABLE}
                     SET binding_state = %s, corrected_at = now()
-                    WHERE artifact_ref = %s AND episode_id = %s
+                    WHERE vault_binding_id = %s AND artifact_ref = %s AND episode_id = %s
                     """,
-                    (BINDING_STATE_CORRECTED, artifact_ref, episode_id),
+                    (
+                        BINDING_STATE_CORRECTED,
+                        COMPATIBILITY_BINDING_ID,
+                        artifact_ref,
+                        episode_id,
+                    ),
                 )
 
     return {"pending": len(to_insert), "corrected": len(to_correct)}

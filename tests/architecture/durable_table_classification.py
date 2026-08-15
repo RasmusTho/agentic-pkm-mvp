@@ -94,7 +94,12 @@ ESCALATION_CONDITIONS = (
 
 #: How a producer replaces the table's contents. Derived, not declared:
 #: `whole-table-replacement` is exactly "some producer issues TRUNCATE".
-REBUILD_MECHANISMS = ("whole-table-replacement", "row-scoped", "no-producer")
+REBUILD_MECHANISMS = (
+    "whole-table-replacement",
+    "binding-scoped-replacement",
+    "row-scoped",
+    "no-producer",
+)
 
 _MUTATION_VERB_PATTERNS: tuple[tuple[str, str], ...] = (
     ("insert", r"insert\s+into\s+"),
