@@ -138,6 +138,7 @@ Impact` unparseable.
 
 1. Read the live body into a file, edit the file as Markdown, and submit that file:
    ```bash
+   set -euo pipefail
    body_file="$(mktemp)"
    gh issue view <N> --repo <owner/repo> --json body --jq .body >"$body_file"
    # Edit "$body_file" while preserving real newlines.
@@ -152,9 +153,14 @@ Impact` unparseable.
      --body-file "$verified_body_file" \
      --issue-number <N> \
      --label agent:ready
+   cmp -s "$body_file" "$verified_body_file" || {
+     echo "GitHub did not store the submitted Issue body exactly" >&2
+     exit 1
+   }
    ```
-3. Add or preserve `agent:ready` only after that command exits successfully. If it fails, leave or
-   restore the Issue to a non-ready truthful state and record the malformed-body repair needed.
+3. Add or preserve `agent:ready` only after both the edit and post-write comparison/validation
+   commands exit successfully. If any step fails, leave or restore the Issue to a non-ready truthful
+   state and record the malformed-body repair needed.
 
 The fresh read and strict validator are the post-condition verification for a body rewrite. Keep
 the temporary body files only for the command sequence, and re-read labels and Issue state after
