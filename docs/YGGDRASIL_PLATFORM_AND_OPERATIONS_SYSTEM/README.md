@@ -71,10 +71,13 @@ invoked during an operational procedure:
 
 ### Authority limits for platform wrappers
 
-Platform wrappers may operate host and Compose mechanics using **already-authorized** channel,
-binding, promotion, and security inputs. They may emit execution receipts that record the operation
-performed and its observed result. Such a receipt is evidence of execution; it does not authorize
-the operation or upgrade any product, release, or security authority.
+Platform wrappers may operate host and Compose mechanics using only the **already-authorized inputs
+applicable to that operation**. A start or recovery uses its authorized channel and binding inputs;
+promotion authorization is required only where the governing deployment or promotion procedure
+requires it, and approved security/topology inputs apply only where that boundary is implicated.
+They may emit execution receipts that record the operation performed and its observed result. Such a
+receipt is evidence of execution; it does not authorize the operation or upgrade any product,
+release, or security authority.
 
 Platform wrappers must not originate or alter environment-selection policy, vault/context binding,
 promotion eligibility, migration intent, product side-effect authority, security policy, credential
@@ -91,7 +94,7 @@ named current procedures remain authoritative.
 | Wrapper class | Platform primary effect | Crossed owner(s) | Current procedure or contract | Required precondition or receipt | Failure and recovery owner |
 | --- | --- | --- | --- | --- | --- |
 | `scripts/deploy_channel.sh` | Physically operates a selected channel's Compose units and gateway. | Deployment, release channels, environment selection, product migration/data owners, and security where topology is affected. | `docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md :: Deploy procedure` and `:: Rollback procedure`; `docs/RELEASE_CHANNELS/README.md`. | An already-authorized target/promotion input; unchanged governed binding; migration classification and acknowledgement where required; the deploy or rollback receipt required by the deployment procedure. | The deployment rollback procedure and the relevant release, migration, or security owner; an execution failure does not let the wrapper select a new target or binding. |
-| `scripts/start_full_system.sh` | Starts and verifies a selected local runtime/Compose stack. | Environment selection, product runtime lifecycle/binding, runtime health, and observability. | `docs/INFRASTRUCTURE.md :: Startup Flow`; `docs/ENVIRONMENTS.md :: Runtime Control Surface`; `docs/OPERATIONS.md :: Startup telemetry`. | Existing resolved channel and binding input; the current startup preflight and startup-telemetry/runtime-verification evidence. | `docs/OPERATIONS.md` and the applicable startup/recovery runbook, with Product/Runtime owners handling a runtime-health or binding failure. |
+| `scripts/start_full_system.sh` | Starts and verifies a selected local runtime/Compose stack; on `dev`/`prod`, it also invokes the BuilderOps coordination bootstrap before Compose startup. | Environment selection; Product/Runtime lifecycle/binding, runtime health, and observability; Builder System / BuilderOps coordination for the `dev`/`prod` bootstrap. | `docs/INFRASTRUCTURE.md :: Startup Flow`; `docs/ENVIRONMENTS.md :: Runtime Control Surface`; `docs/OPERATIONS.md :: Startup telemetry`; `docs/AGENT_ISSUE_DISPATCHER.md :: Dev/prod startup bootstrap` for the BuilderOps bootstrap and its degraded branch. | Existing resolved channel and binding input; the current startup preflight and startup-telemetry/runtime-verification evidence. For `dev`/`prod`, record the BuilderOps bootstrap result required by its current procedure; a degraded result does not grant BuilderOps delivery authority. | `docs/OPERATIONS.md` and the applicable startup/recovery runbook, with Product/Runtime owners handling a runtime-health or binding failure. BuilderOps bootstrap degradation follows `docs/AGENT_ISSUE_DISPATCHER.md :: Dev/prod startup bootstrap`; it does not let the Platform wrapper alter Builder System coordination authority. |
 | Channel-start wrappers such as `scripts/{dev,test,prod}/start_*.sh` | Starts the already-selected channel and its managed units. | Deployment, environments, release channels, runtime health, and gateway topology. | The deployment environment matrix and the relevant `docs/ENVIRONMENTS.md` and `docs/RELEASE_CHANNELS/README.md` procedure. | Existing channel configuration and binding; the current readiness, health, or deployment evidence required for that path. | The channel's current deployment or operations procedure; the wrapper does not substitute another channel, vault, or promotion target. |
 | `ops/host-setup/**` where it provisions or recovers a host | Establishes host-local prerequisites and service/VM topology. | Security, deployment/topology, external-host integrations, and the affected runtime channels. | `ops/host-setup/README.md` and the applicable infrastructure, deployment, and security owner documents. | Operator-approved host/network/credential posture; the runbook's required setup or recovery evidence, with no credential material copied into an execution receipt. | The host-setup runbook plus the controlling security or deployment owner for the failed surface. |
 
