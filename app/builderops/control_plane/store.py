@@ -2179,6 +2179,7 @@ class PostgresBuilderOpsStore:
                 row["post_effect_fencing_token"] != derived["fencing_token"]
                 or row["post_effect_intent_lsn"] != derived["intent_lsn"]
                 or row["post_effect_claim_lsn"] != derived["claim_lsn"]
+                or row["post_effect_claim_receipt_sequence"] != derived["claim_receipt_sequence"]
             ):
                 raise StaleFencingToken("post-effect identity drifted from locked row")
         return derived

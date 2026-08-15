@@ -239,6 +239,18 @@ def test_post_effect_pending_derives_claim_and_lsns_from_locked_outbox_row(
             operation_key=result.operation_key,
             minimum_fencing_token=claim.fencing_token - 1,
         )
+    with control_plane_store._connect() as conn:
+        conn.execute(
+            "UPDATE builderops_outbox SET post_effect_claim_receipt_sequence = 0 "
+            "WHERE repository = %s AND operation_key = %s",
+            (envelope.repository, result.operation_key),
+        )
+    with pytest.raises(StaleFencingToken, match="identity drifted"):
+        control_plane_store.begin_post_effect_pending(
+            repository=envelope.repository,
+            operation_key=result.operation_key,
+            minimum_fencing_token=claim.fencing_token,
+        )
 
 
 def test_post_effect_reconcile_and_replay_reject_forged_or_stale_claim_lsns(
