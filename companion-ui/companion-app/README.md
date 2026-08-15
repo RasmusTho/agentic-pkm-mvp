@@ -15,7 +15,7 @@ companion-ui/companion-app/
         └── active_artifact_shell.py      ← Active artifact body shell contract
 ```
 
-The `companion-ui/companion-app/` directory is the package root added to `sys.path` by `tests/companion_ui/conftest.py`.  Import in tests as:
+The `companion-ui/companion-app/` directory is the `companion_ui` package root. Editable installs declare it through `pyproject.toml`; pytest collection from a fresh source worktree uses the single root `conftest.py` fallback. Import in tests as:
 
 ```python
 from companion_ui.canvas_core.session_state import CanvasSessionState
