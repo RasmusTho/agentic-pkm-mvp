@@ -138,9 +138,15 @@ _ROW_DERIVED_FORBIDDEN_EVIDENCE_KEYS = frozenset(
         "fence",
     }
 )
-_ROW_DERIVED_AUTHORITY_TEXT = re.compile(
-    r"claim|intent|worker|receipt|fenc(?:e|ing)|lsn|expires?_at|authority[_ -]?envelope",
-    re.IGNORECASE,
+_ROW_DERIVED_AUTHORITY_TOKENS = (
+    "claim",
+    "intent",
+    "worker",
+    "receipt",
+    "fence",
+    "lsn",
+    "expires_at",
+    "authority_envelope",
 )
 
 
@@ -188,7 +194,10 @@ def _row_derived_evidence_text(value: Any) -> str:
 def _assert_row_derived_evidence_safe(value: Any) -> None:
     """Keep caller evidence from becoming dormant claim or LSN authority."""
     evidence_text = _row_derived_evidence_text(value)
-    if _contains_postgres_lsn_literal(evidence_text) or _ROW_DERIVED_AUTHORITY_TEXT.search(evidence_text):
+    normalized_text = evidence_text.casefold().replace("-", "_").replace(" ", "_")
+    if _contains_postgres_lsn_literal(evidence_text) or any(
+        token in normalized_text for token in _ROW_DERIVED_AUTHORITY_TOKENS
+    ):
         raise ValueError("row-derived reconciliation evidence cannot contain claim authority")
     if isinstance(value, Mapping):
         for key, child in value.items():
