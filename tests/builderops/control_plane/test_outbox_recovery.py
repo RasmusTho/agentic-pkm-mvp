@@ -313,6 +313,15 @@ def test_post_effect_reconcile_and_replay_reject_forged_or_stale_claim_lsns(
             observed_applied=False,
             evidence={"readback": "found"},
         )
+    with pytest.raises(ValueError, match="contradicts"):
+        control_plane_store.reconcile_post_effect(
+            repository=envelope.repository,
+            operation_key=result.operation_key,
+            minimum_fencing_token=claim.fencing_token,
+            expected_principal=envelope.actor,
+            observed_applied=False,
+            evidence={"readback": "unknown"},
+        )
     with pytest.raises((StaleFencingToken, IdempotencyConflict)):
         control_plane_store.reconcile_post_effect(
             repository=envelope.repository,

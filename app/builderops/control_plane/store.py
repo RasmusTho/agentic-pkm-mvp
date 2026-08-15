@@ -2214,9 +2214,8 @@ class PostgresBuilderOpsStore:
         """Use the stored row-derived claim for dormant reconciliation only."""
         _validate_row_derived_evidence(evidence)
         readback = evidence["readback"]
-        if (terminal_unknown and readback != "unknown") or (observed_applied and readback != "found") or (
-            not terminal_unknown and not observed_applied and readback == "found"
-        ):
+        expected_readback = "unknown" if terminal_unknown else "found" if observed_applied else "not-found"
+        if readback != expected_readback:
             raise ValueError("readback evidence contradicts the requested outcome")
         if terminal_unknown and observed_applied:
             raise ValueError("terminal-unknown reconciliation cannot claim an applied effect")
