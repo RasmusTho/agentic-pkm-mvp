@@ -930,14 +930,7 @@ check_docker_daemon() {
   if docker info >/dev/null 2>&1; then
     return
   fi
-  if [ "${AUTO_START_COLIMA:-0}" = "1" ] && command -v colima >/dev/null 2>&1; then
-    echo "Docker daemon unreachable; starting colima..." >&2
-    colima start >/dev/null 2>&1
-    if docker info >/dev/null 2>&1; then
-      return
-    fi
-  fi
-  echo "ERROR: Docker daemon is not reachable; ensure it is running and accessible (set AUTO_START_COLIMA=1 to allow starting Colima)." >&2
+  echo "ERROR: Docker daemon is not reachable after the bounded runtime readiness gate." >&2
   exit 1
 }
 

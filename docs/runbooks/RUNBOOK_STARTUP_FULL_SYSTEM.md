@@ -228,7 +228,10 @@ then require the checked-in guest gate to prove all of the following:
 - the persisted Docker-config inventory count equals the Docker API inventory
   count.
 
-The guest unit and drop-ins are checked in under
+The checked-in `colima-data-mount.service` is the explicit adapter boundary
+for the existing Colima/Lima per-boot mount provisioner; it verifies the
+mounts and does not guess a device or mutate Docker metadata. The guest unit
+and drop-ins are checked in under
 `ops/host-setup/mac-mini/systemd/`. The installer
 `ops/host-setup/mac-mini/install_colima_runtime_readiness.sh` is refusal-first:
 without `COLIMA_RUNTIME_APPLY=1` it only prints a redacted plan, and even an

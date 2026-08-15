@@ -56,9 +56,12 @@ def test_installed_units_fail_closed_until_exact_persistent_substrate_is_ready(
     assert not log.exists() or log.read_text(encoding="utf-8") == ""
 
     substrate_unit = SYSTEMD / "yggdrasil-colima-persistent-substrate.service"
+    data_mount_unit = SYSTEMD / "colima-data-mount.service"
     containerd_dropin = SYSTEMD / "containerd.service.d/20-yggdrasil-persistent-substrate.conf"
     docker_dropin = SYSTEMD / "docker.service.d/20-yggdrasil-containerd-readiness.conf"
     assert "ExecStart=" in substrate_unit.read_text(encoding="utf-8")
+    assert data_mount_unit.exists()
+    assert "--substrate" in data_mount_unit.read_text(encoding="utf-8")
     assert "Requires=yggdrasil-colima-persistent-substrate.service" in containerd_dropin.read_text(
         encoding="utf-8"
     )
@@ -78,11 +81,19 @@ def test_startup_entrypoints_share_one_bounded_colima_readiness_helper() -> None
     assert "colima_runtime_bind_and_ready" in full_start
     assert "source \"scripts/lib/colima_runtime_readiness.sh\"" in full_start
     assert "source \"${ROOT}/scripts/lib/colima_runtime_readiness.sh\"" in dev_bootstrap
+    assert "colima start" not in dev_bootstrap
+    assert "colima start >/dev/null" not in full_start
     assert "DOCKER_CONTEXT" in helper
     assert "COLIMA_RUNTIME_PROVIDER" in helper
     assert "COLIMA_USERNET_TIMEOUT" in helper
     assert "COLIMA_RESOURCE_PROFILE_FILE" in helper
     assert "timeout" in helper
+
+    installer = (ROOT / "ops/host-setup/mac-mini/install_colima_runtime_readiness.sh").read_text(
+        encoding="utf-8"
+    )
+    assert "COLIMA_RUNTIME_ENV_FILE" in installer
+    assert "install_guest_file_atomic" in installer
 
 
 def test_persisted_inventory_mismatch_fails_without_mutating_metadata(tmp_path: Path) -> None:

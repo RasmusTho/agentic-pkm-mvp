@@ -8,13 +8,6 @@ prepare_instance_ownership_host_state_dir
 
 colima_runtime_bind_and_ready "$ROOT"
 
-docker info >/dev/null 2>&1 || true
-if ! docker info >/dev/null 2>&1; then
-  if command -v colima >/dev/null 2>&1; then
-    colima start
-  fi
-fi
-
 if ! docker info >/dev/null 2>&1; then
   echo "Docker daemon is not available. Start Docker/Colima and retry."
   exit 1

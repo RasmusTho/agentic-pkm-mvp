@@ -60,22 +60,35 @@ _colima_runtime_bounded() {
   local seconds="$1"
   shift
   if command -v timeout >/dev/null 2>&1; then
-    timeout --foreground "$seconds" "$@"
+    if [ -n "${COLIMA_BOUNDED_STDIN_FILE:-}" ]; then
+      timeout --foreground "$seconds" "$@" < "$COLIMA_BOUNDED_STDIN_FILE"
+    else
+      timeout --foreground "$seconds" "$@"
+    fi
     return $?
   fi
   if command -v gtimeout >/dev/null 2>&1; then
-    gtimeout "$seconds" "$@"
+    if [ -n "${COLIMA_BOUNDED_STDIN_FILE:-}" ]; then
+      gtimeout "$seconds" "$@" < "$COLIMA_BOUNDED_STDIN_FILE"
+    else
+      gtimeout "$seconds" "$@"
+    fi
     return $?
   fi
   if command -v python3 >/dev/null 2>&1; then
     python3 - "$seconds" "$@" <<'PY'
+import os
 import subprocess
 import sys
 
 try:
-    result = subprocess.run(sys.argv[2:], check=False, timeout=float(sys.argv[1]))
+    stdin = open(os.environ["COLIMA_BOUNDED_STDIN_FILE"], "rb") if os.environ.get("COLIMA_BOUNDED_STDIN_FILE") else None
+    result = subprocess.run(sys.argv[2:], check=False, timeout=float(sys.argv[1]), stdin=stdin)
 except subprocess.TimeoutExpired:
     sys.exit(124)
+finally:
+    if "stdin" in locals() and stdin is not None:
+        stdin.close()
 sys.exit(result.returncode)
 PY
     return $?
@@ -149,6 +162,7 @@ colima_guest_readiness_gate() {
     _colima_runtime_fail containerd-rpc-or-metadata-not-ready
     return 1
   fi
+  return 0
 }
 
 _colima_runtime_persisted_count() {
