@@ -306,6 +306,35 @@ def test_post_effect_reconcile_and_replay_reject_forged_or_stale_claim_lsns(
         )
 
 
+def test_post_effect_reconcile_rejects_wrong_principal_and_contradictory_terminal_unknown(
+    control_plane_store, envelope
+) -> None:
+    result = _commit_outbox_task(
+        control_plane_store, envelope, task_id="row-derived-principal",
+        key="row-derived-principal", effect_type="github.comment", payload={"issue": 4898},
+    )
+    claim = control_plane_store.claim_outbox(
+        envelope=envelope, operation_key=result.operation_key, worker_id="executor-1"
+    )
+    control_plane_store.begin_post_effect_pending(
+        repository=envelope.repository, operation_key=result.operation_key,
+        minimum_fencing_token=claim.fencing_token, expected_principal=envelope.actor,
+    )
+    control_plane_store.mark_effect_unknown(claim, detail="readback required")
+    with pytest.raises(PermissionError):
+        control_plane_store.reconcile_post_effect(
+            repository=envelope.repository, operation_key=result.operation_key,
+            minimum_fencing_token=claim.fencing_token, expected_principal="other-principal",
+            observed_applied=False, evidence={"readback": "not-found"},
+        )
+    with pytest.raises(ValueError, match="terminal-unknown"):
+        control_plane_store.reconcile_post_effect(
+            repository=envelope.repository, operation_key=result.operation_key,
+            minimum_fencing_token=claim.fencing_token, expected_principal=envelope.actor,
+            observed_applied=True, terminal_unknown=True, evidence={"readback": "not-found"},
+        )
+
+
 def test_post_effect_recovers_after_legacy_reconcile_commits_before_phase_marker(
     control_plane_store, envelope
 ) -> None:

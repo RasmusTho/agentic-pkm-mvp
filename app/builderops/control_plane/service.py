@@ -152,7 +152,14 @@ def _assert_row_derived_evidence_safe(value: Any) -> None:
     """Keep caller evidence from becoming dormant claim or LSN authority."""
     if isinstance(value, Mapping):
         for key, child in value.items():
-            if _canonical_durable_key(str(key)) in _ROW_DERIVED_FORBIDDEN_EVIDENCE_KEYS:
+            normalized = _canonical_durable_key(str(key))
+            if (
+                normalized in _ROW_DERIVED_FORBIDDEN_EVIDENCE_KEYS
+                or any(
+                    fragment in normalized.split("_")
+                    for fragment in _ROW_DERIVED_FORBIDDEN_EVIDENCE_KEYS
+                )
+            ):
                 raise ValueError("row-derived reconciliation evidence cannot contain claim authority")
             _assert_row_derived_evidence_safe(child)
     elif isinstance(value, (list, tuple)):
@@ -1054,6 +1061,7 @@ def create_app(
                 repository=request.envelope.repository,
                 operation_key=request.operation_key,
                 minimum_fencing_token=request.minimum_fencing_token,
+                expected_principal=credential.principal,
             )
         except Exception as exc:
             raise _control_plane_error(exc) from exc
@@ -1220,6 +1228,7 @@ def create_app(
                 repository=request.envelope.repository,
                 operation_key=request.operation_key,
                 minimum_fencing_token=request.minimum_fencing_token,
+                expected_principal=credential.principal,
                 observed_applied=request.observed_applied,
                 terminal_unknown=request.terminal_unknown,
                 evidence=request.evidence,
