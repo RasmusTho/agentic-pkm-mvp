@@ -22,7 +22,7 @@ Introduces exact image-index/platform digest identity plus source-SHA, Compose, 
 
 ## Concretely
 
-`channel-manifest render --channel prod --intent promotion` emits only digest-addressed images and selected mounts; `--channel dev --intent local-source` emits local SHA+dirty identity and `promotion_eligible=false`.
+`channel-manifest render --channel prod --mode promotion --intent promotion` emits only digest-addressed images and selected mounts; `--channel dev --mode local-source --intent ordinary-boot` emits local SHA+dirty identity and `promotion_eligible=false`.
 
 ## Why This Matters
 
