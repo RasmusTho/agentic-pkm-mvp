@@ -18,7 +18,7 @@ Freeze K1–K9 before changing Compose, pins, database state, or vault bindings.
 
 ## What This Task Does
 
-Defines a non-secret ChannelManifest with channel, intent/mode, Compose project, DB/vault/artifact/worktree identities, schema compatibility, LLM policy, ports, gateway, and secret *references*. Defines terminal operation phases, receipt revocation, and hard-stop conditions.
+Defines a non-secret ChannelManifest with channel, intent/mode, Compose project, DB/vault/artifact/worktree identities, schema compatibility, LLM policy, ports, gateway, and secret *references*. Defines terminal operation phases, the machine-readable content-addressed receipt contract and revocation semantics, and hard-stop conditions.
 
 ## Concretely
 

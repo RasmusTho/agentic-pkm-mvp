@@ -58,18 +58,33 @@ proves the mapping statically; it does not claim that these runtime phases are s
 
 ### Terminal operation vocabulary
 
-Every deploy and recovery operation emits exactly one terminal result from this vocabulary:
+Every deploy, recovery, and ordinary-boot operation emits exactly one terminal result from this
+vocabulary:
 
 | Terminal phase | Meaning |
 | --- | --- |
 | `PRE_MUTATION_FAILURE` | Validation, identity, dependency, or receipt admission failed before any migration or activation mutation. |
 | `FAILED_AFTER_MIGRATION` | An actual migration/schema mutation occurred, but the operation did not reach activation success; this takes precedence over any later activation/health failure and is never PASS. A journal attempt alone is not migration. |
 | `ACTIVATION_FAILURE` | Activation/health proof failed without any migration/schema mutation; a journal attempt may exist, but this is never PASS. |
-| `PASS` | Required mutation, activation, and receipt checks completed for the exact manifest. |
+| `PASS` | Required migration (when applicable), activation, and receipt checks completed for the exact manifest. |
+| `ORDINARY_BOOT_PASS` | Read-only compatibility, identity, and health checks completed for the exact manifest; no migration, activation mutation, or promotion receipt is implied. |
 
 Terminal classification is ordered by mutation evidence: validation or journal-only failure is
 `PRE_MUTATION_FAILURE`; an actual schema/migration mutation selects `FAILED_AFTER_MIGRATION`; only
-activation/health failure with no migration selects `ACTIVATION_FAILURE`.
+activation/health failure with no migration selects `ACTIVATION_FAILURE`; a successful read-only
+ordinary boot selects `ORDINARY_BOOT_PASS`.
+
+### Promotion receipt contract
+
+The K5 receipt is a machine-readable, content-addressed record with exactly these semantic fields:
+`receipt_version`, `receipt_id`, `outcome`, `artifact_digest`, `config_identity`, `test_identity`,
+`vault_identity`, `schema_identity`, `required_checks`, `issued_at`, `fresh_until`, and
+`revoked_at`. `receipt_id` is the digest of the canonical receipt body; `outcome` is `PASS` or
+`FAIL`; the four `*_identity` values bind the receipt to the exact manifest; and
+`required_checks` is a non-empty, sorted list of named green checks. `fresh_until` is the exclusive
+freshness deadline and `revoked_at`, when present, invalidates the receipt. Prod admission requires
+`outcome=PASS`, matching identities, current time before `fresh_until`, `revoked_at` absent, and all
+required checks present; receipts contain no secret values or secret references.
 
 ## Verification and acceptance
 

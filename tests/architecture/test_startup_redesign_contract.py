@@ -171,8 +171,24 @@ def test_manifest_schema_represents_ordinary_boot_by_mode() -> None:
 
 
 def test_operation_contract_names_truthful_terminal_phases() -> None:
-    for phase in ("PRE_MUTATION_FAILURE", "FAILED_AFTER_MIGRATION", "ACTIVATION_FAILURE", "PASS"):
+    for phase in (
+        "PRE_MUTATION_FAILURE", "FAILED_AFTER_MIGRATION", "ACTIVATION_FAILURE", "PASS",
+        "ORDINARY_BOOT_PASS",
+    ):
         assert f"`{phase}`" in README
     assert "takes precedence over any later activation/health failure" in README
     assert "without any migration/schema mutation" in README
     assert "A journal attempt alone is not migration" in README
+    assert "successful read-only" in README
+
+
+def test_receipt_contract_names_binding_freshness_and_revocation() -> None:
+    for field in (
+        "receipt_version", "receipt_id", "outcome", "artifact_digest", "config_identity",
+        "test_identity", "vault_identity", "schema_identity", "required_checks", "issued_at",
+        "fresh_until", "revoked_at",
+    ):
+        assert f"`{field}`" in README
+    assert "content-addressed" in README
+    assert "non-empty, sorted list" in README
+    assert "`revoked_at` absent" in README
