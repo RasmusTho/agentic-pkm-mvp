@@ -51,9 +51,12 @@ Last verified against: app/stores/pg.py + app/alembic/versions/e6c4a2b8d1f3_mvr0
   `blocked_pending_mvr06`. The checked-in GOV revocation producer inventory is empty and CI derives
   the matching mutation-seam population from source. This delivery admits no production revocation
   entrypoint: a direct revocation call, indirect alias, callable reference, dynamic keyword call, or
-  constructor seed fails the source gate. A future change must first introduce a canonical
-  runtime-enforced ownership-fence/exclusive-lease entrypoint and evolve the inventory gate in the
-  same reviewed change; manifest booleans cannot self-certify a source path.
+  constructor seed fails the source gate. The authorizer independently requires a private matching
+  capability for a non-empty constructor revocation or `set_binding(..., revoked=True)`, and keeps
+  its facts in copy-on-write, non-mutable state; reflection cannot bypass that runtime boundary. A
+  future change must first introduce the sole canonical ownership-fence/exclusive-lease capability
+  minter and evolve the inventory gate in the same reviewed change; manifest booleans cannot
+  self-certify a source path.
 - The **entity-review operation journal** table (`entity_review_operations`) is **migration-owned**
   (EROJ-01, #4350): Alembic revision `e7a2b9c4d1f8` creates it, and
   `app/heimdal/entity_review_operation_journal.py::ensure_journal_schema()` is assert-only outside

@@ -40,6 +40,7 @@ Source anchors:
 from __future__ import annotations
 
 import json
+import operator
 import re
 import shutil
 from collections import Counter
@@ -47,6 +48,10 @@ from pathlib import Path
 
 import pytest
 
+from app.governance.binding_authority import (
+    RegistryBindingAuthorizer,
+    RevocationCapabilityError,
+)
 from app.instance.gov_revocation_inventory import (
     discover_gov_revocation_producers,
     load_gov_revocation_inventory,
@@ -118,6 +123,24 @@ def test_enabled_gov_revocation_producers_are_fenced_or_absent(tmp_path: Path) -
     assert inventory["producers"] == []
     validate_gov_revocation_coverage(inventory, app_root=REPO_ROOT / "app")
     assert discover_gov_revocation_producers(REPO_ROOT / "app") == frozenset()
+
+    sealed = RegistryBindingAuthorizer({"binding-a": 1})
+    mutation_calls = (
+        sealed.set_binding,
+        getattr(sealed, "set_" + "binding"),
+        sealed.__getattribute__("set_binding"),
+        operator.attrgetter("set_binding")(sealed),
+    )
+    for mutation in mutation_calls:
+        with pytest.raises(RevocationCapabilityError, match="revocation is sealed"):
+            mutation("binding-a", 2, **{"revoked": True})
+    with pytest.raises(RevocationCapabilityError, match="revocation is sealed"):
+        RegistryBindingAuthorizer({"binding-a": 1}, revoked=frozenset({"binding-a"}))
+    with pytest.raises(AttributeError):
+        getattr(sealed, "_known").pop("binding-a")
+    with pytest.raises(AttributeError):
+        setattr(sealed, "_known", {})
+    assert sealed.binding_revision("binding-a") == 1
     with pytest.raises(ValueError, match="ownership fence"):
         validate_gov_revocation_inventory(
             {
@@ -226,6 +249,12 @@ def test_enabled_gov_revocation_producers_are_fenced_or_absent(tmp_path: Path) -
         "def revoke(authorizer, binding):\n"
         "    for mutation in [authorizer.set_binding]:\n"
         "        mutation(binding, 2, **options)\n",
+        "def revoke(x: authorizer.set_binding('binding-a', 2, revoked=True)):\n" "    pass\n",
+        "def revoke() -> authorizer.set_binding('binding-a', 2, revoked=True):\n" "    pass\n",
+        "def revoke(authorizer, binding):\n" "    authorizer._known.pop(binding)\n",
+        "def revoke(authorizer, binding):\n"
+        "    authorizer._known[binding] = _KnownBinding(\n"
+        "        binding, 2, revoked=True)\n",
     )
     for source in indirect_sources:
         (synthetic / "future.py").write_text(source, encoding="utf-8")

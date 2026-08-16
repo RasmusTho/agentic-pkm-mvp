@@ -20,7 +20,8 @@ from __future__ import annotations
 
 import hashlib
 from dataclasses import dataclass
-from typing import Literal, Protocol
+from types import MappingProxyType
+from typing import Literal, Mapping, Protocol
 
 from app.vault.active_context_v1 import PrincipalContext
 
@@ -42,6 +43,10 @@ class BindingAuthorizationError(RuntimeError):
     def __init__(self, verdict: BindingVerdict) -> None:
         super().__init__(f"binding {verdict.vault_binding_id} denied: {verdict.reason}")
         self.verdict = verdict
+
+
+class RevocationCapabilityError(RuntimeError):
+    """Code outside the governed revocation boundary attempted revocation."""
 
 
 @dataclass(frozen=True)
@@ -129,6 +134,35 @@ class _KnownBinding:
     revoked: bool = False
 
 
+_REVOCATION_CAPABILITY_SECRET = object()
+
+
+@dataclass(frozen=True)
+class _RevocationCapability:
+    secret: object
+    vault_binding_id: str | None
+
+
+def _test_revocation_capability() -> _RevocationCapability:
+    """Return a test-only capability; the production source gate rejects its use."""
+
+    return _RevocationCapability(_REVOCATION_CAPABILITY_SECRET, None)
+
+
+def _require_revocation_capability(
+    capability: _RevocationCapability | None, *, vault_binding_id: str
+) -> None:
+    if (
+        capability is None
+        or capability.secret is not _REVOCATION_CAPABILITY_SECRET
+        or capability.vault_binding_id not in {None, vault_binding_id}
+    ):
+        raise RevocationCapabilityError(
+            "binding revocation is sealed until a governed ownership/exclusive entrypoint "
+            "mints the matching capability"
+        )
+
+
 class RegistryBindingAuthorizer:
     """The shipped GOV policy for the current single-user runtime.
 
@@ -153,6 +187,7 @@ class RegistryBindingAuthorizer:
     """
 
     policy_revision = "single-user-registry.v1"
+    __slots__ = ("__known",)
 
     def __init__(
         self,
@@ -160,16 +195,21 @@ class RegistryBindingAuthorizer:
         *,
         unavailable: frozenset[str] = frozenset(),
         revoked: frozenset[str] = frozenset(),
+        _revocation_capability: _RevocationCapability | None = None,
     ) -> None:
-        self._known: dict[str, _KnownBinding] = {
-            binding_id: _KnownBinding(
-                vault_binding_id=binding_id,
-                binding_revision=revision,
-                available=binding_id not in unavailable,
-                revoked=binding_id in revoked,
-            )
-            for binding_id, revision in (known or {}).items()
-        }
+        for binding_id in revoked:
+            _require_revocation_capability(_revocation_capability, vault_binding_id=binding_id)
+        self.__known: Mapping[str, _KnownBinding] = MappingProxyType(
+            {
+                binding_id: _KnownBinding(
+                    vault_binding_id=binding_id,
+                    binding_revision=revision,
+                    available=binding_id not in unavailable,
+                    revoked=binding_id in revoked,
+                )
+                for binding_id, revision in (known or {}).items()
+            }
+        )
 
     def set_binding(
         self,
@@ -178,6 +218,7 @@ class RegistryBindingAuthorizer:
         *,
         available: bool = True,
         revoked: bool = False,
+        _revocation_capability: _RevocationCapability | None = None,
     ) -> None:
         """Record current registry truth for one binding.
 
@@ -185,19 +226,25 @@ class RegistryBindingAuthorizer:
         the verdict epoch is bound to that exact revision.
         """
 
-        self._known[vault_binding_id] = _KnownBinding(
+        if revoked:
+            _require_revocation_capability(
+                _revocation_capability, vault_binding_id=vault_binding_id
+            )
+        updated = dict(self.__known)
+        updated[vault_binding_id] = _KnownBinding(
             vault_binding_id=vault_binding_id,
             binding_revision=binding_revision,
             available=available,
             revoked=revoked,
         )
+        self.__known = MappingProxyType(updated)
 
     def binding_revision(self, vault_binding_id: str) -> int:
-        known = self._known.get(vault_binding_id)
+        known = self.__known.get(vault_binding_id)
         return known.binding_revision if known is not None else 0
 
     def authorize(self, request: BindingAuthorizationRequest) -> BindingVerdict:
-        known = self._known.get(request.vault_binding_id)
+        known = self.__known.get(request.vault_binding_id)
         revision = known.binding_revision if known is not None else 0
 
         def _verdict(status: VerdictStatus, reason: str) -> BindingVerdict:
@@ -233,6 +280,7 @@ __all__ = [
     "BindingAuthorizer",
     "BindingVerdict",
     "RegistryBindingAuthorizer",
+    "RevocationCapabilityError",
     "authorization_epoch",
     "snapshot_authorization_epoch",
 ]

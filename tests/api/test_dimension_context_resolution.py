@@ -29,6 +29,7 @@ from app.api.app import app
 from app.governance.binding_authority import (
     BindingAuthorizationRequest,
     RegistryBindingAuthorizer,
+    _test_revocation_capability,
 )
 from app.instance.active_context_service import (
     ACTION_DIMENSION_RESOLVE,
@@ -59,9 +60,7 @@ SELECTION_URL = "/api/companion/active-context/selection"
 
 @pytest.fixture()
 def instance(tmp_path, monkeypatch):
-    runtime, first, extra, record = provisioned_instance(
-        tmp_path, extra_roots=("two", "three")
-    )
+    runtime, first, extra, record = provisioned_instance(tmp_path, extra_roots=("two", "three"))
     monkeypatch.setenv("INSTANCE_VAULT_REGISTRY_PATH", str(runtime.layout.registry_path))
     monkeypatch.setenv("INSTANCE_OWNERSHIP_ROOT", str(runtime.ledger.root))
     selection_routes.reset_selection_store_for_tests()
@@ -118,12 +117,7 @@ def test_dimension_resolution_authorizes_each_binding(instance, client) -> None:
             seen.append(request)
             return super().authorize(request)
 
-    recording = RecordingAuthorizer(
-        {
-            binding_id: 1
-            for binding_id in snapshot.registrations
-        }
-    )
+    recording = RecordingAuthorizer({binding_id: 1 for binding_id in snapshot.registrations})
     principal = _principal(runtime, record)
     resolution = _dimension_service(runtime).resolve(
         "work",
@@ -181,9 +175,7 @@ def test_selection_endpoint_resolves_dimension_and_derives_context_server_side(
     # dimension changed none of them.
     explicit = client.post(
         SELECTION_URL,
-        json={
-            "vault_binding_ids": [third.vault_binding_id, first.vault_binding_id]
-        },
+        json={"vault_binding_ids": [third.vault_binding_id, first.vault_binding_id]},
     ).json()["context"]
     for field in (
         "principal_kind",
@@ -379,7 +371,12 @@ def test_dimension_never_upgrades_authority_or_falls_back(instance, client) -> N
     )
     snapshot = runtime.registry.load()
     revoking = build_authorizer(snapshot)
-    revoking.set_binding(third.vault_binding_id, 1, revoked=True)
+    revoking.set_binding(
+        third.vault_binding_id,
+        1,
+        revoked=True,
+        _revocation_capability=_test_revocation_capability(),
+    )
     with pytest.raises(DimensionResolutionError) as revoked_error:
         service.resolve(
             "work",
@@ -486,6 +483,9 @@ def test_dimension_resolution_needs_no_selection_store(instance) -> None:
     assert resolution.binding_ids == (first.vault_binding_id,)
     # Resolving mints no selection: resolution is not selection.
     assert len(service.selection_store) == 0
-    assert open_local_operator_principal_store(
-        runtime.layout.registry_path
-    ).require().principal_for("trusted_loopback") == derived.principal
+    assert (
+        open_local_operator_principal_store(runtime.layout.registry_path)
+        .require()
+        .principal_for("trusted_loopback")
+        == derived.principal
+    )

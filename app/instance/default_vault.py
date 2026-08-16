@@ -92,9 +92,7 @@ def _require_registered(
     return registration
 
 
-def resolve_compatibility_default_vault_id(
-    snapshot: RegistrySnapshot, vault_id: str
-) -> str:
+def resolve_compatibility_default_vault_id(snapshot: RegistrySnapshot, vault_id: str) -> str:
     """Resolve the untrusted ``DEFAULT_VAULT_ID`` logical ID to one binding.
 
     A logical vault ID may legitimately map to several local clones. That is
@@ -117,9 +115,7 @@ def resolve_compatibility_default_vault_id(
     return matches[0]
 
 
-def resolve_legacy_bootstrap_binding(
-    snapshot: RegistrySnapshot, vault_root: Path
-) -> str:
+def resolve_legacy_bootstrap_binding(snapshot: RegistrySnapshot, vault_root: Path) -> str:
     """Resolve the explicit legacy bootstrap adapter to one stable binding.
 
     The adapter only ever *finds* the binding MVR-01B created or reconciled for
@@ -181,17 +177,11 @@ def resolve_vault_selection(
         )
         default_provenance = SELECTION_COMPATIBILITY_DEFAULT
     if default_binding_id is not None:
-        registration = _require_registered(
-            snapshot, default_binding_id, branch="instance default"
-        )
+        registration = _require_registered(snapshot, default_binding_id, branch="instance default")
         return VaultSelection(default_binding_id, default_provenance, registration)
     if legacy_bootstrap_vault_root is not None:
-        binding_id = resolve_legacy_bootstrap_binding(
-            snapshot, legacy_bootstrap_vault_root
-        )
-        registration = _require_registered(
-            snapshot, binding_id, branch="legacy bootstrap"
-        )
+        binding_id = resolve_legacy_bootstrap_binding(snapshot, legacy_bootstrap_vault_root)
+        registration = _require_registered(snapshot, binding_id, branch="legacy bootstrap")
         return VaultSelection(binding_id, SELECTION_LEGACY_BOOTSTRAP, registration)
     return VaultSelection(None, SELECTION_NO_VAULT, None)
 
@@ -231,6 +221,7 @@ def _emit_default_mutation_event(receipt: DefaultVaultReceipt) -> str:
     """
 
     from app.events.models import new_event
+    from app.instance.binding_ids import OUTBOX_GLOBAL_BINDING_ID
     from app.services.outbox import derive_idempotency_key, write_outbox_event
 
     payload = {
@@ -259,7 +250,10 @@ def _emit_default_mutation_event(receipt: DefaultVaultReceipt) -> str:
     # change, and requiring the DB here would make the headless CLI unusable on a
     # bare instance that has no outbox at all.
     return write_outbox_event(
-        event, idempotency_key=idempotency_key, required_db=False
+        event,
+        idempotency_key=idempotency_key,
+        vault_binding_id=OUTBOX_GLOBAL_BINDING_ID,
+        required_db=False,
     )
 
 
@@ -334,17 +328,13 @@ class InstanceDefaultVaultService:
             provenance=updated.default_vault_provenance,
             registry_revision=updated.revision,
             previous_vault_binding_id=before.default_vault_binding_id,
-            changed=(
-                before.default_vault_binding_id != updated.default_vault_binding_id
-            ),
+            changed=(before.default_vault_binding_id != updated.default_vault_binding_id),
         )
         if receipt.changed:
             self._emit_event(receipt)
         return receipt
 
-    def _mutate(
-        self, vault_binding_id: str | None, *, provenance: str
-    ) -> DefaultVaultReceipt:
+    def _mutate(self, vault_binding_id: str | None, *, provenance: str) -> DefaultVaultReceipt:
         before = self._store.load()
         if vault_binding_id is not None and vault_binding_id not in before.registrations:
             # Fail closed before any write: an unknown or removed binding is never
@@ -354,9 +344,8 @@ class InstanceDefaultVaultService:
             )
         if (
             before.default_vault_binding_id == vault_binding_id
-            and before.default_vault_provenance == (
-                None if vault_binding_id is None else provenance
-            )
+            and before.default_vault_provenance
+            == (None if vault_binding_id is None else provenance)
         ):
             # A no-op is not a mutation: it must not burn a registry revision and
             # must not publish a rebind event MVR-06 would act on. Provenance is

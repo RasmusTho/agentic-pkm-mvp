@@ -28,8 +28,9 @@ def _call_name(call: ast.Call) -> str:
 
 
 class _RevocationVisitor(ast.NodeVisitor):
-    def __init__(self, module: str) -> None:
+    def __init__(self, module: str, *, postponed_annotations: bool) -> None:
         self.module = module
+        self.postponed_annotations = postponed_annotations
         self.scope: list[str] = []
         self.direct_entrypoint_references: set[int] = set()
         self.producers: dict[str, GovRevocationProducerEvidence] = {}
@@ -41,6 +42,19 @@ class _RevocationVisitor(ast.NodeVisitor):
         for default in (*node.args.defaults, *node.args.kw_defaults):
             if default is not None:
                 self.visit(default)
+        if not self.postponed_annotations:
+            for argument in (
+                *node.args.posonlyargs,
+                *node.args.args,
+                *node.args.kwonlyargs,
+            ):
+                if argument.annotation is not None:
+                    self.visit(argument.annotation)
+            for optional_argument in (node.args.vararg, node.args.kwarg):
+                if optional_argument is not None and optional_argument.annotation is not None:
+                    self.visit(optional_argument.annotation)
+            if node.returns is not None:
+                self.visit(node.returns)
         for statement in node.body:
             self.visit(statement)
         self.scope.pop()
@@ -52,6 +66,19 @@ class _RevocationVisitor(ast.NodeVisitor):
         for default in (*node.args.defaults, *node.args.kw_defaults):
             if default is not None:
                 self.visit(default)
+        if not self.postponed_annotations:
+            for argument in (
+                *node.args.posonlyargs,
+                *node.args.args,
+                *node.args.kwonlyargs,
+            ):
+                if argument.annotation is not None:
+                    self.visit(argument.annotation)
+            for optional_argument in (node.args.vararg, node.args.kwarg):
+                if optional_argument is not None and optional_argument.annotation is not None:
+                    self.visit(optional_argument.annotation)
+            if node.returns is not None:
+                self.visit(node.returns)
         for statement in node.body:
             self.visit(statement)
         self.scope.pop()
@@ -67,7 +94,13 @@ class _RevocationVisitor(ast.NodeVisitor):
 
     def visit_Attribute(self, node: ast.Attribute) -> None:  # noqa: N802
         if (
-            node.attr in {"set_binding", "RegistryBindingAuthorizer"}
+            node.attr
+            in {
+                "set_binding",
+                "RegistryBindingAuthorizer",
+                "_known",
+                "_RegistryBindingAuthorizer__known",
+            }
             and id(node) not in self.direct_entrypoint_references
         ):
             self._record_sealed_producer()
@@ -76,7 +109,12 @@ class _RevocationVisitor(ast.NodeVisitor):
     def visit_Name(self, node: ast.Name) -> None:  # noqa: N802
         if (
             isinstance(node.ctx, ast.Load)
-            and node.id == "RegistryBindingAuthorizer"
+            and node.id
+            in {
+                "RegistryBindingAuthorizer",
+                "_REVOCATION_CAPABILITY_SECRET",
+                "_RevocationCapability",
+            }
             and id(node) not in self.direct_entrypoint_references
         ):
             self._record_sealed_producer()
@@ -84,8 +122,16 @@ class _RevocationVisitor(ast.NodeVisitor):
 
     def visit_ImportFrom(self, node: ast.ImportFrom) -> None:  # noqa: N802
         if any(
-            item.name == "RegistryBindingAuthorizer"
-            and item.asname not in {None, "RegistryBindingAuthorizer"}
+            (
+                item.name == "RegistryBindingAuthorizer"
+                and item.asname not in {None, "RegistryBindingAuthorizer"}
+            )
+            or item.name
+            in {
+                "_test_revocation_capability",
+                "_REVOCATION_CAPABILITY_SECRET",
+                "_RevocationCapability",
+            }
             for item in node.names
         ):
             self._record_sealed_producer()
@@ -105,17 +151,29 @@ class _RevocationVisitor(ast.NodeVisitor):
         )
         possible_indirect_revocation = (
             not recognized_entrypoint
-            and name != "_KnownBinding"
             and revoked is not None
             and not definitely_empty
             and not definitely_false
         )
-        dynamic_entrypoint = name in {"getattr", "methodcaller"} and any(
+        dynamic_entrypoint = name in {
+            "getattr",
+            "__getattribute__",
+            "methodcaller",
+            "attrgetter",
+        } and any(
             isinstance(argument, ast.Constant)
             and argument.value in {"set_binding", "RegistryBindingAuthorizer"}
             for argument in node.args
         )
-        if possible_direct_revocation or possible_indirect_revocation or dynamic_entrypoint:
+        capability_entrypoint = name == "_test_revocation_capability" or any(
+            item.arg == "_revocation_capability" for item in node.keywords
+        )
+        if (
+            possible_direct_revocation
+            or possible_indirect_revocation
+            or dynamic_entrypoint
+            or capability_entrypoint
+        ):
             self._record_sealed_producer()
 
         if recognized_entrypoint:
@@ -135,7 +193,15 @@ def discover_gov_revocation_producer_evidence(
     for path in sorted(app_root.rglob("*.py")):
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         module = path.relative_to(app_root.parent).with_suffix("").as_posix()
-        visitor = _RevocationVisitor(module)
+        if module == "app/governance/binding_authority":
+            continue
+        postponed_annotations = any(
+            isinstance(statement, ast.ImportFrom)
+            and statement.module == "__future__"
+            and any(item.name == "annotations" for item in statement.names)
+            for statement in tree.body
+        )
+        visitor = _RevocationVisitor(module, postponed_annotations=postponed_annotations)
         visitor.visit(tree)
         for name, evidence in visitor.producers.items():
             previous = discovered.get(name)
