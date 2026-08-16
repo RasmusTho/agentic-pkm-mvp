@@ -103,7 +103,12 @@ writer stop, the production wrapper derives the complete dev/test/prod/native le
 canonical channel/runtime env files, stopped or running Compose service config plus scalar stores,
 the native scalar store, and the governed caller binding. Two identical probes create a private
 baseline; after lease-bound quiescence is proven, two more probes must reproduce it exactly before
-the wrapper marks the inventory drained and seeds every owner. A missing, changed, ambiguous, or
+the first MVR-05 floor write may advance the registry. While the canonical deployment-admission and
+registry-producer locks hold, that floor producer initializes the protected host ledger/key only for
+a revision-zero registry; an established registry with either artifact missing remains fail-closed
+and requires the explicit recovery path. The same locks keep release, finalization, and other
+registry producers outside this authority transition. The stopped finalizer then marks the
+inventory drained and seeds every owner. A missing, changed, ambiguous, or
 cross-domain-overlapping source fails closed rather than being silently omitted. The fence prevents
 upgraded consumers from restarting through a failed post-stop validation or import; a changed final
 fingerprint, missing inventory, missing established ledger/key, or unfenced finalizer also aborts.

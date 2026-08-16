@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+import threading
 from dataclasses import replace
 from pathlib import Path
 
@@ -7,6 +9,8 @@ import pytest
 import yaml
 
 from app.events.models import new_event
+from app.instance import mvr05_cutover as mvr05_cutover_module
+from app.instance import runtime as runtime_module
 from app.instance.local_operator_principal import (
     LocalOperatorPrincipalStore,
     PROVENANCE_FRESH_BOOTSTRAP,
@@ -16,7 +20,7 @@ from app.instance.mvr05_cutover import (
     Mvr05CutoverError,
     discover_db_producer_fence,
 )
-from app.instance.ownership_ledger import OwnershipLedger
+from app.instance.ownership_ledger import LedgerKeyError, OwnershipLedger
 from app.instance.vault_registry import VaultRegistration, VaultRegistryStore
 from app.services import outbox
 from tests.helpers.instance_storage_capability import STORAGE_MUTATION_CAPABILITY
@@ -101,6 +105,182 @@ def test_all_old_scalar_db_clients_are_stopped_before_binding_keyed_migration() 
     )
     assert "target_sha}:app/instance/mvr05_cutover.py" in migration
     assert "target_sha}:app/instance/runtime.py" not in migration
+
+
+def _floor_command(tmp_path, monkeypatch) -> tuple[list[str], Path, Path]:
+    registry_path = tmp_path / "instance-state" / "agentic-pkm" / "vault-registry.md"
+    host_global_root = tmp_path / "host-global"
+    registry_path.parent.mkdir(parents=True, mode=0o700)
+    host_global_root.mkdir(mode=0o700)
+    proof_path = tmp_path / "quiescence-proof.json"
+    proof_path.write_text(json.dumps({"nonce": "fresh-deployment"}), encoding="utf-8")
+    fence_path = tmp_path / "mvr05-fence-plan.json"
+    fence_path.write_text(
+        json.dumps(discover_db_producer_fence(REPO_ROOT / "docker-compose.yaml").as_payload()),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        runtime_module,
+        "_require_proved_deployment_lease",
+        lambda **_kwargs: None,
+    )
+    return (
+        [
+            "mvr05-record-floor",
+            "--channel",
+            "dev",
+            "--registry-path",
+            str(registry_path),
+            "--host-global-root",
+            str(host_global_root),
+            "--quiescence-proof-path",
+            str(proof_path),
+            "--fence-plan",
+            str(fence_path),
+        ],
+        registry_path,
+        host_global_root,
+    )
+
+
+def test_floor_producer_seeds_protected_ledger_before_first_registry_write(
+    tmp_path, monkeypatch
+) -> None:
+    """A fresh host must not look like an established registry with lost authority."""
+
+    command, registry_path, host_global_root = _floor_command(tmp_path, monkeypatch)
+    record_floor = mvr05_cutover_module.record_mvr05_runtime_floor
+
+    def record_floor_after_ledger(*args, **kwargs):
+        OwnershipLedger(host_global_root).require_existing()
+        return record_floor(*args, **kwargs)
+
+    monkeypatch.setattr(
+        mvr05_cutover_module,
+        "record_mvr05_runtime_floor",
+        record_floor_after_ledger,
+    )
+
+    assert runtime_module.main(command) == 0
+
+    ledger = OwnershipLedger(host_global_root).require_existing()
+    assert ledger.legacy_bootstrap_complete is False
+    assert VaultRegistryStore(registry_path).load().revision == 1
+
+
+def test_floor_producer_holds_stopped_window_through_floor_commit(
+    tmp_path, monkeypatch
+) -> None:
+    command, registry_path, host_global_root = _floor_command(tmp_path, monkeypatch)
+    record_started = threading.Event()
+    admission_acquired = threading.Event()
+    producer_acquired = threading.Event()
+    record_floor = mvr05_cutover_module.record_mvr05_runtime_floor
+    layout = runtime_module.InstanceStateLayout(
+        root=registry_path.parent,
+        channel_id="dev",
+        registry_path=registry_path,
+    )
+
+    def competing_release() -> None:
+        assert record_started.wait(timeout=1)
+        with runtime_module._deployment_admission_locked(host_global_root):
+            admission_acquired.set()
+
+    def competing_producer() -> None:
+        assert record_started.wait(timeout=1)
+        with runtime_module._producer_transition_locked(layout):
+            producer_acquired.set()
+
+    def record_while_stopped(*args, **kwargs):
+        record_started.set()
+        assert not admission_acquired.wait(timeout=0.1)
+        assert not producer_acquired.wait(timeout=0.1)
+        return record_floor(*args, **kwargs)
+
+    monkeypatch.setattr(
+        mvr05_cutover_module,
+        "record_mvr05_runtime_floor",
+        record_while_stopped,
+    )
+    competitor = threading.Thread(target=competing_release)
+    producer = threading.Thread(target=competing_producer)
+    competitor.start()
+    producer.start()
+
+    assert runtime_module.main(command) == 0
+    competitor.join(timeout=1)
+    producer.join(timeout=1)
+
+    assert not competitor.is_alive()
+    assert not producer.is_alive()
+    assert admission_acquired.is_set()
+    assert producer_acquired.is_set()
+
+
+def test_floor_producer_preserves_established_ledger_identity(tmp_path, monkeypatch) -> None:
+    command, registry_path, host_global_root = _floor_command(tmp_path, monkeypatch)
+    assert runtime_module.main(command) == 0
+    before = OwnershipLedger(host_global_root).require_existing()
+
+    assert runtime_module.main(command) == 0
+
+    after = OwnershipLedger(host_global_root).require_existing()
+    assert (after.key_id, after.generation) == (before.key_id, before.generation)
+    assert VaultRegistryStore(registry_path).load().revision == 1
+
+
+@pytest.mark.parametrize("missing_artifact", ["ledger", "key"])
+def test_floor_producer_does_not_recreate_lost_established_authority(
+    tmp_path, monkeypatch, missing_artifact
+) -> None:
+    command, registry_path, host_global_root = _floor_command(tmp_path, monkeypatch)
+    assert runtime_module.main(command) == 0
+    ledger = OwnershipLedger(host_global_root)
+    missing_path = ledger.path if missing_artifact == "ledger" else ledger.key_path
+    surviving_path = ledger.key_path if missing_artifact == "ledger" else ledger.path
+    surviving_before = surviving_path.read_bytes()
+    missing_path.unlink()
+
+    with pytest.raises(LedgerKeyError):
+        runtime_module.main(command)
+
+    assert not missing_path.exists()
+    assert surviving_path.read_bytes() == surviving_before
+    assert VaultRegistryStore(registry_path).load().revision == 1
+
+
+def test_floor_producer_resumes_revision_zero_key_only_initialization(
+    tmp_path, monkeypatch
+) -> None:
+    command, registry_path, host_global_root = _floor_command(tmp_path, monkeypatch)
+    assert VaultRegistryStore(registry_path).load().revision == 0
+    ledger = OwnershipLedger(host_global_root)
+    seeded = ledger.load()
+    ledger.path.unlink()
+
+    assert runtime_module.main(command) == 0
+
+    resumed = ledger.require_existing()
+    assert (resumed.key_id, resumed.generation) == (seeded.key_id, seeded.generation)
+    assert VaultRegistryStore(registry_path).load().revision == 1
+
+
+def test_floor_producer_rejects_revision_zero_ledger_without_key(
+    tmp_path, monkeypatch
+) -> None:
+    command, registry_path, host_global_root = _floor_command(tmp_path, monkeypatch)
+    assert VaultRegistryStore(registry_path).load().revision == 0
+    ledger = OwnershipLedger(host_global_root)
+    ledger.load()
+    ledger.key_path.unlink()
+
+    with pytest.raises(LedgerKeyError, match="without its protected key"):
+        runtime_module.main(command)
+
+    assert ledger.path.is_file()
+    assert not ledger.key_path.exists()
+    assert VaultRegistryStore(registry_path).load().revision == 0
 
 
 def test_fence_inventory_covers_every_enabled_db_outbox_process(tmp_path) -> None:
