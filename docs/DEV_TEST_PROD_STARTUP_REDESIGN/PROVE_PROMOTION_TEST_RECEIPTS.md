@@ -1,0 +1,50 @@
+---
+name: Prove Promotion-Test Receipts
+description: Produce and validate durable content-addressed PASS or FAIL receipts for exact promotion candidates.
+task_id: STARTUP-04
+github_issue: 4917
+source_anchor: docs/DEV_TEST_PROD_STARTUP_REDESIGN/README.md :: Verification and acceptance
+parent_capability: DEV_TEST_PROD_STARTUP_REDESIGN
+prerequisites: [STARTUP-01, STARTUP-02, STARTUP-03]
+depends_on: [FREEZE_CHANNEL_MANIFEST_AND_OPERATION_CONTRACT.md, BUILD_IMMUTABLE_ARTIFACT_GRAPH.md, IMPLEMENT_READ_ONLY_ORDINARY_BOOT.md]
+can_parallelize_with: []
+---
+
+# Prove Promotion-Test Receipts
+
+## Purpose
+
+Make test a first-class promotion gate and make prod receipt validation deterministic.
+
+## What This Task Does
+
+Runs one exact digest against the declared prod-compatible baseline; records migration journal, readiness/version/UI/smoke checks, and a durable content-addressed PASS/FAIL receipt outside resettable test volumes. Prod rejects absent, stale, revoked, or mismatched receipts.
+
+## Concretely
+
+`promotion-test verify --digest <digest>` emits one receipt. `promotion-receipt validate --channel prod --digest <digest>` accepts only a current, unrevoked PASS whose config/test/vault/schema identities match.
+
+## Why This Matters
+
+A healthy local test does not authorize a different prod artifact or configuration.
+
+## Acceptance Criteria
+
+- [ ] Receipt validation rejects each missing, stale, revoked, digest/config/test/schema mismatch. Verify: `tests/runtime/test_startup_artifact_call_sites.py::test_prod_receipt_validator_is_invoked_before_activation`.
+- [ ] PASS and FAIL are both durable terminal evidence outside resettable test volumes. Verify: `tests/runtime/test_startup_artifact_call_sites.py::test_promotion_test_writes_one_durable_terminal_receipt`.
+
+## How to Verify (Pre-Merge)
+
+Replace strict-xfail skeletons and run receipt fixture plus runtime-path tests.
+
+## Out of Scope
+
+Production activation or accepting an emergency bypass as a normal receipt.
+
+## Related Docs
+
+`docs/RELEASE_CHANNELS/README.md`.
+
+## Related GitHub Issues
+
+Filed ownership: #4917 (P4), under parent validation hub #4913. The parent/child overlap was resolved before filing; this task owns durable promotion-test receipt proof for the newer chain.

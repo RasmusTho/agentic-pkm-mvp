@@ -1,0 +1,15 @@
+{
+  "registry_version": "promotion-receipt-registry.v1",
+  "trusted_keys": {
+    "promotion-test-issuer-key-v1": "Kay64UG8yvCyLhqU000LxzYeUm0L_hLIl5S8kyKWbdc"
+  },
+  "entries": {
+    "sha256:bc530163db3e6cce1881013c5b6e80599af3d387be14fba4b7fc2d4e318bd258": {
+      "issuer_id": "promotion-test-issuer",
+      "issuer_key_id": "promotion-test-issuer-key-v1",
+      "public_key": "Kay64UG8yvCyLhqU000LxzYeUm0L_hLIl5S8kyKWbdc",
+      "issuer_signature": "ed25519:v1:2dfDwYnElEux9HgiPbtpXEGugXG9CHbzI62LqcAyna1LDgSmOL16BuvZe4AdSexbrmChyaeOxN9YH1xmER0XBw",
+      "status": "issued"
+    }
+  }
+}
