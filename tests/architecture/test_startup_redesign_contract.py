@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import json
 import hashlib
+import base64
 import re
 from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
 
 ROOT = Path(__file__).resolve().parents[2]
 SPEC = ROOT / "docs" / "DEV_TEST_PROD_STARTUP_REDESIGN"
@@ -201,7 +203,7 @@ def test_receipt_contract_names_binding_freshness_and_revocation() -> None:
 RECEIPT_FIELDS = {
     "receipt_version", "receipt_id", "outcome", "artifact_digest", "config_identity",
     "test_identity", "vault_identity", "schema_identity", "required_checks", "issued_at",
-    "fresh_until", "issuer_id", "issuer_signature",
+    "fresh_until", "issuer_id", "issuer_key_id", "issuer_signature",
 }
 EXPECTED_RECEIPT_CHECKS = ["migration", "readiness", "schema", "smoke", "ui", "version"]
 REGISTRY_FIXTURE = ROOT / "tests" / "fixtures" / "startup_redesign" / "promotion_receipt_registry.valid.json"
@@ -234,12 +236,13 @@ def _assert_receipt_schema(
     assert receipt["required_checks"] == EXPECTED_RECEIPT_CHECKS
     assert re.fullmatch(r"sha256:[0-9a-f]{64}", receipt["artifact_digest"])
     assert re.fullmatch(r"sha256:[0-9a-f]{64}", receipt["config_identity"])
-    for field in ("artifact_digest", "config_identity", "vault_identity", "schema_identity"):
+    for field in ("artifact_digest", "config_identity", "test_identity", "vault_identity", "schema_identity"):
         assert receipt[field] == expected_manifest[field]
-    assert all(isinstance(receipt[field], str) and re.fullmatch(r"[A-Za-z0-9._:-]+", receipt[field]) for field in ("test_identity", "vault_identity", "schema_identity"))
+    assert re.fullmatch(r"promotion-test:\d{8}", receipt["test_identity"])
+    assert receipt["vault_identity"] == "prod-vault"
+    assert re.fullmatch(r"alembic:[A-Za-z0-9._-]+", receipt["schema_identity"])
     assert receipt["issuer_id"] == "promotion-test-issuer"
-    expected_signature = "sig:v1:promotion-test-issuer:" + hashlib.sha256(_receipt_unsigned_body(receipt)).hexdigest()
-    assert receipt["issuer_signature"] == expected_signature
+    assert receipt["issuer_key_id"] == "promotion-test-issuer-key-v1"
     timestamp_pattern = r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z"
     assert re.fullmatch(timestamp_pattern, receipt["issued_at"])
     assert re.fullmatch(timestamp_pattern, receipt["fresh_until"])
@@ -251,15 +254,37 @@ def _assert_receipt_schema(
     assert registry["registry_version"] == "promotion-receipt-registry.v1"
     entry = registry["entries"][receipt["receipt_id"]]
     assert entry["issuer_id"] == receipt["issuer_id"]
+    assert entry["issuer_key_id"] == receipt["issuer_key_id"]
     assert entry["issuer_signature"] == receipt["issuer_signature"]
     assert entry["status"] == "issued"
+    assert entry["public_key"]
+    signature = receipt["issuer_signature"].split(":", 2)
+    assert signature[:2] == ["ed25519", "v1"]
+    public_key = Ed25519PublicKey.from_public_bytes(base64.urlsafe_b64decode(entry["public_key"] + "=="))
+    public_key.verify(base64.urlsafe_b64decode(signature[2] + "=="), _receipt_unsigned_body(receipt))
     _assert_secret_free(receipt)
+
+
+def _reseal_test_receipt(receipt: dict[str, object], registry: dict[str, object], **updates: str) -> None:
+    """Reseal mutations with the deterministic test-only issuer key."""
+    receipt.update(updates)
+    key = Ed25519PrivateKey.from_private_bytes(bytes(range(32, 64)))
+    signature = base64.urlsafe_b64encode(key.sign(_receipt_unsigned_body(receipt))).decode().rstrip("=")
+    receipt["issuer_signature"] = "ed25519:v1:" + signature
+    receipt["receipt_id"] = "sha256:" + hashlib.sha256(_receipt_digest_body(receipt)).hexdigest()
+    registry["entries"][receipt["receipt_id"]] = {
+        "issuer_id": receipt["issuer_id"],
+        "issuer_key_id": receipt["issuer_key_id"],
+        "public_key": "Kay64UG8yvCyLhqU000LxzYeUm0L_hLIl5S8kyKWbdc",
+        "issuer_signature": receipt["issuer_signature"],
+        "status": "issued",
+    }
 
 
 def test_promotion_receipt_fixture_has_machine_readable_schema() -> None:
     receipt = json.loads(RECEIPT_FIXTURE.read_text())
     registry = json.loads(REGISTRY_FIXTURE.read_text())
-    expected = {"artifact_digest": receipt["artifact_digest"], "config_identity": receipt["config_identity"], "vault_identity": receipt["vault_identity"], "schema_identity": receipt["schema_identity"]}
+    expected = {"artifact_digest": receipt["artifact_digest"], "config_identity": receipt["config_identity"], "test_identity": receipt["test_identity"], "vault_identity": receipt["vault_identity"], "schema_identity": receipt["schema_identity"]}
     _assert_receipt_schema(receipt, registry, now="2026-08-16T12:00:00Z", expected_manifest=expected)
 
 
@@ -291,9 +316,10 @@ def test_promotion_receipt_schema_rejects_tampering_stale_checks_and_revocation(
         _assert_receipt_schema(fail_receipt, registry, now="2026-08-16T12:00:00Z", expected_manifest=receipt)
 
     wrong_test = json.loads(RECEIPT_FIXTURE.read_text())
-    wrong_test["test_identity"] = "promotion-test:other"
+    wrong_test_registry = json.loads(json.dumps(registry))
+    _reseal_test_receipt(wrong_test, wrong_test_registry, test_identity="promotion-test:20260817")
     with pytest.raises(AssertionError):
-        _assert_receipt_schema(wrong_test, registry, now="2026-08-16T12:00:00Z", expected_manifest=receipt)
+        _assert_receipt_schema(wrong_test, wrong_test_registry, now="2026-08-16T12:00:00Z", expected_manifest=receipt)
 
     malformed_clock = json.loads(RECEIPT_FIXTURE.read_text())
     malformed_clock["fresh_until"] = "ZZ"
@@ -307,10 +333,10 @@ def test_promotion_receipt_schema_rejects_tampering_stale_checks_and_revocation(
         _assert_receipt_schema(wrong_manifest, registry, now="2026-08-16T12:00:00Z", expected_manifest=receipt)
 
     secret_bearing = json.loads(RECEIPT_FIXTURE.read_text())
-    secret_bearing["vault_identity"] = "admin:hunter2"
+    secret_registry = json.loads(json.dumps(registry))
+    _reseal_test_receipt(secret_bearing, secret_registry, vault_identity="admin:hunter2")
     with pytest.raises(AssertionError):
-        secret_bearing["receipt_id"] = "sha256:" + hashlib.sha256(_receipt_digest_body(secret_bearing)).hexdigest()
-        _assert_receipt_schema(secret_bearing, registry, now="2026-08-16T12:00:00Z", expected_manifest=receipt)
+        _assert_receipt_schema(secret_bearing, secret_registry, now="2026-08-16T12:00:00Z", expected_manifest=receipt)
 
     with pytest.raises(AssertionError):
         _assert_receipt_schema(receipt, None, now="2026-08-16T12:00:00Z", expected_manifest=receipt)
