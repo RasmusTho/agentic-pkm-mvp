@@ -121,6 +121,9 @@ services:
       - "./docker-compose.yaml:/run/scalar-rollback-policy/docker-compose.yaml:ro"
       - "./docker-compose.scalar-rollback.yml:/run/scalar-rollback-policy/docker-compose.scalar-rollback.yml:ro"
       - "./ops/scalar-rollback/nginx.conf:/run/scalar-rollback-policy/nginx.conf:ro"
+      # The MVR-01C authority producer verifies the exact host launcher bytes;
+      # keep the launcher out of the image and expose only its canonical path.
+      - "./scripts/scalar_rollback_native.sh:/app/scripts/scalar_rollback_native.sh:ro"
       # Exact production native auth producers. The image deliberately excludes
       # these host launchers; the cutover hashes the mounted bytes and fails
       # closed if any declared path is absent.
