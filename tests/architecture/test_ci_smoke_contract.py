@@ -25,14 +25,31 @@ def _vaultwide_panel_step() -> str:
     ].split("      - name: Skip docker smoke for docs-only PR", maxsplit=1)[0]
 
 
+def _assert_bounded_native_enumeration_retry(step: str, expected_calls: int) -> None:
+    after_helper_start = step.split(
+        "          prepare_ci_instance_state_deployment() {", maxsplit=1
+    )[1]
+    helper, after_helper = after_helper_start.split("          }\n", maxsplit=1)
+
+    assert "local attempt=1 max_attempts=3 attempt_rc stderr_path" in helper
+    assert "if prepare_instance_state_deployment \\" in helper
+    assert '2>"$stderr_path"' in helper
+    assert 'attempt_rc=$?' in helper
+    assert 'grep -Fxq "native process enumeration failed" "$stderr_path"' in helper
+    assert 'return "$attempt_rc"' in helper
+    assert "prepare_instance_state_deployment" not in after_helper
+    assert step.count("prepare_ci_instance_state_deployment\n") == expected_calls
+
+
 def test_worker_smoke_starts_db_before_instance_state_deployment() -> None:
     step = _worker_startup_step()
 
     db_start = "run_ci_compose up -d --wait db"
-    deployment = 'prepare_instance_state_deployment run_ci_compose "${PKM_ENVIRONMENT:-dev}"'
+    deployment = "\n          prepare_ci_instance_state_deployment\n"
 
     assert db_start in step
     assert step.index(db_start) < step.index(deployment)
+    _assert_bounded_native_enumeration_retry(step, expected_calls=1)
 
 
 def test_worker_smoke_cleanup_covers_started_dependencies() -> None:
@@ -61,7 +78,7 @@ def test_push_smoke_registers_worker_startup_gate() -> None:
 def test_vaultwide_smoke_activates_registered_fixture_through_production_cutover() -> None:
     step = _vaultwide_panel_step()
 
-    deployment = 'prepare_instance_state_deployment run_ci_compose "${PKM_ENVIRONMENT:-dev}"'
+    deployment = "\n          prepare_ci_instance_state_deployment\n"
     registration = "python -m app.instance.runtime preflight"
     cutover_binding = "export MVR01C_ROLLBACK_VAULT_BINDING_ID"
     cutover_root = 'export MVR01C_ROLLBACK_VAULT_ROOT="$VAULT_ROOT"'
@@ -78,6 +95,7 @@ def test_vaultwide_smoke_activates_registered_fixture_through_production_cutover
     assert registration_index < step.index(cutover_root) < second_deployment
     assert registration_index < step.index(principal_cutover) < second_deployment
     assert registration_index < step.index(principal_topology) < second_deployment
+    _assert_bounded_native_enumeration_retry(step, expected_calls=2)
 
 
 def test_vaultwide_smoke_cleanup_removes_cutover_receipts_and_state() -> None:
