@@ -39,6 +39,7 @@ def test_residual_binding_tables_migrate_or_fail_loud(
             "INSERT INTO heimdal_meeting_finalization_receipt "
             "(session_id,state_sha256,complete) VALUES ('session','state',true)"
         )
+        conn.execute("CREATE UNIQUE INDEX residual_sets_name_unique ON sets(name)")
 
     _upgrade(migrated, monkeypatch, RESIDUAL_HEAD)
     with psycopg.connect(migrated) as conn:
@@ -65,6 +66,20 @@ def test_residual_binding_tables_migrate_or_fail_loud(
             "SELECT count(*) FROM sets WHERE vault_binding_id=%s AND name='published'",
             (COMPATIBILITY_BINDING_ID,),
         ).fetchone() == (1,)
+        conn.execute(
+            "INSERT INTO sets(vault_binding_id,id,name) VALUES "
+            "('binding-a',%s,'same-name'),('binding-b',%s,'same-name')",
+            (uuid.uuid4(), uuid.uuid4()),
+        )
+        assert conn.execute(
+            "SELECT count(*) FROM pg_index i "
+            "WHERE i.indrelid='sets'::regclass AND i.indisunique "
+            "AND NOT EXISTS ("
+            "  SELECT 1 FROM unnest(i.indkey::smallint[]) key(attnum) "
+            "  JOIN pg_attribute a ON a.attrelid=i.indrelid AND a.attnum=key.attnum "
+            "  WHERE a.attname='vault_binding_id'"
+            ")"
+        ).fetchone() == (0,)
         assert conn.execute("SELECT to_regclass('public.objects_embeddings')").fetchone() == (
             None,
         )
@@ -90,4 +105,32 @@ def test_residual_binding_tables_migrate_or_fail_loud(
         )
         assert conn.execute("SELECT to_regclass('public.objects_embeddings')").fetchone() != (
             None,
+        )
+
+    unknown_unique = scratch_db_factory()
+    _upgrade(unknown_unique, monkeypatch, PRE_RESIDUAL_HEAD)
+    with psycopg.connect(unknown_unique) as conn:
+        conn.execute(
+            "ALTER TABLE sets ADD COLUMN vault_binding_id text NOT NULL "
+            f"DEFAULT '{COMPATIBILITY_BINDING_ID}'"
+        )
+        conn.execute(
+            "CREATE UNIQUE INDEX sets_partial_binding_name_unique "
+            "ON sets(vault_binding_id,name) WHERE name <> ''"
+        )
+
+    with pytest.raises(DBAPIError, match="unsupported partial or expression unique index"):
+        _upgrade(unknown_unique, monkeypatch, RESIDUAL_HEAD)
+    with psycopg.connect(unknown_unique) as conn:
+        assert conn.execute("SELECT version_num FROM alembic_version").fetchone() == (
+            PRE_RESIDUAL_HEAD,
+        )
+        assert conn.execute("SELECT to_regclass('public.objects_embeddings')").fetchone() != (
+            None,
+        )
+        conn.execute("DROP INDEX sets_partial_binding_name_unique")
+    _upgrade(unknown_unique, monkeypatch, RESIDUAL_HEAD)
+    with psycopg.connect(unknown_unique) as conn:
+        assert conn.execute("SELECT version_num FROM alembic_version").fetchone() == (
+            RESIDUAL_HEAD,
         )

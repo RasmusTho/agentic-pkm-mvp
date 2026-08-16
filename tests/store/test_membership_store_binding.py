@@ -11,12 +11,14 @@ class _Cursor:
         fail: Exception | None = None,
         primary_key=None,
         resolved_set_id: str | None = "resolved-set",
+        set_constraints_valid: bool = True,
     ) -> None:
         self.sql: list[str] = []
         self.params: list[object] = []
         self.fail = fail
         self.primary_key = primary_key or ["vault_binding_id", "id"]
         self.resolved_set_id = resolved_set_id
+        self.set_constraints_valid = set_constraints_valid
 
     def __enter__(self):
         return self
@@ -36,7 +38,11 @@ class _Cursor:
         ):
             return {"id": self.resolved_set_id} if self.resolved_set_id else None
         if "public.sets" in self.sql[-1]:
-            return {"primary_key": ["vault_binding_id", "id"]}
+            return {
+                "primary_key": ["vault_binding_id", "id"],
+                "has_binding_name_unique": self.set_constraints_valid,
+                "has_no_global_unique": self.set_constraints_valid,
+            }
         return {"primary_key": self.primary_key}
 
 
@@ -83,3 +89,11 @@ def test_membership_writer_fails_loud_when_named_set_is_missing(monkeypatch):
     monkeypatch.setattr("app.store.membership_store.conn_rw", lambda: _Conn(cursor))
     with pytest.raises(RuntimeError, match="membership set 'missing' does not exist"):
         save_membership("object", "missing")
+
+
+def test_membership_writer_rejects_global_set_uniqueness(monkeypatch):
+    cursor = _Cursor(set_constraints_valid=False)
+    monkeypatch.setattr("app.store.membership_store.conn_rw", lambda: _Conn(cursor))
+    with pytest.raises(RuntimeError, match="sets binding-key constraints"):
+        save_membership("object", "published")
+    assert not any("INSERT INTO membership" in statement for statement in cursor.sql)

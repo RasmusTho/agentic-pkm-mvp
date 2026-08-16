@@ -190,7 +190,7 @@ def upgrade() -> None:
             SELECT c.conname
               FROM pg_constraint c
              WHERE c.conrelid='public.sets'::regclass AND c.contype='u'
-               AND (SELECT array_agg(a.attname ORDER BY k.ordinality)
+               AND (SELECT array_agg(a.attname::text ORDER BY k.ordinality)
                       FROM unnest(c.conkey) WITH ORDINALITY k(attnum, ordinality)
                       JOIN pg_attribute a
                         ON a.attrelid=c.conrelid AND a.attnum=k.attnum)
@@ -198,10 +198,52 @@ def upgrade() -> None:
           LOOP
             EXECUTE format('ALTER TABLE public.sets DROP CONSTRAINT %I', constraint_row.conname);
           END LOOP;
+          FOR constraint_row IN
+            SELECT idx.relname AS index_name,
+                   ns.nspname AS schema_name,
+                   array_agg(att.attname::text ORDER BY key.ordinality)
+                     FILTER (WHERE key.attnum<>0) AS columns,
+                   i.indpred IS NOT NULL OR i.indexprs IS NOT NULL AS is_expression_or_partial,
+                   con.oid IS NOT NULL AS backs_constraint
+              FROM pg_index i
+              JOIN pg_class idx ON idx.oid=i.indexrelid
+              JOIN pg_namespace ns ON ns.oid=idx.relnamespace
+              JOIN unnest(i.indkey::smallint[]) WITH ORDINALITY key(attnum, ordinality)
+                ON true
+              LEFT JOIN pg_attribute att
+                ON att.attrelid=i.indrelid AND att.attnum=key.attnum
+              LEFT JOIN pg_constraint con ON con.conindid=i.indexrelid
+             WHERE i.indrelid='public.sets'::regclass
+               AND i.indisunique AND NOT i.indisprimary
+             GROUP BY idx.relname, ns.nspname, i.indpred, i.indexprs, con.oid
+          LOOP
+            IF constraint_row.is_expression_or_partial THEN
+              RAISE EXCEPTION USING
+                MESSAGE = 'sets has unsupported partial or expression unique index '
+                          || constraint_row.index_name,
+                HINT = 'Remove or replace the custom uniqueness, then rerun.';
+            ELSIF NOT constraint_row.backs_constraint
+               AND NOT constraint_row.is_expression_or_partial
+               AND constraint_row.columns IN (
+                 ARRAY['id']::text[], ARRAY['name']::text[]
+               ) THEN
+              EXECUTE format(
+                'DROP INDEX %I.%I',
+                constraint_row.schema_name,
+                constraint_row.index_name
+              );
+            ELSIF constraint_row.columns IS NULL
+               OR NOT ('vault_binding_id'=ANY(constraint_row.columns)) THEN
+              RAISE EXCEPTION USING
+                MESSAGE = 'sets has unsupported global unique index '
+                          || constraint_row.index_name,
+                HINT = 'Remove or binding-scope the custom uniqueness, then rerun.';
+            END IF;
+          END LOOP;
           IF NOT EXISTS (
             SELECT 1 FROM pg_constraint c
              WHERE c.conrelid='public.sets'::regclass AND c.contype='u'
-               AND (SELECT array_agg(a.attname ORDER BY k.ordinality)
+               AND (SELECT array_agg(a.attname::text ORDER BY k.ordinality)
                       FROM unnest(c.conkey) WITH ORDINALITY k(attnum, ordinality)
                       JOIN pg_attribute a
                         ON a.attrelid=c.conrelid AND a.attnum=k.attnum)

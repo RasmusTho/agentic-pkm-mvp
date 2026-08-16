@@ -85,7 +85,11 @@ class _RecCursor:
                     True,
                 ),
                 ("vector_index_meta", ["vault_binding_id", "id"], True),
+                ("sets", ["vault_binding_id", "id"], True),
             ]
+            return
+        if "as sets_binding_name_unique" in norm:
+            self._fetch = (True, True)
             return
         if "from information_schema.columns" in norm or "from pg_attribute" in norm:
             self._fetchall = [(name,) for name in ("dim", "model", "provider", "normalize")]

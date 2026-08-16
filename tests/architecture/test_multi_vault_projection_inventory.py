@@ -1172,6 +1172,19 @@ def test_the_durable_projection_surface_is_fully_classified_and_binding_keyed() 
             assert entry["binding_key"] == "keyed", table
             assert entry["binding_column"], table
 
+    set_mutations = {
+        (path.module, path.verb)
+        for path in discover_durable_mutation_paths(manifest)
+        if path.table == "sets"
+    }
+    assert set_mutations == {("app/stores/pg.py", "insert")}
+    set_ddl = [
+        seam
+        for seam in discover_runtime_ddl_seams(manifest)
+        if seam.table == "sets" and seam.path == "app/stores/pg.py"
+    ]
+    assert set_ddl and all(seam.autocreate_gated for seam in set_ddl)
+
 
 def test_ingest_group_is_fully_binding_keyed() -> None:
     """All four MVR-05A4 rows are keyed and owned by the residual revision."""

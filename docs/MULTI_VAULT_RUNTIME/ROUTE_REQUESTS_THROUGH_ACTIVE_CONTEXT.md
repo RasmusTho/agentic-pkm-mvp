@@ -354,7 +354,10 @@ original closer merged. Revision `f8a05a9b0001` keys `agent_memories`,
 already-delivered outbox dual-key shape and removes the unused
 `objects_embeddings` table. The stage-level inventory and duplicate-UUID tests
 now prove the complete production surface rather than inferring closure from
-child receipts.
+child receipts. The retained projector stays consistently on the scalar
+compatibility binding; selecting and provisioning named sets for a request's
+active binding remains MVR-05B work rather than being smuggled into this schema
+cutover.
 
 MVR-05A4 derives the effective `membership` primary key from the locked live
 catalog (`id` fresh or `(object_id, set_id)` retained historical), preserves

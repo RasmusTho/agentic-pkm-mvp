@@ -79,6 +79,7 @@ def test_meeting_finalization_does_not_report_emitted_when_no_sink_took_it(
     emitted = meeting_finalization._emit_finalized_event(
         {"session_id": "s-4214", "finalization_state": "finalized"},
         trace_id="t-4214",
+        vault_binding_id=meeting_finalization.COMPATIBILITY_BINDING_ID,
     )
 
     assert emitted is False, "reported a finalized acknowledgement that no sink took"

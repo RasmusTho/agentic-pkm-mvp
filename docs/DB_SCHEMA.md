@@ -490,7 +490,10 @@ Append-only acknowledgement that one ledger state was materialized into one
 vault binding. Revision `f8a05a9b0001` adds `vault_binding_id` and changes the
 primary key to `(vault_binding_id, session_id, state_sha256)`. The Heimdal
 producer scopes idempotent reads, supersession, inserts, and outbox emission to
-that same binding and rejects a stale Postgres shape before writing.
+that same binding and rejects a stale Postgres shape before writing. The
+transition is forward-only: a pre-f8 receipt writer uses the removed global
+conflict target, so promotion retains the migrated image under the existing
+MVR-05 minimum-runtime/no-automatic-rollback fence.
 
 ### `file_state` (vault-sync bookkeeping, migration-owned since MVR-05A0)
 
@@ -641,7 +644,11 @@ Interpretation:
 Revision `f8a05a9b0001` replaces the global id/name identity. On the fresh
 lineage, `membership(vault_binding_id, set_id)` references the composite key;
 the retained historical lineage continues to use its proven composite
-`store_objects` endpoint.
+`store_objects` endpoint. The scalar-era projector deliberately keeps using
+`legacy-compatibility-binding` end to end; MVR-05B owns active-context routing
+and the lifecycle that provisions names for additional bindings. The lower
+store seam accepts an explicit binding for that later caller and for isolation
+proofs, but it never invents a set row.
 
 ### `membership` (legacy)
 MVR-05A4 derives the effective primary-key lineage from the catalog: the fresh

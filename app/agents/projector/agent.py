@@ -14,6 +14,7 @@ from app.events.types import (
 )
 from app.services.audit import audit_event
 from app.stores import resolve_store_backend
+from app.instance.binding_ids import COMPATIBILITY_BINDING_ID
 
 AGENT = "projector"
 
@@ -38,7 +39,12 @@ def _record_membership_db(object_id: str, set_name: str, trace_id: str) -> None:
     """
     if resolve_store_backend() == "memory":
         return None
-    save_membership(object_id, set_name, trace_id=trace_id)
+    save_membership(
+        object_id,
+        set_name,
+        trace_id=trace_id,
+        vault_binding_id=COMPATIBILITY_BINDING_ID,
+    )
     return None
 
 

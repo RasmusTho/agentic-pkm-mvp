@@ -116,7 +116,11 @@ class _FakeCursor:
                     True,
                 ),
                 ("vector_index_meta", ["vault_binding_id", "id"], True),
+                ("sets", ["vault_binding_id", "id"], True),
             ]
+            return
+        if "as sets_binding_name_unique" in normalized:
+            self._fetchone = (True, True)
             return
         if normalized.startswith("select attname as column_name from pg_attribute"):
             self._fetchall = [(name,) for name in ("dim", "model", "provider", "normalize")]

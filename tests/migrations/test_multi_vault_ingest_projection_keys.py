@@ -25,6 +25,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 PRE_BINDING_HEAD = "d1e8a0c5f37b"
 PRE_INGEST_HEAD = "e7b4c9d2a6f1"
 INGEST_HEAD = "f4a05a4b0001"
+RESIDUAL_HEAD = "f8a05a9b0001"
 BINDING = COMPATIBILITY_BINDING_ID
 
 
@@ -228,7 +229,7 @@ def test_membership_key_and_chunk_fk_follow_effective_lineage(
             "INSERT INTO membership (id,vault_binding_id,object_id,set_id) VALUES (%s,%s,%s,%s)",
             (uuid.uuid4(), BINDING, object_id, set_id),
         )
-    _upgrade(dsn, monkeypatch, INGEST_HEAD)
+    _upgrade(dsn, monkeypatch, RESIDUAL_HEAD)
     written_object, written_set = uuid.uuid4(), uuid.uuid4()
     with psycopg.connect(dsn) as conn:
         conn.execute(
@@ -241,7 +242,11 @@ def test_membership_key_and_chunk_fk_follow_effective_lineage(
             "VALUES (%s,%s,'note','{}'::jsonb)",
             (BINDING, written_object),
         )
-        conn.execute("INSERT INTO sets (id,name) VALUES (%s,'writer-proof')", (written_set,))
+        conn.execute(
+            "INSERT INTO sets (vault_binding_id,id,name) "
+            "VALUES (%s,%s,'writer-proof')",
+            (BINDING, written_set),
+        )
     _record_membership_db(str(written_object), "writer-proof", "fresh-writer-proof")
     with psycopg.connect(dsn) as conn:
         assert _pk(conn, "membership") == ["vault_binding_id", "id"]
@@ -258,7 +263,11 @@ def test_membership_key_and_chunk_fk_follow_effective_lineage(
             False,
             False,
         )
-        assert _fk(conn, "membership", "set_id")[1:3] == ("sets", ["id"])
+        assert _fk(conn, "membership", "set_id")[:3] == (
+            ["vault_binding_id", "set_id"],
+            "sets",
+            ["vault_binding_id", "id"],
+        )
         assert conn.execute(
             "SELECT id IS NOT NULL FROM membership "
             "WHERE vault_binding_id=%s AND object_id=%s AND set_id=%s",
@@ -271,7 +280,7 @@ def test_retained_historical_membership_lineage_is_rekeyed(
 ) -> None:
     dsn = scratch_db_factory()
     first, second = _prepare_retained_historical_lineage(dsn, monkeypatch)
-    _upgrade(dsn, monkeypatch, INGEST_HEAD)
+    _upgrade(dsn, monkeypatch, RESIDUAL_HEAD)
     writer_object, writer_set = uuid.uuid4(), uuid.uuid4()
     with psycopg.connect(dsn) as conn:
         for oid in (writer_object, writer_set):
@@ -286,8 +295,9 @@ def test_retained_historical_membership_lineage_is_rekeyed(
                 (BINDING, oid),
             )
         conn.execute(
-            "INSERT INTO sets (id,name) VALUES (%s,'retained-writer-proof')",
-            (writer_set,),
+            "INSERT INTO sets (vault_binding_id,id,name) "
+            "VALUES (%s,%s,'retained-writer-proof')",
+            (BINDING, writer_set),
         )
     _record_membership_db(
         str(writer_object), "retained-writer-proof", "retained-writer-proof"

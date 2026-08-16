@@ -5,14 +5,9 @@ from typing import Optional
 from uuid import uuid4
 
 from app.db.db import COMPATIBILITY_BINDING_ID, conn_rw
-from app.instance.scalar_binding_runtime import resolve_scalar_binding_runtime
-
-
 def _resolve_binding_id(vault_binding_id: str | None) -> str:
+    """Keep scalar-era callers on compatibility until MVR-05B routes context."""
     requested = (vault_binding_id or "").strip()
-    runtime = resolve_scalar_binding_runtime(requested_binding_id=requested or None)
-    if runtime is not None:
-        return runtime.vault_binding_id
     if vault_binding_id is None:
         return COMPATIBILITY_BINDING_ID
     if not requested:
@@ -62,12 +57,39 @@ def save_membership(
 
             cur.execute(
                 """
-                SELECT array_agg(a.attname ORDER BY key.ordinality) AS primary_key
-                  FROM pg_constraint c
-                  JOIN unnest(c.conkey) WITH ORDINALITY key(attnum, ordinality) ON true
-                  JOIN pg_attribute a
-                    ON a.attrelid=c.conrelid AND a.attnum=key.attnum
-                 WHERE c.conrelid='public.sets'::regclass AND c.contype='p'
+                SELECT (
+                         SELECT array_agg(a.attname ORDER BY key.ordinality)
+                           FROM pg_constraint c
+                           JOIN unnest(c.conkey) WITH ORDINALITY key(attnum, ordinality)
+                             ON true
+                           JOIN pg_attribute a
+                             ON a.attrelid=c.conrelid AND a.attnum=key.attnum
+                          WHERE c.conrelid='public.sets'::regclass AND c.contype='p'
+                       ) AS primary_key,
+                       EXISTS (
+                         SELECT 1 FROM pg_index i
+                          WHERE i.indrelid='public.sets'::regclass AND i.indisunique
+                            AND (SELECT array_agg(a.attname::text ORDER BY key.ordinality)
+                                   FROM unnest(i.indkey::smallint[])
+                                        WITH ORDINALITY key(attnum, ordinality)
+                                   JOIN pg_attribute a
+                                     ON a.attrelid=i.indrelid AND a.attnum=key.attnum)
+                                = ARRAY['vault_binding_id','name']::text[]
+                       ) AS has_binding_name_unique,
+                       NOT EXISTS (
+                         SELECT 1 FROM pg_index i
+                          WHERE i.indrelid='public.sets'::regclass AND i.indisunique
+                            AND (
+                              i.indexprs IS NOT NULL
+                              OR i.indpred IS NOT NULL
+                              OR NOT EXISTS (
+                                SELECT 1 FROM unnest(i.indkey::smallint[]) key(attnum)
+                                JOIN pg_attribute a
+                                  ON a.attrelid=i.indrelid AND a.attnum=key.attnum
+                               WHERE a.attname='vault_binding_id'
+                              )
+                            )
+                       ) AS has_no_global_unique
                 """
             )
             set_shape = cur.fetchone()
@@ -76,9 +98,24 @@ def save_membership(
                 if isinstance(set_shape, dict)
                 else (set_shape[0] if set_shape else None)
             )
-            if list(set_primary_key or []) != ["vault_binding_id", "id"]:
+            has_binding_name_unique = (
+                set_shape.get("has_binding_name_unique")
+                if isinstance(set_shape, dict)
+                else (set_shape[1] if set_shape else False)
+            )
+            has_no_global_unique = (
+                set_shape.get("has_no_global_unique")
+                if isinstance(set_shape, dict)
+                else (set_shape[2] if set_shape else False)
+            )
+            if (
+                list(set_primary_key or []) != ["vault_binding_id", "id"]
+                or not has_binding_name_unique
+                or not has_no_global_unique
+            ):
                 raise RuntimeError(
-                    "unsupported sets primary key; run MVR-05A residual migrations before writing"
+                    "unsupported sets binding-key constraints; run MVR-05A residual "
+                    "migrations before writing"
                 )
 
             cur.execute(

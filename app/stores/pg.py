@@ -546,6 +546,47 @@ def assert_store_schema_with_connection(conn, *, repair_data: bool = False) -> N
         stale = [table for table, pk in expected_pks.items() if shapes.get(table) != (pk, True)]
         cur.execute(
             """
+            SELECT EXISTS (
+                     SELECT 1 FROM pg_index i
+                      WHERE i.indrelid='public.sets'::regclass AND i.indisunique
+                        AND (SELECT array_agg(a.attname::text ORDER BY key.ordinality)
+                               FROM unnest(i.indkey::smallint[])
+                                    WITH ORDINALITY key(attnum, ordinality)
+                               JOIN pg_attribute a
+                                 ON a.attrelid=i.indrelid AND a.attnum=key.attnum)
+                            = ARRAY['vault_binding_id','name']::text[]
+                   ) AS sets_binding_name_unique,
+                   NOT EXISTS (
+                     SELECT 1 FROM pg_index i
+                      WHERE i.indrelid='public.sets'::regclass AND i.indisunique
+                        AND (
+                          i.indexprs IS NOT NULL
+                          OR i.indpred IS NOT NULL
+                          OR NOT EXISTS (
+                            SELECT 1 FROM unnest(i.indkey::smallint[]) key(attnum)
+                            JOIN pg_attribute a
+                              ON a.attrelid=i.indrelid AND a.attnum=key.attnum
+                           WHERE a.attname='vault_binding_id'
+                          )
+                        )
+                   ) AS sets_have_no_global_unique
+            """
+        )
+        set_constraints = cur.fetchone()
+        binding_name_unique = (
+            set_constraints.get("sets_binding_name_unique")
+            if isinstance(set_constraints, dict)
+            else (set_constraints[0] if set_constraints else False)
+        )
+        no_global_unique = (
+            set_constraints.get("sets_have_no_global_unique")
+            if isinstance(set_constraints, dict)
+            else (set_constraints[1] if set_constraints else False)
+        )
+        if not binding_name_unique or not no_global_unique:
+            stale.append("sets uniqueness")
+        cur.execute(
+            """
             SELECT attname AS column_name FROM pg_attribute
             WHERE attrelid = to_regclass('store_vector_index')
               AND attnum > 0 AND NOT attisdropped

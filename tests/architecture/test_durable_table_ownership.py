@@ -233,6 +233,11 @@ class _StoreRecordingCursor:
         self._last_statement = statement
 
     def fetchone(self):
+        if "sets_binding_name_unique" in self._last_statement:
+            return {
+                "sets_binding_name_unique": True,
+                "sets_have_no_global_unique": True,
+            }
         # The `to_regclass` existence probe answers **for the table it was
         # asked about**. A fake that returned one blanket answer would let a
         # group probe table A and then reshape table B: the probe would report

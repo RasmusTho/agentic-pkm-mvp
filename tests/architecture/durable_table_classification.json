@@ -787,7 +787,7 @@
     },
     "sets": {
       "classification": "binding-scoped",
-      "reason": "MVR-05A residual revision f8a05a9b0001 keys `sets` by `(vault_binding_id, id)`, makes set names unique only within a binding, and rewrites the fresh-lineage `membership` foreign key to the composite endpoint. `app/stores/pg.py` and `app/store/membership_store.py` seed and resolve named sets inside that binding.",
+      "reason": "MVR-05A residual revision f8a05a9b0001 keys `sets` by `(vault_binding_id, id)`, makes set names unique only within a binding, and rewrites the fresh-lineage `membership` foreign key to the composite endpoint. The only app insert is the guarded `STORE_SCHEMA_AUTOCREATE` scratch fixture in `app/stores/pg.py`; production has no live set mutator, while `app/store/membership_store.py` resolves a pre-provisioned name inside the caller's binding.",
       "owning_revision": "202510241200",
       "declaring_revisions": [
         "202510241200",
