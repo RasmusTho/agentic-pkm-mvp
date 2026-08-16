@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import re
 from pathlib import Path
 
@@ -12,6 +13,7 @@ ROOT = Path(__file__).resolve().parents[2]
 SPEC = ROOT / "docs" / "DEV_TEST_PROD_STARTUP_REDESIGN"
 README = (SPEC / "README.md").read_text()
 FIXTURE = ROOT / "tests" / "fixtures" / "startup_redesign" / "channel_manifest.valid.json"
+RECEIPT_FIXTURE = ROOT / "tests" / "fixtures" / "startup_redesign" / "promotion_receipt.valid.json"
 
 
 def test_kernel_contract_names_every_invariant() -> None:
@@ -186,9 +188,57 @@ def test_receipt_contract_names_binding_freshness_and_revocation() -> None:
     for field in (
         "receipt_version", "receipt_id", "outcome", "artifact_digest", "config_identity",
         "test_identity", "vault_identity", "schema_identity", "required_checks", "issued_at",
-        "fresh_until", "revoked_at",
+        "fresh_until",
     ):
         assert f"`{field}`" in README
     assert "content-addressed" in README
-    assert "non-empty, sorted list" in README
-    assert "`revoked_at` absent" in README
+    assert "exactly equal the versioned external policy" in README
+    assert "`receipt_id` excluded" in README
+    assert "authoritative revocation registry" in README
+
+
+RECEIPT_FIELDS = {
+    "receipt_version", "receipt_id", "outcome", "artifact_digest", "config_identity",
+    "test_identity", "vault_identity", "schema_identity", "required_checks", "issued_at",
+    "fresh_until",
+}
+EXPECTED_RECEIPT_CHECKS = ["migration", "readiness", "schema", "smoke", "ui", "version"]
+
+
+def _receipt_digest_body(receipt: dict[str, object]) -> bytes:
+    body = {key: value for key, value in receipt.items() if key != "receipt_id"}
+    return json.dumps(body, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
+
+
+def _assert_receipt_schema(receipt: dict[str, object], revocation_registry: dict[str, str]) -> None:
+    assert set(receipt) == RECEIPT_FIELDS
+    assert receipt["receipt_version"] == "promotion-receipt.v1"
+    assert receipt["outcome"] in {"PASS", "FAIL"}
+    assert isinstance(receipt["receipt_id"], str)
+    assert receipt["receipt_id"] == "sha256:" + hashlib.sha256(_receipt_digest_body(receipt)).hexdigest()
+    assert receipt["required_checks"] == EXPECTED_RECEIPT_CHECKS
+    assert isinstance(receipt["issued_at"], str) and receipt["issued_at"].endswith("Z")
+    assert isinstance(receipt["fresh_until"], str) and receipt["fresh_until"].endswith("Z")
+    assert receipt["receipt_id"] not in revocation_registry
+
+
+def test_promotion_receipt_fixture_has_machine_readable_schema() -> None:
+    receipt = json.loads(RECEIPT_FIXTURE.read_text())
+    _assert_receipt_schema(receipt, {})
+
+
+def test_promotion_receipt_schema_rejects_tampering_stale_checks_and_revocation() -> None:
+    receipt = json.loads(RECEIPT_FIXTURE.read_text())
+    tampered = dict(receipt)
+    tampered["config_identity"] = "sha256:" + "c" * 64
+    with pytest.raises(AssertionError):
+        _assert_receipt_schema(tampered, {})
+
+    incomplete = dict(receipt)
+    incomplete["required_checks"] = ["smoke"]
+    with pytest.raises(AssertionError):
+        _assert_receipt_schema(incomplete, {})
+
+    revoked = {receipt["receipt_id"]: "2026-08-16T01:00:00Z"}
+    with pytest.raises(AssertionError):
+        _assert_receipt_schema(receipt, revoked)

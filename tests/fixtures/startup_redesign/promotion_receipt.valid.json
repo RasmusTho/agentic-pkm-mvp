@@ -1,0 +1,13 @@
+{
+  "artifact_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "config_identity": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "fresh_until": "2026-08-17T00:00:00Z",
+  "issued_at": "2026-08-16T00:00:00Z",
+  "outcome": "PASS",
+  "receipt_id": "sha256:39c74dee29e34b0288c9b254f0d6c139d5d542517c2bb3342b9ee9b6e994ce73",
+  "receipt_version": "promotion-receipt.v1",
+  "required_checks": ["migration", "readiness", "schema", "smoke", "ui", "version"],
+  "schema_identity": "alembic:20260816",
+  "test_identity": "promotion-test:20260816",
+  "vault_identity": "prod-vault"
+}
