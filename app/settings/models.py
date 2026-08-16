@@ -380,6 +380,26 @@ class RetrievalTuning(BaseModel):
     )
 
 
+class TTSSettings(BaseModel):
+    """Vault-shared voice and fallback posture for the local TTS path.
+
+    The browser/cloud modes are intentionally lab-only experiments.  The
+    production resolver clamps them to ``local_only``; an explicit legacy
+    environment override remains available for one release.
+    """
+
+    class Voices(BaseModel):
+        sv: str = Field(default="sv_SE-lisa-medium", min_length=1)
+        en_us: str = Field(default="bf_isabella", min_length=1)
+        en_gb: str = Field(default="bf_isabella", min_length=1)
+
+    voices: Voices = Field(default_factory=Voices)
+    fallback_policy: Literal["local_only", "browser", "cloud"] = Field(
+        default="local_only",
+        description="Fallback posture; browser/cloud are lab-tier only and cloud remains refused by synthesis.",
+    )
+
+
 class QaSettings(AgentBase):
     search_k: int = Field(default=8, description="Documents retrieved before filtering.")
     context_docs: int = Field(default=5, description="Documents kept in the final answer context.")
@@ -492,6 +512,7 @@ class SettingsBundle(BaseModel):
     llm_routing: LLMRoutingSettings = Field(default_factory=LLMRoutingSettings)
     embedding_profiles: EmbeddingProfiles = Field(default_factory=EmbeddingProfiles)
     retrieval_tuning: RetrievalTuning = Field(default_factory=RetrievalTuning)
+    tts: TTSSettings = Field(default_factory=TTSSettings)
     agents: Dict[str, Any] = Field(default_factory=dict)
     yggdrasil_paths: Optional[YggdrasilPaths] = None
     instance: InstanceSettings = Field(default_factory=InstanceSettings)

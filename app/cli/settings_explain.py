@@ -16,6 +16,7 @@ from app.settings.watcher_settings import invalid_allowed_actions, load_watcher_
 from app.settings.runtime import get_settings_bundle
 from app.settings.reasoning_route import describe_effective_reasoning_route
 from app.settings.prompts import resolve_ask_system_prompt
+from app.settings.tiering import active_settings_profile
 
 
 # group 1 = "://user:", group 2 = "@" — replaces only the password portion
@@ -69,6 +70,8 @@ def build_settings_explain_payload() -> dict[str, Any]:
     invalid_actions = invalid_allowed_actions(watcher_settings, allowed_action_ids)
     write_guard = DEFAULT_CONTRACT.evaluate()
     _, ask_prompt_origin = resolve_ask_system_prompt()
+    tts_settings = get_settings_bundle().tts
+    tts_origin = "vault-shared" if (Path(os.getenv("VAULT_ROOT", "vault")) / "settings" / "tts.md").exists() else "registry default"
     settings_provider = None
     settings_model = None
     settings_base_url = None
@@ -170,6 +173,17 @@ def build_settings_explain_payload() -> dict[str, Any]:
             },
         },
         "llm": {"reasoning_model": describe_effective_reasoning_route()},
+        "tts": {
+            "voices": {
+                "sv": {"value": tts_settings.voices.sv, "origin": tts_origin, "tier": active_settings_profile()},
+                "en_us": {"value": tts_settings.voices.en_us, "origin": tts_origin, "tier": active_settings_profile()},
+                "en_gb": {"value": tts_settings.voices.en_gb, "origin": tts_origin, "tier": active_settings_profile()},
+            },
+            "fallback_policy": {"value": tts_settings.fallback_policy, "origin": tts_origin, "tier": active_settings_profile()},
+            "legacy_env_overrides": {
+                key: "deprecated" for key in ("TTS_SV_VOICE", "TTS_EN_US_VOICE", "TTS_EN_GB_VOICE", "TTS_ALLOW_BROWSER_FALLBACK", "TTS_ALLOW_CLOUD_FALLBACK") if os.getenv(key) is not None
+            },
+        },
         "prompts": {"ask.system_prompt": {"origin": ask_prompt_origin}},
     }
 

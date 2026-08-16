@@ -34,6 +34,7 @@ from .models import (
     QaSettings,
     ReviewerSettings,
     SettingsBundle,
+    TTSSettings,
     YggdrasilPaths,
     EmbeddingProfiles,
 )
@@ -505,6 +506,16 @@ def compile_all(
     if "embeddings" in file_paths:
         _update_reference(file_paths["embeddings"], "Embeddings", bundle.embedding_profiles, writeback_allowed(file_paths["embeddings"]), vault_root=resolved_vault_root)
 
+    tts_payload = _merge_sections(file_sections.get("tts", {}))
+    tts_model, tts_canonical, tts_fixed = _hydrate_model(payload=tts_payload, model_cls=TTSSettings)
+    bundle.tts = tts_model
+    if tts_fixed and "tts" in file_paths and writeback_allowed(file_paths["tts"]):
+        writeback_settings_block(
+            file_paths["tts"], tts_canonical, previous=tts_payload, vault_root=resolved_vault_root
+        )
+    if "tts" in file_paths:
+        _update_reference(file_paths["tts"], "TTS", bundle.tts, writeback_allowed(file_paths["tts"]), vault_root=resolved_vault_root)
+
     yggdrasil_payload = _merge_sections(file_sections.get("yggdrasil", {}))
     if yggdrasil_payload:
         ygg_model, ygg_canonical, ygg_fixed = _hydrate_model(
@@ -577,6 +588,7 @@ def compile_all(
         dump(staged_runtime, "global.yaml", bundle.global_.model_dump())
         dump(staged_runtime, "providers.yaml", bundle.providers.model_dump())
         dump(staged_runtime, "llm_routing.yaml", bundle.llm_routing.model_dump())
+        dump(staged_runtime, "tts.yaml", bundle.tts.model_dump())
         dump(staged_runtime, "instance.yaml", bundle.instance.model_dump())
         if bundle.yggdrasil_paths is not None:
             dump(staged_runtime, "yggdrasil.yaml", bundle.yggdrasil_paths.model_dump())
