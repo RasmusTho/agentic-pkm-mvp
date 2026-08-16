@@ -21,7 +21,7 @@ Scope boundary: binding settings-source resolution to the *selected* vault path
 from __future__ import annotations
 
 import threading
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -59,9 +59,21 @@ class SettingsIngestionState:
     source: str  # "vault" | "defaults"
     loaded_at: str | None = None
     error: str | None = None
+    # This is compiled-generation metadata, not a new user setting.  It keeps
+    # explain output bound to the same selected source that produced the active
+    # (or retained last-valid) bundle.
+    tts_origin: str = "registry default"
 
     def to_payload(self) -> dict[str, Any]:
-        return asdict(self)
+        # The reload signal deliberately carries only cross-process invalidation
+        # state.  Source provenance stays process-local with the generation it
+        # describes, so a fresh process cannot claim another process's bundle.
+        return {
+            "state": self.state,
+            "source": self.source,
+            "loaded_at": self.loaded_at,
+            "error": self.error,
+        }
 
 
 # Boot default: nothing ingested yet. Truthful "no_vault" on defaults until the
@@ -191,9 +203,16 @@ def ingest_settings(
         # one) so ingestion never depends on the global subscription still being
         # registered to actually take effect.
         if selected_root is not None:
+            compiled_sources = resolve_compiled_sources(selected_root)
             compiler.compile_all(auto_heal=False, vault_root=selected_root)
+            tts_origin = (
+                "vault-shared"
+                if Path("tts.md") in compiled_sources
+                else "registry default"
+            )
         else:
             compiler.compile_all(auto_heal=False, vault_dir=sources_dir)
+            tts_origin = "vault-shared" if (sources_dir / "tts.md").exists() else "registry default"
         reload_settings_bundle()
     except Exception as exc:
         if had_valid:
@@ -202,6 +221,7 @@ def ingest_settings(
                 source="vault",
                 loaded_at=prior.loaded_at,
                 error=str(exc),
+                tts_origin=prior.tts_origin,
             )
         else:
             # No last-valid bundle to fall back to: boot on defaults, but say so
@@ -217,7 +237,12 @@ def ingest_settings(
             publish_reload_signal(**degraded.to_payload())
         return degraded
 
-    result = SettingsIngestionState(state=STATE_OK, source="vault", loaded_at=_now_iso())
+    result = SettingsIngestionState(
+        state=STATE_OK,
+        source="vault",
+        loaded_at=_now_iso(),
+        tts_origin=tts_origin,
+    )
     _set_state(result)
     if publish_signal:
         publish_reload_signal(**result.to_payload())

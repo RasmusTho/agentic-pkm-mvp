@@ -168,6 +168,28 @@ def test_invalid_settings_degrade_loud(sandbox_sources: Path) -> None:
     assert runtime.get_settings_bundle().global_.log_level == "DEBUG"
 
 
+def test_tts_provenance_follows_compatibility_source_and_retained_last_valid(
+    sandbox_sources: Path,
+) -> None:
+    """The selected legacy-compatible source, not a repo path, owns TTS explain."""
+    source = sandbox_sources / "tts.md"
+    source.write_text(
+        "# TTS\n\n```yaml settings\nvoices:\n  sv: sv_SE-nst-medium\n```\n",
+        encoding="utf-8",
+    )
+
+    assert ingest_settings(reason="compat_tts_source").tts_origin == "vault-shared"
+
+    source.write_text(
+        "# TTS\n\n```yaml settings\nfallback_policy: unsupported\n```\n",
+        encoding="utf-8",
+    )
+    state = ingest_settings(reason="invalid_tts_source")
+
+    assert state.state == STATE_DEGRADED
+    assert state.tts_origin == "vault-shared"
+
+
 def test_late_specialized_validation_keeps_prior_projection_for_fresh_process(
     sandbox_sources: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
