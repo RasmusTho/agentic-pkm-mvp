@@ -2112,6 +2112,8 @@ def _voice_push_to_talk_script() -> str:
       var chunks = [];
       var tapRecording = false;
       var ignoreNextClick = false;
+      var captureState = 'idle';
+      var cancelPendingTap = false;
       function setStatus(message) { status.textContent = message; }
       function rearm(message) {
         voiceControl.removeAttribute('disabled');
@@ -2128,7 +2130,7 @@ def _voice_push_to_talk_script() -> str:
         answer.textContent = turn.answer || '';
         citations.innerHTML = (Array.isArray(turn.sources) ? turn.sources : []).map(function (citation) {
           var label = citation.title || citation.path || 'Source';
-          var href = citation.url || citation.path || '#';
+          var href = citation.path ? '/?note_path=' + encodeURIComponent(citation.path) : (citation.url || '#');
           return '<li><a href="' + escapeHtml(href) + '">' + escapeHtml(label) + '</a></li>';
         }).join('');
         var plan = turn.speech_plan;
@@ -2139,6 +2141,11 @@ def _voice_push_to_talk_script() -> str:
           audio.src = turn.audio_url;
           audio.hidden = false;
           degraded.hidden = true;
+          audio.play().then(function () {
+            setStatus('Answer ready.');
+          }).catch(function () {
+            setStatus('Answer ready. Tap play to listen.');
+          });
         } else {
           audio.removeAttribute('src');
           audio.hidden = true;
@@ -2184,12 +2191,21 @@ def _voice_push_to_talk_script() -> str:
         setStatus('Sending your question…');
       }
       function beginRecording() {
+        if (captureState === 'requesting') { cancelPendingTap = true; return; }
         if (recorder && recorder.state === 'recording') return;
         if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia || !window.MediaRecorder) {
           rearm('Microphone recording is unavailable in this browser.');
           return;
         }
+        captureState = 'requesting';
         navigator.mediaDevices.getUserMedia({audio: true}).then(function (mediaStream) {
+          if (cancelPendingTap) {
+            cancelPendingTap = false;
+            mediaStream.getTracks().forEach(function (track) { track.stop(); });
+            captureState = 'idle';
+            rearm('Microphone ready. Tap to start recording.');
+            return;
+          }
           stream = mediaStream;
           chunks = [];
           var options = (MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported('audio/webm'))
@@ -2199,12 +2215,14 @@ def _voice_push_to_talk_script() -> str:
           recorder.onstop = function () {
             var blob = new Blob(chunks, {type: recorder.mimeType || 'audio/webm'});
             stopTracks();
+            captureState = 'idle';
             sendAudio(blob);
           };
           recorder.start();
+          captureState = 'recording';
           voiceControl.setAttribute('aria-pressed', 'true');
           setStatus('Listening. Release to send.');
-        }).catch(function () { rearm('I couldn\'t hear that clearly — try again.'); });
+        }).catch(function () { captureState = 'idle'; rearm('I couldn\'t hear that clearly — try again.'); });
       }
       voiceControl.addEventListener('pointerdown', function (event) {
         event.preventDefault();
@@ -2216,6 +2234,7 @@ def _voice_push_to_talk_script() -> str:
       voiceControl.addEventListener('pointerleave', function () { finishRecording(); });
       voiceControl.addEventListener('click', function () {
         if (ignoreNextClick) { ignoreNextClick = false; return; }
+        if (captureState === 'requesting') { cancelPendingTap = true; return; }
         if (!recorder || recorder.state === 'inactive') { tapRecording = true; beginRecording(); }
         else if (tapRecording) finishRecording();
       });

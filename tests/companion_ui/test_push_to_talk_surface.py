@@ -40,7 +40,9 @@ def test_push_to_talk_renders_answer_citations_and_audio() -> None:
         assert f'data-testid="{testid}"' in html
     assert "renderSpeechPlan(plan)" in html
     assert "audio_url" in html
-    assert "citation.url || citation.path" in html
+    assert "'/?note_path=' + encodeURIComponent(citation.path)" in html
+    assert "audio.play().then" in html
+    assert "Tap play to listen." in html
 
 
 def test_degrade_states_render_legibly() -> None:
@@ -52,6 +54,8 @@ def test_degrade_states_render_legibly() -> None:
     assert "voice unavailable" in html
     assert "voiceControl.removeAttribute('disabled')" in html
     assert "audio.hidden = true" in html
+    assert "captureState === 'requesting'" in html
+    assert "cancelPendingTap" in html
 
 
 def test_no_always_on_affordance() -> None:
