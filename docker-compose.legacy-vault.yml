@@ -1,7 +1,8 @@
 # Legacy /app/vault compatibility overlay (#2386, Slice 05D of #2311).
 #
-# This overlay re-adds the legacy `/app/vault` bind mount for the api / worker /
-# watcher services. It is intentionally NOT part of the base docker-compose.yaml:
+# This overlay re-adds the legacy `/app/vault` bind mount for the one-shot
+# finalizer plus the api / worker / watcher services. It is intentionally NOT
+# part of the base docker-compose.yaml:
 # a no-vault idle startup (#2005) must never synthesize a repo-local `./vault`
 # bind. The mount remains only as a *compatibility* path for an EXPLICITLY bound
 # vault, until the remaining eager `resolve_vault_root()` consumers (Slices
@@ -21,6 +22,12 @@
 # the explicit-vault branch (NO_VAULT_MODE != 1). The `/Users` + `/Volumes`
 # same-path mounts (#2310) stay in the base compose and are unaffected.
 services:
+  instance-state-init:
+    volumes:
+      # Finalization authenticates the registry's container-facing root after
+      # MVR-01C cutover; it never writes vault content through this alias.
+      - "${VAULT_HOST_ROOT:?VAULT_HOST_ROOT must be set to use the legacy /app/vault compatibility mount}:/app/vault:ro"
+
   api:
     volumes:
       - "${VAULT_HOST_ROOT:?VAULT_HOST_ROOT must be set to use the legacy /app/vault compatibility mount}:/app/vault"
