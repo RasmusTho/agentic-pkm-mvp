@@ -7,8 +7,9 @@ from pathlib import Path
 from typing import Any, Dict, List, Tuple
 from uuid import UUID
 
-from app.components.llm.fabric import LLMBackendTimeout, LLMRouter, LLMTaskIntent, get_chat_client
+from app.components.llm.fabric import ChatClient, LLMBackendTimeout
 from app.components.llm.router import LLMRoute
+from app.settings.reasoning_route import resolve_effective_reasoning_route
 from app.llm.trace import log_llm_call
 from app.reasoning.prompts import SYSTEM_PROMPT, build_user_prompt
 from app.reasoning.schema import ReasoningInput, ReasoningOutput, ReasoningValidationError, validate_output
@@ -16,6 +17,30 @@ from app.reasoning.models import ReasoningMode, ReasoningRun
 from app.stores import get_object_store
 
 _FIXTURE_PATH = Path("data") / "golden" / "reasoning_samples.jsonl"
+
+
+class ReasoningRouteExecutionError(RuntimeError):
+    """Execution failure carrying the immutable route selected for that call."""
+
+    def __init__(self, route: LLMRoute, cause: Exception) -> None:
+        self.route = route
+        super().__init__(str(cause))
+
+
+def _log_route_failure(
+    route: LLMRoute, *, agent: str | None, kind: str | None, trace_id: str | None
+) -> None:
+    log_llm_call(
+        provider=route.provider,
+        model=route.model,
+        agent=agent or "reasoning",
+        kind=kind or "reasoning",
+        messages=[],
+        response={"outcome": "provider_failure"},
+        response_text="provider_failure",
+        trace_id=trace_id,
+        status="failed",
+    )
 
 
 def _call_chat(
@@ -26,13 +51,19 @@ def _call_chat(
     kind: str | None,
     trace_id: str | None,
 ) -> str:
-    response, _ = _call_chat_with_route(
-        task_kind=task_kind,
-        pack=pack,
-        agent=agent,
-        kind=kind,
-        trace_id=trace_id,
-    )
+    try:
+        response, _ = _call_chat_with_route(
+            task_kind=task_kind,
+            pack=pack,
+            agent=agent,
+            kind=kind,
+            trace_id=trace_id,
+        )
+    except ReasoningRouteExecutionError as exc:
+        # Every provider-neutral reasoning caller, not only CLAIMS, records
+        # the immutable route selected before its failed execution.
+        _log_route_failure(exc.route, agent=agent, kind=kind or task_kind, trace_id=trace_id)
+        raise
     return response
 
 
@@ -54,14 +85,20 @@ def _call_chat_with_route(
     kind: str | None,
     trace_id: str | None,
 ) -> tuple[str, dict[str, object]]:
-    client = get_chat_client(LLMTaskIntent(task_kind=task_kind, risk="high"))
-    response = client.chat(
-        task_kind,
-        pack,
-        agent=agent,
-        kind=kind,
-        trace_id=trace_id,
-    )
+    # All provider-neutral reasoning paths use the same effective resolver as
+    # settings-explain and failure tracing.
+    route = resolve_effective_reasoning_route()
+    client = ChatClient(route)
+    try:
+        response = client.chat(
+            task_kind,
+            pack,
+            agent=agent,
+            kind=kind,
+            trace_id=trace_id,
+        )
+    except Exception as exc:
+        raise ReasoningRouteExecutionError(route, exc) from exc
     return response, _route_payload(client.route)
 
 
@@ -182,7 +219,7 @@ def _reasoning_uses_mock_route() -> bool:
     if _reasoning_backend() == "mock":
         return True
     try:
-        route = LLMRouter().route(LLMTaskIntent(task_kind="reasoning", risk="high"))
+        route = resolve_effective_reasoning_route()
     except Exception:
         return False
     return route.provider == "mock"
@@ -252,18 +289,19 @@ def run_reasoning(
                 "outcome": output.outcome,
                 "degraded_reason": output.degraded_reason,
             }
-            log_llm_call(
-                provider=os.getenv("LLM_PROVIDER", "").strip().lower()
-                or _reasoning_backend(),
-                model=os.getenv("REASONING_MODEL", "llama3.1:8b"),
-                agent=agent_name,
-                kind=kind_name,
-                messages=[],
-                response=trace_payload,
-                response_text=json.dumps(trace_payload, sort_keys=True),
-                trace_id=trace_id,
-                status="failed",
-            )
+            if not isinstance(exc, ReasoningRouteExecutionError):
+                failed_route = resolve_effective_reasoning_route()
+                log_llm_call(
+                    provider=failed_route.provider,
+                    model=failed_route.model,
+                    agent=agent_name,
+                    kind=kind_name,
+                    messages=[],
+                    response=trace_payload,
+                    response_text=json.dumps(trace_payload, sort_keys=True),
+                    trace_id=trace_id,
+                    status="failed",
+                )
             return ReasoningRun(
                 mode=mode,
                 trace_id=trace_id,
@@ -536,6 +574,9 @@ def run_reasoning(
         except LLMBackendTimeout:
             raise
         except Exception as exc:
+            if isinstance(exc, ReasoningRouteExecutionError):
+                route_payload = _route_payload(exc.route)
+                _log_route_failure(exc.route, agent=agent_name, kind=kind_name, trace_id=trace_id)
             return ReasoningRun(
                 mode=mode,
                 trace_id=trace_id,

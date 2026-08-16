@@ -31,6 +31,8 @@ class ChatClient:
             trace_id=trace_id,
             provider_override=self.route.provider,
             model_override=self.route.model,
+            timeout_seconds=self.route.timeout_seconds,
+            temperature=self.route.temperature,
             max_tokens=max_tokens,
             response_format=response_format,
         )

@@ -31,6 +31,8 @@ class LLMRoute:
     reason: str
     degraded: bool = False
     embedding_identity: EmbeddingIdentity | None = None
+    timeout_seconds: float | None = None
+    temperature: float | None = None
 
 
 def _normalize(value: str | None) -> str:
@@ -219,6 +221,8 @@ class LLMRouter:
             mode="chat",
             reason=provider_reason if provider_degraded else reason,
             degraded=degraded or provider_degraded,
+            timeout_seconds=getattr(routing, "timeout_seconds", None),
+            temperature=getattr(routing, "temperature", None),
         )
 
     def _resolve_embedding_route(
@@ -405,6 +409,8 @@ class LLMRouter:
                     mode=cand.mode,
                     reason=reason if degraded else route_reason,
                     degraded=cand.degraded or degraded,
+                    timeout_seconds=cand.timeout_seconds,
+                    temperature=cand.temperature,
                 )
         if provider == "mock":
             # mock ignores the model entirely; a self-consistent deterministic route.
@@ -466,6 +472,8 @@ class LLMRouter:
                 reason=reason,
                 degraded=degraded,
                 embedding_identity=embedding_identity,
+                timeout_seconds=getattr(getattr(self._settings, "llm_routing", None), "timeout_seconds", None),
+                temperature=getattr(getattr(self._settings, "llm_routing", None), "temperature", None),
             )
 
         candidates = self._route_candidates(intent)

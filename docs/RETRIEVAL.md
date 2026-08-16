@@ -219,6 +219,11 @@ Implementation lives under `app/retrieval/rerank/` and is applied via `app/retri
 and `app/retrieval/hybrid_rerank_hook.py`, both of which resolve the gate through
 `app.retrieval.tuning.get_retrieval_tuning()`.
 
+The compiled retrieval bundle is the production authority for the rerank gate and
+top-k. `RERANK_ENABLE`, `RERANK_TOP_K`, and `RERANK_PROVIDER` remain visible
+one-release bootstrap overrides; the provider override selects only the reranker
+implementation, never an LLM provider.
+
 ## Output Shape
 `hybrid_search` returns a list of dicts like:
 ```json

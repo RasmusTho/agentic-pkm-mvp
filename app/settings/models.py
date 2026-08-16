@@ -41,6 +41,17 @@ class Providers(BaseModel):
 
 
 class LLMRoutingSettings(BaseModel):
+    timeout_seconds: float | None = Field(
+        default=None,
+        gt=0,
+        description="Compiled LLM request timeout; legacy LLM_TIMEOUT overrides when set.",
+    )
+    temperature: float | None = Field(
+        default=None,
+        ge=0,
+        le=2,
+        description="Compiled LLM sampling temperature; legacy LLM_TEMPERATURE overrides when set.",
+    )
     class RouteTarget(BaseModel):
         model_id: str | None = Field(
             default=None,
