@@ -84,15 +84,15 @@ def test_binding_scoped_rebuild_preserves_standing_question_and_episode_rows(
         ).fetchall() == [("binding-a", episode_id)]
 
 
-def test_duplicate_uuid_is_namespaced_by_binding_in_ingest_projections(
+def test_duplicate_uuid_is_namespaced_by_binding(
     migrated_store_dsn: str,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     object_id = uuid.uuid4()
     set_id = uuid.uuid4()
+    memory_id = uuid.uuid4()
     rows = [("binding-a", object_id), ("binding-b", object_id)]
     with psycopg.connect(migrated_store_dsn) as conn:
-        conn.execute("INSERT INTO sets (id, name) VALUES (%s, 'shared-isolation-set')", (set_id,))
         with conn.cursor() as cur:
             cur.executemany(
                 "INSERT INTO store_objects "
@@ -122,6 +122,17 @@ def test_duplicate_uuid_is_namespaced_by_binding_in_ingest_projections(
                 [(binding,) for binding, _ in rows],
             )
             for binding, oid in rows:
+                cur.execute(
+                    "INSERT INTO sets (vault_binding_id, id, name) "
+                    "VALUES (%s, %s, 'shared-isolation-set')",
+                    (binding, set_id),
+                )
+                cur.execute(
+                    "INSERT INTO objects "
+                    "(vault_binding_id, id, uuid, kind, payload) "
+                    "VALUES (%s, %s, %s, 'note', %s::jsonb)",
+                    (binding, oid, oid, '{"binding":"' + binding + '"}'),
+                )
                 chunk_id = uuid.uuid4()
                 cur.execute(
                     "INSERT INTO chunks "
@@ -146,6 +157,28 @@ def test_duplicate_uuid_is_namespaced_by_binding_in_ingest_projections(
                     "(id, vault_binding_id, object_id, set_id) VALUES (%s, %s, %s, %s)",
                     (uuid.uuid4(), binding, oid, set_id),
                 )
+                cur.execute(
+                    "INSERT INTO file_state (vault_binding_id, path, body_hash) "
+                    "VALUES (%s, '/same/note.md', %s)",
+                    (binding, f"hash-{binding}"),
+                )
+                cur.execute(
+                    "INSERT INTO agent_memories "
+                    "(vault_binding_id, id, layer, payload, provenance) "
+                    "VALUES (%s, %s, 'short_term', %s::jsonb, %s::jsonb)",
+                    (
+                        binding,
+                        memory_id,
+                        '{"binding":"' + binding + '"}',
+                        '{"object_id":"' + str(oid) + '"}',
+                    ),
+                )
+                cur.execute(
+                    "INSERT INTO heimdal_meeting_finalization_receipt "
+                    "(vault_binding_id, session_id, state_sha256, complete, artifact_refs) "
+                    "VALUES (%s, 'same-session', 'same-state', true, %s::jsonb)",
+                    (binding, '{"binding":"' + binding + '"}'),
+                )
 
         # Ingest projections have independent provenance even for the same UUID.
         for table in (
@@ -158,8 +191,32 @@ def test_duplicate_uuid_is_namespaced_by_binding_in_ingest_projections(
             "embeddings",
             "relations",
             "membership",
+            "objects",
+            "file_state",
+            "agent_memories",
+            "heimdal_meeting_finalization_receipt",
         ):
             assert conn.execute(f"SELECT count(*) FROM {table}").fetchone() == (2,), table
+
+        assert conn.execute(
+            "SELECT count(*) FROM sets WHERE name='shared-isolation-set'"
+        ).fetchone() == (2,)
+
+        assert conn.execute("SELECT to_regclass('public.objects_embeddings')").fetchone() == (
+            None,
+        )
+        for binding in ("binding-a", "binding-b"):
+            assert conn.execute(
+                "SELECT payload->>'binding' FROM objects "
+                "WHERE vault_binding_id=%s AND uuid=%s",
+                (binding, object_id),
+            ).fetchone() == (binding,)
+            assert conn.execute(
+                "SELECT artifact_refs->>'binding' "
+                "FROM heimdal_meeting_finalization_receipt "
+                "WHERE vault_binding_id=%s AND session_id='same-session'",
+                (binding,),
+            ).fetchone() == (binding,)
 
         unique_keys = conn.execute(
             """

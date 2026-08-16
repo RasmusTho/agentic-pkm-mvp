@@ -194,7 +194,7 @@ class _UnobservedConnection(BaseException):
     """
 
 
-#: The five migration-owned store tables (Alembic revision `c2766a04d001`).
+#: The store tables and the binding-keyed named-set endpoint they consume.
 STORE_TABLES = frozenset(
     {
         "store_objects",
@@ -202,6 +202,7 @@ STORE_TABLES = frozenset(
         "store_relations",
         "store_relation_memberships",
         "vector_index_meta",
+        "sets",
     }
 )
 
@@ -261,6 +262,7 @@ class _StoreRecordingCursor:
                         "value",
                     ],
                     "vector_index_meta": ["vault_binding_id", "id"],
+                    "sets": ["vault_binding_id", "id"],
                 }.items()
             ]
         # `assert_store_schema_with_connection`'s identity-column census.
@@ -644,8 +646,8 @@ def test_the_attached_object_ddl_debt_is_exactly_what_is_recorded() -> None:
     )
 
 
-def test_no_durable_ddl_has_two_owners() -> None:
-    """`file_state`, `agent_memories` and `objects.path` each have one owner.
+def test_durable_ddl_owners_are_exactly_the_governed_revision_set() -> None:
+    """Adopted tables name every intentional revision that may reshape them.
 
     Both spellings the repo actually uses are matched: raw SQL through
     `op.execute`, and the Alembic operation API (`op.create_table` etc, which
@@ -659,11 +661,10 @@ def test_no_durable_ddl_has_two_owners() -> None:
     assert file_state_owners[0].startswith(FILE_STATE_OWNING_REVISION), file_state_owners
 
     agent_memories_owners = _table_ddl_owners("agent_memories")
-    assert len(agent_memories_owners) == 1, (
-        "expected exactly one Alembic revision to own agent_memories DDL, got "
-        f"{agent_memories_owners}"
-    )
-    assert agent_memories_owners[0].startswith(OBJECTS_OWNING_REVISION), agent_memories_owners
+    assert agent_memories_owners == [
+        "d1e8a0c5f37b_mvr05a1_objects_agent_memories_adoption.py",
+        "f8a05a9b0001_mvr05a_residual_binding_keys.py",
+    ]
 
     # `objects.path` keeps its single MVR-05A0 owner: the MVR-05A1 revision
     # deliberately does not re-declare the column with an `ALTER`.

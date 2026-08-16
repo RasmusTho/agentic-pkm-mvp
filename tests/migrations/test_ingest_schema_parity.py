@@ -9,7 +9,6 @@ import psycopg
 import pytest
 
 from tests.migrations.test_multi_vault_ingest_projection_keys import (
-    INGEST_HEAD,
     _fk,
     _pk,
     _prepare_retained_historical_lineage,
@@ -19,6 +18,7 @@ from tests.migrations.test_multi_vault_ingest_projection_keys import (
 
 
 pytestmark = pytest.mark.pg
+MVR05A_RESIDUAL_HEAD = "f8a05a9b0001"
 INGEST_TABLES = ("chunks", "embeddings", "relations", "sets", "membership")
 INGEST_VIEWS = ("view_chunks_missing_embeddings", "view_objects_ready_for_projection")
 
@@ -77,10 +77,10 @@ def test_ingest_tables_match_migration_and_autocreate(
 ) -> None:
     factory = request.getfixturevalue("scratch_db_factory")
     migrated, autocreated, retained = factory(), factory(), factory()
-    _upgrade(migrated, monkeypatch, INGEST_HEAD)
+    _upgrade(migrated, monkeypatch, MVR05A_RESIDUAL_HEAD)
     _autocreate(autocreated, monkeypatch)
     _prepare_retained_historical_lineage(retained, monkeypatch)
-    _upgrade(retained, monkeypatch, INGEST_HEAD)
+    _upgrade(retained, monkeypatch, MVR05A_RESIDUAL_HEAD)
     migrated_shape, autocreated_shape = _shape(migrated), _shape(autocreated)
     assert migrated_shape == autocreated_shape, (
         "MVR-05A4 Alembic/autocreate schema or retained-view parity diverged:\n"
@@ -117,12 +117,15 @@ def test_ingest_views_and_reset_keep_duplicate_uuid_bindings_isolated(
 ) -> None:
     factory = request.getfixturevalue("scratch_db_factory")
     dsn = factory()
-    _upgrade(dsn, monkeypatch, INGEST_HEAD)
+    _upgrade(dsn, monkeypatch, MVR05A_RESIDUAL_HEAD)
     object_id = uuid.uuid4()
     set_id = uuid.uuid4()
     with psycopg.connect(dsn) as conn:
-        conn.execute("INSERT INTO sets(id,name) VALUES (%s,'shared')", (set_id,))
         for binding in ("binding-a", "binding-b"):
+            conn.execute(
+                "INSERT INTO sets(vault_binding_id,id,name) VALUES (%s,%s,'shared')",
+                (binding, set_id),
+            )
             conn.execute(
                 "INSERT INTO store_objects(vault_binding_id,object_id,kind,payload) "
                 "VALUES (%s,%s,'note','{}'::jsonb)",

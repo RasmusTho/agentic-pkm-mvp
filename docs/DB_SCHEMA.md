@@ -3,7 +3,7 @@ Doc role: Reference
 Authority: Human-readable snapshot of the current database schema and DB outbox bootstrap; migrations and bootstrap code remain the executable source of truth.
 Temporal class: operational
 Source of truth: code
-Last verified against: app/stores/pg.py + app/alembic/versions/e6c4a2b8d1f3_mvr05a3_store_object_binding_keys.py + app/alembic/versions/f4a05a4b0001_mvr05a4_ingest_projection_binding_keys.py + app/alembic/versions/f7a05a4b0001_seed_membership_prerequisites.py + app/alembic/versions/f5a05a5b0001_mvr05a5_replay_projection_binding_keys.py + app/services/outbox.py + app/workers/outbox_binding_gate.py + app/instance/mvr05_cutover.py + app/alembic/versions/f3a1c9d2e4b7_kernel05_outbox_schema_in_migrations.py + app/heimdal/observation_log.py + app/heimdal/cursor_store.py + app/alembic/versions/8b21e6a1f0c4_heim_observation_log_and_cursor.py + app/services/vault_sync.py + app/alembic/versions/c7f4b1a83d29_mvr05a0_file_state_binding_key.py + app/alembic/versions/d1e8a0c5f37b_mvr05a1_objects_agent_memories_adoption.py + app/db/db.py + tests/architecture/durable_table_classification.json (2026-08-16)
+Last verified against: app/stores/pg.py + app/alembic/versions/e6c4a2b8d1f3_mvr05a3_store_object_binding_keys.py + app/alembic/versions/f4a05a4b0001_mvr05a4_ingest_projection_binding_keys.py + app/alembic/versions/f7a05a4b0001_seed_membership_prerequisites.py + app/alembic/versions/f5a05a5b0001_mvr05a5_replay_projection_binding_keys.py + app/alembic/versions/f8a05a9b0001_mvr05a_residual_binding_keys.py + app/services/outbox.py + app/workers/outbox_binding_gate.py + app/instance/mvr05_cutover.py + app/alembic/versions/f3a1c9d2e4b7_kernel05_outbox_schema_in_migrations.py + app/heimdal/observation_log.py + app/heimdal/cursor_store.py + app/alembic/versions/8b21e6a1f0c4_heim_observation_log_and_cursor.py + app/services/vault_sync.py + app/alembic/versions/c7f4b1a83d29_mvr05a0_file_state_binding_key.py + app/alembic/versions/d1e8a0c5f37b_mvr05a1_objects_agent_memories_adoption.py + app/db/db.py + tests/architecture/durable_table_classification.json (2026-08-16)
 
 ## v5.5 Baseline Delta (Current Reality)
 - Registry watcher is the runtime default; legacy snapshot watcher is dev-only.
@@ -149,9 +149,10 @@ Last verified against: app/stores/pg.py + app/alembic/versions/e6c4a2b8d1f3_mvr0
   `uuid`→`id` backfill and the two remaining `objects` indexes the bootstrap owned, and rekeys
   `objects` to `(vault_binding_id, id)` with `objects_uuid_idx` scoped to
   `UNIQUE (vault_binding_id, uuid)`. `agent_memories` had **zero** references anywhere in the
-  revision chain before this and is adopted verbatim, with no shape change. **`objects.path`** keeps
-  its MVR-05A0 owner. Every adopted table now has exactly one production owner and — for the first
-  time — is reachable by `alembic upgrade head`.
+  revision chain before this and was initially adopted verbatim. Residual revision
+  `f8a05a9b0001` later rekeys it by `vault_binding_id`. **`objects.path`** keeps
+  its MVR-05A0 owner. Every adopted table is reachable by `alembic upgrade head`;
+  the exact revision set allowed to reshape each surface is architecture-tested.
 - The adoption, row-survival, rekey, restart and single-vault-equivalence guards for both revisions
   are `pg`-marked and run in **both** lanes that execute `-m "pg"`: `ci-smoke / index_pg` on the PR
   path, and `integration-nightly / pg-contracts` nightly. Both select files by explicit allow-list
@@ -295,6 +296,8 @@ mirror/projection surfaces and do not hold semantic authority over the note cont
   - an ordinary upsert must match the primary identity; a reconcilable fallback write may record a divergent per-row `provider`/`model`/`normalize` (with the same `dim`), making fallback-written vectors visible and reconcilable (EMBEDREL-06 Phase A, `app/stores/pg.py::PgVectorIndex.upsert`)
   - the `dim` guard is unconditional — a dimension mismatch fails loud and writes no row
   - embeddings do not participate in the identity-history/SCD pattern
+  - the historical `objects_embeddings` table is removed by `f8a05a9b0001`;
+    it had no runtime reader or producer and was superseded by this index
   - **transform provenance stamp (KERNEL-06, #2768):** `payload.provenance` carries `{source_ref,
     content_hash, chunk_policy_version, pipeline_version, embedding_identity}`, written in the same
     upsert statement as the vector (never a separate write). `content_hash` is a `sha256` of the
@@ -468,14 +471,26 @@ Append-only working memory with timestamp decay, written and read only by `app/m
 Lossy by design: decay is the contract, and the module falls back to an in-process dict when the
 table is absent. Before #4560 it was created **only** by the runtime bootstrap SQL, with zero
 references anywhere in the Alembic chain — the same condition `file_state` was in before #4543.
-Alembic revision `d1e8a0c5f37b` adopts it verbatim; no column, key, or index changed.
+Alembic revision `d1e8a0c5f37b` adopted it verbatim. MVR-05A residual revision
+`f8a05a9b0001` adds the binding column and rekeys the table; configured database
+access now fails loudly on the old shape instead of falling back to process memory.
 
-- `id` (`uuid`, PK)
+- `vault_binding_id` (`text`, `NOT NULL`, compatibility default)
+- `id` (`uuid`, `NOT NULL`)
 - `run_id` (`uuid`, nullable)
 - `layer` (`text`, `NOT NULL`)
 - `payload` / `provenance` (`jsonb`, `NOT NULL`, default `'{}'::jsonb`)
 - `created_at` (`timestamptz`, `NOT NULL`, default `now()`)
+- Primary key: `(vault_binding_id, id)`
 - Index: `agent_memories_created_at_idx` on `(created_at DESC)`
+
+### `heimdal_meeting_finalization_receipt`
+
+Append-only acknowledgement that one ledger state was materialized into one
+vault binding. Revision `f8a05a9b0001` adds `vault_binding_id` and changes the
+primary key to `(vault_binding_id, session_id, state_sha256)`. The Heimdal
+producer scopes idempotent reads, supersession, inserts, and outbox emission to
+that same binding and rejects a stale Postgres shape before writing.
 
 ### `file_state` (vault-sync bookkeeping, migration-owned since MVR-05A0)
 
@@ -615,6 +630,19 @@ Interpretation:
   canonical parent, the fallback preserves the attempted object identifier in
   `details.object_ref`, clears only `object_id`, and retains `vault_binding_id`.
 
+### `sets` (named membership endpoints)
+
+- `vault_binding_id` (`text`, `NOT NULL`, compatibility default)
+- `id` (`uuid`, `NOT NULL`)
+- `name` (`text`, `NOT NULL`)
+- Primary key: `(vault_binding_id, id)`
+- Unique: `(vault_binding_id, name)`
+
+Revision `f8a05a9b0001` replaces the global id/name identity. On the fresh
+lineage, `membership(vault_binding_id, set_id)` references the composite key;
+the retained historical lineage continues to use its proven composite
+`store_objects` endpoint.
+
 ### `membership` (legacy)
 MVR-05A4 derives the effective primary-key lineage from the catalog: the fresh
 chain uses `(vault_binding_id, id)` while the retained historical chain uses
@@ -624,7 +652,8 @@ fails before any schema or row change; it does not re-attribute, quarantine,
 copy, or delete rows.
 - `vault_binding_id` (`text`, `NOT NULL` after MVR-05A3)
 - `(vault_binding_id, object_id)` (composite FK → `store_objects`, `ON DELETE CASCADE`)
-- `set_id` (`uuid`, `ON DELETE CASCADE`; fresh lineage keeps its FK to `sets.id`, while #3510
+- `set_id` (`uuid`, `ON DELETE CASCADE`; fresh lineage uses the composite FK to
+  `sets(vault_binding_id, id)`, while #3510
   retargets only retained legacy objects-as-sets schemas; MVR-05A3 makes that historical endpoint
   a composite `store_objects(vault_binding_id, object_id)` FK)
 - The projector/backfill producer accepts a set name, resolves it through the retained `sets`
@@ -660,6 +689,8 @@ audited `app/services/outbox.py::bootstrap()` produced it; `bootstrap()` is asse
   - `created_at` (`timestamptz`, default `now()`)
   - `delivered_at` (`timestamptz`, nullable)
   - `attempts` (`int`, default `0`)
+  - `vault_binding_id` (`text`, `NOT NULL`, compatibility default; MVR-05A7)
+  - `legacy_key` (`uuid`, retained pre-cutover idempotency lineage; MVR-05A7)
   - Indexes: `outbox_created_idx`, `outbox_delivered_idx`
 
 Interpretation:

@@ -31,8 +31,12 @@ class _Cursor:
             raise self.fail
 
     def fetchone(self):
-        if self.sql[-1] == "SELECT id FROM sets WHERE name = %s":
+        if self.sql[-1] == (
+            "SELECT id FROM sets WHERE vault_binding_id = %s AND name = %s"
+        ):
             return {"id": self.resolved_set_id} if self.resolved_set_id else None
+        if "public.sets" in self.sql[-1]:
+            return {"primary_key": ["vault_binding_id", "id"]}
         return {"primary_key": self.primary_key}
 
 

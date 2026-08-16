@@ -55,6 +55,7 @@ PRE_ADOPTION_HEAD = "c7f4b1a83d29"
 # The MVR-05A1 adoption revision. Pinned explicitly (not "head") so later
 # revisions adding DDL on top of `objects` do not move this target.
 OBJECTS_ADOPTION_HEAD = "d1e8a0c5f37b"
+MVR05A_RESIDUAL_HEAD = "f8a05a9b0001"
 
 # Verbatim `app/db/migrations_obsidian.sql:19-50` before #4560 deleted the file.
 # The `DROP CONSTRAINT`/`ADD CONSTRAINT` pair below is the defect this slice
@@ -783,7 +784,7 @@ def test_stale_objects_key_fails_loud_before_any_vault_sync_write(
         assert_objects_schema(conn)
 
 
-def test_autocreate_fixture_shape_matches_the_owning_revision(
+def test_autocreate_fixture_shape_matches_the_current_migration_head(
     scratch_db_factory, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Test-fixture create-on-demand produces exactly the migration's shape.
@@ -796,7 +797,7 @@ def test_autocreate_fixture_shape_matches_the_owning_revision(
     from app.db.db import ensure_schema
 
     migrated = scratch_db_factory()
-    _alembic_upgrade(migrated, monkeypatch, OBJECTS_ADOPTION_HEAD)
+    _alembic_upgrade(migrated, monkeypatch, MVR05A_RESIDUAL_HEAD)
 
     autocreated = scratch_db_factory()  # no alembic, no tables at all
     monkeypatch.setenv("DATABASE_URL", autocreated)

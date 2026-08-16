@@ -418,11 +418,9 @@ def test_every_production_projection_schema_and_producer_is_classified() -> None
         else:
             assert entry["binding_key"] in {"keyed", "pending"}, table
         if entry["binding_key"] == "keyed":
-            keyed_revisions = (
-                entry["declaring_revisions"]
-                if table in REPLAY_PROJECTION_TABLES
-                else [entry["owning_revision"]]
-            )
+            keyed_revisions = set(entry["declaring_revisions"]) | {
+                entry["owning_revision"]
+            }
             declaring_paths = [
                 path
                 for revision in keyed_revisions
@@ -1119,9 +1117,20 @@ def test_binding_cutover_worklist_is_derived_from_the_manifest() -> None:
             )
         assert set(row.write_producers) <= set(row.producers)
 
-    # Derivation, proved by mutation rather than by inspection.
-    pinned = next(row.table for row in worklist if row.write_producers)
-    keyed = {**manifest, pinned: {**manifest[pinned], "binding_key": "keyed"}}
+    # Derivation, proved by mutation rather than by inspection. Once MVR-05A
+    # closes there is deliberately no live pending row, so synthesize the same
+    # one-field regression the gate must catch on a future change.
+    pinned = next(
+        table
+        for table, entry in manifest.items()
+        if entry["classification"] == "binding-scoped"
+        and entry["producers"]
+        and entry["escalation_conditions"]
+    )
+    regressed = {**manifest, pinned: {**manifest[pinned], "binding_key": "pending"}}
+    synthetic_worklist = cutover_worklist(regressed)
+    assert pinned in {row.table for row in synthetic_worklist}
+    keyed = {**regressed, pinned: {**regressed[pinned], "binding_key": "keyed"}}
     assert pinned not in {row.table for row in cutover_worklist(keyed)}
 
     promoted = next(
@@ -1138,11 +1147,30 @@ def test_binding_cutover_worklist_is_derived_from_the_manifest() -> None:
     assert promoted in {row.table for row in cutover_worklist(joined)}
 
     # Every routing input the table-group children read is present per row.
-    escalating = {row.table for row in worklist if row.escalates}
+    escalating = {row.table for row in synthetic_worklist if row.escalates}
     assert escalating, "no pending table records an escalation condition"
-    for row in worklist:
+    for row in synthetic_worklist:
         if row.write_producers:
             assert row.rebuild_mechanism != "no-producer", row
+
+
+def test_the_durable_projection_surface_is_fully_classified_and_binding_keyed() -> None:
+    """MVR-05A closes only when no binding-scoped durable table is pending."""
+    manifest = load_manifest()
+    pending = {
+        table
+        for table, entry in manifest.items()
+        if entry["classification"] == "binding-scoped"
+        and entry["binding_key"] != "keyed"
+    }
+    assert pending == set()
+
+    for table, entry in manifest.items():
+        if entry["classification"] != "binding-scoped":
+            continue
+        if entry["producers"]:
+            assert entry["binding_key"] == "keyed", table
+            assert entry["binding_column"], table
 
 
 def test_ingest_group_is_fully_binding_keyed() -> None:

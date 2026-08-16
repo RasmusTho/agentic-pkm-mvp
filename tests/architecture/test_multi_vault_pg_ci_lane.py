@@ -7,6 +7,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 PG_TARGETS = (
     "tests/migrations/test_multi_vault_outbox_upgrade.py",
     "tests/services/test_multi_vault_outbox_dual_key_dedup.py",
+    "tests/migrations/test_mvr05a_residual_binding_keys.py",
 )
 
 

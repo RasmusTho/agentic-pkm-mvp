@@ -21,6 +21,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 PRE_BINDING_HEAD = "d1e8a0c5f37b"
 PRE_SEED_HEAD = "f6a05a7b0001"
 SEED_HEAD = "f7a05a4b0001"
+MVR05A_RESIDUAL_HEAD = "f8a05a9b0001"
 BINDING = COMPATIBILITY_BINDING_ID
 
 
@@ -266,7 +267,7 @@ def test_retained_endpoint_deletion_refuses_partial_projection(
 ) -> None:
     dsn = scratch_db_factory()
     _prepare_retained_lineage(dsn, monkeypatch)
-    _upgrade(dsn, monkeypatch, SEED_HEAD)
+    _upgrade(dsn, monkeypatch, MVR05A_RESIDUAL_HEAD)
     set_id = _published_set_id(dsn)
     object_id = uuid.uuid4()
     with psycopg.connect(dsn) as conn:
@@ -303,8 +304,12 @@ class _MissingSetCursor:
         self.sql.append(statement)
 
     def fetchone(self):
-        if self.sql[-1] == "SELECT id FROM sets WHERE name = %s":
+        if self.sql[-1] == (
+            "SELECT id FROM sets WHERE vault_binding_id = %s AND name = %s"
+        ):
             return None
+        if "public.sets" in self.sql[-1]:
+            return {"primary_key": ["vault_binding_id", "id"]}
         return {"primary_key": ["vault_binding_id", "id"]}
 
 

@@ -27,13 +27,14 @@ from .base import ObjectStore, RelationIndex, RelationMembership, VectorIndex, _
 
 _TABLES_READY = False
 
-# The five migration-owned store tables (Alembic revision c2766a04d001).
+# The five store tables plus the binding-keyed named-set endpoint they consume.
 _STORE_TABLES = (
     "store_objects",
     "store_vector_index",
     "store_relations",
     "store_relation_memberships",
     "vector_index_meta",
+    "sets",
 )
 
 # store_vector_index identity columns the migration guarantees.
@@ -256,21 +257,25 @@ _MIGRATION_OWNED_AUTOCREATE_SQL: tuple[tuple[str, tuple[str, ...]], ...] = (
     (
         "sets",
         (
-            """
+            f"""
             CREATE TABLE IF NOT EXISTS sets (
-                id UUID PRIMARY KEY,
-                name TEXT UNIQUE NOT NULL,
-                meta JSONB NOT NULL DEFAULT '{}'::jsonb
+                vault_binding_id TEXT NOT NULL DEFAULT '{COMPATIBILITY_BINDING_ID}',
+                id UUID NOT NULL,
+                name TEXT NOT NULL,
+                meta JSONB NOT NULL DEFAULT '{{}}'::jsonb,
+                PRIMARY KEY (vault_binding_id, id),
+                UNIQUE (vault_binding_id, name)
             )
             """,
-            """
-            INSERT INTO sets (id, name, meta)
+            f"""
+            INSERT INTO sets (vault_binding_id, id, name, meta)
             VALUES (
+                '{COMPATIBILITY_BINDING_ID}',
                 'afa60fd2-731a-5c30-ae25-07f56c115393'::uuid,
                 'published',
-                '{"system":"membership-projection"}'::jsonb
+                '{{"system":"membership-projection"}}'::jsonb
             )
-            ON CONFLICT (name) DO NOTHING
+            ON CONFLICT (vault_binding_id, name) DO NOTHING
             """,
         ),
     ),
@@ -280,15 +285,17 @@ _MIGRATION_OWNED_AUTOCREATE_SQL: tuple[tuple[str, tuple[str, ...]], ...] = (
             """
             CREATE TABLE IF NOT EXISTS membership (
                 id UUID NOT NULL,
-                set_id UUID NOT NULL
-                    CONSTRAINT membership_set_id_fkey
-                    REFERENCES sets(id) ON DELETE CASCADE,
+                set_id UUID NOT NULL,
                 object_id UUID NOT NULL,
                 created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
                 vault_binding_id TEXT NOT NULL,
                 CONSTRAINT membership_object_id_fkey
                     FOREIGN KEY (vault_binding_id, object_id)
                     REFERENCES store_objects (vault_binding_id, object_id)
+                    ON DELETE CASCADE,
+                CONSTRAINT membership_set_binding_fkey
+                    FOREIGN KEY (vault_binding_id, set_id)
+                    REFERENCES sets (vault_binding_id, id)
                     ON DELETE CASCADE,
                 PRIMARY KEY (vault_binding_id, id)
             )
@@ -518,7 +525,7 @@ def assert_store_schema_with_connection(conn, *, repair_data: bool = False) -> N
                    ) AS has_binding
             FROM (VALUES
                 ('store_objects'), ('store_vector_index'), ('store_relations'),
-                ('store_relation_memberships'), ('vector_index_meta')
+                ('store_relation_memberships'), ('vector_index_meta'), ('sets')
             ) AS t(table_name)
             """
         )
@@ -528,6 +535,7 @@ def assert_store_schema_with_connection(conn, *, repair_data: bool = False) -> N
             "store_relations": ["vault_binding_id", "src_id", "dst_id", "rel"],
             "store_relation_memberships": ["vault_binding_id", "src_id", "rel", "value"],
             "vector_index_meta": ["vault_binding_id", "id"],
+            "sets": ["vault_binding_id", "id"],
         }
         shapes = {}
         for row in cur.fetchall():

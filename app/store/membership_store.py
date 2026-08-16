@@ -5,9 +5,28 @@ from typing import Optional
 from uuid import uuid4
 
 from app.db.db import COMPATIBILITY_BINDING_ID, conn_rw
+from app.instance.scalar_binding_runtime import resolve_scalar_binding_runtime
 
 
-def save_membership(object_id: str, set_name: str, *, trace_id: Optional[str] = None) -> None:
+def _resolve_binding_id(vault_binding_id: str | None) -> str:
+    requested = (vault_binding_id or "").strip()
+    runtime = resolve_scalar_binding_runtime(requested_binding_id=requested or None)
+    if runtime is not None:
+        return runtime.vault_binding_id
+    if vault_binding_id is None:
+        return COMPATIBILITY_BINDING_ID
+    if not requested:
+        raise ValueError("vault_binding_id must be a non-empty string")
+    return requested
+
+
+def save_membership(
+    object_id: str,
+    set_name: str,
+    *,
+    trace_id: Optional[str] = None,
+    vault_binding_id: str | None = None,
+) -> None:
     """
     Binding-scoped membership persistence.
 
@@ -16,6 +35,7 @@ def save_membership(object_id: str, set_name: str, *, trace_id: Optional[str] = 
     Schema/key failures deliberately propagate: swallowing a missing MVR-05A4
     primary-key or binding invariant would falsely report a successful write.
     """
+    resolved_binding_id = _resolve_binding_id(vault_binding_id)
     with conn_rw() as conn:
         with conn.cursor() as cur:
             cur.execute(
@@ -40,7 +60,31 @@ def save_membership(object_id: str, set_name: str, *, trace_id: Optional[str] = 
                     "unsupported membership primary key; run MVR-05A4 migrations before writing"
                 )
 
-            cur.execute("SELECT id FROM sets WHERE name = %s", (set_name,))
+            cur.execute(
+                """
+                SELECT array_agg(a.attname ORDER BY key.ordinality) AS primary_key
+                  FROM pg_constraint c
+                  JOIN unnest(c.conkey) WITH ORDINALITY key(attnum, ordinality) ON true
+                  JOIN pg_attribute a
+                    ON a.attrelid=c.conrelid AND a.attnum=key.attnum
+                 WHERE c.conrelid='public.sets'::regclass AND c.contype='p'
+                """
+            )
+            set_shape = cur.fetchone()
+            set_primary_key = (
+                set_shape.get("primary_key")
+                if isinstance(set_shape, dict)
+                else (set_shape[0] if set_shape else None)
+            )
+            if list(set_primary_key or []) != ["vault_binding_id", "id"]:
+                raise RuntimeError(
+                    "unsupported sets primary key; run MVR-05A residual migrations before writing"
+                )
+
+            cur.execute(
+                "SELECT id FROM sets WHERE vault_binding_id = %s AND name = %s",
+                (resolved_binding_id, set_name),
+            )
             set_row = cur.fetchone()
             set_id = (
                 set_row.get("id")
@@ -53,7 +97,7 @@ def save_membership(object_id: str, set_name: str, *, trace_id: Optional[str] = 
                     "run alembic upgrade head to seed membership prerequisites"
                 )
 
-            common = (COMPATIBILITY_BINDING_ID, object_id, set_id, datetime.now(timezone.utc))
+            common = (resolved_binding_id, object_id, set_id, datetime.now(timezone.utc))
             if list(primary_key or []) == ["vault_binding_id", "id"]:
                 cur.execute(
                     "INSERT INTO membership "
