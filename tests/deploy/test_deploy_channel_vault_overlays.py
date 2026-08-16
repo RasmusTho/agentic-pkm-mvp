@@ -179,6 +179,60 @@ def test_explicit_vault_overlay_parses_without_interpolation() -> None:
 
 
 @requires_docker
+def test_ci_vault_identity_overlay_is_finalizer_only(tmp_path: Path) -> None:
+    vault_root = tmp_path / "ci-vault"
+    ownership_root = tmp_path / "instance-ownership"
+    vault_root.mkdir()
+    ownership_root.mkdir()
+    identity_overlay = tmp_path / "ci-vault-identity.yml"
+    identity_overlay.write_text(
+        "services:\n"
+        "  instance-state-init:\n"
+        "    volumes:\n"
+        "      - type: bind\n"
+        f'        source: "{vault_root}"\n'
+        f'        target: "{vault_root}"\n'
+        "        read_only: true\n",
+        encoding="utf-8",
+    )
+    env = os.environ.copy()
+    env.update(
+        {
+            "INSTANCE_OWNERSHIP_HOST_STATE_DIR": str(ownership_root),
+            "LLM_PROVIDER": "mock",
+            "VAULT_HOST_ROOT": str(vault_root),
+        }
+    )
+    result = subprocess.run(
+        [
+            "docker",
+            "compose",
+            "-f",
+            str(REPO_ROOT / "docker-compose.yaml"),
+            "-f",
+            str(REPO_ROOT / "docker-compose.legacy-vault.yml"),
+            "-f",
+            str(identity_overlay),
+            "config",
+            "--format",
+            "json",
+        ],
+        cwd=REPO_ROOT,
+        env=env,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    services = _services(json.loads(result.stdout))
+
+    finalizer = services["instance-state-init"]
+    assert _mount_source(finalizer, str(vault_root)) == str(vault_root)
+    assert _mount_is_read_only(finalizer, str(vault_root))
+    for service_name in ("api", "worker", "watcher"):
+        assert _mount_source(services[service_name], str(vault_root)) is None
+
+
+@requires_docker
 def test_deploy_channel_test_no_vault_keeps_idle_overlay_set(tmp_path: Path) -> None:
     services = _services(
         _render_deploy_compose(tmp_path, channel="test", explicit_vault=False)

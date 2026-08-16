@@ -534,7 +534,20 @@ jobs:
           export LOCAL_GID="$(id -g)"
           source scripts/lib/instance_ownership_host_state.sh
           prepare_instance_ownership_host_state_dir
-          compose_files="-f docker-compose.yaml -f docker-compose.legacy-vault.yml"
+          VAULT_IDENTITY_OVERLAY_PATH="${RUNNER_TEMP}/ci-vault-identity.${GITHUB_RUN_ID}.${GITHUB_RUN_ATTEMPT}.yml"
+          # Production finalizers see host-spelled vault roots through the
+          # same-path /Users and /Volumes mounts. Mirror that identity contract
+          # for the /tmp CI fixture without widening any long-lived service.
+          cat > "$VAULT_IDENTITY_OVERLAY_PATH" <<EOF
+          services:
+            instance-state-init:
+              volumes:
+                - type: bind
+                  source: "$VAULT_ROOT"
+                  target: "$VAULT_ROOT"
+                  read_only: true
+          EOF
+          compose_files="-f docker-compose.yaml -f docker-compose.legacy-vault.yml -f $VAULT_IDENTITY_OVERLAY_PATH"
           # #4463: single source of truth for the verifier's artifact paths. The
           # diagnostic below used to read the script's workspace-relative tmp/
           # defaults while the invocation overrode them to absolute /tmp paths,
@@ -580,6 +593,7 @@ jobs:
             fi
             rm -f "$VAULT_BINDING_RECEIPT_PATH" "$VAULT_BINDING_ID_PATH"
             docker compose $compose_files down -v || true
+            rm -f "$VAULT_IDENTITY_OVERLAY_PATH"
             exit "$rc"
           }
           trap cleanup EXIT
