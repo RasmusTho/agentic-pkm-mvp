@@ -2111,9 +2111,11 @@ def _voice_push_to_talk_script() -> str:
       var stream = null;
       var chunks = [];
       var tapRecording = false;
-      var ignoreNextClick = false;
       var captureState = 'idle';
       var cancelPendingTap = false;
+      var discardRecording = false;
+      var activePointerId = null;
+      var pointerStartedAt = 0;
       function setStatus(message) { status.textContent = message; }
       function rearm(message) {
         voiceControl.removeAttribute('disabled');
@@ -2164,12 +2166,12 @@ def _voice_push_to_talk_script() -> str:
               var turn = response.data || {};
               result.hidden = false;
               transcript.textContent = turn.transcript ? 'Heard: ' + turn.transcript : '';
-              answer.textContent = 'I couldn\'t answer that right now.';
+              answer.textContent = "I couldn't answer that right now.";
               citations.innerHTML = '';
               audio.hidden = true;
               if (turn.reason === 'stt_unavailable' || detail(turn) === 'stt_unavailable') {
                 transcript.textContent = '';
-                answer.textContent = 'I couldn\'t hear that clearly — try again.';
+                answer.textContent = "I couldn't hear that clearly — try again.";
               }
               rearm(answer.textContent);
               return;
@@ -2179,7 +2181,7 @@ def _voice_push_to_talk_script() -> str:
           })
           .catch(function () {
             result.hidden = false;
-            answer.textContent = 'I couldn\'t answer that right now.';
+            answer.textContent = "I couldn't answer that right now.";
             audio.hidden = true;
             rearm(answer.textContent);
           });
@@ -2190,14 +2192,31 @@ def _voice_push_to_talk_script() -> str:
           setStatus('Microphone permission pending. Release recorded; no audio will be sent.');
           return;
         }
-        if (!recorder || recorder.state === 'inactive') return;
+        if (captureState !== 'recording' || !recorder || recorder.state === 'inactive') return;
+        captureState = 'stopping';
         recorder.stop();
         voiceControl.setAttribute('aria-pressed', 'false');
         setStatus('Sending your question…');
       }
+      function cancelCapture(message) {
+        tapRecording = false;
+        if (captureState === 'requesting') {
+          cancelPendingTap = true;
+          setStatus(message);
+          return;
+        }
+        if (recorder && recorder.state === 'recording') {
+          discardRecording = true;
+          captureState = 'stopping';
+          recorder.stop();
+        } else {
+          stopTracks();
+          captureState = 'idle';
+        }
+        rearm(message);
+      }
       function beginRecording() {
-        if (captureState === 'requesting') { cancelPendingTap = true; return; }
-        if (recorder && recorder.state === 'recording') return;
+        if (captureState !== 'idle') return;
         if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia || !window.MediaRecorder) {
           rearm('Microphone recording is unavailable in this browser.');
           return;
@@ -2213,34 +2232,80 @@ def _voice_push_to_talk_script() -> str:
           }
           stream = mediaStream;
           chunks = [];
-          var options = (MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported('audio/webm'))
-            ? {mimeType: 'audio/webm'} : undefined;
-          recorder = new MediaRecorder(stream, options);
-          recorder.ondataavailable = function (event) { if (event.data && event.data.size) chunks.push(event.data); };
-          recorder.onstop = function () {
-            var blob = new Blob(chunks, {type: recorder.mimeType || 'audio/webm'});
+          try {
+            var options = (MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported('audio/webm'))
+              ? {mimeType: 'audio/webm'} : undefined;
+            recorder = new MediaRecorder(stream, options);
+            recorder.ondataavailable = function (event) { if (event.data && event.data.size) chunks.push(event.data); };
+            recorder.onstop = function () {
+              var blob = new Blob(chunks, {type: recorder.mimeType || 'audio/webm'});
+              stopTracks();
+              captureState = 'idle';
+              if (discardRecording) { discardRecording = false; return; }
+              sendAudio(blob);
+            };
+            recorder.start();
+            captureState = 'recording';
+            voiceControl.setAttribute('aria-pressed', 'true');
+            setStatus('Listening. Release to send.');
+          } catch (error) {
+            recorder = null;
             stopTracks();
             captureState = 'idle';
-            sendAudio(blob);
-          };
-          recorder.start();
-          captureState = 'recording';
-          voiceControl.setAttribute('aria-pressed', 'true');
-          setStatus('Listening. Release to send.');
-        }).catch(function () { captureState = 'idle'; rearm('I couldn\'t hear that clearly — try again.'); });
+            rearm('Microphone recording could not start. Try again.');
+          }
+        }).catch(function () {
+          stream = null;
+          captureState = 'idle';
+          rearm("I couldn't hear that clearly — try again.");
+        });
+      }
+      function isShortTap(event) {
+        var endedAt = typeof event.timeStamp === 'number' ? event.timeStamp : Date.now();
+        return endedAt - pointerStartedAt < 300;
       }
       voiceControl.addEventListener('pointerdown', function (event) {
         event.preventDefault();
-        ignoreNextClick = true;
-        tapRecording = false;
-        beginRecording();
+        activePointerId = event.pointerId;
+        pointerStartedAt = typeof event.timeStamp === 'number' ? event.timeStamp : Date.now();
+        if (captureState === 'idle') beginRecording();
       });
-      voiceControl.addEventListener('pointerup', function () { finishRecording(); });
-      voiceControl.addEventListener('pointerleave', function () { finishRecording(); });
-      voiceControl.addEventListener('click', function () {
-        if (ignoreNextClick) { ignoreNextClick = false; return; }
-        if (captureState === 'requesting') { cancelPendingTap = true; return; }
-        if (!recorder || recorder.state === 'inactive') { tapRecording = true; beginRecording(); }
+      voiceControl.addEventListener('pointerup', function (event) {
+        if (activePointerId !== null && event.pointerId !== activePointerId) return;
+        activePointerId = null;
+        if (isShortTap(event)) {
+          if (captureState === 'requesting') {
+            tapRecording = true;
+            setStatus('Microphone permission pending. Tap again after it starts to send.');
+            return;
+          }
+          if (captureState === 'recording') {
+            if (tapRecording) finishRecording();
+            else {
+              tapRecording = true;
+              setStatus('Listening. Tap again to send.');
+            }
+          }
+          return;
+        }
+        tapRecording = false;
+        finishRecording();
+      });
+      voiceControl.addEventListener('pointerleave', function () { cancelCapture('Recording cancelled. Hold or tap to try again.'); });
+      voiceControl.addEventListener('pointercancel', function () {
+        activePointerId = null;
+        cancelCapture('Recording cancelled. Hold or tap to try again.');
+      });
+      voiceControl.addEventListener('click', function (event) {
+        // Pointer gestures already begin on pointerdown; keyboard/AT clicks
+        // (detail === 0) are the deterministic tap-to-toggle fallback.
+        if (event.detail > 0) return;
+        if (captureState === 'requesting') {
+          cancelPendingTap = true;
+          setStatus('Microphone permission pending. Tap recorded; no audio will be sent.');
+          return;
+        }
+        if (captureState === 'idle') { tapRecording = true; beginRecording(); }
         else if (tapRecording) finishRecording();
       });
     });
