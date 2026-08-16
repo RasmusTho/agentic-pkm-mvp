@@ -98,8 +98,8 @@ function boot(mode) {{
   }};
   const surface = {{querySelector(sel) {{ return nodes[sel]; }}}}; let ready;
   global.window = global; global.document = {{addEventListener(_, cb) {{ ready = cb; }}, querySelector() {{ return surface; }}}};
-  let resolveMedia; const pending = new Promise((resolve) => {{ resolveMedia = resolve; }});
-  Object.defineProperty(global, 'navigator', {{value: {{mediaDevices: {{getUserMedia() {{ return pending; }}}}}}, configurable: true}});
+  let resolveMedia; let rejectMedia;
+  Object.defineProperty(global, 'navigator', {{value: {{mediaDevices: {{getUserMedia() {{ return new Promise((resolve, reject) => {{ resolveMedia = resolve; rejectMedia = reject; }}); }}}}}}, configurable: true}});
   let starts = 0; let current = null; let uploads = 0;
   class Recorder {{
     constructor() {{ if (mode === 'constructor') throw new Error('constructor'); this.state = 'inactive'; this.mimeType = 'audio/webm'; current = this; }}
@@ -112,13 +112,17 @@ function boot(mode) {{
   eval(voiceScript); ready();
   const track = {{stops: 0, stop() {{ this.stops += 1; }}}}; const media = {{getTracks() {{ return [track]; }}}};
   function fire(name, event) {{ control.listeners[name](Object.assign({{pointerId: 1, timeStamp: 0, detail: 1, preventDefault() {{}}}}, event || {{}})); }}
-  return {{control, status, citations, audio, track, resolveMedia, fire, get starts() {{ return starts; }}, get uploads() {{ return uploads; }}}};
+  return {{control, status, citations, audio, track, fire, get resolveMedia() {{ return resolveMedia; }}, get rejectMedia() {{ return rejectMedia; }}, get starts() {{ return starts; }}, get uploads() {{ return uploads; }}}};
 }}
 (async () => {{
   let app = boot('ok'); app.fire('pointerdown', {{timeStamp: 0}}); app.fire('pointerup', {{timeStamp: 500}}); app.resolveMedia({{getTracks: app.track ? () => [app.track] : null}}); await ticks();
   assert(app.starts === 0 && app.track.stops === 1 && app.uploads === 0, 'hold release while permission is pending must cancel, stop tracks, and never upload: ' + JSON.stringify({{starts: app.starts, stops: app.track.stops, uploads: app.uploads, status: app.status.textContent}}));
   app = boot('ok'); app.fire('pointerdown', {{timeStamp: 0}}); app.fire('pointercancel', {{timeStamp: 20}}); app.resolveMedia({{getTracks: () => [app.track]}}); await ticks();
   assert(app.starts === 0 && app.track.stops === 1 && app.uploads === 0, 'pointercancel must cancel pending capture with cleanup');
+  app = boot('ok'); app.fire('pointerdown', {{timeStamp: 0}}); app.fire('pointercancel', {{timeStamp: 20}}); app.rejectMedia(new Error('denied')); await ticks();
+  assert(app.track.stops === 0 && app.control.attrs.disabled === undefined && app.status.textContent.includes("couldn't hear"), 'a rejected cancelled request must rearm without phantom tracks');
+  app.fire('pointerdown', {{timeStamp: 1000}}); app.fire('pointerup', {{timeStamp: 1100}}); app.resolveMedia({{getTracks: () => [app.track]}}); await ticks(); app.fire('pointerdown', {{timeStamp: 2000}}); app.fire('pointerup', {{timeStamp: 2100}}); await ticks();
+  assert(app.starts === 1 && app.track.stops === 1 && app.uploads === 1, 'retry after cancelled request rejection must record, stop tracks, and upload once');
   for (const failure of ['constructor', 'start']) {{ app = boot(failure); app.fire('pointerdown', {{timeStamp: 0}}); app.resolveMedia({{getTracks: () => [app.track]}}); await ticks(); assert(app.track.stops === 1 && app.control.attrs.disabled === undefined && app.status.textContent.includes('could not start'), failure + ' failure must clean up and rearm'); }}
   app = boot('ok'); app.fire('pointerdown', {{timeStamp: 0}}); app.fire('pointerup', {{timeStamp: 100}}); app.fire('pointerleave', {{timeStamp: 110}}); app.resolveMedia({{getTracks: () => [app.track]}}); await ticks(); assert(app.starts === 1, 'a released first short tap must remain armed after delayed permission even if its pointer leaves');
   app.fire('pointerdown', {{timeStamp: 1000}}); app.fire('pointerup', {{timeStamp: 1100}}); await ticks();

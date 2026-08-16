@@ -2256,6 +2256,9 @@ def _voice_push_to_talk_script() -> str:
           }
         }).catch(function () {
           stream = null;
+          cancelPendingTap = false;
+          tapRecording = false;
+          activePointerId = null;
           captureState = 'idle';
           rearm("I couldn't hear that clearly — try again.");
         });
