@@ -2006,8 +2006,14 @@ def test_real_deployment_wrapper_produces_owner_inventory_before_mutation_window
         "      shift\n"
         "    done\n"
         "    exit 2 ;;\n"
-            "  *' controller-token '*) printf 'linux:%064d\\n' 0; exit 0 ;;\n"
-            "  *' compose-fence-plan '*) printf 'api worker watcher heimdal-capture-watch\\n'; exit 0 ;;\n"
+        "  *' redact-compose-fence-config '*)\n"
+        '    while [ "$#" -gt 0 ]; do\n'
+        '      if [ "$1" = --output ]; then printf \'{}\\n\' > "$2"; exit 0; fi\n'
+        "      shift\n"
+        "    done\n"
+        "    exit 2 ;;\n"
+        "  *' controller-token '*) printf 'linux:%064d\\n' 0; exit 0 ;;\n"
+        "  *' compose-fence-plan '*) printf 'api worker watcher heimdal-capture-watch\\n'; exit 0 ;;\n"
         "  *' prove-quiescent '*)\n"
         '    while [ "$#" -gt 0 ]; do\n'
         '      if [ "$1" = --output ]; then printf \'{}\\n\' > "$2"; exit 0; fi\n'
@@ -2086,8 +2092,14 @@ def test_real_deployment_wrapper_mounts_selected_root_at_cutover_alias(
         "      shift\n"
         "    done\n"
         "    exit 2 ;;\n"
-            "  *' controller-token '*) printf 'linux:%064d\\n' 0; exit 0 ;;\n"
-            "  *' compose-fence-plan '*) printf 'api worker watcher heimdal-capture-watch\\n'; exit 0 ;;\n"
+        "  *' redact-compose-fence-config '*)\n"
+        '    while [ "$#" -gt 0 ]; do\n'
+        '      if [ "$1" = --output ]; then printf \'{}\\n\' > "$2"; exit 0; fi\n'
+        "      shift\n"
+        "    done\n"
+        "    exit 2 ;;\n"
+        "  *' controller-token '*) printf 'linux:%064d\\n' 0; exit 0 ;;\n"
+        "  *' compose-fence-plan '*) printf 'api worker watcher heimdal-capture-watch\\n'; exit 0 ;;\n"
         "  *' prove-quiescent '*)\n"
         '    while [ "$#" -gt 0 ]; do\n'
         '      if [ "$1" = --output ]; then printf \'{}\\n\' > "$2"; exit 0; fi\n'
