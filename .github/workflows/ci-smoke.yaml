@@ -521,6 +521,8 @@ jobs:
           # namespacing is deliberate: it stays precise under concurrent runs.
           VAULTWIDE_PANEL_LOG_PATH="/tmp/verify_vaultwide_panel.${GITHUB_RUN_ID}.${GITHUB_RUN_ATTEMPT}.log"
           VAULTWIDE_PANEL_REPORT_PATH="/tmp/verify_vaultwide_panel.${GITHUB_RUN_ID}.${GITHUB_RUN_ATTEMPT}.report"
+          VAULT_BINDING_RECEIPT_PATH="/tmp/ci-vault-binding.${GITHUB_RUN_ID}.${GITHUB_RUN_ATTEMPT}.json"
+          VAULT_BINDING_ID_PATH="/tmp/ci-vault-binding.${GITHUB_RUN_ID}.${GITHUB_RUN_ATTEMPT}.id"
           cleanup() {
             rc=$?
             trap - EXIT
@@ -554,6 +556,7 @@ jobs:
               echo "worker logs (tail=200)"
               docker compose $compose_files logs --no-color --tail=200 worker || true
             fi
+            rm -f "$VAULT_BINDING_RECEIPT_PATH" "$VAULT_BINDING_ID_PATH"
             docker compose $compose_files down -v || true
             exit "$rc"
           }
@@ -563,6 +566,47 @@ jobs:
           source scripts/lib/instance_state_deployment.sh
           run_ci_compose() { docker compose $compose_files "$@"; }
           run_ci_compose up -d --wait db
+          prepare_instance_state_deployment run_ci_compose "${PKM_ENVIRONMENT:-dev}"
+
+          # A fresh CI volume is intentionally dormant after mechanical state
+          # preparation. Register the seeded fixture through the exact runtime
+          # consumer preflight, then exercise the existing explicit MVR-01C and
+          # MVR-03 production cutovers before asking the panel to emit governed
+          # binding effects. This models an already-cut-over installation; it
+          # does not teach ordinary deployment to infer authority activation.
+          set +e
+          run_ci_compose run --rm --no-deps -T worker \
+            python -m app.instance.runtime preflight \
+              --channel "${PKM_ENVIRONMENT:-dev}" \
+              --instance-state-root /app/instance-state \
+              --host-global-root /app/instance-ownership \
+              --consumer worker > "$VAULT_BINDING_RECEIPT_PATH"
+          binding_registration_rc=$?
+          set -e
+          if [ "$binding_registration_rc" -ne 0 ]; then
+            exit "$binding_registration_rc"
+          fi
+          set +e
+          python3 - "$VAULT_BINDING_RECEIPT_PATH" "$VAULT_BINDING_ID_PATH" <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+
+          receipt = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+          binding_id = receipt.get("vault_binding_id")
+          if not isinstance(binding_id, str) or not binding_id.strip():
+              raise SystemExit("consumer preflight did not register the CI vault binding")
+          Path(sys.argv[2]).write_text(binding_id.strip() + "\n", encoding="utf-8")
+          PY
+          binding_parse_rc=$?
+          set -e
+          if [ "$binding_parse_rc" -ne 0 ]; then
+            exit "$binding_parse_rc"
+          fi
+          read -r MVR01C_ROLLBACK_VAULT_BINDING_ID < "$VAULT_BINDING_ID_PATH"
+          export MVR01C_ROLLBACK_VAULT_BINDING_ID
+          export MVR01C_ROLLBACK_VAULT_ROOT="$VAULT_ROOT"
+          export MVR03_PRINCIPAL_CUTOVER=1
           prepare_instance_state_deployment run_ci_compose "${PKM_ENVIRONMENT:-dev}"
 
           docker compose $compose_files up -d --build db api watcher worker
