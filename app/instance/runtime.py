@@ -3969,18 +3969,37 @@ def main(argv: list[str] | None = None) -> int:
             record_mvr05_runtime_floor,
         )
 
-        proof = json.loads(args.quiescence_proof_path.read_text(encoding="utf-8"))
-        _require_proved_deployment_lease(
-            host_global_root=args.host_global_root,
-            channel=args.channel,
-            nonce=proof.get("nonce"),
-        )
-        result = record_mvr05_runtime_floor(
-            VaultRegistryStore(args.registry_path),
-            fence=load_mvr05_fence_plan(args.fence_plan),
+        layout = InstanceStateLayout(
+            root=args.registry_path.parent,
             channel_id=args.channel,
-            _capability=local_operator_storage_capability(),
+            registry_path=args.registry_path,
         )
+        layout.require_existing()
+        with _deployment_admission_locked(args.host_global_root):
+            with _producer_transition_locked(layout):
+                proof = json.loads(
+                    args.quiescence_proof_path.read_text(encoding="utf-8")
+                )
+                _require_proved_deployment_lease(
+                    host_global_root=args.host_global_root,
+                    channel=args.channel,
+                    nonce=proof.get("nonce"),
+                )
+                registry = VaultRegistryStore(args.registry_path)
+                ledger = OwnershipLedger(args.host_global_root)
+                # A revision-zero registry is the only state that may create the
+                # paired protected authority artifacts. Established registries
+                # stay fail-closed and require the explicit recovery path.
+                if registry.load().revision == 0:
+                    ledger.load()
+                else:
+                    ledger.require_existing()
+                result = record_mvr05_runtime_floor(
+                    registry,
+                    fence=load_mvr05_fence_plan(args.fence_plan),
+                    channel_id=args.channel,
+                    _capability=local_operator_storage_capability(),
+                )
         print(json.dumps({"ok": True, "registry_revision": result.revision}, sort_keys=True))
         return 0
     if args.command == "preflight":
