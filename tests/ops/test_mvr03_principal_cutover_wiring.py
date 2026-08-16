@@ -169,6 +169,13 @@ def _wrapper_run(
         '      if [ "$1" = --output ]; then printf \'{"writers_drained":true}\\n\' > "$2"; exit 0; fi\n'
         "      shift\n"
         "    done; exit 2 ;;\n"
+        "  *' compose-fence-plan '*)\n"
+        '    while [ "$#" -gt 0 ]; do\n'
+        '      if [ "$1" = --receipt-output ]; then '
+        "printf '%s\\n' '{\"schema\":\"agentic-pkm.mvr05-cutover-fence.v1\",\"db_clients\":[\"api\",\"migrate\"],\"migration_runner\":\"migrate\",\"stopped_services\":[\"api\"],\"source_sha256\":\"0000000000000000000000000000000000000000000000000000000000000000\"}' > \"$2\"; "
+        "printf 'api\\n'; exit 0; fi\n"
+        "      shift\n"
+        "    done; exit 2 ;;\n"
         "esac\n"
         "exit 2\n",
         encoding="utf-8",
@@ -181,6 +188,9 @@ def _wrapper_run(
         f"source '{REPO_ROOT / 'scripts/lib/instance_state_deployment.sh'}'\n"
         "fake_compose() {\n"
         "  printf 'compose:%s\\n' \"$*\" >> \"$EVENT_LOG\"\n"
+        "  if [ \"${1:-}\" = config ] && [ -n \"${DEPLOY_COMPOSE_FENCE_CONFIG_OUTPUT:-}\" ]; then\n"
+        "    printf '%s\\n' 'services: {api: {depends_on: [db], labels: {com.agentic-pkm.mvr05.db-role: client}}, db: {labels: {com.agentic-pkm.mvr05.db-role: server}}, instance-state-init: {labels: {com.agentic-pkm.mvr05.db-role: fence-controller}}, migrate: {command: [/app/scripts/run_migrations.sh], depends_on: [db], labels: {com.agentic-pkm.mvr05.db-role: migration-runner}}}' > \"$DEPLOY_COMPOSE_FENCE_CONFIG_OUTPUT\"\n"
+        "  fi\n"
         "  case \" $* \" in\n"
         "    *' principal-verify-cutover-clean-failure '*) return \"${VERIFY_CUTOVER:-1}\" ;;\n"
         "    *' principal-cutover '*) return \"${FAIL_CUTOVER:-0}\" ;;\n"

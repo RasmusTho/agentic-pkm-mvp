@@ -263,9 +263,37 @@ prepare_instance_state_deployment() {
     return "${inventory_rc}"
   fi
   chmod 600 "${mvr05_effective_compose_path}"
-  DEPLOY_COMPOSE_FENCE_CONFIG_OUTPUT="${mvr05_effective_compose_path}" \
-    "${compose_function}" config --no-interpolate --no-env-resolution
+  mvr05_raw_compose_path="$(mktemp "${TMPDIR:-/tmp}/mvr05-raw-compose.XXXXXX")"
   inventory_rc=$?
+  if [ "${inventory_rc}" -ne 0 ]; then
+    rm -f -- "${mvr05_effective_compose_path}"
+    _release_abandoned_instance_state_deployment_lease \
+      "${compose_function}" "${channel}" "${runtime_user}" \
+      "${controller_pid}" "${controller_start_token}"
+    return "${inventory_rc}"
+  fi
+  chmod 600 "${mvr05_raw_compose_path}"
+  DEPLOY_COMPOSE_FENCE_CONFIG_OUTPUT="${mvr05_effective_compose_path}" \
+    "${compose_function}" config --no-interpolate --no-env-resolution \
+    > "${mvr05_raw_compose_path}"
+  inventory_rc=$?
+  if [ "${inventory_rc}" -ne 0 ]; then
+    rm -f -- "${mvr05_effective_compose_path}"
+    rm -f -- "${mvr05_raw_compose_path}"
+    _release_abandoned_instance_state_deployment_lease \
+      "${compose_function}" "${channel}" "${runtime_user}" \
+      "${controller_pid}" "${controller_start_token}"
+    return "${inventory_rc}"
+  fi
+  if [ ! -s "${mvr05_effective_compose_path}" ]; then
+    python3 "${inventory_helper}" redact-compose-fence-config \
+      --compose-path "${mvr05_raw_compose_path}" \
+      --output "${mvr05_effective_compose_path}"
+    inventory_rc=$?
+  elif [ -s "${mvr05_raw_compose_path}" ]; then
+    inventory_rc=92
+  fi
+  rm -f -- "${mvr05_raw_compose_path}"
   if [ "${inventory_rc}" -ne 0 ]; then
     rm -f -- "${mvr05_effective_compose_path}"
     _release_abandoned_instance_state_deployment_lease \

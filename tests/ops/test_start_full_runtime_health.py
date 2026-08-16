@@ -137,7 +137,7 @@ def _fake_docker_bin(bin_dir: Path, health: dict[str, object]) -> None:
             raise SystemExit(0)
         cmd = rest[0]
         if cmd == "config":
-            print('{{"services": {{"db": {{"ports": []}}, "api": {{"ports": []}}, "worker": {{"ports": []}}, "watcher": {{"ports": []}}}}}}')
+            print('{{"services": {{"db": {{"labels": {{"com.agentic-pkm.mvr05.db-role": "server"}}}}, "instance-state-init": {{"labels": {{"com.agentic-pkm.mvr05.db-role": "fence-controller"}}}}, "migrate": {{"command": ["/app/scripts/run_migrations.sh"], "depends_on": ["db"], "labels": {{"com.agentic-pkm.mvr05.db-role": "migration-runner"}}}}, "api": {{"depends_on": ["db"], "labels": {{"com.agentic-pkm.mvr05.db-role": "client"}}}}, "worker": {{"depends_on": ["db"], "labels": {{"com.agentic-pkm.mvr05.db-role": "client"}}}}, "watcher": {{"depends_on": ["db"], "labels": {{"com.agentic-pkm.mvr05.db-role": "client"}}}}, "heimdal-capture-watch": {{"depends_on": ["db"], "labels": {{"com.agentic-pkm.mvr05.db-role": "client"}}}}}}}}')
             raise SystemExit(0)
         if cmd == "up":
             raise SystemExit(0)
