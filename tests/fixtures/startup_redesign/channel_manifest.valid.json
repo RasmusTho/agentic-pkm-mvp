@@ -1,6 +1,7 @@
 {
   "schema_version": "channel-manifest.v1",
   "channel": "promotion-test",
+  "mode": "promotion",
   "intent": "promotion",
   "compose_project": "pkm-promotion-test",
   "artifact": {

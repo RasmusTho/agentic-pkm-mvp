@@ -28,7 +28,7 @@ SENSITIVE_FIELD = re.compile(
 )
 SECRET_REFERENCE = re.compile(r"(?:keychain|vault|secret)://[A-Za-z0-9._/-]+\Z")
 MANIFEST_FIELDS = {
-    "schema_version", "channel", "intent", "compose_project", "artifact",
+    "schema_version", "channel", "mode", "intent", "compose_project", "artifact",
     "identities", "llm_policy", "gateway", "secret_references",
 }
 ARTIFACT_FIELDS = {"repository", "image_index_digest", "platform_digest", "source_sha"}
@@ -50,7 +50,7 @@ def _assert_manifest_shape(manifest: dict[str, object]) -> None:
     identities = manifest["identities"]
     gateway = manifest["gateway"]
     assert isinstance(artifact, dict)
-    if manifest["intent"] == "local-source":
+    if manifest["mode"] == "local-source":
         assert set(artifact) == LOCAL_ARTIFACT_FIELDS
         assert artifact["dirty_state"] in {"clean", "dirty"}
         assert artifact["promotion_eligible"] is False
@@ -61,10 +61,12 @@ def _assert_manifest_shape(manifest: dict[str, object]) -> None:
     assert isinstance(manifest["secret_references"], list)
     assert manifest["schema_version"] == "channel-manifest.v1"
     assert manifest["channel"] in {"dev", "local-test", "promotion-test", "prod"}
-    assert manifest["intent"] in {"local-source", "ordinary-boot", "promotion"}
-    if manifest["intent"] == "local-source":
+    assert manifest["mode"] in {"local-source", "promotion"}
+    assert manifest["intent"] in {"ordinary-boot", "promotion"}
+    if manifest["mode"] == "local-source":
         assert manifest["channel"] in {"dev", "local-test"}
-    elif manifest["intent"] == "promotion":
+        assert manifest["intent"] == "ordinary-boot"
+    else:
         assert manifest["channel"] in {"promotion-test", "prod"}
     assert isinstance(manifest["compose_project"], str) and COMPOSE_PROJECT.fullmatch(manifest["compose_project"])
     assert isinstance(manifest["artifact"], dict)
@@ -105,10 +107,11 @@ def _assert_secret_free(value: object, *, path: str = "manifest") -> None:
 def test_manifest_fixture_is_secret_free() -> None:
     manifest = json.loads(FIXTURE.read_text())
     assert set(manifest) >= {
-        "schema_version", "channel", "intent", "compose_project", "artifact",
+        "schema_version", "channel", "mode", "intent", "compose_project", "artifact",
         "identities", "llm_policy", "gateway", "secret_references",
     }
     assert manifest["intent"] == "promotion"
+    assert manifest["mode"] == "promotion"
     assert manifest["artifact"]["image_index_digest"].startswith("sha256:")
     _assert_manifest_shape(manifest)
     _assert_secret_free(manifest)
@@ -143,13 +146,20 @@ def test_manifest_schema_rejects_unvalidated_sensitive_fields() -> None:
 
 def test_manifest_schema_rejects_local_source_on_promotion_channels() -> None:
     manifest = json.loads(FIXTURE.read_text())
-    manifest["intent"] = "local-source"
+    manifest["mode"] = "local-source"
+    manifest["intent"] = "ordinary-boot"
     manifest["artifact"]["dirty_state"] = "clean"
     manifest["artifact"]["promotion_eligible"] = False
     for channel in ("promotion-test", "prod"):
         manifest["channel"] = channel
         with pytest.raises(AssertionError):
             _assert_manifest_shape(manifest)
+
+
+def test_manifest_schema_represents_ordinary_boot_by_mode() -> None:
+    manifest = json.loads(FIXTURE.read_text())
+    manifest["intent"] = "ordinary-boot"
+    _assert_manifest_shape(manifest)
 
 
 def test_operation_contract_names_truthful_terminal_phases() -> None:
