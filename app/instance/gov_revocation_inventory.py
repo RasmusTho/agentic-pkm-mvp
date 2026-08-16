@@ -19,11 +19,31 @@ class GovRevocationProducerEvidence:
     exclusive_binding_lease: bool
 
 
+@dataclass(frozen=True)
+class _EnteredContext:
+    name: str
+    binding_expression: str | None
+
+
+def _binding_expression(call: ast.Call, *, keyword: str = "binding_id") -> str | None:
+    expression: ast.expr | None = call.args[0] if call.args else None
+    if expression is None:
+        expression = next(
+            (item.value for item in call.keywords if item.arg == keyword),
+            None,
+        )
+    return (
+        ast.dump(expression, annotate_fields=True, include_attributes=False)
+        if expression is not None
+        else None
+    )
+
+
 class _RevocationVisitor(ast.NodeVisitor):
     def __init__(self, module: str) -> None:
         self.module = module
         self.scope: list[str] = []
-        self.with_contexts: list[set[str]] = []
+        self.with_contexts: list[list[_EnteredContext]] = []
         self.producers: dict[str, GovRevocationProducerEvidence] = {}
 
     def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
@@ -37,55 +57,82 @@ class _RevocationVisitor(ast.NodeVisitor):
         self.scope.pop()
 
     def visit_With(self, node: ast.With) -> None:
-        contexts: set[str] = set()
+        contexts: list[_EnteredContext] = []
         for item in node.items:
             call = item.context_expr
             if isinstance(call, ast.Call):
                 function = call.func
                 if isinstance(function, ast.Attribute):
-                    contexts.add(function.attr)
+                    contexts.append(_EnteredContext(function.attr, _binding_expression(call)))
                 elif isinstance(function, ast.Name):
-                    contexts.add(function.id)
+                    contexts.append(_EnteredContext(function.id, _binding_expression(call)))
         self.with_contexts.append(contexts)
         for statement in node.body:
             self.visit(statement)
         self.with_contexts.pop()
 
     def visit_AsyncWith(self, node: ast.AsyncWith) -> None:  # noqa: N802
-        contexts: set[str] = set()
+        contexts: list[_EnteredContext] = []
         for item in node.items:
             call = item.context_expr
             if isinstance(call, ast.Call):
                 function = call.func
                 if isinstance(function, ast.Attribute):
-                    contexts.add(function.attr)
+                    contexts.append(_EnteredContext(function.attr, _binding_expression(call)))
                 elif isinstance(function, ast.Name):
-                    contexts.add(function.id)
+                    contexts.append(_EnteredContext(function.id, _binding_expression(call)))
         self.with_contexts.append(contexts)
         for statement in node.body:
             self.visit(statement)
         self.with_contexts.pop()
 
     def visit_Call(self, node: ast.Call) -> None:
-        name = node.func.attr if isinstance(node.func, ast.Attribute) else (
-            node.func.id if isinstance(node.func, ast.Name) else ""
+        name = (
+            node.func.attr
+            if isinstance(node.func, ast.Attribute)
+            else (node.func.id if isinstance(node.func, ast.Name) else "")
         )
         revoked = next((item.value for item in node.keywords if item.arg == "revoked"), None)
         is_mutation = name == "set_binding" and revoked is not None
         is_seed = name == "RegistryBindingAuthorizer" and revoked is not None
-        definitely_empty = (
-            isinstance(revoked, (ast.Set, ast.List, ast.Tuple, ast.Dict))
-            and not getattr(revoked, "elts", getattr(revoked, "keys", ()))
-        )
+        definitely_empty = isinstance(
+            revoked, (ast.Set, ast.List, ast.Tuple, ast.Dict)
+        ) and not getattr(revoked, "elts", getattr(revoked, "keys", ()))
         definitely_false = isinstance(revoked, ast.Constant) and revoked.value is False
         if (is_mutation or is_seed) and not definitely_empty and not definitely_false:
             scope = ".".join(self.scope) or "<module>"
             producer_name = f"{self.module}:{scope}"
-            active_contexts = set().union(*self.with_contexts) if self.with_contexts else set()
+            mutation_binding = _binding_expression(node) if is_mutation else None
+            if is_seed and isinstance(revoked, (ast.Set, ast.List, ast.Tuple)):
+                if len(revoked.elts) == 1:
+                    mutation_binding = ast.dump(
+                        revoked.elts[0], annotate_fields=True, include_attributes=False
+                    )
+            active_contexts = [context for group in self.with_contexts for context in group]
+            ownership_indexes = [
+                index
+                for index, context in enumerate(active_contexts)
+                if context.name == "active_binding_fence"
+                and context.binding_expression is not None
+                and context.binding_expression == mutation_binding
+            ]
+            exclusive_indexes = [
+                index
+                for index, context in enumerate(active_contexts)
+                if context.name == "exclusive_change"
+                and context.binding_expression is not None
+                and context.binding_expression == mutation_binding
+            ]
+            ownership_fence = bool(ownership_indexes)
+            ordered_exclusive = any(
+                ownership_index < exclusive_index
+                for ownership_index in ownership_indexes
+                for exclusive_index in exclusive_indexes
+            )
             evidence = GovRevocationProducerEvidence(
                 name=producer_name,
-                ownership_fence="active_binding_fence" in active_contexts,
-                exclusive_binding_lease="exclusive_change" in active_contexts,
+                ownership_fence=ownership_fence,
+                exclusive_binding_lease=ordered_exclusive,
             )
             previous = self.producers.get(producer_name)
             if previous is not None and previous != evidence:
@@ -93,12 +140,9 @@ class _RevocationVisitor(ast.NodeVisitor):
                 # unfenced as a whole; inventory cannot bless only the safe call.
                 evidence = GovRevocationProducerEvidence(
                     name=producer_name,
-                    ownership_fence=(
-                        previous.ownership_fence and evidence.ownership_fence
-                    ),
+                    ownership_fence=(previous.ownership_fence and evidence.ownership_fence),
                     exclusive_binding_lease=(
-                        previous.exclusive_binding_lease
-                        and evidence.exclusive_binding_lease
+                        previous.exclusive_binding_lease and evidence.exclusive_binding_lease
                     ),
                 )
             self.producers[producer_name] = evidence
@@ -145,12 +189,11 @@ def validate_gov_revocation_inventory(document: Mapping[str, Any]) -> None:
             raise ValueError("enabled GOV revocation producer lacks the exclusive binding lease")
 
 
-def validate_gov_revocation_coverage(
-    document: Mapping[str, Any], *, app_root: Path
-) -> None:
+def validate_gov_revocation_coverage(document: Mapping[str, Any], *, app_root: Path) -> None:
     validate_gov_revocation_inventory(document)
     declared = {
-        str(item["name"]): item for item in document["producers"]  # type: ignore[index]
+        str(item["name"]): item
+        for item in document["producers"]  # type: ignore[index]
     }
     discovered = discover_gov_revocation_producer_evidence(app_root)
     if set(declared) != set(discovered):

@@ -136,8 +136,7 @@ def test_enabled_gov_revocation_producers_are_fenced_or_absent(tmp_path: Path) -
     synthetic = tmp_path / "app"
     synthetic.mkdir()
     (synthetic / "future.py").write_text(
-        "def revoke(authorizer):\n"
-        "    authorizer.set_binding('binding-a', 2, revoked=True)\n",
+        "def revoke(authorizer):\n" "    authorizer.set_binding('binding-a', 2, revoked=True)\n",
         encoding="utf-8",
     )
     with pytest.raises(ValueError, match="differs from source mutation seams"):
@@ -154,6 +153,26 @@ def test_enabled_gov_revocation_producers_are_fenced_or_absent(tmp_path: Path) -
             }
         ],
     }
+    with pytest.raises(ValueError, match="lacks source-proved"):
+        validate_gov_revocation_coverage(declared, app_root=synthetic)
+
+    (synthetic / "future.py").write_text(
+        "def revoke(authorizer, ledger, manager):\n"
+        "    with manager.exclusive_change('binding-a'):\n"
+        "        with ledger.active_binding_fence('binding-a'):\n"
+        "            authorizer.set_binding('binding-a', 2, revoked=True)\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="lacks source-proved"):
+        validate_gov_revocation_coverage(declared, app_root=synthetic)
+
+    (synthetic / "future.py").write_text(
+        "def revoke(authorizer, ledger, manager):\n"
+        "    with ledger.active_binding_fence('binding-a'):\n"
+        "        with manager.exclusive_change('binding-b'):\n"
+        "            authorizer.set_binding('binding-c', 2, revoked=True)\n",
+        encoding="utf-8",
+    )
     with pytest.raises(ValueError, match="lacks source-proved"):
         validate_gov_revocation_coverage(declared, app_root=synthetic)
 
@@ -290,7 +309,9 @@ def test_no_replay_producer_replaces_a_whole_durable_table() -> None:
         assert entry["rebuild_mechanism"] != "whole-table-replacement", table
         for producer in entry["producers"]:
             source = (REPO_ROOT / producer["module"]).read_text(encoding="utf-8")
-            assert not re.search(rf"TRUNCATE\s+(?:TABLE\s+)?(?:public\.)?{table}\b", source, re.I), (
+            assert not re.search(
+                rf"TRUNCATE\s+(?:TABLE\s+)?(?:public\.)?{table}\b", source, re.I
+            ), (
                 table,
                 producer["module"],
             )
@@ -782,22 +803,22 @@ def test_post_cutover_store_fixture_mutations_are_binding_scoped() -> None:
                 "insert into",
                 "store_objects",
             ): 1,
-                (
-                    "tests/migrations/test_multi_vault_ingest_projection_keys.py",
-                    "_prepare_retained_historical_lineage",
-                    "insert into",
-                    "membership",
-                ): 1,
-                # MVR-05A5's migration proof deliberately seeds the pre-replay
-                # decisions shape before applying the binding migration.
-                (
-                    "tests/migrations/test_multi_vault_replay_projection_backfill.py",
-                    "_seed_legacy_rows",
-                    "insert into",
-                    "decisions",
-                ): 1,
-            }
-        )
+            (
+                "tests/migrations/test_multi_vault_ingest_projection_keys.py",
+                "_prepare_retained_historical_lineage",
+                "insert into",
+                "membership",
+            ): 1,
+            # MVR-05A5's migration proof deliberately seeds the pre-replay
+            # decisions shape before applying the binding migration.
+            (
+                "tests/migrations/test_multi_vault_replay_projection_backfill.py",
+                "_seed_legacy_rows",
+                "insert into",
+                "decisions",
+            ): 1,
+        }
+    )
     assert observed == expected, (
         "every current-shape object-identity fixture mutation must name vault_binding_id; "
         f"unbound fixture delta: added={observed - expected}, removed={expected - observed}"
