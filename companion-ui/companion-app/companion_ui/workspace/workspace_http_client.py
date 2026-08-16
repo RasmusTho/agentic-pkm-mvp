@@ -154,6 +154,34 @@ class WorkspaceHttpClient:
             raise WorkspaceClientHTTPError(resp.status_code, resp.text)
         return resp.json()
 
+    def post_raw(
+        self,
+        url: str,
+        *,
+        content: bytes,
+        headers: dict[str, str],
+        timeout: float | None = None,
+    ) -> dict[str, Any]:
+        """Forward a browser-owned body without interpreting its contents.
+
+        Voice queries are multipart ``MediaRecorder`` uploads. The Companion
+        server stays a same-origin transport proxy: it neither decodes nor
+        persists the audio.
+        """
+        full_url = self._base_url + url
+        try:
+            resp = httpx.post(
+                full_url,
+                content=content,
+                headers=headers,
+                timeout=timeout if timeout is not None else self._timeout,
+            )
+        except httpx.RequestError as exc:
+            raise WorkspaceClientNetworkError(_transport_error_message(exc)) from exc
+        if resp.status_code >= 400:
+            raise WorkspaceClientHTTPError(resp.status_code, resp.text)
+        return resp.json()
+
     def delete(self, url: str, *, params: dict[str, Any] | None = None) -> dict[str, Any]:
         """DELETE request to the runtime API. Raises WorkspaceClientError on failure."""
         full_url = self._base_url + url
