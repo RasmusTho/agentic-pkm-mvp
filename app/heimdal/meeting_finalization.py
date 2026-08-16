@@ -304,7 +304,6 @@ def _schema_autocreate_enabled() -> bool:
 
 _PG_AUTOCREATE_DDL = f"""
 CREATE TABLE IF NOT EXISTS {_RECEIPT_TABLE} (
-    vault_binding_id TEXT NOT NULL DEFAULT '{COMPATIBILITY_BINDING_ID}',
     session_id TEXT NOT NULL,
     state_sha256 TEXT NOT NULL,
     complete BOOLEAN NOT NULL,
@@ -312,6 +311,7 @@ CREATE TABLE IF NOT EXISTS {_RECEIPT_TABLE} (
     artifact_refs JSONB NOT NULL DEFAULT '{{}}'::jsonb,
     supersedes TEXT,
     finalized_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    vault_binding_id TEXT NOT NULL DEFAULT '{COMPATIBILITY_BINDING_ID}',
     PRIMARY KEY (vault_binding_id, session_id, state_sha256)
 );
 """

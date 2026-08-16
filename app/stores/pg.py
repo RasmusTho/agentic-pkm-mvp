@@ -259,10 +259,10 @@ _MIGRATION_OWNED_AUTOCREATE_SQL: tuple[tuple[str, tuple[str, ...]], ...] = (
         (
             f"""
             CREATE TABLE IF NOT EXISTS sets (
-                vault_binding_id TEXT NOT NULL DEFAULT '{COMPATIBILITY_BINDING_ID}',
                 id UUID NOT NULL,
                 name TEXT NOT NULL,
                 meta JSONB NOT NULL DEFAULT '{{}}'::jsonb,
+                vault_binding_id TEXT NOT NULL DEFAULT '{COMPATIBILITY_BINDING_ID}',
                 PRIMARY KEY (vault_binding_id, id),
                 UNIQUE (vault_binding_id, name)
             )

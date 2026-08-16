@@ -96,6 +96,11 @@ def test_residual_binding_tables_migrate_or_fail_loud(
     _upgrade(malformed, monkeypatch, PRE_RESIDUAL_HEAD)
     with psycopg.connect(malformed) as conn:
         conn.execute("ALTER TABLE agent_memories ADD COLUMN vault_binding_id text")
+        conn.execute(
+            "INSERT INTO agent_memories (id,layer,payload) "
+            "VALUES (%s,'short_term','{}'::jsonb)",
+            (uuid.uuid4(),),
+        )
 
     with pytest.raises(DBAPIError, match="partially binding-keyed agent_memories"):
         _upgrade(malformed, monkeypatch, RESIDUAL_HEAD)

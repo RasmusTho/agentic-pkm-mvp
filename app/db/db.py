@@ -239,13 +239,13 @@ _MIGRATION_OWNED_AUTOCREATE_SQL: tuple[tuple[str, tuple[str, ...]], ...] = (
         (
             f"""
             CREATE TABLE public.agent_memories (
-                vault_binding_id text NOT NULL DEFAULT '{COMPATIBILITY_BINDING_ID}',
                 id uuid NOT NULL,
                 run_id uuid NULL,
                 layer text NOT NULL,
                 payload jsonb NOT NULL DEFAULT '{{}}'::jsonb,
                 provenance jsonb NOT NULL DEFAULT '{{}}'::jsonb,
                 created_at timestamptz NOT NULL DEFAULT now(),
+                vault_binding_id text NOT NULL DEFAULT '{COMPATIBILITY_BINDING_ID}',
                 PRIMARY KEY (vault_binding_id, id)
             )
             """,

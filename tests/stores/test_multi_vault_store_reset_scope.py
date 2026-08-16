@@ -26,11 +26,12 @@ def test_reset_for_one_binding_leaves_other_binding_rows_intact(
     object_id = uuid.uuid4()
     set_id = uuid.uuid4()
     with psycopg.connect(migrated_store_dsn) as conn:
-        conn.execute(
-            "INSERT INTO sets (id, name) VALUES (%s, 'shared-reset-set')",
-            (set_id,),
-        )
         for binding in ("binding-a", "binding-b"):
+            conn.execute(
+                "INSERT INTO sets (vault_binding_id, id, name) "
+                "VALUES (%s, %s, 'shared-reset-set')",
+                (binding, set_id),
+            )
             chunk_id = uuid.uuid4()
             conn.execute(
                 "INSERT INTO store_objects "

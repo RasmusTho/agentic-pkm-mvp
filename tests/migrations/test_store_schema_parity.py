@@ -35,7 +35,7 @@ STORE_TABLES = (
 # follows the latest revision that changes a child binding invariant; MVR-05A5
 # makes the previously nullable decisions binding final and NOT NULL.
 STORE_SCHEMA_HEAD = "e6c4a2b8d1f3"
-STORE_BINDING_HEAD = "f5a05a5b0001"
+STORE_BINDING_HEAD = "f8a05a9b0001"
 MINIMUM_CHILD_TABLES = (
     "chunks",
     "embeddings",
