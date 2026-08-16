@@ -380,6 +380,7 @@ jobs:
           # start_full_system.sh / deploy_channel.sh do.
           source scripts/lib/instance_state_deployment.sh
           run_ci_compose() { docker compose $compose_files "$@"; }
+          run_ci_compose up -d --wait db
           prepare_instance_state_deployment run_ci_compose "${PKM_ENVIRONMENT:-dev}"
 
           docker compose $compose_files up -d --build worker
@@ -561,6 +562,7 @@ jobs:
           # MVR-01B: run the exact production launcher producer before raw compose up.
           source scripts/lib/instance_state_deployment.sh
           run_ci_compose() { docker compose $compose_files "$@"; }
+          run_ci_compose up -d --wait db
           prepare_instance_state_deployment run_ci_compose "${PKM_ENVIRONMENT:-dev}"
 
           docker compose $compose_files up -d --build db api watcher worker
