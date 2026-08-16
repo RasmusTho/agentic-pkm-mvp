@@ -199,6 +199,9 @@ def test_receipt_contract_names_binding_freshness_and_revocation() -> None:
     assert "`receipt_id` excluded" in README
     assert "machine-readable" in README and "promotion-receipt-registry.v1" in README
     assert "`public_key`" in README and "`issuer_key_id`" in README
+    assert "32 raw Ed25519 public-key bytes" in README
+    assert "64 raw Ed25519 signature bytes" in README
+    assert "present registry entry with `status=issued`" in README
 
 
 RECEIPT_FIELDS = {

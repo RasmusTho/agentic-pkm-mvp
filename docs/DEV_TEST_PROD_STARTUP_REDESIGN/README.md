@@ -93,10 +93,13 @@ against the trusted `promotion-test-issuer` key/authority registry. The registry
 attestation to the immutable receipt ID. Revocation is not a mutable receipt field: the machine-readable
 `promotion-receipt-registry.v1` stores `registry_version` and entries keyed by immutable
 `receipt_id`, each with `issuer_id`, `issuer_key_id`, `public_key`, `issuer_signature`, and `status`
-(`issued` or `revoked`); `public_key` is the trusted Ed25519 key for `issuer_key_id`, and registry
+(`issued` or `revoked`); `public_key` is exactly 32 raw Ed25519 public-key bytes encoded as
+unpadded URL-safe Base64, and `issuer_signature` is exactly 64 raw Ed25519 signature bytes encoded
+as `ed25519:v1:<unpadded-base64url>`. `issuer_key_id` selects the trusted public key. Registry
 fields are outside the receipt digest. Registry lookup failure is a hard admission failure. Prod admission requires `outcome=PASS`, matching expected
 manifest identities, current time at or after `issued_at` and before `fresh_until`, a valid trusted
-issuer attestation, an absent/revocation-free registry entry, and exact required-check coverage. The positive fixture is
+issuer attestation, a present registry entry with `status=issued` (never absent or revoked), and
+exact required-check coverage. The positive fixture is
 `tests/fixtures/startup_redesign/promotion_receipt.valid.json`; receipts contain no secret values
 or secret references.
 
