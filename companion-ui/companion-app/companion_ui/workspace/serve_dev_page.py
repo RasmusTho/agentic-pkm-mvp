@@ -2291,7 +2291,13 @@ def _voice_push_to_talk_script() -> str:
         tapRecording = false;
         finishRecording();
       });
-      voiceControl.addEventListener('pointerleave', function () { cancelCapture('Recording cancelled. Hold or tap to try again.'); });
+      voiceControl.addEventListener('pointerleave', function (event) {
+        // A released short tap remains armed even if its pointer subsequently
+        // leaves the control; only an active hold may be cancelled here.
+        if (activePointerId === null || event.pointerId !== activePointerId) return;
+        activePointerId = null;
+        cancelCapture('Recording cancelled. Hold or tap to try again.');
+      });
       voiceControl.addEventListener('pointercancel', function () {
         activePointerId = null;
         cancelCapture('Recording cancelled. Hold or tap to try again.');
