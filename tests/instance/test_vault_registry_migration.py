@@ -235,8 +235,10 @@ def test_settings_rebind_provisional_ids_are_adopted_atomically(tmp_path) -> Non
     migrated = VaultRegistryStore(path).load_or_migrate()
     assert set(migrated.registrations) == {"provisional-a"}
     assert migrated.settings_rebind is not None
-    for key in ("prior", "candidate", "applied"):
-        assert migrated.settings_rebind[key]["vaultBindingId"] == "provisional-a"
+    assert migrated.settings_rebind["priorBindingId"] == "provisional-a"
+    assert migrated.settings_rebind["candidateBindingId"] == "provisional-a"
+    assert migrated.settings_rebind["phase"] == "dormant"
+    assert migrated.extensions["runtimeFloors"]["minimum_settings_rebind_runtime"] == "1"
 
     alias_path = tmp_path / "alias.md"
     _write_legacy(
@@ -260,7 +262,7 @@ def test_settings_rebind_provisional_ids_are_adopted_atomically(tmp_path) -> Non
     )
     alias_migration = VaultRegistryStore(alias_path).load_or_migrate()
     assert set(alias_migration.registrations) == {"provisional-alias"}
-    assert alias_migration.settings_rebind["candidate"]["ref"] == "alias:/vault/a"
+    assert alias_migration.settings_rebind["candidateBindingId"] == "provisional-alias"
 
     physical_alias_path = tmp_path / "physical-alias.md"
     _write_legacy(

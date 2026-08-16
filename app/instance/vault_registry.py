@@ -2038,6 +2038,35 @@ class VaultRegistryStore:
             for key, value in frontmatter.items()
             if key not in known_legacy_fields
         }
+        settings_rebind: dict[str, Any] | None = None
+        if rewritten_rebind is not None:
+            # A pre-SETTINGS-05 record was only a MVR migration repair hook.  It
+            # has no revision/checksum/floor contract and must never be carried
+            # forward as an authoritative v1 record.  Adopt its one provisional
+            # binding identity into a *dormant* SETTINGS record in the same
+            # registry transaction, or refuse an ambiguous legacy shape.
+            binding_ids = {
+                str(value["vaultBindingId"])
+                for key in ("prior", "candidate", "applied")
+                if isinstance((value := rewritten_rebind.get(key)), dict)
+                and _optional_str(value.get("vaultBindingId")) is not None
+            }
+            if len(binding_ids) > 1:
+                raise RegistryMigrationError(
+                    "legacy settings rebind references multiple binding identities"
+                )
+            binding_id = next(iter(binding_ids), None)
+            from app.instance.settings_rebind import SettingsRebindRecord
+
+            settings_rebind = SettingsRebindRecord.dormant(
+                binding_id=binding_id
+            ).as_payload()
+            floors = dict(extensions.get("runtimeFloors") or {})
+            existing_floor = floors.get(MINIMUM_SETTINGS_REBIND_RUNTIME_KEY)
+            if existing_floor not in (None, MINIMUM_SETTINGS_REBIND_RUNTIME):
+                raise RegistryMigrationError("legacy settings rebind runtime floor is incompatible")
+            floors[MINIMUM_SETTINGS_REBIND_RUNTIME_KEY] = MINIMUM_SETTINGS_REBIND_RUNTIME
+            extensions["runtimeFloors"] = floors
         # A legacy payload may already carry an explicit default. It is untrusted:
         # binding identity is minted during this migration, so it is adopted only
         # when it names exactly one migrated registration. Otherwise the raw value
@@ -2070,7 +2099,7 @@ class VaultRegistryStore:
             app_install_id=app_install_id,
             last_active_vault_ref=last_active_vault_ref,
             registrations=registrations,
-            settings_rebind=rewritten_rebind,
+            settings_rebind=settings_rebind,
             extensions=extensions,
             default_vault_binding_id=default_binding_id,
             default_vault_provenance=default_provenance,
