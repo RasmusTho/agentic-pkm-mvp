@@ -22,7 +22,7 @@ Defines a non-secret ChannelManifest with channel, intent/mode, Compose project,
 
 ## Concretely
 
-`channel-manifest validate --channel prod --intent ordinary-boot` must reject an absent digest, ambiguous vault identity, inline secret value, or implicit fallback. `tests/fixtures/startup_redesign/channel_manifest.valid.json` is the P1 schema fixture.
+`channel-manifest validate --channel prod --mode promotion --intent ordinary-boot` must reject an absent digest, ambiguous vault identity, inline secret value, or implicit fallback. `tests/fixtures/startup_redesign/channel_manifest.valid.json` is the P1 schema fixture.
 
 ## Why This Matters
 
