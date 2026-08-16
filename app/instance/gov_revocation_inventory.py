@@ -35,6 +35,11 @@ class _RevocationVisitor(ast.NodeVisitor):
         self.direct_entrypoint_references: set[int] = set()
         self.producers: dict[str, GovRevocationProducerEvidence] = {}
 
+    def visit_ClassDef(self, node: ast.ClassDef) -> None:  # noqa: N802
+        self.scope.append(node.name)
+        self.generic_visit(node)
+        self.scope.pop()
+
     def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
         self.scope.append(node.name)
         for decorator in node.decorator_list:
@@ -84,6 +89,13 @@ class _RevocationVisitor(ast.NodeVisitor):
         self.scope.pop()
 
     def _record_sealed_producer(self) -> None:
+        if self.module == "app/governance/binding_authority" and ".".join(self.scope) in {
+            "_test_revocation_capability",
+            "_require_revocation_capability",
+            "RegistryBindingAuthorizer.__init__",
+            "RegistryBindingAuthorizer.set_binding",
+        }:
+            return
         scope = ".".join(self.scope) or "<module>"
         name = f"{self.module}:{scope}"
         self.producers[name] = GovRevocationProducerEvidence(
@@ -193,8 +205,6 @@ def discover_gov_revocation_producer_evidence(
     for path in sorted(app_root.rglob("*.py")):
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         module = path.relative_to(app_root.parent).with_suffix("").as_posix()
-        if module == "app/governance/binding_authority":
-            continue
         postponed_annotations = any(
             isinstance(statement, ast.ImportFrom)
             and statement.module == "__future__"

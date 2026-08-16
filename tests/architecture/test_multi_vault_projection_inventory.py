@@ -165,6 +165,19 @@ def test_enabled_gov_revocation_producers_are_fenced_or_absent(tmp_path: Path) -
     with pytest.raises(ValueError, match="differs from source mutation seams"):
         validate_gov_revocation_coverage(inventory, app_root=synthetic)
 
+    canonical_app = tmp_path / "canonical" / "app"
+    canonical_module = canonical_app / "governance" / "binding_authority.py"
+    canonical_module.parent.mkdir(parents=True)
+    canonical_module.write_text(
+        "def revoke(authorizer):\n"
+        "    authorizer.set_binding(\n"
+        "        'binding-a', 2, revoked=True,\n"
+        "        _revocation_capability=_test_revocation_capability())\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="differs from source mutation seams"):
+        validate_gov_revocation_coverage(inventory, app_root=canonical_app)
+
     declared = {
         "schema": "agentic-pkm.gov-revocation-producers.v1",
         "producers": [
