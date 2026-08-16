@@ -210,6 +210,7 @@ RECEIPT_FIELDS = {
     "fresh_until", "issuer_id", "issuer_key_id", "issuer_signature",
 }
 EXPECTED_RECEIPT_CHECKS = ["migration", "readiness", "schema", "smoke", "ui", "version"]
+B64URL = re.compile(r"[A-Za-z0-9_-]+\Z")
 REGISTRY_FIXTURE = ROOT / "tests" / "fixtures" / "startup_redesign" / "promotion_receipt_registry.valid.json"
 
 
@@ -233,6 +234,9 @@ def _assert_receipt_schema(
     if registry is None:
         raise AssertionError("revocation/issuer registry lookup must fail closed")
     assert set(receipt) == RECEIPT_FIELDS
+    signature_parts = receipt["issuer_signature"].split(":", 2)
+    assert signature_parts[:2] == ["ed25519", "v1"]
+    assert B64URL.fullmatch(signature_parts[2]) and len(signature_parts[2]) % 4 != 1
     assert receipt["receipt_version"] == "promotion-receipt.v1"
     assert receipt["outcome"] == "PASS"
     assert isinstance(receipt["receipt_id"], str)
@@ -256,16 +260,17 @@ def _assert_receipt_schema(
     assert now_instant.tzinfo == timezone.utc
     assert issued_at <= now_instant < fresh_until
     assert registry["registry_version"] == "promotion-receipt-registry.v1"
+    assert registry["trusted_keys"][receipt["issuer_key_id"]]
     entry = registry["entries"][receipt["receipt_id"]]
     assert entry["issuer_id"] == receipt["issuer_id"]
     assert entry["issuer_key_id"] == receipt["issuer_key_id"]
     assert entry["issuer_signature"] == receipt["issuer_signature"]
     assert entry["status"] == "issued"
     assert entry["public_key"]
-    signature = receipt["issuer_signature"].split(":", 2)
-    assert signature[:2] == ["ed25519", "v1"]
+    assert B64URL.fullmatch(entry["public_key"]) and len(entry["public_key"]) % 4 != 1
+    assert entry["public_key"] == registry["trusted_keys"][receipt["issuer_key_id"]]
     public_key = Ed25519PublicKey.from_public_bytes(base64.urlsafe_b64decode(entry["public_key"] + "=="))
-    public_key.verify(base64.urlsafe_b64decode(signature[2] + "=="), _receipt_unsigned_body(receipt))
+    public_key.verify(base64.urlsafe_b64decode(signature_parts[2] + "=="), _receipt_unsigned_body(receipt))
     _assert_secret_free(receipt)
 
 
@@ -344,3 +349,22 @@ def test_promotion_receipt_schema_rejects_tampering_stale_checks_and_revocation(
 
     with pytest.raises(AssertionError):
         _assert_receipt_schema(receipt, None, now="2026-08-16T12:00:00Z", expected_manifest=receipt)
+
+    padded = json.loads(RECEIPT_FIXTURE.read_text())
+    padded["issuer_signature"] += "="
+    padded["receipt_id"] = "sha256:" + hashlib.sha256(_receipt_digest_body(padded)).hexdigest()
+    padded_registry = json.loads(json.dumps(registry))
+    padded_registry["entries"][padded["receipt_id"]] = dict(padded_registry["entries"][receipt["receipt_id"]], issuer_signature=padded["issuer_signature"])
+    with pytest.raises(AssertionError):
+        _assert_receipt_schema(padded, padded_registry, now="2026-08-16T12:00:00Z", expected_manifest=receipt)
+
+    substituted = json.loads(json.dumps(registry))
+    substituted["entries"][receipt["receipt_id"]]["public_key"] = "A" * 43
+    with pytest.raises(AssertionError):
+        _assert_receipt_schema(receipt, substituted, now="2026-08-16T12:00:00Z", expected_manifest=receipt)
+
+    noncanonical_key = json.loads(json.dumps(registry))
+    noncanonical_key["trusted_keys"][receipt["issuer_key_id"]] = registry["trusted_keys"][receipt["issuer_key_id"]].replace("_", "/")
+    noncanonical_key["entries"][receipt["receipt_id"]]["public_key"] = noncanonical_key["trusted_keys"][receipt["issuer_key_id"]]
+    with pytest.raises(AssertionError):
+        _assert_receipt_schema(receipt, noncanonical_key, now="2026-08-16T12:00:00Z", expected_manifest=receipt)

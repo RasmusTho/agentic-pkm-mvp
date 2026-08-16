@@ -1,5 +1,8 @@
 {
   "registry_version": "promotion-receipt-registry.v1",
+  "trusted_keys": {
+    "promotion-test-issuer-key-v1": "Kay64UG8yvCyLhqU000LxzYeUm0L_hLIl5S8kyKWbdc"
+  },
   "entries": {
     "sha256:bc530163db3e6cce1881013c5b6e80599af3d387be14fba4b7fc2d4e318bd258": {
       "issuer_id": "promotion-test-issuer",

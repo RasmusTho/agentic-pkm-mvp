@@ -96,7 +96,10 @@ attestation to the immutable receipt ID. Revocation is not a mutable receipt fie
 (`issued` or `revoked`); `public_key` is exactly 32 raw Ed25519 public-key bytes encoded as
 unpadded URL-safe Base64, and `issuer_signature` is exactly 64 raw Ed25519 signature bytes encoded
 as `ed25519:v1:<unpadded-base64url>`. `issuer_key_id` selects the trusted public key. Registry
-fields are outside the receipt digest. Registry lookup failure is a hard admission failure. Prod admission requires `outcome=PASS`, matching expected
+fields are outside the receipt digest. The registry also has exactly `trusted_keys`, an independent
+`issuer_key_id` → `public_key` mapping; admission resolves the key only from that mapping and
+requires the entry key material to match it. Registry lookup failure is a hard admission failure.
+Prod admission requires `outcome=PASS`, matching expected
 manifest identities, current time at or after `issued_at` and before `fresh_until`, a valid trusted
 issuer attestation, a present registry entry with `status=issued` (never absent or revoked), and
 exact required-check coverage. The positive fixture is
