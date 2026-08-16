@@ -54,6 +54,29 @@ def _entered_context(expression: ast.expr) -> _EnteredContext | None:
     return None
 
 
+def _call_name(call: ast.Call) -> str:
+    if isinstance(call.func, ast.Attribute):
+        return call.func.attr
+    if isinstance(call.func, ast.Name):
+        return call.func.id
+    return ""
+
+
+def _contains_entrypoint_reference(expression: ast.AST) -> bool:
+    """Find a revocation-capable reference without treating a direct call as an alias."""
+
+    if isinstance(expression, ast.Attribute) and expression.attr == "set_binding":
+        return True
+    if isinstance(expression, ast.Name) and expression.id == "RegistryBindingAuthorizer":
+        return True
+    if isinstance(expression, ast.Call):
+        return _call_name(expression) in {"getattr", "methodcaller"} and any(
+            isinstance(argument, ast.Constant) and argument.value == "set_binding"
+            for argument in expression.args
+        )
+    return any(_contains_entrypoint_reference(child) for child in ast.iter_child_nodes(expression))
+
+
 class _RevocationVisitor(ast.NodeVisitor):
     def __init__(self, module: str) -> None:
         self.module = module
@@ -102,6 +125,58 @@ class _RevocationVisitor(ast.NodeVisitor):
         self.generic_visit(node)
         self.with_contexts = entered_contexts
 
+    def _record(self, evidence: GovRevocationProducerEvidence) -> None:
+        previous = self.producers.get(evidence.name)
+        if previous is not None:
+            # A producer function with one fenced and one unfenced seam is
+            # unfenced as a whole; inventory cannot bless only the safe call.
+            evidence = GovRevocationProducerEvidence(
+                name=evidence.name,
+                ownership_fence=(previous.ownership_fence and evidence.ownership_fence),
+                exclusive_binding_lease=(
+                    previous.exclusive_binding_lease and evidence.exclusive_binding_lease
+                ),
+            )
+        self.producers[evidence.name] = evidence
+
+    def _record_unsafe_reference(self) -> None:
+        scope = ".".join(self.scope) or "<module>"
+        self._record(
+            GovRevocationProducerEvidence(
+                name=f"{self.module}:{scope}",
+                ownership_fence=False,
+                exclusive_binding_lease=False,
+            )
+        )
+
+    def visit_Assign(self, node: ast.Assign) -> None:
+        if _contains_entrypoint_reference(node.value):
+            self._record_unsafe_reference()
+        self.generic_visit(node)
+
+    def visit_AnnAssign(self, node: ast.AnnAssign) -> None:  # noqa: N802
+        if node.value is not None and _contains_entrypoint_reference(node.value):
+            self._record_unsafe_reference()
+        self.generic_visit(node)
+
+    def visit_NamedExpr(self, node: ast.NamedExpr) -> None:  # noqa: N802
+        if _contains_entrypoint_reference(node.value):
+            self._record_unsafe_reference()
+        self.generic_visit(node)
+
+    def visit_Return(self, node: ast.Return) -> None:  # noqa: N802
+        if node.value is not None and _contains_entrypoint_reference(node.value):
+            self._record_unsafe_reference()
+        self.generic_visit(node)
+
+    def visit_ImportFrom(self, node: ast.ImportFrom) -> None:  # noqa: N802
+        if any(
+            item.name == "RegistryBindingAuthorizer"
+            and item.asname not in {None, "RegistryBindingAuthorizer"}
+            for item in node.names
+        ):
+            self._record_unsafe_reference()
+
     def visit_With(self, node: ast.With) -> None:
         contexts: list[_EnteredContext] = []
         self.with_contexts.append(contexts)
@@ -127,19 +202,38 @@ class _RevocationVisitor(ast.NodeVisitor):
         self.with_contexts.pop()
 
     def visit_Call(self, node: ast.Call) -> None:
-        name = (
-            node.func.attr
-            if isinstance(node.func, ast.Attribute)
-            else (node.func.id if isinstance(node.func, ast.Name) else "")
-        )
+        name = _call_name(node)
         revoked = next((item.value for item in node.keywords if item.arg == "revoked"), None)
+        expanded_keywords = any(item.arg is None for item in node.keywords)
         is_mutation = name == "set_binding" and revoked is not None
         is_seed = name == "RegistryBindingAuthorizer" and revoked is not None
         definitely_empty = isinstance(
             revoked, (ast.Set, ast.List, ast.Tuple, ast.Dict)
         ) and not getattr(revoked, "elts", getattr(revoked, "keys", ()))
         definitely_false = isinstance(revoked, ast.Constant) and revoked.value is False
-        if (is_mutation or is_seed) and not definitely_empty and not definitely_false:
+        possible_recognized_revocation = (
+            name in {"set_binding", "RegistryBindingAuthorizer"} and expanded_keywords
+        )
+        possible_indirect_revocation = (
+            name not in {"set_binding", "RegistryBindingAuthorizer", "_KnownBinding"}
+            and revoked is not None
+            and not definitely_empty
+            and not definitely_false
+        )
+        passes_entrypoint_reference = any(
+            _contains_entrypoint_reference(argument)
+            for argument in (
+                *node.args,
+                *(item.value for item in node.keywords),
+            )
+        )
+        if possible_indirect_revocation or passes_entrypoint_reference:
+            self._record_unsafe_reference()
+        if (
+            (is_mutation or is_seed or possible_recognized_revocation)
+            and not definitely_empty
+            and not definitely_false
+        ):
             scope = ".".join(self.scope) or "<module>"
             producer_name = f"{self.module}:{scope}"
             mutation_binding = _binding_expression(node) if is_mutation else None
@@ -175,18 +269,7 @@ class _RevocationVisitor(ast.NodeVisitor):
                 ownership_fence=ownership_fence,
                 exclusive_binding_lease=ordered_exclusive,
             )
-            previous = self.producers.get(producer_name)
-            if previous is not None and previous != evidence:
-                # A producer function with one fenced and one unfenced seam is
-                # unfenced as a whole; inventory cannot bless only the safe call.
-                evidence = GovRevocationProducerEvidence(
-                    name=producer_name,
-                    ownership_fence=(previous.ownership_fence and evidence.ownership_fence),
-                    exclusive_binding_lease=(
-                        previous.exclusive_binding_lease and evidence.exclusive_binding_lease
-                    ),
-                )
-            self.producers[producer_name] = evidence
+            self._record(evidence)
         self.generic_visit(node)
 
 

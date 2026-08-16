@@ -205,6 +205,24 @@ def test_enabled_gov_revocation_producers_are_fenced_or_absent(tmp_path: Path) -
         with pytest.raises(ValueError, match="lacks source-proved"):
             validate_gov_revocation_coverage(declared, app_root=synthetic)
 
+    indirect_sources = (
+        "def revoke(authorizer, binding):\n"
+        "    authorizer.set_binding(binding, 2, **{'revoked': True})\n",
+        "def revoke(authorizer, binding):\n"
+        "    mutation = authorizer.set_binding\n"
+        "    mutation(binding, 2, revoked=True)\n",
+        "def revoke(authorizer, binding):\n"
+        "    mutation = partial(authorizer.set_binding, revoked=True)\n"
+        "    mutation(binding, 2)\n",
+        "def revoke(binding):\n"
+        "    factory = RegistryBindingAuthorizer\n"
+        "    factory(revoked={binding})\n",
+    )
+    for source in indirect_sources:
+        (synthetic / "future.py").write_text(source, encoding="utf-8")
+        with pytest.raises(ValueError, match="lacks source-proved"):
+            validate_gov_revocation_coverage(declared, app_root=synthetic)
+
     (synthetic / "future.py").write_text(
         "def revoke(authorizer, ledger, manager):\n"
         "    with ledger.active_binding_fence('binding-a'):\n"
