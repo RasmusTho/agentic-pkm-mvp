@@ -78,8 +78,8 @@ ordinary boot selects `ORDINARY_BOOT_PASS`.
 
 The K5 receipt is a machine-readable, content-addressed record with exactly these semantic fields:
 `receipt_version`, `receipt_id`, `outcome`, `artifact_digest`, `config_identity`, `test_identity`,
-`vault_identity`, `schema_identity`, `required_checks`, `issued_at`, `fresh_until`, `issuer_id`, and
-`issuer_signature`. The canonical
+`vault_identity`, `schema_identity`, `required_checks`, `issued_at`, `fresh_until`, `issuer_id`,
+`issuer_key_id`, and `issuer_signature`. The canonical
 bytes are UTF-8 JSON with lexicographically sorted keys, compact separators, and no trailing
 newline; `receipt_id` is `sha256:` plus the digest of those bytes with `receipt_id` excluded.
 The issuer signs a separate acyclic canonical unsigned payload using the same encoding with both
@@ -89,11 +89,12 @@ and the trusted issuer key, never against the receipt ID. `outcome` is `PASS` or
 `required_checks` must exactly equal the versioned external policy
 `promotion-receipt.v1/required-checks` = `[migration, readiness, schema, smoke, ui, version]` in
 sorted order. `fresh_until` is the exclusive freshness deadline. `issuer_signature` is verified
-against the trusted `promotion-test-issuer` key/authority registry and binds the issuer to the
-immutable receipt ID. Revocation is not a mutable receipt field: the machine-readable
+against the trusted `promotion-test-issuer` key/authority registry. The registry binds that
+attestation to the immutable receipt ID. Revocation is not a mutable receipt field: the machine-readable
 `promotion-receipt-registry.v1` stores `registry_version` and entries keyed by immutable
-`receipt_id`, each with issuer, signature, and `status` (`issued` or `revoked`); registry lookup
-failure is a hard admission failure. Prod admission requires `outcome=PASS`, matching expected
+`receipt_id`, each with `issuer_id`, `issuer_key_id`, `public_key`, `issuer_signature`, and `status`
+(`issued` or `revoked`); `public_key` is the trusted Ed25519 key for `issuer_key_id`, and registry
+fields are outside the receipt digest. Registry lookup failure is a hard admission failure. Prod admission requires `outcome=PASS`, matching expected
 manifest identities, current time at or after `issued_at` and before `fresh_until`, a valid trusted
 issuer attestation, an absent/revocation-free registry entry, and exact required-check coverage. The positive fixture is
 `tests/fixtures/startup_redesign/promotion_receipt.valid.json`; receipts contain no secret values

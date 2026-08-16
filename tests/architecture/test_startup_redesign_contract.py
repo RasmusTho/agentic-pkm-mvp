@@ -191,13 +191,14 @@ def test_receipt_contract_names_binding_freshness_and_revocation() -> None:
     for field in (
         "receipt_version", "receipt_id", "outcome", "artifact_digest", "config_identity",
         "test_identity", "vault_identity", "schema_identity", "required_checks", "issued_at",
-        "fresh_until",
+        "fresh_until", "issuer_id", "issuer_key_id", "issuer_signature",
     ):
         assert f"`{field}`" in README
     assert "content-addressed" in README
     assert "exactly equal the versioned external policy" in README
     assert "`receipt_id` excluded" in README
     assert "machine-readable" in README and "promotion-receipt-registry.v1" in README
+    assert "`public_key`" in README and "`issuer_key_id`" in README
 
 
 RECEIPT_FIELDS = {
