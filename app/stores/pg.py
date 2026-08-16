@@ -550,6 +550,7 @@ def assert_store_schema_with_connection(conn, *, repair_data: bool = False) -> N
                      SELECT 1 FROM pg_index i
                       WHERE i.indrelid='public.sets'::regclass AND i.indisunique
                         AND (SELECT array_agg(a.attname::text ORDER BY key.ordinality)
+                                  FILTER (WHERE key.ordinality<=i.indnkeyatts)
                                FROM unnest(i.indkey::smallint[])
                                     WITH ORDINALITY key(attnum, ordinality)
                                JOIN pg_attribute a
@@ -563,10 +564,12 @@ def assert_store_schema_with_connection(conn, *, repair_data: bool = False) -> N
                           i.indexprs IS NOT NULL
                           OR i.indpred IS NOT NULL
                           OR NOT EXISTS (
-                            SELECT 1 FROM unnest(i.indkey::smallint[]) key(attnum)
+                            SELECT 1 FROM unnest(i.indkey::smallint[])
+                              WITH ORDINALITY key(attnum, ordinality)
                             JOIN pg_attribute a
                               ON a.attrelid=i.indrelid AND a.attnum=key.attnum
-                           WHERE a.attname='vault_binding_id'
+                           WHERE key.ordinality<=i.indnkeyatts
+                             AND a.attname='vault_binding_id'
                           )
                         )
                    ) AS sets_have_no_global_unique

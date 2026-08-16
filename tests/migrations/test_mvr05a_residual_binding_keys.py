@@ -39,7 +39,15 @@ def test_residual_binding_tables_migrate_or_fail_loud(
             "INSERT INTO heimdal_meeting_finalization_receipt "
             "(session_id,state_sha256,complete) VALUES ('session','state',true)"
         )
+        conn.execute(
+            "ALTER TABLE sets ADD COLUMN vault_binding_id text NOT NULL "
+            f"DEFAULT '{COMPATIBILITY_BINDING_ID}'"
+        )
         conn.execute("CREATE UNIQUE INDEX residual_sets_name_unique ON sets(name)")
+        conn.execute(
+            "CREATE UNIQUE INDEX residual_sets_name_include_binding_unique "
+            "ON sets(name) INCLUDE(vault_binding_id)"
+        )
 
     _upgrade(migrated, monkeypatch, RESIDUAL_HEAD)
     with psycopg.connect(migrated) as conn:

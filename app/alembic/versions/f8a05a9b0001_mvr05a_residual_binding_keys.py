@@ -208,7 +208,7 @@ def upgrade() -> None:
             SELECT idx.relname AS index_name,
                    ns.nspname AS schema_name,
                    array_agg(att.attname::text ORDER BY key.ordinality)
-                     FILTER (WHERE key.attnum<>0) AS columns,
+                     FILTER (WHERE key.ordinality<=i.indnkeyatts) AS columns,
                    i.indpred IS NOT NULL OR i.indexprs IS NOT NULL AS is_expression_or_partial,
                    con.oid IS NOT NULL AS backs_constraint
               FROM pg_index i
