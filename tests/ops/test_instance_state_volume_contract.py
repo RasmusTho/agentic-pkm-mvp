@@ -2158,6 +2158,7 @@ def test_real_deployment_wrapper_mounts_selected_root_at_cutover_alias(
     assert f"--volume {selected_root}:/app/selected-vault:ro" in cutover
     assert "--rollback-vault-binding-id binding-selected" in cutover
     assert "--selected-root /app/selected-vault" in cutover
+    assert "--native-launcher /app/scripts/scalar_rollback_native.sh" in cutover
 
 
 def _legacy_owner_source_fixture(tmp_path: Path) -> tuple[Path, dict[str, Path]]:
@@ -3357,6 +3358,10 @@ def test_registry_volume_and_preflight_cover_all_consumers(tmp_path) -> None:
     assert "instance-state" in compose["volumes"]
     init = compose["services"]["instance-state-init"]
     assert "instance-state:/app/instance-state" in init["volumes"]
+    assert (
+        "./scripts/scalar_rollback_native.sh:/app/scripts/scalar_rollback_native.sh:ro"
+        in init["volumes"]
+    )
     assert any(
         isinstance(mount, dict)
         and mount.get("target") == "/app/instance-ownership"
