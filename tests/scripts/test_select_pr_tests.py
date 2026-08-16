@@ -258,6 +258,7 @@ def test_settings_facade_and_shared_adapters_have_safe_owners() -> None:
     for adapter_path in (
         "app/cli/settings_explain.py",
         "app/components/settings/providers_loader.py",
+        "app/tts/config.py",
         "app/services/companion_eligibility.py",
         "app/services/settings.py",
     ):
@@ -266,6 +267,11 @@ def test_settings_facade_and_shared_adapters_have_safe_owners() -> None:
         assert focused_selection.unowned_paths == ()
         assert "tests/cli/test_settings_explain_cli.py" in focused_selection.targets
         assert "tests/services/test_companion_eligibility.py" in focused_selection.targets
+
+    tts_selection = select_tests(["app/tts/config.py", "vault/settings/tts.md"])
+    assert tts_selection.subsystems == ("settings",)
+    assert tts_selection.unowned_paths == ()
+    assert "tests/tts" in tts_selection.targets
 
 
 def test_settings_adapter_cannot_mask_unknown_runtime_path() -> None:

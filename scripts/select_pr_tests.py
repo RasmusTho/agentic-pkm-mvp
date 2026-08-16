@@ -289,14 +289,22 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
             "app/components/settings/",
             "app/settings/",
             "app/cli/settings_explain.py",
+            # TTS consumes the compiled Settings Spine directly.  Keep voice
+            # and fallback changes on focused TTS regression coverage rather
+            # than failing the required check as an unowned runtime path.
+            "app/tts/",
             "app/services/companion_eligibility.py",
             "app/services/settings.py",
             "docs/settings/",
+            "docs/SETTINGS_SPINE/TTS_SETTINGS.md",
+            "vault/settings/tts.md",
             "tests/settings/",
+            "tests/tts/",
             "tests/config/",
         ),
         (
             "tests/settings",
+            "tests/tts",
             "tests/config",
             "tests/cli/test_settings_explain_cli.py",
             "tests/services/test_companion_eligibility.py",

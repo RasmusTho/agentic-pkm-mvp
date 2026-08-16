@@ -4,6 +4,9 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
+from app.settings.runtime import get_settings_bundle
+from app.settings.tiering import is_lab_profile
+
 
 def _truthy_env(name: str, *, default: bool = False) -> bool:
     raw = os.getenv(name)
@@ -19,6 +22,13 @@ def _int_env(name: str, *, default: int) -> int:
     except ValueError:
         return default
     return value if value > 0 else default
+
+
+def _configured_fallback_flags(policy: str) -> tuple[bool, bool]:
+    """Resolve the typed fallback posture without widening operator defaults."""
+    if not is_lab_profile():
+        return False, False
+    return policy == "browser", policy == "cloud"
 
 
 @dataclass(frozen=True)
@@ -54,6 +64,8 @@ def load_tts_config() -> TTSConfig:
     model_dir = Path(os.getenv("TTS_MODEL_DIR") or default_root / "models")
     cache_dir = Path(os.getenv("TTS_CACHE_DIR") or default_root / "cache")
     log_dir = Path(os.getenv("TTS_LOG_DIR") or default_root / "logs")
+    settings = get_settings_bundle().tts
+    configured_browser, configured_cloud = _configured_fallback_flags(settings.fallback_policy)
     return TTSConfig(
         enabled=_truthy_env("TTS_ENABLED"),
         local_only=_truthy_env("TTS_LOCAL_ONLY", default=True),
@@ -64,11 +76,11 @@ def load_tts_config() -> TTSConfig:
         cache_eviction=(os.getenv("TTS_CACHE_EVICTION") or "lru").strip().lower(),
         max_concurrent_jobs=_int_env("TTS_MAX_CONCURRENT_JOBS", default=1),
         max_chars_per_request=_int_env("TTS_MAX_CHARS_PER_REQUEST", default=4000),
-        allow_browser_fallback=_truthy_env("TTS_ALLOW_BROWSER_FALLBACK"),
-        allow_cloud_fallback=_truthy_env("TTS_ALLOW_CLOUD_FALLBACK"),
+        allow_browser_fallback=_truthy_env("TTS_ALLOW_BROWSER_FALLBACK", default=configured_browser),
+        allow_cloud_fallback=_truthy_env("TTS_ALLOW_CLOUD_FALLBACK", default=configured_cloud),
         piper_command=(os.getenv("TTS_PIPER_COMMAND") or "").strip() or None,
         kokoro_command=(os.getenv("TTS_KOKORO_COMMAND") or "").strip() or None,
-        sv_voice=(os.getenv("TTS_SV_VOICE") or "sv_SE-lisa-medium").strip(),
-        en_us_voice=(os.getenv("TTS_EN_US_VOICE") or "bf_isabella").strip(),
-        en_gb_voice=(os.getenv("TTS_EN_GB_VOICE") or "bf_isabella").strip(),
+        sv_voice=(os.getenv("TTS_SV_VOICE") or settings.voices.sv).strip(),
+        en_us_voice=(os.getenv("TTS_EN_US_VOICE") or settings.voices.en_us).strip(),
+        en_gb_voice=(os.getenv("TTS_EN_GB_VOICE") or settings.voices.en_gb).strip(),
     )

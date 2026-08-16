@@ -55,4 +55,6 @@ Provider installation, external TTS calls, deployment, model-routing/rerank, wat
 
 ## Related GitHub Issues
 
-Implements [#4797](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4797) after #4796 merges and is reconciled on `origin/main`.
+Implements [#4797](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4797) after the
+main-targeted SETTINGS-07A recovery [#4948](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4948)
+is merged and reconciled on `origin/main`; the historical #4796 attempt is superseded.

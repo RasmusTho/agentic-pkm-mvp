@@ -83,5 +83,9 @@ def test_engine_image_excludes_models_and_preserves_disabled_local_only_defaults
         assert forbidden not in dockerfile
     assert 'enabled=_truthy_env("TTS_ENABLED")' in config
     assert 'local_only=_truthy_env("TTS_LOCAL_ONLY", default=True)' in config
-    assert 'allow_browser_fallback=_truthy_env("TTS_ALLOW_BROWSER_FALLBACK")' in config
-    assert 'allow_cloud_fallback=_truthy_env("TTS_ALLOW_CLOUD_FALLBACK")' in config
+    # Legacy environment flags remain the final one-release compatibility
+    # override, while the default posture comes from the tier-gated Settings
+    # Spine resolver.
+    assert 'allow_browser_fallback=_truthy_env("TTS_ALLOW_BROWSER_FALLBACK", default=configured_browser)' in config
+    assert 'allow_cloud_fallback=_truthy_env("TTS_ALLOW_CLOUD_FALLBACK", default=configured_cloud)' in config
+    assert 'if not is_lab_profile():' in config
