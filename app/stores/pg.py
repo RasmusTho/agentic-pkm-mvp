@@ -77,7 +77,8 @@ def _connect():
 # defect MVR-05A1 (#4560) removed from `app/db/db.py`.  MVR-05A3 extends the
 # explicit test-fixture producer through the minimum child-FK shape guarded by
 # the store parent rekey.  `sets` is reproduced only as the unchanged fresh-
-# lineage parent required by membership.set_id; it is not rekeyed here.
+# lineage parent required by membership.set_id; the fixture also seeds the
+# named `published` row consumed by the production membership writer.
 _MIGRATION_OWNED_AUTOCREATE_SQL: tuple[tuple[str, tuple[str, ...]], ...] = (
     (
         "store_objects",
@@ -261,6 +262,15 @@ _MIGRATION_OWNED_AUTOCREATE_SQL: tuple[tuple[str, tuple[str, ...]], ...] = (
                 name TEXT UNIQUE NOT NULL,
                 meta JSONB NOT NULL DEFAULT '{}'::jsonb
             )
+            """,
+            """
+            INSERT INTO sets (id, name, meta)
+            VALUES (
+                'afa60fd2-731a-5c30-ae25-07f56c115393'::uuid,
+                'published',
+                '{"system":"membership-projection"}'::jsonb
+            )
+            ON CONFLICT (name) DO NOTHING
             """,
         ),
     ),

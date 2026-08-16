@@ -783,15 +783,22 @@
     },
     "sets": {
       "classification": "binding-scoped",
-      "reason": "`sets` holds legacy named collections of vault artifacts. Zero producers remain under app/**, so there is nothing to migrate today, but the shape is vault-derived and `membership.set_id` still references it on the fresh lineage.",
+      "reason": "`sets` holds legacy named collections of vault artifacts. Production population is migration-owned; the only app/** producer is the explicit STORE_SCHEMA_AUTOCREATE test fixture that mirrors the seeded `published` prerequisite. The shape remains vault-derived and `membership.set_id` still references it on the fresh lineage.",
       "owning_revision": "202510241200",
       "declaring_revisions": [
         "202510241200"
       ],
       "binding_key": "pending",
       "binding_column": null,
-      "producers": [],
-      "rebuild_mechanism": "no-producer",
+      "producers": [
+        {
+          "module": "app/stores/pg.py",
+          "operations": [
+            "insert"
+          ]
+        }
+      ],
+      "rebuild_mechanism": "row-scoped",
       "escalation_conditions": [
         "inbound-fk-target"
       ]

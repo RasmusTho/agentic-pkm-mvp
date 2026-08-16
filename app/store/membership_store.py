@@ -48,7 +48,10 @@ def save_membership(object_id: str, set_name: str, *, trace_id: Optional[str] = 
                 else (set_row[0] if set_row else None)
             )
             if set_id is None:
-                raise RuntimeError(f"membership set {set_name!r} does not exist")
+                raise RuntimeError(
+                    f"membership set {set_name!r} does not exist; "
+                    "run alembic upgrade head to seed membership prerequisites"
+                )
 
             common = (COMPATIBILITY_BINDING_ID, object_id, set_id, datetime.now(timezone.utc))
             if list(primary_key or []) == ["vault_binding_id", "id"]:
