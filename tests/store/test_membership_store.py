@@ -11,6 +11,7 @@ from alembic.config import Config
 from psycopg import sql
 from psycopg.conninfo import conninfo_to_dict
 from sqlalchemy.engine import make_url
+from sqlalchemy.exc import DBAPIError
 
 from app.instance.binding_ids import COMPATIBILITY_BINDING_ID
 from app.store.membership_store import save_membership
@@ -122,6 +123,13 @@ def _published_set_id(dsn: str) -> uuid.UUID:
     return row[0]
 
 
+def _revision(dsn: str) -> str:
+    with psycopg.connect(dsn) as conn:
+        row = conn.execute("SELECT version_num FROM alembic_version").fetchone()
+    assert row is not None
+    return row[0]
+
+
 @pytest.mark.pg
 def test_published_set_is_seeded_before_projection(
     scratch_db_factory, monkeypatch: pytest.MonkeyPatch
@@ -158,6 +166,127 @@ def test_retained_lineage_has_binding_store_object(
             "WHERE vault_binding_id=%s AND object_id=%s",
             (BINDING, set_id),
         ).fetchone() == ("membership-set", "published")
+
+    existing_dsn = scratch_db_factory()
+    _prepare_retained_lineage(existing_dsn, monkeypatch)
+    existing_set_id = uuid.uuid4()
+    with psycopg.connect(existing_dsn) as conn:
+        conn.execute(
+            "INSERT INTO sets(id,name,meta) VALUES (%s,'published','{\"legacy\":true}'::jsonb)",
+            (existing_set_id,),
+        )
+        conn.execute(
+            "INSERT INTO store_objects(vault_binding_id,object_id,kind,payload) "
+            "VALUES (%s,%s,'legacy-set','{\"opaque\":true}'::jsonb)",
+            (BINDING, existing_set_id),
+        )
+    _upgrade(existing_dsn, monkeypatch, SEED_HEAD)
+    assert _published_set_id(existing_dsn) == existing_set_id
+    with psycopg.connect(existing_dsn) as conn:
+        assert conn.execute(
+            "SELECT kind,payload FROM store_objects "
+            "WHERE vault_binding_id=%s AND object_id=%s",
+            (BINDING, existing_set_id),
+        ).fetchone() == ("legacy-set", {"opaque": True})
+
+
+@pytest.mark.pg
+def test_seed_collision_rolls_back_and_retry_recovers(
+    scratch_db_factory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    dsn = scratch_db_factory()
+    _upgrade(dsn, monkeypatch, PRE_SEED_HEAD)
+    collision_id = uuid.UUID("afa60fd2-731a-5c30-ae25-07f56c115393")
+    with psycopg.connect(dsn) as conn:
+        conn.execute(
+            "INSERT INTO sets(id,name) VALUES (%s,'unrelated-existing-set')",
+            (collision_id,),
+        )
+
+    with pytest.raises(DBAPIError, match="sets_pkey"):
+        _upgrade(dsn, monkeypatch, SEED_HEAD)
+    assert _revision(dsn) == PRE_SEED_HEAD
+    with psycopg.connect(dsn) as conn:
+        assert conn.execute("SELECT count(*) FROM sets WHERE name='published'").fetchone() == (0,)
+        conn.execute("DELETE FROM sets WHERE id=%s", (collision_id,))
+
+    _upgrade(dsn, monkeypatch, SEED_HEAD)
+    assert _published_set_id(dsn) == collision_id
+
+
+@pytest.mark.pg
+def test_unsupported_lineage_rolls_back_without_partial_seed(
+    scratch_db_factory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    dsn = scratch_db_factory()
+    _upgrade(dsn, monkeypatch, PRE_SEED_HEAD)
+    with psycopg.connect(dsn) as conn:
+        (primary_key,) = conn.execute(
+            "SELECT conname FROM pg_constraint "
+            "WHERE conrelid='membership'::regclass AND contype='p'"
+        ).fetchone()
+        conn.execute(
+            sql.SQL("ALTER TABLE membership DROP CONSTRAINT {}").format(
+                sql.Identifier(primary_key)
+            )
+        )
+        conn.execute("ALTER TABLE membership ADD PRIMARY KEY (vault_binding_id,object_id)")
+
+    with pytest.raises(DBAPIError, match="unsupported primary-key lineage"):
+        _upgrade(dsn, monkeypatch, SEED_HEAD)
+    assert _revision(dsn) == PRE_SEED_HEAD
+    with psycopg.connect(dsn) as conn:
+        assert conn.execute("SELECT count(*) FROM sets WHERE name='published'").fetchone() == (0,)
+
+
+@pytest.mark.pg
+def test_concurrent_set_writer_blocks_seed_and_retry_recovers(
+    scratch_db_factory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    dsn = scratch_db_factory()
+    _upgrade(dsn, monkeypatch, PRE_SEED_HEAD)
+    blocker = psycopg.connect(dsn)
+    try:
+        blocker.execute("LOCK TABLE sets IN ROW EXCLUSIVE MODE")
+        monkeypatch.setenv("PGOPTIONS", "-c lock_timeout=250ms")
+        with pytest.raises(DBAPIError, match="lock timeout"):
+            _upgrade(dsn, monkeypatch, SEED_HEAD)
+        assert _revision(dsn) == PRE_SEED_HEAD
+    finally:
+        blocker.close()
+        monkeypatch.delenv("PGOPTIONS", raising=False)
+
+    _upgrade(dsn, monkeypatch, SEED_HEAD)
+    assert _published_set_id(dsn)
+
+
+@pytest.mark.pg
+def test_retained_endpoint_deletion_refuses_partial_projection(
+    scratch_db_factory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    dsn = scratch_db_factory()
+    _prepare_retained_lineage(dsn, monkeypatch)
+    _upgrade(dsn, monkeypatch, SEED_HEAD)
+    set_id = _published_set_id(dsn)
+    object_id = uuid.uuid4()
+    with psycopg.connect(dsn) as conn:
+        conn.execute(
+            "INSERT INTO store_objects(vault_binding_id,object_id,kind,payload) "
+            "VALUES (%s,%s,'note','{}'::jsonb)",
+            (BINDING, object_id),
+        )
+        conn.execute(
+            "DELETE FROM store_objects WHERE vault_binding_id=%s AND object_id=%s",
+            (BINDING, set_id),
+        )
+
+    with pytest.raises(psycopg.errors.ForeignKeyViolation, match="membership_set_id_fkey"):
+        save_membership(str(object_id), "published")
+    with psycopg.connect(dsn) as conn:
+        assert conn.execute(
+            "SELECT count(*) FROM membership WHERE vault_binding_id=%s AND object_id=%s",
+            (BINDING, object_id),
+        ).fetchone() == (0,)
 
 
 class _MissingSetCursor:
