@@ -119,6 +119,7 @@ def get_settings_ingestion_state() -> SettingsIngestionState:
                 source="vault",
                 loaded_at=prior.loaded_at,
                 error=signal.error,
+                tts_origin=prior.tts_origin,
             )
         )
     with _STATE_LOCK:
