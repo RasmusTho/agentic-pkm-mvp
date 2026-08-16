@@ -49,8 +49,11 @@ Last verified against: app/stores/pg.py + app/alembic/versions/e6c4a2b8d1f3_mvr0
   receipts, and acknowledgement share one per-binding effect lease. A stale binding/revision/root
   remains pending while later global work remains processable and worker readiness reports
   `blocked_pending_mvr06`. The checked-in GOV revocation producer inventory is empty and CI derives
-  the matching mutation-seam population from source; any future enabled producer must declare both
-  the ownership fence and exclusive binding lease before CI accepts it.
+  the matching mutation-seam population from source. This delivery admits no production revocation
+  entrypoint: a direct revocation call, indirect alias, callable reference, dynamic keyword call, or
+  constructor seed fails the source gate. A future change must first introduce a canonical
+  runtime-enforced ownership-fence/exclusive-lease entrypoint and evolve the inventory gate in the
+  same reviewed change; manifest booleans cannot self-certify a source path.
 - The **entity-review operation journal** table (`entity_review_operations`) is **migration-owned**
   (EROJ-01, #4350): Alembic revision `e7a2b9c4d1f8` creates it, and
   `app/heimdal/entity_review_operation_journal.py::ensure_journal_schema()` is assert-only outside

@@ -217,6 +217,15 @@ def test_enabled_gov_revocation_producers_are_fenced_or_absent(tmp_path: Path) -
         "def revoke(binding):\n"
         "    factory = RegistryBindingAuthorizer\n"
         "    factory(revoked={binding})\n",
+        "def revoke(authority, binding):\n"
+        "    factory = authority.RegistryBindingAuthorizer\n"
+        "    factory(**{'revoked': {binding}})\n",
+        "def revoke(authorizer, binding):\n" "    yield authorizer.set_binding\n",
+        "def revoke(binding, mutation=authorizer.set_binding):\n"
+        "    mutation(binding, 2, **options)\n",
+        "def revoke(authorizer, binding):\n"
+        "    for mutation in [authorizer.set_binding]:\n"
+        "        mutation(binding, 2, **options)\n",
     )
     for source in indirect_sources:
         (synthetic / "future.py").write_text(source, encoding="utf-8")
@@ -240,7 +249,8 @@ def test_enabled_gov_revocation_producers_are_fenced_or_absent(tmp_path: Path) -
         "            authorizer.set_binding('binding-a', 2, revoked=True)\n",
         encoding="utf-8",
     )
-    validate_gov_revocation_coverage(declared, app_root=synthetic)
+    with pytest.raises(ValueError, match="lacks source-proved"):
+        validate_gov_revocation_coverage(declared, app_root=synthetic)
 
 
 # --------------------------------------------------------------------------- #
