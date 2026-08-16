@@ -63,6 +63,8 @@ from app.events.schema import make_outbox_event
 from app.events.types import HEIMDAL_MEETING_FINALIZED
 from app.heimdal import meeting_blocks, meeting_ledger, meeting_projection
 from app.heimdal._backend import resolve_heimdal_backend
+from app.instance.binding_ids import COMPATIBILITY_BINDING_ID
+from app.instance.scalar_binding_runtime import resolve_scalar_binding_runtime
 from app.knowledge.write_ops import create_candidate_note_once
 from app.outbox.events import INDEX_OUTBOX_PATH
 from app.services import outbox as outbox_service
@@ -72,7 +74,8 @@ logger = logging.getLogger(__name__)
 _RECEIPT_TABLE = "heimdal_meeting_finalization_receipt"
 _MIGRATION_HINT = (
     "heimdal meeting-finalization schema is migration-owned: run 'alembic upgrade head' "
-    "against this database. See app/alembic/versions/d0f5b2c7e4a6_heim_meeting_finalization_v0.py."
+    "against this database. See "
+    "app/alembic/versions/f8a05a9b0001_mvr05a_residual_binding_keys.py."
 )
 
 _FINALIZATION_PATH_ENV = "HEIMDAL_MEETING_FINALIZATION_PATH"
@@ -124,6 +127,7 @@ class FinalizationReceipt:
     artifact_refs: Dict[str, str]
     supersedes: Optional[str]
     finalized_at: datetime
+    vault_binding_id: str = COMPATIBILITY_BINDING_ID
 
 
 def _utcnow() -> datetime:
@@ -169,6 +173,7 @@ def resolve_vault_root() -> Optional[Path]:
 
 _SQLITE_SCHEMA = f"""
 CREATE TABLE IF NOT EXISTS {_RECEIPT_TABLE} (
+    vault_binding_id TEXT NOT NULL DEFAULT '{COMPATIBILITY_BINDING_ID}',
     session_id TEXT NOT NULL,
     state_sha256 TEXT NOT NULL,
     complete INTEGER NOT NULL,
@@ -176,7 +181,7 @@ CREATE TABLE IF NOT EXISTS {_RECEIPT_TABLE} (
     artifact_refs TEXT NOT NULL DEFAULT '{{}}',
     supersedes TEXT,
     finalized_at TEXT NOT NULL,
-    PRIMARY KEY (session_id, state_sha256)
+    PRIMARY KEY (vault_binding_id, session_id, state_sha256)
 );
 """
 
@@ -204,6 +209,15 @@ class _SqliteReceiptStore:
         self._path = path
         with self._connect() as conn:
             conn.executescript(_SQLITE_SCHEMA)
+            columns = conn.execute(f"PRAGMA table_info({_RECEIPT_TABLE})").fetchall()
+            primary_key = [
+                row[1] for row in sorted(columns, key=lambda item: item[5]) if row[5]
+            ]
+            if primary_key != ["vault_binding_id", "session_id", "state_sha256"]:
+                raise MeetingFinalizationSchemaMissingError(
+                    "SQLite meeting-finalization receipts predate the binding key; "
+                    "move the dev/test receipt aside and retry"
+                )
 
     @contextmanager
     def _connect(self) -> Iterator[sqlite3.Connection]:
@@ -214,23 +228,25 @@ class _SqliteReceiptStore:
         finally:
             conn.close()
 
-    def get(self, session_id: str, state_sha256: str) -> Optional[FinalizationReceipt]:
+    def get(
+        self, vault_binding_id: str, session_id: str, state_sha256: str
+    ) -> Optional[FinalizationReceipt]:
         with self._connect() as conn:
             row = conn.execute(
                 f"SELECT session_id, state_sha256, complete, missing_seqs, artifact_refs, "
-                f"supersedes, finalized_at FROM {_RECEIPT_TABLE} "
-                "WHERE session_id = ? AND state_sha256 = ?",
-                (session_id, state_sha256),
+                f"supersedes, finalized_at, vault_binding_id FROM {_RECEIPT_TABLE} "
+                "WHERE vault_binding_id = ? AND session_id = ? AND state_sha256 = ?",
+                (vault_binding_id, session_id, state_sha256),
             ).fetchone()
         return self._from_row(row) if row else None
 
-    def latest(self, session_id: str) -> Optional[FinalizationReceipt]:
+    def latest(self, vault_binding_id: str, session_id: str) -> Optional[FinalizationReceipt]:
         with self._connect() as conn:
             row = conn.execute(
                 f"SELECT session_id, state_sha256, complete, missing_seqs, artifact_refs, "
-                f"supersedes, finalized_at FROM {_RECEIPT_TABLE} "
-                "WHERE session_id = ? ORDER BY rowid DESC LIMIT 1",
-                (session_id,),
+                f"supersedes, finalized_at, vault_binding_id FROM {_RECEIPT_TABLE} "
+                "WHERE vault_binding_id = ? AND session_id = ? ORDER BY rowid DESC LIMIT 1",
+                (vault_binding_id, session_id),
             ).fetchone()
         return self._from_row(row) if row else None
 
@@ -238,9 +254,10 @@ class _SqliteReceiptStore:
         with self._connect() as conn:
             cur = conn.execute(
                 f"INSERT OR IGNORE INTO {_RECEIPT_TABLE} "
-                "(session_id, state_sha256, complete, missing_seqs, artifact_refs, "
-                "supersedes, finalized_at) VALUES (?,?,?,?,?,?,?)",
+                "(vault_binding_id, session_id, state_sha256, complete, missing_seqs, "
+                "artifact_refs, supersedes, finalized_at) VALUES (?,?,?,?,?,?,?,?)",
                 (
+                    receipt.vault_binding_id,
                     receipt.session_id,
                     receipt.state_sha256,
                     1 if receipt.complete else 0,
@@ -262,6 +279,7 @@ class _SqliteReceiptStore:
             artifact_refs=json.loads(row[4] or "{}"),
             supersedes=row[5],
             finalized_at=_parse_ts(row[6]),
+            vault_binding_id=row[7],
         )
 
 
@@ -293,7 +311,8 @@ CREATE TABLE IF NOT EXISTS {_RECEIPT_TABLE} (
     artifact_refs JSONB NOT NULL DEFAULT '{{}}'::jsonb,
     supersedes TEXT,
     finalized_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    PRIMARY KEY (session_id, state_sha256)
+    vault_binding_id TEXT NOT NULL DEFAULT '{COMPATIBILITY_BINDING_ID}',
+    PRIMARY KEY (vault_binding_id, session_id, state_sha256)
 );
 """
 
@@ -312,18 +331,49 @@ class _PgReceiptStore:
                     raise MeetingFinalizationSchemaMissingError(
                         f"Missing table '{_RECEIPT_TABLE}'. {_MIGRATION_HINT}"
                     )
+                cur.execute(
+                    """
+                    SELECT EXISTS (
+                             SELECT 1 FROM pg_attribute
+                              WHERE attrelid=%s::regclass AND attname='vault_binding_id'
+                                AND attnotnull AND attnum>0 AND NOT attisdropped
+                           ),
+                           (
+                             SELECT array_agg(a.attname ORDER BY k.ordinality)
+                               FROM pg_constraint c
+                               JOIN unnest(c.conkey) WITH ORDINALITY k(attnum, ordinality) ON true
+                               JOIN pg_attribute a
+                                 ON a.attrelid=c.conrelid AND a.attnum=k.attnum
+                              WHERE c.conrelid=%s::regclass AND c.contype='p'
+                           )
+                    """,
+                    (_RECEIPT_TABLE, _RECEIPT_TABLE),
+                )
+                shape = cur.fetchone()
+                if not shape or not shape[0] or list(shape[1] or []) != [
+                    "vault_binding_id",
+                    "session_id",
+                    "state_sha256",
+                ]:
+                    raise MeetingFinalizationSchemaMissingError(
+                        f"Stale binding key on '{_RECEIPT_TABLE}'. {_MIGRATION_HINT}"
+                    )
         finally:
             conn.close()
 
-    def get(self, session_id: str, state_sha256: str) -> Optional[FinalizationReceipt]:
+    def get(
+        self, vault_binding_id: str, session_id: str, state_sha256: str
+    ) -> Optional[FinalizationReceipt]:
         return self._one(
-            "WHERE session_id = %s AND state_sha256 = %s", (session_id, state_sha256)
+            "WHERE vault_binding_id = %s AND session_id = %s AND state_sha256 = %s",
+            (vault_binding_id, session_id, state_sha256),
         )
 
-    def latest(self, session_id: str) -> Optional[FinalizationReceipt]:
+    def latest(self, vault_binding_id: str, session_id: str) -> Optional[FinalizationReceipt]:
         return self._one(
-            "WHERE session_id = %s ORDER BY finalized_at DESC, state_sha256 DESC LIMIT 1",
-            (session_id,),
+            "WHERE vault_binding_id = %s AND session_id = %s "
+            "ORDER BY finalized_at DESC, state_sha256 DESC LIMIT 1",
+            (vault_binding_id, session_id),
         )
 
     def _one(self, clause: str, params: tuple) -> Optional[FinalizationReceipt]:
@@ -332,7 +382,7 @@ class _PgReceiptStore:
             cur = conn.cursor()
             cur.execute(
                 f"SELECT session_id, state_sha256, complete, missing_seqs, artifact_refs, "
-                f"supersedes, finalized_at FROM {_RECEIPT_TABLE} {clause}",
+                f"supersedes, finalized_at, vault_binding_id FROM {_RECEIPT_TABLE} {clause}",
                 params,
             )
             row = cur.fetchone()
@@ -346,10 +396,12 @@ class _PgReceiptStore:
             cur = conn.cursor()
             cur.execute(
                 f"INSERT INTO {_RECEIPT_TABLE} "
-                "(session_id, state_sha256, complete, missing_seqs, artifact_refs, "
-                "supersedes, finalized_at) VALUES (%s,%s,%s,%s::jsonb,%s::jsonb,%s,%s) "
-                "ON CONFLICT (session_id, state_sha256) DO NOTHING",
+                "(vault_binding_id, session_id, state_sha256, complete, missing_seqs, "
+                "artifact_refs, supersedes, finalized_at) "
+                "VALUES (%s,%s,%s,%s,%s::jsonb,%s::jsonb,%s,%s) "
+                "ON CONFLICT (vault_binding_id, session_id, state_sha256) DO NOTHING",
                 (
+                    receipt.vault_binding_id,
                     receipt.session_id,
                     receipt.state_sha256,
                     receipt.complete,
@@ -378,6 +430,7 @@ class _PgReceiptStore:
             artifact_refs=_as_obj(row[4], {}),
             supersedes=row[5],
             finalized_at=_parse_ts(row[6]),
+            vault_binding_id=row[7],
         )
 
 
@@ -571,7 +624,9 @@ def _resolve_outbox_path() -> Path:
     return Path(INDEX_OUTBOX_PATH)
 
 
-def _emit_finalized_event(payload: Dict[str, Any], *, trace_id: str) -> bool:
+def _emit_finalized_event(
+    payload: Dict[str, Any], *, trace_id: str, vault_binding_id: str
+) -> bool:
     evt = make_outbox_event(
         event=HEIMDAL_MEETING_FINALIZED,
         source=_EVENT_SOURCE,
@@ -602,6 +657,7 @@ def _emit_finalized_event(payload: Dict[str, Any], *, trace_id: str) -> bool:
                         str(payload.get("session_id", "")),
                         str(payload.get("finalization_state", "")),
                     ),
+                    vault_binding_id=vault_binding_id,
                 )
                 emitted = True
             except Exception as exc:
@@ -609,12 +665,34 @@ def _emit_finalized_event(payload: Dict[str, Any], *, trace_id: str) -> bool:
     return emitted
 
 
+def _resolve_binding_id(
+    *, vault_binding_id: str | None = None, vault_root: Path | None = None
+) -> str:
+    requested = (vault_binding_id or "").strip()
+    runtime = resolve_scalar_binding_runtime(
+        requested_binding_id=requested or None,
+        vault_root=vault_root,
+    )
+    if runtime is not None:
+        return runtime.vault_binding_id
+    if vault_binding_id is None:
+        return COMPATIBILITY_BINDING_ID
+    if not requested:
+        raise MeetingFinalizationError("vault_binding_id must be a non-empty string")
+    return requested
+
+
 # ---------------------------------------------------------------------------
 # The finalization
 # ---------------------------------------------------------------------------
 
 
-def finalize_session(session_id: str, *, trace_id: str = "") -> Dict[str, Any]:
+def finalize_session(
+    session_id: str,
+    *,
+    trace_id: str = "",
+    vault_binding_id: str | None = None,
+) -> Dict[str, Any]:
     """Finalize one closed session; idempotent per ledger completeness state.
 
     Returns a status dict: ``{"status": "finalized"|"replayed"|"skipped",
@@ -643,16 +721,21 @@ def finalize_session(session_id: str, *, trace_id: str = "") -> Dict[str, Any]:
             "session_id": session_id,
         }
 
+    resolved_binding_id = _resolve_binding_id(
+        vault_binding_id=vault_binding_id,
+        vault_root=vault_root,
+    )
+
     projection = meeting_projection.build_projection(session_id)
     report = meeting_ledger.build_gap_report(session_id)
     state_sha256 = _state_identity(report, projection)
 
     store = _backend()
-    existing = store.get(session_id, state_sha256)
+    existing = store.get(resolved_binding_id, session_id, state_sha256)
     if existing is not None:
         return {"status": "replayed", "receipt": _receipt_dict(existing)}
 
-    previous = store.latest(session_id)
+    previous = store.latest(resolved_binding_id, session_id)
     supersedes = previous.state_sha256 if previous else None
 
     short = state_sha256[:8]
@@ -721,6 +804,7 @@ def finalize_session(session_id: str, *, trace_id: str = "") -> Dict[str, Any]:
         artifact_refs=artifact_refs,
         supersedes=supersedes,
         finalized_at=_utcnow(),
+        vault_binding_id=resolved_binding_id,
     )
 
     # Ack ordering: the outbox event commits BEFORE the receipt row that is
@@ -737,6 +821,7 @@ def finalize_session(session_id: str, *, trace_id: str = "") -> Dict[str, Any]:
             "supersedes": supersedes,
         },
         trace_id=trace_id,
+        vault_binding_id=resolved_binding_id,
     ):
         raise MeetingFinalizationError(
             "the finalized event could not be committed; the session is NOT "
@@ -744,7 +829,7 @@ def finalize_session(session_id: str, *, trace_id: str = "") -> Dict[str, Any]:
         )
 
     if not store.insert(receipt):
-        stored = store.get(session_id, state_sha256)
+        stored = store.get(resolved_binding_id, session_id, state_sha256)
         if stored is not None:
             return {"status": "replayed", "receipt": _receipt_dict(stored)}
         raise MeetingFinalizationError(
@@ -753,7 +838,9 @@ def finalize_session(session_id: str, *, trace_id: str = "") -> Dict[str, Any]:
     return {"status": "finalized", "receipt": _receipt_dict(receipt)}
 
 
-def maybe_refinalize(session_id: str, *, trace_id: str = "") -> None:
+def maybe_refinalize(
+    session_id: str, *, trace_id: str = "", vault_binding_id: str | None = None
+) -> None:
     """Post-close reconciliation trigger: re-finalize after a late admission.
 
     Exception-isolated — called from the admission path, which must never fail
@@ -764,26 +851,45 @@ def maybe_refinalize(session_id: str, *, trace_id: str = "") -> None:
         session = meeting_ledger.get_meeting_session(session_id)
         if session is None or not session.closed:
             return
-        if _backend().latest(session_id) is None:
+        vault_root = resolve_vault_root()
+        if vault_root is None:
+            return
+        resolved_binding_id = _resolve_binding_id(
+            vault_binding_id=vault_binding_id,
+            vault_root=vault_root,
+        )
+        if _backend().latest(resolved_binding_id, session_id) is None:
             # Never finalized (e.g. vault unconfigured at close time) — the
             # close-flow owns first finalization; reconciliation only
             # supersedes an existing one.
             return
-        finalize_session(session_id, trace_id=trace_id)
+        finalize_session(
+            session_id,
+            trace_id=trace_id,
+            vault_binding_id=resolved_binding_id,
+        )
     except Exception as exc:
         logger.error(
             "meeting re-finalization failed session=%s: %s", session_id, exc
         )
 
 
-def latest_receipt(session_id: str) -> Optional[Dict[str, Any]]:
-    receipt = _backend().latest(session_id)
+def latest_receipt(
+    session_id: str, *, vault_binding_id: str | None = None
+) -> Optional[Dict[str, Any]]:
+    vault_root = resolve_vault_root()
+    resolved_binding_id = _resolve_binding_id(
+        vault_binding_id=vault_binding_id,
+        vault_root=vault_root,
+    )
+    receipt = _backend().latest(resolved_binding_id, session_id)
     return _receipt_dict(receipt) if receipt else None
 
 
 def _receipt_dict(receipt: FinalizationReceipt) -> Dict[str, Any]:
     return {
         "session_id": receipt.session_id,
+        "vault_binding_id": receipt.vault_binding_id,
         "finalization_state": receipt.state_sha256,
         "completeness": "complete" if receipt.complete else "needs_attention",
         "missing_seqs": receipt.missing_seqs,

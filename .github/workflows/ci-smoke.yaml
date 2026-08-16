@@ -786,6 +786,8 @@ jobs:
               - 'app/alembic/versions/f4a05a4b0001_mvr05a4_ingest_projection_binding_keys.py'
               - 'app/alembic/versions/f7a05a4b0001_seed_membership_prerequisites.py'
               - 'app/alembic/versions/f5a05a5b0001_mvr05a5_replay_projection_binding_keys.py'
+              - 'app/alembic/versions/f8a05a9b0001_mvr05a_residual_binding_keys.py'
+              - 'app/heimdal/meeting_finalization.py'
               - 'app/db/replay_projection_schema.py'
               - 'app/jobs/episodes_projection.py'
               - 'app/standing_questions/projection.py'
@@ -801,6 +803,7 @@ jobs:
               - 'tests/migrations/test_ingest_schema_parity.py'
               - 'tests/migrations/test_multi_vault_replay_projection_backfill.py'
               - 'tests/migrations/test_replay_schema_parity.py'
+              - 'tests/migrations/test_mvr05a_residual_binding_keys.py'
               - 'tests/jobs/test_multi_vault_decisions_rebuild_scope.py'
               - 'tests/integration/test_multi_vault_projection_isolation.py'
               - 'tests/episodes/test_episode_projection.py'
@@ -927,6 +930,7 @@ jobs:
             tests/migrations/test_ingest_schema_parity.py \
             tests/migrations/test_multi_vault_replay_projection_backfill.py \
             tests/migrations/test_replay_schema_parity.py \
+            tests/migrations/test_mvr05a_residual_binding_keys.py \
             tests/migrations/test_decisions_fk_set_null.py \
             tests/integration/test_decisions_rebuild_from_log_only.py \
             tests/integration/test_multi_vault_projection_isolation.py \

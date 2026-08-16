@@ -237,14 +237,16 @@ _MIGRATION_OWNED_AUTOCREATE_SQL: tuple[tuple[str, tuple[str, ...]], ...] = (
     (
         "public.agent_memories",
         (
-            """
+            f"""
             CREATE TABLE public.agent_memories (
-                id uuid PRIMARY KEY,
+                id uuid NOT NULL,
                 run_id uuid NULL,
                 layer text NOT NULL,
-                payload jsonb NOT NULL DEFAULT '{}'::jsonb,
-                provenance jsonb NOT NULL DEFAULT '{}'::jsonb,
-                created_at timestamptz NOT NULL DEFAULT now()
+                payload jsonb NOT NULL DEFAULT '{{}}'::jsonb,
+                provenance jsonb NOT NULL DEFAULT '{{}}'::jsonb,
+                created_at timestamptz NOT NULL DEFAULT now(),
+                vault_binding_id text NOT NULL DEFAULT '{COMPATIBILITY_BINDING_ID}',
+                PRIMARY KEY (vault_binding_id, id)
             )
             """,
             "CREATE INDEX agent_memories_created_at_idx "
@@ -438,8 +440,9 @@ def _autocreate_migration_owned_schema(conn: psycopg.Connection) -> None:
     """Create the migration-owned durable shape for test scratch databases.
 
     Inert outside tests: production DDL authority is the Alembic revision chain
-    (`c7f4b1a83d29` for `file_state`, `d1e8a0c5f37b` for `objects` and
-    `agent_memories`). The matching fail-loud preflight for a database that never
+    (`c7f4b1a83d29` for `file_state`, `d1e8a0c5f37b` for `objects` adoption,
+    and `f8a05a9b0001` for the `agent_memories` binding key). The matching
+    fail-loud preflight for a database that never
     ran the `file_state` revision is `assert_file_state_schema`, called from the
     vault-sync seam.
 

@@ -21,6 +21,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 PRE_BINDING_HEAD = "d1e8a0c5f37b"
 PRE_SEED_HEAD = "f6a05a7b0001"
 SEED_HEAD = "f7a05a4b0001"
+MVR05A_RESIDUAL_HEAD = "f8a05a9b0001"
 BINDING = COMPATIBILITY_BINDING_ID
 
 
@@ -261,12 +262,40 @@ def test_concurrent_set_writer_blocks_seed_and_retry_recovers(
 
 
 @pytest.mark.pg
+def test_retained_lineage_projects_through_binding_keyed_set(
+    scratch_db_factory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    dsn = scratch_db_factory()
+    _prepare_retained_lineage(dsn, monkeypatch)
+    _upgrade(dsn, monkeypatch, MVR05A_RESIDUAL_HEAD)
+    object_id = uuid.uuid4()
+    with psycopg.connect(dsn) as conn:
+        conn.execute(
+            "INSERT INTO store_objects(vault_binding_id,object_id,kind,payload) "
+            "VALUES (%s,%s,'note','{}'::jsonb)",
+            (BINDING, object_id),
+        )
+
+    save_membership(
+        str(object_id),
+        "published",
+        vault_binding_id=BINDING,
+    )
+    with psycopg.connect(dsn) as conn:
+        assert conn.execute(
+            "SELECT count(*) FROM membership "
+            "WHERE vault_binding_id=%s AND object_id=%s",
+            (BINDING, object_id),
+        ).fetchone() == (1,)
+
+
+@pytest.mark.pg
 def test_retained_endpoint_deletion_refuses_partial_projection(
     scratch_db_factory, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     dsn = scratch_db_factory()
     _prepare_retained_lineage(dsn, monkeypatch)
-    _upgrade(dsn, monkeypatch, SEED_HEAD)
+    _upgrade(dsn, monkeypatch, MVR05A_RESIDUAL_HEAD)
     set_id = _published_set_id(dsn)
     object_id = uuid.uuid4()
     with psycopg.connect(dsn) as conn:
@@ -303,8 +332,16 @@ class _MissingSetCursor:
         self.sql.append(statement)
 
     def fetchone(self):
-        if self.sql[-1] == "SELECT id FROM sets WHERE name = %s":
+        if self.sql[-1] == (
+            "SELECT id FROM sets WHERE vault_binding_id = %s AND name = %s"
+        ):
             return None
+        if "public.sets" in self.sql[-1]:
+            return {
+                "primary_key": ["vault_binding_id", "id"],
+                "has_binding_name_unique": True,
+                "has_no_global_unique": True,
+            }
         return {"primary_key": ["vault_binding_id", "id"]}
 
 

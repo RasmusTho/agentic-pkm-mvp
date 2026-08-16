@@ -7,6 +7,11 @@ import uuid
 import psycopg
 import pytest
 
+from app.heimdal import meeting_finalization
+from app.instance.vault_registry import VaultRegistration, VaultRegistryStore
+from app.memory_kv.store import remember
+from app.store.membership_store import save_membership
+from tests.helpers.instance_storage_capability import STORAGE_MUTATION_CAPABILITY
 from tests.migrations.test_multi_vault_ingest_projection_keys import (
     _upgrade,
     scratch_db_factory,  # noqa: F401 - pytest fixture export
@@ -84,15 +89,26 @@ def test_binding_scoped_rebuild_preserves_standing_question_and_episode_rows(
         ).fetchall() == [("binding-a", episode_id)]
 
 
-def test_duplicate_uuid_is_namespaced_by_binding_in_ingest_projections(
+def test_duplicate_uuid_is_namespaced_by_binding(
     migrated_store_dsn: str,
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
 ) -> None:
     object_id = uuid.uuid4()
     set_id = uuid.uuid4()
-    rows = [("binding-a", object_id), ("binding-b", object_id)]
+    registry = VaultRegistryStore(tmp_path / "instance" / "vault-registry.md")
+    for binding in ("binding-a", "binding-b"):
+        root = tmp_path / binding
+        root.mkdir()
+        registry.register(
+            VaultRegistration(binding, f"path:{root}", str(root)),
+            _capability=STORAGE_MUTATION_CAPABILITY,
+        )
+    rows = [
+        (registration.vault_binding_id, object_id)
+        for registration in registry.list_registrations()
+    ]
     with psycopg.connect(migrated_store_dsn) as conn:
-        conn.execute("INSERT INTO sets (id, name) VALUES (%s, 'shared-isolation-set')", (set_id,))
         with conn.cursor() as cur:
             cur.executemany(
                 "INSERT INTO store_objects "
@@ -122,6 +138,17 @@ def test_duplicate_uuid_is_namespaced_by_binding_in_ingest_projections(
                 [(binding,) for binding, _ in rows],
             )
             for binding, oid in rows:
+                cur.execute(
+                    "INSERT INTO sets (vault_binding_id, id, name) "
+                    "VALUES (%s, %s, 'shared-isolation-set')",
+                    (binding, set_id),
+                )
+                cur.execute(
+                    "INSERT INTO objects "
+                    "(vault_binding_id, id, uuid, kind, payload) "
+                    "VALUES (%s, %s, %s, 'note', %s::jsonb)",
+                    (binding, oid, oid, '{"binding":"' + binding + '"}'),
+                )
                 chunk_id = uuid.uuid4()
                 cur.execute(
                     "INSERT INTO chunks "
@@ -142,11 +169,40 @@ def test_duplicate_uuid_is_namespaced_by_binding_in_ingest_projections(
                     (uuid.uuid4(), binding, oid, oid),
                 )
                 cur.execute(
-                    "INSERT INTO membership "
-                    "(id, vault_binding_id, object_id, set_id) VALUES (%s, %s, %s, %s)",
-                    (uuid.uuid4(), binding, oid, set_id),
+                    "INSERT INTO file_state (vault_binding_id, path, body_hash) "
+                    "VALUES (%s, '/same/note.md', %s)",
+                    (binding, f"hash-{binding}"),
                 )
 
+    receipt_store = meeting_finalization._PgReceiptStore()
+    for binding, oid in rows:
+        save_membership(
+            str(oid),
+            "shared-isolation-set",
+            vault_binding_id=binding,
+        )
+        remember(
+            "isolation-agent",
+            "isolation-memory",
+            str(oid),
+            f"trace-{binding}",
+            {"binding": binding},
+            vault_binding_id=binding,
+        )
+        assert receipt_store.insert(
+            meeting_finalization.FinalizationReceipt(
+                session_id="same-session",
+                state_sha256="same-state",
+                complete=True,
+                missing_seqs=[],
+                artifact_refs={"binding": binding},
+                supersedes=None,
+                finalized_at=meeting_finalization._utcnow(),
+                vault_binding_id=binding,
+            )
+        )
+
+    with psycopg.connect(migrated_store_dsn) as conn:
         # Ingest projections have independent provenance even for the same UUID.
         for table in (
             "store_objects",
@@ -158,8 +214,37 @@ def test_duplicate_uuid_is_namespaced_by_binding_in_ingest_projections(
             "embeddings",
             "relations",
             "membership",
+            "objects",
+            "file_state",
+            "agent_memories",
+            "heimdal_meeting_finalization_receipt",
         ):
             assert conn.execute(f"SELECT count(*) FROM {table}").fetchone() == (2,), table
+
+        assert conn.execute(
+            "SELECT count(*) FROM sets WHERE name='shared-isolation-set'"
+        ).fetchone() == (2,)
+
+        assert conn.execute("SELECT to_regclass('public.objects_embeddings')").fetchone() == (
+            None,
+        )
+        for binding in ("binding-a", "binding-b"):
+            assert conn.execute(
+                "SELECT payload->>'binding' FROM objects "
+                "WHERE vault_binding_id=%s AND uuid=%s",
+                (binding, object_id),
+            ).fetchone() == (binding,)
+            assert conn.execute(
+                "SELECT artifact_refs->>'binding' "
+                "FROM heimdal_meeting_finalization_receipt "
+                "WHERE vault_binding_id=%s AND session_id='same-session'",
+                (binding,),
+            ).fetchone() == (binding,)
+            assert conn.execute(
+                "SELECT payload->>'binding' FROM agent_memories "
+                "WHERE vault_binding_id=%s AND provenance->>'object_id'=%s",
+                (binding, str(object_id)),
+            ).fetchone() == (binding,)
 
         unique_keys = conn.execute(
             """

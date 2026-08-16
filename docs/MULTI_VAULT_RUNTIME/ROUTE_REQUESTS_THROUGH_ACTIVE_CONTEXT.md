@@ -319,7 +319,7 @@ rekeyed one table in 2,202 added lines across 20 files; PR #4569 adopted two tab
 across 23 files. Both merged cleanly. The remainder is fifteen more tables plus five workstreams the
 table work does not amortise, so it does not fit one delivery.
 
-**Why seven children, and what changes that number.** The children are drawn on *mechanism*
+**Why these children, and what changes their number.** The children are drawn on *mechanism*
 boundaries, not on table count. Each owns exactly one adoption, rebuild, or producer mechanism, so a
 child never pays to wire the same producer module or parity harness twice. The number is therefore
 derived — one classification gate, one child per durable-projection producer module, one per missing
@@ -346,6 +346,18 @@ from-scratch concurrency risk from compounding with migration risk.
 | MVR-05A6 | [#4580](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4580) | the per-binding shared/exclusive effect lease | 05A5 | Sol/xhigh |
 | MVR-05A7 | [#4581](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4581) | outbox binding column and dual-key compatibility dedup | 05A6 | Sol/xhigh |
 | MVR-05A8 | [#4582](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4582) | all-process fence, minimum-runtime floor, worker gate, owner-doc writebacks, stage closure | 05A7 | Sol/high |
+| MVR-05A9 | [#4942](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4942) | measured post-closer residual: remaining live binding keys, dead-schema retirement, and exact aggregate proofs | 05A8, #4939 | delivered |
+
+MVR-05A9 is the measured residual found by exact-SHA reconciliation after the
+original closer merged. Revision `f8a05a9b0001` keys `agent_memories`,
+`heimdal_meeting_finalization_receipt`, and `sets`; it preserves MVR-05A7's
+already-delivered outbox dual-key shape and removes the unused
+`objects_embeddings` table. The stage-level inventory and duplicate-UUID tests
+now prove the complete production surface rather than inferring closure from
+child receipts. The retained projector stays consistently on the scalar
+compatibility binding; selecting and provisioning named sets for a request's
+active binding remains MVR-05B work rather than being smuggled into this schema
+cutover.
 
 MVR-05A4 derives the effective `membership` primary key from the locked live
 catalog (`id` fresh or `(object_id, set_id)` retained historical), preserves

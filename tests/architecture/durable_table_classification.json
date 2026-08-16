@@ -44,13 +44,14 @@
     },
     "agent_memories": {
       "classification": "binding-scoped",
-      "reason": "Short-term agent working memory. `app/memory_kv/store.py::remember` stores the acting object's id in `provenance->>'object_id'` and `recall` filters on it, so a row is about one binding's artifact and a recall over binding B would otherwise surface binding A's memory. MVR-05A1 (#4560) adopted the table verbatim without a binding column and explicitly left attribution to MVR-05A. No MVR-05A child currently owns it. Lossy by design (decay, in-process fallback), so the cutover may legitimately choose to drop rather than backfill.",
+      "reason": "MVR-05A residual revision f8a05a9b0001 keys `agent_memories` by `(vault_binding_id, id)`. `app/memory_kv/store.py` resolves the scalar binding for every remember, recall, and decay operation and fails loudly when a configured database still has the legacy shape, preventing one vault from recalling or deleting another vault's working memory.",
       "owning_revision": "d1e8a0c5f37b",
       "declaring_revisions": [
-        "d1e8a0c5f37b"
+        "d1e8a0c5f37b",
+        "f8a05a9b0001"
       ],
-      "binding_key": "pending",
-      "binding_column": null,
+      "binding_key": "keyed",
+      "binding_column": "vault_binding_id",
       "producers": [
         {
           "module": "app/memory_kv/store.py",
@@ -449,13 +450,14 @@
     },
     "heimdal_meeting_finalization_receipt": {
       "classification": "binding-scoped",
-      "reason": "`heimdal_meeting_finalization_receipt` is the exception in the Heimdal set. Its `artifact_refs JSONB` column records the vault artifacts a finalized session was materialized into — `app/heimdal/meeting_finalization.py::resolve_vault_root` reads `HEIMDAL_MEETING_VAULT_ROOT` and the receipt stores the resulting paths — so the row is bound to one vault, not to the device that captured the session. Its PRIMARY KEY (session_id, state_sha256) carries no vault dimension, so the same session finalized into two vaults is not representable. No MVR-05A child currently owns it.",
+      "reason": "MVR-05A residual revision f8a05a9b0001 gives `heimdal_meeting_finalization_receipt` the composite key `(vault_binding_id, session_id, state_sha256)`. `app/heimdal/meeting_finalization.py` resolves that same binding from the materialization root and scopes idempotency, supersession, receipt reads, and outbox emission to it.",
       "owning_revision": "d0f5b2c7e4a6",
       "declaring_revisions": [
-        "d0f5b2c7e4a6"
+        "d0f5b2c7e4a6",
+        "f8a05a9b0001"
       ],
-      "binding_key": "pending",
-      "binding_column": null,
+      "binding_key": "keyed",
+      "binding_column": "vault_binding_id",
       "producers": [
         {
           "module": "app/heimdal/meeting_finalization.py",
@@ -727,26 +729,28 @@
     },
     "objects_embeddings": {
       "classification": "binding-scoped",
-      "reason": "The historical bootstrap-root embedding table (`fe9a3607841f`), superseded by store_vector_index. Zero producers and zero readers remain under app/**; its rows would be vault-derived. Dead schema, retained because dropping a durable table is a separate forward-only migration this slice does not run.",
+      "reason": "MVR-05A residual revision f8a05a9b0001 removes the dead `objects_embeddings` table. It had zero producers and zero readers under `app/**`, was superseded by `store_vector_index`, and therefore has no live rows or runtime seam that can leak across bindings; the nominal binding column records its classified retirement state.",
       "owning_revision": "fe9a3607841f",
       "declaring_revisions": [
-        "fe9a3607841f"
+        "fe9a3607841f",
+        "f8a05a9b0001"
       ],
-      "binding_key": "pending",
-      "binding_column": null,
+      "binding_key": "keyed",
+      "binding_column": "vault_binding_id",
       "producers": [],
       "rebuild_mechanism": "no-producer",
       "escalation_conditions": []
     },
     "outbox": {
       "classification": "binding-scoped",
-      "reason": "`outbox` is the canonical dispatch queue. Its rows carry the pre-cutover idempotency lineage that MVR-05A7 (#4581) must preserve in a `legacy_key` column so a post-cutover re-emission cannot duplicate an already-delivered effect; rows are never purged. Its `id uuid DEFAULT gen_random_uuid()` key does not collide, so the binding column is additive. Owned by MVR-05A7, not by any of the three table groups.",
+      "reason": "MVR-05A7 revision f6a05a7b0001 adds `outbox.vault_binding_id` and preserves pre-cutover idempotency lineage in `legacy_key`. `app/services/outbox.py` resolves the scalar binding before insert, and both producer and worker reject the stale global shape, so durable effects cannot be dispatched across vault bindings.",
       "owning_revision": "f3a1c9d2e4b7",
       "declaring_revisions": [
-        "f3a1c9d2e4b7"
+        "f3a1c9d2e4b7",
+        "f6a05a7b0001"
       ],
-      "binding_key": "pending",
-      "binding_column": null,
+      "binding_key": "keyed",
+      "binding_column": "vault_binding_id",
       "producers": [
         {
           "module": "app/services/outbox.py",
@@ -783,13 +787,14 @@
     },
     "sets": {
       "classification": "binding-scoped",
-      "reason": "`sets` holds legacy named collections of vault artifacts. Production population is migration-owned; the only app/** producer is the explicit STORE_SCHEMA_AUTOCREATE test fixture that mirrors the seeded `published` prerequisite. The shape remains vault-derived and `membership.set_id` still references it on the fresh lineage.",
+      "reason": "MVR-05A residual revision f8a05a9b0001 keys `sets` by `(vault_binding_id, id)`, makes set names unique only within a binding, and rewrites the fresh-lineage `membership` foreign key to the composite endpoint. The only app insert is the guarded `STORE_SCHEMA_AUTOCREATE` scratch fixture in `app/stores/pg.py`; production has no live set mutator, while `app/store/membership_store.py` resolves a pre-provisioned name inside the caller's binding.",
       "owning_revision": "202510241200",
       "declaring_revisions": [
-        "202510241200"
+        "202510241200",
+        "f8a05a9b0001"
       ],
-      "binding_key": "pending",
-      "binding_column": null,
+      "binding_key": "keyed",
+      "binding_column": "vault_binding_id",
       "producers": [
         {
           "module": "app/stores/pg.py",

@@ -198,6 +198,30 @@ def test_finalization_idempotent_per_ledger_state(client: TestClient, vault: Pat
     assert sorted(p.relative_to(vault) for p in vault.rglob("*.md")) == files_after_first
 
 
+def test_receipt_store_scopes_equal_session_state_by_binding(tmp_path: Path) -> None:
+    store = meeting_finalization._SqliteReceiptStore(tmp_path / "binding-receipts.sqlite3")
+    for binding in ("binding-a", "binding-b"):
+        assert store.insert(
+            meeting_finalization.FinalizationReceipt(
+                session_id="same-session",
+                state_sha256="same-state",
+                complete=True,
+                missing_seqs=[],
+                artifact_refs={"binding": binding},
+                supersedes=None,
+                finalized_at=meeting_finalization._utcnow(),
+                vault_binding_id=binding,
+            )
+        )
+
+    assert store.latest("binding-a", "same-session").artifact_refs == {
+        "binding": "binding-a"
+    }
+    assert store.latest("binding-b", "same-session").artifact_refs == {
+        "binding": "binding-b"
+    }
+
+
 def test_gapped_close_is_legible_everywhere(
     client: TestClient, vault: Path
 ) -> None:

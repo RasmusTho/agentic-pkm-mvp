@@ -101,7 +101,7 @@ def test_ensure_schema_creates_the_migration_owned_shape_for_scratch_databases(
     # The compatibility sentinel is one namespace shared with `file_state`, not
     # a second binding-identity scheme.
     assert db_module.COMPATIBILITY_BINDING_ID == db_module.FILE_STATE_COMPATIBILITY_BINDING_ID
-    assert created.count(f"'{db_module.COMPATIBILITY_BINDING_ID}'") == 2
+    assert created.count(f"'{db_module.COMPATIBILITY_BINDING_ID}'") == 3
 
 
 def test_ensure_schema_leaves_an_existing_table_completely_alone(
