@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import shlex
 import subprocess
@@ -30,6 +31,75 @@ PR_HOT_PATH = REPO_ROOT / "docs/development/PR_HOT_PATH.md"
 PR_ESCALATION_PATHS = REPO_ROOT / "docs/development/PR_ESCALATION_PATHS.md"
 VERIFICATION_AGENT_LOOP = REPO_ROOT / "app/dispatcher/verification_agent_loop.py"
 PR_INTEGRATION_SKILL = REPO_ROOT / ".codex/skills/pr-integration/SKILL.md"
+
+
+def test_rejects_stale_workflow_review_receipt(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    for command in (
+        ["git", "init", "-q"],
+        ["git", "config", "user.email", "test@example.invalid"],
+        ["git", "config", "user.name", "test"],
+    ):
+        subprocess.run(command, cwd=repo, check=True)
+    workflow = repo / ".github/workflows/check.yml"
+    workflow.parent.mkdir(parents=True)
+    workflow.write_text("name: check\n'on': push\n", encoding="utf-8")
+    subprocess.run(["git", "add", "."], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-qm", "base"], cwd=repo, check=True)
+    base = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo, text=True).strip()
+    workflow.write_text("name: check\n'on': pull_request\n", encoding="utf-8")
+    subprocess.run(["git", "commit", "-am", "reviewed", "-q"], cwd=repo, check=True)
+    reviewed_head = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=repo, text=True
+    ).strip()
+    from scripts.workflow_review_risk import workflow_risk_evidence_from_git
+
+    evidence = workflow_risk_evidence_from_git(repo, base=base, head=reviewed_head)
+    receipt_path = repo / "receipt.json"
+    receipt_path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "base_sha": evidence.base_sha,
+                "head_sha": evidence.head_sha,
+                "diff_digest": evidence.diff_digest,
+                "risks": list(evidence.risks),
+                "verdict": "pass",
+                "reviewer": "independent reviewer",
+                "scenario_matrix_complete": True,
+            }
+        ),
+        encoding="utf-8",
+    )
+    workflow.write_text(
+        "name: check\n'on': {push: {}, pull_request: {}}\n", encoding="utf-8"
+    )
+    subprocess.run(["git", "commit", "-am", "stale receipt", "-q"], cwd=repo, check=True)
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(REPO_ROOT / "scripts/review_before_ci_gate.py"),
+            "--lane",
+            "governance",
+            "--changed-file",
+            ".github/workflows/check.yml",
+            "--risk-assessment-complete",
+            "--review-gate-complete",
+            "--workflow-risk-base",
+            base,
+            "--workflow-review-receipt",
+            str(receipt_path),
+        ],
+        cwd=repo,
+        env={**os.environ, "PYTHONPATH": str(REPO_ROOT)},
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 2
+    assert "head_sha" in result.stderr
 
 
 def _bare_repo_wide_not_pg_commands(text: str) -> list[str]:

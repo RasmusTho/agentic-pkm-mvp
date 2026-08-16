@@ -58,9 +58,20 @@ def workflow_risk_evidence_from_git(
     base_sha = _git(repo, "rev-parse", "--verify", base).strip()
     head_sha = _git(repo, "rev-parse", "--verify", head).strip()
     paths = tuple(
-        path
-        for path in _git(repo, "diff", "--name-only", "--diff-filter=ACDMRT", base_sha, head_sha).splitlines()
-        if _is_workflow_path(path)
+        dict.fromkeys(
+            path
+            for entry in _git(
+                repo,
+                "diff",
+                "--name-status",
+                "--find-renames",
+                "--diff-filter=ACDMRT",
+                base_sha,
+                head_sha,
+            ).splitlines()
+            for path in entry.split("\t")[1:]
+            if _is_workflow_path(path)
+        )
     )
     diff = _git(repo, "diff", "--no-ext-diff", "--binary", base_sha, head_sha, "--", *paths) if paths else ""
     risks: set[str] = set()

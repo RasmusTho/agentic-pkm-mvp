@@ -19,6 +19,18 @@ from scripts.workflow_review_risk import (
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
+def test_governance_allowlist_admits_classifier_surfaces() -> None:
+    workflow = (REPO_ROOT / ".github/workflows/issue-pr-governance.yml").read_text(
+        encoding="utf-8"
+    )
+    allowlist = workflow.split("const governanceAllowedExact = new Set([", 1)[1].split(
+        "]);", 1
+    )[0]
+
+    assert '"scripts/workflow_review_risk.py"' in allowlist
+    assert '"tests/ops/test_review_before_ci_workflow_risk.py"' in allowlist
+
+
 def test_quoted_and_block_scalar_concurrency_semantics_infer_risk() -> None:
     before = "name: check\n'on': pull_request\n\n'concurrency': old\n"
     after = "name: check\n'on': pull_request\n\n'concurrency': |\n  new-${{ github.ref }}\n"
@@ -61,6 +73,34 @@ jobs:
     assert infer_workflow_risks(before, job_change) == {"state-machine"}
     assert infer_workflow_risks(before, step_change) == set()
     assert infer_workflow_risks(before, nested_change) == set()
+
+
+def test_renamed_workflow_preserves_both_paths(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    for command in (
+        ["git", "init", "-q"],
+        ["git", "config", "user.email", "test@example.invalid"],
+        ["git", "config", "user.name", "test"],
+    ):
+        subprocess.run(command, cwd=repo, check=True)
+    old_workflow = repo / ".github/workflows/old-name.yml"
+    old_workflow.parent.mkdir(parents=True)
+    old_workflow.write_text("name: check\n'on': push\n", encoding="utf-8")
+    subprocess.run(["git", "add", "."], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-qm", "base"], cwd=repo, check=True)
+    base = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo, text=True).strip()
+    new_workflow = old_workflow.with_name("new-name.yml")
+    subprocess.run(["git", "mv", str(old_workflow), str(new_workflow)], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-qm", "rename"], cwd=repo, check=True)
+    head = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo, text=True).strip()
+
+    evidence = workflow_risk_evidence_from_git(repo, base=base, head=head)
+
+    assert evidence.workflow_paths == (
+        ".github/workflows/old-name.yml",
+        ".github/workflows/new-name.yml",
+    )
 
 
 def test_structural_forms_require_exact_bound_receipt_from_actual_diff(tmp_path: Path) -> None:
