@@ -47,4 +47,4 @@ Feature release, forward-only migration, or legacy removal.
 
 ## Related GitHub Issues
 
-Must reuse or explicitly supersede the existing operator-gated cutover issue, never duplicate it.
+Filed ownership: #4918 (P5, operator-gated), under parent validation hub #4913. The existing operator-gated cutover issue was reconciled before filing; this task does not duplicate or silently supersede that capability.

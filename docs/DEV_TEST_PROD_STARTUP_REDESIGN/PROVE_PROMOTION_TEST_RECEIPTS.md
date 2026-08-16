@@ -47,4 +47,4 @@ Production activation or accepting an emergency bypass as a normal receipt.
 
 ## Related GitHub Issues
 
-File after the parent/child overlap is resolved.
+Filed ownership: #4917 (P4), under parent validation hub #4913. The parent/child overlap was resolved before filing; this task owns durable promotion-test receipt proof for the newer chain.

@@ -47,4 +47,4 @@ Promotion, schema migration, runtime recovery execution, and UI redesign.
 
 ## Related GitHub Issues
 
-File only after live overlap reconciliation.
+Filed ownership: #4916 (P3), under parent validation hub #4913. The live overlap reconciliation was completed before filing; this task owns read-only ordinary-boot enforcement for the newer chain.

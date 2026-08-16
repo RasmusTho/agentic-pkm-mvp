@@ -63,8 +63,8 @@ Every deploy and recovery operation emits exactly one terminal result from this 
 | Terminal phase | Meaning |
 | --- | --- |
 | `PRE_MUTATION_FAILURE` | Validation, identity, dependency, or receipt admission failed before any migration or activation mutation. |
-| `FAILED_AFTER_MIGRATION` | Migration/journal mutation occurred, but the operation did not reach activation success; this is never PASS. |
-| `ACTIVATION_FAILURE` | The candidate passed pre-mutation checks but activation/health proof failed; this is never PASS. |
+| `FAILED_AFTER_MIGRATION` | Migration/journal mutation occurred, but the operation did not reach activation success; this takes precedence over any later activation/health failure and is never PASS. |
+| `ACTIVATION_FAILURE` | Activation/health proof failed before any migration/journal mutation; this is never PASS. |
 | `PASS` | Required mutation, activation, and receipt checks completed for the exact manifest. |
 
 ## Verification and acceptance

@@ -6,6 +6,8 @@ import json
 import re
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[2]
 SPEC = ROOT / "docs" / "DEV_TEST_PROD_STARTUP_REDESIGN"
 README = (SPEC / "README.md").read_text()
@@ -25,6 +27,24 @@ SENSITIVE_FIELD = re.compile(
     re.IGNORECASE,
 )
 SECRET_REFERENCE = re.compile(r"(?:keychain|vault|secret)://[A-Za-z0-9._/-]+\Z")
+MANIFEST_FIELDS = {
+    "schema_version", "channel", "intent", "compose_project", "artifact",
+    "identities", "llm_policy", "gateway", "secret_references",
+}
+ARTIFACT_FIELDS = {"repository", "image_index_digest", "platform_digest", "source_sha"}
+IDENTITY_FIELDS = {"database", "vault", "config", "migration"}
+GATEWAY_FIELDS = {"port", "identity"}
+
+
+def _assert_manifest_shape(manifest: dict[str, object]) -> None:
+    assert set(manifest) == MANIFEST_FIELDS
+    artifact = manifest["artifact"]
+    identities = manifest["identities"]
+    gateway = manifest["gateway"]
+    assert isinstance(artifact, dict) and set(artifact) == ARTIFACT_FIELDS
+    assert isinstance(identities, dict) and set(identities) == IDENTITY_FIELDS
+    assert isinstance(gateway, dict) and set(gateway) == GATEWAY_FIELDS
+    assert isinstance(manifest["secret_references"], list)
 
 
 def _assert_secret_free(value: object, *, path: str = "manifest") -> None:
@@ -54,9 +74,19 @@ def test_manifest_fixture_is_secret_free() -> None:
     }
     assert manifest["intent"] == "promotion"
     assert manifest["artifact"]["image_index_digest"].startswith("sha256:")
+    _assert_manifest_shape(manifest)
     _assert_secret_free(manifest)
+
+
+def test_manifest_schema_rejects_unvalidated_sensitive_fields() -> None:
+    manifest = json.loads(FIXTURE.read_text())
+    manifest["auth"] = "Bearer sk-live-example"
+    with pytest.raises(AssertionError):
+        _assert_manifest_shape(manifest)
 
 
 def test_operation_contract_names_truthful_terminal_phases() -> None:
     for phase in ("PRE_MUTATION_FAILURE", "FAILED_AFTER_MIGRATION", "ACTIVATION_FAILURE", "PASS"):
         assert f"`{phase}`" in README
+    assert "takes precedence over any later activation/health failure" in README
+    assert "before any migration/journal mutation" in README
