@@ -20,8 +20,10 @@ from app.events.topic_schema_registry import (
 )
 from app.instance.binding_ids import (
     COMPATIBILITY_BINDING_ID,
+    OUTBOX_GLOBAL_BINDING_ID,
     OUTBOX_QUARANTINE_BINDING_ID,
 )
+from app.instance.scalar_binding_runtime import resolve_scalar_binding_runtime
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -521,12 +523,17 @@ def _resolve_outbox_vault_binding_id(vault_binding_id: str | None) -> str:
     is evidence-only and can never be selected by a producer.
     """
     if vault_binding_id is None:
-        return COMPATIBILITY_BINDING_ID
+        runtime = resolve_scalar_binding_runtime()
+        return runtime.vault_binding_id if runtime is not None else COMPATIBILITY_BINDING_ID
     if not isinstance(vault_binding_id, str) or not vault_binding_id.strip():
         raise ValueError(f"write_outbox_event requires a non-empty vault_binding_id, got {vault_binding_id!r}")
     resolved = vault_binding_id.strip()
     if resolved == OUTBOX_QUARANTINE_BINDING_ID:
         raise ValueError("the outbox quarantine marker cannot authorize an emission")
+    if resolved != OUTBOX_GLOBAL_BINDING_ID:
+        runtime = resolve_scalar_binding_runtime(requested_binding_id=resolved)
+        if runtime is not None:
+            return runtime.vault_binding_id
     return resolved
 
 
@@ -577,6 +584,22 @@ def write_outbox_event(
         raise ValueError(f"write_outbox_event requires a non-empty idempotency_key, got {idempotency_key!r}")
     envelope = _coerce_event(event)
     resolved_binding_id = _resolve_outbox_vault_binding_id(vault_binding_id)
+    if resolved_binding_id != OUTBOX_GLOBAL_BINDING_ID:
+        binding_runtime = resolve_scalar_binding_runtime(
+            requested_binding_id=resolved_binding_id
+        )
+        if binding_runtime is not None:
+            stamped_meta = dict(envelope.meta or {})
+            stamped_meta.update(
+                {
+                    "vault_binding_id": binding_runtime.vault_binding_id,
+                    "binding_authority": binding_runtime.authority,
+                    "binding_authorization_epoch": binding_runtime.authorization_epoch,
+                    "binding_revision": binding_runtime.binding_revision,
+                    "vault_root": str(binding_runtime.root),
+                }
+            )
+            envelope = envelope.model_copy(update={"meta": stamped_meta})
     scoped_key = derive_binding_scoped_idempotency_key(
         envelope.event_type,
         resolved_binding_id,
@@ -803,6 +826,9 @@ def _coerce_event_from_db(raw_payload: Any, topic: str) -> Event:
 def poll_outbox_one(
     conn: Any = None,
     handler: Optional[Callable[[str, Dict[str, Any]], None]] = None,
+    *,
+    eligible_binding_ids: tuple[str, ...] | None = None,
+    required_binding_stamp: Mapping[str, object] | None = None,
 ) -> Optional[Dict[str, Any]]:
     """
     Returnerar nästa odelivererade meddelande som dict, eller None.
@@ -810,13 +836,46 @@ def poll_outbox_one(
     """
     conn, close = _use_conn(conn)
     try:
-        cur = _exec(
-            conn,
-            "select id, topic, payload, vault_binding_id from outbox "
-            "where delivered_at is null and vault_binding_id <> %s "
-            "order by created_at asc limit 1",
-            (OUTBOX_QUARANTINE_BINDING_ID,),
-        )
+        if eligible_binding_ids is None:
+            sql = (
+                "select id, topic, payload, vault_binding_id from outbox "
+                "where delivered_at is null and vault_binding_id <> %s "
+                "order by created_at asc limit 1"
+            )
+            params: tuple[object, ...] = (OUTBOX_QUARANTINE_BINDING_ID,)
+        else:
+            if not eligible_binding_ids:
+                return None
+            placeholders = ", ".join("%s" for _ in eligible_binding_ids)
+            sql = (
+                "select id, topic, payload, vault_binding_id from outbox "
+                "where delivered_at is null and vault_binding_id <> %s "
+                f"and vault_binding_id in ({placeholders}) "
+            )
+            params = (OUTBOX_QUARANTINE_BINDING_ID, *eligible_binding_ids)
+            if required_binding_stamp is not None:
+                binding_id = str(required_binding_stamp["vault_binding_id"])
+                sql += (
+                    "and (vault_binding_id in (%s, %s) or (vault_binding_id = %s "
+                    "and payload #>> '{meta,vault_binding_id}' = %s "
+                    "and payload #>> '{meta,binding_authority}' = %s "
+                    "and payload #>> '{meta,binding_authorization_epoch}' = %s "
+                    "and payload #>> '{meta,binding_revision}' = %s "
+                    "and payload #>> '{meta,vault_root}' = %s)) "
+                )
+                params = (
+                    *params,
+                    COMPATIBILITY_BINDING_ID,
+                    OUTBOX_GLOBAL_BINDING_ID,
+                    binding_id,
+                    binding_id,
+                    str(required_binding_stamp["binding_authority"]),
+                    str(required_binding_stamp["binding_authorization_epoch"]),
+                    str(required_binding_stamp["binding_revision"]),
+                    str(required_binding_stamp["vault_root"]),
+                )
+            sql += "order by created_at asc limit 1"
+        cur = _exec(conn, sql, params)
         row = cur.fetchone()
         if not row:
             return None
@@ -839,6 +898,39 @@ def poll_outbox_one(
                 # Handler-fel får inte blocka polling i worker
                 pass
         return msg
+    finally:
+        if close:
+            conn.close()
+
+
+def count_deferred_outbox_rows(
+    *, required_binding_stamp: Mapping[str, object], conn: Any = None
+) -> int:
+    """Count stale current-binding rows left pending for the MVR-06 resolver."""
+
+    binding_id = str(required_binding_stamp["vault_binding_id"])
+    conn, close = _use_conn(conn)
+    try:
+        cur = _exec(
+            conn,
+            "select count(*) from outbox where delivered_at is null "
+            "and vault_binding_id = %s and ("
+            "payload #>> '{meta,vault_binding_id}' = %s "
+            "and payload #>> '{meta,binding_authority}' = %s "
+            "and payload #>> '{meta,binding_authorization_epoch}' = %s "
+            "and payload #>> '{meta,binding_revision}' = %s "
+            "and payload #>> '{meta,vault_root}' = %s) is not true",
+            (
+                binding_id,
+                binding_id,
+                str(required_binding_stamp["binding_authority"]),
+                str(required_binding_stamp["binding_authorization_epoch"]),
+                str(required_binding_stamp["binding_revision"]),
+                str(required_binding_stamp["vault_root"]),
+            ),
+        )
+        row = cur.fetchone() if hasattr(cur, "fetchone") else None
+        return int(_row_value(row, 0)) if row else 0
     finally:
         if close:
             conn.close()

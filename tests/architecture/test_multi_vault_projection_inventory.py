@@ -47,6 +47,13 @@ from pathlib import Path
 
 import pytest
 
+from app.instance.gov_revocation_inventory import (
+    discover_gov_revocation_producers,
+    load_gov_revocation_inventory,
+    validate_gov_revocation_coverage,
+    validate_gov_revocation_inventory,
+)
+
 from tests.architecture.durable_table_classification import (
     APP_ROOT,
     BINDING_KEY_STATES,
@@ -102,6 +109,39 @@ def _substantial_sentences(reason: str) -> list[str]:
 
 RELATIONS_INIT_SQL = REPO_ROOT / "app" / "db" / "sql" / "relations_init.sql"
 LEGACY_RELATION_INDEX = REPO_ROOT / "app" / "store" / "relation_index.py"
+
+
+def test_enabled_gov_revocation_producers_are_fenced_or_absent(tmp_path: Path) -> None:
+    inventory = load_gov_revocation_inventory(
+        REPO_ROOT / "config" / "gov_revocation_producers.json"
+    )
+    assert inventory["producers"] == []
+    validate_gov_revocation_coverage(inventory, app_root=REPO_ROOT / "app")
+    assert discover_gov_revocation_producers(REPO_ROOT / "app") == frozenset()
+    with pytest.raises(ValueError, match="ownership fence"):
+        validate_gov_revocation_inventory(
+            {
+                "schema": "agentic-pkm.gov-revocation-producers.v1",
+                "producers": [
+                    {
+                        "name": "future-revoker",
+                        "enabled": True,
+                        "ownership_fence": False,
+                        "exclusive_binding_lease": True,
+                    }
+                ],
+            }
+        )
+
+    synthetic = tmp_path / "app"
+    synthetic.mkdir()
+    (synthetic / "future.py").write_text(
+        "def revoke(authorizer):\n"
+        "    authorizer.set_binding('binding-a', 2, revoked=True)\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="differs from source mutation seams"):
+        validate_gov_revocation_coverage(inventory, app_root=synthetic)
 
 
 # --------------------------------------------------------------------------- #

@@ -121,6 +121,9 @@ prepare_instance_state_deployment() {
   local receipt_verify_rc
   local native_producer
   local principal_loopback_flag=""
+  local mvr05_stop_services
+  local -a mvr05_stop_service_args
+  local mvr05_effective_compose_path mvr05_fence_plan_host_path
   repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
   inventory_helper="${repo_root}/scripts/instance_state_writer_inventory.py"
   controller_pid="$$"
@@ -251,11 +254,74 @@ prepare_instance_state_deployment() {
     return "${inventory_rc}"
   fi
 
-  "${compose_function}" stop api worker watcher heimdal-capture-watch
+  mvr05_effective_compose_path="$(mktemp "${TMPDIR:-/tmp}/mvr05-effective-compose.XXXXXX")"
+  inventory_rc=$?
+  if [ "${inventory_rc}" -ne 0 ]; then
+    _release_abandoned_instance_state_deployment_lease \
+      "${compose_function}" "${channel}" "${runtime_user}" \
+      "${controller_pid}" "${controller_start_token}"
+    return "${inventory_rc}"
+  fi
+  chmod 600 "${mvr05_effective_compose_path}"
+  "${compose_function}" config --no-interpolate --no-env-resolution > "${mvr05_effective_compose_path}"
+  inventory_rc=$?
+  if [ "${inventory_rc}" -ne 0 ]; then
+    rm -f -- "${mvr05_effective_compose_path}"
+    _release_abandoned_instance_state_deployment_lease \
+      "${compose_function}" "${channel}" "${runtime_user}" \
+      "${controller_pid}" "${controller_start_token}"
+    return "${inventory_rc}"
+  fi
+  mvr05_fence_plan_host_path="${INSTANCE_OWNERSHIP_HOST_STATE_DIR}/mvr05-fence-plan-${controller_pid}.json"
+  rm -f -- "${mvr05_fence_plan_host_path}"
+  mvr05_stop_services="$(
+    python3 "${inventory_helper}" compose-fence-plan \
+      --compose-path "${mvr05_effective_compose_path}" \
+      --receipt-output "${mvr05_fence_plan_host_path}"
+  )"
+  inventory_rc=$?
+  rm -f -- "${mvr05_effective_compose_path}"
+  if [ "${inventory_rc}" -ne 0 ] || [ -z "${mvr05_stop_services}" ]; then
+    rm -f -- "${inventory_host_path}"
+    rm -f -- "${owner_inventory_host_path}"
+    _release_abandoned_instance_state_deployment_lease \
+      "${compose_function}" "${channel}" "${runtime_user}" \
+      "${controller_pid}" "${controller_start_token}"
+    [ "${inventory_rc}" -ne 0 ] && return "${inventory_rc}"
+    return 1
+  fi
+  read -r -a mvr05_stop_service_args <<< "${mvr05_stop_services}"
+  "${compose_function}" stop "${mvr05_stop_service_args[@]}"
   inventory_rc=$?
   if [ "${inventory_rc}" -ne 0 ]; then
     rm -f -- "${inventory_host_path}"
     rm -f -- "${owner_inventory_host_path}"
+    _release_abandoned_instance_state_deployment_lease \
+      "${compose_function}" "${channel}" "${runtime_user}" \
+      "${controller_pid}" "${controller_start_token}"
+    return "${inventory_rc}"
+  fi
+
+  # The service-name fence is paired with a database-side assertion: no old
+  # image, host process, or unclassified client may retain a live PostgreSQL
+  # session when the irreversible floor is recorded. Require two consecutive
+  # empty snapshots to avoid accepting a transient healthcheck gap.
+  "${compose_function}" exec -T db sh -ec '
+    consecutive=0
+    attempts=0
+    while [ "$attempts" -lt 20 ]; do
+      count="$(psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atqc "select count(*) from pg_stat_activity where pid <> pg_backend_pid() and datname = current_database() and backend_type = '\''client backend'\''")"
+      if [ "$count" = 0 ]; then consecutive=$((consecutive + 1)); else consecutive=0; fi
+      [ "$consecutive" -ge 2 ] && exit 0
+      attempts=$((attempts + 1))
+      sleep 0.1
+    done
+    echo "MVR-05 database session fence did not drain" >&2
+    exit 75
+  '
+  inventory_rc=$?
+  if [ "${inventory_rc}" -ne 0 ]; then
+    rm -f -- "${mvr05_fence_plan_host_path}"
     _release_abandoned_instance_state_deployment_lease \
       "${compose_function}" "${channel}" "${runtime_user}" \
       "${controller_pid}" "${controller_start_token}"
@@ -455,6 +521,25 @@ prepare_instance_state_deployment() {
         "${controller_pid}" "${controller_start_token}"
       return "${inventory_rc}"
     fi
+  fi
+
+  # MVR-05A8: after every fallible stopped-window precondition above has
+  # completed, seal scalar rollback immediately before finalization can permit
+  # the first binding-keyed migration or restarted runtime write.
+  "${compose_function}" run --rm --no-deps -T --user "${runtime_user}" instance-state-init \
+    python -m app.instance.runtime mvr05-record-floor \
+      --channel "${channel}" \
+      --registry-path /app/instance-state/agentic-pkm/vault-registry.md \
+      --host-global-root /app/instance-ownership \
+      --quiescence-proof-path /app/instance-ownership/deployment-quiescence-proof.json \
+      --fence-plan "/app/instance-ownership/mvr05-fence-plan-${controller_pid}.json"
+  inventory_rc=$?
+  rm -f -- "${mvr05_fence_plan_host_path}"
+  if [ "${inventory_rc}" -ne 0 ]; then
+    _release_abandoned_instance_state_deployment_lease \
+      "${compose_function}" "${channel}" "${runtime_user}" \
+      "${controller_pid}" "${controller_start_token}"
+    return "${inventory_rc}"
   fi
 
   "${compose_function}" run --rm --no-deps -T --user "${runtime_user}" instance-state-init \

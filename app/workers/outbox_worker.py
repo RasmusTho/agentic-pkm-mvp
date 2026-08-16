@@ -36,6 +36,7 @@ from app.events.topic_schema_registry import (
 )
 from app.indexer.consumer import process_event as process_indexer_event
 from app.instance.binding_ids import COMPATIBILITY_BINDING_ID
+from app.instance.scalar_binding_runtime import resolve_scalar_binding_runtime
 from app.knowledge.write_ops import read_note_text_with_version
 from app.objects import resolve_canonical_object_id
 from app.outbox.events import INDEX_EMBEDDING_REQUESTED
@@ -46,6 +47,11 @@ from app.workers.metrics import (
     WORKER_LAST_TICK_TIMESTAMP,
     WORKER_PROCESSED,
     maybe_start_worker_metrics_server,
+)
+from app.workers.outbox_binding_gate import (
+    eligible_worker_bindings,
+    required_worker_binding_stamp,
+    worker_effect_window,
 )
 from app.services.indexer import (
     handle_ingest_object_created,
@@ -60,6 +66,7 @@ from app.services.outbox import (
     append_jsonl_outbox_event,
     bootstrap,
     bump_outbox_attempts,
+    count_deferred_outbox_rows,
     derive_idempotency_key,
     open_outbox_txn_conn,
     payload_fingerprint,
@@ -340,8 +347,23 @@ def run_once(
         logger.debug("outbox worker tick idled: no vault selected")
         return WorkerTickResult(state="no_vault", processed=0)
 
-    message = poll_outbox_one()
+    resolved_root = _resolve_optional_vault_root(vault_root)
+    binding_runtime = resolve_scalar_binding_runtime(vault_root=resolved_root)
+    eligible = eligible_worker_bindings(binding_runtime)
+    binding_stamp = required_worker_binding_stamp(binding_runtime)
+    message = (
+        poll_outbox_one()
+        if eligible is None
+        else poll_outbox_one(
+            eligible_binding_ids=eligible,
+            required_binding_stamp=binding_stamp,
+        )
+    )
     if not message:
+        if binding_stamp is not None and count_deferred_outbox_rows(
+            required_binding_stamp=binding_stamp
+        ):
+            return WorkerTickResult(state="blocked_pending_mvr06", processed=0)
         return WorkerTickResult(state="idle", processed=0)
 
     topic = message.get("topic")
@@ -353,50 +375,51 @@ def run_once(
         or "-"
     )
     event_id = _event_id_from_message(message)
-    try:
-        _dispatch_topic(topic, payload, trace_id=trace_id, message=message, event_id=event_id)
-    except InvalidPanelNoteUUIDDispatchError as uuid_exc:
-        logger.warning(
-            "worker dead-lettered malformed panel note uuid topic=%s id=%s",
-            topic,
-            message.get("id"),
-        )
-        _dead_letter_and_ack(
-            message["id"],
-            topic=topic,
-            payload=payload,
-            reason=INVALID_NOTE_UUID_REASON,
-            attempts=0,
-            trace_id=None if trace_id == "-" else trace_id,
-            error=str(uuid_exc),
-            source_vault_binding_id=str(
-                message.get("vault_binding_id") or COMPATIBILITY_BINDING_ID
-            ),
-        )
-        return WorkerTickResult(state="processed", processed=1)
-    except SchemaViolationDispatchError as schema_exc:
-        # Immediate dead-letter (KERNEL-08, #2770): see the matching branch in
-        # run()'s consume loop for the invariant (never transient, no retry budget).
-        logger.warning(
-            "worker dead-lettered schema violation topic=%s id=%s reason=%s",
-            topic,
-            message.get("id"),
-            schema_exc.violation.reason,
-        )
-        _dead_letter_and_ack(
-            message["id"],
-            topic=topic,
-            payload=payload,
-            reason=SCHEMA_VIOLATION_REASON,
-            attempts=0,
-            trace_id=None if trace_id == "-" else trace_id,
-            error=str(schema_exc),
-            source_vault_binding_id=str(
-                message.get("vault_binding_id") or COMPATIBILITY_BINDING_ID
-            ),
-        )
-        return WorkerTickResult(state="processed", processed=1)
-    ack_outbox(message["id"])
+    with worker_effect_window(message, runtime=binding_runtime):
+        try:
+            _dispatch_topic(topic, payload, trace_id=trace_id, message=message, event_id=event_id)
+        except InvalidPanelNoteUUIDDispatchError as uuid_exc:
+            logger.warning(
+                "worker dead-lettered malformed panel note uuid topic=%s id=%s",
+                topic,
+                message.get("id"),
+            )
+            _dead_letter_and_ack(
+                message["id"],
+                topic=topic,
+                payload=payload,
+                reason=INVALID_NOTE_UUID_REASON,
+                attempts=0,
+                trace_id=None if trace_id == "-" else trace_id,
+                error=str(uuid_exc),
+                source_vault_binding_id=str(
+                    message.get("vault_binding_id") or COMPATIBILITY_BINDING_ID
+                ),
+            )
+            return WorkerTickResult(state="processed", processed=1)
+        except SchemaViolationDispatchError as schema_exc:
+            # Immediate dead-letter (KERNEL-08, #2770): see the matching branch in
+            # run()'s consume loop for the invariant (never transient, no retry budget).
+            logger.warning(
+                "worker dead-lettered schema violation topic=%s id=%s reason=%s",
+                topic,
+                message.get("id"),
+                schema_exc.violation.reason,
+            )
+            _dead_letter_and_ack(
+                message["id"],
+                topic=topic,
+                payload=payload,
+                reason=SCHEMA_VIOLATION_REASON,
+                attempts=0,
+                trace_id=None if trace_id == "-" else trace_id,
+                error=str(schema_exc),
+                source_vault_binding_id=str(
+                    message.get("vault_binding_id") or COMPATIBILITY_BINDING_ID
+                ),
+            )
+            return WorkerTickResult(state="processed", processed=1)
+        ack_outbox(message["id"])
     return WorkerTickResult(state="processed", processed=1)
 
 
@@ -1890,6 +1913,7 @@ def run(
     processed_total = 0
     errors_total = 0
     last_heartbeat = 0.0
+    binding_blocked_pending = 0
 
     # The loop polls/dispatches only while a vault is selected. When no vault is
     # bound, ``no_vault_idle`` short-circuits the poll/dispatch body for that tick
@@ -1897,7 +1921,8 @@ def run(
     while True:
         ticks_total += 1
         WORKER_LAST_TICK_TIMESTAMP.set(time.time())
-        no_vault_idle = _resolve_optional_vault_root(None) is None
+        tick_vault_root = _resolve_optional_vault_root(None)
+        no_vault_idle = tick_vault_root is None
         if no_vault_idle:
             # No-vault idle guard (#2407): match run_once's runtime decision. With
             # no vault selected the production loop must not poll/dispatch
@@ -1906,7 +1931,30 @@ def run(
             # row instead of leaving it queued until a vault is selected.
             logger.debug("worker tick idled: no vault selected")
         try:
-            message = None if no_vault_idle else poll_outbox_one()
+            binding_runtime = (
+                None
+                if tick_vault_root is None
+                else resolve_scalar_binding_runtime(vault_root=tick_vault_root)
+            )
+            eligible = eligible_worker_bindings(binding_runtime)
+            binding_stamp = required_worker_binding_stamp(binding_runtime)
+            message = (
+                None
+                if no_vault_idle
+                else (
+                    poll_outbox_one()
+                    if eligible is None
+                    else poll_outbox_one(
+                        eligible_binding_ids=eligible,
+                        required_binding_stamp=binding_stamp,
+                    )
+                )
+            )
+            binding_blocked_pending = (
+                0
+                if binding_stamp is None
+                else count_deferred_outbox_rows(required_binding_stamp=binding_stamp)
+            )
             if message:
                 processed_total += 1
                 WORKER_PROCESSED.inc()
@@ -1927,7 +1975,8 @@ def run(
                     # head-of-line stall (a softer echo of the #2252 stall) that
                     # also starves every downstream row. The row IS handled here
                     # (a deduplicated no-op), so acking it is the receipt.
-                    ack_outbox(message["id"])
+                    with worker_effect_window(message, runtime=binding_runtime):
+                        ack_outbox(message["id"])
                     continue
 
                 payload = message.get("payload") or {}
@@ -1949,7 +1998,9 @@ def run(
                     except Exception:
                         handler_note_path = None
 
-                with start_span("worker.consume", trace_id, {"topic": topic}):
+                with worker_effect_window(
+                    message, runtime=binding_runtime
+                ), start_span("worker.consume", trace_id, {"topic": topic}):
                     try:
                         # Dispatch through the single shared table so run() and
                         # run_once cannot diverge on which topics are supported (#2407).
@@ -2042,7 +2093,7 @@ def run(
                         # the supervised worker restarts and retries (at-least-once).
                         raise
 
-                ack_outbox(message["id"])
+                    ack_outbox(message["id"])
         except Exception:
             errors_total += 1
             logger.exception("worker loop failed")
@@ -2058,6 +2109,12 @@ def run(
                 processed_by_event=processed_by_event,
                 last_processed=last_processed,
                 outbox_path=outbox_path,
+                status=(
+                    "blocked_pending_mvr06"
+                    if binding_blocked_pending
+                    else "running"
+                ),
+                binding_blocked_pending=binding_blocked_pending,
                 now=now,
             )
             last_heartbeat = now

@@ -12,9 +12,11 @@ from app.events.models import new_event
 from app.events.types import INGEST_VAULT_CHANGED
 from app.instance.binding_ids import (
     COMPATIBILITY_BINDING_ID,
+    OUTBOX_GLOBAL_BINDING_ID,
     OUTBOX_QUARANTINE_BINDING_ID,
 )
 from app.services.outbox import (
+    count_deferred_outbox_rows,
     derive_binding_scoped_idempotency_key,
     derive_idempotency_key,
     poll_outbox_one,
@@ -186,6 +188,65 @@ def test_quarantined_pending_row_cannot_dispatch_or_block_later_rows(
             "SELECT delivered_at FROM outbox WHERE id = %s", (quarantined_id,)
         ).fetchone()
         assert quarantined == (None,)
+
+
+def test_stale_binding_row_remains_pending_while_later_global_dispatches(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stamp = {
+        "vault_binding_id": "binding-a",
+        "binding_authority": "allow",
+        "binding_authorization_epoch": "epoch-current",
+        "binding_revision": 8,
+        "vault_root": "/vault/current",
+    }
+    stale = new_event(
+        event_type="mvr.test",
+        payload={"source_id": "stale"},
+        source="test",
+        meta={**stamp, "binding_revision": 7},
+    )
+    global_event = new_event(
+        event_type="mvr.test", payload={"source_id": "global"}, source="test"
+    )
+    with _isolated_outbox(monkeypatch) as conn:
+        stale_id = uuid4()
+        global_id = uuid4()
+        conn.execute(
+            "INSERT INTO outbox (id, legacy_key, vault_binding_id, topic, payload, created_at) "
+            "VALUES (%s, %s, %s, %s, %s::jsonb, '2000-01-01T00:00:00Z'), "
+            "(%s, %s, %s, %s, %s::jsonb, '2000-01-02T00:00:00Z')",
+            (
+                stale_id,
+                uuid4(),
+                "binding-a",
+                "mvr.test",
+                stale.model_dump_json(),
+                global_id,
+                uuid4(),
+                OUTBOX_GLOBAL_BINDING_ID,
+                "mvr.test",
+                global_event.model_dump_json(),
+            ),
+        )
+
+        message = poll_outbox_one(
+            conn,
+            eligible_binding_ids=(
+                "binding-a",
+                COMPATIBILITY_BINDING_ID,
+                OUTBOX_GLOBAL_BINDING_ID,
+            ),
+            required_binding_stamp=stamp,
+        )
+        assert message is not None
+        assert message["id"] == str(global_id)
+        assert count_deferred_outbox_rows(
+            conn=conn, required_binding_stamp=stamp
+        ) == 1
+        assert conn.execute(
+            "SELECT delivered_at FROM outbox WHERE id = %s", (stale_id,)
+        ).fetchone() == (None,)
 
 
 def test_quarantined_vault_activity_row_cannot_reach_episode_consumer(

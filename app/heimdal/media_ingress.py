@@ -52,6 +52,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from app.events.schema import make_outbox_event
+from app.instance.binding_ids import OUTBOX_GLOBAL_BINDING_ID
 from app.events.types import HEIMDAL_CAPTURE_MEDIA_ADMITTED
 from app.heimdal import (
     capture_adapter,
@@ -254,6 +255,7 @@ def _emit_admission_event(
                     idempotency_key=outbox_service.derive_idempotency_key(
                         outbox_evt.event, receipt_id, content_sha256
                     ),
+                    vault_binding_id=OUTBOX_GLOBAL_BINDING_ID,
                 )
                 # Returning normally means the row exists: `write_outbox_event`
                 # yields the new id on insert and "" when its ON CONFLICT

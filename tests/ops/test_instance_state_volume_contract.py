@@ -503,8 +503,12 @@ def test_legacy_registry_export_happens_after_writer_quiescence(tmp_path) -> Non
     )
     assert "prepare_instance_state_deployment compose" in deploy
     assert "prepare_instance_state_deployment run_docker_compose" in start
-    assert producer.index("deployment-begin") < producer.index(" stop api worker watcher")
-    assert producer.index(" stop api worker watcher") < producer.index("deployment-finish")
+    assert producer.index("deployment-begin") < producer.index(
+        'stop "${mvr05_stop_service_args[@]}"'
+    )
+    assert producer.index('stop "${mvr05_stop_service_args[@]}"') < producer.index(
+        "deployment-finish"
+    )
     assert "deployment-prove" in producer
     assert "probe_count" in WRITER_INVENTORY_HELPER.read_text(encoding="utf-8")
 
@@ -1977,7 +1981,9 @@ def test_real_deployment_wrapper_probes_all_domains_twice_before_proof() -> None
     assert "instance_state_writer_inventory.py" in producer
     assert "prove-quiescent" in producer
     assert "pgrep" not in producer
-    assert producer.index(" stop api worker watcher") < producer.index("deployment-prove")
+    assert producer.index('stop "${mvr05_stop_service_args[@]}"') < producer.index(
+        "deployment-prove"
+    )
     assert producer.index("deployment-prove") < producer.index("deployment-finish")
 
 
@@ -2000,7 +2006,8 @@ def test_real_deployment_wrapper_produces_owner_inventory_before_mutation_window
         "      shift\n"
         "    done\n"
         "    exit 2 ;;\n"
-        "  *' controller-token '*) printf 'linux:%064d\\n' 0; exit 0 ;;\n"
+            "  *' controller-token '*) printf 'linux:%064d\\n' 0; exit 0 ;;\n"
+            "  *' compose-fence-plan '*) printf 'api worker watcher heimdal-capture-watch\\n'; exit 0 ;;\n"
         "  *' prove-quiescent '*)\n"
         '    while [ "$#" -gt 0 ]; do\n'
         '      if [ "$1" = --output ]; then printf \'{}\\n\' > "$2"; exit 0; fi\n'
@@ -2025,6 +2032,7 @@ def test_real_deployment_wrapper_produces_owner_inventory_before_mutation_window
         f"source '{REPO_ROOT / 'scripts/lib/instance_state_deployment.sh'}'\n"
         "fake_compose() {\n"
         "  printf 'compose:%s\\n' \"$*\" >> \"$EVENT_LOG\"\n"
+        f"  if [ \"${{1:-}}\" = config ]; then cat '{REPO_ROOT / 'docker-compose.yaml'}'; fi\n"
         "  return 0\n"
         "}\n"
         "prepare_instance_state_deployment fake_compose prod\n",
@@ -2078,7 +2086,8 @@ def test_real_deployment_wrapper_mounts_selected_root_at_cutover_alias(
         "      shift\n"
         "    done\n"
         "    exit 2 ;;\n"
-        "  *' controller-token '*) printf 'linux:%064d\\n' 0; exit 0 ;;\n"
+            "  *' controller-token '*) printf 'linux:%064d\\n' 0; exit 0 ;;\n"
+            "  *' compose-fence-plan '*) printf 'api worker watcher heimdal-capture-watch\\n'; exit 0 ;;\n"
         "  *' prove-quiescent '*)\n"
         '    while [ "$#" -gt 0 ]; do\n'
         '      if [ "$1" = --output ]; then printf \'{}\\n\' > "$2"; exit 0; fi\n'
@@ -2103,6 +2112,7 @@ def test_real_deployment_wrapper_mounts_selected_root_at_cutover_alias(
         f"source '{REPO_ROOT / 'scripts/lib/instance_state_deployment.sh'}'\n"
         "fake_compose() {\n"
         "  printf 'compose:%s\\n' \"$*\" >> \"$EVENT_LOG\"\n"
+        f"  if [ \"${{1:-}}\" = config ]; then cat '{REPO_ROOT / 'docker-compose.yaml'}'; fi\n"
         "  return 0\n"
         "}\n"
         "prepare_instance_state_deployment fake_compose prod\n",

@@ -3,7 +3,7 @@ Doc role: Reference
 Authority: Human-readable snapshot of the current database schema and DB outbox bootstrap; migrations and bootstrap code remain the executable source of truth.
 Temporal class: operational
 Source of truth: code
-Last verified against: app/stores/pg.py + app/alembic/versions/e6c4a2b8d1f3_mvr05a3_store_object_binding_keys.py + app/alembic/versions/f4a05a4b0001_mvr05a4_ingest_projection_binding_keys.py + app/alembic/versions/f5a05a5b0001_mvr05a5_replay_projection_binding_keys.py + app/services/outbox.py + app/alembic/versions/f3a1c9d2e4b7_kernel05_outbox_schema_in_migrations.py + app/heimdal/observation_log.py + app/heimdal/cursor_store.py + app/alembic/versions/8b21e6a1f0c4_heim_observation_log_and_cursor.py + app/services/vault_sync.py + app/alembic/versions/c7f4b1a83d29_mvr05a0_file_state_binding_key.py + app/alembic/versions/d1e8a0c5f37b_mvr05a1_objects_agent_memories_adoption.py + app/db/db.py + tests/architecture/durable_table_classification.json (2026-08-15)
+Last verified against: app/stores/pg.py + app/alembic/versions/e6c4a2b8d1f3_mvr05a3_store_object_binding_keys.py + app/alembic/versions/f4a05a4b0001_mvr05a4_ingest_projection_binding_keys.py + app/alembic/versions/f5a05a5b0001_mvr05a5_replay_projection_binding_keys.py + app/services/outbox.py + app/workers/outbox_binding_gate.py + app/instance/mvr05_cutover.py + app/alembic/versions/f3a1c9d2e4b7_kernel05_outbox_schema_in_migrations.py + app/heimdal/observation_log.py + app/heimdal/cursor_store.py + app/alembic/versions/8b21e6a1f0c4_heim_observation_log_and_cursor.py + app/services/vault_sync.py + app/alembic/versions/c7f4b1a83d29_mvr05a0_file_state_binding_key.py + app/alembic/versions/d1e8a0c5f37b_mvr05a1_objects_agent_memories_adoption.py + app/db/db.py + tests/architecture/durable_table_classification.json (2026-08-16)
 
 ## v5.5 Baseline Delta (Current Reality)
 - Registry watcher is the runtime default; legacy snapshot watcher is dev-only.
@@ -35,6 +35,22 @@ Last verified against: app/stores/pg.py + app/alembic/versions/e6c4a2b8d1f3_mvr0
   fixtures opt in to create-on-demand via the same `STORE_SCHEMA_AUTOCREATE=1` flag KERNEL-04
   established. Schema parity between the migration and the audited `bootstrap()` shape is asserted by
   `tests/migrations/test_outbox_schema_parity.py`.
+- MVR-05A8 (#4582) completes the binding-keyed cutover without another schema revision. Before any
+  binding-aware migration or runtime can write, deployment resolves the effective channel Compose
+  graph and requires every service to carry a DB role, stops all clients except the unique
+  `run_migrations.sh` authority, proves both the host-wide Docker/native inventory and PostgreSQL
+  client-session population quiescent, and records `minimumRuntimeSchema: mvr-05` with the
+  fence receipt in private instance state. Existing scalar producers remain live through the sole
+  `write_outbox_event` compatibility translator: it resolves the configured root to exactly one
+  active registry binding, obtains a GOV verdict, and stamps binding id, authorization epoch,
+  revision, and root on the envelope, so
+  new rows never use the legacy sentinel. The worker admits only its live binding, migrated
+  compatibility history, or explicitly-global rows; binding-scoped dispatch, retry/dead-letter
+  receipts, and acknowledgement share one per-binding effect lease. A stale binding/revision/root
+  remains pending while later global work remains processable and worker readiness reports
+  `blocked_pending_mvr06`. The checked-in GOV revocation producer inventory is empty and CI derives
+  the matching mutation-seam population from source; any future enabled producer must declare both
+  the ownership fence and exclusive binding lease before CI accepts it.
 - The **entity-review operation journal** table (`entity_review_operations`) is **migration-owned**
   (EROJ-01, #4350): Alembic revision `e7a2b9c4d1f8` creates it, and
   `app/heimdal/entity_review_operation_journal.py::ensure_journal_schema()` is assert-only outside

@@ -30,7 +30,6 @@ INVENTORY_SCHEMA = "agentic-pkm.host-deployment-quiescence.v2"
 LEGACY_OWNER_INVENTORY_SCHEMA = "agentic-pkm.legacy-owner-inventory.v1"
 DOMAINS = ("dev", "native", "prod", "test")
 COMPOSE_PROJECT_DOMAINS = {"pkm-dev": "dev", "pkm-prod": "prod", "pkm-test": "test"}
-COMPOSE_WRITER_SERVICES = {"api", "heimdal-capture-watch", "watcher", "worker"}
 LAUNCHER_SCRIPTS = {"deploy_channel.sh", "start_full_system.sh"}
 LAUNCHER_ROLES = {name.removesuffix(".sh") for name in LAUNCHER_SCRIPTS}
 TOKEN_RE = re.compile(r"^(?:linux|darwin|docker):[0-9a-f]{64}$")
@@ -65,6 +64,21 @@ class LegacyOwnerRecord:
     # without emitting a raw host path. Defaults to "unknown" only as a
     # safety net; every live construction site below supplies a real value.
     source: str = "unknown"
+
+
+def _compose_writer_services(compose_path: Path | None = None) -> set[str]:
+    """Use the same production-derived MVR-05 fence plan as deployment."""
+
+    root = Path(__file__).resolve().parents[1]
+    try:
+        if str(root) not in sys.path:
+            sys.path.insert(0, str(root))
+        from app.instance.mvr05_cutover import discover_db_producer_fence
+
+        plan = discover_db_producer_fence(compose_path or root / "docker-compose.yaml")
+    except Exception as exc:
+        raise InventoryError("compose DB producer inventory is incomplete") from exc
+    return set(plan.stopped_services)
 
 
 def _digest_token(kind: str, *parts: object) -> str:
@@ -683,7 +697,7 @@ def _docker_legacy_owner_sources() -> tuple[list[LegacyOwnerRecord], list[str]]:
             raise InventoryError("docker legacy owner source inventory is malformed")
         project = labels.get("com.docker.compose.project")
         service = labels.get("com.docker.compose.service")
-        if project not in COMPOSE_PROJECT_DOMAINS or service not in COMPOSE_WRITER_SERVICES:
+        if project not in COMPOSE_PROJECT_DOMAINS or service not in _compose_writer_services():
             continue
         channel = COMPOSE_PROJECT_DOMAINS[str(project)]
         values = _env_list(config.get("Env"))
@@ -1207,6 +1221,11 @@ def _native_role(
             return "watcher"
         if len(argv) >= 5 and argv[2:5] == ("app.cli", "heimdal", "capture-watch"):
             return "heimdal-capture-watch"
+        if argv[2].startswith("app."):
+            # Future app modules are potential DB producers until classified.
+            # The PostgreSQL session fence is the final proof, but the native
+            # census must not silently discard an unfamiliar producer argv.
+            return "app-python-module"
     return None
 
 
@@ -1250,7 +1269,7 @@ def _docker_writers() -> list[dict[str, object]]:
         seen.add(container_id)
         project = labels.get("com.docker.compose.project")
         service = labels.get("com.docker.compose.service")
-        if project not in COMPOSE_PROJECT_DOMAINS or service not in COMPOSE_WRITER_SERVICES:
+        if project not in COMPOSE_PROJECT_DOMAINS or service not in _compose_writer_services():
             continue
         pid = state.get("Pid")
         started = state.get("StartedAt")
@@ -1412,6 +1431,9 @@ def main(argv: list[str] | None = None) -> int:
     validate.add_argument("--active-channel", required=True)
     validate.add_argument("--inventory", type=Path, required=True)
     validate.add_argument("--output", type=Path, required=True)
+    fence_plan = subparsers.add_parser("compose-fence-plan")
+    fence_plan.add_argument("--compose-path", type=Path, required=True)
+    fence_plan.add_argument("--receipt-output", type=Path)
     args = parser.parse_args(argv)
     try:
         if args.command == "controller-token":
@@ -1438,6 +1460,21 @@ def main(argv: list[str] | None = None) -> int:
                 inventory=args.inventory,
                 output=args.output,
             )
+            return 0
+        if args.command == "compose-fence-plan":
+            root = Path(__file__).resolve().parents[1]
+            if str(root) not in sys.path:
+                sys.path.insert(0, str(root))
+            from app.instance.mvr05_cutover import discover_db_producer_fence
+
+            plan = discover_db_producer_fence(args.compose_path)
+            if args.receipt_output is not None:
+                args.receipt_output.write_text(
+                    json.dumps(plan.as_payload(), sort_keys=True) + "\n",
+                    encoding="utf-8",
+                )
+                os.chmod(args.receipt_output, 0o600)
+            print(" ".join(sorted(plan.stopped_services)))
             return 0
     except InventoryError as exc:
         print(str(exc), file=sys.stderr)

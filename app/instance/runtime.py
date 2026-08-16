@@ -3869,6 +3869,12 @@ def main(argv: list[str] | None = None) -> int:
     prove.add_argument("--channel", required=True)
     prove.add_argument("--host-global-root", type=Path, required=True)
     prove.add_argument("--inventory-path", type=Path, required=True)
+    mvr05_floor = subparsers.add_parser("mvr05-record-floor")
+    mvr05_floor.add_argument("--channel", required=True)
+    mvr05_floor.add_argument("--registry-path", type=Path, required=True)
+    mvr05_floor.add_argument("--host-global-root", type=Path, required=True)
+    mvr05_floor.add_argument("--quiescence-proof-path", type=Path, required=True)
+    mvr05_floor.add_argument("--fence-plan", type=Path, required=True)
     for name in ("default-vault-get", "default-vault-set", "default-vault-clear"):
         command = subparsers.add_parser(name)
         command.add_argument("--registry-path", type=Path, required=True)
@@ -3957,6 +3963,26 @@ def main(argv: list[str] | None = None) -> int:
         return _principal_command(args)
     if args.command == "read-revision":
         return _read_revision(args.registry_path, args.consumer)
+    if args.command == "mvr05-record-floor":
+        from app.instance.mvr05_cutover import (
+            load_mvr05_fence_plan,
+            record_mvr05_runtime_floor,
+        )
+
+        proof = json.loads(args.quiescence_proof_path.read_text(encoding="utf-8"))
+        _require_proved_deployment_lease(
+            host_global_root=args.host_global_root,
+            channel=args.channel,
+            nonce=proof.get("nonce"),
+        )
+        result = record_mvr05_runtime_floor(
+            VaultRegistryStore(args.registry_path),
+            fence=load_mvr05_fence_plan(args.fence_plan),
+            channel_id=args.channel,
+            _capability=local_operator_storage_capability(),
+        )
+        print(json.dumps({"ok": True, "registry_revision": result.revision}, sort_keys=True))
+        return 0
     if args.command == "preflight":
         return _preflight_runtime(
             channel=args.channel,

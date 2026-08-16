@@ -94,6 +94,7 @@ def _heartbeat_status(
     for key in (
         "pid", "scope_glob", "ticks_total", "errors_total", "vault_path", "outbox_path",
         "processed_total", "enqueue_failures_total",
+        "binding_blocked_pending",
     ):
         if key in raw:
             payload[key] = raw[key]

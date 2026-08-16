@@ -288,8 +288,15 @@ Currently recorded floors:
 
 | Floor key | Value | Shipped by | Blocks |
 | --- | --- | --- | --- |
-| `minimumRuntimeSchema` | per MVR-01 | MVR-01B/01C (#3854/#3855) | scalar API/worker startup before the registry/queue schema it needs |
+| `minimumRuntimeSchema` | `mvr-05` | MVR-05A8 (#4582), on the MVR-01B/01C floor mechanism | scalar API/worker startup before binding-keyed DB/outbox authority |
 | `minimumRuntimePrincipal` | `mvr-03` | MVR-03 (#3857) | a credential-only image with no delegated-principal producer |
+
+`minimumRuntimeSchema` is written only inside the proved host-global deployment window. The
+wrapper resolves the effective channel Compose graph, requires a DB-role declaration for every
+service, stops every client except the unique migration runner, proves Docker/native quiescence and
+an empty PostgreSQL client-session population, then records the floor before migration or runtime writes.
+Consequently an image without the binding-aware compatibility ingress and worker gate is not a
+legal rollback target even when its tag remains available.
 
 `minimumRuntimePrincipal` is set together with the private delegated operator-role cutover only
 when a channel deployment carries the explicit `MVR03_PRINCIPAL_CUTOVER=1` opt-in. The governed
@@ -303,8 +310,9 @@ role id, and an ambiguous or divergent lineage fails closed without overwriting 
 
 A floor is lowered only by a later explicitly verified reversible migration. Rolling the
 `stable` ref back does not lower it, and forward-only acknowledgement at promotion time does
-not authorize crossing it. Full operator preflight and the automated cutover operation live in
-`docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md :: Minimum runtime principal floor`.
+not authorize crossing it. The automated cutover operations live in
+`docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md :: Minimum runtime schema floor` and
+`:: Minimum runtime principal floor`.
 
 ### Vault is not release state
 

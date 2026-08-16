@@ -55,6 +55,15 @@ partially upgraded binding cannot be proved carry the explicit quarantine marker
 collision evidence. Worker retry, dead-letter, and knowledge-signal re-emissions inherit this stored
 binding from their source row rather than resolving ambient context.
 
+After the MVR-05A8 cutover, a compatibility producer that omits `vault_binding_id` is translated at
+the outbox choke point: its configured vault root must resolve to exactly one active registry
+binding with matching host ownership, and the serialized event `meta` is stamped with
+`vault_binding_id`, the GOV `binding_authority` verdict and
+`binding_authorization_epoch`, `binding_revision`, and `vault_root`. New runtime rows no
+longer use `legacy-compatibility-binding`; that value remains readable only for rows migrated from
+the scalar schema. Definitionally vault-independent work uses the explicit `explicitly-global`
+binding identity. The quarantine identity is evidence-only and never authorizes emission.
+
 Notes:
 
 - Producers MAY add additional top-level fields for compatibility or convenience; consumers MUST ignore unknown fields (see `docs/CONCEPTS/EVENT_COMPATIBILITY_CONTRACT.md`).
@@ -152,6 +161,13 @@ Current consumer expectations:
 
 - Ordering is FIFO by `created_at` for undelivered DB rows.
 - Delivery completion is recorded by `delivered_at`; rows without `delivered_at` remain pending.
+- The scalar worker polls only its live binding, migrated compatibility history, and
+  `explicitly-global` rows. Binding-scoped work must match the live envelope GOV verdict and
+  authorization epoch, binding revision, and root, then holds the per-binding shared-effect lease across dispatch, emitted
+  receipts (including retry/dead-letter), and final acknowledgement. A mismatched row remains
+  pending while a later explicitly-global row stays eligible and the heartbeat reports
+  `blocked_pending_mvr06`; revocation/rotation takes the
+  corresponding exclusive lease and therefore cannot cross an in-flight effect window.
 - Worker handlers propagate `trace_id` from the event envelope or payload into downstream spans and
   emitted retry events.
 - Consumer idempotency is keyed by `event_id`; duplicate event ids are skipped without replaying
