@@ -2028,6 +2028,7 @@ def _note_readback_script() -> str:
         });
     }
     window.noteReadback = {
+      renderSpeechPlan: renderSpeechPlan,
       readFullNote: function () { readText(sourceNoteText(), 'Reading note source.'); },
       readSelection: function () { readText(selectedText(), 'Reading selected source text.'); },
       readProposal: function () { readText(proposalText(), 'Reading Panel proposal fields.'); },
@@ -2057,6 +2058,267 @@ def _note_readback_script() -> str:
       status('Local TTS idle.', 'idle');
     });
   })();
+  </script>"""
+
+
+def _render_voice_push_to_talk_surface() -> str:
+    """Render the stateless, read-only VOICE-03 turn surface."""
+    return """
+      <section class="voice-push-to-talk" data-testid="voice-push-to-talk"
+        data-authority="read-only-turn" aria-label="Ask Mimer by voice">
+        <div class="voice-push-to-talk-title">Ask by voice</div>
+        <button type="button" class="voice-push-to-talk-control"
+          data-testid="voice-push-to-talk-control" aria-pressed="false"
+          aria-describedby="voice-push-to-talk-status">Hold to talk</button>
+        <p class="voice-push-to-talk-status" data-testid="voice-push-to-talk-status"
+          aria-live="polite">Hold to ask. Tap once to start and again to send.</p>
+        <div class="voice-turn-result" data-testid="voice-turn-result" hidden>
+          <p data-testid="voice-transcript"></p>
+          <div data-testid="voice-answer"></div>
+          <ul data-testid="voice-citations"></ul>
+          <span data-testid="voice-tts-degraded" hidden>voice unavailable</span>
+          <audio data-testid="voice-audio" controls hidden></audio>
+        </div>
+      </section>"""
+
+
+def _voice_push_to_talk_script() -> str:
+    """Browser interaction for one hold-or-tap voice ask turn."""
+    return """
+  <script>
+  (function () {
+    function escapeHtml(value) {
+      return String(value == null ? '' : value)
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+    }
+    function detail(data) {
+      var value = data && data.detail ? data.detail : data;
+      return (value && (value.message || value.reason || value.error)) || '';
+    }
+    document.addEventListener('DOMContentLoaded', function () {
+      var surface = document.querySelector('[data-testid="voice-push-to-talk"]');
+      if (!surface) return;
+      var voiceControl = surface.querySelector('[data-testid="voice-push-to-talk-control"]');
+      var status = surface.querySelector('[data-testid="voice-push-to-talk-status"]');
+      var result = surface.querySelector('[data-testid="voice-turn-result"]');
+      var transcript = surface.querySelector('[data-testid="voice-transcript"]');
+      var answer = surface.querySelector('[data-testid="voice-answer"]');
+      var citations = surface.querySelector('[data-testid="voice-citations"]');
+      var degraded = surface.querySelector('[data-testid="voice-tts-degraded"]');
+      var audio = surface.querySelector('[data-testid="voice-audio"]');
+      var recorder = null;
+      var stream = null;
+      var chunks = [];
+      var tapRecording = false;
+      var captureState = 'idle';
+      var cancelPendingTap = false;
+      var discardRecording = false;
+      var activePointerId = null;
+      var pointerStartedAt = 0;
+      function setStatus(message) { status.textContent = message; }
+      function rearm(message) {
+        voiceControl.removeAttribute('disabled');
+        voiceControl.setAttribute('aria-pressed', 'false');
+        setStatus(message);
+      }
+      function stopTracks() {
+        if (stream && stream.getTracks) stream.getTracks().forEach(function (track) { track.stop(); });
+        stream = null;
+      }
+      function showTurn(turn) {
+        result.hidden = false;
+        transcript.textContent = turn.transcript ? 'Heard: ' + turn.transcript : '';
+        answer.textContent = turn.answer || '';
+        citations.innerHTML = (Array.isArray(turn.sources) ? turn.sources : []).map(function (citation) {
+          var label = citation.title || citation.path || 'Source';
+          var href = citation.path ? '/?note_path=' + encodeURIComponent(citation.path) : (citation.url || '#');
+          return '<li><a href="' + escapeHtml(href) + '">' + escapeHtml(label) + '</a></li>';
+        }).join('');
+        var plan = turn.speech_plan;
+        if (plan && window.noteReadback && window.noteReadback.renderSpeechPlan) {
+          window.noteReadback.renderSpeechPlan(plan);
+        }
+        if (turn.audio_url) {
+          audio.src = turn.audio_url;
+          audio.hidden = false;
+          degraded.hidden = true;
+          audio.play().then(function () {
+            setStatus('Answer ready.');
+          }).catch(function () {
+            setStatus('Answer ready. Tap play to listen.');
+          });
+        } else {
+          audio.removeAttribute('src');
+          audio.hidden = true;
+          degraded.hidden = false;
+        }
+      }
+      function sendAudio(blob) {
+        voiceControl.setAttribute('disabled', '');
+        setStatus('Asking Mimer…');
+        var form = new FormData();
+        form.append('audio', blob, 'voice-question.webm');
+        fetch('/api/ask/voice', {method: 'POST', body: form})
+          .then(function (response) { return response.json().then(function (data) { return {ok: response.ok, data: data}; }); })
+          .then(function (response) {
+            if (!response.ok) {
+              var turn = response.data || {};
+              result.hidden = false;
+              transcript.textContent = turn.transcript ? 'Heard: ' + turn.transcript : '';
+              answer.textContent = "I couldn't answer that right now.";
+              citations.innerHTML = '';
+              audio.hidden = true;
+              if (turn.reason === 'stt_unavailable' || detail(turn) === 'stt_unavailable') {
+                transcript.textContent = '';
+                answer.textContent = "I couldn't hear that clearly — try again.";
+              }
+              rearm(answer.textContent);
+              return;
+            }
+            showTurn(response.data || {});
+            rearm((response.data && response.data.degraded) ? 'Answer ready — voice unavailable.' : 'Answer ready.');
+          })
+          .catch(function () {
+            result.hidden = false;
+            answer.textContent = "I couldn't answer that right now.";
+            audio.hidden = true;
+            rearm(answer.textContent);
+          });
+      }
+      function finishRecording() {
+        if (captureState === 'requesting') {
+          cancelPendingTap = true;
+          setStatus('Microphone permission pending. Release recorded; no audio will be sent.');
+          return;
+        }
+        if (captureState !== 'recording' || !recorder || recorder.state === 'inactive') return;
+        captureState = 'stopping';
+        recorder.stop();
+        voiceControl.setAttribute('aria-pressed', 'false');
+        setStatus('Sending your question…');
+      }
+      function cancelCapture(message) {
+        tapRecording = false;
+        if (captureState === 'requesting') {
+          cancelPendingTap = true;
+          setStatus(message);
+          return;
+        }
+        if (recorder && recorder.state === 'recording') {
+          discardRecording = true;
+          captureState = 'stopping';
+          recorder.stop();
+        } else {
+          stopTracks();
+          captureState = 'idle';
+        }
+        rearm(message);
+      }
+      function beginRecording() {
+        if (captureState !== 'idle') return;
+        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia || !window.MediaRecorder) {
+          rearm('Microphone recording is unavailable in this browser.');
+          return;
+        }
+        captureState = 'requesting';
+        navigator.mediaDevices.getUserMedia({audio: true}).then(function (mediaStream) {
+          if (cancelPendingTap) {
+            cancelPendingTap = false;
+            mediaStream.getTracks().forEach(function (track) { track.stop(); });
+            captureState = 'idle';
+            rearm('Microphone ready. Tap to start recording.');
+            return;
+          }
+          stream = mediaStream;
+          chunks = [];
+          try {
+            var options = (MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported('audio/webm'))
+              ? {mimeType: 'audio/webm'} : undefined;
+            recorder = new MediaRecorder(stream, options);
+            recorder.ondataavailable = function (event) { if (event.data && event.data.size) chunks.push(event.data); };
+            recorder.onstop = function () {
+              var blob = new Blob(chunks, {type: recorder.mimeType || 'audio/webm'});
+              stopTracks();
+              captureState = 'idle';
+              if (discardRecording) { discardRecording = false; return; }
+              sendAudio(blob);
+            };
+            recorder.start();
+            captureState = 'recording';
+            voiceControl.setAttribute('aria-pressed', 'true');
+            setStatus('Listening. Release to send.');
+          } catch (error) {
+            recorder = null;
+            stopTracks();
+            captureState = 'idle';
+            rearm('Microphone recording could not start. Try again.');
+          }
+        }).catch(function () {
+          stream = null;
+          cancelPendingTap = false;
+          tapRecording = false;
+          activePointerId = null;
+          captureState = 'idle';
+          rearm("I couldn't hear that clearly — try again.");
+        });
+      }
+      function isShortTap(event) {
+        var endedAt = typeof event.timeStamp === 'number' ? event.timeStamp : Date.now();
+        return endedAt - pointerStartedAt < 300;
+      }
+      voiceControl.addEventListener('pointerdown', function (event) {
+        event.preventDefault();
+        activePointerId = event.pointerId;
+        pointerStartedAt = typeof event.timeStamp === 'number' ? event.timeStamp : Date.now();
+        if (captureState === 'idle') beginRecording();
+      });
+      voiceControl.addEventListener('pointerup', function (event) {
+        if (activePointerId !== null && event.pointerId !== activePointerId) return;
+        activePointerId = null;
+        if (isShortTap(event)) {
+          if (captureState === 'requesting') {
+            tapRecording = true;
+            setStatus('Microphone permission pending. Tap again after it starts to send.');
+            return;
+          }
+          if (captureState === 'recording') {
+            if (tapRecording) finishRecording();
+            else {
+              tapRecording = true;
+              setStatus('Listening. Tap again to send.');
+            }
+          }
+          return;
+        }
+        tapRecording = false;
+        finishRecording();
+      });
+      voiceControl.addEventListener('pointerleave', function (event) {
+        // A released short tap remains armed even if its pointer subsequently
+        // leaves the control; only an active hold may be cancelled here.
+        if (activePointerId === null || event.pointerId !== activePointerId) return;
+        activePointerId = null;
+        cancelCapture('Recording cancelled. Hold or tap to try again.');
+      });
+      voiceControl.addEventListener('pointercancel', function () {
+        activePointerId = null;
+        cancelCapture('Recording cancelled. Hold or tap to try again.');
+      });
+      voiceControl.addEventListener('click', function (event) {
+        // Pointer gestures already begin on pointerdown; keyboard/AT clicks
+        // (detail === 0) are the deterministic tap-to-toggle fallback.
+        if (event.detail > 0) return;
+        if (captureState === 'requesting') {
+          cancelPendingTap = true;
+          setStatus('Microphone permission pending. Tap recorded; no audio will be sent.');
+          return;
+        }
+        if (captureState === 'idle') { tapRecording = true; beginRecording(); }
+        else if (tapRecording) finishRecording();
+      });
+    });
+  }());
   </script>"""
 
 
@@ -2839,6 +3101,7 @@ def _render_note_section(fields: dict) -> tuple[str, str, str]:
         identity_chips_html=identity_chips_html,
         rendered_props=rendered_props,
     )
+    voice_push_to_talk_html = _render_voice_push_to_talk_surface()
     # #3361 (DESIGN_AUDIT.md §3.1) — the ONE calm banner consumes the SAME
     # `vault_posture` value the topbar chip received (derived exactly once
     # above), so the two surfaces agree by construction.
@@ -3279,6 +3542,7 @@ def _render_note_section(fields: dict) -> tuple[str, str, str]:
         {breadcrumb_html}
         {identity_caution_html}
       </header>
+      {voice_push_to_talk_html}
       {hidden_frontmatter_html}
       {note_not_found_html}
       <div
@@ -15488,6 +15752,7 @@ def render_index_html(
   {_mermaid_runtime_script()}
   {_display_preferences_script()}
   {_note_readback_script()}
+  {_voice_push_to_talk_script()}
   {_note_editor_script()}
   {_refused_write_draft_restore_boot_script()}
   {_note_chrome_script()}
@@ -16226,6 +16491,7 @@ def make_handler(
                 "/api/companion/note/save",  # direct human note edit
                 "/api/companion/tts/plan",
                 "/api/companion/tts/synthesize",
+                "/api/ask/voice",
                 "/api/companion/vault-browser/actions/queue-review",
                 VAULT_SELECT_ENDPOINT,
                 VAULT_INITIALIZE_ENDPOINT,
@@ -16314,6 +16580,7 @@ def make_handler(
         # companion-UI-facing path (pre-rewrite).
         _POST_PATH_TIMEOUT_OVERRIDES: dict[str, str] = {
             "/api/operator/ask": "_ask_timeout_seconds",
+            "/api/ask/voice": "_ask_timeout_seconds",
         }
 
         def _post_timeout_override(self, path: str) -> Optional[float]:
@@ -16347,6 +16614,26 @@ def make_handler(
             except ValueError:
                 length = 0
             raw_body = self.rfile.read(length) if length else b"{}"
+            if parsed.path == "/api/ask/voice":
+                content_type = self.headers.get("Content-Type", "")
+                if not content_type.startswith("multipart/form-data"):
+                    self._send_json(
+                        400,
+                        {"error": "invalid_audio", "message": "Voice audio must be multipart."},
+                    )
+                    return
+                try:
+                    data = self._client.post_raw(
+                        parsed.path,
+                        content=raw_body,
+                        headers={"Content-Type": content_type},
+                        timeout=self._post_timeout_override(parsed.path),
+                    )
+                except WorkspaceClientError as exc:
+                    self._proxy_error(exc)
+                    return
+                self._send_json(200, data)
+                return
             try:
                 payload = json.loads(raw_body.decode("utf-8") or "{}")
             except json.JSONDecodeError:

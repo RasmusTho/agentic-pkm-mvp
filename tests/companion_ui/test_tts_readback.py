@@ -82,7 +82,7 @@ def _html() -> str:
 
 def _readback_script(html: str) -> str:
     start = html.index("var proposalFieldOrder")
-    end = html.index("window.noteEditor", start)
+    end = html.index("</script>", start)
     return html[start:end]
 
 
@@ -220,6 +220,18 @@ def test_tts_readback_has_no_autoplay_or_backend_mutation_calls() -> None:
     assert "/api/companion/note/save" not in script
     assert "/api/panel/checkbox-projection" not in script
     assert "/api/companion/tts/plan" in script
+
+
+def test_no_autoplay_contract_is_scoped_to_unrequested_readback() -> None:
+    """VOICE-03 may play only after its explicit user recording gesture."""
+    html = _html()
+    readback_script = _readback_script(html)
+    voice_start = html.index("function showTurn(turn)")
+    voice_script = html[voice_start : html.index("</script>", voice_start)]
+
+    assert ".play()" not in readback_script[: readback_script.index("function readText")]
+    assert "audio.play().then" in voice_script
+    assert "Tap play to listen." in voice_script
 
 
 def test_tts_proposal_readback_uses_stable_field_order() -> None:
