@@ -79,7 +79,7 @@ def _assert_manifest_shape(manifest: dict[str, object]) -> None:
     assert isinstance(identities["config"], str) and HEX_DIGEST.fullmatch(identities["config"])
     assert isinstance(identities["migration"], str) and MIGRATION_IDENTITY.fullmatch(identities["migration"])
     assert manifest["llm_policy"] in {"declared-required", "declared-optional", "disabled"}
-    assert isinstance(gateway["port"], int) and 1 <= gateway["port"] <= 65535
+    assert type(gateway["port"]) is int and 1 <= gateway["port"] <= 65535
     assert isinstance(gateway["identity"], str) and CHANNEL_IDENTITY.fullmatch(gateway["identity"])
 
 
@@ -123,6 +123,7 @@ def test_manifest_schema_rejects_unvalidated_sensitive_fields() -> None:
     with pytest.raises(AssertionError):
         _assert_manifest_shape(manifest)
 
+
     manifest = json.loads(FIXTURE.read_text())
     manifest["identities"]["database"] = "admin:hunter2"
     with pytest.raises(AssertionError):
@@ -140,6 +141,13 @@ def test_manifest_schema_rejects_unvalidated_sensitive_fields() -> None:
 
     manifest = json.loads(FIXTURE.read_text())
     manifest["gateway"]["identity"] = "admin:hunter2"
+    with pytest.raises(AssertionError):
+        _assert_manifest_shape(manifest)
+
+
+def test_manifest_schema_rejects_boolean_gateway_port() -> None:
+    manifest = json.loads(FIXTURE.read_text())
+    manifest["gateway"]["port"] = True
     with pytest.raises(AssertionError):
         _assert_manifest_shape(manifest)
 
