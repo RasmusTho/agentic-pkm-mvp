@@ -68,6 +68,9 @@ CONTAINER_TESTIDS: frozenset[str] = frozenset(
         "workspace-note-frontmatter",
         # Note body
         "workspace-note-body",
+        # VOICE-03: all voice-turn status, answer, and citation copy is scoped
+        # to this read-only, single-turn surface.
+        "voice-push-to-talk",
         # Outline
         "note-outline",
         "note-outline-link",

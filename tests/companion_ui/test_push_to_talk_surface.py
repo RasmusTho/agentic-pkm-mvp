@@ -3,6 +3,7 @@ from __future__ import annotations
 import io
 
 from companion_ui.workspace.serve_dev_page import make_handler, render_index_html
+from tests.companion_ui._orphan_text import assert_no_orphan_text
 
 
 def _html() -> str:
@@ -60,6 +61,7 @@ def test_no_always_on_affordance() -> None:
     assert "wake" not in surface
     assert "always-on" not in surface
     assert "getusermedia" not in html.lower() or "mediarecorder" in html.lower()
+    assert_no_orphan_text(html)
 
 
 def test_voice_audio_is_proxied_as_unchanged_multipart() -> None:
