@@ -82,7 +82,10 @@ The K5 receipt is a machine-readable, content-addressed record with exactly thes
 `issuer_signature`. The canonical
 bytes are UTF-8 JSON with lexicographically sorted keys, compact separators, and no trailing
 newline; `receipt_id` is `sha256:` plus the digest of those bytes with `receipt_id` excluded.
-`outcome` is `PASS` or `FAIL`; the four `*_identity` values bind the receipt to the exact manifest.
+The issuer signs a separate acyclic canonical unsigned payload using the same encoding with both
+`receipt_id` and `issuer_signature` excluded; `issuer_signature` is verified against that payload
+and the trusted issuer key, never against the receipt ID. `outcome` is `PASS` or `FAIL`; the four
+`*_identity` values bind the receipt to the exact manifest.
 `required_checks` must exactly equal the versioned external policy
 `promotion-receipt.v1/required-checks` = `[migration, readiness, schema, smoke, ui, version]` in
 sorted order. `fresh_until` is the exclusive freshness deadline. `issuer_signature` is verified

@@ -4,12 +4,12 @@
   "fresh_until": "2026-08-17T00:00:00Z",
   "issued_at": "2026-08-16T00:00:00Z",
   "outcome": "PASS",
-  "receipt_id": "sha256:b05ec91301ff8e449fdbc953add2596b11b707d8d92874c8ca90d290a2068285",
+  "receipt_id": "sha256:59deaef6689d7cb4c9f31daf6e6a4741e2232825d77d4a138b8e371d2e9db30c",
   "receipt_version": "promotion-receipt.v1",
   "required_checks": ["migration", "readiness", "schema", "smoke", "ui", "version"],
   "schema_identity": "alembic:20260816",
   "test_identity": "promotion-test:20260816",
   "vault_identity": "prod-vault",
   "issuer_id": "promotion-test-issuer",
-  "issuer_signature": "sig:v1:promotion-test-issuer:attestation"
+  "issuer_signature": "sig:v1:promotion-test-issuer:ee9c879386e03f2ee6e630aa22c6ec4b69ad45dd41f52d8d200c1d010f846744"
 }

@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import hashlib
 import re
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -211,6 +212,11 @@ def _receipt_digest_body(receipt: dict[str, object]) -> bytes:
     return json.dumps(body, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
 
 
+def _receipt_unsigned_body(receipt: dict[str, object]) -> bytes:
+    body = {key: value for key, value in receipt.items() if key not in {"receipt_id", "issuer_signature"}}
+    return json.dumps(body, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
+
+
 def _assert_receipt_schema(
     receipt: dict[str, object],
     registry: dict[str, object] | None,
@@ -222,7 +228,7 @@ def _assert_receipt_schema(
         raise AssertionError("revocation/issuer registry lookup must fail closed")
     assert set(receipt) == RECEIPT_FIELDS
     assert receipt["receipt_version"] == "promotion-receipt.v1"
-    assert receipt["outcome"] in {"PASS", "FAIL"}
+    assert receipt["outcome"] == "PASS"
     assert isinstance(receipt["receipt_id"], str)
     assert receipt["receipt_id"] == "sha256:" + hashlib.sha256(_receipt_digest_body(receipt)).hexdigest()
     assert receipt["required_checks"] == EXPECTED_RECEIPT_CHECKS
@@ -232,10 +238,16 @@ def _assert_receipt_schema(
         assert receipt[field] == expected_manifest[field]
     assert all(isinstance(receipt[field], str) and re.fullmatch(r"[A-Za-z0-9._:-]+", receipt[field]) for field in ("test_identity", "vault_identity", "schema_identity"))
     assert receipt["issuer_id"] == "promotion-test-issuer"
-    assert receipt["issuer_signature"] == "sig:v1:promotion-test-issuer:attestation"
-    assert isinstance(receipt["issued_at"], str) and receipt["issued_at"].endswith("Z")
-    assert isinstance(receipt["fresh_until"], str) and receipt["fresh_until"].endswith("Z")
-    assert receipt["issued_at"] <= now < receipt["fresh_until"]
+    expected_signature = "sig:v1:promotion-test-issuer:" + hashlib.sha256(_receipt_unsigned_body(receipt)).hexdigest()
+    assert receipt["issuer_signature"] == expected_signature
+    timestamp_pattern = r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z"
+    assert re.fullmatch(timestamp_pattern, receipt["issued_at"])
+    assert re.fullmatch(timestamp_pattern, receipt["fresh_until"])
+    now_instant = datetime.fromisoformat(now.replace("Z", "+00:00"))
+    issued_at = datetime.fromisoformat(receipt["issued_at"].replace("Z", "+00:00"))
+    fresh_until = datetime.fromisoformat(receipt["fresh_until"].replace("Z", "+00:00"))
+    assert now_instant.tzinfo == timezone.utc
+    assert issued_at <= now_instant < fresh_until
     assert registry["registry_version"] == "promotion-receipt-registry.v1"
     entry = registry["entries"][receipt["receipt_id"]]
     assert entry["issuer_id"] == receipt["issuer_id"]
@@ -272,6 +284,21 @@ def test_promotion_receipt_schema_rejects_tampering_stale_checks_and_revocation(
     stale = json.loads(RECEIPT_FIXTURE.read_text())
     with pytest.raises(AssertionError):
         _assert_receipt_schema(stale, registry, now="2026-08-18T00:00:00Z", expected_manifest=receipt)
+
+    fail_receipt = json.loads(RECEIPT_FIXTURE.read_text())
+    fail_receipt["outcome"] = "FAIL"
+    with pytest.raises(AssertionError):
+        _assert_receipt_schema(fail_receipt, registry, now="2026-08-16T12:00:00Z", expected_manifest=receipt)
+
+    wrong_test = json.loads(RECEIPT_FIXTURE.read_text())
+    wrong_test["test_identity"] = "promotion-test:other"
+    with pytest.raises(AssertionError):
+        _assert_receipt_schema(wrong_test, registry, now="2026-08-16T12:00:00Z", expected_manifest=receipt)
+
+    malformed_clock = json.loads(RECEIPT_FIXTURE.read_text())
+    malformed_clock["fresh_until"] = "ZZ"
+    with pytest.raises(AssertionError):
+        _assert_receipt_schema(malformed_clock, registry, now="2026-08-16T12:00:00Z", expected_manifest=receipt)
 
     wrong_manifest = json.loads(RECEIPT_FIXTURE.read_text())
     wrong_manifest["artifact_digest"] = "sha256:" + "c" * 64
