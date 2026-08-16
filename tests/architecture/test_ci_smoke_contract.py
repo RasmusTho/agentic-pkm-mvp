@@ -103,4 +103,28 @@ def test_vaultwide_smoke_cleanup_removes_cutover_receipts_and_state() -> None:
 
     assert 'rm -f "$VAULT_BINDING_RECEIPT_PATH" "$VAULT_BINDING_ID_PATH"' in step
     assert "docker compose $compose_files down -v || true" in step
+    assert 'rm -f "$VAULT_IDENTITY_OVERLAY_PATH"' in step
     assert step.index("trap cleanup EXIT") < step.index("run_ci_compose up -d --wait db")
+
+
+def test_vaultwide_smoke_materializes_ci_vault_host_identity_for_finalizer() -> None:
+    step = _vaultwide_panel_step()
+
+    overlay_write = 'cat > "$VAULT_IDENTITY_OVERLAY_PATH" <<EOF'
+    compose_files = (
+        'compose_files="-f docker-compose.yaml -f docker-compose.legacy-vault.yml '
+        '-f $VAULT_IDENTITY_OVERLAY_PATH"'
+    )
+    first_deployment = "\n          prepare_ci_instance_state_deployment\n"
+
+    assert 'VAULT_IDENTITY_OVERLAY_PATH="${RUNNER_TEMP}/ci-vault-identity.' in step
+    assert overlay_write in step
+    assert "          services:\n            instance-state-init:\n" in step
+    assert '                  source: "$VAULT_ROOT"' in step
+    assert '                  target: "$VAULT_ROOT"' in step
+    assert "                  read_only: true" in step
+    assert compose_files in step
+    assert step.index(overlay_write) < step.index(compose_files) < step.index(
+        first_deployment
+    )
+    assert "VAULT_IDENTITY_OVERLAY_PATH" not in _worker_startup_step()
