@@ -320,6 +320,8 @@ def call_llm(
     trace_id: Optional[str] = None,
     provider_override: str | None = None,
     model_override: str | None = None,
+    timeout_seconds: float | None = None,
+    temperature: float | None = None,
     max_tokens: int | None = None,
     response_format: dict[str, Any] | str | None = None,
 ) -> str:
@@ -338,7 +340,19 @@ def call_llm(
 
     provider = _normalize_provider(provider_override) or _normalize_provider(os.getenv("LLM_PROVIDER")) or "mock"
     model = _normalize_model(model_override) or _default_model()
-    temperature = float(os.getenv("LLM_TEMPERATURE", "0"))
+    # Existing environment values are one-release bootstrap overrides.  The
+    # compiled route supplies the normal value without introducing a second
+    # provider/model selection path.
+    if "LLM_TEMPERATURE" in os.environ:
+        temperature = float(os.environ["LLM_TEMPERATURE"])
+    elif temperature is None:
+        temperature = 0.0
+    if "LLM_TIMEOUT" in os.environ:
+        timeout = env_float("LLM_TIMEOUT")
+    elif timeout_seconds is not None:
+        timeout = timeout_seconds
+    else:
+        timeout = env_float("LLM_TIMEOUT")
     system = pack.get("system", "")
     user = pack.get("user", "")
     messages = [{"role": "system", "content": system}, {"role": "user", "content": user}]
@@ -398,7 +412,7 @@ def call_llm(
                     user,
                     str(model),
                     temperature,
-                    timeout=env_float("LLM_TIMEOUT"),
+                    timeout=timeout,
                     max_tokens=max_tokens,
                     response_format=response_format,
                 )
@@ -435,7 +449,7 @@ def call_llm(
                 api_key=api_key,
                 model=str(model),
                 messages=messages,
-                timeout=env_float("LLM_TIMEOUT"),
+                timeout=timeout,
                 max_tokens=max_tokens,
                 response_format=response_format,
             )
@@ -455,7 +469,7 @@ def call_llm(
                 api_key=api_key,
                 model=str(model),
                 messages=messages,
-                timeout=env_float("LLM_TIMEOUT"),
+                timeout=timeout,
                 max_tokens=max_tokens,
                 response_format=response_format,
             )

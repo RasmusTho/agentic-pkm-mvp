@@ -31,6 +31,8 @@ class LLMRoute:
     reason: str
     degraded: bool = False
     embedding_identity: EmbeddingIdentity | None = None
+    timeout_seconds: float | None = None
+    temperature: float | None = None
 
 
 def _normalize(value: str | None) -> str:
@@ -219,6 +221,8 @@ class LLMRouter:
             mode="chat",
             reason=provider_reason if provider_degraded else reason,
             degraded=degraded or provider_degraded,
+            timeout_seconds=getattr(routing, "timeout_seconds", None),
+            temperature=getattr(routing, "temperature", None),
         )
 
     def _resolve_embedding_route(

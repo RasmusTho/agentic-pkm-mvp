@@ -37,6 +37,12 @@ Runtime settings cover the panel action catalog, watcher policy, and compiled ru
 Today, `python -m app.cli settings-explain` is a narrow operator-facing diagnostics surface for environment/database state plus panel-action and watcher provenance/gating; it is not a full dump of every compiled runtime YAML.
 Compiled bundle files such as `runtime/settings/llm_routing.yaml` remain the direct artifact for the broader runtime payload, while `python -m app.cli settings-validate` checks registries, panel/watcher source artifacts, and any compiled-runtime unresolved-secret sentinels visible locally.
 They also include task-specific LLM routing policy via `<vault>/settings/llm_routing.md` -> `runtime/settings/llm_routing.yaml`.
+The provider-neutral reasoning path and `settings-explain` resolve the same compiled
+`default_reasoning` route. During this one-release compatibility window,
+`REASONING_MODEL` may replace that route's model only; it never selects or changes
+the compiled provider. `llm_routing.timeout_seconds` and `.temperature` feed the
+same route; `LLM_TIMEOUT` and `LLM_TEMPERATURE` remain bootstrap overrides. The
+explain payload reports the effective identity and origin.
 
 Settings tiering guidance (operator-facing vs dev/lab-only), inventory, and migration targets are described below.
 Runtime profile switch for tier enforcement: `PKM_SETTINGS_PROFILE=operator|lab` (default `operator`).

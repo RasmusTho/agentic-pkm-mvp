@@ -177,6 +177,12 @@ def _reload_after_external_signal() -> None:
 
 def reload_settings_bundle(*, notify: bool = True) -> SettingsBundle:
     bundle = _build_bundle()
+    # Retrieval tuning is derived from this bundle and memoized on its hot
+    # path.  A new compiled generation must not leave that cache serving the
+    # prior generation after a cross-process reload.
+    from app.retrieval.tuning import reset_retrieval_tuning_cache
+
+    reset_retrieval_tuning_cache()
     with _LOCK:
         global _CURRENT
         _CURRENT = bundle

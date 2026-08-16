@@ -7,8 +7,9 @@ from pathlib import Path
 from typing import Any, Dict, List, Tuple
 from uuid import UUID
 
-from app.components.llm.fabric import LLMBackendTimeout, LLMRouter, LLMTaskIntent, get_chat_client
+from app.components.llm.fabric import ChatClient, LLMBackendTimeout
 from app.components.llm.router import LLMRoute
+from app.settings.reasoning_route import resolve_effective_reasoning_route
 from app.llm.trace import log_llm_call
 from app.reasoning.prompts import SYSTEM_PROMPT, build_user_prompt
 from app.reasoning.schema import ReasoningInput, ReasoningOutput, ReasoningValidationError, validate_output
@@ -54,7 +55,9 @@ def _call_chat_with_route(
     kind: str | None,
     trace_id: str | None,
 ) -> tuple[str, dict[str, object]]:
-    client = get_chat_client(LLMTaskIntent(task_kind=task_kind, risk="high"))
+    # All provider-neutral reasoning paths use the same effective resolver as
+    # settings-explain and failure tracing.
+    client = ChatClient(resolve_effective_reasoning_route())
     response = client.chat(
         task_kind,
         pack,
@@ -182,7 +185,7 @@ def _reasoning_uses_mock_route() -> bool:
     if _reasoning_backend() == "mock":
         return True
     try:
-        route = LLMRouter().route(LLMTaskIntent(task_kind="reasoning", risk="high"))
+        route = resolve_effective_reasoning_route()
     except Exception:
         return False
     return route.provider == "mock"
@@ -253,9 +256,8 @@ def run_reasoning(
                 "degraded_reason": output.degraded_reason,
             }
             log_llm_call(
-                provider=os.getenv("LLM_PROVIDER", "").strip().lower()
-                or _reasoning_backend(),
-                model=os.getenv("REASONING_MODEL", "llama3.1:8b"),
+                provider=resolve_effective_reasoning_route().provider,
+                model=resolve_effective_reasoning_route().model,
                 agent=agent_name,
                 kind=kind_name,
                 messages=[],
