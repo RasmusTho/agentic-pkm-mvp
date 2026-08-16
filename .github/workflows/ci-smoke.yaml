@@ -380,8 +380,30 @@ jobs:
           # start_full_system.sh / deploy_channel.sh do.
           source scripts/lib/instance_state_deployment.sh
           run_ci_compose() { docker compose $compose_files "$@"; }
+          prepare_ci_instance_state_deployment() {
+            local attempt=1 max_attempts=3 attempt_rc stderr_path
+            while :; do
+              stderr_path="$(mktemp "${RUNNER_TEMP:-/tmp}/prepare-instance-state.XXXXXX")" || return $?
+              if prepare_instance_state_deployment \
+                run_ci_compose "${PKM_ENVIRONMENT:-dev}" 2>"$stderr_path"; then
+                cat "$stderr_path" >&2
+                rm -f "$stderr_path"
+                return 0
+              else
+                attempt_rc=$?
+              fi
+              cat "$stderr_path" >&2
+              if [ "$attempt" -ge "$max_attempts" ] \
+                || ! grep -Fxq "native process enumeration failed" "$stderr_path"; then
+                rm -f "$stderr_path"
+                return "$attempt_rc"
+              fi
+              rm -f "$stderr_path"
+              attempt=$((attempt + 1))
+            done
+          }
           run_ci_compose up -d --wait db
-          prepare_instance_state_deployment run_ci_compose "${PKM_ENVIRONMENT:-dev}"
+          prepare_ci_instance_state_deployment
 
           docker compose $compose_files up -d --build worker
 
@@ -565,8 +587,30 @@ jobs:
           # MVR-01B: run the exact production launcher producer before raw compose up.
           source scripts/lib/instance_state_deployment.sh
           run_ci_compose() { docker compose $compose_files "$@"; }
+          prepare_ci_instance_state_deployment() {
+            local attempt=1 max_attempts=3 attempt_rc stderr_path
+            while :; do
+              stderr_path="$(mktemp "${RUNNER_TEMP:-/tmp}/prepare-instance-state.XXXXXX")" || return $?
+              if prepare_instance_state_deployment \
+                run_ci_compose "${PKM_ENVIRONMENT:-dev}" 2>"$stderr_path"; then
+                cat "$stderr_path" >&2
+                rm -f "$stderr_path"
+                return 0
+              else
+                attempt_rc=$?
+              fi
+              cat "$stderr_path" >&2
+              if [ "$attempt" -ge "$max_attempts" ] \
+                || ! grep -Fxq "native process enumeration failed" "$stderr_path"; then
+                rm -f "$stderr_path"
+                return "$attempt_rc"
+              fi
+              rm -f "$stderr_path"
+              attempt=$((attempt + 1))
+            done
+          }
           run_ci_compose up -d --wait db
-          prepare_instance_state_deployment run_ci_compose "${PKM_ENVIRONMENT:-dev}"
+          prepare_ci_instance_state_deployment
 
           # A fresh CI volume is intentionally dormant after mechanical state
           # preparation. Register the seeded fixture through the exact runtime
@@ -608,7 +652,7 @@ jobs:
           export MVR01C_ROLLBACK_VAULT_ROOT="$VAULT_ROOT"
           export MVR03_PRINCIPAL_CUTOVER=1
           export MVR03_PRINCIPAL_LOOPBACK_LISTENER=0
-          prepare_instance_state_deployment run_ci_compose "${PKM_ENVIRONMENT:-dev}"
+          prepare_ci_instance_state_deployment
 
           docker compose $compose_files up -d --build db api watcher worker
           LOG_PATH="$VAULTWIDE_PANEL_LOG_PATH" \
