@@ -25,11 +25,15 @@ class _EnteredContext:
     binding_expression: str | None
 
 
-def _binding_expression(call: ast.Call, *, keyword: str = "binding_id") -> str | None:
+def _binding_expression(call: ast.Call) -> str | None:
     expression: ast.expr | None = call.args[0] if call.args else None
     if expression is None:
         expression = next(
-            (item.value for item in call.keywords if item.arg == keyword),
+            (
+                item.value
+                for item in call.keywords
+                if item.arg in {"binding_id", "vault_binding_id"}
+            ),
             None,
         )
     return (
@@ -47,14 +51,45 @@ class _RevocationVisitor(ast.NodeVisitor):
         self.producers: dict[str, GovRevocationProducerEvidence] = {}
 
     def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+        for decorator in node.decorator_list:
+            self.visit(decorator)
+        self.visit(node.args)
+        if node.returns is not None:
+            self.visit(node.returns)
         self.scope.append(node.name)
-        self.generic_visit(node)
+        entered_contexts = self.with_contexts
+        self.with_contexts = []
+        for statement in node.body:
+            self.visit(statement)
+        self.with_contexts = entered_contexts
         self.scope.pop()
 
     def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
+        for decorator in node.decorator_list:
+            self.visit(decorator)
+        self.visit(node.args)
+        if node.returns is not None:
+            self.visit(node.returns)
         self.scope.append(node.name)
-        self.generic_visit(node)
+        entered_contexts = self.with_contexts
+        self.with_contexts = []
+        for statement in node.body:
+            self.visit(statement)
+        self.with_contexts = entered_contexts
         self.scope.pop()
+
+    def visit_Lambda(self, node: ast.Lambda) -> None:  # noqa: N802
+        self.visit(node.args)
+        entered_contexts = self.with_contexts
+        self.with_contexts = []
+        self.visit(node.body)
+        self.with_contexts = entered_contexts
+
+    def visit_GeneratorExp(self, node: ast.GeneratorExp) -> None:  # noqa: N802
+        entered_contexts = self.with_contexts
+        self.with_contexts = []
+        self.generic_visit(node)
+        self.with_contexts = entered_contexts
 
     def visit_With(self, node: ast.With) -> None:
         contexts: list[_EnteredContext] = []
@@ -124,10 +159,11 @@ class _RevocationVisitor(ast.NodeVisitor):
                 and context.binding_expression == mutation_binding
             ]
             ownership_fence = bool(ownership_indexes)
-            ordered_exclusive = any(
-                ownership_index < exclusive_index
-                for ownership_index in ownership_indexes
-                for exclusive_index in exclusive_indexes
+            first_ownership = min(ownership_indexes, default=-1)
+            ordered_exclusive = (
+                first_ownership >= 0
+                and bool(exclusive_indexes)
+                and all(exclusive_index > first_ownership for exclusive_index in exclusive_indexes)
             )
             evidence = GovRevocationProducerEvidence(
                 name=producer_name,

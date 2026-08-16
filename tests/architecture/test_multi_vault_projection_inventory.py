@@ -168,6 +168,33 @@ def test_enabled_gov_revocation_producers_are_fenced_or_absent(tmp_path: Path) -
 
     (synthetic / "future.py").write_text(
         "def revoke(authorizer, ledger, manager):\n"
+        "    with manager.exclusive_change('binding-a'):\n"
+        "        with ledger.active_binding_fence('binding-a'):\n"
+        "            with manager.exclusive_change('binding-a'):\n"
+        "                authorizer.set_binding('binding-a', 2, revoked=True)\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="lacks source-proved"):
+        validate_gov_revocation_coverage(declared, app_root=synthetic)
+
+    (synthetic / "future.py").write_text(
+        "def build(authorizer, ledger, manager):\n"
+        "    with ledger.active_binding_fence('binding-a'):\n"
+        "        with manager.exclusive_change('binding-a'):\n"
+        "            def revoke():\n"
+        "                authorizer.set_binding('binding-a', 2, revoked=True)\n"
+        "            return revoke\n",
+        encoding="utf-8",
+    )
+    nested_declared = {
+        **declared,
+        "producers": [{**declared["producers"][0], "name": "app/future:build.revoke"}],
+    }
+    with pytest.raises(ValueError, match="lacks source-proved"):
+        validate_gov_revocation_coverage(nested_declared, app_root=synthetic)
+
+    (synthetic / "future.py").write_text(
+        "def revoke(authorizer, ledger, manager):\n"
         "    with ledger.active_binding_fence('binding-a'):\n"
         "        with manager.exclusive_change('binding-b'):\n"
         "            authorizer.set_binding('binding-c', 2, revoked=True)\n",
