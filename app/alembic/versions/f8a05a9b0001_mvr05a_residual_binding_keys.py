@@ -54,11 +54,13 @@ def upgrade() -> None:
              WHERE attrelid='public.agent_memories'::regclass
                AND attname='vault_binding_id' AND attnum>0 AND NOT attisdropped
           ) INTO binding_preexisted;
-          IF binding_preexisted AND EXISTS (
-            SELECT 1 FROM public.agent_memories
-             WHERE vault_binding_id IS NULL OR btrim(vault_binding_id)=''
-          ) THEN
-            RAISE EXCEPTION 'partially binding-keyed agent_memories has ambiguous rows';
+          IF binding_preexisted THEN
+            IF EXISTS (
+              SELECT 1 FROM public.agent_memories
+               WHERE vault_binding_id IS NULL OR btrim(vault_binding_id)=''
+            ) THEN
+              RAISE EXCEPTION 'partially binding-keyed agent_memories has ambiguous rows';
+            END IF;
           END IF;
           IF NOT binding_preexisted THEN
             ALTER TABLE public.agent_memories
@@ -91,11 +93,13 @@ def upgrade() -> None:
              WHERE attrelid='public.heimdal_meeting_finalization_receipt'::regclass
                AND attname='vault_binding_id' AND attnum>0 AND NOT attisdropped
           ) INTO binding_preexisted;
-          IF binding_preexisted AND EXISTS (
-            SELECT 1 FROM public.heimdal_meeting_finalization_receipt
-             WHERE vault_binding_id IS NULL OR btrim(vault_binding_id)=''
-          ) THEN
-            RAISE EXCEPTION 'partially binding-keyed heimdal_meeting_finalization_receipt has ambiguous rows';
+          IF binding_preexisted THEN
+            IF EXISTS (
+              SELECT 1 FROM public.heimdal_meeting_finalization_receipt
+               WHERE vault_binding_id IS NULL OR btrim(vault_binding_id)=''
+            ) THEN
+              RAISE EXCEPTION 'partially binding-keyed heimdal_meeting_finalization_receipt has ambiguous rows';
+            END IF;
           END IF;
           IF NOT binding_preexisted THEN
             ALTER TABLE public.heimdal_meeting_finalization_receipt
@@ -157,11 +161,13 @@ def upgrade() -> None:
              WHERE attrelid='public.sets'::regclass
                AND attname='vault_binding_id' AND attnum>0 AND NOT attisdropped
           ) INTO binding_preexisted;
-          IF binding_preexisted AND EXISTS (
-            SELECT 1 FROM public.sets
-             WHERE vault_binding_id IS NULL OR btrim(vault_binding_id)=''
-          ) THEN
-            RAISE EXCEPTION 'partially binding-keyed sets has ambiguous rows';
+          IF binding_preexisted THEN
+            IF EXISTS (
+              SELECT 1 FROM public.sets
+               WHERE vault_binding_id IS NULL OR btrim(vault_binding_id)=''
+            ) THEN
+              RAISE EXCEPTION 'partially binding-keyed sets has ambiguous rows';
+            END IF;
           END IF;
           IF NOT binding_preexisted THEN
             ALTER TABLE public.sets
