@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+import hashlib
 import json
 from dataclasses import dataclass
 from pathlib import Path
@@ -10,6 +11,12 @@ from typing import Any, Mapping
 
 
 GOV_REVOCATION_INVENTORY_SCHEMA = "agentic-pkm.gov-revocation-producers.v1"
+_CANONICAL_BOUNDARY_DEFINITION_DIGESTS = {
+    "_test_revocation_capability": "cfd1ebf24386b1ad6f1cc00641a450ed67e9f06f88750658662f2e02ae33643d",
+    "_require_revocation_capability": "cdc3506f1be89a15afe4c0c1228f81307548a225d2d1a21b1ddb928da3222944",
+    "RegistryBindingAuthorizer.__init__": "8c03032252f22ecd6c141de9b37448e0804e791f244fdb406787e7770153a7fa",
+    "RegistryBindingAuthorizer.set_binding": "667f3b07f9e21faabc6e9209f272bf8b5a17109147b0486c7d2f13939fd75862",
+}
 
 
 @dataclass(frozen=True)
@@ -17,6 +24,35 @@ class GovRevocationProducerEvidence:
     name: str
     ownership_fence: bool
     exclusive_binding_lease: bool
+
+
+def _canonical_boundary_definitions(tree: ast.Module) -> dict[str, list[ast.AST]]:
+    definitions: dict[str, list[ast.AST]] = {
+        name: [] for name in _CANONICAL_BOUNDARY_DEFINITION_DIGESTS
+    }
+    for statement in tree.body:
+        if isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            if statement.name in definitions:
+                definitions[statement.name].append(statement)
+        elif isinstance(statement, ast.ClassDef) and statement.name == "RegistryBindingAuthorizer":
+            for member in statement.body:
+                if isinstance(member, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    name = f"RegistryBindingAuthorizer.{member.name}"
+                    if name in definitions:
+                        definitions[name].append(member)
+    return definitions
+
+
+def _canonical_boundary_shape_is_exact(tree: ast.Module) -> bool:
+    definitions = _canonical_boundary_definitions(tree)
+    for name, expected_digest in _CANONICAL_BOUNDARY_DEFINITION_DIGESTS.items():
+        nodes = definitions[name]
+        if len(nodes) != 1:
+            return False
+        digest = hashlib.sha256(ast.dump(nodes[0], include_attributes=False).encode()).hexdigest()
+        if digest != expected_digest:
+            return False
+    return True
 
 
 def _call_name(call: ast.Call) -> str:
@@ -36,12 +72,18 @@ class _RevocationVisitor(ast.NodeVisitor):
         self.producers: dict[str, GovRevocationProducerEvidence] = {}
 
     def visit_ClassDef(self, node: ast.ClassDef) -> None:  # noqa: N802
+        for decorator in node.decorator_list:
+            self.visit(decorator)
+        for base in node.bases:
+            self.visit(base)
+        for keyword in node.keywords:
+            self.visit(keyword.value)
         self.scope.append(node.name)
-        self.generic_visit(node)
+        for statement in node.body:
+            self.visit(statement)
         self.scope.pop()
 
     def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
-        self.scope.append(node.name)
         for decorator in node.decorator_list:
             self.visit(decorator)
         for default in (*node.args.defaults, *node.args.kw_defaults):
@@ -60,12 +102,12 @@ class _RevocationVisitor(ast.NodeVisitor):
                     self.visit(optional_argument.annotation)
             if node.returns is not None:
                 self.visit(node.returns)
+        self.scope.append(node.name)
         for statement in node.body:
             self.visit(statement)
         self.scope.pop()
 
     def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
-        self.scope.append(node.name)
         for decorator in node.decorator_list:
             self.visit(decorator)
         for default in (*node.args.defaults, *node.args.kw_defaults):
@@ -84,6 +126,7 @@ class _RevocationVisitor(ast.NodeVisitor):
                     self.visit(optional_argument.annotation)
             if node.returns is not None:
                 self.visit(node.returns)
+        self.scope.append(node.name)
         for statement in node.body:
             self.visit(statement)
         self.scope.pop()
@@ -213,6 +256,15 @@ def discover_gov_revocation_producer_evidence(
         )
         visitor = _RevocationVisitor(module, postponed_annotations=postponed_annotations)
         visitor.visit(tree)
+        if module == "app/governance/binding_authority" and not _canonical_boundary_shape_is_exact(
+            tree
+        ):
+            name = f"{module}:<canonical-boundary-shape>"
+            visitor.producers[name] = GovRevocationProducerEvidence(
+                name=name,
+                ownership_fence=False,
+                exclusive_binding_lease=False,
+            )
         for name, evidence in visitor.producers.items():
             previous = discovered.get(name)
             if previous is not None and previous != evidence:

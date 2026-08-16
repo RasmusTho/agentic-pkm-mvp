@@ -53,6 +53,7 @@ from app.governance.binding_authority import (
     RevocationCapabilityError,
 )
 from app.instance.gov_revocation_inventory import (
+    discover_gov_revocation_producer_evidence,
     discover_gov_revocation_producers,
     load_gov_revocation_inventory,
     validate_gov_revocation_coverage,
@@ -178,6 +179,27 @@ def test_enabled_gov_revocation_producers_are_fenced_or_absent(tmp_path: Path) -
     with pytest.raises(ValueError, match="differs from source mutation seams"):
         validate_gov_revocation_coverage(inventory, app_root=canonical_app)
 
+    canonical_module.write_text(
+        "def _test_revocation_capability(\n"
+        "    value=authorizer.set_binding(\n"
+        "        'binding-a', 2, revoked=True,\n"
+        "        _revocation_capability=capability)\n"
+        "):\n"
+        "    return value\n",
+        encoding="utf-8",
+    )
+    evidence = discover_gov_revocation_producer_evidence(canonical_app)
+    assert "app/governance/binding_authority:<module>" in evidence
+
+    canonical_module.write_text(
+        (REPO_ROOT / "app/governance/binding_authority.py").read_text(encoding="utf-8")
+        + "\ndef _test_revocation_capability(authorizer=None):\n"
+        "    return authorizer\n",
+        encoding="utf-8",
+    )
+    evidence = discover_gov_revocation_producer_evidence(canonical_app)
+    assert "app/governance/binding_authority:<canonical-boundary-shape>" in evidence
+
     declared = {
         "schema": "agentic-pkm.gov-revocation-producers.v1",
         "producers": [
@@ -271,7 +293,10 @@ def test_enabled_gov_revocation_producers_are_fenced_or_absent(tmp_path: Path) -
     )
     for source in indirect_sources:
         (synthetic / "future.py").write_text(source, encoding="utf-8")
-        with pytest.raises(ValueError, match="lacks source-proved"):
+        with pytest.raises(
+            ValueError,
+            match="source mutation seams|lacks source-proved",
+        ):
             validate_gov_revocation_coverage(declared, app_root=synthetic)
 
     (synthetic / "future.py").write_text(
