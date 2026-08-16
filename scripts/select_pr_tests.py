@@ -928,6 +928,7 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
         (
             "tests/architecture/test_startup_redesign_contract.py",
             "tests/runtime/test_startup_artifact_call_sites.py",
+            "tests/architecture/test_docs_index.py::test_all_docs_are_listed_in_docs_index",
         ),
     ),
     (

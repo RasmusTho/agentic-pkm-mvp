@@ -48,4 +48,4 @@ Compose, resolver implementation, credential provisioning, migration execution, 
 
 ## Related GitHub Issues
 
-Pre-filing: reconcile #2655/#2698 and their children first.
+Filed ownership: #4914 (P1), under parent validation hub #4913. The overlap with #2655/#2698 and their children was reconciled before filing; those issues remain the authority for the earlier pinned-image capability.

@@ -6,7 +6,7 @@ Owning SoT: `docs/ENVIRONMENTS.md`, `docs/RELEASE_CHANNELS/README.md`, and `docs
 
 ## Purpose
 
-Define the small, deterministic startup and promotion kernel needed to recover stable production without making ordinary boot a deployment engine. This supersedes no existing issue: before filing, its overlap with `PINNED_IMAGE_CUTOVER` (#2655/#2698 and children) must be reconciled against live GitHub state.
+Define the small, deterministic startup and promotion kernel needed to recover stable production without making ordinary boot a deployment engine. Before filing, its overlap with `PINNED_IMAGE_CUTOVER` (#2655/#2698 and children) was reconciled against the live issue set; this filed chain owns the newer two-mode, receipt-gated contract and does not rewrite the earlier capability.
 
 ## Capability boundary
 
@@ -35,9 +35,37 @@ P0 is deliberately not a child task: the live Colima persistent-substrate recove
 - **K8:** A rollback target is runtime/schema/vault compatible and never rewinds operator-authored vault content.
 - **K9:** Secrets never appear in manifests, config hashes, logs, or receipts; no ambient fallback is permitted.
 
+### Invariant enforcement phases
+
+The phase column is the frozen enforcement hand-off for the later implementation slices. P1
+proves the mapping statically; it does not claim that these runtime phases are shipped.
+
+| Invariant | Enforcement phase | Owning slice |
+| --- | --- | --- |
+| **K1** | `resolve` | P1 / P3 |
+| **K2** | `admit` | P2 / P3 |
+| **K3** | `admit` | P1 / P2 |
+| **K4** | `resolve` | P3 |
+| **K5** | `receipt` | P1 / P4 |
+| **K6** | `admit` | P1 / P3 |
+| **K7** | `terminal` | P1 / P3 / P4 |
+| **K8** | `recover` | P1 / P5 / P6 |
+| **K9** | `resolve` | P1 / P2 / P4 |
+
 ## Cross-Task Invariants / Interaction Safety
 
-`local-source` and `promotion` artifacts are disjoint identities: a local build may never be relabelled as a promotion candidate. A promotion is non-terminal until the immutable digest, schema journal, and promotion-test receipt agree; a deploy that writes a journal but fails activation records `failed_after_migration`, not PASS. A prod recovery cannot repair ambiguity by choosing a vault, image, or receipt: it fails closed. Rollback changes the runtime artifact only after compatibility proof and leaves the vault untouched. P6 may remove a legacy caller only after a later digest promotion and recovery/rollback drills prove no supported caller remains.
+`local-source` and `promotion` artifacts are disjoint identities: a local build may never be relabelled as a promotion candidate. A promotion is non-terminal until the immutable digest, schema journal, and promotion-test receipt agree. A prod recovery cannot repair ambiguity by choosing a vault, image, or receipt: it fails closed. Rollback changes the runtime artifact only after compatibility proof and leaves the vault untouched. P6 may remove a legacy caller only after a later digest promotion and recovery/rollback drills prove no supported caller remains.
+
+### Terminal operation vocabulary
+
+Every deploy and recovery operation emits exactly one terminal result from this vocabulary:
+
+| Terminal phase | Meaning |
+| --- | --- |
+| `PRE_MUTATION_FAILURE` | Validation, identity, dependency, or receipt admission failed before any migration or activation mutation. |
+| `FAILED_AFTER_MIGRATION` | Migration/journal mutation occurred, but the operation did not reach activation success; this is never PASS. |
+| `ACTIVATION_FAILURE` | The candidate passed pre-mutation checks but activation/health proof failed; this is never PASS. |
+| `PASS` | Required mutation, activation, and receipt checks completed for the exact manifest. |
 
 ## Verification and acceptance
 
@@ -45,7 +73,7 @@ P1 is proven by the static contract test and fixture in `tests/architecture/test
 
 ## Relationship to existing work
 
-`docs/deployment/PINNED_IMAGE_CUTOVER/` remains the existing documented pinned-image/cutover capability. This directory is a contract freeze for the newer two-mode, receipt-gated design and must be reconciled with its open/closed issue set before any GitHub issue is created or any current SoT claim changes.
+`docs/deployment/PINNED_IMAGE_CUTOVER/` remains the existing documented pinned-image/cutover capability. Its open/closed issue set and overlap with this design were reconciled before the #4913–#4919 chain was filed. This directory is a contract freeze for the newer two-mode, receipt-gated design; it does not change the earlier capability's current-state claims.
 
 ## Relationship to GitHub issues
 

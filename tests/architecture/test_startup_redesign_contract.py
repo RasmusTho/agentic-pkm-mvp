@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -13,7 +14,36 @@ FIXTURE = ROOT / "tests" / "fixtures" / "startup_redesign" / "channel_manifest.v
 
 def test_kernel_contract_names_every_invariant() -> None:
     for invariant in range(1, 10):
-        assert f"**K{invariant}:**" in README
+        assert re.search(
+            rf"\|\s*\*\*K{invariant}\*\*\s*\|\s*`[a-z_]+`\s*\|",
+            README,
+        ), f"K{invariant} must have a structured enforcement phase"
+
+
+SENSITIVE_FIELD = re.compile(
+    r"(?:secret|password|token|credential|private[_-]?key|api[_-]?key|access[_-]?key|client[_-]?secret)",
+    re.IGNORECASE,
+)
+SECRET_REFERENCE = re.compile(r"(?:keychain|vault|secret)://[A-Za-z0-9._/-]+\Z")
+
+
+def _assert_secret_free(value: object, *, path: str = "manifest") -> None:
+    if isinstance(value, dict):
+        for key, child in value.items():
+            child_path = f"{path}.{key}"
+            if key == "secret_references":
+                assert isinstance(child, list) and child, f"{child_path} must be a non-empty list"
+                for reference in child:
+                    assert isinstance(reference, str), f"{child_path} must contain strings"
+                    assert SECRET_REFERENCE.fullmatch(reference), f"invalid secret reference: {child_path}"
+                continue
+            assert not SENSITIVE_FIELD.search(key), f"sensitive field is not allowed: {child_path}"
+            _assert_secret_free(child, path=child_path)
+    elif isinstance(value, list):
+        for index, child in enumerate(value):
+            _assert_secret_free(child, path=f"{path}[{index}]")
+    elif isinstance(value, str):
+        assert not SENSITIVE_FIELD.search(value), f"sensitive value is not allowed: {path}"
 
 
 def test_manifest_fixture_is_secret_free() -> None:
@@ -24,13 +54,9 @@ def test_manifest_fixture_is_secret_free() -> None:
     }
     assert manifest["intent"] == "promotion"
     assert manifest["artifact"]["image_index_digest"].startswith("sha256:")
-    assert manifest["secret_references"]
-    assert not any("secret" in key and key != "secret_references" for key in manifest)
-    serialized = json.dumps(manifest).lower()
-    assert "password" not in serialized and "token" not in serialized
+    _assert_secret_free(manifest)
 
 
 def test_operation_contract_names_truthful_terminal_phases() -> None:
-    assert "failed_after_migration" in README
-    assert "PASS" in README
-    assert "fails closed" in README
+    for phase in ("PRE_MUTATION_FAILURE", "FAILED_AFTER_MIGRATION", "ACTIVATION_FAILURE", "PASS"):
+        assert f"`{phase}`" in README

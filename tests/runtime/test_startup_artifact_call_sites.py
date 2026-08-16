@@ -1,6 +1,18 @@
 """Strict P1 skeletons: replacement requires a real production call-site proof."""
 
+from pathlib import Path
+
 import pytest
+
+
+SKELETON = Path(__file__).read_text()
+
+
+def test_future_runtime_call_sites_are_explicitly_deferred() -> None:
+    """P1 proves deferral posture; later slices must replace these skeletons."""
+    assert SKELETON.count("\n@pytest.mark.xfail(strict=True") == 6
+    assert SKELETON.count("\n    raise NotImplementedError") == 6
+    assert "production call-site proof" in SKELETON
 
 
 @pytest.mark.xfail(strict=True, reason="STARTUP-02 production render call site is not implemented")

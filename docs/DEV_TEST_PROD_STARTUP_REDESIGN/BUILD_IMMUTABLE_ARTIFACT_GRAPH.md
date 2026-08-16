@@ -47,4 +47,4 @@ Running a prod cutover or changing vault data.
 
 ## Related GitHub Issues
 
-Must be de-duplicated against the existing pinned-image capability before filing.
+Filed ownership: #4915 (P2), under parent validation hub #4913. The overlap with the existing pinned-image capability was reconciled before filing; this task owns only the newer digest-only promotion contract.
