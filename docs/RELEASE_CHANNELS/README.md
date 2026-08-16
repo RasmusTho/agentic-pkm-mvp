@@ -296,7 +296,9 @@ wrapper resolves the effective channel Compose graph, requires a DB-role declara
 service, stops every client except the unique migration runner, proves Docker/native quiescence and
 an empty PostgreSQL client-session population, then records the floor before migration or runtime writes.
 Consequently an image without the binding-aware compatibility ingress and worker gate is not a
-legal rollback target even when its tag remains available.
+legal rollback target even when its tag remains available. The wrapper identifies that capability
+by the target tree's `app/instance/mvr05_cutover.py` marker; the older generic
+`app/instance/runtime.py` is not evidence that an image can honor this floor.
 
 `minimumRuntimePrincipal` is set together with the private delegated operator-role cutover only
 when a channel deployment carries the explicit `MVR03_PRINCIPAL_CUTOVER=1` opt-in. The governed

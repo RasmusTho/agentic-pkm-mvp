@@ -212,7 +212,7 @@ current_sha="$(read_pin "${pin_file}" 2>/dev/null || true)"
 target_sha="$(resolve_target_sha "${target_sha}")"
 scalar_rollback=0
 if [ "${action}" = "rollback" ] && \
-  ! git -C "${ROOT}" cat-file -e "${target_sha}:app/instance/runtime.py" 2>/dev/null; then
+  ! git -C "${ROOT}" cat-file -e "${target_sha}:app/instance/mvr05_cutover.py" 2>/dev/null; then
   scalar_rollback=1
 fi
 

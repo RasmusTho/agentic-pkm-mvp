@@ -95,6 +95,8 @@ def test_all_old_scalar_db_clients_are_stopped_before_binding_keyed_migration() 
     assert migration.rindex("prepare_instance_state_deployment") < migration.rindex(
         "apply_changed_migrations"
     )
+    assert "target_sha}:app/instance/mvr05_cutover.py" in migration
+    assert "target_sha}:app/instance/runtime.py" not in migration
 
 
 def test_fence_inventory_covers_every_enabled_db_outbox_process(tmp_path) -> None:

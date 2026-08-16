@@ -66,6 +66,17 @@ def _call_name(call: ast.Call) -> str:
     return ""
 
 
+def _literal_string(node: ast.AST) -> str | None:
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+        left = _literal_string(node.left)
+        right = _literal_string(node.right)
+        if left is not None and right is not None:
+            return left + right
+    return None
+
+
 class _RevocationVisitor(ast.NodeVisitor):
     def __init__(self, module: str, *, postponed_annotations: bool) -> None:
         self.module = module
@@ -211,15 +222,25 @@ class _RevocationVisitor(ast.NodeVisitor):
             and not definitely_empty
             and not definitely_false
         )
+        dynamic_names: set[str] = set()
+        for argument in node.args:
+            if (dynamic_name := _literal_string(argument)) is not None:
+                dynamic_names.add(dynamic_name)
         dynamic_entrypoint = name in {
             "getattr",
             "__getattribute__",
             "methodcaller",
             "attrgetter",
-        } and any(
-            isinstance(argument, ast.Constant)
-            and argument.value in {"set_binding", "RegistryBindingAuthorizer"}
-            for argument in node.args
+            "__setattr__",
+            "setattr",
+        } and bool(
+            dynamic_names
+            & {
+                "set_binding",
+                "RegistryBindingAuthorizer",
+                "_known",
+                "_RegistryBindingAuthorizer__known",
+            }
         )
         capability_entrypoint = name == "_test_revocation_capability" or any(
             item.arg == "_revocation_capability" for item in node.keywords

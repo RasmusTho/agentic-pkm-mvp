@@ -299,6 +299,14 @@ def test_enabled_gov_revocation_producers_are_fenced_or_absent(tmp_path: Path) -
         "def revoke(authorizer, binding):\n"
         "    authorizer._known[binding] = _KnownBinding(\n"
         "        binding, 2, revoked=True)\n",
+        "def revoke(authorizer, binding, options):\n"
+        "    mutation = getattr(authorizer, 'set_' + 'binding')\n"
+        "    mutation(binding, 2, **options)\n",
+        "def revoke(authorizer):\n"
+        "    known = object.__getattribute__(\n"
+        "        authorizer, '_RegistryBindingAuthorizer__known')\n"
+        "    object.__setattr__(\n"
+        "        authorizer, '_RegistryBindingAuthorizer__known', dict(known))\n",
     )
     for source in indirect_sources:
         (synthetic / "future.py").write_text(source, encoding="utf-8")
