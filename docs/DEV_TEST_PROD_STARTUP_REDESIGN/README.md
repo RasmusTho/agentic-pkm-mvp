@@ -78,17 +78,21 @@ ordinary boot selects `ORDINARY_BOOT_PASS`.
 
 The K5 receipt is a machine-readable, content-addressed record with exactly these semantic fields:
 `receipt_version`, `receipt_id`, `outcome`, `artifact_digest`, `config_identity`, `test_identity`,
-`vault_identity`, `schema_identity`, `required_checks`, `issued_at`, and `fresh_until`. The canonical
+`vault_identity`, `schema_identity`, `required_checks`, `issued_at`, `fresh_until`, `issuer_id`, and
+`issuer_signature`. The canonical
 bytes are UTF-8 JSON with lexicographically sorted keys, compact separators, and no trailing
 newline; `receipt_id` is `sha256:` plus the digest of those bytes with `receipt_id` excluded.
 `outcome` is `PASS` or `FAIL`; the four `*_identity` values bind the receipt to the exact manifest.
 `required_checks` must exactly equal the versioned external policy
 `promotion-receipt.v1/required-checks` = `[migration, readiness, schema, smoke, ui, version]` in
-sorted order. `fresh_until` is the exclusive freshness deadline. Revocation is not a mutable
-receipt field: an authoritative revocation registry keyed by immutable `receipt_id` stores the
-revocation timestamp and registry version; prod admission rejects any ID present there. Prod
-admission requires `outcome=PASS`, matching identities, current time before `fresh_until`, an absent
-revocation-registry entry, and exact required-check coverage. The positive fixture is
+sorted order. `fresh_until` is the exclusive freshness deadline. `issuer_signature` is verified
+against the trusted `promotion-test-issuer` key/authority registry and binds the issuer to the
+immutable receipt ID. Revocation is not a mutable receipt field: the machine-readable
+`promotion-receipt-registry.v1` stores `registry_version` and entries keyed by immutable
+`receipt_id`, each with issuer, signature, and `status` (`issued` or `revoked`); registry lookup
+failure is a hard admission failure. Prod admission requires `outcome=PASS`, matching expected
+manifest identities, current time at or after `issued_at` and before `fresh_until`, a valid trusted
+issuer attestation, an absent/revocation-free registry entry, and exact required-check coverage. The positive fixture is
 `tests/fixtures/startup_redesign/promotion_receipt.valid.json`; receipts contain no secret values
 or secret references.
 

@@ -1,0 +1,10 @@
+{
+  "registry_version": "promotion-receipt-registry.v1",
+  "entries": {
+    "sha256:b05ec91301ff8e449fdbc953add2596b11b707d8d92874c8ca90d290a2068285": {
+      "issuer_id": "promotion-test-issuer",
+      "issuer_signature": "sig:v1:promotion-test-issuer:attestation",
+      "status": "issued"
+    }
+  }
+}
