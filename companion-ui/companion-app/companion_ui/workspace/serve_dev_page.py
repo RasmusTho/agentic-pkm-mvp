@@ -2185,6 +2185,11 @@ def _voice_push_to_talk_script() -> str:
           });
       }
       function finishRecording() {
+        if (captureState === 'requesting') {
+          cancelPendingTap = true;
+          setStatus('Microphone permission pending. Release recorded; no audio will be sent.');
+          return;
+        }
         if (!recorder || recorder.state === 'inactive') return;
         recorder.stop();
         voiceControl.setAttribute('aria-pressed', 'false');

@@ -56,6 +56,8 @@ def test_degrade_states_render_legibly() -> None:
     assert "audio.hidden = true" in html
     assert "captureState === 'requesting'" in html
     assert "cancelPendingTap" in html
+    assert "Microphone permission pending. Release recorded; no audio will be sent." in html
+    assert "mediaStream.getTracks().forEach(function (track) { track.stop(); });" in html
 
 
 def test_no_always_on_affordance() -> None:
