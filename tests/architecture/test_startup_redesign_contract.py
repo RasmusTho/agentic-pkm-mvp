@@ -224,6 +224,15 @@ def _receipt_unsigned_body(receipt: dict[str, object]) -> bytes:
     return json.dumps(body, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
 
 
+def _decode_canonical_b64url(value: str, expected_bytes: int) -> bytes:
+    assert B64URL.fullmatch(value) and len(value) % 4 != 1
+    padding = "=" * ((4 - len(value) % 4) % 4)
+    decoded = base64.urlsafe_b64decode(value + padding)
+    assert len(decoded) == expected_bytes
+    assert base64.urlsafe_b64encode(decoded).decode().rstrip("=") == value
+    return decoded
+
+
 def _assert_receipt_schema(
     receipt: dict[str, object],
     registry: dict[str, object] | None,
@@ -269,8 +278,8 @@ def _assert_receipt_schema(
     assert entry["public_key"]
     assert B64URL.fullmatch(entry["public_key"]) and len(entry["public_key"]) % 4 != 1
     assert entry["public_key"] == registry["trusted_keys"][receipt["issuer_key_id"]]
-    public_key = Ed25519PublicKey.from_public_bytes(base64.urlsafe_b64decode(entry["public_key"] + "=="))
-    public_key.verify(base64.urlsafe_b64decode(signature_parts[2] + "=="), _receipt_unsigned_body(receipt))
+    public_key = Ed25519PublicKey.from_public_bytes(_decode_canonical_b64url(entry["public_key"], 32))
+    public_key.verify(_decode_canonical_b64url(signature_parts[2], 64), _receipt_unsigned_body(receipt))
     _assert_secret_free(receipt)
 
 
@@ -364,7 +373,18 @@ def test_promotion_receipt_schema_rejects_tampering_stale_checks_and_revocation(
         _assert_receipt_schema(receipt, substituted, now="2026-08-16T12:00:00Z", expected_manifest=receipt)
 
     noncanonical_key = json.loads(json.dumps(registry))
-    noncanonical_key["trusted_keys"][receipt["issuer_key_id"]] = registry["trusted_keys"][receipt["issuer_key_id"]].replace("_", "/")
+    noncanonical_key["trusted_keys"][receipt["issuer_key_id"]] = registry["trusted_keys"][receipt["issuer_key_id"]][:-1] + "d"
     noncanonical_key["entries"][receipt["receipt_id"]]["public_key"] = noncanonical_key["trusted_keys"][receipt["issuer_key_id"]]
     with pytest.raises(AssertionError):
         _assert_receipt_schema(receipt, noncanonical_key, now="2026-08-16T12:00:00Z", expected_manifest=receipt)
+
+    noncanonical_signature = json.loads(RECEIPT_FIXTURE.read_text())
+    noncanonical_signature["issuer_signature"] = noncanonical_signature["issuer_signature"][:-1] + "x"
+    noncanonical_signature["receipt_id"] = "sha256:" + hashlib.sha256(_receipt_digest_body(noncanonical_signature)).hexdigest()
+    noncanonical_signature_registry = json.loads(json.dumps(registry))
+    noncanonical_signature_registry["entries"][noncanonical_signature["receipt_id"]] = dict(
+        noncanonical_signature_registry["entries"][receipt["receipt_id"]],
+        issuer_signature=noncanonical_signature["issuer_signature"],
+    )
+    with pytest.raises(AssertionError):
+        _assert_receipt_schema(noncanonical_signature, noncanonical_signature_registry, now="2026-08-16T12:00:00Z", expected_manifest=receipt)
