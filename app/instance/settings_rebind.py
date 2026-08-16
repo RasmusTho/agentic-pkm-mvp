@@ -79,6 +79,14 @@ class SettingsRebindRecord:
         phase, posture = value.get("phase"), value.get("lifecyclePosture")
         if phase not in _PHASES or posture not in _POSTURES:
             raise SettingsRebindError("settings rebind phase or lifecycle posture is invalid")
+        if phase == "dormant" and (desired != applied or posture != "dormant"):
+            raise SettingsRebindError("dormant settings rebind state must be fully applied")
+        if phase == "prepared" and (desired != applied + 1 or posture != "watcher"):
+            raise SettingsRebindError("prepared settings rebind state is not one revision ahead")
+        if phase == "committed" and (desired != applied or posture != "watcher"):
+            raise SettingsRebindError("committed settings rebind state must be fully applied")
+        if phase == "no_lifecycle" and (desired != applied or posture != "no_lifecycle"):
+            raise SettingsRebindError("no_lifecycle settings rebind state must be fully applied")
         prior, candidate = value.get("priorBindingId"), value.get("candidateBindingId")
         if prior is not None and (not isinstance(prior, str) or not prior.strip()):
             raise SettingsRebindError("settings rebind prior binding is invalid")
@@ -121,4 +129,3 @@ class SettingsRebindStore:
         if snapshot.settings_rebind is None:
             raise SettingsRebindError("settings rebind record has not been installed")
         return SettingsRebindRecord.from_payload(copy.deepcopy(snapshot.settings_rebind))
-

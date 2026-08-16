@@ -3,6 +3,8 @@ from __future__ import annotations
 from app.instance._storage_boundary import _STORAGE_MUTATION_CAPABILITY
 from app.instance.instance_state import InstanceStateLayout
 from app.instance.runtime import InstanceRegistryRuntime
+from app.instance.settings_rebind import SettingsRebindRecord
+import pytest
 
 
 def test_api_and_watcher_startup_share_one_dormant_rebind_revision(tmp_path) -> None:
@@ -50,3 +52,21 @@ def test_startup_restores_last_complete_record_after_on_disk_checksum_corruption
     )
 
     assert runtime.open_settings_rebind_store().read().as_payload() == expected
+
+
+@pytest.mark.parametrize(
+    ("phase", "posture", "desired", "applied"),
+    [("dormant", "dormant", 2, 2), ("prepared", "watcher", 3, 2),
+     ("committed", "watcher", 3, 3), ("no_lifecycle", "no_lifecycle", 3, 3)],
+)
+def test_each_persisted_phase_has_a_deterministic_revision_relation(
+    phase, posture, desired, applied
+) -> None:
+    record = SettingsRebindRecord(desired, applied, phase, posture, "binding-a", "binding-b")
+    assert SettingsRebindRecord.from_payload(record.as_payload()) == record
+
+
+def test_invalid_phase_revision_relation_fails_before_record_write() -> None:
+    record = SettingsRebindRecord(3, 2, "committed", "watcher", "binding-a", "binding-b")
+    with pytest.raises(Exception, match="committed"):
+        SettingsRebindRecord.from_payload(record.as_payload())

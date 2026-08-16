@@ -1933,6 +1933,9 @@ class VaultRegistryStore:
                 settings_rebind = validate_settings_rebind_payload(settings_rebind)
             except SettingsRebindError as exc:
                 raise RegistryError(str(exc)) from exc
+            floors = extensions.get("runtimeFloors") or {}
+            if floors.get(MINIMUM_SETTINGS_REBIND_RUNTIME_KEY) != MINIMUM_SETTINGS_REBIND_RUNTIME:
+                raise RegistryError("settings rebind record requires its runtime floor")
         default_binding_id, default_provenance = _read_default_from_frontmatter(
             frontmatter, registrations, extensions
         )
