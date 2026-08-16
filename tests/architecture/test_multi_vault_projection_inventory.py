@@ -193,6 +193,18 @@ def test_enabled_gov_revocation_producers_are_fenced_or_absent(tmp_path: Path) -
     with pytest.raises(ValueError, match="lacks source-proved"):
         validate_gov_revocation_coverage(nested_declared, app_root=synthetic)
 
+    for async_prefix in ("", "async "):
+        (synthetic / "future.py").write_text(
+            f"{async_prefix}def revoke(authorizer, ledger, wrap):\n"
+            f"    {async_prefix}with ledger.active_binding_fence('binding-a'):\n"
+            f"        {async_prefix}with wrap("
+            "authorizer.set_binding('binding-a', 2, revoked=True)):\n"
+            "            pass\n",
+            encoding="utf-8",
+        )
+        with pytest.raises(ValueError, match="lacks source-proved"):
+            validate_gov_revocation_coverage(declared, app_root=synthetic)
+
     (synthetic / "future.py").write_text(
         "def revoke(authorizer, ledger, manager):\n"
         "    with ledger.active_binding_fence('binding-a'):\n"

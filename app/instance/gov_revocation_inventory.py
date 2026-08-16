@@ -43,6 +43,17 @@ def _binding_expression(call: ast.Call) -> str | None:
     )
 
 
+def _entered_context(expression: ast.expr) -> _EnteredContext | None:
+    if not isinstance(expression, ast.Call):
+        return None
+    function = expression.func
+    if isinstance(function, ast.Attribute):
+        return _EnteredContext(function.attr, _binding_expression(expression))
+    if isinstance(function, ast.Name):
+        return _EnteredContext(function.id, _binding_expression(expression))
+    return None
+
+
 class _RevocationVisitor(ast.NodeVisitor):
     def __init__(self, module: str) -> None:
         self.module = module
@@ -93,30 +104,24 @@ class _RevocationVisitor(ast.NodeVisitor):
 
     def visit_With(self, node: ast.With) -> None:
         contexts: list[_EnteredContext] = []
-        for item in node.items:
-            call = item.context_expr
-            if isinstance(call, ast.Call):
-                function = call.func
-                if isinstance(function, ast.Attribute):
-                    contexts.append(_EnteredContext(function.attr, _binding_expression(call)))
-                elif isinstance(function, ast.Name):
-                    contexts.append(_EnteredContext(function.id, _binding_expression(call)))
         self.with_contexts.append(contexts)
+        for item in node.items:
+            self.visit(item.context_expr)
+            entered = _entered_context(item.context_expr)
+            if entered is not None:
+                contexts.append(entered)
         for statement in node.body:
             self.visit(statement)
         self.with_contexts.pop()
 
     def visit_AsyncWith(self, node: ast.AsyncWith) -> None:  # noqa: N802
         contexts: list[_EnteredContext] = []
-        for item in node.items:
-            call = item.context_expr
-            if isinstance(call, ast.Call):
-                function = call.func
-                if isinstance(function, ast.Attribute):
-                    contexts.append(_EnteredContext(function.attr, _binding_expression(call)))
-                elif isinstance(function, ast.Name):
-                    contexts.append(_EnteredContext(function.id, _binding_expression(call)))
         self.with_contexts.append(contexts)
+        for item in node.items:
+            self.visit(item.context_expr)
+            entered = _entered_context(item.context_expr)
+            if entered is not None:
+                contexts.append(entered)
         for statement in node.body:
             self.visit(statement)
         self.with_contexts.pop()
