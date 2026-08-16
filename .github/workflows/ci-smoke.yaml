@@ -828,6 +828,9 @@ jobs:
               - 'app/db/db.py'
               - 'app/memory_kv/store.py'
               - 'app/services/vault_sync.py'
+              - 'app/services/outbox.py'
+              - 'app/workers/outbox_worker.py'
+              - 'app/alembic/versions/f6a05a7b0001_mvr05a7_outbox_binding_dual_key.py'
               - 'tests/migrations/test_file_state_adoption.py'
               - 'tests/migrations/test_objects_adoption.py'
               # Both were pg-marked and in no lane at all before #4560, and both
@@ -862,6 +865,8 @@ jobs:
               - 'tests/architecture/durable_table_classification.py'
               - 'tests/architecture/durable_table_classification.json'
               - 'tests/migrations/test_outbox_schema_parity.py'
+              - 'tests/migrations/test_multi_vault_outbox_upgrade.py'
+              - 'tests/services/test_multi_vault_outbox_dual_key_dedup.py'
               - 'tests/services/test_outbox_bootstrap_assert_only.py'
               - 'tests/instance/test_file_state_binding_key.py'
               - 'tests/services/test_vault_sync_binding_scope.py'
@@ -938,6 +943,8 @@ jobs:
             tests/stores/test_vector_generation_identity.py \
             tests/services/test_audit_writer.py \
             tests/migrations/test_outbox_schema_parity.py \
+            tests/migrations/test_multi_vault_outbox_upgrade.py \
+            tests/services/test_multi_vault_outbox_dual_key_dedup.py \
             tests/services/test_outbox_bootstrap_assert_only.py \
             tests/instance/test_file_state_binding_key.py \
             tests/services/test_vault_sync_binding_scope.py \

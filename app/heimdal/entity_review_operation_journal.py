@@ -70,6 +70,7 @@ from typing import Any, Callable, Mapping, Protocol
 
 from app.events.models import new_event
 from app.events.types import HEIMDAL_REGISTER_ENTITY_MERGED
+from app.instance.binding_ids import COMPATIBILITY_BINDING_ID
 from app.services.outbox import write_outbox_event
 
 # ---------------------------------------------------------------------------
@@ -750,8 +751,15 @@ class EntityReviewOperationJournal:
             self._validate_loaded(record, operation)
             cur = _exec(
                 conn,
-                "SELECT topic, payload FROM outbox WHERE id = %s",
-                (record.outbox_event_id,),
+                "SELECT topic, payload FROM outbox "
+                "WHERE vault_binding_id = %s AND (id = %s OR legacy_key = %s) "
+                "ORDER BY (id = %s) DESC LIMIT 1",
+                (
+                    COMPATIBILITY_BINDING_ID,
+                    record.outbox_event_id,
+                    record.outbox_event_id,
+                    record.outbox_event_id,
+                ),
             )
             row = cur.fetchone() if hasattr(cur, "fetchone") else None
             if row is None:

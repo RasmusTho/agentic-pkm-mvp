@@ -20,7 +20,12 @@ from psycopg import sql  # noqa: E402
 from app.db.dsn import resolve_dsn  # noqa: E402
 from app.events.models import new_event  # noqa: E402
 from app.events.types import INGEST_OBJECT_CREATED  # noqa: E402
-from app.services.outbox import bootstrap, derive_idempotency_key, write_outbox_event  # noqa: E402
+from app.services.outbox import (  # noqa: E402
+    bootstrap,
+    derive_binding_scoped_idempotency_key,
+    derive_idempotency_key,
+    write_outbox_event,
+)
 
 
 def _pg_base_dsn() -> str:
@@ -70,17 +75,24 @@ def test_same_key_from_two_connections_yields_one_row() -> None:
             first = write_outbox_event(event, conn_a, idempotency_key=key)
             second = write_outbox_event(event, conn_b, idempotency_key=key)
 
-            assert first == key
+            scoped_key = derive_binding_scoped_idempotency_key(
+                INGEST_OBJECT_CREATED, "legacy-compatibility-binding", key
+            )
+            assert first == scoped_key
             assert second == ""  # ON CONFLICT (id) DO NOTHING at the real PK
 
             row = conn_a.execute(
-                "select count(*) from outbox where id = %s", (key,)
+                "select count(*) from outbox where id = %s", (scoped_key,)
             ).fetchone()
             assert row is not None and int(row[0]) == 1
 
             # A different derived key from either connection is a genuine row.
             other = derive_idempotency_key(INGEST_OBJECT_CREATED, "note-uuid-pg", "content-hash-pg-2")
-            assert write_outbox_event(event, conn_b, idempotency_key=other) == other
+            assert write_outbox_event(event, conn_b, idempotency_key=other) == (
+                derive_binding_scoped_idempotency_key(
+                    INGEST_OBJECT_CREATED, "legacy-compatibility-binding", other
+                )
+            )
             row = conn_b.execute("select count(*) from outbox").fetchone()
             assert row is not None and int(row[0]) == 2
         finally:

@@ -63,7 +63,7 @@ class FakeOutboxConn:
         if text.startswith("insert into outbox"):
             # Keyed insert shape (KERNEL-02): id is the mandatory idempotency
             # key with ON CONFLICT (id) DO NOTHING semantics.
-            row_id, topic, payload, created_at, attempts = params
+            row_id, topic, payload, created_at, attempts, legacy_key, vault_binding_id, *_ = params
             if row_id in self.rows:
                 return _FakeCursor([])
             self._seq += 1
@@ -74,6 +74,8 @@ class FakeOutboxConn:
                 "created_at": created_at,
                 "delivered_at": None,
                 "attempts": attempts,
+                "legacy_key": legacy_key,
+                "vault_binding_id": vault_binding_id,
             }
             return _FakeCursor([(row_id,)])
 
@@ -83,7 +85,9 @@ class FakeOutboxConn:
             if not undelivered:
                 return _FakeCursor([])
             head = undelivered[0]
-            return _FakeCursor([(head["id"], head["topic"], head["payload"])])
+            return _FakeCursor(
+                [(head["id"], head["topic"], head["payload"], head["vault_binding_id"])]
+            )
 
         if text.startswith("update outbox set attempts"):
             msg_id = params[0]

@@ -8,6 +8,7 @@ from app.events.types import INGEST_OBJECT_CREATED
 from app.services.outbox import (
     append_jsonl_outbox_event,
     coerce_outbox_event,
+    derive_binding_scoped_idempotency_key,
     derive_idempotency_key,
     serialize_outbox_record,
     write_outbox_event,
@@ -40,9 +41,13 @@ def test_write_outbox_event_serializes_payload():
     sql, params = conn.executed[0]
 
     assert "insert into outbox" in sql.lower()
-    row_id, topic, payload_json, created_at, attempts = params
+    row_id, topic, payload_json, created_at, attempts, legacy_key, vault_binding_id, *_ = params
 
-    assert row_id == key
+    assert row_id == derive_binding_scoped_idempotency_key(
+        INGEST_OBJECT_CREATED, "legacy-compatibility-binding", key
+    )
+    assert legacy_key == key
+    assert vault_binding_id == "legacy-compatibility-binding"
     assert topic == INGEST_OBJECT_CREATED
     data = json.loads(payload_json)
     assert data["event_type"] == INGEST_OBJECT_CREATED
@@ -70,7 +75,7 @@ def test_write_outbox_event_accepts_panel_event_source_models():
     assert len(conn.executed) == 1
     sql, params = conn.executed[0]
     assert "insert into outbox" in sql.lower()
-    row_id, topic, payload_json, created_at, attempts = params
+    row_id, topic, payload_json, created_at, attempts, legacy_key, vault_binding_id, *_ = params
 
     assert topic == "panel.intent.executed"
     data = json.loads(payload_json)

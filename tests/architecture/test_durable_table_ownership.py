@@ -805,6 +805,10 @@ DURABLE_OWNERSHIP_PG_TARGETS = (
     # same `objects` table this slice rekeys.
     "tests/migrations/test_legacy_objects_fk_migration.py",
     "tests/migrations/test_outbox_schema_parity.py",
+    # MVR-05A7 (#4581): forward-only outbox classification plus runtime
+    # dual-key compatibility dedup both require real PostgreSQL.
+    "tests/migrations/test_multi_vault_outbox_upgrade.py",
+    "tests/services/test_multi_vault_outbox_dual_key_dedup.py",
     # Exercises `outbox.bootstrap()`, which calls the `ensure_schema` seam this
     # slice rewrote; it was also pg-marked and in no lane.
     "tests/services/test_outbox_bootstrap_assert_only.py",
@@ -896,6 +900,9 @@ def test_the_pr_path_pg_lane_is_triggered_by_the_sources_it_guards() -> None:
         "app/db/db.py",
         "app/memory_kv/store.py",
         "app/services/vault_sync.py",
+        "app/services/outbox.py",
+        "app/workers/outbox_worker.py",
+        "app/alembic/versions/f6a05a7b0001_mvr05a7_outbox_binding_dual_key.py",
         "app/alembic/versions/e6c4a2b8d1f3_mvr05a3_store_object_binding_keys.py",
         "app/alembic/versions/f5a05a5b0001_mvr05a5_replay_projection_binding_keys.py",
         "app/db/replay_projection_schema.py",

@@ -36,6 +36,7 @@ from app.knowledge_acquisition.stage_events import (
     stage_completed_key,
     stage_dead_letter_key,
 )
+from app.services.outbox import derive_binding_scoped_idempotency_key
 
 pytestmark = pytest.mark.not_pg
 
@@ -78,7 +79,7 @@ class FakeOutboxConn:
         text = " ".join(sql.lower().split())
         if text.startswith("insert into outbox (id,"):
             assert "on conflict (id) do nothing" in text
-            row_id, topic, payload, created_at, attempts = params
+            row_id, topic, payload, created_at, attempts, legacy_key, vault_binding_id, *_ = params
             if row_id in self.rows:
                 return _FakeCursor([])  # conflict: nothing inserted / returned
             self.rows[row_id] = {
@@ -88,6 +89,8 @@ class FakeOutboxConn:
                 "created_at": created_at,
                 "delivered_at": None,
                 "attempts": attempts,
+                "legacy_key": legacy_key,
+                "vault_binding_id": vault_binding_id,
             }
             return _FakeCursor([(row_id,)])
         raise AssertionError(f"unexpected SQL shape reached the outbox: {text!r}")
@@ -142,16 +145,21 @@ def test_envelope_and_deterministic_idempotency_key() -> None:
         conn=conn,
     )
 
-    # Exactly one row, keyed by the deterministic idempotency key (row id == key).
+    # Exactly one row, keyed by the binding-scoped derivative while retaining
+    # the unchanged producer key as compatibility history.
     assert len(conn.rows) == 1
     (row,) = conn.rows.values()
-    assert row["id"] == key
+    legacy_key = stage_completed_key(
+        stage="normalize", stage_version=1, content_identity=content_identity
+    )
+    assert row["id"] == derive_binding_scoped_idempotency_key(
+        STAGE_COMPLETED_TOPIC, "legacy-compatibility-binding", legacy_key
+    )
+    assert row["legacy_key"] == legacy_key
     assert row["topic"] == STAGE_COMPLETED_TOPIC
 
     # The key is deterministic: independently derived from (stage, version, identity).
-    assert key == stage_completed_key(
-        stage="normalize", stage_version=1, content_identity=content_identity
-    )
+    assert key == row["id"]
 
     # The persisted payload is a standard envelope (Event shape, docs/EVENTS.md fields).
     envelope = Event.model_validate_json(row["payload"])
@@ -458,10 +466,14 @@ def test_summary_v2_non_finite_confidence_dead_letter_has_v2_identity() -> None:
     assert len(rows) == 1
     envelope = Event.model_validate_json(rows[0]["payload"])
     assert envelope.payload["stage_version"] == EXTRACTOR_VERSION
-    assert rows[0]["id"] == stage_dead_letter_key(
+    legacy_key = stage_dead_letter_key(
         stage="extracted",
         stage_version=EXTRACTOR_VERSION,
         content_identity=normalized["source_content_identity"],
         extractor_id="summary",
         failure_scope="required",
     )
+    assert rows[0]["id"] == derive_binding_scoped_idempotency_key(
+        STAGE_DEAD_LETTERED_TOPIC, "legacy-compatibility-binding", legacy_key
+    )
+    assert rows[0]["legacy_key"] == legacy_key

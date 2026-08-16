@@ -77,6 +77,10 @@ from app.heimdal.settings_notes import (
     read_settings_note,
     write_settings_note,
 )
+from app.instance.binding_ids import (
+    COMPATIBILITY_BINDING_ID,
+    OUTBOX_QUARANTINE_BINDING_ID,
+)
 from app.services import outbox as outbox_module
 from app.vault.manager import VaultContext
 from app.write_guard import WriteGuard
@@ -563,7 +567,11 @@ def test_merge_event_commit_is_visible_on_fresh_connection_before_pending_clear(
     events = _merged_event_rows(scratch_dsn)
     assert len(events) == 1
     event_id, payload = events[0]
-    assert event_id == operation.outbox_event_id
+    assert event_id == outbox_module.derive_binding_scoped_idempotency_key(
+        MERGED_TOPIC,
+        COMPATIBILITY_BINDING_ID,
+        operation.outbox_event_id,
+    )
     assert payload["from_id"] == from_id
     assert payload["into_id"] == into_id
     assert payload["operation_id"] == operation.operation_id
@@ -573,6 +581,54 @@ def test_merge_event_commit_is_visible_on_fresh_connection_before_pending_clear(
     journal.commit_merge_event(operation)
     assert len(_merged_event_rows(scratch_dsn)) == 1
     assert journal.verify_committed_visibility(committed) is True
+
+
+def test_quarantined_event_cannot_authorize_pending_review_clear(
+    scratch_dsn: str, tmp_path: Path
+) -> None:
+    vault_root = _vault_root(tmp_path)
+    register = _register(vault_root)
+    queue_entry_id, from_id, into_id, raw_decision = _queue_merge_decision(
+        vault_root, register
+    )
+    journal = _journal(scratch_dsn)
+    operation = journal.claim_operation(
+        **_claim_kwargs(register, queue_entry_id, from_id, into_id, raw_decision)
+    )
+    register.ensure_merge_effects(from_id, into_id)
+    envelope = {
+        "event_type": MERGED_TOPIC,
+        "payload": {
+            "from_id": from_id,
+            "into_id": into_id,
+            "operation_id": operation.operation_id,
+        },
+    }
+    with psycopg.connect(scratch_dsn) as conn:
+        conn.execute(
+            "UPDATE entity_review_operations SET state = %s WHERE operation_id = %s",
+            (STATE_EVENT_COMMITTED, operation.operation_id),
+        )
+        conn.execute(
+            "INSERT INTO outbox "
+            "(id, legacy_key, vault_binding_id, topic, payload) "
+            "VALUES (%s, %s, %s, %s, %s::jsonb)",
+            (
+                operation.outbox_event_id,
+                operation.outbox_event_id,
+                OUTBOX_QUARANTINE_BINDING_ID,
+                MERGED_TOPIC,
+                json.dumps(envelope),
+            ),
+        )
+
+    committed = replace(operation, state=STATE_EVENT_COMMITTED)
+    assert journal.verify_committed_visibility(committed) is False
+    with pytest.raises(EntityConfirmError, match="committed visibility"):
+        apply_human_review_decisions(vault_root, register=register, journal=journal)
+    assert [e.queue_entry_id for e in pending_review_entries(vault_root)] == [
+        queue_entry_id
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -604,11 +660,18 @@ class _CallerTransactionJournal(EntityReviewOperationJournal):
             source="heimdal.entity_review",
         )
         outbox_module.write_outbox_event(
-            event, conn=self.caller_conn, idempotency_key=operation.outbox_event_id
+            event,
+            conn=self.caller_conn,
+            idempotency_key=operation.outbox_event_id,
         )
         # Same-transaction read-your-own-write: the caller can see the row...
+        scoped_event_id = outbox_module.derive_binding_scoped_idempotency_key(
+            MERGED_TOPIC,
+            COMPATIBILITY_BINDING_ID,
+            operation.outbox_event_id,
+        )
         seen = self.caller_conn.execute(
-            "SELECT count(*) FROM outbox WHERE id = %s", (operation.outbox_event_id,)
+            "SELECT count(*) FROM outbox WHERE id = %s", (scoped_event_id,)
         ).fetchone()
         assert seen == (1,), "the caller transaction must see its own uncommitted insert"
         # ...and on the #4253 path that visibility was treated as durability.

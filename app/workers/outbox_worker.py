@@ -35,6 +35,7 @@ from app.events.topic_schema_registry import (
     validate_topic_payload,
 )
 from app.indexer.consumer import process_event as process_indexer_event
+from app.instance.binding_ids import COMPATIBILITY_BINDING_ID
 from app.knowledge.write_ops import read_note_text_with_version
 from app.objects import resolve_canonical_object_id
 from app.outbox.events import INDEX_EMBEDDING_REQUESTED
@@ -368,6 +369,9 @@ def run_once(
             attempts=0,
             trace_id=None if trace_id == "-" else trace_id,
             error=str(uuid_exc),
+            source_vault_binding_id=str(
+                message.get("vault_binding_id") or COMPATIBILITY_BINDING_ID
+            ),
         )
         return WorkerTickResult(state="processed", processed=1)
     except SchemaViolationDispatchError as schema_exc:
@@ -387,6 +391,9 @@ def run_once(
             attempts=0,
             trace_id=None if trace_id == "-" else trace_id,
             error=str(schema_exc),
+            source_vault_binding_id=str(
+                message.get("vault_binding_id") or COMPATIBILITY_BINDING_ID
+            ),
         )
         return WorkerTickResult(state="processed", processed=1)
     ack_outbox(message["id"])
@@ -446,10 +453,17 @@ def _dispatch_topic(
     invalid payload against a registered schema must never partially process.
     """
     _validate_dispatch_payload(topic, payload, message=message)
+    source_vault_binding_id = str(
+        message.get("vault_binding_id") or COMPATIBILITY_BINDING_ID
+    )
     if topic == INGEST_OBJECT_CREATED:
         handle_ingest_object_created(_indexer_payload(payload))
     elif topic == INGEST_VAULT_CHANGED:
-        handle_ingest_vault_changed(payload, trace_id=trace_id)
+        handle_ingest_vault_changed(
+            payload,
+            trace_id=trace_id,
+            source_vault_binding_id=source_vault_binding_id,
+        )
     elif topic == INGEST_OBJECT_DELETED:
         handle_ingest_object_deleted(payload)
     elif topic == PANEL_SCAN_REQUESTED:
@@ -458,6 +472,7 @@ def _dispatch_topic(
             payload,
             trace_id=trace_id,
             scan_requested_ts=event_timestamp,
+            source_vault_binding_id=source_vault_binding_id,
         )
     elif topic == PROMOTE_INTENT_CREATED:
         from app.promotion.consumer import consume_promotion_intent_payload
@@ -478,9 +493,17 @@ def _dispatch_topic(
             }
         )
     elif topic == KNOWLEDGE_ACQUISITION_STAGE_COMPLETED:
-        handle_knowledge_acquisition_stage_completed(payload, trace_id=trace_id)
+        handle_knowledge_acquisition_stage_completed(
+            payload,
+            trace_id=trace_id,
+            source_vault_binding_id=source_vault_binding_id,
+        )
     elif topic == KNOWLEDGE_ACQUISITION_STAGE_DEAD_LETTERED:
-        handle_knowledge_acquisition_stage_dead_lettered(payload, trace_id=trace_id)
+        handle_knowledge_acquisition_stage_dead_lettered(
+            payload,
+            trace_id=trace_id,
+            source_vault_binding_id=source_vault_binding_id,
+        )
     else:
         logger.debug("worker skipping unsupported topic=%s trace_id=%s", topic, trace_id)
 
@@ -593,6 +616,7 @@ def _emit_ka_consumer_signal(
     fingerprint: str,
     payload: Mapping[str, Any],
     trace_id: str | None,
+    source_vault_binding_id: str = COMPATIBILITY_BINDING_ID,
 ) -> None:
     """Durable, item-scoped observability signal for a handled KA stage event.
 
@@ -626,7 +650,11 @@ def _emit_ka_consumer_signal(
     try:
         append_jsonl_outbox_event(_outbox_audit_path(), event, default_source="worker")
         if _use_db_outbox():
-            write_outbox_event(event, idempotency_key=key)
+            write_outbox_event(
+                event,
+                idempotency_key=key,
+                vault_binding_id=source_vault_binding_id,
+            )
     except Exception:
         # Best-effort observability signal: a failure here must never re-block
         # the outbox poll loop or fail the dispatch of the KA stage event
@@ -639,7 +667,10 @@ def _emit_ka_consumer_signal(
 
 
 def handle_knowledge_acquisition_stage_completed(
-    payload: Mapping[str, Any], *, trace_id: str | None = None
+    payload: Mapping[str, Any],
+    *,
+    trace_id: str | None = None,
+    source_vault_binding_id: str = COMPATIBILITY_BINDING_ID,
 ) -> None:
     """Consume ``knowledge_acquisition.stage.completed`` (KA-06 → KA-07, #3107).
 
@@ -692,6 +723,7 @@ def handle_knowledge_acquisition_stage_completed(
             "artifact_path": payload.get("artifact_path"),
         },
         trace_id=trace_id,
+        source_vault_binding_id=source_vault_binding_id,
     )
     logger.info(
         "knowledge_acquisition candidate ready for triage content_identity=%s trace_id=%s",
@@ -701,7 +733,10 @@ def handle_knowledge_acquisition_stage_completed(
 
 
 def handle_knowledge_acquisition_stage_dead_lettered(
-    payload: Mapping[str, Any], *, trace_id: str | None = None
+    payload: Mapping[str, Any],
+    *,
+    trace_id: str | None = None,
+    source_vault_binding_id: str = COMPATIBILITY_BINDING_ID,
 ) -> None:
     """Consume ``knowledge_acquisition.stage.dead_lettered`` (KA-06 → KA-07, #3107).
 
@@ -746,6 +781,7 @@ def handle_knowledge_acquisition_stage_dead_lettered(
             "error": payload.get("error"),
         },
         trace_id=trace_id,
+        source_vault_binding_id=source_vault_binding_id,
     )
     logger.warning(
         "knowledge_acquisition stage dead-letter surfaced content_identity=%s stage=%s "
@@ -1009,6 +1045,7 @@ def _emit_retry_dead_letter(
     retry_count: int,
     trace_id: str | None,
     original_event_id: str | None,
+    source_vault_binding_id: str = COMPATIBILITY_BINDING_ID,
 ) -> None:
     event = make_outbox_event(
         OUTBOX_EVENT_DEAD_LETTERED,
@@ -1034,6 +1071,7 @@ def _emit_retry_dead_letter(
                 _original_event_id(payload, original_event_id) or str(note_path),
                 f"retry-exhausted:{reason}:{retry_count}",
             ),
+            vault_binding_id=source_vault_binding_id,
         )
 
 
@@ -1047,6 +1085,7 @@ def _dead_letter_outbox_message(
     trace_id: str | None,
     error: str,
     conn: Any = None,
+    source_vault_binding_id: str = COMPATIBILITY_BINDING_ID,
 ) -> None:
     """Audit a poison outbox row that exceeded the dispatch-attempt budget.
 
@@ -1086,9 +1125,18 @@ def _dead_letter_outbox_message(
             )
             if conn is not None:
                 with conn.transaction():
-                    write_outbox_event(event, conn=conn, idempotency_key=key)
+                    write_outbox_event(
+                        event,
+                        conn=conn,
+                        idempotency_key=key,
+                        vault_binding_id=source_vault_binding_id,
+                    )
             else:
-                write_outbox_event(event, idempotency_key=key)
+                write_outbox_event(
+                    event,
+                    idempotency_key=key,
+                    vault_binding_id=source_vault_binding_id,
+                )
         logger.warning(
             "worker dead-lettered poison outbox row topic=%s id=%s reason=%s attempts=%s",
             topic,
@@ -1121,6 +1169,7 @@ def _dead_letter_and_ack(
     attempts: int,
     trace_id: str | None,
     error: str,
+    source_vault_binding_id: str = COMPATIBILITY_BINDING_ID,
 ) -> None:
     """Write the dead-letter audit row and ack the poisoned row atomically (#3930).
 
@@ -1141,6 +1190,7 @@ def _dead_letter_and_ack(
             attempts=attempts,
             trace_id=trace_id,
             error=error,
+            source_vault_binding_id=source_vault_binding_id,
         )
         ack_outbox(message_id)
         return
@@ -1160,6 +1210,7 @@ def _dead_letter_and_ack(
                 trace_id=trace_id,
                 error=error,
                 conn=conn,
+                source_vault_binding_id=source_vault_binding_id,
             )
             ack_outbox(conn, message_id)
     finally:
@@ -1176,6 +1227,7 @@ def _record_failed_dispatch(
     payload: Mapping[str, Any],
     trace_id: str | None,
     error: BaseException,
+    source_vault_binding_id: str = COMPATIBILITY_BINDING_ID,
 ) -> bool:
     """Record one failed dispatch: bump the poison budget, dead-letter at the cap.
 
@@ -1214,6 +1266,7 @@ def _record_failed_dispatch(
                 attempts=attempts,
                 trace_id=trace_id,
                 error=str(error),
+                source_vault_binding_id=source_vault_binding_id,
             )
             ack_outbox(message_id)
             return True
@@ -1242,6 +1295,7 @@ def _record_failed_dispatch(
                 trace_id=trace_id,
                 error=str(error),
                 conn=conn,
+                source_vault_binding_id=source_vault_binding_id,
             )
             # Ack and commit share one guard: either can raise on the same
             # broken-connection fault that would make the other fail too, and
@@ -1352,6 +1406,7 @@ def _queue_transient_retry(
     reason: str,
     trace_id: str | None = None,
     original_event_id: str | None = None,
+    source_vault_binding_id: str = COMPATIBILITY_BINDING_ID,
 ) -> bool:
     retry_count = _payload_retry_count(payload)
     if retry_count >= _MAX_TRANSIENT_RETRY_ATTEMPTS:
@@ -1364,6 +1419,7 @@ def _queue_transient_retry(
                 retry_count=retry_count,
                 trace_id=trace_id,
                 original_event_id=original_event_id,
+                source_vault_binding_id=source_vault_binding_id,
             )
         except Exception:
             logger.exception(
@@ -1406,6 +1462,7 @@ def _queue_transient_retry(
                     f"retry:{retry_count + 1}:{reason}",
                 ),
                 required_db=True,
+                vault_binding_id=source_vault_binding_id,
             )
         else:
             append_jsonl_outbox_event(_outbox_audit_path(), retry_event, default_source="worker")
@@ -1436,6 +1493,7 @@ def handle_panel_scan_requested(
     vault_root: Path | None = None,
     trace_id: str | None = None,
     scan_requested_ts: str | None = None,
+    source_vault_binding_id: str = COMPATIBILITY_BINDING_ID,
 ) -> WorkerPanelSummary:
     resolved_root = _resolve_vault_root(vault_root)
     note_path = _note_path_from_payload(payload, vault_root=resolved_root)
@@ -1452,6 +1510,7 @@ def handle_panel_scan_requested(
             note_path=note_path,
             reason="file_unstable",
             trace_id=trace_id,
+            source_vault_binding_id=source_vault_binding_id,
         ):
             if _retry_exhausted(payload):
                 logger.warning("panel scan dropped after exhausted retries (file unstable) note_path=%s", note_path)
@@ -1476,6 +1535,7 @@ def handle_panel_scan_requested(
             note_path=note_path,
             reason="missing_uuid",
             trace_id=trace_id,
+            source_vault_binding_id=source_vault_binding_id,
         ):
             if _retry_exhausted(payload):
                 logger.warning("panel scan dropped after exhausted retries (missing uuid) note_path=%s", note_path)
@@ -1587,6 +1647,7 @@ def handle_ingest_vault_changed(
     *,
     vault_root: Path | None = None,
     trace_id: str | None = None,
+    source_vault_binding_id: str = COMPATIBILITY_BINDING_ID,
 ) -> WorkerIngestSummary:
     resolved_root = _resolve_vault_root(vault_root)
     note_path = _note_path_from_payload(payload, vault_root=resolved_root)
@@ -1601,6 +1662,7 @@ def handle_ingest_vault_changed(
             note_path=note_path,
             reason="missing_or_unstable_note",
             trace_id=trace_id,
+            source_vault_binding_id=source_vault_binding_id,
         ):
             if _retry_exhausted(payload):
                 logger.warning("ingest dropped after exhausted retries note_path=%s", note_path)
@@ -1913,6 +1975,9 @@ def run(
                             attempts=0,
                             trace_id=None if trace_id == "-" else trace_id,
                             error=str(uuid_exc),
+                            source_vault_binding_id=str(
+                                message.get("vault_binding_id") or COMPATIBILITY_BINDING_ID
+                            ),
                         )
                         continue
                     except SchemaViolationDispatchError as schema_exc:
@@ -1935,6 +2000,9 @@ def run(
                             attempts=0,
                             trace_id=None if trace_id == "-" else trace_id,
                             error=str(schema_exc),
+                            source_vault_binding_id=str(
+                                message.get("vault_binding_id") or COMPATIBILITY_BINDING_ID
+                            ),
                         )
                         continue
                     except Exception as handler_exc:
@@ -1964,6 +2032,9 @@ def run(
                             payload=payload,
                             trace_id=None if trace_id == "-" else trace_id,
                             error=handler_exc,
+                            source_vault_binding_id=str(
+                                message.get("vault_binding_id") or COMPATIBILITY_BINDING_ID
+                            ),
                         ):
                             errors_total += 1
                             continue

@@ -156,6 +156,42 @@ def _call_name(node: ast.Call) -> str | None:
     return None
 
 
+def test_every_outbox_producer_routes_through_the_binding_aware_choke_point() -> None:
+    """MVR-05A7: one binding-aware insert seam and explicit worker inheritance."""
+    direct_inserts: list[str] = []
+    for path in sorted(APP_ROOT.rglob("*.py")):
+        source = path.read_text(encoding="utf-8")
+        tree = ast.parse(source, filename=str(path))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            for arg in node.args:
+                if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
+                    if "insert into outbox" in " ".join(arg.value.lower().split()):
+                        direct_inserts.append(str(path.relative_to(APP_ROOT.parent)))
+    assert direct_inserts == ["app/services/outbox.py"]
+
+    outbox_source = DEFINING_MODULE.read_text(encoding="utf-8")
+    assert "derive_binding_scoped_idempotency_key" in outbox_source
+    assert "_resolve_outbox_vault_binding_id" in outbox_source
+    normalized_outbox_source = " ".join(outbox_source.split())
+    assert "legacy_key" in normalized_outbox_source
+    assert "vault_binding_id" in normalized_outbox_source
+
+    worker_path = APP_ROOT / "workers" / "outbox_worker.py"
+    worker_tree = ast.parse(worker_path.read_text(encoding="utf-8"), filename=str(worker_path))
+    worker_writes = [
+        node
+        for node in ast.walk(worker_tree)
+        if isinstance(node, ast.Call) and _call_name(node) == "write_outbox_event"
+    ]
+    assert len(worker_writes) == 5
+    assert all(
+        any(keyword.arg == "vault_binding_id" for keyword in call.keywords)
+        for call in worker_writes
+    )
+
+
 def _enclosing_function_node(
     node: ast.AST, parents: dict[ast.AST, ast.AST]
 ) -> ast.FunctionDef | ast.AsyncFunctionDef | None:

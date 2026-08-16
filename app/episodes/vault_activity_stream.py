@@ -29,6 +29,7 @@ from typing import Any, Mapping, Sequence
 from app.db.db import conn_rw
 from app.episodes import engine_state
 from app.events.types import INGEST_OBJECT_CREATED, INGEST_OBJECT_DELETED, INGEST_VAULT_CHANGED
+from app.instance.binding_ids import OUTBOX_QUARANTINE_BINDING_ID
 from app.watcher.vault_watcher import extract_context_dimensions_for_note
 from scripts.yaml_roundtrip import load_frontmatter
 
@@ -90,9 +91,10 @@ def read_vault_activity_for_consumer(consumer_id: str, *, limit: int | None = No
     """Read the next unread vault-activity outbox rows for `consumer_id`, without advancing its cursor.
 
     Independent of the outbox worker's `delivered_at` -- reads every matching
-    row regardless of worker-delivery state, ordered `(created_at, id)`
-    ascending (docs/EVENTS.md FIFO-by-created_at ordering), strictly after
-    the consumer's own last-seen position. Call
+    row regardless of worker-delivery state except rows whose source binding
+    is quarantined as unprovable, ordered `(created_at, id)` ascending
+    (docs/EVENTS.md FIFO-by-created_at ordering), strictly after the consumer's
+    own last-seen position. Call
     :func:`advance_vault_activity_cursor` explicitly once the batch is
     durably processed downstream (at-least-once delivery, mirrors the
     Heimdal cursor contract).
@@ -101,6 +103,8 @@ def read_vault_activity_for_consumer(consumer_id: str, *, limit: int | None = No
     topic_placeholders = ", ".join(["%s"] * len(VAULT_ACTIVITY_TOPICS))
     query = f"SELECT id, topic, payload, created_at FROM outbox WHERE topic IN ({topic_placeholders})"
     params: list[Any] = list(VAULT_ACTIVITY_TOPICS)
+    query += " AND vault_binding_id <> %s"
+    params.append(OUTBOX_QUARANTINE_BINDING_ID)
     if created_at is not None and row_id is not None:
         query += " AND (created_at, id) > (%s, %s::uuid)"
         params.extend([created_at, row_id])
