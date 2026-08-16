@@ -202,6 +202,8 @@ def test_receipt_contract_names_binding_freshness_and_revocation() -> None:
     assert "32 raw Ed25519 public-key bytes" in README
     assert "64 raw Ed25519 signature bytes" in README
     assert "present registry entry with `status=issued`" in README
+    assert "`issuer_signature` participates in the receipt digest" in README
+    assert "not in the signed payload" in README
 
 
 RECEIPT_FIELDS = {
@@ -414,3 +416,13 @@ def test_receipt_wire_encoding_rejects_nonzero_base64url_pad_bits() -> None:
         _decode_canonical_b64url(key_mutation, 32)
     with pytest.raises(AssertionError):
         _decode_canonical_b64url(signature_mutation, 64)
+
+
+def test_receipt_digest_and_signature_payload_have_distinct_field_bindings() -> None:
+    receipt = json.loads(RECEIPT_FIXTURE.read_text())
+    digest_body = _receipt_digest_body(receipt)
+    unsigned_body = _receipt_unsigned_body(receipt)
+    assert b'"issuer_signature"' in digest_body
+    assert b'"issuer_signature"' not in unsigned_body
+    assert b'"issuer_key_id"' in digest_body
+    assert b'"issuer_key_id"' in unsigned_body

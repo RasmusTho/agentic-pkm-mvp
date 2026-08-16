@@ -123,9 +123,10 @@ The machine-readable shapes are frozen as follows; producers must emit no additi
 ```
 
 `issuer_key_id` participates in the receipt's canonical digest and unsigned signed payload.
-`issuer_signature` does not participate in either payload; it signs the canonical unsigned
-payload after both `receipt_id` and `issuer_signature` are removed. Registry fields are not
-receipt-digest inputs. Every Base64URL value is decoded and re-encoded before use; the re-encoded
+`issuer_signature` participates in the receipt digest, but not in the signed payload; it is
+the signature over the canonical unsigned payload after both `receipt_id` and `issuer_signature`
+are removed. Registry fields are not receipt-digest inputs. Every Base64URL value is decoded and
+re-encoded before use; the re-encoded
 unpadded URL-safe value must be byte-for-byte identical, which rejects nonzero terminal pad bits
 as well as padding and standard-Base64 characters.
 
