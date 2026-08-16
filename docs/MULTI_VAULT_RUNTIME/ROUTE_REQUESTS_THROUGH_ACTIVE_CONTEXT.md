@@ -352,7 +352,10 @@ catalog (`id` fresh or `(object_id, set_id)` retained historical), preserves
 the fresh `sets(id)` endpoint, and refuses any unknown inbound-FK shape before
 schema mutation. The projector resolves its public set name through `sets` and
 writes that UUID on both supported membership shapes; a retained objects-as-sets
-database must already carry the same UUID in binding-scoped `store_objects`.
+database carries the same UUID in binding-scoped `store_objects`. Prerequisite
+repair #4939 seeds the named `published` registry row for both supported lineages
+and the compatibility-binding endpoint required by the retained lineage before
+projection; runtime deletion of either prerequisite continues to fail closed.
 Its retained ingest views join by `vault_binding_id`.
 
 MVR-05A5 keys all six replay projections by `vault_binding_id`, scopes standing-question,

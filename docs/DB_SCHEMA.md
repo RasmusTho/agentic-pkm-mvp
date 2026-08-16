@@ -3,7 +3,7 @@ Doc role: Reference
 Authority: Human-readable snapshot of the current database schema and DB outbox bootstrap; migrations and bootstrap code remain the executable source of truth.
 Temporal class: operational
 Source of truth: code
-Last verified against: app/stores/pg.py + app/alembic/versions/e6c4a2b8d1f3_mvr05a3_store_object_binding_keys.py + app/alembic/versions/f4a05a4b0001_mvr05a4_ingest_projection_binding_keys.py + app/alembic/versions/f5a05a5b0001_mvr05a5_replay_projection_binding_keys.py + app/services/outbox.py + app/workers/outbox_binding_gate.py + app/instance/mvr05_cutover.py + app/alembic/versions/f3a1c9d2e4b7_kernel05_outbox_schema_in_migrations.py + app/heimdal/observation_log.py + app/heimdal/cursor_store.py + app/alembic/versions/8b21e6a1f0c4_heim_observation_log_and_cursor.py + app/services/vault_sync.py + app/alembic/versions/c7f4b1a83d29_mvr05a0_file_state_binding_key.py + app/alembic/versions/d1e8a0c5f37b_mvr05a1_objects_agent_memories_adoption.py + app/db/db.py + tests/architecture/durable_table_classification.json (2026-08-16)
+Last verified against: app/stores/pg.py + app/alembic/versions/e6c4a2b8d1f3_mvr05a3_store_object_binding_keys.py + app/alembic/versions/f4a05a4b0001_mvr05a4_ingest_projection_binding_keys.py + app/alembic/versions/f7a05a4b0001_seed_membership_prerequisites.py + app/alembic/versions/f5a05a5b0001_mvr05a5_replay_projection_binding_keys.py + app/services/outbox.py + app/workers/outbox_binding_gate.py + app/instance/mvr05_cutover.py + app/alembic/versions/f3a1c9d2e4b7_kernel05_outbox_schema_in_migrations.py + app/heimdal/observation_log.py + app/heimdal/cursor_store.py + app/alembic/versions/8b21e6a1f0c4_heim_observation_log_and_cursor.py + app/services/vault_sync.py + app/alembic/versions/c7f4b1a83d29_mvr05a0_file_state_binding_key.py + app/alembic/versions/d1e8a0c5f37b_mvr05a1_objects_agent_memories_adoption.py + app/db/db.py + tests/architecture/durable_table_classification.json (2026-08-16)
 
 ## v5.5 Baseline Delta (Current Reality)
 - Registry watcher is the runtime default; legacy snapshot watcher is dev-only.
@@ -629,8 +629,10 @@ copy, or delete rows.
   a composite `store_objects(vault_binding_id, object_id)` FK)
 - The projector/backfill producer accepts a set name, resolves it through the retained `sets`
   registry, and writes the resolved UUID. On the historical objects-as-sets lineage that same UUID
-  must already exist in binding-scoped `store_objects`; a missing registry or endpoint row fails
-  the write instead of fabricating membership.
+  must also exist in binding-scoped `store_objects`. Revision `f7a05a4b0001` seeds the named
+  `published` set for both supported lineages and mirrors its resolved UUID into the compatibility
+  binding's `store_objects` only on the historical lineage. A later missing registry or endpoint
+  row still fails the write with migration guidance instead of fabricating membership.
 - `created_at` (`timestamptz`, default `now()`)
 - `PRIMARY KEY (vault_binding_id, object_id, set_id)` on the retained lineage
 
