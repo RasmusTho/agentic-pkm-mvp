@@ -85,6 +85,40 @@ elif command in {
         + "\\n",
         encoding="utf-8",
     )
+elif command == "redact-compose-fence-config":
+    output = Path(_value("--output"))
+    output.write_text(
+        '''services:
+  api: {depends_on: [db], labels: {com.agentic-pkm.mvr05.db-role: client}}
+  db: {depends_on: [], labels: {com.agentic-pkm.mvr05.db-role: server}}
+  heimdal-capture-watch: {depends_on: [db], labels: {com.agentic-pkm.mvr05.db-role: client}}
+  instance-state-init: {depends_on: [], labels: {com.agentic-pkm.mvr05.db-role: fence-controller}}
+  migrate:
+    command: [/app/scripts/run_migrations.sh]
+    depends_on: [db]
+    labels: {com.agentic-pkm.mvr05.db-role: migration-runner}
+  watcher: {depends_on: [db], labels: {com.agentic-pkm.mvr05.db-role: client}}
+  worker: {depends_on: [db], labels: {com.agentic-pkm.mvr05.db-role: client}}
+''',
+        encoding="utf-8",
+    )
+elif command == "compose-fence-plan":
+    receipt = Path(_value("--receipt-output"))
+    receipt.write_text(
+        json.dumps(
+            {
+                "schema": "agentic-pkm.mvr05-cutover-fence.v1",
+                "db_clients": ["api", "heimdal-capture-watch", "migrate", "watcher", "worker"],
+                "migration_runner": "migrate",
+                "stopped_services": ["api", "heimdal-capture-watch", "watcher", "worker"],
+                "source_sha256": "0" * 64,
+            },
+            sort_keys=True,
+        )
+        + "\\n",
+        encoding="utf-8",
+    )
+    print("api heimdal-capture-watch watcher worker")
 else:
     raise SystemExit(f"unsupported writer-inventory fixture command: {command}")
 """,
@@ -158,6 +192,10 @@ def _deploy_harness(tmp_path: Path) -> tuple[Path, dict[str, str], str]:
         '"""Fixture marker for a target with the instance-state preflight."""\n',
         encoding="utf-8",
     )
+    (root / "app/instance/mvr05_cutover.py").write_text(
+        '"""Fixture marker for an MVR-05 floor-capable target."""\n',
+        encoding="utf-8",
+    )
     shutil.copy2(
         REPO_ROOT / "docker-compose.scalar-rollback.yml",
         root / "docker-compose.scalar-rollback.yml",
@@ -185,6 +223,7 @@ def _deploy_harness(tmp_path: Path) -> tuple[Path, dict[str, str], str]:
             "add",
             "scripts",
             "app/instance/runtime.py",
+            "app/instance/mvr05_cutover.py",
             "docker-compose.scalar-rollback.yml",
             "ops/scalar-rollback/nginx.conf",
         ],

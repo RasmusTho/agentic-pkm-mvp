@@ -51,6 +51,33 @@ def test_worker_probe_exit_codes(
     assert _probe(role, base_env).returncode == 1
 
 
+def test_worker_probe_fails_readiness_for_binding_blocked_heartbeat(
+    tmp_path: Path,
+) -> None:
+    heartbeat = tmp_path / "worker.json"
+    heartbeat.write_text(
+        json.dumps(
+            {
+                "ts": time.time(),
+                "status": "blocked_pending_mvr06",
+                "binding_blocked_pending": 2,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = _probe(
+        "worker",
+        {
+            "WORKER_HEARTBEAT_PATH": str(heartbeat),
+            "STORE_BACKEND": "pg",
+            "WORKER_ENABLE": "true",
+        },
+    )
+
+    assert result.returncode == 1
+
+
 def test_watcher_probe_exit_codes(tmp_path: Path) -> None:
     # The parametrized test above keeps the named worker AC compact; this named
     # test is retained as the explicit issue Verify target for watcher.

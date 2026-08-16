@@ -32,6 +32,7 @@ from app.vault.active_context_v1 import (
     PrincipalContext,
     WorkspaceState,
 )
+from tests.helpers.revoked_binding_authorizer import RevokedBindingAuthorizer
 
 PRINCIPAL = PrincipalContext(
     principal_id="lor_test_role",
@@ -40,9 +41,7 @@ PRINCIPAL = PrincipalContext(
 )
 
 
-def _resolver(
-    facts: dict[str, BindingFact], authorizer, *, revision: int = 7, invalidate=None
-):
+def _resolver(facts: dict[str, BindingFact], authorizer, *, revision: int = 7, invalidate=None):
     state = {"facts": facts, "revision": revision}
     return (
         ActiveContextSelectionResolver(
@@ -92,9 +91,9 @@ def test_selection_resolution_is_immutable_and_global_free() -> None:
         "app.vault.manager",
         "active_context",
     ):
-        assert forbidden not in referenced, (
-            f"the selection resolver must not reach mutable global selection ({forbidden})"
-        )
+        assert (
+            forbidden not in referenced
+        ), f"the selection resolver must not reach mutable global selection ({forbidden})"
 
     facts = {
         "bind-a": BindingFact(vault_binding_id="bind-a", binding_revision=3, vault_id="v-a"),
@@ -159,7 +158,7 @@ def test_binding_revision_rotates_resolver_generation() -> None:
     """
 
     facts = {"bind-a": BindingFact(vault_binding_id="bind-a", binding_revision=3)}
-    authorizer = RegistryBindingAuthorizer({"bind-a": 3})
+    authorizer = RevokedBindingAuthorizer(RegistryBindingAuthorizer({"bind-a": 3}))
     store = ContextSelectionStore()
     resolver, state = _resolver(facts, authorizer, invalidate=store.invalidate_digest)
 
@@ -211,7 +210,7 @@ def test_binding_revision_rotates_resolver_generation() -> None:
     # and attaches the descriptor to the error, so a denied selection cannot survive because
     # someone forgot to call an invalidation helper.
     assert len(store) == 1
-    authorizer.set_binding("bind-a", 4, revoked=True)
+    authorizer.revoke_for_test("bind-a")
     with pytest.raises(BindingAuthorizationError) as denied:
         resolver.resolve(selection=record, **kwargs)  # type: ignore[arg-type]
     assert denied.value.verdict.status == "deny"

@@ -40,6 +40,7 @@ from app.vault.active_context_v1 import (
     WorkspaceState,
 )
 from tests._mvr03_principal_harness import provisioned_instance
+from tests.helpers.revoked_binding_authorizer import RevokedBindingAuthorizer
 
 SELECTION_URL = "/api/companion/active-context/selection"
 
@@ -54,9 +55,7 @@ _READ_GOV_INPUTS = dict(
 def instance(tmp_path, monkeypatch):
     """An authoritative registry, a provisioned delegated role, two registered vaults."""
 
-    runtime, first, extra, record = provisioned_instance(
-        tmp_path, extra_roots=("two",)
-    )
+    runtime, first, extra, record = provisioned_instance(tmp_path, extra_roots=("two",))
     monkeypatch.setenv("INSTANCE_VAULT_REGISTRY_PATH", str(runtime.layout.registry_path))
     monkeypatch.setenv("INSTANCE_OWNERSHIP_ROOT", str(runtime.ledger.root))
     selection_routes.reset_selection_store_for_tests()
@@ -147,9 +146,7 @@ def test_session_switch_is_generation_atomic(instance, client) -> None:
     resolver = _service_resolver(runtime, principal_record)
 
     before = _record_for(store, bearer_a, principal, instance_identity)
-    in_flight = resolver.resolve(
-        selection=before, principal=principal, **_READ_GOV_INPUTS
-    ).snapshot
+    in_flight = resolver.resolve(selection=before, principal=principal, **_READ_GOV_INPUTS).snapshot
     assert in_flight.generation == 1
     assert in_flight.binding_ids == (first.vault_binding_id,)
 
@@ -169,9 +166,7 @@ def test_session_switch_is_generation_atomic(instance, client) -> None:
     assert in_flight.binding_ids == (first.vault_binding_id,)
 
     after = _record_for(store, bearer_a, principal, instance_identity)
-    subsequent = resolver.resolve(
-        selection=after, principal=principal, **_READ_GOV_INPUTS
-    ).snapshot
+    subsequent = resolver.resolve(selection=after, principal=principal, **_READ_GOV_INPUTS).snapshot
     assert subsequent.generation == 2
     assert subsequent.binding_ids == (second.vault_binding_id,)
 
@@ -211,9 +206,7 @@ def test_session_expiry_and_restart_are_truthful(instance, client, monkeypatch) 
 
     # -- process restart ---------------------------------------------------------------
     selection_routes.reset_selection_store_for_tests()
-    restarted = client.get(
-        SELECTION_URL, headers={"X-Active-Context-Session": bearer}
-    )
+    restarted = client.get(SELECTION_URL, headers={"X-Active-Context-Session": bearer})
     assert restarted.status_code == 401
     assert "reselection_required" in restarted.json()["detail"]
 
@@ -274,9 +267,7 @@ def test_each_binding_is_authorized_independently(instance, client) -> None:
         (one, 1),
         (many, 2),
     ):
-        record = _record_for(
-            store, payload["context_selection_id"], principal, instance_identity
-        )
+        record = _record_for(store, payload["context_selection_id"], principal, instance_identity)
         snapshot = resolver.resolve(
             selection=record, principal=principal, **_READ_GOV_INPUTS
         ).snapshot
@@ -287,7 +278,7 @@ def test_each_binding_is_authorized_independently(instance, client) -> None:
         assert len(epochs) == expected
 
     # Each of the three deny branches is real and reachable.
-    authorizer = RegistryBindingAuthorizer({first.vault_binding_id: 1})
+    authorizer = RevokedBindingAuthorizer(RegistryBindingAuthorizer({first.vault_binding_id: 1}))
     unresolved = BindingAuthorizationRequest(
         principal=PrincipalContext(
             principal_id="x", principal_kind="delegated_operator_role", subject="trusted_loopback"
@@ -298,7 +289,7 @@ def test_each_binding_is_authorized_independently(instance, client) -> None:
         required_permission="wsp.read",
     )
     assert authorizer.authorize(unresolved).reason == "binding_unknown"
-    authorizer.set_binding(first.vault_binding_id, 1, revoked=True)
+    authorizer.revoke_for_test(first.vault_binding_id)
     denied_revoked = authorizer.authorize(
         BindingAuthorizationRequest(
             principal=unresolved.principal,
@@ -313,7 +304,8 @@ def test_each_binding_is_authorized_independently(instance, client) -> None:
     # Availability is NOT an authorization input: an unreachable content root is still a
     # binding this principal may use, and it degrades rather than denying. Folding it into
     # GOV would make the degraded posture unreachable in production wiring.
-    authorizer.set_binding(first.vault_binding_id, 1, available=False, revoked=False)
+    authorizer.restore_for_test(first.vault_binding_id)
+    authorizer.set_binding(first.vault_binding_id, 1, available=False)
     still_allowed = authorizer.authorize(
         BindingAuthorizationRequest(
             principal=unresolved.principal,
@@ -327,23 +319,19 @@ def test_each_binding_is_authorized_independently(instance, client) -> None:
 
     # Denying one member of a many-binding set fails the whole resolution: no partial set
     # is returned and no member is silently excluded.
-    partial = RegistryBindingAuthorizer(
-        {first.vault_binding_id: 1, second.vault_binding_id: 1},
-        revoked=frozenset({second.vault_binding_id}),
+    partial = RevokedBindingAuthorizer(
+        RegistryBindingAuthorizer({first.vault_binding_id: 1, second.vault_binding_id: 1})
     )
+    partial.revoke_for_test(second.vault_binding_id)
     partial_resolver = ActiveContextSelectionResolver(
         binding_facts=lambda: binding_facts(runtime.registry.load()),
         registry_revision=lambda: runtime.registry.load().revision,
         authorizer=partial,
         instance_identity=instance_identity,
     )
-    many_record = _record_for(
-        store, many["context_selection_id"], principal, instance_identity
-    )
+    many_record = _record_for(store, many["context_selection_id"], principal, instance_identity)
     with pytest.raises(BindingAuthorizationError):
-        partial_resolver.resolve(
-            selection=many_record, principal=principal, **_READ_GOV_INPUTS
-        )
+        partial_resolver.resolve(selection=many_record, principal=principal, **_READ_GOV_INPUTS)
 
 
 def test_degraded_posture_distinguishes_valid_no_vault_from_unavailable_binding(
@@ -357,13 +345,9 @@ def test_degraded_posture_distinguishes_valid_no_vault_from_unavailable_binding(
     store = selection_routes.get_selection_store()
 
     healthy_empty = _create(client, [])
-    record = _record_for(
-        store, healthy_empty["context_selection_id"], principal, instance_identity
-    )
+    record = _record_for(store, healthy_empty["context_selection_id"], principal, instance_identity)
     resolver = _service_resolver(runtime, principal_record)
-    healthy = resolver.resolve(
-        selection=record, principal=principal, **_READ_GOV_INPUTS
-    ).snapshot
+    healthy = resolver.resolve(selection=record, principal=principal, **_READ_GOV_INPUTS).snapshot
     assert healthy.posture == "healthy"
     assert healthy.degraded_reason is None
     assert healthy.is_no_vault
@@ -418,9 +402,7 @@ def test_degraded_posture_distinguishes_valid_no_vault_from_unavailable_binding(
         )
 
 
-def test_selection_id_is_single_user_bearer_with_server_derived_context(
-    instance, client
-) -> None:
+def test_selection_id_is_single_user_bearer_with_server_derived_context(instance, client) -> None:
     """The bearer is expiring, high-entropy, and additional to #2223 -- never authority."""
 
     runtime, first, second, principal_record = instance
@@ -525,9 +507,7 @@ def test_selection_id_is_single_user_bearer_with_server_derived_context(
     )
     other_principal = updated.additional_principal(added.role_id, "trusted_loopback")
     with pytest.raises(SelectionPrincipalMismatchError):
-        store.inspect(
-            bearer, principal=other_principal, instance_identity=instance_identity
-        )
+        store.inspect(bearer, principal=other_principal, instance_identity=instance_identity)
     with pytest.raises(SelectionPrincipalMismatchError):
         store.replace_bindings(
             bearer,
@@ -560,9 +540,7 @@ def test_selection_id_is_single_user_bearer_with_server_derived_context(
     )
 
 
-def test_instance_identity_never_substitutes_for_principal_context(
-    instance, client
-) -> None:
+def test_instance_identity_never_substitutes_for_principal_context(instance, client) -> None:
     """Principal derivation uses only the auth/GOV-owned role record.
 
     Two installations are two instance identities, not two humans; and two roles on one
@@ -616,9 +594,9 @@ def test_instance_identity_never_substitutes_for_principal_context(
         )
     )
     assert delegated_verdict.allowed and human_verdict.allowed
-    assert delegated_verdict.epoch != human_verdict.epoch, (
-        "two principals must produce distinguishable GOV decisions"
-    )
+    assert (
+        delegated_verdict.epoch != human_verdict.epoch
+    ), "two principals must produce distinguishable GOV decisions"
 
     # And distinguishable full-context identity (the cache-key input).
     from app.retrieval.context_cache import context_cache_identity

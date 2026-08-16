@@ -38,17 +38,25 @@ def _write_watcher_heartbeat(path: Path, *, ts: float, paused: bool = False) -> 
     path.write_text(json.dumps(heartbeat, ensure_ascii=False), encoding="utf-8")
 
 
-def _write_worker_heartbeat(path: Path, *, ts: float) -> None:
+def _write_worker_heartbeat(
+    path: Path,
+    *,
+    ts: float,
+    status: str = "running",
+    binding_blocked_pending: int | None = None,
+) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     heartbeat = {
         "ts": ts,
         "pid": 123,
-        "status": "running",
+        "status": status,
         "ticks_total": 3,
         "errors_total": 0,
         "processed_total": 2,
         "outbox_path": "/app/tmp/index-outbox.jsonl",
     }
+    if binding_blocked_pending is not None:
+        heartbeat["binding_blocked_pending"] = binding_blocked_pending
     path.write_text(json.dumps(heartbeat, ensure_ascii=False), encoding="utf-8")
 
 
@@ -202,6 +210,40 @@ def test_health_requires_worker_when_enabled(monkeypatch, tmp_path) -> None:
     assert resp.status_code == 200
     data = resp.json()
     assert data["runtime"]["worker"]["ok"] is False
+
+
+def test_health_blocks_readiness_for_binding_incompatible_pending_rows(
+    monkeypatch, tmp_path
+) -> None:
+    heartbeat = tmp_path / "watcher-heartbeat.json"
+    _write_watcher_heartbeat(heartbeat, ts=time.time())
+    worker_hb = tmp_path / "worker-heartbeat.json"
+    _write_worker_heartbeat(
+        worker_hb,
+        ts=time.time(),
+        status="blocked_pending_mvr06",
+        binding_blocked_pending=2,
+    )
+    client = _health_client(
+        monkeypatch,
+        tmp_path,
+        watcher_path=heartbeat,
+        worker_path=worker_hb,
+        worker_enabled=True,
+    )
+
+    data = client.get("/api/health").json()
+
+    assert data["required_ok"] is False
+    worker = data["runtime"]["worker"]
+    assert worker["ok"] is False
+    assert worker["status"] == "blocked_pending_mvr06"
+    assert worker["binding_blocked_pending"] == 2
+    assert any(
+        action.get("id") == "worker_binding_blocked"
+        and action.get("severity") == "required"
+        for action in data["suggested_actions"]
+    )
 
 
 def test_health_suggests_index_rebuild(monkeypatch, tmp_path) -> None:

@@ -119,6 +119,7 @@ def write_worker_heartbeat(
     processed_by_event: Mapping[str, int] | None = None,
     last_processed: Mapping[str, float] | None = None,
     status: str = "running",
+    binding_blocked_pending: int | None = None,
     now: float | None = None,
 ) -> None:
     timestamp = now if now is not None else time.time()
@@ -136,6 +137,8 @@ def write_worker_heartbeat(
         payload["processed_by_event"] = {k: int(v) for k, v in processed_by_event.items()}
     if last_processed is not None:
         payload["last_processed"] = {k: float(v) for k, v in last_processed.items()}
+    if binding_blocked_pending is not None:
+        payload["binding_blocked_pending"] = int(binding_blocked_pending)
     _write_payload(path, payload)
 
 

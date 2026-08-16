@@ -12,3 +12,7 @@ COMPATIBILITY_BINDING_ID = "legacy-compatibility-binding"
 # collision, so quarantined history can suppress a duplicate effect but can
 # never authorize a new binding-scoped emission.
 OUTBOX_QUARANTINE_BINDING_ID = "outbox-quarantined-unprovable-binding"
+
+# MVR-05A8 (#4582): durable outbox work that is definitionally independent of
+# vault content uses an explicit value rather than borrowing a scalar binding.
+OUTBOX_GLOBAL_BINDING_ID = "explicitly-global"

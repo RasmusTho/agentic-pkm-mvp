@@ -40,12 +40,26 @@ Source anchors:
 from __future__ import annotations
 
 import json
+import operator
 import re
 import shutil
 from collections import Counter
 from pathlib import Path
 
 import pytest
+
+import app.governance.binding_authority as binding_authority
+from app.governance.binding_authority import (
+    RegistryBindingAuthorizer,
+    RevocationCapabilityError,
+)
+from app.instance.gov_revocation_inventory import (
+    discover_gov_revocation_producer_evidence,
+    discover_gov_revocation_producers,
+    load_gov_revocation_inventory,
+    validate_gov_revocation_coverage,
+    validate_gov_revocation_inventory,
+)
 
 from tests.architecture.durable_table_classification import (
     APP_ROOT,
@@ -102,6 +116,225 @@ def _substantial_sentences(reason: str) -> list[str]:
 
 RELATIONS_INIT_SQL = REPO_ROOT / "app" / "db" / "sql" / "relations_init.sql"
 LEGACY_RELATION_INDEX = REPO_ROOT / "app" / "store" / "relation_index.py"
+
+
+def test_enabled_gov_revocation_producers_are_fenced_or_absent(tmp_path: Path) -> None:
+    inventory = load_gov_revocation_inventory(
+        REPO_ROOT / "config" / "gov_revocation_producers.json"
+    )
+    assert inventory["producers"] == []
+    validate_gov_revocation_coverage(inventory, app_root=REPO_ROOT / "app")
+    assert discover_gov_revocation_producers(REPO_ROOT / "app") == frozenset()
+
+    sealed = RegistryBindingAuthorizer({"binding-a": 1})
+    mutation_calls = (
+        sealed.set_binding,
+        getattr(sealed, "set_" + "binding"),
+        sealed.__getattribute__("set_binding"),
+        operator.attrgetter("set_binding")(sealed),
+    )
+    for mutation in mutation_calls:
+        with pytest.raises(RevocationCapabilityError, match="revocation is dormant"):
+            mutation("binding-a", 2, **{"revoked": True})
+    with pytest.raises(RevocationCapabilityError, match="revocation is dormant"):
+        RegistryBindingAuthorizer({"binding-a": 1}, revoked=frozenset({"binding-a"}))
+    with pytest.raises(AttributeError):
+        getattr(sealed, "_known").pop("binding-a")
+    with pytest.raises(AttributeError):
+        setattr(sealed, "_known", {})
+    with pytest.raises(RevocationCapabilityError, match="authority state is sealed"):
+        setattr(sealed, "_RegistryBindingAuthorizer__known", {})
+    with pytest.raises(AttributeError):
+        getattr(binding_authority, "_test_revocation_" + "capability")
+    with pytest.raises(TypeError):
+        binding_authority._KnownBinding(  # type: ignore[call-arg]
+            "binding-a", 2, revoked=True
+        )
+    assert sealed.binding_revision("binding-a") == 1
+    with pytest.raises(ValueError, match="ownership fence"):
+        validate_gov_revocation_inventory(
+            {
+                "schema": "agentic-pkm.gov-revocation-producers.v1",
+                "producers": [
+                    {
+                        "name": "future-revoker",
+                        "enabled": True,
+                        "ownership_fence": False,
+                        "exclusive_binding_lease": True,
+                    }
+                ],
+            }
+        )
+
+    synthetic = tmp_path / "app"
+    synthetic.mkdir()
+    (synthetic / "future.py").write_text(
+        "def revoke(authorizer):\n" "    authorizer.set_binding('binding-a', 2, revoked=True)\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="differs from source mutation seams"):
+        validate_gov_revocation_coverage(inventory, app_root=synthetic)
+
+    canonical_app = tmp_path / "canonical" / "app"
+    canonical_module = canonical_app / "governance" / "binding_authority.py"
+    canonical_module.parent.mkdir(parents=True)
+    canonical_module.write_text(
+        "def revoke(authorizer):\n"
+        "    authorizer.set_binding(\n"
+        "        'binding-a', 2, revoked=True,\n"
+        "        _revocation_capability=_test_revocation_capability())\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="differs from source mutation seams"):
+        validate_gov_revocation_coverage(inventory, app_root=canonical_app)
+
+    canonical_module.write_text(
+        "def _test_revocation_capability(\n"
+        "    value=authorizer.set_binding(\n"
+        "        'binding-a', 2, revoked=True,\n"
+        "        _revocation_capability=capability)\n"
+        "):\n"
+        "    return value\n",
+        encoding="utf-8",
+    )
+    evidence = discover_gov_revocation_producer_evidence(canonical_app)
+    assert "app/governance/binding_authority:<module>" in evidence
+
+    canonical_module.write_text(
+        (REPO_ROOT / "app/governance/binding_authority.py").read_text(encoding="utf-8")
+        + "\nclass _KnownBinding:\n"
+        "    pass\n",
+        encoding="utf-8",
+    )
+    evidence = discover_gov_revocation_producer_evidence(canonical_app)
+    assert "app/governance/binding_authority:<canonical-boundary-shape>" in evidence
+
+    declared = {
+        "schema": "agentic-pkm.gov-revocation-producers.v1",
+        "producers": [
+            {
+                "name": "app/future:revoke",
+                "enabled": True,
+                "ownership_fence": True,
+                "exclusive_binding_lease": True,
+            }
+        ],
+    }
+    with pytest.raises(ValueError, match="lacks source-proved"):
+        validate_gov_revocation_coverage(declared, app_root=synthetic)
+
+    (synthetic / "future.py").write_text(
+        "def revoke(authorizer, ledger, manager):\n"
+        "    with manager.exclusive_change('binding-a'):\n"
+        "        with ledger.active_binding_fence('binding-a'):\n"
+        "            authorizer.set_binding('binding-a', 2, revoked=True)\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="lacks source-proved"):
+        validate_gov_revocation_coverage(declared, app_root=synthetic)
+
+    (synthetic / "future.py").write_text(
+        "def revoke(authorizer, ledger, manager):\n"
+        "    with manager.exclusive_change('binding-a'):\n"
+        "        with ledger.active_binding_fence('binding-a'):\n"
+        "            with manager.exclusive_change('binding-a'):\n"
+        "                authorizer.set_binding('binding-a', 2, revoked=True)\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="lacks source-proved"):
+        validate_gov_revocation_coverage(declared, app_root=synthetic)
+
+    (synthetic / "future.py").write_text(
+        "def build(authorizer, ledger, manager):\n"
+        "    with ledger.active_binding_fence('binding-a'):\n"
+        "        with manager.exclusive_change('binding-a'):\n"
+        "            def revoke():\n"
+        "                authorizer.set_binding('binding-a', 2, revoked=True)\n"
+        "            return revoke\n",
+        encoding="utf-8",
+    )
+    nested_declared = {
+        **declared,
+        "producers": [{**declared["producers"][0], "name": "app/future:build.revoke"}],
+    }
+    with pytest.raises(ValueError, match="lacks source-proved"):
+        validate_gov_revocation_coverage(nested_declared, app_root=synthetic)
+
+    for async_prefix in ("", "async "):
+        (synthetic / "future.py").write_text(
+            f"{async_prefix}def revoke(authorizer, ledger, wrap):\n"
+            f"    {async_prefix}with ledger.active_binding_fence('binding-a'):\n"
+            f"        {async_prefix}with wrap("
+            "authorizer.set_binding('binding-a', 2, revoked=True)):\n"
+            "            pass\n",
+            encoding="utf-8",
+        )
+        with pytest.raises(ValueError, match="lacks source-proved"):
+            validate_gov_revocation_coverage(declared, app_root=synthetic)
+
+    indirect_sources = (
+        "def revoke(authorizer, binding):\n"
+        "    authorizer.set_binding(binding, 2, **{'revoked': True})\n",
+        "def revoke(authorizer, binding):\n"
+        "    mutation = authorizer.set_binding\n"
+        "    mutation(binding, 2, revoked=True)\n",
+        "def revoke(authorizer, binding):\n"
+        "    mutation = partial(authorizer.set_binding, revoked=True)\n"
+        "    mutation(binding, 2)\n",
+        "def revoke(binding):\n"
+        "    factory = RegistryBindingAuthorizer\n"
+        "    factory(revoked={binding})\n",
+        "def revoke(authority, binding):\n"
+        "    factory = authority.RegistryBindingAuthorizer\n"
+        "    factory(**{'revoked': {binding}})\n",
+        "def revoke(authorizer, binding):\n" "    yield authorizer.set_binding\n",
+        "def revoke(binding, mutation=authorizer.set_binding):\n"
+        "    mutation(binding, 2, **options)\n",
+        "def revoke(authorizer, binding):\n"
+        "    for mutation in [authorizer.set_binding]:\n"
+        "        mutation(binding, 2, **options)\n",
+        "def revoke(x: authorizer.set_binding('binding-a', 2, revoked=True)):\n" "    pass\n",
+        "def revoke() -> authorizer.set_binding('binding-a', 2, revoked=True):\n" "    pass\n",
+        "def revoke(authorizer, binding):\n" "    authorizer._known.pop(binding)\n",
+        "def revoke(authorizer, binding):\n"
+        "    authorizer._known[binding] = _KnownBinding(\n"
+        "        binding, 2, revoked=True)\n",
+        "def revoke(authorizer, binding, options):\n"
+        "    mutation = getattr(authorizer, 'set_' + 'binding')\n"
+        "    mutation(binding, 2, **options)\n",
+        "def revoke(authorizer):\n"
+        "    known = object.__getattribute__(\n"
+        "        authorizer, '_RegistryBindingAuthorizer__known')\n"
+        "    object.__setattr__(\n"
+        "        authorizer, '_RegistryBindingAuthorizer__known', dict(known))\n",
+    )
+    for source in indirect_sources:
+        (synthetic / "future.py").write_text(source, encoding="utf-8")
+        with pytest.raises(
+            ValueError,
+            match="source mutation seams|lacks source-proved",
+        ):
+            validate_gov_revocation_coverage(declared, app_root=synthetic)
+
+    (synthetic / "future.py").write_text(
+        "def revoke(authorizer, ledger, manager):\n"
+        "    with ledger.active_binding_fence('binding-a'):\n"
+        "        with manager.exclusive_change('binding-b'):\n"
+        "            authorizer.set_binding('binding-c', 2, revoked=True)\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="lacks source-proved"):
+        validate_gov_revocation_coverage(declared, app_root=synthetic)
+
+    (synthetic / "future.py").write_text(
+        "def revoke(authorizer, ledger, manager):\n"
+        "    with ledger.active_binding_fence('binding-a'):\n"
+        "        with manager.exclusive_change('binding-a'):\n"
+        "            authorizer.set_binding('binding-a', 2, revoked=True)\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="lacks source-proved"):
+        validate_gov_revocation_coverage(declared, app_root=synthetic)
 
 
 # --------------------------------------------------------------------------- #
@@ -227,7 +460,9 @@ def test_no_replay_producer_replaces_a_whole_durable_table() -> None:
         assert entry["rebuild_mechanism"] != "whole-table-replacement", table
         for producer in entry["producers"]:
             source = (REPO_ROOT / producer["module"]).read_text(encoding="utf-8")
-            assert not re.search(rf"TRUNCATE\s+(?:TABLE\s+)?(?:public\.)?{table}\b", source, re.I), (
+            assert not re.search(
+                rf"TRUNCATE\s+(?:TABLE\s+)?(?:public\.)?{table}\b", source, re.I
+            ), (
                 table,
                 producer["module"],
             )
@@ -719,22 +954,22 @@ def test_post_cutover_store_fixture_mutations_are_binding_scoped() -> None:
                 "insert into",
                 "store_objects",
             ): 1,
-                (
-                    "tests/migrations/test_multi_vault_ingest_projection_keys.py",
-                    "_prepare_retained_historical_lineage",
-                    "insert into",
-                    "membership",
-                ): 1,
-                # MVR-05A5's migration proof deliberately seeds the pre-replay
-                # decisions shape before applying the binding migration.
-                (
-                    "tests/migrations/test_multi_vault_replay_projection_backfill.py",
-                    "_seed_legacy_rows",
-                    "insert into",
-                    "decisions",
-                ): 1,
-            }
-        )
+            (
+                "tests/migrations/test_multi_vault_ingest_projection_keys.py",
+                "_prepare_retained_historical_lineage",
+                "insert into",
+                "membership",
+            ): 1,
+            # MVR-05A5's migration proof deliberately seeds the pre-replay
+            # decisions shape before applying the binding migration.
+            (
+                "tests/migrations/test_multi_vault_replay_projection_backfill.py",
+                "_seed_legacy_rows",
+                "insert into",
+                "decisions",
+            ): 1,
+        }
+    )
     assert observed == expected, (
         "every current-shape object-identity fixture mutation must name vault_binding_id; "
         f"unbound fixture delta: added={observed - expected}, removed={expected - observed}"

@@ -296,6 +296,7 @@ def test_instance_storage_mutation_import_contract_is_complete() -> None:
         "app.instance.binding_effect_lease",
         "app.instance.instance_state",
         "app.instance.runtime",
+        "app.instance.scalar_binding_runtime",
     }
     capability_section = _instance_storage_capability_contract_section()
     assert capability_section["type"] == "protected"
@@ -305,13 +306,16 @@ def test_instance_storage_mutation_import_contract_is_complete() -> None:
     }
     # This set is deliberately enumerated rather than pattern-matched: every durable
     # instance-state writer must be a named, reviewed entry. MVR-03 (#3857) added
-    # `local_operator_principal`; MVR-05A6 (#4580) adds the per-binding effect lease.
-    # Both write under the same boundary and therefore take the same seal.
+    # `local_operator_principal`; MVR-05A6 (#4580) adds the per-binding effect lease;
+    # MVR-05A8 (#4582) adds the scalar compatibility resolver that assembles the
+    # ownership fence and effect lease. All write under the same boundary and take
+    # the same seal.
     assert _module_list(capability_section["allowed_importers"]) == {
         "app.instance.binding_effect_lease",
         "app.instance.local_operator_principal",
         "app.instance.ownership_ledger",
         "app.instance.runtime",
+        "app.instance.scalar_binding_runtime",
         "app.instance.vault_registry",
     }
     runtime_module = importlib.import_module("app.instance.runtime")

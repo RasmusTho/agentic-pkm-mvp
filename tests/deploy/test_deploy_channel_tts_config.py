@@ -34,6 +34,7 @@ def test_governed_runtime_env_supplies_tts_selectors_to_compose(tmp_path: Path) 
         "scripts/lib/deploy_channel_compose.sh",
         "scripts/lib/instance_ownership_host_state.sh",
         "scripts/lib/signboard_root.sh",
+        "scripts/instance_state_writer_inventory.py",
     ):
         source = REPO_ROOT / relative
         destination = synthetic_root / relative
@@ -139,6 +140,50 @@ def test_governed_runtime_env_supplies_tts_selectors_to_compose(tmp_path: Path) 
     assert blocked_config.returncode == 92
     assert "command=config" in blocked_config.stderr
     assert str(tts_root) not in blocked_config.stdout + blocked_config.stderr
+
+    fence_config = tmp_path / "effective-fence.yml"
+    fence_config.touch(mode=0o600)
+    handoff_env = env.copy()
+    handoff_env.update(
+        {
+            "DEPLOY_COMPOSE_FENCE_CONFIG_OUTPUT": str(fence_config),
+            "TTS_FAKE_STDOUT": yaml.safe_dump(
+                {
+                    "services": {
+                        "db": {
+                            "labels": {
+                                "com.agentic-pkm.mvr05.db-role": "server",
+                                "private-label": str(tts_root),
+                            },
+                            "environment": {"PRIVATE_DSN": "postgresql://secret"},
+                        },
+                        "migrate": {
+                            "command": ["/app/scripts/run_migrations.sh"],
+                            "depends_on": {"db": {"condition": "service_healthy"}},
+                            "labels": {
+                                "com.agentic-pkm.mvr05.db-role": "migration-runner"
+                            },
+                        },
+                    }
+                }
+            ),
+        }
+    )
+    allowed_config = run_wrapper(
+        "config",
+        "--no-interpolate",
+        "--no-env-resolution",
+        command_env=handoff_env,
+    )
+    assert allowed_config.returncode == 0, allowed_config.stderr
+    assert "services:" not in allowed_config.stdout
+    assert "postgresql://secret" not in allowed_config.stdout + allowed_config.stderr
+    redacted = yaml.safe_load(fence_config.read_text(encoding="utf-8"))
+    assert set(redacted["services"]) == {"db", "migrate"}
+    assert "environment" not in redacted["services"]["db"]
+    assert "private-label" not in redacted["services"]["db"]["labels"]
+    assert str(tts_root) not in fence_config.read_text(encoding="utf-8")
+    assert "postgresql://secret" not in fence_config.read_text(encoding="utf-8")
 
     malformed_env = env.copy()
     malformed_env["TTS_FAKE_STDOUT"] = str(tts_root)

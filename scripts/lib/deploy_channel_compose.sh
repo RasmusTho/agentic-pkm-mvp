@@ -682,6 +682,36 @@ deploy_channel_compose() {
     # machine-local mount root or unrelated env-file values. Only validated
     # container IDs from the two internal `ps -q` probes cross this boundary;
     # every other success stays quiet and every failure emits a fixed receipt.
+    # The MVR-05 deployment fence has one narrower internal `config` consumer:
+    # it names an already-created private output file, and this wrapper writes
+    # only service names, DB-role labels, dependencies, and the migration-runner
+    # command there. Raw effective config never crosses this boundary.
+    if [ "${1:-}" = "config" ] && [ -n "${DEPLOY_COMPOSE_FENCE_CONFIG_OUTPUT:-}" ]; then
+      case "${DEPLOY_COMPOSE_FENCE_CONFIG_OUTPUT}" in
+        /*) ;;
+        *)
+          echo "governed compose config handoff failed: output=invalid" >&2
+          return 92
+          ;;
+      esac
+      set +e
+      "${compose_command[@]}" >"${compose_stdout_file}" 2>"${compose_stderr_file}"
+      compose_rc=$?
+      set -e
+      if [ "${compose_rc}" -ne 0 ]; then
+        echo "governed compose command failed: output=redacted" >&2
+        return "${compose_rc}"
+      fi
+      if ! "${PYTHON:-python3}" "${root}/scripts/instance_state_writer_inventory.py" \
+        redact-compose-fence-config \
+        --compose-path "${compose_stdout_file}" \
+        --output "${DEPLOY_COMPOSE_FENCE_CONFIG_OUTPUT}" \
+        >"${compose_stderr_file}" 2>&1; then
+        echo "governed compose config handoff failed: output=redacted" >&2
+        return 92
+      fi
+      return 0
+    fi
     if [ "${DEPLOY_TTS_CONFIG_GOVERNED:-0}" = "1" ]; then
       if [ "${1:-}" = "config" ]; then
         echo "governed compose output blocked: command=config" >&2

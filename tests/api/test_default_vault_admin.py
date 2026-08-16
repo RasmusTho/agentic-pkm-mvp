@@ -40,9 +40,7 @@ def client() -> TestClient:
 @pytest.fixture()
 def bound_instance(tmp_path, monkeypatch):
     runtime, first, extra = active_runtime(tmp_path, extra_roots=("two",))
-    monkeypatch.setenv(
-        "INSTANCE_VAULT_REGISTRY_PATH", str(runtime.layout.registry_path)
-    )
+    monkeypatch.setenv("INSTANCE_VAULT_REGISTRY_PATH", str(runtime.layout.registry_path))
     monkeypatch.setenv("INSTANCE_OWNERSHIP_ROOT", str(runtime.ledger.root))
     return runtime, first, extra[0]
 
@@ -53,7 +51,17 @@ def captured_events(monkeypatch) -> list[tuple[object, str]]:
 
     emitted: list[tuple[object, str]] = []
 
-    def _capture(event, conn=None, *, idempotency_key: str, required_db: bool = False):
+    def _capture(
+        event,
+        conn=None,
+        *,
+        idempotency_key: str,
+        vault_binding_id: str | None = None,
+        required_db: bool = False,
+    ):
+        from app.instance.binding_ids import OUTBOX_GLOBAL_BINDING_ID
+
+        assert vault_binding_id == OUTBOX_GLOBAL_BINDING_ID
         emitted.append((event, idempotency_key))
         return idempotency_key
 
@@ -116,9 +124,7 @@ def test_production_default_commands_share_one_service(
         assert first.path not in rendered
 
     # Both reject an unknown/unauthorized binding without changing state.
-    rejected = client.put(
-        "/api/instance/default-vault", json={"vault_binding_id": "binding-nope"}
-    )
+    rejected = client.put("/api/instance/default-vault", json={"vault_binding_id": "binding-nope"})
     assert rejected.status_code == 404
     cli_rejected = _cli(
         "default-vault-set",
@@ -134,10 +140,7 @@ def test_production_default_commands_share_one_service(
     # Clear converges too, and survives restart as an explicit absence.
     assert client.delete("/api/instance/default-vault").status_code == 200
     assert reopen_runtime(runtime, tmp_path).registry.load().default_vault_binding_id is None
-    assert (
-        _cli("default-vault-get", "--registry-path", registry_path)["vault_binding_id"]
-        is None
-    )
+    assert _cli("default-vault-get", "--registry-path", registry_path)["vault_binding_id"] is None
 
 
 def test_default_mutation_publishes_versioned_rebind_event(
@@ -251,9 +254,7 @@ def test_removing_current_default_requires_atomic_clear_or_replacement(
         service.remove_registration(fourth.vault_binding_id, clear_default=True)
 
     # The explicit-clear arm is equally atomic.
-    cleared = service.remove_registration(
-        third.vault_binding_id, clear_default=True
-    )
+    cleared = service.remove_registration(third.vault_binding_id, clear_default=True)
     final = VaultRegistryStore(runtime.layout.registry_path).load()
     assert cleared.vault_binding_id is None
     assert final.default_vault_binding_id is None

@@ -1,5 +1,7 @@
 services:
   db:
+    labels:
+      com.agentic-pkm.mvr05.db-role: server
     image: pgvector/pgvector:pg16
     env_file:
       - ./config/runtime.defaults.env
@@ -14,6 +16,8 @@ services:
       start_period: 10s
 
   ollama:
+    labels:
+      com.agentic-pkm.mvr05.db-role: non-client
     image: ollama/ollama:latest
     environment:
       - OLLAMA_HOST=0.0.0.0:11434
@@ -43,6 +47,8 @@ services:
   # keeps it one-shot; every `docker compose up <service>` pulls it in via
   # depends_on (no producer runs `--no-deps`).
   migrate:
+    labels:
+      com.agentic-pkm.mvr05.db-role: migration-runner
     build:
       context: .
       args:
@@ -82,6 +88,8 @@ services:
   # across dev/test/prod. Run as root only to establish private ownership, then
   # every long-lived consumer runs its own fail-loud preflight as LOCAL_UID.
   instance-state-init:
+    labels:
+      com.agentic-pkm.mvr05.db-role: fence-controller
     build:
       context: .
       args:
@@ -139,6 +147,8 @@ services:
     restart: "no"
 
   api:
+    labels:
+      com.agentic-pkm.mvr05.db-role: client
     build:
       context: .
       args:
@@ -290,6 +300,8 @@ services:
       retries: 3
 
   worker:
+    labels:
+      com.agentic-pkm.mvr05.db-role: client
     build:
       context: .
       args:
@@ -373,6 +385,8 @@ services:
       retries: 3
 
   watcher:
+    labels:
+      com.agentic-pkm.mvr05.db-role: client
     build:
       context: .
       args:
@@ -464,6 +478,8 @@ services:
   # environment and override the governed env_file values. Left unset, the
   # container fails loud at runtime, not at compose-parse time.
   heimdal-capture-watch:
+    labels:
+      com.agentic-pkm.mvr05.db-role: client
     build:
       context: .
       args:
@@ -539,6 +555,8 @@ services:
       retries: 5
 
   companion-ui:
+    labels:
+      com.agentic-pkm.mvr05.db-role: non-client
     build:
       context: .
       args:

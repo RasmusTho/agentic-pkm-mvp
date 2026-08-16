@@ -220,6 +220,7 @@ def test_native_role_classifies_known_writers():
         ("python", "-m", "app.cli", "watcher", "run"): "watcher",
         ("python3", "-m", "app.cli", "heimdal", "capture-watch"): "heimdal-capture-watch",
         ("python", "-m", "app.workers.outbox_worker"): "outbox-worker",
+        ("python", "-m", "app.future_writer"): "app-python-module",
         ("python", "-m", "uvicorn", "app.api.app:app"): "uvicorn",
         ("python", "-m", "celery", "worker"): "celery",
         ("/usr/bin/uvicorn", "app.api.app:app"): "uvicorn",

@@ -30,7 +30,6 @@ INVENTORY_SCHEMA = "agentic-pkm.host-deployment-quiescence.v2"
 LEGACY_OWNER_INVENTORY_SCHEMA = "agentic-pkm.legacy-owner-inventory.v1"
 DOMAINS = ("dev", "native", "prod", "test")
 COMPOSE_PROJECT_DOMAINS = {"pkm-dev": "dev", "pkm-prod": "prod", "pkm-test": "test"}
-COMPOSE_WRITER_SERVICES = {"api", "heimdal-capture-watch", "watcher", "worker"}
 LAUNCHER_SCRIPTS = {"deploy_channel.sh", "start_full_system.sh"}
 LAUNCHER_ROLES = {name.removesuffix(".sh") for name in LAUNCHER_SCRIPTS}
 TOKEN_RE = re.compile(r"^(?:linux|darwin|docker):[0-9a-f]{64}$")
@@ -43,6 +42,82 @@ LINUX_PROCESS_STATES = frozenset({"D", "I", "K", "P", "R", "S", "T", "W", "X", "
 
 class InventoryError(RuntimeError):
     """Enumeration or proof construction was incomplete or unsafe."""
+
+
+def redact_compose_fence_config(source: Path, output: Path) -> None:
+    """Write the minimal effective-Compose surface needed by the MVR-05 fence."""
+
+    import yaml
+
+    try:
+        document = yaml.safe_load(source.read_text(encoding="utf-8")) or {}
+        services = document.get("services")
+    except (OSError, UnicodeError, yaml.YAMLError) as exc:
+        raise InventoryError("effective Compose fence input is invalid") from exc
+    if not isinstance(services, dict):
+        raise InventoryError("effective Compose fence input has no services")
+
+    role_label = "com.agentic-pkm.mvr05.db-role"
+    redacted_services: dict[str, object] = {}
+    for raw_name, raw_service in services.items():
+        if not isinstance(raw_name, str) or not isinstance(raw_service, dict):
+            raise InventoryError("effective Compose fence service is malformed")
+        labels = raw_service.get("labels")
+        if isinstance(labels, dict):
+            safe_labels: object = (
+                {role_label: labels[role_label]} if role_label in labels else {}
+            )
+        elif isinstance(labels, list):
+            prefix = f"{role_label}="
+            safe_labels = [str(item) for item in labels if str(item).startswith(prefix)]
+        else:
+            safe_labels = {}
+        depends_on = raw_service.get("depends_on")
+        if isinstance(depends_on, dict):
+            safe_dependencies: object = sorted(str(item) for item in depends_on)
+        elif isinstance(depends_on, list):
+            safe_dependencies = [str(item) for item in depends_on]
+        else:
+            safe_dependencies = []
+        safe_service: dict[str, object] = {
+            "labels": safe_labels,
+            "depends_on": safe_dependencies,
+        }
+        role = (
+            labels.get(role_label)
+            if isinstance(labels, dict)
+            else next(
+                (
+                    str(item).removeprefix(f"{role_label}=")
+                    for item in labels or []
+                    if str(item).startswith(f"{role_label}=")
+                ),
+                None,
+            )
+        )
+        if role == "migration-runner":
+            safe_service["command"] = raw_service.get("command")
+        redacted_services[raw_name] = safe_service
+
+    try:
+        metadata = output.lstat()
+    except OSError as exc:
+        raise InventoryError("effective Compose fence output is unavailable") from exc
+    if (
+        not stat.S_ISREG(metadata.st_mode)
+        or metadata.st_uid != os.getuid()
+        or metadata.st_mode & 0o077
+    ):
+        raise InventoryError("effective Compose fence output is not private")
+    flags = os.O_WRONLY | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        descriptor = os.open(output, flags)
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            yaml.safe_dump({"services": redacted_services}, handle, sort_keys=True)
+            handle.flush()
+            os.fsync(handle.fileno())
+    except OSError as exc:
+        raise InventoryError("effective Compose fence output could not be written") from exc
 
 
 @dataclass(frozen=True)
@@ -65,6 +140,21 @@ class LegacyOwnerRecord:
     # without emitting a raw host path. Defaults to "unknown" only as a
     # safety net; every live construction site below supplies a real value.
     source: str = "unknown"
+
+
+def _compose_writer_services(compose_path: Path | None = None) -> set[str]:
+    """Use the same production-derived MVR-05 fence plan as deployment."""
+
+    root = Path(__file__).resolve().parents[1]
+    try:
+        if str(root) not in sys.path:
+            sys.path.insert(0, str(root))
+        from app.instance.mvr05_cutover import discover_db_producer_fence
+
+        plan = discover_db_producer_fence(compose_path or root / "docker-compose.yaml")
+    except Exception as exc:
+        raise InventoryError("compose DB producer inventory is incomplete") from exc
+    return set(plan.stopped_services)
 
 
 def _digest_token(kind: str, *parts: object) -> str:
@@ -683,7 +773,7 @@ def _docker_legacy_owner_sources() -> tuple[list[LegacyOwnerRecord], list[str]]:
             raise InventoryError("docker legacy owner source inventory is malformed")
         project = labels.get("com.docker.compose.project")
         service = labels.get("com.docker.compose.service")
-        if project not in COMPOSE_PROJECT_DOMAINS or service not in COMPOSE_WRITER_SERVICES:
+        if project not in COMPOSE_PROJECT_DOMAINS or service not in _compose_writer_services():
             continue
         channel = COMPOSE_PROJECT_DOMAINS[str(project)]
         values = _env_list(config.get("Env"))
@@ -1207,6 +1297,11 @@ def _native_role(
             return "watcher"
         if len(argv) >= 5 and argv[2:5] == ("app.cli", "heimdal", "capture-watch"):
             return "heimdal-capture-watch"
+        if argv[2].startswith("app."):
+            # Future app modules are potential DB producers until classified.
+            # The PostgreSQL session fence is the final proof, but the native
+            # census must not silently discard an unfamiliar producer argv.
+            return "app-python-module"
     return None
 
 
@@ -1250,7 +1345,7 @@ def _docker_writers() -> list[dict[str, object]]:
         seen.add(container_id)
         project = labels.get("com.docker.compose.project")
         service = labels.get("com.docker.compose.service")
-        if project not in COMPOSE_PROJECT_DOMAINS or service not in COMPOSE_WRITER_SERVICES:
+        if project not in COMPOSE_PROJECT_DOMAINS or service not in _compose_writer_services():
             continue
         pid = state.get("Pid")
         started = state.get("StartedAt")
@@ -1412,6 +1507,12 @@ def main(argv: list[str] | None = None) -> int:
     validate.add_argument("--active-channel", required=True)
     validate.add_argument("--inventory", type=Path, required=True)
     validate.add_argument("--output", type=Path, required=True)
+    fence_plan = subparsers.add_parser("compose-fence-plan")
+    fence_plan.add_argument("--compose-path", type=Path, required=True)
+    fence_plan.add_argument("--receipt-output", type=Path)
+    redact_fence = subparsers.add_parser("redact-compose-fence-config")
+    redact_fence.add_argument("--compose-path", type=Path, required=True)
+    redact_fence.add_argument("--output", type=Path, required=True)
     args = parser.parse_args(argv)
     try:
         if args.command == "controller-token":
@@ -1438,6 +1539,24 @@ def main(argv: list[str] | None = None) -> int:
                 inventory=args.inventory,
                 output=args.output,
             )
+            return 0
+        if args.command == "compose-fence-plan":
+            root = Path(__file__).resolve().parents[1]
+            if str(root) not in sys.path:
+                sys.path.insert(0, str(root))
+            from app.instance.mvr05_cutover import discover_db_producer_fence
+
+            plan = discover_db_producer_fence(args.compose_path)
+            if args.receipt_output is not None:
+                args.receipt_output.write_text(
+                    json.dumps(plan.as_payload(), sort_keys=True) + "\n",
+                    encoding="utf-8",
+                )
+                os.chmod(args.receipt_output, 0o600)
+            print(" ".join(sorted(plan.stopped_services)))
+            return 0
+        if args.command == "redact-compose-fence-config":
+            redact_compose_fence_config(args.compose_path, args.output)
             return 0
     except InventoryError as exc:
         print(str(exc), file=sys.stderr)

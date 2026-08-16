@@ -120,7 +120,9 @@ class DimensionResolutionError(VaultDimensionError):
     would be the partial result the contract forbids.
     """
 
-    def __init__(self, reason: str, *, dimension_id: str, vault_binding_id: str | None = None) -> None:
+    def __init__(
+        self, reason: str, *, dimension_id: str, vault_binding_id: str | None = None
+    ) -> None:
         detail = f"{reason}: dimension {dimension_id}"
         if vault_binding_id is not None:
             detail = f"{detail} member {vault_binding_id}"
@@ -325,7 +327,9 @@ def parse_dimensions(extensions: Mapping[str, Any] | None) -> dict[str, VaultDim
             raise VaultDimensionError(f"dimension {dimension_id} must be a mapping")
         revision = value.get("revision")
         if not isinstance(revision, int) or revision < 1:
-            raise VaultDimensionError(f"dimension {dimension_id} revision must be a positive integer")
+            raise VaultDimensionError(
+                f"dimension {dimension_id} revision must be a positive integer"
+            )
         raw_members = value.get("members") or []
         if not isinstance(raw_members, list):
             raise VaultDimensionError(f"dimension {dimension_id} members must be a list")
@@ -635,9 +639,7 @@ class VaultDimensionService:
         current, dimensions = self._load()
         existing = self._require_dimension(dimensions, target)
         if member not in existing.members:
-            raise VaultDimensionError(
-                f"binding is not a member of dimension {target}: {member}"
-            )
+            raise VaultDimensionError(f"binding is not a member of dimension {target}: {member}")
         dimensions[target] = VaultDimension(
             dimension_id=target,
             display_name=existing.display_name,
@@ -729,9 +731,7 @@ class VaultDimensionService:
             raise DimensionResolutionError(REASON_DIMENSION_UNKNOWN, dimension_id=dimension_id)
         return dimension
 
-    def _require_registered(
-        self, snapshot: RegistrySnapshot, members: Iterable[str]
-    ) -> None:
+    def _require_registered(self, snapshot: RegistrySnapshot, members: Iterable[str]) -> None:
         """Refuse an addition naming a binding this instance does not hold.
 
         This is input validation on a proposed membership, not a resolution: raising
@@ -739,13 +739,10 @@ class VaultDimensionService:
         over stored state, and would have to invent a dimension id to do it.
         """
 
-        unknown = [
-            member for member in members if member not in snapshot.registrations
-        ]
+        unknown = [member for member in members if member not in snapshot.registrations]
         if unknown:
             raise VaultDimensionError(
-                "proposed dimension member is not a current registration: "
-                f"{sorted(unknown)[0]}"
+                "proposed dimension member is not a current registration: " f"{sorted(unknown)[0]}"
             )
 
     def _commit(
@@ -796,15 +793,14 @@ def emit_dimension_mutation_event(receipt: DimensionReceipt) -> str:
 
     from app.events.models import new_event
     from app.events.types import INSTANCE_VAULT_DIMENSION_CHANGED
+    from app.instance.binding_ids import OUTBOX_GLOBAL_BINDING_ID
     from app.services.outbox import derive_idempotency_key, write_outbox_event
 
     payload = {
         "event_version": DIMENSION_MUTATION_EVENT_VERSION,
         "registry_revision": receipt.registry_revision,
         "dimension_id": receipt.dimension_id,
-        "dimension_revision": (
-            None if receipt.dimension is None else receipt.dimension.revision
-        ),
+        "dimension_revision": (None if receipt.dimension is None else receipt.dimension.revision),
         "deleted": receipt.dimension is None,
         "member_count": 0 if receipt.dimension is None else len(receipt.dimension.members),
     }
@@ -818,7 +814,12 @@ def emit_dimension_mutation_event(receipt: DimensionReceipt) -> str:
         payload=payload,
         source="instance.vault_dimensions",
     )
-    return write_outbox_event(event, idempotency_key=idempotency_key, required_db=False)
+    return write_outbox_event(
+        event,
+        idempotency_key=idempotency_key,
+        vault_binding_id=OUTBOX_GLOBAL_BINDING_ID,
+        required_db=False,
+    )
 
 
 def _binding_revision(snapshot: RegistrySnapshot, vault_binding_id: str) -> int:

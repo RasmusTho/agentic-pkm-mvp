@@ -90,10 +90,10 @@ if [ "${{1:-}}" = "compose" ]; then
 
   case "${{1:-}}" in
     config)
-      printf '{{"services":{{}}}}\n'
+      printf '%s\n' '{{"services":{{"db":{{"labels":{{"com.agentic-pkm.mvr05.db-role":"server"}}}},"instance-state-init":{{"labels":{{"com.agentic-pkm.mvr05.db-role":"fence-controller"}}}},"migrate":{{"command":["/app/scripts/run_migrations.sh"],"depends_on":["db"],"labels":{{"com.agentic-pkm.mvr05.db-role":"migration-runner"}}}},"api":{{"depends_on":["db"],"labels":{{"com.agentic-pkm.mvr05.db-role":"client"}}}},"worker":{{"depends_on":["db"],"labels":{{"com.agentic-pkm.mvr05.db-role":"client"}}}},"watcher":{{"depends_on":["db"],"labels":{{"com.agentic-pkm.mvr05.db-role":"client"}}}},"heimdal-capture-watch":{{"depends_on":["db"],"labels":{{"com.agentic-pkm.mvr05.db-role":"client"}}}}}}}}'
       exit 0
       ;;
-    run|stop)
+    run|stop|exec)
       # The instance-state deployment producer now fences/finalizes before
       # the first compose up. This test is scoped to the later build marker.
       exit 0
