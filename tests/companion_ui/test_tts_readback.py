@@ -226,7 +226,7 @@ def test_no_autoplay_contract_is_scoped_to_unrequested_readback() -> None:
     """VOICE-03 may play only after its explicit user recording gesture."""
     html = _html()
     readback_script = _readback_script(html)
-    voice_start = html.index("function sendAudio(blob)")
+    voice_start = html.index("function showTurn(turn)")
     voice_script = html[voice_start : html.index("</script>", voice_start)]
 
     assert ".play()" not in readback_script[: readback_script.index("function readText")]
