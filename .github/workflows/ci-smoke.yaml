@@ -607,6 +607,7 @@ jobs:
           export MVR01C_ROLLBACK_VAULT_BINDING_ID
           export MVR01C_ROLLBACK_VAULT_ROOT="$VAULT_ROOT"
           export MVR03_PRINCIPAL_CUTOVER=1
+          export MVR03_PRINCIPAL_LOOPBACK_LISTENER=0
           prepare_instance_state_deployment run_ci_compose "${PKM_ENVIRONMENT:-dev}"
 
           docker compose $compose_files up -d --build db api watcher worker

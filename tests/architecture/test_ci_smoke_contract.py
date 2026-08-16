@@ -66,6 +66,7 @@ def test_vaultwide_smoke_activates_registered_fixture_through_production_cutover
     cutover_binding = "export MVR01C_ROLLBACK_VAULT_BINDING_ID"
     cutover_root = 'export MVR01C_ROLLBACK_VAULT_ROOT="$VAULT_ROOT"'
     principal_cutover = "export MVR03_PRINCIPAL_CUTOVER=1"
+    principal_topology = "export MVR03_PRINCIPAL_LOOPBACK_LISTENER=0"
     services = "docker compose $compose_files up -d --build db api watcher worker"
 
     assert step.count(deployment) == 2
@@ -76,6 +77,7 @@ def test_vaultwide_smoke_activates_registered_fixture_through_production_cutover
     assert registration_index < step.index(cutover_binding) < second_deployment
     assert registration_index < step.index(cutover_root) < second_deployment
     assert registration_index < step.index(principal_cutover) < second_deployment
+    assert registration_index < step.index(principal_topology) < second_deployment
 
 
 def test_vaultwide_smoke_cleanup_removes_cutover_receipts_and_state() -> None:
