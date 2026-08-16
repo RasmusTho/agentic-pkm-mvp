@@ -209,6 +209,10 @@ RECEIPT_FIELDS = {
     "test_identity", "vault_identity", "schema_identity", "required_checks", "issued_at",
     "fresh_until", "issuer_id", "issuer_key_id", "issuer_signature",
 }
+REGISTRY_FIELDS = {"registry_version", "trusted_keys", "entries"}
+REGISTRY_ENTRY_FIELDS = {
+    "issuer_id", "issuer_key_id", "public_key", "issuer_signature", "status",
+}
 EXPECTED_RECEIPT_CHECKS = ["migration", "readiness", "schema", "smoke", "ui", "version"]
 B64URL = re.compile(r"[A-Za-z0-9_-]+\Z")
 REGISTRY_FIXTURE = ROOT / "tests" / "fixtures" / "startup_redesign" / "promotion_receipt_registry.valid.json"
@@ -243,6 +247,7 @@ def _assert_receipt_schema(
     if registry is None:
         raise AssertionError("revocation/issuer registry lookup must fail closed")
     assert set(receipt) == RECEIPT_FIELDS
+    assert set(registry) == REGISTRY_FIELDS
     signature_parts = receipt["issuer_signature"].split(":", 2)
     assert signature_parts[:2] == ["ed25519", "v1"]
     assert B64URL.fullmatch(signature_parts[2]) and len(signature_parts[2]) % 4 != 1
@@ -269,17 +274,22 @@ def _assert_receipt_schema(
     assert now_instant.tzinfo == timezone.utc
     assert issued_at <= now_instant < fresh_until
     assert registry["registry_version"] == "promotion-receipt-registry.v1"
-    assert registry["trusted_keys"][receipt["issuer_key_id"]]
+    assert set(registry["trusted_keys"]) == {receipt["issuer_key_id"]}
     entry = registry["entries"][receipt["receipt_id"]]
+    assert set(entry) == REGISTRY_ENTRY_FIELDS
     assert entry["issuer_id"] == receipt["issuer_id"]
     assert entry["issuer_key_id"] == receipt["issuer_key_id"]
     assert entry["issuer_signature"] == receipt["issuer_signature"]
     assert entry["status"] == "issued"
     assert entry["public_key"]
     assert B64URL.fullmatch(entry["public_key"]) and len(entry["public_key"]) % 4 != 1
-    assert entry["public_key"] == registry["trusted_keys"][receipt["issuer_key_id"]]
-    public_key = Ed25519PublicKey.from_public_bytes(_decode_canonical_b64url(entry["public_key"], 32))
-    public_key.verify(_decode_canonical_b64url(signature_parts[2], 64), _receipt_unsigned_body(receipt))
+    trusted_key = registry["trusted_keys"][receipt["issuer_key_id"]]
+    trusted_key_bytes = _decode_canonical_b64url(trusted_key, 32)
+    assert entry["public_key"] == trusted_key
+    public_key = Ed25519PublicKey.from_public_bytes(trusted_key_bytes)
+    signature_bytes = _decode_canonical_b64url(signature_parts[2], 64)
+    assert entry["issuer_signature"] == receipt["issuer_signature"]
+    public_key.verify(signature_bytes, _receipt_unsigned_body(receipt))
     _assert_secret_free(receipt)
 
 
@@ -388,3 +398,19 @@ def test_promotion_receipt_schema_rejects_tampering_stale_checks_and_revocation(
     )
     with pytest.raises(AssertionError):
         _assert_receipt_schema(noncanonical_signature, noncanonical_signature_registry, now="2026-08-16T12:00:00Z", expected_manifest=receipt)
+
+
+def test_receipt_wire_encoding_rejects_nonzero_base64url_pad_bits() -> None:
+    receipt = json.loads(RECEIPT_FIXTURE.read_text())
+    registry = json.loads(REGISTRY_FIXTURE.read_text())
+    key = registry["trusted_keys"][receipt["issuer_key_id"]]
+    signature = receipt["issuer_signature"].split(":", 2)[2]
+    key_mutation = key[:-1] + "d"
+    signature_mutation = signature[:-1] + "x"
+
+    assert base64.urlsafe_b64decode(key + "=") == base64.urlsafe_b64decode(key_mutation + "=")
+    assert base64.urlsafe_b64decode(signature + "==") == base64.urlsafe_b64decode(signature_mutation + "==")
+    with pytest.raises(AssertionError):
+        _decode_canonical_b64url(key_mutation, 32)
+    with pytest.raises(AssertionError):
+        _decode_canonical_b64url(signature_mutation, 64)

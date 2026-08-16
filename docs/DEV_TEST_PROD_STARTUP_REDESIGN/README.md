@@ -106,6 +106,29 @@ exact required-check coverage. The positive fixture is
 `tests/fixtures/startup_redesign/promotion_receipt.valid.json`; receipts contain no secret values
 or secret references.
 
+The machine-readable shapes are frozen as follows; producers must emit no additional fields:
+
+```json
+{
+  "receipt": [
+    "receipt_version", "receipt_id", "outcome", "artifact_digest", "config_identity",
+    "test_identity", "vault_identity", "schema_identity", "required_checks", "issued_at",
+    "fresh_until", "issuer_id", "issuer_key_id", "issuer_signature"
+  ],
+  "registry": ["registry_version", "trusted_keys", "entries"],
+  "registry_entry": [
+    "issuer_id", "issuer_key_id", "public_key", "issuer_signature", "status"
+  ]
+}
+```
+
+`issuer_key_id` participates in the receipt's canonical digest and unsigned signed payload.
+`issuer_signature` does not participate in either payload; it signs the canonical unsigned
+payload after both `receipt_id` and `issuer_signature` are removed. Registry fields are not
+receipt-digest inputs. Every Base64URL value is decoded and re-encoded before use; the re-encoded
+unpadded URL-safe value must be byte-for-byte identical, which rejects nonzero terminal pad bits
+as well as padding and standard-Base64 characters.
+
 ## Verification and acceptance
 
 P1 is proven by the static contract test and fixture in `tests/architecture/test_startup_redesign_contract.py`. P2–P4 have strict-xfail call-site skeletons until their production entrypoints exist; an XPASS is a failure and requires converting the skeleton into a real runtime-path proof. P5 requires a live-host acceptance receipt; P6 requires soak and drill receipts. No local-source result is promotion evidence.
