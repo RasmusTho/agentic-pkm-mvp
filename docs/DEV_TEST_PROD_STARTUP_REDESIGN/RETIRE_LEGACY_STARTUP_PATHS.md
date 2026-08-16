@@ -47,4 +47,4 @@ Deleting vaults, volumes, backups, or authority data.
 
 ## Related GitHub Issues
 
-Post-soak work; do not mark ready from a docs-only claim.
+Filed ownership: #4919 (P6, dependency-blocked/post-soak), under parent validation hub #4913. The parent/child overlap was reconciled before filing; retain the post-soak readiness constraint and do not mark this task ready from a docs-only claim.

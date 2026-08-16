@@ -34,6 +34,11 @@ MANIFEST_FIELDS = {
 ARTIFACT_FIELDS = {"repository", "image_index_digest", "platform_digest", "source_sha"}
 IDENTITY_FIELDS = {"database", "vault", "config", "migration"}
 GATEWAY_FIELDS = {"port", "identity"}
+HEX_DIGEST = re.compile(r"sha256:[0-9a-f]{64}\Z")
+SOURCE_SHA = re.compile(r"[0-9a-f]{40}\Z")
+IDENTITY = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]*\Z")
+COMPOSE_PROJECT = re.compile(r"pkm-[a-z0-9-]+\Z")
+REPOSITORY = re.compile(r"ghcr\.io/[A-Za-z0-9._/-]+\Z")
 
 
 def _assert_manifest_shape(manifest: dict[str, object]) -> None:
@@ -45,6 +50,19 @@ def _assert_manifest_shape(manifest: dict[str, object]) -> None:
     assert isinstance(identities, dict) and set(identities) == IDENTITY_FIELDS
     assert isinstance(gateway, dict) and set(gateway) == GATEWAY_FIELDS
     assert isinstance(manifest["secret_references"], list)
+    assert manifest["schema_version"] == "channel-manifest.v1"
+    assert manifest["channel"] in {"dev", "local-test", "promotion-test", "prod"}
+    assert manifest["intent"] in {"local-source", "ordinary-boot", "promotion"}
+    assert isinstance(manifest["compose_project"], str) and COMPOSE_PROJECT.fullmatch(manifest["compose_project"])
+    assert isinstance(manifest["artifact"], dict)
+    assert REPOSITORY.fullmatch(manifest["artifact"]["repository"])
+    assert HEX_DIGEST.fullmatch(manifest["artifact"]["image_index_digest"])
+    assert HEX_DIGEST.fullmatch(manifest["artifact"]["platform_digest"])
+    assert SOURCE_SHA.fullmatch(manifest["artifact"]["source_sha"])
+    assert all(isinstance(value, str) and IDENTITY.fullmatch(value) for value in identities.values())
+    assert manifest["llm_policy"] in {"declared-required", "declared-optional", "disabled"}
+    assert isinstance(gateway["port"], int) and 1 <= gateway["port"] <= 65535
+    assert isinstance(gateway["identity"], str) and IDENTITY.fullmatch(gateway["identity"])
 
 
 def _assert_secret_free(value: object, *, path: str = "manifest") -> None:
@@ -64,6 +82,8 @@ def _assert_secret_free(value: object, *, path: str = "manifest") -> None:
             _assert_secret_free(child, path=f"{path}[{index}]")
     elif isinstance(value, str):
         assert not SENSITIVE_FIELD.search(value), f"sensitive value is not allowed: {path}"
+        assert "@" not in value and "://" not in value, f"credential-bearing URI is not allowed: {path}"
+        assert not re.search(r"\bsk-[A-Za-z0-9][A-Za-z0-9_-]*", value), f"API key is not allowed: {path}"
 
 
 def test_manifest_fixture_is_secret_free() -> None:
