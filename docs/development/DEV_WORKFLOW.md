@@ -358,6 +358,7 @@ Use this lane only when:
   - `scripts/py312_smoke_test.sh`
   - `scripts/await_pr_checks.sh`
   - `scripts/review_before_ci_gate.py`
+  - `scripts/workflow_review_risk.py`
   - `scripts/run_with_host_lease.py`
   - `scripts/verify_runtime_chain.sh`
   - `scripts/validate_source_anchors.py`
@@ -378,6 +379,7 @@ Use this lane only when:
   - `tests/governance/test_skills_consistency_lint.py`
   - `tests/ops/test_project_status_reconcile.py`
   - `tests/ops/test_review_before_ci_gate.py`
+  - `tests/ops/test_review_before_ci_workflow_risk.py`
   - `tests/ops/test_host_global_lease.py`
   - `tests/scripts/test_validate_issue_readiness.py`
   - `tests/scripts/test_docs_guard.py`
