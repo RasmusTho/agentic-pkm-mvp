@@ -148,6 +148,15 @@ def _mount_source(service: dict[str, object], target: str) -> str | None:
     return None
 
 
+def _mount_is_read_only(service: dict[str, object], target: str) -> bool:
+    volumes = service.get("volumes", [])
+    assert isinstance(volumes, list)
+    for volume in volumes:
+        if isinstance(volume, dict) and volume.get("target") == target:
+            return volume.get("read_only") is True
+    return False
+
+
 @requires_docker
 def test_deploy_channel_test_no_vault_keeps_idle_overlay_set(tmp_path: Path) -> None:
     services = _services(
@@ -164,6 +173,8 @@ def test_deploy_channel_test_no_vault_keeps_idle_overlay_set(tmp_path: Path) -> 
         assert env["WATCHER_VAULT_PATH"] == ""
         assert env["DEPLOY_RUNTIME_SENTINEL"] == "governed"
         assert service["image"] == f"ghcr.io/rasmustho/pkm-app:{IMAGE_SHA}"
+
+    assert _mount_source(services["instance-state-init"], "/app/vault") is None
 
 
 @requires_docker
@@ -185,6 +196,10 @@ def test_deploy_channel_test_explicit_vault_uses_governed_overlay_order(
         assert env["WATCHER_VAULT_PATH"] == "/app/vault"
         assert env["DEPLOY_RUNTIME_SENTINEL"] == "governed"
         assert service["image"] == f"ghcr.io/rasmustho/pkm-app:{IMAGE_SHA}"
+
+    finalizer = services["instance-state-init"]
+    assert _mount_source(finalizer, "/app/vault") == selected_vault
+    assert _mount_is_read_only(finalizer, "/app/vault")
 
     migrate = _environment(services["migrate"])
     assert migrate["DATABASE_URL"].endswith("/app_test")
@@ -210,6 +225,10 @@ def test_deploy_channel_non_test_explicit_vault_uses_legacy_overlay_only(
         assert env["DEPLOY_RUNTIME_SENTINEL"] == "governed"
         assert env["DATABASE_URL"].endswith("/app")
         assert env["DB_DSN"].endswith("/app")
+
+    finalizer = services["instance-state-init"]
+    assert _mount_source(finalizer, "/app/vault") == selected_vault
+    assert _mount_is_read_only(finalizer, "/app/vault")
 
 
 @requires_docker
