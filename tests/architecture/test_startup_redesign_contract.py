@@ -32,6 +32,7 @@ MANIFEST_FIELDS = {
     "identities", "llm_policy", "gateway", "secret_references",
 }
 ARTIFACT_FIELDS = {"repository", "image_index_digest", "platform_digest", "source_sha"}
+LOCAL_ARTIFACT_FIELDS = ARTIFACT_FIELDS | {"dirty_state", "promotion_eligible"}
 IDENTITY_FIELDS = {"database", "vault", "config", "migration"}
 GATEWAY_FIELDS = {"port", "identity"}
 HEX_DIGEST = re.compile(r"sha256:[0-9a-f]{64}\Z")
@@ -46,7 +47,13 @@ def _assert_manifest_shape(manifest: dict[str, object]) -> None:
     artifact = manifest["artifact"]
     identities = manifest["identities"]
     gateway = manifest["gateway"]
-    assert isinstance(artifact, dict) and set(artifact) == ARTIFACT_FIELDS
+    assert isinstance(artifact, dict)
+    if manifest["intent"] == "local-source":
+        assert set(artifact) == LOCAL_ARTIFACT_FIELDS
+        assert artifact["dirty_state"] in {"clean", "dirty"}
+        assert artifact["promotion_eligible"] is False
+    else:
+        assert set(artifact) == ARTIFACT_FIELDS
     assert isinstance(identities, dict) and set(identities) == IDENTITY_FIELDS
     assert isinstance(gateway, dict) and set(gateway) == GATEWAY_FIELDS
     assert isinstance(manifest["secret_references"], list)
@@ -110,3 +117,4 @@ def test_operation_contract_names_truthful_terminal_phases() -> None:
         assert f"`{phase}`" in README
     assert "takes precedence over any later activation/health failure" in README
     assert "before any migration/journal mutation" in README
+    assert "A journal attempt alone is not migration" in README
