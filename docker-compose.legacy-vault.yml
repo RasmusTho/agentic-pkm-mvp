@@ -26,7 +26,13 @@ services:
     volumes:
       # Finalization authenticates the registry's container-facing root after
       # MVR-01C cutover; it never writes vault content through this alias.
-      - "${VAULT_HOST_ROOT:?VAULT_HOST_ROOT must be set to use the legacy /app/vault compatibility mount}:/app/vault:ro"
+      # Long syntax keeps the read-only mode outside the guarded source. The
+      # deployment fence renders this file with `config --no-interpolate`,
+      # where the equivalent short form has too many colon delimiters.
+      - type: bind
+        source: "${VAULT_HOST_ROOT:?VAULT_HOST_ROOT must be set to use the legacy /app/vault compatibility mount}"
+        target: /app/vault
+        read_only: true
 
   api:
     volumes:
