@@ -19,6 +19,14 @@ from app.stores import get_object_store
 _FIXTURE_PATH = Path("data") / "golden" / "reasoning_samples.jsonl"
 
 
+class ReasoningRouteExecutionError(RuntimeError):
+    """Execution failure carrying the immutable route selected for that call."""
+
+    def __init__(self, route: LLMRoute, cause: Exception) -> None:
+        self.route = route
+        super().__init__(str(cause))
+
+
 def _call_chat(
     *,
     task_kind: str,
@@ -57,14 +65,18 @@ def _call_chat_with_route(
 ) -> tuple[str, dict[str, object]]:
     # All provider-neutral reasoning paths use the same effective resolver as
     # settings-explain and failure tracing.
-    client = ChatClient(resolve_effective_reasoning_route())
-    response = client.chat(
-        task_kind,
-        pack,
-        agent=agent,
-        kind=kind,
-        trace_id=trace_id,
-    )
+    route = resolve_effective_reasoning_route()
+    client = ChatClient(route)
+    try:
+        response = client.chat(
+            task_kind,
+            pack,
+            agent=agent,
+            kind=kind,
+            trace_id=trace_id,
+        )
+    except Exception as exc:
+        raise ReasoningRouteExecutionError(route, exc) from exc
     return response, _route_payload(client.route)
 
 
@@ -255,9 +267,10 @@ def run_reasoning(
                 "outcome": output.outcome,
                 "degraded_reason": output.degraded_reason,
             }
+            failed_route = exc.route if isinstance(exc, ReasoningRouteExecutionError) else resolve_effective_reasoning_route()
             log_llm_call(
-                provider=resolve_effective_reasoning_route().provider,
-                model=resolve_effective_reasoning_route().model,
+                provider=failed_route.provider,
+                model=failed_route.model,
                 agent=agent_name,
                 kind=kind_name,
                 messages=[],

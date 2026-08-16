@@ -409,6 +409,8 @@ class LLMRouter:
                     mode=cand.mode,
                     reason=reason if degraded else route_reason,
                     degraded=cand.degraded or degraded,
+                    timeout_seconds=cand.timeout_seconds,
+                    temperature=cand.temperature,
                 )
         if provider == "mock":
             # mock ignores the model entirely; a self-consistent deterministic route.

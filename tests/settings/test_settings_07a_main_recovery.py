@@ -29,6 +29,7 @@ def test_vault_settings_reach_model_reasoning_and_rerank_consumers_with_one_gene
     monkeypatch.delenv("LLM_FORCE_PROVIDER", raising=False)
     monkeypatch.delenv("LLM_FORCE_MODEL", raising=False)
     monkeypatch.delenv("LLM_PROVIDER", raising=False)
+    monkeypatch.delenv("LLM_PROVIDER_ENFORCE", raising=False)
     tuning.reset_retrieval_tuning_cache()
 
     route = LLMRouter().route(LLMTaskIntent(task_kind="reasoning"))
@@ -57,6 +58,18 @@ def test_empty_settings_and_legacy_env_preserve_behavior_without_provider_flip(m
     assert route.provider == "mock"
     assert route.model == "llama3.1:8b"  # only the shared resolver applies REASONING_MODEL
     assert (retrieval.rerank, retrieval.rerank_top_k) == ("always", 3)
+
+
+def test_enforced_provider_preserves_compiled_request_options(monkeypatch) -> None:
+    bundle = _bundle()
+    monkeypatch.setattr("app.components.llm.router.get_settings_bundle", lambda: bundle)
+    monkeypatch.setenv("LLM_PROVIDER", "openai")
+    monkeypatch.setenv("LLM_PROVIDER_ENFORCE", "1")
+
+    route = LLMRouter().route(LLMTaskIntent(task_kind="reasoning"))
+
+    assert (route.provider, route.model) == ("openai", "gpt-4.1")
+    assert (route.timeout_seconds, route.temperature) == (12, 0.2)
 
 
 def test_operator_tier_and_last_valid_bundle_fail_closed(monkeypatch, tmp_path) -> None:

@@ -32,11 +32,22 @@ def describe_effective_reasoning_route() -> dict[str, object]:
     """Return safe explain data from the exact resolver used by execution."""
     route = resolve_effective_reasoning_route()
     legacy_model = (os.getenv("REASONING_MODEL") or "").strip()
+    forced_provider = (os.getenv("LLM_FORCE_PROVIDER") or "").strip()
+    forced_model = (os.getenv("LLM_FORCE_MODEL") or "").strip()
+    env_provider = (os.getenv("LLM_PROVIDER") or "").strip()
+    if forced_provider or forced_model:
+        origin = "env:LLM_FORCE_PROVIDER/LLM_FORCE_MODEL"
+    elif legacy_model:
+        origin = "env:REASONING_MODEL"
+    elif env_provider:
+        origin = "env:LLM_PROVIDER"
+    else:
+        origin = "settings:llm_routing.default_reasoning"
     return {
         "provider": route.provider,
         "model": route.model,
         "mode": route.mode,
         "degraded": route.degraded,
-        "origin": "env:REASONING_MODEL" if legacy_model else "settings:llm_routing.default_reasoning",
+        "origin": origin,
         "tier": active_settings_profile(),
     }

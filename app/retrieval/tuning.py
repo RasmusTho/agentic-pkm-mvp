@@ -26,12 +26,13 @@ import os
 
 from pydantic import ValidationError
 
-from app.settings.models import RetrievalTuning
+from app.settings.models import RetrievalTuning, SettingsBundle
 from app.settings.runtime import get_settings_bundle
 
 _TRUE_VALUES = {"1", "true", "yes", "on"}
 
 _CACHED: RetrievalTuning | None = None
+_CACHED_BUNDLE: SettingsBundle | None = None
 
 
 class RetrievalTuningError(ValueError):
@@ -62,13 +63,15 @@ def reset_retrieval_tuning_cache() -> None:
     """
     global _CACHED
     _CACHED = None
+    global _CACHED_BUNDLE
+    _CACHED_BUNDLE = None
 
 
-def _base_tuning() -> RetrievalTuning:
+def _base_tuning(bundle: SettingsBundle) -> RetrievalTuning:
     # The runtime settings bundle is the authoritative typed configuration
     # surface. Do not downgrade a malformed runtime file to defaults here:
     # callers of the actual retrieval resolver must fail just as startup does.
-    return get_settings_bundle().retrieval_tuning
+    return bundle.retrieval_tuning
 
 
 def _parse_int(raw: str, *, env_key: str) -> int:
@@ -101,8 +104,8 @@ def _env(key: str) -> str:
     return os.getenv(key, "").strip()
 
 
-def _resolve_retrieval_tuning() -> RetrievalTuning:
-    base = _base_tuning()
+def _resolve_retrieval_tuning(bundle: SettingsBundle) -> RetrievalTuning:
+    base = _base_tuning(bundle)
     data = base.model_dump()
 
     fusion_raw = _env("RETRIEVAL_FUSION")
@@ -171,9 +174,14 @@ def get_retrieval_tuning() -> RetrievalTuning:
     Resolves once and caches; an invalid or unimplemented resolution is never cached (so a fixed
     override on the next call re-resolves rather than staying stuck raising).
     """
-    global _CACHED
-    if _CACHED is None:
-        _CACHED = _resolve_retrieval_tuning()
+    global _CACHED, _CACHED_BUNDLE
+    bundle = get_settings_bundle()
+    # Bind the memoized value to the exact runtime bundle identity. A lookup
+    # racing a reload can cache the old bundle briefly, but the next lookup
+    # observes the new identity and cannot retain that stale result.
+    if _CACHED is None or _CACHED_BUNDLE is not bundle:
+        _CACHED = _resolve_retrieval_tuning(bundle)
+        _CACHED_BUNDLE = bundle
     return _CACHED
 
 
