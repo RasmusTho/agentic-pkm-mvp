@@ -84,8 +84,8 @@ bytes are UTF-8 JSON with lexicographically sorted keys, compact separators, and
 newline; `receipt_id` is `sha256:` plus the digest of those bytes with `receipt_id` excluded.
 The issuer signs a separate acyclic canonical unsigned payload using the same encoding with both
 `receipt_id` and `issuer_signature` excluded; `issuer_signature` is verified against that payload
-and the trusted issuer key, never against the receipt ID. `outcome` is `PASS` or `FAIL`; the four
-`*_identity` values bind the receipt to the exact manifest.
+and the trusted issuer key, never against the receipt ID. `outcome` is `PASS` or `FAIL`; the
+identity values bind the receipt to the exact admission context.
 `required_checks` must exactly equal the versioned external policy
 `promotion-receipt.v1/required-checks` = `[migration, readiness, schema, smoke, ui, version]` in
 sorted order. `fresh_until` is the exclusive freshness deadline. `issuer_signature` is verified
@@ -100,10 +100,13 @@ fields are outside the receipt digest. The registry also has exactly `trusted_ke
 `issuer_key_id` → `public_key` mapping; admission resolves the key only from that mapping and
 requires the entry key material to match it. Registry lookup failure is a hard admission failure.
 Prod admission requires `outcome=PASS`, matching expected
-manifest identities, current time at or after `issued_at` and before `fresh_until`, a valid trusted
+identities from an independently supplied prod-admission manifest and `test_identity` from the
+versioned promotion-test policy, current time at or after `issued_at` and before `fresh_until`, a valid trusted
 issuer attestation, a present registry entry with `status=issued` (never absent or revoked), and
 exact required-check coverage. The positive fixture is
-`tests/fixtures/startup_redesign/promotion_receipt.valid.json`; receipts contain no secret values
+`tests/fixtures/startup_redesign/promotion_admission_context.valid.json` supplies the independent
+positive-admission expectations; the receipt fixture is validated against that context rather than
+against itself. Receipts contain no secret values
 or secret references.
 
 The machine-readable shapes are frozen as follows; producers must emit no additional fields:

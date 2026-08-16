@@ -1,0 +1,7 @@
+{
+  "artifact_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "config_identity": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "test_identity": "promotion-test:20260816",
+  "vault_identity": "prod-vault",
+  "schema_identity": "alembic:20260816"
+}

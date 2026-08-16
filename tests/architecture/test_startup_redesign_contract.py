@@ -17,6 +17,7 @@ SPEC = ROOT / "docs" / "DEV_TEST_PROD_STARTUP_REDESIGN"
 README = (SPEC / "README.md").read_text()
 FIXTURE = ROOT / "tests" / "fixtures" / "startup_redesign" / "channel_manifest.valid.json"
 RECEIPT_FIXTURE = ROOT / "tests" / "fixtures" / "startup_redesign" / "promotion_receipt.valid.json"
+ADMISSION_CONTEXT_FIXTURE = ROOT / "tests" / "fixtures" / "startup_redesign" / "promotion_admission_context.valid.json"
 
 
 def test_kernel_contract_names_every_invariant() -> None:
@@ -314,62 +315,63 @@ def _reseal_test_receipt(receipt: dict[str, object], registry: dict[str, object]
 def test_promotion_receipt_fixture_has_machine_readable_schema() -> None:
     receipt = json.loads(RECEIPT_FIXTURE.read_text())
     registry = json.loads(REGISTRY_FIXTURE.read_text())
-    expected = {"artifact_digest": receipt["artifact_digest"], "config_identity": receipt["config_identity"], "test_identity": receipt["test_identity"], "vault_identity": receipt["vault_identity"], "schema_identity": receipt["schema_identity"]}
+    expected = json.loads(ADMISSION_CONTEXT_FIXTURE.read_text())
     _assert_receipt_schema(receipt, registry, now="2026-08-16T12:00:00Z", expected_manifest=expected)
 
 
 def test_promotion_receipt_schema_rejects_tampering_stale_checks_and_revocation() -> None:
     receipt = json.loads(RECEIPT_FIXTURE.read_text())
     registry = json.loads(REGISTRY_FIXTURE.read_text())
+    expected = json.loads(ADMISSION_CONTEXT_FIXTURE.read_text())
     tampered = dict(receipt)
     tampered["config_identity"] = "sha256:" + "c" * 64
     with pytest.raises(AssertionError):
-        _assert_receipt_schema(tampered, registry, now="2026-08-16T12:00:00Z", expected_manifest=receipt)
+        _assert_receipt_schema(tampered, registry, now="2026-08-16T12:00:00Z", expected_manifest=expected)
 
     incomplete = dict(receipt)
     incomplete["required_checks"] = ["smoke"]
     with pytest.raises(AssertionError):
-        _assert_receipt_schema(incomplete, registry, now="2026-08-16T12:00:00Z", expected_manifest=receipt)
+        _assert_receipt_schema(incomplete, registry, now="2026-08-16T12:00:00Z", expected_manifest=expected)
 
     revoked = json.loads(json.dumps(registry))
     revoked["entries"][receipt["receipt_id"]]["status"] = "revoked"
     with pytest.raises(AssertionError):
-        _assert_receipt_schema(receipt, revoked, now="2026-08-16T12:00:00Z", expected_manifest=receipt)
+        _assert_receipt_schema(receipt, revoked, now="2026-08-16T12:00:00Z", expected_manifest=expected)
 
     stale = json.loads(RECEIPT_FIXTURE.read_text())
     with pytest.raises(AssertionError):
-        _assert_receipt_schema(stale, registry, now="2026-08-18T00:00:00Z", expected_manifest=receipt)
+        _assert_receipt_schema(stale, registry, now="2026-08-18T00:00:00Z", expected_manifest=expected)
 
     fail_receipt = json.loads(RECEIPT_FIXTURE.read_text())
     fail_receipt["outcome"] = "FAIL"
     with pytest.raises(AssertionError):
-        _assert_receipt_schema(fail_receipt, registry, now="2026-08-16T12:00:00Z", expected_manifest=receipt)
+        _assert_receipt_schema(fail_receipt, registry, now="2026-08-16T12:00:00Z", expected_manifest=expected)
 
     wrong_test = json.loads(RECEIPT_FIXTURE.read_text())
     wrong_test_registry = json.loads(json.dumps(registry))
     _reseal_test_receipt(wrong_test, wrong_test_registry, test_identity="promotion-test:20260817")
     with pytest.raises(AssertionError):
-        _assert_receipt_schema(wrong_test, wrong_test_registry, now="2026-08-16T12:00:00Z", expected_manifest=receipt)
+        _assert_receipt_schema(wrong_test, wrong_test_registry, now="2026-08-16T12:00:00Z", expected_manifest=expected)
 
     malformed_clock = json.loads(RECEIPT_FIXTURE.read_text())
     malformed_clock["fresh_until"] = "ZZ"
     with pytest.raises(AssertionError):
-        _assert_receipt_schema(malformed_clock, registry, now="2026-08-16T12:00:00Z", expected_manifest=receipt)
+        _assert_receipt_schema(malformed_clock, registry, now="2026-08-16T12:00:00Z", expected_manifest=expected)
 
     wrong_manifest = json.loads(RECEIPT_FIXTURE.read_text())
     wrong_manifest["artifact_digest"] = "sha256:" + "c" * 64
     with pytest.raises(AssertionError):
         wrong_manifest["receipt_id"] = "sha256:" + hashlib.sha256(_receipt_digest_body(wrong_manifest)).hexdigest()
-        _assert_receipt_schema(wrong_manifest, registry, now="2026-08-16T12:00:00Z", expected_manifest=receipt)
+        _assert_receipt_schema(wrong_manifest, registry, now="2026-08-16T12:00:00Z", expected_manifest=expected)
 
     secret_bearing = json.loads(RECEIPT_FIXTURE.read_text())
     secret_registry = json.loads(json.dumps(registry))
     _reseal_test_receipt(secret_bearing, secret_registry, vault_identity="admin:hunter2")
     with pytest.raises(AssertionError):
-        _assert_receipt_schema(secret_bearing, secret_registry, now="2026-08-16T12:00:00Z", expected_manifest=receipt)
+        _assert_receipt_schema(secret_bearing, secret_registry, now="2026-08-16T12:00:00Z", expected_manifest=expected)
 
     with pytest.raises(AssertionError):
-        _assert_receipt_schema(receipt, None, now="2026-08-16T12:00:00Z", expected_manifest=receipt)
+        _assert_receipt_schema(receipt, None, now="2026-08-16T12:00:00Z", expected_manifest=expected)
 
     padded = json.loads(RECEIPT_FIXTURE.read_text())
     padded["issuer_signature"] += "="
@@ -377,18 +379,18 @@ def test_promotion_receipt_schema_rejects_tampering_stale_checks_and_revocation(
     padded_registry = json.loads(json.dumps(registry))
     padded_registry["entries"][padded["receipt_id"]] = dict(padded_registry["entries"][receipt["receipt_id"]], issuer_signature=padded["issuer_signature"])
     with pytest.raises(AssertionError):
-        _assert_receipt_schema(padded, padded_registry, now="2026-08-16T12:00:00Z", expected_manifest=receipt)
+        _assert_receipt_schema(padded, padded_registry, now="2026-08-16T12:00:00Z", expected_manifest=expected)
 
     substituted = json.loads(json.dumps(registry))
     substituted["entries"][receipt["receipt_id"]]["public_key"] = "A" * 43
     with pytest.raises(AssertionError):
-        _assert_receipt_schema(receipt, substituted, now="2026-08-16T12:00:00Z", expected_manifest=receipt)
+        _assert_receipt_schema(receipt, substituted, now="2026-08-16T12:00:00Z", expected_manifest=expected)
 
     noncanonical_key = json.loads(json.dumps(registry))
     noncanonical_key["trusted_keys"][receipt["issuer_key_id"]] = registry["trusted_keys"][receipt["issuer_key_id"]][:-1] + "d"
     noncanonical_key["entries"][receipt["receipt_id"]]["public_key"] = noncanonical_key["trusted_keys"][receipt["issuer_key_id"]]
     with pytest.raises(AssertionError):
-        _assert_receipt_schema(receipt, noncanonical_key, now="2026-08-16T12:00:00Z", expected_manifest=receipt)
+        _assert_receipt_schema(receipt, noncanonical_key, now="2026-08-16T12:00:00Z", expected_manifest=expected)
 
     noncanonical_signature = json.loads(RECEIPT_FIXTURE.read_text())
     noncanonical_signature["issuer_signature"] = noncanonical_signature["issuer_signature"][:-1] + "x"
@@ -399,7 +401,24 @@ def test_promotion_receipt_schema_rejects_tampering_stale_checks_and_revocation(
         issuer_signature=noncanonical_signature["issuer_signature"],
     )
     with pytest.raises(AssertionError):
-        _assert_receipt_schema(noncanonical_signature, noncanonical_signature_registry, now="2026-08-16T12:00:00Z", expected_manifest=receipt)
+        _assert_receipt_schema(noncanonical_signature, noncanonical_signature_registry, now="2026-08-16T12:00:00Z", expected_manifest=expected)
+
+
+def test_receipt_identity_binding_rejects_resealed_mismatches() -> None:
+    expected = json.loads(ADMISSION_CONTEXT_FIXTURE.read_text())
+    mutations = {
+        "artifact_digest": "sha256:" + "d" * 64,
+        "config_identity": "sha256:" + "e" * 64,
+        "test_identity": "promotion-test:20990101",
+        "vault_identity": "staging-vault",
+        "schema_identity": "alembic:attacker-selected",
+    }
+    for field, value in mutations.items():
+        receipt = json.loads(RECEIPT_FIXTURE.read_text())
+        registry = json.loads(REGISTRY_FIXTURE.read_text())
+        _reseal_test_receipt(receipt, registry, **{field: value})
+        with pytest.raises(AssertionError):
+            _assert_receipt_schema(receipt, registry, now="2026-08-16T12:00:00Z", expected_manifest=expected)
 
 
 def test_receipt_wire_encoding_rejects_nonzero_base64url_pad_bits() -> None:
