@@ -143,6 +143,29 @@ def test_enabled_gov_revocation_producers_are_fenced_or_absent(tmp_path: Path) -
     with pytest.raises(ValueError, match="differs from source mutation seams"):
         validate_gov_revocation_coverage(inventory, app_root=synthetic)
 
+    declared = {
+        "schema": "agentic-pkm.gov-revocation-producers.v1",
+        "producers": [
+            {
+                "name": "app/future:revoke",
+                "enabled": True,
+                "ownership_fence": True,
+                "exclusive_binding_lease": True,
+            }
+        ],
+    }
+    with pytest.raises(ValueError, match="lacks source-proved"):
+        validate_gov_revocation_coverage(declared, app_root=synthetic)
+
+    (synthetic / "future.py").write_text(
+        "def revoke(authorizer, ledger, manager):\n"
+        "    with ledger.active_binding_fence('binding-a'):\n"
+        "        with manager.exclusive_change('binding-a'):\n"
+        "            authorizer.set_binding('binding-a', 2, revoked=True)\n",
+        encoding="utf-8",
+    )
+    validate_gov_revocation_coverage(declared, app_root=synthetic)
+
 
 # --------------------------------------------------------------------------- #
 # The population gate

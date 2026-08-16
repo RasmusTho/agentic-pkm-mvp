@@ -913,14 +913,16 @@ def count_deferred_outbox_rows(
     try:
         cur = _exec(
             conn,
-            "select count(*) from outbox where delivered_at is null "
-            "and vault_binding_id = %s and ("
+            "select count(*) from outbox where delivered_at is null and ("
+            "vault_binding_id in (%s, %s) or (vault_binding_id = %s and "
             "payload #>> '{meta,vault_binding_id}' = %s "
             "and payload #>> '{meta,binding_authority}' = %s "
             "and payload #>> '{meta,binding_authorization_epoch}' = %s "
             "and payload #>> '{meta,binding_revision}' = %s "
-            "and payload #>> '{meta,vault_root}' = %s) is not true",
+            "and payload #>> '{meta,vault_root}' = %s)) is not true",
             (
+                COMPATIBILITY_BINDING_ID,
+                OUTBOX_GLOBAL_BINDING_ID,
                 binding_id,
                 binding_id,
                 str(required_binding_stamp["binding_authority"]),

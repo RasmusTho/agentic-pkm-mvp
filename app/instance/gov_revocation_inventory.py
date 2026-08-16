@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ast
 import json
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -11,11 +12,19 @@ from typing import Any, Mapping
 GOV_REVOCATION_INVENTORY_SCHEMA = "agentic-pkm.gov-revocation-producers.v1"
 
 
+@dataclass(frozen=True)
+class GovRevocationProducerEvidence:
+    name: str
+    ownership_fence: bool
+    exclusive_binding_lease: bool
+
+
 class _RevocationVisitor(ast.NodeVisitor):
     def __init__(self, module: str) -> None:
         self.module = module
         self.scope: list[str] = []
-        self.producers: set[str] = set()
+        self.with_contexts: list[set[str]] = []
+        self.producers: dict[str, GovRevocationProducerEvidence] = {}
 
     def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
         self.scope.append(node.name)
@@ -26,6 +35,36 @@ class _RevocationVisitor(ast.NodeVisitor):
         self.scope.append(node.name)
         self.generic_visit(node)
         self.scope.pop()
+
+    def visit_With(self, node: ast.With) -> None:
+        contexts: set[str] = set()
+        for item in node.items:
+            call = item.context_expr
+            if isinstance(call, ast.Call):
+                function = call.func
+                if isinstance(function, ast.Attribute):
+                    contexts.add(function.attr)
+                elif isinstance(function, ast.Name):
+                    contexts.add(function.id)
+        self.with_contexts.append(contexts)
+        for statement in node.body:
+            self.visit(statement)
+        self.with_contexts.pop()
+
+    def visit_AsyncWith(self, node: ast.AsyncWith) -> None:  # noqa: N802
+        contexts: set[str] = set()
+        for item in node.items:
+            call = item.context_expr
+            if isinstance(call, ast.Call):
+                function = call.func
+                if isinstance(function, ast.Attribute):
+                    contexts.add(function.attr)
+                elif isinstance(function, ast.Name):
+                    contexts.add(function.id)
+        self.with_contexts.append(contexts)
+        for statement in node.body:
+            self.visit(statement)
+        self.with_contexts.pop()
 
     def visit_Call(self, node: ast.Call) -> None:
         name = node.func.attr if isinstance(node.func, ast.Attribute) else (
@@ -41,21 +80,52 @@ class _RevocationVisitor(ast.NodeVisitor):
         definitely_false = isinstance(revoked, ast.Constant) and revoked.value is False
         if (is_mutation or is_seed) and not definitely_empty and not definitely_false:
             scope = ".".join(self.scope) or "<module>"
-            self.producers.add(f"{self.module}:{scope}")
+            producer_name = f"{self.module}:{scope}"
+            active_contexts = set().union(*self.with_contexts) if self.with_contexts else set()
+            evidence = GovRevocationProducerEvidence(
+                name=producer_name,
+                ownership_fence="active_binding_fence" in active_contexts,
+                exclusive_binding_lease="exclusive_change" in active_contexts,
+            )
+            previous = self.producers.get(producer_name)
+            if previous is not None and previous != evidence:
+                # A producer function with one fenced and one unfenced seam is
+                # unfenced as a whole; inventory cannot bless only the safe call.
+                evidence = GovRevocationProducerEvidence(
+                    name=producer_name,
+                    ownership_fence=(
+                        previous.ownership_fence and evidence.ownership_fence
+                    ),
+                    exclusive_binding_lease=(
+                        previous.exclusive_binding_lease
+                        and evidence.exclusive_binding_lease
+                    ),
+                )
+            self.producers[producer_name] = evidence
         self.generic_visit(node)
 
 
-def discover_gov_revocation_producers(app_root: Path) -> frozenset[str]:
+def discover_gov_revocation_producer_evidence(
+    app_root: Path,
+) -> Mapping[str, GovRevocationProducerEvidence]:
     """Derive the production revocation mutation-seam population from source."""
 
-    discovered: set[str] = set()
+    discovered: dict[str, GovRevocationProducerEvidence] = {}
     for path in sorted(app_root.rglob("*.py")):
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         module = path.relative_to(app_root.parent).with_suffix("").as_posix()
         visitor = _RevocationVisitor(module)
         visitor.visit(tree)
-        discovered.update(visitor.producers)
-    return frozenset(discovered)
+        for name, evidence in visitor.producers.items():
+            previous = discovered.get(name)
+            if previous is not None and previous != evidence:
+                raise ValueError(f"conflicting GOV revocation evidence for {name}")
+            discovered[name] = evidence
+    return discovered
+
+
+def discover_gov_revocation_producers(app_root: Path) -> frozenset[str]:
+    return frozenset(discover_gov_revocation_producer_evidence(app_root))
 
 
 def validate_gov_revocation_inventory(document: Mapping[str, Any]) -> None:
@@ -79,13 +149,27 @@ def validate_gov_revocation_coverage(
     document: Mapping[str, Any], *, app_root: Path
 ) -> None:
     validate_gov_revocation_inventory(document)
-    declared = {str(item["name"]) for item in document["producers"]}  # type: ignore[index]
-    discovered = set(discover_gov_revocation_producers(app_root))
-    if declared != discovered:
+    declared = {
+        str(item["name"]): item for item in document["producers"]  # type: ignore[index]
+    }
+    discovered = discover_gov_revocation_producer_evidence(app_root)
+    if set(declared) != set(discovered):
         raise ValueError(
             "GOV revocation inventory differs from source mutation seams: "
-            f"missing={sorted(discovered - declared)}, stale={sorted(declared - discovered)}"
+            f"missing={sorted(set(discovered) - set(declared))}, "
+            f"stale={sorted(set(declared) - set(discovered))}"
         )
+    for name, evidence in discovered.items():
+        entry = declared[name]
+        if (
+            entry.get("ownership_fence") is not evidence.ownership_fence
+            or entry.get("exclusive_binding_lease") is not evidence.exclusive_binding_lease
+            or not evidence.ownership_fence
+            or not evidence.exclusive_binding_lease
+        ):
+            raise ValueError(
+                f"GOV revocation producer {name} lacks source-proved ownership/exclusive fencing"
+            )
 
 
 def load_gov_revocation_inventory(path: Path) -> Mapping[str, Any]:
@@ -98,6 +182,8 @@ def load_gov_revocation_inventory(path: Path) -> Mapping[str, Any]:
 
 __all__ = [
     "discover_gov_revocation_producers",
+    "discover_gov_revocation_producer_evidence",
+    "GovRevocationProducerEvidence",
     "load_gov_revocation_inventory",
     "validate_gov_revocation_coverage",
     "validate_gov_revocation_inventory",

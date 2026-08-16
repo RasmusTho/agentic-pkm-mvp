@@ -211,10 +211,12 @@ def test_stale_binding_row_remains_pending_while_later_global_dispatches(
     )
     with _isolated_outbox(monkeypatch) as conn:
         stale_id = uuid4()
+        foreign_id = uuid4()
         global_id = uuid4()
         conn.execute(
             "INSERT INTO outbox (id, legacy_key, vault_binding_id, topic, payload, created_at) "
             "VALUES (%s, %s, %s, %s, %s::jsonb, '2000-01-01T00:00:00Z'), "
+            "(%s, %s, %s, %s, %s::jsonb, '2000-01-01T12:00:00Z'), "
             "(%s, %s, %s, %s, %s::jsonb, '2000-01-02T00:00:00Z')",
             (
                 stale_id,
@@ -222,6 +224,18 @@ def test_stale_binding_row_remains_pending_while_later_global_dispatches(
                 "binding-a",
                 "mvr.test",
                 stale.model_dump_json(),
+                foreign_id,
+                uuid4(),
+                "binding-b",
+                "mvr.test",
+                stale.model_copy(
+                    update={
+                        "meta": {
+                            **dict(stale.meta or {}),
+                            "vault_binding_id": "binding-b",
+                        }
+                    }
+                ).model_dump_json(),
                 global_id,
                 uuid4(),
                 OUTBOX_GLOBAL_BINDING_ID,
@@ -243,10 +257,11 @@ def test_stale_binding_row_remains_pending_while_later_global_dispatches(
         assert message["id"] == str(global_id)
         assert count_deferred_outbox_rows(
             conn=conn, required_binding_stamp=stamp
-        ) == 1
+        ) == 2
         assert conn.execute(
-            "SELECT delivered_at FROM outbox WHERE id = %s", (stale_id,)
-        ).fetchone() == (None,)
+            "SELECT delivered_at FROM outbox WHERE id = ANY(%s)",
+            ([stale_id, foreign_id],),
+        ).fetchall() == [(None,), (None,)]
 
 
 def test_quarantined_vault_activity_row_cannot_reach_episode_consumer(
