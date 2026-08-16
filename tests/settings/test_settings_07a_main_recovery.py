@@ -73,6 +73,18 @@ def test_enforced_provider_preserves_compiled_request_options(monkeypatch) -> No
     assert (route.timeout_seconds, route.temperature) == (12, 0.2)
 
 
+def test_forced_route_preserves_compiled_request_options(monkeypatch) -> None:
+    bundle = _bundle()
+    monkeypatch.setattr("app.components.llm.router.get_settings_bundle", lambda: bundle)
+    monkeypatch.setenv("LLM_FORCE_PROVIDER", "openai")
+    monkeypatch.setenv("LLM_FORCE_MODEL", "gpt-4.1-mini")
+
+    route = LLMRouter().route(LLMTaskIntent(task_kind="reasoning"))
+
+    assert (route.provider, route.model) == ("openai", "gpt-4.1-mini")
+    assert (route.timeout_seconds, route.temperature) == (12, 0.2)
+
+
 def test_openai_compatible_transport_receives_compiled_temperature(monkeypatch) -> None:
     captured: dict[str, object] = {}
 

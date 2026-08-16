@@ -472,6 +472,8 @@ class LLMRouter:
                 reason=reason,
                 degraded=degraded,
                 embedding_identity=embedding_identity,
+                timeout_seconds=getattr(getattr(self._settings, "llm_routing", None), "timeout_seconds", None),
+                temperature=getattr(getattr(self._settings, "llm_routing", None), "temperature", None),
             )
 
         candidates = self._route_candidates(intent)

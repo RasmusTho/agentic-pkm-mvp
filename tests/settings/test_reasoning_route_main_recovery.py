@@ -127,6 +127,8 @@ def test_ask_failure_returns_the_immutable_selected_route(monkeypatch) -> None:
             reasoning_provider.ReasoningRouteExecutionError(route, RuntimeError("boom"))
         ),
     )
+    logged: list[dict[str, object]] = []
+    monkeypatch.setattr(reasoning_provider, "log_llm_call", lambda **kwargs: logged.append(kwargs))
 
     result = reasoning_provider.run_reasoning(
         ReasoningMode.ASK_ANSWER, [], question="What changed?"
@@ -134,3 +136,5 @@ def test_ask_failure_returns_the_immutable_selected_route(monkeypatch) -> None:
 
     assert result.status == "failed"
     assert result.llm_route == {"provider": "openai", "model": "gpt-4.1", "mode": "chat", "reason": "settings", "degraded": False}
+    assert logged[0]["provider"] == "openai"
+    assert logged[0]["model"] == "gpt-4.1"

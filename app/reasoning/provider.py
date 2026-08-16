@@ -27,6 +27,22 @@ class ReasoningRouteExecutionError(RuntimeError):
         super().__init__(str(cause))
 
 
+def _log_route_failure(
+    route: LLMRoute, *, agent: str | None, kind: str | None, trace_id: str | None
+) -> None:
+    log_llm_call(
+        provider=route.provider,
+        model=route.model,
+        agent=agent or "reasoning",
+        kind=kind or "reasoning",
+        messages=[],
+        response={"outcome": "provider_failure"},
+        response_text="provider_failure",
+        trace_id=trace_id,
+        status="failed",
+    )
+
+
 def _call_chat(
     *,
     task_kind: str,
@@ -46,17 +62,7 @@ def _call_chat(
     except ReasoningRouteExecutionError as exc:
         # Every provider-neutral reasoning caller, not only CLAIMS, records
         # the immutable route selected before its failed execution.
-        log_llm_call(
-            provider=exc.route.provider,
-            model=exc.route.model,
-            agent=agent or "reasoning",
-            kind=kind or task_kind,
-            messages=[],
-            response={"outcome": "provider_failure"},
-            response_text="provider_failure",
-            trace_id=trace_id,
-            status="failed",
-        )
+        _log_route_failure(exc.route, agent=agent, kind=kind or task_kind, trace_id=trace_id)
         raise
     return response
 
@@ -570,6 +576,7 @@ def run_reasoning(
         except Exception as exc:
             if isinstance(exc, ReasoningRouteExecutionError):
                 route_payload = _route_payload(exc.route)
+                _log_route_failure(exc.route, agent=agent_name, kind=kind_name, trace_id=trace_id)
             return ReasoningRun(
                 mode=mode,
                 trace_id=trace_id,
