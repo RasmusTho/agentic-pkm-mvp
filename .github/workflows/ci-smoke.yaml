@@ -547,7 +547,7 @@ jobs:
                   target: "$VAULT_ROOT"
                   read_only: true
           EOF
-          compose_files="-f docker-compose.yaml -f docker-compose.legacy-vault.yml -f $VAULT_IDENTITY_OVERLAY_PATH"
+          compose_files="-f docker-compose.yaml -f docker-compose.legacy-vault.yml"
           # #4463: single source of truth for the verifier's artifact paths. The
           # diagnostic below used to read the script's workspace-relative tmp/
           # defaults while the invocation overrode them to absolute /tmp paths,
@@ -662,6 +662,11 @@ jobs:
             exit "$binding_parse_rc"
           fi
           read -r MVR01C_ROLLBACK_VAULT_BINDING_ID < "$VAULT_BINDING_ID_PATH"
+          # The first fresh-volume deployment intentionally treats the seeded
+          # fixture as unadopted. Materialize its host spelling only after the
+          # worker has registered the binding, so the cutover deployment can
+          # reconcile that adopted lease without weakening the rev-0 gate.
+          compose_files="$compose_files -f $VAULT_IDENTITY_OVERLAY_PATH"
           export MVR01C_ROLLBACK_VAULT_BINDING_ID
           export MVR01C_ROLLBACK_VAULT_ROOT="$VAULT_ROOT"
           export MVR03_PRINCIPAL_CUTOVER=1
