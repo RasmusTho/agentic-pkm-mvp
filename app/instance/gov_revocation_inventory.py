@@ -12,10 +12,11 @@ from typing import Any, Mapping
 
 GOV_REVOCATION_INVENTORY_SCHEMA = "agentic-pkm.gov-revocation-producers.v1"
 _CANONICAL_BOUNDARY_DEFINITION_DIGESTS = {
-    "_test_revocation_capability": "cfd1ebf24386b1ad6f1cc00641a450ed67e9f06f88750658662f2e02ae33643d",
-    "_require_revocation_capability": "cdc3506f1be89a15afe4c0c1228f81307548a225d2d1a21b1ddb928da3222944",
-    "RegistryBindingAuthorizer.__init__": "8c03032252f22ecd6c141de9b37448e0804e791f244fdb406787e7770153a7fa",
-    "RegistryBindingAuthorizer.set_binding": "667f3b07f9e21faabc6e9209f272bf8b5a17109147b0486c7d2f13939fd75862",
+    "_KnownBinding": "f18a5e2845440bf446103154e5026afa12bfd044a3146580ac01c386f8313f8b",
+    "RegistryBindingAuthorizer.__setattr__": "82735f84d023d6fa7579b01b314d84eca1413f05c29fdd2f8e5468f6b6c2a5c0",
+    "RegistryBindingAuthorizer.__init__": "3bbb4bb8ff2adf8790bd7730685e0f0e2a28ba5420c91ebbabc7d4a65cb55cbc",
+    "RegistryBindingAuthorizer.set_binding": "d2692318e9fc1b22f5401059a49547a70f452e89910752faeea2f13056c280ca",
+    "RegistryBindingAuthorizer.authorize": "b7b0e7cd424fab2c465f9816e7a3b2048379ce5e8cb98947997fc326a93db3ba",
 }
 
 
@@ -31,6 +32,8 @@ def _canonical_boundary_definitions(tree: ast.Module) -> dict[str, list[ast.AST]
         name: [] for name in _CANONICAL_BOUNDARY_DEFINITION_DIGESTS
     }
     for statement in tree.body:
+        if isinstance(statement, ast.ClassDef) and statement.name == "_KnownBinding":
+            definitions[statement.name].append(statement)
         if isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef)):
             if statement.name in definitions:
                 definitions[statement.name].append(statement)
@@ -133,8 +136,6 @@ class _RevocationVisitor(ast.NodeVisitor):
 
     def _record_sealed_producer(self) -> None:
         if self.module == "app/governance/binding_authority" and ".".join(self.scope) in {
-            "_test_revocation_capability",
-            "_require_revocation_capability",
             "RegistryBindingAuthorizer.__init__",
             "RegistryBindingAuthorizer.set_binding",
         }:

@@ -48,6 +48,7 @@ from pathlib import Path
 
 import pytest
 
+import app.governance.binding_authority as binding_authority
 from app.governance.binding_authority import (
     RegistryBindingAuthorizer,
     RevocationCapabilityError,
@@ -133,14 +134,22 @@ def test_enabled_gov_revocation_producers_are_fenced_or_absent(tmp_path: Path) -
         operator.attrgetter("set_binding")(sealed),
     )
     for mutation in mutation_calls:
-        with pytest.raises(RevocationCapabilityError, match="revocation is sealed"):
+        with pytest.raises(RevocationCapabilityError, match="revocation is dormant"):
             mutation("binding-a", 2, **{"revoked": True})
-    with pytest.raises(RevocationCapabilityError, match="revocation is sealed"):
+    with pytest.raises(RevocationCapabilityError, match="revocation is dormant"):
         RegistryBindingAuthorizer({"binding-a": 1}, revoked=frozenset({"binding-a"}))
     with pytest.raises(AttributeError):
         getattr(sealed, "_known").pop("binding-a")
     with pytest.raises(AttributeError):
         setattr(sealed, "_known", {})
+    with pytest.raises(RevocationCapabilityError, match="authority state is sealed"):
+        setattr(sealed, "_RegistryBindingAuthorizer__known", {})
+    with pytest.raises(AttributeError):
+        getattr(binding_authority, "_test_revocation_" + "capability")
+    with pytest.raises(TypeError):
+        binding_authority._KnownBinding(  # type: ignore[call-arg]
+            "binding-a", 2, revoked=True
+        )
     assert sealed.binding_revision("binding-a") == 1
     with pytest.raises(ValueError, match="ownership fence"):
         validate_gov_revocation_inventory(
@@ -193,8 +202,8 @@ def test_enabled_gov_revocation_producers_are_fenced_or_absent(tmp_path: Path) -
 
     canonical_module.write_text(
         (REPO_ROOT / "app/governance/binding_authority.py").read_text(encoding="utf-8")
-        + "\ndef _test_revocation_capability(authorizer=None):\n"
-        "    return authorizer\n",
+        + "\nclass _KnownBinding:\n"
+        "    pass\n",
         encoding="utf-8",
     )
     evidence = discover_gov_revocation_producer_evidence(canonical_app)

@@ -18,7 +18,6 @@ from app.governance.binding_authority import (
     BindingAuthorizationError,
     BindingAuthorizationRequest,
     RegistryBindingAuthorizer,
-    _test_revocation_capability,
 )
 from app.instance.active_context_service import (
     ACTION_SELECTION_INSPECT,
@@ -41,6 +40,7 @@ from app.vault.active_context_v1 import (
     WorkspaceState,
 )
 from tests._mvr03_principal_harness import provisioned_instance
+from tests.helpers.revoked_binding_authorizer import RevokedBindingAuthorizer
 
 SELECTION_URL = "/api/companion/active-context/selection"
 
@@ -278,7 +278,7 @@ def test_each_binding_is_authorized_independently(instance, client) -> None:
         assert len(epochs) == expected
 
     # Each of the three deny branches is real and reachable.
-    authorizer = RegistryBindingAuthorizer({first.vault_binding_id: 1})
+    authorizer = RevokedBindingAuthorizer(RegistryBindingAuthorizer({first.vault_binding_id: 1}))
     unresolved = BindingAuthorizationRequest(
         principal=PrincipalContext(
             principal_id="x", principal_kind="delegated_operator_role", subject="trusted_loopback"
@@ -289,12 +289,7 @@ def test_each_binding_is_authorized_independently(instance, client) -> None:
         required_permission="wsp.read",
     )
     assert authorizer.authorize(unresolved).reason == "binding_unknown"
-    authorizer.set_binding(
-        first.vault_binding_id,
-        1,
-        revoked=True,
-        _revocation_capability=_test_revocation_capability(),
-    )
+    authorizer.revoke_for_test(first.vault_binding_id)
     denied_revoked = authorizer.authorize(
         BindingAuthorizationRequest(
             principal=unresolved.principal,
@@ -309,7 +304,8 @@ def test_each_binding_is_authorized_independently(instance, client) -> None:
     # Availability is NOT an authorization input: an unreachable content root is still a
     # binding this principal may use, and it degrades rather than denying. Folding it into
     # GOV would make the degraded posture unreachable in production wiring.
-    authorizer.set_binding(first.vault_binding_id, 1, available=False, revoked=False)
+    authorizer.restore_for_test(first.vault_binding_id)
+    authorizer.set_binding(first.vault_binding_id, 1, available=False)
     still_allowed = authorizer.authorize(
         BindingAuthorizationRequest(
             principal=unresolved.principal,
@@ -323,11 +319,10 @@ def test_each_binding_is_authorized_independently(instance, client) -> None:
 
     # Denying one member of a many-binding set fails the whole resolution: no partial set
     # is returned and no member is silently excluded.
-    partial = RegistryBindingAuthorizer(
-        {first.vault_binding_id: 1, second.vault_binding_id: 1},
-        revoked=frozenset({second.vault_binding_id}),
-        _revocation_capability=_test_revocation_capability(),
+    partial = RevokedBindingAuthorizer(
+        RegistryBindingAuthorizer({first.vault_binding_id: 1, second.vault_binding_id: 1})
     )
+    partial.revoke_for_test(second.vault_binding_id)
     partial_resolver = ActiveContextSelectionResolver(
         binding_facts=lambda: binding_facts(runtime.registry.load()),
         registry_revision=lambda: runtime.registry.load().revision,

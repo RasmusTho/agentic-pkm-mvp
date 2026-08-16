@@ -29,7 +29,6 @@ from app.api.app import app
 from app.governance.binding_authority import (
     BindingAuthorizationRequest,
     RegistryBindingAuthorizer,
-    _test_revocation_capability,
 )
 from app.instance.active_context_service import (
     ACTION_DIMENSION_RESOLVE,
@@ -53,6 +52,7 @@ from app.instance.vault_registry import VaultRegistryStore
 from app.vault.active_context_v1 import DimensionFilter, PrincipalContext
 from tests._mvr03_principal_harness import provisioned_instance
 from tests.helpers.instance_storage_capability import STORAGE_MUTATION_CAPABILITY
+from tests.helpers.revoked_binding_authorizer import RevokedBindingAuthorizer
 
 DIMENSIONS_URL = "/api/instance/dimensions"
 SELECTION_URL = "/api/companion/active-context/selection"
@@ -370,13 +370,8 @@ def test_dimension_never_upgrades_authority_or_falls_back(instance, client) -> N
         _capability=STORAGE_MUTATION_CAPABILITY,
     )
     snapshot = runtime.registry.load()
-    revoking = build_authorizer(snapshot)
-    revoking.set_binding(
-        third.vault_binding_id,
-        1,
-        revoked=True,
-        _revocation_capability=_test_revocation_capability(),
-    )
+    revoking = RevokedBindingAuthorizer(build_authorizer(snapshot))
+    revoking.revoke_for_test(third.vault_binding_id)
     with pytest.raises(DimensionResolutionError) as revoked_error:
         service.resolve(
             "work",
