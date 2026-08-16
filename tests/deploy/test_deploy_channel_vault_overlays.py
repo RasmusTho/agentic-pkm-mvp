@@ -158,6 +158,27 @@ def _mount_is_read_only(service: dict[str, object], target: str) -> bool:
 
 
 @requires_docker
+def test_explicit_vault_overlay_parses_without_interpolation() -> None:
+    subprocess.run(
+        [
+            "docker",
+            "compose",
+            "-f",
+            str(REPO_ROOT / "docker-compose.yaml"),
+            "-f",
+            str(REPO_ROOT / "docker-compose.legacy-vault.yml"),
+            "config",
+            "--no-interpolate",
+            "--no-env-resolution",
+        ],
+        cwd=REPO_ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+
+@requires_docker
 def test_deploy_channel_test_no_vault_keeps_idle_overlay_set(tmp_path: Path) -> None:
     services = _services(
         _render_deploy_compose(tmp_path, channel="test", explicit_vault=False)
