@@ -275,10 +275,11 @@ def _http_chat(
     model: str,
     messages: list[dict[str, str]],
     timeout: float,
+    temperature: float = 0.0,
     max_tokens: int | None = None,
     response_format: dict[str, Any] | str | None = None,
 ) -> tuple[str, dict[str, Any]]:
-    payload: dict[str, Any] = {"model": model, "messages": messages}
+    payload: dict[str, Any] = {"model": model, "messages": messages, "temperature": temperature}
     if max_tokens is not None:
         payload["max_tokens"] = int(max_tokens)
     if response_format is not None:
@@ -450,6 +451,7 @@ def call_llm(
                 model=str(model),
                 messages=messages,
                 timeout=timeout,
+                temperature=temperature,
                 max_tokens=max_tokens,
                 response_format=response_format,
             )
@@ -470,6 +472,7 @@ def call_llm(
                 model=str(model),
                 messages=messages,
                 timeout=timeout,
+                temperature=temperature,
                 max_tokens=max_tokens,
                 response_format=response_format,
             )

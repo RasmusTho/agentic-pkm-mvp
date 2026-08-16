@@ -7,6 +7,7 @@ from app.retrieval import tuning
 from app.settings import runtime
 from app.settings.models import LLMRoutingSettings, RetrievalTuning, SettingsBundle
 from app.settings.tiering import resolve_dev_lab_env_value
+from app.services import llm as llm_service
 
 
 def _bundle(*, rerank: str = "off", top_k: int = 100) -> SettingsBundle:
@@ -70,6 +71,36 @@ def test_enforced_provider_preserves_compiled_request_options(monkeypatch) -> No
 
     assert (route.provider, route.model) == ("openai", "gpt-4.1")
     assert (route.timeout_seconds, route.temperature) == (12, 0.2)
+
+
+def test_openai_compatible_transport_receives_compiled_temperature(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    class Response:
+        status_code = 200
+
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict[str, object]:
+            return {"choices": [{"message": {"content": "ok"}}]}
+
+    def fake_post(*_args, **kwargs):
+        captured.update(kwargs)
+        return Response()
+
+    monkeypatch.setattr(llm_service.requests, "post", fake_post)
+    response, _payload = llm_service._http_chat(
+        url="https://example.test/chat",
+        api_key="test",
+        model="gpt-4.1",
+        messages=[],
+        timeout=12,
+        temperature=0.2,
+    )
+
+    assert response == "ok"
+    assert '"temperature": 0.2' in str(captured["data"])
 
 
 def test_operator_tier_and_last_valid_bundle_fail_closed(monkeypatch, tmp_path) -> None:

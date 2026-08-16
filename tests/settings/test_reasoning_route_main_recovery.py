@@ -6,6 +6,7 @@ from app.cli.settings_explain import build_settings_explain_payload
 from app.components.llm.fabric import ChatClient
 from app.settings.models import LLMRoutingSettings
 from app.reasoning import provider as reasoning_provider
+from app.reasoning.models import ReasoningMode
 from app.settings import runtime
 from app.settings.models import RetrievalTuning, SettingsBundle
 from app.retrieval import tuning
@@ -113,3 +114,23 @@ def test_retrieval_cache_rechecks_bundle_identity_after_reload_race(monkeypatch)
     assert tuning.get_retrieval_tuning().rerank_top_k == 3
     current[0] = second
     assert tuning.get_retrieval_tuning().rerank_top_k == 9
+
+
+def test_ask_failure_returns_the_immutable_selected_route(monkeypatch) -> None:
+    route = reasoning_provider.LLMRoute("openai", "gpt-4.1", "chat", "settings")
+    monkeypatch.setattr(reasoning_provider, "_reasoning_backend", lambda: "llm")
+    monkeypatch.setenv("LLM_PROVIDER", "openai")
+    monkeypatch.setattr(
+        reasoning_provider,
+        "_call_chat_with_route",
+        lambda **_kwargs: (_ for _ in ()).throw(
+            reasoning_provider.ReasoningRouteExecutionError(route, RuntimeError("boom"))
+        ),
+    )
+
+    result = reasoning_provider.run_reasoning(
+        ReasoningMode.ASK_ANSWER, [], question="What changed?"
+    )
+
+    assert result.status == "failed"
+    assert result.llm_route == {"provider": "openai", "model": "gpt-4.1", "mode": "chat", "reason": "settings", "degraded": False}

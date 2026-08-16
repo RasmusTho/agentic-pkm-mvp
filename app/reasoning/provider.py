@@ -35,13 +35,29 @@ def _call_chat(
     kind: str | None,
     trace_id: str | None,
 ) -> str:
-    response, _ = _call_chat_with_route(
-        task_kind=task_kind,
-        pack=pack,
-        agent=agent,
-        kind=kind,
-        trace_id=trace_id,
-    )
+    try:
+        response, _ = _call_chat_with_route(
+            task_kind=task_kind,
+            pack=pack,
+            agent=agent,
+            kind=kind,
+            trace_id=trace_id,
+        )
+    except ReasoningRouteExecutionError as exc:
+        # Every provider-neutral reasoning caller, not only CLAIMS, records
+        # the immutable route selected before its failed execution.
+        log_llm_call(
+            provider=exc.route.provider,
+            model=exc.route.model,
+            agent=agent or "reasoning",
+            kind=kind or task_kind,
+            messages=[],
+            response={"outcome": "provider_failure"},
+            response_text="provider_failure",
+            trace_id=trace_id,
+            status="failed",
+        )
+        raise
     return response
 
 
@@ -267,18 +283,19 @@ def run_reasoning(
                 "outcome": output.outcome,
                 "degraded_reason": output.degraded_reason,
             }
-            failed_route = exc.route if isinstance(exc, ReasoningRouteExecutionError) else resolve_effective_reasoning_route()
-            log_llm_call(
-                provider=failed_route.provider,
-                model=failed_route.model,
-                agent=agent_name,
-                kind=kind_name,
-                messages=[],
-                response=trace_payload,
-                response_text=json.dumps(trace_payload, sort_keys=True),
-                trace_id=trace_id,
-                status="failed",
-            )
+            if not isinstance(exc, ReasoningRouteExecutionError):
+                failed_route = resolve_effective_reasoning_route()
+                log_llm_call(
+                    provider=failed_route.provider,
+                    model=failed_route.model,
+                    agent=agent_name,
+                    kind=kind_name,
+                    messages=[],
+                    response=trace_payload,
+                    response_text=json.dumps(trace_payload, sort_keys=True),
+                    trace_id=trace_id,
+                    status="failed",
+                )
             return ReasoningRun(
                 mode=mode,
                 trace_id=trace_id,
@@ -551,6 +568,8 @@ def run_reasoning(
         except LLMBackendTimeout:
             raise
         except Exception as exc:
+            if isinstance(exc, ReasoningRouteExecutionError):
+                route_payload = _route_payload(exc.route)
             return ReasoningRun(
                 mode=mode,
                 trace_id=trace_id,
