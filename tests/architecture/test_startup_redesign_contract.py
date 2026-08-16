@@ -38,6 +38,8 @@ GATEWAY_FIELDS = {"port", "identity"}
 HEX_DIGEST = re.compile(r"sha256:[0-9a-f]{64}\Z")
 SOURCE_SHA = re.compile(r"[0-9a-f]{40}\Z")
 IDENTITY = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]*\Z")
+CHANNEL_IDENTITY = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*\Z")
+MIGRATION_IDENTITY = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]*\Z")
 COMPOSE_PROJECT = re.compile(r"pkm-[a-z0-9-]+\Z")
 REPOSITORY = re.compile(r"ghcr\.io/[A-Za-z0-9._/-]+\Z")
 
@@ -70,7 +72,10 @@ def _assert_manifest_shape(manifest: dict[str, object]) -> None:
     assert HEX_DIGEST.fullmatch(manifest["artifact"]["image_index_digest"])
     assert HEX_DIGEST.fullmatch(manifest["artifact"]["platform_digest"])
     assert SOURCE_SHA.fullmatch(manifest["artifact"]["source_sha"])
-    assert all(isinstance(value, str) and IDENTITY.fullmatch(value) for value in identities.values())
+    assert isinstance(identities["database"], str) and CHANNEL_IDENTITY.fullmatch(identities["database"])
+    assert isinstance(identities["vault"], str) and CHANNEL_IDENTITY.fullmatch(identities["vault"])
+    assert isinstance(identities["config"], str) and HEX_DIGEST.fullmatch(identities["config"])
+    assert isinstance(identities["migration"], str) and MIGRATION_IDENTITY.fullmatch(identities["migration"])
     assert manifest["llm_policy"] in {"declared-required", "declared-optional", "disabled"}
     assert isinstance(gateway["port"], int) and 1 <= gateway["port"] <= 65535
     assert isinstance(gateway["identity"], str) and IDENTITY.fullmatch(gateway["identity"])
@@ -112,6 +117,16 @@ def test_manifest_fixture_is_secret_free() -> None:
 def test_manifest_schema_rejects_unvalidated_sensitive_fields() -> None:
     manifest = json.loads(FIXTURE.read_text())
     manifest["auth"] = "Bearer sk-live-example"
+    with pytest.raises(AssertionError):
+        _assert_manifest_shape(manifest)
+
+    manifest = json.loads(FIXTURE.read_text())
+    manifest["identities"]["database"] = "admin:hunter2"
+    with pytest.raises(AssertionError):
+        _assert_manifest_shape(manifest)
+
+    manifest = json.loads(FIXTURE.read_text())
+    manifest["identities"]["config"] = "config-value"
     with pytest.raises(AssertionError):
         _assert_manifest_shape(manifest)
 
