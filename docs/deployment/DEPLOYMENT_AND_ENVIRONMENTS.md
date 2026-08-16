@@ -321,8 +321,11 @@ Later deployments re-derive and prove their current client population; the initi
 remains immutable evidence rather than a hand-maintained service list.
 
 MVR-05A8 derives that population from the effective channel Compose graph, not the base file alone.
-Every service declares one DB role in Compose; an added or overlay-enabled service without a role
-fails closed. After the declared clients stop, the wrapper also requires two consecutive empty
+The governed Compose wrapper keeps raw `config` output private and hands the fence only a mode-0600,
+redacted projection of service names, DB roles, dependencies, and the migration-runner command; it
+does not expose resolved environment or mount values. Every service declares one DB role in Compose;
+an added or overlay-enabled service without a role fails closed. After the declared clients stop,
+the wrapper also requires two consecutive empty
 `pg_stat_activity` client-session snapshots before accepting the host process proof or recording the
 irreversible `minimumRuntimeSchema: mvr-05` floor.
 

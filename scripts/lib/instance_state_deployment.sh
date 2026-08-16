@@ -263,7 +263,8 @@ prepare_instance_state_deployment() {
     return "${inventory_rc}"
   fi
   chmod 600 "${mvr05_effective_compose_path}"
-  "${compose_function}" config --no-interpolate --no-env-resolution > "${mvr05_effective_compose_path}"
+  DEPLOY_COMPOSE_FENCE_CONFIG_OUTPUT="${mvr05_effective_compose_path}" \
+    "${compose_function}" config --no-interpolate --no-env-resolution
   inventory_rc=$?
   if [ "${inventory_rc}" -ne 0 ]; then
     rm -f -- "${mvr05_effective_compose_path}"

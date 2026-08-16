@@ -91,6 +91,10 @@ def test_all_old_scalar_db_clients_are_stopped_before_binding_keyed_migration() 
     }
     assert 'compose-fence-plan' in deployment
     assert 'stop "${mvr05_stop_service_args[@]}"' in deployment
+    assert 'DEPLOY_COMPOSE_FENCE_CONFIG_OUTPUT="${mvr05_effective_compose_path}"' in deployment
+    assert "redact-compose-fence-config" in (
+        REPO_ROOT / "scripts/lib/deploy_channel_compose.sh"
+    ).read_text()
     assert deployment.index(floor_marker) < deployment.rindex("deployment-finish")
     assert migration.rindex("prepare_instance_state_deployment") < migration.rindex(
         "apply_changed_migrations"

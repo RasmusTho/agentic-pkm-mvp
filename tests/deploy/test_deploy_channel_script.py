@@ -235,10 +235,10 @@ def test_scalar_rollback_uses_guarded_overlay_and_only_safe_services(
         )
 
     root, env, current_sha = _deploy_harness(tmp_path)
-    runtime_marker = root / "app/instance/runtime.py"
+    runtime_marker = root / "app/instance/mvr05_cutover.py"
     runtime_marker.unlink()
     subprocess.run(
-        ["git", "add", "-u", "app/instance/runtime.py"],
+        ["git", "add", "-u", "app/instance/mvr05_cutover.py"],
         cwd=root,
         check=True,
     )
@@ -360,9 +360,9 @@ def test_scalar_rollback_rejects_invalid_gateway_credentials_before_mutation(
     tmp_path: Path,
 ) -> None:
     root, env, current_sha = _deploy_harness(tmp_path)
-    (root / "app/instance/runtime.py").unlink()
+    (root / "app/instance/mvr05_cutover.py").unlink()
     subprocess.run(
-        ["git", "add", "-u", "app/instance/runtime.py"],
+        ["git", "add", "-u", "app/instance/mvr05_cutover.py"],
         cwd=root,
         check=True,
     )
@@ -445,9 +445,9 @@ def test_scalar_rollback_establishment_failure_retains_retryable_guarded_mode(
     tmp_path: Path,
 ) -> None:
     root, env, current_sha = _deploy_harness(tmp_path)
-    (root / "app/instance/runtime.py").unlink()
+    (root / "app/instance/mvr05_cutover.py").unlink()
     subprocess.run(
-        ["git", "add", "-u", "app/instance/runtime.py"],
+        ["git", "add", "-u", "app/instance/mvr05_cutover.py"],
         cwd=root,
         check=True,
     )
@@ -508,9 +508,9 @@ def test_scalar_rollback_fails_before_mutation_without_explicit_inputs(
     tmp_path: Path,
 ) -> None:
     root, env, current_sha = _deploy_harness(tmp_path)
-    (root / "app/instance/runtime.py").unlink()
+    (root / "app/instance/mvr05_cutover.py").unlink()
     subprocess.run(
-        ["git", "add", "-u", "app/instance/runtime.py"],
+        ["git", "add", "-u", "app/instance/mvr05_cutover.py"],
         cwd=root,
         check=True,
     )

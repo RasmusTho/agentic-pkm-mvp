@@ -139,6 +139,14 @@ def _install_writer_inventory_fixture(
         "        shift\n"
         "      done\n"
         "      exit 2 ;;\n"
+        "    *' compose-fence-plan '*)\n"
+        '      while [ "$#" -gt 0 ]; do\n'
+        '        if [ "$1" = --receipt-output ]; then '
+        "printf '%s\\n' '{\"schema\":\"agentic-pkm.mvr05-cutover-fence.v1\",\"db_clients\":[\"api\",\"migrate\"],\"migration_runner\":\"migrate\",\"stopped_services\":[\"api\"],\"source_sha256\":\"0000000000000000000000000000000000000000000000000000000000000000\"}' > \"$2\"; "
+        "printf 'api\\n'; exit 0; fi\n"
+        "        shift\n"
+        "      done\n"
+        "      exit 2 ;;\n"
         "  esac\n"
         "  exit 2\n"
         "fi\n"
@@ -165,6 +173,9 @@ def _fake_compose_harness(tmp_path: Path, extra_env: dict[str, str]) -> tuple[su
         f"source '{INSTANCE_STATE_DEPLOYMENT_SH}'\n"
         "fake_compose() {\n"
         "  printf 'compose:%s\\n' \"$*\" >> \"$EVENT_LOG\"\n"
+        "  if [ \"${1:-}\" = config ] && [ -n \"${DEPLOY_COMPOSE_FENCE_CONFIG_OUTPUT:-}\" ]; then\n"
+        "    printf '%s\\n' 'services: {api: {depends_on: [db], labels: {com.agentic-pkm.mvr05.db-role: client}}, db: {labels: {com.agentic-pkm.mvr05.db-role: server}}, instance-state-init: {labels: {com.agentic-pkm.mvr05.db-role: fence-controller}}, migrate: {command: [/app/scripts/run_migrations.sh], depends_on: [db], labels: {com.agentic-pkm.mvr05.db-role: migration-runner}}}' > \"$DEPLOY_COMPOSE_FENCE_CONFIG_OUTPUT\"\n"
+        "  fi\n"
         "  return 0\n"
         "}\n"
         "prepare_instance_state_deployment fake_compose prod\n",
@@ -266,6 +277,9 @@ def test_producer_fails_closed_on_empty_inventory(tmp_path: Path) -> None:
         f"source '{INSTANCE_STATE_DEPLOYMENT_SH}'\n"
         "fake_compose() {\n"
         "  printf 'compose:%s\\n' \"$*\" >> \"$EVENT_LOG\"\n"
+        "  if [ \"${1:-}\" = config ] && [ -n \"${DEPLOY_COMPOSE_FENCE_CONFIG_OUTPUT:-}\" ]; then\n"
+        "    printf '%s\\n' 'services: {api: {depends_on: [db], labels: {com.agentic-pkm.mvr05.db-role: client}}, db: {labels: {com.agentic-pkm.mvr05.db-role: server}}, instance-state-init: {labels: {com.agentic-pkm.mvr05.db-role: fence-controller}}, migrate: {command: [/app/scripts/run_migrations.sh], depends_on: [db], labels: {com.agentic-pkm.mvr05.db-role: migration-runner}}}' > \"$DEPLOY_COMPOSE_FENCE_CONFIG_OUTPUT\"\n"
+        "  fi\n"
         "  return 0\n"
         "}\n"
         "prepare_instance_state_deployment fake_compose prod\n",

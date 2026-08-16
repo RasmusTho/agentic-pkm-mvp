@@ -44,6 +44,82 @@ class InventoryError(RuntimeError):
     """Enumeration or proof construction was incomplete or unsafe."""
 
 
+def redact_compose_fence_config(source: Path, output: Path) -> None:
+    """Write the minimal effective-Compose surface needed by the MVR-05 fence."""
+
+    import yaml
+
+    try:
+        document = yaml.safe_load(source.read_text(encoding="utf-8")) or {}
+        services = document.get("services")
+    except (OSError, UnicodeError, yaml.YAMLError) as exc:
+        raise InventoryError("effective Compose fence input is invalid") from exc
+    if not isinstance(services, dict):
+        raise InventoryError("effective Compose fence input has no services")
+
+    role_label = "com.agentic-pkm.mvr05.db-role"
+    redacted_services: dict[str, object] = {}
+    for raw_name, raw_service in services.items():
+        if not isinstance(raw_name, str) or not isinstance(raw_service, dict):
+            raise InventoryError("effective Compose fence service is malformed")
+        labels = raw_service.get("labels")
+        if isinstance(labels, dict):
+            safe_labels: object = (
+                {role_label: labels[role_label]} if role_label in labels else {}
+            )
+        elif isinstance(labels, list):
+            prefix = f"{role_label}="
+            safe_labels = [str(item) for item in labels if str(item).startswith(prefix)]
+        else:
+            safe_labels = {}
+        depends_on = raw_service.get("depends_on")
+        if isinstance(depends_on, dict):
+            safe_dependencies: object = sorted(str(item) for item in depends_on)
+        elif isinstance(depends_on, list):
+            safe_dependencies = [str(item) for item in depends_on]
+        else:
+            safe_dependencies = []
+        safe_service: dict[str, object] = {
+            "labels": safe_labels,
+            "depends_on": safe_dependencies,
+        }
+        role = (
+            labels.get(role_label)
+            if isinstance(labels, dict)
+            else next(
+                (
+                    str(item).removeprefix(f"{role_label}=")
+                    for item in labels or []
+                    if str(item).startswith(f"{role_label}=")
+                ),
+                None,
+            )
+        )
+        if role == "migration-runner":
+            safe_service["command"] = raw_service.get("command")
+        redacted_services[raw_name] = safe_service
+
+    try:
+        metadata = output.lstat()
+    except OSError as exc:
+        raise InventoryError("effective Compose fence output is unavailable") from exc
+    if (
+        not stat.S_ISREG(metadata.st_mode)
+        or metadata.st_uid != os.getuid()
+        or metadata.st_mode & 0o077
+    ):
+        raise InventoryError("effective Compose fence output is not private")
+    flags = os.O_WRONLY | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        descriptor = os.open(output, flags)
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            yaml.safe_dump({"services": redacted_services}, handle, sort_keys=True)
+            handle.flush()
+            os.fsync(handle.fileno())
+    except OSError as exc:
+        raise InventoryError("effective Compose fence output could not be written") from exc
+
+
 @dataclass(frozen=True)
 class ProcessRecord:
     pid: int
@@ -1434,6 +1510,9 @@ def main(argv: list[str] | None = None) -> int:
     fence_plan = subparsers.add_parser("compose-fence-plan")
     fence_plan.add_argument("--compose-path", type=Path, required=True)
     fence_plan.add_argument("--receipt-output", type=Path)
+    redact_fence = subparsers.add_parser("redact-compose-fence-config")
+    redact_fence.add_argument("--compose-path", type=Path, required=True)
+    redact_fence.add_argument("--output", type=Path, required=True)
     args = parser.parse_args(argv)
     try:
         if args.command == "controller-token":
@@ -1475,6 +1554,9 @@ def main(argv: list[str] | None = None) -> int:
                 )
                 os.chmod(args.receipt_output, 0o600)
             print(" ".join(sorted(plan.stopped_services)))
+            return 0
+        if args.command == "redact-compose-fence-config":
+            redact_compose_fence_config(args.compose_path, args.output)
             return 0
     except InventoryError as exc:
         print(str(exc), file=sys.stderr)
