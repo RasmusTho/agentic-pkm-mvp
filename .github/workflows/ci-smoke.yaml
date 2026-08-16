@@ -784,6 +784,7 @@ jobs:
               - 'app/stores/postgres.py'
               - 'app/alembic/versions/e6c4a2b8d1f3_mvr05a3_store_object_binding_keys.py'
               - 'app/alembic/versions/f4a05a4b0001_mvr05a4_ingest_projection_binding_keys.py'
+              - 'app/alembic/versions/f7a05a4b0001_seed_membership_prerequisites.py'
               - 'app/alembic/versions/f5a05a5b0001_mvr05a5_replay_projection_binding_keys.py'
               - 'app/db/replay_projection_schema.py'
               - 'app/jobs/episodes_projection.py'
