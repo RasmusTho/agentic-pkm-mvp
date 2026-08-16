@@ -39,7 +39,7 @@ HEX_DIGEST = re.compile(r"sha256:[0-9a-f]{64}\Z")
 SOURCE_SHA = re.compile(r"[0-9a-f]{40}\Z")
 IDENTITY = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]*\Z")
 CHANNEL_IDENTITY = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*\Z")
-MIGRATION_IDENTITY = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]*\Z")
+MIGRATION_IDENTITY = re.compile(r"alembic:[A-Za-z0-9._-]+\Z")
 COMPOSE_PROJECT = re.compile(r"pkm-[a-z0-9-]+\Z")
 REPOSITORY = re.compile(r"ghcr\.io/[A-Za-z0-9._/-]+\Z")
 
@@ -78,7 +78,7 @@ def _assert_manifest_shape(manifest: dict[str, object]) -> None:
     assert isinstance(identities["migration"], str) and MIGRATION_IDENTITY.fullmatch(identities["migration"])
     assert manifest["llm_policy"] in {"declared-required", "declared-optional", "disabled"}
     assert isinstance(gateway["port"], int) and 1 <= gateway["port"] <= 65535
-    assert isinstance(gateway["identity"], str) and IDENTITY.fullmatch(gateway["identity"])
+    assert isinstance(gateway["identity"], str) and CHANNEL_IDENTITY.fullmatch(gateway["identity"])
 
 
 def _assert_secret_free(value: object, *, path: str = "manifest") -> None:
@@ -127,6 +127,16 @@ def test_manifest_schema_rejects_unvalidated_sensitive_fields() -> None:
 
     manifest = json.loads(FIXTURE.read_text())
     manifest["identities"]["config"] = "config-value"
+    with pytest.raises(AssertionError):
+        _assert_manifest_shape(manifest)
+
+    manifest = json.loads(FIXTURE.read_text())
+    manifest["identities"]["migration"] = "admin:hunter2"
+    with pytest.raises(AssertionError):
+        _assert_manifest_shape(manifest)
+
+    manifest = json.loads(FIXTURE.read_text())
+    manifest["gateway"]["identity"] = "admin:hunter2"
     with pytest.raises(AssertionError):
         _assert_manifest_shape(manifest)
 
