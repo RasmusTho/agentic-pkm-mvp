@@ -64,7 +64,7 @@ Every deploy and recovery operation emits exactly one terminal result from this 
 | --- | --- |
 | `PRE_MUTATION_FAILURE` | Validation, identity, dependency, or receipt admission failed before any migration or activation mutation. |
 | `FAILED_AFTER_MIGRATION` | An actual migration/schema mutation occurred, but the operation did not reach activation success; this takes precedence over any later activation/health failure and is never PASS. A journal attempt alone is not migration. |
-| `ACTIVATION_FAILURE` | Activation/health proof failed before any migration/journal mutation; this is never PASS. |
+| `ACTIVATION_FAILURE` | Activation/health proof failed without any migration/schema mutation; a journal attempt may exist, but this is never PASS. |
 | `PASS` | Required mutation, activation, and receipt checks completed for the exact manifest. |
 
 Terminal classification is ordered by mutation evidence: validation or journal-only failure is

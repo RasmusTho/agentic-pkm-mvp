@@ -60,6 +60,10 @@ def _assert_manifest_shape(manifest: dict[str, object]) -> None:
     assert manifest["schema_version"] == "channel-manifest.v1"
     assert manifest["channel"] in {"dev", "local-test", "promotion-test", "prod"}
     assert manifest["intent"] in {"local-source", "ordinary-boot", "promotion"}
+    if manifest["intent"] == "local-source":
+        assert manifest["channel"] in {"dev", "local-test"}
+    elif manifest["intent"] == "promotion":
+        assert manifest["channel"] in {"promotion-test", "prod"}
     assert isinstance(manifest["compose_project"], str) and COMPOSE_PROJECT.fullmatch(manifest["compose_project"])
     assert isinstance(manifest["artifact"], dict)
     assert REPOSITORY.fullmatch(manifest["artifact"]["repository"])
@@ -112,9 +116,20 @@ def test_manifest_schema_rejects_unvalidated_sensitive_fields() -> None:
         _assert_manifest_shape(manifest)
 
 
+def test_manifest_schema_rejects_local_source_on_promotion_channels() -> None:
+    manifest = json.loads(FIXTURE.read_text())
+    manifest["intent"] = "local-source"
+    manifest["artifact"]["dirty_state"] = "clean"
+    manifest["artifact"]["promotion_eligible"] = False
+    for channel in ("promotion-test", "prod"):
+        manifest["channel"] = channel
+        with pytest.raises(AssertionError):
+            _assert_manifest_shape(manifest)
+
+
 def test_operation_contract_names_truthful_terminal_phases() -> None:
     for phase in ("PRE_MUTATION_FAILURE", "FAILED_AFTER_MIGRATION", "ACTIVATION_FAILURE", "PASS"):
         assert f"`{phase}`" in README
     assert "takes precedence over any later activation/health failure" in README
-    assert "before any migration/journal mutation" in README
+    assert "without any migration/schema mutation" in README
     assert "A journal attempt alone is not migration" in README
