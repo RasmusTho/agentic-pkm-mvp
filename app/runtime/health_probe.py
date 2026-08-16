@@ -78,18 +78,34 @@ def _heartbeat_status(
         }
     freshness = max(0.0, now - ts_value)
     ok = freshness <= stale_seconds
+    reported_status = str(raw.get("status") or "").strip().lower()
+    binding_blocked = (
+        name == "worker"
+        and reported_status == "blocked_pending_mvr06"
+        and ok
+    )
+    if binding_blocked:
+        ok = False
     paused_value = bool(raw.get("paused", False))
     payload: dict[str, Any] = {
         "ok": ok,
         "detail": (
-            f"{name} running (fresh {freshness:.1f}s, paused={paused_value})"
+            f"{name} blocked by pending binding-incompatible outbox rows"
+            if binding_blocked
+            else f"{name} running (fresh {freshness:.1f}s, paused={paused_value})"
             if ok
             else f"{name} stale (last seen {freshness:.1f}s ago)"
         ),
         "path": str(path),
         "freshness_seconds": freshness,
         "paused": paused_value,
-        "status": "ok" if ok else "stale",
+        "status": (
+            "blocked_pending_mvr06"
+            if binding_blocked
+            else "ok"
+            if ok
+            else "stale"
+        ),
     }
     for key in (
         "pid", "scope_glob", "ticks_total", "errors_total", "vault_path", "outbox_path",

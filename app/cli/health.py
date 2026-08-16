@@ -501,6 +501,15 @@ def _suggested_actions(checks: dict[str, dict[str, Any]], runtime: dict[str, dic
                 "command": "docker compose restart worker",
             }
         )
+    elif worker_status == "blocked_pending_mvr06":
+        actions.append(
+            {
+                "id": "worker_binding_blocked",
+                "severity": "required",
+                "message": "Worker has pending rows that do not match its active binding",
+                "command_hint": "Keep rows pending for governed MVR-06 resolution",
+            }
+        )
 
     dead_letters = checks.get("dead_letters", {})
     if dead_letters.get("ok") is False:
