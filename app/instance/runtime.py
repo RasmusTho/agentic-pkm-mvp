@@ -54,6 +54,11 @@ from app.instance.local_operator_principal import (
     PRINCIPAL_RECORD_FILENAME,
     PrincipalPreflightError,
 )
+from app.instance.settings_rebind import (
+    MINIMUM_SETTINGS_REBIND_RUNTIME,
+    MINIMUM_SETTINGS_REBIND_RUNTIME_KEY,
+    SettingsRebindStore,
+)
 from app.instance.vault_registry import (
     AppLocalSettings,
     AppLocalSettingsStore,
@@ -128,6 +133,17 @@ class InstanceRegistryRuntime:
         self.registry = VaultRegistryStore(layout.registry_path)
         self.ledger = ledger
         self._legacy_path = legacy_path or (layout.root / "legacy-app-local.md")
+
+    def open_settings_rebind_store(self) -> SettingsRebindStore:
+        """Resolve the dormant SETTINGS-05 record through protected runtime state.
+
+        This intentionally only exposes record recovery.  It does not select a
+        vault, resolve a watcher root, or permit a caller to initiate a rebind.
+        """
+        from app.instance._storage_boundary import _STORAGE_MUTATION_CAPABILITY
+
+        _require_runtime_floor(self.registry.load(), scalar_runtime=False)
+        return SettingsRebindStore(self.registry, capability=_STORAGE_MUTATION_CAPABILITY)
 
     @classmethod
     def for_paths(
@@ -872,6 +888,11 @@ def _require_runtime_floor(snapshot: RegistrySnapshot, *, scalar_runtime: bool) 
         raise CapabilityNotReadyError(
             "minimum runtime principal blocks a credential-only scalar image; use a "
             "compatible roll-forward image instead of scalar rollback"
+        )
+    settings_rebind_floor = floors.get(MINIMUM_SETTINGS_REBIND_RUNTIME_KEY)
+    if settings_rebind_floor is not None and str(settings_rebind_floor) != MINIMUM_SETTINGS_REBIND_RUNTIME:
+        raise CapabilityNotReadyError(
+            "minimum settings rebind runtime blocks this API/watcher image before root resolution"
         )
 
 

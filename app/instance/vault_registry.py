@@ -31,6 +31,12 @@ from app.instance.filesystem_identity import (
     same_filesystem_root,
 )
 from app.receipts.settings_write import emit_settings_write_receipts_for_changes
+from app.instance.settings_rebind import (
+    MINIMUM_SETTINGS_REBIND_RUNTIME,
+    MINIMUM_SETTINGS_REBIND_RUNTIME_KEY,
+    SettingsRebindError,
+    validate_settings_rebind_payload,
+)
 
 if TYPE_CHECKING:
     from app.instance.runtime import InstanceRegistryRuntime
@@ -968,6 +974,59 @@ class VaultRegistryStore:
             _capability=_capability,
         )
 
+    def record_settings_rebind_floor(
+        self,
+        *,
+        _capability: _StorageMutationCapability | None = None,
+    ) -> RegistrySnapshot:
+        """Record SETTINGS-05's compatibility floor before its first record.
+
+        This is intentionally a dedicated producer: it pins the revision it
+        observed and carries sibling extension state unchanged rather than
+        making a settings record writer an unrestricted extension writer.
+        """
+        _require_storage_mutation_capability(_capability)
+        current = self.load()
+        floors = dict(current.extensions.get("runtimeFloors") or {})
+        existing = floors.get(MINIMUM_SETTINGS_REBIND_RUNTIME_KEY)
+        if existing not in (None, MINIMUM_SETTINGS_REBIND_RUNTIME):
+            raise RegistryError("settings rebind runtime floor is incompatible")
+        if existing == MINIMUM_SETTINGS_REBIND_RUNTIME:
+            return current
+        floors[MINIMUM_SETTINGS_REBIND_RUNTIME_KEY] = MINIMUM_SETTINGS_REBIND_RUNTIME
+        return self.set_extension_state(
+            principal_state=dict(current.extensions.get("principalState") or {}),
+            background_state=dict(current.extensions.get("backgroundState") or {}),
+            runtime_floors=floors,
+            expected_revision=current.revision,
+            _capability=_capability,
+        )
+
+    def set_settings_rebind_state(
+        self,
+        value: Mapping[str, object],
+        *,
+        expected_revision: int | None = None,
+        _capability: _StorageMutationCapability | None = None,
+    ) -> RegistrySnapshot:
+        """Atomically persist one checksum-validated dormant rebind record."""
+        _require_storage_mutation_capability(_capability)
+        try:
+            validated = validate_settings_rebind_payload(value)
+        except SettingsRebindError as exc:
+            raise RegistryError(str(exc)) from exc
+        with self._locked():
+            self._assert_no_scalar_rollback_session_locked()
+            current = self._read_current_locked(recover=True)
+            self._assert_revision(current, expected_revision)
+            floors = current.extensions.get("runtimeFloors") or {}
+            if floors.get(MINIMUM_SETTINGS_REBIND_RUNTIME_KEY) != MINIMUM_SETTINGS_REBIND_RUNTIME:
+                raise RegistryError("settings rebind runtime floor must precede the record")
+            updated = self._with_registrations(current, dict(current.registrations))
+            updated = replace(updated, settings_rebind=copy.deepcopy(validated))
+            self._write_locked(updated)
+            return updated
+
     def require_authoritative_activation(
         self,
         proof: RegistryActivationProof,
@@ -1869,8 +1928,11 @@ class VaultRegistryStore:
             ):
                 raise RegistryError("active registry scalar rollback floor is invalid")
         settings_rebind = frontmatter.get("settingsRebind")
-        if settings_rebind is not None and not isinstance(settings_rebind, dict):
-            raise RegistryError("settingsRebind must be a mapping")
+        if settings_rebind is not None:
+            try:
+                settings_rebind = validate_settings_rebind_payload(settings_rebind)
+            except SettingsRebindError as exc:
+                raise RegistryError(str(exc)) from exc
         default_binding_id, default_provenance = _read_default_from_frontmatter(
             frontmatter, registrations, extensions
         )
