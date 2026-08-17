@@ -438,6 +438,7 @@ class GhRegistryGateway:
                 if not (
                     first_line.startswith("<!-- known-defect-entry:")
                     or first_line.startswith("<!-- known-defect-promotion:")
+                    or first_line.startswith(SUPERSEDED_HISTORY_PREFIX)
                 ):
                     continue
                 raw_association = comment.get("author_association")

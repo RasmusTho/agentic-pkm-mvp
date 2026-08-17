@@ -92,6 +92,9 @@ class FakeGateway:
                     and (
                         first_line.startswith("<!-- known-defect-entry:")
                         or first_line.startswith("<!-- known-defect-promotion:")
+                        or first_line.startswith(
+                            known_defects.SUPERSEDED_HISTORY_PREFIX
+                        )
                     )
                 ):
                     known_defects._validate_schema_comment(comment)
@@ -277,6 +280,27 @@ def test_known_defects_intake_rejects_ambiguous_or_active_duplicate_state() -> N
     ).read_text(encoding="utf-8")
     assert "Superseded audit record: KD-..." in bug_skill
     assert "original review finding/thread" in bug_skill
+
+
+def test_superseded_history_identity_drift_fails_closed_before_new_registry() -> None:
+    gateway = FakeGateway()
+    issue = gateway.create_registry_issue()
+    gateway.lock_registry_issue(issue["number"])
+    defect = _defect()
+    gateway.add_comment(issue["number"], _superseded_history(defect))
+
+    gateway.issues[issue["number"]]["title"] = "retired registry"
+    gateway.issues[issue["number"]]["body"] = "identity drift"
+    gateway.issues[issue["number"]]["labels"] = []
+    gateway.registry_identity_numbers.clear()
+
+    with pytest.raises(
+        known_defects.KnownDefectsError,
+        match="readable registry container",
+    ):
+        known_defects.intake_defect(defect, gateway)
+
+    assert set(gateway.issues) == {issue["number"]}
 
 
 def test_known_defects_intake_rejects_ambiguous_history_before_pending_finalize() -> None:
