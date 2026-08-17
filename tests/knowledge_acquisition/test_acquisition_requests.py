@@ -208,7 +208,8 @@ def test_same_video_two_sources_single_request_merged_provenance(
     discovered = conn.payloads_for(YOUTUBE_SOURCE_DISCOVERED_TOPIC)
     assert {d["binding_id"] for d in discovered} == {BINDING_INBOX, BINDING_OWNED}
 
-    # End-to-end through the (stubbed-egress) production pipeline: one candidate.
+    # End-to-end through the (stubbed-egress) production pipeline: one candidate plus
+    # its portable derived transcript.
     vault = _vault(tmp_path / "vault")
     claimed = q.claim_batch(1, conn=conn)
     assert [c.request_id for c in claimed] == [r1.request_id]
@@ -217,7 +218,7 @@ def test_same_video_two_sources_single_request_merged_provenance(
     assert result.content_identity
     assert result.artifact_path
     notes = list((tmp_path / "vault").rglob("*.md"))
-    assert len(notes) == 1
+    assert len(notes) == 2
 
     # Converged: nothing left to claim.
     assert q.claim_batch(5, conn=conn) == []
@@ -447,7 +448,7 @@ def test_writeguard_block_reported_and_retryable_at_call_site(
     assert [r.request_id for r in reclaimed] == [row.request_id]
     done = drain_one(reclaimed[0], vault_context=vault, queue=q, write_guard=_allowing_guard(), conn=conn)
     assert done.status == "completed"
-    assert len(list((tmp_path / "vault").rglob("*.md"))) == 1
+    assert len(list((tmp_path / "vault").rglob("*.md"))) == 2
 
 
 # ---------------------------------------------------------------------------
