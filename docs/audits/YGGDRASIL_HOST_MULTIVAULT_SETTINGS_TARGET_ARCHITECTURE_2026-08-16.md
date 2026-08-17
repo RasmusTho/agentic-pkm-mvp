@@ -77,7 +77,7 @@ Proxmox's own guide requires an AMD64 system with hardware virtualization for KV
 | Surface | What it represents at this snapshot | Revision posture |
 |---|---|---|
 | `docs/INFRASTRUCTURE.md` | Actual current macOS/Colima/Compose runtime | Keep current until cutover; then rewrite as current reality |
-| `ops/host-setup/README.md` | Actual current Mac mini/Windows inference/MacBook topology | Keep current until roles change; do not insert Proxmox as shipped |
+| `ops/host-setup/README.md` | Actual current macOS-host/Windows-inference/MacBook topology | Keep current until roles change; do not insert Proxmox as shipped |
 | `scripts/start_full_system.sh` and `docker-compose*.yml` | Executable current behavior; stronger evidence than aspirational prose | Change only through implementation Issues |
 | `docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md` | Mixed: actual current matrix plus decided pinned-image/Compose target | Extend the accepted target after owner decision; correct current drift separately |
 | `docs/ENVIRONMENTS.md` | Current contracts plus some claims that diverge from startup/release reality | Needs bounded current-state reconciliation; later add VM/bridge semantics |
@@ -109,7 +109,7 @@ Novel F1/F3/F4-F6 recommendations remain advisory and are not eligible for `feat
 
 | Concern | Current reality | Transition state | Recommended target |
 |---|---|---|---|
-| Physical host | Mac mini/Colima; documented burst inference on a separate Windows PC (`ops/host-setup/README.md:3-46`) | HP laptop lab node; no production data | Qualified single Proxmox node; no HA claim |
+| Physical host | Current macOS/Colima host; documented burst inference on a separate Windows PC (`ops/host-setup/README.md:3-46`) | HP laptop lab node; no production data | Qualified single Proxmox node; no HA claim |
 | Environments | Three Compose projects on one host | Dev/test VMs first; prod stays on current host | Three VM failure domains; test off by default |
 | Application packaging | Shared checkout/bind-mount drift remains (`scripts/start_full_system.sh:7,727`; `docker-compose.app-bind.yml:2-7`) | Produce and boot pinned SHA images in lab | Same immutable image digest promoted through channel configuration |
 | Postgres | Per-channel Compose service/volume | Same topology inside lab VMs | One Postgres per environment VM |
@@ -482,7 +482,7 @@ The proposal **conforms** to the SBS by remaining an enabling Platform/Operation
 
 | Option | Strength | Cost/risk | Verdict |
 |---|---|---|---|
-| Keep Mac mini + Colima | Lowest migration cost; native iCloud | Shared failure domain and existing Colima/checkout drift | Valid short-term baseline, not isolation target |
+| Keep existing macOS host + Colima | Lowest migration cost; native iCloud | Shared failure domain and existing Colima/checkout drift | Valid short-term baseline, not isolation target |
 | Bare-metal Linux + Compose | Simple and efficient | Environment isolation remains mostly logical | Fallback if laptop fails VM qualification |
 | Single-node Proxmox | Strong VM isolation, snapshots, repeatable restore, scoped API | More operations; one-node/one-disk failure remains; iCloud needs Mac bridge | Recommended conditionally |
 | Kubernetes/cluster | Scheduling and declarative control | Disproportionate complexity; no HA hardware | Reject |
