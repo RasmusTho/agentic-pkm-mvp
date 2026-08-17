@@ -12,10 +12,11 @@ from pathlib import Path
 import pytest
 
 from app.instance._storage_boundary import _STORAGE_MUTATION_CAPABILITY
-from app.instance.instance_state import InstanceStateLayout
+from app.instance.instance_state import InstanceStateLayout, InstanceStatePreflightError
 from app.instance.ownership_ledger import LedgerKeyError, OwnershipLedger
 from app.instance.runtime import (
     _begin_instance_state_deployment,
+    _deployment_fence_path,
     _deployment_lease_path,
     _finish_instance_state_deployment,
     _prove_instance_state_quiescence,
@@ -95,6 +96,7 @@ def _finish(
     backup_root: Path,
     owners: list[dict[str, str]],
     restore_root: Path | None = None,
+    remove_restart_fence: bool = False,
 ) -> dict[str, object]:
     channel = "dev"
     _begin_instance_state_deployment(
@@ -108,6 +110,9 @@ def _finish(
     inventory = ownership_root / "legacy-owner-inventory.json"
     inventory.write_text(json.dumps(_owner_inventory(owners)), encoding="utf-8")
     inventory.chmod(0o600)
+    proof = _prove_empty_quiescence(channel, ownership_root)
+    if remove_restart_fence:
+        _deployment_fence_path(ownership_root, channel).unlink()
     return _finish_instance_state_deployment(
         channel=channel,
         instance_state_root=state_root,
@@ -116,7 +121,7 @@ def _finish(
         inventory_path=inventory,
         backup_root=backup_root,
         restore_root=restore_root,
-        quiescence_proof=_prove_empty_quiescence(channel, ownership_root),
+        quiescence_proof=proof,
     )
 
 
@@ -193,6 +198,30 @@ def test_established_registry_missing_ownership_fails_closed(tmp_path: Path) -> 
 def test_recovery_requires_explicit_fence(tmp_path: Path) -> None:
     state_root, ownership_root, owner, ledger = _fresh_and_established(tmp_path)
     recovery_backup = tmp_path / "recovery-backup"
+    _finish(
+        state_root=state_root,
+        ownership_root=ownership_root,
+        backup_root=recovery_backup,
+        owners=[owner],
+    )
+    before = ledger.require_existing()
+    ledger.path.unlink()
+    ledger.key_path.unlink()
+
+    with pytest.raises(InstanceStatePreflightError, match="restart fence"):
+        _finish(
+            state_root=state_root,
+            ownership_root=ownership_root,
+            backup_root=tmp_path / "unfenced-recovery-backup",
+            owners=[owner],
+            restore_root=recovery_backup,
+            remove_restart_fence=True,
+        )
+
+    fenced_root = tmp_path / "fenced"
+    fenced_root.mkdir()
+    state_root, ownership_root, owner, ledger = _fresh_and_established(fenced_root)
+    recovery_backup = tmp_path / "fenced-recovery-backup"
     _finish(
         state_root=state_root,
         ownership_root=ownership_root,
