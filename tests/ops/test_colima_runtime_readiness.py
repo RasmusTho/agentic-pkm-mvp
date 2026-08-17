@@ -204,6 +204,62 @@ def test_mount_producer_creates_and_verifies_reviewed_mounts(tmp_path: Path) -> 
     ]
 
 
+def test_mount_producer_refuses_to_hide_existing_metadata_with_empty_source(tmp_path: Path) -> None:
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    mount_calls = tmp_path / "mount.calls"
+    mount_state = tmp_path / "mount-state"
+    mount_state.mkdir()
+    for name, body in {
+        "mountpoint": (
+            "last=''\n"
+            "for arg in \"$@\"; do last=\"$arg\"; done\n"
+            "key=$(printf '%s' \"$last\" | tr '/' '_')\n"
+            f"test -f \"{mount_state}/$key\"\n"
+        ),
+        "mount": (
+            f"printf '%s\\n' \"$*\" >> '{mount_calls}'\n"
+            "last=''\n"
+            "for arg in \"$@\"; do last=\"$arg\"; done\n"
+            "key=$(printf '%s' \"$last\" | tr '/' '_')\n"
+            f"touch \"{mount_state}/$key\"\n"
+        ),
+        "findmnt": (
+            "case \"$*\" in *FSROOT*) printf '/\\n';; "
+            "*SOURCE*) printf '/dev/persistent\\n';; "
+            "*UUID*) printf 'reviewed-uuid\\n';; "
+            "*FSTYPE*) printf 'ext4\\n';; esac\n"
+        ),
+    }.items():
+        path = fake_bin / name
+        path.write_text(f"#!/bin/sh\n{body}", encoding="utf-8")
+        path.chmod(0o755)
+
+    persistent = tmp_path / "persistent"
+    docker_data = tmp_path / "docker"
+    docker_data.mkdir()
+    (docker_data / "existing-container-metadata").write_text("preserve", encoding="utf-8")
+    containerd_data = tmp_path / "containerd"
+    result = _run_bash(
+        f"COLIMA_PERSISTENT_DATA_PATH='{persistent}' "
+        f"COLIMA_DOCKER_DATA_PATH='{docker_data}' "
+        f"COLIMA_CONTAINERD_DATA_PATH='{containerd_data}' "
+        "COLIMA_EXPECTED_PERSISTENT_SOURCE=/dev/persistent "
+        "COLIMA_EXPECTED_PERSISTENT_IDENTITY=UUID=reviewed-uuid "
+        "COLIMA_EXPECTED_PERSISTENT_FSTYPE=ext4 "
+        f"bash '{ROOT / 'scripts/lib/colima_data_mount_provision.sh'}' --provision",
+        env={"PATH": f"{fake_bin}:{os.environ['PATH']}"},
+    )
+
+    assert result.returncode != 0
+    assert "existing data" in result.stderr
+    assert mount_calls.read_text(encoding="utf-8").splitlines() == [
+        f"-t ext4 UUID=reviewed-uuid {persistent}",
+    ]
+    assert (docker_data / "existing-container-metadata").read_text(encoding="utf-8") == "preserve"
+    assert not (persistent / "docker").exists()
+
+
 def test_prestart_inventory_mismatch_refuses_before_docker_api(tmp_path: Path) -> None:
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()

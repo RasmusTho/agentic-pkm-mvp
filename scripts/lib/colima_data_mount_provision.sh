@@ -43,6 +43,12 @@ findmnt_value() {
   "$findmnt_bin" -n -o "$field" --target "$target" 2>/dev/null
 }
 
+directory_has_entries() {
+  local path="$1"
+  [ -d "$path" ] || return 1
+  [ -n "$(find "$path" -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null)" ]
+}
+
 verify_mount() {
   local target="$1" expected_fsroot="$2" actual_source actual_identity actual_fstype actual_fsroot
   actual_source="$(findmnt_value SOURCE "$target")" || return 1
@@ -62,6 +68,15 @@ ensure_mount() {
   mkdir -p "$target"
   if ! "$mountpoint_bin" -q "$target" 2>/dev/null; then
     if [ "$kind" = "bind" ]; then
+      if [ ! -d "$source" ]; then
+        if directory_has_entries "$target"; then
+          echo "persistent source $source is absent while $target contains existing data; refusing bind" >&2
+          return 1
+        fi
+      elif ! directory_has_entries "$source" && directory_has_entries "$target"; then
+        echo "persistent source $source is empty while $target contains existing data; refusing bind" >&2
+        return 1
+      fi
       mkdir -p "$source"
       "$mount_bin" --bind "$source" "$target"
     else
