@@ -142,6 +142,8 @@ def _wrapper_run(
     loopback: str = "0",
     fail_cutover: int = 0,
     verify_cutover: int = 1,
+    fail_mvr_floor: int = 0,
+    fail_settings_install: int = 0,
 ) -> tuple[subprocess.CompletedProcess[str], list[str]]:
     tmp_path.mkdir(parents=True)
     event_log = tmp_path / "events.log"
@@ -192,6 +194,8 @@ def _wrapper_run(
         "    printf '%s\\n' 'services: {api: {depends_on: [db], labels: {com.agentic-pkm.mvr05.db-role: client}}, db: {labels: {com.agentic-pkm.mvr05.db-role: server}}, instance-state-init: {labels: {com.agentic-pkm.mvr05.db-role: fence-controller}}, migrate: {command: [/app/scripts/run_migrations.sh], depends_on: [db], labels: {com.agentic-pkm.mvr05.db-role: migration-runner}}}' > \"$DEPLOY_COMPOSE_FENCE_CONFIG_OUTPUT\"\n"
         "  fi\n"
         "  case \" $* \" in\n"
+        "    *' mvr05-record-floor '*) return \"${FAIL_MVR_FLOOR:-0}\" ;;\n"
+        "    *' settings-rebind-install-dormant '*) return \"${FAIL_SETTINGS_INSTALL:-0}\" ;;\n"
         "    *' principal-verify-cutover-clean-failure '*) return \"${VERIFY_CUTOVER:-1}\" ;;\n"
         "    *' principal-cutover '*) return \"${FAIL_CUTOVER:-0}\" ;;\n"
         "  esac\n"
@@ -210,6 +214,8 @@ def _wrapper_run(
         "INSTANCE_OWNERSHIP_HOST_STATE_DIR": str(ownership_root),
         "FAIL_CUTOVER": str(fail_cutover),
         "VERIFY_CUTOVER": str(verify_cutover),
+        "FAIL_MVR_FLOOR": str(fail_mvr_floor),
+        "FAIL_SETTINGS_INSTALL": str(fail_settings_install),
         "REAL_PYTHON": sys.executable,
     }
     env.pop("MVR03_PRINCIPAL_CUTOVER", None)
@@ -225,6 +231,26 @@ def _wrapper_run(
         check=False,
     )
     return result, event_log.read_text(encoding="utf-8").splitlines()
+
+
+def test_settings_floor_receipt_pending_and_installed_matrix(tmp_path: Path) -> None:
+    """The production wrapper fences failures after proof, but not pristine hosts."""
+    mvr_failure, _ = _wrapper_run(tmp_path / "mvr-failure", cutover=False, fail_mvr_floor=1)
+    mvr_marker = tmp_path / "mvr-failure" / "instance-ownership" / "settings-rebind-runtime-floor-prod.json"
+    assert mvr_failure.returncode == 1
+    assert '"phase":"pending"' in mvr_marker.read_text(encoding="utf-8")
+
+    settings_failure, _ = _wrapper_run(
+        tmp_path / "settings-failure", cutover=False, fail_settings_install=1
+    )
+    settings_marker = tmp_path / "settings-failure" / "instance-ownership" / "settings-rebind-runtime-floor-prod.json"
+    assert settings_failure.returncode == 1
+    assert '"phase":"pending"' in settings_marker.read_text(encoding="utf-8")
+
+    installed, _ = _wrapper_run(tmp_path / "installed", cutover=False)
+    installed_marker = tmp_path / "installed" / "instance-ownership" / "settings-rebind-runtime-floor-prod.json"
+    assert installed.returncode == 0
+    assert '"phase":"installed"' in installed_marker.read_text(encoding="utf-8")
 
 
 def test_wrapper_runs_the_cutover_inside_the_stopped_window(tmp_path: Path) -> None:
