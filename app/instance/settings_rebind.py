@@ -113,15 +113,11 @@ class SettingsRebindStore:
         self._capability = capability
 
     def install_dormant(self, *, binding_id: str | None = None) -> SettingsRebindRecord:
-        """Install the compatibility floor before the first authoritative record."""
-        self._registry.record_settings_rebind_floor(_capability=self._capability)
-        current = self._registry.load()
-        if current.settings_rebind is None:
-            self._registry.set_settings_rebind_state(
-                SettingsRebindRecord.dormant(binding_id=binding_id).as_payload(),
-                expected_revision=current.revision,
-                _capability=self._capability,
-            )
+        """Atomically install the floor and first authoritative dormant record."""
+        self._registry.install_settings_rebind_dormant(
+            SettingsRebindRecord.dormant(binding_id=binding_id).as_payload(),
+            _capability=self._capability,
+        )
         return self.read()
 
     def read(self) -> SettingsRebindRecord:

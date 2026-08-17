@@ -559,6 +559,39 @@ def test_deploy_channel_rolls_back_when_embedding_provider_preflight_fails(
     assert "embedding provider configuration preflight failed" in result.stderr
 
 
+def test_automatic_rollback_does_not_restart_a_pre_settings_floor_image(
+    tmp_path: Path,
+) -> None:
+    """A failed capable deploy retains its pin rather than recreating an old image."""
+    root, env, old_sha = _deploy_harness(tmp_path)
+    (root / "config/deploy/dev.env").write_text(
+        f"APP_IMAGE_REPOSITORY=example.invalid/pkm-app\nAPP_IMAGE_TAG={old_sha}\n",
+        encoding="utf-8",
+    )
+    marker = root / "app/instance/settings_rebind.py"
+    marker.write_text('"""SETTINGS-05 capable target marker."""\n', encoding="utf-8")
+    subprocess.run(
+        ["git", "add", "app/instance/settings_rebind.py"], cwd=root, check=True
+    )
+    subprocess.run(["git", "commit", "-qm", "settings capable target"], cwd=root, check=True)
+    target_sha = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=root, text=True
+    ).strip()
+    env["FAKE_DOCKER_FAIL_MATCH"] = "exec -T api python -m app.cli settings validate --json"
+    env["FAKE_SHA"] = target_sha
+
+    result = _run_deploy(root, env, target_sha)
+
+    assert result.returncode == 24
+    assert "automatic rollback is blocked" in result.stderr
+    assert f"APP_IMAGE_TAG={target_sha}" in (root / "config/deploy/dev.env").read_text(
+        encoding="utf-8"
+    )
+    assert f"APP_IMAGE_TAG={old_sha}" in (root / "config/deploy/dev.previous.env").read_text(
+        encoding="utf-8"
+    )
+
+
 def _wait_for_path_or_process_exit(
     process: subprocess.Popen[str],
     path: Path,

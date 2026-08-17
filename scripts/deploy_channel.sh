@@ -212,7 +212,8 @@ current_sha="$(read_pin "${pin_file}" 2>/dev/null || true)"
 target_sha="$(resolve_target_sha "${target_sha}")"
 scalar_rollback=0
 if [ "${action}" = "rollback" ] && \
-  ! git -C "${ROOT}" cat-file -e "${target_sha}:app/instance/mvr05_cutover.py" 2>/dev/null; then
+  { ! git -C "${ROOT}" cat-file -e "${target_sha}:app/instance/mvr05_cutover.py" 2>/dev/null \
+    || ! git -C "${ROOT}" cat-file -e "${target_sha}:app/instance/settings_rebind.py" 2>/dev/null; }; then
   scalar_rollback=1
 fi
 
@@ -699,6 +700,10 @@ rollback_failed_startup() {
     return 0
   fi
   if [ -n "${current_sha}" ]; then
+    if ! git -C "${ROOT}" cat-file -e "${current_sha}:app/instance/settings_rebind.py" 2>/dev/null; then
+      echo "${reason} (status ${original_status}); automatic rollback is blocked because previous pin ${current_sha} cannot satisfy the persisted settings rebind runtime floor" >&2
+      return 0
+    fi
     echo "${reason} (status ${original_status}); attempting rollback to previous pin" >&2
     if ! write_pin "${pin_file}" "${current_sha}"; then
       echo "rollback pin restore failed for previous pin ${current_sha}" >&2

@@ -894,6 +894,11 @@ def _require_runtime_floor(snapshot: RegistrySnapshot, *, scalar_runtime: bool) 
         raise CapabilityNotReadyError(
             "minimum settings rebind runtime blocks this API/watcher image before root resolution"
         )
+    if scalar_runtime and settings_rebind_floor == MINIMUM_SETTINGS_REBIND_RUNTIME:
+        raise CapabilityNotReadyError(
+            "minimum settings rebind runtime blocks a legacy scalar image; use a compatible "
+            "roll-forward image instead of rollback"
+        )
 
 
 def _preflight_scalar_rollback(
@@ -3896,6 +3901,11 @@ def main(argv: list[str] | None = None) -> int:
     mvr05_floor.add_argument("--host-global-root", type=Path, required=True)
     mvr05_floor.add_argument("--quiescence-proof-path", type=Path, required=True)
     mvr05_floor.add_argument("--fence-plan", type=Path, required=True)
+    rebind_install = subparsers.add_parser("settings-rebind-install-dormant")
+    rebind_install.add_argument("--channel", required=True)
+    rebind_install.add_argument("--registry-path", type=Path, required=True)
+    rebind_install.add_argument("--host-global-root", type=Path, required=True)
+    rebind_install.add_argument("--quiescence-proof-path", type=Path, required=True)
     for name in ("default-vault-get", "default-vault-set", "default-vault-clear"):
         command = subparsers.add_parser(name)
         command.add_argument("--registry-path", type=Path, required=True)
@@ -4022,6 +4032,38 @@ def main(argv: list[str] | None = None) -> int:
                     _capability=local_operator_storage_capability(),
                 )
         print(json.dumps({"ok": True, "registry_revision": result.revision}, sort_keys=True))
+        return 0
+    if args.command == "settings-rebind-install-dormant":
+        layout = InstanceStateLayout(
+            root=args.registry_path.parent,
+            channel_id=args.channel,
+            registry_path=args.registry_path,
+        )
+        layout.require_existing()
+        with _deployment_admission_locked(args.host_global_root):
+            with _producer_transition_locked(layout):
+                proof = json.loads(args.quiescence_proof_path.read_text(encoding="utf-8"))
+                _require_proved_deployment_lease(
+                    host_global_root=args.host_global_root,
+                    channel=args.channel,
+                    nonce=proof.get("nonce"),
+                )
+                registry = VaultRegistryStore(args.registry_path)
+                result = SettingsRebindStore(
+                    registry,
+                    capability=local_operator_storage_capability(),
+                ).install_dormant()
+        print(
+            json.dumps(
+                {
+                    "ok": True,
+                    "desired_revision": result.desired_revision,
+                    "applied_revision": result.applied_revision,
+                    "phase": result.phase,
+                },
+                sort_keys=True,
+            )
+        )
         return 0
     if args.command == "preflight":
         return _preflight_runtime(

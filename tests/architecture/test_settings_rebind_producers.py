@@ -32,11 +32,22 @@ def test_all_producers_match_production_rebind_schema_and_activation_seal(tmp_pa
         for path, source in sources.items()
         if ".set_settings_rebind_state(" in source
     }
-    assert direct_writers == {"app/instance/settings_rebind.py"}
+    assert direct_writers == set()
     assert "settings rebind runtime floor must precede the record" in sources[
         "app/instance/vault_registry.py"
     ]
-    assert "expected_revision=current.revision" in sources["app/instance/settings_rebind.py"]
+    assert "install_settings_rebind_dormant" in sources["app/instance/settings_rebind.py"]
+    assert ".install_settings_rebind_dormant(" in sources["app/instance/settings_rebind.py"]
+    assert "Atomically install SETTINGS-05's floor" in sources["app/instance/vault_registry.py"]
+    deployment = (REPO_ROOT / "scripts/lib/instance_state_deployment.sh").read_text(
+        encoding="utf-8"
+    )
+    deploy = (REPO_ROOT / "scripts/deploy_channel.sh").read_text(encoding="utf-8")
+    assert "settings-rebind-install-dormant" in deployment
+    assert deployment.index("settings-rebind-install-dormant") < deployment.rindex(
+        "deployment-finish"
+    )
+    assert "${target_sha}:app/instance/settings_rebind.py" in deploy
     assert not any(
         "settingsRebind" in source
         for path, source in sources.items()

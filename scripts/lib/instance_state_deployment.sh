@@ -571,6 +571,23 @@ prepare_instance_state_deployment() {
     return "${inventory_rc}"
   fi
 
+  # SETTINGS-05A installs only the dormant record/floor while the same proved
+  # stopped window that seals MVR-05 is still live. This is the production and
+  # existing-install producer; API, picker, and watcher activation remain sealed.
+  "${compose_function}" run --rm --no-deps -T --user "${runtime_user}" instance-state-init \
+    python -m app.instance.runtime settings-rebind-install-dormant \
+      --channel "${channel}" \
+      --registry-path /app/instance-state/agentic-pkm/vault-registry.md \
+      --host-global-root /app/instance-ownership \
+      --quiescence-proof-path /app/instance-ownership/deployment-quiescence-proof.json
+  inventory_rc=$?
+  if [ "${inventory_rc}" -ne 0 ]; then
+    _release_abandoned_instance_state_deployment_lease \
+      "${compose_function}" "${channel}" "${runtime_user}" \
+      "${controller_pid}" "${controller_start_token}"
+    return "${inventory_rc}"
+  fi
+
   "${compose_function}" run --rm --no-deps -T --user "${runtime_user}" instance-state-init \
     python -m app.instance.runtime deployment-finish \
       "${finish_args[@]}"
