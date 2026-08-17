@@ -111,6 +111,7 @@ class Candidate:
     normalized_artifact_id: str | None = None
     extraction_artifact_ids: tuple[str, ...] = ()
     optional_failures: tuple["ExtractionFailure", ...] = ()
+    derived_transcript_link: str | None = None
 
     def summary_text(self) -> str | None:
         for extraction in self.extractions:
@@ -317,6 +318,7 @@ def render_candidate_note(candidate: Candidate) -> str:
                     f"extractions={','.join(candidate.extraction_artifact_ids) or 'none'}"
                 ),
             ),
+            ("Derived transcript", candidate.derived_transcript_link or "not materialized"),
             (
                 "Materialization status",
                 (
@@ -356,6 +358,17 @@ def _candidate_proposal_sections(candidate: Candidate) -> tuple[ProposalSection,
                         f"Rerun handle: `{failure.rerun_handle}`."
                     )
                     for failure in candidate.optional_failures
+                ),
+            )
+        )
+    if candidate.derived_transcript_link:
+        sections.append(
+            ProposalSection(
+                module_id="derived-transcript",
+                title="Derived transcript",
+                content=(
+                    "Derived transcript reference (never replay input): "
+                    f"[[{candidate.derived_transcript_link}]]"
                 ),
             )
         )

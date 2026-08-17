@@ -1,0 +1,26 @@
+{
+  "object_id": "bundle:fixture",
+  "object_type": "projection",
+  "scope_id": "scope:external/unresolved",
+  "scope_binding": {"bound": "unbound"},
+  "source_role": "external_source",
+  "authority_state": "derived",
+  "evidence_role": "reference",
+  "sensitivity": "internal",
+  "suppression_state": "visible",
+  "created_by": "app:knowledge_acquisition.source_bundle",
+  "created_at": "2026-08-17T00:00:00Z",
+  "derived_from": ["normalized:fixture"],
+  "provenance_event_ids": ["bundle:normalized:fixture"],
+  "episode_ref": "unbound",
+  "extensions": {
+    "artifact_kind": "youtube_source_bundle",
+    "stable_source_folder": "Sources/YouTube/_attachments/yt-dQw4w9WgXcQ",
+    "immutable_bundle_folder": "Sources/YouTube/_attachments/yt-dQw4w9WgXcQ/content-fixture-v1",
+    "content_identity": "sha256:fixture",
+    "stage_version": 1,
+    "transcript_path": "Sources/YouTube/_attachments/yt-dQw4w9WgXcQ/content-fixture-v1/transcript.md",
+    "transcript_anchors": ["t000000000-t000002000-s0000"],
+    "replay_input": "machine_side_raw_only"
+  }
+}

@@ -127,6 +127,14 @@ companion rather than overwrite the original candidate or human-authored content
 deliveries do not ship the later v2 modules, change title-bearing paths or persistence, alter
 D1–D6, or introduce ProfileAgent behavior.
 
+The portable-source-bundle delivery adds a derived, rebuildable vault transcript and `source.json`
+under the YouTube attachment root (`Sources/YouTube/_attachments` by default). The stable
+`yt-<video-id>` folder contains immutable content-identity/stage-version members, so a later
+acquisition cannot retarget prior candidate evidence. Its manifest carries the resolved
+metadata-bundle envelope (including object-form `scope_binding`); replay still reads only
+machine-side raw evidence. New candidates link the transcript, while an existing candidate receives
+that link only in its D5 versioned proposal companion.
+
 ## Phase 2 vertical slice (TCD milestone)
 
 One explicit URL, end to end, nothing more — no discovery, no scheduling, no UI, one extractor.
