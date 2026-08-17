@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 from datetime import datetime, timezone
+from pathlib import Path
 
 import pytest
 
@@ -147,6 +148,7 @@ def _evidence(
 def _candidate(*, evidence: list[dict] | None = None) -> dict:
     return {
         "subject_ref": _source("RasmusTho/agentic-pkm-mvp#4715"),
+        "display_label": "Overview contract review",
         "reason": "The server-declared reason for this placement.",
         "evidence": evidence or [_evidence("authority"), _evidence("ready")],
         "owner_authority": {
@@ -171,6 +173,59 @@ def _candidate(*, evidence: list[dict] | None = None) -> dict:
         "navigation_refs": [],
         "limitations": [],
     }
+
+
+def test_candidate_requires_source_owned_display_label_separate_from_identity_and_reason() -> None:
+    missing = _candidate()
+    missing.pop("display_label")
+    with pytest.raises(OverviewContractError, match="missing fields"):
+        compose_overview_view(composition=_composition(), candidates={"now": [missing]})
+
+    blank = _candidate()
+    blank["display_label"] = " \t "
+    with pytest.raises(OverviewContractError, match="display_label must be a non-empty string"):
+        compose_overview_view(composition=_composition(), candidates={"now": [blank]})
+
+
+def test_overview_item_preserves_display_label_identity_and_reason_independently() -> None:
+    candidate = _candidate()
+    candidate["display_label"] = "Cockpit Now — exact source title"
+    candidate["subject_ref"]["source_id"] = "RasmusTho/agentic-pkm-mvp#4834"
+    candidate["reason"] = "Source-backed why-now statement."
+
+    result = compose_overview_view(composition=_composition(), candidates={"now": [candidate]})
+
+    item = result["now"][0]
+    assert item["display_label"] == "Cockpit Now — exact source title"
+    assert item["subject_ref"]["source_id"] == "RasmusTho/agentic-pkm-mvp#4834"
+    assert item["reason"] == "Source-backed why-now statement."
+
+
+def test_withdrawal_preserves_display_label_and_technical_identity() -> None:
+    candidate = _candidate()
+    candidate["display_label"] = "Exact withdrawn source title"
+    candidate["subject_ref"]["source_id"] = "RasmusTho/agentic-pkm-mvp#4834"
+    candidate["owner_authority"]["category"] = "ci_failure"
+    candidate["limitations"] = ["The source could not establish owner authority."]
+
+    result = compose_overview_view(
+        composition=_composition(), candidates={"needs_you": [candidate]}
+    )
+
+    withdrawal = next(item for item in result["limitations"] if item["zone"] == "needs_you")
+    assert withdrawal["display_label"] == "Exact withdrawn source title"
+    assert withdrawal["subject_ref"]["source_id"] == "RasmusTho/agentic-pkm-mvp#4834"
+    assert withdrawal["evidence"] == candidate["evidence"]
+    assert withdrawal["limitations"] == candidate["limitations"]
+
+
+def test_display_label_contract_is_owner_documented() -> None:
+    owner_doc = Path("docs/DEVUI.md").read_text(encoding="utf-8")
+    boundary = owner_doc.split("### DEVUI-OVERVIEW-BOUNDARY", maxsplit=1)[1]
+
+    assert "display_label" in boundary
+    assert "source-owned presentation text" in boundary
+    assert "identity, authority, ranking, or navigation" in boundary
 
 
 def test_overview_production_composer_is_projection_only_and_has_no_io_or_state_path() -> None:

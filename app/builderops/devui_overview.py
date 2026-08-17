@@ -239,6 +239,7 @@ def _candidate(value: Any, *, zone: str) -> dict[str, Any]:
         candidate,
         allowed={
             "subject_ref",
+            "display_label",
             "reason",
             "evidence",
             "owner_authority",
@@ -246,12 +247,20 @@ def _candidate(value: Any, *, zone: str) -> dict[str, Any]:
             "navigation_refs",
             "limitations",
         },
-        required={"subject_ref", "reason", "evidence", "navigation_refs", "limitations"},
+        required={
+            "subject_ref",
+            "display_label",
+            "reason",
+            "evidence",
+            "navigation_refs",
+            "limitations",
+        },
         label=f"{zone} candidate",
     )
     candidate["subject_ref"] = _source_ref(
         candidate["subject_ref"], label=f"{zone} candidate.subject_ref"
     )
+    _string(candidate["display_label"], label=f"{zone} candidate.display_label")
     _string(candidate["reason"], label=f"{zone} candidate.reason")
     evidence = [_evidence(item, label=f"{zone} candidate.evidence") for item in _list(candidate["evidence"], label=f"{zone} candidate.evidence")]
     if not evidence:
@@ -330,6 +339,7 @@ def _withdrawal(candidate: Mapping[str, Any], *, zone: str, reason: str) -> dict
         "kind": "classification_withdrawn",
         "zone": zone,
         "subject_ref": candidate["subject_ref"],
+        "display_label": candidate["display_label"],
         "reason": reason,
         "evidence": candidate["evidence"],
         "limitations": candidate["limitations"],
