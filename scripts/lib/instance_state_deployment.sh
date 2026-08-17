@@ -201,6 +201,7 @@ prepare_instance_state_deployment() {
   if [ "${inventory_rc}" -ne 0 ]; then
     return "${inventory_rc}"
   fi
+
   python3 "${inventory_helper}" produce-legacy-owners \
     --repo-root "${repo_root}" \
     --active-channel "${channel}" \
@@ -399,6 +400,14 @@ prepare_instance_state_deployment() {
     return "${inventory_rc}"
   fi
 
+  # Install pending authority after the proved stopped window and before either
+  # protected-store commit; replaying this idempotent deployment reconciles it.
+  ( umask 077
+    marker_tmp="${INSTANCE_OWNERSHIP_HOST_STATE_DIR}/.settings-rebind-runtime-floor-${channel}-${controller_pid}.tmp"
+    marker_path="${INSTANCE_OWNERSHIP_HOST_STATE_DIR}/settings-rebind-runtime-floor-${channel}.json"
+    printf '{"schema":"settings-rebind-floor-receipt.v1","channel":"%s","phase":"pending"}\n' "${channel}" > "${marker_tmp}" && mv -f -- "${marker_tmp}" "${marker_path}"
+  ) || return $?
+
   # Re-read every owner/config producer after all writers are stopped and the
   # lease-bound quiescence proof is durable. Any missing or changed source
   # aborts while the durable fence remains installed; only an exact match may
@@ -593,7 +602,7 @@ prepare_instance_state_deployment() {
   ( umask 077
     marker_tmp="${INSTANCE_OWNERSHIP_HOST_STATE_DIR}/.settings-rebind-runtime-floor-${channel}-${controller_pid}.tmp"
     marker_path="${INSTANCE_OWNERSHIP_HOST_STATE_DIR}/settings-rebind-runtime-floor-${channel}.json"
-    printf '{"schema":"settings-rebind-floor-receipt.v1","channel":"%s"}\n' "${channel}" > "${marker_tmp}" &&
+    printf '{"schema":"settings-rebind-floor-receipt.v1","channel":"%s","phase":"installed"}\n' "${channel}" > "${marker_tmp}" &&
       mv -f -- "${marker_tmp}" "${marker_path}"
   )
   inventory_rc=$?
