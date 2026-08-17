@@ -30,6 +30,11 @@ replace the existing DevUI/BSC/FCP/Stage-A contracts.
 
 ## 2. Docs Governance Decision
 
+Owner acceptance receipt: the Product Owner approved the accepted target-state change in the
+governing conversation on 2026-08-17. This receipt authorizes docs acceptance and merge of the
+review package; it does not authorize DevUI implementation, Builder Vault storage, or promotion
+execution.
+
 ```text
 Docs Governance Decision:
 - Artifact role: accepted cross-plane architecture/governance review plus accepted target-state design artifacts
