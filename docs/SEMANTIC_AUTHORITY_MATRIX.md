@@ -14,10 +14,9 @@ This document is the per-entity authority detail for **Layer 4 (Governance/Autho
 
 It is a consolidation, not a new authority. Each flag's authoritative definition lives in an owner doc (named in the column legend); where a cell summarizes that owner, the owner wins on conflict and this matrix is updated to match.
 
-The proposed cross-plane Builder/PKM authority and provenance overlay is in
+The accepted cross-plane Builder/PKM authority and provenance overlay is in
 `docs/architecture/INFORMATION_AUTHORITY_MODEL.md`. This matrix remains the owner of per-entity
-Product/Runtime authority flags; it neither adopts the overlay nor replaces its local contracts
-until the proposal is accepted.
+Product/Runtime authority flags; it adopts no replacement schema or local-contract semantics.
 
 ## Reading rules (load-bearing)
 

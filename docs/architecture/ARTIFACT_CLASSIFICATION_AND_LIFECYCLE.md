@@ -1,4 +1,4 @@
-State: Proposed cross-system design baseline (2026-08-17). Normative for classification and lifecycle routing after owner acceptance; it makes no runtime or migration claim.
+State: Accepted cross-system design baseline (owner accepted 2026-08-17). Normative for classification and lifecycle routing; it makes no runtime or migration claim.
 Doc role: Architecture / governance design record
 Authority: Owns the shared classification axes and Capture → Explore → Synthesize → Propose → Promote → Implement → Verify → Supersede/Retire lifecycle across Builder working artifacts and Product/Runtime knowledge derivatives. Domain contracts remain authoritative for their concrete classes and enforcement.
 Owner: Builder System / CES boundary, reconciled with Product/Runtime semantic owners
@@ -177,8 +177,8 @@ This document does not create a new artifact registry, storage migration, schema
 engine, or runtime validator. It does not make any existing DevUI or BuilderOps surface delivered.
 
 Before further DevUI implementation that depends on this boundary, the Information Authority Model,
-this lifecycle document, and the DevUI Discovery Architecture must be accepted through the normal
-docs-authoring review path. Existing read-only recovery or validation work remains governed by its
+this lifecycle document, and the DevUI Discovery Architecture must remain the accepted design
+baseline and be reconciled with the live implementation Issue. Existing read-only recovery or validation work remains governed by its
 own live Issue and source contract; no new implementation may use this proposal as an unapproved
 authority shortcut.
 

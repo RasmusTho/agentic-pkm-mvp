@@ -1,10 +1,10 @@
-State: Advisory architecture/governance review snapshot (2026-08-17). The three companion design artifacts are proposed target-state inputs and remain subordinate to existing accepted owner docs and ADRs until owner acceptance.
+State: Accepted architecture/governance review snapshot (owner accepted 2026-08-17). The three companion design artifacts are accepted target-state inputs and remain subordinate to existing local owner docs and ADRs for local semantics and current truth.
 Doc role: Reference (bounded architecture review and backlog handoff)
 Authority: Evidence-based cross-plane analysis of information authority, artifact classification/lifecycle, provenance, promotion, and DevUI discovery. The review changes no runtime, schema, GitHub lifecycle, or authority by itself.
 Owner: Builder System / CES boundary, with Product/Runtime semantic owners retaining local authority
 Temporal class: snapshot
 Review cadence: event-driven after owner disposition, acceptance of the companion artifacts, or material DevUI/BuilderOps/PKM authority change
-Source of truth: `docs/DOCS_INDEX.md`, accepted ADRs, current owner docs, and live GitHub state; the companion artifacts are the proposed cross-plane writeback.
+Source of truth: `docs/DOCS_INDEX.md`, accepted ADRs, current owner docs, and live GitHub state; the companion artifacts are the accepted cross-plane writeback on the owner-accepted PR head.
 Repository baseline: `origin/main` at `d69028084` (2026-08-17)
 Last reviewed: 2026-08-17
 
@@ -32,14 +32,14 @@ replace the existing DevUI/BSC/FCP/Stage-A contracts.
 
 ```text
 Docs Governance Decision:
-- Artifact role: advisory cross-plane architecture/governance review plus proposed target-state design artifacts
+- Artifact role: accepted cross-plane architecture/governance review plus accepted target-state design artifacts
 - Owner: Builder System / CES boundary for the cross-plane boundary; existing Product/Runtime and BuilderOps owners retain local authority
 - Action: create one indexed audit and three indexed architecture design records; add routing cross-links to existing owner docs; do not change DevUI implementation
 - Traceability: conversation decision -> live owner-doc reconciliation -> companion artifacts -> bounded implementation issues after acceptance
 - DOCS_INDEX impact: add rows for the audit and all three architecture records
 - SBS/interface ownership: conforms to the existing Builder System boundary and devUI owner contract; no SBS reshape; DevUI remains a projection/navigation boundary over existing sources
-- Next skill or no-change receipt: docs-authoring now; docs-to-issue after owner acceptance for bounded implementation gaps; #4982 remains the unified UI/UX handoff owner
-- Human Exception: owner acceptance is required before the proposed cross-plane artifacts become normative; until then existing owner docs win
+- Next skill or no-change receipt: docs-authoring merge/closure now; docs-to-issue readiness reconciliation for bounded implementation gaps after the accepted PR is merged; #4982 remains the unified UI/UX handoff owner
+- Human Exception: owner acceptance was supplied by the Product Owner on 2026-08-17; existing owner docs still win for local semantics and current truth
 ```
 
 ## 3. Evidence read and current authority
@@ -111,7 +111,7 @@ traceability and fail-closed defense in depth required for an inspectable projec
 
 ## 6. SBS reconciliation
 
-This review **conforms to** the existing SBS rather than reshaping it:
+This accepted review **conforms to** the existing SBS rather than reshaping it:
 
 - It classifies the work as Builder System / CES boundary work because it governs builder research,
   repo-authority crossings, and devUI discovery.
@@ -131,12 +131,13 @@ This review **conforms to** the existing SBS rather than reshaping it:
 | Cross-plane authority/lifecycle model | This review + three companion docs | Existing ADRs and owner docs remain local authority | Accept this docs-authoring PR; no duplicate parent issue. |
 | Unified DevUI owner-facing architecture and UX handoff | Reuse, do not duplicate | #4982 owns the nine-layer process-to-UI map and governed handoff; #4980 owns process health | Add the new discovery boundary as a source input to #4982; keep #4980 separate. |
 | PKM source lineage/evidence independence | Reuse, do not duplicate | #4906 owns source-lineage/evidence-independence validation | Cross-reference only; no new Product/Runtime issue here. |
-| Builder Vault artifact capture/classification/provenance | New bounded Builder System implementation gap | Existing BuilderOps object model/boundary/gateway provide mechanics but no generic working-artifact admission contract | #4984 is filed `agent:blocked`; after owner acceptance, refine/readiness-check it for explicit non-normative working-artifact intake over existing BuilderOps surfaces. |
-| DevUI authority-aware discovery projection/navigation | New bounded downstream gap | #4982 owns the unified UX handoff; existing Overview/BSC contracts own provider projections | #4985 is filed `agent:blocked`; after owner acceptance, refine/readiness-check it for a read-only projection consuming existing source contracts; no new source registry or docs store. |
+| Builder Vault artifact capture/classification/provenance | New bounded Builder System implementation gap | Existing BuilderOps object model/boundary/gateway provide mechanics but no generic working-artifact admission contract | #4984 is filed `agent:blocked`; after the accepted PR is merged, refine/readiness-check it for explicit non-normative working-artifact intake over existing BuilderOps surfaces. |
+| DevUI authority-aware discovery projection/navigation | New bounded downstream gap | #4982 owns the unified UX handoff; existing Overview/BSC contracts own provider projections | #4985 is filed `agent:blocked`; after the accepted PR is merged, refine/readiness-check it for a read-only projection consuming existing source contracts; no new source registry or docs store. |
 | Governed promotion enforcement beyond proposal/receipt mechanics | Reconcile before filing | ADR-0010 and `BUILDEROPS_PROMOTION_GATEWAY.md` already own proposal-only mechanics; target surfaces own actual promotion | Do not file a duplicate gateway issue. File only a concrete missing target-surface adapter if live evidence identifies one. |
 
 The two new implementation Issues are filed as explicitly blocked follow-ups (#4984 and #4985) now
-that the docs-authoring PR exists. They must remain blocked until the proposed artifacts are accepted.
+that the docs-authoring PR exists. They must remain blocked until the accepted artifacts are merged
+into `main` and their live source anchors/readiness are revalidated.
 Their source anchors and `Verify:` targets must point to the accepted docs, not to this advisory audit
 alone, before either Issue can become agent-ready.
 

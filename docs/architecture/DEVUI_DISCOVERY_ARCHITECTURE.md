@@ -1,4 +1,4 @@
-State: Proposed target-state discovery/control-plane architecture (2026-08-17). It is not a shipped UI, route, portal, or source-of-truth claim.
+State: Accepted target-state discovery/control-plane architecture (owner accepted 2026-08-17). It is not a shipped UI, route, portal, or source-of-truth claim.
 Doc role: Architecture design record
 Authority: Owns the cross-plane DevUI discovery boundary: index/projection/navigation to authoritative sources, honest artifact standing, and promotion-route handoff. `docs/DEVUI.md` remains the owner of the complete owner-facing experience; BSC/FCP/Stage-A docs own their capability contracts.
 Owner: Builder System / CES boundary
@@ -170,9 +170,10 @@ does not yet prove a complete discovery shell, Builder Vault discovery surface, 
 promotion navigation in one owner experience. This document therefore authorizes no UI, route, data
 pipeline, or runtime implementation.
 
-Further DevUI implementation depending on this boundary is gated on acceptance of the three-artifact
-Information Authority & Artifact Lifecycle review. Existing Issues remain governed by their live
-contracts; this gate does not rewrite or silently unblock them.
+Further DevUI implementation depending on this boundary is gated on the accepted three-artifact
+Information Authority & Artifact Lifecycle review and the live implementation Issue contracts.
+Existing Issues remain governed by their live contracts; this acceptance does not silently mark
+implementation delivered or bypass their readiness gates.
 
 ## Implementation gaps and issue reconciliation
 
@@ -183,7 +184,7 @@ contracts; this gate does not rewrite or silently unblock them.
   not a DevUI source registry.
 - The remaining discovery implementation gap is a bounded, read-only projection over existing
   authoritative sources with explicit artifact standing and navigation. It is recorded in blocked
-  #4985 and must remain blocked until this review is accepted and reconciled with #4982.
+  #4985 and must remain blocked until this review is merged and reconciled with #4982.
 
 ## Related documents
 

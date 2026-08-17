@@ -1,4 +1,4 @@
-State: Proposed cross-system design baseline (2026-08-17). Normative for the cross-plane vocabulary and boundaries after owner acceptance; it makes no shipped-runtime claim.
+State: Accepted cross-system design baseline (owner accepted 2026-08-17). Normative for the cross-plane vocabulary and boundaries; it makes no shipped-runtime claim.
 Doc role: Architecture / governance design record
 Authority: Owns the cross-plane information-authority model for the Product/Runtime knowledge surfaces and the Builder System working surfaces. Existing domain owner docs remain authoritative for their local semantics, schemas, runtime behavior, and delivery lifecycle.
 Owner: Builder System / CES boundary, with Product/Runtime semantic owners retaining their existing authority
@@ -144,15 +144,16 @@ that route; it does not execute or infer promotion.
 
 ## Adoption and non-goals
 
-This is a proposed target-state baseline pending owner review through the docs-authoring lane. Until
-that review is accepted, the existing owner docs and ADRs remain the only authority. This document
+This is an accepted target-state baseline through the docs-authoring lane. Existing owner docs and ADRs
+remain authoritative for local contract detail and current-state truth. This document
 does not:
 
 - create a new database, metadata schema, source registry, graph authority, or lifecycle engine;
 - convert Builder Vault material into product/runtime memory or knowledge;
 - claim that DevUI, Builder Vault, or any promotion path is fully implemented;
 - replace existing Mimer, BuilderOps, GitHub, CI, review, merge, or receipt authority; or
-- authorize further DevUI implementation before the three-artifact review is accepted.
+- authorize further DevUI implementation by itself; implementation remains governed by the merged
+  docs head and the bounded Issues' live readiness contracts.
 
 Implementation gaps are recorded in the companion review audit and must become bounded Issues with
 `Verify:` targets before execution.
