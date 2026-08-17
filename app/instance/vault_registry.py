@@ -1035,10 +1035,12 @@ class VaultRegistryStore:
                     persisted = validate_settings_rebind_payload(current.settings_rebind)
                 except SettingsRebindError as exc:  # defensive: load recovery must not weaken writes
                     raise RegistryError(str(exc)) from exc
-                persisted_desired = int(persisted["desiredRevision"])
-                persisted_applied = int(persisted["appliedRevision"])
-                incoming_desired = int(validated["desiredRevision"])
-                incoming_applied = int(validated["appliedRevision"])
+                persisted_record = SettingsRebindRecord.from_payload(persisted)
+                incoming_record = SettingsRebindRecord.from_payload(validated)
+                persisted_desired = persisted_record.desired_revision
+                persisted_applied = persisted_record.applied_revision
+                incoming_desired = incoming_record.desired_revision
+                incoming_applied = incoming_record.applied_revision
                 if (
                     incoming_desired < persisted_desired
                     or incoming_applied < persisted_applied

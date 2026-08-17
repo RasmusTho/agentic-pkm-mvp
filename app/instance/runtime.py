@@ -4049,7 +4049,7 @@ def main(argv: list[str] | None = None) -> int:
                     nonce=proof.get("nonce"),
                 )
                 registry = VaultRegistryStore(args.registry_path)
-                result = SettingsRebindStore(
+                rebind_record = SettingsRebindStore(
                     registry,
                     capability=local_operator_storage_capability(),
                 ).install_dormant()
@@ -4057,9 +4057,9 @@ def main(argv: list[str] | None = None) -> int:
             json.dumps(
                 {
                     "ok": True,
-                    "desired_revision": result.desired_revision,
-                    "applied_revision": result.applied_revision,
-                    "phase": result.phase,
+                    "desired_revision": rebind_record.desired_revision,
+                    "applied_revision": rebind_record.applied_revision,
+                    "phase": rebind_record.phase,
                 },
                 sort_keys=True,
             )
