@@ -49,7 +49,7 @@ flag additionally makes the CLI surface the guarantee explicitly in the printed 
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Mapping, Sequence
 from uuid import UUID
 
@@ -80,6 +80,11 @@ from app.knowledge_acquisition.normalize import STAGE_NAME as NORMALIZE_STAGE
 from app.knowledge_acquisition.normalize import STAGE_VERSION as NORMALIZE_STAGE_VERSION
 from app.knowledge_acquisition.normalize import NormalizeError, normalize
 from app.knowledge_acquisition.raw_record import RawRecordIntegrityError, get_raw_record
+from app.knowledge_acquisition.source_bundle import (
+    DEFAULT_YOUTUBE_ATTACHMENT_ROOT,
+    SourceBundleError,
+    materialize_youtube_source_bundle,
+)
 from app.knowledge_acquisition.stage_events import (
     STAGE_EVENT_SOURCE,
     emit_stage_completed,
@@ -244,6 +249,7 @@ def run_replay(
     assert_no_source_egress: bool = True,
     trace_id: str | None = None,
     conn: Any = None,
+    youtube_attachment_root: str = DEFAULT_YOUTUBE_ATTACHMENT_ROOT,
 ) -> ReplayReceipt:
     """Replay every derived level from an existing `raw` record and return a typed receipt.
 
@@ -448,13 +454,21 @@ def run_replay(
                     normalized_artifact_id=normalized_artifact.object_id,
                     optional_failures=optional_failures,
                 )
+                bundle = materialize_youtube_source_bundle(
+                    candidate,
+                    normalized_artifact,
+                    vault_context=vault_context,
+                    write_guard=write_guard,
+                    youtube_attachment_root=youtube_attachment_root,
+                )
+                candidate = replace(candidate, derived_transcript_link=bundle.transcript_path)
                 write_result = write_candidate_note(
                     candidate,
                     vault_context=vault_context,
                     write_guard=write_guard,
                     proposal_on_existing=True,
                 )
-            except (CandidateAssemblyError, CandidateWritebackError) as exc:
+            except (CandidateAssemblyError, CandidateWritebackError, SourceBundleError) as exc:
                 emit_stage_dead_letter(
                     stage=CANDIDATE_STAGE,
                     stage_version=CANDIDATE_STAGE_VERSION,

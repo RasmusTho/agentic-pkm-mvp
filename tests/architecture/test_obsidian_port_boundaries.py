@@ -400,6 +400,10 @@ def test_create_once_stays_behind_knowledge_service_boundary() -> None:
             "_write_versioned_proposal",
         ),
         ("app/knowledge_acquisition/candidate_writeback.py", "write_candidate_note"),
+        # Portable source bundles (#4113): transcript and manifest are separate immutable,
+        # no-clobber derived members under the same governed write service.
+        ("app/knowledge_acquisition/source_bundle.py", "materialize_youtube_source_bundle"),
+        ("app/knowledge_acquisition/source_bundle.py", "materialize_youtube_source_bundle"),
     ]
     writeback_path = app_root / "knowledge_acquisition" / "candidate_writeback.py"
     imports = [

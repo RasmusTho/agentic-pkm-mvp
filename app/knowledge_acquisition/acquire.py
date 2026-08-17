@@ -38,7 +38,7 @@ directly, the same two names the outbox module itself documents as the override.
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Callable, Mapping, Sequence
 
 # Production extractor wiring: importing the extractors package registers every extractor
@@ -67,6 +67,11 @@ from app.knowledge_acquisition.normalize import STAGE_NAME as NORMALIZE_STAGE
 from app.knowledge_acquisition.normalize import STAGE_VERSION as NORMALIZE_STAGE_VERSION
 from app.knowledge_acquisition.normalize import NormalizeError, normalize
 from app.knowledge_acquisition.replay import CANDIDATE_STAGE, CANDIDATE_STAGE_VERSION
+from app.knowledge_acquisition.source_bundle import (
+    DEFAULT_YOUTUBE_ATTACHMENT_ROOT,
+    SourceBundleError,
+    materialize_youtube_source_bundle,
+)
 from app.knowledge_acquisition.stage_events import (
     emit_stage_completed,
     emit_stage_dead_letter,
@@ -263,6 +268,7 @@ def acquire_youtube(
     conn: Any = None,
     env: Mapping[str, str] | None = None,
     fetch_fn: Callable[[str], youtube_plugin.FetchOutcome] | None = None,
+    youtube_attachment_root: str = DEFAULT_YOUTUBE_ATTACHMENT_ROOT,
 ) -> AcquisitionReceipt:
     """Acquire a NEW YouTube URL end-to-end: fetch -> persist raw -> normalize -> extract ->
     assemble_candidate -> write_candidate_note, emitting one KA-06 stage event per transition.
@@ -461,6 +467,14 @@ def acquire_youtube(
             normalized_artifact_id=normalized_artifact.object_id,
             optional_failures=optional_failures,
         )
+        bundle = materialize_youtube_source_bundle(
+            candidate,
+            normalized_artifact,
+            vault_context=vault_context,
+            write_guard=write_guard,
+            youtube_attachment_root=youtube_attachment_root,
+        )
+        candidate = replace(candidate, derived_transcript_link=bundle.transcript_path)
         write_result: CandidateWriteResult = write_candidate_note(
             candidate,
             vault_context=vault_context,
@@ -470,7 +484,7 @@ def acquire_youtube(
             # and must become a companion when the canonical candidate already exists.
             proposal_on_existing=any(not result.replayed for result in report.successes),
         )
-    except (CandidateAssemblyError, CandidateWritebackError) as exc:
+    except (CandidateAssemblyError, CandidateWritebackError, SourceBundleError) as exc:
         emit_stage_dead_letter(
             stage=CANDIDATE_STAGE,
             stage_version=CANDIDATE_STAGE_VERSION,

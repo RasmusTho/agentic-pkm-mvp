@@ -23,6 +23,12 @@ renderer while preserving owner-authored bytes, omitting empty optional modules,
 candidate terminality behind successful note materialization. This is the YSNV2-03 rendering seam,
 not delivery of the later evidence, bundle, module, profile, frame, or evaluation slices.
 
+YSNV2-06 materializes the portable source bundle through the delivered transcript/extraction seam:
+the flat candidate note remains in place while a configured vault-relative attachment root holds a
+stable `yt-<video-id>` folder and immutable content-identity/version members. Each member contains
+a derived/rebuildable `transcript.md` and schema-valid `source.json`; replay continues from
+machine-side raw evidence, and existing candidate upgrades use a D5 versioned proposal companion.
+
 The following are V1 limitations or deliberate choices, not retroactive defects: process-local extraction results, fixed rendering, and title-bearing paths. V2 may replace those choices only through the task contracts below. The brief's metadata-bundle examples are not adopted. Every usable bundle resolves the schema-required fields at the top level: identity (`object_id`, `object_type`), scope (`scope_id`), semantic standing (`source_role`, `authority_state`, `evidence_role`, `sensitivity`, `suppression_state`), provenance (`created_by`, `created_at`, `provenance_event_ids`), and episode binding (`episode_ref`). `scope_binding`, when present, is the object defined by the shared schema rather than a string or nested substitute. Conditional schema requirements such as `derived_from` for derived types and `authority_receipt_ref` for canonical standing remain in force.
 
 ## Capability boundary

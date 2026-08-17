@@ -219,9 +219,10 @@ def test_replay_fresh_write_not_equivalent_then_preserved(tmp_path: Path) -> Non
     assert stages["candidate"].status == "proposal_written"
     assert stages["candidate"].equivalence == "versioned_proposal_original_preserved"
 
-    # The original candidate plus one proposal companion exist; the candidate is untouched.
+    # The original candidate plus one proposal companion and its derived transcript exist;
+    # the candidate is untouched.
     notes = list((tmp_path / "vault").rglob("*.md"))
-    assert len(notes) == 2
+    assert len(notes) == 3
     assert len([path for path in notes if path.name.endswith(".meta.md")]) == 1
 
     # Stage events were emitted on the outbox for normalize + extracted + candidate.
