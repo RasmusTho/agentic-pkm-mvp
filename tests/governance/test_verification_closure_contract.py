@@ -23,7 +23,11 @@ def test_terminal_closure_requires_source_thread_and_dispatcher_readback() -> No
         "Record that final readback in the delivery receipt",
         "python3 -m app.dispatcher status --json",
         "python3 -m app.dispatcher show <task-id> --json",
-        "strict\nissue-readiness validation against that current body and labels",
-        "Only then make the explicit lifecycle mutation and read it\nback",
+        "For a verified\nGitHub-label-only fallback",
+        "dispatcher unavailability or a missing dispatcher task does not invalidate\nthat fallback",
+        "do not unblock\nan Issue carrying `agent:needs-human`",
+        "prospective post-unblock label set by replacing\n`agent:blocked` with `agent:ready`",
+        "strict issue-readiness validation against that current\nbody and prospective label set",
+        "Only then make the explicit lifecycle mutation and read it back",
     ):
         assert requirement in text

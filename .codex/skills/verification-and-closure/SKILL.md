@@ -638,18 +638,22 @@ this block.
 
 ## Dependent Issue Unblocking
 
-Before a terminal delivery receipt, read current dispatcher status and the exact issue task state
-(`python3 -m app.dispatcher status --json` and `python3 -m app.dispatcher show <task-id> --json` when
-the task exists). Record the readback and require it to agree with the merged Issue/PR and label
-state; unavailable, stale, or contradictory dispatcher evidence is a terminal-closure block, not a
-reason to infer completion from an earlier lease or receipt.
+Before a terminal delivery receipt, obtain current coordination evidence. For a verified
+dispatcher-backed pickup, read current dispatcher status and the exact issue task state
+(`python3 -m app.dispatcher status --json` and `python3 -m app.dispatcher show <task-id> --json`),
+record the readback, and require it to agree with the merged Issue/PR and label state; unavailable,
+stale, or contradictory dispatcher evidence is a terminal-closure block. For a verified
+GitHub-label-only fallback, instead preserve the claimant fallback receipt and re-read the current
+Issue, PR, and labels; dispatcher unavailability or a missing dispatcher task does not invalidate
+that fallback. Never infer either mode from an earlier lease, database existence, or receipt alone.
 
 After merging and delivering work, scan for issues blocked by the delivered Issue. Before unblocking
-each dependent, re-read its live Issue body, state, labels, and dependency evidence; run the strict
-issue-readiness validation against that current body and labels; and verify that this delivery
-actually satisfied the named dependency. Only then make the explicit lifecycle mutation and read it
-back. Do not unblock from a stale dependency graph, an earlier readiness report, or a successful
-merge alone.
+each dependent, re-read its live Issue body, state, labels, and dependency evidence; do not unblock
+an Issue carrying `agent:needs-human`; form the prospective post-unblock label set by replacing
+`agent:blocked` with `agent:ready`; run the strict issue-readiness validation against that current
+body and prospective label set; and verify that this delivery actually satisfied the named
+dependency. Only then make the explicit lifecycle mutation and read it back. Do not unblock from a
+stale dependency graph, an earlier readiness report, or a successful merge alone.
 
 ## Optional Project Projection
 
