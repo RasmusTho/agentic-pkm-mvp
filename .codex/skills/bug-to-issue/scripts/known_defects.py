@@ -48,6 +48,7 @@ REGISTRY_DISCOVERY_MAX_PASSES = 4
 ENTRY_MARKER_TEMPLATE = (
     "<!-- known-defect-entry:v1 id={defect_id} phase={phase} -->"
 )
+SUPERSEDED_HISTORY_PREFIX = "Superseded audit record: "
 PROMOTION_MARKER_TEMPLATE = (
     "<!-- known-defect-promotion:v1 id={defect_id} issue={issue_number} "
     "authority_sha256={authority_sha256} phase={phase} -->"
@@ -56,6 +57,10 @@ ENTRY_ID_RE = re.compile(r"^KD-[0-9A-F]{12}$")
 ENTRY_MARKER_RE = re.compile(
     r"<!-- known-defect-entry:v1 id=(KD-[0-9A-F]{12}) "
     r"phase=(pending|final) -->"
+)
+SUPERSEDED_HISTORY_RE = re.compile(
+    r"Superseded audit record: (KD-[0-9A-F]{12}) "
+    r"\(retained for history; not an active registry entry\)"
 )
 PROMOTION_MARKER_RE = re.compile(
     r"<!-- known-defect-promotion:v1 id=(KD-[0-9A-F]{12}) issue=([1-9][0-9]*) "
@@ -729,6 +734,75 @@ def _entry_id_from_comment(body: str) -> str | None:
     return parsed[0]
 
 
+def _superseded_history_id_from_comment(body: str) -> str | None:
+    """Parse the exact legacy audit form without making it active authority."""
+    lines = body.splitlines()
+    if not lines or not lines[0].startswith(SUPERSEDED_HISTORY_PREFIX):
+        return None
+    marker = SUPERSEDED_HISTORY_RE.fullmatch(lines[0])
+    if marker is None:
+        raise KnownDefectsError("malformed superseded historical entry marker")
+    defect_id = marker.group(1)
+    if len(lines) != 11 or lines[1] != "" or lines[2] != f"### {defect_id}" or lines[3] != "":
+        raise KnownDefectsError(
+            f"malformed superseded historical entry shape for {defect_id}"
+        )
+    if lines[4] != "- State: superseded; repaired on source PR before merge":
+        raise KnownDefectsError(
+            f"malformed superseded historical entry {defect_id}: invalid state"
+        )
+    source = re.fullmatch(
+        (
+            r"- Source: PR #([1-9][0-9]*) @ `([0-9a-f]{40})` "
+            r"\(\[review evidence\]\((https://github\.com/[^()\s]+)\)\)"
+        ),
+        lines[5],
+    )
+    if source is None:
+        raise KnownDefectsError(
+            f"malformed superseded historical entry {defect_id}: invalid source"
+        )
+    source_pr = int(source.group(1))
+    review_url = urlparse(source.group(3))
+    review_path = review_url.path.casefold()
+    if (
+        review_url.scheme != "https"
+        or review_url.netloc.casefold() != "github.com"
+        or re.fullmatch(
+            rf"/[^/]+/[^/]+/pull/{source_pr}(?:/.*)?",
+            review_path,
+        )
+        is None
+    ):
+        raise KnownDefectsError(
+            f"malformed superseded historical entry {defect_id}: review URL does not match PR"
+        )
+    for line, prefix, field in (
+        (lines[6], "- Original symptom: ", "original symptom"),
+        (lines[7], "- Repair: ", "repair"),
+        (lines[8], "- Verification: ", "verification"),
+        (lines[10], "- Supersession reason: ", "supersession reason"),
+    ):
+        if not line.startswith(prefix):
+            raise KnownDefectsError(
+                f"malformed superseded historical entry {defect_id}: invalid {field}"
+            )
+        value = line.removeprefix(prefix)
+        if not value or value != " ".join(value.split()):
+            raise KnownDefectsError(
+                f"malformed superseded historical entry {defect_id}: invalid {field}"
+            )
+    if (
+        lines[9]
+        != "- Disposition: This registry entry is retained as audit history and "
+        "is not an active deferred defect."
+    ):
+        raise KnownDefectsError(
+            f"malformed superseded historical entry {defect_id}: invalid disposition"
+        )
+    return defect_id
+
+
 def _promotion_from_comment(body: str) -> tuple[str, int, str, str] | None:
     lines = body.splitlines()
     if not lines or not lines[0].startswith("<!-- known-defect-promotion:"):
@@ -769,7 +843,8 @@ def _validate_schema_comment(comment: dict[str, Any]) -> None:
     first_line = lines[0]
     is_entry = first_line.startswith("<!-- known-defect-entry:")
     is_promotion = first_line.startswith("<!-- known-defect-promotion:")
-    if not is_entry and not is_promotion:
+    is_superseded_history = first_line.startswith(SUPERSEDED_HISTORY_PREFIX)
+    if not is_entry and not is_promotion and not is_superseded_history:
         return
     association = str(comment.get("author_association") or "").upper()
     if association not in TRUSTED_AUTHOR_ASSOCIATIONS:
@@ -780,8 +855,10 @@ def _validate_schema_comment(comment: dict[str, Any]) -> None:
     _comment_reservation_order(comment)
     if is_entry:
         _entry_marker_from_comment(body)
-    else:
+    elif is_promotion:
         _promotion_from_comment(body)
+    else:
+        _superseded_history_id_from_comment(body)
 
 
 def _comment_reservation_order(comment: dict[str, Any]) -> tuple[str, int]:
@@ -1006,6 +1083,37 @@ def _find_entry(
     return canonical
 
 
+def _find_superseded_history(
+    gateway: RegistryGateway,
+    defect_id: str,
+    *,
+    recover_bootstrap: bool = False,
+) -> tuple[dict[str, Any], dict[str, Any]] | None:
+    issues = (
+        _registry_inventory(
+            gateway,
+            recover_bootstrap=True,
+            allow_multiple_open=True,
+        )
+        if recover_bootstrap
+        else _registry_candidates_for_read(gateway)
+    )
+    found: list[tuple[dict[str, Any], dict[str, Any]]] = []
+    for issue in issues:
+        for comment in _inventory_comments(gateway, int(issue["number"])):
+            if _superseded_history_id_from_comment(
+                comment.get("body") or ""
+            ) == defect_id:
+                found.append((issue, comment))
+    if not found:
+        return None
+    if len(found) != 1:
+        raise KnownDefectsError(
+            f"ambiguous superseded historical entries for {defect_id}"
+        )
+    return found[0]
+
+
 def _select_registry(
     gateway: RegistryGateway,
     registry_issue: int | None,
@@ -1211,6 +1319,14 @@ def _reconcile_pending_entries(
         _compensate_comment(gateway, int(issue["number"]), comment)
     if canonical_marker[1] == "final":
         return canonical_issue, canonical_comment
+    # Re-check immediately at the write boundary.  A pending reservation is
+    # not authority to finalize when matching historical evidence became
+    # ambiguous during the earlier inventory/reconciliation work.
+    _find_superseded_history(
+        gateway,
+        defect_id,
+        recover_bootstrap=False,
+    )
     finalized = _finalize_pending_entry(
         gateway,
         canonical_issue,
@@ -1227,6 +1343,17 @@ def _intake_defect(
     allow_lifecycle_retry: bool,
 ) -> dict[str, Any]:
     gateway.ensure_registry_label()
+    # Validate history-cardinality before finalizing a pending reservation.  A
+    # pending entry is only a recoverable write state; it must not mask an
+    # ambiguous historical record for the same deterministic defect ID.
+    # Preserve the regular read-authority failure for a malformed container
+    # before bootstrap recovery can lock it.
+    _registry_candidates_for_read(gateway)
+    _find_superseded_history(
+        gateway,
+        defect.defect_id,
+        recover_bootstrap=True,
+    )
     reconciled = _reconcile_pending_entries(gateway, defect.defect_id)
     if reconciled is not None:
         issue, comment = reconciled
@@ -1276,6 +1403,14 @@ def _intake_defect(
             "registry_issue": int(pending_issue["number"]),
             "url": comment.get("html_url"),
         }
+    # A single exact superseded-history record is intentionally non-active. It
+    # preserves audit evidence but must neither suppress a renewed P2 intake
+    # nor permit an ambiguous historical state to be ignored.
+    _find_superseded_history(
+        gateway,
+        defect.defect_id,
+        recover_bootstrap=True,
+    )
     _inventory_comments(gateway, int(issue["number"]))
     fresh_issue = gateway.get_issue(int(issue["number"]))
     try:
@@ -1397,10 +1532,20 @@ def lookup_defect(
     gateway.refresh_registry_identities()
     found = _find_entry(gateway, defect_id)
     if found is None:
+        historical = _find_superseded_history(gateway, defect_id)
+        if historical is None:
+            return {
+                "schema": "known-defect-receipt.v1",
+                "status": "not_found",
+                "defect_id": defect_id,
+            }
+        issue, comment = historical
         return {
             "schema": "known-defect-receipt.v1",
-            "status": "not_found",
+            "status": "superseded",
             "defect_id": defect_id,
+            "registry_issue": int(issue["number"]),
+            "url": comment.get("html_url"),
         }
     issue, comment = found
     promotion = _single_committed_promotion(gateway, defect_id)

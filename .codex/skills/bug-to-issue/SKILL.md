@@ -105,6 +105,10 @@ The helper:
 - finds or creates and locks the single rolling registry Issue;
 - rejects unlocked or mislabeled registries and parses only exact first-line markers with the
   expected schema shape;
+- treats the exact `Superseded audit record: KD-...` historical form as non-active evidence only
+  when its complete legacy shape and trusted author association validate; one such record may
+  coexist with a later valid deferred intake, while malformed or multiple matching historical
+  records fail closed;
 - detects the exact defect marker across existing registries before appending;
 - posts one compact JSON `known-defect-receipt.v1` with `created`, `duplicate`, `excluded`,
   `promotion_required`, or non-authoritative diagnostic `dry_run` status.
@@ -117,6 +121,11 @@ Every entry records:
 - impact and P2 severity;
 - workaround, including `none known` when truthful;
 - an explicit re-evaluation/promotion trigger.
+
+After a durable `created` or `duplicate` receipt, reply on the original review finding/thread
+with that registry receipt URL and the deferred disposition before resolving the thread. A
+superseded historical record is audit context only and cannot satisfy that original-thread
+disposition requirement.
 
 Lookup is deterministic and read-only:
 

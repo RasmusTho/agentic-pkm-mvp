@@ -175,6 +175,162 @@ def _defect(**overrides: Any) -> Any:
     return known_defects.KnownDefect.validated(**values)
 
 
+def _superseded_history(defect: Any) -> str:
+    """Render the explicit legacy audit form retained on registry #4172."""
+    return "\n".join(
+        (
+            (
+                f"Superseded audit record: {defect.defect_id} "
+                "(retained for history; not an active registry entry)"
+            ),
+            "",
+            f"### {defect.defect_id}",
+            "",
+            "- State: superseded; repaired on source PR before merge",
+            (
+                f"- Source: PR #{defect.source_pr} @ `{defect.source_sha}` "
+                f"([review evidence]({defect.review_url}))"
+            ),
+            f"- Original symptom: {defect.symptom}",
+            "- Repair: The source pull request repaired the finding before merge.",
+            "- Verification: The source pull request's focused regression test passed.",
+            (
+                "- Disposition: This registry entry is retained as audit history and "
+                "is not an active deferred defect."
+            ),
+            "- Supersession reason: The source pull request repaired the finding.",
+        )
+    )
+
+
+def test_known_defects_intake_allows_superseded_historical_entry() -> None:
+    gateway = FakeGateway()
+    issue = gateway.create_registry_issue()
+    gateway.lock_registry_issue(issue["number"])
+    historical = _defect()
+    gateway.add_comment(issue["number"], _superseded_history(historical))
+
+    historical_lookup = known_defects.lookup_defect(historical.defect_id, gateway)
+
+    assert historical_lookup == {
+        "schema": "known-defect-receipt.v1",
+        "status": "superseded",
+        "defect_id": historical.defect_id,
+        "registry_issue": issue["number"],
+        "url": gateway.comments[issue["number"]][0]["html_url"],
+    }
+
+    renewed = known_defects.KnownDefect.validated(
+        **{
+            **historical.__dict__,
+            "source_sha": "b" * 40,
+            "evidence": "The deferred regression reproduced after the repair.",
+            "defect_id_override": historical.defect_id,
+        }
+    )
+    receipt = known_defects.intake_defect(renewed, gateway)
+
+    assert receipt["status"] == "created"
+    assert known_defects.lookup_defect(historical.defect_id, gateway)["status"] == "deferred"
+    assert len(gateway.comments[issue["number"]]) == 2
+
+
+def test_known_defects_intake_rejects_ambiguous_or_active_duplicate_state() -> None:
+    active_gateway = FakeGateway()
+    active = _defect()
+    known_defects.intake_defect(active, active_gateway)
+
+    assert known_defects.intake_defect(active, active_gateway)["status"] == "duplicate"
+
+    malformed_gateway = FakeGateway()
+    malformed_issue = malformed_gateway.create_registry_issue()
+    malformed_gateway.lock_registry_issue(malformed_issue["number"])
+    malformed = _superseded_history(_defect()).replace(
+        "- State: superseded; repaired on source PR before merge",
+        "- State: deferred; not an implementation contract",
+        1,
+    )
+    malformed_gateway.add_comment(malformed_issue["number"], malformed)
+
+    with pytest.raises(known_defects.KnownDefectsError, match="superseded"):
+        known_defects.lookup_defect(_defect().defect_id, malformed_gateway)
+
+    ambiguous_gateway = FakeGateway()
+    ambiguous_issue = ambiguous_gateway.create_registry_issue()
+    ambiguous_gateway.lock_registry_issue(ambiguous_issue["number"])
+    historical = _defect()
+    ambiguous_gateway.add_comment(
+        ambiguous_issue["number"], _superseded_history(historical)
+    )
+    ambiguous_gateway.add_comment(
+        ambiguous_issue["number"], _superseded_history(historical)
+    )
+
+    with pytest.raises(
+        known_defects.KnownDefectsError,
+        match="ambiguous superseded historical",
+    ):
+        known_defects.intake_defect(historical, ambiguous_gateway)
+
+    bug_skill = (
+        REPO_ROOT / ".codex" / "skills" / "bug-to-issue" / "SKILL.md"
+    ).read_text(encoding="utf-8")
+    assert "Superseded audit record: KD-..." in bug_skill
+    assert "original review finding/thread" in bug_skill
+
+
+def test_known_defects_intake_rejects_ambiguous_history_before_pending_finalize() -> None:
+    gateway = FakeGateway()
+    issue = gateway.create_registry_issue()
+    gateway.lock_registry_issue(issue["number"])
+    defect = _defect()
+    gateway.add_comment(issue["number"], _superseded_history(defect))
+    gateway.add_comment(issue["number"], _superseded_history(defect))
+    pending = gateway.add_comment(issue["number"], defect.render_entry(phase="pending"))
+
+    with pytest.raises(
+        known_defects.KnownDefectsError,
+        match="ambiguous superseded historical",
+    ):
+        known_defects.intake_defect(defect, gateway)
+
+    assert "phase=pending" in pending["body"].splitlines()[0]
+
+
+def test_known_defects_intake_rechecks_history_at_pending_finalization(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gateway = FakeGateway()
+    issue = gateway.create_registry_issue()
+    gateway.lock_registry_issue(issue["number"])
+    defect = _defect()
+    gateway.add_comment(issue["number"], _superseded_history(defect))
+    pending = gateway.add_comment(issue["number"], defect.render_entry(phase="pending"))
+    original = known_defects._find_superseded_history
+    calls = 0
+
+    def add_history_before_finalization(*args: object, **kwargs: object) -> object:
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            gateway.add_comment(issue["number"], _superseded_history(defect))
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(
+        known_defects,
+        "_find_superseded_history",
+        add_history_before_finalization,
+    )
+
+    with pytest.raises(
+        known_defects.KnownDefectsError,
+        match="ambiguous superseded historical",
+    ):
+        known_defects.intake_defect(defect, gateway)
+
+    assert "phase=pending" in pending["body"].splitlines()[0]
+
+
 def _canonical_bug_body() -> str:
     return """## Context
 
