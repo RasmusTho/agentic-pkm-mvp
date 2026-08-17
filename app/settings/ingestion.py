@@ -29,6 +29,7 @@ from typing import Any
 from app.config.environment import active_environment
 from app.config.paths import VaultRootMisconfiguredError, resolve_optional_vault_root
 from app.settings import compiler
+from app.settings import runtime
 from app.settings.locations import (
     CANONICAL_SETTINGS_DIR_NAME,
     canonical_settings_root,
@@ -105,6 +106,22 @@ def _selected_settings_source_dir() -> Path | None:
     return canonical_settings_root(vault_root)
 
 
+def _compiled_generation_tts_origin() -> str | None:
+    """Recover TTS provenance for a fresh process reading a compiled bundle.
+
+    ``settings explain`` may run without this process having performed ingestion.
+    The runtime projection proves that a compiled generation is available; the
+    selected source map identifies whether that generation included ``tts.md``.
+    This keeps provenance tied to the selected settings spine rather than to a
+    repository-relative path probe.
+    """
+    source_dir = _selected_settings_source_dir()
+    if source_dir is None or not (runtime.RUNTIME / "tts.yaml").is_file():
+        return None
+    sources = resolve_compiled_sources(source_dir.parent)
+    return "vault-shared" if Path("tts.md") in sources else "registry default"
+
+
 def get_settings_ingestion_state() -> SettingsIngestionState:
     # A watcher reload runs in a different container.  Its signal carries
     # error evidence, but not this process's in-memory bundle history: a fresh
@@ -112,6 +129,17 @@ def get_settings_ingestion_state() -> SettingsIngestionState:
     # defaults against invalid sources.
     signal = read_reload_signal()
     prior = _get_local_ingestion_state()
+    if prior.state == STATE_NO_VAULT:
+        compiled_tts_origin = _compiled_generation_tts_origin()
+        if compiled_tts_origin is not None:
+            _set_state(
+                SettingsIngestionState(
+                    state=STATE_OK,
+                    source="vault",
+                    tts_origin=compiled_tts_origin,
+                )
+            )
+            prior = _get_local_ingestion_state()
     if signal is not None and signal.state != STATE_OK and prior.state in _VALID_PRIOR_STATES:
         _set_state(
             SettingsIngestionState(

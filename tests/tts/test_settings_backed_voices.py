@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from app.cli.settings_explain import build_settings_explain_payload
 from app.settings import compiler
+from app.settings import runtime
 from app.settings.ingestion import SettingsIngestionState, reset_settings_ingestion_state
 from app.settings.models import SettingsBundle, TTSSettings
 from app.tts.config import load_tts_config
@@ -64,6 +65,31 @@ def test_no_vault_settings_explain_reports_registry_default_origin(monkeypatch, 
 
     assert payload["tts"]["voices"]["sv"]["origin"] == "registry default"
     reset_settings_ingestion_state()
+
+
+def test_settings_explain_recovers_origin_from_compiled_generation(
+    monkeypatch, tmp_path
+) -> None:
+    vault_root = tmp_path / "vault"
+    settings_dir = vault_root / "settings"
+    settings_dir.mkdir(parents=True)
+    (settings_dir / "tts.md").write_text(
+        "# TTS\n\n```yaml settings\nvoices:\n  sv: sv_SE-nst-medium\n```\n",
+        encoding="utf-8",
+    )
+    runtime_dir = tmp_path / "runtime" / "settings"
+    monkeypatch.setattr(compiler, "RUNTIME", runtime_dir)
+    monkeypatch.setattr(runtime, "RUNTIME", runtime_dir)
+    monkeypatch.setattr(runtime, "_CURRENT", None)
+    monkeypatch.setenv("VAULT_ROOT", str(vault_root))
+    monkeypatch.setenv("SETTINGS_RELOAD_SIGNAL_PATH", str(tmp_path / "reload.json"))
+    reset_settings_ingestion_state()
+
+    compiler.compile_all(vault_root=vault_root)
+
+    payload = build_settings_explain_payload()
+
+    assert payload["tts"]["voices"]["sv"]["origin"] == "vault-shared"
 
 
 def test_settings_explain_uses_compiled_tts_provenance_for_compatibility_and_last_valid(
