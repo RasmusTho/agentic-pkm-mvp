@@ -61,7 +61,9 @@ def test_installed_units_fail_closed_until_exact_persistent_substrate_is_ready(
     docker_dropin = SYSTEMD / "docker.service.d/20-yggdrasil-containerd-readiness.conf"
     assert "ExecStart=" in substrate_unit.read_text(encoding="utf-8")
     assert data_mount_unit.exists()
-    assert "--substrate" in data_mount_unit.read_text(encoding="utf-8")
+    data_mount_text = data_mount_unit.read_text(encoding="utf-8")
+    assert "yggdrasil-colima-data-mount --provision" in data_mount_text
+    assert (ROOT / "scripts/lib/colima_data_mount_provision.sh").exists()
     assert "Requires=yggdrasil-colima-persistent-substrate.service" in containerd_dropin.read_text(
         encoding="utf-8"
     )
@@ -97,6 +99,7 @@ def test_startup_entrypoints_share_one_bounded_colima_readiness_helper() -> None
     assert "COLIMA_RUNTIME_ENV_FILE" in installer
     assert "install_guest_file_atomic" in installer
     assert "COLIMA_EXPECTED_PERSISTENT_IDENTITY" in installer
+    assert "colima_data_mount_provision.sh" in installer
 
 
 def test_persisted_inventory_mismatch_fails_without_mutating_metadata(tmp_path: Path) -> None:
@@ -133,13 +136,72 @@ def test_persisted_inventory_mismatch_fails_without_mutating_metadata(tmp_path: 
 
     assert result.returncode != 0
     assert "inventory" in result.stderr.lower()
-    assert "prune" not in calls.read_text(encoding="utf-8")
-    assert "recreate" not in calls.read_text(encoding="utf-8")
-    assert "delete" not in calls.read_text(encoding="utf-8")
+    docker_calls = calls.read_text(encoding="utf-8") if calls.exists() else ""
+    assert "prune" not in docker_calls
+    assert "recreate" not in docker_calls
+    assert "delete" not in docker_calls
     assert receipt.exists()
     receipt_text = receipt.read_text(encoding="utf-8")
     assert "failure_reason" in receipt_text
     assert str(persisted) not in receipt_text
+    assert not calls.exists()
+
+
+def test_mount_producer_creates_and_verifies_reviewed_mounts(tmp_path: Path) -> None:
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    mount_calls = tmp_path / "mount.calls"
+    mount_state = tmp_path / "mount-state"
+    mount_state.mkdir()
+    for name, body in {
+        "mountpoint": (
+            "last=''\n"
+            "for arg in \"$@\"; do last=\"$arg\"; done\n"
+            "key=$(printf '%s' \"$last\" | tr '/' '_')\n"
+            f"test -f \"{mount_state}/$key\"\n"
+        ),
+        "mount": (
+            f"printf '%s\\n' \"$*\" >> '{mount_calls}'\n"
+            "last=''\n"
+            "for arg in \"$@\"; do last=\"$arg\"; done\n"
+            "key=$(printf '%s' \"$last\" | tr '/' '_')\n"
+            f"touch \"{mount_state}/$key\"\n"
+        ),
+        "findmnt": (
+            "case \"$*\" in *FSROOT*docker*) printf '/docker\\n';; "
+            "*FSROOT*containerd*) printf '/containerd\\n';; "
+            "*FSROOT*) printf '/\\n';; "
+            "*SOURCE*docker*) printf '/dev/persistent[/docker]\\n';; "
+            "*SOURCE*containerd*) printf '/dev/persistent[/containerd]\\n';; "
+            "*SOURCE*) printf '/dev/persistent\\n';; "
+            "*UUID*) printf 'reviewed-uuid\\n';; "
+            "*FSTYPE*) printf 'ext4\\n';; esac\n"
+        ),
+    }.items():
+        path = fake_bin / name
+        path.write_text(f"#!/bin/sh\n{body}", encoding="utf-8")
+        path.chmod(0o755)
+
+    persistent = tmp_path / "persistent"
+    docker_data = tmp_path / "docker"
+    containerd_data = tmp_path / "containerd"
+    result = _run_bash(
+        f"COLIMA_PERSISTENT_DATA_PATH='{persistent}' "
+        f"COLIMA_DOCKER_DATA_PATH='{docker_data}' "
+        f"COLIMA_CONTAINERD_DATA_PATH='{containerd_data}' "
+        "COLIMA_EXPECTED_PERSISTENT_SOURCE=/dev/persistent "
+        "COLIMA_EXPECTED_PERSISTENT_IDENTITY=UUID=reviewed-uuid "
+        "COLIMA_EXPECTED_PERSISTENT_FSTYPE=ext4 "
+        f"bash '{ROOT / 'scripts/lib/colima_data_mount_provision.sh'}' --provision",
+        env={"PATH": f"{fake_bin}:{os.environ['PATH']}"},
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert mount_calls.read_text(encoding="utf-8").splitlines() == [
+        f"-t ext4 UUID=reviewed-uuid {persistent}",
+        f"--bind {persistent}/docker {docker_data}",
+        f"--bind {persistent}/containerd {containerd_data}",
+    ]
 
 
 def test_prestart_inventory_mismatch_refuses_before_docker_api(tmp_path: Path) -> None:

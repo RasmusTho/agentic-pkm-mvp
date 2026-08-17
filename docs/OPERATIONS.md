@@ -42,6 +42,17 @@ CLI note:
 - Runtime verification note: `make verify-runtime` is the authoritative local operator check for the live Docker stack because it verifies service health plus in-container CLI health, rather than the host shell environment.
 - Canvas note: `python -m app.cli canvas ...` and `/api/canvas/*` now exist as bounded session surfaces behind `CANVAS_ENABLED`; they are materially supported for bounded co-authoring, but still not part of the default production operator surface.
 
+### Colima persistent-substrate readiness
+
+Managed Colima startup is refusal-first: the checked-in mount producer creates
+only the reviewed native filesystem and Docker/containerd bind mounts, then the
+containerd and Docker units require exact source, canonical UUID/LABEL/PARTUUID,
+filesystem-root, RPC/metadata, and persisted-inventory checks before readiness.
+Use `docs/runbooks/RUNBOOK_STARTUP_FULL_SYSTEM.md` for the installer and the
+isolated-candidate-before-default activation order. Repository delivery of
+these artifacts is not a live-host activation receipt; default cold-start and
+dev/test/prod channel-isolation proof remain separate operator gates.
+
 ### Heimdal raw-store capacity receipt
 
 Use `python -m app.cli heimdal capacity --vault-root <vault>` to inspect an

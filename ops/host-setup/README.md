@@ -49,9 +49,10 @@ governed host procedure explicitly sets `COLIMA_RUNTIME_APPLY=1`; installation
 does not restart Colima, containerd, Docker, or any application channel.
 
 `colima-data-mount.service` is the explicit systemd dependency boundary for
-the existing Colima/Lima per-boot mount provisioner. It verifies the reviewed
-source and bind mounts but does not guess a device, perform an unsafe mount,
-or modify Docker/containerd metadata.
+the checked-in refusal-first Colima/Lima mount producer. It creates only the
+reviewed filesystem and bind mounts, verifies their source, identity, and
+filesystem-root values, and never guesses a device, unmounts an existing
+target, or modifies Docker/containerd metadata.
 
 The gate binds one explicit Docker context, verifies the exact configured
 persistent source and canonical UUID/LABEL/PARTUUID identity at

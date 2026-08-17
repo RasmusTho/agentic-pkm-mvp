@@ -230,9 +230,10 @@ then require the checked-in guest gate to prove all of the following:
   expected count before the Docker service starts, and then equals the Docker
   API inventory count after the daemon responds.
 
-The checked-in `colima-data-mount.service` is the explicit adapter boundary
-for the existing Colima/Lima per-boot mount provisioner; it verifies the
-mounts and does not guess a device or mutate Docker metadata. The guest unit
+The checked-in `colima-data-mount.service` invokes the refusal-first
+`yggdrasil-colima-data-mount` producer to create the reviewed filesystem and
+bind mounts, then verifies their exact identity. It never guesses a device,
+unmounts an existing target, or mutates Docker metadata. The guest unit
 and drop-ins are checked in under
 `ops/host-setup/mac-mini/systemd/`. The installer
 `ops/host-setup/mac-mini/install_colima_runtime_readiness.sh` is refusal-first:

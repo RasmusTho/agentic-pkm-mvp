@@ -169,7 +169,7 @@ colima_guest_assert_persisted_inventory() {
   expected="${COLIMA_EXPECTED_PERSISTED_INVENTORY:-}"
   case "$expected" in ''|*[!0-9]*) _colima_runtime_fail expected-inventory-count-not-configured "$persisted"; return 1;; esac
   if [ "$persisted" -ne "$expected" ]; then
-    _colima_runtime_fail persisted-inventory-mismatch "$expected" "$persisted"
+    _colima_runtime_fail persisted-inventory-mismatch "$persisted" ""
     return 1
   fi
   COLIMA_PERSISTED_INVENTORY_READY=true
@@ -221,6 +221,10 @@ colima_runtime_assert_inventory() {
   case "$persisted" in ''|*[!0-9]*) _colima_runtime_fail persisted-inventory-count-unreadable; return 1;; esac
   expected="${COLIMA_EXPECTED_PERSISTED_INVENTORY:-$persisted}"
   case "$expected" in ''|*[!0-9]*) _colima_runtime_fail expected-inventory-count-invalid; return 1;; esac
+  if [ "$persisted" -ne "$expected" ]; then
+    _colima_runtime_fail persisted-inventory-mismatch "$persisted" ""
+    return 1
+  fi
   DOCKER_CONTEXT="${COLIMA_DOCKER_CONTEXT:-${DOCKER_CONTEXT:-colima}}"
   export DOCKER_CONTEXT
   _colima_runtime_bounded "${COLIMA_DOCKER_COMMAND_TIMEOUT_SECONDS:-15}" docker context inspect "$DOCKER_CONTEXT" >/dev/null 2>&1 || {
@@ -234,7 +238,7 @@ colima_runtime_assert_inventory() {
   }
   docker_count="$(printf '%s\n' "$docker_listing" | awk 'NF {count++} END {print count + 0}')"
   if [ "$docker_count" -ne "$expected" ]; then
-    _colima_runtime_fail persisted-inventory-mismatch "$expected" "$docker_count"
+    _colima_runtime_fail persisted-inventory-mismatch "$persisted" "$docker_count"
     return 1
   fi
   COLIMA_INVENTORY_EXACT=true
