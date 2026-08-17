@@ -50,8 +50,41 @@ READINESS_CLASSES: tuple[str, ...] = (
     "malformed_parent_reference",
     "ambiguous_intent",
     "authority_risk",
+    "admission_contract_conflict",
     "not_agentable",
     "unknown",
+)
+
+ADMISSION_CLAIM_PATTERNS: tuple[re.Pattern[str], ...] = tuple(
+    re.compile(pattern, re.IGNORECASE)
+    for pattern in (
+        r"\blocal admission\b",
+        r"\b(?:admission|request) proxy(?:ing)?\b",
+        r"\bforwarded[- ]identity\b",
+        r"\bforwarded[- ](?:for|host|proto)\b",
+        r"\bforward(?:ed|ing)? identity\b",
+        r"\bproxy(?:ing|ed)?\b",
+    )
+)
+PRODUCTION_SEAM_PATTERNS: tuple[re.Pattern[str], ...] = tuple(
+    re.compile(pattern, re.IGNORECASE)
+    for pattern in (
+        r"\bnamed production seam\b",
+        r"\bproduction seam\b",
+        r"\bdirect loopback\b",
+        r"\bloopback endpoint\b",
+        r"\b(?:gateway|ingress|reverse proxy)\b",
+    )
+)
+NO_FORWARDED_IDENTITY_PATTERNS: tuple[re.Pattern[str], ...] = tuple(
+    re.compile(pattern, re.IGNORECASE)
+    for pattern in (
+        r"\bno forwarded identity\b",
+        r"\bwithout forwarded identity\b",
+        r"\bmust not forward identity\b",
+        r"\bdoes not forward identity\b",
+        r"\bno forwarded[- ](?:for|host|proto)\b",
+    )
 )
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -399,6 +432,28 @@ def _contains_any(patterns: Sequence[re.Pattern[str]], text: str) -> bool:
     return any(pattern.search(text) for pattern in patterns)
 
 
+def admission_contract_problem(body: str) -> str | None:
+    """Reject readiness claims that lack or contradict their production seam."""
+
+    if not _contains_any(ADMISSION_CLAIM_PATTERNS, body):
+        return None
+    if not _contains_any(PRODUCTION_SEAM_PATTERNS, body):
+        return "admission/proxy/forwarded-identity claim has no named production seam"
+    if _contains_any(NO_FORWARDED_IDENTITY_PATTERNS, body):
+        forwarded_assertion = re.search(
+            r"\b(?:forward|preserve|accept|trust|use|require)[a-z -]{0,24}"
+            r"(?:forwarded[- ](?:identity|for|host|proto)|forward(?:ed|ing)? identity)\b",
+            body,
+            re.IGNORECASE,
+        )
+        forwarded_assertion = forwarded_assertion or re.search(
+            r"\bforward identity\b", body, re.IGNORECASE
+        )
+        if forwarded_assertion is not None:
+            return "forwarded-identity assertion contradicts the named no-forwarding seam"
+    return None
+
+
 def _unknown_body(body: str, present: Sequence[str]) -> bool:
     stripped = body.strip()
     if not stripped:
@@ -452,6 +507,8 @@ def classify_issue_body(
         classification = "missing_verify_file_paths"
     elif _parent_reference_problem(body) is not None:
         classification = "malformed_parent_reference"
+    elif admission_contract_problem(body) is not None:
+        classification = "admission_contract_conflict"
     elif _contains_any(AUTHORITY_RISK_PATTERNS, body):
         classification = "authority_risk"
         human_exception_required = True
@@ -504,6 +561,11 @@ def repair_guidance(
         return [
             "Resolve the named authority question before agent execution.",
             "Split irreversible, Project/label mutation, branch-protection, auto-merge, prod, or strategic-decision work behind an explicit human decision.",
+        ]
+    if classification == "admission_contract_conflict":
+        return [
+            "Name the production admission seam (for example, direct loopback or gateway) in the Issue.",
+            "Rewrite readiness claims so forwarded-identity and proxy behavior agree with that seam.",
         ]
     if classification == "ambiguous_intent":
         return [
