@@ -47,6 +47,16 @@ not define primary navigation or split one owner journey across subsystem UIs.
 Its primary success criterion is reduced cognitive load: the owner can keep directing the project
 without first rebuilding an internal model of the delivery machinery.
 
+### Discovery/control-plane boundary
+
+devUI is a discovery and control plane, not a separate documentation portal. It may index, project,
+label, explain, and navigate to authoritative repo, GitHub, BuilderOps, source, and PKM surfaces;
+it must not become the canonical copy of normative documentation, Builder Vault working material,
+task truth, or promotion decisions. The cross-plane authority and artifact-lifecycle vocabulary is
+defined in [`docs/architecture/INFORMATION_AUTHORITY_MODEL.md`](architecture/INFORMATION_AUTHORITY_MODEL.md),
+[`docs/architecture/ARTIFACT_CLASSIFICATION_AND_LIFECYCLE.md`](architecture/ARTIFACT_CLASSIFICATION_AND_LIFECYCLE.md),
+and [`docs/architecture/DEVUI_DISCOVERY_ARCHITECTURE.md`](architecture/DEVUI_DISCOVERY_ARCHITECTURE.md).
+
 The owner loop has four verbs:
 
 ```text

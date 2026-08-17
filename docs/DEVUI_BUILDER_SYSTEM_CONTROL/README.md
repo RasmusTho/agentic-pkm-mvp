@@ -57,6 +57,11 @@ target contract does not become delivered merely because this specification name
 
 - `docs/DEVUI.md` and the accepted Focus boundary from PR #4699 govern the owner journey and hard
   sibling separation.
+- The proposed cross-plane authority, artifact-lifecycle, and discovery vocabulary is in
+  `docs/architecture/INFORMATION_AUTHORITY_MODEL.md`,
+  `docs/architecture/ARTIFACT_CLASSIFICATION_AND_LIFECYCLE.md`, and
+  `docs/architecture/DEVUI_DISCOVERY_ARCHITECTURE.md`; those records remain subordinate to this
+  lens's accepted local contract until owner acceptance.
 - `docs/architecture/SBS_OPERATING_MODEL.md` governs Builder System classification, artifact
   ownership, allowed write paths, and receipts.
 - `docs/development/BUILDER_SYSTEM_PROCESS_MAP.md`, refreshed by the process clarification in PR

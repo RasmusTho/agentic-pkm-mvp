@@ -8,6 +8,11 @@ Authority: Names the lifecycle states, transitions, and applicability per artifa
 
 This document defines the **lifecycle model** for the artifact classes introduced in `docs/CONTEXTUALIZATION_LAYER/HUMAN_AND_AGENTIC_ARTIFACTS.md`.
 
+The proposed cross-plane lifecycle overlay for PKM and Builder is defined in
+`docs/architecture/ARTIFACT_CLASSIFICATION_AND_LIFECYCLE.md`. This document remains the owner of
+Contextualization per-class lifecycle semantics; the overlay must not be read as a replacement or
+as evidence of runtime enforcement.
+
 It exists so that later work on review queues, promotion flows, recall and explanation surfaces, stale-content handling, and retention policy can talk about the same lifecycle states without each surface inventing its own vocabulary, and without collapsing fundamentally different lifecycles into a single one.
 
 It is intentionally narrow:
