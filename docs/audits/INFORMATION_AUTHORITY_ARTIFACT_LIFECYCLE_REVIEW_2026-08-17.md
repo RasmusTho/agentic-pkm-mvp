@@ -131,13 +131,14 @@ This review **conforms to** the existing SBS rather than reshaping it:
 | Cross-plane authority/lifecycle model | This review + three companion docs | Existing ADRs and owner docs remain local authority | Accept this docs-authoring PR; no duplicate parent issue. |
 | Unified DevUI owner-facing architecture and UX handoff | Reuse, do not duplicate | #4982 owns the nine-layer process-to-UI map and governed handoff; #4980 owns process health | Add the new discovery boundary as a source input to #4982; keep #4980 separate. |
 | PKM source lineage/evidence independence | Reuse, do not duplicate | #4906 owns source-lineage/evidence-independence validation | Cross-reference only; no new Product/Runtime issue here. |
-| Builder Vault artifact capture/classification/provenance | New bounded Builder System implementation gap | Existing BuilderOps object model/boundary/gateway provide mechanics but no generic working-artifact admission contract | Create one Issue after owner acceptance for an explicit non-normative working-artifact intake over existing BuilderOps surfaces. |
-| DevUI authority-aware discovery projection/navigation | New bounded downstream gap | #4982 owns the unified UX handoff; existing Overview/BSC contracts own provider projections | Create one Issue after owner acceptance for a read-only projection that consumes existing source contracts; no new source registry or docs store. |
+| Builder Vault artifact capture/classification/provenance | New bounded Builder System implementation gap | Existing BuilderOps object model/boundary/gateway provide mechanics but no generic working-artifact admission contract | #4984 is filed `agent:blocked`; after owner acceptance, refine/readiness-check it for explicit non-normative working-artifact intake over existing BuilderOps surfaces. |
+| DevUI authority-aware discovery projection/navigation | New bounded downstream gap | #4982 owns the unified UX handoff; existing Overview/BSC contracts own provider projections | #4985 is filed `agent:blocked`; after owner acceptance, refine/readiness-check it for a read-only projection consuming existing source contracts; no new source registry or docs store. |
 | Governed promotion enforcement beyond proposal/receipt mechanics | Reconcile before filing | ADR-0010 and `BUILDEROPS_PROMOTION_GATEWAY.md` already own proposal-only mechanics; target surfaces own actual promotion | Do not file a duplicate gateway issue. File only a concrete missing target-surface adapter if live evidence identifies one. |
 
-The two new implementation Issues are intentionally held until the proposed artifacts are accepted.
+The two new implementation Issues are filed as explicitly blocked follow-ups (#4984 and #4985) now
+that the docs-authoring PR exists. They must remain blocked until the proposed artifacts are accepted.
 Their source anchors and `Verify:` targets must point to the accepted docs, not to this advisory audit
-alone.
+alone, before either Issue can become agent-ready.
 
 ## 8. Review acceptance gate
 

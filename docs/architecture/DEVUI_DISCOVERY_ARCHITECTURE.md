@@ -182,8 +182,8 @@ contracts; this gate does not rewrite or silently unblock them.
 - Source-lineage/evidence-independence remains in #4906 and is a Product/Runtime semantic track,
   not a DevUI source registry.
 - The remaining discovery implementation gap is a bounded, read-only projection over existing
-  authoritative sources with explicit artifact standing and navigation. It must be issued only
-  after this review is accepted and reconciled with #4982.
+  authoritative sources with explicit artifact standing and navigation. It is recorded in blocked
+  #4985 and must remain blocked until this review is accepted and reconciled with #4982.
 
 ## Related documents
 
