@@ -68,6 +68,10 @@ conditional path (`Issue maintenance -> Agent`), not the hot path.
   ```
   Do not use `--observe-only` for a Ready mutation. If validation fails, remove or avoid
   `agent:ready`.
+- For Issues asserting local admission, proxying, or forwarded-identity behavior, verify that the
+  body names the production admission seam and that its wording agrees with the seam. The shared
+  readiness validator rejects an unnamed seam or a forwarded-identity assertion paired with an
+  explicit no-forwarding/direct-loopback seam.
 
 ## Canonical lifecycle expectations
 

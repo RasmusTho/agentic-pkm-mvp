@@ -50,6 +50,16 @@ data, or any artefact that is not reproducible from the checked-in repo plus pub
 body, linked PR, owner doc) before authoring the Issue that depends on it. If the material cannot be
 promoted, the Issue should not depend on it.
 
+### Admission claims must match the named production seam
+
+An Issue that asserts local admission, proxying, or forwarded-identity behavior must name the
+production admission seam (for example, a direct loopback endpoint or gateway) in its `Scope`,
+`Constraints`, or `Source Anchors`. Readiness wording must agree with that seam: an explicit
+no-forwarded-identity/direct-loopback seam cannot be paired with an assertion that identity is
+forwarded or trusted through a proxy. The readiness validator rejects contradictory or unnamed
+admission claims before `agent:ready` is applied. This is a Builder System contract check; it does
+not establish or change Product/Runtime admission behavior.
+
 ## Child to parent reference
 
 A child slice governed by a parent feature issue declares that edge with exactly one line, on its
