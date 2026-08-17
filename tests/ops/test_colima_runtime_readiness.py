@@ -70,6 +70,7 @@ def test_installed_units_fail_closed_until_exact_persistent_substrate_is_ready(
     assert "--substrate" in substrate_unit.read_text(encoding="utf-8")
     docker_dropin_text = docker_dropin.read_text(encoding="utf-8")
     assert "Requires=containerd.service" in docker_dropin_text
+    assert "EnvironmentFile=-/etc/yggdrasil/colima-runtime.env" in docker_dropin_text
     assert "--docker-preflight" in docker_dropin_text
     assert "ExecStartPre=" in docker_dropin_text
 
@@ -258,6 +259,64 @@ def test_mount_producer_refuses_to_hide_existing_metadata_with_empty_source(tmp_
     ]
     assert (docker_data / "existing-container-metadata").read_text(encoding="utf-8") == "preserve"
     assert not (persistent / "docker").exists()
+
+
+def test_mount_producer_refuses_unverified_nonempty_source_and_target(tmp_path: Path) -> None:
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    mount_calls = tmp_path / "mount.calls"
+    mount_state = tmp_path / "mount-state"
+    mount_state.mkdir()
+    for name, body in {
+        "mountpoint": (
+            "last=''\n"
+            "for arg in \"$@\"; do last=\"$arg\"; done\n"
+            "key=$(printf '%s' \"$last\" | tr '/' '_')\n"
+            f"test -f \"{mount_state}/$key\"\n"
+        ),
+        "mount": (
+            f"printf '%s\\n' \"$*\" >> '{mount_calls}'\n"
+            "last=''\n"
+            "for arg in \"$@\"; do last=\"$arg\"; done\n"
+            "key=$(printf '%s' \"$last\" | tr '/' '_')\n"
+            f"touch \"{mount_state}/$key\"\n"
+        ),
+        "findmnt": (
+            "case \"$*\" in *FSROOT*) printf '/\\n';; "
+            "*SOURCE*) printf '/dev/persistent\\n';; "
+            "*UUID*) printf 'reviewed-uuid\\n';; "
+            "*FSTYPE*) printf 'ext4\\n';; esac\n"
+        ),
+    }.items():
+        path = fake_bin / name
+        path.write_text(f"#!/bin/sh\n{body}", encoding="utf-8")
+        path.chmod(0o755)
+
+    persistent = tmp_path / "persistent"
+    (persistent / "docker").mkdir(parents=True)
+    (persistent / "docker" / "reviewed-source-marker").write_text("source", encoding="utf-8")
+    docker_data = tmp_path / "docker"
+    docker_data.mkdir()
+    (docker_data / "existing-target-marker").write_text("target", encoding="utf-8")
+    containerd_data = tmp_path / "containerd"
+    result = _run_bash(
+        f"COLIMA_PERSISTENT_DATA_PATH='{persistent}' "
+        f"COLIMA_DOCKER_DATA_PATH='{docker_data}' "
+        f"COLIMA_CONTAINERD_DATA_PATH='{containerd_data}' "
+        "COLIMA_EXPECTED_PERSISTENT_SOURCE=/dev/persistent "
+        "COLIMA_EXPECTED_PERSISTENT_IDENTITY=UUID=reviewed-uuid "
+        "COLIMA_EXPECTED_PERSISTENT_FSTYPE=ext4 "
+        f"bash '{ROOT / 'scripts/lib/colima_data_mount_provision.sh'}' --provision",
+        env={"PATH": f"{fake_bin}:{os.environ['PATH']}"},
+    )
+
+    assert result.returncode != 0
+    assert "unverified bind" in result.stderr
+    assert mount_calls.read_text(encoding="utf-8").splitlines() == [
+        f"-t ext4 UUID=reviewed-uuid {persistent}",
+    ]
+    assert (persistent / "docker" / "reviewed-source-marker").read_text(encoding="utf-8") == "source"
+    assert (docker_data / "existing-target-marker").read_text(encoding="utf-8") == "target"
 
 
 def test_prestart_inventory_mismatch_refuses_before_docker_api(tmp_path: Path) -> None:

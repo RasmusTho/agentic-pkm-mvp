@@ -76,6 +76,9 @@ ensure_mount() {
       elif ! directory_has_entries "$source" && directory_has_entries "$target"; then
         echo "persistent source $source is empty while $target contains existing data; refusing bind" >&2
         return 1
+      elif directory_has_entries "$source" && directory_has_entries "$target"; then
+        echo "persistent source $source and target $target both contain data; refusing unverified bind" >&2
+        return 1
       fi
       mkdir -p "$source"
       "$mount_bin" --bind "$source" "$target"
