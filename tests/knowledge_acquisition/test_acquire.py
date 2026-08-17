@@ -220,8 +220,14 @@ def test_acquire_youtube_end_to_end_writes_candidate_and_emits_events(
     assert candidate_stage.artifact_path
 
     notes = list((tmp_path / "vault").rglob("*.md"))
-    assert len(notes) == 1
-    assert notes[0].read_text(encoding="utf-8")  # candidate note has content
+    assert len(notes) == 2
+    candidate_path = Path(vault.active_vault_path) / str(candidate_stage.artifact_path)
+    candidate_body = candidate_path.read_text(encoding="utf-8")
+    transcript = next(path for path in notes if path.name == "transcript.md")
+    manifest = transcript.with_name("source.json")
+    transcript_rel = transcript.relative_to(vault.active_vault_path).as_posix()
+    assert f"[[{transcript_rel}]]" in candidate_body
+    assert manifest.exists()
 
     # One stage.completed event per real transition (normalize, extracted, candidate).
     completed = conn.rows_for(STAGE_COMPLETED_TOPIC)
@@ -278,7 +284,7 @@ def test_acquire_youtube_rerun_is_idempotent_dedup_noop(
     assert note_path.read_bytes() == bytes_first
 
     notes = list((tmp_path / "vault").rglob("*.md"))
-    assert len(notes) == 1  # no duplicate note written
+    assert len(notes) == 2  # no duplicate candidate or derived transcript written
 
     # Stage-completed events deduped: re-running an unchanged item does not mint new rows.
     completed = conn.rows_for(STAGE_COMPLETED_TOPIC)

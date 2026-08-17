@@ -69,8 +69,10 @@ def materialize_youtube_source_bundle(
             manifest_path, json.dumps(manifest, indent=2, sort_keys=True) + "\n", vault_root=vault_root,
             action=SOURCE_BUNDLE_WRITE_ACTION, write_guard=write_guard,
         )
-    except WritesBlockedError as exc:
-        raise SourceBundleError(f"source bundle write blocked: {exc}") from exc
+    except WritesBlockedError:
+        return SourceBundleResult(
+            source_folder, bundle_folder, transcript_path, manifest_path, "blocked"
+        )
     except Exception as exc:  # noqa: BLE001
         raise SourceBundleError(f"source bundle materialization failed: {exc}") from exc
     return SourceBundleResult(source_folder, bundle_folder, transcript_path, manifest_path, "written" if "written" in {transcript_status, manifest_status} else "already_exists")
