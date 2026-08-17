@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import shutil
 import tempfile
@@ -102,6 +103,14 @@ def dump(runtime_dir: Path, relative: str, payload: Dict[str, Any]) -> None:
     target.parent.mkdir(parents=True, exist_ok=True)
     with target.open("w", encoding="utf-8") as handle:
         yaml.safe_dump(payload, handle, allow_unicode=True, sort_keys=True)
+
+
+def _source_fingerprints(source_paths: dict[Path, Path]) -> dict[str, str]:
+    """Record the source bytes that produced one published runtime generation."""
+    return {
+        str(relative): hashlib.sha256(path.read_bytes()).hexdigest()
+        for relative, path in sorted(source_paths.items(), key=lambda item: str(item[0]))
+    }
 
 
 def _new_staged_runtime_dir() -> Path:
@@ -601,6 +610,12 @@ def compile_all(
             _panel_actions_payload(panel_actions_settings),
         )
         dump(staged_runtime, "watchers.yaml", _watcher_settings_payload(watcher_settings))
+        with (staged_runtime / "sources.json").open("w", encoding="utf-8") as handle:
+            json.dump(
+                {"version": 1, "sources": _source_fingerprints(source_paths)},
+                handle,
+                sort_keys=True,
+            )
         _publish_staged_runtime(staged_runtime)
     except Exception:
         shutil.rmtree(staged_runtime, ignore_errors=True)

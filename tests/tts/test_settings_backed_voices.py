@@ -3,7 +3,12 @@ from __future__ import annotations
 from app.cli.settings_explain import build_settings_explain_payload
 from app.settings import compiler
 from app.settings import runtime
-from app.settings.ingestion import SettingsIngestionState, reset_settings_ingestion_state
+from app.settings.ingestion import (
+    STATE_NO_VAULT,
+    SettingsIngestionState,
+    get_settings_ingestion_state,
+    reset_settings_ingestion_state,
+)
 from app.settings.models import SettingsBundle, TTSSettings
 from app.tts.config import load_tts_config
 from app.tts.planning import build_tts_plan
@@ -90,6 +95,21 @@ def test_settings_explain_recovers_origin_from_compiled_generation(
     payload = build_settings_explain_payload()
 
     assert payload["tts"]["voices"]["sv"]["origin"] == "vault-shared"
+    assert get_settings_ingestion_state().state == STATE_NO_VAULT
+
+    (settings_dir / "global.md").write_text("# unrelated settings\n", encoding="utf-8")
+    reset_settings_ingestion_state()
+    unchanged_tts_payload = build_settings_explain_payload()
+
+    assert unchanged_tts_payload["tts"]["voices"]["sv"]["origin"] == "vault-shared"
+    assert get_settings_ingestion_state().state == STATE_NO_VAULT
+
+    (settings_dir / "tts.md").unlink()
+    reset_settings_ingestion_state()
+    stale_payload = build_settings_explain_payload()
+
+    assert stale_payload["tts"]["voices"]["sv"]["origin"] == "registry default"
+    assert get_settings_ingestion_state().state == STATE_NO_VAULT
 
 
 def test_settings_explain_uses_compiled_tts_provenance_for_compatibility_and_last_valid(

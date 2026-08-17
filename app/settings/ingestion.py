@@ -20,6 +20,8 @@ Scope boundary: binding settings-source resolution to the *selected* vault path
 
 from __future__ import annotations
 
+import hashlib
+import json
 import threading
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -116,10 +118,35 @@ def _compiled_generation_tts_origin() -> str | None:
     repository-relative path probe.
     """
     source_dir = _selected_settings_source_dir()
-    if source_dir is None or not (runtime.RUNTIME / "tts.yaml").is_file():
+    manifest_path = runtime.RUNTIME / "sources.json"
+    if (
+        source_dir is None
+        or not (runtime.RUNTIME / "tts.yaml").is_file()
+        or not manifest_path.is_file()
+    ):
         return None
-    sources = resolve_compiled_sources(source_dir.parent)
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        expected = manifest["sources"]
+        if manifest.get("version") != 1 or not isinstance(expected, dict):
+            return None
+        sources = resolve_compiled_sources(source_dir.parent)
+        tts_source = sources.get(Path("tts.md"))
+        actual_tts = (
+            hashlib.sha256(tts_source.read_bytes()).hexdigest()
+            if tts_source is not None
+            else None
+        )
+    except (OSError, TypeError, ValueError, KeyError):
+        return None
+    if expected.get("tts.md") != actual_tts:
+        return None
     return "vault-shared" if Path("tts.md") in sources else "registry default"
+
+
+def get_compiled_generation_tts_origin() -> str | None:
+    """Return provenance only when the published generation matches its sources."""
+    return _compiled_generation_tts_origin()
 
 
 def get_settings_ingestion_state() -> SettingsIngestionState:
@@ -129,17 +156,6 @@ def get_settings_ingestion_state() -> SettingsIngestionState:
     # defaults against invalid sources.
     signal = read_reload_signal()
     prior = _get_local_ingestion_state()
-    if prior.state == STATE_NO_VAULT:
-        compiled_tts_origin = _compiled_generation_tts_origin()
-        if compiled_tts_origin is not None:
-            _set_state(
-                SettingsIngestionState(
-                    state=STATE_OK,
-                    source="vault",
-                    tts_origin=compiled_tts_origin,
-                )
-            )
-            prior = _get_local_ingestion_state()
     if signal is not None and signal.state != STATE_OK and prior.state in _VALID_PRIOR_STATES:
         _set_state(
             SettingsIngestionState(
@@ -286,5 +302,6 @@ __all__ = [
     "STATE_NO_VAULT",
     "ingest_settings",
     "get_settings_ingestion_state",
+    "get_compiled_generation_tts_origin",
     "reset_settings_ingestion_state",
 ]

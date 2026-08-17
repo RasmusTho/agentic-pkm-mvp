@@ -14,7 +14,11 @@ from app.settings.panel_actions_settings import load_panel_actions_settings, pan
 from app.settings.locations import LEGACY_COMPILED_DIR, resolve_settings_file
 from app.settings.watcher_settings import invalid_allowed_actions, load_watcher_settings, resolve_auto_exec_state
 from app.settings.runtime import get_settings_bundle
-from app.settings.ingestion import get_settings_ingestion_state
+from app.settings.ingestion import (
+    STATE_NO_VAULT,
+    get_compiled_generation_tts_origin,
+    get_settings_ingestion_state,
+)
 from app.settings.reasoning_route import describe_effective_reasoning_route
 from app.settings.prompts import resolve_ask_system_prompt
 from app.settings.tiering import active_settings_profile
@@ -74,7 +78,10 @@ def build_settings_explain_payload() -> dict[str, Any]:
     tts_settings = get_settings_bundle().tts
     # Explain the source that compiled the active bundle (or retained the
     # last-valid bundle), never a convenient repository-relative file.
-    tts_origin = get_settings_ingestion_state().tts_origin
+    ingestion_state = get_settings_ingestion_state()
+    tts_origin = ingestion_state.tts_origin
+    if ingestion_state.state == STATE_NO_VAULT:
+        tts_origin = get_compiled_generation_tts_origin() or tts_origin
     settings_provider = None
     settings_model = None
     settings_base_url = None
