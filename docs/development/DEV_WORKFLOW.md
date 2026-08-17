@@ -376,6 +376,7 @@ Use this lane only when:
   - `tests/governance/test_ci_smoke_docs_only_gate.py`
   - `tests/governance/test_issue_pr_governance.py`
   - `tests/governance/test_known_defects_registry.py`
+  - `tests/governance/test_resume_work_contract.py`
   - `tests/governance/test_skills_consistency_lint.py`
   - `tests/ops/test_project_status_reconcile.py`
   - `tests/ops/test_review_before_ci_gate.py`

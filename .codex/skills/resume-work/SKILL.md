@@ -90,8 +90,14 @@ but do not replay rescue-stash material on the strength of a cached ref alone.
 If the rescue material no longer matches the current contract, do not apply it
 blindly. Reconstruct the needed bounded delta from current `origin/main`, or
 escalate through the normal contract/SoT ambiguity path when the intended
-delta cannot be determined safely. Never apply or delete a rescue stash merely
-to make recovery look complete.
+delta cannot be determined safely. Before a rescue candidate is treated as
+rebase-ready, replay its exact stash hash in an isolated disposable worktree
+using a dry-run that does not apply or delete the stash. Record a conflict
+inventory from that replay: a replay-safe candidate has no conflicts and no
+deleted or stale paths, while any deleted, stale, or conflicting path keeps the
+candidate out of the rebase-ready state until its bounded delta is reconstructed
+from current `origin/main`. Never apply or delete a rescue stash merely to make
+recovery look complete.
 
 For an interrupted `type:bug` implementation from a larger bug set, resume only its original
 dedicated Codex task/session and worktree. Do not absorb another bug into that session; the serial
