@@ -211,12 +211,6 @@ acquire_channel_mutation_lock
 current_sha="$(read_pin "${pin_file}" 2>/dev/null || true)"
 target_sha="$(resolve_target_sha "${target_sha}")"
 scalar_rollback=0
-settings_rebind_floor_marker="${INSTANCE_OWNERSHIP_HOST_STATE_DIR:-}/settings-rebind-runtime-floor-${channel}.json"
-if [ "${action}" = "rollback" ] && [ -f "${settings_rebind_floor_marker}" ] && \
-  { ! git -C "${ROOT}" cat-file -e "${target_sha}:app/instance/mvr05_cutover.py" 2>/dev/null \
-    || ! git -C "${ROOT}" cat-file -e "${target_sha}:app/instance/settings_rebind.py" 2>/dev/null; }; then
-  scalar_rollback=1
-fi
 
 prepare_scalar_rollback_environment() {
   if [ -z "${current_sha}" ]; then
@@ -1096,11 +1090,16 @@ if ! scripts/companion_ui_postdeploy_smoke.sh preflight; then
   exit 86
 fi
 
+prepare_instance_ownership_host_state_dir
+settings_rebind_floor_marker="${INSTANCE_OWNERSHIP_HOST_STATE_DIR}/settings-rebind-runtime-floor-${channel}.json"
+if [ "${action}" = "rollback" ] && [ -f "${settings_rebind_floor_marker}" ] && \
+  { ! git -C "${ROOT}" cat-file -e "${target_sha}:app/instance/mvr05_cutover.py" 2>/dev/null \
+    || ! git -C "${ROOT}" cat-file -e "${target_sha}:app/instance/settings_rebind.py" 2>/dev/null; }; then
+  scalar_rollback=1
+fi
 if [ "${scalar_rollback}" = "1" ]; then
   prepare_scalar_rollback_environment || exit $?
 fi
-
-prepare_instance_ownership_host_state_dir
 
 if [ "${action}" = "rollback" ]; then
   INSTANCE_STATE_LEGACY_ROLLBACK=1
