@@ -31,8 +31,9 @@ Those documents remain the local owners named in the reconciliation table below.
 3. **Presentation is not authority.** An item does not become normative merely because DevUI
    indexes, projects, ranks, or displays it.
 4. **Derived representations inherit; they do not originate.** A derivative, mirror, index,
-   search result, or DevUI view must preserve a resolvable link to its source and cannot gain more
-   authority than that source.
+   search result, or DevUI view must preserve a resolvable link to its source and cannot gain
+   stronger authority automatically. Any stronger standing requires the explicit governed
+   promotion described in rule 5.
 5. **Promotion is explicit and governed.** Crossing from working, derived, or proposed material
    into a normative or otherwise stronger authority class requires an explicit review/decision,
    a target surface, and a durable receipt or equivalent repo evidence.
@@ -50,7 +51,8 @@ Those documents remain the local owners named in the reconciliation table below.
 | Product/Runtime owner docs, ADRs, contracts, code, and tests | Accepted product meaning, architecture decisions, contracts, and shipped behavior according to each owner | A Builder working note or a DevUI-generated copy |
 | Builder Vault working artifacts | Non-normative research, agent drafts, design explorations, comparisons, and intermediate products | Product/runtime truth, accepted architecture, or an executable task without promotion |
 | BuilderOps operating plane | Builder worklogs, signals, proposals, operational state, and receipts under ADR-0010 | Product/runtime semantic truth or direct repo/GitHub mutation |
-| GitHub Issues and PRs | The executable Builder task contract and delivery/review lifecycle for their bounded scope | Product/runtime semantic truth merely by being open, merged, or displayed |
+| GitHub Issues | The executable Builder task contract for their bounded scope | Product/runtime semantic truth merely by being open, closed, or displayed |
+| GitHub PRs | Delivery, review, merge, and closure evidence for their bounded scope | The executable task contract or Product/runtime semantic truth merely by being open, merged, or displayed |
 | Generated projection / mirror | A rebuildable view over named sources, with freshness and limitations | A new source of truth or an authority upgrade |
 | DevUI discovery/control plane | Read-time indexing, projection, navigation, source-state presentation, and links to governed actions | A docs portal, source registry, policy engine, task store, or promotion authority |
 | Receipt / verification evidence | What a bounded transition, review, or verification observed and recorded | A replacement for the owner contract or proof of unrelated claims |
@@ -70,7 +72,7 @@ reverse the meaning below without an accepted owner decision.
 | **Normative** | Accepted and owner-governed for a named scope; it can define requirements, architecture, policy, or current truth as its owner contract allows. | It is a source of authority only within that scope. |
 | **Non-normative** | Useful, inspectable, and explicitly not a source of requirements or current truth. | It may inform a proposal but cannot authorize implementation or action by itself. |
 | **Ephemeral** | Intended to be short-lived, disposable, or retained only for a bounded working episode. | Durability is low; it still needs provenance while it is used and must not gain authority from persistence. |
-| **Derived** | Produced from one or more named sources by a transformation, synthesis, aggregation, or projection. | It must preserve lineage and cannot exceed source authority. |
+| **Derived** | Produced from one or more named sources by a transformation, synthesis, aggregation, or projection. | It must preserve lineage and cannot gain stronger authority automatically; any stronger standing requires explicit governed promotion. |
 | **Promoted** | Explicitly accepted at a governed boundary into a target surface or stronger authority class. | Promotion is a recorded transition, not a copy or a status inferred from location. |
 | **Superseded** | Retained artifact whose active claim has been replaced for a named scope by an explicit successor. | It is historical/audit context, not current authority. |
 | **Authority** | The bounded right to define, establish, or authorize a claim or transition for a named scope. | Authority is claim-, scope-, and owner-specific; it is not a storage or UI property. |
