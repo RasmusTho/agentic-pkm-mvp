@@ -13,10 +13,11 @@ Source of truth: This document owns the owner experience. Accepted ADRs and link
 specifications own the mechanisms; live GitHub, CI, dispatcher, and receipt evidence owns delivery
 truth.
 Last reviewed: 2026-08-12
-Last verified against: `origin/main` `efbf1acd529e127803da0a6d56b384d7fb8c2bd8`, including the
-merged withdrawal receipt in PR #4751, the admitted local Focus route in PR #4771, the admitted
-direct-loopback Overview route in PR #4772, the ARO-03 contract and route-test-selection recovery
-in PR #4789, and the `Via`-transit admission repair in PR #4792; ADR-0057,
+Last verified against: `origin/main` `a4e79f77909f93e1a313d9f10907e6ed8aeb72a6`, live GitHub state
+for #4746, #4768, #4834, and #4838, the merged withdrawal receipt in PR #4751, the admitted local
+Focus route in PR #4771, the admitted direct-loopback Overview route in PR #4772, the ARO-03
+contract and route-test-selection recovery in PR #4789, and the `Via`-transit admission repair in
+PR #4792; ADR-0057,
 ADR-0062, ADR-0064, ADR-0065, the CKM and BuilderOps Cockpit owner contracts, the Deterministic
 Delivery Orchestration specification, the merged Builder System process clarification in PR #4692,
 the advisory Builder System devUI execution audit in PR #4689, and the merged Focus and Conversation
@@ -381,9 +382,11 @@ same devUI context; it does not redirect the owner to another subsystem.
 
 ## Information architecture
 
-The detailed visual design must go through Yggdrasil design handoff before implementation. devUI has
-three connected owner views, not separate capability, work, agent, Cockpit, CKM, Signboard, and
-receipt products:
+Detailed visual work must pass one of the governed Yggdrasil routes before implementation. Exact
+shipped-pattern reuse may use an independently reviewed `yggdrasil-constrained-reuse.v1` provenance
+receipt; novel, mixed, or unknown scope must pass the live Yggdrasil design-system gate and produce
+the separate live handoff receipt. devUI has three connected owner views, not separate capability,
+work, agent, Cockpit, CKM, Signboard, and receipt products:
 
 1. **Overview** — the three zones: Now, Needs you, and Ready to try, including the optional
    read-only SoI Evidence View lens over a named Product/Runtime SoI scope.
@@ -452,9 +455,10 @@ it retains that proof's explicit Product/Runtime denominator and current/target 
 does not classify Overview items or become a maturity, priority, or lifecycle authority.
 
 This contract is a nonvisual prerequisite. A local GET-only route may expose it after its own
-bounded implementation proof. A visual shell remains separately gated by the governed Yggdrasil
-design handoff; neither a browser nor a shell may reclassify the server result or add durable
-selection state.
+bounded implementation proof. A visual shell remains separately gated by accepted Yggdrasil design
+evidence: either independently reviewed exact shipped-pattern reuse provenance or the live handoff
+required for novel, mixed, or unknown scope. Neither a browser nor a shell may reclassify the server
+result or add durable selection state.
 
 The pure composer is implemented in `app/builderops/devui_overview.py`. It accepts only the
 composition envelope, explicit producer evidence, and typed root references; without actionable
@@ -592,9 +596,22 @@ claims that the Builder System Control runtime or UI is delivered.
 The following is a candidate composition brief for the governed Yggdrasil design handoff, not an
 accepted visual contract. The binding contract is the information behavior: preserve the selected
 subject and goal, expose situation → meaning → next step, keep evidence and provenance reachable,
-and make authority-bearing actions visually distinct. The handoff may revise geometry, proportions,
-components, typography, motion, or responsive treatment while preserving those behaviors. No visual
-implementation may treat this sketch as final before the handoff receipt exists.
+and make authority-bearing actions visually distinct.
+
+For the connected Stage A Overview → Focus → return scope, #4746 may accept an independently
+reviewed `yggdrasil-constrained-reuse.v1` receipt only after #4834 has merged stable source-owned
+**Now** fixtures and the delivered #4768 admitted Focus API fixtures have been re-read. That receipt
+must map every visual and interaction decision to exact shipped Cockpit patterns and accepted token
+declarations, list every allowed layout or interaction transformation, normalize external font
+imports to a hash-bound local-system-font/no-egress subset, and cover the complete state and
+accessibility matrix with zero novel visual language. This governance change does not accept #4746.
+#4746 remains blocked until those fixtures exist and one such receipt passes independent review.
+
+If any proposed or final delta is novel, mixed, or unknown, or lies outside the reviewed reuse
+envelope, the live Yggdrasil design-system gate remains mandatory. Only that live route may revise
+geometry, proportions, components, typography sources, motion, icon language, or interaction class.
+No visual implementation may treat this sketch as final before its applicable governed receipt
+exists.
 
 The candidate cockpit is asymmetric rather than three equal dashboard columns. **Now** is the wide
 situation field because it carries the system model. **Needs you** is a compact, high-salience
@@ -655,7 +672,8 @@ Delivered now:
 - DDO-01 through DDO-04 fast lane, contracts, plan compiler, reducer, and WorkerRuntime seam; and
 - parts of the BuilderOps API/PostgreSQL control-plane development baseline.
 
-Not delivered now: one devUI shell; request/preview/authenticated approval in one owner experience;
+Not delivered now: the #4834 source-owned **Now** adapter and stable fixture; one devUI shell;
+request/preview/authenticated approval in one owner experience;
 PostgreSQL authority cutover; full live run controls; receipt-to-CKM reassessment in the unified
 surface; Focus browser UI, capability-subject route, and Overview-to-Focus
 navigation; provider conversation runtime; authenticated command preview/Start/Hold;
@@ -712,7 +730,8 @@ routes may remain available for diagnostics and recovery, but devUI is the norma
 - [ ] Normal owner flow needs no technical identifier.
 - [ ] No persisted graph, parallel intent object, or second task/state system is introduced for the
       owner experience.
-- [ ] The visual surface has passed Yggdrasil design handoff and desktop, narrow/200%, keyboard,
+- [ ] The visual surface has accepted Yggdrasil design evidence — exact constrained-reuse provenance
+      or the live handoff required for any novel delta — plus desktop, narrow/200%, keyboard,
       degraded, and many-at-once validation.
 
 ## Mechanism owners and related documents

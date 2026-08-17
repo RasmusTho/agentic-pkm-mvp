@@ -128,9 +128,11 @@ citation site. `_shared/READ_SCOPE.md` is the canonical protocol, including the 
 - `docs-governance`
   - decision and routing skill for docs-as-code ownership, anti-sprawl, DOCS_INDEX impact, and narrower docs workflow selection
 - `yggdrasil-design-handoff`
-  - prepare, run, revise, validate, or archive Claude Design and other UI/component handoffs;
-    fail closed unless the live Yggdrasil Design System is selected or attached and its token sheet
-    matches the repo's binding source
+  - prepare, run, revise, validate, or archive Claude Design and other UI/component handoffs; classify
+    exact shipped-pattern reuse separately from novel, mixed, and unknown work; only exact reuse may
+    use an independently reviewed content-addressed constrained-reuse receipt without generation,
+    while every generated or out-of-envelope visual remains fail-closed on live Yggdrasil Design
+    System selection/attachment and token parity
 - `docs-authoring`
   - docs-only authoritative authoring lane
 - `docs-to-issue`
@@ -205,6 +207,8 @@ workflow — see `## App-agent skill family (product-lane)` below for the full d
   `docs-governance -> (docs-authoring | docs-to-issue | feature-breakdown)`
 - Design handoff path:
   `yggdrasil-design-handoff -> governed exploration/handoff -> disposition (PromotionIntent when crossing authority classes) -> (Companion UI: Crossing B -> normalized spec | other surface: local owner doc/spec) -> docs-to-issue`
+- Exact shipped-pattern reuse path:
+  `yggdrasil-design-handoff -> exact_shipped_reuse classification -> content-addressed yggdrasil-constrained-reuse.v1 -> independent review -> bounded consuming Issue`; any novel, mixed, unknown, or final out-of-envelope delta returns to the live design handoff path
 - Architecture research path:
   `architecture-research -> explicit disposition + accepted PromotionIntent/BuilderOpsReceipt -> feature-breakdown -> promoted receipt -> issue-to-code` (audit doc publishes via `publish-pr`; findings reconcile against open epics instead of creating parallel hubs)
 - Maintenance-learning intake path:

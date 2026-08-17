@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from scripts.lint_skills_consistency import run_lint
+
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -270,6 +272,20 @@ def test_yggdrasil_design_handoff_is_routed_and_fail_closed() -> None:
         in principles_flat
     )
     assert "For other Product or Builder surfaces" in skill
+
+
+def test_agent_skills_are_consistent() -> None:
+    errors = run_lint(REPO_ROOT)
+    assert errors == [], "skills consistency lint reported errors:\n" + "\n".join(errors)
+
+    agents = _read("AGENTS.md")
+    skill_index = _read(".codex/skills/README.md")
+    docs_index = _read("docs/DOCS_INDEX.md")
+    skill_path = ".codex/skills/yggdrasil-design-handoff/SKILL.md"
+
+    assert skill_path in agents
+    assert "`yggdrasil-design-handoff`" in skill_index
+    assert f"| {skill_path} |" in docs_index
 
 
 def test_issue_to_code_preflight_captures_expected_branch_and_worktree() -> None:
