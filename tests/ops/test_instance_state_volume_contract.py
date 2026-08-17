@@ -1999,6 +1999,7 @@ def test_real_deployment_wrapper_produces_owner_inventory_before_mutation_window
     python.write_text(
         "#!/usr/bin/env bash\n"
         'printf \'python:%s\\n\' "$*" >> "$EVENT_LOG"\n'
+        'if [ "${1:-}" = - ]; then exec "${REAL_PYTHON:?}" "$@"; fi\n'
         'case " $* " in\n'
         "  *' produce-legacy-owners '*)\n"
         '    while [ "$#" -gt 0 ]; do\n'
@@ -2052,6 +2053,7 @@ def test_real_deployment_wrapper_produces_owner_inventory_before_mutation_window
         env={
             **os.environ,
             "EVENT_LOG": str(event_log),
+            "REAL_PYTHON": sys.executable,
             "PATH": f"{fake_bin}:{os.environ['PATH']}",
             "INSTANCE_OWNERSHIP_HOST_STATE_DIR": str(ownership_root),
         },
@@ -2071,6 +2073,7 @@ def test_real_deployment_wrapper_produces_owner_inventory_before_mutation_window
     validate_index = next(i for i, event in enumerate(events) if "validate-legacy-owners" in event)
     finish_index = next(i for i, event in enumerate(events) if "deployment-finish" in event)
     assert produce_index < begin_index < stop_index < proof_index < validate_index < finish_index
+    assert sum(event.startswith("python:- ") for event in events) == 2
 
 
 def test_real_deployment_wrapper_mounts_selected_root_at_cutover_alias(
@@ -2085,6 +2088,7 @@ def test_real_deployment_wrapper_mounts_selected_root_at_cutover_alias(
     python.write_text(
         "#!/usr/bin/env bash\n"
         'printf \'python:%s\\n\' "$*" >> "$EVENT_LOG"\n'
+        'if [ "${1:-}" = - ]; then exec "${REAL_PYTHON:?}" "$@"; fi\n'
         'case " $* " in\n'
         "  *' produce-legacy-owners '*)\n"
         '    while [ "$#" -gt 0 ]; do\n'
@@ -2139,6 +2143,7 @@ def test_real_deployment_wrapper_mounts_selected_root_at_cutover_alias(
         env={
             **os.environ,
             "EVENT_LOG": str(event_log),
+            "REAL_PYTHON": sys.executable,
             "PATH": f"{fake_bin}:{os.environ['PATH']}",
             "MVR01C_ROLLBACK_VAULT_BINDING_ID": "binding-selected",
             "MVR01C_ROLLBACK_VAULT_ROOT": selected_root,
@@ -2159,6 +2164,8 @@ def test_real_deployment_wrapper_mounts_selected_root_at_cutover_alias(
     assert "--rollback-vault-binding-id binding-selected" in cutover
     assert "--selected-root /app/selected-vault" in cutover
     assert "--native-launcher /app/scripts/scalar_rollback_native.sh" in cutover
+    events = event_log.read_text(encoding="utf-8").splitlines()
+    assert sum(event.startswith("python:- ") for event in events) == 2
 
 
 def _legacy_owner_source_fixture(tmp_path: Path) -> tuple[Path, dict[str, Path]]:
