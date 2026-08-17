@@ -103,10 +103,13 @@ include raw paths, vault names, environment values, DSNs, secrets, or raw startu
   Project repair remains an explicit cold-path action.
 - Verify review-feedback repairs are present on the target base branch before treating them as closed; a side branch or intermediate PR is not enough unless the fixing commit is reachable from the final merge target. [base-branch-truth]
 - Run GitHub GraphQL `reviewThreads` closure checks only when a review-thread closure trigger is present: a review-fix or direct-repair PR, a PR body or source anchor that names prior review feedback, a terminal issue/PR closure audit, or known unresolved review feedback. Preserve the lightweight hot path for ordinary PRs with no trigger. [review-thread-closure]
-- When a review-thread closure trigger applies, reply on and resolve or explicitly disposition the
-  original review thread before final closure: P0/P1 repairs name the fixing PR or merge commit, P2
-  deferrals name their durable defect Issue, and P3 observations may be closed as informational.
-  [review-thread-closure]
+- When a review-thread closure trigger applies, preserve the original actionable thread node IDs and
+  reply on and resolve or explicitly disposition every one before final closure: P0/P1 repairs name
+  the fixing PR or merge commit, P2 deferrals name their durable defect Issue, and P3 observations
+  record an informational disposition. Immediately before the terminal receipt, re-read those same
+  original thread IDs through `reviewThreads` and require a final resolved state plus the matching
+  reply or disposition evidence for each; missing, substituted, or still-unresolved original-thread
+  evidence fails closure. Record that final readback in the delivery receipt. [review-thread-closure]
 - On resume or recovery, re-check branch, `origin/main`, relevant merged PRs, and expected implementation files before continuing publication, reimplementation, or closure. [post-resume-current-state-gate]
 - If the work is a slice under a larger feature, keep post-merge validation evidence on the parent issue
 - If post-merge validation advanced but acceptance is still pending, record the new evidence on the parent issue body or comments
@@ -635,8 +638,18 @@ this block.
 
 ## Dependent Issue Unblocking
 
-After merging and delivering work, scan for issues blocked by the delivered Issue.
-Only unblock issues whose actual dependency is truly satisfied.
+Before a terminal delivery receipt, read current dispatcher status and the exact issue task state
+(`python3 -m app.dispatcher status --json` and `python3 -m app.dispatcher show <task-id> --json` when
+the task exists). Record the readback and require it to agree with the merged Issue/PR and label
+state; unavailable, stale, or contradictory dispatcher evidence is a terminal-closure block, not a
+reason to infer completion from an earlier lease or receipt.
+
+After merging and delivering work, scan for issues blocked by the delivered Issue. Before unblocking
+each dependent, re-read its live Issue body, state, labels, and dependency evidence; run the strict
+issue-readiness validation against that current body and labels; and verify that this delivery
+actually satisfied the named dependency. Only then make the explicit lifecycle mutation and read it
+back. Do not unblock from a stale dependency graph, an earlier readiness report, or a successful
+merge alone.
 
 ## Optional Project Projection
 
