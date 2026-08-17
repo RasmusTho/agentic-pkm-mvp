@@ -75,6 +75,52 @@ _instance_state_deployment_host_ownership_path() {
   esac
 }
 
+# The SETTINGS runtime floor crosses two durable stores.  The host receipt is
+# therefore authority, not telemetry: each replacement fsyncs its content and
+# then the containing directory before either protected-store commit can rely
+# on it.  A failed installed replacement deliberately leaves a durable pending
+# receipt, which fences an old image until an idempotent deployment reconciles.
+_write_settings_rebind_floor_receipt() {
+  local channel="${1:?channel required}"
+  local phase="${2:?phase required}"
+  python3 - "${INSTANCE_OWNERSHIP_HOST_STATE_DIR}" "${channel}" "${phase}" <<'PY'
+import json
+import os
+import sys
+import tempfile
+
+root, channel, phase = sys.argv[1:]
+if phase not in {"pending", "installed"}:
+    raise SystemExit("invalid settings rebind floor receipt phase")
+name = f"settings-rebind-runtime-floor-{channel}.json"
+path = os.path.join(root, name)
+fd, temporary = tempfile.mkstemp(prefix=f".{name}.", dir=root)
+try:
+    os.fchmod(fd, 0o600)
+    payload = json.dumps(
+        {"schema": "settings-rebind-floor-receipt.v1", "channel": channel, "phase": phase},
+        separators=(",", ":"),
+    ).encode() + b"\n"
+    os.write(fd, payload)
+    os.fsync(fd)
+    os.close(fd)
+    fd = -1
+    os.replace(temporary, path)
+    directory = os.open(root, os.O_RDONLY)
+    try:
+        os.fsync(directory)
+    finally:
+        os.close(directory)
+finally:
+    if fd >= 0:
+        os.close(fd)
+    try:
+        os.unlink(temporary)
+    except FileNotFoundError:
+        pass
+PY
+}
+
 # Explicit operator recovery for exactly one missing active ownership lease.
 # This is deliberately not called by deploy/start: the failed deployment must
 # already have left its host-global restart fence and proved quiescence in
@@ -402,11 +448,7 @@ prepare_instance_state_deployment() {
 
   # Install pending authority after the proved stopped window and before either
   # protected-store commit; replaying this idempotent deployment reconciles it.
-  ( umask 077
-    marker_tmp="${INSTANCE_OWNERSHIP_HOST_STATE_DIR}/.settings-rebind-runtime-floor-${channel}-${controller_pid}.tmp"
-    marker_path="${INSTANCE_OWNERSHIP_HOST_STATE_DIR}/settings-rebind-runtime-floor-${channel}.json"
-    printf '{"schema":"settings-rebind-floor-receipt.v1","channel":"%s","phase":"pending"}\n' "${channel}" > "${marker_tmp}" && mv -f -- "${marker_tmp}" "${marker_path}"
-  ) || return $?
+  _write_settings_rebind_floor_receipt "${channel}" pending || return $?
 
   # Re-read every owner/config producer after all writers are stopped and the
   # lease-bound quiescence proof is durable. Any missing or changed source
@@ -599,12 +641,7 @@ prepare_instance_state_deployment() {
   # Publish the host receipt only after both deployment proof and the atomic
   # SETTINGS record/floor commit succeeded. A crash before this point leaves no
   # rollback fence; a crash after it has the complete protected state.
-  ( umask 077
-    marker_tmp="${INSTANCE_OWNERSHIP_HOST_STATE_DIR}/.settings-rebind-runtime-floor-${channel}-${controller_pid}.tmp"
-    marker_path="${INSTANCE_OWNERSHIP_HOST_STATE_DIR}/settings-rebind-runtime-floor-${channel}.json"
-    printf '{"schema":"settings-rebind-floor-receipt.v1","channel":"%s","phase":"installed"}\n' "${channel}" > "${marker_tmp}" &&
-      mv -f -- "${marker_tmp}" "${marker_path}"
-  )
+  _write_settings_rebind_floor_receipt "${channel}" installed
   inventory_rc=$?
   if [ "${inventory_rc}" -ne 0 ]; then
     _release_abandoned_instance_state_deployment_lease \

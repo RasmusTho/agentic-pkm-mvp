@@ -67,11 +67,13 @@ def test_floor_receipt_is_published_only_after_proof_and_dormant_install() -> No
         encoding="utf-8"
     )
     proof = deployment.index("python -m app.instance.runtime deployment-prove")
+    pending = deployment.index('_write_settings_rebind_floor_receipt "${channel}" pending')
+    mvr_floor = deployment.index("mvr05-record-floor")
     install = deployment.index("python -m app.instance.runtime settings-rebind-install-dormant")
-    receipt = deployment.index("settings-rebind-runtime-floor-${channel}.json")
+    installed = deployment.index('_write_settings_rebind_floor_receipt "${channel}" installed')
     finish = deployment.rindex("deployment-finish")
 
-    assert proof < install < receipt < finish
+    assert proof < pending < mvr_floor < install < installed < finish
 
 
 def test_floor_receipt_path_uses_resolved_default_and_explicit_host_root(tmp_path) -> None:
@@ -106,3 +108,14 @@ def test_rollback_reads_floor_receipt_only_after_host_root_preparation() -> None
     admission = deploy.index('if [ "${action}" = "rollback" ] && [ -f "${settings_rebind_floor_marker}" ]')
 
     assert prepared < marker < admission
+
+
+def test_pristine_pre_floor_rollback_remains_unfenced() -> None:
+    deploy = (REPO_ROOT / "scripts/deploy_channel.sh").read_text(encoding="utf-8")
+    admission = 'if [ "${action}" = "rollback" ] && [ -f "${settings_rebind_floor_marker}" ]'
+    assert admission in deploy
+    # A missing receipt is the durable proof that no SETTINGS floor transition
+    # began; generic scalar rollback must therefore retain its pre-floor path.
+    assert deploy.index(admission) < deploy.index(
+        'if [ "${scalar_rollback}" = "1" ]', deploy.index(admission)
+    )

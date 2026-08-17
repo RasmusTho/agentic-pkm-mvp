@@ -144,15 +144,22 @@ def _wrapper_run(
     verify_cutover: int = 1,
     fail_mvr_floor: int = 0,
     fail_settings_install: int = 0,
+    fail_receipt_write: str = "",
+    explicit_root: bool = True,
 ) -> tuple[subprocess.CompletedProcess[str], list[str]]:
-    tmp_path.mkdir(parents=True)
+    tmp_path.mkdir(parents=True, exist_ok=True)
     event_log = tmp_path / "events.log"
     fake_bin = tmp_path / "bin"
-    fake_bin.mkdir()
+    fake_bin.mkdir(exist_ok=True)
     python = fake_bin / "python3"
     python.write_text(
         "#!/usr/bin/env bash\n"
+        'if [ "${1:-}" = - ]; then\n'
+        '  count_file="${RECEIPT_CALLS:?}"; count=$(cat "$count_file" 2>/dev/null || printf 0); count=$((count + 1)); printf %s "$count" > "$count_file"\n'
+        '  [ "${FAIL_RECEIPT_WRITE:-}" = "$count" ] && exit 91\n'
+        'fi\n'
         'if [ "${1:-}" = -c ]; then exec "$REAL_PYTHON" "$@"; fi\n'
+        'if [ "${1:-}" = - ]; then exec "$REAL_PYTHON" "$@"; fi\n'
         'printf \'python:%s\\n\' "$*" >> "$EVENT_LOG"\n'
         'case " $* " in\n'
         "  *' produce-legacy-owners '*)\n"
@@ -201,23 +208,31 @@ def _wrapper_run(
         "  esac\n"
         "  return 0\n"
         "}\n"
+        "prepare_instance_ownership_host_state_dir\n"
         "prepare_instance_state_deployment fake_compose prod\n",
         encoding="utf-8",
     )
     harness.chmod(0o755)
-    ownership_root = tmp_path / "instance-ownership"
-    ownership_root.mkdir()
+    ownership_root = tmp_path / "instance-ownership" if explicit_root else tmp_path / "xdg" / "agentic-pkm" / "instance-ownership"
+    ownership_root.mkdir(parents=True, exist_ok=True)
     env = {
         **os.environ,
         "EVENT_LOG": str(event_log),
         "PATH": f"{fake_bin}:{os.environ['PATH']}",
-        "INSTANCE_OWNERSHIP_HOST_STATE_DIR": str(ownership_root),
+        "RECEIPT_CALLS": str(tmp_path / "receipt-calls"),
         "FAIL_CUTOVER": str(fail_cutover),
         "VERIFY_CUTOVER": str(verify_cutover),
         "FAIL_MVR_FLOOR": str(fail_mvr_floor),
         "FAIL_SETTINGS_INSTALL": str(fail_settings_install),
+        "FAIL_RECEIPT_WRITE": fail_receipt_write,
         "REAL_PYTHON": sys.executable,
     }
+    if explicit_root:
+        env["INSTANCE_OWNERSHIP_HOST_STATE_DIR"] = str(ownership_root)
+    else:
+        env["XDG_STATE_HOME"] = str(tmp_path / "xdg")
+        env["HOME"] = str(tmp_path / "home")
+        env.pop("INSTANCE_OWNERSHIP_HOST_STATE_DIR", None)
     env.pop("MVR03_PRINCIPAL_CUTOVER", None)
     env.pop("MVR03_PRINCIPAL_LOOPBACK_LISTENER", None)
     if cutover:
@@ -230,7 +245,7 @@ def _wrapper_run(
         text=True,
         check=False,
     )
-    return result, event_log.read_text(encoding="utf-8").splitlines()
+    return result, event_log.read_text(encoding="utf-8").splitlines() if event_log.exists() else []
 
 
 def test_settings_floor_receipt_pending_and_installed_matrix(tmp_path: Path) -> None:
@@ -251,6 +266,24 @@ def test_settings_floor_receipt_pending_and_installed_matrix(tmp_path: Path) -> 
     installed_marker = tmp_path / "installed" / "instance-ownership" / "settings-rebind-runtime-floor-prod.json"
     assert installed.returncode == 0
     assert '"phase":"installed"' in installed_marker.read_text(encoding="utf-8")
+
+    installed_write_failure, _ = _wrapper_run(
+        tmp_path / "installed-write-failure", cutover=False, fail_receipt_write="4"
+    )
+    failed_marker = tmp_path / "installed-write-failure" / "instance-ownership" / "settings-rebind-runtime-floor-prod.json"
+    assert installed_write_failure.returncode == 91
+    assert '"phase":"pending"' in failed_marker.read_text(encoding="utf-8")
+
+    replay_root = tmp_path / "same-root-replay"
+    failed, _ = _wrapper_run(replay_root, cutover=False, fail_settings_install=1)
+    assert failed.returncode == 1
+    replayed, _ = _wrapper_run(replay_root, cutover=False)
+    assert replayed.returncode == 0
+    assert '"phase":"installed"' in (replay_root / "instance-ownership" / "settings-rebind-runtime-floor-prod.json").read_text(encoding="utf-8")
+
+    default_root, _ = _wrapper_run(tmp_path / "default-root", cutover=False, explicit_root=False)
+    assert default_root.returncode == 0
+    assert (tmp_path / "default-root" / "xdg" / "agentic-pkm" / "instance-ownership" / "settings-rebind-runtime-floor-prod.json").is_file()
 
 
 def test_wrapper_runs_the_cutover_inside_the_stopped_window(tmp_path: Path) -> None:
