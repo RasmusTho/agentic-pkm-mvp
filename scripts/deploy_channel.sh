@@ -211,7 +211,8 @@ acquire_channel_mutation_lock
 current_sha="$(read_pin "${pin_file}" 2>/dev/null || true)"
 target_sha="$(resolve_target_sha "${target_sha}")"
 scalar_rollback=0
-if [ "${action}" = "rollback" ] && \
+settings_rebind_floor_marker="${INSTANCE_OWNERSHIP_HOST_STATE_DIR:-}/settings-rebind-runtime-floor-${channel}.json"
+if [ "${action}" = "rollback" ] && [ -f "${settings_rebind_floor_marker}" ] && \
   { ! git -C "${ROOT}" cat-file -e "${target_sha}:app/instance/mvr05_cutover.py" 2>/dev/null \
     || ! git -C "${ROOT}" cat-file -e "${target_sha}:app/instance/settings_rebind.py" 2>/dev/null; }; then
   scalar_rollback=1
@@ -700,7 +701,8 @@ rollback_failed_startup() {
     return 0
   fi
   if [ -n "${current_sha}" ]; then
-    if ! git -C "${ROOT}" cat-file -e "${current_sha}:app/instance/settings_rebind.py" 2>/dev/null; then
+    if [ -f "${settings_rebind_floor_marker}" ] && \
+      ! git -C "${ROOT}" cat-file -e "${current_sha}:app/instance/settings_rebind.py" 2>/dev/null; then
       echo "${reason} (status ${original_status}); automatic rollback is blocked because previous pin ${current_sha} cannot satisfy the persisted settings rebind runtime floor" >&2
       return 0
     fi

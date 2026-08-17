@@ -385,6 +385,22 @@ prepare_instance_state_deployment() {
       "${controller_pid}" "${controller_start_token}"
     return "${inventory_rc}"
   fi
+  # This host-global receipt is written only after the atomic protected record
+  # commit succeeds. Rollback admission consumes its existence, not image age,
+  # so installations which never crossed SETTINGS-05A retain generic rollback.
+  ( umask 077
+    marker_tmp="${INSTANCE_OWNERSHIP_HOST_STATE_DIR}/.settings-rebind-runtime-floor-${channel}-${controller_pid}.tmp"
+    marker_path="${INSTANCE_OWNERSHIP_HOST_STATE_DIR}/settings-rebind-runtime-floor-${channel}.json"
+    printf '{"schema":"settings-rebind-floor-receipt.v1","channel":"%s"}\n' "${channel}" > "${marker_tmp}" &&
+      mv -f -- "${marker_tmp}" "${marker_path}"
+  )
+  inventory_rc=$?
+  if [ "${inventory_rc}" -ne 0 ]; then
+    _release_abandoned_instance_state_deployment_lease \
+      "${compose_function}" "${channel}" "${runtime_user}" \
+      "${controller_pid}" "${controller_start_token}"
+    return "${inventory_rc}"
+  fi
 
   "${compose_function}" run --rm --no-deps -T --user "${runtime_user}" instance-state-init \
     python -m app.instance.runtime deployment-prove \

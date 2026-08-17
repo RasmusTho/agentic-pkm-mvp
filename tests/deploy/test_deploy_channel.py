@@ -577,6 +577,12 @@ def test_automatic_rollback_does_not_restart_a_pre_settings_floor_image(
     target_sha = subprocess.check_output(
         ["git", "rev-parse", "HEAD"], cwd=root, text=True
     ).strip()
+    host_state = Path(env["INSTANCE_OWNERSHIP_HOST_STATE_DIR"])
+    host_state.mkdir(parents=True, exist_ok=True)
+    (host_state / "settings-rebind-runtime-floor-dev.json").write_text(
+        '{"schema":"settings-rebind-floor-receipt.v1","channel":"dev"}\n',
+        encoding="utf-8",
+    )
     env["FAKE_DOCKER_FAIL_MATCH"] = "exec -T api python -m app.cli settings validate --json"
     env["FAKE_SHA"] = target_sha
 
