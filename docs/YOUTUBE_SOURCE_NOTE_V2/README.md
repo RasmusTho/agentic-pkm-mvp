@@ -112,7 +112,7 @@ This stable heading is retained because parent Issue #4107 uses it as an accepta
 | 2 | `FIX_CANDIDATE_TRUTH_SURFACES` | [#4109](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4109) — delivered by PR #4130; bounded V1 truth correction only | task 1 |
 | 3 | `COMPOSE_REVIEW_REQUIRED_PROPOSAL_NOTE` | [#4110](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4110) — delivered by PR #4142 | task 2 |
 | 4 | `PERSIST_ANCHORED_TRANSCRIPT_AND_EXTRACTIONS` | [#4111](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4111) — implemented | durable transcript/extraction lineage, partial-failure policy, and D5 versioned companions; #4132 prerequisite delivered |
-| 5 | `PRODUCE_EVIDENCE_ANCHORED_SYNTHESIS_AND_CLAIMS` | [#4112](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4112) — `agent:blocked` | task 4; D6 resolved |
+| 5 | `PRODUCE_EVIDENCE_ANCHORED_SYNTHESIS_AND_CLAIMS` | [#4112](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4112) — governed implementation record | task 4; D6 resolved |
 | 6 | `MATERIALIZE_PORTABLE_YOUTUBE_SOURCE_BUNDLE` | [#4113](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4113) — `agent:blocked` | task 4; D2/D3 resolved; D5 companion seam required |
 | 7 | `ROUTE_CONTENT_AND_RENDER_INITIAL_MODULES` | [#4114](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4114) — `agent:blocked` | tasks 3/5 |
 | 8 | `EXTRACT_GATED_ONTOLOGY_PROPOSALS` | [#4115](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4115) — `agent:blocked` | task 5 |
