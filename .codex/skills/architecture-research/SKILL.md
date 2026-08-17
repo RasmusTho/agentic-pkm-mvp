@@ -148,11 +148,26 @@ must never be used as a proxy.
 - Keep the pass bounded: charter the subsystems and RQs up front; scope creep in research is as
   real as in implementation.
 - The default goal is efficient architecture evidence for real delivery. Do not run large synthetic
-  experiments merely to prove consistency, completeness, throughput, or cost. Validate protocol
-  changes opportunistically on the next two real eligible research/delivery runs; add automation
-  only if the same failure recurs or coordinator cleanup is materially expensive.
+  experiments merely to prove consistency, completeness, throughput, or cost.
 - Do not claim semantic completeness, delivery throughput, parallel speedup, agent-selection effect,
   or token efficiency without an appropriate comparable baseline and exposed measurements.
+
+### Validation window
+
+When a research-protocol change needs real-run validation, open a bounded validation window rather
+than a synthetic experiment. The audit or BuilderOps record that opens the window must record all
+of the following:
+
+- **Start point:** the exact `origin/main` SHA and the protocol change being observed.
+- **Run identity:** a stable, unique identifier for every eligible research or delivery run counted
+  by the window.
+- **Completion record:** for each counted run, its run identity, outcome, and evidence reference.
+- **Removal trigger:** the condition that closes and removes the temporary validation window.
+
+Validate protocol changes opportunistically on the next two real eligible research/delivery runs.
+Close the window when both completion records exist; if the same failure recurs or coordinator
+cleanup is materially expensive, replace the temporary window with the smallest justified
+automation or governance follow-up rather than extending it indefinitely.
 
 ## TCD guidance
 
