@@ -84,6 +84,18 @@ def test_instance_registry_change_selects_vault_coverage() -> None:
     )
 
 
+def test_mvr05_authority_recovery_architecture_test_has_vault_ci_owner() -> None:
+    path = "tests/architecture/test_mvr05_authority_recovery.py"
+
+    selection = select_tests([path])
+
+    assert selection.full_suite is False
+    assert selection.subsystems == ("vault",)
+    assert selection.unowned_paths == ()
+    assert path in selection.targets
+    assert "tests/ops/test_instance_state_volume_contract.py" in selection.targets
+
+
 def test_knowledge_runtime_modules_select_vault_knowledge_and_port_coverage() -> None:
     selection = select_tests(
         [

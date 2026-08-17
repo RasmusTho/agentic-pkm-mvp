@@ -329,6 +329,10 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
             # Vault-layout hardcoded-literal fitness guard. Keep this exact
             # file owned without widening vault to all architecture tests.
             "tests/architecture/test_no_hardcoded_vault_layout.py",
+            # MVR-05 deployment finalization is a vault/ownership authority
+            # boundary. Keep its focused architecture regression owned without
+            # widening vault to all architecture tests.
+            "tests/architecture/test_mvr05_authority_recovery.py",
             # The semanticmd vault-note merge driver/resolver (#4505): cross-
             # device vault-note merging is its real job (uuid: frontmatter
             # identity, near-duplicate/"prefer concise" heuristics), so it was
@@ -348,6 +352,7 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
             "tests/services/test_vault_sync_delete_note_policy.py",
             "tests/watcher/test_vault_watcher_delete_required_outbox.py",
             "tests/architecture/test_no_hardcoded_vault_layout.py",
+            "tests/architecture/test_mvr05_authority_recovery.py",
             "tests/agents/test_merge_resolver.py",
             "tests/agents/test_merge_resolver_repo_docs.py",
             "tests/cli/test_merge_driver.py",
