@@ -77,6 +77,15 @@ def test_direct_loopback_rejects_forwarded_identity_claim():
     assert report.readiness_classification == "admission_contract_conflict"
 
 
+def test_explicit_no_forwarding_conflict_remains_rejected():
+    body = _issue_body(
+        scope="Require gateway admission to accept forwarded identity.",
+        constraints="The gateway has no forwarded identity.",
+    )
+    report = classify_issue_body(body, labels=("agent:ready",))
+    assert report.readiness_classification == "admission_contract_conflict"
+
+
 def test_negated_or_unrelated_proxy_text_is_not_an_affirmative_admission_claim():
     negative = _issue_body(
         scope="Require direct loopback endpoint admission.",

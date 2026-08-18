@@ -456,6 +456,8 @@ def admission_contract_problem(body: str) -> str | None:
         return None
     if not _contains_any(PRODUCTION_SEAM_PATTERNS, body):
         return "admission/proxy/forwarded-identity claim has no named production seam"
+    if _contains_any(NO_FORWARDED_IDENTITY_PATTERNS, body) and _affirmative_forwarded_identity_claim(body):
+        return "forwarded-identity assertion contradicts the named no-forwarding seam"
     if _contains_any((re.compile(r"\bdirect loopback\b", re.IGNORECASE),
                       re.compile(r"\bloopback endpoint\b", re.IGNORECASE)), body) and _affirmative_forwarded_identity_claim(body):
         return "forwarded-identity assertion contradicts the direct-loopback seam"
