@@ -212,6 +212,48 @@ authority-surface references.
 
 ## Object Types
 
+### Builder Vault working-artifact admission
+
+`BuilderVaultWorkingArtifact` is the bounded BuilderOps admission seam for Builder Vault research,
+agent drafts, design explorations, and intermediate products. It uses the existing validated
+BuilderOps envelope and store; it is not a second vault, source registry, authority-bearing mirror,
+or promotion executor.
+
+**Authority boundary:** every admitted record has `authority_standing: non_normative`. Its
+`location_context` is routing context only and cannot establish authority. It may use BuilderOps
+`raw` or `analytical` authority classes, but it never becomes Product/Runtime, PKM, repo, GitHub,
+or DevUI truth merely by storage, indexing, readback, display, lifecycle state, or recency.
+
+**Required classification:** `authority_standing`, `derivation_role`, `durability_posture`,
+`working_lifecycle_stage`, `promotion_posture`, and `location_context` are explicit. The
+classification uses the cross-plane overlay without collapsing its axes: derivation is
+`source|derived|projection|unknown`; durability is `durable|ephemeral|rebuildable|unknown`; the
+working stage is `capture|explore|synthesize|propose|promote|implement|verify|supersede_retire|unknown`;
+and promotion posture is `not_promoted|proposed|promoted|superseded|retired|unknown`. Unknowns are
+stored explicitly rather than inferred from a path, timestamp, Git state, model identity, or UI.
+
+**Required provenance:** the `provenance` object preserves source refs, derivation inputs and
+transformation, actor/process/time, source versions or watermarks, review/decision and promotion
+refs, supersession and receipt refs, and limitations. Known source refs use the existing `SourceRef`
+shape; unavailable evidence is represented as explicit `unknown`, never silently omitted.
+
+**Lifecycle and promotion:** `archived` (retirement), `discarded`, `superseded`, and a rejected
+promotion require `successor_refs` naming successor or outcome evidence. The existing source refs
+and transition receipt remain attached; the record is not deleted or rewritten. Any authority
+crossing is proposal-only through a separately created `PromotionIntent` and the existing promotion
+gateway. That gateway requires an explicit target, review decision, and receipt/result evidence; it
+does not directly mutate repo, GitHub, Product/Runtime, or PKM authority.
+
+**Required fields:** common envelope fields, including `id`, `source_refs`, `created_by`, `summary`,
+`body`, and `receipt_refs`; `authority_standing: non_normative`; the five remaining classification
+fields; and `provenance` with every field in the minimum provenance envelope above.
+
+**Lifecycle states:** `draft`, `active`, `review_pending`, `accepted`, `promoted`, `archived`,
+`discarded`, and `superseded`.
+
+**Must not do:** infer or execute a promotion; create an Issue or PR; write a repo document; or
+mutate Product/Runtime or PKM authority.
+
 ### Gated target-state boundary: temporal-intention lifecycle evidence
 
 ADR-0065 owns the future temporal-intention authority and lifecycle semantics. This contract reserves

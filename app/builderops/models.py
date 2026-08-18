@@ -93,6 +93,7 @@ PROMOTION_TARGET_ALIASES: dict[str, str] = {
 
 OBJECT_PREFIXES = {
     "AgentWorklog": "awl",
+    "BuilderVaultWorkingArtifact": "work",
     "LearningSignal": "lrn",
     "RetroCluster": "retro",
     "BuilderDecision": "dec",
@@ -108,6 +109,12 @@ OBJECT_DEFAULTS: dict[str, JsonDict] = {
         "lifecycle_state": "active",
         "promotion_status": "none",
         "task_context": {},
+        "receipt_refs": [],
+    },
+    "BuilderVaultWorkingArtifact": {
+        "authority_class": "raw",
+        "lifecycle_state": "active",
+        "promotion_status": "none",
         "receipt_refs": [],
     },
     "LearningSignal": {
@@ -156,6 +163,7 @@ OBJECT_DEFAULTS: dict[str, JsonDict] = {
 
 ALLOWED_AUTHORITY_BY_TYPE: dict[str, frozenset[str]] = {
     "AgentWorklog": frozenset({"raw", "operational"}),
+    "BuilderVaultWorkingArtifact": frozenset({"raw", "analytical"}),
     "LearningSignal": frozenset({"operational", "analytical"}),
     "RetroCluster": frozenset({"analytical"}),
     "BuilderDecision": frozenset({"decision"}),
@@ -170,6 +178,16 @@ ALLOWED_LIFECYCLE_BY_TYPE: dict[str, frozenset[str]] = {
         "draft",
         "active",
         "review_pending",
+        "promoted",
+        "archived",
+        "discarded",
+        "superseded",
+    }),
+    "BuilderVaultWorkingArtifact": frozenset({
+        "draft",
+        "active",
+        "review_pending",
+        "accepted",
         "promoted",
         "archived",
         "discarded",
@@ -247,6 +265,27 @@ REQUIRED_FIELDS: dict[str, frozenset[str]] = {
         "summary",
         "body",
         "task_context",
+        "receipt_refs",
+    }),
+    "BuilderVaultWorkingArtifact": frozenset({
+        "id",
+        "object_type",
+        "authority_class",
+        "lifecycle_state",
+        "promotion_status",
+        "created_at",
+        "updated_at",
+        "created_by",
+        "source_refs",
+        "summary",
+        "body",
+        "authority_standing",
+        "derivation_role",
+        "durability_posture",
+        "working_lifecycle_stage",
+        "promotion_posture",
+        "location_context",
+        "provenance",
         "receipt_refs",
     }),
     "LearningSignal": frozenset({
@@ -389,6 +428,31 @@ SOURCE_REF_LIST_FIELDS = frozenset({
 # "handled" while the underlying defect stays unrepaired.
 TERMINAL_SIGNAL_LIFECYCLE_STATES = frozenset({"discarded", "superseded"})
 SUCCESSOR_REF_TYPES = frozenset({"github_issue", "github_pr", "promotion_intent"})
+WORKING_ARTIFACT_TERMINAL_STATES = frozenset({"archived", "discarded", "superseded"})
+WORKING_ARTIFACT_CLASSIFICATION_VALUES = {
+    "derivation_role": frozenset({"source", "derived", "projection", "unknown"}),
+    "durability_posture": frozenset({"durable", "ephemeral", "rebuildable", "unknown"}),
+    "working_lifecycle_stage": frozenset({
+        "capture", "explore", "synthesize", "propose", "promote", "implement", "verify",
+        "supersede_retire", "unknown",
+    }),
+    "promotion_posture": frozenset({
+        "not_promoted", "proposed", "promoted", "superseded", "retired", "unknown",
+    }),
+}
+WORKING_ARTIFACT_PROVENANCE_FIELDS = frozenset({
+    "source_refs",
+    "derived_from",
+    "transformation",
+    "actor_or_process",
+    "observed_at",
+    "source_versions_or_watermarks",
+    "review_or_decision_ref",
+    "promotion_ref",
+    "supersedes_refs",
+    "receipt_refs",
+    "limitations",
+})
 
 
 class BuilderOpsValidationError(ValueError):
@@ -514,6 +578,7 @@ def normalize_record(record: Mapping[str, Any]) -> JsonDict:
             validate_nonempty_list(data[field], field)
     validate_source_refs(data["source_refs"])
     validate_terminal_signal_successor(data)
+    validate_working_artifact(data)
     return data
 
 
@@ -548,3 +613,55 @@ def validate_terminal_signal_successor(record: Mapping[str, Any]) -> None:
             f"'{record.get('lifecycle_state')}' requires at least one "
             f"successor_refs entry with ref_type in: {allowed}"
         )
+
+
+def validate_working_artifact(record: Mapping[str, Any]) -> None:
+    """Keep Builder Vault working material explicitly non-authoritative and traceable."""
+
+    if record.get("object_type") != "BuilderVaultWorkingArtifact":
+        return
+    if record.get("authority_standing") != "non_normative":
+        raise BuilderOpsValidationError(
+            "BuilderVaultWorkingArtifact authority_standing must be non_normative"
+        )
+    for field, allowed in WORKING_ARTIFACT_CLASSIFICATION_VALUES.items():
+        if record.get(field) not in allowed:
+            raise BuilderOpsValidationError(
+                f"BuilderVaultWorkingArtifact {field} must be one of: {', '.join(sorted(allowed))}"
+            )
+    if not isinstance(record.get("location_context"), str) or not record["location_context"].strip():
+        raise BuilderOpsValidationError(
+            "BuilderVaultWorkingArtifact location_context must be explicit"
+        )
+    provenance = record.get("provenance")
+    if not isinstance(provenance, Mapping):
+        raise BuilderOpsValidationError("BuilderVaultWorkingArtifact provenance must be an object")
+    missing = sorted(
+        field for field in WORKING_ARTIFACT_PROVENANCE_FIELDS
+        if field not in provenance or provenance[field] in (None, "")
+    )
+    if missing:
+        raise BuilderOpsValidationError(
+            "BuilderVaultWorkingArtifact provenance missing required field(s): "
+            + ", ".join(missing)
+        )
+    for field in ("source_refs", "derived_from"):
+        value = provenance[field]
+        if value != ["unknown"]:
+            validate_source_refs(value, f"provenance.{field}")
+    for field in ("source_versions_or_watermarks", "supersedes_refs", "receipt_refs", "limitations"):
+        value = provenance[field]
+        if not isinstance(value, list) or not value:
+            raise BuilderOpsValidationError(
+                f"BuilderVaultWorkingArtifact provenance.{field} must be a non-empty list or explicit unknown"
+            )
+    terminal = record.get("lifecycle_state") in WORKING_ARTIFACT_TERMINAL_STATES
+    rejected = record.get("promotion_status") == "rejected"
+    if terminal or rejected:
+        successors = record.get("successor_refs")
+        if not isinstance(successors, list) or not successors:
+            raise BuilderOpsValidationError(
+                "BuilderVaultWorkingArtifact terminal or rejected-promotion disposition "
+                "requires successor_refs with the successor or outcome evidence"
+            )
+        validate_source_refs(successors, "successor_refs")
