@@ -37,6 +37,17 @@ def test_canonical_agents_entrypoint_routes_to_repo_skill_index() -> None:
     assert "Known Defects registry Issue #4172" in text
 
 
+def test_shared_issue_contract_requires_duplicate_search_before_issue_creation() -> None:
+    contract = _read(".codex/skills/_shared/ISSUE_CONTRACT.md")
+    self_sufficiency = " ".join(
+        _section_between(contract, "## Issue self-sufficiency rule", "## Child to parent reference").split()
+    )
+
+    assert "Before creating or normalizing a governance or contract Issue" in self_sufficiency
+    assert "open Issues, recently merged PRs, and closed Issues" in self_sufficiency
+    assert "do not require GraphQL or ProjectV2 operations" in self_sufficiency
+
+
 def test_bug_delivery_transition_policy_is_linked_across_workflows() -> None:
     canonical = "AGENTS.md :: Transition-period bug-delivery policy"
     for path in (
