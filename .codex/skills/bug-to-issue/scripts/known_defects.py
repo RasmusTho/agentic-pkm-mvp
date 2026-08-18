@@ -682,25 +682,31 @@ def _entry_marker_from_comment(body: str) -> tuple[str, str] | None:
         ),
         lines[4],
     )
-    if source is None:
+    legacy_source = re.fullmatch(
+        r"- Source: PR #([1-9][0-9]*) @ `([0-9a-f]{40})` "
+        r"\(independent closure review\)",
+        lines[4],
+    )
+    if source is None and legacy_source is None:
         raise KnownDefectsError(
             f"malformed known-defect entry {defect_id}: invalid source"
         )
-    source_pr = int(source.group(1))
-    review_url = urlparse(source.group(3))
-    review_path = review_url.path.casefold()
-    if (
-        review_url.scheme != "https"
-        or review_url.netloc.casefold() != "github.com"
-        or re.fullmatch(
-            rf"/[^/]+/[^/]+/pull/{source_pr}(?:/.*)?",
-            review_path,
-        )
-        is None
-    ):
-        raise KnownDefectsError(
-            f"malformed known-defect entry {defect_id}: review URL does not match PR"
-        )
+    source_pr = int((source or legacy_source).group(1))
+    if source is not None:
+        review_url = urlparse(source.group(3))
+        review_path = review_url.path.casefold()
+        if (
+            review_url.scheme != "https"
+            or review_url.netloc.casefold() != "github.com"
+            or re.fullmatch(
+                rf"/[^/]+/[^/]+/pull/{source_pr}(?:/.*)?",
+                review_path,
+            )
+            is None
+        ):
+            raise KnownDefectsError(
+                f"malformed known-defect entry {defect_id}: review URL does not match PR"
+            )
     value_fields = (
         (lines[5], "- Reproducible symptom: ", "symptom"),
         (lines[6], "- Evidence: ", "evidence"),
@@ -855,6 +861,11 @@ def _validate_schema_comment(comment: dict[str, Any]) -> None:
         )
     _comment_reservation_order(comment)
     if is_entry:
+        if len(_entry_blocks_from_comment(body)) != 1:
+            raise KnownDefectsError(
+                f"schema comment #{comment.get('id')} must contain exactly one "
+                "known-defect entry marker"
+            )
         _entry_marker_from_comment(body)
     elif is_promotion:
         _promotion_from_comment(body)
@@ -924,6 +935,146 @@ def _inventory_comments(
     for comment in comments:
         _validate_schema_comment(comment)
     return comments
+
+
+def _entry_blocks_from_comment(body: str) -> list[str]:
+    """Split a legacy multi-entry comment without granting it authority."""
+    lines = body.splitlines()
+    starts = [
+        index
+        for index, line in enumerate(lines)
+        if line.startswith("<!-- known-defect-entry:")
+    ]
+    return [
+        "\n".join(lines[start:end]).strip()
+        for start, end in zip(starts, starts[1:] + [len(lines)])
+    ]
+
+
+def _reconciliation_entries(
+    gateway: RegistryGateway,
+    registry_issue: int,
+) -> list[tuple[dict[str, Any], str, str, int]]:
+    issue = gateway.get_issue(registry_issue)
+    _validate_registry_issue(issue, require_open=True)
+    comments = sorted(
+        gateway.list_comments(registry_issue),
+        key=lambda item: _comment_reservation_order(item),
+    )
+    entries: list[tuple[dict[str, Any], str, str, int]] = []
+    for comment in comments:
+        body = comment.get("body") or ""
+        blocks = _entry_blocks_from_comment(body)
+        if not blocks:
+            _validate_schema_comment(comment)
+            continue
+        for index, block in enumerate(blocks):
+            parsed = _entry_marker_from_comment(block)
+            if parsed is None:
+                raise KnownDefectsError(
+                    f"comment #{comment.get('id')} contains a non-entry block"
+                )
+            entries.append((comment, block, parsed[0], index))
+    return entries
+
+
+def reconcile_registry(
+    gateway: RegistryGateway,
+    registry_issue: int,
+    *,
+    apply: bool = False,
+) -> dict[str, Any]:
+    """Plan or apply a one-entry-per-comment registry reconciliation."""
+    entries = _reconciliation_entries(gateway, registry_issue)
+    by_id: dict[str, list[tuple[dict[str, Any], str, str, int]]] = {}
+    for entry in entries:
+        by_id.setdefault(entry[2], []).append(entry)
+
+    canonical: set[tuple[int, int]] = set()
+    duplicate_ids: dict[str, list[int]] = {}
+    for defect_id, matches in by_id.items():
+        matches.sort(key=lambda item: _comment_reservation_order(item[0]))
+        canonical.add((int(matches[0][0]["id"]), matches[0][3]))
+        if len(matches) > 1:
+            duplicate_ids[defect_id] = [
+                int(item[0]["id"])
+                for item in matches[1:]
+            ]
+
+    by_comment: dict[int, list[tuple[str, str, int]]] = {}
+    for comment, block, defect_id, index in entries:
+        if (int(comment["id"]), index) in canonical:
+            by_comment.setdefault(int(comment["id"]), []).append(
+                (defect_id, block, index)
+            )
+
+    actions: list[dict[str, Any]] = []
+    for comment in sorted(
+        {id(comment): comment for comment, *_ in entries}.values(),
+        key=lambda item: _comment_reservation_order(item),
+    ):
+        comment_id = int(comment["id"])
+        kept = by_comment.get(comment_id, [])
+        if not kept:
+            actions.append({"action": "delete", "comment_id": comment_id})
+            continue
+        first_block = kept[0][1]
+        if len(kept) > 1 or (comment.get("body") or "").strip() != first_block:
+            actions.append(
+                {
+                    "action": "update",
+                    "comment_id": comment_id,
+                    "body": first_block,
+                }
+            )
+        for defect_id, block, _index in kept[1:]:
+            actions.append(
+                {
+                    "action": "add",
+                    "registry_issue": registry_issue,
+                    "defect_id": defect_id,
+                    "body": block,
+                }
+            )
+
+    report = {
+        "schema": "known-defect-reconciliation.v1",
+        "status": "planned" if not apply else "reconciled",
+        "registry_issue": registry_issue,
+        "entry_count": len(entries),
+        "unique_id_count": len(by_id),
+        "duplicate_ids": duplicate_ids,
+        "multi_entry_comments": sorted(
+            int(comment["id"])
+            for comment in {id(entry[0]): entry[0] for entry in entries}.values()
+            if len(_entry_blocks_from_comment(comment.get("body") or "")) > 1
+        ),
+        "actions": actions,
+    }
+    if not apply:
+        return report
+
+    for action in actions:
+        if action["action"] == "delete":
+            gateway.delete_comment(action["comment_id"])
+        elif action["action"] == "update":
+            gateway.update_comment(action["comment_id"], action["body"])
+        else:
+            gateway.add_comment(action["registry_issue"], action["body"])
+
+    verified = _reconciliation_entries(gateway, registry_issue)
+    verified_ids = {entry[2] for entry in verified}
+    verified_comments = {int(entry[0]["id"]) for entry in verified}
+    if (
+        len(verified) != len(by_id)
+        or len(verified_ids) != len(by_id)
+        or len(verified_comments) != len(by_id)
+    ):
+        raise KnownDefectsError(
+            "reconciliation did not produce one comment per unique defect ID"
+        )
+    report["verified_comment_count"] = len(verified_comments)
+    return report
 
 
 def _registry_candidates_for_read(
@@ -2080,6 +2231,18 @@ def build_parser() -> argparse.ArgumentParser:
     promote.add_argument("--defect-id", required=True)
     promote.add_argument("--issue", required=True, type=int)
 
+    reconcile = subparsers.add_parser(
+        "reconcile",
+        help="plan or apply a bounded registry comment reconciliation",
+    )
+    _add_common_repo_argument(reconcile)
+    reconcile.add_argument("--registry-issue", required=True, type=int)
+    reconcile.add_argument(
+        "--apply",
+        action="store_true",
+        help="apply the verified plan; default is read-only planning",
+    )
+
     return parser
 
 
@@ -2132,11 +2295,17 @@ def main(argv: Sequence[str] | None = None) -> int:
                 )
         elif args.command == "lookup":
             receipt = lookup_defect(args.defect_id, GhRegistryGateway(repo))
-        else:
+        elif args.command == "promote":
             receipt = promote_defect(
                 args.defect_id,
                 args.issue,
                 GhRegistryGateway(repo),
+            )
+        else:
+            receipt = reconcile_registry(
+                GhRegistryGateway(repo),
+                args.registry_issue,
+                apply=args.apply,
             )
     except KnownDefectsError as exc:
         print(
