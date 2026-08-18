@@ -1074,6 +1074,99 @@ def test_malformed_first_line_schema_marker_fails_closed() -> None:
         known_defects.lookup_defect("KD-000000000000", gateway)
 
 
+def test_registry_entry_comment_must_contain_exactly_one_entry_marker() -> None:
+    gateway = FakeGateway()
+    issue = gateway.create_registry_issue()
+    gateway.lock_registry_issue(issue["number"])
+    first = _defect()
+    second = _defect(
+        source_pr=4322,
+        source_sha="b" * 40,
+        review_url=(
+            "https://github.com/RasmusTho/agentic-pkm-mvp/"
+            "pull/4322#discussion_r124"
+        ),
+    )
+    gateway.add_comment(
+        issue["number"],
+        first.render_entry() + "\n\n" + second.render_entry(),
+    )
+    gateway.add_comment(issue["number"], "Owner note: retain the registry history.")
+
+    with pytest.raises(known_defects.KnownDefectsError, match="exactly one"):
+        known_defects.lookup_defect(first.defect_id, gateway)
+
+
+def test_duplicate_entry_id_uses_the_earliest_canonical_record() -> None:
+    gateway = FakeGateway()
+    issue = gateway.create_registry_issue()
+    gateway.lock_registry_issue(issue["number"])
+    defect = _defect()
+    gateway.add_comment(issue["number"], defect.render_entry())
+    gateway.add_comment(issue["number"], defect.render_entry())
+
+    receipt = known_defects.lookup_defect(defect.defect_id, gateway)
+    assert receipt["status"] == "deferred"
+    assert receipt["url"].endswith("issuecomment-1")
+
+
+def test_registry_reconciliation_keeps_earliest_id_and_splits_multi_entry_comment() -> None:
+    gateway = FakeGateway()
+    issue = gateway.create_registry_issue()
+    gateway.lock_registry_issue(issue["number"])
+    first = _defect()
+    second = _defect(
+        source_pr=4322,
+        source_sha="b" * 40,
+        review_url=(
+            "https://github.com/RasmusTho/agentic-pkm-mvp/"
+            "pull/4322#discussion_r124"
+        ),
+    )
+    gateway.add_comment(issue["number"], first.render_entry())
+    gateway.add_comment(issue["number"], first.render_entry())
+    gateway.add_comment(
+        issue["number"],
+        first.render_entry() + "\n\n" + second.render_entry(),
+    )
+    gateway.add_comment(issue["number"], "Owner note: retain the registry history.")
+
+    plan = known_defects.reconcile_registry(gateway, issue["number"])
+    assert plan["status"] == "planned"
+    assert plan["duplicate_ids"] == {first.defect_id: [2, 3]}
+    assert plan["multi_entry_comments"] == [3]
+
+    receipt = known_defects.reconcile_registry(
+        gateway,
+        issue["number"],
+        apply=True,
+    )
+    assert receipt["status"] == "reconciled"
+    assert receipt["verified_comment_count"] == 2
+    comments = gateway.comments[issue["number"]]
+    assert all(
+        body.count("<!-- known-defect-entry:v1") == 1
+        for body in (comment["body"] for comment in comments)
+        if "<!-- known-defect-entry:v1" in body
+    )
+    assert known_defects.lookup_defect(first.defect_id, gateway)["status"] == "deferred"
+    assert known_defects.lookup_defect(second.defect_id, gateway)["status"] == "deferred"
+
+
+def test_registry_reconciliation_rejects_malformed_entry_before_mutation() -> None:
+    gateway = FakeGateway()
+    issue = gateway.create_registry_issue()
+    gateway.lock_registry_issue(issue["number"])
+    gateway.add_comment(
+        issue["number"],
+        "<!-- known-defect-entry:v1 id=KD-000000000000 phase=final -->\ninvalid",
+    )
+
+    with pytest.raises(known_defects.KnownDefectsError, match="entry shape"):
+        known_defects.reconcile_registry(gateway, issue["number"], apply=True)
+    assert len(gateway.comments[issue["number"]]) == 1
+
+
 def test_schema_comment_requires_stable_creation_authority() -> None:
     gateway = FakeGateway()
     issue = gateway.create_registry_issue()
