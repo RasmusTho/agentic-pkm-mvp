@@ -323,6 +323,15 @@ The implementation agent must stop point-fixing and build one convergence packet
 - all prior findings and attempted fixes bound to the same mechanism key; and
 - a test matrix mapping each invariant, transition, crash point, and race to focused proof.
 
+### Dormant-capability proof placement
+
+For a dormant capability, the slice that makes storage, schema, or sealing changes proves only
+those durability and sealing obligations. Proof that the capability can execute through an
+activation path belongs to the bounded slice that activates that path, where its production
+entrypoints and focused verification can be named. A convergence packet must not import a
+far-future activation proof merely because it can hypothesize one; if activation is required for
+the current slice, it is current scope and must be explicitly enumerated in the governing Issue.
+
 ### Stateful fallback boundary matrix
 
 For a high-risk stateful fallback mechanism, the convergence packet must also contain **one

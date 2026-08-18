@@ -430,7 +430,7 @@ When continuing through anchor drift:
     - the affected path returns a typed, truthful refusal or degradation outcome, never a false success or ambiguous empty result; and
     - retry, replay, retention, migration, or restore preserves the declared contract where that lifecycle transition exists.
 
-    Do not invent this test class for a bounded slice with none of those state or boundary conditions. When the check adds a runtime precondition, apply `AGENTS.md :: Required rules` **Invariant → producers rule** in the same change: migrate every producer and add its fail-loud preflight rather than protecting only the consumer path.
+    Do not invent this test class for a bounded slice with none of those state or boundary conditions. When the check adds a runtime precondition, apply `AGENTS.md :: Required rules` **Invariant → producers rule** in the same change: migrate every producer and add its fail-loud preflight rather than protecting only the consumer path. The governing Issue must enumerate that producer surface under `.codex/skills/_shared/ISSUE_CONTRACT.md :: Bounded producer and caller surfaces`; do not turn an open class such as "direct-service producers" into an untestable acceptance criterion.
 11. Implement the smallest complete change that turns every behavioral `Verify:` test green without breaking unrelated tests.
 12. **Writeback for non-behavioral ACs**: perform each non-behavioral `Verify:` target in the same change (doc anchor writeback, roadmap wording cleanup, runtime receipt, etc.).
 13. Update owner docs if shipped behavior/contracts changed.
