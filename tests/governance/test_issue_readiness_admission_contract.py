@@ -57,3 +57,34 @@ def test_ready_issue_admission_wording_matches_named_production_seam():
     )
     report = classify_issue_body(matching, labels=("agent:ready",))
     assert report.readiness_classification == "ready_candidate"
+
+
+def test_forwarded_identity_requires_concrete_production_seam():
+    body = _issue_body(
+        scope="Require forwarded identity at the production seam.",
+        constraints="The forwarded identity is trusted by the admission check.",
+    )
+    report = classify_issue_body(body, labels=("agent:ready",))
+    assert report.readiness_classification == "admission_contract_conflict"
+
+
+def test_direct_loopback_rejects_forwarded_identity_claim():
+    body = _issue_body(
+        scope="Require direct loopback endpoint admission with trusted forwarded identity.",
+        constraints="The direct loopback endpoint is the production seam.",
+    )
+    report = classify_issue_body(body, labels=("agent:ready",))
+    assert report.readiness_classification == "admission_contract_conflict"
+
+
+def test_negated_or_unrelated_proxy_text_is_not_an_affirmative_admission_claim():
+    negative = _issue_body(
+        scope="Require direct loopback endpoint admission.",
+        constraints="The direct loopback endpoint has no forwarded identity.",
+    )
+    unrelated = _issue_body(
+        scope="Document the reverse proxy used by the deployment.",
+        constraints="The readiness claim does not require forwarded identity.",
+    )
+    assert classify_issue_body(negative, labels=("agent:ready",)).readiness_classification == "ready_candidate"
+    assert classify_issue_body(unrelated, labels=("agent:ready",)).readiness_classification == "ready_candidate"
