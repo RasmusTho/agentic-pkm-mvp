@@ -378,6 +378,143 @@ destination workflow executes and receipts the effect; Builder System Control do
    disposable transport aids with source versions and cannot become a registry or recovery
    authority.
 
+## Process-health model
+
+Process health is a multidimensional, evidence-bound orientation model for a **named Builder System
+process step** from `docs/development/BUILDER_SYSTEM_PROCESS_MAP.md`. It asks whether that one step
+is supported and continuing as its existing intended-process authority describes; it is not a
+productivity score for the Builder System, a universal lifecycle, or a claim about a person, agent,
+team, or repository as a whole.
+
+Each process-health record names its step, the intended outcome cited from the process map or
+owning workflow, the source owner for each input, independent evidence state, and a limitation. A
+step is only in scope when its identity and intended outcome are explicitly declared. A read that
+cannot establish either yields a typed `unknown` or withdrawal, not a synthesized health result.
+The model is composed per read, rebuildable, and advisory: it has no policy, workflow, task,
+session, release, prioritization, evaluation, ranking, or action authority.
+
+The six dimensions are intentionally separate. A healthy-looking value on one dimension neither
+fills a missing dimension nor implies that the step is delivered, correct, accepted, or suitable for
+continuation. The lens presents the step, inputs, state envelope, denominator/window where present,
+and limitations before any compact summary.
+
+## Process-health dimensions
+
+| Dimension | Per-step question and bounded evidence inputs | Can claim | Cannot claim |
+| --- | --- | --- | --- |
+| Coverage / maturity | For the named step, which explicitly declared required process elements, source declarations, or admitted capabilities have source-owned evidence? Inputs are the step's owner-defined requirement set and its linked source-state/coverage records. | Observed coverage of the declared set, or a bounded maturity observation when the owning source defines stages. | Universal completeness, delivery, quality, or maturity when the requirement set, denominator, or stage owner is absent. |
+| Flow / continuation | Does source-owned route or receipt evidence show the declared step continuing through its next intended legal transition? Inputs are explicit intended-route refs, observed-route refs, and transition/receipt facts. | That an explicitly correlated route continued, paused, or is not evidenced in the stated window. | Causality, throughput, success, or a lifecycle transition inferred from time, prose, branch, session, or name similarity. |
+| Late stop / rework | Did a source-owned stop, invalidation, supersession, or repair receipt identify work that reached this step before the stop? Inputs are explicit late-stop/rework facts and their stable correlation to the step. | Count or presence of explicitly evidenced late stops/rework in the bounded cohort/window. | Defect rate, blame, avoidability, cost, or causal attribution; ordinary iteration is not rework without an owning source's fact. |
+| Escalation quality | When the step produces an escalation, did its owning workflow provide the declared authority, options/consequences, evidence, and receipt/readback? Inputs are explicitly linked escalation and owner-decision/workflow records. | Whether declared escalation-quality fields are evidenced or missing for that step. | Whether the decision was substantively right, whether the owner should decide, or an evaluation of the owner, worker, or agent. |
+| Autonomous continuation | Where the owning workflow permits agent continuation, did source-owned evidence show a lawful continuation, a stop, or a required handoff? Inputs are workflow admission/authority rules plus explicit continuation, refusal, and receipt facts. | That a permitted continuation is evidenced, withdrawn, or unknown under the declared rule. | That autonomy is desirable, safe generally, equivalent to acceptance, or permission to bypass a named authority boundary. |
+| Understanding / trust | Does the step's owner-facing evidence frame expose situation, meaning, next step, source freshness, disagreement, and material limitations? Inputs are source-owned state envelopes and the devUI cognitive-load/decision-support contract. | Whether the declared evidence needed to inspect and interpret this step is present, degraded, or unread. | A person's understanding, confidence, satisfaction, or trustworthiness; it is a presentation-evidence condition, not a psychometric measure. |
+
+No dimension is populated from an unsupported substitute. In particular, GitHub provides only the
+Issue/PR facts it owns; Git and CI/review/merge readback provide their own delivery facts;
+BuilderOps and receipts provide only their recorded facts; and owner documents/workflow contracts
+provide intended process semantics. A source's availability alone does not prove the dimension.
+
+## Measurement contract
+
+Every populated process-health dimension carries this measurement envelope; field absence is not
+permission to estimate it:
+
+```yaml
+process_step_ref: SourceRef.v1                 # explicit process-map/workflow step identity
+intended_outcome_ref: SourceRef.v1             # owner-defined intended outcome
+dimension: coverage_maturity | flow_continuation | late_stop_rework |
+  escalation_quality | autonomous_continuation | understanding_trust
+source_inputs: [SourceRef.v1]                  # each input with its owning authority
+population_or_cohort: string | unknown         # exact admitted step instances
+evaluation_window:
+  event_from: RFC3339 | unknown
+  event_until: RFC3339 | unknown
+denominator: integer | not_countable | unknown
+numerator: integer | not_countable | unknown
+minimum_evidence: string                       # owner-defined admission rule for this dimension
+event_time: RFC3339 | unknown
+observation_time: RFC3339
+source_watermark: string | unknown
+fresh_until: RFC3339 | unknown
+state: evidenced | measured_empty | partial_window | disagreement | stale | unread |
+  unavailable | refused | missing | unlinked | unsupported | unknown | withdrawn
+limitations: [Limitation.v1]
+```
+
+Numerator and denominator are meaningful only for an owner-defined, countable population and one
+compatible evaluation window. `measured_empty` requires a successful bounded read with a visible
+population, event window, and watermark. A partial window is not a zero-filled full window.
+Incompatible denominators, insufficient minimum evidence, unknown step membership, unlinked inputs,
+or incomparable windows yield typed `unknown` or `withdrawn`; the composer never calculates a rate
+or carries a prior value forward. Event time records when the source says something happened;
+observation time records when it was read. Neither composition time nor freshness substitutes for
+the other.
+
+Freshness and expiry remain source-specific. A dimension displays its oldest material input
+watermark and each input's freshness state; it may be `stale` while a different dimension for the
+same step is fresh. A snapshot is a named read boundary, never evidence of an atomic cross-source
+state.
+
+## Authority and correlation boundaries
+
+Owner documents and the Builder System process map define only intended process-step semantics,
+outcomes, requirement sets, and authority boundaries. The process-health composer may cite those
+declarations but cannot amend, normalize, or infer them. Live GitHub, Git, CI/review/merge
+readback, BuilderOps, and receipts contribute only facts each source owns, with their own source
+state, timestamp, watermark, and limitations.
+
+Every cross-source input to a dimension requires an explicit stable correlation owned by a source
+that may assert that relation. The composer never joins process events, cohorts, completions,
+denominators, causes, or rework from names, prose, branch/session similarity, provider metadata, or
+time proximity. When a correlation, input, or source authority is missing, the affected dimension is
+`unlinked`, `unknown`, or `withdrawn` locally; unaffected dimensions remain visible with their own
+limitations. devUI is a read-only composition and never becomes a process-health source of truth,
+source registry, or repair authority.
+
+## Anti-misleading-score safeguards
+
+- Do not render or derive a generic Builder System productivity, efficiency, maturity, confidence,
+  or health score. The six dimensions stay visible and independently stateful.
+- Do not rank, compare, reward, penalize, or evaluate people, agents, workers, teams, repositories,
+  or providers. This model describes evidence for a process step only.
+- Do not hide weights, thresholds, imputations, denominator changes, stale carry-forward, or
+  withdrawn inputs behind a summary. Any later optional aggregate is advisory only and must show
+  every component, source, denominator/window, state, watermark, and limitation.
+- Do not use a dimension or optional aggregate as a machine gate, release gate, policy rule,
+  prioritizer, automation trigger, workflow transition, or sole input to an owner decision. It may
+  orient the owner to source evidence and existing governed routes only.
+- Refuse cross-process, cross-cohort, or cross-window comparisons unless an owning authority
+  explicitly evidences compatible step semantics, population, denominator, window, and limitations.
+  Similar labels or percentages do not establish comparability.
+- Never render missing, unavailable, unread, refused, stale, partial, or incompatible evidence as
+  healthy, zero, empty, neutral, or high trust.
+
+## Process-health verification matrix
+
+This is a specification verification matrix, not a claim that any collector, storage, API, route,
+or visual surface exists.
+
+| Case | Required process-health result | Prohibited rendering/inference |
+| --- | --- | --- |
+| Fresh | Show the bounded dimension value/state, source, cohort/window, watermark, and limitation. | Treat one fresh source as an atomic fresh step summary. |
+| Stale | Retain the explicit stale state and affected claim; withdraw an expired claim where its source rule requires it. | Re-label stale evidence as current or silently carry it forward. |
+| Missing | State `missing` or `unknown` for the affected input/dimension. | Healthy zero, empty, or assumed complete coverage. |
+| Unread | State `unread` with the unperformed/unsupported read scope. | Equate unread with absent evidence or no events. |
+| Unavailable | State `unavailable`, source identity, and limitation; preserve unrelated dimensions. | Suppress the failure or infer a negative/positive value. |
+| Refused | State `refused` and the refusal reason/admission boundary. | Retry through an ungoverned path or treat refusal as measured empty. |
+| Unknown | Preserve typed `unknown` where membership, denominator, authority, or minimum evidence is insufficient. | Estimate, impute, or score the unknown. |
+| Measured-empty | Show the successful bounded read, exact cohort/window, and watermark. | Use a failed, stale, unread, or unlinked read to prove zero. |
+| Partial-window | State `partial_window`, covered interval, missing interval, and limitation. | Divide as though the full window were observed. |
+| Disagreement | Show the disagreeing source-owned facts and their scopes; withdraw any unsupported combined conclusion. | Select a preferred source or fabricate consensus. |
+| Late-stop/rework | Show only the explicitly correlated stop/rework fact, step, cohort/window, and limitation. | Infer blame, defect rate, cause, cost, or a person/agent ranking. |
+
+The matrix composes with the existing BSC source-state axes: coverage, freshness, exception,
+unknown, measured-empty, and route-deviation remain their own source-owned facts. In the devUI
+cognitive-load and decision-support frame, a process-health item must answer what is happening,
+what it means, and what happens next while keeping source freshness, disagreement, and limitations
+reachable at the same evidence depth. It may link to an existing governed route; it does not create
+an action or decision authority.
+
 ## Existing governed routes
 
 The target lens may navigate to, but does not reimplement, routes such as:
@@ -404,6 +541,9 @@ lens does not substitute an ungoverned action.
 - explicit correlations between intended workflows and observed GitHub/BuilderOps/delivery-route
   evidence;
 - source-specific freshness/read-watermark adapters and safe withdrawal of dependent claims;
+- a separate later implementation slice for explicit process-step input adapters and bounded
+  fixtures; any collector, observation, storage, API, route, or UI remains outside this
+  specification change;
 - stable nonvisual fixtures for fresh, stale, unavailable, unread, unsupported, unlinked, missing,
   measured-empty, exception, and deviation cases;
 - an authenticated action boundary plus destination-owned idempotency/readback before any typed
@@ -428,9 +568,14 @@ commands, the following questions must be answered by the authority that owns ea
    evidence?
 5. Which authenticated destination workflows are eligible for later BSC typed proposals, and what
    replay/readback contract does each already provide?
+6. Which existing owner may define countable cohorts, compatible denominators, minimum evidence,
+   expiry, and comparison compatibility for each process-health dimension before a later data, UI,
+   or implementation slice reads it?
 
 Each answer must be recorded in the owning authority surface through its normal governed path. This
-document does not answer by convention or implementation convenience.
+document does not answer by convention or implementation convenience. The later data, collector,
+storage, API, visual/UI, or implementation work is separate follow-up scope and cannot be admitted
+by treating this target-state specification as delivered behavior.
 
 ## Separate interaction and visual requirements
 
