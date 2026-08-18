@@ -400,9 +400,9 @@ def _candidate_proposal_sections(candidate: Candidate) -> tuple[ProposalSection,
 
     summary = candidate.summary_text()
     confidence = candidate.summary_confidence()
-    sections: list[ProposalSection] = []
+    summary_sections: list[ProposalSection] = []
     if summary is not None and confidence is not None and candidate.transcript_segment_count > 0:
-        sections.append(
+        summary_sections.append(
             ProposalSection(
                 module_id="summary",
                 title="Summary",
@@ -412,7 +412,7 @@ def _candidate_proposal_sections(candidate: Candidate) -> tuple[ProposalSection,
             )
         )
     if candidate.optional_failures:
-        sections.append(
+        summary_sections.append(
             ProposalSection(
                 module_id="extraction-gaps",
                 title="Degraded extraction status",
@@ -426,7 +426,7 @@ def _candidate_proposal_sections(candidate: Candidate) -> tuple[ProposalSection,
             )
         )
     if candidate.derived_transcript_link:
-        sections.append(
+        summary_sections.append(
             ProposalSection(
                 module_id="derived-transcript",
                 title="Derived transcript",
@@ -436,7 +436,7 @@ def _candidate_proposal_sections(candidate: Candidate) -> tuple[ProposalSection,
                 ),
             )
         )
-    return tuple(sections)
+    return tuple(summary_sections)
 
 
 def _render_anchored_evidence(

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 
 # The old ``summary`` extractor remains available for explicit legacy callers, but production
 # acquisition and replay must not silently publish its free-text output.
@@ -9,8 +10,8 @@ DEFAULT_EXTRACTOR_IDS: tuple[str, ...] = ("synthesis", "claims")
 
 
 def resolve_extractor_ids(
-    extractor_ids: tuple[str, ...] | list[str],
-    extractor_requirements: dict[str, str] | None,
+    extractor_ids: Sequence[str],
+    extractor_requirements: Mapping[str, str] | None,
 ) -> tuple[str, ...]:
     """Preserve the pre-anchored shorthand for explicit summary policies.
 
