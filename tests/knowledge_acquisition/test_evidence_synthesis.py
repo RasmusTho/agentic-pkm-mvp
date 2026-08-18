@@ -30,16 +30,30 @@ def test_renderer_drops_anchorless_claims_and_synthesis_sentences() -> None:
     assert rendered.dropped == ("synthesis_sentence", "claim")
 
 
-def test_synthesis_reports_coverage_and_caption_quality_confidence_cap() -> None:
+def test_synthesis_coverage_uses_transcript_evidence_spans() -> None:
+    normalized = {
+        **NORMALIZED,
+        "segments": [
+            {"start": float(index), "end": float(index + 1), "text": f"Segment {index}."}
+            for index in range(100)
+        ],
+    }
     rendered = render_evidence_anchored(
-        normalized=NORMALIZED,
+        normalized=normalized,
         model_confidence=0.95,
-        synthesis_sentences=({"text": "Anchored.", "anchors": [ANCHOR]},),
+        synthesis_sentences=(
+            {
+                "text": "Anchored.",
+                "anchors": [{"segment_index": 0, "start": 0.0, "end": 1.0}],
+            },
+        ),
         claims=(),
     )
 
-    assert rendered.coverage == 1.0
-    assert rendered.confidence == 0.75
+    assert rendered.coverage == 0.01
+    assert rendered.model_confidence == 0.95
+    assert rendered.evidence_confidence == 0.01
+    assert rendered.confidence == 0.01
 
 
 def test_synthesis_language_policy_uses_english_unless_source_is_swedish_and_preserves_quotes() -> None:

@@ -25,7 +25,11 @@ from app.knowledge_acquisition.extraction_registry import (
     clear_registry,
     run_extractor,
 )
-from app.knowledge_acquisition.extractors import summary_extractor
+from app.knowledge_acquisition.extractors import (
+    claims_extractor,
+    summary_extractor,
+    synthesis_extractor,
+)
 from app.knowledge_acquisition.normalize import normalize
 from app.knowledge_acquisition.raw_record import persist_raw_record
 from app.knowledge_acquisition.replay import run_replay
@@ -55,9 +59,29 @@ def _isolated_runtime(monkeypatch: pytest.MonkeyPatch):
     summary_extractor.register(
         complete=_completion({"summary": "Durable summary.", "confidence": 0.8})
     )
+    synthesis_extractor.register(
+        complete=_completion({
+            "synthesis_sentences": [{
+                "text": "The transcript describes a durable test.",
+                "anchors": [{"segment_index": 0, "start": 0.0, "end": 2.0}],
+            }],
+            "model_confidence": 0.8,
+        })
+    )
+    claims_extractor.register(
+        complete=_completion({
+            "claims": [{
+                "source_wording": "Hello world",
+                "system_paraphrase": "The source opens with a greeting.",
+                "anchors": [{"segment_index": 0, "start": 0.0, "end": 2.0}],
+            }]
+        })
+    )
     yield
     clear_registry()
     summary_extractor.register()
+    synthesis_extractor.register()
+    claims_extractor.register()
     object_store_module._MEMORY_STORE.clear()
     reset_store_backends()
 
@@ -254,7 +278,9 @@ def test_reextraction_writes_versioned_proposal_companion_without_overwriting_ca
     assert candidate_stage.status == "proposal_written"
     assert candidate_stage.artifact_path is not None
     first_proposal = Path(vault.active_vault_path) / candidate_stage.artifact_path
-    assert "Durable summary." in first_proposal.read_text(encoding="utf-8")
+    assert "The transcript describes a durable test." in first_proposal.read_text(
+        encoding="utf-8"
+    )
 
     assert candidate_stage.artifact_path is not None
     proposal = Path(vault.active_vault_path) / candidate_stage.artifact_path

@@ -25,8 +25,10 @@ pipeline ends here; triage is human territory.
   `Proposals (non-authoritative)` wrapper, and deterministic evidence/lineage — through
   WriteGuard and the candidate-only create-once knowledge helper (mechanical durable,
   non-authority-bearing write). A durable existing-target probe stays before render and WriteGuard.
-- Composes the delivered `summary@2` result through a pure proposal-section seam. Empty optional
-  modules are omitted; a no-proposals marker replaces empty module headings.
+- Composes production `synthesis@1` and `claims@1` results through pure proposal-section seams.
+  Both outputs are evidence-anchored; invalid language and unresolvable anchors fail before
+  rendering. The legacy `summary@2` extractor remains available for explicit persisted policies.
+  Empty optional modules are omitted; a no-proposals marker replaces empty module headings.
 - Parses generated Markdown before assembly and fails closed when visible prose falsely claims the
   note owner's belief, decision, takeaway, or approval, or when a visible heading impersonates one
   of the three authority bands. Invisible link destinations and valid reference definitions are not
@@ -63,11 +65,11 @@ pipeline ends here; triage is human territory.
 ## Concretely
 
 ```
-candidate(raw=…, extractions=[summary@2]) → vault: Sources/<title>.md
+candidate(raw=…, extractions=[synthesis@1, claims@1]) → vault: Sources/<title>.md
 frontmatter: artifact_class=youtube_source_note, requires_review=true, provenance{…},
 transcript_available=true
 body: Owner notes{Takeaways, Open threads}
-      / Proposals (non-authoritative){Summary when present}
+      / Proposals (non-authoritative){anchored synthesis and claims when present}
       / Evidence and lineage{source URL, content identity, acquisition method,
                              transcript status, deterministic coverage}
 ```

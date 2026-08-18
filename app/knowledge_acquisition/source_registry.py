@@ -63,6 +63,8 @@ from __future__ import annotations
 
 import json
 import math
+
+from app.knowledge_acquisition.pipeline_defaults import DEFAULT_EXTRACTOR_IDS
 import os
 import threading
 import uuid
@@ -367,7 +369,7 @@ def _build_acquisition_policy(collection_kind: str, override: dict[str, Any] | N
         merged["media"] = merged_media
     requirements = merged.get("extractor_requirements")
     if requirements is not None:
-        selected = tuple(merged.get("extractor_ids") or ("summary",))
+        selected = tuple(merged.get("extractor_ids") or DEFAULT_EXTRACTOR_IDS)
         if set(requirements) != set(selected):
             raise SourceRegistryValidationError(
                 "acquisition_policy.extractor_requirements must classify every selected "

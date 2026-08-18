@@ -15,5 +15,6 @@ new module plus one import line here, never a change to the registry or the pipe
 
 from __future__ import annotations
 
-from app.knowledge_acquisition.extractors import summary_extractor as summary_extractor  # noqa: F401
 from app.knowledge_acquisition.extractors import claims_extractor as claims_extractor  # noqa: F401
+from app.knowledge_acquisition.extractors import summary_extractor as summary_extractor  # noqa: F401
+from app.knowledge_acquisition.extractors import synthesis_extractor as synthesis_extractor  # noqa: F401

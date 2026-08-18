@@ -1,4 +1,4 @@
-State: Partially implemented source specification. The explicit-URL fetch/refinement/writeback path is delivered by KA-01..06, including evidence-derived transcript availability, rendered summary confidence, complete normalized-transcript summary input, and authority-banded review-required proposal rendering. Pragmatic discovery V1 is delivered by #3915/#3920: one OAuth account, one ordinary owned playlist selected as Inbox, explicit manual sync, sanitized status, and review-required draft candidates. Liked Videos, multi-playlist product sync, scheduling, subscriptions/RSS/Takeout, backfill, analytics, broad CLI/UI, and full-media work remain target state and are not shipped claims.
+State: Partially implemented source specification. The explicit-URL fetch/refinement/writeback path is delivered by KA-01..06, including evidence-derived transcript availability, anchored synthesis and claims bound to retained transcript segments, deterministic coverage/confidence reporting, and authority-banded review-required proposal rendering. Pragmatic discovery V1 is delivered by #3915/#3920: one OAuth account, one ordinary owned playlist selected as Inbox, explicit manual sync, sanitized status, and review-required draft candidates. Liked Videos, multi-playlist product sync, scheduling, subscriptions/RSS/Takeout, backfill, analytics, broad CLI/UI, and full-media work remain target state and are not shipped claims.
 Doc role: Source instance specification
 Authority: Instantiates `SOURCE_PLUGIN_CONTRACT.md` for YouTube. Mechanism choices are grounded in `RESEARCH_2026-07.md` (mid-2026 verification). The triage flow for the resulting artifacts is owned by `docs/CONTEXTUALIZATION_LAYER/INGESTION_AND_TRIAGE_POLICY.md` §4.3; the artifact class by `LIFE_WIDE_ARTIFACT_TAXONOMY.md` (`youtube_source_note`).
 
@@ -83,8 +83,9 @@ The candidate stage writes a `youtube_source_note` companion artifact based on t
 template (`docs/examples/vault-templates/youtube-source-note.md`). Metadata, provenance, and
 `transcript_available` remain in frontmatter. The body has exactly three authority bands:
 owner-authored takeaways/open threads, one `Proposals (non-authoritative)` wrapper for registered
-extraction output, and deterministic evidence/lineage. The delivered `summary@2` output is the
-only current proposal module; blank optional modules are omitted. Generated content never enters
+extraction output, and deterministic evidence/lineage. Production acquisition renders anchored
+`synthesis@1` and `claims@1` modules; explicit legacy `summary@2` policies remain supported.
+Generated content never enters
 the owner band, and first-write-wins replay leaves every byte of an existing note unchanged.
 
 Every runtime candidate carrying generated content receives the initial non-authoritative posture
@@ -108,9 +109,10 @@ The shipped candidate writeback now corrects the three confirmed V1 truth defect
 - `transcript_available` is derived from usable normalized segments; a valid empty ASR result
   renders `false` and does not run transcript-dependent summary extraction. Captionless acquisition
   remains a loud normalization failure.
-- each rendered summary shows its schema-validated model confidence as non-authoritative.
-- summary input contains every normalized segment, and the rendered note reports the complete
-  segment count rather than hiding a partial window.
+- anchored synthesis shows schema-validated model confidence plus deterministic evidence
+  confidence derived from referenced transcript segments.
+- synthesis and claims input contains every normalized segment; coverage counts unique referenced
+  transcript segments, and unsupported anchorless output is omitted before rendering.
 
 The delivered YSNV2-03 renderer replaces the fixed About/Summary/Takeaways body with the three
 authority bands above. It fails closed when visible generated Markdown claims the owner's belief,
@@ -149,8 +151,8 @@ Acceptance criteria (each needs a concrete `Verify:` target when issues are file
       (dedup), not a duplicate.
 - [ ] `normalized` transcript: deduplicated rolling cues, timestamps preserved, language detected
       and marked as detected.
-- [ ] One extractor (e.g. `summary`) produces schema-valid output registered per the extraction
-      registry; schema mismatch fails loudly.
+- [x] Anchored `synthesis` and `claims` extractors produce schema-valid output registered per the
+      extraction registry; language and anchor violations fail loudly.
 - [ ] Candidate written back as a `youtube_source_note` companion artifact with the mandated
       non-authoritative posture markers (`requires_review: true` + `review_state: draft` — see
       §Writeback, including the template-frontmatter extension shipped in the same slice) and full

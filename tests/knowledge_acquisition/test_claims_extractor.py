@@ -35,3 +35,16 @@ def test_claim_wording_and_paraphrase_are_structurally_distinct() -> None:
     payload["claims"][0]["system_paraphrase"] = "Le texte source."
     with pytest.raises(ExtractionError, match="must remain distinct"):
         run(NORMALIZED, complete=_completion(json.dumps(payload)))
+
+
+def test_non_swedish_paraphrase_language_is_rejected() -> None:
+    payload = {
+        "claims": [{
+            "source_wording": "The source wording.",
+            "system_paraphrase": "Le texte source est important.",
+            "anchors": [{"segment_index": 0, "start": 0.0, "end": 2.0}],
+        }]
+    }
+
+    with pytest.raises(ExtractionError, match="system_paraphrase language"):
+        run(NORMALIZED, complete=_completion(json.dumps(payload)))

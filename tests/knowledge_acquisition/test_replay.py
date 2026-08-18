@@ -31,7 +31,7 @@ from app.knowledge_acquisition.candidate_writeback import (
     write_candidate_note,
 )
 from app.knowledge_acquisition.extraction_registry import clear_registry
-from app.knowledge_acquisition.extractors import summary_extractor
+from app.knowledge_acquisition.extractors import claims_extractor, summary_extractor, synthesis_extractor
 from app.knowledge_acquisition.normalize import normalize
 from app.knowledge_acquisition.raw_record import (
     persist_raw_record,
@@ -139,9 +139,33 @@ def _reset_registry():
             json.dumps({"summary": "A deterministic test summary.", "confidence": 0.75})
         )
     )
+    synthesis_extractor.register(
+        complete=_stub_completion(
+            json.dumps({
+                "synthesis_sentences": [{
+                    "text": "The transcript describes a deterministic test.",
+                    "anchors": [{"segment_index": 0, "start": 0.0, "end": 2.0}],
+                }],
+                "model_confidence": 0.8,
+            })
+        )
+    )
+    claims_extractor.register(
+        complete=_stub_completion(
+            json.dumps({
+                "claims": [{
+                    "source_wording": "Hello world",
+                    "system_paraphrase": "The source opens with a greeting.",
+                    "anchors": [{"segment_index": 0, "start": 0.0, "end": 2.0}],
+                }]
+            })
+        )
+    )
     yield
     clear_registry()
     summary_extractor.register()
+    synthesis_extractor.register()
+    claims_extractor.register()
 
 
 def _vault(root: Path) -> VaultContext:
@@ -200,7 +224,8 @@ def test_replay_fresh_write_not_equivalent_then_preserved(tmp_path: Path) -> Non
     assert second.source_egress == 0
     assert second.equivalent is True
 
-    stages = {s.stage: s for s in second.stages}
+    stages = {s.stage: s for s in second.stages if s.stage != "extracted"}
+    extracted = [s for s in second.stages if s.stage == "extracted"]
 
     # normalize: byte-identical equivalence, asserted deterministic.
     assert stages["normalize"].equivalence == "byte_identical"
@@ -211,9 +236,9 @@ def test_replay_fresh_write_not_equivalent_then_preserved(tmp_path: Path) -> Non
     assert n1 == n2
 
     # extracted: schema + lineage equivalence (NOT byte-identical text).
-    assert stages["extracted"].equivalence == "schema_and_lineage"
-    assert stages["extracted"].extractor_id == "summary"
-    assert stages["extracted"].extractor_version == 2
+    assert {s.extractor_id for s in extracted} == {"synthesis", "claims"}
+    assert all(s.equivalence == "schema_and_lineage" for s in extracted)
+    assert {s.extractor_version for s in extracted} == {1}
 
     # candidate: first-write-wins, with the fresh re-extraction surfaced as a companion proposal.
     assert stages["candidate"].status == "proposal_written"
@@ -344,6 +369,7 @@ def test_replay_valid_empty_asr_blocks_candidate_when_summary_is_required(
     receipt = run_replay(
         str(persisted.object_id),
         vault_context=vault,
+        extractor_ids=("summary",),
         write_guard=_allowing_guard(),
         conn=conn,
     )
