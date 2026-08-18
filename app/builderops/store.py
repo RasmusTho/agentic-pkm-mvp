@@ -177,6 +177,9 @@ class SqliteBuilderOpsStore:
     def create_agent_worklog(self, **fields: Any) -> dict[str, Any]:
         return self.create_record({"object_type": "AgentWorklog", **fields})
 
+    def create_working_artifact(self, **fields: Any) -> dict[str, Any]:
+        return self.create_record({"object_type": "BuilderVaultWorkingArtifact", **fields})
+
     def create_learning_signal(self, **fields: Any) -> dict[str, Any]:
         return self.create_record({"object_type": "LearningSignal", **fields})
 
@@ -578,6 +581,30 @@ class SqliteBuilderOpsStore:
 def _minimal_probe_fields(object_type: str) -> dict[str, Any]:
     if object_type == "AgentWorklog":
         return {"body": "probe", "task_context": {}}
+    if object_type == "BuilderVaultWorkingArtifact":
+        probe_ref = {"ref_type": "builderops_object", "ref": "probe"}
+        return {
+            "body": "probe",
+            "authority_standing": "non_normative",
+            "derivation_role": "derived",
+            "durability_posture": "ephemeral",
+            "working_lifecycle_stage": "capture",
+            "promotion_posture": "not_promoted",
+            "location_context": "builder_vault",
+            "provenance": {
+                "source_refs": [probe_ref],
+                "derived_from": [probe_ref],
+                "transformation": "probe",
+                "actor_or_process": "probe",
+                "observed_at": "2026-06-01T00:00:00Z",
+                "source_versions_or_watermarks": ["unknown"],
+                "review_or_decision_ref": "unknown",
+                "promotion_ref": "unknown",
+                "supersedes_refs": ["unknown"],
+                "receipt_refs": ["unknown"],
+                "limitations": ["unknown"],
+            },
+        }
     if object_type == "LearningSignal":
         return {"content": "probe", "signal_type": "probe"}
     if object_type == "RetroCluster":
