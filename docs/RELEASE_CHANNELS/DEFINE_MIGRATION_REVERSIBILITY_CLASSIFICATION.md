@@ -28,14 +28,21 @@ This task produces the migration-reversibility contract as a docs artifact under
 
 ## Concretely
 
-This is a **target-state, unshipped** contract for the planned per-channel DB split. Until that split lands, current production uses the single `app` DB under compose project `pkm-prod`.
+This contract applies now to the active production promotion path: migrations promoted to the
+single `app` DB under compose project `pkm-prod` must carry and be consumed with an explicit
+reversibility classification. The planned per-channel DB split remains future state; when that
+split lands, the same classification contract will apply to each channel database, but the
+contract does not wait for that split.
 
 - **Reversible migration**: the migration has an authored reverse step that restores the prior schema/data shape when executed. The reverse step is versioned alongside the forward step and runs as part of `rollback-promotion` if invoked.
 - **Forward-only migration**: the migration does not have a reverse step, either because reversal is impossible (e.g. dropped data) or because reversal is not worth authoring. Forward-only migrations are allowed but must be flagged.
 - **Declaration surface**: the reversibility marker lives in the migration file itself (frontmatter, comment, or tool-native metadata, as the migration tool allows). It is mandatory; a migration with no marker fails a pre-promotion check.
 - **Consumption**: `prepare-promotion` reads the markers across the migration delta and emits them into the promotion plan's migration-delta section.
 - **Operator acknowledgment**: forward-only migrations require a distinct operator acknowledgment in the plan. Reversible migrations do not.
-- **Scope**: applies to migrations that run against `pkm_prod`. Dev-side migrations run against `pkm_dev` and are not bound by this contract during development; the contract engages at promotion time.
+- **Scope**: applies to migrations that run against the active production `app` DB in compose
+  project `pkm-prod` at promotion time. Dev-side migrations run against `pkm_dev` and are not
+  bound by this contract during development. The future per-channel database split may introduce
+  channel-specific database names, but does not narrow or defer the active production contract.
 
 ## Why This Matters
 
@@ -51,8 +58,9 @@ Without this classification, rollback is a guess. The operator discovers at roll
   Verify: `rg -n "operator acknowledgment|forward-only" docs/RELEASE_CHANNELS/DEFINE_MIGRATION_REVERSIBILITY_CLASSIFICATION.md`.
 - [ ] The contract specifies that reversible migrations carry a machine-readable reversal step.
   Verify: `rg -n "reversal step|machine-readable" docs/RELEASE_CHANNELS/DEFINE_MIGRATION_REVERSIBILITY_CLASSIFICATION.md`.
-- [ ] The contract scopes its applicability to migrations running against `pkm_prod`.
-  Verify: `rg -n "pkm_prod|at promotion time|applicability" docs/RELEASE_CHANNELS/DEFINE_MIGRATION_REVERSIBILITY_CLASSIFICATION.md`.
+- [ ] The contract scopes its applicability to migrations running against the active production
+  `app` DB under compose project `pkm-prod`, while keeping the per-channel split future state.
+  Verify: `rg -n "app|pkm-prod|at promotion time|future state" docs/RELEASE_CHANNELS/DEFINE_MIGRATION_REVERSIBILITY_CLASSIFICATION.md`.
 - [ ] The contract states that classification is about reversal-path existence, not about migration success.
   Verify: `rg -n "not a guarantee|success|reversal path" docs/RELEASE_CHANNELS/DEFINE_MIGRATION_REVERSIBILITY_CLASSIFICATION.md`.
 - [ ] The contract does not prescribe a specific migration tool.
