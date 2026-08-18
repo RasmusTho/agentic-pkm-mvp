@@ -461,13 +461,24 @@ def run_replay(
                     write_guard=write_guard,
                     youtube_attachment_root=youtube_attachment_root,
                 )
-                candidate = replace(candidate, derived_transcript_link=bundle.transcript_path)
-                write_result = write_candidate_note(
-                    candidate,
-                    vault_context=vault_context,
-                    write_guard=write_guard,
-                    proposal_on_existing=True,
-                )
+                if bundle.status == "blocked":
+                    # Bundle materialization is governed by the same write guard as the
+                    # candidate note. Preserve the retryable refusal and do not write a
+                    # candidate that falsely claims to link a bundle that was not created.
+                    write_result = CandidateWriteResult(
+                        status="blocked",
+                        artifact_path=None,
+                        content_identity=candidate.content_identity,
+                        reason=bundle.reason or "source bundle materialization blocked by write guard",
+                    )
+                else:
+                    candidate = replace(candidate, derived_transcript_link=bundle.transcript_path)
+                    write_result = write_candidate_note(
+                        candidate,
+                        vault_context=vault_context,
+                        write_guard=write_guard,
+                        proposal_on_existing=True,
+                    )
             except (CandidateAssemblyError, CandidateWritebackError, SourceBundleError) as exc:
                 emit_stage_dead_letter(
                     stage=CANDIDATE_STAGE,

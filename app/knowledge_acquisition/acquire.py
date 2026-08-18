@@ -474,16 +474,27 @@ def acquire_youtube(
             write_guard=write_guard,
             youtube_attachment_root=youtube_attachment_root,
         )
-        candidate = replace(candidate, derived_transcript_link=bundle.transcript_path)
-        write_result: CandidateWriteResult = write_candidate_note(
-            candidate,
-            vault_context=vault_context,
-            write_guard=write_guard,
-            # An ordinary same-version restart hit has no new proposal. A fresh extractor
-            # version (or other newly executed successful extraction) is an upgrade under D5
-            # and must become a companion when the canonical candidate already exists.
-            proposal_on_existing=any(not result.replayed for result in report.successes),
-        )
+        if bundle.status == "blocked":
+            # A bundle refusal means the candidate must not claim a transcript that was
+            # never materialized. Preserve the retryable refusal even if the guard recovers
+            # before the candidate-write seam is reached.
+            write_result = CandidateWriteResult(
+                status="blocked",
+                artifact_path=None,
+                content_identity=candidate.content_identity,
+                reason=bundle.reason or "source bundle materialization blocked by write guard",
+            )
+        else:
+            candidate = replace(candidate, derived_transcript_link=bundle.transcript_path)
+            write_result: CandidateWriteResult = write_candidate_note(  # type: ignore[no-redef]
+                candidate,
+                vault_context=vault_context,
+                write_guard=write_guard,
+                # An ordinary same-version restart hit has no new proposal. A fresh extractor
+                # version (or other newly executed successful extraction) is an upgrade under D5
+                # and must become a companion when the canonical candidate already exists.
+                proposal_on_existing=any(not result.replayed for result in report.successes),
+            )
     except (CandidateAssemblyError, CandidateWritebackError, SourceBundleError) as exc:
         emit_stage_dead_letter(
             stage=CANDIDATE_STAGE,

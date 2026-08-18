@@ -80,6 +80,43 @@ def test_youtube_attachment_root_is_configurable_and_vault_relative(tmp_path: Pa
             materialize_youtube_source_bundle(candidate, transcript, vault_context=vault, write_guard=_guard(), youtube_attachment_root=unsafe)
 
 
+def test_bundle_write_failure_remains_terminal_and_non_partial(tmp_path: Path) -> None:
+    vault = _vault(tmp_path / "vault")
+    _, transcript, candidate = _source_material(tmp_path)
+    blocked = materialize_youtube_source_bundle(
+        candidate,
+        transcript,
+        vault_context=vault,
+        write_guard=WriteGuard(lambda: {"state": "safe_mode", "reason": "test-induced block"}),
+    )
+
+    assert blocked.status == "blocked"
+    assert blocked.reason is not None
+    assert "Writes blocked" in blocked.reason
+    assert list((tmp_path / "vault").rglob("*.md")) == []
+
+
+def test_bundle_write_blocked_between_members_cleans_up_partial_artifact(tmp_path: Path) -> None:
+    vault = _vault(tmp_path / "vault")
+    _, transcript, candidate = _source_material(tmp_path)
+    snapshots = iter(
+        [
+            {"state": "healthy"},
+            {"state": "safe_mode", "reason": "mid-bundle block"},
+        ]
+    )
+
+    blocked = materialize_youtube_source_bundle(
+        candidate,
+        transcript,
+        vault_context=vault,
+        write_guard=WriteGuard(lambda: next(snapshots)),
+    )
+
+    assert blocked.status == "blocked"
+    assert list((tmp_path / "vault").rglob("*.md")) == []
+
+
 def test_transcript_projection_is_anchored_derived_and_never_replay_input(tmp_path: Path) -> None:
     vault = _vault(tmp_path / "vault")
     _, transcript, candidate = _source_material(tmp_path)

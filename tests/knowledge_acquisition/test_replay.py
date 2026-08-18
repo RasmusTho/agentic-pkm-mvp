@@ -231,6 +231,27 @@ def test_replay_fresh_write_not_equivalent_then_preserved(tmp_path: Path) -> Non
     assert stages_seen == {"normalize", "extracted", "candidate"}
 
 
+def test_blocked_replay_preserves_retryable_write_blocked_result(tmp_path: Path) -> None:
+    """A blocked bundle write remains retryable and never becomes a dead letter."""
+    from app.knowledge_acquisition.stage_events import STAGE_DEAD_LETTERED_TOPIC
+
+    raw_id = _persist_raw()
+    conn = FakeOutboxConn()
+    receipt = run_replay(
+        raw_id,
+        vault_context=_vault(tmp_path / "vault"),
+        write_guard=WriteGuard(lambda: {"state": "safe_mode", "reason": "test-induced block"}),
+        conn=conn,
+    )
+
+    candidate_stage = next(stage for stage in receipt.stages if stage.stage == "candidate")
+    assert candidate_stage.status == "blocked"
+    assert receipt.dead_lettered == ()
+    assert conn.rows_for(STAGE_DEAD_LETTERED_TOPIC) == []
+    assert "Writes blocked" in candidate_stage.detail
+    assert list((tmp_path / "vault").rglob("*.md")) == []
+
+
 def test_candidate_byte_identical_across_replay(tmp_path: Path) -> None:
     """The written candidate note is byte-identical after a replay (first-write-wins)."""
     conn = FakeOutboxConn()
