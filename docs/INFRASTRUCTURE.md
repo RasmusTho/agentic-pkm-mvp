@@ -33,6 +33,97 @@ macOS host
 ```
 API and worker share the same Python image built from the repo.
 
+## Feasibility: capacity-managed dev/test runtime
+
+**Status:** Advisory feasibility snapshot, 2026-08-17. This section describes a
+possible infrastructure posture; it does not change the current `dev` / `test` /
+`prod` channel contracts or claim that a resource allocator is shipped.
+
+### Decision summary
+
+The proposed model is feasible for the current single-host Docker + Colima
+topology:
+
+- `prod` remains outside the resource pool and is never stopped by local
+  development/test scheduling.
+- `dev` and `test` remain distinct channels with distinct data, configuration,
+  ports, and runtime-artifact paths.
+- A non-production runtime slot may be allocated exclusively to `dev` or `test`.
+  The default allocation is `dev`; a test run first stops the `dev` runtime and
+  restores it after verification.
+- If future host-capacity evidence permits it, an allocator may grant `dev`
+  and `test` simultaneous runtime leases. Parallelism is an optimization, not a
+  channel or isolation requirement.
+
+This means that `test` does not need permanently reserved CPU, memory, ports, or
+containers. The test *contract* remains available on demand even when the test
+runtime is stopped.
+
+### Evidence for feasibility
+
+| Concern | Existing evidence | Feasibility result |
+| --- | --- | --- |
+| Channel identity | Compose projects are explicitly named `pkm-dev`, `pkm-test`, and `pkm-prod`; the Makefile provides channel-specific start/down targets (`Makefile :: COMPOSE_*`, `dev-down`, `test-down`, `dev-start-full`, `test-start-full`). | **Feasible.** The runtime can be stopped and started by channel without changing channel identity. |
+| Port separation | Dev uses Postgres/API ports `15433`/`18001`; test uses `15434`/`18002`; prod uses `15432`/`18000` ([ENVIRONMENTS.md](ENVIRONMENTS.md#parallel-local-stacks)). | **Feasible.** Exclusive mode needs no new port allocation; parallel mode already has fixed port separation. |
+| Persistent state | Dev and test use separate Postgres identities and runtime paths: `app_dev`/`tmp-dev` and `app_test`/`tmp-test` ([ENVIRONMENTS.md](ENVIRONMENTS.md#stores-and-persistence), [RELEASE_CHANNELS](RELEASE_CHANNELS/README.md#channel-model)). The `dev-down` and `test-down` targets do not remove named volumes. | **Feasible with guardrails.** Stopping containers must not be combined with volume deletion or reset unless the test workflow explicitly requests it. |
+| Clean verification | `make test-start-full VAULT_ROOT=<path>` is the explicit test startup path, while `make bootstrap-test-channel` owns the idempotent test bootstrap (`Makefile :: test-start-full`, `Makefile :: bootstrap-test-channel`). | **Feasible.** Test can be a cold-start verification mode rather than an always-on service. |
+| Code identity | The deployment model distinguishes the running channel from the candidate code ref; exact-SHA test UAT may use an isolated worktree or pinned image ([DEPLOYMENT_AND_ENVIRONMENTS.md](deployment/DEPLOYMENT_AND_ENVIRONMENTS.md#build-once--promote-model)). | **Conditional.** The allocator must never switch a dirty development checkout into test verification. Test needs a clean candidate checkout or image. |
+| Mutual exclusion | Existing deployment and instance-state paths already use host-global leases and restart fences for mutation/recreate operations ([DEPLOYMENT_AND_ENVIRONMENTS.md](deployment/DEPLOYMENT_AND_ENVIRONMENTS.md#current-reality)). | **Partial.** These protect deployment/state transitions; they are not yet a general dev/test runtime-slot allocator. |
+| Capacity decision | The repo has startup disk-space checks, but this study found no canonical CPU/memory budget or admission receipt for deciding whether `dev` and `test` may run concurrently. | **Open.** Dynamic parallelism requires measurement and an explicit admission rule before it should be enabled. |
+
+### Recommended operating shape
+
+Use a two-level policy:
+
+1. **Safe default — exclusive non-prod slot.** `dev` owns the slot. A bounded
+   test run acquires the slot, verifies that `dev` is stopped, starts the test
+   channel with its explicit bindings, records the result, stops test, and
+   restores dev. This is the minimum viable shape and does not require a new
+   capacity model.
+2. **Optional optimization — capacity-aware parallelism.** A future allocator
+   may keep both channels active only after a read-only capacity check proves
+   the host margin and obtains a short-lived `dev`/`test` runtime lease. A failed
+   or unavailable capacity check falls back to exclusive mode; it must not
+   silently start a second stack.
+
+The resource allocator should own only runtime admission and lifecycle
+coordination. It must not choose vaults, promotion refs, migration policy, or
+release authority. Those remain owned by the environment, release-channel, and
+deployment contracts.
+
+### Required safety invariants for a future allocator
+
+- `prod` is never a candidate for automatic stop, restart, or resource
+  reclamation.
+- A `test` start fails closed unless the effective `PKM_ENVIRONMENT`, DB DSN,
+  vault binding, runtime-artifact path, Compose project, and candidate code
+  identity all resolve to test.
+- Stopping a runtime releases containers and ports but preserves its channel
+  data volumes and operator-configured vaults.
+- A test run uses a clean candidate checkout or immutable image; it does not
+  use uncommitted dev worktree state as release evidence.
+- Switching back to dev proves the dev project is healthy and that no test
+  runtime remains bound to dev ports, volumes, vault paths, or runtime-env
+  files.
+- A crash or interrupted switch leaves an observable terminal state and a
+  recoverable previous allocation; it must not report success merely because
+  `docker compose down` returned zero.
+
+### Feasibility conclusion and next evidence
+
+The infrastructure does not need permanent test capacity to retain test's
+verification value. The lowest-risk next shape is therefore **exclusive,
+on-demand test execution with persistent channel state**, followed by a measured
+capacity-admission experiment if parallelism remains valuable.
+
+Before enabling dynamic parallelism, collect host-local evidence for cold-start
+time, peak and steady-state CPU/memory, disk growth during image/build/start,
+and the recovery time from an interrupted switch. The result should be a
+versioned capacity receipt, not an operator intuition or a fixed hardware
+assumption. Until that receipt and a runtime-slot lease exist, treat parallel
+`dev` + `test` as supported by Compose topology but not as an admitted capacity
+policy.
+
 ## Services
 - **db**: `pgvector/pgvector:pg16`, credentials `app/app`, database `app`, exposed on `127.0.0.1:15432`.
 - **api**: FastAPI app (`app.main:app`) listening on `8000` in-container, mapped to `18000` on the host.
