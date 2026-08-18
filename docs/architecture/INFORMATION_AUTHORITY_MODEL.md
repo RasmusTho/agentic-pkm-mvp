@@ -57,6 +57,12 @@ Those documents remain the local owners named in the reconciliation table below.
 | DevUI discovery/control plane | Read-time indexing, projection, navigation, source-state presentation, and links to governed actions | A docs portal, source registry, policy engine, task store, or promotion authority |
 | Receipt / verification evidence | What a bounded transition, review, or verification observed and recorded | A replacement for the owner contract or proof of unrelated claims |
 
+For issue-backed work, the GitHub Issue remains the executable Builder task contract and the PR
+remains delivery, review, merge, and closure evidence. A bounded Issue-free direct-repair PR is
+the explicit exception: its complete `Direct Repair` block is the task contract for that repair,
+while the PR still remains delivery and review evidence rather than a general source of Product or
+Builder policy.
+
 “Builder Vault” in this document means the working-artifact area for ephemeral or non-normative
 Builder material. It is not a new authority above the existing BuilderOps Vault boundary. Where a
 record is a BuilderOps operational object, ADR-0010 and
