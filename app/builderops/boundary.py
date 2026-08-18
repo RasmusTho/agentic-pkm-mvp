@@ -17,6 +17,7 @@ AUTONOMOUS_AGENT_SAFE_OPERATIONS = frozenset({
     "list_records",
     "read_record",
     "create_agent_worklog",
+    "create_working_artifact",
     "create_learning_signal",
     "create_promotion_intent",
     "append_receipt",
@@ -34,6 +35,7 @@ BUILDEROPS_MCP_TOOL_NAMES = frozenset({
     f"{BUILDEROPS_MCP_TOOL_PREFIX}list_records",
     f"{BUILDEROPS_MCP_TOOL_PREFIX}read_record",
     f"{BUILDEROPS_MCP_TOOL_PREFIX}create_worklog",
+    f"{BUILDEROPS_MCP_TOOL_PREFIX}create_working_artifact",
     f"{BUILDEROPS_MCP_TOOL_PREFIX}create_learning_signal",
     f"{BUILDEROPS_MCP_TOOL_PREFIX}create_promotion_intent",
     f"{BUILDEROPS_MCP_TOOL_PREFIX}append_receipt",
@@ -97,6 +99,9 @@ class BuilderOpsBoundary:
     def create_agent_worklog(self, payload: Mapping[str, Any]) -> dict[str, Any]:
         return self._store.create_agent_worklog(**dict(payload))
 
+    def create_working_artifact(self, payload: Mapping[str, Any]) -> dict[str, Any]:
+        return self._store.create_working_artifact(**dict(payload))
+
     def create_learning_signal(self, payload: Mapping[str, Any]) -> dict[str, Any]:
         return self._store.create_learning_signal(**dict(payload))
 
@@ -129,6 +134,8 @@ def execute_builderops_mcp_tool(
         return {"status": "ok", "record": boundary.read_record(str(args["record_id"]))}
     if tool_name == f"{BUILDEROPS_MCP_TOOL_PREFIX}create_worklog":
         return {"status": "ok", "record": boundary.create_agent_worklog(args)}
+    if tool_name == f"{BUILDEROPS_MCP_TOOL_PREFIX}create_working_artifact":
+        return {"status": "ok", "record": boundary.create_working_artifact(args)}
     if tool_name == f"{BUILDEROPS_MCP_TOOL_PREFIX}create_learning_signal":
         return {"status": "ok", "record": boundary.create_learning_signal(args)}
     if tool_name == f"{BUILDEROPS_MCP_TOOL_PREFIX}create_promotion_intent":

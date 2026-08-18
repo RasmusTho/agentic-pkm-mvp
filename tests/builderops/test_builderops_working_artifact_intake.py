@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from app.builderops.models import BuilderOpsValidationError
+from app.builderops.boundary import BuilderOpsBoundary, execute_builderops_mcp_tool
 from app.builderops.promotion_gateway import BuilderOpsPromotionError, BuilderOpsPromotionGateway
 from app.builderops.store import SqliteBuilderOpsStore
 
@@ -89,6 +90,35 @@ def test_working_artifact_uses_existing_builderops_store(
 
     assert store.list_records("BuilderVaultWorkingArtifact") == [created]
     assert store.get_record(created["id"]) == created
+
+
+def test_working_artifact_is_admitted_through_controlled_builderops_boundary(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "builderops.sqlite3"
+    result = execute_builderops_mcp_tool(
+        tool_name="mcp.builderops.create_working_artifact",
+        tool_args=_working_artifact_fields(),
+        settings={"builderops_db_path": str(db_path)},
+    )
+    created = result["record"]
+    boundary = BuilderOpsBoundary.from_path(db_path)
+
+    assert result["status"] == "ok"
+    assert boundary.read_record(created["id"]) == created
+
+
+def test_working_artifact_cannot_claim_gateway_promotion_directly(
+    store: SqliteBuilderOpsStore,
+) -> None:
+    fields = _working_artifact_fields()
+    fields.update({
+        "promotion_status": "promoted",
+        "promotion_posture": "promoted",
+    })
+
+    with pytest.raises(BuilderOpsValidationError, match="cannot claim promotion"):
+        store.create_working_artifact(**fields)
 
 
 def test_working_artifact_promotion_requires_explicit_target_and_receipt(

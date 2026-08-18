@@ -188,7 +188,6 @@ ALLOWED_LIFECYCLE_BY_TYPE: dict[str, frozenset[str]] = {
         "active",
         "review_pending",
         "accepted",
-        "promoted",
         "archived",
         "discarded",
         "superseded",
@@ -437,7 +436,7 @@ WORKING_ARTIFACT_CLASSIFICATION_VALUES = {
         "supersede_retire", "unknown",
     }),
     "promotion_posture": frozenset({
-        "not_promoted", "proposed", "promoted", "superseded", "retired", "unknown",
+        "not_promoted", "proposed", "superseded", "retired", "unknown",
     }),
 }
 WORKING_ARTIFACT_PROVENANCE_FIELDS = frozenset({
@@ -623,6 +622,15 @@ def validate_working_artifact(record: Mapping[str, Any]) -> None:
     if record.get("authority_standing") != "non_normative":
         raise BuilderOpsValidationError(
             "BuilderVaultWorkingArtifact authority_standing must be non_normative"
+        )
+    if (
+        record.get("lifecycle_state") == "promoted"
+        or record.get("promotion_status") == "promoted"
+        or record.get("promotion_posture") == "promoted"
+    ):
+        raise BuilderOpsValidationError(
+            "BuilderVaultWorkingArtifact cannot claim promotion; create a PromotionIntent "
+            "and use the promotion gateway with target, review, and receipt evidence"
         )
     for field, allowed in WORKING_ARTIFACT_CLASSIFICATION_VALUES.items():
         if record.get(field) not in allowed:

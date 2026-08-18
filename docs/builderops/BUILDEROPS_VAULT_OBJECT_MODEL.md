@@ -229,7 +229,7 @@ or DevUI truth merely by storage, indexing, readback, display, lifecycle state, 
 classification uses the cross-plane overlay without collapsing its axes: derivation is
 `source|derived|projection|unknown`; durability is `durable|ephemeral|rebuildable|unknown`; the
 working stage is `capture|explore|synthesize|propose|promote|implement|verify|supersede_retire|unknown`;
-and promotion posture is `not_promoted|proposed|promoted|superseded|retired|unknown`. Unknowns are
+and promotion posture is `not_promoted|proposed|superseded|retired|unknown`. Unknowns are
 stored explicitly rather than inferred from a path, timestamp, Git state, model identity, or UI.
 
 **Required provenance:** the `provenance` object preserves source refs, derivation inputs and
@@ -243,6 +243,11 @@ and transition receipt remain attached; the record is not deleted or rewritten. 
 crossing is proposal-only through a separately created `PromotionIntent` and the existing promotion
 gateway. That gateway requires an explicit target, review decision, and receipt/result evidence; it
 does not directly mutate repo, GitHub, Product/Runtime, or PKM authority.
+
+The source working artifact cannot mark itself `promoted` through the generic store transition.
+Promotion is represented by the separately stored `PromotionIntent`, its gateway receipt, and the
+resulting target evidence; the controlled `BuilderOpsBoundary` and its
+`mcp.builderops.create_working_artifact` intake operation preserve this validation path.
 
 **Required fields:** common envelope fields, including `id`, `source_refs`, `created_by`, `summary`,
 `body`, and `receipt_refs`; `authority_standing: non_normative`; the five remaining classification
