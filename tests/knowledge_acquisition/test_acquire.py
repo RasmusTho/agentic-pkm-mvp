@@ -946,6 +946,35 @@ def test_acquire_youtube_writeguard_blocked_is_not_ok_no_note(
     assert receipt.as_dict()["ok"] is False
 
 
+def test_acquire_youtube_bundle_blocked_does_not_publish_broken_link(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A guard recovery between bundle members cannot publish a missing bundle link."""
+    _stub_caption_fetch(monkeypatch)
+    conn = FakeOutboxConn()
+    vault = _vault(tmp_path / "vault")
+    snapshots = iter(
+        [
+            {"state": "safe_mode", "reason": "transient bundle block"},
+            {"state": "healthy"},
+        ]
+    )
+
+    receipt = acquire_youtube(
+        FAKE_URL,
+        vault_context=vault,
+        write_guard=WriteGuard(lambda: next(snapshots)),
+        conn=conn,
+    )
+
+    candidate_stage = next(s for s in receipt.stages if s.stage == "candidate")
+    assert receipt.ok is False
+    assert candidate_stage.status == "blocked"
+    assert "Writes blocked" in candidate_stage.detail
+    assert conn.rows_for(STAGE_DEAD_LETTERED_TOPIC) == []
+    assert list((tmp_path / "vault").rglob("*.md")) == []
+
+
 def test_acquire_youtube_cli_exits_nonzero_on_blocked_write(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

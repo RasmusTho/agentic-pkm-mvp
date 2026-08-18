@@ -5,9 +5,16 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import tempfile
+import threading
+from contextlib import contextmanager
 from dataclasses import dataclass
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - Windows local tooling fallback.
+    fcntl = None  # type: ignore[assignment]
 from pathlib import Path, PurePosixPath
-from typing import Any
+from typing import Any, Iterator
 
 from app.knowledge.write_ops import create_candidate_note_once
 from app.knowledge_acquisition.candidate_writeback import Candidate
@@ -17,6 +24,9 @@ from app.write_guard import DEFAULT_WRITE_GUARD, WriteGuard, WritesBlockedError
 
 DEFAULT_YOUTUBE_ATTACHMENT_ROOT = "Sources/YouTube/_attachments"
 SOURCE_BUNDLE_WRITE_ACTION = "knowledge_acquisition.youtube_source_bundle"
+
+_THREAD_LOCKS_GUARD = threading.Lock()
+_THREAD_LOCKS: dict[str, threading.Lock] = {}
 
 
 class SourceBundleError(RuntimeError):
@@ -30,6 +40,7 @@ class SourceBundleResult:
     transcript_path: str
     manifest_path: str
     status: str
+    reason: str | None = None
 
 
 def validate_youtube_attachment_root(value: str = DEFAULT_YOUTUBE_ATTACHMENT_ROOT) -> str:
@@ -60,22 +71,49 @@ def materialize_youtube_source_bundle(
     transcript_path = (PurePosixPath(bundle_folder) / "transcript.md").as_posix()
     manifest_path = (PurePosixPath(bundle_folder) / "source.json").as_posix()
     manifest = _manifest(candidate, transcript, source_folder, bundle_folder, transcript_path)
-    try:
-        transcript_status = create_candidate_note_once(
-            transcript_path, _render_transcript(candidate, transcript), vault_root=vault_root,
-            action=SOURCE_BUNDLE_WRITE_ACTION, write_guard=write_guard,
-        )
-        manifest_status = create_candidate_note_once(
-            manifest_path, json.dumps(manifest, indent=2, sort_keys=True) + "\n", vault_root=vault_root,
-            action=SOURCE_BUNDLE_WRITE_ACTION, write_guard=write_guard,
-        )
-    except WritesBlockedError:
-        return SourceBundleResult(
-            source_folder, bundle_folder, transcript_path, manifest_path, "blocked"
-        )
-    except Exception as exc:  # noqa: BLE001
-        raise SourceBundleError(f"source bundle materialization failed: {exc}") from exc
+    with _bundle_lock(vault_root, bundle_folder):
+        transcript_status: str | None = None
+        try:
+            transcript_status = create_candidate_note_once(
+                transcript_path, _render_transcript(candidate, transcript), vault_root=vault_root,
+                action=SOURCE_BUNDLE_WRITE_ACTION, write_guard=write_guard,
+            )
+            manifest_status = create_candidate_note_once(
+                manifest_path, json.dumps(manifest, indent=2, sort_keys=True) + "\n", vault_root=vault_root,
+                action=SOURCE_BUNDLE_WRITE_ACTION, write_guard=write_guard,
+            )
+        except WritesBlockedError as exc:
+            if transcript_status == "written":
+                try:
+                    (vault_root / transcript_path).unlink()
+                except OSError as cleanup_exc:
+                    raise SourceBundleError(
+                        f"source bundle blocked after partial write and cleanup failed: {cleanup_exc}"
+                    ) from cleanup_exc
+            return SourceBundleResult(
+                source_folder, bundle_folder, transcript_path, manifest_path, "blocked", str(exc)
+            )
+        except Exception as exc:  # noqa: BLE001
+            raise SourceBundleError(f"source bundle materialization failed: {exc}") from exc
     return SourceBundleResult(source_folder, bundle_folder, transcript_path, manifest_path, "written" if "written" in {transcript_status, manifest_status} else "already_exists")
+
+
+@contextmanager
+def _bundle_lock(vault_root: Path, bundle_folder: str) -> Iterator[None]:
+    key = hashlib.sha256(f"{vault_root}:{bundle_folder}".encode("utf-8")).hexdigest()
+    if fcntl is None:
+        with _THREAD_LOCKS_GUARD:
+            lock = _THREAD_LOCKS.setdefault(key, threading.Lock())
+        with lock:
+            yield
+        return
+    lock_path = Path(tempfile.gettempdir()) / f"agentic-pkm-youtube-bundle-{key}.lock"
+    with lock_path.open("a+") as lock_file:
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
 
 
 def _source_key(item_ref: str) -> str:
