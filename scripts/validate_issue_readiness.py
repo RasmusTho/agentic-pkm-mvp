@@ -69,8 +69,6 @@ ADMISSION_CLAIM_PATTERNS: tuple[re.Pattern[str], ...] = tuple(
 PRODUCTION_SEAM_PATTERNS: tuple[re.Pattern[str], ...] = tuple(
     re.compile(pattern, re.IGNORECASE)
     for pattern in (
-        r"\bnamed production seam\b",
-        r"\bproduction seam\b",
         r"\bdirect loopback\b",
         r"\bloopback endpoint\b",
         r"\b(?:gateway|ingress|reverse proxy)\b",
@@ -432,6 +430,25 @@ def _contains_any(patterns: Sequence[re.Pattern[str]], text: str) -> bool:
     return any(pattern.search(text) for pattern in patterns)
 
 
+def _affirmative_forwarded_identity_claim(body: str) -> bool:
+    """Return whether the body positively requires or trusts forwarded identity."""
+
+    affirmative_patterns = (
+        r"\b(?:forward|preserve|accept|trust|use|require|allow|receive)[a-z -]{0,24}"
+        r"(?:forwarded[- ](?:identity|for|host|proto)|forward(?:ed|ing)? identity)\b",
+        r"\bforward identity\b",
+        r"\b(?:forwarded[- ](?:identity|for|host|proto)|forward(?:ed|ing)? identity)"
+        r"\s+(?:is|must be|should be|remains?)\s+(?:trusted|accepted|required|used)\b",
+        r"\btrusted forwarded[- ]identity\b",
+    )
+    for pattern in affirmative_patterns:
+        for match in re.finditer(pattern, body, re.IGNORECASE):
+            prefix = body[max(0, match.start() - 24) : match.start()]
+            if not re.search(r"(?:no|not|without|never)\s*$", prefix, re.IGNORECASE):
+                return True
+    return False
+
+
 def admission_contract_problem(body: str) -> str | None:
     """Reject readiness claims that lack or contradict their production seam."""
 
@@ -439,18 +456,11 @@ def admission_contract_problem(body: str) -> str | None:
         return None
     if not _contains_any(PRODUCTION_SEAM_PATTERNS, body):
         return "admission/proxy/forwarded-identity claim has no named production seam"
-    if _contains_any(NO_FORWARDED_IDENTITY_PATTERNS, body):
-        forwarded_assertion = re.search(
-            r"\b(?:forward|preserve|accept|trust|use|require)[a-z -]{0,24}"
-            r"(?:forwarded[- ](?:identity|for|host|proto)|forward(?:ed|ing)? identity)\b",
-            body,
-            re.IGNORECASE,
-        )
-        forwarded_assertion = forwarded_assertion or re.search(
-            r"\bforward identity\b", body, re.IGNORECASE
-        )
-        if forwarded_assertion is not None:
-            return "forwarded-identity assertion contradicts the named no-forwarding seam"
+    if _contains_any(NO_FORWARDED_IDENTITY_PATTERNS, body) and _affirmative_forwarded_identity_claim(body):
+        return "forwarded-identity assertion contradicts the named no-forwarding seam"
+    if _contains_any((re.compile(r"\bdirect loopback\b", re.IGNORECASE),
+                      re.compile(r"\bloopback endpoint\b", re.IGNORECASE)), body) and _affirmative_forwarded_identity_claim(body):
+        return "forwarded-identity assertion contradicts the direct-loopback seam"
     return None
 
 
