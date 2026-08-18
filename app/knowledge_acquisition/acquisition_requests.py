@@ -75,6 +75,7 @@ from app.events.types import (
     YOUTUBE_SOURCE_DISCOVERED,
 )
 from app.knowledge_acquisition.source_registry import VALID_PRIORITIES as _registry_priorities
+from app.knowledge_acquisition.pipeline_defaults import DEFAULT_EXTRACTOR_IDS
 from app.services.outbox import derive_idempotency_key, write_outbox_event
 
 # --- Contract vocab ----------------------------------------------------------
@@ -1470,7 +1471,7 @@ def drain_one(
             now=now,
             conn=conn,
         )
-    extractor_ids = tuple(raw_extractor_ids) or ("summary",)
+    extractor_ids = tuple(raw_extractor_ids) or DEFAULT_EXTRACTOR_IDS
     raw_extractor_requirements = policy.get("extractor_requirements")
     if raw_extractor_requirements is not None and not isinstance(
         raw_extractor_requirements, dict

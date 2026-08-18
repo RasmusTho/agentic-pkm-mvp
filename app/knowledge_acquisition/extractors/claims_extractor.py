@@ -7,7 +7,11 @@ from typing import Any, Mapping
 from app.components.llm.constrained import CompletionFn, ConstrainedCompletionError, constrained_completion, register_schema
 from app.components.llm.fabric import LLMTaskIntent
 from app.components.llm.router import LLMRouter
-from app.knowledge_acquisition.evidence_synthesis import system_language_for
+from app.knowledge_acquisition.evidence_synthesis import (
+    system_language_for,
+    validate_generated_language,
+    validate_resolvable_anchor,
+)
 from app.knowledge_acquisition.extraction_registry import ExtractionError, ExtractorSpec, register_extractor
 
 EXTRACTOR_ID = "claims"
@@ -56,12 +60,14 @@ def run(normalized: Mapping[str, Any], *, complete: CompletionFn | None = None) 
     except ConstrainedCompletionError as exc:
         raise ExtractionError(extractor_id=EXTRACTOR_ID, version=EXTRACTOR_VERSION, reason=exc.reason) from exc
     segments = normalized["segments"]
+    expected_language = system_language_for(normalized.get("language"))
     for claim in payload["claims"]:
         if claim["source_wording"].strip() == claim["system_paraphrase"].strip():
             raise ExtractionError(extractor_id=EXTRACTOR_ID, version=EXTRACTOR_VERSION, reason="source_wording and system_paraphrase must remain distinct")
+        if not validate_generated_language(claim["system_paraphrase"], expected_language):
+            raise ExtractionError(extractor_id=EXTRACTOR_ID, version=EXTRACTOR_VERSION, reason="system_paraphrase language is not allowed by D6")
         for anchor in claim["anchors"]:
-            index = anchor["segment_index"]
-            if index >= len(segments) or anchor["start"] > anchor["end"]:
+            if not validate_resolvable_anchor(anchor, segments):
                 raise ExtractionError(extractor_id=EXTRACTOR_ID, version=EXTRACTOR_VERSION, reason="claim anchor is not resolvable")
     return payload
 

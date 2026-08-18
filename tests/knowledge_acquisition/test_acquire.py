@@ -30,7 +30,7 @@ from app.knowledge_acquisition.acquire import (
 from app.knowledge.write_ops import write_note_relative
 from app.knowledge_acquisition.candidate_writeback import Candidate, write_candidate_note
 from app.knowledge_acquisition.extraction_registry import clear_registry
-from app.knowledge_acquisition.extractors import summary_extractor
+from app.knowledge_acquisition.extractors import claims_extractor, summary_extractor, synthesis_extractor
 from app.knowledge_acquisition.stage_events import (
     STAGE_COMPLETED_TOPIC,
     STAGE_DEAD_LETTERED_TOPIC,
@@ -104,9 +104,33 @@ def _reset_registry():
             json.dumps({"summary": "A deterministic test summary.", "confidence": 0.75})
         )
     )
+    synthesis_extractor.register(
+        complete=_stub_completion(
+            json.dumps({
+                "synthesis_sentences": [{
+                    "text": "The transcript describes a deterministic test.",
+                    "anchors": [{"segment_index": 0, "start": 0.0, "end": 2.0}],
+                }],
+                "model_confidence": 0.8,
+            })
+        )
+    )
+    claims_extractor.register(
+        complete=_stub_completion(
+            json.dumps({
+                "claims": [{
+                    "source_wording": "Hello world",
+                    "system_paraphrase": "The source opens with a greeting.",
+                    "anchors": [{"segment_index": 0, "start": 0.0, "end": 2.0}],
+                }]
+            })
+        )
+    )
     yield
     clear_registry()
     summary_extractor.register()
+    synthesis_extractor.register()
+    claims_extractor.register()
 
 
 @pytest.fixture(autouse=True)
@@ -190,9 +214,28 @@ def _denying_guard() -> WriteGuard:
     return WriteGuard(lambda: {"state": "safe_mode", "reason": "runtime degraded (test)"})
 
 
+def test_normal_acquisition_produces_anchored_synthesis(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _stub_caption_fetch(monkeypatch)
+    receipt = acquire_youtube(
+        FAKE_URL,
+        vault_context=_vault(tmp_path / "vault"),
+        write_guard=_allowing_guard(),
+        conn=FakeOutboxConn(),
+    )
+
+    assert receipt.ok is True
+    note = next((tmp_path / "vault").rglob("*.md")).read_text(encoding="utf-8")
+    assert "### Evidence-anchored synthesis" in note
+    assert "### Evidence-anchored claims" in note
+    assert "### Summary" not in note
+    assert "The transcript describes a deterministic test." in note
+
+
 # ---------------------------------------------------------------------------
 # AC1: end-to-end new-URL acquisition — fetch -> persist raw -> normalize ->
-# extract(summary) -> candidate note written, one stage event per transition.
+# extract(synthesis + claims) -> candidate note written, one stage event per transition.
 # ---------------------------------------------------------------------------
 
 
@@ -213,7 +256,7 @@ def test_acquire_youtube_end_to_end_writes_candidate_and_emits_events(
     assert receipt.is_new_raw is True
 
     stage_names = [s.stage for s in receipt.stages]
-    assert stage_names == ["raw", "normalize", "extracted", "candidate"]
+    assert stage_names == ["raw", "normalize", "extracted", "extracted", "candidate"]
 
     candidate_stage = next(s for s in receipt.stages if s.stage == "candidate")
     assert candidate_stage.status == "written"
@@ -226,14 +269,14 @@ def test_acquire_youtube_end_to_end_writes_candidate_and_emits_events(
     transcript = next(path for path in notes if path.name == "transcript.md")
     manifest = transcript.with_name("source.json")
     transcript_rel = transcript.relative_to(vault.active_vault_path).as_posix()
-    assert f"[[{transcript_rel}]]" in candidate_body
+    assert f"- **Derived transcript:** {transcript_rel}" in candidate_body
     assert manifest.exists()
 
-    # One stage.completed event per real transition (normalize, extracted, candidate).
+    # One stage.completed event per real transition (normalize, each extractor, candidate).
     completed = conn.rows_for(STAGE_COMPLETED_TOPIC)
     stages_seen = {json.loads(r["payload"])["payload"]["stage"] for r in completed}
     assert stages_seen == {"normalize", "extracted", "candidate"}
-    assert len(completed) == 3  # exactly one per transition, no duplicates
+    assert len(completed) == 4  # exactly one per transition, no duplicates
 
 
 # ---------------------------------------------------------------------------
@@ -288,7 +331,7 @@ def test_acquire_youtube_rerun_is_idempotent_dedup_noop(
 
     # Stage-completed events deduped: re-running an unchanged item does not mint new rows.
     completed = conn.rows_for(STAGE_COMPLETED_TOPIC)
-    assert len(completed) == 3  # still exactly 3: normalize + extracted + candidate, deduped
+    assert len(completed) == 4  # normalize + synthesis + claims + candidate, deduped
 
 
 def test_acquire_youtube_asr_dedup_skips_reacquisition(
@@ -456,6 +499,7 @@ def test_acquire_valid_empty_asr_blocks_candidate_when_summary_is_required(
     receipt = acquire_youtube(
         FAKE_URL,
         vault_context=vault,
+        extractor_ids=("summary",),
         write_guard=_allowing_guard(),
         conn=conn,
         fetch_fn=lambda _url: outcome,
@@ -508,6 +552,7 @@ def test_acquire_valid_empty_asr_materializes_degraded_when_summary_is_optional(
 
     receipt = acquire_youtube(
         FAKE_URL,
+        extractor_ids=("summary",),
         vault_context=vault,
         extractor_requirements={"summary": "optional_for_materialization"},
         write_guard=_allowing_guard(),
@@ -837,6 +882,7 @@ def test_ordinary_extractor_version_upgrade_writes_proposal_without_overwrite(
     )
     upgraded = acquire_youtube(
         FAKE_URL,
+        extractor_ids=("summary",),
         vault_context=vault,
         write_guard=_allowing_guard(),
         conn=conn,

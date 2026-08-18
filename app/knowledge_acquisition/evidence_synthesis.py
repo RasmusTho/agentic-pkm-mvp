@@ -8,6 +8,8 @@ content only after checking that every assertion names a resolvable transcript s
 from __future__ import annotations
 
 from dataclasses import dataclass
+import math
+import re
 from typing import Any, Mapping, Sequence
 
 
@@ -19,6 +21,8 @@ class RenderedEvidence:
     claims: tuple[Mapping[str, Any], ...]
     dropped: tuple[str, ...]
     coverage: float
+    model_confidence: float
+    evidence_confidence: float
     confidence: float
     system_language: str
 
@@ -39,8 +43,35 @@ def caption_quality_confidence_cap(acquisition_method: object) -> float:
     if method == "captions_auto":
         return 0.75
     if method == "asr":
-        return 0.6
+        return 0.85
     return 0.5
+
+
+_ENGLISH_MARKERS = frozenset(
+    "a an and are as about by can claim claims contains describes demonstrates evidence "
+    "for from has have in indicates is it its makes may of on provides source supports "
+    "that the their this to with".split()
+)
+_NON_ENGLISH_MARKERS = frozenset(
+    "avec cette dans des est et la le les une que sont ce der die das ein eine ist mit "
+    "el las los una es son con del y het een van zijn".split()
+)
+_TOKEN_RE = re.compile(r"[^\W\d_]+", re.UNICODE)
+
+
+def validate_generated_language(text: str, expected_language: str) -> bool:
+    """Apply a conservative, deterministic D6 gate to generated prose."""
+
+    tokens = {token.casefold() for token in _TOKEN_RE.findall(text)}
+    if not tokens:
+        return False
+    if expected_language == "sv":
+        return bool(tokens & {"och", "att", "som", "för", "inte", "är", "på", "med"}) or bool(
+            set(text) & {"å", "ä", "ö", "Å", "Ä", "Ö"}
+        )
+    if tokens & _NON_ENGLISH_MARKERS:
+        return False
+    return bool(tokens & _ENGLISH_MARKERS)
 
 
 def render_evidence_anchored(
@@ -77,16 +108,22 @@ def render_evidence_anchored(
         else:
             dropped.append("claim")
 
-    asserted = len(synthesis_sentences) + len(claims)
-    retained = len(rendered_sentences) + len(rendered_claims)
-    coverage = retained / asserted if asserted else 0.0
+    covered_segments: set[int] = set()
+    for item in (*synthesis_sentences, *claims):
+        if isinstance(item, Mapping) and _has_resolvable_anchor(item, segments):
+            covered_segments.update(_covered_segment_indices(item))
+    coverage = len(covered_segments) / len(segments) if segments else 0.0
     cap = caption_quality_confidence_cap(normalized.get("acquisition_method"))
-    confidence = min(_finite_unit_interval(model_confidence), cap)
+    bounded_model_confidence = _finite_unit_interval(model_confidence)
+    evidence_confidence = min(cap, coverage)
+    confidence = min(bounded_model_confidence, evidence_confidence)
     return RenderedEvidence(
         synthesis_sentences=tuple(rendered_sentences),
         claims=tuple(rendered_claims),
         dropped=tuple(dropped),
         coverage=coverage,
+        model_confidence=bounded_model_confidence,
+        evidence_confidence=evidence_confidence,
         confidence=confidence,
         system_language=system_language_for(normalized.get("language")),
     )
@@ -111,9 +148,27 @@ def _has_resolvable_anchor(item: Mapping[str, Any], segments: Sequence[object]) 
         segment_start, segment_end = segment.get("start"), segment.get("end")
         if not isinstance(segment_start, (int, float)) or not isinstance(segment_end, (int, float)):
             return False
+        if not math.isfinite(float(start)) or not math.isfinite(float(end)):
+            return False
         if start < segment_start or end > segment_end:
             return False
     return True
+
+
+def validate_resolvable_anchor(anchor: Mapping[str, Any], segments: Sequence[object]) -> bool:
+    """Validate one transcript anchor against its referenced segment bounds."""
+
+    return _has_resolvable_anchor({"anchors": [anchor]}, segments)
+
+
+def _covered_segment_indices(item: Mapping[str, Any]) -> set[int]:
+    return {
+        int(anchor["segment_index"])
+        for anchor in item.get("anchors", ())
+        if isinstance(anchor, Mapping)
+        and isinstance(anchor.get("segment_index"), int)
+        and not isinstance(anchor.get("segment_index"), bool)
+    }
 
 
 def _claim_is_structurally_distinct(claim: Mapping[str, Any]) -> bool:

@@ -158,6 +158,7 @@ definitive list**):
 | Extractor | Output shape it proves |
 | --- | --- |
 | `summary` | free-text with confidence |
+| `synthesis` | source-bound sentences with transcript-segment anchors and model confidence |
 | `claims` | list of statements with source-position anchors (timestamps) |
 | `entities` | typed references (people, works, technologies) for later SIP linking |
 | `action_items` | task-shaped candidates that must NOT become tasks without triage |

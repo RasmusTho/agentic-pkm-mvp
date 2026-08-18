@@ -41,7 +41,11 @@ from app.knowledge_acquisition.acquisition_requests import (
     reset_memory_acquisition_requests,
 )
 from app.knowledge_acquisition.extraction_registry import clear_registry
-from app.knowledge_acquisition.extractors import summary_extractor
+from app.knowledge_acquisition.extractors import (
+    claims_extractor,
+    summary_extractor,
+    synthesis_extractor,
+)
 from app.services.outbox import write_outbox_event
 from app.events.models import new_event
 from app.vault.manager import VaultContext
@@ -77,9 +81,33 @@ _VALID_SUMMARY = json.dumps({"summary": "A deterministic test summary.", "confid
 def _reset_registry():
     clear_registry()
     summary_extractor.register(complete=_stub_completion(_VALID_SUMMARY))
+    synthesis_extractor.register(
+        complete=_stub_completion(
+            json.dumps({
+                "synthesis_sentences": [{
+                    "text": "The transcript describes a deterministic test.",
+                    "anchors": [{"segment_index": 0, "start": 0.0, "end": 2.0}],
+                }],
+                "model_confidence": 0.8,
+            })
+        )
+    )
+    claims_extractor.register(
+        complete=_stub_completion(
+            json.dumps({
+                "claims": [{
+                    "source_wording": "Hello world",
+                    "system_paraphrase": "The source opens with a greeting.",
+                    "anchors": [{"segment_index": 0, "start": 0.0, "end": 2.0}],
+                }]
+            })
+        )
+    )
     yield
     clear_registry()
     summary_extractor.register()
+    synthesis_extractor.register()
+    claims_extractor.register()
 
 
 @pytest.fixture(autouse=True)
@@ -290,7 +318,11 @@ def test_drain_one_requeues_private_youtube_plugin_failure(
     """Expected inaccessible-source failures never strand a claimed request."""
     conn = FakeOutboxConn()
     q = _queue()
-    _enqueue(q, conn)
+    _enqueue(
+        q,
+        conn,
+        policy_snapshot={"policy_version": 1, "extractor_ids": ["summary"]},
+    )
     claimed = q.claim_batch(1, conn=conn)
 
     monkeypatch.setattr(
@@ -326,7 +358,11 @@ def test_drain_one_sanitizes_transient_youtube_plugin_failure(
     """Transient caption egress is retryable and stores no provider detail."""
     conn = FakeOutboxConn()
     q = _queue()
-    _enqueue(q, conn)
+    _enqueue(
+        q,
+        conn,
+        policy_snapshot={"policy_version": 1, "extractor_ids": ["summary"]},
+    )
     claimed = q.claim_batch(1, conn=conn)
     _stub_caption_fetch(monkeypatch)
     monkeypatch.setattr(
@@ -400,7 +436,11 @@ def test_drain_one_maps_pipeline_dead_letter(
     summary_extractor.register(complete=_stub_completion("not json at all"))
     conn = FakeOutboxConn()
     q = _queue()
-    _enqueue(q, conn)
+    _enqueue(
+        q,
+        conn,
+        policy_snapshot={"policy_version": 1, "extractor_ids": ["summary"]},
+    )
     claimed = q.claim_batch(1, conn=conn)
 
     result = drain_one(
@@ -468,7 +508,12 @@ def test_dead_letter_item_scoped_and_attempts_exhaustion(
     _stub_caption_fetch(monkeypatch)
     clear_registry()
     summary_extractor.register(complete=_stub_completion("not json at all"))
-    row_a = _enqueue(q, conn, item=VIDEO_ID)
+    row_a = _enqueue(
+        q,
+        conn,
+        item=VIDEO_ID,
+        policy_snapshot={"policy_version": 1, "extractor_ids": ["summary"]},
+    )
     claimed = q.claim_batch(1, conn=conn)
     dead = drain_one(claimed[0], vault_context=vault, queue=q, write_guard=_allowing_guard(), conn=conn)
     assert dead.status == "dead_lettered"
@@ -482,7 +527,14 @@ def test_dead_letter_item_scoped_and_attempts_exhaustion(
     monkeypatch.setattr(plugin, "yt_dlp_extract_info", lambda url: info_b)
     clear_registry()
     summary_extractor.register(complete=_stub_completion(_VALID_SUMMARY))
-    row_b = _enqueue(q, conn, item="lmnopqrstuv", binding=BINDING_OWNED, kind="owned_playlist")
+    row_b = _enqueue(
+        q,
+        conn,
+        item="lmnopqrstuv",
+        binding=BINDING_OWNED,
+        kind="owned_playlist",
+        policy_snapshot={"policy_version": 1, "extractor_ids": ["summary"]},
+    )
     assert q.get(row_b.request_id).status == "pending"
     claimed_b = q.claim_batch(1, conn=conn)
     assert [c.request_id for c in claimed_b] == [row_b.request_id]

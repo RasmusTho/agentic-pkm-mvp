@@ -26,7 +26,11 @@ from app.knowledge_acquisition.acquisition_requests import (
     reset_memory_acquisition_requests,
 )
 from app.knowledge_acquisition.extraction_registry import clear_registry
-from app.knowledge_acquisition.extractors import summary_extractor
+from app.knowledge_acquisition.extractors import (
+    claims_extractor,
+    summary_extractor,
+    synthesis_extractor,
+)
 from app.knowledge_acquisition.playlist_discovery import (
     SourcePollPersistenceError,
     V1InboxConfigurationError,
@@ -182,12 +186,33 @@ def _memory_backends(monkeypatch: pytest.MonkeyPatch):
     reset_memory_acquisition_requests()
     object_store_module._MEMORY_STORE.clear()
     clear_registry()
+    synthesis_extractor.register(
+        complete=lambda **_kwargs: json.dumps({
+            "synthesis_sentences": [{
+                "text": "The transcript describes a deterministic test.",
+                "anchors": [{"segment_index": 0, "start": 0.0, "end": 2.0}],
+            }],
+            "model_confidence": 0.8,
+        })
+    )
+    claims_extractor.register(
+        complete=lambda **_kwargs: json.dumps({
+            "claims": [{
+                "source_wording": "Hello world",
+                "system_paraphrase": "The source opens with a greeting.",
+                "anchors": [{"segment_index": 0, "start": 0.0, "end": 2.0}],
+            }]
+        })
+    )
     yield
     clear_registry()
     reset_store_backends()
     reset_memory_source_registry()
     reset_memory_acquisition_requests()
     object_store_module._MEMORY_STORE.clear()
+    synthesis_extractor.register()
+    claims_extractor.register()
+    summary_extractor.register()
 
 
 @pytest.fixture

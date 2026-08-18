@@ -79,6 +79,10 @@ from app.knowledge_acquisition.extraction_registry import (
 from app.knowledge_acquisition.normalize import STAGE_NAME as NORMALIZE_STAGE
 from app.knowledge_acquisition.normalize import STAGE_VERSION as NORMALIZE_STAGE_VERSION
 from app.knowledge_acquisition.normalize import NormalizeError, normalize
+from app.knowledge_acquisition.pipeline_defaults import (
+    DEFAULT_EXTRACTOR_IDS,
+    resolve_extractor_ids,
+)
 from app.knowledge_acquisition.raw_record import RawRecordIntegrityError, get_raw_record
 from app.knowledge_acquisition.source_bundle import (
     DEFAULT_YOUTUBE_ATTACHMENT_ROOT,
@@ -243,7 +247,7 @@ def run_replay(
     raw_record_id: str | UUID,
     *,
     vault_context: VaultContext,
-    extractor_ids: Sequence[str] = ("summary",),
+    extractor_ids: Sequence[str] = DEFAULT_EXTRACTOR_IDS,
     extractor_requirements: Mapping[str, str] | None = None,
     write_guard: WriteGuard = DEFAULT_WRITE_GUARD,
     assert_no_source_egress: bool = True,
@@ -315,11 +319,14 @@ def run_replay(
                 f"{content_identity!r}: {exc}"
             ) from exc
         normalized_dict = normalized.as_dict()
+        selected_extractor_ids = resolve_extractor_ids(
+            extractor_ids, extractor_requirements
+        )
         try:
             resolved_requirements = resolve_extractor_requirements(
-                extractor_ids, extractor_requirements
+                selected_extractor_ids, extractor_requirements
             )
-            validate_registered_extractors(list(extractor_ids))
+            validate_registered_extractors(list(selected_extractor_ids))
         except (ValueError, UnknownExtractorError) as exc:
             raise ReplayError(f"invalid extractor materialization plan: {exc}") from exc
         try:
@@ -365,7 +372,7 @@ def run_replay(
         # --- extracted: schema + lineage equivalence -----------------------------------
         report = run_extractors(
             normalized_dict,
-            extractor_ids=extractor_ids,
+                extractor_ids=selected_extractor_ids,
             trace_id=trace_id,
             conn=conn,
             extractor_requirements=resolved_requirements,

@@ -54,6 +54,10 @@ from app.knowledge.write_ops import (
     create_candidate_note_once,
 )
 from app.knowledge_acquisition.extraction_registry import ExtractionResult, run_extractor
+from app.knowledge_acquisition.evidence_synthesis import (
+    RenderedEvidence,
+    render_evidence_anchored,
+)
 from app.knowledge_acquisition.note_renderer import (
     NoteRenderError,
     ProposalSection,
@@ -112,6 +116,7 @@ class Candidate:
     extraction_artifact_ids: tuple[str, ...] = ()
     optional_failures: tuple["ExtractionFailure", ...] = ()
     derived_transcript_link: str | None = None
+    rendered_evidence: RenderedEvidence | None = None
 
     def summary_text(self) -> str | None:
         for extraction in self.extractions:
@@ -201,6 +206,11 @@ def assemble_candidate(
                     f"content_identity={content_identity!r}: {exc}"
                 ) from exc
 
+    rendered_evidence = _render_anchored_evidence(
+        normalized=normalized_dict,
+        extractions=extractions,
+    )
+
     return Candidate(
         content_identity=content_identity,
         source_kind=str(source_kind),
@@ -219,6 +229,7 @@ def assemble_candidate(
             result.artifact_id for result in extractions if result.artifact_id is not None
         ),
         optional_failures=tuple(optional_failures),
+        rendered_evidence=rendered_evidence,
     )
 
 
@@ -288,7 +299,14 @@ def render_candidate_note(candidate: Candidate) -> str:
 
     proposal_sections = _candidate_proposal_sections(candidate)
     coverage = (
-        f"{candidate.transcript_segment_count}/{candidate.transcript_segment_count} "
+        (
+            f"{candidate.rendered_evidence.coverage:.1%} transcript segments covered; "
+            f"model confidence {candidate.rendered_evidence.model_confidence:g}; "
+            f"evidence confidence {candidate.rendered_evidence.evidence_confidence:g}; "
+            f"final confidence {candidate.rendered_evidence.confidence:g}"
+        )
+        if candidate.rendered_evidence is not None
+        else f"{candidate.transcript_segment_count}/{candidate.transcript_segment_count} "
         "normalized segments (100%; complete transcript)"
         if candidate.transcript_available and candidate.transcript_segment_count > 0
         else "0 normalized segments; no transcript evidence"
@@ -334,11 +352,57 @@ def render_candidate_note(candidate: Candidate) -> str:
 
 def _candidate_proposal_sections(candidate: Candidate) -> tuple[ProposalSection, ...]:
     """Render reviewable extraction outputs without assigning them authority."""
+    if candidate.rendered_evidence is not None:
+        sections: list[ProposalSection] = []
+        if candidate.rendered_evidence.synthesis_sentences:
+            evidence = candidate.rendered_evidence
+            sections.append(
+                ProposalSection(
+                    module_id="evidence-anchored-synthesis",
+                    title="Evidence-anchored synthesis",
+                    content=(
+                        f"**Model confidence (non-authoritative):** {evidence.model_confidence:g}\n\n"
+                        f"**Evidence confidence (non-authoritative):** {evidence.evidence_confidence:g}\n\n"
+                        + "\n".join(f"- {sentence}" for sentence in evidence.synthesis_sentences)
+                    ),
+                )
+            )
+        if candidate.rendered_evidence.claims:
+            claim_lines = ["**Source-bound claims (non-authoritative):**"]
+            for claim in candidate.rendered_evidence.claims:
+                claim_lines.extend(
+                    (
+                        f"- **Source wording:** {claim['source_wording']}",
+                        f"  **System paraphrase:** {claim['system_paraphrase']}",
+                        f"  **Anchors:** {claim['anchors']}",
+                    )
+                )
+            sections.append(
+                ProposalSection(
+                    module_id="evidence-anchored-claims",
+                    title="Evidence-anchored claims",
+                    content="\n".join(claim_lines),
+                )
+            )
+        if candidate.rendered_evidence.dropped:
+            sections.append(
+                ProposalSection(
+                    module_id="evidence-gaps",
+                    title="Unsupported evidence omitted",
+                    content=(
+                        "The following generated assertions were omitted because their evidence "
+                        "anchors were not resolvable: "
+                        + ", ".join(candidate.rendered_evidence.dropped)
+                    ),
+                )
+            )
+        return tuple(sections)
+
     summary = candidate.summary_text()
     confidence = candidate.summary_confidence()
-    sections: list[ProposalSection] = []
+    summary_sections: list[ProposalSection] = []
     if summary is not None and confidence is not None and candidate.transcript_segment_count > 0:
-        sections.append(
+        summary_sections.append(
             ProposalSection(
                 module_id="summary",
                 title="Summary",
@@ -348,7 +412,7 @@ def _candidate_proposal_sections(candidate: Candidate) -> tuple[ProposalSection,
             )
         )
     if candidate.optional_failures:
-        sections.append(
+        summary_sections.append(
             ProposalSection(
                 module_id="extraction-gaps",
                 title="Degraded extraction status",
@@ -362,7 +426,7 @@ def _candidate_proposal_sections(candidate: Candidate) -> tuple[ProposalSection,
             )
         )
     if candidate.derived_transcript_link:
-        sections.append(
+        summary_sections.append(
             ProposalSection(
                 module_id="derived-transcript",
                 title="Derived transcript",
@@ -372,7 +436,33 @@ def _candidate_proposal_sections(candidate: Candidate) -> tuple[ProposalSection,
                 ),
             )
         )
-    return tuple(sections)
+    return tuple(summary_sections)
+
+
+def _render_anchored_evidence(
+    *, normalized: Mapping[str, Any], extractions: Sequence[ExtractionResult]
+) -> RenderedEvidence | None:
+    synthesis = next(
+        (result.output for result in extractions if result.extractor_id == "synthesis"),
+        None,
+    )
+    claims = next(
+        (result.output for result in extractions if result.extractor_id == "claims"),
+        None,
+    )
+    if synthesis is None and claims is None:
+        return None
+    synthesis_sentences = (
+        synthesis.get("synthesis_sentences", []) if synthesis is not None else []
+    )
+    claim_items = claims.get("claims", []) if claims is not None else []
+    model_confidence = synthesis.get("model_confidence", 0.0) if synthesis is not None else 0.0
+    return render_evidence_anchored(
+        synthesis_sentences=synthesis_sentences,
+        claims=claim_items,
+        normalized=normalized,
+        model_confidence=model_confidence,
+    )
 
 
 def write_candidate_note(
