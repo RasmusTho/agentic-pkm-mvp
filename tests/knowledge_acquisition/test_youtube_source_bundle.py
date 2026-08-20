@@ -150,6 +150,61 @@ def test_blocked_rollback_fsyncs_bundle_directory_before_return(
     assert not Path(vault.active_vault_path, blocked.transcript_path).exists()
 
 
+def test_blocked_manifest_publication_removes_preexisting_orphan_transcript(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    vault = _vault(tmp_path / "vault")
+    _, transcript, candidate = _source_material(tmp_path)
+    complete = materialize_youtube_source_bundle(candidate, transcript, vault_context=vault, write_guard=_guard())
+    Path(vault.active_vault_path, complete.manifest_path).unlink()
+    fenced: list[Path] = []
+    original_fsync_directory = source_bundle_module._fsync_directory
+
+    def record_fsync_directory(path: Path) -> None:
+        fenced.append(path)
+        original_fsync_directory(path)
+
+    monkeypatch.setattr(source_bundle_module, "_fsync_directory", record_fsync_directory)
+    snapshots = iter([
+        {"state": "healthy"},
+        {"state": "safe_mode", "reason": "manifest publication blocked"},
+    ])
+    blocked = materialize_youtube_source_bundle(
+        candidate,
+        transcript,
+        vault_context=vault,
+        write_guard=WriteGuard(lambda: next(snapshots)),
+    )
+
+    assert blocked.status == "blocked"
+    assert not Path(vault.active_vault_path, blocked.transcript_path).exists()
+    assert not Path(vault.active_vault_path, blocked.manifest_path).exists()
+    assert fenced == [Path(vault.active_vault_path, blocked.bundle_folder)]
+
+
+def test_blocked_manifest_publication_preserves_complete_preexisting_bundle(tmp_path: Path) -> None:
+    vault = _vault(tmp_path / "vault")
+    _, transcript, candidate = _source_material(tmp_path)
+    complete = materialize_youtube_source_bundle(candidate, transcript, vault_context=vault, write_guard=_guard())
+    transcript_path = Path(vault.active_vault_path, complete.transcript_path)
+    manifest_path = Path(vault.active_vault_path, complete.manifest_path)
+    before = (transcript_path.read_bytes(), manifest_path.read_bytes())
+    snapshots = iter([
+        {"state": "healthy"},
+        {"state": "safe_mode", "reason": "manifest publication blocked"},
+    ])
+
+    blocked = materialize_youtube_source_bundle(
+        candidate,
+        transcript,
+        vault_context=vault,
+        write_guard=WriteGuard(lambda: next(snapshots)),
+    )
+
+    assert blocked.status == "blocked"
+    assert (transcript_path.read_bytes(), manifest_path.read_bytes()) == before
+
+
 def test_transcript_projection_is_anchored_derived_and_never_replay_input(tmp_path: Path) -> None:
     vault = _vault(tmp_path / "vault")
     _, transcript, candidate = _source_material(tmp_path)
