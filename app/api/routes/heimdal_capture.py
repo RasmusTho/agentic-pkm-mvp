@@ -71,7 +71,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_valida
 from starlette.datastructures import UploadFile
 
 from app.events.models import new_trace_id
-from app.heimdal import media_ingress, media_receipts, meeting_ledger
+from app.heimdal import media_ingress, media_receipts, meeting_ledger, raw_liveness
 from app.heimdal.consent_ledger import ConsentRefusedError
 from app.heimdal.media_ingress import (
     MediaAdmissionError,
@@ -217,6 +217,7 @@ class MediaReceiptResponse(BaseModel):
     kind: str
     admitted_at: str
     trace_id: str
+    response_lease: dict[str, Any]
     idempotent_replay: bool | None = None
 
 
@@ -588,6 +589,22 @@ async def admit_media(request: Request) -> MediaReceiptResponse:
                 "trace_id": trace_id,
             },
         ) from exc
+    except raw_liveness.RawLivenessUnavailableError as exc:
+        # Missing untombstoned raw state, a missing active representation, or
+        # corrupt generation metadata is indeterminate. Never collapse it to
+        # erased/410 or an admitted response the client could delete against.
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "error": "raw_liveness_unavailable",
+                "state": "unavailable",
+                "message": (
+                    "The exact raw generation could not be validated; no admission "
+                    "success is being asserted. Retain the original and re-query."
+                ),
+                "trace_id": trace_id,
+            },
+        ) from exc
     except MediaAdmissionEventPersistenceError as exc:
         # INV-CDLM-1: the raw object may be durable, but without a committed
         # admission event nothing is acknowledged, so no receipt exists and the
@@ -657,6 +674,7 @@ async def admit_media(request: Request) -> MediaReceiptResponse:
         kind=receipt.kind,
         admitted_at=media_ingress.iso_timestamp(receipt.admitted_at),
         trace_id=trace_id,
+        response_lease=admission.response_lease.as_response_field(),
         idempotent_replay=True if admission.idempotent_replay else None,
     )
 
@@ -700,6 +718,20 @@ def query_receipts(
     try:
         found = media_receipts.find_media_receipts_by_capture_ids(requested)
         answers = media_ingress.receipt_answers(found, requested)
+    except raw_liveness.RawLivenessUnavailableError as exc:
+        logger.exception("heimdal raw liveness query failed trace_id=%s", trace_id)
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "error": "raw_liveness_unavailable",
+                "state": "unavailable",
+                "message": (
+                    "The exact raw generation could not be validated; no admission "
+                    "state is being asserted. Retain the original and re-query."
+                ),
+                "trace_id": trace_id,
+            },
+        ) from exc
     except Exception as exc:
         # A read failure must not be reported as `unknown`: "never arrived" is a
         # load-bearing answer a client acts on (CDLM-03 deletes originals against

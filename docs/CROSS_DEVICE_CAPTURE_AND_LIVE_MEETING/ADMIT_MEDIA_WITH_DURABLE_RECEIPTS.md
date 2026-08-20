@@ -59,7 +59,9 @@ durable acceptance:
   outbox-before-ack ordering the governed text capture already enforces. Failure of either leaves
   no acknowledged state.
 - **Receipt body:** `{outcome: "admitted", capture_id, content_sha256, receipt_id, raw_ref,
-  admitted_at, trace_id}` plus `idempotent_replay: true` when the pair was already admitted.
+  admitted_at, trace_id, response_lease}` plus `idempotent_replay: true` when the pair was already
+  admitted. `response_lease` binds the answer to the exact raw liveness generation and carries its
+  expiry; clients retain the original and re-query after expiry before local cleanup.
 - **Receipt query:** `GET /api/heimdal/capture/receipts?capture_id=…` (repeatable parameter,
   bounded batch) returns each id's `admitted`, `erased`, or `unknown` state. `erased` preserves
   immutable receipt history while honestly reporting that governed retention removed the raw
@@ -69,6 +71,10 @@ durable acceptance:
   unsupported kind (415), oversize per configured per-kind caps (413), retained-evidence-erased
   (410 `media_evidence_erased`, terminal), receipt/raw-state unavailability (503), and raw-store
   or event-commit failure (500, nothing acknowledged).
+- **Retention fencing:** both hard-retention writers share the generation-aware raw-liveness fence.
+  A valid response lease prevents deletion until it expires; only an append-only deletion tombstone
+  turns an exact missing generation into `erased`. Missing raw state without that tombstone remains
+  unavailable and cannot authorize client deletion.
 - **Legacy lane convergence:** watched-folder admissions flow through the same admission seam and
   also produce receipts (keyed by content hash; `capture_id` when a sidecar carries one), so
   Model-1 files are queryable — while the retention guarantee remains an outbox-lane property

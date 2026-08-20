@@ -28,7 +28,7 @@ from pathlib import Path
 
 import pytest
 
-from app.heimdal import capture_adapter, raw_store
+from app.heimdal import capture_adapter, media_receipts, raw_store
 from app.heimdal.capture_adapter import (
     CAPTURE_CHAIN_V1,
     CaptureAdmissionError,
@@ -72,9 +72,11 @@ def _reset_heimdal_state(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(capture_adapter, "_STABILITY_CHECK_DELAY_SECONDS", 0.0)
     reset_memory_consent_ledger()
     reset_memory_raw_store()
+    media_receipts.reset_memory_media_receipts()
     yield
     reset_memory_consent_ledger()
     reset_memory_raw_store()
+    media_receipts.reset_memory_media_receipts()
 
 
 def _write_memo(tmp_path: Path, name: str = "memo.m4a", content: bytes = b"fake audio bytes") -> Path:

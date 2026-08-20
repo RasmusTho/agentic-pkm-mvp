@@ -142,9 +142,11 @@ lineage rather than rejected, so the sidecar composes with the capture-time meta
 durably written to the encrypted raw store **and** the `heimdal.capture.media.admitted` outbox event
 is committed; the receipt is persisted last, because the receipt *is* the acknowledgement. This is
 the same outbox-before-ack ordering as §4.1. Success (`200`):
-`{outcome: "admitted", capture_id, content_sha256, receipt_id, raw_ref, kind, admitted_at, trace_id}`
+`{outcome: "admitted", capture_id, content_sha256, receipt_id, raw_ref, kind, admitted_at, trace_id, response_lease}`
 plus `idempotent_replay: true` when this identity was already acknowledged. A client MUST surface
-this receipt and never fabricate its own.
+this receipt and never fabricate its own. `response_lease` is bound to the exact raw liveness
+generation and includes `lease_id`, `liveness_generation`, `issued_at`, and `expires_at`. It is the
+validity window for receipt-gated local cleanup; after expiry, retain the original and re-query.
 
 **Idempotency identity is `(capture_id, content_sha256)`** — the client-visible key §9 F5 asks for,
 delivered here for the media lane. `receipt_id` is derived from that pair, so re-sending after a lost
@@ -157,13 +159,16 @@ stays single.
 **Recovery.** `GET /api/heimdal/capture/receipts?capture_id=…` takes the parameter repeatably, up to
 100 ids per call, and answers `{receipts: [...]}` with one entry per requested id, echoing the id you
 asked for so answers stay alignable with the request. Each entry is either
-`{capture_id, outcome: "admitted", receipt_id, content_sha256, raw_ref, kind, lane, admitted_at}` or
+`{capture_id, outcome: "admitted", receipt_id, content_sha256, raw_ref, kind, lane, admitted_at, response_lease}` or
 `{capture_id, outcome: "erased", receipt_id, content_sha256, raw_ref, kind, lane, admitted_at}` or
 `{capture_id, outcome: "unknown"}`. `unknown` means *never arrived* and is a first-class answer, not
 an error — it is how a client distinguishes a lost response from a capture that never reached the hub.
 `erased` means governed retention removed the raw evidence after the immutable admission receipt was
 written: retain the local original, surface the terminal state, and do not treat that historical
 receipt as permission to delete or as a normal idempotent replay.
+An active answer is backed by a short-lived response lease; retention uses the same liveness fence
+and will not erase that generation while the lease is valid. Raw absence without a governed
+tombstone is `503 receipt_store_unavailable`/`raw_liveness_unavailable`, never `erased`.
 
 Error contract (a client must branch on `error`; never retry blindly):
 

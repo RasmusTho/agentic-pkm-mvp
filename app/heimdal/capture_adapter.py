@@ -35,13 +35,13 @@ Pipeline for one candidate file, in order:
    `app.heimdal.raw_store.insert_raw_record` writes ciphertext +
    `content_identity` + `capture_chain` + `sensor` + `consent` in one
    statement -- there is no separate "stamp provenance later" step.
-4.5 **Receipt the admission through the shared media seam** (CDLM-01, #4384).
+4.5 **Receipt and lease the admission through the shared media seam** (CDLM-01,
+   #4384). The generation-bound response lease is the authority for step 5;
    `app.heimdal.media_ingress.record_watched_folder_admission` records the
    durable-acceptance receipt (keyed by the sidecar's `capture_id` when it
    carries one, otherwise by content hash) so a Model-1 file is queryable
-   through `GET /api/heimdal/capture/receipts`. It never gates step 5:
-   receipt-gated retention is an outbox-lane property (CDLM-03) and is not
-   claimed for this lane, so a receipt failure is logged, not raised.
+   through `GET /api/heimdal/capture/receipts`. A receipt or liveness failure
+   leaves the source queued for an idempotent retry.
 5. **Delete-after-confirmed-ingest.** The source file is removed **only**
    after step 4 returns successfully (the row is durably persisted, or was
    already durably persisted on a prior crash-retry -- `insert_raw_record`
@@ -438,19 +438,30 @@ def admit_capture_file(
     # import is function-local to break the cycle (`media_ingress` imports this
     # module for the sensor/consent guards it reuses).
     #
-    # This deliberately does NOT gate the delete below: receipt-gated retention
-    # is an outbox-lane property (CDLM-03), and claiming it for the legacy
-    # watched-folder lane is the forbidden outcome in the vertical's
-    # partial-failure matrix. `record_watched_folder_admission` logs and returns
-    # None on failure rather than raising, so this lane gains no new failure
-    # mode (#4362 owns its env-delivery bug).
+    # The returned response-validity lease gates source cleanup. If receipt or
+    # exact liveness validation fails, keep the source queued; the already-safe
+    # raw row and append-only receipt/event seams make the next attempt
+    # idempotent.
     from app.heimdal import media_ingress
 
-    media_ingress.record_watched_folder_admission(
-        record,
-        capture_id=(capture_sidecar or {}).get("capture_id"),
-        trace_id="",
-    )
+    try:
+        media_ingress.record_watched_folder_admission(
+            record,
+            capture_id=(capture_sidecar or {}).get("capture_id"),
+            trace_id="",
+        )
+    except Exception as exc:
+        logger.error(
+            "Heimdal capture adapter: watched-folder response fence failed for %s "
+            "(content_identity=%s): %s. Source file retained for retry.",
+            path,
+            content_identity,
+            exc,
+        )
+        raise CaptureAdmissionError(
+            f"Capture refused: receipt/liveness confirmation failed for {path}: {exc}. "
+            "Source file left in place (not deleted)."
+        ) from exc
 
     # Step 5: delete-after-confirmed-ingest. Only reached once insert_raw_record
     # has returned a row (either freshly created or the pre-existing row from

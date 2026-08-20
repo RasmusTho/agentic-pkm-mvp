@@ -498,28 +498,39 @@ Contract:
   `RetentionWindowMissingError` — this job never assumes a default bound
   for an irreversible act.
 - **Deletion is never silent.** Every hard delete is paired, in the same
-  operation, with exactly one durable `heimdal_raw_deletion_receipt` row
+  transaction, with exactly one durable `heimdal_raw_deletion_receipt` row
   (what: `record_id` + `content_identity`; when: `deleted_at`; why:
   `reason` — always `"hard_retention_bound"` in v1; `retention_window_days`
-  names the bound in force). A `RetentionEnforcementReceipt` is returned
+  names the bound in force) and an append-only
+  `heimdal_raw_deletion_tombstone`. A `RetentionEnforcementReceipt` is returned
   from every run, including the zero-deletions case (an honestly-receipted
   no-op, never a silent skip).
+- **Raw liveness is generation-bound.** Migration `c5d8a1e4f2b7` records one
+  append-only liveness generation for each raw identity and promotes historical
+  deletion receipts into governed tombstones. Missing raw state without its
+  tombstone is `unavailable`, never inferred to be `erased`; only the exact
+  tombstone permits the terminal `erased`/410 outcome. Re-inserting identical
+  content creates a new generation and cannot resurrect an older receipt.
+- **Response-boundary fencing.** Media admission and receipt recovery issue a
+  short-lived response lease for the exact raw generation. Both hard-retention
+  writers use the same per-content fence and skip a deletion while a lease is
+  valid; clients may delete their local original only while the lease is valid,
+  and must re-query after expiry.
 - **All registered copies precede success.** The shared raw-store erasure
-  primitive enumerates and deletes every registered representation in one
-  transaction before removing identity. Any copy failure rolls the whole
-  attempt back, so retention cannot append a success receipt while bytes
-  remain. Consent-revocation propagation remains a later runtime, but it must
-  reuse this same primitive rather than deleting a single location.
+  transaction writes the tombstone and deletion receipt, then enumerates and
+  deletes every registered representation before removing identity. Any copy
+  failure rolls the whole attempt back, so retention cannot append a success
+  receipt while bytes remain. Consent-revocation propagation remains a later
+  runtime, but it must reuse this same primitive rather than deleting a single
+  location.
 - **The one governed exception to append-only (D-RETENTION).**
-  `app.heimdal.raw_store.hard_delete_raw_record` is the ONLY function that
-  can remove a `heimdal_raw_record` row. The Postgres trigger
-  (`heimdal_raw_record_reject_mutation`, updated by migration
-  `a3f9d1c6e2b8`) rejects every UPDATE unconditionally and every DELETE
-  *unless* the session-local setting `app.heimdal_retention_bypass` is
-  `'true'` in the same transaction — a guard only that one function sets,
-  immediately before the DELETE, so no other code path (including a
-  hand-written SQL client) can hard-delete a raw record outside the
-  governed job.
+  `app.heimdal.raw_liveness.governed_delete_raw_record` is the only runtime
+  path that can remove a raw identity. The Postgres trigger
+  (`heimdal_raw_record_reject_mutation`, updated by migrations
+  `a3f9d1c6e2b8` and `c5d8a1e4f2b7`) requires the session-local retention guard
+  and a same-transaction tombstone before allowing the delete. The matching
+  representation trigger applies the same requirement to every registered
+  copy.
 - **The observation log is untouched.** Retention operates on raw evidence
   and deletion receipts only; `app.heimdal.observation_log` (HEIM-1,
   append-only) and its projections are never read or written by this
