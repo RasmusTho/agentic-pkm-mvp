@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -16,6 +17,7 @@ from app.knowledge_acquisition.source_bundle import (
     SourceBundleError,
     materialize_youtube_source_bundle,
 )
+import app.knowledge_acquisition.source_bundle as source_bundle_module
 from app.vault.manager import VaultContext
 from app.write_guard import WriteGuard
 from tests.invariants._helpers import assert_validates
@@ -115,6 +117,172 @@ def test_bundle_write_blocked_between_members_cleans_up_partial_artifact(tmp_pat
 
     assert blocked.status == "blocked"
     assert list((tmp_path / "vault").rglob("*.md")) == []
+
+
+def test_blocked_rollback_fsyncs_bundle_directory_before_return(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    vault = _vault(tmp_path / "vault")
+    _, transcript, candidate = _source_material(tmp_path)
+    opened: list[Path] = []
+    unlinked: list[tuple[str, int | None]] = []
+    synced: list[int] = []
+    original_open = source_bundle_module.os.open
+    original_unlink = source_bundle_module.os.unlink
+    original_fsync = source_bundle_module.os.fsync
+
+    def record_open(
+        path: str | bytes | os.PathLike[str], flags: int, *args: object, **kwargs: object
+    ) -> int:
+        opened.append(Path(path))
+        return original_open(path, flags, *args, **kwargs)
+
+    def record_unlink(path: str | bytes | os.PathLike[str], *, dir_fd: int | None = None) -> None:
+        unlinked.append((os.fspath(path), dir_fd))
+        original_unlink(path, dir_fd=dir_fd)
+
+    def record_fsync(descriptor: int) -> None:
+        synced.append(descriptor)
+        original_fsync(descriptor)
+
+    monkeypatch.setattr(source_bundle_module.os, "open", record_open)
+    monkeypatch.setattr(source_bundle_module.os, "unlink", record_unlink)
+    monkeypatch.setattr(source_bundle_module.os, "fsync", record_fsync)
+    snapshots = iter(
+        [
+            {"state": "healthy"},
+            {"state": "safe_mode", "reason": "mid-bundle block"},
+        ]
+    )
+
+    blocked = materialize_youtube_source_bundle(
+        candidate,
+        transcript,
+        vault_context=vault,
+        write_guard=WriteGuard(lambda: next(snapshots)),
+    )
+
+    assert blocked.status == "blocked"
+    assert opened.count(Path(vault.active_vault_path)) == 2
+    assert unlinked and unlinked[0][0] == "transcript.md"
+    assert unlinked[0][1] in synced
+    assert not Path(vault.active_vault_path, blocked.transcript_path).exists()
+
+
+def test_blocked_manifest_publication_removes_preexisting_orphan_transcript(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    vault = _vault(tmp_path / "vault")
+    _, transcript, candidate = _source_material(tmp_path)
+    complete = materialize_youtube_source_bundle(candidate, transcript, vault_context=vault, write_guard=_guard())
+    Path(vault.active_vault_path, complete.manifest_path).unlink()
+    snapshots = iter([
+        {"state": "healthy"},
+        {"state": "safe_mode", "reason": "manifest publication blocked"},
+    ])
+    blocked = materialize_youtube_source_bundle(
+        candidate,
+        transcript,
+        vault_context=vault,
+        write_guard=WriteGuard(lambda: next(snapshots)),
+    )
+
+    assert blocked.status == "blocked"
+    assert not Path(vault.active_vault_path, blocked.transcript_path).exists()
+    assert not Path(vault.active_vault_path, blocked.manifest_path).exists()
+
+
+def test_blocked_manifest_publication_preserves_complete_preexisting_bundle(tmp_path: Path) -> None:
+    vault = _vault(tmp_path / "vault")
+    _, transcript, candidate = _source_material(tmp_path)
+    complete = materialize_youtube_source_bundle(candidate, transcript, vault_context=vault, write_guard=_guard())
+    transcript_path = Path(vault.active_vault_path, complete.transcript_path)
+    manifest_path = Path(vault.active_vault_path, complete.manifest_path)
+    before = (transcript_path.read_bytes(), manifest_path.read_bytes())
+    snapshots = iter([
+        {"state": "healthy"},
+        {"state": "safe_mode", "reason": "manifest publication blocked"},
+    ])
+
+    blocked = materialize_youtube_source_bundle(
+        candidate,
+        transcript,
+        vault_context=vault,
+        write_guard=WriteGuard(lambda: next(snapshots)),
+    )
+
+    assert blocked.status == "blocked"
+    assert (transcript_path.read_bytes(), manifest_path.read_bytes()) == before
+
+
+def test_blocked_rollback_keeps_descriptor_identity_across_bundle_redirect(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A pathname swap after traversal cannot redirect cleanup to a foreign bundle."""
+    vault = _vault(tmp_path / "vault")
+    _, transcript, candidate = _source_material(tmp_path)
+    complete = materialize_youtube_source_bundle(candidate, transcript, vault_context=vault, write_guard=_guard())
+    bundle_path = Path(vault.active_vault_path, complete.bundle_folder)
+    bundle_path.joinpath("source.json").unlink()
+    foreign_path = bundle_path.with_name(f"{bundle_path.name}.foreign")
+    foreign_path.mkdir()
+    foreign_transcript = foreign_path / "transcript.md"
+    foreign_transcript.write_text("foreign", encoding="utf-8")
+    original_stat = source_bundle_module.os.stat
+    redirected = False
+
+    def swap_before_manifest_stat(path, *args, **kwargs):
+        nonlocal redirected
+        if path == "source.json" and kwargs.get("dir_fd") is not None and not redirected:
+            redirected = True
+            original_bundle = bundle_path.with_name(f"{bundle_path.name}.original")
+            bundle_path.rename(original_bundle)
+            bundle_path.symlink_to(foreign_path.name, target_is_directory=True)
+        return original_stat(path, *args, **kwargs)
+
+    monkeypatch.setattr(source_bundle_module.os, "stat", swap_before_manifest_stat)
+    snapshots = iter([
+        {"state": "healthy"},
+        {"state": "safe_mode", "reason": "manifest publication blocked"},
+    ])
+
+    blocked = materialize_youtube_source_bundle(
+        candidate,
+        transcript,
+        vault_context=vault,
+        write_guard=WriteGuard(lambda: next(snapshots)),
+    )
+
+    assert blocked.status == "blocked"
+    assert redirected
+    assert not (bundle_path.with_name(f"{bundle_path.name}.original") / "transcript.md").exists()
+    assert foreign_transcript.read_text(encoding="utf-8") == "foreign"
+
+
+def test_unsupported_descriptor_cleanup_fails_before_partial_bundle_write(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    vault = _vault(tmp_path / "vault")
+    _, transcript, candidate = _source_material(tmp_path)
+    monkeypatch.setattr(source_bundle_module, "_DESCRIPTOR_RELATIVE_OPERATIONS_SUPPORTED", False)
+
+    with pytest.raises(SourceBundleError, match="descriptor-relative bundle rollback"):
+        materialize_youtube_source_bundle(candidate, transcript, vault_context=vault, write_guard=_guard())
+
+    assert list((tmp_path / "vault").rglob("transcript.md")) == []
+
+
+def test_unsupported_no_follow_manifest_inspection_fails_before_partial_bundle_write(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    vault = _vault(tmp_path / "vault")
+    _, transcript, candidate = _source_material(tmp_path)
+    monkeypatch.setattr(source_bundle_module, "_NO_FOLLOW_STAT_SUPPORTED", False)
+
+    with pytest.raises(SourceBundleError, match="no-follow manifest inspection"):
+        materialize_youtube_source_bundle(candidate, transcript, vault_context=vault, write_guard=_guard())
+
+    assert list((tmp_path / "vault").rglob("transcript.md")) == []
 
 
 def test_transcript_projection_is_anchored_derived_and_never_replay_input(tmp_path: Path) -> None:

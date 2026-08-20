@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
+import stat
 import tempfile
 import threading
 from contextlib import contextmanager
@@ -74,6 +76,7 @@ def materialize_youtube_source_bundle(
     with _bundle_lock(vault_root, bundle_folder):
         transcript_status: str | None = None
         try:
+            _descriptor_cleanup_capability()
             transcript_status = create_candidate_note_once(
                 transcript_path, _render_transcript(candidate, transcript), vault_root=vault_root,
                 action=SOURCE_BUNDLE_WRITE_ACTION, write_guard=write_guard,
@@ -83,9 +86,9 @@ def materialize_youtube_source_bundle(
                 action=SOURCE_BUNDLE_WRITE_ACTION, write_guard=write_guard,
             )
         except WritesBlockedError as exc:
-            if transcript_status == "written":
+            if transcript_status in {"written", "already_exists"}:
                 try:
-                    (vault_root / transcript_path).unlink()
+                    _rollback_partial_bundle(vault_root, bundle_folder)
                 except OSError as cleanup_exc:
                     raise SourceBundleError(
                         f"source bundle blocked after partial write and cleanup failed: {cleanup_exc}"
@@ -96,6 +99,52 @@ def materialize_youtube_source_bundle(
         except Exception as exc:  # noqa: BLE001
             raise SourceBundleError(f"source bundle materialization failed: {exc}") from exc
     return SourceBundleResult(source_folder, bundle_folder, transcript_path, manifest_path, "written" if "written" in {transcript_status, manifest_status} else "already_exists")
+
+
+_DIRECTORY_OPEN_FLAGS = (
+    os.O_RDONLY
+    | getattr(os, "O_DIRECTORY", 0)
+    | getattr(os, "O_NOFOLLOW", 0)
+    | getattr(os, "O_CLOEXEC", 0)
+)
+_DESCRIPTOR_RELATIVE_OPERATIONS_SUPPORTED = all(
+    operation in getattr(os, "supports_dir_fd", ())
+    for operation in (os.open, os.stat, os.unlink)
+)
+_NO_FOLLOW_STAT_SUPPORTED = os.stat in getattr(os, "supports_follow_symlinks", ())
+
+
+def _descriptor_cleanup_capability() -> None:
+    """Require the primitives that make rollback identity-safe, or fail closed."""
+    required_flags = ("O_DIRECTORY", "O_NOFOLLOW")
+    if any(getattr(os, flag, 0) == 0 for flag in required_flags):
+        raise OSError("descriptor-safe bundle rollback is unsupported on this platform")
+    if not _DESCRIPTOR_RELATIVE_OPERATIONS_SUPPORTED:
+        raise OSError("descriptor-relative bundle rollback is unsupported on this platform")
+    if not _NO_FOLLOW_STAT_SUPPORTED:
+        raise OSError("no-follow manifest inspection is unsupported on this platform")
+
+
+def _rollback_partial_bundle(vault_root: Path, bundle_folder: str) -> None:
+    _descriptor_cleanup_capability()
+    components = PurePosixPath(bundle_folder).parts
+    if not components or any(component in {"", ".", ".."} for component in components):
+        raise OSError("bundle folder must be a safe vault-relative path")
+    descriptor = os.open(vault_root, _DIRECTORY_OPEN_FLAGS)
+    try:
+        for component in components:
+            child_descriptor = os.open(component, _DIRECTORY_OPEN_FLAGS, dir_fd=descriptor)
+            os.close(descriptor)
+            descriptor = child_descriptor
+        try:
+            manifest_stat = os.stat("source.json", dir_fd=descriptor, follow_symlinks=False)
+        except FileNotFoundError:
+            manifest_stat = None
+        if manifest_stat is None or not stat.S_ISREG(manifest_stat.st_mode):
+            os.unlink("transcript.md", dir_fd=descriptor)
+            os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
 
 
 @contextmanager
