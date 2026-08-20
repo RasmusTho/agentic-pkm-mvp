@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import tempfile
 import threading
@@ -85,7 +86,9 @@ def materialize_youtube_source_bundle(
         except WritesBlockedError as exc:
             if transcript_status == "written":
                 try:
-                    (vault_root / transcript_path).unlink()
+                    transcript_file = vault_root / transcript_path
+                    transcript_file.unlink()
+                    _fsync_directory(transcript_file.parent)
                 except OSError as cleanup_exc:
                     raise SourceBundleError(
                         f"source bundle blocked after partial write and cleanup failed: {cleanup_exc}"
@@ -96,6 +99,14 @@ def materialize_youtube_source_bundle(
         except Exception as exc:  # noqa: BLE001
             raise SourceBundleError(f"source bundle materialization failed: {exc}") from exc
     return SourceBundleResult(source_folder, bundle_folder, transcript_path, manifest_path, "written" if "written" in {transcript_status, manifest_status} else "already_exists")
+
+
+def _fsync_directory(path: Path) -> None:
+    descriptor = os.open(path, os.O_RDONLY)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
 
 
 @contextmanager

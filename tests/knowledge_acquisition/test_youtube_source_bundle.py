@@ -16,6 +16,7 @@ from app.knowledge_acquisition.source_bundle import (
     SourceBundleError,
     materialize_youtube_source_bundle,
 )
+import app.knowledge_acquisition.source_bundle as source_bundle_module
 from app.vault.manager import VaultContext
 from app.write_guard import WriteGuard
 from tests.invariants._helpers import assert_validates
@@ -115,6 +116,38 @@ def test_bundle_write_blocked_between_members_cleans_up_partial_artifact(tmp_pat
 
     assert blocked.status == "blocked"
     assert list((tmp_path / "vault").rglob("*.md")) == []
+
+
+def test_blocked_rollback_fsyncs_bundle_directory_before_return(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    vault = _vault(tmp_path / "vault")
+    _, transcript, candidate = _source_material(tmp_path)
+    fenced: list[Path] = []
+    original_fsync_directory = source_bundle_module._fsync_directory
+
+    def record_fsync_directory(path: Path) -> None:
+        fenced.append(path)
+        original_fsync_directory(path)
+
+    monkeypatch.setattr(source_bundle_module, "_fsync_directory", record_fsync_directory)
+    snapshots = iter(
+        [
+            {"state": "healthy"},
+            {"state": "safe_mode", "reason": "mid-bundle block"},
+        ]
+    )
+
+    blocked = materialize_youtube_source_bundle(
+        candidate,
+        transcript,
+        vault_context=vault,
+        write_guard=WriteGuard(lambda: next(snapshots)),
+    )
+
+    assert blocked.status == "blocked"
+    assert fenced == [Path(vault.active_vault_path, blocked.bundle_folder)]
+    assert not Path(vault.active_vault_path, blocked.transcript_path).exists()
 
 
 def test_transcript_projection_is_anchored_derived_and_never_replay_input(tmp_path: Path) -> None:
