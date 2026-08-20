@@ -163,7 +163,7 @@ def test_blocked_rollback_fsyncs_bundle_directory_before_return(
     )
 
     assert blocked.status == "blocked"
-    assert opened.count(Path(vault.active_vault_path, blocked.bundle_folder)) == 1
+    assert opened.count(Path(vault.active_vault_path)) == 2
     assert unlinked and unlinked[0][0] == "transcript.md"
     assert unlinked[0][1] in synced
     assert not Path(vault.active_vault_path, blocked.transcript_path).exists()

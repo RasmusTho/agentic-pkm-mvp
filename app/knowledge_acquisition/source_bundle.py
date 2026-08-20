@@ -84,11 +84,9 @@ def materialize_youtube_source_bundle(
                 action=SOURCE_BUNDLE_WRITE_ACTION, write_guard=write_guard,
             )
         except WritesBlockedError as exc:
-            manifest_file = vault_root / manifest_path
-            if transcript_status in {"written", "already_exists"} and not manifest_file.exists():
+            if transcript_status in {"written", "already_exists"}:
                 try:
-                    transcript_file = vault_root / transcript_path
-                    _unlink_and_fsync_transcript(transcript_file)
+                    _rollback_partial_bundle(vault_root, bundle_folder)
                 except OSError as cleanup_exc:
                     raise SourceBundleError(
                         f"source bundle blocked after partial write and cleanup failed: {cleanup_exc}"
@@ -101,11 +99,26 @@ def materialize_youtube_source_bundle(
     return SourceBundleResult(source_folder, bundle_folder, transcript_path, manifest_path, "written" if "written" in {transcript_status, manifest_status} else "already_exists")
 
 
-def _unlink_and_fsync_transcript(path: Path) -> None:
-    descriptor = os.open(path.parent, os.O_RDONLY)
+_DIRECTORY_OPEN_FLAGS = (
+    os.O_RDONLY
+    | getattr(os, "O_DIRECTORY", 0)
+    | getattr(os, "O_NOFOLLOW", 0)
+    | getattr(os, "O_CLOEXEC", 0)
+)
+
+
+def _rollback_partial_bundle(vault_root: Path, bundle_folder: str) -> None:
+    descriptor = os.open(vault_root, _DIRECTORY_OPEN_FLAGS)
     try:
-        os.unlink(path.name, dir_fd=descriptor)
-        os.fsync(descriptor)
+        for component in PurePosixPath(bundle_folder).parts:
+            child_descriptor = os.open(component, _DIRECTORY_OPEN_FLAGS, dir_fd=descriptor)
+            os.close(descriptor)
+            descriptor = child_descriptor
+        try:
+            os.stat("source.json", dir_fd=descriptor, follow_symlinks=False)
+        except FileNotFoundError:
+            os.unlink("transcript.md", dir_fd=descriptor)
+            os.fsync(descriptor)
     finally:
         os.close(descriptor)
 
