@@ -21,6 +21,7 @@ import io
 import json
 import logging
 import secrets
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -51,8 +52,13 @@ from app.heimdal.raw_read_gate import raw_ref_for
 from app.heimdal.raw_store import (
     all_raw_records,
     all_raw_representations,
+    encrypt_raw_bytes,
+    insert_raw_record,
     reset_memory_raw_store,
 )
+from app.heimdal.retention import enforce_hard_retention_bound
+from app.heimdal.settings_notes import SETTINGS, SettingsNote, write_settings_note
+from app.write_guard import WriteGuard
 
 pytestmark = pytest.mark.not_pg
 
@@ -297,6 +303,43 @@ def test_receipt_raw_ref_resolves_to_the_object_it_attests_to(client: TestClient
     assert admitted.json()["raw_ref"] == raw_ref_for(record)
     queried = _get_receipts(client, sidecar["capture_id"]).json()["receipts"][0]
     assert queried["raw_ref"] == raw_ref_for(record)
+
+
+def test_resend_after_retention_is_not_false_idempotent(
+    client: TestClient, tmp_path: Path
+) -> None:
+    """A resend after erasure gets the explicit terminal outcome, never a replay ack."""
+    media = b"retained-then-erased-media"
+    sidecar = _sidecar(media)
+    admitted = _post_media(client, media, sidecar)
+    assert admitted.status_code == 200, admitted.text
+
+    vault_root = tmp_path / "vault"
+    vault_root.mkdir()
+    write_settings_note(
+        vault_root,
+        SettingsNote(spec=SETTINGS, values={"retention_window_days": 1}),
+        write_guard=WriteGuard(lambda: {"state": "healthy"}),
+    )
+    enforce_hard_retention_bound(
+        vault_root=vault_root, now=datetime.now(timezone.utc) + timedelta(days=2)
+    )
+
+    query = _get_receipts(client, sidecar["capture_id"])
+    assert query.status_code == 200, query.text
+    assert query.json()["receipts"][0]["outcome"] == "erased"
+
+    resent = _post_media(client, media, sidecar)
+    assert resent.status_code == 410, resent.text
+    assert resent.json()["detail"] == {
+        "error": "media_evidence_erased",
+        "state": "erased",
+        "capture_id": sidecar["capture_id"],
+        "content_sha256": sidecar["content_sha256"],
+        "trace_id": resent.json()["detail"]["trace_id"],
+    }
+    assert resent.json()["detail"]["trace_id"]
+    assert len(all_raw_records()) == 0
 
 
 def test_receipt_identity_includes_the_capture_id(client: TestClient) -> None:
@@ -1126,11 +1169,25 @@ def test_shared_seam_reports_an_already_acknowledged_identity_as_not_new() -> No
     won the race between the pre-write short-circuit and the seam's own guard.
     """
     capture_id = str(uuid4())
-    content_sha256 = hashlib.sha256(b"seam-guard-bytes").hexdigest()
+    media = b"seam-guard-bytes"
+    content_sha256 = hashlib.sha256(media).hexdigest()
+    ciphertext, nonce = encrypt_raw_bytes(media, key=_KEY)
+    record, created = insert_raw_record(
+        content_identity=content_sha256,
+        capture_chain=["test"],
+        sensor={"sensor_id": "test"},
+        consent={"grant_ref": "test"},
+        ciphertext=ciphertext,
+        nonce=nonce,
+        key_ref="test-key",
+        key=_KEY,
+        source_path="test-media",
+    )
+    assert created
     common = {
         "capture_id": capture_id,
         "content_sha256": content_sha256,
-        "raw_ref": "heimraw:record-seam",
+        "raw_ref": raw_ref_for(record),
         "kind": "audio",
         "lane": media_ingress.LANE_MEDIA_INGRESS,
         "trace_id": "t-seam",

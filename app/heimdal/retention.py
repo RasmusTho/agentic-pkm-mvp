@@ -443,7 +443,10 @@ def enforce_hard_retention_bound(
 
     Records within the window are left untouched (negative case). The
     published observation log (HEIM-1) is never read or written by this
-    function -- retention operates on raw evidence and receipts only.
+    function -- retention operates on raw evidence and receipts only. Media
+    admission history is append-only too: after the governed raw deletion,
+    `media_ingress.receipt_answer` derives the receipt's client-visible
+    ``erased`` outcome instead of leaving it falsely admitted.
 
     Returns a :class:`RetentionEnforcementReceipt` naming how many records
     were deleted (``deleted_count`` -- ``0`` is a valid, honestly-receipted

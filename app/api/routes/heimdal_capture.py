@@ -76,6 +76,7 @@ from app.heimdal.consent_ledger import ConsentRefusedError
 from app.heimdal.media_ingress import (
     MediaAdmissionError,
     MediaAdmissionEventPersistenceError,
+    MediaEvidenceErasedError,
     MediaCapConfigError,
     MediaHashMismatchError,
     MediaKindUnsupportedError,
@@ -570,6 +571,20 @@ async def admit_media(request: Request) -> MediaReceiptResponse:
                     "The original could not be durably written; no receipt was issued. "
                     "Re-send the same capture_id and content_sha256 — admission is idempotent."
                 ),
+                "trace_id": trace_id,
+            },
+        ) from exc
+    except MediaEvidenceErasedError as exc:
+        # Retention preserves the immutable admission receipt for audit, but
+        # the raw evidence it attested to is gone. A resend under the same
+        # identity must be an explicit terminal result, never a false replay.
+        raise HTTPException(
+            status_code=410,
+            detail={
+                "error": "media_evidence_erased",
+                "state": "erased",
+                "capture_id": exc.receipt.capture_id,
+                "content_sha256": exc.receipt.content_sha256,
                 "trace_id": trace_id,
             },
         ) from exc

@@ -142,6 +142,21 @@ class MediaAdmissionError(RuntimeError):
     """The durable raw write did not confirm; nothing was acknowledged."""
 
 
+class MediaEvidenceErasedError(RuntimeError):
+    """An immutable admission receipt exists, but its raw evidence was erased.
+
+    This is a terminal outcome for the original transfer identity: the receipt
+    history remains auditable, but it can no longer acknowledge durable raw
+    acceptance or make a resend look idempotent.
+    """
+
+    def __init__(self, receipt: MediaReceipt) -> None:
+        self.receipt = receipt
+        super().__init__(
+            "the durable raw evidence for this media admission was erased by governed retention"
+        )
+
+
 class MediaAdmissionEventPersistenceError(RuntimeError):
     """The admission event could not be committed, so no receipt was written.
 
@@ -165,6 +180,19 @@ class MediaAdmission:
 
     receipt: MediaReceipt
     idempotent_replay: bool
+
+
+def _retained_receipt_or_erased(receipt: MediaReceipt) -> MediaReceipt:
+    """Return a replayable receipt only while it still resolves to its raw object.
+
+    Receipt rows are append-only, so retention never changes their identity or
+    fields in place. The current acknowledgement state is instead derived from
+    whether the exact raw object the receipt attests to still exists.
+    """
+    record = raw_store.get_raw_record_by_content_identity(receipt.content_sha256)
+    if record is not None and raw_ref_for(record) == receipt.raw_ref:
+        return receipt
+    raise MediaEvidenceErasedError(receipt)
 
 
 def resolve_media_kind_max_bytes(kind: str) -> int:
@@ -318,7 +346,7 @@ def record_media_admission(
     """
     already_acknowledged = media_receipts.get_media_receipt(capture_id, content_sha256)
     if already_acknowledged is not None:
-        return already_acknowledged, False
+        return _retained_receipt_or_erased(already_acknowledged), False
 
     receipt_id = media_receipts.derive_receipt_id(capture_id, content_sha256)
     if not _emit_admission_event(
@@ -410,6 +438,7 @@ def admit_media_bytes(
     # before consent/encryption/write so a replay costs one lookup.
     existing = media_receipts.get_media_receipt(capture_id, content_sha256)
     if existing is not None:
+        existing = _retained_receipt_or_erased(existing)
         # The replay must still reach the ledger (CDLM-02): if a prior attempt
         # acknowledged the capture but crashed before the ledger row landed, the
         # client's resend takes this branch — an idempotent ledger upsert here is
@@ -656,7 +685,7 @@ def record_watched_folder_admission(
 
 
 def receipt_answer(receipt: Optional[MediaReceipt], capture_id: str) -> Dict[str, Any]:
-    """Render one receipt-query answer: `admitted` with the receipt, or `unknown`.
+    """Render one receipt-query answer: `admitted`, `erased`, or `unknown`.
 
     ``unknown`` is a first-class answer, not an error: it is how a client
     distinguishes "my response was lost" from "my capture never arrived"
@@ -669,9 +698,15 @@ def receipt_answer(receipt: Optional[MediaReceipt], capture_id: str) -> Dict[str
     """
     if receipt is None:
         return {"capture_id": capture_id, "outcome": "unknown"}
+    try:
+        _retained_receipt_or_erased(receipt)
+    except MediaEvidenceErasedError:
+        outcome = "erased"
+    else:
+        outcome = "admitted"
     return {
         "capture_id": capture_id,
-        "outcome": "admitted",
+        "outcome": outcome,
         "receipt_id": receipt.receipt_id,
         "content_sha256": receipt.content_sha256,
         "raw_ref": receipt.raw_ref,
@@ -705,6 +740,7 @@ __all__ = [
     "MediaAdmission",
     "MediaAdmissionError",
     "MediaAdmissionEventPersistenceError",
+    "MediaEvidenceErasedError",
     "MediaCapConfigError",
     "MediaHashMismatchError",
     "MediaKindUnsupportedError",

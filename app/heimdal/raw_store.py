@@ -1456,12 +1456,14 @@ def hard_delete_raw_record(record_id: str) -> bool:
 
     This function performs the deletion ONLY -- it does not decide *whether*
     a record is past its retention window, and it does not write a deletion
-    receipt. The sanctioned caller is
+    receipt or rewrite an admission receipt. The sanctioned caller is
     `app.heimdal.retention.enforce_hard_retention_bound`, which resolves the
     retention window (from `_heimdal/**` settings notes, A14), calls this
     function for each record past the bound, and pairs every call with a
     durable deletion receipt in the same operation -- deletion is never
-    silent (Constraints: "no silent hard delete").
+    silent (Constraints: "no silent hard delete"). Media receipt consumers
+    derive post-erasure state from the removed raw identity; they must not
+    treat this primitive as permission to mutate append-only receipt history.
     """
     return _backend().hard_delete(record_id)
 

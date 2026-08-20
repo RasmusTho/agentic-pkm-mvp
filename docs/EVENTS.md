@@ -680,16 +680,17 @@ Contract:
   `unavailable` on `/api/status` before first use instead of letting a dead lane
   look calm. Placing key material into each channel's Keychain item remains an
   operator step; see `docs/STATUS.md :: Runtime verification`.
-- **Receipts are not retention-aware, stated honestly.**
-  `app.heimdal.retention.enforce_hard_retention_bound` hard-deletes raw records
-  past the retention window without consulting receipts, so a receipt can outlive
-  the raw object it attests to: the query would still answer `admitted` with a
-  `raw_ref` that no longer resolves, and a resend short-circuits on that receipt
-  rather than re-admitting the original. Latent today — nothing schedules that job
-  — but CDLM-03 deletes client originals against an `admitted` answer, so a
-  receipt-aware retention interaction must land before that. Tracked as a deferred
-  defect on the Known Defects registry (#4172, `KD-4384-RETENTION`), not claimed as
-  solved here.
+- **Receipts project retention truth without rewriting history.**
+  Admission receipts remain append-only and retain their original
+  `(capture_id, content_sha256)` identity after hard retention deletes their raw
+  object; the matching governed deletion receipt remains the audit of that act.
+  Receipt queries derive `outcome: erased` when the receipt's exact `raw_ref` no
+  longer resolves, rather than returning `admitted`. Clients must keep their
+  original for an `erased` answer and treat it as a governed terminal outcome for
+  that transfer identity; a resend returns 410 `media_evidence_erased`, never a
+  false idempotent/admitted acknowledgement. `unknown` still means no receipt was
+  ever acknowledged, and only that answer remains eligible for normal resend
+  recovery.
 - **Consent scope names what the lane captures.** The lane admits under its own
   standing grant (`consent_ledger.MEDIA_CAPTURE_SCOPE` =
   `device+adapter:v1-media-ingress`, `grant_ref` `grant-media-capture-v1`,
