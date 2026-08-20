@@ -16,11 +16,17 @@ import json
 from pathlib import Path
 import threading
 from typing import Any
+import uuid
 
 import pytest
 
 from app import objects as object_store_module
 from app.knowledge_acquisition import youtube_plugin as plugin
+from app.knowledge_acquisition import acquisition_requests as request_module
+from app.knowledge_acquisition.acquisition_requests import (
+    AcquisitionRequests,
+    reset_memory_acquisition_requests,
+)
 from app.knowledge_acquisition.acquire import (
     AcquisitionError,
     DatabaseNotConfiguredError,
@@ -31,10 +37,20 @@ from app.knowledge.write_ops import write_note_relative
 from app.knowledge_acquisition.candidate_writeback import Candidate, write_candidate_note
 from app.knowledge_acquisition.extraction_registry import clear_registry
 from app.knowledge_acquisition.extractors import claims_extractor, summary_extractor, synthesis_extractor
+from app.knowledge_acquisition.playlist_discovery import poll_source
+from app.knowledge_acquisition.source_registry import (
+    SourceRegistry,
+    reset_memory_source_registry,
+)
 from app.knowledge_acquisition.stage_events import (
     STAGE_COMPLETED_TOPIC,
     STAGE_DEAD_LETTERED_TOPIC,
 )
+from app.knowledge_acquisition.youtube_api_client import (
+    PlaylistItem,
+    PlaylistItemsPage,
+)
+from app.services.outbox import write_outbox_event
 from app.stores import reset_store_backends
 from app.vault.manager import VaultContext
 from app.write_guard import WriteGuard
@@ -212,6 +228,76 @@ def _denying_guard() -> WriteGuard:
     `WritesBlockedError` for the (non-bootstrap) candidate-write action — the real
     reachable state a degraded runtime produces."""
     return WriteGuard(lambda: {"state": "safe_mode", "reason": "runtime degraded (test)"})
+
+
+def test_anchored_policy_defaults_enqueue_through_playlist_discovery(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    reset_memory_source_registry()
+    reset_memory_acquisition_requests()
+    outbox = FakeOutboxConn()
+
+    def emit(event: Any, conn: Any = None, *, idempotency_key: str) -> str:
+        del conn
+        return write_outbox_event(event, conn=outbox, idempotency_key=idempotency_key)
+
+    monkeypatch.setattr(request_module, "write_outbox_event", emit)
+    try:
+        account = str(uuid.uuid4())
+        registry = SourceRegistry.for_runtime()
+        row = registry.register(
+            collection_kind="inbox_playlist",
+            collection_ref="PL_anchored_default",
+            title="Anchored default policy",
+            account_binding_id=account,
+            acquisition_policy={
+                "extractor_requirements": {
+                    "synthesis": "required_for_materialization",
+                    "claims": "required_for_materialization",
+                }
+            },
+        )
+        binding = registry.set_inbox(account, row.binding_id)
+        page = PlaylistItemsPage(
+            items=(
+                PlaylistItem(
+                    playlist_item_id="pli-anchored-default",
+                    video_id=VIDEO_ID,
+                    position=0,
+                    published_at="2026-08-20T00:00:00Z",
+                    title="Anchored default fixture",
+                ),
+            ),
+            next_page_token=None,
+            etag='"anchored-default"',
+            pagination_truncated=False,
+        )
+
+        class Api:
+            def list_playlist_items(self, *_args: Any, **_kwargs: Any) -> PlaylistItemsPage:
+                return page
+
+            def quota_status(self) -> dict[str, int | bool]:
+                return {"spent_today": 1, "budget": 10_000, "exhausted": False}
+
+        result = poll_source(
+            binding,
+            api_client=Api(),
+            requests=AcquisitionRequests.for_runtime(),
+            registry=registry,
+        )
+
+        queued = AcquisitionRequests.for_runtime().list_all()
+        assert result.enqueued == 1
+        assert len(queued) == 1
+        assert queued[0].policy_snapshot["extractor_ids"] == []
+        assert queued[0].policy_snapshot["extractor_requirements"] == {
+            "synthesis": "required_for_materialization",
+            "claims": "required_for_materialization",
+        }
+    finally:
+        reset_memory_source_registry()
+        reset_memory_acquisition_requests()
 
 
 def test_normal_acquisition_produces_anchored_synthesis(

@@ -6,6 +6,7 @@ import pytest
 
 from app.knowledge_acquisition.extraction_registry import ExtractionError
 from app.knowledge_acquisition.extractors.claims_extractor import run
+from app.knowledge_acquisition.extractors.synthesis_extractor import run as run_synthesis
 
 
 NORMALIZED = {
@@ -48,3 +49,19 @@ def test_non_swedish_paraphrase_language_is_rejected() -> None:
 
     with pytest.raises(ExtractionError, match="system_paraphrase language"):
         run(NORMALIZED, complete=_completion(json.dumps(payload)))
+
+
+def test_synthesis_rejects_any_invalid_anchor_before_persistence() -> None:
+    payload = {
+        "synthesis_sentences": [{
+            "text": "Cats sleep frequently.",
+            "anchors": [
+                {"segment_index": 0, "start": 0.0, "end": 2.0},
+                {"segment_index": 0, "start": 2.0, "end": 3.0},
+            ],
+        }],
+        "model_confidence": 0.8,
+    }
+
+    with pytest.raises(ExtractionError, match="synthesis anchor is not resolvable"):
+        run_synthesis({**NORMALIZED, "language": "en"}, complete=_completion(json.dumps(payload)))

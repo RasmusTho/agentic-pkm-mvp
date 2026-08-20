@@ -9,8 +9,17 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import math
-import re
 from typing import Any, Mapping, Sequence
+
+from lingua import Language, LanguageDetectorBuilder
+
+
+_D6_LANGUAGES = {"en": Language.ENGLISH, "sv": Language.SWEDISH}
+_LANGUAGE_DETECTOR = LanguageDetectorBuilder.from_all_languages_without(Language.LATIN).build()
+_NORDIC_LANGUAGE_DETECTOR = LanguageDetectorBuilder.from_languages(
+    Language.ENGLISH, Language.SWEDISH
+).build()
+_NORDIC_NEIGHBORS = {Language.BOKMAL, Language.DANISH, Language.NYNORSK}
 
 
 @dataclass(frozen=True)
@@ -47,31 +56,29 @@ def caption_quality_confidence_cap(acquisition_method: object) -> float:
     return 0.5
 
 
-_ENGLISH_MARKERS = frozenset(
-    "a an and are as about by can claim claims contains describes demonstrates evidence "
-    "for from has have in indicates is it its makes may of on provides source supports "
-    "that the their this to with".split()
-)
-_NON_ENGLISH_MARKERS = frozenset(
-    "avec cette dans des est et la le les une que sont ce der die das ein eine ist mit "
-    "el las los una es son con del y het een van zijn".split()
-)
-_TOKEN_RE = re.compile(r"[^\W\d_]+", re.UNICODE)
-
-
 def validate_generated_language(text: str, expected_language: str) -> bool:
-    """Apply a conservative, deterministic D6 gate to generated prose."""
+    """Accept only D6's detected generated-prose language.
 
-    tokens = {token.casefold() for token in _TOKEN_RE.findall(text)}
-    if not tokens:
+    A language identifier handles ordinary prose without coupling the gate to a
+    small, hand-maintained set of marker words. Detection failures fail closed.
+    """
+
+    if expected_language not in {"en", "sv"} or not text.strip():
         return False
-    if expected_language == "sv":
-        return bool(tokens & {"och", "att", "som", "för", "inte", "är", "på", "med"}) or bool(
-            set(text) & {"å", "ä", "ö", "Å", "Ä", "Ö"}
-        )
-    if tokens & _NON_ENGLISH_MARKERS:
+    expected = _D6_LANGUAGES.get(expected_language)
+    if expected is None or not text.strip():
         return False
-    return bool(tokens & _ENGLISH_MARKERS)
+    detected = _LANGUAGE_DETECTOR.detect_language_of(text)
+    if detected == expected:
+        return True
+    # Short Swedish prose can be indistinguishable from its Nordic neighbors
+    # to a broad detector. Resolve only that bounded ambiguity with the D6
+    # language set; every other language remains a fail-closed refusal.
+    return (
+        expected == Language.SWEDISH
+        and detected in _NORDIC_NEIGHBORS
+        and _NORDIC_LANGUAGE_DETECTOR.detect_language_of(text) == Language.SWEDISH
+    )
 
 
 def render_evidence_anchored(

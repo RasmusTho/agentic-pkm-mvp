@@ -75,7 +75,7 @@ from app.events.types import (
     YOUTUBE_SOURCE_DISCOVERED,
 )
 from app.knowledge_acquisition.source_registry import VALID_PRIORITIES as _registry_priorities
-from app.knowledge_acquisition.pipeline_defaults import DEFAULT_EXTRACTOR_IDS
+from app.knowledge_acquisition.pipeline_defaults import DEFAULT_EXTRACTOR_IDS, resolve_extractor_ids
 from app.services.outbox import derive_idempotency_key, write_outbox_event
 
 # --- Contract vocab ----------------------------------------------------------
@@ -1017,7 +1017,9 @@ class AcquisitionRequests:
                     "policy_snapshot.extractor_requirements must map non-empty extractor ids "
                     "to a required/optional materialization classification"
                 )
-            selected = tuple(extractor_ids or ("summary",))
+            selected = resolve_extractor_ids(
+                tuple(extractor_ids or DEFAULT_EXTRACTOR_IDS), extractor_requirements
+            )
             if set(extractor_requirements) != set(selected):
                 raise AcquisitionRequestValidationError(
                     "policy_snapshot.extractor_requirements must classify every selected "
