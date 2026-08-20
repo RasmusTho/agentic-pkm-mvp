@@ -786,7 +786,7 @@ def _pg_exact_active(cur: Any, generation: RawLivenessGeneration) -> bool:
                count(*) FILTER (
                    WHERE p.active
                      AND p.storage_kind = 'postgres_hot'
-                     AND p.location_ref LIKE 'heimloc:%'
+                     AND p.location_ref LIKE 'heimloc:%%'
                      AND p.ciphertext IS NOT NULL
                      AND p.nonce IS NOT NULL
                      AND p.key_ref IS NOT NULL
