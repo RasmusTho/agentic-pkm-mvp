@@ -124,6 +124,11 @@ ALLOW_FILES = (
     # encrypted raw-record table, direct DSN connection, no ORM layer to
     # route through.
     'app/heimdal/raw_store.py',
+    # Raw-evidence liveness authority (#5020). The generation/tombstone/lease
+    # tables own the atomic raw-state fence and governed deletion transaction,
+    # so this dedicated adapter has the same bounded direct-connection
+    # exception as raw_store.py.
+    'app/heimdal/raw_liveness.py',
     # Gated raw-read receipt log (#3027, Epic #3019 slice A7). Same bounded
     # pattern as the raw store above: a dedicated append-only receipt
     # table, direct DSN connection, no ORM layer to route through.
