@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import re
+import stat
 import tempfile
 import threading
 from contextlib import contextmanager
@@ -133,8 +134,10 @@ def _rollback_partial_bundle(vault_root: Path, bundle_folder: str) -> None:
             os.close(descriptor)
             descriptor = child_descriptor
         try:
-            os.stat("source.json", dir_fd=descriptor, follow_symlinks=False)
+            manifest_stat = os.stat("source.json", dir_fd=descriptor, follow_symlinks=False)
         except FileNotFoundError:
+            manifest_stat = None
+        if manifest_stat is None or not stat.S_ISREG(manifest_stat.st_mode):
             os.unlink("transcript.md", dir_fd=descriptor)
             os.fsync(descriptor)
     finally:
