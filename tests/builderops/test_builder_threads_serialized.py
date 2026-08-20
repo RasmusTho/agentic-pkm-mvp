@@ -4,6 +4,7 @@ import pytest
 from pathlib import Path
 
 from app.builderops.builder_threads_serialized import (
+    BuilderThreadError,
     BuilderThreadClient,
     BuilderThreadWriterHost,
     InProcessWriterEndpoint,
@@ -430,6 +431,153 @@ def test_external_writer_state_survives_restart_and_replays_exact_request(tmp_pa
     )
     assert restarted.read(created.thread.thread_id).thread_id == created.thread.thread_id
     assert restarted.create(**request).replayed is True
+
+
+def test_failed_write_preserves_last_valid_artifact(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    writer = _writer(tmp_path)
+    client = BuilderThreadClient(
+        InProcessWriterEndpoint(writer, client_id="codex:desktop"), client_id="codex:desktop"
+    )
+    created = client.create(
+        request_id="atomic-baseline-5023",
+        actor="codex:desktop",
+        recipient="claude:mac",
+        subject="Atomic baseline",
+        content="This committed artifact must remain readable.",
+        source_refs=("github:5023",),
+    )
+    entries = tmp_path / "external-builderops-vault" / "builder-thread-entries"
+    baseline = (entries / "atomic-baseline-5023.json").read_bytes()
+
+    def fail_publication(_source: object, _destination: object) -> None:
+        raise OSError("simulated publication failure")
+
+    monkeypatch.setattr("app.builderops.builder_threads_serialized.os.link", fail_publication)
+    with pytest.raises(WriterUnavailableError, match="persistence is unavailable"):
+        client.create(
+            request_id="atomic-failure-5023",
+            actor="codex:desktop",
+            recipient="claude:mac",
+            subject="Atomic failure",
+            content="This failed write must not replace committed state.",
+            source_refs=("github:5023",),
+        )
+
+    assert (entries / "atomic-baseline-5023.json").read_bytes() == baseline
+    assert not (entries / "atomic-failure-5023.json").exists()
+    assert writer.read_thread(created.thread.thread_id) == created.thread
+
+
+def test_atomic_publication_does_not_overwrite_competing_artifact(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    writer = _writer(tmp_path)
+    client = BuilderThreadClient(
+        InProcessWriterEndpoint(writer, client_id="codex:desktop"), client_id="codex:desktop"
+    )
+    entries = tmp_path / "external-builderops-vault" / "builder-thread-entries"
+    created = client.create(
+        request_id="competing-baseline-5023",
+        actor="codex:desktop",
+        recipient="claude:mac",
+        subject="Competing baseline",
+        content="This valid envelope must not become another request's authority.",
+        source_refs=("github:5023",),
+    )
+    competing = (entries / "competing-baseline-5023.json").read_bytes()
+
+    def simulate_competing_publication(_source: object, destination: object) -> None:
+        Path(destination).write_bytes(competing)
+        raise FileExistsError(destination)
+
+    monkeypatch.setattr(
+        "app.builderops.builder_threads_serialized.os.link", simulate_competing_publication
+    )
+    with pytest.raises(WriterUnavailableError, match="persistence is unavailable"):
+        client.create(
+            request_id="competing-publication-5023",
+            actor="codex:desktop",
+            recipient="claude:mac",
+            subject="Competing publication",
+            content="The writer must not replace an existing immutable envelope.",
+            source_refs=("github:5023",),
+        )
+
+    assert (entries / "competing-publication-5023.json").read_bytes() == competing
+    assert writer.read_thread(created.thread.thread_id) == created.thread
+    with pytest.raises(WriterUnavailableError, match="persistence is unavailable"):
+        client.create(
+            request_id="competing-follow-up-5023",
+            actor="codex:desktop",
+            recipient="claude:mac",
+            subject="Competing follow-up",
+            content="A failed publication latches the writer unavailable.",
+            source_refs=("github:5023",),
+        )
+    with pytest.raises(BuilderThreadError, match="external writer entry is invalid"):
+        _writer(tmp_path)
+
+
+def test_restart_recovers_after_interrupted_write(tmp_path: Path) -> None:
+    writer = _writer(tmp_path)
+    client = BuilderThreadClient(
+        InProcessWriterEndpoint(writer, client_id="codex:desktop"), client_id="codex:desktop"
+    )
+    created = client.create(
+        request_id="interrupted-create-5023",
+        actor="codex:desktop",
+        recipient="claude:mac",
+        subject="Interrupted restart",
+        content="A completed command remains available after interruption.",
+        source_refs=("github:5023",),
+    )
+    entries = tmp_path / "external-builderops-vault" / "builder-thread-entries"
+    (entries / ".interrupted-reply-5023.json.interrupted.tmp").write_text(
+        '{"command":', encoding="utf-8"
+    )
+
+    restarted = BuilderThreadClient(
+        InProcessWriterEndpoint(_writer(tmp_path), client_id="claude:mac"), client_id="claude:mac"
+    )
+    retried = restarted.reply(
+        request_id="interrupted-reply-5023",
+        thread_id=created.thread.thread_id,
+        actor="claude:mac",
+        recipient="codex:desktop",
+        content="The retry commits exactly once after restart.",
+        source_refs=("github:5023",),
+    )
+
+    assert retried.replayed is False
+    assert len(restarted.read(created.thread.thread_id).entries) == 2
+
+
+def test_partial_artifact_is_quarantined_with_failure_signal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    writer = _writer(tmp_path)
+    client = BuilderThreadClient(
+        InProcessWriterEndpoint(writer, client_id="codex:desktop"), client_id="codex:desktop"
+    )
+    created = client.create(
+        request_id="partial-baseline-5023",
+        actor="codex:desktop",
+        recipient="claude:mac",
+        subject="Partial artifact baseline",
+        content="The last valid command must remain authoritative.",
+        source_refs=("github:5023",),
+    )
+    entries = tmp_path / "external-builderops-vault" / "builder-thread-entries"
+    partial = entries / "partial-final-5023.json"
+    partial.write_text('{"command":', encoding="utf-8")
+
+    with pytest.raises(BuilderThreadError, match="external writer entry is invalid"):
+        _writer(tmp_path)
+
+    assert partial.read_text(encoding="utf-8") == '{"command":'
+    assert writer.read_thread(created.thread.thread_id) == created.thread
 
 
 def test_external_writer_restores_causal_order_not_request_id_order(tmp_path: Path) -> None:
