@@ -293,14 +293,14 @@ Each command envelope is written to a same-directory temporary pathname, then
 atomically published at its final JSON pathname only after the complete payload
 is written. Interrupted temporary writes are not committed state. Recovery reads
 only validated final envelopes in sequence order; a malformed legacy partial
-final envelope is retained under a quarantine name and excluded from replay, so
-the last valid artifact remains the recovery authority. A failed publication
-returns the existing typed writer-unavailable signal, and an exact retry may
-then publish the command without duplicating an accepted mutation.
+final envelope is retained and fails recovery closed rather than being replayed
+or silently discarded. A failed publication latches the existing typed
+writer-unavailable signal until a clean restart; an exact retry after a valid
+restart may then publish the command without duplicating an accepted mutation.
 
 This boundary is deliberately not a distributed filesystem protocol. It has no
-vault-global claims, slot reservations, cross-device locks, hard-link/fsync race
-recovery, SQLite state, or iCloud convergence semantics. PR #4706 is superseded
+vault-global claims, slot reservations, cross-device locks, fsync-based recovery,
+SQLite state, or iCloud convergence semantics. PR #4706 is superseded
 multi-writer evidence only; it is not merged or used as the operational contract.
 
 Threads and their inbox/devUI projections are non-authoritative discussion

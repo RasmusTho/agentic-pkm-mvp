@@ -1,11 +1,10 @@
 from __future__ import annotations
 
-import os
-
 import pytest
 from pathlib import Path
 
 from app.builderops.builder_threads_serialized import (
+    BuilderThreadError,
     BuilderThreadClient,
     BuilderThreadWriterHost,
     InProcessWriterEndpoint,
@@ -455,7 +454,7 @@ def test_failed_write_preserves_last_valid_artifact(
     def fail_publication(_source: object, _destination: object) -> None:
         raise OSError("simulated publication failure")
 
-    monkeypatch.setattr("app.builderops.builder_threads_serialized.os.replace", fail_publication)
+    monkeypatch.setattr("app.builderops.builder_threads_serialized.os.link", fail_publication)
     with pytest.raises(WriterUnavailableError, match="persistence is unavailable"):
         client.create(
             request_id="atomic-failure-5023",
@@ -469,6 +468,56 @@ def test_failed_write_preserves_last_valid_artifact(
     assert (entries / "atomic-baseline-5023.json").read_bytes() == baseline
     assert not (entries / "atomic-failure-5023.json").exists()
     assert writer.read_thread(created.thread.thread_id) == created.thread
+
+
+def test_atomic_publication_does_not_overwrite_competing_artifact(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    writer = _writer(tmp_path)
+    client = BuilderThreadClient(
+        InProcessWriterEndpoint(writer, client_id="codex:desktop"), client_id="codex:desktop"
+    )
+    entries = tmp_path / "external-builderops-vault" / "builder-thread-entries"
+    created = client.create(
+        request_id="competing-baseline-5023",
+        actor="codex:desktop",
+        recipient="claude:mac",
+        subject="Competing baseline",
+        content="This valid envelope must not become another request's authority.",
+        source_refs=("github:5023",),
+    )
+    competing = (entries / "competing-baseline-5023.json").read_bytes()
+
+    def simulate_competing_publication(_source: object, destination: object) -> None:
+        Path(destination).write_bytes(competing)
+        raise FileExistsError(destination)
+
+    monkeypatch.setattr(
+        "app.builderops.builder_threads_serialized.os.link", simulate_competing_publication
+    )
+    with pytest.raises(WriterUnavailableError, match="persistence is unavailable"):
+        client.create(
+            request_id="competing-publication-5023",
+            actor="codex:desktop",
+            recipient="claude:mac",
+            subject="Competing publication",
+            content="The writer must not replace an existing immutable envelope.",
+            source_refs=("github:5023",),
+        )
+
+    assert (entries / "competing-publication-5023.json").read_bytes() == competing
+    assert writer.read_thread(created.thread.thread_id) == created.thread
+    with pytest.raises(WriterUnavailableError, match="persistence is unavailable"):
+        client.create(
+            request_id="competing-follow-up-5023",
+            actor="codex:desktop",
+            recipient="claude:mac",
+            subject="Competing follow-up",
+            content="A failed publication latches the writer unavailable.",
+            source_refs=("github:5023",),
+        )
+    with pytest.raises(BuilderThreadError, match="external writer entry is invalid"):
+        _writer(tmp_path)
 
 
 def test_restart_recovers_after_interrupted_write(tmp_path: Path) -> None:
@@ -521,28 +570,13 @@ def test_partial_artifact_is_quarantined_with_failure_signal(
         source_refs=("github:5023",),
     )
     entries = tmp_path / "external-builderops-vault" / "builder-thread-entries"
-    original_replace = os.replace
+    partial = entries / "partial-final-5023.json"
+    partial.write_text('{"command":', encoding="utf-8")
 
-    def leave_partial_final(_source: object, destination: object) -> None:
-        destination_path = Path(destination)
-        if destination_path.name == "partial-final-5023.json":
-            destination_path.write_text('{"command":', encoding="utf-8")
-            raise OSError("simulated interrupted publication")
-        original_replace(_source, destination)
+    with pytest.raises(BuilderThreadError, match="external writer entry is invalid"):
+        _writer(tmp_path)
 
-    monkeypatch.setattr("app.builderops.builder_threads_serialized.os.replace", leave_partial_final)
-    with pytest.raises(WriterUnavailableError, match="persistence is unavailable"):
-        client.create(
-            request_id="partial-final-5023",
-            actor="codex:desktop",
-            recipient="claude:mac",
-            subject="Partial final artifact",
-            content="This partial final artifact cannot authorize a mutation.",
-            source_refs=("github:5023",),
-        )
-
-    assert not (entries / "partial-final-5023.json").exists()
-    assert list(entries.glob("partial-final-5023.json.quarantine-*"))
+    assert partial.read_text(encoding="utf-8") == '{"command":'
     assert writer.read_thread(created.thread.thread_id) == created.thread
 
 

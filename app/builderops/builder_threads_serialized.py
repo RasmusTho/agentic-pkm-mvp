@@ -179,6 +179,7 @@ class SerializedThreadWriter:
         self._request_results: dict[str, BuilderThread] = {}
         self._capture_index: dict[str, str] = {}
         self._accepted_mutation_count = 0
+        self._persistence_unavailable = False
         self._lock = threading.RLock()
         self._verify_external_root()
         self._restore_external_state()
@@ -204,6 +205,10 @@ class SerializedThreadWriter:
 
             if self._accepted_mutation_count >= _MAX_TOTAL_ENTRIES:
                 raise BuilderThreadError("serialized writer contribution bound reached")
+            if self._persistence_unavailable:
+                raise WriterUnavailableError("serialized writer persistence is unavailable")
+            threads_before_write = self._threads.copy()
+            capture_index_before_write = self._capture_index.copy()
             if command.kind == "create":
                 thread = self._create(command)
             else:
@@ -215,7 +220,9 @@ class SerializedThreadWriter:
                     sequence=self._accepted_mutation_count + 1,
                 )
             except OSError as exc:
-                self._restore_external_state()
+                self._threads = threads_before_write
+                self._capture_index = capture_index_before_write
+                self._persistence_unavailable = True
                 raise WriterUnavailableError("serialized writer persistence is unavailable") from exc
             self._record(command, request_digest, thread)
             return ThreadMutationResult(thread=thread, replayed=False)
@@ -345,15 +352,16 @@ class SerializedThreadWriter:
                 payload = json.loads(path.read_text(encoding="utf-8"))
                 sequence = payload["sequence"]
                 command = _command_from_record(payload, vault_id=self._vault_id)
+                if path.name != f"{command.request_id}.json":
+                    raise ValueError("invalid writer entry identity")
                 digest = payload["request_digest"]
                 if not isinstance(sequence, int) or isinstance(sequence, bool):
                     raise ValueError("invalid writer sequence")
                 if not isinstance(digest, str) or digest != _command_digest(command):
                     raise ValueError("invalid writer digest")
                 _validate_command(command)
-            except (KeyError, TypeError, ValueError, json.JSONDecodeError):
-                self._quarantine_incomplete_entry(path)
-                continue
+            except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
+                raise BuilderThreadError("external writer entry is invalid") from exc
             records.append((sequence, command, digest))
         if len(records) > _MAX_TOTAL_ENTRIES:
             raise BuilderThreadError("external writer contribution bound exceeded")
@@ -379,17 +387,11 @@ class SerializedThreadWriter:
         temporary_path = self._entries_root / f".{path.name}.{uuid.uuid4().hex}.tmp"
         with temporary_path.open("xb") as handle:
             handle.write(_canonical_json(payload))
-        if path.exists():
-            raise FileExistsError(path)
-        os.replace(temporary_path, path)
-
-    def _quarantine_incomplete_entry(self, path: Path) -> None:
-        """Retain a malformed legacy final artifact without treating it as committed."""
-        quarantine_path = path.with_name(f"{path.name}.quarantine-{uuid.uuid4().hex}")
+        os.link(temporary_path, path)
         try:
-            os.replace(path, quarantine_path)
-        except OSError as exc:
-            raise BuilderThreadError("external writer entry is invalid") from exc
+            temporary_path.unlink()
+        except OSError:
+            pass
 
     def _record(
         self, command: ThreadMutation, request_digest: str, thread: BuilderThread
