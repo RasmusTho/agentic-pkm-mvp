@@ -416,23 +416,6 @@ def _assert_pg_schema(conn: Any) -> None:
         )
 
 
-def _append_only_sql(function_name: str, table_name: str, trigger_name: str) -> tuple[str, str]:
-    function = f"""
-        CREATE OR REPLACE FUNCTION {function_name}()
-        RETURNS trigger AS $$
-        BEGIN
-            RAISE EXCEPTION '{table_name} is append-only: % is not permitted', TG_OP;
-        END;
-        $$ LANGUAGE plpgsql
-    """
-    trigger = f"""
-        CREATE TRIGGER {trigger_name}
-        BEFORE UPDATE OR DELETE ON {table_name}
-        FOR EACH ROW EXECUTE FUNCTION {function_name}()
-    """
-    return function, trigger
-
-
 def _bootstrap_pg(conn: Any) -> None:
     if not _schema_autocreate_enabled():
         _assert_pg_schema(conn)
@@ -475,17 +458,27 @@ def _bootstrap_pg(conn: Any) -> None:
         f"CREATE INDEX IF NOT EXISTS heimdal_raw_deletion_receipt_record_id_idx "
         f"ON {_DELETION_RECEIPT_TABLE} (record_id)"
     )
-    receipt_function, receipt_trigger = _append_only_sql(
-        "heimdal_raw_deletion_receipt_reject_mutation",
-        _DELETION_RECEIPT_TABLE,
-        "heimdal_raw_deletion_receipt_no_update",
+    cur.execute(
+        """
+        CREATE OR REPLACE FUNCTION heimdal_raw_deletion_receipt_reject_mutation()
+        RETURNS trigger AS $$
+        BEGIN
+            RAISE EXCEPTION 'heimdal_raw_deletion_receipt is append-only: % is not permitted', TG_OP;
+        END;
+        $$ LANGUAGE plpgsql
+        """
     )
-    cur.execute(receipt_function)
     cur.execute(
         f"DROP TRIGGER IF EXISTS heimdal_raw_deletion_receipt_no_update "
         f"ON {_DELETION_RECEIPT_TABLE}"
     )
-    cur.execute(receipt_trigger)
+    cur.execute(
+        f"""
+        CREATE TRIGGER heimdal_raw_deletion_receipt_no_update
+        BEFORE UPDATE OR DELETE ON {_DELETION_RECEIPT_TABLE}
+        FOR EACH ROW EXECUTE FUNCTION heimdal_raw_deletion_receipt_reject_mutation()
+        """
+    )
     cur.execute(
         f"""
         CREATE TABLE {_GENERATION_TABLE} (
@@ -547,26 +540,57 @@ def _bootstrap_pg(conn: Any) -> None:
         f"CREATE INDEX heimdal_raw_response_lease_active_idx "
         f"ON {_LEASE_TABLE} (record_id, expires_at)"
     )
-    for function_name, table_name, trigger_name in (
-        (
-            "heimdal_raw_liveness_generation_reject_mutation",
-            _GENERATION_TABLE,
-            "heimdal_raw_liveness_generation_no_mutation",
-        ),
-        (
-            "heimdal_raw_deletion_tombstone_reject_mutation",
-            _TOMBSTONE_TABLE,
-            "heimdal_raw_deletion_tombstone_no_mutation",
-        ),
-        (
-            "heimdal_raw_response_lease_reject_mutation",
-            _LEASE_TABLE,
-            "heimdal_raw_response_lease_no_mutation",
-        ),
-    ):
-        function, trigger = _append_only_sql(function_name, table_name, trigger_name)
-        cur.execute(function)
-        cur.execute(trigger)
+    cur.execute(
+        """
+        CREATE OR REPLACE FUNCTION heimdal_raw_liveness_generation_reject_mutation()
+        RETURNS trigger AS $$
+        BEGIN
+            RAISE EXCEPTION 'heimdal_raw_liveness_generation is append-only: % is not permitted', TG_OP;
+        END;
+        $$ LANGUAGE plpgsql
+        """
+    )
+    cur.execute(
+        f"""
+        CREATE TRIGGER heimdal_raw_liveness_generation_no_mutation
+        BEFORE UPDATE OR DELETE ON {_GENERATION_TABLE}
+        FOR EACH ROW EXECUTE FUNCTION heimdal_raw_liveness_generation_reject_mutation()
+        """
+    )
+    cur.execute(
+        """
+        CREATE OR REPLACE FUNCTION heimdal_raw_deletion_tombstone_reject_mutation()
+        RETURNS trigger AS $$
+        BEGIN
+            RAISE EXCEPTION 'heimdal_raw_deletion_tombstone is append-only: % is not permitted', TG_OP;
+        END;
+        $$ LANGUAGE plpgsql
+        """
+    )
+    cur.execute(
+        f"""
+        CREATE TRIGGER heimdal_raw_deletion_tombstone_no_mutation
+        BEFORE UPDATE OR DELETE ON {_TOMBSTONE_TABLE}
+        FOR EACH ROW EXECUTE FUNCTION heimdal_raw_deletion_tombstone_reject_mutation()
+        """
+    )
+    cur.execute(
+        """
+        CREATE OR REPLACE FUNCTION heimdal_raw_response_lease_reject_mutation()
+        RETURNS trigger AS $$
+        BEGIN
+            RAISE EXCEPTION 'heimdal_raw_response_lease is append-only: % is not permitted', TG_OP;
+        END;
+        $$ LANGUAGE plpgsql
+        """
+    )
+    cur.execute(
+        f"""
+        CREATE TRIGGER heimdal_raw_response_lease_no_mutation
+        BEFORE UPDATE OR DELETE ON {_LEASE_TABLE}
+        FOR EACH ROW EXECUTE FUNCTION heimdal_raw_response_lease_reject_mutation()
+        """
+    )
     cur.execute(
         f"""
         CREATE OR REPLACE FUNCTION heimdal_raw_record_reject_mutation()

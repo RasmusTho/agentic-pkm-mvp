@@ -366,6 +366,16 @@ def test_every_candidate_create_once_seam_has_port_coverage() -> None:
             "_write_versioned_proposal",
         ),
         ("app/knowledge_acquisition/candidate_writeback.py", "write_candidate_note"),
+        # YouTube source bundle materialization has two guarded create-once
+        # artifacts: the source note and its attachment manifest.
+        (
+            "app/knowledge_acquisition/source_bundle.py",
+            "materialize_youtube_source_bundle",
+        ),
+        (
+            "app/knowledge_acquisition/source_bundle.py",
+            "materialize_youtube_source_bundle",
+        ),
     ]
 
     writeback_tree = ast.parse(writeback_path.read_text(encoding="utf-8"))
