@@ -106,6 +106,28 @@ def test_index_paths_exist() -> None:
     )
 
 
+def test_ysnv2_owner_doc_delivery_state_matches_index() -> None:
+    """Keep the YSNV2-06 owner state aligned with its canonical index row."""
+    owner_doc = (DOCS_ROOT / "YOUTUBE_SOURCE_NOTE_V2" / "README.md").read_text(
+        encoding="utf-8"
+    )
+    index_text = DOCS_INDEX.read_text(encoding="utf-8")
+
+    owner_state = owner_doc.splitlines()[0]
+    assert "YSNV2-06 is delivered" in owner_state
+
+    index_row = next(
+        (
+            line
+            for line in index_text.splitlines()
+            if line.startswith("| docs/YOUTUBE_SOURCE_NOTE_V2/README.md |")
+        ),
+        None,
+    )
+    assert index_row is not None, "YSNV2 owner README must have a canonical index row."
+    assert "YSNV2-06 delivered" in index_row
+
+
 def _heading_to_anchor(heading: str) -> str:
     """Convert a Markdown heading text to a GitHub-style anchor slug."""
     slug = heading.strip().lower()

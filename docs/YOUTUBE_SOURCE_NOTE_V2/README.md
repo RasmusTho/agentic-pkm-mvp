@@ -1,4 +1,4 @@
-State: Target-state capability specification with active parent Issue #4107 and child Issues #4108–#4119. YSNV2-01 through YSNV2-03 are delivered; later slices remain outstanding, and neither the complete v2 runtime nor ProfileAgent is claimed shipped.
+State: Target-state capability specification with active parent Issue #4107 and child Issues #4108–#4119. YSNV2-01 through YSNV2-03 are delivered; YSNV2-04 is implemented and YSNV2-06 is delivered, while later slices remain outstanding, and neither the complete v2 runtime nor ProfileAgent is claimed shipped.
 Doc role: Capability specification directory
 Authority: Defines the YouTube Source Note v2 target boundary, task graph, cross-task invariants, and acceptance path. Current behavior remains owned by `docs/KNOWLEDGE_ACQUISITION/*` and implementation evidence.
 
@@ -119,7 +119,7 @@ This stable heading is retained because parent Issue #4107 uses it as an accepta
 | 3 | `COMPOSE_REVIEW_REQUIRED_PROPOSAL_NOTE` | [#4110](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4110) — delivered by PR #4142 | task 2 |
 | 4 | `PERSIST_ANCHORED_TRANSCRIPT_AND_EXTRACTIONS` | [#4111](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4111) — implemented | durable transcript/extraction lineage, partial-failure policy, and D5 versioned companions; #4132 prerequisite delivered |
 | 5 | `PRODUCE_EVIDENCE_ANCHORED_SYNTHESIS_AND_CLAIMS` | [#4112](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4112) — governed implementation record | task 4; D6 resolved |
-| 6 | `MATERIALIZE_PORTABLE_YOUTUBE_SOURCE_BUNDLE` | [#4113](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4113) — `agent:blocked` | task 4; D2/D3 resolved; D5 companion seam required |
+| 6 | `MATERIALIZE_PORTABLE_YOUTUBE_SOURCE_BUNDLE` | [#4113](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4113) — delivered by PR #4991 | task 4; D2/D3 resolved; D5 companion seam required |
 | 7 | `ROUTE_CONTENT_AND_RENDER_INITIAL_MODULES` | [#4114](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4114) — `agent:blocked` | tasks 3/5 |
 | 8 | `EXTRACT_GATED_ONTOLOGY_PROPOSALS` | [#4115](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4115) — `agent:blocked` | task 5 |
 | 9 | `SELECT_TIMESTAMPED_KEY_MOMENTS` | [#4116](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4116) — `agent:blocked` | task 5 |
@@ -133,7 +133,7 @@ Child PRs resolve their own `Verify:` targets and post a concise validation rece
 
 ## Relationship to GitHub Issues
 
-Parent feature Issue [#4107](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4107) is the live validation hub. Child Issues [#4108](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4108) through [#4119](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4119) were filed from the validated task templates and linked through native dependencies. #4108 through #4110 are delivered; #4132 delivered the canonical atomic governed KnowledgePort create-if-absent boundary, and #4111 implements the dependent durable extraction/proposal-companion slice. Later children remain governed by their recorded predecessors; #4117 additionally needs its separate authoritative vault-wide profile contract, which also gates #4119 and parent completion.
+Parent feature Issue [#4107](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4107) is the live validation hub. Child Issues [#4108](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4108) through [#4119](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4119) were filed from the validated task templates and linked through native dependencies. #4108 through #4110 are delivered; #4132 delivered the canonical atomic governed KnowledgePort create-if-absent boundary, #4111 is implemented, and #4113 was delivered by PR #4991 with the portable source-bundle slice. Later children remain governed by their recorded predecessors; #4117 additionally needs its separate authoritative vault-wide profile contract, which also gates #4119 and parent completion.
 
 ## Related Docs
 
