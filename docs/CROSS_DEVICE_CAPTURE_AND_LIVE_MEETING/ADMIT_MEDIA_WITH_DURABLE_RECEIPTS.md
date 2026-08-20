@@ -72,9 +72,11 @@ durable acceptance:
   (410 `media_evidence_erased`, terminal), receipt/raw-state unavailability (503), and raw-store
   or event-commit failure (500, nothing acknowledged).
 - **Retention fencing:** both hard-retention writers share the generation-aware raw-liveness fence.
-  A valid response lease prevents deletion until it expires; only an append-only deletion tombstone
-  turns an exact missing generation into `erased`. Missing raw state without that tombstone remains
-  unavailable and cannot authorize client deletion.
+  A valid response lease prevents deletion until it expires. The first eligible retention attempt
+  appends a durable retirement claim and finite drain frontier, so receipt polling cannot renew the
+  lease after retention has claimed the generation. Only an append-only deletion tombstone turns an
+  exact missing generation into `erased`. Missing raw state without that tombstone remains unavailable
+  and cannot authorize client deletion.
 - **Legacy lane convergence:** watched-folder admissions flow through the same admission seam and
   also produce receipts (keyed by content hash; `capture_id` when a sidecar carries one), so
   Model-1 files are queryable — while the retention guarantee remains an outbox-lane property

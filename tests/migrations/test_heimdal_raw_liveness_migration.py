@@ -22,6 +22,7 @@ _TABLES = (
     "heimdal_raw_liveness_generation",
     "heimdal_raw_deletion_tombstone",
     "heimdal_raw_response_lease",
+    "heimdal_raw_retention_claim",
     "heimdal_raw_deletion_receipt",
 )
 

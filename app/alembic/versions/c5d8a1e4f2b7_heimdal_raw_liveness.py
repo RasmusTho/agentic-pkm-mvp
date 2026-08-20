@@ -112,6 +112,30 @@ def upgrade() -> None:
         "CREATE INDEX heimdal_raw_response_lease_active_idx "
         "ON heimdal_raw_response_lease (record_id, expires_at)"
     )
+    op.execute(
+        """
+        CREATE TABLE heimdal_raw_retention_claim (
+            id uuid PRIMARY KEY,
+            content_identity text NOT NULL,
+            generation integer NOT NULL,
+            record_id uuid NOT NULL UNIQUE,
+            raw_ref text NOT NULL UNIQUE,
+            reason text NOT NULL,
+            retention_window_days integer NOT NULL,
+            claimed_at timestamptz NOT NULL,
+            drain_after timestamptz NOT NULL,
+            payload jsonb NOT NULL DEFAULT '{}'::jsonb,
+            sequence bigserial NOT NULL,
+            FOREIGN KEY (content_identity, generation)
+                REFERENCES heimdal_raw_liveness_generation(content_identity, generation)
+                ON DELETE RESTRICT
+        )
+        """
+    )
+    op.execute(
+        "CREATE INDEX heimdal_raw_retention_claim_record_idx "
+        "ON heimdal_raw_retention_claim (record_id)"
+    )
 
     # Every historical governed deletion already has durable terminal evidence.
     # Preserve its ordering as the generation history for that content.
@@ -212,6 +236,11 @@ def upgrade() -> None:
         "heimdal_raw_response_lease_reject_mutation",
         "heimdal_raw_response_lease",
         "heimdal_raw_response_lease_no_mutation",
+    )
+    _append_only(
+        "heimdal_raw_retention_claim_reject_mutation",
+        "heimdal_raw_retention_claim",
+        "heimdal_raw_retention_claim_no_mutation",
     )
 
     # A session setting is no longer enough: the exact generation's tombstone

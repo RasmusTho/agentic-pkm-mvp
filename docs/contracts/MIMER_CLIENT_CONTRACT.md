@@ -167,7 +167,9 @@ an error — it is how a client distinguishes a lost response from a capture tha
 written: retain the local original, surface the terminal state, and do not treat that historical
 receipt as permission to delete or as a normal idempotent replay.
 An active answer is backed by a short-lived response lease; retention uses the same liveness fence
-and will not erase that generation while the lease is valid. Raw absence without a governed
+and will not erase that generation while the lease is valid. Once retention claims the generation,
+the claim records a finite lease-drain frontier and subsequent polling cannot renew or reopen a
+lease. Raw absence without a governed
 tombstone is `503 receipt_store_unavailable`/`raw_liveness_unavailable`, never `erased`.
 
 Error contract (a client must branch on `error`; never retry blindly):

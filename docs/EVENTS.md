@@ -513,9 +513,11 @@ Contract:
   content creates a new generation and cannot resurrect an older receipt.
 - **Response-boundary fencing.** Media admission and receipt recovery issue a
   short-lived response lease for the exact raw generation. Both hard-retention
-  writers use the same per-content fence and skip a deletion while a lease is
-  valid; clients may delete their local original only while the lease is valid,
-  and must re-query after expiry.
+  writers use the same per-content fence. The first eligible retention attempt
+  appends a durable retirement claim with a finite `drain_after` frontier; it
+  waits for the already-issued lease, but polling cannot issue or renew another
+  lease after that claim. Clients may delete their local original only while
+  the lease is valid, and must re-query after expiry.
 - **All registered copies precede success.** The shared raw-store erasure
   transaction writes the tombstone and deletion receipt, then enumerates and
   deletes every registered representation before removing identity. Any copy

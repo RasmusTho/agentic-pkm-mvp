@@ -326,7 +326,7 @@ def test_receipt_raw_ref_resolves_to_the_object_it_attests_to(client: TestClient
 
 
 def test_resend_after_retention_is_not_false_idempotent(
-    client: TestClient, tmp_path: Path
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A resend after erasure gets the explicit terminal outcome, never a replay ack."""
     media = b"retained-then-erased-media"
@@ -349,6 +349,12 @@ def test_resend_after_retention_is_not_false_idempotent(
     assert query.status_code == 200, query.text
     assert query.json()["receipts"][0]["outcome"] == "erased"
 
+    def fail_if_meeting_side_effect_runs(**_: Any) -> None:
+        pytest.fail("erased resend reached meeting side effects before returning 410")
+
+    monkeypatch.setattr(
+        media_ingress, "_ledger_session_segment", fail_if_meeting_side_effect_runs
+    )
     resent = _post_media(client, media, sidecar)
     assert resent.status_code == 410, resent.text
     assert resent.json()["detail"] == {
@@ -383,7 +389,16 @@ def test_admitted_responses_carry_a_generation_bound_response_lease(
         == query_lease["liveness_generation"]
         == 1
     )
-    assert len({first_lease["lease_id"], replay_lease["lease_id"], query_lease["lease_id"]}) == 3
+    assert (
+        first_lease["lease_id"]
+        == replay_lease["lease_id"]
+        == query_lease["lease_id"]
+    )
+    assert (
+        first_lease["expires_at"]
+        == replay_lease["expires_at"]
+        == query_lease["expires_at"]
+    )
     assert replay.json()["idempotent_replay"] is True
 
 

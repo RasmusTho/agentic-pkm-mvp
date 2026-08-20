@@ -28,6 +28,7 @@ from app.heimdal._backend import resolve_heimdal_backend
 _GENERATION_TABLE = "heimdal_raw_liveness_generation"
 _TOMBSTONE_TABLE = "heimdal_raw_deletion_tombstone"
 _LEASE_TABLE = "heimdal_raw_response_lease"
+_RETENTION_CLAIM_TABLE = "heimdal_raw_retention_claim"
 _DELETION_RECEIPT_TABLE = "heimdal_raw_deletion_receipt"
 _RAW_REF_PREFIX = "heimraw:"
 _RETENTION_GUARD_SETTING = "app.heimdal_retention_bypass"
@@ -117,6 +118,21 @@ class RawDeletionTombstone:
 
 
 @dataclass(frozen=True)
+class RawRetentionClaim:
+    id: str
+    content_identity: str
+    generation: int
+    record_id: str
+    raw_ref: str
+    reason: str
+    retention_window_days: int
+    claimed_at: datetime
+    drain_after: datetime
+    payload: Dict[str, Any]
+    sequence: int
+
+
+@dataclass(frozen=True)
 class RawLivenessProjection:
     outcome: Literal["active", "erased"]
     generation: RawLivenessGeneration
@@ -168,6 +184,8 @@ class _MemoryAuthority:
         self.generations_by_content: Dict[str, list[RawLivenessGeneration]] = {}
         self.tombstones_by_record: Dict[str, RawDeletionTombstone] = {}
         self.leases: list[RawResponseLease] = []
+        self.retention_claims_by_record: Dict[str, RawRetentionClaim] = {}
+        self.retention_claims: list[RawRetentionClaim] = []
         self.deletion_receipts: list[DeletionReceipt] = []
         self.tombstones: list[RawDeletionTombstone] = []
 
@@ -266,6 +284,19 @@ def _memory_projection_locked(
         raise RawLivenessUnavailableError(
             "untombstoned raw generation is missing its exact active representation"
         )
+    if record_id in _MEMORY.retention_claims_by_record:
+        raise RawLivenessUnavailableError(
+            "raw generation is retiring under a durable retention claim"
+        )
+    for existing_lease in reversed(_MEMORY.leases):
+        if (
+            existing_lease.record_id == record_id
+            and existing_lease.generation == generation.generation
+            and existing_lease.expires_at > issued_at
+        ):
+            return RawLivenessProjection(
+                outcome="active", generation=generation, response_lease=existing_lease
+            )
     lease = RawResponseLease(
         lease_id=str(uuid4()),
         content_identity=content_identity,
@@ -308,6 +339,7 @@ def _assert_pg_schema(conn: Any) -> None:
         _GENERATION_TABLE,
         _TOMBSTONE_TABLE,
         _LEASE_TABLE,
+        _RETENTION_CLAIM_TABLE,
         _DELETION_RECEIPT_TABLE,
     )
     cur.execute("SELECT " + ", ".join("to_regclass(%s)" for _ in tables), tables)
@@ -346,6 +378,19 @@ def _assert_pg_schema(conn: Any) -> None:
             "expires_at",
             "sequence",
         },
+        _RETENTION_CLAIM_TABLE: {
+            "id",
+            "content_identity",
+            "generation",
+            "record_id",
+            "raw_ref",
+            "reason",
+            "retention_window_days",
+            "claimed_at",
+            "drain_after",
+            "payload",
+            "sequence",
+        },
         _DELETION_RECEIPT_TABLE: {
             "id",
             "record_id",
@@ -382,6 +427,7 @@ def _assert_pg_schema(conn: Any) -> None:
               'heimdal_raw_liveness_generation_no_mutation',
               'heimdal_raw_deletion_tombstone_no_mutation',
               'heimdal_raw_response_lease_no_mutation',
+              'heimdal_raw_retention_claim_no_mutation',
               'heimdal_raw_deletion_receipt_no_update'
           )
         """
@@ -391,6 +437,7 @@ def _assert_pg_schema(conn: Any) -> None:
         "heimdal_raw_liveness_generation_no_mutation",
         "heimdal_raw_deletion_tombstone_no_mutation",
         "heimdal_raw_response_lease_no_mutation",
+        "heimdal_raw_retention_claim_no_mutation",
         "heimdal_raw_deletion_receipt_no_update",
     }
     if triggers != expected:
@@ -438,8 +485,8 @@ def _bootstrap_pg(conn: Any) -> None:
         return
     cur = conn.cursor()
     cur.execute(
-        "SELECT to_regclass(%s), to_regclass(%s), to_regclass(%s)",
-        (_GENERATION_TABLE, _TOMBSTONE_TABLE, _LEASE_TABLE),
+        "SELECT to_regclass(%s), to_regclass(%s), to_regclass(%s), to_regclass(%s)",
+        (_GENERATION_TABLE, _TOMBSTONE_TABLE, _LEASE_TABLE, _RETENTION_CLAIM_TABLE),
     )
     existing = cur.fetchone()
     if existing and any(existing):
@@ -557,6 +604,30 @@ def _bootstrap_pg(conn: Any) -> None:
         f"ON {_LEASE_TABLE} (record_id, expires_at)"
     )
     cur.execute(
+        f"""
+        CREATE TABLE {_RETENTION_CLAIM_TABLE} (
+            id uuid PRIMARY KEY,
+            content_identity text NOT NULL,
+            generation integer NOT NULL,
+            record_id uuid NOT NULL UNIQUE,
+            raw_ref text NOT NULL UNIQUE,
+            reason text NOT NULL,
+            retention_window_days integer NOT NULL,
+            claimed_at timestamptz NOT NULL,
+            drain_after timestamptz NOT NULL,
+            payload jsonb NOT NULL DEFAULT '{{}}'::jsonb,
+            sequence bigserial NOT NULL,
+            FOREIGN KEY (content_identity, generation)
+                REFERENCES {_GENERATION_TABLE}(content_identity, generation)
+                ON DELETE RESTRICT
+        )
+        """
+    )
+    cur.execute(
+        f"CREATE INDEX heimdal_raw_retention_claim_record_idx "
+        f"ON {_RETENTION_CLAIM_TABLE} (record_id)"
+    )
+    cur.execute(
         """
         CREATE OR REPLACE FUNCTION heimdal_raw_liveness_generation_reject_mutation()
         RETURNS trigger AS $$
@@ -605,6 +676,23 @@ def _bootstrap_pg(conn: Any) -> None:
         CREATE TRIGGER heimdal_raw_response_lease_no_mutation
         BEFORE UPDATE OR DELETE ON {_LEASE_TABLE}
         FOR EACH ROW EXECUTE FUNCTION heimdal_raw_response_lease_reject_mutation()
+        """
+    )
+    cur.execute(
+        """
+        CREATE OR REPLACE FUNCTION heimdal_raw_retention_claim_reject_mutation()
+        RETURNS trigger AS $$
+        BEGIN
+            RAISE EXCEPTION 'heimdal_raw_retention_claim is append-only: % is not permitted', TG_OP;
+        END;
+        $$ LANGUAGE plpgsql
+        """
+    )
+    cur.execute(
+        f"""
+        CREATE TRIGGER heimdal_raw_retention_claim_no_mutation
+        BEFORE UPDATE OR DELETE ON {_RETENTION_CLAIM_TABLE}
+        FOR EACH ROW EXECUTE FUNCTION heimdal_raw_retention_claim_reject_mutation()
         """
     )
     cur.execute(
@@ -819,6 +907,37 @@ def _load_pg_tombstone(cur: Any, *, record_id: str) -> RawDeletionTombstone:
     )
 
 
+def _load_pg_retention_claim(
+    cur: Any, *, record_id: str
+) -> Optional[RawRetentionClaim]:
+    cur.execute(
+        f"""
+        SELECT id, content_identity, generation, raw_ref, reason,
+               retention_window_days, claimed_at, drain_after, payload, sequence
+        FROM {_RETENTION_CLAIM_TABLE}
+        WHERE record_id = %s
+        """,
+        (record_id,),
+    )
+    row = cur.fetchone()
+    if row is None:
+        return None
+    payload = row[8] if isinstance(row[8], dict) else json.loads(row[8] or "{}")
+    return RawRetentionClaim(
+        id=str(row[0]),
+        content_identity=str(row[1]),
+        generation=int(row[2]),
+        record_id=record_id,
+        raw_ref=str(row[3]),
+        reason=str(row[4]),
+        retention_window_days=int(row[5]),
+        claimed_at=row[6],
+        drain_after=row[7],
+        payload=dict(payload),
+        sequence=int(row[9]),
+    )
+
+
 def _pg_exact_active(cur: Any, generation: RawLivenessGeneration) -> bool:
     cur.execute(
         """
@@ -916,6 +1035,41 @@ def project_with_response_leases(
                 raise RawLivenessUnavailableError(
                     "untombstoned raw generation is missing its exact active representation"
                 )
+            cur.execute(
+                f"SELECT 1 FROM {_RETENTION_CLAIM_TABLE} WHERE record_id = %s",
+                (record_id,),
+            )
+            if cur.fetchone() is not None:
+                raise RawLivenessUnavailableError(
+                    "raw generation is retiring under a durable retention claim"
+                )
+            cur.execute(
+                f"""
+                SELECT lease_id, issued_at, expires_at, sequence
+                FROM {_LEASE_TABLE}
+                WHERE record_id = %s AND generation = %s AND expires_at > %s
+                ORDER BY sequence DESC
+                LIMIT 1
+                """,
+                (record_id, generation.generation, issued_at),
+            )
+            existing_lease = cur.fetchone()
+            if existing_lease is not None:
+                projections[raw_ref] = RawLivenessProjection(
+                    outcome="active",
+                    generation=generation,
+                    response_lease=RawResponseLease(
+                        lease_id=str(existing_lease[0]),
+                        content_identity=content_identity,
+                        generation=generation.generation,
+                        record_id=record_id,
+                        raw_ref=raw_ref,
+                        issued_at=existing_lease[1],
+                        expires_at=existing_lease[2],
+                        sequence=int(existing_lease[3]),
+                    ),
+                )
+                continue
             lease_id = str(uuid4())
             expires_at = issued_at + timedelta(seconds=RESPONSE_LEASE_SECONDS)
             cur.execute(
@@ -993,6 +1147,41 @@ def _new_receipt(
     )
 
 
+def _memory_claim_retention_locked(
+    *,
+    generation: RawLivenessGeneration,
+    reason: str,
+    retention_window_days: int,
+    claimed_at: datetime,
+    payload: Mapping[str, Any],
+) -> RawRetentionClaim:
+    existing = _MEMORY.retention_claims_by_record.get(generation.record_id)
+    if existing is not None:
+        return existing
+    active_expiries = [
+        lease.expires_at
+        for lease in _MEMORY.leases
+        if lease.record_id == generation.record_id and lease.expires_at > claimed_at
+    ]
+    drain_after = max([claimed_at, *active_expiries])
+    claim = RawRetentionClaim(
+        id=str(uuid4()),
+        content_identity=generation.content_identity,
+        generation=generation.generation,
+        record_id=generation.record_id,
+        raw_ref=generation.raw_ref,
+        reason=reason,
+        retention_window_days=retention_window_days,
+        claimed_at=claimed_at,
+        drain_after=drain_after,
+        payload=dict(payload),
+        sequence=len(_MEMORY.retention_claims),
+    )
+    _MEMORY.retention_claims.append(claim)
+    _MEMORY.retention_claims_by_record[generation.record_id] = claim
+    return claim
+
+
 def _governed_delete_memory(
     *,
     record_id: str,
@@ -1025,10 +1214,15 @@ def _governed_delete_memory(
                 "untombstoned retention target is missing its active representation"
             )
         reference_time = _as_utc(deleted_at)
-        if any(
-            lease.record_id == record_id and lease.expires_at > reference_time
-            for lease in _MEMORY.leases
-        ):
+        claim_was_new = record_id not in _MEMORY.retention_claims_by_record
+        claim = _memory_claim_retention_locked(
+            generation=generation,
+            reason=reason,
+            retention_window_days=retention_window_days,
+            claimed_at=reference_time,
+            payload=payload,
+        )
+        if reference_time < claim.drain_after:
             return GovernedDeletionResult(outcome="lease_valid")
 
         receipt = _new_receipt(
@@ -1065,6 +1259,9 @@ def _governed_delete_memory(
             _retention_stage_hook("after_raw_delete")
         except Exception:
             raw_store._MEMORY_STORE.restore_state(raw_snapshot)  # noqa: SLF001
+            if claim_was_new and _MEMORY.retention_claims and _MEMORY.retention_claims[-1] == claim:
+                _MEMORY.retention_claims.pop()
+                _MEMORY.retention_claims_by_record.pop(record_id, None)
             if _MEMORY.deletion_receipts and _MEMORY.deletion_receipts[-1] == receipt:
                 _MEMORY.deletion_receipts.pop()
             if _MEMORY.tombstones and _MEMORY.tombstones[-1] == tombstone:
@@ -1142,13 +1339,58 @@ def _governed_delete_pg(
                 "untombstoned retention target is missing its active representation"
             )
         reference_time = _as_utc(deleted_at)
-        cur.execute(
-            f"SELECT 1 FROM {_LEASE_TABLE} "
-            "WHERE record_id = %s AND expires_at > %s LIMIT 1",
-            (record_id, reference_time),
-        )
-        if cur.fetchone() is not None:
-            conn.rollback()
+        claim = _load_pg_retention_claim(cur, record_id=record_id)
+        if claim is None:
+            cur.execute(
+                f"SELECT max(expires_at) FROM {_LEASE_TABLE} "
+                "WHERE record_id = %s AND expires_at > %s",
+                (record_id, reference_time),
+            )
+            lease_row = cur.fetchone()
+            drain_after = max(reference_time, lease_row[0]) if lease_row[0] else reference_time
+            claim_id = str(uuid4())
+            cur.execute(
+                f"""
+                INSERT INTO {_RETENTION_CLAIM_TABLE} (
+                    id, content_identity, generation, record_id, raw_ref,
+                    reason, retention_window_days, claimed_at, drain_after, payload
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb)
+                RETURNING id, content_identity, generation, raw_ref, reason,
+                          retention_window_days, claimed_at, drain_after, payload, sequence
+                """,
+                (
+                    claim_id,
+                    content_identity,
+                    generation.generation,
+                    record_id,
+                    generation.raw_ref,
+                    reason,
+                    retention_window_days,
+                    reference_time,
+                    drain_after,
+                    json.dumps(dict(payload)),
+                ),
+            )
+            claim_row = cur.fetchone()
+            claim = RawRetentionClaim(
+                id=str(claim_row[0]),
+                content_identity=str(claim_row[1]),
+                generation=int(claim_row[2]),
+                record_id=record_id,
+                raw_ref=str(claim_row[3]),
+                reason=str(claim_row[4]),
+                retention_window_days=int(claim_row[5]),
+                claimed_at=claim_row[6],
+                drain_after=claim_row[7],
+                payload=(
+                    claim_row[8]
+                    if isinstance(claim_row[8], dict)
+                    else json.loads(claim_row[8] or "{}")
+                ),
+                sequence=int(claim_row[9]),
+            )
+        if reference_time < claim.drain_after:
+            conn.commit()
             return GovernedDeletionResult(outcome="lease_valid")
 
         receipt_id = str(uuid4())
@@ -1299,12 +1541,35 @@ def all_deletion_tombstones() -> list[RawDeletionTombstone]:
         conn.close()
 
 
+def all_retention_claims() -> list[RawRetentionClaim]:
+    if resolve_heimdal_backend() == "memory":
+        with _MEMORY_FENCE:
+            return list(_MEMORY.retention_claims)
+    conn = _pg_connect(autocommit=True)
+    try:
+        _assert_pg_schema(conn)
+        cur = conn.cursor()
+        cur.execute(
+            f"SELECT record_id FROM {_RETENTION_CLAIM_TABLE} ORDER BY sequence"
+        )
+        claims = []
+        for row in cur.fetchall():
+            claim = _load_pg_retention_claim(cur, record_id=str(row[0]))
+            if claim is not None:
+                claims.append(claim)
+        return claims
+    finally:
+        conn.close()
+
+
 def reset_memory_raw_liveness() -> None:
     with _MEMORY_FENCE:
         _MEMORY.generations_by_record.clear()
         _MEMORY.generations_by_content.clear()
         _MEMORY.tombstones_by_record.clear()
         _MEMORY.leases.clear()
+        _MEMORY.retention_claims_by_record.clear()
+        _MEMORY.retention_claims.clear()
         _MEMORY.deletion_receipts.clear()
         _MEMORY.tombstones.clear()
 
@@ -1312,6 +1577,8 @@ def reset_memory_raw_liveness() -> None:
 def reset_memory_deletion_receipts() -> None:
     with _MEMORY_FENCE:
         _MEMORY.tombstones_by_record.clear()
+        _MEMORY.retention_claims_by_record.clear()
+        _MEMORY.retention_claims.clear()
         _MEMORY.deletion_receipts.clear()
         _MEMORY.tombstones.clear()
         _MEMORY.leases.clear()
@@ -1331,9 +1598,11 @@ __all__ = [
     "RawLivenessProjection",
     "RawLivenessSchemaMissingError",
     "RawLivenessUnavailableError",
+    "RawRetentionClaim",
     "RawResponseLease",
     "all_deletion_receipts",
     "all_deletion_tombstones",
+    "all_retention_claims",
     "governed_delete_raw_record",
     "issue_response_lease",
     "project_with_response_leases",

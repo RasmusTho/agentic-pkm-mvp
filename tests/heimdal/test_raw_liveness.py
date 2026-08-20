@@ -202,7 +202,7 @@ def test_same_content_reinsertion_gets_new_generation_without_resurrecting_old_r
         )
 
 
-def test_multiple_valid_leases_for_one_raw_identity_all_fence_deletion(
+def test_retention_claim_stops_lease_reopening_while_existing_lease_drains(
     tmp_path: Path,
 ) -> None:
     root = _settings(tmp_path)
@@ -213,18 +213,20 @@ def test_multiple_valid_leases_for_one_raw_identity_all_fence_deletion(
         content_identity=record.content_identity,
         now=retention_time,
     )
-    second = raw_liveness.issue_response_lease(
-        raw_ref=raw_ref_for(record),
-        content_identity=record.content_identity,
-        now=retention_time + timedelta(seconds=1),
-    )
-    assert first.lease_id != second.lease_id
-    assert first.generation == second.generation == 1
-
-    assert _run_retention("hard", root=root, now=first.expires_at).deleted_count == 0
+    result = _run_retention("hard", root=root, now=retention_time)
+    assert result.deleted_count == 0
+    claims = raw_liveness.all_retention_claims()
+    assert len(claims) == 1
+    assert claims[0].drain_after == first.expires_at
+    with pytest.raises(raw_liveness.RawLivenessUnavailableError, match="retiring"):
+        raw_liveness.issue_response_lease(
+            raw_ref=raw_ref_for(record),
+            content_identity=record.content_identity,
+            now=retention_time + timedelta(seconds=1),
+        )
     assert (
         _run_retention(
-            "hard", root=root, now=second.expires_at + timedelta(microseconds=1)
+            "hard", root=root, now=first.expires_at + timedelta(microseconds=1)
         ).deleted_count
         == 1
     )

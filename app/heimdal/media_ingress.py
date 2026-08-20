@@ -450,6 +450,7 @@ def admit_media_bytes(
     # before consent/encryption/write so a replay costs one lookup.
     existing = media_receipts.get_media_receipt(capture_id, content_sha256)
     if existing is not None:
+        existing, response_lease = _lease_receipt_or_erased(existing)
         # The replay must still reach the ledger (CDLM-02): if a prior attempt
         # acknowledged the capture but crashed before the ledger row landed, the
         # client's resend takes this branch — an idempotent ledger upsert here is
@@ -462,7 +463,6 @@ def admit_media_bytes(
             media_bytes=media_bytes,
             kind=kind,
         )
-        existing, response_lease = _lease_receipt_or_erased(existing)
         return MediaAdmission(
             receipt=existing,
             idempotent_replay=True,
@@ -561,6 +561,7 @@ def admit_media_bytes(
         },
         receipt_payload=admission_metadata,
     )
+    receipt, response_lease = _lease_receipt_or_erased(receipt)
     _ledger_session_segment(
         session_id=session_id,
         session_seq=session_seq,
@@ -569,7 +570,6 @@ def admit_media_bytes(
         media_bytes=media_bytes,
         kind=kind,
     )
-    receipt, response_lease = _lease_receipt_or_erased(receipt)
     # A concurrent request may have acknowledged this identity between the
     # short-circuit above and the seam's own guard; report that truthfully rather
     # than claiming this call was the one that acknowledged it.
