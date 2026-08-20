@@ -129,3 +129,22 @@ The goal is to keep docs-only and governance/skill PRs cheap while preserving di
 - Direct repair PRs are classified by the surfaces they touch, not by whether they carry a governing issue.
 - Failing required checks must be classified, not ignored as out-of-scope.
 - A required check that is stale, missing, or unrelated to the current head SHA is a blocking classification problem, not a silent pass.
+
+## Historical selector replay
+
+`scripts/replay_pr_test_selection.py` measures how the current affected-test selector classifies
+historical accepted-main deltas without changing CI or creating a second subsystem-policy source.
+It walks a bounded first-parent sample, fingerprints `scripts/select_pr_tests.py`, and emits the
+changed paths, selected subsystems and targets, plus aggregate full-suite, unowned-path, and
+multi-subsystem rates:
+
+```bash
+python3 scripts/replay_pr_test_selection.py --ref origin/main --limit 100 --json
+```
+
+The report is a rebuildable observation, never delivery authority. It applies the selector at the
+current checkout to historical changed-file sets; it does not reconstruct the selector revision
+that existed at each merge. Git history alone also cannot establish historical failing-test recall,
+CI duration or runner cost, review effort, or escaped-defect frequency. Those measurements require
+separately attributable CI and delivery evidence and must remain `not observable` when that evidence
+is unavailable rather than being inferred from this replay.
