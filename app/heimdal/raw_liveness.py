@@ -1165,7 +1165,15 @@ def _governed_delete_pg(
         )
         _retention_stage_hook("after_tombstone")
         cur.execute("SELECT set_config(%s, 'true', true)", (_RETENTION_GUARD_SETTING,))
-        cur.execute("DELETE FROM heimdal_raw_representation WHERE record_id = %s", (record_id,))
+        try:
+            cur.execute(
+                "DELETE FROM heimdal_raw_representation WHERE record_id = %s",
+                (record_id,),
+            )
+        except Exception as exc:
+            raise raw_store.RawRepresentationDeletionError(
+                "governed all-copy deletion failed; no identity was removed"
+            ) from exc
         cur.execute(
             "SELECT 1 FROM heimdal_raw_representation WHERE record_id = %s LIMIT 1",
             (record_id,),
