@@ -111,6 +111,7 @@ _DESCRIPTOR_RELATIVE_OPERATIONS_SUPPORTED = all(
     operation in getattr(os, "supports_dir_fd", ())
     for operation in (os.open, os.stat, os.unlink)
 )
+_NO_FOLLOW_STAT_SUPPORTED = os.stat in getattr(os, "supports_follow_symlinks", ())
 
 
 def _descriptor_cleanup_capability() -> None:
@@ -120,6 +121,8 @@ def _descriptor_cleanup_capability() -> None:
         raise OSError("descriptor-safe bundle rollback is unsupported on this platform")
     if not _DESCRIPTOR_RELATIVE_OPERATIONS_SUPPORTED:
         raise OSError("descriptor-relative bundle rollback is unsupported on this platform")
+    if not _NO_FOLLOW_STAT_SUPPORTED:
+        raise OSError("no-follow manifest inspection is unsupported on this platform")
 
 
 def _rollback_partial_bundle(vault_root: Path, bundle_folder: str) -> None:

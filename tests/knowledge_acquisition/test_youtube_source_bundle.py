@@ -272,6 +272,19 @@ def test_unsupported_descriptor_cleanup_fails_before_partial_bundle_write(
     assert list((tmp_path / "vault").rglob("transcript.md")) == []
 
 
+def test_unsupported_no_follow_manifest_inspection_fails_before_partial_bundle_write(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    vault = _vault(tmp_path / "vault")
+    _, transcript, candidate = _source_material(tmp_path)
+    monkeypatch.setattr(source_bundle_module, "_NO_FOLLOW_STAT_SUPPORTED", False)
+
+    with pytest.raises(SourceBundleError, match="no-follow manifest inspection"):
+        materialize_youtube_source_bundle(candidate, transcript, vault_context=vault, write_guard=_guard())
+
+    assert list((tmp_path / "vault").rglob("transcript.md")) == []
+
+
 def test_transcript_projection_is_anchored_derived_and_never_replay_input(tmp_path: Path) -> None:
     vault = _vault(tmp_path / "vault")
     _, transcript, candidate = _source_material(tmp_path)
