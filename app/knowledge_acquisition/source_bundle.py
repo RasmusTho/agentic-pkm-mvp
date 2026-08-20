@@ -75,6 +75,7 @@ def materialize_youtube_source_bundle(
     with _bundle_lock(vault_root, bundle_folder):
         transcript_status: str | None = None
         try:
+            _descriptor_cleanup_capability()
             transcript_status = create_candidate_note_once(
                 transcript_path, _render_transcript(candidate, transcript), vault_root=vault_root,
                 action=SOURCE_BUNDLE_WRITE_ACTION, write_guard=write_guard,

@@ -259,6 +259,19 @@ def test_blocked_rollback_keeps_descriptor_identity_across_bundle_redirect(
     assert foreign_transcript.read_text(encoding="utf-8") == "foreign"
 
 
+def test_unsupported_descriptor_cleanup_fails_before_partial_bundle_write(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    vault = _vault(tmp_path / "vault")
+    _, transcript, candidate = _source_material(tmp_path)
+    monkeypatch.setattr(source_bundle_module, "_DESCRIPTOR_RELATIVE_OPERATIONS_SUPPORTED", False)
+
+    with pytest.raises(SourceBundleError, match="descriptor-relative bundle rollback"):
+        materialize_youtube_source_bundle(candidate, transcript, vault_context=vault, write_guard=_guard())
+
+    assert list((tmp_path / "vault").rglob("transcript.md")) == []
+
+
 def test_transcript_projection_is_anchored_derived_and_never_replay_input(tmp_path: Path) -> None:
     vault = _vault(tmp_path / "vault")
     _, transcript, candidate = _source_material(tmp_path)
