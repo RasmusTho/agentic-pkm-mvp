@@ -215,6 +215,50 @@ def test_blocked_manifest_publication_preserves_complete_preexisting_bundle(tmp_
     assert (transcript_path.read_bytes(), manifest_path.read_bytes()) == before
 
 
+def test_blocked_rollback_keeps_descriptor_identity_across_bundle_redirect(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A pathname swap after traversal cannot redirect cleanup to a foreign bundle."""
+    vault = _vault(tmp_path / "vault")
+    _, transcript, candidate = _source_material(tmp_path)
+    complete = materialize_youtube_source_bundle(candidate, transcript, vault_context=vault, write_guard=_guard())
+    bundle_path = Path(vault.active_vault_path, complete.bundle_folder)
+    bundle_path.joinpath("source.json").unlink()
+    foreign_path = bundle_path.with_name(f"{bundle_path.name}.foreign")
+    foreign_path.mkdir()
+    foreign_transcript = foreign_path / "transcript.md"
+    foreign_transcript.write_text("foreign", encoding="utf-8")
+    original_stat = source_bundle_module.os.stat
+    redirected = False
+
+    def swap_before_manifest_stat(path, *args, **kwargs):
+        nonlocal redirected
+        if path == "source.json" and kwargs.get("dir_fd") is not None and not redirected:
+            redirected = True
+            original_bundle = bundle_path.with_name(f"{bundle_path.name}.original")
+            bundle_path.rename(original_bundle)
+            bundle_path.symlink_to(foreign_path.name, target_is_directory=True)
+        return original_stat(path, *args, **kwargs)
+
+    monkeypatch.setattr(source_bundle_module.os, "stat", swap_before_manifest_stat)
+    snapshots = iter([
+        {"state": "healthy"},
+        {"state": "safe_mode", "reason": "manifest publication blocked"},
+    ])
+
+    blocked = materialize_youtube_source_bundle(
+        candidate,
+        transcript,
+        vault_context=vault,
+        write_guard=WriteGuard(lambda: next(snapshots)),
+    )
+
+    assert blocked.status == "blocked"
+    assert redirected
+    assert not (bundle_path.with_name(f"{bundle_path.name}.original") / "transcript.md").exists()
+    assert foreign_transcript.read_text(encoding="utf-8") == "foreign"
+
+
 def test_transcript_projection_is_anchored_derived_and_never_replay_input(tmp_path: Path) -> None:
     vault = _vault(tmp_path / "vault")
     _, transcript, candidate = _source_material(tmp_path)

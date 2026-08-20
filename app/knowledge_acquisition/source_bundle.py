@@ -105,12 +105,29 @@ _DIRECTORY_OPEN_FLAGS = (
     | getattr(os, "O_NOFOLLOW", 0)
     | getattr(os, "O_CLOEXEC", 0)
 )
+_DESCRIPTOR_RELATIVE_OPERATIONS_SUPPORTED = all(
+    operation in getattr(os, "supports_dir_fd", ())
+    for operation in (os.open, os.stat, os.unlink)
+)
+
+
+def _descriptor_cleanup_capability() -> None:
+    """Require the primitives that make rollback identity-safe, or fail closed."""
+    required_flags = ("O_DIRECTORY", "O_NOFOLLOW")
+    if any(getattr(os, flag, 0) == 0 for flag in required_flags):
+        raise OSError("descriptor-safe bundle rollback is unsupported on this platform")
+    if not _DESCRIPTOR_RELATIVE_OPERATIONS_SUPPORTED:
+        raise OSError("descriptor-relative bundle rollback is unsupported on this platform")
 
 
 def _rollback_partial_bundle(vault_root: Path, bundle_folder: str) -> None:
+    _descriptor_cleanup_capability()
+    components = PurePosixPath(bundle_folder).parts
+    if not components or any(component in {"", ".", ".."} for component in components):
+        raise OSError("bundle folder must be a safe vault-relative path")
     descriptor = os.open(vault_root, _DIRECTORY_OPEN_FLAGS)
     try:
-        for component in PurePosixPath(bundle_folder).parts:
+        for component in components:
             child_descriptor = os.open(component, _DIRECTORY_OPEN_FLAGS, dir_fd=descriptor)
             os.close(descriptor)
             descriptor = child_descriptor
