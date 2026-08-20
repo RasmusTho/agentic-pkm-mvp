@@ -84,7 +84,8 @@ def materialize_youtube_source_bundle(
                 action=SOURCE_BUNDLE_WRITE_ACTION, write_guard=write_guard,
             )
         except WritesBlockedError as exc:
-            if transcript_status == "written":
+            manifest_file = vault_root / manifest_path
+            if transcript_status in {"written", "already_exists"} and not manifest_file.exists():
                 try:
                     transcript_file = vault_root / transcript_path
                     transcript_file.unlink()
