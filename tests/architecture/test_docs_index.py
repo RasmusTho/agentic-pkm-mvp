@@ -114,7 +114,7 @@ def test_ysnv2_owner_doc_delivery_state_matches_index() -> None:
     index_text = DOCS_INDEX.read_text(encoding="utf-8")
 
     owner_state = owner_doc.splitlines()[0]
-    assert "YSNV2-06" in owner_state and "delivered" in owner_state.lower()
+    assert "YSNV2-06 is delivered" in owner_state
 
     index_row = next(
         (
