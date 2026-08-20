@@ -416,6 +416,22 @@ def _assert_pg_schema(conn: Any) -> None:
         )
 
 
+def assert_runtime_schema() -> None:
+    """Fail closed when the migration-owned liveness authority is unavailable.
+
+    Memory-backed test fixtures have no durable schema to check. PostgreSQL
+    callers use a fresh read-only connection so startup/status can report an
+    incomplete migration before the first media admission.
+    """
+    if resolve_heimdal_backend() != "pg":
+        return
+    conn = _pg_connect(autocommit=True)
+    try:
+        _assert_pg_schema(conn)
+    finally:
+        conn.close()
+
+
 def _bootstrap_pg(conn: Any) -> None:
     if not _schema_autocreate_enabled():
         _assert_pg_schema(conn)

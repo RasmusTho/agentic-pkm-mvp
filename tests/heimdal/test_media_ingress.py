@@ -1636,6 +1636,31 @@ def test_startup_preflight_reports_ingress_unavailable_without_exiting(
         assert refused.json()["detail"]["state"] == "not_acknowledged"
 
 
+def test_startup_preflight_reports_missing_raw_liveness_schema(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A missing liveness migration makes both raw ingress lanes unavailable."""
+    from app.heimdal import ingress_preflight
+
+    def _missing_schema() -> None:
+        raise ingress_preflight.raw_liveness.RawLivenessSchemaMissingError(
+            "missing migration-owned liveness tables"
+        )
+
+    monkeypatch.setattr(ingress_preflight.raw_liveness, "assert_runtime_schema", _missing_schema)
+    ingress_preflight.reset_ingress_preflight()
+
+    recorded = ingress_preflight.run_ingress_preflight()
+
+    assert recorded.raw_store_key_available is True
+    assert recorded.raw_liveness_schema_available is False
+    assert recorded.lanes == {
+        "media_ingress": "unavailable",
+        "screen_capture": "unavailable",
+    }
+    assert ingress_preflight.DETAIL_RAW_LIVENESS_SCHEMA_UNAVAILABLE in recorded.detail
+
+
 def test_startup_preflight_reports_missing_media_consent_grant(
     client: TestClient,
 ) -> None:

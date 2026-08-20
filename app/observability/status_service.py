@@ -1259,6 +1259,7 @@ def _get_heimdal_ingress_status():
 
     return HeimdalIngressStatus(
         raw_store_key_available=result.raw_store_key_available,
+        raw_liveness_schema_available=result.raw_liveness_schema_available,
         lanes=dict(result.lanes),
         detail=result.detail,
         checked_at=result.checked_at,
