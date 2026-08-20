@@ -699,6 +699,7 @@ def query_receipts(
 
     try:
         found = media_receipts.find_media_receipts_by_capture_ids(requested)
+        answers = media_ingress.receipt_answers(found, requested)
     except Exception as exc:
         # A read failure must not be reported as `unknown`: "never arrived" is a
         # load-bearing answer a client acts on (CDLM-03 deletes originals against
@@ -716,7 +717,6 @@ def query_receipts(
             },
         ) from exc
 
-    answers = [media_ingress.receipt_answer(found.get(value), value) for value in requested]
     return ReceiptQueryResponse(receipts=answers, trace_id=trace_id)
 
 

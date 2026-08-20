@@ -61,11 +61,14 @@ durable acceptance:
 - **Receipt body:** `{outcome: "admitted", capture_id, content_sha256, receipt_id, raw_ref,
   admitted_at, trace_id}` plus `idempotent_replay: true` when the pair was already admitted.
 - **Receipt query:** `GET /api/heimdal/capture/receipts?capture_id=…` (repeatable parameter,
-  bounded batch) returns each id's receipt or `unknown` — the client's reconnect/recovery answer
-  after a lost response, per INV-CDLM-3.
+  bounded batch) returns each id's `admitted`, `erased`, or `unknown` state. `erased` preserves
+  immutable receipt history while honestly reporting that governed retention removed the raw
+  evidence; the client retains its original and treats the identity as terminal rather than as a
+  replayable acknowledgement.
 - **Named error states,** never blind-retryable: schema violation and hash mismatch (422),
-  unsupported kind (415), oversize per configured per-kind caps (413), raw-store or event-commit
-  failure (500, nothing acknowledged).
+  unsupported kind (415), oversize per configured per-kind caps (413), retained-evidence-erased
+  (410 `media_evidence_erased`, terminal), receipt/raw-state unavailability (503), and raw-store
+  or event-commit failure (500, nothing acknowledged).
 - **Legacy lane convergence:** watched-folder admissions flow through the same admission seam and
   also produce receipts (keyed by content hash; `capture_id` when a sidecar carries one), so
   Model-1 files are queryable — while the retention guarantee remains an outbox-lane property
@@ -84,6 +87,9 @@ curl -s -X POST http://hub.local/api/heimdal/capture/media \
 
 curl -s 'http://hub.local/api/heimdal/capture/receipts?capture_id=9f7c…'
 # → {"receipts":[{"capture_id":"9f7c…","outcome":"admitted","receipt_id":"rcp_…",…}]}
+# after governed raw retention of an admitted object:
+# → {"receipts":[{"capture_id":"9f7c…","outcome":"erased","receipt_id":"rcp_…",…}]}
+# re-posting that transfer identity → 410 {"error":"media_evidence_erased","state":"erased",…}
 ```
 
 ## Why This Matters

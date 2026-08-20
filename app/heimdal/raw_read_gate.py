@@ -120,14 +120,15 @@ def resolve_read_allowlist() -> frozenset:
     return frozenset(item.strip() for item in raw.split(",") if item.strip())
 
 
-def raw_ref_for(record: "raw_store.RawRecord") -> str:
+def raw_ref_for(record: "raw_store.RawRecord | str") -> str:
     """Mint the opaque `raw_ref` handle for a durable raw record.
 
     Opaque per FABLE_COMPANION §1.1 item 2: resolvable only through
     :func:`read_raw_record`, never a URL, filesystem path, or raw table key
     a caller could use to bypass the gate.
     """
-    return f"{_RAW_REF_PREFIX}{record.id}"
+    record_id = record if isinstance(record, str) else record.id
+    return f"{_RAW_REF_PREFIX}{record_id}"
 
 
 def _record_id_from_raw_ref(raw_ref: str) -> str:

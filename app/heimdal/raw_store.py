@@ -387,6 +387,18 @@ class _MemoryRawStore:
                 return None
             return self._compose(identity, self._active_representation_locked(identity.id))
 
+    def active_record_ids_by_content_identities(
+        self, content_identities: List[str]
+    ) -> Dict[str, str]:
+        """Return active raw IDs only, without composing encrypted record payloads."""
+        with self._lock:
+            return {
+                identity: record.id
+                for identity in set(content_identities)
+                if (record := self._by_identity.get(identity)) is not None
+                and self._active_representation_locked(record.id) is not None
+            }
+
     def resolve_active(self, record_id: str) -> Optional[RawRecord]:
         with self._lock:
             identity = next((row for row in self._rows if row.id == record_id), None)
@@ -1080,6 +1092,35 @@ class _PgRawStore:
         finally:
             conn.close()
 
+    def active_record_ids_by_content_identities(
+        self, content_identities: List[str]
+    ) -> Dict[str, str]:
+        """Resolve active raw IDs in one metadata-only query.
+
+        Receipt recovery needs only identity existence and the opaque raw-record
+        ID; selecting ciphertext, nonces, or JSON payloads here would materialize
+        media bytes on a read-only recovery path.
+        """
+        identities = sorted(set(content_identities))
+        if not identities:
+            return {}
+        conn = _pg_connect()
+        try:
+            _assert_pg_schema(conn)
+            cur = conn.cursor()
+            cur.execute(
+                f"""
+                SELECT r.content_identity, r.id
+                FROM {_TABLE} AS r
+                JOIN {_REPRESENTATION_TABLE} AS p ON p.record_id = r.id AND p.active
+                WHERE r.content_identity = ANY(%s)
+                """,
+                (identities,),
+            )
+            return {str(content_identity): str(record_id) for content_identity, record_id in cur.fetchall()}
+        finally:
+            conn.close()
+
     def resolve_active(self, record_id: str) -> Optional[RawRecord]:
         conn = _pg_connect()
         try:
@@ -1376,6 +1417,19 @@ def get_raw_record_by_content_identity(content_identity: str) -> Optional[RawRec
     return _backend().get_by_content_identity(content_identity)
 
 
+def find_active_raw_record_ids_by_content_identities(
+    content_identities: List[str],
+) -> Dict[str, str]:
+    """Resolve bounded active raw identities without materializing encrypted media.
+
+    The return mapping is ``content_identity -> record_id`` for identities with
+    one active representation. It is the receipt-state recovery seam; absence
+    is distinct from a backend failure, which callers must surface rather than
+    treating as an erased or unknown receipt.
+    """
+    return _backend().active_record_ids_by_content_identities(content_identities)
+
+
 def resolve_active_raw_record(record_id: str) -> Optional[RawRecord]:
     """Resolve identity through its one active registered representation.
 
@@ -1487,6 +1541,7 @@ __all__ = [
     "decrypt_raw_bytes",
     "encrypt_raw_bytes",
     "get_raw_record_by_content_identity",
+    "find_active_raw_record_ids_by_content_identities",
     "hard_delete_raw_record",
     "insert_raw_record",
     "register_raw_representation",

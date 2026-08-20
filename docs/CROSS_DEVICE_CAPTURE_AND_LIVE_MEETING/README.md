@@ -122,8 +122,10 @@ acceptance receipts recorded on parent #4383; none is available for pickup.
   receipts.
 - **INV-CDLM-2 — originals outlive everything until their receipt.** The client deletes a captured
   original only after that item's durable-acceptance receipt is persisted in the client's own
-  durable outbox state. Process kill, relaunch, device reboot, or hub unavailability may delay
-  transfer forever; they may never lose an original or a persisted receipt.
+  durable outbox state and the hub continues to answer `admitted` for its raw evidence. Process
+  kill, relaunch, device reboot, hub unavailability, or governed post-admission erasure may delay
+  transfer forever; `erased` / `media_evidence_erased` preserves the original and surfaces a
+  terminal state rather than authorizing deletion or a false idempotent replay.
 - **INV-CDLM-3 — retries are idempotent end-to-end.** Transfer identity is
   `(capture_id, content_sha256)`, minted once at capture finalization. Re-sending after a lost
   response, crash, or reconnect re-admits nothing: the hub returns the same receipt identity, the
@@ -164,6 +166,7 @@ acceptance receipts recorded on parent #4383; none is available for pickup.
 | Client crash after capture finalization, before any send | Original + sidecar in the outbox store | Queue rebuilds from disk; item shows `pending locally` | Losing the original; fabricating a sent state |
 | Response lost after the hub durably admitted | Hub: raw object + committed event; client: outbox item without receipt | Client re-queries receipts by `capture_id` or resends; hub answers idempotently with the same receipt | A duplicate raw object, ledger row, or derived segment |
 | Hub crash between raw write and outbox commit | Raw object without committed event | Admission is not acknowledged; the client resend completes admission idempotently and only then receives the receipt | Acknowledging before the event commit; orphaned acknowledged state |
+| Governed retention erases raw evidence after admission | Immutable admission + deletion receipts; no retained raw object | Receipt query reports `erased`; client retains its original and surfaces the terminal 410 resend outcome | Returning `admitted`, deleting the original, or false idempotent success |
 | Disconnect mid-meeting | Outbox holds unsent segments; ledger holds a gapped sequence set | Ledger reports the gap; client resends missing segments on reconnect; projections re-derive and converge | Projections claiming completeness over a gapped prefix; double-derived segments |
 | Meeting closed while segments are missing | Close record + gapped ledger | Finalization marks the output `needs attention` with the missing sequence numbers; late admission triggers reconciliation and re-finalization | A final transcript/analysis presented as complete over known gaps |
 | Hub restart mid-meeting | Admitted segments + ledger + projection revisions in durable state | Session state and projections rebuild from durable rows; the next derivation resumes at the correct revision | Restart resetting the ledger, losing admitted segments, or replaying derivations non-idempotently |

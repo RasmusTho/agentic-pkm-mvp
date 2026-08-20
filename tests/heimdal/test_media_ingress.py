@@ -342,6 +342,70 @@ def test_resend_after_retention_is_not_false_idempotent(
     assert len(all_raw_records()) == 0
 
 
+def test_receipt_query_uses_one_batched_metadata_only_raw_lookup(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Receipt recovery never materializes ciphertext or opens one lookup per receipt."""
+    first_media = b"metadata-only-receipt-query-one"
+    second_media = b"metadata-only-receipt-query-two"
+    first = _sidecar(first_media)
+    second = _sidecar(second_media)
+    assert _post_media(client, first_media, first).status_code == 200
+    assert _post_media(client, second_media, second).status_code == 200
+
+    calls: list[set[str]] = []
+
+    def metadata_lookup(content_identities: list[str]) -> dict[str, str]:
+        calls.append(set(content_identities))
+        return {
+            record.content_identity: record.id
+            for record in all_raw_records()
+            if record.content_identity in content_identities
+        }
+
+    def unexpected_full_lookup(*_args: Any, **_kwargs: Any) -> None:
+        raise AssertionError("receipt recovery must not materialize a raw record")
+
+    monkeypatch.setattr(
+        media_ingress.raw_store,
+        "find_active_raw_record_ids_by_content_identities",
+        metadata_lookup,
+    )
+    monkeypatch.setattr(
+        media_ingress.raw_store,
+        "get_raw_record_by_content_identity",
+        unexpected_full_lookup,
+    )
+
+    response = _get_receipts(client, first["capture_id"], second["capture_id"])
+    assert response.status_code == 200, response.text
+    assert [item["outcome"] for item in response.json()["receipts"]] == ["admitted", "admitted"]
+    assert calls == [{first["content_sha256"], second["content_sha256"]}]
+
+
+def test_receipt_query_reports_raw_state_lookup_failure_as_unavailable(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A raw-state backend failure is 503, never a false answer or unnamed 500."""
+    media = b"raw-state-lookup-unavailable"
+    sidecar = _sidecar(media)
+    assert _post_media(client, media, sidecar).status_code == 200
+
+    def unavailable(_content_identities: list[str]) -> dict[str, str]:
+        raise RuntimeError("raw metadata store unavailable")
+
+    monkeypatch.setattr(
+        media_ingress.raw_store,
+        "find_active_raw_record_ids_by_content_identities",
+        unavailable,
+    )
+
+    response = _get_receipts(client, sidecar["capture_id"])
+    assert response.status_code == 503, response.text
+    assert response.json()["detail"]["error"] == "receipt_store_unavailable"
+    assert response.json()["detail"]["trace_id"]
+
+
 def test_receipt_identity_includes_the_capture_id(client: TestClient) -> None:
     """INV-CDLM-3's identity is the *pair*, so identical bytes do not share a receipt.
 

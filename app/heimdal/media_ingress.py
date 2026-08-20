@@ -182,15 +182,21 @@ class MediaAdmission:
     idempotent_replay: bool
 
 
-def _retained_receipt_or_erased(receipt: MediaReceipt) -> MediaReceipt:
+def _retained_receipt_or_erased(
+    receipt: MediaReceipt, *, active_record_ids: Optional[Dict[str, str]] = None
+) -> MediaReceipt:
     """Return a replayable receipt only while it still resolves to its raw object.
 
     Receipt rows are append-only, so retention never changes their identity or
     fields in place. The current acknowledgement state is instead derived from
     whether the exact raw object the receipt attests to still exists.
     """
-    record = raw_store.get_raw_record_by_content_identity(receipt.content_sha256)
-    if record is not None and raw_ref_for(record) == receipt.raw_ref:
+    if active_record_ids is None:
+        active_record_ids = raw_store.find_active_raw_record_ids_by_content_identities(
+            [receipt.content_sha256]
+        )
+    record_id = active_record_ids.get(receipt.content_sha256)
+    if record_id is not None and raw_ref_for(record_id) == receipt.raw_ref:
         return receipt
     raise MediaEvidenceErasedError(receipt)
 
@@ -684,7 +690,12 @@ def record_watched_folder_admission(
     return receipt
 
 
-def receipt_answer(receipt: Optional[MediaReceipt], capture_id: str) -> Dict[str, Any]:
+def receipt_answer(
+    receipt: Optional[MediaReceipt],
+    capture_id: str,
+    *,
+    active_record_ids: Optional[Dict[str, str]] = None,
+) -> Dict[str, Any]:
     """Render one receipt-query answer: `admitted`, `erased`, or `unknown`.
 
     ``unknown`` is a first-class answer, not an error: it is how a client
@@ -699,7 +710,7 @@ def receipt_answer(receipt: Optional[MediaReceipt], capture_id: str) -> Dict[str
     if receipt is None:
         return {"capture_id": capture_id, "outcome": "unknown"}
     try:
-        _retained_receipt_or_erased(receipt)
+        _retained_receipt_or_erased(receipt, active_record_ids=active_record_ids)
     except MediaEvidenceErasedError:
         outcome = "erased"
     else:
@@ -714,6 +725,24 @@ def receipt_answer(receipt: Optional[MediaReceipt], capture_id: str) -> Dict[str
         "lane": receipt.lane,
         "admitted_at": iso_timestamp(receipt.admitted_at),
     }
+
+
+def receipt_answers(
+    receipts_by_capture_id: Dict[str, MediaReceipt], capture_ids: List[str]
+) -> List[Dict[str, Any]]:
+    """Render a bounded receipt batch from one metadata-only raw-state query."""
+    content_identities = sorted(
+        {receipt.content_sha256 for receipt in receipts_by_capture_id.values()}
+    )
+    active_record_ids = raw_store.find_active_raw_record_ids_by_content_identities(content_identities)
+    return [
+        receipt_answer(
+            receipts_by_capture_id.get(capture_id),
+            capture_id,
+            active_record_ids=active_record_ids,
+        )
+        for capture_id in capture_ids
+    ]
 
 
 def iso_timestamp(value: datetime) -> str:
@@ -748,6 +777,7 @@ __all__ = [
     "admit_media_bytes",
     "iso_timestamp",
     "receipt_answer",
+    "receipt_answers",
     "record_media_admission",
     "record_watched_folder_admission",
     "resolve_media_kind_max_bytes",
