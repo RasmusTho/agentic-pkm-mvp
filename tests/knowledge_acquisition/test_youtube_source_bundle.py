@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -123,14 +124,30 @@ def test_blocked_rollback_fsyncs_bundle_directory_before_return(
 ) -> None:
     vault = _vault(tmp_path / "vault")
     _, transcript, candidate = _source_material(tmp_path)
-    fenced: list[Path] = []
-    original_fsync_directory = source_bundle_module._fsync_directory
+    opened: list[Path] = []
+    unlinked: list[tuple[str, int | None]] = []
+    synced: list[int] = []
+    original_open = source_bundle_module.os.open
+    original_unlink = source_bundle_module.os.unlink
+    original_fsync = source_bundle_module.os.fsync
 
-    def record_fsync_directory(path: Path) -> None:
-        fenced.append(path)
-        original_fsync_directory(path)
+    def record_open(
+        path: str | bytes | os.PathLike[str], flags: int, *args: object, **kwargs: object
+    ) -> int:
+        opened.append(Path(path))
+        return original_open(path, flags, *args, **kwargs)
 
-    monkeypatch.setattr(source_bundle_module, "_fsync_directory", record_fsync_directory)
+    def record_unlink(path: str | bytes | os.PathLike[str], *, dir_fd: int | None = None) -> None:
+        unlinked.append((os.fspath(path), dir_fd))
+        original_unlink(path, dir_fd=dir_fd)
+
+    def record_fsync(descriptor: int) -> None:
+        synced.append(descriptor)
+        original_fsync(descriptor)
+
+    monkeypatch.setattr(source_bundle_module.os, "open", record_open)
+    monkeypatch.setattr(source_bundle_module.os, "unlink", record_unlink)
+    monkeypatch.setattr(source_bundle_module.os, "fsync", record_fsync)
     snapshots = iter(
         [
             {"state": "healthy"},
@@ -146,7 +163,9 @@ def test_blocked_rollback_fsyncs_bundle_directory_before_return(
     )
 
     assert blocked.status == "blocked"
-    assert fenced == [Path(vault.active_vault_path, blocked.bundle_folder)]
+    assert opened.count(Path(vault.active_vault_path, blocked.bundle_folder)) == 1
+    assert unlinked and unlinked[0][0] == "transcript.md"
+    assert unlinked[0][1] in synced
     assert not Path(vault.active_vault_path, blocked.transcript_path).exists()
 
 
@@ -157,14 +176,6 @@ def test_blocked_manifest_publication_removes_preexisting_orphan_transcript(
     _, transcript, candidate = _source_material(tmp_path)
     complete = materialize_youtube_source_bundle(candidate, transcript, vault_context=vault, write_guard=_guard())
     Path(vault.active_vault_path, complete.manifest_path).unlink()
-    fenced: list[Path] = []
-    original_fsync_directory = source_bundle_module._fsync_directory
-
-    def record_fsync_directory(path: Path) -> None:
-        fenced.append(path)
-        original_fsync_directory(path)
-
-    monkeypatch.setattr(source_bundle_module, "_fsync_directory", record_fsync_directory)
     snapshots = iter([
         {"state": "healthy"},
         {"state": "safe_mode", "reason": "manifest publication blocked"},
@@ -179,7 +190,6 @@ def test_blocked_manifest_publication_removes_preexisting_orphan_transcript(
     assert blocked.status == "blocked"
     assert not Path(vault.active_vault_path, blocked.transcript_path).exists()
     assert not Path(vault.active_vault_path, blocked.manifest_path).exists()
-    assert fenced == [Path(vault.active_vault_path, blocked.bundle_folder)]
 
 
 def test_blocked_manifest_publication_preserves_complete_preexisting_bundle(tmp_path: Path) -> None:

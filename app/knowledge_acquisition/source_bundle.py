@@ -88,8 +88,7 @@ def materialize_youtube_source_bundle(
             if transcript_status in {"written", "already_exists"} and not manifest_file.exists():
                 try:
                     transcript_file = vault_root / transcript_path
-                    transcript_file.unlink()
-                    _fsync_directory(transcript_file.parent)
+                    _unlink_and_fsync_transcript(transcript_file)
                 except OSError as cleanup_exc:
                     raise SourceBundleError(
                         f"source bundle blocked after partial write and cleanup failed: {cleanup_exc}"
@@ -102,9 +101,10 @@ def materialize_youtube_source_bundle(
     return SourceBundleResult(source_folder, bundle_folder, transcript_path, manifest_path, "written" if "written" in {transcript_status, manifest_status} else "already_exists")
 
 
-def _fsync_directory(path: Path) -> None:
-    descriptor = os.open(path, os.O_RDONLY)
+def _unlink_and_fsync_transcript(path: Path) -> None:
+    descriptor = os.open(path.parent, os.O_RDONLY)
     try:
+        os.unlink(path.name, dir_fd=descriptor)
         os.fsync(descriptor)
     finally:
         os.close(descriptor)
