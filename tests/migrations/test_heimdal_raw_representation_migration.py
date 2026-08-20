@@ -16,6 +16,7 @@ pytestmark = pytest.mark.pg
 REPO_ROOT = Path(__file__).resolve().parents[2]
 PRE_REPRESENTATION_HEAD = "d1e8a0c5f37b"
 REPRESENTATION_HEAD = "e7b4c9d2a6f1"
+LIVENESS_HEAD = "c5d8a1e4f2b7"
 _KEY = bytes(range(32))
 
 
@@ -303,6 +304,7 @@ def test_failed_legacy_backfill_is_loud_resumable_and_readable(
         conn.commit()
 
     _upgrade(dsn, monkeypatch, REPRESENTATION_HEAD)
+    _upgrade(dsn, monkeypatch, LIVENESS_HEAD)
 
     monkeypatch.setenv("HEIMDAL_RAW_STORE_KEY", _KEY.hex())
     monkeypatch.setenv("HEIMDAL_RAW_READ_ALLOWLIST", "authorized-reader")
@@ -405,6 +407,7 @@ def test_legacy_content_identity_mismatch_rolls_back_and_corrected_replay_succee
     )
 
     _upgrade(dsn, monkeypatch, REPRESENTATION_HEAD)
+    _upgrade(dsn, monkeypatch, LIVENESS_HEAD)
     monkeypatch.setenv("STORE_BACKEND", "pg")
     monkeypatch.setenv("DATABASE_URL", dsn)
     monkeypatch.setenv("HEIMDAL_RAW_READ_ALLOWLIST", "authorized-reader")
@@ -451,6 +454,7 @@ def test_test_bootstrap_refuses_legacy_shape_until_alembic_migrates_it(
 
     monkeypatch.setenv("HEIMDAL_RAW_STORE_KEY", _KEY.hex())
     _upgrade(dsn, monkeypatch, REPRESENTATION_HEAD)
+    _upgrade(dsn, monkeypatch, LIVENESS_HEAD)
     raw_store._PgRawStore()
     monkeypatch.setenv("HEIMDAL_RAW_STORE_KEY", _KEY.hex())
     monkeypatch.setenv("HEIMDAL_RAW_READ_ALLOWLIST", "authorized-reader")
@@ -490,7 +494,7 @@ def test_test_bootstrap_refuses_malformed_final_schema_without_self_repair(
     missing_object: str,
 ) -> None:
     dsn = scratch_db_factory()
-    _upgrade(dsn, monkeypatch, REPRESENTATION_HEAD)
+    _upgrade(dsn, monkeypatch, LIVENESS_HEAD)
     with psycopg.connect(dsn, autocommit=True) as conn:
         conn.execute(drop_statement)
 
@@ -525,7 +529,7 @@ def test_pg_representation_activation_and_all_copy_erasure_are_transactional(
     tmp_path: Path,
 ) -> None:
     dsn = scratch_db_factory()
-    _upgrade(dsn, monkeypatch, REPRESENTATION_HEAD)
+    _upgrade(dsn, monkeypatch, LIVENESS_HEAD)
     monkeypatch.setenv("DATABASE_URL", dsn)
     monkeypatch.setenv("STORE_BACKEND", "pg")
     monkeypatch.delenv("STORE_SCHEMA_AUTOCREATE", raising=False)
