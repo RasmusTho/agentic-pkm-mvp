@@ -277,6 +277,43 @@ def test_blocked_replay_preserves_retryable_write_blocked_result(tmp_path: Path)
     assert list((tmp_path / "vault").rglob("*.md")) == []
 
 
+def test_blocked_bundle_recovery_does_not_expose_orphan_transcript(tmp_path: Path) -> None:
+    """A restart after rollback sees no transcript without its complete bundle manifest."""
+    raw_id = _persist_raw()
+    conn = FakeOutboxConn()
+    vault = _vault(tmp_path / "vault")
+    snapshots = iter(
+        [
+            {"state": "healthy"},
+            {"state": "safe_mode", "reason": "partial publication blocked"},
+        ]
+    )
+
+    blocked = run_replay(
+        raw_id,
+        vault_context=vault,
+        write_guard=WriteGuard(lambda: next(snapshots)),
+        conn=conn,
+    )
+
+    blocked_stage = next(stage for stage in blocked.stages if stage.stage == "candidate")
+    assert blocked_stage.status == "blocked"
+    assert list(vault_path for vault_path in (tmp_path / "vault").rglob("transcript.md")) == []
+
+    recovered = run_replay(
+        raw_id,
+        vault_context=vault,
+        write_guard=_allowing_guard(),
+        conn=conn,
+    )
+
+    recovered_stage = next(stage for stage in recovered.stages if stage.stage == "candidate")
+    assert recovered_stage.status == "written"
+    transcripts = list((tmp_path / "vault").rglob("transcript.md"))
+    assert transcripts
+    assert all((transcript.parent / "source.json").is_file() for transcript in transcripts)
+
+
 def test_candidate_byte_identical_across_replay(tmp_path: Path) -> None:
     """The written candidate note is byte-identical after a replay (first-write-wins)."""
     conn = FakeOutboxConn()
