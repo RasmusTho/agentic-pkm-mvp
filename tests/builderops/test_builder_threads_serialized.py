@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+
 import pytest
 from pathlib import Path
 
@@ -430,6 +432,118 @@ def test_external_writer_state_survives_restart_and_replays_exact_request(tmp_pa
     )
     assert restarted.read(created.thread.thread_id).thread_id == created.thread.thread_id
     assert restarted.create(**request).replayed is True
+
+
+def test_failed_write_preserves_last_valid_artifact(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    writer = _writer(tmp_path)
+    client = BuilderThreadClient(
+        InProcessWriterEndpoint(writer, client_id="codex:desktop"), client_id="codex:desktop"
+    )
+    created = client.create(
+        request_id="atomic-baseline-5023",
+        actor="codex:desktop",
+        recipient="claude:mac",
+        subject="Atomic baseline",
+        content="This committed artifact must remain readable.",
+        source_refs=("github:5023",),
+    )
+    entries = tmp_path / "external-builderops-vault" / "builder-thread-entries"
+    baseline = (entries / "atomic-baseline-5023.json").read_bytes()
+
+    def fail_publication(_source: object, _destination: object) -> None:
+        raise OSError("simulated publication failure")
+
+    monkeypatch.setattr("app.builderops.builder_threads_serialized.os.replace", fail_publication)
+    with pytest.raises(WriterUnavailableError, match="persistence is unavailable"):
+        client.create(
+            request_id="atomic-failure-5023",
+            actor="codex:desktop",
+            recipient="claude:mac",
+            subject="Atomic failure",
+            content="This failed write must not replace committed state.",
+            source_refs=("github:5023",),
+        )
+
+    assert (entries / "atomic-baseline-5023.json").read_bytes() == baseline
+    assert not (entries / "atomic-failure-5023.json").exists()
+    assert writer.read_thread(created.thread.thread_id) == created.thread
+
+
+def test_restart_recovers_after_interrupted_write(tmp_path: Path) -> None:
+    writer = _writer(tmp_path)
+    client = BuilderThreadClient(
+        InProcessWriterEndpoint(writer, client_id="codex:desktop"), client_id="codex:desktop"
+    )
+    created = client.create(
+        request_id="interrupted-create-5023",
+        actor="codex:desktop",
+        recipient="claude:mac",
+        subject="Interrupted restart",
+        content="A completed command remains available after interruption.",
+        source_refs=("github:5023",),
+    )
+    entries = tmp_path / "external-builderops-vault" / "builder-thread-entries"
+    (entries / ".interrupted-reply-5023.json.interrupted.tmp").write_text(
+        '{"command":', encoding="utf-8"
+    )
+
+    restarted = BuilderThreadClient(
+        InProcessWriterEndpoint(_writer(tmp_path), client_id="claude:mac"), client_id="claude:mac"
+    )
+    retried = restarted.reply(
+        request_id="interrupted-reply-5023",
+        thread_id=created.thread.thread_id,
+        actor="claude:mac",
+        recipient="codex:desktop",
+        content="The retry commits exactly once after restart.",
+        source_refs=("github:5023",),
+    )
+
+    assert retried.replayed is False
+    assert len(restarted.read(created.thread.thread_id).entries) == 2
+
+
+def test_partial_artifact_is_quarantined_with_failure_signal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    writer = _writer(tmp_path)
+    client = BuilderThreadClient(
+        InProcessWriterEndpoint(writer, client_id="codex:desktop"), client_id="codex:desktop"
+    )
+    created = client.create(
+        request_id="partial-baseline-5023",
+        actor="codex:desktop",
+        recipient="claude:mac",
+        subject="Partial artifact baseline",
+        content="The last valid command must remain authoritative.",
+        source_refs=("github:5023",),
+    )
+    entries = tmp_path / "external-builderops-vault" / "builder-thread-entries"
+    original_replace = os.replace
+
+    def leave_partial_final(_source: object, destination: object) -> None:
+        destination_path = Path(destination)
+        if destination_path.name == "partial-final-5023.json":
+            destination_path.write_text('{"command":', encoding="utf-8")
+            raise OSError("simulated interrupted publication")
+        original_replace(_source, destination)
+
+    monkeypatch.setattr("app.builderops.builder_threads_serialized.os.replace", leave_partial_final)
+    with pytest.raises(WriterUnavailableError, match="persistence is unavailable"):
+        client.create(
+            request_id="partial-final-5023",
+            actor="codex:desktop",
+            recipient="claude:mac",
+            subject="Partial final artifact",
+            content="This partial final artifact cannot authorize a mutation.",
+            source_refs=("github:5023",),
+        )
+
+    assert not (entries / "partial-final-5023.json").exists()
+    assert list(entries.glob("partial-final-5023.json.quarantine-*"))
+    assert writer.read_thread(created.thread.thread_id) == created.thread
 
 
 def test_external_writer_restores_causal_order_not_request_id_order(tmp_path: Path) -> None:
