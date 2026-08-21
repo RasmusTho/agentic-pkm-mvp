@@ -128,6 +128,13 @@ def register_cold_location(location_ref: str, object_path: Path) -> None:
     _cold_location_paths[location_ref] = object_path
 
 
+def configure_cold_archive_root(archive_root: Path) -> None:
+    """Bind the verified archive root for cold reads after process restart."""
+    if not archive_root.is_absolute():
+        raise ValueError("cold archive root must be absolute")
+    os.environ[_COLD_ARCHIVE_ROOT_ENV] = str(archive_root)
+
+
 def _resolve_cold_ciphertext(location_ref: str) -> bytes:
     object_path = _cold_location_paths.get(location_ref)
     if object_path is None:

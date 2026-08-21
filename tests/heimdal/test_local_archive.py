@@ -90,6 +90,10 @@ def test_verified_archive_receipt_precedes_hot_retirement(tmp_path: Path) -> Non
     assert result.health.healthy
     assert result.receipt.schema == "heimdal_archive_receipt.v1"
     assert (tmp_path / "mounted-cold" / "manifests" / f"{result.receipt.representation_id}.json").exists()
+    raw_store._cold_location_paths.clear()  # noqa: SLF001 - restart-like cache loss
+    assert raw_store._resolve_cold_ciphertext(result.active_representation.location_ref) == next(  # noqa: SLF001
+        (archive_root / "representations").glob("*.bin")
+    ).read_bytes()
     representations = all_raw_representations(record.id)
     assert [item.storage_kind for item in representations if item.active] == [
         "encrypted_local_cold"
