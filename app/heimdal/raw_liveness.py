@@ -62,7 +62,7 @@ def _receipt_trigger_is_migration_ready(function_def: str, trigger_def: str) -> 
         _RECEIPT_TRIGGER_GUARDED_UPDATE.fullmatch(body)
         and re.fullmatch(
             r"create trigger heimdal_raw_deletion_receipt_no_update "
-            r"before update or delete on (?:[a-z_][a-z0-9_]*\.)?heimdal_raw_deletion_receipt "
+            r"before delete or update on (?:[a-z_][a-z0-9_]*\.)?heimdal_raw_deletion_receipt "
             r"for each row execute function "
             r"(?:[a-z_][a-z0-9_]*\.)?heimdal_raw_deletion_receipt_reject_mutation\(\)",
             normalized_trigger,

@@ -89,9 +89,9 @@ def test_receipt_trigger_preflight_rejects_extra_delete_return_path() -> None:
         END;
     """
     trigger = (
-        "CREATE TRIGGER heimdal_raw_deletion_receipt_no_update BEFORE UPDATE OR DELETE "
-        "ON heimdal_raw_deletion_receipt FOR EACH ROW EXECUTE FUNCTION "
-        "heimdal_raw_deletion_receipt_reject_mutation()"
+        "CREATE TRIGGER heimdal_raw_deletion_receipt_no_update BEFORE DELETE OR UPDATE "
+        "ON public.heimdal_raw_deletion_receipt FOR EACH ROW EXECUTE FUNCTION "
+        "public.heimdal_raw_deletion_receipt_reject_mutation()"
     )
     assert raw_liveness._receipt_trigger_is_migration_ready(canonical, trigger)  # noqa: SLF001
     assert not raw_liveness._receipt_trigger_is_migration_ready(

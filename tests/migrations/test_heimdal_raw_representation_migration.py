@@ -745,6 +745,6 @@ def test_test_bootstrap_and_migration_shapes_converge(
         and "current_setting('app.heimdal_retention_reconcile', true) = 'true'" in function_def
         and "RETURN NEW" in function_def
         and "RAISE EXCEPTION" in function_def
-        and "BEFORE UPDATE OR DELETE" in trigger_def
+        and "BEFORE DELETE OR UPDATE" in trigger_def
         for function_def, trigger_def in receipt_functions
     )
