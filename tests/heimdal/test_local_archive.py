@@ -121,7 +121,7 @@ def test_verify_before_hot_representation_retire_and_fail_closed(
             now=now,
             retention_window_days=30,
             key=_KEY,
-        volume_ready=lambda: _issue_archive_volume_ready(_ARCHIVE_REF, archive_root),
+            volume_ready=lambda: _issue_archive_volume_ready(_ARCHIVE_REF, archive_root),
         )
     assert error.value.reason == "archive_copy_verification_failed"
     assert [item.storage_kind for item in all_raw_representations(record.id) if item.active] == [
@@ -216,6 +216,19 @@ def test_archive_requires_verified_mount_and_redacts_failure(tmp_path: Path) -> 
     assert mount_error.value.__cause__ is None
     assert mount_error.value.__context__ is None
 
+    wrong_root = tmp_path / "wrong-root"
+    wrong_root.mkdir()
+    with pytest.raises(local_archive.ArchiveDegradedError, match="archive_mount_unavailable"):
+        local_archive.relocate_raw_record(
+            record,
+            archive_root=wrong_root,
+            archive_ref=_ARCHIVE_REF,
+            now=now,
+            retention_window_days=30,
+            key=_KEY,
+            volume_ready=lambda: _issue_archive_volume_ready(_ARCHIVE_REF, archive_root),
+        )
+
     with pytest.raises(local_archive.ArchiveDegradedError) as callback_error:
         local_archive.relocate_raw_record(
             record,
@@ -271,3 +284,33 @@ def test_governed_cold_cleanup_removes_object_and_manifest(tmp_path: Path) -> No
     assert list((archive_root / "representations").glob("*.bin")) == []
     assert list((archive_root / "manifests").glob("*.json")) == []
     assert result.receipt.representation_id
+
+
+def test_pg_cursor_cold_cleanup_locks_rows_and_removes_files(tmp_path: Path) -> None:
+    archive_root = tmp_path / "mounted-cold"
+    objects = archive_root / "representations"
+    manifests = archive_root / "manifests"
+    objects.mkdir(parents=True)
+    manifests.mkdir()
+    representation_id = "11111111-1111-4111-8111-111111111111"
+    location_ref = f"heimloc:cold:{representation_id}"
+    object_path = objects / f"{representation_id}.bin"
+    object_path.write_bytes(b"ciphertext")
+    (manifests / f"{representation_id}.json").write_text("{}\n")
+    raw_store.register_cold_location(location_ref, object_path)
+
+    class Cursor:
+        def __init__(self) -> None:
+            self.queries: list[str] = []
+
+        def execute(self, query: str, params: object) -> None:
+            self.queries.append(query)
+
+        def fetchall(self) -> list[tuple[str]]:
+            return [(location_ref,)]
+
+    cursor = Cursor()
+    raw_store._delete_cold_objects_for_pg_cursor(cursor, "record-id")  # noqa: SLF001
+    assert any("FOR UPDATE" in query for query in cursor.queries)
+    assert not object_path.exists()
+    assert not (manifests / f"{representation_id}.json").exists()
