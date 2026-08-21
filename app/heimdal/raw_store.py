@@ -15,14 +15,10 @@ Contract:
   rewriting identity or provenance. **One governed exception exists by design (D-RETENTION,
   Charter FIXED #7):** the raw layer is the one place true erasure exists,
   and its execution must be receipted, never silent or unbounded. That
-  exception is `hard_delete_raw_record` below -- the *only* function in this
-  module that can remove a row, and the *only* call the trigger admits (it
-  checks a session-local guard this function sets immediately before the
-  DELETEs, in the same transaction, so no other code path -- not even a
-  hand-written SQL client -- can hard-delete without going through this
-  function). The real caller is `app.heimdal.retention.enforce_hard_retention_bound`
-  (Epic #3019 slice A12, #3032), which pairs every deletion with a durable
-  deletion receipt in the same call.
+  exception is the fenced transaction in `app.heimdal.raw_liveness`: the only
+  path that can append a governed tombstone and deletion receipt while removing
+  every registered representation and the identity in one commit. Both
+  retention writers use that transaction.
 - **Encrypted at rest.** Every representation is encrypted with AES-256-GCM
   (authenticated encryption) before it is written; plaintext raw bytes never
   touch the store or either backing table. The store never generates or
@@ -82,7 +78,8 @@ _REPRESENTATION_TABLE = "heimdal_raw_representation"
 
 _MIGRATION_HINT = (
     "the location-aware Heimdal raw schema is migration-owned: run "
-    "'alembic upgrade head' against this database. See revision e7b4c9d2a6f1."
+    "'alembic upgrade head' against this database. See revisions "
+    "e7b4c9d2a6f1 and c5d8a1e4f2b7."
 )
 
 _KEY_ENV_VAR = "HEIMDAL_RAW_STORE_KEY"
@@ -90,9 +87,8 @@ _AES_KEY_BYTES = 32  # AES-256
 _NONCE_BYTES = 12  # standard AES-GCM nonce size
 
 # Session-local Postgres setting the append-only trigger admits a DELETE
-# under (D-RETENTION governed exception). Never set by any code path other
-# than `hard_delete_raw_record`, and only for the duration of that one
-# statement's transaction -- see the trigger body in `_bootstrap_pg`.
+# under (D-RETENTION governed exception). It is set only by the transaction in
+# `raw_liveness.governed_delete_raw_record`, after the tombstone is present.
 _RETENTION_GUARD_SETTING = "app.heimdal_retention_bypass"
 _REPRESENTATION_ACTIVATION_GUARD_SETTING = "app.heimdal_representation_activation"
 _HOT_STORAGE_KIND = "postgres_hot"
@@ -327,10 +323,19 @@ class _MemoryRawStore:
 
     def insert(self, record: RawRecord) -> tuple[RawRecord, bool]:
         """Atomically insert identity and its initial registered hot representation."""
-        with self._lock:
+        from app.heimdal import raw_liveness
+
+        with raw_liveness.memory_fence(), self._lock:
             existing = self._by_identity.get(record.content_identity)
             if existing is not None:
-                return self._compose(existing, self._active_representation_locked(existing.id)), False
+                raw_liveness.assert_memory_generation_active(
+                    record_id=existing.id,
+                    content_identity=record.content_identity,
+                )
+                return (
+                    self._compose(existing, self._active_representation_locked(existing.id)),
+                    False,
+                )
             identity = _RawIdentity(
                 id=record.id,
                 content_identity=record.content_identity,
@@ -354,11 +359,36 @@ class _MemoryRawStore:
                 registered_at=identity.ingested_at,
                 sequence=0,
             )
-            self._rows.append(identity)
-            self._by_identity[record.content_identity] = identity
-            self._representations[representation.id] = representation
-            self._representation_ids_by_record[record.id] = [representation.id]
+            try:
+                self._rows.append(identity)
+                self._by_identity[record.content_identity] = identity
+                self._representations[representation.id] = representation
+                self._representation_ids_by_record[record.id] = [representation.id]
+                raw_liveness.register_memory_generation(
+                    record_id=record.id,
+                    content_identity=record.content_identity,
+                    activated_at=identity.ingested_at,
+                )
+            except Exception:
+                self._rows = [row for row in self._rows if row.id != record.id]
+                self._by_identity.pop(record.content_identity, None)
+                self._representations.pop(representation.id, None)
+                self._representation_ids_by_record.pop(record.id, None)
+                raise
             return self._compose(identity, representation), True
+
+    def validate_exact_active(self, record_id: str, content_identity: str) -> bool:
+        """Validate exact identity + one supported active representation."""
+
+        with self._lock:
+            identity = next((row for row in self._rows if row.id == record_id), None)
+            if identity is None or identity.content_identity != content_identity:
+                return False
+            try:
+                self._active_representation_locked(record_id)
+            except RawRepresentationUnavailableError:
+                return False
+            return True
 
     def all_rows(self) -> List[RawRecord]:
         with self._lock:
@@ -386,6 +416,18 @@ class _MemoryRawStore:
             if identity is None:
                 return None
             return self._compose(identity, self._active_representation_locked(identity.id))
+
+    def active_record_ids_by_content_identities(
+        self, content_identities: List[str]
+    ) -> Dict[str, str]:
+        """Return active raw IDs only, without composing encrypted record payloads."""
+        with self._lock:
+            return {
+                identity: record.id
+                for identity in set(content_identities)
+                if (record := self._by_identity.get(identity)) is not None
+                and self._active_representation_locked(record.id) is not None
+            }
 
     def resolve_active(self, record_id: str) -> Optional[RawRecord]:
         with self._lock:
@@ -494,6 +536,52 @@ class _MemoryRawStore:
     def _delete_representation_locked(self, representation_id: str) -> None:
         self._representations.pop(representation_id)
 
+    def snapshot_state(
+        self,
+    ) -> tuple[
+        List[_RawIdentity],
+        Dict[str, _RawIdentity],
+        Dict[str, RawRepresentation],
+        Dict[str, List[str]],
+    ]:
+        """Snapshot memory raw state while the liveness fence is held.
+
+        The governed deletion coordinator uses this to give the volatile
+        backend the same all-or-nothing crash semantics as PostgreSQL.  The
+        stored records are immutable values, so container copies are enough.
+        """
+
+        with self._lock:
+            return (
+                list(self._rows),
+                dict(self._by_identity),
+                dict(self._representations),
+                {
+                    key: list(value)
+                    for key, value in self._representation_ids_by_record.items()
+                },
+            )
+
+    def restore_state(
+        self,
+        snapshot: tuple[
+            List[_RawIdentity],
+            Dict[str, _RawIdentity],
+            Dict[str, RawRepresentation],
+            Dict[str, List[str]],
+        ],
+    ) -> None:
+        """Restore a deletion snapshot while the liveness fence is held."""
+
+        with self._lock:
+            rows, by_identity, representations, representation_ids = snapshot
+            self._rows = list(rows)
+            self._by_identity = dict(by_identity)
+            self._representations = dict(representations)
+            self._representation_ids_by_record = {
+                key: list(value) for key, value in representation_ids.items()
+            }
+
     def hard_delete(self, record_id: str) -> bool:
         """Atomically erase every representation, then its immutable identity."""
         with self._lock:
@@ -544,6 +632,9 @@ _MEMORY_STORE = _MemoryRawStore()
 def reset_memory_raw_store() -> None:
     """Test-only reset hook, mirroring the other memory-backend reset helpers."""
     _MEMORY_STORE.clear()
+    from app.heimdal.raw_liveness import reset_memory_raw_liveness
+
+    reset_memory_raw_liveness()
 
 
 def _pg_connect(*, autocommit: bool = True) -> Any:
@@ -748,6 +839,10 @@ def _assert_pg_schema(conn: Any) -> None:
             "refusing to serve raw records. " + _MIGRATION_HINT
         )
 
+    from app.heimdal import raw_liveness
+
+    raw_liveness._assert_pg_schema(conn)  # noqa: SLF001
+
 
 def _bootstrap_pg(conn: Any) -> None:
     if not _schema_autocreate_enabled():
@@ -876,6 +971,9 @@ def _bootstrap_pg(conn: Any) -> None:
             continue
         for statement in statements:
             cur.execute(statement)
+    from app.heimdal import raw_liveness
+
+    raw_liveness._bootstrap_pg(conn)  # noqa: SLF001
     _assert_pg_schema(conn)
 
 
@@ -956,10 +1054,13 @@ class _PgRawStore:
             conn.close()
 
     def insert(self, record: RawRecord) -> tuple[RawRecord, bool]:
+        from app.heimdal import raw_liveness
+
         conn = _pg_connect(autocommit=False)
         try:
             _assert_pg_schema(conn)
             cur = conn.cursor()
+            raw_liveness.acquire_pg_fence(cur, record.content_identity)
             cur.execute(
                 f"""
                 INSERT INTO {_TABLE} (
@@ -1014,8 +1115,22 @@ class _PgRawStore:
                 raise RawRepresentationUnavailableError(
                     "raw identity insert/replay has no active registered representation"
                 )
+            persisted_record = _row_from_db(persisted)
+            if created:
+                raw_liveness.register_pg_generation(
+                    cur,
+                    record_id=persisted_record.id,
+                    content_identity=persisted_record.content_identity,
+                    activated_at=persisted_record.ingested_at,
+                )
+            else:
+                raw_liveness.assert_pg_generation_active(
+                    cur,
+                    record_id=persisted_record.id,
+                    content_identity=persisted_record.content_identity,
+                )
             conn.commit()
-            return _row_from_db(persisted), created
+            return persisted_record, created
         except Exception:
             conn.rollback()
             raise
@@ -1077,6 +1192,35 @@ class _PgRawStore:
             )
             row = cur.fetchone()
             return _row_from_db(row) if row is not None else None
+        finally:
+            conn.close()
+
+    def active_record_ids_by_content_identities(
+        self, content_identities: List[str]
+    ) -> Dict[str, str]:
+        """Resolve active raw IDs in one metadata-only query.
+
+        Receipt recovery needs only identity existence and the opaque raw-record
+        ID; selecting ciphertext, nonces, or JSON payloads here would materialize
+        media bytes on a read-only recovery path.
+        """
+        identities = sorted(set(content_identities))
+        if not identities:
+            return {}
+        conn = _pg_connect()
+        try:
+            _assert_pg_schema(conn)
+            cur = conn.cursor()
+            cur.execute(
+                f"""
+                SELECT r.content_identity, r.id
+                FROM {_TABLE} AS r
+                JOIN {_REPRESENTATION_TABLE} AS p ON p.record_id = r.id AND p.active
+                WHERE r.content_identity = ANY(%s)
+                """,
+                (identities,),
+            )
+            return {str(content_identity): str(record_id) for content_identity, record_id in cur.fetchall()}
         finally:
             conn.close()
 
@@ -1376,6 +1520,19 @@ def get_raw_record_by_content_identity(content_identity: str) -> Optional[RawRec
     return _backend().get_by_content_identity(content_identity)
 
 
+def find_active_raw_record_ids_by_content_identities(
+    content_identities: List[str],
+) -> Dict[str, str]:
+    """Resolve bounded active raw identities without materializing encrypted media.
+
+    The return mapping is ``content_identity -> record_id`` for identities with
+    one active representation. It is the receipt-state recovery seam; absence
+    is distinct from a backend failure, which callers must surface rather than
+    treating as an erased or unknown receipt.
+    """
+    return _backend().active_record_ids_by_content_identities(content_identities)
+
+
 def resolve_active_raw_record(record_id: str) -> Optional[RawRecord]:
     """Resolve identity through its one active registered representation.
 
@@ -1445,27 +1602,6 @@ def all_raw_record_capacity_metadata() -> List[RawRecordCapacityMetadata]:
     return _backend().capacity_metadata()
 
 
-def hard_delete_raw_record(record_id: str) -> bool:
-    """Governed exception to append-only (D-RETENTION, Charter FIXED #7).
-
-    Atomically enumerates and removes every registered representation before
-    removing the durable identity. The identity is never removed while any
-    copy remains, and a representation failure rolls the whole attempt back.
-    Returns ``True`` if an identity existed and all copies plus identity were
-    removed, ``False`` if the identity was already absent.
-
-    This function performs the deletion ONLY -- it does not decide *whether*
-    a record is past its retention window, and it does not write a deletion
-    receipt. The sanctioned caller is
-    `app.heimdal.retention.enforce_hard_retention_bound`, which resolves the
-    retention window (from `_heimdal/**` settings notes, A14), calls this
-    function for each record past the bound, and pairs every call with a
-    durable deletion receipt in the same operation -- deletion is never
-    silent (Constraints: "no silent hard delete").
-    """
-    return _backend().hard_delete(record_id)
-
-
 __all__ = [
     "AppendOnlyViolationError",
     "RawRecord",
@@ -1485,7 +1621,7 @@ __all__ = [
     "decrypt_raw_bytes",
     "encrypt_raw_bytes",
     "get_raw_record_by_content_identity",
-    "hard_delete_raw_record",
+    "find_active_raw_record_ids_by_content_identities",
     "insert_raw_record",
     "register_raw_representation",
     "reset_memory_raw_store",

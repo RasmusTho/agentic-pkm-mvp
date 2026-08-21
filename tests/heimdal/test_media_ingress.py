@@ -21,6 +21,10 @@ import io
 import json
 import logging
 import secrets
+import threading
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -31,7 +35,7 @@ from fastapi.testclient import TestClient
 from starlette.datastructures import UploadFile
 
 from app.api.app import app
-from app.heimdal import media_ingress, media_receipts
+from app.heimdal import media_ingress, media_receipts, raw_liveness, raw_store
 from app.heimdal.capture_adapter import admit_capture_file
 from app.heimdal.consent_ledger import (
     ConsentLedgerSchemaMissingError,
@@ -51,8 +55,16 @@ from app.heimdal.raw_read_gate import raw_ref_for
 from app.heimdal.raw_store import (
     all_raw_records,
     all_raw_representations,
+    encrypt_raw_bytes,
+    insert_raw_record,
     reset_memory_raw_store,
 )
+from app.heimdal.retention import (
+    enforce_hard_retention_bound,
+    enforce_screen_frame_retention,
+)
+from app.heimdal.settings_notes import SETTINGS, SettingsNote, write_settings_note
+from app.write_guard import WriteGuard
 
 pytestmark = pytest.mark.not_pg
 
@@ -129,6 +141,20 @@ def _get_receipts(client: TestClient, *capture_ids: str):
     return client.get(
         "/api/heimdal/capture/receipts",
         params=[("capture_id", capture_id) for capture_id in capture_ids],
+    )
+
+
+def _write_retention_settings(vault_root: Path) -> None:
+    write_settings_note(
+        vault_root,
+        SettingsNote(
+            spec=SETTINGS,
+            values={
+                "retention_window_days": 1,
+                "screen_frame_retention_minutes": 1,
+            },
+        ),
+        write_guard=WriteGuard(lambda: {"state": "healthy"}),
     )
 
 
@@ -297,6 +323,369 @@ def test_receipt_raw_ref_resolves_to_the_object_it_attests_to(client: TestClient
     assert admitted.json()["raw_ref"] == raw_ref_for(record)
     queried = _get_receipts(client, sidecar["capture_id"]).json()["receipts"][0]
     assert queried["raw_ref"] == raw_ref_for(record)
+
+
+def test_resend_after_retention_is_not_false_idempotent(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A resend after erasure gets the explicit terminal outcome, never a replay ack."""
+    media = b"retained-then-erased-media"
+    sidecar = _sidecar(media)
+    admitted = _post_media(client, media, sidecar)
+    assert admitted.status_code == 200, admitted.text
+
+    vault_root = tmp_path / "vault"
+    vault_root.mkdir()
+    write_settings_note(
+        vault_root,
+        SettingsNote(spec=SETTINGS, values={"retention_window_days": 1}),
+        write_guard=WriteGuard(lambda: {"state": "healthy"}),
+    )
+    enforce_hard_retention_bound(
+        vault_root=vault_root, now=datetime.now(timezone.utc) + timedelta(days=2)
+    )
+
+    query = _get_receipts(client, sidecar["capture_id"])
+    assert query.status_code == 200, query.text
+    assert query.json()["receipts"][0]["outcome"] == "erased"
+
+    def fail_if_meeting_side_effect_runs(**_: Any) -> None:
+        pytest.fail("erased resend reached meeting side effects before returning 410")
+
+    monkeypatch.setattr(
+        media_ingress, "_ledger_session_segment", fail_if_meeting_side_effect_runs
+    )
+    resent = _post_media(client, media, sidecar)
+    assert resent.status_code == 410, resent.text
+    assert resent.json()["detail"] == {
+        "error": "media_evidence_erased",
+        "state": "erased",
+        "capture_id": sidecar["capture_id"],
+        "content_sha256": sidecar["content_sha256"],
+        "trace_id": resent.json()["detail"]["trace_id"],
+    }
+    assert resent.json()["detail"]["trace_id"]
+    assert len(all_raw_records()) == 0
+
+
+def test_admitted_responses_carry_a_generation_bound_response_lease(
+    client: TestClient,
+) -> None:
+    media = b"response-lease-shape"
+    sidecar = _sidecar(media)
+
+    first = _post_media(client, media, sidecar)
+    replay = _post_media(client, media, sidecar)
+    query = _get_receipts(client, sidecar["capture_id"])
+
+    assert first.status_code == replay.status_code == query.status_code == 200
+    first_lease = first.json()["response_lease"]
+    replay_lease = replay.json()["response_lease"]
+    query_lease = query.json()["receipts"][0]["response_lease"]
+    assert first_lease["raw_ref"] == replay_lease["raw_ref"] == query_lease["raw_ref"]
+    assert (
+        first_lease["liveness_generation"]
+        == replay_lease["liveness_generation"]
+        == query_lease["liveness_generation"]
+        == 1
+    )
+    assert (
+        first_lease["lease_id"]
+        == replay_lease["lease_id"]
+        == query_lease["lease_id"]
+    )
+    assert (
+        first_lease["expires_at"]
+        == replay_lease["expires_at"]
+        == query_lease["expires_at"]
+    )
+    assert replay.json()["idempotent_replay"] is True
+
+
+def test_untombstoned_raw_absence_is_typed_unavailable_on_query_and_replay(
+    client: TestClient,
+) -> None:
+    media = b"untombstoned-http-absence"
+    sidecar = _sidecar(media)
+    admitted = _post_media(client, media, sidecar)
+    assert admitted.status_code == 200
+    record = all_raw_records()[0]
+
+    # Test-only corruption below the governed authority: public raw_store has
+    # no deletion surface.
+    assert raw_store._MEMORY_STORE.hard_delete(record.id)  # noqa: SLF001
+    assert raw_liveness.all_deletion_tombstones() == []
+
+    query = _get_receipts(client, sidecar["capture_id"])
+    replay = _post_media(client, media, sidecar)
+    for response in (query, replay):
+        assert response.status_code == 503, response.text
+        assert response.json()["detail"]["error"] == "raw_liveness_unavailable"
+        assert response.json()["detail"]["state"] == "unavailable"
+
+
+def test_same_content_reinsertion_does_not_resurrect_old_receipt(
+    client: TestClient, tmp_path: Path
+) -> None:
+    media = b"receipt-generation-reinsertion"
+    old_sidecar = _sidecar(media)
+    assert _post_media(client, media, old_sidecar).status_code == 200
+
+    vault_root = tmp_path / "vault"
+    vault_root.mkdir()
+    _write_retention_settings(vault_root)
+    enforce_hard_retention_bound(
+        vault_root=vault_root,
+        now=datetime.now(timezone.utc) + timedelta(days=2),
+        record_last_enforced=False,
+    )
+
+    new_sidecar = _sidecar(media)
+    new = _post_media(client, media, new_sidecar)
+    assert new.status_code == 200, new.text
+    assert new.json()["response_lease"]["liveness_generation"] == 2
+
+    answers = _get_receipts(
+        client, old_sidecar["capture_id"], new_sidecar["capture_id"]
+    )
+    assert answers.status_code == 200, answers.text
+    old_answer, new_answer = answers.json()["receipts"]
+    assert old_answer["outcome"] == "erased"
+    assert "response_lease" not in old_answer
+    assert new_answer["outcome"] == "admitted"
+    assert new_answer["response_lease"]["liveness_generation"] == 2
+    assert old_answer["raw_ref"] != new_answer["raw_ref"]
+
+
+def test_multiple_receipts_sharing_one_raw_identity_share_one_query_lease(
+    client: TestClient,
+) -> None:
+    media = b"multiple-receipts-one-raw"
+    first_sidecar = _sidecar(media)
+    second_sidecar = _sidecar(media)
+    assert _post_media(client, media, first_sidecar).status_code == 200
+    assert _post_media(client, media, second_sidecar).status_code == 200
+
+    response = _get_receipts(
+        client, first_sidecar["capture_id"], second_sidecar["capture_id"]
+    )
+    assert response.status_code == 200, response.text
+    first, second = response.json()["receipts"]
+    assert first["raw_ref"] == second["raw_ref"]
+    assert first["response_lease"] == second["response_lease"]
+
+
+@pytest.mark.parametrize("producer", ["first", "replay", "query", "watched_folder"])
+@pytest.mark.parametrize("writer", ["hard", "screen"])
+def test_response_fence_serializes_every_producer_against_both_retention_writers(
+    producer: str,
+    writer: str,
+    client: TestClient,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A deterministic barrier proves all admitted producers converge on one fence."""
+
+    media = f"barrier-{producer}-{writer}".encode()
+    sidecar = _sidecar(media)
+    vault_root = tmp_path / "vault"
+    vault_root.mkdir()
+    _write_retention_settings(vault_root)
+
+    if producer in {"replay", "query"}:
+        initial = _post_media(client, media, sidecar)
+        assert initial.status_code == 200, initial.text
+
+    memo: Path | None = None
+    if producer == "watched_folder":
+        memo = tmp_path / "watched.m4a"
+        memo.write_bytes(media)
+        memo.with_name(f"{memo.name}.capture.json").write_text(
+            json.dumps(
+                {
+                    "sidecar_version": 1,
+                    "device_id": "iphone-barrier",
+                    "capture_id": sidecar["capture_id"],
+                }
+            ),
+            encoding="utf-8",
+        )
+
+    retention_time = datetime.now(timezone.utc) + timedelta(days=2)
+    lease_appended = threading.Event()
+    release_response = threading.Event()
+    retention_at_fence = threading.Event()
+
+    def mark_all_records_as_screen() -> None:
+        with raw_store._MEMORY_STORE._lock:  # noqa: SLF001
+            raw_store._MEMORY_STORE._rows = [  # noqa: SLF001
+                replace(row, payload={**row.payload, "modality": "screen"})
+                for row in raw_store._MEMORY_STORE._rows  # noqa: SLF001
+            ]
+            raw_store._MEMORY_STORE._by_identity = {  # noqa: SLF001
+                row.content_identity: row
+                for row in raw_store._MEMORY_STORE._rows  # noqa: SLF001
+            }
+
+    def response_hook(stage: str) -> None:
+        assert stage == "after_lease_append"
+        if writer == "screen":
+            mark_all_records_as_screen()
+        lease_appended.set()
+        assert release_response.wait(timeout=5), "response barrier was never released"
+
+    real_delete = raw_liveness.governed_delete_raw_record
+
+    def deletion_at_fence(**kwargs: Any):
+        retention_at_fence.set()
+        return real_delete(**kwargs)
+
+    monkeypatch.setattr(raw_liveness, "_utc_now", lambda: retention_time)
+    monkeypatch.setattr(raw_liveness, "_response_lease_stage_hook", response_hook)
+    monkeypatch.setattr(raw_liveness, "governed_delete_raw_record", deletion_at_fence)
+
+    def produce():
+        if producer in {"first", "replay"}:
+            return _post_media(client, media, sidecar)
+        if producer == "query":
+            return _get_receipts(client, sidecar["capture_id"])
+        assert memo is not None
+        return admit_capture_file(memo, key=_KEY, stability_delay=0.0)
+
+    def retain():
+        if writer == "hard":
+            return enforce_hard_retention_bound(
+                vault_root=vault_root,
+                now=retention_time,
+                record_last_enforced=False,
+            )
+        return enforce_screen_frame_retention(
+            vault_root=vault_root, now=retention_time
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        producer_future = executor.submit(produce)
+        assert lease_appended.wait(timeout=5), "producer never reached response fence"
+        retention_future = executor.submit(retain)
+        assert retention_at_fence.wait(timeout=5), "retention never reached shared fence"
+        assert not retention_future.done(), "retention crossed a held response fence"
+        release_response.set()
+        produced = producer_future.result(timeout=5)
+        retained = retention_future.result(timeout=5)
+
+    assert retained.deleted_count == 0
+    assert len(all_raw_records()) == 1
+    if producer == "watched_folder":
+        assert produced.source_deleted is True
+        assert memo is not None and not memo.exists()
+        lease = raw_liveness._MEMORY.leases[-1]  # noqa: SLF001
+    else:
+        assert produced.status_code == 200, produced.text
+        body = produced.json()
+        lease_field = (
+            body["receipts"][0]["response_lease"]
+            if producer == "query"
+            else body["response_lease"]
+        )
+        lease = raw_liveness._MEMORY.leases[-1]  # noqa: SLF001
+        assert lease_field["lease_id"] == lease.lease_id
+
+    expired = lease.expires_at + timedelta(microseconds=1)
+    deleted = (
+        enforce_hard_retention_bound(
+            vault_root=vault_root, now=expired, record_last_enforced=False
+        )
+        if writer == "hard"
+        else enforce_screen_frame_retention(vault_root=vault_root, now=expired)
+    )
+    assert deleted.deleted_count == 1
+    erased = _get_receipts(client, sidecar["capture_id"])
+    assert erased.status_code == 200
+    assert erased.json()["receipts"][0]["outcome"] == "erased"
+    assert "response_lease" not in erased.json()["receipts"][0]
+
+
+def test_receipt_query_uses_one_batched_metadata_only_raw_lookup(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Receipt recovery never materializes ciphertext or opens one lookup per receipt."""
+    first_media = b"metadata-only-receipt-query-one"
+    second_media = b"metadata-only-receipt-query-two"
+    first = _sidecar(first_media)
+    second = _sidecar(second_media)
+    assert _post_media(client, first_media, first).status_code == 200
+    assert _post_media(client, second_media, second).status_code == 200
+
+    calls: list[set[tuple[str, str]]] = []
+    real_projection = media_ingress.raw_liveness.project_with_response_leases
+
+    def metadata_lookup(
+        requests: set[tuple[str, str]], *, now: datetime | None = None
+    ) -> dict[str, media_ingress.raw_liveness.RawLivenessProjection]:
+        calls.append(set(requests))
+        return real_projection(requests, now=now)
+
+    def unexpected_full_lookup(*_args: Any, **_kwargs: Any) -> None:
+        raise AssertionError("receipt recovery must not materialize a raw record")
+
+    monkeypatch.setattr(
+        media_ingress.raw_liveness,
+        "project_with_response_leases",
+        metadata_lookup,
+    )
+    monkeypatch.setattr(
+        media_ingress.raw_store,
+        "get_raw_record_by_content_identity",
+        unexpected_full_lookup,
+    )
+
+    response = _get_receipts(client, first["capture_id"], second["capture_id"])
+    assert response.status_code == 200, response.text
+    assert [item["outcome"] for item in response.json()["receipts"]] == ["admitted", "admitted"]
+    receipt_by_hash = {
+        receipt.content_sha256: receipt for receipt in all_media_receipts()
+    }
+    assert calls == [
+        {
+            (
+                receipt_by_hash[first["content_sha256"]].raw_ref,
+                first["content_sha256"],
+            ),
+            (
+                receipt_by_hash[second["content_sha256"]].raw_ref,
+                second["content_sha256"],
+            ),
+        }
+    ]
+
+
+def test_receipt_query_reports_raw_state_lookup_failure_as_unavailable(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A raw-state backend failure is 503, never a false answer or unnamed 500."""
+    media = b"raw-state-lookup-unavailable"
+    sidecar = _sidecar(media)
+    assert _post_media(client, media, sidecar).status_code == 200
+
+    def unavailable(
+        _requests: set[tuple[str, str]], *, now: datetime | None = None
+    ) -> dict[str, media_ingress.raw_liveness.RawLivenessProjection]:
+        del now
+        raise media_ingress.raw_liveness.RawLivenessUnavailableError(
+            "raw metadata store unavailable"
+        )
+
+    monkeypatch.setattr(
+        media_ingress.raw_liveness,
+        "project_with_response_leases",
+        unavailable,
+    )
+
+    response = _get_receipts(client, sidecar["capture_id"])
+    assert response.status_code == 503, response.text
+    assert response.json()["detail"]["error"] == "raw_liveness_unavailable"
+    assert response.json()["detail"]["state"] == "unavailable"
+    assert response.json()["detail"]["trace_id"]
 
 
 def test_receipt_identity_includes_the_capture_id(client: TestClient) -> None:
@@ -1126,11 +1515,25 @@ def test_shared_seam_reports_an_already_acknowledged_identity_as_not_new() -> No
     won the race between the pre-write short-circuit and the seam's own guard.
     """
     capture_id = str(uuid4())
-    content_sha256 = hashlib.sha256(b"seam-guard-bytes").hexdigest()
+    media = b"seam-guard-bytes"
+    content_sha256 = hashlib.sha256(media).hexdigest()
+    ciphertext, nonce = encrypt_raw_bytes(media, key=_KEY)
+    record, created = insert_raw_record(
+        content_identity=content_sha256,
+        capture_chain=["test"],
+        sensor={"sensor_id": "test"},
+        consent={"grant_ref": "test"},
+        ciphertext=ciphertext,
+        nonce=nonce,
+        key_ref="test-key",
+        key=_KEY,
+        source_path="test-media",
+    )
+    assert created
     common = {
         "capture_id": capture_id,
         "content_sha256": content_sha256,
-        "raw_ref": "heimraw:record-seam",
+        "raw_ref": raw_ref_for(record),
         "kind": "audio",
         "lane": media_ingress.LANE_MEDIA_INGRESS,
         "trace_id": "t-seam",
@@ -1246,6 +1649,31 @@ def test_startup_preflight_reports_ingress_unavailable_without_exiting(
         assert refused.status_code == 500
         assert refused.json()["detail"]["error"] == "raw_store_key_unavailable"
         assert refused.json()["detail"]["state"] == "not_acknowledged"
+
+
+def test_startup_preflight_reports_missing_raw_liveness_schema(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A missing liveness migration makes both raw ingress lanes unavailable."""
+    from app.heimdal import ingress_preflight
+
+    def _missing_schema() -> None:
+        raise ingress_preflight.raw_liveness.RawLivenessSchemaMissingError(
+            "missing migration-owned liveness tables"
+        )
+
+    monkeypatch.setattr(ingress_preflight.raw_liveness, "assert_runtime_schema", _missing_schema)
+    ingress_preflight.reset_ingress_preflight()
+
+    recorded = ingress_preflight.run_ingress_preflight()
+
+    assert recorded.raw_store_key_available is True
+    assert recorded.raw_liveness_schema_available is False
+    assert recorded.lanes == {
+        "media_ingress": "unavailable",
+        "screen_capture": "unavailable",
+    }
+    assert ingress_preflight.DETAIL_RAW_LIVENESS_SCHEMA_UNAVAILABLE in recorded.detail
 
 
 def test_startup_preflight_reports_missing_media_consent_grant(

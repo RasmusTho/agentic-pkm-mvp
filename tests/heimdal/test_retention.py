@@ -44,6 +44,13 @@ from app.heimdal.raw_store import (
     insert_raw_record,
     reset_memory_raw_store,
 )
+from app.heimdal.media_ingress import receipt_answer
+from app.heimdal.media_receipts import (
+    all_media_receipts,
+    append_media_receipt,
+    get_media_receipt,
+    reset_memory_media_receipts,
+)
 from app.heimdal.retention import (
     REASON_HARD_RETENTION_BOUND,
     RetentionWindowMissingError,
@@ -73,10 +80,12 @@ def _reset_backends(monkeypatch: pytest.MonkeyPatch):
     reset_memory_raw_store()
     reset_memory_raw_read_receipts()
     reset_memory_deletion_receipts()
+    reset_memory_media_receipts()
     yield
     reset_memory_raw_store()
     reset_memory_raw_read_receipts()
     reset_memory_deletion_receipts()
+    reset_memory_media_receipts()
 
 
 def _vault(tmp_path: Path) -> Path:
@@ -152,6 +161,46 @@ def test_hard_retention_bound_and_receipt(tmp_path: Path) -> None:
     persisted = all_deletion_receipts()
     assert len(persisted) == 1
     assert persisted[0].record_id == record.id
+
+
+def test_retention_does_not_leave_admitted_receipt_for_missing_raw(tmp_path: Path) -> None:
+    """An admission receipt becomes an honest ``erased`` query outcome after retention.
+
+    The original receipt stays append-only for audit, while its client-visible
+    projection must never continue to authorize deletion of a client's last copy.
+    """
+    vault_root = _vault(tmp_path)
+    _write_retention_window(vault_root, days=30)
+    record = _insert_test_record("receipt-aware-retention")
+    capture_id = "receipt-aware-retention-capture"
+    persisted, created = append_media_receipt(
+        capture_id=capture_id,
+        content_sha256=record.content_identity,
+        raw_ref=raw_ref_for(record),
+        kind="audio",
+        lane="media_ingress",
+    )
+    assert created is True
+
+    result = enforce_hard_retention_bound(
+        vault_root=vault_root, now=datetime.now(timezone.utc) + timedelta(days=31)
+    )
+
+    assert result.deleted_count == 1
+    assert all_raw_records() == []
+    assert all_media_receipts() == [persisted], "admission history remains append-only"
+    receipt = get_media_receipt(capture_id, record.content_identity)
+    assert receipt == persisted
+    assert receipt_answer(receipt, capture_id) == {
+        "capture_id": capture_id,
+        "outcome": "erased",
+        "receipt_id": persisted.receipt_id,
+        "content_sha256": record.content_identity,
+        "raw_ref": persisted.raw_ref,
+        "kind": "audio",
+        "lane": "media_ingress",
+        "admitted_at": receipt_answer(persisted, capture_id)["admitted_at"],
+    }
 
 
 def test_record_within_window_is_not_deleted(tmp_path: Path) -> None:

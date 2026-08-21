@@ -603,7 +603,47 @@
       "binding_column": null,
       "producers": [
         {
-          "module": "app/heimdal/retention.py",
+          "module": "app/heimdal/raw_liveness.py",
+          "operations": [
+            "insert"
+          ]
+        }
+      ],
+      "rebuild_mechanism": "row-scoped",
+      "escalation_conditions": []
+    },
+    "heimdal_raw_deletion_tombstone": {
+      "classification": "explicitly-global",
+      "reason": "`heimdal_raw_deletion_tombstone` is the append-only terminal authority for governed raw erasure generations, written by `app/heimdal/raw_liveness.py` in the same transaction as the deletion receipt and all-copy raw deletion. It carries no vault binding because raw evidence identity is instance-global.",
+      "owning_revision": "c5d8a1e4f2b7",
+      "declaring_revisions": [
+        "c5d8a1e4f2b7"
+      ],
+      "binding_key": "not-applicable",
+      "binding_column": null,
+      "producers": [
+        {
+          "module": "app/heimdal/raw_liveness.py",
+          "operations": [
+            "insert"
+          ]
+        }
+      ],
+      "rebuild_mechanism": "row-scoped",
+      "escalation_conditions": []
+    },
+    "heimdal_raw_liveness_generation": {
+      "classification": "explicitly-global",
+      "reason": "`heimdal_raw_liveness_generation` is the append-only generation ledger that binds each global raw identity to one durable record and raw reference, written by `app/heimdal/raw_liveness.py` during admission and migration backfill.",
+      "owning_revision": "c5d8a1e4f2b7",
+      "declaring_revisions": [
+        "c5d8a1e4f2b7"
+      ],
+      "binding_key": "not-applicable",
+      "binding_column": null,
+      "producers": [
+        {
+          "module": "app/heimdal/raw_liveness.py",
           "operations": [
             "insert"
           ]
@@ -632,6 +672,46 @@
       "rebuild_mechanism": "row-scoped",
       "escalation_conditions": []
     },
+    "heimdal_raw_response_lease": {
+      "classification": "explicitly-global",
+      "reason": "`heimdal_raw_response_lease` is the append-only validity lease for a raw response, written by `app/heimdal/raw_liveness.py` and scoped to a global raw generation rather than to a vault.",
+      "owning_revision": "c5d8a1e4f2b7",
+      "declaring_revisions": [
+        "c5d8a1e4f2b7"
+      ],
+      "binding_key": "not-applicable",
+      "binding_column": null,
+      "producers": [
+        {
+          "module": "app/heimdal/raw_liveness.py",
+          "operations": [
+            "insert"
+          ]
+        }
+      ],
+      "rebuild_mechanism": "row-scoped",
+      "escalation_conditions": []
+    },
+    "heimdal_raw_retention_claim": {
+      "classification": "explicitly-global",
+      "reason": "`heimdal_raw_retention_claim` is the append-only retirement boundary for one raw liveness generation. It is written by `app/heimdal/raw_liveness.py` before a retention writer waits for response leases, so polling cannot reopen an eligible generation.",
+      "owning_revision": "c5d8a1e4f2b7",
+      "declaring_revisions": [
+        "c5d8a1e4f2b7"
+      ],
+      "binding_key": "not-applicable",
+      "binding_column": null,
+      "producers": [
+        {
+          "module": "app/heimdal/raw_liveness.py",
+          "operations": [
+            "insert"
+          ]
+        }
+      ],
+      "rebuild_mechanism": "row-scoped",
+      "escalation_conditions": []
+    },
     "heimdal_raw_record": {
       "classification": "explicitly-global",
       "reason": "`heimdal_raw_record` is the immutable raw capture identity/provenance row, keyed by content identity and written by `app/heimdal/raw_store.py` at ingest. The row exists because a sensor produced bytes, before and independently of any vault; encrypted copies live in `heimdal_raw_representation`. Explicitly global per MVR-05's acceptance criteria.",
@@ -647,6 +727,12 @@
           "operations": [
             "delete",
             "insert"
+          ]
+        },
+        {
+          "module": "app/heimdal/raw_liveness.py",
+          "operations": [
+            "delete"
           ]
         }
       ],
@@ -669,6 +755,12 @@
             "delete",
             "insert",
             "update"
+          ]
+        },
+        {
+          "module": "app/heimdal/raw_liveness.py",
+          "operations": [
+            "delete"
           ]
         }
       ],

@@ -237,17 +237,16 @@ def test_get_raw_record_by_content_identity() -> None:
 
 
 def test_no_mutation_method_exported() -> None:
-    """HEIM-1 with the one declared D-RETENTION exception (#3032, Epic #3019
-    slice A12): no `update*` surface exists at all, and the only `delete*`
-    surface is `hard_delete_raw_record` -- the governed hard-retention
-    exception (Charter FIXED #7), never a silent/ungoverned mutation path.
-    See the module docstring and `app.heimdal.retention.enforce_hard_retention_bound`,
-    the sole sanctioned caller."""
+    """HEIM-1: raw_store exports no mutation surface.
+
+    Governed retention deletion is authority-owned by ``raw_liveness`` so no
+    caller can remove raw state without the shared fence and tombstone commit.
+    """
     public_names = {name for name in dir(raw_store) if not name.startswith("_")}
     updating_names = {name for name in public_names if "update" in name}
     deleting_names = {name for name in public_names if "delete" in name}
     assert updating_names == set(), f"unexpected update surface exported: {updating_names}"
-    assert deleting_names == {"hard_delete_raw_record"}, (
+    assert deleting_names == set(), (
         f"unexpected delete surface exported: {deleting_names}"
     )
 

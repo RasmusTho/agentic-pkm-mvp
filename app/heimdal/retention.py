@@ -48,27 +48,18 @@ erasure of published event content (v2 hardening candidate).
 
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
-from uuid import uuid4
+from typing import List, Optional
 
-from app.heimdal import raw_store
-from app.heimdal._backend import resolve_heimdal_backend
+from app.heimdal import raw_liveness, raw_store
+from app.heimdal.raw_liveness import DeletionReceipt
 from app.heimdal.settings_notes import (
     DEFAULT_SETTINGS_DIR,
     SETTINGS,
     apply_agent_update,
     read_settings_note,
-)
-
-_TABLE = "heimdal_raw_deletion_receipt"
-
-_MIGRATION_HINT = (
-    "heimdal_raw_deletion_receipt schema is migration-owned: run 'alembic upgrade head' "
-    "against this database. See app/alembic/versions/a3f9d1c6e2b8_heim_retention_deletion_receipt_v0.py."
 )
 
 # The only reason value this v1 job ever writes: the bounded window fired,
@@ -89,37 +80,10 @@ class RetentionWindowMissingError(RuntimeError):
     """
 
 
-class DeletionReceiptSchemaMissingError(RuntimeError):
-    """Raised when the Postgres backend is selected but the receipt table is absent."""
+DeletionReceiptSchemaMissingError = raw_liveness.RawLivenessSchemaMissingError
 
 
-class AppendOnlyViolationError(RuntimeError):
-    """Raised when a caller attempts to mutate an existing deletion-receipt row.
-
-    Never raised by this module's own code paths -- it is raised when the
-    Postgres backend surfaces the DB trigger's rejection of an UPDATE/DELETE
-    statement issued outside this module.
-    """
-
-
-@dataclass(frozen=True)
-class DeletionReceipt:
-    """One durable, immutable row recording one hard-deleted raw record.
-
-    ``receipted`` is always ``True`` for a persisted receipt -- the field
-    exists so callers (and the HEIM-7 invariant skeleton) can assert the
-    contract positively without reaching into the store internals.
-    """
-
-    id: str
-    record_id: str
-    content_identity: str
-    reason: str
-    retention_window_days: int
-    deleted_at: datetime
-    payload: Dict[str, Any]
-    sequence: int
-    receipted: bool = True
+AppendOnlyViolationError = raw_liveness.RawLivenessUnavailableError
 
 
 @dataclass(frozen=True)
@@ -207,213 +171,15 @@ def resolve_screen_frame_retention_minutes(
     return minutes
 
 
-# ---------------------------------------------------------------------------
-# Deletion-receipt store (dual-backend, mirrors every other Heimdal store)
-# ---------------------------------------------------------------------------
-
-
-class _MemoryReceiptStore:
-    """In-process append-only store. Test/dev backend; volatile by design."""
-
-    def __init__(self) -> None:
-        import threading
-
-        self._lock = threading.Lock()
-        self._rows: List[DeletionReceipt] = []
-
-    def append(self, receipt: DeletionReceipt) -> DeletionReceipt:
-        with self._lock:
-            row = DeletionReceipt(
-                id=receipt.id,
-                record_id=receipt.record_id,
-                content_identity=receipt.content_identity,
-                reason=receipt.reason,
-                retention_window_days=receipt.retention_window_days,
-                deleted_at=datetime.now(timezone.utc),
-                payload=dict(receipt.payload),
-                sequence=len(self._rows),
-            )
-            self._rows.append(row)
-            return row
-
-    def all_rows(self) -> List[DeletionReceipt]:
-        with self._lock:
-            return list(self._rows)
-
-    def clear(self) -> None:
-        with self._lock:
-            self._rows.clear()
-
-
-_MEMORY_STORE = _MemoryReceiptStore()
-
-
 def reset_memory_deletion_receipts() -> None:
-    """Test-only reset hook, mirroring the other memory-backend reset helpers."""
-    _MEMORY_STORE.clear()
+    """Test-only reset hook for the unified liveness authority."""
 
-
-def _pg_connect() -> Any:
-    import psycopg
-
-    from app.db.dsn import resolve_dsn
-
-    url = os.environ.get("DATABASE_URL") or os.environ.get("DB_DSN")
-    if not url:
-        raise RuntimeError("DATABASE_URL or DB_DSN not set")
-    return psycopg.connect(resolve_dsn(url), autocommit=True)
-
-
-def _schema_autocreate_enabled() -> bool:
-    """Explicit test-fixture opt-in, mirroring KERNEL-04/KERNEL-05 precedent."""
-    return (os.environ.get("STORE_SCHEMA_AUTOCREATE") or "").strip().lower() in {"1", "true", "yes"}
-
-
-def _assert_pg_schema(conn: Any) -> None:
-    cur = conn.cursor()
-    cur.execute("SELECT to_regclass(%s)", (_TABLE,))
-    row = cur.fetchone()
-    oid = row[0] if row else None
-    if not oid:
-        raise DeletionReceiptSchemaMissingError(f"Missing table '{_TABLE}'. {_MIGRATION_HINT}")
-
-
-def _bootstrap_pg(conn: Any) -> None:
-    if not _schema_autocreate_enabled():
-        _assert_pg_schema(conn)
-        return
-    cur = conn.cursor()
-    cur.execute("CREATE EXTENSION IF NOT EXISTS pgcrypto")
-    cur.execute(
-        f"""
-        CREATE TABLE IF NOT EXISTS {_TABLE} (
-            id uuid PRIMARY KEY,
-            record_id uuid NOT NULL,
-            content_identity text NOT NULL,
-            reason text NOT NULL,
-            retention_window_days integer NOT NULL,
-            deleted_at timestamptz NOT NULL DEFAULT now(),
-            payload jsonb NOT NULL DEFAULT '{{}}'::jsonb,
-            sequence bigserial NOT NULL
-        )
-        """
-    )
-    cur.execute(f"CREATE INDEX IF NOT EXISTS heimdal_raw_deletion_receipt_seq_idx ON {_TABLE} (sequence)")
-    cur.execute(
-        f"CREATE INDEX IF NOT EXISTS heimdal_raw_deletion_receipt_record_id_idx ON {_TABLE} (record_id)"
-    )
-    cur.execute(
-        """
-        CREATE OR REPLACE FUNCTION heimdal_raw_deletion_receipt_reject_mutation()
-        RETURNS trigger AS $$
-        BEGIN
-            RAISE EXCEPTION 'heimdal_raw_deletion_receipt is append-only (HEIM-1): % is not permitted', TG_OP;
-        END;
-        $$ LANGUAGE plpgsql
-        """
-    )
-    cur.execute(f"DROP TRIGGER IF EXISTS heimdal_raw_deletion_receipt_no_update ON {_TABLE}")
-    cur.execute(
-        f"""
-        CREATE TRIGGER heimdal_raw_deletion_receipt_no_update
-        BEFORE UPDATE OR DELETE ON {_TABLE}
-        FOR EACH ROW EXECUTE FUNCTION heimdal_raw_deletion_receipt_reject_mutation()
-        """
-    )
-
-
-def _row_from_db(row: tuple) -> DeletionReceipt:
-    import json
-
-    (
-        row_id, record_id, content_identity, reason, retention_window_days,
-        deleted_at, payload, sequence,
-    ) = row
-
-    def _as_dict(value: Any) -> Dict[str, Any]:
-        if isinstance(value, dict):
-            return value
-        if value is None:
-            return {}
-        return json.loads(value)
-
-    return DeletionReceipt(
-        id=str(row_id),
-        record_id=str(record_id),
-        content_identity=str(content_identity),
-        reason=str(reason),
-        retention_window_days=int(retention_window_days),
-        deleted_at=deleted_at,
-        payload=_as_dict(payload),
-        sequence=int(sequence),
-    )
-
-
-_SELECT_COLUMNS = (
-    "id, record_id, content_identity, reason, retention_window_days, "
-    "deleted_at, payload, sequence"
-)
-
-
-class _PgReceiptStore:
-    """Postgres-backed append-only receipt store; append-only enforced by DB trigger."""
-
-    def __init__(self) -> None:
-        conn = _pg_connect()
-        try:
-            _bootstrap_pg(conn)
-        finally:
-            conn.close()
-
-    def append(self, receipt: DeletionReceipt) -> DeletionReceipt:
-        import json
-
-        conn = _pg_connect()
-        try:
-            _assert_pg_schema(conn)
-            cur = conn.cursor()
-            cur.execute(
-                f"""
-                INSERT INTO {_TABLE} (
-                    id, record_id, content_identity, reason, retention_window_days, payload
-                ) VALUES (%s, %s, %s, %s, %s, %s::jsonb)
-                RETURNING {_SELECT_COLUMNS}
-                """,
-                (
-                    receipt.id,
-                    receipt.record_id,
-                    receipt.content_identity,
-                    receipt.reason,
-                    receipt.retention_window_days,
-                    json.dumps(receipt.payload),
-                ),
-            )
-            row = cur.fetchone()
-            assert row is not None, "INSERT ... RETURNING produced no row"
-            return _row_from_db(row)
-        finally:
-            conn.close()
-
-    def all_rows(self) -> List[DeletionReceipt]:
-        conn = _pg_connect()
-        try:
-            _assert_pg_schema(conn)
-            cur = conn.cursor()
-            cur.execute(f"SELECT {_SELECT_COLUMNS} FROM {_TABLE} ORDER BY sequence ASC")
-            return [_row_from_db(row) for row in cur.fetchall()]
-        finally:
-            conn.close()
-
-
-def _backend() -> "_MemoryReceiptStore | _PgReceiptStore":
-    if resolve_heimdal_backend() == "pg":
-        return _PgReceiptStore()
-    return _MEMORY_STORE
+    raw_liveness.reset_memory_deletion_receipts()
 
 
 def all_deletion_receipts() -> List[DeletionReceipt]:
     """Return every deletion receipt in insertion order (diagnostic/test/audit helper)."""
-    return _backend().all_rows()
+    return raw_liveness.all_deletion_receipts()
 
 
 # ---------------------------------------------------------------------------
@@ -443,7 +209,10 @@ def enforce_hard_retention_bound(
 
     Records within the window are left untouched (negative case). The
     published observation log (HEIM-1) is never read or written by this
-    function -- retention operates on raw evidence and receipts only.
+    function -- retention operates on raw evidence and receipts only. Media
+    admission history is append-only too: after the governed raw deletion,
+    `media_ingress.receipt_answer` derives the receipt's client-visible
+    ``erased`` outcome instead of leaving it falsely admitted.
 
     Returns a :class:`RetentionEnforcementReceipt` naming how many records
     were deleted (``deleted_count`` -- ``0`` is a valid, honestly-receipted
@@ -470,26 +239,19 @@ def enforce_hard_retention_bound(
         if ingested_at >= cutoff:
             continue  # within the bound: not deleted (negative AC)
 
-        deleted = raw_store.hard_delete_raw_record(record.id)
-        if not deleted:
-            # Already gone (e.g. a concurrent run) -- nothing to receipt for
-            # a record that no longer exists; move on rather than fabricate
-            # a receipt for a deletion that did not happen here.
-            continue
-
-        receipt = _backend().append(
-            DeletionReceipt(
-                id=str(uuid4()),
-                record_id=record.id,
-                content_identity=record.content_identity,
-                reason=REASON_HARD_RETENTION_BOUND,
-                retention_window_days=window_days,
-                deleted_at=reference_time,
-                payload={},
-                sequence=-1,
-            )
+        result = raw_liveness.governed_delete_raw_record(
+            record_id=record.id,
+            reason=REASON_HARD_RETENTION_BOUND,
+            retention_window_days=window_days,
+            deleted_at=reference_time,
         )
-        deletions.append(receipt)
+        if result.outcome != "deleted":
+            # A concurrent run may already have erased this generation, while
+            # a valid response lease makes this bounded run skip and retry on
+            # its next schedule. Neither case fabricates another receipt.
+            continue
+        assert result.receipt is not None
+        deletions.append(result.receipt)
 
     if record_last_enforced:
         apply_agent_update(
@@ -524,13 +286,18 @@ def enforce_screen_frame_retention(
         if record.payload.get("modality") != "screen":
             continue
         ingested_at = record.ingested_at if record.ingested_at.tzinfo else record.ingested_at.replace(tzinfo=timezone.utc)
-        if ingested_at >= cutoff or not raw_store.hard_delete_raw_record(record.id):
+        if ingested_at >= cutoff:
             continue
-        deletions.append(_backend().append(DeletionReceipt(
-            id=str(uuid4()), record_id=record.id, content_identity=record.content_identity,
-            reason=REASON_SCREEN_FRAME_RETENTION_BUFFER, retention_window_days=0,
-            deleted_at=reference_time, payload={"screen_frame_retention_minutes": minutes}, sequence=-1,
-        )))
+        result = raw_liveness.governed_delete_raw_record(
+            record_id=record.id,
+            reason=REASON_SCREEN_FRAME_RETENTION_BUFFER,
+            retention_window_days=0,
+            deleted_at=reference_time,
+            payload={"screen_frame_retention_minutes": minutes},
+        )
+        if result.outcome == "deleted":
+            assert result.receipt is not None
+            deletions.append(result.receipt)
     return RetentionEnforcementReceipt(deleted_count=len(deletions), retention_window_days=0, deletions=tuple(deletions))
 
 

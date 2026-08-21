@@ -60,6 +60,7 @@ from app.heimdal import (
     meeting_finalization,
     meeting_ledger,
     meeting_projection,
+    raw_liveness,
     raw_store,
 )
 from app.heimdal.capture_adapter import SensorIdentity
@@ -74,9 +75,9 @@ logger = logging.getLogger(__name__)
 MEDIA_ADMITTED_EVENT = HEIMDAL_CAPTURE_MEDIA_ADMITTED
 _EVENT_SOURCE = "heimdal.capture.media"
 
-# The two lanes that produce receipts. Both write the same receipt shape; they
-# differ only in retention posture -- receipt-gated retention is an outbox-lane
-# property (CDLM-03), never claimed for the legacy watched-folder lane.
+# The two lanes that produce receipts. Both write the same receipt shape and
+# both must validate raw liveness before their success boundary.  The watched
+# folder has no HTTP response, so its lease gates source cleanup instead.
 LANE_MEDIA_INGRESS = "media_ingress"
 LANE_WATCHED_FOLDER = "watched_folder"
 
@@ -142,6 +143,21 @@ class MediaAdmissionError(RuntimeError):
     """The durable raw write did not confirm; nothing was acknowledged."""
 
 
+class MediaEvidenceErasedError(RuntimeError):
+    """An immutable admission receipt exists, but its raw evidence was erased.
+
+    This is a terminal outcome for the original transfer identity: the receipt
+    history remains auditable, but it can no longer acknowledge durable raw
+    acceptance or make a resend look idempotent.
+    """
+
+    def __init__(self, receipt: MediaReceipt) -> None:
+        self.receipt = receipt
+        super().__init__(
+            "the durable raw evidence for this media admission was erased by governed retention"
+        )
+
+
 class MediaAdmissionEventPersistenceError(RuntimeError):
     """The admission event could not be committed, so no receipt was written.
 
@@ -165,6 +181,28 @@ class MediaAdmission:
 
     receipt: MediaReceipt
     idempotent_replay: bool
+    response_lease: raw_liveness.RawResponseLease
+
+
+def _lease_receipt_or_erased(
+    receipt: MediaReceipt,
+) -> tuple[MediaReceipt, raw_liveness.RawResponseLease]:
+    """Validate exact raw liveness and fence one response boundary.
+
+    Receipt rows are append-only, so retention never changes their identity or
+    fields in place. A response may report admitted only after the exact raw
+    generation and active representation have been validated under the shared
+    liveness fence and a bounded response lease has been issued. Absence without
+    a tombstone propagates as unavailable; only a governed tombstone is erased.
+    """
+    try:
+        lease = raw_liveness.issue_response_lease(
+            raw_ref=receipt.raw_ref,
+            content_identity=receipt.content_sha256,
+        )
+    except raw_liveness.RawEvidenceErasedError as exc:
+        raise MediaEvidenceErasedError(receipt) from exc
+    return receipt, lease
 
 
 def resolve_media_kind_max_bytes(kind: str) -> int:
@@ -318,6 +356,8 @@ def record_media_admission(
     """
     already_acknowledged = media_receipts.get_media_receipt(capture_id, content_sha256)
     if already_acknowledged is not None:
+        # The response lease is issued by the concrete producer after any
+        # ledger/replay repair, immediately before it returns success.
         return already_acknowledged, False
 
     receipt_id = media_receipts.derive_receipt_id(capture_id, content_sha256)
@@ -410,6 +450,7 @@ def admit_media_bytes(
     # before consent/encryption/write so a replay costs one lookup.
     existing = media_receipts.get_media_receipt(capture_id, content_sha256)
     if existing is not None:
+        existing, response_lease = _lease_receipt_or_erased(existing)
         # The replay must still reach the ledger (CDLM-02): if a prior attempt
         # acknowledged the capture but crashed before the ledger row landed, the
         # client's resend takes this branch — an idempotent ledger upsert here is
@@ -422,7 +463,11 @@ def admit_media_bytes(
             media_bytes=media_bytes,
             kind=kind,
         )
-        return MediaAdmission(receipt=existing, idempotent_replay=True)
+        return MediaAdmission(
+            receipt=existing,
+            idempotent_replay=True,
+            response_lease=response_lease,
+        )
 
     sensor = SensorIdentity(
         adapter=MEDIA_ADAPTER_ID, version=MEDIA_ADAPTER_VERSION, device=device_id
@@ -516,6 +561,7 @@ def admit_media_bytes(
         },
         receipt_payload=admission_metadata,
     )
+    receipt, response_lease = _lease_receipt_or_erased(receipt)
     _ledger_session_segment(
         session_id=session_id,
         session_seq=session_seq,
@@ -527,7 +573,11 @@ def admit_media_bytes(
     # A concurrent request may have acknowledged this identity between the
     # short-circuit above and the seam's own guard; report that truthfully rather
     # than claiming this call was the one that acknowledged it.
-    return MediaAdmission(receipt=receipt, idempotent_replay=not newly_acknowledged)
+    return MediaAdmission(
+        receipt=receipt,
+        idempotent_replay=not newly_acknowledged,
+        response_lease=response_lease,
+    )
 
 
 def _ledger_session_segment(
@@ -595,16 +645,14 @@ def record_watched_folder_admission(
     capture_id: Optional[str] = None,
     kind: str = "audio",
     trace_id: str = "",
-) -> Optional[MediaReceipt]:
+) -> MediaAdmission:
     """Receipt a watched-folder admission through the shared seam.
 
-    The legacy (Model-1) lane is admitted and receipted hub-side so its files
-    are queryable, but it stays **outside** the receipt-gated retention
-    guarantee: that guarantee is an outbox-lane property (CDLM-03), and claiming
-    it here is the forbidden outcome in the vertical's partial-failure matrix.
-    A receipt failure is therefore logged loudly and returned as ``None`` rather
-    than raised -- it must not change the watcher's existing
-    delete-after-confirmed-ingest behavior, which #4362 owns.
+    The legacy (Model-1) lane has no HTTP response, so the returned admission
+    object is its response boundary: the caller may delete the watched source
+    only while the attached generation-bound response lease is valid. A failure
+    to append the receipt or validate exact raw liveness propagates so the source
+    remains queued for an idempotent retry.
 
     ``capture_id`` comes from the HCAP-07 sidecar when it carries one; otherwise
     the receipt is keyed by the content hash itself, so one query parameter serves
@@ -613,50 +661,48 @@ def record_watched_folder_admission(
     resolves to one transfer identity; `canonical_capture_id` is called here for
     its other job -- a sidecar is untrusted client input whose values are not
     type-validated upstream, and a non-string `capture_id` must degrade to the
-    content-hash key rather than raise. Everything here runs *after* the durable
-    write, so an exception escaping into `admit_capture_file` would strand the
-    source file as permanently "refused" on every tick.
+    content-hash key rather than raise.
     """
     content_sha256 = record.content_identity
-    try:
-        raw_ref = raw_ref_for(record)
-        sidecar_capture_id = media_receipts.canonical_capture_id(capture_id)
-        resolved_capture_id = sidecar_capture_id or content_sha256
-        receipt, _newly_acknowledged = record_media_admission(
-            capture_id=resolved_capture_id,
-            content_sha256=content_sha256,
-            raw_ref=raw_ref,
-            kind=kind,
-            lane=LANE_WATCHED_FOLDER,
-            trace_id=trace_id,
-            event_payload={
-                "capture_id": resolved_capture_id,
-                "content_sha256": content_sha256,
-                "raw_ref": raw_ref,
-                "kind": kind,
-                "lane": LANE_WATCHED_FOLDER,
-                "receipt_id": media_receipts.derive_receipt_id(
-                    resolved_capture_id, content_sha256
-                ),
-            },
-            receipt_payload=(
-                {"sidecar_capture_id": sidecar_capture_id} if sidecar_capture_id else {}
+    raw_ref = raw_ref_for(record)
+    sidecar_capture_id = media_receipts.canonical_capture_id(capture_id)
+    resolved_capture_id = sidecar_capture_id or content_sha256
+    receipt, newly_acknowledged = record_media_admission(
+        capture_id=resolved_capture_id,
+        content_sha256=content_sha256,
+        raw_ref=raw_ref,
+        kind=kind,
+        lane=LANE_WATCHED_FOLDER,
+        trace_id=trace_id,
+        event_payload={
+            "capture_id": resolved_capture_id,
+            "content_sha256": content_sha256,
+            "raw_ref": raw_ref,
+            "kind": kind,
+            "lane": LANE_WATCHED_FOLDER,
+            "receipt_id": media_receipts.derive_receipt_id(
+                resolved_capture_id, content_sha256
             ),
-        )
-    except Exception as exc:  # noqa: BLE001 -- the legacy lane must not gain a new failure mode
-        logger.error(
-            "Heimdal media receipts: watched-folder admission %s was durably written but "
-            "could not be receipted: %s. The raw object is safe; the receipt query will "
-            "answer 'unknown' for it until a later admission of the same content.",
-            content_sha256,
-            exc,
-        )
-        return None
-    return receipt
+        },
+        receipt_payload=(
+            {"sidecar_capture_id": sidecar_capture_id} if sidecar_capture_id else {}
+        ),
+    )
+    receipt, response_lease = _lease_receipt_or_erased(receipt)
+    return MediaAdmission(
+        receipt=receipt,
+        idempotent_replay=not newly_acknowledged,
+        response_lease=response_lease,
+    )
 
 
-def receipt_answer(receipt: Optional[MediaReceipt], capture_id: str) -> Dict[str, Any]:
-    """Render one receipt-query answer: `admitted` with the receipt, or `unknown`.
+def receipt_answer(
+    receipt: Optional[MediaReceipt],
+    capture_id: str,
+    *,
+    liveness_by_raw_ref: Optional[Dict[str, raw_liveness.RawLivenessProjection]] = None,
+) -> Dict[str, Any]:
+    """Render one receipt-query answer: `admitted`, `erased`, or `unknown`.
 
     ``unknown`` is a first-class answer, not an error: it is how a client
     distinguishes "my response was lost" from "my capture never arrived"
@@ -669,9 +715,14 @@ def receipt_answer(receipt: Optional[MediaReceipt], capture_id: str) -> Dict[str
     """
     if receipt is None:
         return {"capture_id": capture_id, "outcome": "unknown"}
-    return {
+    if liveness_by_raw_ref is None:
+        liveness_by_raw_ref = raw_liveness.project_with_response_leases(
+            [(receipt.raw_ref, receipt.content_sha256)]
+        )
+    projection = liveness_by_raw_ref[receipt.raw_ref]
+    answer: Dict[str, Any] = {
         "capture_id": capture_id,
-        "outcome": "admitted",
+        "outcome": "admitted" if projection.outcome == "active" else "erased",
         "receipt_id": receipt.receipt_id,
         "content_sha256": receipt.content_sha256,
         "raw_ref": receipt.raw_ref,
@@ -679,6 +730,33 @@ def receipt_answer(receipt: Optional[MediaReceipt], capture_id: str) -> Dict[str
         "lane": receipt.lane,
         "admitted_at": iso_timestamp(receipt.admitted_at),
     }
+    if projection.outcome == "active":
+        if projection.response_lease is None:
+            raise raw_liveness.RawLivenessUnavailableError(
+                "active receipt projection has no response-validity lease"
+            )
+        answer["response_lease"] = projection.response_lease.as_response_field()
+    return answer
+
+
+def receipt_answers(
+    receipts_by_capture_id: Dict[str, MediaReceipt], capture_ids: List[str]
+) -> List[Dict[str, Any]]:
+    """Render a bounded receipt batch from one metadata-only liveness transaction."""
+    liveness_by_raw_ref = raw_liveness.project_with_response_leases(
+        {
+            (receipt.raw_ref, receipt.content_sha256)
+            for receipt in receipts_by_capture_id.values()
+        }
+    )
+    return [
+        receipt_answer(
+            receipts_by_capture_id.get(capture_id),
+            capture_id,
+            liveness_by_raw_ref=liveness_by_raw_ref,
+        )
+        for capture_id in capture_ids
+    ]
 
 
 def iso_timestamp(value: datetime) -> str:
@@ -705,6 +783,7 @@ __all__ = [
     "MediaAdmission",
     "MediaAdmissionError",
     "MediaAdmissionEventPersistenceError",
+    "MediaEvidenceErasedError",
     "MediaCapConfigError",
     "MediaHashMismatchError",
     "MediaKindUnsupportedError",
@@ -712,6 +791,7 @@ __all__ = [
     "admit_media_bytes",
     "iso_timestamp",
     "receipt_answer",
+    "receipt_answers",
     "record_media_admission",
     "record_watched_folder_admission",
     "resolve_media_kind_max_bytes",

@@ -462,10 +462,13 @@ def append_media_receipt(
 
 
 def get_media_receipt(capture_id: str, content_sha256: str) -> Optional[MediaReceipt]:
-    """Look up the receipt for one transfer identity (idempotency check).
+    """Look up immutable receipt history for one transfer identity.
 
     Keyed by the derived receipt id, which canonicalizes the capture id, so an
-    equivalent spelling resolves to the same receipt.
+    equivalent spelling resolves to the same receipt. This lookup intentionally
+    does not hide an erased receipt: audit and identity history remain
+    append-only. `media_ingress` derives whether the receipt still represents
+    retained raw evidence before returning an admitted/idempotent answer.
     """
     return _backend().get_by_receipt_id(derive_receipt_id(capture_id, content_sha256))
 

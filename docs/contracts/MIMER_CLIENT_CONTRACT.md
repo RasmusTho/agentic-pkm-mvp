@@ -60,7 +60,7 @@ Base URL: the Mimer runtime API (`app/api/app.py`). All routes below exist on `m
 | --- | --- | --- | --- | --- |
 | Capture (write) | `POST /api/companion/capture` | Friction-free intake into the vault inbox note | `x-trace-id`; actor currently fixed (§9 F1) | Full governed chain (§4.1) |
 | Media capture (write) | `POST /api/heimdal/capture/media` | Admit one captured original (audio/image/video/document) and return its durable-acceptance receipt | `x-trace-id` / response `trace_id`; client-minted `capture_id` + `content_sha256` | Governed chain, acknowledged only on durable acceptance (§4.4) |
-| Receipt query | `GET /api/heimdal/capture/receipts?capture_id=` | Answer `admitted` or `unknown` per capture id — the reconnect/recovery answer after a lost response | `x-trace-id` / response `trace_id` | Read-only; discloses admission state, same LAN posture (§4.4) |
+| Receipt query | `GET /api/heimdal/capture/receipts?capture_id=` | Answer `admitted`, `erased`, or `unknown` per capture id — the reconnect/recovery answer after a lost response | `x-trace-id` / response `trace_id` | Read-only; discloses admission state, same LAN posture (§4.4) |
 | Meeting session (write) | `POST /api/heimdal/meeting/session` | Open or replay one client-minted meeting session | `x-trace-id` / response `trace_id`; stable `session_id` | Durable idempotent ledger write (§4.5) |
 | Meeting close + finalization (write) | `POST /api/heimdal/meeting/{session_id}/close` | Record the final segment count and trigger idempotent finalization | `x-trace-id` / response `trace_id`; stable `session_id` | Durable close; finalization status is explicit (§4.5) |
 | Meeting gap report | `GET /api/heimdal/meeting/{session_id}/segments` | Return received and missing sequence numbers, conflicts, and completeness | `x-trace-id` / response `trace_id` | Read-only projection over the durable ledger (§4.5) |
@@ -142,9 +142,11 @@ lineage rather than rejected, so the sidecar composes with the capture-time meta
 durably written to the encrypted raw store **and** the `heimdal.capture.media.admitted` outbox event
 is committed; the receipt is persisted last, because the receipt *is* the acknowledgement. This is
 the same outbox-before-ack ordering as §4.1. Success (`200`):
-`{outcome: "admitted", capture_id, content_sha256, receipt_id, raw_ref, kind, admitted_at, trace_id}`
+`{outcome: "admitted", capture_id, content_sha256, receipt_id, raw_ref, kind, admitted_at, trace_id, response_lease}`
 plus `idempotent_replay: true` when this identity was already acknowledged. A client MUST surface
-this receipt and never fabricate its own.
+this receipt and never fabricate its own. `response_lease` is bound to the exact raw liveness
+generation and includes `lease_id`, `liveness_generation`, `issued_at`, and `expires_at`. It is the
+validity window for receipt-gated local cleanup; after expiry, retain the original and re-query.
 
 **Idempotency identity is `(capture_id, content_sha256)`** — the client-visible key §9 F5 asks for,
 delivered here for the media lane. `receipt_id` is derived from that pair, so re-sending after a lost
@@ -157,9 +159,18 @@ stays single.
 **Recovery.** `GET /api/heimdal/capture/receipts?capture_id=…` takes the parameter repeatably, up to
 100 ids per call, and answers `{receipts: [...]}` with one entry per requested id, echoing the id you
 asked for so answers stay alignable with the request. Each entry is either
-`{capture_id, outcome: "admitted", receipt_id, content_sha256, raw_ref, kind, lane, admitted_at}` or
+`{capture_id, outcome: "admitted", receipt_id, content_sha256, raw_ref, kind, lane, admitted_at, response_lease}` or
+`{capture_id, outcome: "erased", receipt_id, content_sha256, raw_ref, kind, lane, admitted_at}` or
 `{capture_id, outcome: "unknown"}`. `unknown` means *never arrived* and is a first-class answer, not
 an error — it is how a client distinguishes a lost response from a capture that never reached the hub.
+`erased` means governed retention removed the raw evidence after the immutable admission receipt was
+written: retain the local original, surface the terminal state, and do not treat that historical
+receipt as permission to delete or as a normal idempotent replay.
+An active answer is backed by a short-lived response lease; retention uses the same liveness fence
+and will not erase that generation while the lease is valid. Once retention claims the generation,
+the claim records a finite lease-drain frontier and subsequent polling cannot renew or reopen a
+lease; PostgreSQL enforces that boundary at the lease write trigger as well. Raw absence without a governed
+tombstone is `503 receipt_store_unavailable`/`raw_liveness_unavailable`, never `erased`.
 
 Error contract (a client must branch on `error`; never retry blindly):
 
@@ -173,8 +184,9 @@ Error contract (a client must branch on `error`; never retry blindly):
 | 422 | `sidecar_schema_invalid` | Sidecar fails the admission schema (`violations` included) | Fix the request; surface to human |
 | 422 | `content_hash_mismatch` | Received bytes do not hash to `content_sha256`; nothing admitted | Re-read the source and re-hash before resending |
 | 409 | `consent_refused` | No active consent grant (HEIM-3); nothing admitted | Surface the reason verbatim; never fall back to a direct FS write |
+| 410 | `media_evidence_erased`, state `erased` | The immutable receipt remains auditable but its exact raw evidence was governed-erased | Retain the local original and surface the terminal outcome; do not retry the same transfer identity as an idempotent replay or delete against it |
 | 500 | `raw_write_failed`, `admission_event_commit_failed`, `receipt_persistence_failed`, `raw_store_key_unavailable`, `media_cap_misconfigured`, `admission_failed` — all with `state: "not_acknowledged"` | Nothing was acknowledged | Safe to re-send the same `capture_id` + `content_sha256`; admission is idempotent. Retain the original |
-| 503 | `receipt_store_unavailable` | The receipt store could not be read | Treat as *no information*, **never** as `unknown`; retry the read |
+| 503 | `receipt_store_unavailable` | The receipt store or raw-state metadata lookup could not be read | Treat as *no information*, **never** as `unknown` or `erased`; retry the read |
 
 The v1 auth posture above is unchanged for these routes: no per-agent identity, LAN/loopback/tailnet
 only. The posture is enforced hub-side on the immediate peer and deliberately ignores
@@ -346,7 +358,7 @@ Therefore: the rules below remain **binding client discipline around the progres
 - **W2 — Read-fresh, write-promptly, verify-staleness.** Before any whole-file write: read the file and record its raw-byte content hash; keep the read→write window as short as possible; immediately before writing, re-check the hash. Callers using the shared Mimer filesystem seam pass that hash as `expected_version` with their `writer_identity`, so VMW-02 can write atomically or stage an initially stale proposal. A direct filesystem client outside that seam must still re-read and re-apply its edit when the hash changed; its check remains advisory and the TOCTOU window remains real.
 - **W3 — Ownership courtesy.** Default to creating and editing files the client itself authored (workspace roots, §5). Edit a human-authored note only on explicit human direction in the live session, and prefer append/patch-shaped edits over whole-file rewrites of prose the human may have open in Obsidian.
 - **W4 — Atomic replace.** Whole-file writes land as write-to-temp-then-rename within the same directory, so the watcher and other readers never observe a half-written note. Never leave temp files in the vault on failure.
-- **W5 — Idempotency by verification, not by retry — except on the receipted media/meeting lanes.** No client-supplied idempotency key exists on the *text* capture endpoint today (the runtime derives an idempotency key for the outbox *event*, not the write — §9 F5). So for `POST /api/companion/capture` and direct FS writes: after `not_acknowledged` (500) or a transport timeout where the response was lost, the write may have landed. Verify by reading the target before any retry. Direct FS whole-file writes are idempotent by content; appends are not. **The §4.4/§4.5 lanes are the exception:** retain the original/note revision until a durable ack, then resolve ambiguity through the stable capture/session/note identity and the matching receipt or ledger query. Never mint a replacement identity for a retry.
+- **W5 — Idempotency by verification, not by retry — except on the receipted media/meeting lanes.** No client-supplied idempotency key exists on the *text* capture endpoint today (the runtime derives an idempotency key for the outbox *event*, not the write — §9 F5). So for `POST /api/companion/capture` and direct FS writes: after `not_acknowledged` (500) or a transport timeout where the response was lost, the write may have landed. Verify by reading the target before any retry. Direct FS whole-file writes are idempotent by content; appends are not. **The §4.4/§4.5 lanes are the exception:** retain the original/note revision until a durable ack, then resolve ambiguity through the stable capture/session/note identity and the matching receipt or ledger query. Never mint a replacement identity for a retry. `erased` / `media_evidence_erased` is not an ambiguous retry: preserve the original, surface the terminal retention state, and follow an explicitly governed recovery path rather than deleting or silently reminting identity.
 - **W6 — Write-ordering vs the watcher.** The watcher detects changes by mtime + sha256 and feeds ingest; the index trails the file. After a write, the file is truth and the index is eventually consistent. Never re-write a file to "fix" perceived index lag, and never treat index state as evidence the write failed.
 - **W7 — One transport per note; reconciling FS vs API writes.** The only note both transports touch by design is excluded from FS writes (the capture inbox, §5), so a governed API write and a direct FS write to the same note should not occur under this contract. If a client nevertheless observes it caused such a collision (e.g. it rewrote a note between another writer's read and write), the reconciliation is: the file's current content is the outcome (LWW), the AuthorityReceipt/outbox event remains the truthful record of *what the governed write did at its time*, and the client surfaces the suspected collision to the human rather than silently re-asserting its own version. Receipts are authoritative for what happened, never for what is currently true (AGENT-FLOWS §10).
 - **W8 — iCloud conflict artifacts.** If a client encounters a `… (conflicted copy …)` sibling, it must not merge, delete, or adopt it silently: surface it to the human. The production vault Markdown iterator uses the VMW-01 shared classifier to quarantine both iCloud and runtime-staged conflict artifacts before watcher/ingest/index parsing, preserves the artifact on disk, and emits a legible classification receipt (VMW-03 / #3452). VMW-04 / #3453 reconciled this as shipped INV-VW3 enforcement.

@@ -14,8 +14,8 @@ migration, or a lane whose grant was revoked, looks calm until the first
 upload. Checking it here is the `AGENTS.md :: Required rules`
 invariant→producers preflight for that seeded grant.
 
-The check is a read against the ledger and never grants, revokes, or repairs
-consent **in production**. One caveat worth naming: under
+The check is a read against the ledger and liveness authority and never
+grants, revokes, or repairs consent or raw state **in production**. One caveat worth naming: under
 ``STORE_SCHEMA_AUTOCREATE=1`` (a test-fixture opt-in, `tests/conftest.py`) the
 Postgres ledger backend bootstraps its own schema and standing-grant seeds on
 construction — and `consent_ledger._backend()` constructs a fresh
@@ -43,6 +43,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Dict, List, Optional
 
+from app.heimdal import raw_liveness
 from app.heimdal.consent_ledger import MEDIA_CAPTURE_SCOPE, resolve_active_grant
 from app.heimdal.raw_store import RawStoreKeyMissingError, resolve_raw_store_key
 
@@ -60,6 +61,7 @@ DETAIL_RAW_STORE_KEY_MISSING = "raw_store_key_missing"
 DETAIL_RAW_STORE_KEY_INVALID = "raw_store_key_invalid"
 DETAIL_MEDIA_CONSENT_GRANT_MISSING = "media_consent_grant_missing"
 DETAIL_MEDIA_CONSENT_LEDGER_UNREADABLE = "media_consent_ledger_unreadable"
+DETAIL_RAW_LIVENESS_SCHEMA_UNAVAILABLE = "raw_liveness_schema_unavailable"
 
 
 @dataclass(frozen=True)
@@ -72,8 +74,9 @@ class IngressPreflightResult:
     """
 
     raw_store_key_available: bool
+    raw_liveness_schema_available: bool
     # Required, not defaulted: an omitted precondition must not read as
-    # "available". Both preconditions are equally load-bearing for this lane.
+    # "available". Every precondition is load-bearing for the affected lanes.
     media_consent_grant_available: bool
     lanes: Dict[str, str] = field(default_factory=dict)
     detail: str = ""
@@ -112,6 +115,16 @@ def _check_media_consent_grant(details: List[str]) -> bool:
     return True
 
 
+def _check_raw_liveness_schema(details: List[str]) -> bool:
+    """Whether the durable liveness authority is ready for raw ingress."""
+    try:
+        raw_liveness.assert_runtime_schema()
+        return True
+    except Exception as exc:
+        details.append(f"{DETAIL_RAW_LIVENESS_SCHEMA_UNAVAILABLE}:{type(exc).__name__}")
+        return False
+
+
 def run_ingress_preflight() -> IngressPreflightResult:
     """Check every ingress-lane precondition once and record lane availability.
 
@@ -122,17 +135,19 @@ def run_ingress_preflight() -> IngressPreflightResult:
     global _LAST_RESULT
     details: List[str] = []
     key_available = _check_raw_store_key(details)
+    liveness_schema_available = _check_raw_liveness_schema(details)
     # The screen lane's `screen_always_on` scope carries no seeded grant, so
     # this check is the media lane's alone.
     media_grant_available = _check_media_consent_grant(details)
 
-    key_state = STATE_AVAILABLE if key_available else STATE_UNAVAILABLE
-    media_available = key_available and media_grant_available
+    raw_available = key_available and liveness_schema_available
+    media_available = raw_available and media_grant_available
     result = IngressPreflightResult(
         raw_store_key_available=key_available,
+        raw_liveness_schema_available=liveness_schema_available,
         lanes={
             LANE_MEDIA: STATE_AVAILABLE if media_available else STATE_UNAVAILABLE,
-            LANE_SCREEN: key_state,
+            LANE_SCREEN: STATE_AVAILABLE if raw_available else STATE_UNAVAILABLE,
         },
         detail=",".join(details),
         checked_at=datetime.now(timezone.utc),
@@ -172,7 +187,14 @@ def run_ingress_preflight() -> IngressPreflightResult:
             remedy,
             result.detail,
         )
-    if key_available and media_grant_available:
+    if not liveness_schema_available:
+        logger.error(
+            "Heimdal ingress preflight: raw-liveness authority is unavailable; "
+            "media and screen ingress lanes will refuse admissions until migration "
+            "c5d8a1e4f2b7 is applied. All other API functions keep serving. Detail: %s",
+            result.detail,
+        )
+    if key_available and liveness_schema_available and media_grant_available:
         logger.info(
             "Heimdal ingress preflight: raw-store key and media consent grant "
             "available; ingress lanes ready."
@@ -196,6 +218,7 @@ __all__ = [
     "DETAIL_MEDIA_CONSENT_LEDGER_UNREADABLE",
     "DETAIL_RAW_STORE_KEY_INVALID",
     "DETAIL_RAW_STORE_KEY_MISSING",
+    "DETAIL_RAW_LIVENESS_SCHEMA_UNAVAILABLE",
     "LANE_MEDIA",
     "LANE_SCREEN",
     "STATE_AVAILABLE",
