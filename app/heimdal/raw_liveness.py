@@ -449,10 +449,16 @@ def _assert_pg_schema(conn: Any) -> None:
         )
     cur.execute(
         """
-        SELECT pg_get_functiondef(p.oid)
-        FROM pg_proc AS p
-        WHERE p.proname = 'heimdal_raw_deletion_receipt_reject_mutation'
+        SELECT pg_get_functiondef(t.tgfoid)
+        FROM pg_trigger AS t
+        JOIN pg_class AS c ON c.oid = t.tgrelid
+        JOIN pg_namespace AS n ON n.oid = c.relnamespace
+        WHERE n.nspname = current_schema()
+          AND c.relname = %s
+          AND t.tgname = 'heimdal_raw_deletion_receipt_no_update'
+          AND NOT t.tgisinternal
         """
+        , (_DELETION_RECEIPT_TABLE,)
     )
     function_defs = [str(item[0]) for item in cur.fetchall()]
     if not any(

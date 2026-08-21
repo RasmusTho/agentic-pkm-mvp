@@ -242,10 +242,14 @@ def _raw_schema_snapshot(dsn: str) -> dict[str, object]:
         triggers = [tuple(row) for row in cur.fetchall()]
         cur.execute(
             """
-            SELECT pg_get_functiondef(oid)
-            FROM pg_proc
-            WHERE proname = 'heimdal_raw_deletion_receipt_reject_mutation'
-            ORDER BY oid
+            SELECT pg_get_functiondef(t.tgfoid)
+            FROM pg_trigger AS t
+            JOIN pg_class AS c ON c.oid = t.tgrelid
+            JOIN pg_namespace AS n ON n.oid = c.relnamespace
+            WHERE n.nspname = current_schema()
+              AND c.relname = 'heimdal_raw_deletion_receipt'
+              AND t.tgname = 'heimdal_raw_deletion_receipt_no_update'
+              AND NOT t.tgisinternal
             """
         )
         receipt_functions = [tuple(row) for row in cur.fetchall()]
