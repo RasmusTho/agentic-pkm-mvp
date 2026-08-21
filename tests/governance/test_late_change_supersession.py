@@ -19,6 +19,8 @@ def test_late_change_supersedes_affected_evidence() -> None:
         assert "late-change supersession" in normalized
         assert "affected evidence" in normalized
         assert "rerun" in normalized
+        assert "mutable authority" in normalized
+        assert "digest/version" in normalized
 
     assert "late_change_supersession_receipt.v1" in closure
 
@@ -33,3 +35,4 @@ def test_closure_rejects_stale_evidence_after_late_change() -> None:
     assert "must not merge or close" in merge_prerequisites
     assert "current head SHA" in merge_prerequisites
     assert "late_change_supersession_receipt.v1" in merge_prerequisites
+    assert "mutable authority" in merge_prerequisites
