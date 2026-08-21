@@ -145,6 +145,34 @@ def _resolve_cold_ciphertext(location_ref: str) -> bytes:
         raise RawRepresentationUnavailableError("cold representation bytes are unavailable") from exc
 
 
+def _cold_object_path(location_ref: str) -> Path | None:
+    object_path = _cold_location_paths.get(location_ref)
+    if object_path is not None:
+        return object_path
+    root_value = os.environ.get(_COLD_ARCHIVE_ROOT_ENV, "")
+    object_id = location_ref.rsplit(":", 1)[-1]
+    if root_value and Path(root_value).is_absolute() and re.fullmatch(r"[0-9a-f-]{36}", object_id):
+        return Path(root_value) / "representations" / f"{object_id}.bin"
+    return None
+
+
+def _delete_cold_objects_for_record(record_id: str) -> None:
+    """Remove cold bytes and their manifest before a governed raw deletion commits."""
+    for representation in all_raw_representations(record_id):
+        if representation.storage_kind != _COLD_STORAGE_KIND:
+            continue
+        object_path = _cold_object_path(representation.location_ref)
+        if object_path is None:
+            raise RawRepresentationDeletionError("cold representation resolver is unavailable")
+        try:
+            object_path.unlink(missing_ok=True)
+            object_path.parent.parent.joinpath("manifests", f"{object_path.stem}.json").unlink(
+                missing_ok=True
+            )
+        except OSError:
+            raise RawRepresentationDeletionError("cold representation deletion failed") from None
+
+
 def _representation_ciphertext(representation: "RawRepresentation") -> bytes:
     if representation.storage_kind == _COLD_STORAGE_KIND:
         return _resolve_cold_ciphertext(representation.location_ref)

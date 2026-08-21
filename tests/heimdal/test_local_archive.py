@@ -9,7 +9,7 @@ import secrets
 
 import pytest
 
-from app.heimdal import local_archive
+from app.heimdal import local_archive, raw_store
 from app.heimdal.raw_store import (
     all_raw_representations,
     compute_raw_content_identity,
@@ -82,10 +82,11 @@ def test_verified_archive_receipt_precedes_hot_retirement(tmp_path: Path) -> Non
         now=now,
         retention_window_days=30,
         key=_KEY,
+        volume_ready=lambda: True,
     )
     assert result.health.healthy
     assert result.receipt.schema == "heimdal_archive_receipt.v1"
-    assert (tmp_path / "mounted-cold" / "manifests" / f"{result.receipt.receipt_id}.json").exists()
+    assert (tmp_path / "mounted-cold" / "manifests" / f"{result.receipt.representation_id}.json").exists()
     representations = all_raw_representations(record.id)
     assert [item.storage_kind for item in representations if item.active] == [
         "encrypted_local_cold"
@@ -116,6 +117,7 @@ def test_verify_before_hot_representation_retire_and_fail_closed(
             now=now,
             retention_window_days=30,
             key=_KEY,
+            volume_ready=lambda: True,
         )
     assert error.value.reason == "archive_copy_verification_failed"
     assert [item.storage_kind for item in all_raw_representations(record.id) if item.active] == [
@@ -134,9 +136,69 @@ def test_archive_receipts_are_redacted(tmp_path: Path) -> None:
         now=now,
         retention_window_days=30,
         key=_KEY,
+        volume_ready=lambda: True,
     )
     manifest = next((tmp_path / "mounted-cold" / "manifests").glob("*.json")).read_text()
     assert secret.decode() not in manifest
     assert str(tmp_path) not in manifest
     assert record.source_path not in manifest
     assert result.receipt.as_dict()["content_identity"] == record.content_identity
+
+
+def test_archive_requires_verified_mount_and_redacts_failure(tmp_path: Path) -> None:
+    record, now = _eligible(_insert(b"mount-gated"))
+    archive_root = tmp_path / "mounted-cold"
+    archive_root.mkdir()
+    with pytest.raises(local_archive.ArchiveDegradedError, match="archive_mount_unavailable"):
+        local_archive.relocate_raw_record(
+            record,
+            archive_root=archive_root,
+            now=now,
+            retention_window_days=30,
+            key=_KEY,
+            volume_ready=lambda: False,
+        )
+
+    original_write = local_archive._durable_write
+
+    def fail_manifest(path: Path, payload: bytes) -> None:
+        if path.suffix == ".json":
+            raise OSError(f"sensitive path: {path}")
+        original_write(path, payload)
+
+    # The returned error is redacted and the pre-receipt object is cleaned up.
+    with pytest.raises(local_archive.ArchiveDegradedError) as error:
+        local_archive._durable_write = fail_manifest
+        try:
+            local_archive.relocate_raw_record(
+                record,
+                archive_root=archive_root,
+                now=now,
+                retention_window_days=30,
+                key=_KEY,
+                volume_ready=lambda: True,
+            )
+        finally:
+            local_archive._durable_write = original_write
+    assert str(tmp_path) not in str(error.value)
+    assert list((archive_root / "representations").glob("*.bin")) == []
+
+
+def test_governed_cold_cleanup_removes_object_and_manifest(tmp_path: Path) -> None:
+    record, now = _eligible(_insert(b"delete-cold"))
+    archive_root = tmp_path / "mounted-cold"
+    archive_root.mkdir()
+    result = local_archive.relocate_raw_record(
+        record,
+        archive_root=archive_root,
+        now=now,
+        retention_window_days=30,
+        key=_KEY,
+        volume_ready=lambda: True,
+    )
+    assert list((archive_root / "representations").glob("*.bin"))
+    assert list((archive_root / "manifests").glob("*.json"))
+    raw_store._delete_cold_objects_for_record(record.id)  # noqa: SLF001
+    assert list((archive_root / "representations").glob("*.bin")) == []
+    assert list((archive_root / "manifests").glob("*.json")) == []
+    assert result.receipt.representation_id

@@ -1277,6 +1277,7 @@ def _governed_delete_memory(
             _retention_stage_hook("after_deletion_receipt")
             _MEMORY.tombstones.append(tombstone)
             _MEMORY.tombstones_by_record[record_id] = tombstone
+            raw_store._delete_cold_objects_for_record(record_id)  # noqa: SLF001
             _retention_stage_hook("after_tombstone")
             if not raw_store._MEMORY_STORE.hard_delete(record_id):  # noqa: SLF001
                 raise RawLivenessUnavailableError(
@@ -1474,6 +1475,7 @@ def _governed_delete_pg(
         _retention_stage_hook("after_tombstone")
         cur.execute("SELECT set_config(%s, 'true', true)", (_RETENTION_GUARD_SETTING,))
         try:
+            raw_store._delete_cold_objects_for_record(record_id)  # noqa: SLF001
             cur.execute(
                 "DELETE FROM heimdal_raw_representation WHERE record_id = %s",
                 (record_id,),

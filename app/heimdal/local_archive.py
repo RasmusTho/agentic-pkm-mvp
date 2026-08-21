@@ -119,9 +119,21 @@ def _ensure_archive_dirs(archive_root: Path) -> tuple[Path, Path]:
         raise ArchiveDegradedError("archive_mount_unavailable")
     objects = archive_root / "representations"
     manifests = archive_root / "manifests"
-    objects.mkdir(exist_ok=True)
-    manifests.mkdir(exist_ok=True)
+    try:
+        objects.mkdir(exist_ok=True)
+        manifests.mkdir(exist_ok=True)
+    except OSError:
+        raise ArchiveDegradedError("archive_mount_unavailable") from None
     return objects, manifests
+
+
+def _discard_uncommitted_object(object_path: Path) -> None:
+    try:
+        object_path.unlink(missing_ok=True)
+    except OSError:
+        # A later retry can reconcile an unreadable orphan; never disclose the
+        # mounted volume path through an exception or log value.
+        return
 
 
 def _durable_write(path: Path, payload: bytes) -> None:
@@ -160,7 +172,7 @@ def relocate_raw_record(
     retention_window_days: Optional[int] = None,
     vault_root: Optional[Path] = None,
     key: Optional[bytes] = None,
-    volume_ready: Optional[Callable[[], bool]] = None,
+    volume_ready: Callable[[], bool],
 ) -> ArchiveResult:
     """Copy, verify, receipt, then activate cold; fail closed on every error."""
     reference = now or datetime.now(timezone.utc)
@@ -170,7 +182,7 @@ def relocate_raw_record(
         retention_window_days = resolve_retention_window_days(vault_root)
     if not archive_eligible(record, now=reference, retention_window_days=retention_window_days):
         raise ArchiveDegradedError("record_outside_archive_window")
-    if volume_ready is not None and not volume_ready():
+    if not volume_ready():
         raise ArchiveDegradedError("archive_mount_unavailable")
 
     objects, manifests = _ensure_archive_dirs(archive_root)
@@ -192,15 +204,6 @@ def relocate_raw_record(
         raw_store.decrypt_and_verify_raw_bytes(
             record.content_identity, copied, hot.nonce, key=key or raw_store.resolve_raw_store_key()
         )
-        cold, _ = raw_store.register_cold_raw_representation(
-            record_id=record.id,
-            ciphertext=copied,
-            nonce=hot.nonce,
-            key_ref=hot.key_ref,
-            location_ref=location_ref,
-            key=key,
-            representation_id=representation_id,
-        )
         receipt = ArchiveReceipt(
             receipt_id=receipt_id,
             record_id=record.id,
@@ -210,17 +213,26 @@ def relocate_raw_record(
             ciphertext_sha256=ciphertext_hash,
             verified_at=_utc(reference),
         )
-        _durable_write(manifests / f"{receipt_id}.json", _manifest_payload(receipt))
+        _durable_write(manifests / f"{representation_id}.json", _manifest_payload(receipt))
         manifest_written = True
+        cold, _ = raw_store.register_cold_raw_representation(
+            record_id=record.id,
+            ciphertext=copied,
+            nonce=hot.nonce,
+            key_ref=hot.key_ref,
+            location_ref=location_ref,
+            key=key,
+            representation_id=representation_id,
+        )
         active = raw_store.activate_raw_representation(record.id, cold.id, key=key)
         return ArchiveResult(receipt, ArchiveHealth(True, "ok"), active)
     except ArchiveDegradedError:
         if not manifest_written:
-            object_path.unlink(missing_ok=True)
+            _discard_uncommitted_object(object_path)
         raise
     except Exception:
         if not manifest_written:
-            object_path.unlink(missing_ok=True)
+            _discard_uncommitted_object(object_path)
         raise ArchiveDegradedError("archive_relocation_failed") from None
 
 
