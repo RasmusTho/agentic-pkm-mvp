@@ -19,6 +19,7 @@ from app.heimdal.raw_store import (
 )
 from app.heimdal.raw_read_gate import raw_ref_for, read_raw_record, reset_memory_raw_read_receipts
 from app.heimdal.raw_liveness import reset_memory_deletion_receipts
+from app.heimdal import raw_liveness
 from app.ops.heimdal_cold_volume import _issue_archive_volume_ready
 
 pytestmark = pytest.mark.not_pg
@@ -316,5 +317,35 @@ def test_pg_cursor_cold_cleanup_locks_rows_and_removes_files(tmp_path: Path) -> 
     cursor = Cursor()
     raw_store._delete_cold_objects_for_pg_cursor(cursor, "record-id")  # noqa: SLF001
     assert any("FOR UPDATE" in query for query in cursor.queries)
+    assert not object_path.exists()
+    assert not (manifests / f"{representation_id}.json").exists()
+
+
+def test_pg_erasure_cleanup_receipt_reconciles_after_commit(tmp_path: Path) -> None:
+    archive_root = tmp_path / "mounted-cold"
+    objects = archive_root / "representations"
+    manifests = archive_root / "manifests"
+    objects.mkdir(parents=True)
+    manifests.mkdir()
+    representation_id = "22222222-2222-4222-8222-222222222222"
+    location_ref = f"heimloc:cold:{representation_id}"
+    object_path = objects / f"{representation_id}.bin"
+    object_path.write_bytes(b"ciphertext")
+    (manifests / f"{representation_id}.json").write_text("{}\n")
+    raw_store.register_cold_location(location_ref, object_path)
+
+    class ReceiptCursor:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def execute(self, query: str, params: object) -> None:
+            self.calls += 1
+
+        def fetchone(self) -> tuple[object]:
+            if self.calls == 1:
+                return ("receipt-id",)
+            return ({"cold_cleanup_location_refs": [location_ref]},)
+
+    raw_liveness._reconcile_pg_cold_cleanup(ReceiptCursor(), "record-id")  # noqa: SLF001
     assert not object_path.exists()
     assert not (manifests / f"{representation_id}.json").exists()

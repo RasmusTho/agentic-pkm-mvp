@@ -209,6 +209,23 @@ def _cold_object_paths_for_pg_cursor(cur: Any, record_id: str) -> list[Path]:
     return paths
 
 
+def _cold_location_paths_for_pg_cursor(cur: Any, record_id: str) -> list[tuple[str, Path]]:
+    """Capture opaque cold refs and paths under representation locks."""
+    cur.execute(
+        f"SELECT location_ref FROM {_REPRESENTATION_TABLE} "
+        "WHERE record_id = %s AND storage_kind = %s FOR UPDATE",
+        (record_id, _COLD_STORAGE_KIND),
+    )
+    locations: list[tuple[str, Path]] = []
+    for row in cur.fetchall():
+        location_ref = str(row[0])
+        object_path = _cold_object_path(location_ref)
+        if object_path is None:
+            raise RawRepresentationDeletionError("cold representation resolver is unavailable")
+        locations.append((location_ref, object_path))
+    return locations
+
+
 def _delete_cold_object_path(object_path: Path) -> None:
     deletion_failed = False
     try:

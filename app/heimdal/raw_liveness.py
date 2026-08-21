@@ -1320,6 +1320,33 @@ def _deletion_receipt_from_row(row: tuple[Any, ...]) -> DeletionReceipt:
     )
 
 
+def _reconcile_pg_cold_cleanup(cur: Any, record_id: str) -> None:
+    from app.heimdal import raw_store
+
+    cur.execute(
+        f"SELECT deletion_receipt_id FROM {_TOMBSTONE_TABLE} WHERE record_id = %s",
+        (record_id,),
+    )
+    tombstone_row = cur.fetchone()
+    if tombstone_row is None:
+        return
+    cur.execute(
+        f"SELECT payload FROM {_DELETION_RECEIPT_TABLE} WHERE id = %s",
+        (tombstone_row[0],),
+    )
+    receipt_row = cur.fetchone()
+    payload = receipt_row[0] if receipt_row else {}
+    if isinstance(payload, str):
+        payload = json.loads(payload)
+    for location_ref in payload.get("cold_cleanup_location_refs", []):
+        object_path = raw_store._cold_object_path(str(location_ref))  # noqa: SLF001
+        if object_path is None:
+            raise raw_store.RawRepresentationDeletionError(
+                "cold representation resolver is unavailable"
+            )
+        raw_store._delete_cold_object_path(object_path)  # noqa: SLF001
+
+
 def _governed_delete_pg(
     *,
     record_id: str,
@@ -1359,6 +1386,7 @@ def _governed_delete_pg(
                     "tombstoned retention target still has durable raw state"
                 )
             tombstone = _load_pg_tombstone(cur, record_id=record_id)
+            _reconcile_pg_cold_cleanup(cur, record_id)
             conn.rollback()
             return GovernedDeletionResult(outcome="already_erased", tombstone=tombstone)
         if not raw_active:
@@ -1475,6 +1503,7 @@ def _governed_delete_pg(
         _retention_stage_hook("after_tombstone")
         cur.execute("SELECT set_config(%s, 'true', true)", (_RETENTION_GUARD_SETTING,))
         cold_paths: list[Any] = []
+        cold_location_refs: list[str] = []
         try:
             cur.execute(
                 "SELECT 1 FROM heimdal_raw_record WHERE id = %s FOR UPDATE",
@@ -1484,7 +1513,16 @@ def _governed_delete_pg(
                 raise RawLivenessUnavailableError(
                     "raw identity disappeared before governed deletion"
                 )
-            cold_paths = raw_store._cold_object_paths_for_pg_cursor(cur, record_id)  # noqa: SLF001
+            locations = raw_store._cold_location_paths_for_pg_cursor(cur, record_id)  # noqa: SLF001
+            cold_location_refs = [location_ref for location_ref, _path in locations]
+            cold_paths = [path for _location_ref, path in locations]
+            if cold_location_refs:
+                cleanup_payload = dict(receipt.payload)
+                cleanup_payload["cold_cleanup_location_refs"] = cold_location_refs
+                cur.execute(
+                    f"UPDATE {_DELETION_RECEIPT_TABLE} SET payload = %s::jsonb WHERE id = %s",
+                    (json.dumps(cleanup_payload), receipt.id),
+                )
             cur.execute(
                 "DELETE FROM heimdal_raw_representation WHERE record_id = %s",
                 (record_id,),
