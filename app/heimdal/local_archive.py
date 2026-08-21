@@ -199,6 +199,7 @@ def relocate_raw_record(
         not isinstance(volume_proof, ArchiveVolumeReady)
         or not volume_proof.ready
         or volume_proof.archive_ref != archive_ref
+        or volume_proof.mountpoint != archive_root
     ):
         raise ArchiveDegradedError("archive_mount_unavailable")
 

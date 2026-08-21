@@ -85,7 +85,7 @@ def test_verified_archive_receipt_precedes_hot_retirement(tmp_path: Path) -> Non
         now=now,
         retention_window_days=30,
         key=_KEY,
-        volume_ready=lambda: _issue_archive_volume_ready(_ARCHIVE_REF),
+        volume_ready=lambda: _issue_archive_volume_ready(_ARCHIVE_REF, archive_root),
     )
     assert result.health.healthy
     assert result.receipt.schema == "heimdal_archive_receipt.v1"
@@ -121,7 +121,7 @@ def test_verify_before_hot_representation_retire_and_fail_closed(
             now=now,
             retention_window_days=30,
             key=_KEY,
-            volume_ready=lambda: _issue_archive_volume_ready(_ARCHIVE_REF),
+        volume_ready=lambda: _issue_archive_volume_ready(_ARCHIVE_REF, archive_root),
         )
     assert error.value.reason == "archive_copy_verification_failed"
     assert [item.storage_kind for item in all_raw_representations(record.id) if item.active] == [
@@ -141,7 +141,7 @@ def test_archive_receipts_are_redacted(tmp_path: Path) -> None:
         now=now,
         retention_window_days=30,
         key=_KEY,
-        volume_ready=lambda: _issue_archive_volume_ready(_ARCHIVE_REF),
+        volume_ready=lambda: _issue_archive_volume_ready(_ARCHIVE_REF, archive_root),
     )
     manifest = next((tmp_path / "mounted-cold" / "manifests").glob("*.json")).read_text()
     assert secret.decode() not in manifest
@@ -183,7 +183,7 @@ def test_archive_requires_verified_mount_and_redacts_failure(tmp_path: Path) -> 
                 now=now,
                 retention_window_days=30,
                 key=_KEY,
-                volume_ready=lambda: _issue_archive_volume_ready(_ARCHIVE_REF),
+        volume_ready=lambda: _issue_archive_volume_ready(_ARCHIVE_REF, archive_root),
             )
         finally:
             local_archive._durable_write = original_write
@@ -209,7 +209,7 @@ def test_archive_requires_verified_mount_and_redacts_failure(tmp_path: Path) -> 
                 now=now,
                 retention_window_days=30,
                 key=_KEY,
-                volume_ready=lambda: _issue_archive_volume_ready(_ARCHIVE_REF),
+        volume_ready=lambda: _issue_archive_volume_ready(_ARCHIVE_REF, archive_root),
             )
     finally:
         Path.mkdir = original_mkdir  # type: ignore[method-assign]
@@ -237,7 +237,7 @@ def test_archive_requires_verified_mount_and_redacts_failure(tmp_path: Path) -> 
             now=now,
             retention_window_days=30,
             key=_KEY,
-            volume_ready=lambda: _issue_archive_volume_ready(_ARCHIVE_REF),
+        volume_ready=lambda: _issue_archive_volume_ready(_ARCHIVE_REF, archive_root),
         )
 
     with pytest.raises(local_archive.ArchiveDegradedError, match="archive_mount_unavailable"):
@@ -263,7 +263,7 @@ def test_governed_cold_cleanup_removes_object_and_manifest(tmp_path: Path) -> No
         now=now,
         retention_window_days=30,
         key=_KEY,
-        volume_ready=lambda: _issue_archive_volume_ready(_ARCHIVE_REF),
+        volume_ready=lambda: _issue_archive_volume_ready(_ARCHIVE_REF, archive_root),
     )
     assert list((archive_root / "representations").glob("*.bin"))
     assert list((archive_root / "manifests").glob("*.json"))
