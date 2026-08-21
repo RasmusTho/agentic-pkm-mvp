@@ -117,12 +117,16 @@ class RawRepresentationIdentityMismatchError(RuntimeError):
 
 
 def _require_verified_cold_volume(archive_root: Path, verified_volume: object) -> None:
-    from app.ops.heimdal_cold_volume import ArchiveVolumeReady
+    from app.ops.heimdal_cold_volume import (
+        ArchiveVolumeReady,
+        _ARCHIVE_VOLUME_READY_ISSUER,
+    )
 
     if (
         not isinstance(verified_volume, ArchiveVolumeReady)
         or not verified_volume.ready
         or verified_volume.mountpoint != archive_root
+        or verified_volume._issuer is not _ARCHIVE_VOLUME_READY_ISSUER
     ):
         raise RawRepresentationDeletionError("verified cold volume proof is required")
 
