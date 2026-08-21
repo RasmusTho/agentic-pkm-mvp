@@ -1642,6 +1642,13 @@ def _governed_delete_pg(
         conn.commit()
         for cold_path in cold_paths:
             raw_store._delete_cold_object_path(cold_path)  # noqa: SLF001
+        if cold_location_refs:
+            cur.execute(
+                "SELECT set_config(%s, 'true', true)",
+                (_RETENTION_RECONCILE_GUARD_SETTING,),
+            )
+            _reconcile_pg_cold_cleanup(cur, record_id)
+            conn.commit()
         return GovernedDeletionResult(
             outcome="deleted", receipt=receipt, tombstone=tombstone
         )
