@@ -32,6 +32,7 @@ _RETENTION_CLAIM_TABLE = "heimdal_raw_retention_claim"
 _DELETION_RECEIPT_TABLE = "heimdal_raw_deletion_receipt"
 _RAW_REF_PREFIX = "heimraw:"
 _RETENTION_GUARD_SETTING = "app.heimdal_retention_bypass"
+_RETENTION_RECONCILE_GUARD_SETTING = "app.heimdal_retention_reconcile"
 
 RESPONSE_LEASE_SECONDS = 30
 
@@ -528,6 +529,10 @@ def _bootstrap_pg(conn: Any) -> None:
         CREATE OR REPLACE FUNCTION heimdal_raw_deletion_receipt_reject_mutation()
         RETURNS trigger AS $$
         BEGIN
+            IF TG_OP = 'UPDATE'
+               AND current_setting('{_RETENTION_RECONCILE_GUARD_SETTING}', true) = 'true' THEN
+                RETURN NEW;
+            END IF;
             RAISE EXCEPTION 'heimdal_raw_deletion_receipt is append-only: % is not permitted', TG_OP;
         END;
         $$ LANGUAGE plpgsql
@@ -1441,6 +1446,10 @@ def _governed_delete_pg(
                     "tombstoned retention target still has durable raw state"
                 )
             tombstone = _load_pg_tombstone(cur, record_id=record_id)
+            cur.execute(
+                "SELECT set_config(%s, 'true', true)",
+                (_RETENTION_RECONCILE_GUARD_SETTING,),
+            )
             try:
                 _reconcile_pg_cold_cleanup(cur, record_id)
             except Exception:

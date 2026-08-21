@@ -61,4 +61,4 @@ cleanup. `tests/heimdal/test_raw_liveness.py`
 and `tests/heimdal/test_raw_store.py` cover governed liveness and representation contracts.
 Migration convergence is covered by
 `tests/migrations/test_heimdal_raw_representation_migration.py`, whose shape comparison targets
-current head `d1a4b7c9e2f0` while historical HAR-02 tests remain at `e7b4c9d2a6f1`.
+current head `e2f3a4b5c6d7` while historical HAR-02 tests remain at `e7b4c9d2a6f1`.
