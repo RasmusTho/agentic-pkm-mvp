@@ -291,9 +291,19 @@ or silently discarded. A failed publication latches the existing typed
 writer-unavailable signal until a clean restart; an exact retry after a valid
 restart may then publish the command without duplicating an accepted mutation.
 
+Independently restored writer hosts that share the same external-root filesystem
+reserve each mutation's sequence allocation through the writer-owned lock file.
+While holding that reservation, a host reloads the immutable envelopes before
+allocating and publishing its next sequence, so concurrent hosts either serialize
+to unique contiguous sequences or the unavailable reservation produces the typed
+writer-unavailable refusal without accepting a command. A caller retains and may
+retry the same request ID after the overlap clears; restart recovery reads the
+resulting ordered envelopes normally. This is a same-filesystem writer
+reservation, not a cross-device or iCloud coordination guarantee.
+
 This boundary is deliberately not a distributed filesystem protocol. It has no
-vault-global claims, slot reservations, cross-device locks, fsync-based recovery,
-SQLite state, or iCloud convergence semantics. PR #4706 is superseded
+vault-global claims, cross-device locks, fsync-based recovery, SQLite state, or
+iCloud convergence semantics. PR #4706 is superseded
 multi-writer evidence only; it is not merged or used as the operational contract.
 
 Threads and their inbox/devUI projections are non-authoritative discussion

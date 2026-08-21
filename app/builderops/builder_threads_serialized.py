@@ -7,15 +7,17 @@ no client filesystem API and deliberately never discovers a vault path.
 
 from __future__ import annotations
 
+import fcntl
 import hashlib
 import json
 import os
 import re
 import threading
 import uuid
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal, Protocol, cast
+from typing import Any, Iterator, Literal, Protocol, cast
 
 
 PRIVACY_CLASS: Literal["shared_non_sensitive"] = "shared_non_sensitive"
@@ -48,6 +50,9 @@ _ENTRY_DIRECTORY = "builder-thread-entries"
 _REPOSITORY_VAULT_ROOT = (Path(__file__).resolve().parents[2] / "vault").resolve()
 _WRITER_ROOT_ENV = "BUILDEROPS_THREAD_WRITER_ROOT"
 _WRITER_VAULT_ID_ENV = "BUILDEROPS_THREAD_WRITER_VAULT_ID"
+_SEQUENCE_RESERVATION = ".builder-thread-sequence.lock"
+_ROOT_RESERVATION_GUARD = threading.Lock()
+_ROOT_RESERVATIONS: dict[Path, threading.Lock] = {}
 
 
 class BuilderThreadError(ValueError):
@@ -72,6 +77,32 @@ class RequestReplayConflictError(BuilderThreadError):
 
 class ThreadAlreadyRepresentedError(BuilderThreadError):
     """The create capture key already has a durable Builder Thread."""
+
+
+@contextmanager
+def _external_mutation_reservation(entries_root: Path) -> Iterator[None]:
+    """Reserve one durable sequence allocation across writer hosts on this filesystem."""
+    lock_path = (entries_root / _SEQUENCE_RESERVATION).resolve()
+    with _ROOT_RESERVATION_GUARD:
+        process_lock = _ROOT_RESERVATIONS.setdefault(lock_path, threading.Lock())
+    if not process_lock.acquire(blocking=False):
+        raise WriterUnavailableError("serialized writer overlap is unavailable")
+
+    descriptor: int | None = None
+    try:
+        try:
+            descriptor = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
+            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError as exc:
+            raise WriterUnavailableError("serialized writer overlap is unavailable") from exc
+        yield
+    finally:
+        if descriptor is not None:
+            try:
+                fcntl.flock(descriptor, fcntl.LOCK_UN)
+            finally:
+                os.close(descriptor)
+        process_lock.release()
 
 
 def initialize_external_writer_root(root: Path, *, vault_id: str) -> None:
@@ -192,40 +223,46 @@ class SerializedThreadWriter:
         """Validate and apply exactly one command in the designated process."""
         with self._lock:
             _validate_command(command)
-            request_digest = _command_digest(command)
-            previous_digest = self._request_digests.get(command.request_id)
-            if previous_digest is not None:
-                if previous_digest != request_digest:
-                    raise RequestReplayConflictError(
-                        "request id reuse conflicts with accepted semantics"
-                    )
-                return ThreadMutationResult(
-                    thread=self._request_results[command.request_id], replayed=True
-                )
-
-            if self._accepted_mutation_count >= _MAX_TOTAL_ENTRIES:
-                raise BuilderThreadError("serialized writer contribution bound reached")
             if self._persistence_unavailable:
                 raise WriterUnavailableError("serialized writer persistence is unavailable")
-            threads_before_write = self._threads.copy()
-            capture_index_before_write = self._capture_index.copy()
-            if command.kind == "create":
-                thread = self._create(command)
-            else:
-                thread = self._append(command)
-            try:
-                self._persist(
-                    command,
-                    request_digest,
-                    sequence=self._accepted_mutation_count + 1,
-                )
-            except OSError as exc:
-                self._threads = threads_before_write
-                self._capture_index = capture_index_before_write
-                self._persistence_unavailable = True
-                raise WriterUnavailableError("serialized writer persistence is unavailable") from exc
-            self._record(command, request_digest, thread)
-            return ThreadMutationResult(thread=thread, replayed=False)
+            with _external_mutation_reservation(self._entries_root):
+                # A separately restored host has a stale in-memory sequence. Rebuild
+                # under the shared reservation before allocating the next durable slot.
+                self._restore_external_state()
+                request_digest = _command_digest(command)
+                previous_digest = self._request_digests.get(command.request_id)
+                if previous_digest is not None:
+                    if previous_digest != request_digest:
+                        raise RequestReplayConflictError(
+                            "request id reuse conflicts with accepted semantics"
+                        )
+                    return ThreadMutationResult(
+                        thread=self._request_results[command.request_id], replayed=True
+                    )
+
+                if self._accepted_mutation_count >= _MAX_TOTAL_ENTRIES:
+                    raise BuilderThreadError("serialized writer contribution bound reached")
+                threads_before_write = self._threads.copy()
+                capture_index_before_write = self._capture_index.copy()
+                if command.kind == "create":
+                    thread = self._create(command)
+                else:
+                    thread = self._append(command)
+                try:
+                    self._persist(
+                        command,
+                        request_digest,
+                        sequence=self._accepted_mutation_count + 1,
+                    )
+                except OSError as exc:
+                    self._threads = threads_before_write
+                    self._capture_index = capture_index_before_write
+                    self._persistence_unavailable = True
+                    raise WriterUnavailableError(
+                        "serialized writer persistence is unavailable"
+                    ) from exc
+                self._record(command, request_digest, thread)
+                return ThreadMutationResult(thread=thread, replayed=False)
 
     def read_thread(self, thread_id: str) -> BuilderThread:
         _validate_identifier(thread_id, field="thread_id")

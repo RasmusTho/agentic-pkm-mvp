@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import json
+import multiprocessing
+
 import pytest
 from pathlib import Path
 
@@ -610,6 +613,86 @@ def test_external_writer_restores_causal_order_not_request_id_order(tmp_path: Pa
         client_id="claude:mac",
     )
     assert len(restarted.read(created.thread.thread_id).entries) == 2
+
+
+def _overlapping_writer_process(
+    start: object, outcomes: object, request_id: str, actor: str, recipient: str
+) -> None:
+    start.wait()
+    try:
+        host = BuilderThreadWriterHost.from_environment()
+        client = BuilderThreadClient(host.endpoint_for(actor), client_id=actor)
+        client.create(
+            request_id=request_id,
+            actor=actor,
+            recipient=recipient,
+            subject=f"Overlapping writer {request_id}",
+            content="Concurrent hosts must reserve durable sequence allocation.",
+            source_refs=("github:5031",),
+        )
+        outcomes.put("accepted")
+    except WriterUnavailableError:
+        outcomes.put("unavailable")
+
+
+def _overlap_writer_hosts() -> list[str]:
+    context = multiprocessing.get_context("spawn")
+    start = context.Barrier(3)
+    outcomes = context.Queue()
+    first = context.Process(
+        target=_overlapping_writer_process,
+        args=(start, outcomes, "overlap-first-5031", "codex:desktop", "claude:mac"),
+    )
+    second = context.Process(
+        target=_overlapping_writer_process,
+        args=(start, outcomes, "overlap-second-5031", "claude:mac", "codex:desktop"),
+    )
+    first.start()
+    second.start()
+    start.wait()
+    first.join()
+    second.join()
+
+    assert first.exitcode == 0
+    assert second.exitcode == 0
+    return [outcomes.get(), outcomes.get()]
+
+
+def test_overlapping_writer_hosts_cannot_publish_duplicate_sequences(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Independently restored production hosts reserve durable sequence slots."""
+    root = tmp_path / "host-owned-external-vault"
+    monkeypatch.setenv("BUILDEROPS_THREAD_WRITER_ROOT", str(root))
+    monkeypatch.setenv("BUILDEROPS_THREAD_WRITER_VAULT_ID", "builderops-mac-mini")
+    outcomes = _overlap_writer_hosts()
+
+    assert len(outcomes) == 2
+    entries = root / "builder-thread-entries"
+    sequences = sorted(
+        json.loads(path.read_text(encoding="utf-8"))["sequence"]
+        for path in entries.glob("*.json")
+    )
+    assert sequences == list(range(1, len(sequences) + 1))
+    assert len(sequences) == outcomes.count("accepted")
+
+
+def test_restart_recovers_after_overlapping_writer_attempt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "host-owned-external-vault"
+    monkeypatch.setenv("BUILDEROPS_THREAD_WRITER_ROOT", str(root))
+    monkeypatch.setenv("BUILDEROPS_THREAD_WRITER_VAULT_ID", "builderops-mac-mini")
+    _overlap_writer_hosts()
+    restarted = SerializedThreadWriter(vault_id="builderops-mac-mini", state_root=root)
+    entries = root / "builder-thread-entries"
+    sequences = sorted(
+        json.loads(path.read_text(encoding="utf-8"))["sequence"]
+        for path in entries.glob("*.json")
+    )
+
+    assert restarted.accepted_mutation_count == len(sequences)
+    assert sequences == list(range(1, restarted.accepted_mutation_count + 1))
 
 
 def test_global_contribution_bound_applies_to_replies(tmp_path: Path) -> None:
