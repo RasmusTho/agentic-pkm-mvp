@@ -92,7 +92,7 @@ def test_working_artifact_uses_existing_builderops_store(
     assert store.get_record(created["id"]) == created
 
 
-def test_working_artifact_is_admitted_through_controlled_builderops_boundary(
+def test_working_artifact_is_reachable_through_supported_boundary(
     tmp_path: Path,
 ) -> None:
     db_path = tmp_path / "builderops.sqlite3"
@@ -108,17 +108,30 @@ def test_working_artifact_is_admitted_through_controlled_builderops_boundary(
     assert boundary.read_record(created["id"]) == created
 
 
-def test_working_artifact_cannot_claim_gateway_promotion_directly(
+def test_promoted_working_artifact_requires_gateway_evidence_at_every_transition(
     store: SqliteBuilderOpsStore,
 ) -> None:
     fields = _working_artifact_fields()
-    fields.update({
-        "promotion_status": "promoted",
-        "promotion_posture": "promoted",
-    })
+    fields["promotion_status"] = "promoted"
 
     with pytest.raises(BuilderOpsValidationError, match="cannot claim promotion"):
         store.create_working_artifact(**fields)
+
+    artifact = store.create_working_artifact(**_working_artifact_fields())
+    lease = store.acquire_lease(artifact["id"], actor=_actor())
+
+    with pytest.raises(BuilderOpsValidationError, match="cannot claim promotion"):
+        store.transition_record_state(
+            artifact["id"],
+            actor=_actor(),
+            lease_id=lease["lease_id"],
+            idempotency_key="working-artifact-direct-promotion",
+            source_refs=_source_refs(),
+            summary="Attempt unsupported direct promotion",
+            action="promote",
+            receipt_body="A working artifact cannot self-promote.",
+            promotion_status="promoted",
+        )
 
 
 def test_working_artifact_promotion_requires_explicit_target_and_receipt(

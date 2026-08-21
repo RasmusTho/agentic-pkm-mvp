@@ -268,6 +268,69 @@ def test_repo_doc_and_adr_promotions_are_proposal_only(
     assert "## Source Anchors" in proposal["body"]
 
 
+def test_working_artifact_promotion_stays_proposal_only(
+    store: SqliteBuilderOpsStore,
+    gateway: BuilderOpsPromotionGateway,
+) -> None:
+    artifact = store.create_working_artifact(
+        id="work_proposal_only_001",
+        summary="Builder working artifact remains non-normative",
+        body="A bounded artifact that may only produce a proposal.",
+        source_refs=[
+            {
+                "ref_type": "github_issue",
+                "ref": "#5013",
+                "authority_surface": "github",
+            }
+        ],
+        created_by=_actor(),
+        authority_standing="non_normative",
+        derivation_role="derived",
+        durability_posture="ephemeral",
+        working_lifecycle_stage="propose",
+        promotion_posture="proposed",
+        location_context="builder_vault",
+        provenance={
+            "source_refs": [
+                {
+                    "ref_type": "github_issue",
+                    "ref": "#5013",
+                    "authority_surface": "github",
+                }
+            ],
+            "derived_from": [
+                {
+                    "ref_type": "github_issue",
+                    "ref": "#5013",
+                    "authority_surface": "github",
+                }
+            ],
+            "transformation": "Prepare a proposal through the promotion gateway.",
+            "actor_or_process": "test-agent",
+            "observed_at": "2026-08-22T00:00:00Z",
+            "source_versions_or_watermarks": ["issue-5013@2026-08-22"],
+            "review_or_decision_ref": "unknown",
+            "promotion_ref": "unknown",
+            "supersedes_refs": ["unknown"],
+            "receipt_refs": ["unknown"],
+            "limitations": ["Cannot mutate target authority."],
+        },
+        receipt_refs=[],
+    )
+    intent = _create_intent(
+        store,
+        intent_id="prom_working_artifact_001",
+        target_surface="github_issue",
+        target_ref="pending",
+    )
+    proposal = gateway.render_proposal(intent["id"])
+
+    assert artifact["promotion_status"] == "none"
+    assert artifact["promotion_posture"] == "proposed"
+    assert proposal["would_mutate_authority"] is False
+    assert proposal["target_authority_surface"] == "github_issue"
+
+
 def test_repo_skill_and_workflow_doc_target_renders_as_writeback_proposal(
     store: SqliteBuilderOpsStore,
     gateway: BuilderOpsPromotionGateway,
