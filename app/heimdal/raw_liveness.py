@@ -1208,6 +1208,32 @@ def _memory_claim_retention_locked(
     return claim
 
 
+def _reconcile_memory_cold_cleanup(tombstone: RawDeletionTombstone) -> None:
+    from app.heimdal import raw_store
+
+    receipt = next(
+        (item for item in _MEMORY.deletion_receipts if item.id == tombstone.deletion_receipt_id),
+        None,
+    )
+    if receipt is None:
+        return
+    refs = list(receipt.payload.get("cold_cleanup_location_refs", []))
+    remaining: list[str] = []
+    for location_ref in refs:
+        object_path = raw_store._cold_object_path(str(location_ref))  # noqa: SLF001
+        if object_path is None:
+            raise raw_store.RawRepresentationDeletionError(
+                "cold representation resolver is unavailable"
+            )
+        try:
+            raw_store._delete_cold_object_path(object_path)  # noqa: SLF001
+        except raw_store.RawRepresentationDeletionError:
+            remaining.append(str(location_ref))
+    receipt.payload["cold_cleanup_location_refs"] = remaining
+    if remaining:
+        raise raw_store.RawRepresentationDeletionError("cold representation deletion failed")
+
+
 def _governed_delete_memory(
     *,
     record_id: str,
@@ -1228,6 +1254,7 @@ def _governed_delete_memory(
         existing_tombstone = _MEMORY.tombstones_by_record.get(record_id)
         raw_active = _memory_raw_is_exact_active(generation)
         if existing_tombstone is not None:
+            _reconcile_memory_cold_cleanup(existing_tombstone)
             if raw_active:
                 raise RawLivenessUnavailableError(
                     "tombstoned retention target still has active raw state"
@@ -1272,19 +1299,35 @@ def _governed_delete_memory(
             sequence=len(_MEMORY.tombstones),
         )
         raw_snapshot = raw_store._MEMORY_STORE.snapshot_state()  # noqa: SLF001
+        cold_paths = []
+        for representation in raw_store.all_raw_representations(record_id):
+            if representation.storage_kind == "encrypted_local_cold":
+                object_path = raw_store._cold_object_path(representation.location_ref)  # noqa: SLF001
+                if object_path is None:
+                    raise raw_store.RawRepresentationDeletionError(
+                        "cold representation resolver is unavailable"
+                    )
+                cold_paths.append((representation.location_ref, object_path))
+        if cold_paths:
+            receipt.payload["cold_cleanup_location_refs"] = [ref for ref, _path in cold_paths]
         _MEMORY.deletion_receipts.append(receipt)
+        raw_deleted = False
         try:
             _retention_stage_hook("after_deletion_receipt")
             _MEMORY.tombstones.append(tombstone)
             _MEMORY.tombstones_by_record[record_id] = tombstone
-            raw_store._delete_cold_objects_for_record(record_id)  # noqa: SLF001
             _retention_stage_hook("after_tombstone")
             if not raw_store._MEMORY_STORE.hard_delete(record_id):  # noqa: SLF001
                 raise RawLivenessUnavailableError(
                     "retention target disappeared without a governed tombstone commit"
                 )
             _retention_stage_hook("after_raw_delete")
+            raw_deleted = True
+            for _location_ref, cold_path in cold_paths:
+                raw_store._delete_cold_object_path(cold_path)  # noqa: SLF001
         except Exception:
+            if raw_deleted:
+                raise
             raw_store._MEMORY_STORE.restore_state(raw_snapshot)  # noqa: SLF001
             if claim_was_new and _MEMORY.retention_claims and _MEMORY.retention_claims[-1] == claim:
                 _MEMORY.retention_claims.pop()
@@ -1338,13 +1381,25 @@ def _reconcile_pg_cold_cleanup(cur: Any, record_id: str) -> None:
     payload = receipt_row[0] if receipt_row else {}
     if isinstance(payload, str):
         payload = json.loads(payload)
+    remaining: list[str] = []
     for location_ref in payload.get("cold_cleanup_location_refs", []):
         object_path = raw_store._cold_object_path(str(location_ref))  # noqa: SLF001
         if object_path is None:
             raise raw_store.RawRepresentationDeletionError(
                 "cold representation resolver is unavailable"
             )
-        raw_store._delete_cold_object_path(object_path)  # noqa: SLF001
+        try:
+            raw_store._delete_cold_object_path(object_path)  # noqa: SLF001
+        except raw_store.RawRepresentationDeletionError:
+            remaining.append(str(location_ref))
+    updated_payload = dict(payload)
+    updated_payload["cold_cleanup_location_refs"] = remaining
+    cur.execute(
+        f"UPDATE {_DELETION_RECEIPT_TABLE} SET payload = %s::jsonb WHERE id = %s",
+        (json.dumps(updated_payload), tombstone_row[0]),
+    )
+    if remaining:
+        raise raw_store.RawRepresentationDeletionError("cold representation deletion failed")
 
 
 def _governed_delete_pg(

@@ -42,8 +42,10 @@ memory governed path. Ordinary representation registration cannot delete identit
 - PG deletion locks the content fence, generation, raw record, then cold representation rows.
   Cold registration locks the same raw record, so registration cannot commit after capture.
 - Receipt retry is the queued consumer. It is idempotent (`missing_ok=True`) and does not reinsert
-  rows. Stale observations cannot authorize deletion because the receipt/tombstone and row locks
-  are the authority.
+  rows. The PG receipt payload is atomically reduced to an empty ref list after successful
+  reconciliation; the memory writer follows the same post-authority-delete ordering and keeps its
+  receipt queue on cleanup failure. Stale observations cannot authorize deletion because the
+  receipt/tombstone and row locks are the authority.
 
 ## Prior findings and proof map
 
@@ -54,7 +56,8 @@ post-commit cleanup. The current implementation addresses each under the same me
 
 Focused proof: `tests/heimdal/test_local_archive.py` covers eligibility, proof/root mismatch,
 receipt ordering, cache-loss re-resolution, callback/mkdir/manifest redaction, cursor locking,
-post-commit receipt reconciliation, and object/manifest cleanup. `tests/heimdal/test_raw_liveness.py`
+post-commit receipt reconciliation and queue clearing, memory rollback ordering, and object/manifest
+cleanup. `tests/heimdal/test_raw_liveness.py`
 and `tests/heimdal/test_raw_store.py` cover governed liveness and representation contracts.
 Migration convergence is covered by
 `tests/migrations/test_heimdal_raw_representation_migration.py`, whose shape comparison targets

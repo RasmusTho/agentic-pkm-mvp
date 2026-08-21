@@ -346,6 +346,8 @@ def test_pg_erasure_cleanup_receipt_reconciles_after_commit(tmp_path: Path) -> N
                 return ("receipt-id",)
             return ({"cold_cleanup_location_refs": [location_ref]},)
 
-    raw_liveness._reconcile_pg_cold_cleanup(ReceiptCursor(), "record-id")  # noqa: SLF001
+    cursor = ReceiptCursor()
+    raw_liveness._reconcile_pg_cold_cleanup(cursor, "record-id")  # noqa: SLF001
+    assert cursor.calls == 3
     assert not object_path.exists()
     assert not (manifests / f"{representation_id}.json").exists()
