@@ -46,7 +46,8 @@ _RECEIPT_TRIGGER_GUARDED_UPDATE = re.compile(
     r"^if\s+tg_op\s*=\s*'update'\s+and\s+current_setting\(\s*'"
     + re.escape(_RETENTION_RECONCILE_GUARD_SETTING)
     + r"'\s*,\s*true\s*\)\s*=\s*'true'\s+then\s+return\s+new\s*;\s*"
-    r"end\s+if\s*;\s*raise\s+exception\b[^;]+;\s*$",
+    r"end\s+if\s*;\s*raise\s+exception\s+'heimdal_raw_deletion_receipt\s+"
+    r"is\s+append-only:\s+%\s+is\s+not\s+permitted',\s*tg_op\s*;\s*$",
     re.IGNORECASE,
 )
 
