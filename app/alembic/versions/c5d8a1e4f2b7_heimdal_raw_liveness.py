@@ -242,6 +242,31 @@ def upgrade() -> None:
         "heimdal_raw_retention_claim",
         "heimdal_raw_retention_claim_no_mutation",
     )
+    op.execute(
+        """
+        CREATE OR REPLACE FUNCTION heimdal_raw_response_lease_reject_retiring()
+        RETURNS trigger AS $$
+        BEGIN
+            PERFORM pg_advisory_xact_lock(hashtextextended(NEW.content_identity, 0));
+            IF EXISTS (
+                SELECT 1 FROM heimdal_raw_retention_claim
+                WHERE record_id = NEW.record_id
+            ) THEN
+                RAISE EXCEPTION
+                    'heimdal_raw_response_lease cannot be issued for a retiring raw generation';
+            END IF;
+            RETURN NEW;
+        END;
+        $$ LANGUAGE plpgsql
+        """
+    )
+    op.execute(
+        """
+        CREATE TRIGGER heimdal_raw_response_lease_reject_retiring
+        BEFORE INSERT ON heimdal_raw_response_lease
+        FOR EACH ROW EXECUTE FUNCTION heimdal_raw_response_lease_reject_retiring()
+        """
+    )
 
     # A session setting is no longer enough: the exact generation's tombstone
     # must already exist in the same transaction before any bytes can be erased.

@@ -516,8 +516,9 @@ Contract:
   writers use the same per-content fence. The first eligible retention attempt
   appends a durable retirement claim with a finite `drain_after` frontier; it
   waits for the already-issued lease, but polling cannot issue or renew another
-  lease after that claim. Clients may delete their local original only while
-  the lease is valid, and must re-query after expiry.
+  lease after that claim. PostgreSQL enforces the same boundary in the lease
+  insert trigger under the shared advisory fence. Clients may delete their
+  local original only while the lease is valid, and must re-query after expiry.
 - **All registered copies precede success.** The shared raw-store erasure
   transaction writes the tombstone and deletion receipt, then enumerates and
   deletes every registered representation before removing identity. Any copy

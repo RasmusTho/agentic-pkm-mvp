@@ -1640,7 +1640,7 @@ RECORDED_ATTACHED_DDL_DEBT: Mapping[tuple[str, str, str], int] = MappingProxyTyp
             "app/heimdal/raw_liveness.py",
             "create trigger",
             "heimdal_raw_response_lease",
-        ): 1,
+        ): 2,
         (
             "app/heimdal/raw_liveness.py",
             "create trigger",

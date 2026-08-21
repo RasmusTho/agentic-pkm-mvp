@@ -273,6 +273,80 @@ def test_autocreate_and_migration_liveness_schemas_match(
     assert _schema_snapshot(bootstrapped) == _schema_snapshot(migrated)
 
 
+def test_pg_retention_claim_rejects_post_claim_lease_insert_and_renewal(
+    scratch_db_factory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    dsn = scratch_db_factory()
+    _upgrade(dsn, monkeypatch, LIVENESS_HEAD)
+    content_identity = "sha256:" + "b" * 64
+    record_id = uuid.uuid4()
+    lease_id = uuid.uuid4()
+    claimed_at = datetime(2026, 8, 21, tzinfo=timezone.utc)
+    with psycopg.connect(dsn, autocommit=True) as conn:
+        conn.execute(
+            """
+            INSERT INTO heimdal_raw_liveness_generation (
+                content_identity, generation, record_id, raw_ref, activated_at
+            ) VALUES (%s, 1, %s, %s, %s)
+            """,
+            (content_identity, record_id, f"heimraw:{record_id}", claimed_at),
+        )
+        conn.execute(
+            """
+            INSERT INTO heimdal_raw_response_lease (
+                lease_id, content_identity, generation, record_id, raw_ref,
+                issued_at, expires_at
+            ) VALUES (%s, %s, 1, %s, %s, %s, %s)
+            """,
+            (
+                lease_id,
+                content_identity,
+                record_id,
+                f"heimraw:{record_id}",
+                claimed_at,
+                claimed_at + timedelta(seconds=30),
+            ),
+        )
+        conn.execute(
+            """
+            INSERT INTO heimdal_raw_retention_claim (
+                id, content_identity, generation, record_id, raw_ref,
+                reason, retention_window_days, claimed_at, drain_after, payload
+            ) VALUES (%s, %s, 1, %s, %s, 'hard_retention_bound', 1, %s, %s, '{}'::jsonb)
+            """,
+            (
+                uuid.uuid4(),
+                content_identity,
+                record_id,
+                f"heimraw:{record_id}",
+                claimed_at,
+                claimed_at + timedelta(seconds=30),
+            ),
+        )
+        with pytest.raises(psycopg.errors.RaiseException, match="retiring"):
+            conn.execute(
+                """
+                INSERT INTO heimdal_raw_response_lease (
+                    lease_id, content_identity, generation, record_id, raw_ref,
+                    issued_at, expires_at
+                ) VALUES (%s, %s, 1, %s, %s, %s, %s)
+                """,
+                (
+                    uuid.uuid4(),
+                    content_identity,
+                    record_id,
+                    f"heimraw:{record_id}",
+                    claimed_at + timedelta(seconds=31),
+                    claimed_at + timedelta(seconds=61),
+                ),
+            )
+        with pytest.raises(psycopg.errors.RaiseException, match="append-only"):
+            conn.execute(
+                "UPDATE heimdal_raw_response_lease SET expires_at = %s WHERE lease_id = %s",
+                (claimed_at + timedelta(minutes=5), lease_id),
+            )
+
+
 @pytest.mark.parametrize(
     "crash_stage", ["after_deletion_receipt", "after_tombstone", "after_raw_delete"]
 )

@@ -428,6 +428,7 @@ def _assert_pg_schema(conn: Any) -> None:
               'heimdal_raw_deletion_tombstone_no_mutation',
               'heimdal_raw_response_lease_no_mutation',
               'heimdal_raw_retention_claim_no_mutation',
+              'heimdal_raw_response_lease_reject_retiring',
               'heimdal_raw_deletion_receipt_no_update'
           )
         """
@@ -438,6 +439,7 @@ def _assert_pg_schema(conn: Any) -> None:
         "heimdal_raw_deletion_tombstone_no_mutation",
         "heimdal_raw_response_lease_no_mutation",
         "heimdal_raw_retention_claim_no_mutation",
+        "heimdal_raw_response_lease_reject_retiring",
         "heimdal_raw_deletion_receipt_no_update",
     }
     if triggers != expected:
@@ -676,6 +678,31 @@ def _bootstrap_pg(conn: Any) -> None:
         CREATE TRIGGER heimdal_raw_response_lease_no_mutation
         BEFORE UPDATE OR DELETE ON {_LEASE_TABLE}
         FOR EACH ROW EXECUTE FUNCTION heimdal_raw_response_lease_reject_mutation()
+        """
+    )
+    cur.execute(
+        f"""
+        CREATE OR REPLACE FUNCTION heimdal_raw_response_lease_reject_retiring()
+        RETURNS trigger AS $$
+        BEGIN
+            PERFORM pg_advisory_xact_lock(hashtextextended(NEW.content_identity, 0));
+            IF EXISTS (
+                SELECT 1 FROM {_RETENTION_CLAIM_TABLE}
+                WHERE record_id = NEW.record_id
+            ) THEN
+                RAISE EXCEPTION
+                    'heimdal_raw_response_lease cannot be issued for a retiring raw generation';
+            END IF;
+            RETURN NEW;
+        END;
+        $$ LANGUAGE plpgsql
+        """
+    )
+    cur.execute(
+        f"""
+        CREATE TRIGGER heimdal_raw_response_lease_reject_retiring
+        BEFORE INSERT ON {_LEASE_TABLE}
+        FOR EACH ROW EXECUTE FUNCTION heimdal_raw_response_lease_reject_retiring()
         """
     )
     cur.execute(
