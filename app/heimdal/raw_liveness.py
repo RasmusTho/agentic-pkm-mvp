@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import threading
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -447,9 +448,13 @@ def _assert_pg_schema(conn: Any) -> None:
         raise RawLivenessSchemaMissingError(
             "Raw-liveness append-only triggers are incomplete. " + _MIGRATION_HINT
         )
+    # The trigger must remain bound to both mutation events, while the function
+    # must admit exactly the guarded UPDATE path and reject everything else.
+    # Normalize PostgreSQL's pretty-printed body before checking the complete
+    # control-flow shape; independent token presence is insufficient here.
     cur.execute(
         """
-        SELECT pg_get_functiondef(t.tgfoid)
+        SELECT pg_get_functiondef(t.tgfoid), pg_get_triggerdef(t.oid)
         FROM pg_trigger AS t
         JOIN pg_class AS c ON c.oid = t.tgrelid
         JOIN pg_namespace AS n ON n.oid = c.relnamespace
@@ -457,16 +462,21 @@ def _assert_pg_schema(conn: Any) -> None:
           AND c.relname = %s
           AND t.tgname = 'heimdal_raw_deletion_receipt_no_update'
           AND NOT t.tgisinternal
-        """
-        , (_DELETION_RECEIPT_TABLE,)
+        """,
+        (_DELETION_RECEIPT_TABLE,),
     )
-    function_defs = [str(item[0]) for item in cur.fetchall()]
+    trigger_rows = cur.fetchall()
+    canonical_guarded_update = re.compile(
+        r"if\s+tg_op\s*=\s*'update'\s+and\s+current_setting\(\s*'"
+        + re.escape(_RETENTION_RECONCILE_GUARD_SETTING)
+        + r"'\s*,\s*true\s*\)\s*=\s*'true'\s+then\s+return\s+new\s*;\s*"
+        r"end\s+if\s*;\s*raise\s+exception",
+        re.IGNORECASE,
+    )
     if not any(
-        _RETENTION_RECONCILE_GUARD_SETTING in function_def
-        and "TG_OP = 'UPDATE'" in function_def
-        and "RETURN NEW" in function_def
-        and "RAISE EXCEPTION" in function_def
-        for function_def in function_defs
+        canonical_guarded_update.search(re.sub(r"\s+", " ", str(row[0])))
+        and re.search(r"before\s+update\s+or\s+delete\s+on", str(row[1]), re.IGNORECASE)
+        for row in trigger_rows
     ):
         raise RawLivenessSchemaMissingError(
             "Deletion-receipt reconciliation trigger is not migration-ready. "

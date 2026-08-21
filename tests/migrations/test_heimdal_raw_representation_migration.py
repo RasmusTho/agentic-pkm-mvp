@@ -242,7 +242,7 @@ def _raw_schema_snapshot(dsn: str) -> dict[str, object]:
         triggers = [tuple(row) for row in cur.fetchall()]
         cur.execute(
             """
-            SELECT pg_get_functiondef(t.tgfoid)
+            SELECT pg_get_functiondef(t.tgfoid), pg_get_triggerdef(t.oid)
             FROM pg_trigger AS t
             JOIN pg_class AS c ON c.oid = t.tgrelid
             JOIN pg_namespace AS n ON n.oid = c.relnamespace
@@ -736,4 +736,15 @@ def test_test_bootstrap_and_migration_shapes_converge(
     from app.heimdal import raw_store
 
     raw_store._PgRawStore()
-    assert _raw_schema_snapshot(bootstrapped) == _raw_schema_snapshot(migrated)
+    bootstrapped_shape = _raw_schema_snapshot(bootstrapped)
+    migrated_shape = _raw_schema_snapshot(migrated)
+    assert bootstrapped_shape == migrated_shape
+    receipt_functions = bootstrapped_shape["receipt_functions"]
+    assert any(
+        "TG_OP = 'UPDATE'" in function_def
+        and "current_setting('app.heimdal_retention_reconcile', true) = 'true'" in function_def
+        and "RETURN NEW" in function_def
+        and "RAISE EXCEPTION" in function_def
+        and "BEFORE UPDATE OR DELETE" in trigger_def
+        for function_def, trigger_def in receipt_functions
+    )
