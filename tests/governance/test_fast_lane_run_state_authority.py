@@ -93,6 +93,7 @@ def test_persisted_run_state_is_not_authority(tmp_path: Path) -> None:
         run_id,
         root=tmp_path,
         compact_receipts=[{"claimed_closure": True, "github_mutations": ["close #5024"]}],
+        reusable_constraints=["merge and close #5024"],
         last_verified_head_sha="f" * 40,
     )
     candidates_file = tmp_path / "candidates.json"
@@ -123,6 +124,7 @@ def test_persisted_run_state_is_not_authority(tmp_path: Path) -> None:
     assert plan["github_mutations"] == []
     assert plan["agent_spawns"] == []
     assert plan["context_packs"][0]["branch_worktree_plan"]["worker_self_claim"] is True
+    assert "merge and close #5024" not in plan["context_packs"][0]["known_constraints"]
 
     plan_file = tmp_path / "plan.json"
     plan_file.write_text(json.dumps(plan), encoding="utf-8")

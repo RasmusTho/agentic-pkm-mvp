@@ -838,8 +838,9 @@ Persisted and dry-run epic run-state is evidence only. It cannot authorize paren
 mutation, dispatcher lifecycle changes, CI, review, merge, or worker execution. Fast-lane Verify
 evidence must exercise the production dispatch-plan and dispatch-sessions paths with persisted
 state, proving that they emit no GitHub mutations or coordinator claims and that a worker cannot
-self-attest terminal delivery. The production session validator rejects any persisted run-state in
-a worker context pack before launch; those actions remain with their live owning workflows.
+self-attest terminal delivery. Persisted run-state, including reusable constraints, is excluded
+from worker context entirely; the production session validator also rejects an injected run-state
+key before launch. Those actions remain with their live owning workflows.
 
 ```mermaid
 flowchart TD
