@@ -971,11 +971,10 @@ def _pg_exact_active(cur: Any, generation: RawLivenessGeneration) -> bool:
         SELECT count(*) FILTER (WHERE p.active),
                count(*) FILTER (
                    WHERE p.active
-                     AND p.storage_kind = 'postgres_hot'
-                     AND p.location_ref LIKE 'heimloc:%%'
-                     AND p.ciphertext IS NOT NULL
-                     AND p.nonce IS NOT NULL
-                     AND p.key_ref IS NOT NULL
+                   AND p.storage_kind IN ('postgres_hot', 'encrypted_local_cold')
+                   AND p.location_ref LIKE 'heimloc:%%'
+                   AND p.nonce IS NOT NULL
+                   AND p.key_ref IS NOT NULL
                )
         FROM heimdal_raw_record AS r
         LEFT JOIN heimdal_raw_representation AS p ON p.record_id = r.id

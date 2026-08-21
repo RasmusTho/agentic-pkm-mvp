@@ -179,14 +179,16 @@ def relocate_raw_record(
     ciphertext_hash = hashlib.sha256(ciphertext).hexdigest()
     representation_id = str(uuid4())
     receipt_id = str(uuid4())
-    location_ref = f"heimloc:cold:{receipt_id}"
+    location_ref = f"heimloc:cold:{representation_id}"
     object_path = objects / f"{representation_id}.bin"
+    manifest_written = False
 
     try:
         _durable_write(object_path, ciphertext)
         copied = object_path.read_bytes()
         if copied != ciphertext or hashlib.sha256(copied).hexdigest() != ciphertext_hash:
             raise ArchiveDegradedError("archive_copy_verification_failed")
+        raw_store.register_cold_location(location_ref, object_path)
         raw_store.decrypt_and_verify_raw_bytes(
             record.content_identity, copied, hot.nonce, key=key or raw_store.resolve_raw_store_key()
         )
@@ -209,12 +211,17 @@ def relocate_raw_record(
             verified_at=_utc(reference),
         )
         _durable_write(manifests / f"{receipt_id}.json", _manifest_payload(receipt))
+        manifest_written = True
         active = raw_store.activate_raw_representation(record.id, cold.id, key=key)
         return ArchiveResult(receipt, ArchiveHealth(True, "ok"), active)
     except ArchiveDegradedError:
+        if not manifest_written:
+            object_path.unlink(missing_ok=True)
         raise
-    except Exception as exc:
-        raise ArchiveDegradedError("archive_relocation_failed") from exc
+    except Exception:
+        if not manifest_written:
+            object_path.unlink(missing_ok=True)
+        raise ArchiveDegradedError("archive_relocation_failed") from None
 
 
 __all__ = [

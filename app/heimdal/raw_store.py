@@ -52,8 +52,8 @@ resolvable Postgres DSN uses the migration-owned identity and representation
 tables. Runtime preflight refuses an incomplete legacy backfill or unsupported
 active representation; it never falls back to inline bytes or a caller path.
 
-Out of scope for HAR-02: cold-volume provisioning, a file resolver, and live
-relocation. Key management/rotation also remains out of scope. The gated read
+HAR-04 adds the mounted-cold file resolver and live relocation. Key
+management/rotation remains out of scope. The gated read
 path (allowlist + receipt evaluation over the active registry entry) is
 `app/heimdal/raw_read_gate.py` (A7, #3027, evolved by #3848).
 """
@@ -63,6 +63,8 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+from pathlib import Path
+import re
 import threading
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
@@ -94,6 +96,8 @@ _REPRESENTATION_ACTIVATION_GUARD_SETTING = "app.heimdal_representation_activatio
 _HOT_STORAGE_KIND = "postgres_hot"
 _COLD_STORAGE_KIND = "encrypted_local_cold"
 _LOCATION_REF_PREFIX = "heimloc:"
+_COLD_ARCHIVE_ROOT_ENV = "HEIMDAL_ARCHIVE_ROOT"
+_cold_location_paths: Dict[str, Path] = {}
 
 
 class RawStoreSchemaMissingError(RuntimeError):
@@ -110,6 +114,41 @@ class RawRepresentationDeletionError(RuntimeError):
 
 class RawRepresentationIdentityMismatchError(RuntimeError):
     """Raised when encrypted representation bytes do not match immutable identity."""
+
+
+def register_cold_location(location_ref: str, object_path: Path) -> None:
+    """Bind an opaque cold handle to a verified mounted-volume object path."""
+    object_id = location_ref.rsplit(":", 1)[-1]
+    if (
+        not location_ref.startswith(f"{_LOCATION_REF_PREFIX}cold:")
+        or not object_path.is_absolute()
+        or object_path.name != f"{object_id}.bin"
+    ):
+        raise ValueError("cold object path does not match its opaque location handle")
+    _cold_location_paths[location_ref] = object_path
+
+
+def _resolve_cold_ciphertext(location_ref: str) -> bytes:
+    object_path = _cold_location_paths.get(location_ref)
+    if object_path is None:
+        root_value = os.environ.get(_COLD_ARCHIVE_ROOT_ENV, "")
+        object_id = location_ref.rsplit(":", 1)[-1]
+        if root_value and Path(root_value).is_absolute() and re.fullmatch(
+            r"[0-9a-f-]{36}", object_id
+        ):
+            object_path = Path(root_value) / "representations" / f"{object_id}.bin"
+    if object_path is None:
+        raise RawRepresentationUnavailableError("cold representation resolver is unavailable")
+    try:
+        return object_path.read_bytes()
+    except OSError as exc:
+        raise RawRepresentationUnavailableError("cold representation bytes are unavailable") from exc
+
+
+def _representation_ciphertext(representation: "RawRepresentation") -> bytes:
+    if representation.storage_kind == _COLD_STORAGE_KIND:
+        return _resolve_cold_ciphertext(representation.location_ref)
+    return representation.ciphertext
 
 
 class AppendOnlyViolationError(RuntimeError):
@@ -316,7 +355,7 @@ class _MemoryRawStore:
             capture_chain=list(identity.capture_chain),
             sensor=dict(identity.sensor),
             consent=dict(identity.consent),
-            ciphertext=representation.ciphertext,
+            ciphertext=_representation_ciphertext(representation),
             nonce=representation.nonce,
             key_ref=representation.key_ref,
             source_path=identity.source_path,
@@ -519,7 +558,7 @@ class _MemoryRawStore:
                 expected = (record_id, ciphertext, nonce, key_ref, _COLD_STORAGE_KIND, location_ref)
                 actual = (
                     existing.record_id,
-                    existing.ciphertext,
+                    _representation_ciphertext(existing),
                     existing.nonce,
                     existing.key_ref,
                     existing.storage_kind,
@@ -533,7 +572,7 @@ class _MemoryRawStore:
                 record_id=record_id,
                 storage_kind=_COLD_STORAGE_KIND,
                 location_ref=location_ref,
-                ciphertext=ciphertext,
+                ciphertext=b"",
                 nonce=nonce,
                 key_ref=key_ref,
                 active=False,
@@ -557,7 +596,7 @@ class _MemoryRawStore:
             raise RawRepresentationUnavailableError("raw identity does not exist")
         decrypt_and_verify_raw_bytes(
             identity.content_identity,
-            target.ciphertext,
+            _representation_ciphertext(target),
             target.nonce,
             key=key,
         )
@@ -872,16 +911,26 @@ def _assert_pg_schema(conn: Any) -> None:
             OR count(*) FILTER (
                 WHERE p.active
                   AND (
-                    NOT (p.storage_kind = ANY(%s))
-                    OR p.location_ref NOT LIKE %s
-                    OR p.ciphertext IS NULL
-                    OR p.nonce IS NULL
-                    OR p.key_ref IS NULL
+                    NOT (
+                        (
+                            p.storage_kind = 'postgres_hot'
+                            AND p.location_ref LIKE %s
+                            AND p.ciphertext IS NOT NULL
+                            AND p.nonce IS NOT NULL
+                            AND p.key_ref IS NOT NULL
+                        )
+                        OR (
+                            p.storage_kind = 'encrypted_local_cold'
+                            AND p.location_ref LIKE %s
+                            AND p.nonce IS NOT NULL
+                            AND p.key_ref IS NOT NULL
+                        )
+                    )
                   )
             ) <> 0
         LIMIT 1
         """,
-        ([_HOT_STORAGE_KIND, _COLD_STORAGE_KIND], f"{_LOCATION_REF_PREFIX}%"),
+        (f"{_LOCATION_REF_PREFIX}%", f"{_LOCATION_REF_PREFIX}cold:%"),
     )
     if cur.fetchone() is not None:
         raise RawStoreSchemaMissingError(
@@ -1032,7 +1081,8 @@ def _bootstrap_pg(conn: Any) -> None:
 def _row_from_db(row: tuple) -> RawRecord:
     (
         row_id, content_identity, capture_chain, sensor, consent,
-        ciphertext, nonce, key_ref, source_path, ingested_at, payload, sequence,
+        storage_kind, location_ref, ciphertext, nonce, key_ref,
+        source_path, ingested_at, payload, sequence,
     ) = row
 
     def _as_dict(value: Any) -> Dict[str, Any]:
@@ -1049,13 +1099,25 @@ def _row_from_db(row: tuple) -> RawRecord:
             return []
         return json.loads(value)
 
+    representation = RawRepresentation(
+        id="row",
+        record_id=str(row_id),
+        storage_kind=str(storage_kind),
+        location_ref=str(location_ref),
+        ciphertext=bytes(ciphertext or b""),
+        nonce=bytes(nonce),
+        key_ref=str(key_ref),
+        active=True,
+        registered_at=ingested_at,
+        sequence=int(sequence),
+    )
     return RawRecord(
         id=str(row_id),
         content_identity=str(content_identity),
         capture_chain=_as_list(capture_chain),
         sensor=_as_dict(sensor),
         consent=_as_dict(consent),
-        ciphertext=bytes(ciphertext),
+        ciphertext=_representation_ciphertext(representation),
         nonce=bytes(nonce),
         key_ref=str(key_ref),
         source_path=str(source_path),
@@ -1067,7 +1129,8 @@ def _row_from_db(row: tuple) -> RawRecord:
 
 _SELECT_COLUMNS = (
     "r.id, r.content_identity, r.capture_chain, r.sensor, r.consent, "
-    "p.ciphertext, p.nonce, p.key_ref, r.source_path, r.ingested_at, r.payload, r.sequence"
+    "p.storage_kind, p.location_ref, p.ciphertext, p.nonce, p.key_ref, "
+    "r.source_path, r.ingested_at, r.payload, r.sequence"
 )
 
 _REPRESENTATION_SELECT_COLUMNS = (
@@ -1082,7 +1145,7 @@ def _representation_from_db(row: tuple) -> RawRepresentation:
         record_id=str(row[1]),
         storage_kind=str(row[2]),
         location_ref=str(row[3]),
-        ciphertext=bytes(row[4]),
+        ciphertext=bytes(row[4] or b""),
         nonce=bytes(row[5]),
         key_ref=str(row[6]),
         active=bool(row[7]),
@@ -1416,7 +1479,7 @@ class _PgRawStore:
                     record_id,
                     _COLD_STORAGE_KIND,
                     location_ref,
-                    ciphertext,
+                    None,
                     nonce,
                     key_ref,
                 ),
@@ -1436,7 +1499,7 @@ class _PgRawStore:
                     existing.record_id != record_id
                     or existing.storage_kind != _COLD_STORAGE_KIND
                     or existing.location_ref != location_ref
-                    or existing.ciphertext != ciphertext
+                    or _representation_ciphertext(existing) != ciphertext
                     or existing.nonce != nonce
                     or existing.key_ref != key_ref
                 ):
@@ -1467,7 +1530,7 @@ class _PgRawStore:
         if identity_row is None:
             raise RawRepresentationUnavailableError("raw identity does not exist")
         cur.execute(
-            f"SELECT ciphertext, nonce FROM {_REPRESENTATION_TABLE} "
+            f"SELECT storage_kind, location_ref, ciphertext, nonce FROM {_REPRESENTATION_TABLE} "
             "WHERE id = %s AND record_id = %s FOR UPDATE",
             (representation_id, record_id),
         )
@@ -1478,8 +1541,21 @@ class _PgRawStore:
             )
         decrypt_and_verify_raw_bytes(
             str(identity_row[0]),
-            bytes(target_row[0]),
-            bytes(target_row[1]),
+            _representation_ciphertext(
+                RawRepresentation(
+                    id=representation_id,
+                    record_id=record_id,
+                    storage_kind=str(target_row[0]),
+                    location_ref=str(target_row[1]),
+                    ciphertext=bytes(target_row[2] or b""),
+                    nonce=bytes(target_row[3]),
+                    key_ref="activation",
+                    active=False,
+                    registered_at=datetime.now(timezone.utc),
+                    sequence=0,
+                )
+            ),
+            bytes(target_row[3]),
             key=key,
         )
         cur.execute(
