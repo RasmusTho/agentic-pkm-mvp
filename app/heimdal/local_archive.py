@@ -20,6 +20,7 @@ from uuid import uuid4
 from app.heimdal import raw_store
 from app.heimdal.raw_store import RawRecord, RawRepresentation
 from app.heimdal.retention import resolve_retention_window_days
+from app.ops.heimdal_cold_volume import ArchiveVolumeReady
 
 ARCHIVE_SCHEMA = "heimdal_archive_receipt.v1"
 ARCHIVE_STORAGE_KIND = "encrypted_local_cold"
@@ -172,7 +173,7 @@ def relocate_raw_record(
     retention_window_days: Optional[int] = None,
     vault_root: Optional[Path] = None,
     key: Optional[bytes] = None,
-    volume_ready: Callable[[], bool],
+    volume_ready: Callable[[], ArchiveVolumeReady],
 ) -> ArchiveResult:
     """Copy, verify, receipt, then activate cold; fail closed on every error."""
     reference = now or datetime.now(timezone.utc)
@@ -182,7 +183,11 @@ def relocate_raw_record(
         retention_window_days = resolve_retention_window_days(vault_root)
     if not archive_eligible(record, now=reference, retention_window_days=retention_window_days):
         raise ArchiveDegradedError("record_outside_archive_window")
-    if not volume_ready():
+    try:
+        volume_proof = volume_ready()
+    except Exception:
+        raise ArchiveDegradedError("archive_mount_unavailable") from None
+    if not isinstance(volume_proof, ArchiveVolumeReady) or not volume_proof.ready:
         raise ArchiveDegradedError("archive_mount_unavailable")
 
     objects, manifests = _ensure_archive_dirs(archive_root)

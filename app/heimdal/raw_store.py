@@ -141,8 +141,8 @@ def _resolve_cold_ciphertext(location_ref: str) -> bytes:
         raise RawRepresentationUnavailableError("cold representation resolver is unavailable")
     try:
         return object_path.read_bytes()
-    except OSError as exc:
-        raise RawRepresentationUnavailableError("cold representation bytes are unavailable") from exc
+    except OSError:
+        raise RawRepresentationUnavailableError("cold representation bytes are unavailable") from None
 
 
 def _cold_object_path(location_ref: str) -> Path | None:
@@ -162,6 +162,26 @@ def _delete_cold_objects_for_record(record_id: str) -> None:
         if representation.storage_kind != _COLD_STORAGE_KIND:
             continue
         object_path = _cold_object_path(representation.location_ref)
+        if object_path is None:
+            raise RawRepresentationDeletionError("cold representation resolver is unavailable")
+        try:
+            object_path.unlink(missing_ok=True)
+            object_path.parent.parent.joinpath("manifests", f"{object_path.stem}.json").unlink(
+                missing_ok=True
+            )
+        except OSError:
+            raise RawRepresentationDeletionError("cold representation deletion failed") from None
+
+
+def _delete_cold_objects_for_pg_cursor(cur: Any, record_id: str) -> None:
+    """Remove cold objects while the deletion transaction owns representation locks."""
+    cur.execute(
+        f"SELECT location_ref FROM {_REPRESENTATION_TABLE} "
+        "WHERE record_id = %s AND storage_kind = %s FOR UPDATE",
+        (record_id, _COLD_STORAGE_KIND),
+    )
+    for row in cur.fetchall():
+        object_path = _cold_object_path(str(row[0]))
         if object_path is None:
             raise RawRepresentationDeletionError("cold representation resolver is unavailable")
         try:
