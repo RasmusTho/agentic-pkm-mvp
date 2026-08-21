@@ -1441,8 +1441,12 @@ def _governed_delete_pg(
                     "tombstoned retention target still has durable raw state"
                 )
             tombstone = _load_pg_tombstone(cur, record_id=record_id)
-            _reconcile_pg_cold_cleanup(cur, record_id)
-            conn.rollback()
+            try:
+                _reconcile_pg_cold_cleanup(cur, record_id)
+            except Exception:
+                conn.commit()
+                raise
+            conn.commit()
             return GovernedDeletionResult(outcome="already_erased", tombstone=tombstone)
         if not raw_active:
             raise RawLivenessUnavailableError(
