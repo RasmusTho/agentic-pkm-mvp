@@ -40,8 +40,21 @@ def _hash(value: Mapping[str, Any]) -> str:
     return hashlib.sha256(_canonical(value).encode()).hexdigest()
 
 
-def _validate_row_derived_evidence(evidence: Mapping[str, Any]) -> None:
-    """Validate the closed dormant readback schema at the persistence boundary."""
+def _validate_row_derived_evidence(
+    evidence: Mapping[str, Any], *, terminal_unknown: bool
+) -> None:
+    """Validate the closed post-effect evidence schema at the persistence boundary."""
+    if terminal_unknown:
+        _assert_terminal_unknown_model_evidence(
+            effect_type="model.verification_coordinator",
+            effect_payload={"head_sha": evidence.get("head_sha")},
+            task_payload={
+                "contract_version": "builderops_verification_run.v1",
+                "run": {"coordinator_session_id": None, "context_pack": None},
+            },
+            evidence=evidence,
+        )
+        return
     allowed = {"readback", "relaunch_performed"}
     if not isinstance(evidence, Mapping) or not set(evidence).issubset(allowed):
         raise ValueError("row-derived readback evidence contains unknown fields")
@@ -2212,13 +2225,14 @@ class PostgresBuilderOpsStore:
         terminal_unknown: bool = False,
     ) -> Mapping[str, Any]:
         """Use the stored row-derived claim for dormant reconciliation only."""
-        _validate_row_derived_evidence(evidence)
-        readback = evidence["readback"]
-        expected_readback = "unknown" if terminal_unknown else "found" if observed_applied else "not-found"
-        if readback != expected_readback:
-            raise ValueError("readback evidence contradicts the requested outcome")
         if terminal_unknown and observed_applied:
             raise ValueError("terminal-unknown reconciliation cannot claim an applied effect")
+        _validate_row_derived_evidence(evidence, terminal_unknown=terminal_unknown)
+        if not terminal_unknown:
+            readback = evidence["readback"]
+            expected_readback = "found" if observed_applied else "not-found"
+            if readback != expected_readback:
+                raise ValueError("readback evidence contradicts the requested outcome")
         repository = canonical_repository(repository)
         with self._connect() as conn:
             row = conn.execute(

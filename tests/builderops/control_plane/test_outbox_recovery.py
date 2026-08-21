@@ -499,7 +499,7 @@ def test_concurrent_identical_post_effect_reconciliation_replays_one_row_identit
     assert first["receipt_sequence"] == second["receipt_sequence"]
 
 
-def test_indeterminate_effect_dead_letters_without_retry(
+def test_terminal_unknown_evidence_reaches_dead_letter(
     control_plane_store, envelope
 ) -> None:
     result = _commit_outbox_task(
@@ -532,27 +532,37 @@ def test_indeterminate_effect_dead_letters_without_retry(
         "relaunch_performed": False,
     }
 
-    terminal = control_plane_store.reconcile_outbox(
-        claim,
+    control_plane_store.begin_post_effect_pending(
+        repository=envelope.repository,
+        operation_key=result.operation_key,
+        minimum_fencing_token=claim.fencing_token,
+        expected_principal=envelope.actor,
+    )
+    terminal = control_plane_store.reconcile_post_effect(
+        repository=envelope.repository,
+        operation_key=result.operation_key,
+        minimum_fencing_token=claim.fencing_token,
+        expected_principal=envelope.actor,
         observed_applied=False,
         terminal_unknown=True,
         evidence=evidence,
     )
-    replay = control_plane_store.reconcile_outbox(
-        claim,
+    replay = control_plane_store.reconcile_post_effect(
+        repository=envelope.repository,
+        operation_key=result.operation_key,
+        minimum_fencing_token=claim.fencing_token,
+        expected_principal=envelope.actor,
         observed_applied=False,
         terminal_unknown=True,
         evidence=evidence,
     )
 
-    assert terminal.status == "dead_letter"
-    assert replay.status == "dead_letter"
-    assert replay.replayed is True
-    receipt = control_plane_store.receipt(
-        envelope.repository, terminal.receipt_sequence
-    )
+    assert terminal["status"] == "dead_letter"
+    assert replay["status"] == "dead_letter"
+    assert replay["replayed"] is True
+    receipt = control_plane_store.receipt(envelope.repository, terminal["receipt_sequence"])
     assert receipt["event_type"] == "outbox.reconciled.dead_letter"
-    assert receipt["recovery_lsn"] == terminal.recovery_lsn
+    assert receipt["recovery_lsn"] == terminal["recovery_lsn"]
     with control_plane_store._connect() as conn:
         dead_letter = conn.execute(
             "SELECT outcome FROM builderops_dead_letters "
@@ -568,12 +578,61 @@ def test_indeterminate_effect_dead_letters_without_retry(
             worker_id="replacement-verifier",
         )
     with pytest.raises(ValueError, match="cannot claim an applied effect"):
-        control_plane_store.reconcile_outbox(
-            claim,
+        control_plane_store.reconcile_post_effect(
+            repository=envelope.repository,
+            operation_key=result.operation_key,
+            minimum_fencing_token=claim.fencing_token,
+            expected_principal=envelope.actor,
             observed_applied=True,
             terminal_unknown=True,
             evidence=evidence,
         )
+
+
+def test_terminal_unknown_rejects_incomplete_evidence(
+    control_plane_store, envelope
+) -> None:
+    result = _commit_outbox_task(
+        control_plane_store,
+        envelope,
+        task_id="task-incomplete-terminal-evidence",
+        key="incomplete-terminal-evidence",
+        effect_type="model.verification_coordinator",
+        payload={"head_sha": "a" * 40},
+        task_payload={
+            "contract_version": "builderops_verification_run.v1",
+            "run": {"coordinator_session_id": None, "context_pack": None},
+        },
+    )
+    claim = control_plane_store.claim_outbox(
+        envelope=envelope,
+        operation_key=result.operation_key,
+        worker_id="verification-host",
+    )
+    control_plane_store.mark_effect_unknown(claim, detail="readback required")
+    control_plane_store.begin_post_effect_pending(
+        repository=envelope.repository,
+        operation_key=result.operation_key,
+        minimum_fencing_token=claim.fencing_token,
+        expected_principal=envelope.actor,
+    )
+
+    with pytest.raises(StateConflict, match="exact"):
+        control_plane_store.reconcile_post_effect(
+            repository=envelope.repository,
+            operation_key=result.operation_key,
+            minimum_fencing_token=claim.fencing_token,
+            expected_principal=envelope.actor,
+            observed_applied=False,
+            terminal_unknown=True,
+            evidence={
+                "outcome": "indeterminate_pre_session_model_effect",
+                "provider_session_id": None,
+                "relaunch_performed": False,
+            },
+        )
+
+    assert control_plane_store.outbox_status(envelope.repository, result.operation_key) == "unknown"
 
 
 def test_terminal_unknown_rejects_github_effect_without_mutation(

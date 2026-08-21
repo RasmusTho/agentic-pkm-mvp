@@ -110,7 +110,7 @@ by BuilderOps governance and remains outside Product persistence authority.
 - [x] A pre-session indeterminate verification-model effect without a provider identity becomes one
   durable `dead_letter` reconciliation and cannot be reclaimed or replayed; the PostgreSQL
   authority rejects the same terminal-unknown request for GitHub effects without mutation.
-  Verify: `tests/builderops/control_plane/test_outbox_recovery.py::test_indeterminate_effect_dead_letters_without_retry`.
+  Verify: `tests/builderops/control_plane/test_outbox_recovery.py::test_terminal_unknown_evidence_reaches_dead_letter`.
   Verify: `tests/builderops/control_plane/test_outbox_recovery.py::test_terminal_unknown_rejects_github_effect_without_mutation`.
   Verify: `tests/builderops/control_plane/test_outbox_recovery.py::test_terminal_unknown_rejects_session_bound_task_without_mutation`.
 - [x] Production construction requires a PostgreSQL DSN and never selects/creates SQLite implicitly;

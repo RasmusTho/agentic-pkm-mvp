@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class AuthorityEnvelopeInput(BaseModel):
@@ -176,18 +176,44 @@ class RowDerivedPostEffectPendingRequest(BaseModel):
     minimum_fencing_token: int = Field(ge=1)
 
 
-class RowDerivedPostEffectEvidence(BaseModel):
-    """Closed readback vocabulary; claim/LSN authority never enters evidence."""
+class RowDerivedReadbackEvidence(BaseModel):
+    """Closed ordinary readback vocabulary; claim/LSN authority never enters evidence."""
 
     model_config = ConfigDict(extra="forbid")
     readback: Literal["found", "not-found", "unknown"]
     relaunch_performed: bool | None = None
 
 
+class TerminalUnknownModelEvidence(BaseModel):
+    """Exact pre-session model-effect evidence for a terminal unknown result."""
+
+    model_config = ConfigDict(extra="forbid")
+    head_sha: str = Field(pattern=r"^[0-9a-f]{40}$")
+    outcome: Literal["indeterminate_pre_session_model_effect"]
+    provider_session_id: None
+    relaunch_performed: Literal[False]
+
+
+RowDerivedPostEffectEvidence = (
+    RowDerivedReadbackEvidence | TerminalUnknownModelEvidence
+)
+
+
 class RowDerivedPostEffectReconcileRequest(RowDerivedPostEffectPendingRequest):
     observed_applied: bool
     terminal_unknown: bool = False
     evidence: RowDerivedPostEffectEvidence
+
+    @model_validator(mode="after")
+    def _terminal_unknown_uses_exact_evidence(
+        self,
+    ) -> "RowDerivedPostEffectReconcileRequest":
+        is_terminal_evidence = isinstance(self.evidence, TerminalUnknownModelEvidence)
+        if self.terminal_unknown != is_terminal_evidence:
+            raise ValueError(
+                "terminal-unknown reconciliation requires exact terminal evidence"
+            )
+        return self
 
 
 __all__ = [
@@ -203,6 +229,8 @@ __all__ = [
     "OutboxUnknownRequest",
     "RowDerivedPostEffectPendingRequest",
     "RowDerivedPostEffectEvidence",
+    "RowDerivedReadbackEvidence",
+    "TerminalUnknownModelEvidence",
     "RowDerivedPostEffectReconcileRequest",
     "PromotionCommitRequest",
     "RecordCommitRequest",

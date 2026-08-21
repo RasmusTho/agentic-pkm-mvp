@@ -207,6 +207,10 @@ Shortcuts are proportionate, not authority bypasses:
 | **V3.4 Verify, accept, merge, and close** | Resolve delivery tier, prove exact-head ACs/checks, run full-path independent review when required, perform the current governed explicit merge/readback, close Issue/claim, and classify owner-doc impact. | Accepted merge and closure evidence; technical verification remains distinct from owner/product validation. Disabled GitHub auto-merge is not the merge mechanism. |
 | **V3.5 Release, deploy, verify, or roll back** | Resolve the current channel model, authorize the candidate, prepare risk/migration/config delta, obtain only required operator authority, deploy the authorized SHA, prove live identity/health, run feature/owner acceptance when required, and accept or roll back with rollback verification. | Live-channel receipt or safe rollback/block; current `main`-tracking production and target gated-`stable` promotion remain distinct. |
 
+#### Delivery reconciliation
+
+Row-derived post-effect reconciliation uses a closed ordinary readback schema. Its sole terminal-unknown exception is the exact pre-session verification-model evidence (`head_sha`, the indeterminate outcome, a null provider session, and `relaunch_performed: false`). The persistence transition independently proves that the stored effect is eligible for that exception before dead-lettering it, so an unknown external effect is neither represented as success/failure nor relaunched.
+
 #### V4 Operate & Improve — L2 children
 
 | L2 ID | Child subprocess | Required output and boundary |
