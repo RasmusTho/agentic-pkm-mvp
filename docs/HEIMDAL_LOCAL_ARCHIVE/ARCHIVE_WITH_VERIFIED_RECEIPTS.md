@@ -8,7 +8,7 @@ depends_on: [HAR-03]
 can_parallelize_with: []
 ---
 
-State: Authored task specification (future-state; child issue not yet filed)
+State: HAR-04 runtime delivered; restore/expiry remains future-state under HAR-05
 
 # Archive With Verified Receipts
 
@@ -30,15 +30,15 @@ append-only/provenance/read-gate discipline or risking silent loss.
 
 ## Acceptance criteria
 
-- [ ] Records are archive-eligible only after seven days and never after configured retention expiry.
+- [x] Records are archive-eligible only after seven days and never after configured retention expiry.
       Verify: `tests/heimdal/test_local_archive.py::test_archive_eligibility_respects_hot_and_retention_bounds`
-- [ ] A successful archive writes a durable manifest/receipt binding original raw-record identity to a
+- [x] A successful archive writes a durable manifest/receipt binding original raw-record identity to a
       verified cold representation before hot retirement, with the same gated `raw_ref`.
       Verify: `tests/heimdal/test_local_archive.py::test_verified_archive_receipt_precedes_hot_retirement`
-- [ ] Checksum/content-identity mismatch, unavailable mount, or receipt failure keeps the hot copy and
+- [x] Checksum/content-identity mismatch, unavailable mount, or receipt failure keeps the hot copy and
       emits a loud degraded health result.
       Verify: `tests/heimdal/test_local_archive.py::test_verify_before_hot_representation_retire_and_fail_closed`
-- [ ] The archive path exposes no raw content or filesystem paths in receipts/logs.
+- [x] The archive path exposes no raw content or filesystem paths in receipts/logs.
       Verify: `tests/heimdal/test_local_archive.py::test_archive_receipts_are_redacted`
 
 ## Out of scope

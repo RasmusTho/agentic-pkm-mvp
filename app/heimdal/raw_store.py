@@ -92,6 +92,7 @@ _NONCE_BYTES = 12  # standard AES-GCM nonce size
 _RETENTION_GUARD_SETTING = "app.heimdal_retention_bypass"
 _REPRESENTATION_ACTIVATION_GUARD_SETTING = "app.heimdal_representation_activation"
 _HOT_STORAGE_KIND = "postgres_hot"
+_COLD_STORAGE_KIND = "encrypted_local_cold"
 _LOCATION_REF_PREFIX = "heimloc:"
 
 
@@ -298,7 +299,10 @@ class _MemoryRawStore:
             for representation_id in self._representation_ids_by_record.get(record_id, [])
             if self._representations[representation_id].active
         ]
-        if len(active) != 1 or active[0].storage_kind != _HOT_STORAGE_KIND:
+        if len(active) != 1 or active[0].storage_kind not in {
+            _HOT_STORAGE_KIND,
+            _COLD_STORAGE_KIND,
+        }:
             raise RawRepresentationUnavailableError(
                 "raw identity does not have exactly one supported active registered representation"
             )
@@ -492,6 +496,52 @@ class _MemoryRawStore:
                 representation = self._activate_representation_locked(
                     record_id, representation.id, key=key
                 )
+            return representation, True
+
+    def register_cold_representation(
+        self,
+        *,
+        record_id: str,
+        ciphertext: bytes,
+        nonce: bytes,
+        key_ref: str,
+        key: bytes,
+        representation_id: str,
+        location_ref: str,
+    ) -> tuple[RawRepresentation, bool]:
+        with self._lock:
+            identity = next((row for row in self._rows if row.id == record_id), None)
+            if identity is None:
+                raise RawRepresentationUnavailableError("raw identity does not exist")
+            decrypt_and_verify_raw_bytes(identity.content_identity, ciphertext, nonce, key=key)
+            existing = self._representations.get(representation_id)
+            if existing is not None:
+                expected = (record_id, ciphertext, nonce, key_ref, _COLD_STORAGE_KIND, location_ref)
+                actual = (
+                    existing.record_id,
+                    existing.ciphertext,
+                    existing.nonce,
+                    existing.key_ref,
+                    existing.storage_kind,
+                    existing.location_ref,
+                )
+                if actual != expected:
+                    raise ValueError("cold representation id replay does not match registered bytes")
+                return existing, False
+            representation = RawRepresentation(
+                id=representation_id,
+                record_id=record_id,
+                storage_kind=_COLD_STORAGE_KIND,
+                location_ref=location_ref,
+                ciphertext=ciphertext,
+                nonce=nonce,
+                key_ref=key_ref,
+                active=False,
+                registered_at=datetime.now(timezone.utc),
+                sequence=len(self._representation_ids_by_record.get(record_id, [])),
+            )
+            self._representations[representation.id] = representation
+            self._representation_ids_by_record.setdefault(record_id, []).append(representation.id)
             return representation, True
 
     def _activate_representation_locked(
@@ -822,7 +872,7 @@ def _assert_pg_schema(conn: Any) -> None:
             OR count(*) FILTER (
                 WHERE p.active
                   AND (
-                    p.storage_kind <> %s
+                    NOT (p.storage_kind = ANY(%s))
                     OR p.location_ref NOT LIKE %s
                     OR p.ciphertext IS NULL
                     OR p.nonce IS NULL
@@ -831,7 +881,7 @@ def _assert_pg_schema(conn: Any) -> None:
             ) <> 0
         LIMIT 1
         """,
-        (_HOT_STORAGE_KIND, f"{_LOCATION_REF_PREFIX}%"),
+        ([_HOT_STORAGE_KIND, _COLD_STORAGE_KIND], f"{_LOCATION_REF_PREFIX}%"),
     )
     if cur.fetchone() is not None:
         raise RawStoreSchemaMissingError(
@@ -911,7 +961,9 @@ def _bootstrap_pg(conn: Any) -> None:
                 CREATE TABLE {_REPRESENTATION_TABLE} (
                     id uuid PRIMARY KEY,
                     record_id uuid NOT NULL REFERENCES {_TABLE}(id) ON DELETE RESTRICT,
-                    storage_kind text NOT NULL CHECK (storage_kind IN ('{_HOT_STORAGE_KIND}')),
+                    storage_kind text NOT NULL CHECK (
+                        storage_kind IN ('{_HOT_STORAGE_KIND}', '{_COLD_STORAGE_KIND}')
+                    ),
                     location_ref text NOT NULL UNIQUE
                         CHECK (location_ref LIKE '{_LOCATION_REF_PREFIX}%'),
                     ciphertext bytea,
@@ -1330,6 +1382,75 @@ class _PgRawStore:
         finally:
             conn.close()
 
+    def register_cold_representation(
+        self,
+        *,
+        record_id: str,
+        ciphertext: bytes,
+        nonce: bytes,
+        key_ref: str,
+        key: bytes,
+        representation_id: str,
+        location_ref: str,
+    ) -> tuple[RawRepresentation, bool]:
+        conn = _pg_connect(autocommit=False)
+        try:
+            _assert_pg_schema(conn)
+            cur = conn.cursor()
+            cur.execute(f"SELECT content_identity FROM {_TABLE} WHERE id = %s FOR UPDATE", (record_id,))
+            identity_row = cur.fetchone()
+            if identity_row is None:
+                raise RawRepresentationUnavailableError("raw identity does not exist")
+            decrypt_and_verify_raw_bytes(str(identity_row[0]), ciphertext, nonce, key=key)
+            cur.execute(
+                f"""
+                INSERT INTO {_REPRESENTATION_TABLE} (
+                    id, record_id, storage_kind, location_ref,
+                    ciphertext, nonce, key_ref, active
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, false)
+                ON CONFLICT (id) DO NOTHING
+                RETURNING {_REPRESENTATION_SELECT_COLUMNS}
+                """,
+                (
+                    representation_id,
+                    record_id,
+                    _COLD_STORAGE_KIND,
+                    location_ref,
+                    ciphertext,
+                    nonce,
+                    key_ref,
+                ),
+            )
+            inserted = cur.fetchone()
+            created = inserted is not None
+            if inserted is None:
+                cur.execute(
+                    f"SELECT {_REPRESENTATION_SELECT_COLUMNS} FROM {_REPRESENTATION_TABLE} WHERE id = %s",
+                    (representation_id,),
+                )
+                inserted = cur.fetchone()
+                if inserted is None:
+                    raise RawRepresentationUnavailableError("cold representation replay could not resolve")
+                existing = _representation_from_db(inserted)
+                if (
+                    existing.record_id != record_id
+                    or existing.storage_kind != _COLD_STORAGE_KIND
+                    or existing.location_ref != location_ref
+                    or existing.ciphertext != ciphertext
+                    or existing.nonce != nonce
+                    or existing.key_ref != key_ref
+                ):
+                    raise ValueError("cold representation id replay does not match registered bytes")
+            assert inserted is not None
+            result = _representation_from_db(inserted)
+            conn.commit()
+            return result, created
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
     @staticmethod
     def _activate_with_cursor(
         cur: Any,
@@ -1574,6 +1695,33 @@ def register_raw_representation(
     )
 
 
+def register_cold_raw_representation(
+    *,
+    record_id: str,
+    ciphertext: bytes,
+    nonce: bytes,
+    key_ref: str,
+    location_ref: str,
+    key: Optional[bytes] = None,
+    representation_id: Optional[str] = None,
+) -> tuple[RawRepresentation, bool]:
+    """Register one verified encrypted local-cold representation, inactive."""
+    if not record_id or not ciphertext or not nonce or not key_ref:
+        raise ValueError("record_id, ciphertext, nonce, and key_ref are required")
+    if not location_ref.startswith(f"{_LOCATION_REF_PREFIX}cold:"):
+        raise ValueError("cold location_ref must be an opaque heimloc:cold: handle")
+    verification_key = key if key is not None else resolve_raw_store_key()
+    return _backend().register_cold_representation(
+        record_id=record_id,
+        ciphertext=ciphertext,
+        nonce=nonce,
+        key_ref=key_ref,
+        key=verification_key,
+        representation_id=representation_id or str(uuid4()),
+        location_ref=location_ref,
+    )
+
+
 def activate_raw_representation(
     record_id: str,
     representation_id: str,
@@ -1624,6 +1772,7 @@ __all__ = [
     "find_active_raw_record_ids_by_content_identities",
     "insert_raw_record",
     "register_raw_representation",
+    "register_cold_raw_representation",
     "reset_memory_raw_store",
     "resolve_active_raw_record",
     "resolve_raw_store_key",

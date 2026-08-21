@@ -1,0 +1,142 @@
+"""HAR-04: verified encrypted hot-to-cold relocation."""
+
+from __future__ import annotations
+
+from dataclasses import replace
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+import secrets
+
+import pytest
+
+from app.heimdal import local_archive
+from app.heimdal.raw_store import (
+    all_raw_representations,
+    compute_raw_content_identity,
+    encrypt_raw_bytes,
+    insert_raw_record,
+    reset_memory_raw_store,
+)
+from app.heimdal.raw_read_gate import raw_ref_for, read_raw_record, reset_memory_raw_read_receipts
+from app.heimdal.raw_liveness import reset_memory_deletion_receipts
+
+pytestmark = pytest.mark.not_pg
+
+_KEY = bytes.fromhex(secrets.token_hex(32))
+
+
+@pytest.fixture(autouse=True)
+def _memory_runtime(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("STORE_BACKEND", "memory")
+    monkeypatch.setenv("HEIMDAL_RAW_STORE_KEY", _KEY.hex())
+    monkeypatch.setenv("HEIMDAL_RAW_READ_ALLOWLIST", "authorized-reader")
+    reset_memory_raw_store()
+    reset_memory_raw_read_receipts()
+    reset_memory_deletion_receipts()
+    yield
+    reset_memory_raw_store()
+    reset_memory_raw_read_receipts()
+    reset_memory_deletion_receipts()
+
+
+def _insert(plaintext: bytes = b"archive-evidence"):
+    ciphertext, nonce = encrypt_raw_bytes(plaintext, key=_KEY)
+    record, created = insert_raw_record(
+        content_identity=compute_raw_content_identity(plaintext),
+        capture_chain=["registered-sensor", "heimdal"],
+        sensor={"sensor_id": "registered-sensor"},
+        consent={"grant_ref": "standing-grant"},
+        ciphertext=ciphertext,
+        nonce=nonce,
+        key_ref="test-key-v1",
+        key=_KEY,
+        source_path="source-class-redacted",
+    )
+    assert created
+    return record
+
+
+def _eligible(record):
+    now = datetime.now(timezone.utc)
+    return replace(record, ingested_at=now - timedelta(days=8)), now
+
+
+def test_archive_eligibility_respects_hot_and_retention_bounds() -> None:
+    record = _insert()
+    now = datetime.now(timezone.utc)
+    assert not local_archive.archive_eligible(
+        record, now=now, retention_window_days=30
+    )
+    eligible, now = _eligible(record)
+    assert local_archive.archive_eligible(eligible, now=now, retention_window_days=30)
+    assert not local_archive.archive_eligible(eligible, now=now, retention_window_days=7)
+
+
+def test_verified_archive_receipt_precedes_hot_retirement(tmp_path: Path) -> None:
+    record, now = _eligible(_insert(b"verified-archive"))
+    archive_root = tmp_path / "mounted-cold"
+    archive_root.mkdir()
+    result = local_archive.relocate_raw_record(
+        record,
+        archive_root=archive_root,
+        now=now,
+        retention_window_days=30,
+        key=_KEY,
+    )
+    assert result.health.healthy
+    assert result.receipt.schema == "heimdal_archive_receipt.v1"
+    assert (tmp_path / "mounted-cold" / "manifests" / f"{result.receipt.receipt_id}.json").exists()
+    representations = all_raw_representations(record.id)
+    assert [item.storage_kind for item in representations if item.active] == [
+        "encrypted_local_cold"
+    ]
+    assert read_raw_record(
+        raw_ref_for(record), reader="authorized-reader", purpose="HAR-04 proof", key=_KEY
+    ).plaintext == b"verified-archive"
+
+
+def test_verify_before_hot_representation_retire_and_fail_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    record, now = _eligible(_insert(b"must-stay-hot"))
+    archive_root = tmp_path / "mounted-cold"
+    archive_root.mkdir()
+    original_write = local_archive._durable_write
+
+    def corrupt_first_write(path: Path, payload: bytes) -> None:
+        if path.suffix == ".bin":
+            return original_write(path, b"tampered")
+        return original_write(path, payload)
+
+    monkeypatch.setattr(local_archive, "_durable_write", corrupt_first_write)
+    with pytest.raises(local_archive.ArchiveDegradedError) as error:
+        local_archive.relocate_raw_record(
+            record,
+            archive_root=archive_root,
+            now=now,
+            retention_window_days=30,
+            key=_KEY,
+        )
+    assert error.value.reason == "archive_copy_verification_failed"
+    assert [item.storage_kind for item in all_raw_representations(record.id) if item.active] == [
+        "postgres_hot"
+    ]
+
+
+def test_archive_receipts_are_redacted(tmp_path: Path) -> None:
+    secret = b"never-put-plaintext-in-receipt"
+    record, now = _eligible(_insert(secret))
+    archive_root = tmp_path / "mounted-cold"
+    archive_root.mkdir()
+    result = local_archive.relocate_raw_record(
+        record,
+        archive_root=archive_root,
+        now=now,
+        retention_window_days=30,
+        key=_KEY,
+    )
+    manifest = next((tmp_path / "mounted-cold" / "manifests").glob("*.json")).read_text()
+    assert secret.decode() not in manifest
+    assert str(tmp_path) not in manifest
+    assert record.source_path not in manifest
+    assert result.receipt.as_dict()["content_identity"] == record.content_identity
