@@ -240,11 +240,21 @@ def _raw_schema_snapshot(dsn: str) -> dict[str, object]:
             """
         )
         triggers = [tuple(row) for row in cur.fetchall()]
+        cur.execute(
+            """
+            SELECT pg_get_functiondef(oid)
+            FROM pg_proc
+            WHERE proname = 'heimdal_raw_deletion_receipt_reject_mutation'
+            ORDER BY oid
+            """
+        )
+        receipt_functions = [tuple(row) for row in cur.fetchall()]
         return {
             "columns": columns,
             "indexes": indexes,
             "constraints": constraints,
             "triggers": triggers,
+            "receipt_functions": receipt_functions,
         }
 
 

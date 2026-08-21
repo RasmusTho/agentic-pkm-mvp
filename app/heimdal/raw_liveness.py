@@ -525,7 +525,7 @@ def _bootstrap_pg(conn: Any) -> None:
         f"ON {_DELETION_RECEIPT_TABLE} (record_id)"
     )
     cur.execute(
-        """
+        f"""
         CREATE OR REPLACE FUNCTION heimdal_raw_deletion_receipt_reject_mutation()
         RETURNS trigger AS $$
         BEGIN
@@ -1587,6 +1587,10 @@ def _governed_delete_pg(
             if cold_location_refs:
                 cleanup_payload = dict(receipt.payload)
                 cleanup_payload["cold_cleanup_location_refs"] = cold_location_refs
+                cur.execute(
+                    "SELECT set_config(%s, 'true', true)",
+                    (_RETENTION_RECONCILE_GUARD_SETTING,),
+                )
                 cur.execute(
                     f"UPDATE {_DELETION_RECEIPT_TABLE} SET payload = %s::jsonb WHERE id = %s",
                     (json.dumps(cleanup_payload), receipt.id),
