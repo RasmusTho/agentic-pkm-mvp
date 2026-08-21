@@ -371,10 +371,11 @@ def test_provisioner_never_reformats_or_uses_parent_volume(tmp_path: Path) -> No
 
 
 def test_image_encryption_and_filesystem_capacity_are_separate_layers(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     metadata = _metadata(tmp_path)
     _materialize_ready_fs(metadata)
+    previous_archive_root = os.environ.get("HEIMDAL_ARCHIVE_ROOT")
 
     # APFS is valid even when diskutil reports that the filesystem layer is
     # unencrypted: hdiutil isencrypted is the AES image-layer authority.
@@ -382,6 +383,11 @@ def test_image_encryption_and_filesystem_capacity_are_separate_layers(
         metadata,
         runner=FakeRunner(metadata, encrypted=True, disk_overrides={"Encryption": False}),
     ).ready
+    assert os.environ["HEIMDAL_ARCHIVE_ROOT"] == str(metadata.mountpoint)
+    if previous_archive_root is None:
+        monkeypatch.delenv("HEIMDAL_ARCHIVE_ROOT", raising=False)
+    else:
+        monkeypatch.setenv("HEIMDAL_ARCHIVE_ROOT", previous_archive_root)
     with pytest.raises(volume.ArchiveVolumeRefusedError):
         volume.require_archive_volume_ready(
             metadata,

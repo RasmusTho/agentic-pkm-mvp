@@ -1316,6 +1316,11 @@ def require_archive_volume_ready(
         )
     finally:
         os.close(parent_descriptor)
+    # Startup callers use the same verified boundary to rebind cold reads
+    # after a process restart; never bind an unverified mountpoint.
+    from app.heimdal import raw_store
+
+    raw_store.configure_cold_archive_root(metadata.mountpoint)
     return ArchiveVolumeReady(
         _issuer=_ARCHIVE_VOLUME_READY_ISSUER,
         archive_ref=metadata.archive_id,
