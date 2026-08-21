@@ -832,6 +832,16 @@ coordinator nor starts workers or parallel execution. Dispatcher lease state, li
 truth, exact branch/SHA, CI, and review state must still be refreshed and acted on through their
 existing owning workflows.
 
+### Run-state authority
+
+Persisted and dry-run epic run-state is evidence only. It cannot authorize parent closure, GitHub
+mutation, dispatcher lifecycle changes, CI, review, merge, or worker execution. Fast-lane Verify
+evidence must exercise the production dispatch-plan and dispatch-sessions paths with persisted
+state, proving that they emit no GitHub mutations or coordinator claims and that a worker cannot
+self-attest terminal delivery. Persisted run-state, including reusable constraints, is excluded
+from worker context entirely; the production session validator also rejects an injected run-state
+key before launch. Those actions remain with their live owning workflows.
+
 ```mermaid
 flowchart TD
   Issue["GitHub Issue"] --> Shape{"Contract + Verify valid?"}

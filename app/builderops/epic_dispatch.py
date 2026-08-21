@@ -290,10 +290,6 @@ def build_dispatch_plan(
             independent_issue_numbers=independent_scope,
             run_id=normalized_run_id,
         )
-    run_state_constraints = _normalize_json_list(
-        run_state.get("reusable_constraints", []) if run_state is not None else [],
-        "run_state.reusable_constraints",
-    )
     if independent_scope:
         _validate_independent_fast_lane_admission(
             normalized_candidates,
@@ -336,7 +332,6 @@ def build_dispatch_plan(
                     decision=decision,
                     context_pack_id=context_pack_id,
                     dispatch_slot=selected_count,
-                    run_state_constraints=run_state_constraints,
                 )
                 context_packs.append(context_pack)
                 decision["context_cost_estimate"] = {
@@ -564,6 +559,10 @@ def _validated_session_contexts(
         matching_context = contexts_by_id.get(context_id)
         if matching_context is None:
             raise EpicDispatchError("selected decision is missing its context pack")
+        if "run_state" in matching_context:
+            raise EpicDispatchError(
+                "context pack must not carry persisted run-state or lifecycle authority"
+            )
         issue_contract = matching_context.get("issue_contract")
         runtime = matching_context.get("runtime")
         if (
@@ -718,7 +717,6 @@ def _build_context_pack(
     decision: Mapping[str, Any],
     context_pack_id: str,
     dispatch_slot: int,
-    run_state_constraints: list[Any],
 ) -> dict[str, Any]:
     pack = {
         "schema_version": SCHEMA_VERSION,
@@ -734,10 +732,7 @@ def _build_context_pack(
         "skill_loaded": ".codex/skills/issue-to-code/SKILL.md",
         "source_anchors": candidate["source_anchors"],
         "owner_docs": sorted(candidate["owner_docs"]),
-        "known_constraints": _merge_context_constraints(
-            candidate["known_constraints"],
-            run_state_constraints,
-        ),
+        "known_constraints": list(candidate["known_constraints"]),
         "branch_worktree_plan": {
             "branch": candidate["branch"],
             "worktree": candidate["worktree"],
@@ -853,21 +848,6 @@ def _dispatch_state_summary(decision: Mapping[str, Any]) -> dict[str, Any]:
         "skip_reason": decision["skip_reason"],
         "context_pack_id": decision["context_pack_id"],
     }
-
-
-def _merge_context_constraints(
-    issue_constraints: Iterable[Any],
-    run_state_constraints: Iterable[Any],
-) -> list[Any]:
-    merged: list[Any] = []
-    seen: set[str] = set()
-    for constraint in (*issue_constraints, *run_state_constraints):
-        key = json.dumps(constraint, sort_keys=True, ensure_ascii=False)
-        if key in seen:
-            continue
-        seen.add(key)
-        merged.append(constraint)
-    return merged
 
 
 def _normalize_candidate(candidate: Mapping[str, Any]) -> dict[str, Any]:

@@ -353,7 +353,7 @@ def test_run_state_accepts_dispatch_decision_summaries(tmp_path: Path) -> None:
     ]
 
 
-def test_dispatch_context_pack_includes_reusable_constraints_from_run_state() -> None:
+def test_dispatch_context_pack_excludes_reusable_constraints_from_run_state() -> None:
     run_state = {
         "schema_version": 1,
         "epic_issue_number": 3229,
@@ -385,13 +385,7 @@ def test_dispatch_context_pack_includes_reusable_constraints_from_run_state() ->
     )
 
     constraints = plan["context_packs"][0]["known_constraints"]
-    assert constraints == [
-        "worker self-claims through issue-to-code",
-        {
-            "id": "artifact-only-pagination",
-            "text": "artifact-only workflow reads must paginate generated artifacts before repair.",
-        },
-    ]
+    assert constraints == ["worker self-claims through issue-to-code"]
 
 
 def test_existing_run_state_epic_mismatch_rejects_dispatch_plan(tmp_path: Path) -> None:
