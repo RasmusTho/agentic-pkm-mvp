@@ -183,7 +183,7 @@ def test_archive_requires_verified_mount_and_redacts_failure(tmp_path: Path) -> 
                 now=now,
                 retention_window_days=30,
                 key=_KEY,
-        volume_ready=lambda: _issue_archive_volume_ready(_ARCHIVE_REF, archive_root),
+                volume_ready=lambda: _issue_archive_volume_ready(_ARCHIVE_REF, bad_root),
             )
         finally:
             local_archive._durable_write = original_write
