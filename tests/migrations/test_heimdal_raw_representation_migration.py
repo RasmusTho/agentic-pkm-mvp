@@ -17,6 +17,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 PRE_REPRESENTATION_HEAD = "d1e8a0c5f37b"
 REPRESENTATION_HEAD = "e7b4c9d2a6f1"
 LIVENESS_HEAD = "c5d8a1e4f2b7"
+CURRENT_REPRESENTATION_HEAD = "d1a4b7c9e2f0"
 _KEY = bytes(range(32))
 
 
@@ -713,7 +714,7 @@ def test_test_bootstrap_and_migration_shapes_converge(
     _upgrade(migrated, monkeypatch, PRE_REPRESENTATION_HEAD)
     _insert_legacy_record(migrated, record_id=uuid.uuid4(), plaintext=b"shape-proof")
     monkeypatch.setenv("HEIMDAL_RAW_STORE_KEY", _KEY.hex())
-    _upgrade(migrated, monkeypatch, REPRESENTATION_HEAD)
+    _upgrade(migrated, monkeypatch, CURRENT_REPRESENTATION_HEAD)
 
     monkeypatch.setenv("DATABASE_URL", bootstrapped)
     monkeypatch.setenv("STORE_BACKEND", "pg")
