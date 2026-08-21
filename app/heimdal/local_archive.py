@@ -199,6 +199,7 @@ def relocate_raw_record(
     location_ref = f"heimloc:cold:{representation_id}"
     object_path = objects / f"{representation_id}.bin"
     manifest_written = False
+    failure: ArchiveDegradedError | None = None
 
     try:
         _durable_write(object_path, ciphertext)
@@ -231,14 +232,16 @@ def relocate_raw_record(
         )
         active = raw_store.activate_raw_representation(record.id, cold.id, key=key)
         return ArchiveResult(receipt, ArchiveHealth(True, "ok"), active)
-    except ArchiveDegradedError:
+    except ArchiveDegradedError as exc:
         if not manifest_written:
             _discard_uncommitted_object(object_path)
-        raise
+        failure = exc
     except Exception:
         if not manifest_written:
             _discard_uncommitted_object(object_path)
-        raise ArchiveDegradedError("archive_relocation_failed") from None
+        failure = ArchiveDegradedError("archive_relocation_failed")
+    if failure is not None:
+        raise failure
 
 
 __all__ = [

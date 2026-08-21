@@ -201,10 +201,26 @@ class CommandResult:
     cwd_identity: tuple[int, int] | None = None
 
 
-@dataclass(frozen=True)
+_ARCHIVE_VOLUME_READY_ISSUER = object()
+
+
+@dataclass(frozen=True, init=False)
 class ArchiveVolumeReady:
-    ready: bool = True
-    archive_ref: str = "archive-volume-verified"
+    ready: bool
+    archive_ref: str
+    _issuer: object
+
+    def __init__(self, *, _issuer: object, archive_ref: str) -> None:
+        if _issuer is not _ARCHIVE_VOLUME_READY_ISSUER:
+            raise _refused()
+        object.__setattr__(self, "ready", True)
+        object.__setattr__(self, "archive_ref", archive_ref)
+        object.__setattr__(self, "_issuer", _issuer)
+
+
+def _issue_archive_volume_ready(archive_ref: str) -> ArchiveVolumeReady:
+    """Issue a proof for the verified-volume boundary and its bound archive."""
+    return ArchiveVolumeReady(_issuer=_ARCHIVE_VOLUME_READY_ISSUER, archive_ref=archive_ref)
 
 
 CommandRunner = Callable[..., CommandResult]
@@ -1292,7 +1308,10 @@ def require_archive_volume_ready(
         )
     finally:
         os.close(parent_descriptor)
-    return ArchiveVolumeReady()
+    return ArchiveVolumeReady(
+        _issuer=_ARCHIVE_VOLUME_READY_ISSUER,
+        archive_ref=metadata.archive_id,
+    )
 
 
 @dataclass(frozen=True)
@@ -1365,7 +1384,7 @@ def mount_archive_volume(
         else runner
     )
     _mount_and_validate(metadata, credential=credential, runner=selected)
-    return ArchiveVolumeReady()
+    return _issue_archive_volume_ready(metadata.archive_id)
 
 
 def _mount_and_validate(
@@ -1660,7 +1679,7 @@ def provision_archive_volume(
     if metadata.state == BOUND_ACTIVE:
         _require_bundle_directory(metadata)
         _mount_and_validate(metadata, credential=credential, runner=selected)
-        return ArchiveVolumeReady()
+        return _issue_archive_volume_ready(metadata.archive_id)
 
     if metadata_path is None:
         raise _refused()
@@ -1697,7 +1716,7 @@ def provision_archive_volume(
             if attachment.detach_authority is not None:
                 _detach_exact(selected, attachment.detach_authority)
             raise
-        return ArchiveVolumeReady()
+        return _issue_archive_volume_ready(metadata.archive_id)
 
     _require_empty_mount_directory(metadata)
     if _attached_device(metadata, selected) is not None:
@@ -1774,7 +1793,7 @@ def provision_archive_volume(
             raise
     finally:
         os.close(parent_descriptor)
-    return ArchiveVolumeReady()
+    return _issue_archive_volume_ready(metadata.archive_id)
 
 
 def _bootstrap_credential(

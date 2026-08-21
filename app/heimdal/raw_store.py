@@ -139,10 +139,14 @@ def _resolve_cold_ciphertext(location_ref: str) -> bytes:
             object_path = Path(root_value) / "representations" / f"{object_id}.bin"
     if object_path is None:
         raise RawRepresentationUnavailableError("cold representation resolver is unavailable")
+    ciphertext: bytes | None = None
     try:
-        return object_path.read_bytes()
+        ciphertext = object_path.read_bytes()
     except OSError:
-        raise RawRepresentationUnavailableError("cold representation bytes are unavailable") from None
+        pass
+    if ciphertext is None:
+        raise RawRepresentationUnavailableError("cold representation bytes are unavailable")
+    return ciphertext
 
 
 def _cold_object_path(location_ref: str) -> Path | None:
@@ -164,13 +168,16 @@ def _delete_cold_objects_for_record(record_id: str) -> None:
         object_path = _cold_object_path(representation.location_ref)
         if object_path is None:
             raise RawRepresentationDeletionError("cold representation resolver is unavailable")
+        deletion_failed = False
         try:
             object_path.unlink(missing_ok=True)
             object_path.parent.parent.joinpath("manifests", f"{object_path.stem}.json").unlink(
                 missing_ok=True
             )
         except OSError:
-            raise RawRepresentationDeletionError("cold representation deletion failed") from None
+            deletion_failed = True
+        if deletion_failed:
+            raise RawRepresentationDeletionError("cold representation deletion failed")
 
 
 def _delete_cold_objects_for_pg_cursor(cur: Any, record_id: str) -> None:
@@ -184,13 +191,16 @@ def _delete_cold_objects_for_pg_cursor(cur: Any, record_id: str) -> None:
         object_path = _cold_object_path(str(row[0]))
         if object_path is None:
             raise RawRepresentationDeletionError("cold representation resolver is unavailable")
+        deletion_failed = False
         try:
             object_path.unlink(missing_ok=True)
             object_path.parent.parent.joinpath("manifests", f"{object_path.stem}.json").unlink(
                 missing_ok=True
             )
         except OSError:
-            raise RawRepresentationDeletionError("cold representation deletion failed") from None
+            deletion_failed = True
+        if deletion_failed:
+            raise RawRepresentationDeletionError("cold representation deletion failed")
 
 
 def _representation_ciphertext(representation: "RawRepresentation") -> bytes:
