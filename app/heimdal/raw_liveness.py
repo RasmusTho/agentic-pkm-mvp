@@ -509,7 +509,7 @@ def _bootstrap_pg(conn: Any) -> None:
             content_identity text NOT NULL,
             reason text NOT NULL,
             retention_window_days integer NOT NULL,
-            deleted_at timestamptz NOT NULL,
+            deleted_at timestamptz NOT NULL DEFAULT now(),
             payload jsonb NOT NULL DEFAULT '{{}}'::jsonb,
             sequence bigserial NOT NULL
         )
