@@ -200,9 +200,14 @@ def _recall_node(
     citation_reference: str | None = None,
 ) -> AgentState:
     vault_root = _active_recall_vault_root()
-    candidates = retrieve_relevant_promoted(state.query, k=RECALL_TOP_K, vault_root=vault_root)
     # The same scope retrieval used for this turn (#2921), under the same precedence rule.
     active_scope = _active_scope(state)
+    candidates = retrieve_relevant_promoted(
+        state.query,
+        k=RECALL_TOP_K,
+        vault_root=vault_root,
+        active_scope_id=active_scope,
+    )
     provisional = (
         retrieve_relevant_provisional(
             state.query,
@@ -239,6 +244,7 @@ def _recall_node(
             why_now=candidate.reason,
             receipt_path=receipt_path,
             source_artifact_path=_source_artifact_path(candidate, vault_root),
+            applied_scope_id=candidate.applied_scope_id,
         )
         if guarded.may_answer:
             recalled.append(guarded.explanation)
