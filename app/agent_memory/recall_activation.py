@@ -44,6 +44,7 @@ def activate_guarded_recall(
     behavioral_claim: str | None = None,
     authority_source: str | None = None,
     source_artifact_path: Path | None = None,
+    applied_scope_id: str | None = None,
 ) -> GuardedRecall:
     decision = evaluate_memory_authority(
         promoted,
@@ -76,6 +77,7 @@ def activate_guarded_recall(
         explanation=explanation,
         requested_use_right=use_right,
         source_artifact_path=source_artifact_path,
+        applied_scope_id=applied_scope_id,
     )
     return GuardedRecall(
         memory_id=promoted.candidate.candidate_id,
@@ -97,6 +99,7 @@ def _emit_recall_receipt(
     explanation: RecallExplanation,
     requested_use_right: RecallUseRight,
     source_artifact_path: Path | None,
+    applied_scope_id: str | None,
 ) -> str:
     record = {
         "event": RECALL_RECEIPT_EVENT,
@@ -121,6 +124,7 @@ def _emit_recall_receipt(
             "source_provenance": explanation.source_provenance.model_dump(),
             "authority_limits": list(explanation.authority_limits),
             "source_artifact_path": str(source_artifact_path) if source_artifact_path else None,
+            "applied_scope_id": applied_scope_id,
         },
     }
     receipt_path.parent.mkdir(parents=True, exist_ok=True)

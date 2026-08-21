@@ -273,6 +273,80 @@ def test_selects_relevant_topk_and_caps(tmp_path: Path) -> None:
     )
 
 
+def test_scope_bound_promoted_recall_excludes_private_memory(tmp_path: Path) -> None:
+    """A bound recall only admits promoted memories with the same persisted scope."""
+    vault_root = tmp_path / "vault"
+    memory_dir = vault_root / "Agent Memory"
+    memory_dir.mkdir(parents=True)
+    records = []
+    for candidate_id, scope_id, title in (
+        ("candidate-work", "scope-work", "Work deployment posture"),
+        ("candidate-private", "scope-private", "Private deployment posture"),
+        ("candidate-legacy", None, "Legacy deployment posture"),
+    ):
+        artifact_path = f"Agent Memory/{candidate_id}.md"
+        scope_line = f"scope_id: {scope_id}\n" if scope_id else ""
+        (vault_root / artifact_path).write_text(
+            "---\n"
+            "artifact_type: semantic_memory\n"
+            "agent_promoted: true\n"
+            f"promoted_from_candidate_id: {candidate_id}\n"
+            f"{scope_line}"
+            "decided_by: companion-ui:reviewer\n"
+            "decided_at: '2026-06-13T09:00:00Z'\n"
+            "---\n\n"
+            f"# {title}\n\nDeployment posture details.\n",
+            encoding="utf-8",
+        )
+        records.append(
+            {
+                "event": "promotion.transition.applied",
+                "event_id": f"receipt-{candidate_id}",
+                "trace_id": f"trace-{candidate_id}",
+                "timestamp": "2026-06-13T09:05:00Z",
+                "payload": {
+                    "receipt_id": f"receipt-{candidate_id}",
+                    "transition_family": "agent_memory_materialization",
+                    "target_maturity": "semantic_memory",
+                    "artifact_uuid": f"artifact-{candidate_id}",
+                    "artifact_path": artifact_path,
+                    "authority": {"requested_by": "companion-ui:reviewer"},
+                    "basis": {"candidate_id": candidate_id},
+                    "outcome": {"status": "applied", "review_state": "accepted"},
+                    "artifact_linkage": {
+                        "artifact_uuid": f"artifact-{candidate_id}",
+                        "artifact_path": artifact_path,
+                        "candidate_id": candidate_id,
+                    },
+                },
+            }
+        )
+
+    scoped = retrieve_relevant_promoted(
+        "deployment posture",
+        vault_root=vault_root,
+        records=records,
+        active_scope_id="scope-work",
+    )
+
+    assert [item.promoted.candidate.candidate_id for item in scoped] == ["candidate-work"]
+    assert scoped[0].memory_scope_id == "scope-work"
+    assert scoped[0].applied_scope_id == "scope-work"
+
+    unbound = retrieve_relevant_promoted(
+        "deployment posture",
+        vault_root=vault_root,
+        records=records,
+    )
+
+    assert {item.promoted.candidate.candidate_id for item in unbound} == {
+        "candidate-work",
+        "candidate-private",
+        "candidate-legacy",
+    }
+    assert {item.applied_scope_id for item in unbound} == {None}
+
+
 def test_pure_and_safe_on_empty(tmp_path: Path) -> None:
     missing_vault = tmp_path / "missing-vault"
     missing_outbox = tmp_path / "missing-outbox.jsonl"

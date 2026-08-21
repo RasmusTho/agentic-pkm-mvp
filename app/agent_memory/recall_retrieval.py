@@ -56,6 +56,8 @@ class RecallCandidate:
     reason: str
     artifact_path: str | None = None
     receipt_id: str | None = None
+    memory_scope_id: str | None = None
+    applied_scope_id: str | None = None
 
 
 def read_promoted_memories(
@@ -96,8 +98,14 @@ def retrieve_relevant_promoted(
     outbox_path: str | Path | None = None,
     records: Iterable[dict[str, Any]] | None = None,
     memory_dir: str = DEFAULT_MEMORY_DIR,
+    active_scope_id: str | None = None,
 ) -> list[RecallCandidate]:
-    """Return a scarce, relevance-ranked subset of promoted memories for recall."""
+    """Return a scarce, relevance-ranked subset of scope-eligible promoted memories.
+
+    A bound ASK admits only memories with the same persisted scope. Missing
+    bindings fail closed when a scope is active; unbound calls preserve the
+    default behavior and consider all promoted memories.
+    """
 
     if k <= 0:
         return []
@@ -116,12 +124,15 @@ def retrieve_relevant_promoted(
     )
     candidates: list[RecallCandidate] = []
     for row in rows:
-        promoted = _promoted_from_row(
+        promoted_with_scope = _promoted_from_row_with_scope(
             row,
             vault_root=resolved_root,
             memory_dir=memory_dir,
         )
-        if promoted is None:
+        if promoted_with_scope is None:
+            continue
+        promoted, memory_scope_id = promoted_with_scope
+        if active_scope_id is not None and memory_scope_id != active_scope_id:
             continue
         score, reason = _score(promoted, query_tokens)
         if score <= 0:
@@ -133,6 +144,8 @@ def retrieve_relevant_promoted(
                 reason=reason,
                 artifact_path=row.artifact_path,
                 receipt_id=row.receipt_id,
+                memory_scope_id=memory_scope_id,
+                applied_scope_id=active_scope_id,
             )
         )
 
@@ -193,6 +206,20 @@ def _promoted_from_row(
     vault_root: Path,
     memory_dir: str,
 ) -> PromotedMemory | None:
+    promoted_with_scope = _promoted_from_row_with_scope(
+        row,
+        vault_root=vault_root,
+        memory_dir=memory_dir,
+    )
+    return promoted_with_scope[0] if promoted_with_scope is not None else None
+
+
+def _promoted_from_row_with_scope(
+    row: PromotionReceiptRow,
+    *,
+    vault_root: Path,
+    memory_dir: str,
+) -> tuple[PromotedMemory, str | None] | None:
     if not row.artifact_path:
         return None
     note_path = (vault_root / row.artifact_path).resolve()
@@ -233,14 +260,17 @@ def _promoted_from_row(
         content=content,
         observed_at=decided_at,
     )
-    return PromotedMemory(
-        promotion_id=row.receipt_id,
-        outcome=ReviewState.ACCEPTED,
-        candidate=candidate,
-        decided_by=_first_str(frontmatter.get("decided_by"), row.authority.get("requested_by")) or "unknown",
-        decided_at=decided_at,
-        decision_notes=_first_str(frontmatter.get("decision_notes")),
-        promoted_at=promoted_at,
+    return (
+        PromotedMemory(
+            promotion_id=row.receipt_id,
+            outcome=ReviewState.ACCEPTED,
+            candidate=candidate,
+            decided_by=_first_str(frontmatter.get("decided_by"), row.authority.get("requested_by")) or "unknown",
+            decided_at=decided_at,
+            decision_notes=_first_str(frontmatter.get("decision_notes")),
+            promoted_at=promoted_at,
+        ),
+        _first_str(frontmatter.get("scope_id"), frontmatter.get("domain")),
     )
 
 
