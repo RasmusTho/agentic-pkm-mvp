@@ -43,10 +43,10 @@ _MIGRATION_HINT = (
 )
 
 _RECEIPT_TRIGGER_GUARDED_UPDATE = re.compile(
-    r"if\s+tg_op\s*=\s*'update'\s+and\s+current_setting\(\s*'"
+    r"^if\s+tg_op\s*=\s*'update'\s+and\s+current_setting\(\s*'"
     + re.escape(_RETENTION_RECONCILE_GUARD_SETTING)
     + r"'\s*,\s*true\s*\)\s*=\s*'true'\s+then\s+return\s+new\s*;\s*"
-    r"end\s+if\s*;\s*raise\s+exception",
+    r"end\s+if\s*;\s*raise\s+exception\b[^;]+;\s*$",
     re.IGNORECASE,
 )
 
@@ -54,11 +54,10 @@ _RECEIPT_TRIGGER_GUARDED_UPDATE = re.compile(
 def _receipt_trigger_is_migration_ready(function_def: str, trigger_def: str) -> bool:
     """Accept only the canonical guarded-update/append-only trigger shape."""
     normalized = re.sub(r"\s+", " ", function_def).lower()
+    body_match = re.search(r"\bbegin\s+(.*?)\bend\s*;", normalized, re.IGNORECASE)
+    body = body_match.group(1).strip() if body_match else ""
     return bool(
-        _RECEIPT_TRIGGER_GUARDED_UPDATE.search(normalized)
-        and len(re.findall(r"\bif\b", normalized)) == 2
-        and len(re.findall(r"\breturn\b", normalized)) == 1
-        and len(re.findall(r"\braise\s+exception\b", normalized)) == 1
+        _RECEIPT_TRIGGER_GUARDED_UPDATE.fullmatch(body)
         and re.search(r"before\s+update\s+or\s+delete\s+on", trigger_def, re.IGNORECASE)
     )
 

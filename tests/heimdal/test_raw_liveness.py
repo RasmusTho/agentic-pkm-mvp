@@ -103,6 +103,19 @@ def test_receipt_trigger_preflight_rejects_extra_delete_return_path() -> None:
         """,
         trigger,
     )  # noqa: SLF001
+    assert not raw_liveness._receipt_trigger_is_migration_ready(
+        """
+        BEGIN
+          DELETE FROM unrelated_table;
+          IF TG_OP = 'UPDATE'
+             AND current_setting('app.heimdal_retention_reconcile', true) = 'true' THEN
+            RETURN NEW;
+          END IF;
+          RAISE EXCEPTION 'append-only: %', TG_OP;
+        END;
+        """,
+        trigger,
+    )  # noqa: SLF001
 
 
 @pytest.mark.parametrize("writer", ["hard", "screen"])
