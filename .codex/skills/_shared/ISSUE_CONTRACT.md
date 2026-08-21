@@ -50,11 +50,12 @@ data, or any artefact that is not reproducible from the checked-in repo plus pub
 body, linked PR, owner doc) before authoring the Issue that depends on it. If the material cannot be
 promoted, the Issue should not depend on it.
 
-Before creating or normalizing a governance or contract Issue, search for the same artifact or
-symptom in open Issues, recently merged PRs, and closed Issues. Use GitHub CLI/REST search; do not
-require GraphQL or ProjectV2 operations. If an open match exists, add the evidence there rather
-than creating a duplicate. If a closed Issue or merged PR matches, verify whether the work is
-already delivered before filing a new contract.
+Before creating or normalizing a governance or contract Issue, follow the canonical
+`AGENTS.md :: GitHub delivery governance` requirement: search for the same artifact or symptom in
+open Issues, recently merged PRs, and closed Issues. Use GitHub CLI/REST search; do not require
+GraphQL or ProjectV2 operations. If an open match exists, add the evidence there rather than
+creating a duplicate. If a closed Issue or merged PR matches, verify whether the work is already
+delivered before filing a new contract.
 
 ### Admission claims must match the named production seam
 
