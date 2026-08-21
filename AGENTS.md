@@ -502,6 +502,7 @@ Builder-agent rules:
 - Do not treat chat-only requests as canonical implementation tasks when an Issue is expected.
 - Do not expand scope beyond the Issue without updating the task contract first.
 - Do not create new backlog work in GitHub without stable `Source Anchors` that point to the most local governing doc items.
+- Before creating or normalizing a governance or contract Issue, search GitHub for the same artifact or symptom in open Issues, recently merged PRs, and closed Issues. Use GitHub CLI/REST search; do not require GraphQL or ProjectV2 operations. Add evidence to an open match rather than creating a duplicate; for a closed Issue or merged PR, verify whether the work is already delivered before filing a new contract.
 - Prefer stable anchor IDs over prose fragments when the source doc is likely to produce multiple Issues over time.
 - Treat GitHub Issues as the canonical backlog receipt. GitHub Project is an optional legacy projection when available; inline doc markers such as `Tracked by: #...` are secondary convenience notes only.
 - Prefer Issues plus truthful agent labels, linked PR state, and CI as harder authority than Project state if they drift.

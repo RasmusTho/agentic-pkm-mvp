@@ -48,6 +48,17 @@ def test_shared_issue_contract_requires_duplicate_search_before_issue_creation()
     assert "do not require GraphQL or ProjectV2 operations" in self_sufficiency
 
 
+def test_duplicate_search_rule_is_present_in_canonical_agent_instructions() -> None:
+    agents = _read("AGENTS.md")
+    delivery_governance = " ".join(
+        _section_between(agents, "## GitHub delivery governance", "## Dispatcher policy").split()
+    )
+
+    assert "Before creating or normalizing a governance or contract Issue" in delivery_governance
+    assert "open Issues, recently merged PRs, and closed Issues" in delivery_governance
+    assert "Use GitHub CLI/REST search; do not require GraphQL or ProjectV2 operations" in delivery_governance
+
+
 def test_shared_issue_contract_bounds_producer_and_caller_surfaces() -> None:
     contract = _read(".codex/skills/_shared/ISSUE_CONTRACT.md")
     bounded_surfaces = " ".join(
