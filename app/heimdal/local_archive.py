@@ -120,11 +120,14 @@ def _ensure_archive_dirs(archive_root: Path) -> tuple[Path, Path]:
         raise ArchiveDegradedError("archive_mount_unavailable")
     objects = archive_root / "representations"
     manifests = archive_root / "manifests"
+    mount_error = False
     try:
         objects.mkdir(exist_ok=True)
         manifests.mkdir(exist_ok=True)
     except OSError:
-        raise ArchiveDegradedError("archive_mount_unavailable") from None
+        mount_error = True
+    if mount_error:
+        raise ArchiveDegradedError("archive_mount_unavailable")
     return objects, manifests
 
 
