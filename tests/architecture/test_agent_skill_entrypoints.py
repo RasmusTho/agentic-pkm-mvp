@@ -48,6 +48,30 @@ def test_shared_issue_contract_requires_duplicate_search_before_issue_creation()
     assert "do not require GraphQL or ProjectV2 operations" in self_sufficiency
 
 
+def test_shared_issue_contract_bounds_producer_and_caller_surfaces() -> None:
+    contract = _read(".codex/skills/_shared/ISSUE_CONTRACT.md")
+    bounded_surfaces = " ".join(
+        _section_between(contract, "## Bounded producer and caller surfaces", "## Body template").split()
+    )
+
+    assert "enumerate the concrete production entrypoints" in bounded_surfaces
+    assert "unprovable-in-PR" in bounded_surfaces
+    assert "absolute quantifiers over an open caller set" in bounded_surfaces
+    assert "Concrete rewrite:" in bounded_surfaces
+
+
+def test_dormant_capability_proofs_stay_with_the_activation_slice() -> None:
+    gate = _read("docs/development/AUTONOMOUS_REVIEW_REPAIR_GATE_CONTRACTS.md")
+    placement = " ".join(
+        _section_between(gate, "### Dormant-capability proof placement", "### Stateful fallback boundary matrix").split()
+    )
+    implementation = _read(".codex/skills/issue-to-code/SKILL.md")
+
+    assert "belongs to the bounded slice that activates that path" in placement
+    assert "far-future activation proof" in placement
+    assert "Bounded producer and caller surfaces" in implementation
+
+
 def test_bug_delivery_transition_policy_is_linked_across_workflows() -> None:
     canonical = "AGENTS.md :: Transition-period bug-delivery policy"
     for path in (

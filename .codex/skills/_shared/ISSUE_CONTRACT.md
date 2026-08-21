@@ -135,6 +135,28 @@ Every Acceptance Criterion declares its verification inline with a `Verify:` mar
 The canonical long-form rule lives in `docs/development/DEV_WORKFLOW.md` ("Acceptance
 verifiability"); this file is the skill-facing summary.
 
+## Bounded producer and caller surfaces
+
+Acceptance Criteria must name a finite, reviewable surface. An AC that names producers must
+enumerate the concrete production entrypoints in the Issue, or reference an owner-document list
+that does; an open class such as "direct-service producers" is not a reviewable surface. Include
+CI workflows when they invoke the guarded persisted-schema surface directly. If a named producer
+can only be proven after merge, name it as `unprovable-in-PR` and require its post-merge proof in
+the Issue rather than discovering it through a later review round.
+
+Do not use absolute quantifiers over an open caller set (`every`, `never`, or `cannot`) as a
+stand-alone AC guarantee. Either enumerate the bounded surface or name the mechanical boundary
+that enforces the guarantee, such as a storage-layer gate or import-linter contract.
+
+Concrete rewrite:
+
+```
+Bad: every direct-service producer persists the schema.
+Good: `scripts/bootstrap_vault.py`, `app/api/routes/capture.py`, and
+`.github/workflows/ci-smoke.yaml` satisfy the schema preflight; the raw-compose
+smoke producer is `unprovable-in-PR` and is verified by its post-merge workflow run.
+```
+
 ## Body template
 
 ```
