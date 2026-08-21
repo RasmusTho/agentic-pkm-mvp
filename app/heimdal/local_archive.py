@@ -169,6 +169,7 @@ def relocate_raw_record(
     record: RawRecord,
     *,
     archive_root: Path,
+    archive_ref: str,
     now: Optional[datetime] = None,
     retention_window_days: Optional[int] = None,
     vault_root: Optional[Path] = None,
@@ -187,7 +188,11 @@ def relocate_raw_record(
         volume_proof = volume_ready()
     except Exception:
         raise ArchiveDegradedError("archive_mount_unavailable") from None
-    if not isinstance(volume_proof, ArchiveVolumeReady) or not volume_proof.ready:
+    if (
+        not isinstance(volume_proof, ArchiveVolumeReady)
+        or not volume_proof.ready
+        or volume_proof.archive_ref != archive_ref
+    ):
         raise ArchiveDegradedError("archive_mount_unavailable")
 
     objects, manifests = _ensure_archive_dirs(archive_root)
