@@ -8,6 +8,13 @@ This document describes the current tool descriptor registry, validation rules, 
 It is a current-state contract for tool descriptor completeness, allowed-argument validation, mock/deterministic test behavior, and audit expectations.
 It does not claim rich descriptor versioning or future permission-model expansion as shipped.
 
+**Producer/consumer distinction:** the MCP boundary in this contract is Mimer's internal
+consumer-side ToolProvider and optional remote-multiplex seam. ADR-0061 separately accepts a future
+producer-side external Mimer client adapter: a constituent-owned stdio sidecar over the governed
+HTTP API. That sidecar is not shipped, does not reuse this registry or `app/mcp/vault_tools.py`, and
+does not change any ToolProvider validation, execution, fallback, or admission behavior documented
+here.
+
 Use this document with:
 - `docs/ARCHITECTURE.md` for current runtime boundaries and the planner/orchestrator pipeline.
 - `docs/AGENTS.md` for the current agent matrix and tool authorization semantics.
@@ -245,6 +252,10 @@ Dynamic MCP descriptor discovery is best-effort and bounded:
 
 This contract explicitly bounds current tool execution behavior and reserves future expansion space:
 
+- **Distinct external producer boundary**: ADR-0061's accepted Mimer client adapter exposes only
+  ask, governed capture, retrieve/search, note-read, and health through a separate stdio sidecar
+  delegating to the HTTP API. It has no network listener in v1, exposes neither generic vault write
+  nor receipt read-back, and is not an implementation of `RemoteMCPProvider`.
 - **Currently implemented**: local registry-backed ToolProvider default path, plus optional remote multiplex seam with best-effort descriptor merging (no admission gate).
 - **Fallback behavior**: when remote multiplex is enabled but no remote adapter is present or the adapter errors, route falls back to local registry with deterministic reason codes (`remote_unavailable`, `remote_provider_error`).
 - **Not currently implemented**: descriptor versioning/evolution policies across remote providers.

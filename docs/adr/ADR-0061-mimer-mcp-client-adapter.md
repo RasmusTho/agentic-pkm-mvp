@@ -1,14 +1,14 @@
-State: Proposed (owner decision pending, 2026-07-11). Prepares — but does not make — the decision to admit MCP (Model Context Protocol) as an additional protocol-tier client adapter over Mimer's existing client contract, exposing exactly the already-shipped ask, governed-capture, retrieve/search, note-read, and health operations. Enumerates topology, wire-transport, and authentication alternatives with consequences and a recommendation. It changes no current authority: `docs/contracts/MIMER_CLIENT_CONTRACT.md`, ADR-0047, and ADR-0056 remain authoritative and MCP is NOT an admitted Mimer client transport until an owner-decision receipt on #3371 accepts one option. Only then may this ADR become Accepted and record supersession precisely. Numbering note: issues #3366–#3371 (and, before the #4320 correction, the specification directory) name this decision "ADR-0058", but ADR-0058 is already taken (event-horizon closure decay); this record is **ADR-0061** and supersedes those stale "ADR-0058" references.
+State: Accepted (owner decision, 2026-08-21; [receipt on #3371](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3371#issuecomment-5375222455)). Admits MCP (Model Context Protocol) as an additional protocol-tier client adapter over Mimer's existing client contract and selects **A2 + B1 + C1 for v1**: a constituent-owned sidecar over the governed HTTP API, stdio only with no network listener, and the inherited loopback/LAN/tailnet trust posture with no new authentication. The fixed external operation boundary is exactly ask, governed capture, retrieve/search, note-read, and health. Streamable HTTP over tailnet/LAN and per-device authentication are deferred, separately gated follow-ons and must not be enabled implicitly. Acceptance authorizes bounded downstream implementation; it does not claim that an MCP server is shipped or operationally accepted. Numbering note: issues #3366–#3371 originally named this decision "ADR-0058", but ADR-0058 is already taken (event-horizon closure decay); this record is **ADR-0061** and supersedes those stale references.
 Doc role: Decision record (ADR)
-Authority: Not authoritative while Proposed — advisory decision-preparation only. If accepted by an owner receipt on #3371, it becomes authoritative for (a) admitting MCP as an additional protocol-tier client adapter over the Mimer client contract, (b) the topology/wire-transport/auth posture of that adapter, and (c) the fixed operation boundary of the external MCP surface. It never becomes an independent authority path: the adapter delegates to the operations and authority envelope of `docs/contracts/MIMER_CLIENT_CONTRACT.md` and creates no second knowledge API or vault-write path.
+Authority: Authoritative for (a) admitting MCP as an additional protocol-tier client adapter over the Mimer client contract, (b) the selected A2/B1/C1 topology, wire-transport, and trust posture, and (c) the fixed operation boundary of the external MCP surface. It is not implementation evidence and never becomes an independent authority path: the adapter delegates to the operations and authority envelope of `docs/contracts/MIMER_CLIENT_CONTRACT.md` and creates no second knowledge API or vault-write path.
 Owner: Architecture (Rasmus)
-Temporal class: Proposed decision-preparation; becomes a Durable decision only on an accepting owner receipt. Supersede via a new ADR only after acceptance.
-Source of truth: While Proposed, the authoritative records remain ADR-0047, ADR-0056, and `docs/contracts/MIMER_CLIENT_CONTRACT.md`. This ADR is the proposal surface plus (on acceptance) the decision record; its design content, if accepted, lands in the Mimer client contract § Classification and transports.
+Temporal class: Durable decision. Supersede via a new ADR if the accepted topology, transport, authentication posture, or operation boundary changes.
+Source of truth: This ADR owns the accepted MCP adapter decision; `docs/contracts/MIMER_CLIENT_CONTRACT.md` owns the resulting client authority and transport contract. ADR-0047 remains authoritative for the distinct consumer-side remote-multiplex seam, and ADR-0056 remains authoritative except for its MCP deferral/closed transport-set wording, which this ADR supersedes in part.
 
-# ADR-0061: Admit MCP as an additional Mimer client adapter — topology, wire transport, and auth posture (proposed)
+# ADR-0061: Admit MCP as an additional Mimer client adapter — topology, wire transport, and auth posture
 
 **Date:** 2026-07-11
-**Status:** Proposed (owner decision pending)
+**Status:** Accepted (owner decision, 2026-08-21)
 
 ---
 
@@ -19,8 +19,9 @@ ranks a Mimer MCP server as the highest-leverage external-connectivity build ite
 MCP-capable clients (Claude Desktop/app, Codex app, and peers) reach Mimer's shipped ask,
 capture, retrieve, note-read, and health surfaces through a standard protocol instead of a
 bespoke HTTP client per app. Parent feature #3366 and children #3368–#3370 sequence the build;
-this ADR is child #3371 (MIMER-MCP-01), the owner-gated ratification head that must land before any
-adapter code is written.
+this ADR is child #3371 (MIMER-MCP-01), the owner-gated ratification head. Its accepted contract must
+land before any adapter code is treated as authorized, and acceptance alone is not evidence that
+the server exists.
 
 Two accepted decisions currently stand in the way, by design:
 
@@ -47,10 +48,9 @@ append → AuthorityReceipt → outbox event) plus read routes `GET /search`, `P
 orchestrator plumbing**, not an external transport; an external MCP server must not reuse them (see
 § Relationship to the internal ToolProvider).
 
-Three sub-decisions need one owner ruling each: **topology** (who hosts the server and how it is
-packaged), **wire transport** (which MCP wire protocol(s) are exposed and where they bind), and
-**authentication / trust posture** (what gates a caller). The operation boundary and authority
-invariants are fixed and identical across all options (§ Invariants across all options).
+The owner selected all three sub-decisions in one receipt: **A2 topology**, **B1 stdio-only wire
+transport**, and **C1 inherited trust posture**. The operation boundary and authority invariants
+remain fixed (§ Invariants across all options).
 
 ## Invariants across all options
 
@@ -81,9 +81,10 @@ without reopening the authority model.
 
 ## Options and recommendation
 
-Each sub-decision is presented with concrete alternatives and honest consequences (attack surface,
-governance load, future flexibility). A recommendation follows each, and a combined recommended
-bundle closes the section. **None of these is chosen until the owner rules on #3371.**
+Each sub-decision preserves the alternatives and consequences considered (attack surface,
+governance load, future flexibility). The [owner receipt](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3371#issuecomment-5375222455)
+accepted the recommended A2/B1/C1 bundle exactly; the unselected alternatives remain historical
+decision context only.
 
 ### Sub-decision A — Topology (who hosts the server, how it is packaged)
 
@@ -189,7 +190,7 @@ capability spec.
 
 ## Relationship to the internal ToolProvider (tool-policy contract)
 
-The external MCP **server** proposed here is the producer side and is distinct from the internal MCP
+The external MCP **server** accepted here is the producer side and is distinct from the internal MCP
 **ToolProvider** (`app/orchestrator/mcp_tool_provider.py`, consumer/remote-multiplex side governed by
 `docs/contracts/TOOL_POLICY_AND_MCP_ADAPTER_CONTRACT.md`). They share only the protocol name.
 Resolving the spec's open question: the internal tool-policy contract is **unaffected** — its
@@ -202,14 +203,16 @@ under ADR-0047 Rule 4.
 
 ## Conform / extend / reshape against the SoT
 
-- **ADR-0056 — Extend (supersede-in-part on acceptance).** This ADR adds a third client transport
+- **ADR-0056 — Extend (superseded in part).** This ADR adds a third client transport
   (MCP) alongside HTTP API + direct filesystem, exactly the reserved "admits a new client transport"
   event ADR-0056 anticipated. It preserves every ADR-0056 invariant — the three hard authority
   invariants, the exclusion list, capture as the only write path, index-lag honesty — and reshapes
-  none of them. On acceptance, ADR-0056 §2 is amended to list MCP as an admitted adapter; its
+  none of them. ADR-0056 §2 is amended to list MCP as an admitted but not-yet-shipped adapter; its
   authority envelope is untouched.
-- **ADR-0047 — Extend / enact (revisit-trigger satisfied).** B1 is the concrete server that ADR-0047
-  D4 named as its revisit trigger. This ADR ratifies candidate **Rule 2** (constituent-owned server)
+- **ADR-0047 — Extend / enact on the producer side (revisit-trigger satisfied).** The audit's B1
+  build item puts the concrete Mimer server proposal on the table that ADR-0047 D4 named as its
+  revisit trigger. This
+  ADR ratifies candidate **Rule 2** (constituent-owned server)
   on the producer side and imports the intent of **Rule 4** (admission/legible degradation) into the
   producer transport's trust posture. It does **not** reshape ADR-0047's consumer-side deferral or
   touch the remote-multiplex seam; the consumer-side silent-fallback gap remains ADR-0047's to close.
@@ -221,55 +224,45 @@ under ADR-0047 Rule 4.
 
 ## Constraints honored
 
-- Decision-preparation only while Proposed — no code, dependency, transport process, service unit, or
-  client configuration is added by this ADR's PR, and no current-state owner doc is promoted. The
-  Mimer client contract, ADR-0047, and ADR-0056 remain unchanged and authoritative.
-- No Accepted or superseding language takes force until an owner-decision receipt on #3371 is linked
-  from § Owner decision receipt. The recommendation is advisory; the ruling is the owner's.
+- Decision and contract writeback only — no code, dependency, transport process, service unit,
+  network listener, client configuration, startup change, or promotion is added by this slice.
+- Accepted and superseding language is grounded in the linked #3371 owner-decision receipt; the
+  accepted bundle is the owner's ruling, not an agent-selected recommendation.
 - The external server is never conflated with the internal ToolProvider, and `vault_tools.py` is
   never proposed as an external transport.
 - Single-operator posture preserved: server ownership follows constituent ownership under one human
-  apex authority; security is proportionate (trusted LAN/tailnet now, per-device auth as the gate on
-  any network listener), consistent with the project's data-integrity-first, security-TCD-gated
-  stance.
+  apex authority; stdio inherits the local user session and creates no listener. Any later
+  Streamable HTTP listener requires the separately gated B2 + C2 decision and implementation.
 
 ## Consequences
 
-- **If accepted (recommended bundle):** #3368 (expose governed tools over MCP) and #3369 (package and
-  harden transport) unblock; the client contract §2 gains MCP as an admitted adapter; the primary
-  desktop clients can reach Mimer over a standard protocol with no new network surface or auth in v1.
-  Remote/multi-device use and its auth are a named, separately gated follow-on (B2 + C2).
-- **If accepted with a different bundle:** the downstream slices bind to whatever topology/transport/
-  auth the owner selects; the invariants and five-operation boundary hold regardless of which bundle
-  wins.
-- **If declined:** MCP stays deferred; ADR-0056's HTTP + direct-FS transport set and ADR-0047's
-  deferral both stand unchanged; #3368–#3370 remain blocked and #3366 stays a blocked validation hub.
+- **Accepted bundle:** the client contract §2 gains MCP as an admitted, not-yet-shipped adapter under
+  A2/B1/C1. #3368 and #3369 may be reassessed for readiness only after this accepted docs contract
+  lands and verifies; this ADR does not mutate their live lifecycle state.
+- **No new exposure in v1:** stdio introduces no network listener and no per-device authentication.
+  Remote/multi-device MCP and its auth remain a named, separately gated follow-on (B2 + C2).
 - **Numbering debris cleared:** issues #3366–#3371 reference "ADR-0058" for this decision; that
   number belongs to event-horizon closure decay. This record is ADR-0061 and supersedes those
   stale issue-text references, which should be read as pointing here. The
   `MIMER_MCP_CLIENT_ADAPTER/` spec docs' filename and decision-number anchors were corrected to
-  ADR-0061 by the #4320 docs pass.
+  ADR-0061 by the #4320 docs pass; #3371's executable contract was corrected before this delivery.
 
 ## Owner decision receipt
 
-**No owner ruling is recorded yet.** This ADR stays `State: Proposed` and claims no acceptance or
-supersession until an explicit owner-decision receipt is posted on **GitHub Issue #3371** and linked
-from this section. Only after that link exists may this ADR's state become Accepted, may ADR-0056 §2
-be amended to admit MCP, and may `docs/contracts/MIMER_CLIENT_CONTRACT.md` § Classification and
-transports be updated to exactly the ruled option.
+The owner accepted the recommendation on 2026-08-21 in the durable
+[owner-decision receipt on GitHub Issue #3371](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3371#issuecomment-5375222455):
 
-The single question the owner must answer to move this to Accepted:
+- **A2 topology:** constituent-owned Mimer MCP sidecar over the existing governed HTTP API.
+- **B1 transport for v1:** stdio only; no network listener.
+- **C1 trust posture for v1:** inherit the existing loopback/LAN/tailnet posture; add no new
+  authentication while the adapter is stdio-only.
 
-> **Do you accept admitting MCP as an additional Mimer client adapter now under the recommended bundle
-> — a constituent-owned sidecar over the governed HTTP API (A2), stdio wire transport for v1 (B1),
-> inheriting the ADR-0056 LAN/loopback/tailnet trust posture with no network listener and no new auth
-> (C1) — with the tailnet streamable-HTTP transport and per-device auth (B2 + C2) as a separately
-> gated follow-on? Or do you prefer a different topology/transport/auth bundle, or to keep MCP
-> deferred?**
-
-The pivotal sub-choice inside that question is the **exposure/transport posture** (B1 stdio-only vs
-B2 tailnet HTTP), because it determines the network attack surface and whether the per-device auth
-slice (C2) must ship in v1; topology (A2) and auth (C1/C2) largely follow from it.
+The receipt accepts exactly the five operations in § Invariants across all options and rejects
+generic vault writes, separate receipt read-back, internal `vault_tools` reuse, hidden client
+authority, and direct-filesystem fallback. Streamable HTTP over tailnet/LAN and per-device
+authentication are explicitly deferred and require a separate gated follow-on. The receipt
+authorizes bounded downstream implementation but does not claim a shipped or operationally
+accepted server.
 
 ## References
 

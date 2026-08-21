@@ -1,19 +1,21 @@
-State: FILED specification directory (parent #3366; children #3368–#3371). MIMER-MCP-01/#3371
-remains `agent:needs-human` after this specification merges because MCP topology, wire transport,
-and authentication are owner-deferred. MIMER-MCP-02/#3368 and MIMER-MCP-03/#3369 remain blocked
-until an explicit owner-decision receipt accepts the proposed ADR. No implementation or current MCP
-transport support is claimed.
+State: FILED specification directory (parent #3366; children #3368–#3371). The 2026-08-21
+[owner-decision receipt](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3371#issuecomment-5375222455)
+accepts ADR-0061's A2/B1/C1 bundle and authorizes its contract writeback. MIMER-MCP-02/#3368 and
+MIMER-MCP-03/#3369 remain blocked until that accepted docs contract lands and their live issue
+contracts are reassessed; this decision slice does not change their lifecycle state. No
+implementation or current MCP transport support is claimed.
 Doc role: Capability specification and future delivery index
-Authority: Specifies the proposed Mimer MCP client-adapter capability. Until the owner accepts the
-decision proposal and an accepted ADR lands, `docs/contracts/MIMER_CLIENT_CONTRACT.md`, ADR-0047,
-and ADR-0056 remain authoritative and MCP is not an admitted Mimer client transport.
+Authority: Specifies the owner-accepted Mimer MCP client-adapter capability and downstream delivery
+sequence. ADR-0061 owns the A2/B1/C1 decision; `docs/contracts/MIMER_CLIENT_CONTRACT.md` owns the
+authority envelope. Runtime availability remains unshipped until the implementation and composed
+acceptance tasks deliver evidence.
 
 # Mimer MCP Client Adapter
 
 ## Capability Boundary
 
-This capability proposes admitting MCP as an additional protocol-tier adapter over Mimer's existing
-client contract, then—only if the owner accepts the proposal—exposes the already-shipped ask,
+This capability admits MCP at the contract layer as an additional protocol-tier adapter over
+Mimer's existing client contract, then exposes the already-shipped ask,
 governed capture, retrieve/search, note-read, and health operations to MCP clients. It does not
 create a second knowledge API or a new vault-write path.
 
@@ -31,13 +33,15 @@ acceptance evidence. No Builder System behavior is changed.
 - No new semantic authority, hidden durable store, retrieval engine, or client-local source of
   truth.
 - No Direction A connector configuration and no Direction C external-signal consumption.
-- No claim that MCP is a current transport before an explicit owner decision accepts the proposed
-  ADR and the accepted decision lands.
+- No claim that MCP is a running transport before downstream implementation and composed acceptance
+  evidence land.
+- No Streamable HTTP listener or per-device authentication in v1; B2 + C2 are separately gated
+  follow-ons and cannot be enabled implicitly.
 
 ## Task List
 
-1. [RATIFY_MCP_CLIENT_ADAPTER.md](RATIFY_MCP_CLIENT_ADAPTER.md) — draft the decision proposal and
-   wait for the owner's explicit topology/transport/auth ruling before admission.
+1. [RATIFY_MCP_CLIENT_ADAPTER.md](RATIFY_MCP_CLIENT_ADAPTER.md) — apply the accepted A2/B1/C1
+   decision and its linked owner receipt to ADR-0061 and the client contract.
 2. [EXPOSE_GOVERNED_MIMER_TOOLS_OVER_MCP.md](EXPOSE_GOVERNED_MIMER_TOOLS_OVER_MCP.md) — implement
    the protocol-neutral MCP tool surface over existing Mimer client operations.
 3. [PACKAGE_AND_HARDEN_MIMER_MCP_TRANSPORT.md](PACKAGE_AND_HARDEN_MIMER_MCP_TRANSPORT.md) — package
@@ -48,7 +52,8 @@ acceptance evidence. No Builder System behavior is changed.
 ## Flat Execution Order
 
 1. `RATIFY_MCP_CLIENT_ADAPTER.md`
-2. Only after the owner-decision receipt accepts the proposed ADR, run
+2. Only after the accepted ADR/client-contract writeback lands and downstream readiness is
+   reconciled, run
    `EXPOSE_GOVERNED_MIMER_TOOLS_OVER_MCP.md` and
    `PACKAGE_AND_HARDEN_MIMER_MCP_TRANSPORT.md` in parallel when isolated worktrees and file scopes
    make that safe.
@@ -58,7 +63,7 @@ In shorthand: `MIMER-MCP-01 -> (MIMER-MCP-02 || MIMER-MCP-03) -> MIMER-MCP-04`.
 
 ## Cross-Task Invariants / Interaction Safety
 
-- **MCP is an adapter, never an authority path.** If accepted, the tool layer delegates to the
+- **MCP is an adapter, never an authority path.** The accepted tool layer delegates to the
   operations and authority envelope recorded in the accepted client contract. It does not call internal vault tooling,
   write files, or reinterpret successful and failed outcomes.
 - **Capture is terminal only with the existing governed acknowledgement.** A successful MCP capture
@@ -73,9 +78,9 @@ In shorthand: `MIMER-MCP-01 -> (MIMER-MCP-02 || MIMER-MCP-03) -> MIMER-MCP-04`.
 - **Read truth remains honest.** Search/index misses retain the documented index-lag posture, ask
   failures never become answers from adapter memory, and note paths are not promoted into stable
   cross-host identifiers.
-- **Transport cannot widen exposure.** Packaging applies the owner-accepted binding/auth posture before a
-  network listener is considered usable. A healthy protocol handler on an unapproved interface is
-  a failed deployment, not partial success.
+- **Transport cannot widen exposure.** v1 is stdio only and opens no network listener. Any
+  Streamable HTTP/listener or per-device-auth work requires a separately accepted B2 + C2 follow-on;
+  it cannot enter through packaging defaults.
 - **Acceptance is composed.** MIMER-MCP-02 or MIMER-MCP-03 may be locally correct while the other is
   absent; neither changes owner-doc truth alone. MIMER-MCP-04 accepts the capability only after the
   semantic tool surface and hardened transport pass together.
@@ -85,40 +90,40 @@ In shorthand: `MIMER-MCP-01 -> (MIMER-MCP-02 || MIMER-MCP-03) -> MIMER-MCP-04`.
 - [ ] An owner-accepted decision and client-contract update admit MCP as an additional adapter
       without replacing HTTP or direct-filesystem semantics.
   Verify: doc writeback at `docs/contracts/MIMER_CLIENT_CONTRACT.md :: Classification and transports`
-  and owner-decision receipt on GitHub Issue #3371 linked from
-  `docs/adr/ADR-0061-mimer-mcp-client-adapter.md :: Owner decision receipt`
+  Verify: doc writeback at `docs/adr/ADR-0061-mimer-mcp-client-adapter.md :: Owner decision receipt`
 - [ ] The server exposes exactly ask, governed capture, retrieve/search, note read, and health, with
       governed capture receipts and failure semantics preserved.
   Verify: `tests/mcp/test_mimer_server.py::test_server_exposes_exact_contracted_tool_set`
-- [ ] The packaged transport rejects exposure or callers outside the owner-accepted trust posture and
-      reports deterministic health.
-  Verify: `tests/mcp/test_mimer_server_security.py::test_transport_rejects_untrusted_production_call`
+- [ ] The packaged transport exposes stdio only, opens no network listener, and reports
+      deterministic health.
+  Verify: `tests/mcp/test_mimer_server_security.py::test_stdio_production_entrypoint_opens_no_network_listener`
 - [ ] A composed smoke proves protocol negotiation, read operations, one governed capture receipt,
       restart recovery, and no receipt-readback tool.
   Verify: `tests/mcp/test_mimer_server_smoke.py::test_composed_mimer_mcp_journey`
 - [ ] Acceptance evidence and owner-doc writeback are reconciled without claiming unverified client
       compatibility.
-  Verify: runtime acceptance receipt on the parent feature issue plus doc writeback at `docs/STATUS.md :: Current Snapshot`
+  Verify: runtime acceptance receipt: parent feature issue #3366
+  Verify: doc writeback at `docs/STATUS.md :: Current Snapshot`
 
 ## Verification Path
 
-- MIMER-MCP-01 drafts `ADR-0061` in `Proposed` state with alternatives and a recommendation, then
-  waits for the owner-decision receipt before any Accepted/superseding language or contract change.
+- MIMER-MCP-01 preserves the proposal history, links the owner-decision receipt, moves ADR-0061 to
+  Accepted, and writes exactly A2/B1/C1 into the client contract without claiming implementation.
 - MIMER-MCP-02 uses in-process MCP tool tests with stubbed existing client operations plus the
   existing API contract suites.
-- MIMER-MCP-03 uses transport lifecycle, security-call-site, packaging, and dependency-consistency
+- MIMER-MCP-03 uses stdio lifecycle, no-listener production-entrypoint, packaging, and dependency-consistency
   tests.
 - MIMER-MCP-04 runs the composed protocol smoke and records durable compatibility evidence on the
   parent feature issue.
 
 ## Validation / Acceptance Path
 
-The specification is filed, but #3371 remains `agent:needs-human` until the owner explicitly rules
-on topology, wire transport, and auth. The parent remains a blocked validation hub while children
-are open. #3368/#3369 cannot become Ready merely because the spec merges; they require an accepted
-ADR plus its owner-decision receipt. Each merged child posts its PR and verification receipt to the
-parent. Only MIMER-MCP-04 may recommend current-state owner-doc promotion, and only after the
-composed runtime receipt exists.
+The owner has ruled on topology, wire transport, and auth. The parent remains a blocked validation
+hub while children are open. #3368/#3369 cannot become Ready merely because the receipt exists;
+they require the accepted ADR/client-contract writeback to land and a separate live readiness
+reconciliation. Each merged child posts its PR and verification receipt to the parent. Only
+MIMER-MCP-04 may promote runtime-availability claims, and only after the composed runtime receipt
+exists.
 
 ## Evidence Surface
 
@@ -132,11 +137,12 @@ composed runtime receipt exists.
 ## Relationship to GitHub Issues
 
 - Parent validation hub: #3366 (`agent:blocked`).
-- MIMER-MCP-01: #3371 — `agent:needs-human`; drafts ADR-0061 as Proposed and waits for the explicit
-  owner-decision receipt. Spec merge does not make it autonomous.
-- MIMER-MCP-02: #3368 — blocked on an owner-accepted ADR-0061 receipt, not only issue/PR completion.
-- MIMER-MCP-03: #3369 — blocked on the same owner-accepted ADR-0061 receipt; may run parallel with
-  #3368 only after that gate is satisfied.
+- MIMER-MCP-01: #3371 — applies the accepted A2/B1/C1 owner decision to ADR-0061 and the client
+  contract; no server code belongs to this slice.
+- MIMER-MCP-02: #3368 — remains blocked until #3371's accepted docs contract lands and live issue
+  maintenance confirms readiness.
+- MIMER-MCP-03: #3369 — same block; its v1 contract is stdio-only with no listener or new auth and
+  may run parallel with #3368 only after readiness is reconciled.
 - MIMER-MCP-04: #3370 — blocked on #3368 and #3369; final acceptance/closure handoff.
 
 [PARENT_FEATURE_ISSUE.md](PARENT_FEATURE_ISSUE.md) points to the live validation hub; GitHub owns

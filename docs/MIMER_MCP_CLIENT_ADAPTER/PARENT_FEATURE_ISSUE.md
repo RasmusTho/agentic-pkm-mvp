@@ -5,19 +5,19 @@ contract pointer; GitHub owns live backlog and validation state.
 
 ## Context
 
-The app-connectivity audit ranks a Mimer MCP server as its highest-leverage build item, but current
-authority explicitly says MCP is not a Mimer client transport. This feature first prepares an
-owner-gated decision proposal that revisits ADR-0047 and ADR-0056. Implementation may begin only if
-the owner explicitly accepts topology, wire transport, and authentication in a durable receipt.
+The app-connectivity audit ranks a Mimer MCP server as its highest-leverage build item. ADR-0061 and
+the 2026-08-21 owner receipt now accept the A2/B1/C1 contract: a constituent-owned sidecar over the
+governed HTTP API, stdio only, and no network listener or new auth in v1. The decision authorizes
+bounded implementation after its docs contract lands; it does not claim a shipped server.
 
 ## Scope
 
-- Draft `docs/adr/ADR-0061-mimer-mcp-client-adapter.md` as a **Proposed** decision with alternatives
-  and a recommendation; do not mark it Accepted or superseding without the owner's receipt.
-- If accepted, implement the exact MCP tool surface without creating a second authority or
+- Preserve the Proposed-stage alternatives and record ADR-0061 as **Accepted** with the linked
+  owner receipt and exact A2/B1/C1 selection.
+- Implement the exact MCP tool surface without creating a second authority or
   vault-write path.
-- If accepted, package the owner-selected wire transport with explicit configuration, trust enforcement, lifecycle,
-  and health behavior.
+- Package a stdio-only sidecar with no network listener, Streamable HTTP, or new authentication;
+  those are separately gated follow-ons.
 - Prove composed client compatibility and retain acceptance evidence on this parent validation hub.
 
 ## Source Anchors
@@ -42,8 +42,8 @@ the owner explicitly accepts topology, wire transport, and authentication in a d
 - Memory impact: none; adapter/session state must not become runtime or user memory
 - Retrieval/context impact: exposes existing ask/retrieve/read behavior without changing ranking, grounding, or context assembly
 - Sync/deployment impact: adds a managed client transport whose binding, restart, and exposure posture must be explicit
-- External boundary impact: adds a constituent-owned protocol adapter and client-facing trust boundary
-- New or changed contract: Proposed ADR-0061 first; accepted/superseding ADR and `docs/contracts/MIMER_CLIENT_CONTRACT.md` change only after an explicit owner receipt; tool-policy contract changes only if internal adapter semantics change
+- External boundary impact: accepts a constituent-owned stdio protocol adapter boundary without shipping it or adding network exposure
+- New or changed contract: Accepted ADR-0061 + `docs/contracts/MIMER_CLIENT_CONTRACT.md`; the internal tool-policy contract receives only a producer/consumer distinction and no semantic change
 - Owner-doc impact: will-update-in-PR per child; final current-state promotion belongs to the acceptance child
 - Transition debt impact: no SBS transition-debt effect expected; any newly discovered adapter/authority deviation becomes bounded debt
 - Fitness rule impact: strengthens the manual external-adapter/authority review with production-call-site tests
@@ -51,9 +51,9 @@ the owner explicitly accepts topology, wire transport, and authentication in a d
 ## Constraints
 
 - The parent is a validation hub, never an `agent:ready` implementation issue.
-- #3371 remains `agent:needs-human` after the spec merges. Drafting the proposal does not authorize
-  an agent to choose topology, wire transport, authentication, or mark ADR-0061 Accepted.
-- #3368 and #3369 remain blocked until ADR-0061 is Accepted with a linked owner-decision receipt.
+- #3371 applies the owner's already-recorded A2/B1/C1 decision; no agent chooses the bundle.
+- #3368 and #3369 remain blocked until the Accepted ADR/client-contract writeback lands and their
+  live readiness is separately reconciled.
 - Preserve the client contract's authority, index-lag, ambiguous-write, trace, and no-hidden-truth
   rules.
 - Do not expose `app/mcp/vault_tools.py` or internal orchestrator descriptors as the client server.
@@ -64,18 +64,20 @@ the owner explicitly accepts topology, wire transport, and authentication in a d
 
 ## Acceptance Criteria
 
-- [ ] ADR-0061 presents explicit topology, wire-transport, and authentication alternatives plus a
-      recommendation while remaining Proposed until the owner rules.
+- [ ] ADR-0061 preserves the alternatives/recommendation and records the accepted A2/B1/C1 ruling
+      without claiming implementation.
   - Verify: doc writeback at `docs/adr/ADR-0061-mimer-mcp-client-adapter.md :: Options and recommendation`
-- [ ] The owner decision is recorded durably before ADR-0061 becomes Accepted or supersedes existing
-      authority, and the client contract changes only to the accepted choice.
-  - Verify: owner-decision receipt on GitHub Issue #3371 linked from `docs/adr/ADR-0061-mimer-mcp-client-adapter.md :: Owner decision receipt` plus doc writeback at `docs/contracts/MIMER_CLIENT_CONTRACT.md :: Classification and transports`
+- [ ] The durable owner decision is linked from ADR-0061, and the client contract changes only to
+      A2/B1/C1 while leaving runtime availability unclaimed.
+  - Verify: doc writeback at `docs/adr/ADR-0061-mimer-mcp-client-adapter.md :: Owner decision receipt`
+  - Verify: doc writeback at `docs/contracts/MIMER_CLIENT_CONTRACT.md :: Classification and transports`
 - [ ] The exact contracted MCP tool surface delegates to existing client operations and preserves
       the governed capture response and error envelope.
   - Verify: `tests/mcp/test_mimer_server.py::test_server_exposes_exact_contracted_tool_set`
-- [ ] The packaged transport enforces the owner-accepted trust posture on its production call path and
-      survives a supervised restart without durable adapter state.
-  - Verify: `tests/mcp/test_mimer_server_security.py::test_transport_rejects_untrusted_production_call` and `tests/mcp/test_mimer_server_transport.py::test_supervised_restart_restores_service_without_replay`
+- [ ] The packaged transport exposes stdio only, opens no network listener, and survives a
+      client-spawned restart without durable adapter state or replay.
+  - Verify: `tests/mcp/test_mimer_server_security.py::test_stdio_production_entrypoint_opens_no_network_listener`
+  - Verify: `tests/mcp/test_mimer_server_transport.py::test_client_spawned_restart_restores_stdio_without_replay`
 - [ ] The composed capability passes a real protocol journey and records supported-client evidence.
   - Verify: `tests/mcp/test_mimer_server_smoke.py::test_composed_mimer_mcp_journey` plus runtime acceptance receipt on this parent issue
 - [ ] Every child has a delivery receipt and exactly one owner-doc writeback resolution before the
@@ -103,6 +105,7 @@ the owner explicitly accepts topology, wire transport, and authentication in a d
 - `docs/audits/APP_MCP_CONNECTIVITY_2026-07-07.md`
 - `docs/ROADMAP.md`
 - `docs/contracts/MIMER_CLIENT_CONTRACT.md`
+- `docs/adr/ADR-0061-mimer-mcp-client-adapter.md`
 - `docs/adr/ADR-0047-mcp-topology-federation-stance.md`
 - `docs/adr/ADR-0056-mimer-client-contract-and-transports.md`
 - `docs/contracts/TOOL_POLICY_AND_MCP_ADAPTER_CONTRACT.md`
@@ -114,8 +117,8 @@ the owner explicitly accepts topology, wire transport, and authentication in a d
 
 ## Implementation Tasks
 
-1. #3371 (`agent:needs-human`) — `docs/MIMER_MCP_CLIENT_ADAPTER/RATIFY_MCP_CLIENT_ADAPTER.md`
-2. In parallel only after ADR-0061 is owner-accepted with a linked decision receipt:
+1. #3371 — `docs/MIMER_MCP_CLIENT_ADAPTER/RATIFY_MCP_CLIENT_ADAPTER.md` (accepted docs contract)
+2. In parallel only after #3371's docs contract lands and downstream readiness is reconciled:
    - #3368 — `docs/MIMER_MCP_CLIENT_ADAPTER/EXPOSE_GOVERNED_MIMER_TOOLS_OVER_MCP.md`
    - #3369 — `docs/MIMER_MCP_CLIENT_ADAPTER/PACKAGE_AND_HARDEN_MIMER_MCP_TRANSPORT.md`
 3. #3370 — `docs/MIMER_MCP_CLIENT_ADAPTER/PROVE_CLIENT_COMPATIBILITY_AND_ACCEPT_MIMER_MCP.md`
@@ -128,9 +131,9 @@ existing API suites against the integrated head.
 
 ## Validation / Acceptance Path
 
-Keep this parent blocked while children are open. Spec merge does not unblock #3371; it stays
-`agent:needs-human` until the owner-decision receipt exists, and #3368/#3369 stay blocked until the
-accepted ADR lands. Record for every child: issue, PR, merge SHA, CI,
+Keep this parent blocked while children are open. The owner-decision receipt exists; #3368/#3369
+stay blocked until the accepted ADR/client-contract writeback lands and their live contracts are
+reconciled. Record for every child: issue, PR, merge SHA, CI,
 declared `Verify:` results, owner-doc resolution, and transition-debt outcome. After all four child
 receipts exist, record the composed smoke, restart/failure evidence, supported-client matrix, and
 any operator observation. Close only when all parent ACs are satisfied and current-state docs match

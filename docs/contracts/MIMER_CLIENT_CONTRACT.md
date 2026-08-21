@@ -1,11 +1,11 @@
-State: Canonical hub client contract (owner rulings 2026-07-07, enacted via `docs/adr/ADR-0056-mimer-client-contract-and-transports.md`; governed media and meeting lanes promoted 2026-08-01 after CDLM acceptance). Current-state contract over shipped surfaces; every named gap is marked as follow-on work, not claimed solved.
+State: Canonical hub client contract (owner rulings 2026-07-07, enacted via `docs/adr/ADR-0056-mimer-client-contract-and-transports.md`; governed media and meeting lanes promoted 2026-08-01 after CDLM acceptance; MCP adapter posture accepted 2026-08-21 via ADR-0061). Current-state contract over shipped surfaces plus the explicitly accepted, not-yet-shipped MCP adapter boundary; every named gap is marked as follow-on work, not claimed solved.
 Doc role: Core SoT contract
-Authority: Canonical for how external clients attach to Mimer: the callable surface, the two write transports (governed HTTP API and direct filesystem), the authority envelope, and the concurrent-writer client discipline. Serves BOTH client families — Bifrost native shells (`RasmusTho/bifrost`, ADR-0050) and external app agents (Claude app, Codex app, and peers). Subordinate to `docs/INTEGRATION_FABRIC_CONTRACT.md` (class taxonomy + authority rule), `docs/AGENT-FLOWS.md` (participation modes and zones), `docs/adr/ADR-0055-vault-multiwriter-consistency-model.md` (the decided multi-writer mechanism, supersedes ADR-0053, resolves #3114; VMW-01 through VMW-04 and INV-VW2 are delivered, while versionless-writer migration remains in #3570), and `docs/contracts/OBSIDIAN_KNOWLEDGE_PORT.md` / `docs/contracts/GOVERNED_WRITE_PROTOCOL.md` (runtime write mechanics). `docs/ARCHITECTURE.md` and `docs/STATUS.md` win on current runtime truth.
+Authority: Canonical for how external clients attach to Mimer: the callable surface, the two durable mutation paths (governed HTTP API and direct filesystem), the accepted MCP protocol adapter posture, the authority envelope, and the concurrent-writer client discipline. Serves BOTH client families — Bifrost native shells (`RasmusTho/bifrost`, ADR-0050) and external app agents (Claude app, Codex app, and peers). Subordinate to `docs/INTEGRATION_FABRIC_CONTRACT.md` (class taxonomy + authority rule), `docs/AGENT-FLOWS.md` (participation modes and zones), `docs/adr/ADR-0055-vault-multiwriter-consistency-model.md` (the decided multi-writer mechanism, supersedes ADR-0053, resolves #3114; VMW-01 through VMW-04 and INV-VW2 are delivered, while versionless-writer migration remains in #3570), and `docs/contracts/OBSIDIAN_KNOWLEDGE_PORT.md` / `docs/contracts/GOVERNED_WRITE_PROTOCOL.md` (runtime write mechanics). ADR-0061 owns the MCP adapter decision. `docs/ARCHITECTURE.md` and `docs/STATUS.md` win on current runtime truth.
 Owner: Architecture spine (Rasmus)
 Temporal class: strategic
 Review cadence: event-driven (re-verify at each Epic B wave boundary and each remaining ADR-0055 enactment change)
 Source of truth: mixed
-Last reviewed: 2026-08-01
+Last reviewed: 2026-08-21
 
 # Mimer Client Contract
 
@@ -35,14 +35,31 @@ A client under this contract operates in two modes simultaneously:
 - **API-mediated caller** — governed writes and retrieval through the HTTP surface (§4). Mediated-write semantics apply (AGENT-FLOWS §4).
 - **Mode (c) direct filesystem agent** — direct reads and writes of vault Markdown under the human's delegation (§5). Observed-write semantics apply: Mimer observes, classifies, and indexes the result; a direct write is not APPLY, produces no Mimer receipt of its own, and confers no authority.
 
-**MCP is not a transport of this contract.** The `mcp.vault.append_note` descriptor is an internal orchestrator descriptor (`docs/settings/tools/mcp.vault.append_note.yaml`), not an externally callable endpoint; no MCP server exists in `app/`, and the MCP topology stance is owner-deferred (ADR-0047). This contract does not reopen that deferral. Mode (d) MCP/RBAC attachment remains future work.
+ADR-0061 additionally admits an **MCP protocol adapter** under this same contract, with availability
+still pending downstream implementation and composed acceptance. Its fixed v1 posture is:
+
+- **A2 topology:** a constituent-owned sidecar process that can call only the governed HTTP API;
+  it has no in-process access to internal tooling or vault writers.
+- **B1 wire transport:** stdio only, spawned by a local MCP client; **no network listener**.
+- **C1 trust posture:** the sidecar calls the existing loopback API and inherits the current
+  loopback/LAN/tailnet posture; stdio adds no new authentication machinery.
+- **Exactly five operations:** ask, governed capture, retrieve/search, note-read, and health.
+  Generic vault writes, separate receipt read-back, internal `vault_tools` reuse, hidden authority,
+  and direct-filesystem fallback are excluded.
+
+MCP is a third client protocol adapter, **not a third durable mutation path**: governed capture
+still terminates at the HTTP API, returns that API's PolicyDecision, DecisionToken, and
+AuthorityReceipt unchanged, and follows §6 W5 after an ambiguous response. The
+`mcp.vault.append_note` descriptor remains internal orchestrator plumbing, not an external endpoint.
+No MCP server is shipped in `app/` yet. Streamable HTTP over tailnet/LAN plus per-device
+authentication are deferred, separately gated follow-ons and must not be enabled implicitly.
 
 ## 3. Authority envelope — the three hard invariants
 
-Every client, both families, both transports:
+Every client, both families, every admitted adapter and mutation path:
 
 1. **Never semantic authority.** The client never decides what a vault note means, never owns a Core-6 field, and never treats its own output as human-canonical. Client output enters at the zone posture of where it lands (AGENT-FLOWS §7); promotion to human-canonical knowledge is a human act through the trust path (`docs/CONCEPTS/TRUST_SEMANTICS_CONTRACT.md`).
-2. **Every durable mutation stays inside a named transport.** There are exactly two: the governed API path (§4) and the direct-filesystem path (§5). No bespoke side channels, no client-invented write mechanisms, no local write queue that replays into the vault without the human.
+2. **Every durable mutation stays inside a named path.** There are exactly two: the governed API path (§4) and the direct-filesystem path (§5). The accepted MCP adapter delegates capture to the governed API and adds no third write path. No bespoke side channels, no client-invented write mechanisms, no local write queue that replays into the vault without the human.
 3. **Never a hidden source of truth.** No client-local store may hold meaning that the vault + companion set cannot rebuild (`docs/INTEGRATION_FABRIC_CONTRACT.md` authority rule). Client caches are opaque external durability: rebuildable, never written back as authority.
 
 How each transport stays inside the envelope:
@@ -55,6 +72,11 @@ How each transport stays inside the envelope:
 Base URL: the Mimer runtime API (`app/api/app.py`). All routes below exist on `main` today. Trace correlation: send `x-trace-id` on every call; the runtime's TraceIdMiddleware propagates it into spans, receipts, and events.
 
 **v1 auth posture (owner ruling):** LAN/loopback-only. The client-facing routes below carry no auth dependency today; `X-API-Key` machinery exists (`app/auth.py`) but is applied to only three routes in `companion.py`. A client under this contract MUST refuse to operate against a Mimer host that is not loopback, LAN, or tailnet (`docs/SECURITY_TRUST_BOUNDARIES.md`). Per-agent identity/keys is the named first hardening slice (§9 F2), not a v1 blocker.
+
+For the accepted MCP v1 adapter, C1 means the stdio process inherits its local user session and
+calls the existing loopback API; it does not open a network listener and adds no new auth. This does
+not authorize a networked MCP endpoint. Any later Streamable HTTP transport requires a separate
+B2 + C2 decision and per-device authentication before listener startup.
 
 | Operation | Method + path | Purpose | Provenance/trace | Governance |
 | --- | --- | --- | --- | --- |
@@ -415,7 +437,7 @@ Answers per `docs/INTEGRATION_FABRIC_CONTRACT.md` §Contract fields.
 Named follow-on work; each routes through `feature-breakdown`/`docs-to-issue`, none blocks v1 clients operating under the postures above:
 
 - **F1 — Capture provenance field + per-agent actor.** The capture schema is `{text}` with `extra="forbid"`; the actor is hardcoded `companion.capture`, so a Claude-app capture and a Bifrost capture are indistinguishable in DecisionToken/AuthorityReceipt/event. Add an optional provenance object to the schema and thread it through the governed chain.
-- **F2 — Auth coverage + per-agent/per-device identity (first hardening slice).** Apply the existing `X-API-Key` machinery to the client-facing routes and introduce per-client identity/keys; serves both families (and Bifrost B1's remote posture). Owner-ruled as the first hardening slice, not a v1 blocker.
+- **F2 — Auth coverage + per-agent/per-device identity (first hardening slice).** Apply the existing `X-API-Key` machinery to the client-facing routes and introduce per-client identity/keys; serves both families (and Bifrost B1's remote posture). It is not a blocker for ADR-0061's stdio-only MCP v1 because no listener exists, but it is a mandatory precondition for any separately approved Streamable HTTP MCP transport.
 - **F3 — uuid-resolving note fetch or enriched search payload.** Close the §4.2 uuid→path gap at the API instead of by client-side filesystem enrichment.
 - **F4 — API versioning + published OpenAPI for the client surface.** The hub API is unversioned and `api/openapi.yaml` documents 2 of 23+ route modules (audit §3; the surface is still growing); a client-publishable contract needs both.
 - **F5 — Client-visible idempotency key on the *text* capture endpoint.** Still open for `POST /api/companion/capture`: no client-supplied key exists there, so a client must verify-by-read after `not_acknowledged`/timeout instead of retrying (§6 W5). **Delivered for the media lane** by #4384 / PR #4400: `POST /api/heimdal/capture/media` takes `(capture_id, content_sha256)` as its client-minted identity and answers a resend with the same `receipt_id` (§4.4), so that lane retries safely and needs no verify-by-read.
@@ -434,9 +456,11 @@ Per the repo's architecture-artifact convention (binding classification against 
 | Admitting external app agents to the live writer set | **Extend** | Owner ruling 2026-07-07, enacted via ADR-0056; extends the writer set ADR-0055 governs (supersedes ADR-0053) to a new writer class; VMW-01 through VMW-04 and INV-VW2 are delivered, while #3570 preserves the progressive versionless-caller migration boundary |
 | Client write discipline W1–W8 | **Extend** | New client-side obligations; introduces no runtime mechanism, forks no `GOVERNED_WRITE_PROTOCOL`/`OBSIDIAN_KNOWLEDGE_PORT` semantics, and defers to ADR-0055's enactment for real enforcement |
 | Provenance frontmatter convention (§5) | **Extend** | New convention on a surface AGENT-FLOWS §4 names as best-effort; advisory to the runtime until F1/F2 land, anticipates ADR-0055 item 4 |
-| MCP-transport assumption retired for clients | **Conform** | ADR-0047 (deferred stance) and the audit's A2-class finding; no stance is reopened |
+| MCP admitted as an additional protocol adapter under A2/B1/C1, without a shipped server or new mutation path | **Extend** | Owner ruling 2026-08-21, enacted via ADR-0061; fixed five-operation surface delegates to the governed HTTP API; B2 + C2 remain deferred |
 
-No reshape: no existing boundary, charter, contract, or ADR is altered. The one authority-affecting change (new writer class) is routed through ADR-0056 as required.
+No boundary reshape: ADR-0061 extends this client contract and supersedes the MCP-deferral wording
+in ADR-0047/ADR-0056 only as stated above. The authority envelope, two durable mutation paths, and
+existing subsystem charters remain unchanged.
 
 ## 11. References
 
@@ -446,7 +470,8 @@ No reshape: no existing boundary, charter, contract, or ADR is altered. The one 
 - `docs/INTEGRATION_FABRIC_CONTRACT.md` — class taxonomy, contract fields, authority rule.
 - `docs/AGENT-FLOWS.md` §3/§4/§7/§10/§12/§13 — participation modes, observed writes, zones, provenance rules.
 - `docs/contracts/GOVERNED_WRITE_PROTOCOL.md`, `docs/contracts/OBSIDIAN_KNOWLEDGE_PORT.md` — the write machinery this contract rides.
-- `docs/contracts/TOOL_POLICY_AND_MCP_ADAPTER_CONTRACT.md`, ADR-0047 — why MCP is not a client transport today.
+- ADR-0061 — accepted A2/B1/C1 external MCP client adapter; implementation and composed acceptance remain downstream.
+- `docs/contracts/TOOL_POLICY_AND_MCP_ADAPTER_CONTRACT.md`, ADR-0047 — the distinct internal ToolProvider/consumer-side remote-multiplex seam, whose remaining deferral is not changed by the external adapter decision.
 - `docs/BIFROST/APP_TOPOLOGY_AND_PLATFORMS.md` — Bifrost topology design-of-record; Epic B #3020, B1 #3023/`bifrost#1`; ADR-0050.
 - `app/api/routes/{capture,search,ask,artifacts}.py`, `app/auth.py`, `app/knowledge/{adapters,write_ops}.py`, `app/components/concurrency.py`, `app/watcher/watcher.py` — implementation evidence (descriptive, not normative; `docs/ARCHITECTURE.md` owns runtime truth).
 - `docs/MIMER_VOICE_LOOP/SHARE_TRANSCRIPTION_CAPABILITY.md` — VOICE-02's internal shared-ASR seam: Heimdal capture and Mimer voice-ask reuse `app.media.transcribe.run_asr`; this is not a client transport.
