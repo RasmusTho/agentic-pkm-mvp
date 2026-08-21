@@ -45,6 +45,11 @@ def test_verified_volume_proof_cannot_be_reused_as_minting_authority(tmp_path: P
             "forged-archive", tmp_path / "arbitrary", _issuer=getattr(proof, "_issuer", object())
         )
 
+    forged_root = tmp_path / "forged"
+    object.__setattr__(proof, "mountpoint", forged_root)
+    with pytest.raises(raw_store.RawRepresentationDeletionError):
+        raw_store.configure_cold_archive_root(forged_root, verified_volume=proof)
+
 
 @pytest.fixture(autouse=True)
 def _memory_runtime(monkeypatch: pytest.MonkeyPatch):

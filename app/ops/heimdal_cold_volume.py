@@ -205,7 +205,7 @@ class CommandResult:
 _ARCHIVE_VOLUME_READY_ISSUER = object()
 
 
-_VERIFIED_VOLUME_PROOF_IDS: set[int] = set()
+_VERIFIED_VOLUME_PROOFS: dict[int, tuple[str, Path]] = {}
 
 
 @dataclass(frozen=True, init=False)
@@ -223,12 +223,17 @@ class ArchiveVolumeReady:
         object.__setattr__(self, "archive_ref", archive_ref)
         object.__setattr__(self, "mountpoint", mountpoint)
         proof_id = id(self)
-        _VERIFIED_VOLUME_PROOF_IDS.add(proof_id)
-        weakref.finalize(self, _VERIFIED_VOLUME_PROOF_IDS.discard, proof_id)
+        _VERIFIED_VOLUME_PROOFS[proof_id] = (archive_ref, mountpoint)
+        weakref.finalize(self, _VERIFIED_VOLUME_PROOFS.pop, proof_id, None)
 
 
-def _is_verified_archive_volume_ready(proof: object) -> bool:
-    return isinstance(proof, ArchiveVolumeReady) and id(proof) in _VERIFIED_VOLUME_PROOF_IDS
+def _is_verified_archive_volume_ready(proof: object, expected_mountpoint: Path) -> bool:
+    binding = _VERIFIED_VOLUME_PROOFS.get(id(proof))
+    return (
+        isinstance(proof, ArchiveVolumeReady)
+        and binding is not None
+        and binding[1] == expected_mountpoint
+    )
 
 
 def _issue_archive_volume_ready(

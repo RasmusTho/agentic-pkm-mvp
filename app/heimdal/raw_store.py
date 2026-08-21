@@ -126,7 +126,7 @@ def _require_verified_cold_volume(archive_root: Path, verified_volume: object) -
         not isinstance(verified_volume, ArchiveVolumeReady)
         or not verified_volume.ready
         or verified_volume.mountpoint != archive_root
-        or not _is_verified_archive_volume_ready(verified_volume)
+        or not _is_verified_archive_volume_ready(verified_volume, archive_root)
     ):
         raise RawRepresentationDeletionError("verified cold volume proof is required")
 
