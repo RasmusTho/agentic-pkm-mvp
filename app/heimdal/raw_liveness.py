@@ -448,6 +448,22 @@ def _assert_pg_schema(conn: Any) -> None:
             "Raw-liveness append-only triggers are incomplete. " + _MIGRATION_HINT
         )
     cur.execute(
+        """
+        SELECT pg_get_functiondef(p.oid)
+        FROM pg_proc AS p
+        WHERE p.proname = 'heimdal_raw_deletion_receipt_reject_mutation'
+        """
+    )
+    function_defs = [str(item[0]) for item in cur.fetchall()]
+    if not any(
+        _RETENTION_RECONCILE_GUARD_SETTING in function_def
+        for function_def in function_defs
+    ):
+        raise RawLivenessSchemaMissingError(
+            "Deletion-receipt reconciliation trigger is not migration-ready. "
+            + _MIGRATION_HINT
+        )
+    cur.execute(
         f"""
         SELECT r.id
         FROM heimdal_raw_record AS r

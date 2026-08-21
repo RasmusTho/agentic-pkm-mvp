@@ -46,6 +46,8 @@ memory governed path. Ordinary representation registration cannot delete identit
   reconciliation; the memory writer follows the same post-authority-delete ordering and keeps its
   receipt queue on cleanup failure. Stale observations cannot authorize deletion because the
   receipt/tombstone and row locks are the authority.
+- PG schema preflight validates the reconciliation trigger function body, not just trigger name;
+  partial/pre-e2f3 schemas fail at the migration boundary before any erase state transition.
 
 ## Prior findings and proof map
 
