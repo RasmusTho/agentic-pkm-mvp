@@ -22,6 +22,7 @@ import re
 import secrets
 import stat
 import subprocess
+import weakref
 import sys
 import threading
 import unicodedata
@@ -204,12 +205,14 @@ class CommandResult:
 _ARCHIVE_VOLUME_READY_ISSUER = object()
 
 
+_VERIFIED_VOLUME_PROOF_IDS: set[int] = set()
+
+
 @dataclass(frozen=True, init=False)
 class ArchiveVolumeReady:
     ready: bool
     archive_ref: str
     mountpoint: Path
-    _issuer: object
 
     def __init__(self, *, _issuer: object, archive_ref: str, mountpoint: Path) -> None:
         if _issuer is not _ARCHIVE_VOLUME_READY_ISSUER:
@@ -219,7 +222,13 @@ class ArchiveVolumeReady:
         object.__setattr__(self, "ready", True)
         object.__setattr__(self, "archive_ref", archive_ref)
         object.__setattr__(self, "mountpoint", mountpoint)
-        object.__setattr__(self, "_issuer", _issuer)
+        proof_id = id(self)
+        _VERIFIED_VOLUME_PROOF_IDS.add(proof_id)
+        weakref.finalize(self, _VERIFIED_VOLUME_PROOF_IDS.discard, proof_id)
+
+
+def _is_verified_archive_volume_ready(proof: object) -> bool:
+    return isinstance(proof, ArchiveVolumeReady) and id(proof) in _VERIFIED_VOLUME_PROOF_IDS
 
 
 def _issue_archive_volume_ready(

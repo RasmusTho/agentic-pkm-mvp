@@ -23,6 +23,7 @@ from app.heimdal import raw_liveness
 from app.ops.heimdal_cold_volume import (
     _ARCHIVE_VOLUME_READY_ISSUER,
     _issue_archive_volume_ready,
+    ArchiveVolumeRefusedError,
 )
 
 pytestmark = pytest.mark.not_pg
@@ -35,6 +36,14 @@ def _test_volume_ready(archive_ref: str, archive_root: Path):
     return _issue_archive_volume_ready(
         archive_ref, archive_root, _issuer=_ARCHIVE_VOLUME_READY_ISSUER
     )
+
+
+def test_verified_volume_proof_cannot_be_reused_as_minting_authority(tmp_path: Path) -> None:
+    proof = _test_volume_ready(_ARCHIVE_REF, tmp_path / "verified")
+    with pytest.raises(ArchiveVolumeRefusedError):
+        _issue_archive_volume_ready(
+            "forged-archive", tmp_path / "arbitrary", _issuer=getattr(proof, "_issuer", object())
+        )
 
 
 @pytest.fixture(autouse=True)
