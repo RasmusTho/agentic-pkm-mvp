@@ -81,6 +81,7 @@ include raw paths, vault names, environment values, DSNs, secrets, or raw startu
 - Run the exact `Suggested Validation` commands where possible
 - Add focused extra checks if the touched surface obviously needs them
 - For every AC, resolve the declared `Verify:` target on the current PR head SHA
+- Enforce **late-change supersession** at the closing boundary. If a late delivery change altered the PR head, scope/authority body, governing contract, or required-check configuration after any evidence was collected, compare the prior/current digest/version of every mutable authority surface — PR body, governing contract, and required-check configuration — alongside the head SHA, identify only the evidence affected by that change, mark it superseded, and emit a `late_change_supersession_receipt.v1` in the delivery evidence. The receipt names the prior/current head SHA and mutable-authority digest/version snapshots, late change, superseded evidence, unaffected evidence retained with its dependency, required reruns, and current-head rerun results. Rerun every affected gate before merge or closure; unchanged, independent evidence need not be repeated.
 - If a behavioral `Verify:` test is missing, skipped, xfailed, or excluded from the CI suite that ran, do not treat the AC as satisfied
 - If a non-behavioral `Verify:` target is absent, do not merge until the writeback exists
 - If any AC lacks a `Verify:` marker, route through issue maintenance before proceeding
@@ -190,6 +191,7 @@ Wait **how** matters for CI: follow `_shared/CI_WAIT_CONTRACT.md` — use the sh
 Prerequisites for merge (full path; the light path's complete gate is in `Delivery-path routing` above):
 
 - current SHA truth is intact
+- late-change supersession is resolved: a `late_change_supersession_receipt.v1` exists for every late delivery change after evidence collection, it compares every mutable authority surface by digest/version as well as head SHA, its affected evidence has been rerun green on the current head SHA, and stale evidence must not merge or close the PR
 - required checks and repo-standard checks that cover the changed surface are green on the current head SHA
 - any red check that covers the changed surface is a hard stop until fixed, rerun green, or explicitly classified as unrelated by evidence; this includes `Unit tests (not pg)` even when branch protection does not require it
 - no unresolved P0/P1 blocking review comments remain
