@@ -31,7 +31,7 @@ A promotion plan has these required sections:
 
 - **Promotion target** — the commit on `main` being promoted, and the current `stable` commit being replaced.
 - **Code delta** — ordered list of PRs included, each annotated with: PR title, PR link, AC status (satisfied / partial / unverified), verification receipt pointer, and any known-regression notes.
-- **Migration delta** — schema and data migrations to apply to prod (`app` DB, compose project `pkm-prod`), each classified as **reversible** or **forward-only** per `DEFINE_MIGRATION_REVERSIBILITY_CLASSIFICATION`.
+- **Migration delta** — schema and data migrations to apply to prod's active (`app` DB, compose project `pkm-prod`), each classified as **reversible** or **forward-only** per `DEFINE_MIGRATION_REVERSIBILITY_CLASSIFICATION`. In the target gated promotion-plan workflow, this is the same active production applicability boundary that the current `main`-tracking path protects manually.
 - **Config / settings delta** — settings changes that take effect in prod after promotion (watcher policies, env vars, operator-visible defaults).
 - **Risk notes** — explicit list of risks the operator should consider, including forward-only migrations, any PR lacking full AC verification, and any cross-channel touchpoints.
 - **Rollback path** — the previous `stable` ref and the migration-reversal sequence (per `DEFINE_ROLLBACK_CONTRACT`).
