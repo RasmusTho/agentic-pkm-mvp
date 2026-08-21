@@ -55,11 +55,18 @@ _RECEIPT_TRIGGER_GUARDED_UPDATE = re.compile(
 def _receipt_trigger_is_migration_ready(function_def: str, trigger_def: str) -> bool:
     """Accept only the canonical guarded-update/append-only trigger shape."""
     normalized = re.sub(r"\s+", " ", function_def).lower()
+    normalized_trigger = re.sub(r"\s+", " ", trigger_def).lower()
     body_match = re.search(r"\bbegin\s+(.*?)\bend\s*;", normalized, re.IGNORECASE)
     body = body_match.group(1).strip() if body_match else ""
     return bool(
         _RECEIPT_TRIGGER_GUARDED_UPDATE.fullmatch(body)
-        and re.search(r"before\s+update\s+or\s+delete\s+on", trigger_def, re.IGNORECASE)
+        and re.fullmatch(
+            r"create trigger heimdal_raw_deletion_receipt_no_update "
+            r"before update or delete on (?:[a-z_][a-z0-9_]*\.)?heimdal_raw_deletion_receipt "
+            r"for each row execute function "
+            r"(?:[a-z_][a-z0-9_]*\.)?heimdal_raw_deletion_receipt_reject_mutation\(\)",
+            normalized_trigger,
+        )
     )
 
 

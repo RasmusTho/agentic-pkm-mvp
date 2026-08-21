@@ -88,7 +88,11 @@ def test_receipt_trigger_preflight_rejects_extra_delete_return_path() -> None:
           RAISE EXCEPTION 'heimdal_raw_deletion_receipt is append-only: % is not permitted', TG_OP;
         END;
     """
-    trigger = "BEFORE UPDATE OR DELETE ON heimdal_raw_deletion_receipt"
+    trigger = (
+        "CREATE TRIGGER heimdal_raw_deletion_receipt_no_update BEFORE UPDATE OR DELETE "
+        "ON heimdal_raw_deletion_receipt FOR EACH ROW EXECUTE FUNCTION "
+        "heimdal_raw_deletion_receipt_reject_mutation()"
+    )
     assert raw_liveness._receipt_trigger_is_migration_ready(canonical, trigger)  # noqa: SLF001
     assert not raw_liveness._receipt_trigger_is_migration_ready(
         """
@@ -98,7 +102,7 @@ def test_receipt_trigger_preflight_rejects_extra_delete_return_path() -> None:
              AND current_setting('app.heimdal_retention_reconcile', true) = 'true' THEN
             RETURN NEW;
           END IF;
-          RAISE EXCEPTION 'append-only: %', TG_OP;
+          RAISE EXCEPTION 'heimdal_raw_deletion_receipt is append-only: % is not permitted', TG_OP;
         END;
         """,
         trigger,
@@ -124,10 +128,14 @@ def test_receipt_trigger_preflight_rejects_extra_delete_return_path() -> None:
              AND current_setting('app.heimdal_retention_reconcile', true) = 'true' THEN
             RETURN NEW;
           END IF;
-          RAISE EXCEPTION 'append-only: %', TG_OP;
+          RAISE EXCEPTION 'heimdal_raw_deletion_receipt is append-only: % is not permitted', TG_OP;
         END;
         """,
         trigger,
+    )  # noqa: SLF001
+    assert not raw_liveness._receipt_trigger_is_migration_ready(
+        canonical,
+        trigger + " WHEN (false)",
     )  # noqa: SLF001
 
 
