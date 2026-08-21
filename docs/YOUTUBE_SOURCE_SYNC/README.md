@@ -4,7 +4,7 @@ Authority: Owns the YouTube source-sync capability design — account binding, s
 Owner: Architecture / knowledge acquisition
 Temporal class: strategic
 Review cadence: event-driven (task merge, YouTube API surface change)
-Last reviewed: 2026-07-21
+Last reviewed: 2026-08-22
 
 # YouTube Source Sync
 
@@ -160,7 +160,10 @@ Invariants that hold *across* tasks, with their partial-failure seams:
   manual call and does not claim lease or concurrent-run reconciliation.
 - **INV-YSS-7 — channel isolation.** dev/test/prod never share OAuth state, registry rows, cursors,
   or queues: DB-per-channel isolates the tables; token stores are per-channel app-local paths.
-  Environment selection never bypasses these boundaries (`docs/ENVIRONMENTS.md`).
+  Environment selection never bypasses these boundaries (`docs/ENVIRONMENTS.md`). Before a
+  dev-channel rooted default is first used after upgrade, a fail-loud existing-resource migration
+  durably verifies the former dev-only encrypted default before deleting it; test/prod never claim
+  that unscoped state, and explicit path overrides remain outside the migration.
 - **INV-YSS-8 — posture markers unconditional.** Every candidate written via this capability
   carries `authority.requires_review: true` + `review_state: draft` and enters triage at
   `captured` — inherited from KA-05 and never overridable by any sync policy or setting.

@@ -36,6 +36,7 @@ import json
 import os
 import stat
 import threading
+import unicodedata
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -44,7 +45,7 @@ from typing import Any
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
-from app.config.environment import active_environment
+from app.config.environment import ENV_DEV, active_environment
 from app.config.paths import resolve_runtime_artifact_path
 
 KEY_ENV_VAR = "YOUTUBE_TOKEN_STORE_KEY"
@@ -56,6 +57,8 @@ _SCHEMA = "youtube-token-store.v1"
 _STATE_DIRECTORY = "knowledge_acquisition"
 _TOKEN_STORE_FILENAME = "youtube_token_store.enc"
 _WRITER_LOCK_FILENAME = "youtube_oauth_writer.lock"
+_LEGACY_DEFAULT_REL_PATH = Path("runtime/knowledge_acquisition/youtube_token_store.enc")
+_MIGRATION_STAGE_FILENAME = f".{_TOKEN_STORE_FILENAME}.migration-stage"
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
@@ -70,6 +73,10 @@ class TokenStoreKeyMissingError(RuntimeError):
 
 class OAuthStateBoundaryError(RuntimeError):
     """The private channel OAuth state boundary is absent or unsafe."""
+
+
+class OAuthStateMigrationError(OAuthStateBoundaryError):
+    """Legacy and channel-rooted OAuth state cannot converge safely."""
 
 
 class OAuthWriterAdmissionError(RuntimeError):
@@ -171,6 +178,86 @@ def default_token_store_path() -> Path:
     return _token_store_path(canonical_oauth_state_root())
 
 
+def _legacy_default_token_store_paths() -> tuple[Path, ...]:
+    """Resolve every bounded checkout/CWD location used by the old producer.
+
+    The former default was process-CWD-relative.  The product producer was
+    dev-only and normally launched from a repository checkout, so upgrade
+    discovery covers the current launch CWD, this module's checkout, the
+    canonical shared checkout, and every linked worktree registered there.
+    Multiple surviving stores are ambiguous and are refused by the migration
+    preflight rather than guessed or merged.
+    """
+
+    roots = [Path.cwd(), _REPO_ROOT]
+    try:
+        canonical_root = _canonical_repository_root()
+    except OAuthStateBoundaryError:
+        canonical_root = None
+    if canonical_root is not None:
+        roots.append(canonical_root)
+        worktrees_root = canonical_root / ".git" / "worktrees"
+        try:
+            entries = tuple(worktrees_root.iterdir())
+        except FileNotFoundError:
+            entries = ()
+        except OSError as exc:
+            raise OAuthStateMigrationError(
+                "registered legacy YouTube OAuth locations are unavailable"
+            ) from exc
+        for entry in entries:
+            gitdir_marker = entry / "gitdir"
+            try:
+                marker = gitdir_marker.read_text(encoding="utf-8").strip()
+            except FileNotFoundError:
+                continue
+            except OSError as exc:
+                raise OAuthStateMigrationError(
+                    "registered legacy YouTube OAuth location is unavailable"
+                ) from exc
+            if marker:
+                roots.append(Path(marker).expanduser().parent)
+
+    candidates: list[Path] = []
+    seen: set[Path] = set()
+    for root in roots:
+        candidate = Path(os.path.abspath(root / _LEGACY_DEFAULT_REL_PATH))
+        if candidate not in seen:
+            seen.add(candidate)
+            candidates.append(candidate)
+    return tuple(candidates)
+
+
+def _normalized_path_identities(path: Path) -> frozenset[str]:
+    """Path spellings that collapse on the default developer filesystem."""
+
+    absolute = os.path.abspath(path)
+    canonical = os.path.realpath(absolute)
+    return frozenset(
+        unicodedata.normalize("NFC", spelling).casefold()
+        for spelling in (absolute, canonical)
+    )
+
+
+def _paths_alias(first: Path, second: Path) -> bool:
+    """Detect lexical, case/Unicode, symlink, hard-link, and bind-mount aliases."""
+
+    if _normalized_path_identities(first) & _normalized_path_identities(second):
+        return True
+    try:
+        if os.path.samefile(first, second):
+            return True
+    except OSError:
+        pass
+    try:
+        return os.path.samefile(first.parent, second.parent) and (
+            unicodedata.normalize("NFC", first.name).casefold()
+            == unicodedata.normalize("NFC", second.name).casefold()
+        )
+    except OSError:
+        return False
+
+
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -266,16 +353,36 @@ class YouTubeTokenStore:
 
     def __init__(self, path: Path | str | None = None) -> None:
         if path is None:
+            configured_path = (os.environ.get(PATH_ENV_VAR) or "").strip()
             state_root = canonical_oauth_state_root()
             self._path = _token_store_path(state_root)
             self._channel_runtime_root: Path | None = state_root.parent
+            migrate_legacy_default = (
+                active_environment() == ENV_DEV
+                and not configured_path
+            )
+            if (
+                not configured_path
+                and any(
+                    _paths_alias(self._path, legacy_path)
+                    for legacy_path in _legacy_default_token_store_paths()
+                )
+            ):
+                raise OAuthStateBoundaryError(
+                    "channel-rooted YouTube OAuth state aliases the unscoped legacy default"
+                )
         else:
             explicit = Path(path).expanduser()
             if not explicit.is_absolute():
                 raise OAuthStateBoundaryError("explicit OAuth state path must be absolute")
             self._path = Path(os.path.abspath(explicit))
             self._channel_runtime_root = None
+            migrate_legacy_default = False
         self._lock = threading.Lock()
+        if migrate_legacy_default:
+            self._migrate_legacy_default()
+        if path is None and not configured_path:
+            self._preflight_existing_default_target()
 
     def __repr__(self) -> str:
         return "YouTubeTokenStore(path=***)"
@@ -306,6 +413,32 @@ class YouTubeTokenStore:
         ):
             raise OAuthStateBoundaryError(
                 "YouTube OAuth state file must be a current-user-owned mode-0600 regular file"
+            )
+
+    @staticmethod
+    def _assert_legacy_directory(metadata: os.stat_result) -> None:
+        """Accept the old mkdir-produced directory without accepting writable peers."""
+
+        if (
+            not stat.S_ISDIR(metadata.st_mode)
+            or metadata.st_mode & 0o022
+            or metadata.st_uid != os.geteuid()
+        ):
+            raise OAuthStateMigrationError(
+                "legacy YouTube OAuth state directory is not safely current-user-owned"
+            )
+
+    @staticmethod
+    def _assert_legacy_file(metadata: os.stat_result) -> None:
+        """Accept old umask-derived read bits, but never another writer."""
+
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or metadata.st_mode & 0o022
+            or metadata.st_uid != os.geteuid()
+        ):
+            raise OAuthStateMigrationError(
+                "legacy YouTube OAuth state file is not a safe current-user-owned regular file"
             )
 
     @staticmethod
@@ -382,13 +515,21 @@ class YouTubeTokenStore:
             except OAuthStateBoundaryError:
                 os.close(runtime_fd)
                 raise
+            descriptor = -1
             try:
                 try:
                     os.mkdir(_STATE_DIRECTORY, mode=0o700, dir_fd=runtime_fd)
                 except FileExistsError:
                     pass
                 descriptor = os.open(_STATE_DIRECTORY, flags, dir_fd=runtime_fd)
+                # The credential file cannot become authoritative until the
+                # private directory's entry is durable in its parent.  Fsync
+                # even when the directory pre-existed so a retry after an
+                # indeterminate earlier fsync closes that crash window.
+                os.fsync(runtime_fd)
             except OSError:
+                if descriptor >= 0:
+                    os.close(descriptor)
                 raise OAuthStateBoundaryError(
                     "private YouTube OAuth state directory is unavailable"
                 ) from None
@@ -426,19 +567,412 @@ class YouTubeTokenStore:
             raise
         return descriptor
 
+    @staticmethod
+    def _entry_exists(path: Path, *, label: str) -> bool:
+        try:
+            metadata = path.lstat()
+        except FileNotFoundError:
+            return False
+        except OSError as exc:
+            raise OAuthStateMigrationError(f"{label} state is unavailable") from exc
+        if stat.S_ISLNK(metadata.st_mode):
+            raise OAuthStateMigrationError(f"{label} state must not be a symlink")
+        return True
+
+    def _open_legacy_directory(self, legacy_path: Path) -> int | None:
+        parent = legacy_path.parent
+        try:
+            parent_metadata = parent.lstat()
+        except FileNotFoundError:
+            return None
+        except OSError as exc:
+            raise OAuthStateMigrationError(
+                "legacy YouTube OAuth state directory is unavailable"
+            ) from exc
+        self._assert_no_symlink_ancestry(parent, allow_missing_leaf=False)
+        self._assert_legacy_directory(parent_metadata)
+        flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+        try:
+            descriptor = os.open(parent, flags)
+        except OSError as exc:
+            raise OAuthStateMigrationError(
+                "legacy YouTube OAuth state directory is unavailable"
+            ) from exc
+        try:
+            self._assert_legacy_directory(os.fstat(descriptor))
+        except BaseException:
+            os.close(descriptor)
+            raise
+        return descriptor
+
+    def _open_checked_store_entry(
+        self,
+        directory_fd: int,
+        name: str,
+        *,
+        legacy: bool,
+        label: str,
+    ) -> int | None:
+        try:
+            metadata = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+        except FileNotFoundError:
+            return None
+        except OSError as exc:
+            raise OAuthStateMigrationError(f"{label} state is unavailable") from exc
+        if legacy:
+            self._assert_legacy_file(metadata)
+        else:
+            self._assert_private_file(metadata)
+        try:
+            descriptor = os.open(
+                name,
+                os.O_RDONLY
+                | getattr(os, "O_NOFOLLOW", 0)
+                | getattr(os, "O_NONBLOCK", 0),
+                dir_fd=directory_fd,
+            )
+        except FileNotFoundError:
+            return None
+        except OSError as exc:
+            raise OAuthStateMigrationError(f"{label} state is unavailable") from exc
+        try:
+            metadata = os.fstat(descriptor)
+            if legacy:
+                self._assert_legacy_file(metadata)
+            else:
+                self._assert_private_file(metadata)
+        except BaseException:
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
+            raise
+        return descriptor
+
+    def _read_store_entry(
+        self,
+        directory_fd: int,
+        name: str,
+        *,
+        legacy: bool,
+        label: str,
+    ) -> bytes | None:
+        descriptor = self._open_checked_store_entry(
+            directory_fd,
+            name,
+            legacy=legacy,
+            label=label,
+        )
+        if descriptor is None:
+            return None
+        with os.fdopen(descriptor, "rb") as handle:
+            payload = handle.read()
+        self._validate_migration_payload(payload, label=label)
+        return payload
+
+    def _preflight_existing_default_target(self) -> None:
+        """Refuse an unsafe implicit target before status/refresh receives the store."""
+
+        if not self._entry_exists(self._path, label="channel-rooted"):
+            return
+        directory_fd = self._open_state_directory()
+        try:
+            payload = self._read_store_entry(
+                directory_fd,
+                self._path.name,
+                legacy=False,
+                label="channel-rooted",
+            )
+            assert payload is not None
+        finally:
+            os.close(directory_fd)
+
+    @staticmethod
+    def _validate_migration_payload(payload: bytes, *, label: str) -> None:
+        """Validate only encrypted structure; migration never decrypts or falls back."""
+
+        try:
+            data = json.loads(payload.decode("utf-8"))
+            if not isinstance(data, dict) or data.get("schema") != _SCHEMA:
+                raise ValueError("unexpected schema")
+            records = data.get("records")
+            if not isinstance(records, dict):
+                raise ValueError("records must be an object")
+            for binding_id, record in records.items():
+                if not isinstance(binding_id, str) or not binding_id:
+                    raise ValueError("invalid binding id")
+                if not isinstance(record, dict):
+                    raise ValueError("invalid encrypted record")
+                ciphertext = record.get("ciphertext")
+                nonce = record.get("nonce")
+                if not isinstance(ciphertext, str) or not isinstance(nonce, str):
+                    raise ValueError("invalid encrypted record fields")
+                decoded_ciphertext = base64.b64decode(ciphertext, validate=True)
+                decoded_nonce = base64.b64decode(nonce, validate=True)
+                if len(decoded_nonce) != _NONCE_BYTES or len(decoded_ciphertext) < 16:
+                    raise ValueError("invalid AES-GCM record")
+        except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
+            raise OAuthStateMigrationError(
+                f"{label} encrypted YouTube token store failed migration preflight"
+            ) from exc
+
+    def _acquire_migration_admission(self) -> OAuthWriterAdmission:
+        directory_fd = self._open_state_directory()
+        try:
+            descriptor = os.open(
+                _WRITER_LOCK_FILENAME,
+                os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0),
+                0o600,
+                dir_fd=directory_fd,
+            )
+            try:
+                self._assert_private_file(os.fstat(descriptor))
+                fcntl.flock(descriptor, fcntl.LOCK_EX)
+            except BaseException:
+                os.close(descriptor)
+                raise
+            return OAuthWriterAdmission(descriptor)
+        finally:
+            os.close(directory_fd)
+
+    @staticmethod
+    def _assert_equal_payloads(first: bytes, second: bytes, *, states: str) -> None:
+        if first != second:
+            raise OAuthStateMigrationError(
+                f"ambiguous encrypted YouTube token stores exist in {states}"
+            )
+
+    def _remove_migration_entry(self, directory_fd: int, name: str, *, label: str) -> None:
+        try:
+            os.unlink(name, dir_fd=directory_fd)
+            os.fsync(directory_fd)
+        except OSError as exc:
+            raise OAuthStateMigrationError(f"{label} failed") from exc
+
+    def _publish_migration_payload(
+        self,
+        directory_fd: int,
+        payload: bytes,
+        *,
+        staged_payload: bytes | None,
+    ) -> bytes:
+        # Rollback owns only entries created by this attempt.  A pre-existing
+        # stage is independent recovery evidence and must survive any refusal.
+        stage_created = False
+        target_created = False
+        try:
+            if staged_payload is None:
+                descriptor = os.open(
+                    _MIGRATION_STAGE_FILENAME,
+                    os.O_WRONLY
+                    | os.O_CREAT
+                    | os.O_EXCL
+                    | getattr(os, "O_NOFOLLOW", 0),
+                    0o600,
+                    dir_fd=directory_fd,
+                )
+                stage_created = True
+                with os.fdopen(descriptor, "wb") as handle:
+                    handle.write(payload)
+                    handle.flush()
+                    os.fsync(handle.fileno())
+                staged_payload = self._read_store_entry(
+                    directory_fd,
+                    _MIGRATION_STAGE_FILENAME,
+                    legacy=False,
+                    label="staged migration",
+                )
+                assert staged_payload is not None
+            self._assert_equal_payloads(
+                payload, staged_payload, states="legacy and staged state"
+            )
+            os.link(
+                _MIGRATION_STAGE_FILENAME,
+                self._path.name,
+                src_dir_fd=directory_fd,
+                dst_dir_fd=directory_fd,
+                follow_symlinks=False,
+            )
+            target_created = True
+            os.fsync(directory_fd)
+            published = self._read_store_entry(
+                directory_fd,
+                self._path.name,
+                legacy=False,
+                label="channel-rooted",
+            )
+            assert published is not None
+            self._assert_equal_payloads(payload, published, states="legacy and channel state")
+            self._remove_migration_entry(
+                directory_fd,
+                _MIGRATION_STAGE_FILENAME,
+                label="staged migration cleanup",
+            )
+            stage_created = False
+            return published
+        except Exception as exc:
+            rollback_error: OSError | None = None
+            if target_created:
+                try:
+                    os.unlink(self._path.name, dir_fd=directory_fd)
+                    os.fsync(directory_fd)
+                except OSError as rollback_exc:
+                    rollback_error = rollback_exc
+            if stage_created:
+                try:
+                    os.unlink(_MIGRATION_STAGE_FILENAME, dir_fd=directory_fd)
+                    os.fsync(directory_fd)
+                except OSError as cleanup_exc:
+                    rollback_error = rollback_error or cleanup_exc
+            if rollback_error is not None:
+                raise OAuthStateMigrationError(
+                    "target publication failed and rollback could not be verified"
+                ) from exc
+            if (
+                not target_created
+                and not stage_created
+                and isinstance(exc, OAuthStateMigrationError)
+            ):
+                raise
+            raise OAuthStateMigrationError(
+                "target publication failed; encrypted legacy state was preserved"
+            ) from exc
+
+    def _migrate_legacy_default(self) -> None:
+        """Converge the old default into this channel before any credential read."""
+
+        legacy_candidates = _legacy_default_token_store_paths()
+        if any(_paths_alias(self._path, path) for path in legacy_candidates):
+            raise OAuthStateBoundaryError(
+                "channel-rooted YouTube OAuth state aliases the unscoped legacy default"
+            )
+        legacy_paths = tuple(
+            path
+            for path in legacy_candidates
+            if self._entry_exists(path, label="legacy")
+        )
+        if len(legacy_paths) > 1:
+            raise OAuthStateMigrationError(
+                "ambiguous encrypted YouTube token stores exist in multiple legacy locations"
+            )
+        legacy_path = legacy_paths[0] if legacy_paths else None
+        stage_path = self._path.with_name(_MIGRATION_STAGE_FILENAME)
+        stage_exists = self._entry_exists(stage_path, label="staged migration")
+        if legacy_path is None and not stage_exists:
+            return
+
+        admission = self._acquire_migration_admission()
+        legacy_fd: int | None = None
+        target_fd: int | None = None
+        try:
+            legacy_fd = (
+                self._open_legacy_directory(legacy_path)
+                if legacy_path is not None
+                else None
+            )
+            legacy = (
+                self._read_store_entry(
+                    legacy_fd,
+                    _TOKEN_STORE_FILENAME,
+                    legacy=True,
+                    label="legacy",
+                )
+                if legacy_fd is not None
+                else None
+            )
+            target_fd = self._open_state_directory()
+            target = self._read_store_entry(
+                target_fd,
+                self._path.name,
+                legacy=False,
+                label="channel-rooted",
+            )
+            stage = self._read_store_entry(
+                target_fd,
+                _MIGRATION_STAGE_FILENAME,
+                legacy=False,
+                label="staged migration",
+            )
+
+            if legacy is None and stage is not None and target is None:
+                raise OAuthStateMigrationError(
+                    "orphaned staged migration has no legacy or channel authority"
+                )
+            if legacy is None:
+                assert target is not None
+                if stage is not None:
+                    self._assert_equal_payloads(
+                        target, stage, states="channel and staged state"
+                    )
+                    self._remove_migration_entry(
+                        target_fd,
+                        _MIGRATION_STAGE_FILENAME,
+                        label="staged migration cleanup",
+                    )
+                return
+            if target is None:
+                target = self._publish_migration_payload(
+                    target_fd,
+                    legacy,
+                    staged_payload=stage,
+                )
+            else:
+                self._assert_equal_payloads(
+                    legacy, target, states="legacy and channel-rooted state"
+                )
+                if stage is not None:
+                    self._assert_equal_payloads(
+                        target, stage, states="channel and staged state"
+                    )
+                    self._remove_migration_entry(
+                        target_fd,
+                        _MIGRATION_STAGE_FILENAME,
+                        label="staged migration cleanup",
+                    )
+            try:
+                # A visible target from an interrupted publication is not yet
+                # authority proof.  Re-establish its directory-link durability
+                # on every retry before the legacy authority can be removed.
+                os.fsync(target_fd)
+            except OSError as exc:
+                raise OAuthStateMigrationError(
+                    "channel-rooted durability verification failed"
+                ) from exc
+            assert legacy_fd is not None
+            current_legacy = self._read_store_entry(
+                legacy_fd,
+                _TOKEN_STORE_FILENAME,
+                legacy=True,
+                label="legacy",
+            )
+            assert current_legacy is not None
+            self._assert_equal_payloads(
+                target, current_legacy, states="channel and final legacy state"
+            )
+            self._remove_migration_entry(
+                legacy_fd,
+                _TOKEN_STORE_FILENAME,
+                label="legacy finalization",
+            )
+        finally:
+            if target_fd is not None:
+                os.close(target_fd)
+            if legacy_fd is not None:
+                os.close(legacy_fd)
+            admission.release()
+
     def _load_file(self) -> dict[str, Any]:
         directory_fd = self._open_state_directory()
         try:
-            try:
-                descriptor = os.open(
-                    self._path.name,
-                    os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0),
-                    dir_fd=directory_fd,
-                )
-            except FileNotFoundError:
+            descriptor = self._open_checked_store_entry(
+                directory_fd,
+                self._path.name,
+                legacy=False,
+                label="channel-rooted",
+            )
+            if descriptor is None:
                 return {"schema": _SCHEMA, "records": {}}
             try:
-                self._assert_private_file(os.fstat(descriptor))
                 with os.fdopen(descriptor, "r", encoding="utf-8") as handle:
                     raw = handle.read()
             except BaseException:
@@ -459,19 +993,14 @@ class YouTubeTokenStore:
         temporary_name = f".{self._path.name}.{uuid.uuid4().hex}.tmp"
         descriptor: int | None = None
         try:
-            try:
-                existing = os.open(
-                    self._path.name,
-                    os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0),
-                    dir_fd=directory_fd,
-                )
-            except FileNotFoundError:
-                existing = None
+            existing = self._open_checked_store_entry(
+                directory_fd,
+                self._path.name,
+                legacy=False,
+                label="channel-rooted",
+            )
             if existing is not None:
-                try:
-                    self._assert_private_file(os.fstat(existing))
-                finally:
-                    os.close(existing)
+                os.close(existing)
             descriptor = os.open(
                 temporary_name,
                 os.O_WRONLY
@@ -590,6 +1119,7 @@ class YouTubeTokenStore:
 __all__ = [
     "KEY_ENV_VAR",
     "OAuthStateBoundaryError",
+    "OAuthStateMigrationError",
     "OAuthWriterAdmission",
     "OAuthWriterAdmissionError",
     "PATH_ENV_VAR",
