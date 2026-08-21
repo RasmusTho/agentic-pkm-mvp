@@ -1640,15 +1640,21 @@ def _governed_delete_pg(
             )
         _retention_stage_hook("after_raw_delete")
         conn.commit()
-        for cold_path in cold_paths:
-            raw_store._delete_cold_object_path(cold_path)  # noqa: SLF001
-        if cold_location_refs:
-            cur.execute(
-                "SELECT set_config(%s, 'true', true)",
-                (_RETENTION_RECONCILE_GUARD_SETTING,),
-            )
-            _reconcile_pg_cold_cleanup(cur, record_id)
+        try:
+            for cold_path in cold_paths:
+                raw_store._delete_cold_object_path(cold_path)  # noqa: SLF001
+            if cold_location_refs:
+                cur.execute(
+                    "SELECT set_config(%s, 'true', true)",
+                    (_RETENTION_RECONCILE_GUARD_SETTING,),
+                )
+                _reconcile_pg_cold_cleanup(cur, record_id)
+                conn.commit()
+        except Exception:
+            # The DB erasure is already committed. Preserve any reduced queue
+            # update so the next retry converges instead of replaying refs.
             conn.commit()
+            raise
         return GovernedDeletionResult(
             outcome="deleted", receipt=receipt, tombstone=tombstone
         )
