@@ -53,10 +53,11 @@ def infer_workflow_risks(before: str | None, after: str | None) -> set[str]:
 def workflow_risk_evidence_from_git(
     repo: Path, *, base: str = "origin/main", head: str = "HEAD"
 ) -> WorkflowRiskEvidence:
-    """Inspect every workflow path in Git's real diff, rather than caller input."""
+    """Inspect the candidate diff from its merge base, rather than moving endpoints."""
 
-    base_sha = _git(repo, "rev-parse", "--verify", base).strip()
+    requested_base_sha = _git(repo, "rev-parse", "--verify", base).strip()
     head_sha = _git(repo, "rev-parse", "--verify", head).strip()
+    base_sha = _git(repo, "merge-base", requested_base_sha, head_sha).strip()
     paths = tuple(
         dict.fromkeys(
             path
