@@ -116,8 +116,21 @@ class RawRepresentationIdentityMismatchError(RuntimeError):
     """Raised when encrypted representation bytes do not match immutable identity."""
 
 
-def register_cold_location(location_ref: str, object_path: Path) -> None:
-    """Bind an opaque cold handle to a verified mounted-volume object path."""
+def _require_verified_cold_volume(archive_root: Path, verified_volume: object) -> None:
+    from app.ops.heimdal_cold_volume import ArchiveVolumeReady
+
+    if (
+        not isinstance(verified_volume, ArchiveVolumeReady)
+        or not verified_volume.ready
+        or verified_volume.mountpoint != archive_root
+    ):
+        raise RawRepresentationDeletionError("verified cold volume proof is required")
+
+
+def register_cold_location(
+    location_ref: str, object_path: Path, *, verified_volume: object
+) -> None:
+    """Bind an opaque cold handle only under a verified-volume capability."""
     object_id = location_ref.rsplit(":", 1)[-1]
     if (
         not location_ref.startswith(f"{_LOCATION_REF_PREFIX}cold:")
@@ -125,6 +138,7 @@ def register_cold_location(location_ref: str, object_path: Path) -> None:
         or object_path.name != f"{object_id}.bin"
     ):
         raise ValueError("cold object path does not match its opaque location handle")
+    _require_verified_cold_volume(object_path.parent.parent, verified_volume)
     _cold_location_paths[location_ref] = object_path
 
 
@@ -133,10 +147,11 @@ def discard_cold_location(location_ref: str) -> None:
     _cold_location_paths.pop(location_ref, None)
 
 
-def configure_cold_archive_root(archive_root: Path) -> None:
+def configure_cold_archive_root(archive_root: Path, *, verified_volume: object) -> None:
     """Bind the verified archive root for cold reads after process restart."""
     if not archive_root.is_absolute():
         raise ValueError("cold archive root must be absolute")
+    _require_verified_cold_volume(archive_root, verified_volume)
     os.environ[_COLD_ARCHIVE_ROOT_ENV] = str(archive_root)
 
 
@@ -1879,12 +1894,17 @@ def register_cold_raw_representation(
     location_ref: str,
     key: Optional[bytes] = None,
     representation_id: Optional[str] = None,
+    verified_volume: object,
 ) -> tuple[RawRepresentation, bool]:
     """Register one verified encrypted local-cold representation, inactive."""
     if not record_id or not ciphertext or not nonce or not key_ref:
         raise ValueError("record_id, ciphertext, nonce, and key_ref are required")
     if not location_ref.startswith(f"{_LOCATION_REF_PREFIX}cold:"):
         raise ValueError("cold location_ref must be an opaque heimloc:cold: handle")
+    object_path = _cold_object_path(location_ref)
+    if object_path is None:
+        raise RawRepresentationDeletionError("cold location is not bound to a verified volume")
+    _require_verified_cold_volume(object_path.parent.parent, verified_volume)
     verification_key = key if key is not None else resolve_raw_store_key()
     return _backend().register_cold_representation(
         record_id=record_id,

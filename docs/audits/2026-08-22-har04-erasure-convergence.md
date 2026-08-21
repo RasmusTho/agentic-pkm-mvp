@@ -42,6 +42,9 @@ memory governed path. Ordinary representation registration cannot delete identit
 
 - HAR-03 verified-volume startup and HAR-04 relocation bind `HEIMDAL_ARCHIVE_ROOT` only after the
   proof validates encryption, mount identity, archive id, and exact mountpoint.
+- Cold location binding, archive-root configuration, and cold representation registration all
+  require the same issuer-gated `ArchiveVolumeReady` capability; direct raw-store calls cannot
+  place or activate a cold copy under an arbitrary local path.
 - Raw read gate consumes the active representation and resolver; it never infers authority from a
   filesystem object alone.
 - PG deletion locks the content fence, generation, raw record, then cold representation rows.

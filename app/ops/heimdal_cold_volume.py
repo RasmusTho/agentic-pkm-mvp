@@ -1320,12 +1320,13 @@ def require_archive_volume_ready(
     # after a process restart; never bind an unverified mountpoint.
     from app.heimdal import raw_store
 
-    raw_store.configure_cold_archive_root(metadata.mountpoint)
-    return ArchiveVolumeReady(
+    proof = ArchiveVolumeReady(
         _issuer=_ARCHIVE_VOLUME_READY_ISSUER,
         archive_ref=metadata.archive_id,
         mountpoint=metadata.mountpoint,
     )
+    raw_store.configure_cold_archive_root(metadata.mountpoint, verified_volume=proof)
+    return proof
 
 
 @dataclass(frozen=True)

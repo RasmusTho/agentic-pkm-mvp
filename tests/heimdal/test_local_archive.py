@@ -295,6 +295,17 @@ def test_registration_failure_discards_unregistered_archive_artifacts(
     assert list((archive_root / "representations").glob("*.bin")) == []
     assert list((archive_root / "manifests").glob("*.json")) == []
 
+    arbitrary_root = tmp_path / "arbitrary-root"
+    arbitrary_root.mkdir()
+    arbitrary_object = arbitrary_root / "representations" / "33333333-3333-4333-8333-333333333333.bin"
+    arbitrary_object.parent.mkdir()
+    with pytest.raises(raw_store.RawRepresentationDeletionError):
+        raw_store.register_cold_location(
+            "heimloc:cold:33333333-3333-4333-8333-333333333333",
+            arbitrary_object,
+            verified_volume=_issue_archive_volume_ready(_ARCHIVE_REF, archive_root),
+        )
+
 
 def test_governed_cold_cleanup_removes_object_and_manifest(tmp_path: Path) -> None:
     record, now = _eligible(_insert(b"delete-cold"))
@@ -328,7 +339,11 @@ def test_pg_cursor_cold_cleanup_locks_rows_and_removes_files(tmp_path: Path) -> 
     object_path = objects / f"{representation_id}.bin"
     object_path.write_bytes(b"ciphertext")
     (manifests / f"{representation_id}.json").write_text("{}\n")
-    raw_store.register_cold_location(location_ref, object_path)
+    raw_store.register_cold_location(
+        location_ref,
+        object_path,
+        verified_volume=_issue_archive_volume_ready(_ARCHIVE_REF, archive_root),
+    )
 
     class Cursor:
         def __init__(self) -> None:
@@ -358,7 +373,11 @@ def test_pg_erasure_cleanup_receipt_reconciles_after_commit(tmp_path: Path) -> N
     object_path = objects / f"{representation_id}.bin"
     object_path.write_bytes(b"ciphertext")
     (manifests / f"{representation_id}.json").write_text("{}\n")
-    raw_store.register_cold_location(location_ref, object_path)
+    raw_store.register_cold_location(
+        location_ref,
+        object_path,
+        verified_volume=_issue_archive_volume_ready(_ARCHIVE_REF, archive_root),
+    )
 
     class ReceiptCursor:
         def __init__(self) -> None:

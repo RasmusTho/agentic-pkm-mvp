@@ -209,7 +209,7 @@ def relocate_raw_record(
         or volume_proof.mountpoint != archive_root
     ):
         raise ArchiveDegradedError("archive_mount_unavailable")
-    raw_store.configure_cold_archive_root(archive_root)
+    raw_store.configure_cold_archive_root(archive_root, verified_volume=volume_proof)
 
     objects, manifests = _ensure_archive_dirs(archive_root)
     hot = _active_hot(record.id)
@@ -229,7 +229,9 @@ def relocate_raw_record(
         copied = object_path.read_bytes()
         if copied != ciphertext or hashlib.sha256(copied).hexdigest() != ciphertext_hash:
             raise ArchiveDegradedError("archive_copy_verification_failed")
-        raw_store.register_cold_location(location_ref, object_path)
+        raw_store.register_cold_location(
+            location_ref, object_path, verified_volume=volume_proof
+        )
         raw_store.decrypt_and_verify_raw_bytes(
             record.content_identity, copied, hot.nonce, key=key or raw_store.resolve_raw_store_key()
         )
@@ -252,6 +254,7 @@ def relocate_raw_record(
             location_ref=location_ref,
             key=key,
             representation_id=representation_id,
+            verified_volume=volume_proof,
         )
         representation_registered = True
         active = raw_store.activate_raw_representation(record.id, cold.id, key=key)
