@@ -11,6 +11,11 @@ description: "Produce a promotion plan that diffs main against stable, enumerate
 > **dormant** and is not an ancestor of `origin/main`. Do not run this skill against the current
 > baseline without explicit operator direction — see README §Current direction and §Promotion
 > model before invoking.
+>
+> The target workflow uses the same active production applicability boundary as the current
+> `main`-tracking path: migrations against the `app` DB under compose project `pkm-prod` must be
+> classified before they run. The current baseline applies that policy manually; this skill's
+> marker enforcement and durable plan acknowledgements remain deferred hardening.
 
 Use this skill before any `execute-promotion` run. Its sole job is to produce a reviewable promotion plan. It does not move any ref, apply any migration, or restart any process.
 

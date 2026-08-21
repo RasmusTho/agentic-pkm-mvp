@@ -47,8 +47,8 @@ Use `make prod-start-full` for the canonical prod startup that enforces all four
 
 Once the prod baseline is stable, the promotion workflow (prepare → execute → verify → rollback) will be hardened as a separate governance layer. The test channel (`pkm-test`) is a deliberate intermediate stage in that path. What belongs to future promotion hardening and not to the current baseline:
 - the `promote-to-test` and `promote-test-to-prod` staged workflows
-- automated migration reversal classification
-- operator acknowledgement receipts for forward-only migrations
+- automated enforcement of migration reversibility classification
+- durable promotion-plan acknowledgement receipts for forward-only migrations
 - CI/UAT-as-test for the test channel: today `.github/workflows/harness-selfverify.yml` only runs the harness (IR-v1 UAT, channel preflight, bootstrap smoke, fault injection) and writes **no** receipt, and `ops/test-promotions/` does not exist. The current test-channel gate is therefore **harness self-verification only**; CI/UAT cannot yet substitute for a live test run because `promote-to-test` still requires a durable machine-readable receipt naming the candidate SHA, channel config, and passing check suite (see `.codex/skills/promote-to-test/SKILL.md` §"CI/UAT as substitute for a live test run"). This stays future hardening until CI emits that candidate-SHA receipt.
 
 The absence of these does not block establishing a prod baseline. Operators should not wait for promotion hardening to run prod.
@@ -212,6 +212,19 @@ This section records the **current** prod promotion model and how it relates to 
 ### Current: prod tracks `main` (interim baseline)
 
 Prod's promotion ref is **`main`**. The prod process runs from a checkout pinned to `main` with a clean working tree; there is no gated `stable` indirection in force today. This is the interim baseline established while the UI and docs capabilities stabilize in dev — establishing a trustworthy prod runtime comes before promotion-governance hardening (see [Current direction](#current-direction-prod-baseline-before-promotion-hardening)).
+
+#### Current migration reversibility applicability
+
+The migration-reversibility classification is already an operator-safety policy for the current
+`main`-tracking production path. Before a migration is run against the active `app` DB under
+compose project `pkm-prod`, it must be classified as reversible or forward-only. An
+unclassified migration blocks the current prod migration operation. A forward-only migration
+requires an explicit operator decision before it runs.
+
+The current baseline does not yet automate that check or create the target promotion-plan
+acknowledgement receipt. Those mechanisms belong to the deferred gated-`stable` promotion workflow;
+they make the existing active applicability enforceable and auditable, rather than changing which
+production database the classification protects.
 
 `origin/stable` (`e2892b18`) is **dormant** and does **not** reflect what prod runs: as of 2026-06-29 it is not an ancestor of `origin/main` (hundreds of commits of divergence under squash-merge history). It must not be treated as the prod source-of-truth until it is restored as a gated ref. The promotion **skills** (`prepare-promotion`, `execute-promotion`, `verify-promotion`, `promote-test-to-prod`) describe the target gated model and remain valid for that future; they do not describe the current `main`-tracking baseline.
 

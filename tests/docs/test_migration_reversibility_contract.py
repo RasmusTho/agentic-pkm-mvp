@@ -18,6 +18,32 @@ PROMOTION_PLAN = (
 PREPARE_PROMOTION = (
     REPO_ROOT / ".codex" / "skills" / "prepare-promotion" / "SKILL.md"
 )
+README = REPO_ROOT / "docs" / "RELEASE_CHANNELS" / "README.md"
+
+
+def test_active_promotion_docs_agree_on_migration_applicability() -> None:
+    """Keep the active policy distinct from deferred automated promotion hardening."""
+    classification = CLASSIFICATION.read_text(encoding="utf-8")
+    promotion_plan = PROMOTION_PLAN.read_text(encoding="utf-8")
+    prepare_promotion = PREPARE_PROMOTION.read_text(encoding="utf-8")
+    readme = README.read_text(encoding="utf-8")
+
+    assert "active production promotion path" in classification
+    assert "`app` DB" in classification
+    assert "`pkm-prod`" in classification
+    assert "`main`-tracking production path" in readme
+    assert (
+        "unclassified migration blocks the current prod migration operation"
+        in readme.replace("\n", " ")
+    )
+    assert "target gated promotion-plan workflow" in promotion_plan
+    assert "same active production applicability boundary" in prepare_promotion
+
+    future_hardening = readme.split("### Future promotion hardening", 1)[1].split(
+        "## Human need", 1
+    )[0]
+    assert "automated enforcement of migration reversibility classification" in future_hardening
+    assert "automated migration reversal classification" not in future_hardening
 
 
 def test_active_promotion_path_is_covered_by_reversibility_contract() -> None:
