@@ -578,6 +578,10 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
         "memory_retrieval",
         (
             "app/memory/",
+            # Promoted and provisional agent-memory recall is consumed by the
+            # memory/retrieval suites. Keep this runtime package owned so a
+            # recall-boundary change cannot fail CI selection as unowned.
+            "app/agent_memory/",
             "app/retrieval/",
             "app/index/",
             # Index rebuild is the memory-retrieval CLI producer for the
