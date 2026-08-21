@@ -463,6 +463,9 @@ def _assert_pg_schema(conn: Any) -> None:
     function_defs = [str(item[0]) for item in cur.fetchall()]
     if not any(
         _RETENTION_RECONCILE_GUARD_SETTING in function_def
+        and "TG_OP = 'UPDATE'" in function_def
+        and "RETURN NEW" in function_def
+        and "RAISE EXCEPTION" in function_def
         for function_def in function_defs
     ):
         raise RawLivenessSchemaMissingError(
@@ -1245,7 +1248,7 @@ def _reconcile_memory_cold_cleanup(tombstone: RawDeletionTombstone) -> None:
     if receipt is None:
         return
     refs = list(receipt.payload.get("cold_cleanup_location_refs", []))
-    remaining: list[str] = []
+    remaining = list(refs)
     for location_ref in refs:
         object_path = raw_store._cold_object_path(str(location_ref))  # noqa: SLF001
         if object_path is None:
@@ -1255,8 +1258,9 @@ def _reconcile_memory_cold_cleanup(tombstone: RawDeletionTombstone) -> None:
         try:
             raw_store._delete_cold_object_path(object_path)  # noqa: SLF001
         except raw_store.RawRepresentationDeletionError:
-            remaining.append(str(location_ref))
-    receipt.payload["cold_cleanup_location_refs"] = remaining
+            raise raw_store.RawRepresentationDeletionError("cold representation deletion failed")
+        remaining.remove(str(location_ref))
+        receipt.payload["cold_cleanup_location_refs"] = list(remaining)
     if remaining:
         raise raw_store.RawRepresentationDeletionError("cold representation deletion failed")
 
@@ -1389,7 +1393,7 @@ def _deletion_receipt_from_row(row: tuple[Any, ...]) -> DeletionReceipt:
     )
 
 
-def _reconcile_pg_cold_cleanup(cur: Any, record_id: str) -> None:
+def _reconcile_pg_cold_cleanup(cur: Any, record_id: str, *, conn: Any | None = None) -> None:
     from app.heimdal import raw_store
 
     cur.execute(
@@ -1407,8 +1411,8 @@ def _reconcile_pg_cold_cleanup(cur: Any, record_id: str) -> None:
     payload = receipt_row[0] if receipt_row else {}
     if isinstance(payload, str):
         payload = json.loads(payload)
-    remaining: list[str] = []
-    for location_ref in payload.get("cold_cleanup_location_refs", []):
+    remaining = [str(ref) for ref in payload.get("cold_cleanup_location_refs", [])]
+    for location_ref in list(remaining):
         object_path = raw_store._cold_object_path(str(location_ref))  # noqa: SLF001
         if object_path is None:
             raise raw_store.RawRepresentationDeletionError(
@@ -1417,15 +1421,34 @@ def _reconcile_pg_cold_cleanup(cur: Any, record_id: str) -> None:
         try:
             raw_store._delete_cold_object_path(object_path)  # noqa: SLF001
         except raw_store.RawRepresentationDeletionError:
-            remaining.append(str(location_ref))
-    updated_payload = dict(payload)
-    updated_payload["cold_cleanup_location_refs"] = remaining
-    cur.execute(
-        f"UPDATE {_DELETION_RECEIPT_TABLE} SET payload = %s::jsonb WHERE id = %s",
-        (json.dumps(updated_payload), tombstone_row[0]),
-    )
-    if remaining:
-        raise raw_store.RawRepresentationDeletionError("cold representation deletion failed")
+            updated_payload = dict(payload)
+            updated_payload["cold_cleanup_location_refs"] = remaining
+            if conn is not None:
+                cur.execute(
+                    "SELECT set_config(%s, 'true', true)",
+                    (_RETENTION_RECONCILE_GUARD_SETTING,),
+                )
+            cur.execute(
+                f"UPDATE {_DELETION_RECEIPT_TABLE} SET payload = %s::jsonb WHERE id = %s",
+                (json.dumps(updated_payload), tombstone_row[0]),
+            )
+            if conn is not None:
+                conn.commit()
+            raise raw_store.RawRepresentationDeletionError("cold representation deletion failed")
+        remaining.remove(location_ref)
+        updated_payload = dict(payload)
+        updated_payload["cold_cleanup_location_refs"] = remaining
+        if conn is not None:
+            cur.execute(
+                "SELECT set_config(%s, 'true', true)",
+                (_RETENTION_RECONCILE_GUARD_SETTING,),
+            )
+        cur.execute(
+            f"UPDATE {_DELETION_RECEIPT_TABLE} SET payload = %s::jsonb WHERE id = %s",
+            (json.dumps(updated_payload), tombstone_row[0]),
+        )
+        if conn is not None:
+            conn.commit()
 
 
 def _governed_delete_pg(
@@ -1472,7 +1495,7 @@ def _governed_delete_pg(
                 (_RETENTION_RECONCILE_GUARD_SETTING,),
             )
             try:
-                _reconcile_pg_cold_cleanup(cur, record_id)
+                _reconcile_pg_cold_cleanup(cur, record_id, conn=conn)
             except Exception:
                 conn.commit()
                 raise
@@ -1644,7 +1667,7 @@ def _governed_delete_pg(
                     "SELECT set_config(%s, 'true', true)",
                     (_RETENTION_RECONCILE_GUARD_SETTING,),
                 )
-                _reconcile_pg_cold_cleanup(cur, record_id)
+                _reconcile_pg_cold_cleanup(cur, record_id, conn=conn)
                 conn.commit()
         except Exception:
             # The DB erasure is already committed. Preserve any reduced queue

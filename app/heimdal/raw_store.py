@@ -128,6 +128,11 @@ def register_cold_location(location_ref: str, object_path: Path) -> None:
     _cold_location_paths[location_ref] = object_path
 
 
+def discard_cold_location(location_ref: str) -> None:
+    """Forget a location handle when registration never reached raw authority."""
+    _cold_location_paths.pop(location_ref, None)
+
+
 def configure_cold_archive_root(archive_root: Path) -> None:
     """Bind the verified archive root for cold reads after process restart."""
     if not archive_root.is_absolute():

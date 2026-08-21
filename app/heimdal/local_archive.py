@@ -140,6 +140,13 @@ def _discard_uncommitted_object(object_path: Path) -> None:
         return
 
 
+def _discard_uncommitted_manifest(manifest_path: Path) -> None:
+    try:
+        manifest_path.unlink(missing_ok=True)
+    except OSError:
+        return
+
+
 def _durable_write(path: Path, payload: bytes) -> None:
     temporary = path.with_name(f".{path.name}.{uuid4().hex}.tmp")
     try:
@@ -213,6 +220,8 @@ def relocate_raw_record(
     location_ref = f"heimloc:cold:{representation_id}"
     object_path = objects / f"{representation_id}.bin"
     manifest_written = False
+    representation_registered = False
+    manifest_path = manifests / f"{representation_id}.json"
     failure: ArchiveDegradedError | None = None
 
     try:
@@ -233,7 +242,7 @@ def relocate_raw_record(
             ciphertext_sha256=ciphertext_hash,
             verified_at=_utc(reference),
         )
-        _durable_write(manifests / f"{representation_id}.json", _manifest_payload(receipt))
+        _durable_write(manifest_path, _manifest_payload(receipt))
         manifest_written = True
         cold, _ = raw_store.register_cold_raw_representation(
             record_id=record.id,
@@ -244,15 +253,22 @@ def relocate_raw_record(
             key=key,
             representation_id=representation_id,
         )
+        representation_registered = True
         active = raw_store.activate_raw_representation(record.id, cold.id, key=key)
         return ArchiveResult(receipt, ArchiveHealth(True, "ok"), active)
     except ArchiveDegradedError as exc:
-        if not manifest_written:
+        if not representation_registered:
+            raw_store.discard_cold_location(location_ref)
             _discard_uncommitted_object(object_path)
+            if manifest_written:
+                _discard_uncommitted_manifest(manifest_path)
         failure = exc
     except Exception:
-        if not manifest_written:
+        if not representation_registered:
+            raw_store.discard_cold_location(location_ref)
             _discard_uncommitted_object(object_path)
+            if manifest_written:
+                _discard_uncommitted_manifest(manifest_path)
         failure = ArchiveDegradedError("archive_relocation_failed")
     if failure is not None:
         raise failure

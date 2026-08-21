@@ -270,6 +270,32 @@ def test_archive_requires_verified_mount_and_redacts_failure(tmp_path: Path) -> 
         )
 
 
+def test_registration_failure_discards_unregistered_archive_artifacts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    record, now = _eligible(_insert(b"registration-failure"))
+    archive_root = tmp_path / "mounted-cold"
+    archive_root.mkdir()
+
+    def fail_registration(**_kwargs: object) -> object:
+        raise RuntimeError("registration unavailable")
+
+    monkeypatch.setattr(raw_store, "register_cold_raw_representation", fail_registration)
+    with pytest.raises(local_archive.ArchiveDegradedError, match="archive_relocation_failed"):
+        local_archive.relocate_raw_record(
+            record,
+            archive_root=archive_root,
+            archive_ref=_ARCHIVE_REF,
+            now=now,
+            retention_window_days=30,
+            key=_KEY,
+            volume_ready=lambda: _issue_archive_volume_ready(_ARCHIVE_REF, archive_root),
+        )
+
+    assert list((archive_root / "representations").glob("*.bin")) == []
+    assert list((archive_root / "manifests").glob("*.json")) == []
+
+
 def test_governed_cold_cleanup_removes_object_and_manifest(tmp_path: Path) -> None:
     record, now = _eligible(_insert(b"delete-cold"))
     archive_root = tmp_path / "mounted-cold"

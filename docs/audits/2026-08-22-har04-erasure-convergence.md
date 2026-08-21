@@ -32,6 +32,9 @@ memory governed path. Ordinary representation registration cannot delete identit
 4. Delete object/manifest after commit. Each successful deletion is removed from the durable
    receipt queue before the next deletion; failure leaves the reduced queue durable and the state
    `cleanup_pending`.
+   If relocation writes an object/manifest but cannot register the representation, it removes
+   both artifacts and the unbound location handle; only a registered representation is retained
+   for governed cleanup.
 5. A later `already_erased` retry reads the receipt queue and removes only resolved opaque refs;
    it fails closed if the archive-root resolver is unavailable.
 
@@ -52,7 +55,8 @@ memory governed path. Ordinary representation registration cannot delete identit
   registration. Stale observations cannot authorize deletion because the receipt/tombstone and
   row locks are the authority.
 - PG schema preflight validates the reconciliation trigger function body, not just trigger name;
-  partial/pre-e2f3 schemas fail at the migration boundary before any erase state transition.
+  it requires the guarded UPDATE return path and rejecting exception path. Partial/pre-e2f3 or
+  semantically drifted schemas fail at the migration boundary before any erase state transition.
 
 ## Prior findings and proof map
 
@@ -63,8 +67,8 @@ post-commit cleanup. The current implementation addresses each under the same me
 
 Focused proof: `tests/heimdal/test_local_archive.py` covers eligibility, proof/root mismatch,
 receipt ordering, cache-loss re-resolution, callback/mkdir/manifest redaction, cursor locking,
-post-commit receipt reconciliation and queue clearing, memory rollback ordering, and object/manifest
-cleanup. `tests/heimdal/test_raw_liveness.py`
+post-commit receipt reconciliation and queue clearing, per-object queue progress, registration
+failure orphan cleanup, memory rollback ordering, and object/manifest cleanup. `tests/heimdal/test_raw_liveness.py`
 and `tests/heimdal/test_raw_store.py` cover governed liveness and representation contracts.
 Migration convergence is covered by
 `tests/migrations/test_heimdal_raw_representation_migration.py`, whose shape comparison targets
