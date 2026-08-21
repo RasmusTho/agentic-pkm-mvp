@@ -32,9 +32,9 @@ from app.journaling.lifecycle import (
     journal_decline_finding_id,
     strip_journal_review_panel,
 )
-from app.knowledge.adapters import _atomic_rename_noreplace_at
 from app.knowledge.errors import KnowledgeWriteConflict
 from app.knowledge.write_ops import (
+    _atomic_rename_noreplace_at,
     append_note_relative,
     locked_atomic_append_authority,
 )
