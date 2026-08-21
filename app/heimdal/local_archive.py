@@ -187,10 +187,14 @@ def relocate_raw_record(
         retention_window_days = resolve_retention_window_days(vault_root)
     if not archive_eligible(record, now=reference, retention_window_days=retention_window_days):
         raise ArchiveDegradedError("record_outside_archive_window")
+    callback_failed = False
+    volume_proof: ArchiveVolumeReady | object = object()
     try:
         volume_proof = volume_ready()
     except Exception:
-        raise ArchiveDegradedError("archive_mount_unavailable") from None
+        callback_failed = True
+    if callback_failed:
+        raise ArchiveDegradedError("archive_mount_unavailable")
     if (
         not isinstance(volume_proof, ArchiveVolumeReady)
         or not volume_proof.ready

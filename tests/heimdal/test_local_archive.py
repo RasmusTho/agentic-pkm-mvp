@@ -216,6 +216,19 @@ def test_archive_requires_verified_mount_and_redacts_failure(tmp_path: Path) -> 
     assert mount_error.value.__cause__ is None
     assert mount_error.value.__context__ is None
 
+    with pytest.raises(local_archive.ArchiveDegradedError) as callback_error:
+        local_archive.relocate_raw_record(
+            record,
+            archive_root=archive_root,
+            archive_ref=_ARCHIVE_REF,
+            now=now,
+            retention_window_days=30,
+            key=_KEY,
+            volume_ready=lambda: (_ for _ in ()).throw(OSError("sensitive callback path")),
+        )
+    assert callback_error.value.__cause__ is None
+    assert callback_error.value.__context__ is None
+
     with pytest.raises(local_archive.ArchiveDegradedError, match="archive_mount_unavailable"):
         local_archive.relocate_raw_record(
             record,
