@@ -1350,8 +1350,7 @@ def _governed_delete_memory(
                 )
             _retention_stage_hook("after_raw_delete")
             raw_deleted = True
-            for _location_ref, cold_path in cold_paths:
-                raw_store._delete_cold_object_path(cold_path)  # noqa: SLF001
+            _reconcile_memory_cold_cleanup(tombstone)
         except Exception:
             if raw_deleted:
                 raise
@@ -1592,7 +1591,6 @@ def _governed_delete_pg(
         )
         _retention_stage_hook("after_tombstone")
         cur.execute("SELECT set_config(%s, 'true', true)", (_RETENTION_GUARD_SETTING,))
-        cold_paths: list[Any] = []
         cold_location_refs: list[str] = []
         try:
             cur.execute(
@@ -1605,7 +1603,6 @@ def _governed_delete_pg(
                 )
             locations = raw_store._cold_location_paths_for_pg_cursor(cur, record_id)  # noqa: SLF001
             cold_location_refs = [location_ref for location_ref, _path in locations]
-            cold_paths = [path for _location_ref, path in locations]
             if cold_location_refs:
                 cleanup_payload = dict(receipt.payload)
                 cleanup_payload["cold_cleanup_location_refs"] = cold_location_refs
@@ -1641,9 +1638,8 @@ def _governed_delete_pg(
         _retention_stage_hook("after_raw_delete")
         conn.commit()
         try:
-            for cold_path in cold_paths:
-                raw_store._delete_cold_object_path(cold_path)  # noqa: SLF001
             if cold_location_refs:
+                acquire_pg_fence(cur, content_identity)
                 cur.execute(
                     "SELECT set_config(%s, 'true', true)",
                     (_RETENTION_RECONCILE_GUARD_SETTING,),

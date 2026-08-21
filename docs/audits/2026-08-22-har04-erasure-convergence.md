@@ -29,7 +29,9 @@ memory governed path. Ordinary representation registration cannot delete identit
    with those refs before any DB deletion.
 3. Delete representations and identity; commit the DB transaction. Any failure before commit rolls
    back and external bytes are untouched.
-4. Delete object/manifest after commit. Failure leaves a durable receipt queue (`cleanup_pending`).
+4. Delete object/manifest after commit. Each successful deletion is removed from the durable
+   receipt queue before the next deletion; failure leaves the reduced queue durable and the state
+   `cleanup_pending`.
 5. A later `already_erased` retry reads the receipt queue and removes only resolved opaque refs;
    it fails closed if the archive-root resolver is unavailable.
 
@@ -42,10 +44,13 @@ memory governed path. Ordinary representation registration cannot delete identit
 - PG deletion locks the content fence, generation, raw record, then cold representation rows.
   Cold registration locks the same raw record, so registration cannot commit after capture.
 - Receipt retry is the queued consumer. It is idempotent (`missing_ok=True`) and does not reinsert
-  rows. The PG receipt payload is atomically reduced to an empty ref list after successful
-  reconciliation; the memory writer follows the same post-authority-delete ordering and keeps its
-  receipt queue on cleanup failure. Stale observations cannot authorize deletion because the
-  receipt/tombstone and row locks are the authority.
+  rows. The PG receipt payload is atomically reduced after each successful reconciliation (and is
+  committed even when a later object fails), reaching an empty ref list only after all objects
+  succeed. The memory writer follows the same post-authority-delete ordering and persists its
+  reduced receipt queue on cleanup failure. The PG post-commit reconciliation reacquires the
+  content fence before consuming the queue, so cleanup cannot race a new generation or
+  registration. Stale observations cannot authorize deletion because the receipt/tombstone and
+  row locks are the authority.
 - PG schema preflight validates the reconciliation trigger function body, not just trigger name;
   partial/pre-e2f3 schemas fail at the migration boundary before any erase state transition.
 
