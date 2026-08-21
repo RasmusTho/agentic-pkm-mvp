@@ -8,6 +8,7 @@ from typing import Mapping
 from unittest.mock import patch
 
 from click.testing import CliRunner
+import pytest
 
 from app.builderops.__main__ import _root as builderops_root
 from app.builderops.epic_dispatch import build_dispatch_plan
@@ -177,10 +178,10 @@ def test_run_state_cannot_bypass_live_authority(tmp_path: Path) -> None:
 
     from app.builderops.epic_dispatch import dispatch_issue_sessions
 
-    receipt = dispatch_issue_sessions(plan, launcher)
+    with pytest.raises(
+        ValueError,
+        match="context pack must not carry persisted run-state",
+    ):
+        dispatch_issue_sessions(plan, launcher)
 
-    assert receipt["stopped_reason"] == "session-launch-failed"
-    assert receipt["sessions"][0]["status"] == "failed"
-    assert "invalid final_state" in receipt["sessions"][0]["error"]
-    assert receipt["github_mutations"] == []
-    assert receipt["coordinator_claims"] == []
+    assert launcher.calls == []

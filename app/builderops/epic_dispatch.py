@@ -564,6 +564,10 @@ def _validated_session_contexts(
         matching_context = contexts_by_id.get(context_id)
         if matching_context is None:
             raise EpicDispatchError("selected decision is missing its context pack")
+        if "run_state" in matching_context:
+            raise EpicDispatchError(
+                "context pack must not carry persisted run-state or lifecycle authority"
+            )
         issue_contract = matching_context.get("issue_contract")
         runtime = matching_context.get("runtime")
         if (
