@@ -42,6 +42,26 @@ _MIGRATION_HINT = (
     "database. See revision c5d8a1e4f2b7."
 )
 
+_RECEIPT_TRIGGER_GUARDED_UPDATE = re.compile(
+    r"if\s+tg_op\s*=\s*'update'\s+and\s+current_setting\(\s*'"
+    + re.escape(_RETENTION_RECONCILE_GUARD_SETTING)
+    + r"'\s*,\s*true\s*\)\s*=\s*'true'\s+then\s+return\s+new\s*;\s*"
+    r"end\s+if\s*;\s*raise\s+exception",
+    re.IGNORECASE,
+)
+
+
+def _receipt_trigger_is_migration_ready(function_def: str, trigger_def: str) -> bool:
+    """Accept only the canonical guarded-update/append-only trigger shape."""
+    normalized = re.sub(r"\s+", " ", function_def).lower()
+    return bool(
+        _RECEIPT_TRIGGER_GUARDED_UPDATE.search(normalized)
+        and len(re.findall(r"\bif\b", normalized)) == 2
+        and len(re.findall(r"\breturn\b", normalized)) == 1
+        and len(re.findall(r"\braise\s+exception\b", normalized)) == 1
+        and re.search(r"before\s+update\s+or\s+delete\s+on", trigger_def, re.IGNORECASE)
+    )
+
 
 class RawLivenessSchemaMissingError(RuntimeError):
     """The durable liveness authority is absent or structurally incomplete."""
@@ -466,16 +486,8 @@ def _assert_pg_schema(conn: Any) -> None:
         (_DELETION_RECEIPT_TABLE,),
     )
     trigger_rows = cur.fetchall()
-    canonical_guarded_update = re.compile(
-        r"if\s+tg_op\s*=\s*'update'\s+and\s+current_setting\(\s*'"
-        + re.escape(_RETENTION_RECONCILE_GUARD_SETTING)
-        + r"'\s*,\s*true\s*\)\s*=\s*'true'\s+then\s+return\s+new\s*;\s*"
-        r"end\s+if\s*;\s*raise\s+exception",
-        re.IGNORECASE,
-    )
     if not any(
-        canonical_guarded_update.search(re.sub(r"\s+", " ", str(row[0])))
-        and re.search(r"before\s+update\s+or\s+delete\s+on", str(row[1]), re.IGNORECASE)
+        _receipt_trigger_is_migration_ready(str(row[0]), str(row[1]))
         for row in trigger_rows
     ):
         raise RawLivenessSchemaMissingError(

@@ -78,6 +78,33 @@ def _run_retention(writer: str, *, root: Path, now: datetime):
     return enforce_screen_frame_retention(vault_root=root, now=now)
 
 
+def test_receipt_trigger_preflight_rejects_extra_delete_return_path() -> None:
+    canonical = """
+        BEGIN
+          IF TG_OP = 'UPDATE'
+             AND current_setting('app.heimdal_retention_reconcile', true) = 'true' THEN
+            RETURN NEW;
+          END IF;
+          RAISE EXCEPTION 'append-only: %', TG_OP;
+        END;
+    """
+    trigger = "BEFORE UPDATE OR DELETE ON heimdal_raw_deletion_receipt"
+    assert raw_liveness._receipt_trigger_is_migration_ready(canonical, trigger)  # noqa: SLF001
+    assert not raw_liveness._receipt_trigger_is_migration_ready(
+        """
+        BEGIN
+          IF TG_OP = 'DELETE' THEN RETURN OLD; END IF;
+          IF TG_OP = 'UPDATE'
+             AND current_setting('app.heimdal_retention_reconcile', true) = 'true' THEN
+            RETURN NEW;
+          END IF;
+          RAISE EXCEPTION 'append-only: %', TG_OP;
+        END;
+        """,
+        trigger,
+    )  # noqa: SLF001
+
+
 @pytest.mark.parametrize("writer", ["hard", "screen"])
 def test_valid_response_lease_blocks_both_retention_writers_until_expiry(
     writer: str, tmp_path: Path
