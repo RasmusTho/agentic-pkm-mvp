@@ -189,25 +189,37 @@ def _delete_cold_objects_for_record(record_id: str) -> None:
 
 def _delete_cold_objects_for_pg_cursor(cur: Any, record_id: str) -> None:
     """Remove cold objects while the deletion transaction owns representation locks."""
+    for object_path in _cold_object_paths_for_pg_cursor(cur, record_id):
+        _delete_cold_object_path(object_path)
+
+
+def _cold_object_paths_for_pg_cursor(cur: Any, record_id: str) -> list[Path]:
+    """Capture locked cold paths for post-commit cleanup."""
     cur.execute(
         f"SELECT location_ref FROM {_REPRESENTATION_TABLE} "
         "WHERE record_id = %s AND storage_kind = %s FOR UPDATE",
         (record_id, _COLD_STORAGE_KIND),
     )
+    paths: list[Path] = []
     for row in cur.fetchall():
         object_path = _cold_object_path(str(row[0]))
         if object_path is None:
             raise RawRepresentationDeletionError("cold representation resolver is unavailable")
-        deletion_failed = False
-        try:
-            object_path.unlink(missing_ok=True)
-            object_path.parent.parent.joinpath("manifests", f"{object_path.stem}.json").unlink(
-                missing_ok=True
-            )
-        except OSError:
-            deletion_failed = True
-        if deletion_failed:
-            raise RawRepresentationDeletionError("cold representation deletion failed")
+        paths.append(object_path)
+    return paths
+
+
+def _delete_cold_object_path(object_path: Path) -> None:
+    deletion_failed = False
+    try:
+        object_path.unlink(missing_ok=True)
+        object_path.parent.parent.joinpath("manifests", f"{object_path.stem}.json").unlink(
+            missing_ok=True
+        )
+    except OSError:
+        deletion_failed = True
+    if deletion_failed:
+        raise RawRepresentationDeletionError("cold representation deletion failed")
 
 
 def _representation_ciphertext(representation: "RawRepresentation") -> bytes:

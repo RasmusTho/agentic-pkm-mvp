@@ -1474,6 +1474,7 @@ def _governed_delete_pg(
         )
         _retention_stage_hook("after_tombstone")
         cur.execute("SELECT set_config(%s, 'true', true)", (_RETENTION_GUARD_SETTING,))
+        cold_paths: list[Any] = []
         try:
             cur.execute(
                 "SELECT 1 FROM heimdal_raw_record WHERE id = %s FOR UPDATE",
@@ -1483,7 +1484,7 @@ def _governed_delete_pg(
                 raise RawLivenessUnavailableError(
                     "raw identity disappeared before governed deletion"
                 )
-            raw_store._delete_cold_objects_for_pg_cursor(cur, record_id)  # noqa: SLF001
+            cold_paths = raw_store._cold_object_paths_for_pg_cursor(cur, record_id)  # noqa: SLF001
             cur.execute(
                 "DELETE FROM heimdal_raw_representation WHERE record_id = %s",
                 (record_id,),
@@ -1507,6 +1508,8 @@ def _governed_delete_pg(
             )
         _retention_stage_hook("after_raw_delete")
         conn.commit()
+        for cold_path in cold_paths:
+            raw_store._delete_cold_object_path(cold_path)  # noqa: SLF001
         return GovernedDeletionResult(
             outcome="deleted", receipt=receipt, tombstone=tombstone
         )
