@@ -698,6 +698,41 @@ def test_candidate_replacement_during_retirement_is_preserved(
     assert candidate.read_text(encoding="utf-8") == "external replacement\n"
 
 
+def test_candidate_replacement_before_canonical_write_is_not_materialized(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    root = tmp_path / "vault"
+    root.mkdir()
+    candidate = _stage_candidate(root, accept_checked=True)
+    outbox = tmp_path / "outbox.jsonl"
+    real_append = review_module.append_note_relative
+    replaced = False
+
+    def replace_before_transform(*args: object, **kwargs: object) -> object:
+        nonlocal replaced
+        if not replaced:
+            candidate.write_text(
+                candidate.read_text(encoding="utf-8") + "\nexternal replacement\n",
+                encoding="utf-8",
+            )
+            replaced = True
+        return real_append(*args, **kwargs)
+
+    monkeypatch.setattr(review_module, "append_note_relative", replace_before_transform)
+    with pytest.raises(JournalReviewConflictError, match="changed before canonical acceptance"):
+        process_journal_review(
+            vault_context=_context(root),
+            for_date=DAY,
+            outbox_path=outbox,
+            write_guard=WriteGuard(lambda: {"state": "healthy"}),
+            now=NOW,
+        )
+
+    assert candidate.read_text(encoding="utf-8").endswith("external replacement\n")
+    assert not (root / "1_Calendar/Daily/2026-07-15.md").exists()
+    assert not outbox.exists()
+
+
 def test_candidate_replacement_before_final_archive_is_restored(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

@@ -428,6 +428,7 @@ def _accept_candidate(
             current_raw: bytes | None, proposed: bytes
         ) -> tuple[bytes, bytes]:
             nonlocal materialized_at
+            _assert_candidate_unchanged_at(directory_fd, candidate)
             if current_raw is not None:
                 current_frontmatter, _current_body = _load_raw_frontmatter(current_raw)
                 if (
@@ -479,6 +480,7 @@ def _accept_candidate(
             current_raw: bytes | None, proposed: bytes
         ) -> tuple[bytes, bytes]:
             nonlocal materialized_at
+            _assert_candidate_unchanged_at(directory_fd, candidate)
             if current_raw is None:
                 raise JournalAcceptedEntryExistsError(
                     "an addendum requires an existing accepted journal entry"
@@ -916,6 +918,30 @@ def _load_raw_frontmatter(raw: bytes) -> tuple[dict[str, Any], bytes]:
             "canonical journal frontmatter/body boundary is not stable UTF-8"
         )
     return frontmatter, body_bytes
+
+
+def _assert_candidate_unchanged_at(directory_fd: int, candidate: _Candidate) -> None:
+    """Reject publication if the owner changed the checked candidate meanwhile.
+
+    This runs inside the canonical write transaction, so the body stamped into the
+    accepted note is the same body that the owner actually approved.
+    """
+    try:
+        current = _read_candidate_at(
+            directory_fd,
+            candidate.storage_filename,
+            relative_path=candidate.relative_path,
+            candidate_type=candidate.candidate_type,
+            for_date=date.fromisoformat(str(candidate.frontmatter["for_date"])),
+        )
+    except FileNotFoundError:
+        raise JournalReviewConflictError(
+            "journal candidate disappeared during canonical acceptance; the owner must retry"
+        ) from None
+    if current.identity != candidate.identity or current.raw != candidate.raw:
+        raise JournalReviewConflictError(
+            "journal candidate changed before canonical acceptance; the current edited draft remains available"
+        )
 
 
 def _retire_candidate_if_unchanged(
