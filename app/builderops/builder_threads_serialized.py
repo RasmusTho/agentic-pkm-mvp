@@ -458,6 +458,13 @@ class BuilderThreadClient:
         self._endpoint = endpoint
         self.client_id = client_id
 
+    @classmethod
+    def from_environment(cls) -> "BuilderThreadClient":
+        """Construct the sanctioned configured HTTP client without vault access."""
+        from app.builderops.builder_thread_endpoint import configured_builder_thread_client
+
+        return configured_builder_thread_client()
+
     def create(
         self,
         *,

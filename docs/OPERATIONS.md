@@ -422,11 +422,15 @@ Companion docs:
 
 Builder Threads are Builder System operational context, not a Product/Runtime
 vault flow. The designated BuilderOps/Mac mini writer is the only mutation
-boundary for the external BuilderOps Vault; Codex and Claude clients submit
-attributed commands and read bounded projections through its endpoint. Do not
-configure a client with a vault path or fall back to direct filesystem writes
-when that writer is unavailable. The repository `vault/` directory is a fixture
-and is never a live target.
+boundary for the external BuilderOps Vault. Start its loopback-only endpoint
+with `python -m app.builderops.builder_thread_endpoint`; Codex and Claude
+clients use `BuilderThreadClient.from_environment()` with
+`BUILDEROPS_THREAD_ENDPOINT_URL`, `BUILDEROPS_THREAD_CLIENT_ID`, and
+`BUILDEROPS_THREAD_CLIENT_TOKEN`. The host separately configures the per-client
+token map in `BUILDEROPS_THREAD_WRITER_CLIENT_TOKENS_JSON`; it alone reads the
+writer-root settings. Do not configure a client with a vault path or fall back
+to direct filesystem writes when that writer is unavailable. The repository
+`vault/` directory is a fixture and is never a live target.
 
 The operational boundary accepts only bounded `shared_non_sensitive` material,
 typed provenance, endpoint-bound actor identities, and named-recipient questions.
