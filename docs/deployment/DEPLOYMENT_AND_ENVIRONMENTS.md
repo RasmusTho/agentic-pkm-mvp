@@ -13,7 +13,7 @@ Last verified against: `docker-compose.yaml`, `docker-compose.{dev,test,prod}.ym
 
 ## Current live runtime posture
 
-The intended live split is now: Mac mini for Ollama only, and the product runtime on isolated Linux
+The intended live split is now: a dedicated Ollama host for Ollama only, and the product runtime on isolated Linux
 hosts reached through Tailscale. On 2026-08-22, `ygg-dev` served API `:18001` and UI `:8111`,
 `ygg-prod` served API liveness on `:18000` while its UI `:8113` was unavailable, and no `ygg-test`
 host or endpoint was available. Dev and prod both reported `git_sha=unknown`; prod functional health
@@ -21,7 +21,7 @@ was failing because the watcher was stale/paused and the worker had no heartbeat
 are the current baseline and do not prove a deployable promotion chain.
 
 The repository does not yet contain an authoritative deployment/startup handoff for these new hosts,
-and this workstation has no usable SSH/deploy authority for them. Do not use the old Mac mini Compose
+and this workstation has no usable SSH/deploy authority for them. Do not use the old local Compose
 projects or the local Compose matrix below as evidence for the new-host runtime. The required sequence
 remains exact candidate identity → dev verification → test deployment and verification → prod promotion
 and verification.

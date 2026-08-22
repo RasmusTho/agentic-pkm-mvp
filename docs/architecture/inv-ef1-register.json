@@ -2275,6 +2275,41 @@
       "why_load_bearing": "The serialized-writer tests retain the designated host identity only as a synthetic vault identifier for contract coverage.",
       "disposition": "stay",
       "issue": "#4708"
+    },
+    {
+      "artifact": "docs/DEV_TEST_PROD_STARTUP_REDESIGN/README.md",
+      "category": "iii",
+      "why_load_bearing": "The startup redesign records the designated Ollama-only model host and the separate Linux runtime-host boundary.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "docs/INFRASTRUCTURE.md",
+      "category": "iii",
+      "why_load_bearing": "The infrastructure owner document records the designated Ollama-only model host and the separate Linux runtime-host boundary.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "docs/RELEASE_CHANNELS/README.md",
+      "category": "iii",
+      "why_load_bearing": "The release-channel specification records the designated Ollama-only model host and the separate promotion-host boundary.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md",
+      "category": "iii",
+      "why_load_bearing": "The deployment owner document records the designated Ollama-only model host and the separate Linux runtime-host boundary.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "docs/ARCHITECTURE.md",
+      "category": "iii",
+      "why_load_bearing": "The architecture owner document records the designated remote Ollama provider and the separate Linux runtime-host boundary.",
+      "disposition": "stay",
+      "issue": "#2892"
     }
   ]
 }
