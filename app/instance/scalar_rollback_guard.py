@@ -202,13 +202,18 @@ def _validate_compose_model(base_model: object, overlay_model: object) -> None:
     gateway = services["scalar-rollback-gateway"]
     if not all(isinstance(value, dict) for value in (init, api, guard, gateway)):
         raise RegistryError("scalar rollback service definitions are invalid")
-    init_targets = _volume_targets(init.get("volumes"))
-    if not {
-        "/run/scalar-rollback-policy/docker-compose.yaml",
-        "/run/scalar-rollback-policy/docker-compose.scalar-rollback.yml",
-        "/run/scalar-rollback-policy/nginx.conf",
-    }.issubset(init_targets):
-        raise RegistryError("scalar rollback init policy/source mounts are incomplete")
+    expected_init_mounts = {
+        "./docker-compose.yaml:/run/scalar-rollback-policy/docker-compose.yaml:ro",
+        "./docker-compose.scalar-rollback.yml:/run/scalar-rollback-policy/docker-compose.scalar-rollback.yml:ro",
+        "./ops/scalar-rollback/nginx.conf:/run/scalar-rollback-policy/nginx.conf:ro",
+    }
+    init_volumes = init.get("volumes")
+    if (
+        not isinstance(init_volumes, list)
+        or not all(isinstance(mount, str) for mount in init_volumes)
+        or set(init_volumes) != expected_init_mounts
+    ):
+        raise RegistryError("scalar rollback init policy/source mounts are invalid")
     if api.get("ports") != [] or set((api.get("depends_on") or {})) != {
         "scalar-rollback-guard"
     }:

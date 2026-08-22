@@ -54,6 +54,16 @@ the same vault remains verifiable across container bind mounts. Nested-root
 collision checks still compare authenticated sealed roots by resolved path when
 their persisted parent identities cannot be compared directly.
 
+### Scratch/rebootstrap boundary
+
+The path-bound parent-chain identity is persisted under ledger schema v2. A
+schema-v1 ownership ledger is not migrated or silently interpreted under the
+new identity semantics; established v1 state fails closed with an explicit
+`scratch/rebootstrap reset` error. Rebootstrap is an operator-controlled
+replacement of the host-global ownership state after the external backup,
+writer-drain, and deployment-quiescence proofs are complete. This repository
+change does not perform that destructive reset.
+
 ## Feasibility: capacity-managed dev/test runtime
 
 **Status:** Advisory feasibility snapshot, 2026-08-17. This section describes a

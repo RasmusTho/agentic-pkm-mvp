@@ -25,7 +25,8 @@ from app.instance.filesystem_identity import (
 )
 
 
-LEDGER_SCHEMA = "agentic-pkm.host-ownership-ledger.v1"
+LEGACY_LEDGER_SCHEMA = "agentic-pkm.host-ownership-ledger.v1"
+LEDGER_SCHEMA = "agentic-pkm.host-ownership-ledger.v2"
 KEY_SCHEMA = "agentic-pkm.host-ownership-key.v1"
 ROTATION_SCHEMA = "agentic-pkm.host-ownership-key-rotation.v1"
 
@@ -1382,7 +1383,12 @@ class OwnershipLedger:
         _assert_private_file(self.path)
         try:
             value = json.loads(self.path.read_text(encoding="utf-8"))
-            if value.get("schema") != LEDGER_SCHEMA:
+            schema = value.get("schema")
+            if schema == LEGACY_LEDGER_SCHEMA:
+                raise LedgerError(
+                    "ownership ledger format v1 requires explicit scratch/rebootstrap reset"
+                )
+            if schema != LEDGER_SCHEMA:
                 raise ValueError
             leases = {
                 binding: OwnershipLease(

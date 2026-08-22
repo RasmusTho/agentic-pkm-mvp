@@ -152,6 +152,13 @@ post-#2655 pinned-image topology: deployment epic #2655 (S5/S7) is still open, s
 above is verified against the current `docker-compose.yaml` and the "Current reality (verified
 2026-06-29)" row of the environment matrix, not the "Target" row.
 
+The host-global ownership ledger is an additional deployment-boundary guard:
+ledger schema v2 stores the selected vault's primary filesystem identity and
+canonical parent-chain identities for cross-container verification. A persisted
+v1 ledger is incompatible with that semantic change and must fail closed until
+an explicitly operator-controlled scratch/rebootstrap reset has been completed;
+the application does not perform that reset implicitly.
+
 ## Artifact surfaces (current reading, forward-line aligned)
 
 Read the current architecture through three artifact surfaces:
