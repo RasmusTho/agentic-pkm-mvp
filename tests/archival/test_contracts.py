@@ -42,7 +42,12 @@ def test_artifact_classification_preserves_authority_and_durability_axes():
 
 def test_location_cannot_mint_identity_or_access_authority():
     for constructor, label in ((ArtifactIdentity, "artifact"), (RepresentationRef, "representation")):
-        for location in ("/tmp/raw.bin", "file://archive/raw.bin", "volume\\raw.bin"):
+        for location in (
+            "/tmp/raw.bin",
+            "file://archive/raw.bin",
+            "file:archive/raw.bin",
+            "volume\\raw.bin",
+        ):
             try:
                 constructor(location)
             except ValueError as exc:
@@ -97,6 +102,18 @@ def test_unavailable_liveness_is_retryable_receipt_evidence():
         Liveness.UNAVAILABLE,
     )
     assert receipt.liveness is Liveness.UNAVAILABLE
+
+
+def test_hka_conflict_is_a_typed_non_terminal_liveness():
+    receipt = Receipt(
+        "hka.restore.conflict",
+        ArtifactIdentity("artifact-001"),
+        None,
+        1,
+        TransitionStage.RESTORING,
+        Liveness.CONFLICT,
+    )
+    assert receipt.liveness is Liveness.CONFLICT
 
 
 def test_content_identity_is_not_a_path_or_uri():

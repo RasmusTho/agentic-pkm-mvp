@@ -68,7 +68,7 @@ Policy profiles have distinct terminal outcomes. Raw evidence may reach `erased`
 registered representations and cleanup obligations converge. Retained sources preserve their
 source until explicit policy says otherwise. HKA recovery is conflict-safe and must not inherit raw
 evidence TTL. Rebuildable derivatives are disposable/rebuildable by default and cannot become the
-last authoritative copy of meaning. HKA recovery conflicts remain typed, non-terminal states
+last authoritative copy of meaning. HKA recovery conflicts remain typed `Liveness.CONFLICT`, non-terminal states
 awaiting governed resolution; `unavailable` liveness is retryable doctor/read evidence, not a
 terminal policy outcome. Receipts and tombstones are durable governance evidence, not source
 content.

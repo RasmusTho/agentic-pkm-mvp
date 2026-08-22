@@ -75,18 +75,25 @@ class Liveness(_ValueEnum):
     ACTIVE = "active"
     PENDING = "pending"
     RESTORING = "restoring"
+    CONFLICT = "conflict"
     ERASURE_PENDING = "erasure_pending"
     UNAVAILABLE = "unavailable"
     TERMINAL = "terminal"
 
 
-def _opaque(value: str, field: str) -> str:
+def _opaque(value: str, field: str, allowed_schemes: tuple[str, ...] = ()) -> str:
     """Validate an opaque identifier without treating a location as authority."""
 
     if not isinstance(value, str) or not value.strip():
         raise ValueError(f"{field} must be a non-empty opaque string")
     candidate = value.strip()
-    if "/" in candidate or "\\" in candidate or "://" in candidate:
+    scheme, separator, _ = candidate.partition(":")
+    if (
+        "/" in candidate
+        or "\\" in candidate
+        or "://" in candidate
+        or (separator and scheme not in allowed_schemes)
+    ):
         raise ValueError(f"{field} must not be a path or URI")
     return candidate
 
@@ -153,7 +160,11 @@ class RepresentationDescriptor:
             raise ValueError("representation generation must be positive")
         if not self.format.strip():
             raise ValueError("representation content_identity and format are required")
-        object.__setattr__(self, "content_identity", _opaque(self.content_identity, "content identity"))
+        object.__setattr__(
+            self,
+            "content_identity",
+            _opaque(self.content_identity, "content identity", ("sha256",)),
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -177,7 +188,9 @@ class Receipt:
             TransitionStage.COPIED: frozenset({Liveness.PENDING, Liveness.UNAVAILABLE}),
             TransitionStage.VERIFIED: frozenset({Liveness.PENDING, Liveness.ACTIVE, Liveness.UNAVAILABLE}),
             TransitionStage.ACTIVE: frozenset({Liveness.ACTIVE, Liveness.UNAVAILABLE}),
-            TransitionStage.RESTORING: frozenset({Liveness.RESTORING, Liveness.UNAVAILABLE}),
+            TransitionStage.RESTORING: frozenset(
+                {Liveness.RESTORING, Liveness.CONFLICT, Liveness.UNAVAILABLE}
+            ),
             TransitionStage.RETIREMENT_PENDING: frozenset({Liveness.PENDING, Liveness.UNAVAILABLE}),
             TransitionStage.ERASURE_PENDING: frozenset({Liveness.ERASURE_PENDING, Liveness.UNAVAILABLE}),
             TransitionStage.RETIRED: frozenset({Liveness.TERMINAL}),
