@@ -50,14 +50,16 @@ inventoried in `docs/audits/APP_MCP_CONNECTIVITY_2026-07-07.md` (advisory snapsh
 directions are deliberately kept separate. **Direction A — assistant connectors** (Claude/agent
 sessions connecting to third-party MCP servers such as Home Assistant, Todoist, Drafts, Google
 Workspace) is operator configuration, not backlog work, and creates no roadmap claims.
-**Direction B — Mimer as an MCP server** is the first build candidate: after a superseding ADR
-ratifies MCP as an additional adapter (ADR-0056 explicitly excludes it today), build a thin MCP
-transport over the existing ask, governed-capture, retrieve/search, read-note, and health endpoints.
-Capture's response already carries its governed receipt; no separate receipt read-back endpoint is
-claimed. The adapter preserves the authority envelope the `mimer-*` skills and
+**Direction B — Mimer as an MCP client adapter** is the first build candidate: ADR-0061 now
+accepts MCP as an additional adapter under A2/B1/C1, so the next bounded slice may build a thin
+stdio-only sidecar over the existing ask, governed-capture, retrieve/search, read-note, and health
+endpoints. Capture's response already carries its governed receipt; no separate receipt read-back
+endpoint is claimed. The adapter preserves the authority envelope the `mimer-*` skills and
 `docs/contracts/MIMER_CLIENT_CONTRACT.md` encode; it enters the backlog only through
 feature-breakdown, and no MCP server exists today (`app/mcp/vault_tools.py` is internal plumbing,
-not a transport). A second build item joins it on the same footing: the audit's
+not a transport). The accepted contract still requires implementation-level dependency/filesystem
+isolation and a fixed route allowlist; process separation alone is not enforcement. A second build
+item joins it on the same footing: the audit's
 D1 owner decision (read-later consolidation) is ruled — self-host Karakeep on the mac mini as the
 free, local-first read-later/highlights source. Per ADR-0049, Heimdal owns Karakeep REST fetch,
 attribution, and the durable published-evidence handoff; Mimer/KAP owns refinement into

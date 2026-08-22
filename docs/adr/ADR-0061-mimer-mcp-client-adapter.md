@@ -105,13 +105,15 @@ runtime.
     SDK release can destabilize the core runtime.
 - **A2 — Separate constituent-owned adapter process (sidecar) over the governed HTTP API.** A
   distinct process/executable that is an HTTP client of the same loopback API an external client
-  uses; it has no in-process access to internal tooling.
+  uses. Process separation alone does not prove an API-only boundary or the fixed operation set;
+  the implementation must add and test dependency/import, filesystem/credential, and explicit
+  route-allowlist restrictions before those properties can be treated as enforced.
   - *Attack surface:* MCP SDK dependency and any listener live outside the core runtime; the runtime
     exposes only its existing loopback HTTP surface.
-  - *Governance load:* lowest and structural — the sidecar *cannot* bypass the governed chain
-    because it has no path to `WriteGuard`/`write_ops`; it can only call the same governed endpoints
-    every other external client calls. The five-operation boundary is enforced by construction (it
-    can only call five routes).
+  - *Governance load:* lowest once the required boundary tests pass — the sidecar must have no
+    permitted path to `WriteGuard`/`write_ops` or vault files and must expose only the five
+    allowlisted routes. Without those restrictions, process separation is only a deployment shape,
+    not a governance guarantee.
   - *Future flexibility:* MCP SDK/runtime upgrades are isolated from the core runtime; the semantic
     adapter stays independently testable from the wire packaging (as #3368 requires); the trade is
     one more managed process and an extra loopback hop.

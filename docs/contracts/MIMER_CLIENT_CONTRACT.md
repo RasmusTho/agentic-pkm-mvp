@@ -38,12 +38,16 @@ A client under this contract operates in two modes simultaneously:
 ADR-0061 additionally admits an **MCP protocol adapter** under this same contract, with availability
 still pending downstream implementation and composed acceptance. Its fixed v1 posture is:
 
-- **A2 topology:** a constituent-owned sidecar process that can call only the governed HTTP API;
-  it has no in-process access to internal tooling or vault writers.
+- **A2 topology:** a constituent-owned sidecar process with a required, tested boundary to the
+  governed HTTP API. Process separation alone is not enforcement: the downstream implementation
+  MUST provide dependency/import and filesystem/credential isolation, plus an explicit allowlist
+  for the five HTTP operations below. Until those tests pass, this is a binding implementation
+  invariant, not current runtime evidence.
 - **B1 wire transport:** stdio only, spawned by a local MCP client; **no network listener**.
 - **C1 trust posture:** the sidecar calls the existing loopback API and inherits the current
   loopback/LAN/tailnet posture; stdio adds no new authentication machinery.
-- **Exactly five operations:** ask, governed capture, retrieve/search, note-read, and health.
+- **Exactly five operations:** ask, governed capture, retrieve/search, note-read, and health; the
+  implementation must reject every other route.
   Generic vault writes, separate receipt read-back, internal `vault_tools` reuse, hidden authority,
   and direct-filesystem fallback are excluded.
 
