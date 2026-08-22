@@ -2078,7 +2078,12 @@ class VerificationDispatchLedger:
         holder: str,
         lease_id: str,
         idempotency_key: str | None = None,
+        containment_receipt: Mapping[str, object] | None = None,
     ) -> int:
+        if containment_receipt is not None:
+            raise ValueError(
+                "local verification ledger cannot persist host containment"
+            )
         allowed = {*REPAIR_ATTEMPT_KINDS, "review", "verification"}
         if kind not in allowed:
             raise ValueError("invalid verification attempt kind")

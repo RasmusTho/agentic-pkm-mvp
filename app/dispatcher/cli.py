@@ -631,6 +631,9 @@ class _InstalledMainExactHeadLauncher:
     ) -> None:
         self.launcher = launcher
         self.config = launcher.config
+        self.containment_receipt_required = bool(
+            getattr(launcher, "containment_receipt_required", False)
+        )
         self.installed_main = installed_main
         self.context_path = context_path
         self.git_runner = git_runner
@@ -712,6 +715,7 @@ def _build_host_fenced_verification_cycle(
     worktree: Path,
     context_path: Path,
     containment_factory: Callable[[], Any],
+    containment_receipt_required: bool = False,
 ) -> tuple[Any, Callable[[], None]]:
     from app.dispatcher.verification_consumer import (
         CANONICAL_RECEIPT_SCHEMA_PATH,
@@ -755,6 +759,7 @@ def _build_host_fenced_verification_cycle(
             CANONICAL_RECEIPT_SCHEMA_PATH,
             context_path,
             containment_factory=containment_factory,
+            containment_receipt_required=containment_receipt_required,
         )
         launcher = _InstalledMainExactHeadLauncher(
             raw_launcher,
@@ -833,6 +838,9 @@ def _cmd_verification_cycle(
         containment_factory = select_verification_containment(
             args.containment_profile
         )
+        from app.dispatcher.linux_containment import (
+            LINUX_SYSTEMD_CGROUP_V2_SCOPE_PROFILE,
+        )
         with tempfile.TemporaryDirectory(
             prefix="yggdrasil-verification-cycle-"
         ) as scratch:
@@ -845,6 +853,10 @@ def _cmd_verification_cycle(
                         worktree=worktree,
                         context_path=Path(scratch) / "context.json",
                         containment_factory=containment_factory,
+                        containment_receipt_required=(
+                            args.containment_profile
+                            == LINUX_SYSTEMD_CGROUP_V2_SCOPE_PROFILE
+                        ),
                     )
                 )
                 try:

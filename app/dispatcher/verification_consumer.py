@@ -2706,6 +2706,7 @@ class CodexExecLauncher:
         runner: ProcessRunner | None = None,
         containment_factory: Callable[[], WholeTreeContainment] | None = None,
         cleanup_tracker_factory: Callable[[], WholeTreeContainment] | None = None,
+        containment_receipt_required: bool = False,
     ) -> None:
         self.worktree = worktree
         self.receipt_schema = receipt_schema
@@ -2715,6 +2716,7 @@ class CodexExecLauncher:
         self.cleanup_tracker_factory = (
             cleanup_tracker_factory or TaggedProcessTreeCleanup
         )
+        self.containment_receipt_required = containment_receipt_required
         self._last_containment_receipt: dict[str, object] | None = None
         self.adapter_path = adapter_path or worktree / ".codex/agents/verification-closer.toml"
         try:
@@ -4895,6 +4897,10 @@ class VerificationConsumer:
             effect_operation_key = None
 
         attempt_already_durable = recovered_attempt is not None
+        containment_receipt: dict[str, object] | None = None
+        containment_required = bool(
+            getattr(self.launcher, "containment_receipt_required", False)
+        )
         try:
             resume_session_id = bounded_coordinator_session_id(
                 claimed.coordinator_session_id
@@ -4917,6 +4923,17 @@ class VerificationConsumer:
                         "durable model attempt does not match recovery authority"
                     )
                 session_id = stored_session
+                stored_containment = recovered_attempt.get("containment")
+                if stored_containment is not None:
+                    containment_receipt = (
+                        validated_linux_containment_receipt(
+                            stored_containment
+                        )
+                    )
+                if containment_required and containment_receipt is None:
+                    raise ValueError(
+                        "durable Linux containment receipt is unavailable"
+                    )
                 started(session_id)
                 receipt = load_and_validate_verification_closer_receipt(
                     stored_receipt,
@@ -4970,6 +4987,19 @@ class VerificationConsumer:
                     on_thread_started=started,
                     on_heartbeat=heartbeat,
                 )
+                containment_receipt_reader = getattr(
+                    self.launcher, "containment_receipt", None
+                )
+                if callable(containment_receipt_reader):
+                    candidate = containment_receipt_reader()
+                    if candidate is not None:
+                        containment_receipt = (
+                            validated_linux_containment_receipt(candidate)
+                        )
+                if containment_required and containment_receipt is None:
+                    raise ValueError(
+                        "Linux containment receipt is unavailable"
+                    )
                 receipt = load_and_validate_verification_closer_receipt(
                     receipt,
                     self.receipt_schema,
@@ -5182,6 +5212,7 @@ class VerificationConsumer:
                         config.reasoning_effort,
                         receipt,
                     ),
+                    containment_receipt=containment_receipt,
                 )
             except Exception:
                 abandon_effect(
@@ -5470,16 +5501,6 @@ class VerificationConsumer:
                 raise RuntimeError(
                     "host-fenced merge receipt writer is unavailable"
                 )
-            containment_receipt = None
-            containment_receipt_reader = getattr(
-                self.launcher, "containment_receipt", None
-            )
-            if callable(containment_receipt_reader):
-                candidate = containment_receipt_reader()
-                if candidate is not None:
-                    containment_receipt = validated_linux_containment_receipt(
-                        candidate
-                    )
             return mark_merge_ready(
                 claimed.run_id,
                 dict(receipt),

@@ -328,6 +328,32 @@ class VerifiedLauncher(Launcher):
         }
 
 
+LINUX_CONTAINMENT_RECEIPT = {
+    "contract": "builderops_linux_containment.v1",
+    "profile_name": "linux-systemd-cgroup-v2-scope-v1",
+    "scope_identity": f"yggdrasil-verification-{'a' * 24}.scope",
+    "evidence_digests": {
+        "attach": "b" * 64,
+        "cleanup": "c" * 64,
+    },
+    "outcome": "clean",
+}
+
+
+class LinuxVerifiedLauncher(VerifiedLauncher):
+    containment_receipt_required = True
+
+    def containment_receipt(self):
+        return LINUX_CONTAINMENT_RECEIPT
+
+
+class RestartedLinuxLauncher(VerifiedLauncher):
+    containment_receipt_required = True
+
+    def containment_receipt(self):
+        return None
+
+
 @pytest.mark.parametrize(
     "recovery_shape", ("merged", "open-neutralized")
 )
@@ -720,7 +746,7 @@ def test_pre_thread_start_recovery_rejects_partial_session_state_without_mutatio
 def test_recovery_reconciles_durable_model_attempt_without_relaunch() -> None:
     api = FakeBuilderOpsClient()
     outbox = CrashAfterDurableAttemptOutbox(api)
-    first_launcher = VerifiedLauncher()
+    first_launcher = LinuxVerifiedLauncher()
     first = VerificationConsumer(
         BuilderOpsVerificationLedger(
             api, repository=REPO, effect_outbox=outbox
@@ -737,10 +763,14 @@ def test_recovery_reconciles_durable_model_attempt_without_relaunch() -> None:
     run_id = next(iter(api.tasks))
     task = api.tasks[run_id]
     assert len(api.attempt_rows[run_id]) == 1
+    assert (
+        api.attempt_rows[run_id][0]["payload"]["containment"]
+        == LINUX_CONTAINMENT_RECEIPT
+    )
     assert task["lease"] is not None
     task["lease"]["expires_at"] = "2000-01-01T00:00:00+00:00"
 
-    restarted_launcher = VerifiedLauncher()
+    restarted_launcher = RestartedLinuxLauncher()
     restarted = VerificationConsumer(
         BuilderOpsVerificationLedger(
             api, repository=REPO, effect_outbox=outbox
@@ -755,9 +785,50 @@ def test_recovery_reconciles_durable_model_attempt_without_relaunch() -> None:
     assert recovered.status == "running"
     assert restarted_launcher.calls == []
     assert len(first_launcher.calls) == 1
-    assert restarted.ledger.merge_ready_receipt(run_id) is not None
+    merge_ready = restarted.ledger.merge_ready_receipt(run_id)
+    assert merge_ready is not None
+    assert merge_ready["containment"] == LINUX_CONTAINMENT_RECEIPT
     assert outbox.states
     assert set(outbox.states.values()) == {"succeeded"}
+
+
+def test_recovery_requires_durable_linux_containment_without_relaunch() -> None:
+    api = FakeBuilderOpsClient()
+    outbox = CrashAfterDurableAttemptOutbox(api)
+    first = VerificationConsumer(
+        BuilderOpsVerificationLedger(
+            api, repository=REPO, effect_outbox=outbox
+        ),
+        Truth(eligible_pr(), GREEN),
+        Auth(),
+        LinuxVerifiedLauncher(),
+        holder="verification-host",
+    )
+
+    with pytest.raises(SystemExit, match="durable model attempt"):
+        first.consume(request())
+
+    run_id = next(iter(api.tasks))
+    api.attempt_rows[run_id][0]["payload"].pop("containment")
+    task = api.tasks[run_id]
+    assert task["lease"] is not None
+    task["lease"]["expires_at"] = "2000-01-01T00:00:00+00:00"
+    restarted_launcher = RestartedLinuxLauncher()
+    restarted = VerificationConsumer(
+        BuilderOpsVerificationLedger(
+            api, repository=REPO, effect_outbox=outbox
+        ),
+        Truth(eligible_pr(), GREEN),
+        Auth(),
+        restarted_launcher,
+        holder="verification-host",
+    )
+
+    recovered = restarted.recover(run_id)
+
+    assert recovered.status == "backoff"
+    assert restarted_launcher.calls == []
+    assert restarted.ledger.merge_ready_receipt(run_id) is None
 
 
 def test_succeeded_model_effect_recovery_applies_attempt_without_relaunch() -> None:

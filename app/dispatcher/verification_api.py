@@ -890,7 +890,12 @@ class BuilderOpsVerificationLedger:
                         raise ValueError("BuilderOps verification attempt batch is malformed")
                     result.append(dict(event))
             else:
-                result.append(dict(payload))
+                attempt = dict(payload)
+                if "containment" in attempt:
+                    validated_linux_containment_receipt(
+                        attempt["containment"]
+                    )
+                result.append(attempt)
         return result
 
     def record_attempt(
@@ -907,6 +912,7 @@ class BuilderOpsVerificationLedger:
         holder: str,
         lease_id: str,
         idempotency_key: str | None = None,
+        containment_receipt: Mapping[str, object] | None = None,
     ) -> int:
         if kind not in {*REPAIR_ATTEMPT_KINDS, "review", "verification"}:
             raise ValueError("invalid verification attempt kind")
@@ -928,6 +934,13 @@ class BuilderOpsVerificationLedger:
             )
             if replay is not None:
                 expected_receipt = dict(receipt) if receipt is not None else None
+                expected_containment = (
+                    validated_linux_containment_receipt(
+                        containment_receipt
+                    )
+                    if containment_receipt is not None
+                    else None
+                )
                 if (
                     replay.get("kind") != kind
                     or replay.get("session_id") != session_id
@@ -935,6 +948,7 @@ class BuilderOpsVerificationLedger:
                     or replay.get("reasoning_effort") != reasoning_effort
                     or replay.get("outcome") != outcome
                     or replay.get("receipt") != expected_receipt
+                    or replay.get("containment") != expected_containment
                 ):
                     raise ValueError("verification attempt replay conflicts")
                 ordinal = replay.get("ordinal")
@@ -970,6 +984,10 @@ class BuilderOpsVerificationLedger:
             "mechanism_id": mechanism_id,
             "receipt": dict(receipt) if receipt is not None else None,
         }
+        if containment_receipt is not None:
+            document["containment"] = validated_linux_containment_receipt(
+                containment_receipt
+            )
         self.client.commit_attempt(
             envelope=self.envelope,
             task_id=run_id,

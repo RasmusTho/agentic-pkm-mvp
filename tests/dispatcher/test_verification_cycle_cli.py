@@ -172,12 +172,18 @@ def test_cycle_command_composes_api_outbox_and_host_runtime(
     monkeypatch.setattr(
         verification_consumer,
         "CodexExecLauncher",
-        lambda worktree, receipt_schema, context_path, *, containment_factory: (
+        lambda worktree,
+        receipt_schema,
+        context_path,
+        *,
+        containment_factory,
+        containment_receipt_required: (
             seen.update(
                 worktree=worktree,
                 receipt_schema=receipt_schema,
                 context_path=context_path,
                 containment_factory=containment_factory,
+                containment_receipt_required=containment_receipt_required,
             )
             or launcher
         ),
@@ -257,6 +263,7 @@ def test_cycle_command_composes_api_outbox_and_host_runtime(
     assert seen["consumer_ledger"] is ledger
     assert seen["raw_launcher"] is launcher
     assert seen["containment_factory"] is containment_factory
+    assert seen["containment_receipt_required"] is False
     assert seen["launcher"] is exact_launcher
     assert seen["executor_ledger"] is ledger
     assert seen["executor_outbox"] is outbox

@@ -134,6 +134,8 @@ def test_host_cycle_projects_linux_containment_into_durable_receipt() -> None:
     }
 
     class LinuxVerifiedLauncher(VerifiedLauncher):
+        containment_receipt_required = True
+
         def containment_receipt(self):
             return containment_receipt
 
