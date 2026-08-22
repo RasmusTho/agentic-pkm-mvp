@@ -87,6 +87,8 @@ class TransitionStage(str, Enum):
     ERASE_PENDING = "erase_pending"
     ERASED = "erased"
     REFUSED = "refused"
+    CONFLICT = "conflict"
+    RESTORE_PENDING = "restore_pending"
 
 
 class LivenessState(str, Enum):
@@ -96,6 +98,11 @@ class LivenessState(str, Enum):
     MISSING = "missing"
     ERASED = "erased"
     REFUSED = "refused"
+    TRANSITION_PENDING = "transition_pending"
+    RESTORE_PENDING = "restore_pending"
+    ERASURE_PENDING = "erasure_pending"
+    UNAVAILABLE = "unavailable"
+    CONFLICT = "conflict"
 
 
 _OPAQUE_NAMESPACE = re.compile(r"^[a-z][a-z0-9_-]*$")

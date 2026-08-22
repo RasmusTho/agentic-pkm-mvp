@@ -9,10 +9,22 @@ from app.archival.contracts import (
     DerivationClass,
     DurabilityClass,
     Generation,
+    Liveness,
+    LivenessState,
     OwnerAuthority,
     OpaqueReference,
     PolicyProfile,
+    ProvenanceRef,
+    Representation,
     RepresentationRef,
+    TransitionStage,
+)
+from app.archival.transition import (
+    ArchivalTransitionKernel,
+    DurableFakeAdapter,
+    FaultStage,
+    TransitionFailure,
+    TransitionResult,
 )
 
 __all__ = [
@@ -24,8 +36,18 @@ __all__ = [
     "DerivationClass",
     "DurabilityClass",
     "Generation",
+    "Liveness",
+    "LivenessState",
     "OwnerAuthority",
     "OpaqueReference",
     "PolicyProfile",
+    "ProvenanceRef",
+    "Representation",
     "RepresentationRef",
+    "TransitionStage",
+    "ArchivalTransitionKernel",
+    "DurableFakeAdapter",
+    "FaultStage",
+    "TransitionFailure",
+    "TransitionResult",
 ]
