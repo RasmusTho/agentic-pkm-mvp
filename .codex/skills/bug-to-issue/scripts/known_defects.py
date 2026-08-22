@@ -1145,11 +1145,11 @@ def reconcile_registry(
     verified_comments = {int(entry[0]["id"]) for entry in verified}
     if (
         len(verified) != len(by_id)
-        or len(verified_ids) != len(by_id)
+        or verified_ids != set(by_id)
         or len(verified_comments) != len(by_id)
     ):
         raise KnownDefectsError(
-            "reconciliation did not produce one comment per unique defect ID"
+            "reconciliation did not preserve exactly one comment per expected defect ID"
         )
     if any(_entry_marker_from_comment(entry[1])[1] != "final" for entry in verified):
         raise KnownDefectsError("reconciliation left a pending canonical entry")

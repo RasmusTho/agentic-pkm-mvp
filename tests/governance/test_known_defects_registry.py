@@ -1320,6 +1320,49 @@ def test_reconcile_replayed_addition_id_cannot_use_existing_duplicate_before_upd
     assert gateway.operations == []
 
 
+def test_reconcile_rejects_replaced_defect_id_at_final_readback() -> None:
+    class ReplacedFinalReadbackGateway(FakeGateway):
+        def __init__(self) -> None:
+            super().__init__()
+            self.replacement: dict[str, Any] | None = None
+
+        def list_comments(self, issue_number: int) -> list[dict[str, Any]]:
+            comments = super().list_comments(issue_number)
+            if self.replacement is not None:
+                comments[0]["body"] = self.replacement["body"]
+            return comments
+
+        def update_comment(self, comment_id: int, body: str) -> dict[str, Any]:
+            result = super().update_comment(comment_id, body)
+            self.replacement = {"body": replacement.render_entry()}
+            return result
+
+    gateway = ReplacedFinalReadbackGateway()
+    issue = gateway.create_registry_issue()
+    gateway.lock_registry_issue(issue["number"])
+    original = _defect()
+    second = _defect(
+        source_pr=4322,
+        source_sha="b" * 40,
+        review_url="https://github.com/RasmusTho/agentic-pkm-mvp/pull/4322#discussion_r124",
+    )
+    replacement = _defect(
+        source_pr=4323,
+        source_sha="c" * 40,
+        review_url="https://github.com/RasmusTho/agentic-pkm-mvp/pull/4323#discussion_r125",
+    )
+    gateway.add_comment(
+        issue["number"],
+        original.render_entry() + "\n\n" + second.render_entry(),
+    )
+
+    with pytest.raises(
+        known_defects.KnownDefectsError,
+        match="exactly one comment per expected defect ID",
+    ):
+        known_defects.reconcile_registry(gateway, issue["number"], apply=True)
+
+
 def test_schema_comment_requires_stable_creation_authority() -> None:
     gateway = FakeGateway()
     issue = gateway.create_registry_issue()
