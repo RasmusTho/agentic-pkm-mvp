@@ -49,8 +49,17 @@ _RECEIPT_TRIGGER_BODY = (
     "and new.retention_window_days is not distinct from old.retention_window_days "
     "and new.deleted_at is not distinct from old.deleted_at and new.sequence is not distinct from old.sequence "
     "and (new.payload - 'cold_cleanup_location_refs') is not distinct from (old.payload - 'cold_cleanup_location_refs') "
-    "and coalesce(old.payload->'cold_cleanup_location_refs', '[]'::jsonb) @> coalesce(new.payload->'cold_cleanup_location_refs', '[]'::jsonb) "
+    "and heimdal_raw_cleanup_queue_is_subsequence( old.payload->'cold_cleanup_location_refs', new.payload->'cold_cleanup_location_refs' ) "
     "then return new; end if; raise exception 'heimdal_raw_deletion_receipt is append-only: % is not permitted', tg_op;"
+)
+
+_CLEANUP_QUEUE_HELPER_BODY = (
+    "declare old_refs text[] := array( select jsonb_array_elements_text(coalesce(old_payload, '[]'::jsonb)) ); "
+    "new_ref text; old_index integer := 1; old_length integer := coalesce(array_length(old_refs, 1), 0); "
+    "begin for new_ref in select jsonb_array_elements_text(coalesce(new_payload, '[]'::jsonb)) loop "
+    "while old_index <= old_length and old_refs[old_index] <> new_ref loop old_index := old_index + 1; end loop; "
+    "if old_index > old_length then return false; end if; old_index := old_index + 1; end loop; "
+    "return true; end;"
 )
 
 
@@ -69,6 +78,20 @@ def _receipt_trigger_is_migration_ready(function_def: str, trigger_def: str) -> 
             r"(?:[a-z_][a-z0-9_]*\.)?heimdal_raw_deletion_receipt_reject_mutation\(\)",
             normalized_trigger,
         )
+    )
+
+
+def _cleanup_queue_helper_is_migration_ready(
+    function_def: str, arguments: str, volatility: str
+) -> bool:
+    """Accept only the canonical order-preserving queue helper."""
+    normalized = re.sub(r"\s+", " ", function_def).lower()
+    body_match = re.search(r"\bdeclare\s+(.*?)\bend\s*;", normalized, re.IGNORECASE)
+    body = body_match.group(0).strip() if body_match else ""
+    return bool(
+        arguments.strip().lower() == "old_payload jsonb, new_payload jsonb"
+        and volatility == "i"
+        and body == _CLEANUP_QUEUE_HELPER_BODY
     )
 
 
@@ -504,6 +527,26 @@ def _assert_pg_schema(conn: Any) -> None:
             + _MIGRATION_HINT
         )
     cur.execute(
+        """
+        SELECT pg_get_functiondef(p.oid), pg_get_function_arguments(p.oid), p.provolatile
+        FROM pg_proc AS p
+        JOIN pg_namespace AS n ON n.oid = p.pronamespace
+        WHERE n.nspname = current_schema()
+          AND p.proname = 'heimdal_raw_cleanup_queue_is_subsequence'
+          AND p.proargtypes = ARRAY['jsonb'::regtype, 'jsonb'::regtype]::oidvector
+        """
+    )
+    helper_rows = cur.fetchall()
+    if not any(
+        _cleanup_queue_helper_is_migration_ready(
+            str(row[0]), str(row[1]), str(row[2])
+        )
+        for row in helper_rows
+    ):
+        raise RawLivenessSchemaMissingError(
+            "Deletion-receipt queue helper is not migration-ready. " + _MIGRATION_HINT
+        )
+    cur.execute(
         f"""
         SELECT r.id
         FROM heimdal_raw_record AS r
@@ -581,6 +624,33 @@ def _bootstrap_pg(conn: Any) -> None:
         f"ON {_DELETION_RECEIPT_TABLE} (record_id)"
     )
     cur.execute(
+        """
+        CREATE OR REPLACE FUNCTION heimdal_raw_cleanup_queue_is_subsequence(
+            old_payload jsonb, new_payload jsonb
+        ) RETURNS boolean AS $$
+        DECLARE
+            old_refs text[] := ARRAY(
+                SELECT jsonb_array_elements_text(COALESCE(old_payload, '[]'::jsonb))
+            );
+            new_ref text;
+            old_index integer := 1;
+            old_length integer := COALESCE(array_length(old_refs, 1), 0);
+        BEGIN
+            FOR new_ref IN SELECT jsonb_array_elements_text(COALESCE(new_payload, '[]'::jsonb)) LOOP
+                WHILE old_index <= old_length AND old_refs[old_index] <> new_ref LOOP
+                    old_index := old_index + 1;
+                END LOOP;
+                IF old_index > old_length THEN
+                    RETURN false;
+                END IF;
+                old_index := old_index + 1;
+            END LOOP;
+            RETURN true;
+        END;
+        $$ LANGUAGE plpgsql IMMUTABLE STRICT
+        """
+    )
+    cur.execute(
         f"""
         CREATE OR REPLACE FUNCTION heimdal_raw_deletion_receipt_reject_mutation()
         RETURNS trigger AS $$
@@ -596,8 +666,10 @@ def _bootstrap_pg(conn: Any) -> None:
                AND NEW.sequence IS NOT DISTINCT FROM OLD.sequence
                AND (NEW.payload - 'cold_cleanup_location_refs')
                    IS NOT DISTINCT FROM (OLD.payload - 'cold_cleanup_location_refs')
-               AND COALESCE(OLD.payload->'cold_cleanup_location_refs', '[]'::jsonb)
-                   @> COALESCE(NEW.payload->'cold_cleanup_location_refs', '[]'::jsonb) THEN
+               AND heimdal_raw_cleanup_queue_is_subsequence(
+                   OLD.payload->'cold_cleanup_location_refs',
+                   NEW.payload->'cold_cleanup_location_refs'
+               ) THEN
                 RETURN NEW;
             END IF;
             RAISE EXCEPTION 'heimdal_raw_deletion_receipt is append-only: % is not permitted', TG_OP;

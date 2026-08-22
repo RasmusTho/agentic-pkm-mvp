@@ -15,6 +15,30 @@ reversibility: str = "forward-only"
 def upgrade() -> None:
     op.execute(
         """
+        CREATE OR REPLACE FUNCTION heimdal_raw_cleanup_queue_is_subsequence(
+            old_payload jsonb, new_payload jsonb
+        ) RETURNS boolean AS $$
+        DECLARE
+            old_refs text[] := ARRAY(
+                SELECT jsonb_array_elements_text(COALESCE(old_payload, '[]'::jsonb))
+            );
+            new_ref text;
+            old_index integer := 1;
+            old_length integer := COALESCE(array_length(old_refs, 1), 0);
+        BEGIN
+            FOR new_ref IN SELECT jsonb_array_elements_text(COALESCE(new_payload, '[]'::jsonb)) LOOP
+                WHILE old_index <= old_length AND old_refs[old_index] <> new_ref LOOP
+                    old_index := old_index + 1;
+                END LOOP;
+                IF old_index > old_length THEN
+                    RETURN false;
+                END IF;
+                old_index := old_index + 1;
+            END LOOP;
+            RETURN true;
+        END;
+        $$ LANGUAGE plpgsql IMMUTABLE STRICT;
+
         CREATE OR REPLACE FUNCTION heimdal_raw_deletion_receipt_reject_mutation()
         RETURNS trigger AS $$
         BEGIN
@@ -29,8 +53,10 @@ def upgrade() -> None:
                AND NEW.sequence IS NOT DISTINCT FROM OLD.sequence
                AND (NEW.payload - 'cold_cleanup_location_refs')
                    IS NOT DISTINCT FROM (OLD.payload - 'cold_cleanup_location_refs')
-               AND COALESCE(OLD.payload->'cold_cleanup_location_refs', '[]'::jsonb)
-                   @> COALESCE(NEW.payload->'cold_cleanup_location_refs', '[]'::jsonb) THEN
+               AND heimdal_raw_cleanup_queue_is_subsequence(
+                   OLD.payload->'cold_cleanup_location_refs',
+                   NEW.payload->'cold_cleanup_location_refs'
+               ) THEN
                 RETURN NEW;
             END IF;
             RAISE EXCEPTION 'heimdal_raw_deletion_receipt is append-only: % is not permitted', TG_OP;

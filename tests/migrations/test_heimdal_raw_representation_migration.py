@@ -253,12 +253,24 @@ def _raw_schema_snapshot(dsn: str) -> dict[str, object]:
             """
         )
         receipt_functions = [tuple(row) for row in cur.fetchall()]
+        cur.execute(
+            """
+            SELECT pg_get_functiondef(p.oid), pg_get_function_arguments(p.oid), p.provolatile
+            FROM pg_proc AS p
+            JOIN pg_namespace AS n ON n.oid = p.pronamespace
+            WHERE n.nspname = 'public'
+              AND p.proname = 'heimdal_raw_cleanup_queue_is_subsequence'
+              AND p.proargtypes = ARRAY['jsonb'::regtype, 'jsonb'::regtype]::oidvector
+            """
+        )
+        cleanup_queue_helpers = [tuple(row) for row in cur.fetchall()]
         return {
             "columns": columns,
             "indexes": indexes,
             "constraints": constraints,
             "triggers": triggers,
             "receipt_functions": receipt_functions,
+            "cleanup_queue_helpers": cleanup_queue_helpers,
         }
 
 

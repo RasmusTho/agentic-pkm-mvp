@@ -92,8 +92,10 @@ def test_receipt_trigger_preflight_rejects_extra_delete_return_path() -> None:
              AND NEW.sequence IS NOT DISTINCT FROM OLD.sequence
              AND (NEW.payload - 'cold_cleanup_location_refs') IS NOT DISTINCT FROM
                  (OLD.payload - 'cold_cleanup_location_refs')
-             AND COALESCE(OLD.payload->'cold_cleanup_location_refs', '[]'::jsonb)
-                 @> COALESCE(NEW.payload->'cold_cleanup_location_refs', '[]'::jsonb) THEN
+             AND heimdal_raw_cleanup_queue_is_subsequence(
+                 OLD.payload->'cold_cleanup_location_refs',
+                 NEW.payload->'cold_cleanup_location_refs'
+             ) THEN
             RETURN NEW;
           END IF;
           RAISE EXCEPTION 'heimdal_raw_deletion_receipt is append-only: % is not permitted', TG_OP;
@@ -148,6 +150,45 @@ def test_receipt_trigger_preflight_rejects_extra_delete_return_path() -> None:
         canonical,
         trigger + " WHEN (false)",
     )  # noqa: SLF001
+
+
+def test_cleanup_queue_helper_preflight_binds_exact_immutable_function() -> None:
+    function_def = """
+        CREATE OR REPLACE FUNCTION public.heimdal_raw_cleanup_queue_is_subsequence(
+            old_payload jsonb, new_payload jsonb
+        ) RETURNS boolean AS $$
+        DECLARE
+            old_refs text[] := ARRAY(
+                SELECT jsonb_array_elements_text(COALESCE(old_payload, '[]'::jsonb))
+            );
+            new_ref text;
+            old_index integer := 1;
+            old_length integer := COALESCE(array_length(old_refs, 1), 0);
+        BEGIN
+            FOR new_ref IN SELECT jsonb_array_elements_text(COALESCE(new_payload, '[]'::jsonb)) LOOP
+                WHILE old_index <= old_length AND old_refs[old_index] <> new_ref LOOP
+                    old_index := old_index + 1;
+                END LOOP;
+                IF old_index > old_length THEN
+                    RETURN false;
+                END IF;
+                old_index := old_index + 1;
+            END LOOP;
+            RETURN true;
+        END;
+        $$ LANGUAGE plpgsql IMMUTABLE STRICT;
+    """
+    assert raw_liveness._cleanup_queue_helper_is_migration_ready(  # noqa: SLF001
+        function_def, "old_payload jsonb, new_payload jsonb", "i"
+    )
+    assert not raw_liveness._cleanup_queue_helper_is_migration_ready(  # noqa: SLF001
+        function_def.replace("RETURN true", "RETURN false"),
+        "old_payload jsonb, new_payload jsonb",
+        "i",
+    )
+    assert not raw_liveness._cleanup_queue_helper_is_migration_ready(  # noqa: SLF001
+        function_def, "old_payload jsonb, new_payload jsonb", "v"
+    )
 
 
 @pytest.mark.parametrize("writer", ["hard", "screen"])

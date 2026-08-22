@@ -61,8 +61,9 @@ memory governed path. Ordinary representation registration cannot delete identit
   registration. Stale observations cannot authorize deletion because the receipt/tombstone and
   row locks are the authority.
 - PG schema preflight validates the reconciliation trigger function body, not just trigger name;
-  it requires the guarded UPDATE return path, immutable-column equality, monotonic removal-only
-  queue progress, and rejecting exception path. Partial/pre-e2f3 or semantically drifted schemas
+  it requires the guarded UPDATE return path, immutable-column equality, order-preserving
+  monotonic removal-only queue progress, and rejecting exception path. Partial/pre-e2f3 or
+  semantically drifted schemas
   fail at the migration boundary before any erase state transition.
 
 ## Prior findings and proof map
