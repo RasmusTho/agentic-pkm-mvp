@@ -121,7 +121,7 @@ def test_cycle_command_composes_api_outbox_and_host_runtime(
     ledger = SimpleNamespace(effect_outbox=outbox)
     truth = object()
     auth = object()
-    launcher = object()
+    launcher = SimpleNamespace(containment_receipt=lambda: None)
     exact_launcher = object()
     containment_factory = lambda: object()
     consumer = object()
@@ -284,6 +284,9 @@ def test_exact_head_launcher_supplies_immutable_review_patch(
             calls.append((["inner"], {**kwargs, "source": source}))
             return "session", {"verdict": "verified"}
 
+        def containment_receipt(self):
+            return {"contract": "builderops_linux_containment.v1"}
+
     def _git(command: list[str], **_kwargs: object) -> SimpleNamespace:
         if command[3:5] == ["cat-file", "-e"]:
             return SimpleNamespace(returncode=0, stdout="")
@@ -311,6 +314,9 @@ def test_exact_head_launcher_supplies_immutable_review_patch(
         b"diff --git exact\n"
     ).hexdigest()
     assert not Path(source["patch_path"]).exists()
+    assert launcher.containment_receipt() == {
+        "contract": "builderops_linux_containment.v1"
+    }
 
 
 def test_cycle_command_runs_and_recovers_dry_cycle(
@@ -553,6 +559,21 @@ def test_cycle_command_output_is_secret_free_and_fail_closed(
     }
     with pytest.raises(ValueError, match="receipt is malformed"):
         dispatcher_cli._public_verification_cycle_receipt(unsafe_authority)
+
+    unsafe_containment = _Runtime._receipt("vrun-test")
+    unsafe_containment["containment"] = {
+        "contract": "builderops_linux_containment.v1",
+        "profile_name": "linux-systemd-cgroup-v2-scope-v1",
+        "scope_identity": f"yggdrasil-verification-{'a' * 24}.scope",
+        "evidence_digests": {
+            "attach": "b" * 64,
+            "cleanup": "c" * 64,
+        },
+        "outcome": "clean",
+        "credential": secret,
+    }
+    with pytest.raises(ValueError, match="containment receipt is malformed"):
+        dispatcher_cli._public_verification_cycle_receipt(unsafe_containment)
 
 
 def test_cycle_command_rejects_non_installed_main_worktree(

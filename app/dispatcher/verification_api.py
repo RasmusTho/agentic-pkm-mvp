@@ -44,6 +44,9 @@ from app.dispatcher.verification_dispatch import (
     _request_final_review_rounds,
     _validate_request,
 )
+from app.dispatcher.linux_containment import (
+    validated_linux_containment_receipt,
+)
 
 _TASK_PREFIX = "vrun-"
 _PAYLOAD_CONTRACT = "builderops_verification_run.v1"
@@ -1237,6 +1240,7 @@ class BuilderOpsVerificationLedger:
         *,
         holder: str,
         lease_id: str,
+        containment_receipt: Mapping[str, object] | None = None,
     ) -> VerificationRun:
         """Persist exact review-only authority before the host merge effect."""
         snapshot = self._snapshot(run_id)
@@ -1251,7 +1255,7 @@ class BuilderOpsVerificationLedger:
             )
         lease = self._assert_lease(snapshot, holder, lease_id)
         document = dict(_snapshot_payload(snapshot))
-        document["merge_ready_receipt"] = {
+        merge_ready_receipt: dict[str, object] = {
             "contract": "builderops_merge_ready.v1",
             "run_id": run_id,
             "repository": self.repository,
@@ -1260,6 +1264,11 @@ class BuilderOpsVerificationLedger:
             **self._merge_ready_authority(run),
             "coordinator_receipt": dict(receipt),
         }
+        if containment_receipt is not None:
+            merge_ready_receipt["containment"] = (
+                validated_linux_containment_receipt(containment_receipt)
+            )
+        document["merge_ready_receipt"] = merge_ready_receipt
         self.client.transition_task(
             envelope=self.envelope,
             task_id=run_id,
@@ -1301,8 +1310,19 @@ class BuilderOpsVerificationLedger:
             key: marker.get(key)
             for key in expected
         }
+        allowed_keys = {
+            "contract",
+            "run_id",
+            "repository",
+            "pr_number",
+            "head_sha",
+            "coordinator_receipt",
+            "containment",
+            *expected,
+        }
         if (
-            marker.get("contract") != "builderops_merge_ready.v1"
+            not set(marker).issubset(allowed_keys)
+            or marker.get("contract") != "builderops_merge_ready.v1"
             or marker.get("run_id") != run_id
             or marker.get("repository") != self.repository
             or marker.get("pr_number") != run.pr_number
@@ -1313,6 +1333,8 @@ class BuilderOpsVerificationLedger:
             or coordinator.get("head_sha") != run.current_head_sha
         ):
             raise ValueError("BuilderOps merge-ready receipt is malformed or stale")
+        if "containment" in marker:
+            validated_linux_containment_receipt(marker["containment"])
         return dict(marker)
 
     def pending_effect_binding(

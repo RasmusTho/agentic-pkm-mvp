@@ -33,6 +33,10 @@ from zoneinfo import ZoneInfo
 
 import jsonschema
 
+from app.dispatcher.linux_containment import (
+    validated_linux_containment_receipt,
+)
+
 from app.dispatcher.verification_dispatch import (
     CONTRACT_VERSION,
     VerificationBackoffPending,
@@ -2711,6 +2715,7 @@ class CodexExecLauncher:
         self.cleanup_tracker_factory = (
             cleanup_tracker_factory or TaggedProcessTreeCleanup
         )
+        self._last_containment_receipt: dict[str, object] | None = None
         self.adapter_path = adapter_path or worktree / ".codex/agents/verification-closer.toml"
         try:
             adapter = tomllib.loads(self.adapter_path.read_text(encoding="utf-8"))
@@ -2827,6 +2832,7 @@ class CodexExecLauncher:
         on_thread_started: Callable[[str], None] | None = None,
         on_heartbeat: Callable[[], None] | None = None,
     ) -> tuple[str, Mapping[str, object]]:
+        self._last_containment_receipt = None
         try:
             schema = json.loads(self.receipt_schema.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as exc:
@@ -2923,11 +2929,18 @@ class CodexExecLauncher:
                 except Exception:
                     pass
             try:
-                return bool(containment.cleanup())
+                clean = bool(containment.cleanup())
             except Exception:
                 return False
+            receipt_reader = getattr(containment, "receipt", None)
+            if callable(receipt_reader):
+                candidate = receipt_reader()
+                if not isinstance(candidate, Mapping):
+                    return False
+                self._last_containment_receipt = dict(candidate)
+            return clean
 
-        def reap_direct_root() -> bool:
+        def reap_direct_root(*, allow_signal: bool = True) -> bool:
             with process_lock:
                 if process is None:
                     return False
@@ -2936,6 +2949,12 @@ class CodexExecLauncher:
                         return True
                 except Exception:
                     return False
+                if not allow_signal:
+                    try:
+                        process.wait(timeout=5)
+                    except Exception:
+                        return False
+                    return True
                 try:
                     process.terminate()
                 except ProcessLookupError:
@@ -2954,10 +2973,17 @@ class CodexExecLauncher:
                     return False
                 return True
 
-        def cleanup_darwin_barrier_after_release() -> bool:
-            # In R, direct-root reaping is best effort. The audited coalition
-            # cleanup must run even if that adapter fails.
+        def cleanup_barrier_after_release() -> bool:
+            # Linux signals only through its scope/pidfd authority, then waits
+            # for the exact Popen root without sending another numeric-PID
+            # signal. Darwin retains its existing root-reap-first ordering.
             with process_lock:
+                if bool(
+                    getattr(containment, "cleanup_before_direct_reap", False)
+                ):
+                    containment_clean = cleanup_process_tree()
+                    root_reaped = reap_direct_root(allow_signal=False)
+                    return root_reaped and containment_clean
                 root_reaped = reap_direct_root()
                 try:
                     coalition_clean = bool(containment.cleanup())
@@ -2976,10 +3002,13 @@ class CodexExecLauncher:
                             barrier.close()
                         except Exception:
                             pass
+                        # Before release the coordinator cannot have entered
+                        # the target scope. Reap only this exact Popen child;
+                        # scope-owned signalling begins after release.
                         reap_direct_root()
                     else:
                         containment_proven = (
-                            cleanup_darwin_barrier_after_release()
+                            cleanup_barrier_after_release()
                             or containment_proven
                         )
                     process_group_id = None
@@ -3309,7 +3338,7 @@ class CodexExecLauncher:
                         if barrier is not None:
                             process_group_id = None
                             containment_proven = (
-                                cleanup_darwin_barrier_after_release()
+                                cleanup_barrier_after_release()
                             )
                         elif process_group_is_alive():
                             terminate_and_reap_child()
@@ -3382,6 +3411,13 @@ class CodexExecLauncher:
         if terminal is None:
             raise RuntimeError("codex exec produced no schema-valid final agent receipt")
         return thread_id, terminal
+
+    def containment_receipt(self) -> Mapping[str, object] | None:
+        """Return the last launch's bounded host-containment evidence."""
+
+        if self._last_containment_receipt is None:
+            return None
+        return dict(self._last_containment_receipt)
 
 
 def _nested(mapping: Mapping[str, object], *keys: str) -> object:
@@ -5434,11 +5470,22 @@ class VerificationConsumer:
                 raise RuntimeError(
                     "host-fenced merge receipt writer is unavailable"
                 )
+            containment_receipt = None
+            containment_receipt_reader = getattr(
+                self.launcher, "containment_receipt", None
+            )
+            if callable(containment_receipt_reader):
+                candidate = containment_receipt_reader()
+                if candidate is not None:
+                    containment_receipt = validated_linux_containment_receipt(
+                        candidate
+                    )
             return mark_merge_ready(
                 claimed.run_id,
                 dict(receipt),
                 holder=self.holder,
                 lease_id=lease_id,
+                containment_receipt=containment_receipt,
             )
         status = (
             {

@@ -421,6 +421,7 @@ _PUBLIC_VERIFICATION_CYCLE_RECEIPT_KEYS = frozenset(
         "raw_secret_count",
     }
 )
+_PUBLIC_VERIFICATION_CYCLE_OPTIONAL_KEYS = frozenset({"containment"})
 
 
 def _public_verification_cycle_receipt(
@@ -429,7 +430,11 @@ def _public_verification_cycle_receipt(
     """Return only the exact, secret-free BCP-05 receipt contract."""
 
     if (
-        set(receipt) != _PUBLIC_VERIFICATION_CYCLE_RECEIPT_KEYS
+        not _PUBLIC_VERIFICATION_CYCLE_RECEIPT_KEYS.issubset(receipt)
+        or not set(receipt).issubset(
+            _PUBLIC_VERIFICATION_CYCLE_RECEIPT_KEYS
+            | _PUBLIC_VERIFICATION_CYCLE_OPTIONAL_KEYS
+        )
         or receipt.get("contract") != "bcp05_demerzel_cycle.v1"
         or receipt.get("raw_secret_count") != 0
         or not isinstance(receipt.get("readback"), Mapping)
@@ -688,6 +693,15 @@ class _InstalledMainExactHeadLauncher:
             return self.launcher.launch(bound_pack, **kwargs)
         finally:
             patch_path.unlink(missing_ok=True)
+
+    def containment_receipt(self) -> Mapping[str, object] | None:
+        """Expose the inner launch's validated host-containment evidence."""
+
+        reader = getattr(self.launcher, "containment_receipt", None)
+        if not callable(reader):
+            return None
+        candidate = reader()
+        return dict(candidate) if isinstance(candidate, Mapping) else None
 
 
 def _build_host_fenced_verification_cycle(

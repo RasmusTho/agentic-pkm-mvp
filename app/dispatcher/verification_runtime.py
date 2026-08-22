@@ -18,6 +18,9 @@ from app.dispatcher.verification_merge import (
     VerificationMergeExecutor,
     verification_authority_digest,
 )
+from app.dispatcher.linux_containment import (
+    validated_linux_containment_receipt,
+)
 from app.dispatcher.verified_merge import (
     FIXED_VERIFIED_MERGE_COMMIT_MESSAGE,
     fixed_verified_merge_commit_title,
@@ -39,6 +42,7 @@ _CYCLE_RECEIPT_KEYS = frozenset(
         "raw_secret_count",
     }
 )
+_OPTIONAL_CYCLE_RECEIPT_KEYS = frozenset({"containment"})
 _DRY_READBACK_KEYS = frozenset(
     {
         "merged",
@@ -120,7 +124,10 @@ def validated_cycle_receipt_shape(
     hex40 = re.compile(r"[0-9a-f]{40}")
     hex64 = re.compile(r"[0-9a-f]{64}")
     if (
-        set(receipt) != _CYCLE_RECEIPT_KEYS
+        not _CYCLE_RECEIPT_KEYS.issubset(receipt)
+        or not set(receipt).issubset(
+            _CYCLE_RECEIPT_KEYS | _OPTIONAL_CYCLE_RECEIPT_KEYS
+        )
         or receipt.get("contract") != "bcp05_demerzel_cycle.v1"
         or not _positive_int(receipt.get("governing_issue"))
         or receipt.get("repository") != repository
@@ -159,12 +166,20 @@ def validated_cycle_receipt_shape(
         or receipt.get("raw_secret_count") != 0
     ):
         raise ValueError("verification cycle receipt is malformed")
+    if "containment" in receipt:
+        validated_containment_receipt_shape(receipt["containment"])
     validated_dry_run_readback(
         readback,
         head_sha=receipt.get("head_sha"),
         terminal_outcome=receipt.get("terminal_outcome"),
     )
     return dict(receipt)
+
+
+def validated_containment_receipt_shape(value: object) -> dict[str, object]:
+    """Validate the Linux receipt before API replay or public output."""
+
+    return validated_linux_containment_receipt(value)
 
 
 class HostFencedVerificationCycle:
@@ -361,6 +376,13 @@ class HostFencedVerificationCycle:
             },
             "raw_secret_count": 0,
         }
+        merge_ready = self.ledger.merge_ready_receipt(run_id)
+        if not isinstance(merge_ready, Mapping):
+            raise ValueError("verification merge readiness is unavailable")
+        if "containment" in merge_ready:
+            receipt["containment"] = validated_containment_receipt_shape(
+                merge_ready["containment"]
+            )
         return self._validated_receipt(
             run,
             receipt,
@@ -472,6 +494,7 @@ class HostFencedVerificationCycle:
 
 __all__ = [
     "HostFencedVerificationCycle",
+    "validated_containment_receipt_shape",
     "validated_cycle_receipt_shape",
     "validated_dry_run_readback",
 ]

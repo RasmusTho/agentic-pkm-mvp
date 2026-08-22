@@ -16,6 +16,9 @@ from app.dispatcher.linux_containment import (
     LinuxScopeIdentity,
     SystemdCgroupV2Kernel,
 )
+from app.dispatcher.verification_runtime import (
+    validated_containment_receipt_shape,
+)
 
 
 class FakeLinuxKernel:
@@ -23,7 +26,7 @@ class FakeLinuxKernel:
         self.available = True
         self.scope_available = True
         self.scope = LinuxScopeIdentity(
-            unit="yggdrasil-verification-test.scope",
+            unit=f"yggdrasil-verification-{'f' * 24}.scope",
             cgroup_path="/user.slice/test.scope",
             cgroup_device=7,
             cgroup_inode=11,
@@ -227,6 +230,7 @@ def test_linux_receipt_is_secret_safe() -> None:
     assert containment.cleanup() is True
 
     receipt: Mapping[str, object] = containment.receipt()
+    assert validated_containment_receipt_shape(receipt) == receipt
     assert receipt == {
         "contract": "builderops_linux_containment.v1",
         "profile_name": LINUX_SYSTEMD_CGROUP_V2_SCOPE_PROFILE,

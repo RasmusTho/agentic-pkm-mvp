@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import secrets
 import shutil
 import signal
@@ -29,6 +30,41 @@ from app.dispatcher.linux_launch_barrier import RELEASE_TOKEN
 LINUX_SYSTEMD_CGROUP_V2_SCOPE_PROFILE = "linux-systemd-cgroup-v2-scope-v1"
 _SCOPE_PREFIX = "yggdrasil-verification-"
 _STABLE_SNAPSHOT_ATTEMPTS = 8
+
+
+def validated_linux_containment_receipt(value: object) -> dict[str, object]:
+    """Validate the complete secret-safe Linux containment allowlist."""
+
+    if not isinstance(value, Mapping):
+        raise ValueError("verification containment receipt is malformed")
+    evidence = value.get("evidence_digests")
+    hex64 = re.compile(r"[0-9a-f]{64}")
+    scope_name = re.compile(r"yggdrasil-verification-[0-9a-f]{24}\.scope")
+    if (
+        set(value)
+        != {
+            "contract",
+            "profile_name",
+            "scope_identity",
+            "evidence_digests",
+            "outcome",
+        }
+        or value.get("contract") != "builderops_linux_containment.v1"
+        or value.get("profile_name")
+        != LINUX_SYSTEMD_CGROUP_V2_SCOPE_PROFILE
+        or not isinstance(value.get("scope_identity"), str)
+        or scope_name.fullmatch(str(value.get("scope_identity"))) is None
+        or not isinstance(evidence, Mapping)
+        or set(evidence) != {"attach", "cleanup"}
+        or any(
+            not isinstance(evidence.get(key), str)
+            or hex64.fullmatch(str(evidence.get(key))) is None
+            for key in ("attach", "cleanup")
+        )
+        or value.get("outcome") != "clean"
+    ):
+        raise ValueError("verification containment receipt is malformed")
+    return dict(value)
 
 
 @dataclass(frozen=True, order=True)
@@ -478,6 +514,7 @@ class LinuxSystemdScopeContainment:
     """Launch-scoped cleanup proven by one transient systemd scope."""
 
     profile_name = LINUX_SYSTEMD_CGROUP_V2_SCOPE_PROFILE
+    cleanup_before_direct_reap = True
 
     def __init__(
         self,
@@ -702,4 +739,5 @@ __all__ = [
     "LinuxSystemdScopeContainment",
     "SystemdCgroupV2Kernel",
     "select_linux_verification_containment",
+    "validated_linux_containment_receipt",
 ]
