@@ -33,6 +33,37 @@ macOS host
 ```
 API and worker share the same Python image built from the repo.
 
+## Cross-container vault and scalar-rollback contract
+
+The full-host-vault overlay binds the selected host vault read-only into
+`instance-state-init`, `api`, `worker`, and `watcher`. The init container must
+see the same selected root as the runtime consumers so deployment admission can
+validate drained legacy-owner roots from inside its container namespace.
+
+The scalar-rollback overlay also exposes the repo-owned policy sources
+read-only to `instance-state-init` at:
+
+- `/run/scalar-rollback-policy/docker-compose.yaml`
+- `/run/scalar-rollback-policy/docker-compose.scalar-rollback.yml`
+- `/run/scalar-rollback-policy/nginx.conf`
+
+The rollback guard fails closed unless that init service and all three policy
+mounts are present. The ownership ledger keeps the selected vault's primary
+identity inode-bound, while parent-chain identities are canonical-path-bound so
+the same vault remains verifiable across container bind mounts. Nested-root
+collision checks still compare authenticated sealed roots by resolved path when
+their persisted parent identities cannot be compared directly.
+
+### Scratch/rebootstrap boundary
+
+The path-bound parent-chain identity is persisted under ledger schema v2. A
+schema-v1 ownership ledger is not migrated or silently interpreted under the
+new identity semantics; established v1 state fails closed with an explicit
+`scratch/rebootstrap reset` error. Rebootstrap is an operator-controlled
+replacement of the host-global ownership state after the external backup,
+writer-drain, and deployment-quiescence proofs are complete. This repository
+change does not perform that destructive reset.
+
 ## Feasibility: capacity-managed dev/test runtime
 
 **Status:** Advisory feasibility snapshot, 2026-08-17. This section describes a

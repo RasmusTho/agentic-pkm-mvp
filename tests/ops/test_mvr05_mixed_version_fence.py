@@ -20,7 +20,7 @@ from app.instance.mvr05_cutover import (
     Mvr05CutoverError,
     discover_db_producer_fence,
 )
-from app.instance.ownership_ledger import LedgerKeyError, OwnershipLedger
+from app.instance.ownership_ledger import LedgerError, LedgerKeyError, OwnershipLedger
 from app.instance.vault_registry import VaultRegistration, VaultRegistryStore
 from app.services import outbox
 from tests.helpers.instance_storage_capability import STORAGE_MUTATION_CAPABILITY
@@ -228,6 +228,41 @@ def test_floor_producer_preserves_established_ledger_identity(tmp_path, monkeypa
     after = OwnershipLedger(host_global_root).require_existing()
     assert (after.key_id, after.generation) == (before.key_id, before.generation)
     assert VaultRegistryStore(registry_path).load().revision == 1
+
+
+def test_recover_missing_active_uses_authenticated_key_for_collision_check(tmp_path) -> None:
+    ownership_root = tmp_path / "host-global"
+    ownership_root.mkdir(mode=0o700)
+    root = tmp_path / "recovered-vault"
+    root.mkdir()
+    ledger = OwnershipLedger(ownership_root)
+    ledger.load()
+
+    recovered = ledger.recover_missing_active(
+        channel_id="dev",
+        vault_binding_id="binding-recovered",
+        root=root,
+        _capability=STORAGE_MUTATION_CAPABILITY,
+    )
+
+    assert recovered.state == "active"
+    assert ledger.require_existing().leases["binding-recovered"] == recovered
+
+
+def test_v1_ledger_requires_explicit_scratch_rebootstrap(tmp_path) -> None:
+    ownership_root = tmp_path / "host-global"
+    ownership_root.mkdir(mode=0o700)
+    ledger = OwnershipLedger(ownership_root)
+    ledger.load()
+    payload = json.loads(ledger.path.read_text(encoding="utf-8"))
+    payload["schema"] = "agentic-pkm.host-ownership-ledger.v1"
+    ledger.path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(
+        LedgerError,
+        match="ownership ledger format v1 requires explicit scratch/rebootstrap reset",
+    ):
+        ledger.require_existing()
 
 
 @pytest.mark.parametrize("missing_artifact", ["ledger", "key"])

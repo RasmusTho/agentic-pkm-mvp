@@ -1,5 +1,11 @@
 # MVR-01C only: constrain a supported previous scalar image to one validated binding.
 services:
+  instance-state-init:
+    volumes:
+      - "./docker-compose.yaml:/run/scalar-rollback-policy/docker-compose.yaml:ro"
+      - "./docker-compose.scalar-rollback.yml:/run/scalar-rollback-policy/docker-compose.scalar-rollback.yml:ro"
+      - "./ops/scalar-rollback/nginx.conf:/run/scalar-rollback-policy/nginx.conf:ro"
+
   scalar-rollback-guard:
     image: ${SCALAR_ROLLBACK_GUARD_IMAGE:?current guard image is required}
     user: "${LOCAL_UID:-0}:${LOCAL_GID:-0}"

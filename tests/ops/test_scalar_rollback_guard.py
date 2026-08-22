@@ -263,6 +263,35 @@ def test_rollback_gateway_and_mounts_enforce_selected_binding(
     gateway_config.write_bytes(
         (REPO_ROOT / "ops/scalar-rollback/nginx.conf").read_bytes()
     )
+    canonical_overlay = (REPO_ROOT / "docker-compose.scalar-rollback.yml").read_text(
+        encoding="utf-8"
+    )
+    for replacement in (
+        (
+            "./ops/scalar-rollback/nginx.conf:/run/scalar-rollback-policy/nginx.conf:ro",
+            "./wrong-policy.conf:/run/scalar-rollback-policy/nginx.conf:ro",
+        ),
+        (
+            "./ops/scalar-rollback/nginx.conf:/run/scalar-rollback-policy/nginx.conf:ro",
+            "./ops/scalar-rollback/nginx.conf:/run/scalar-rollback-policy/nginx.conf:rw",
+        ),
+    ):
+        compose_overlay.write_text(
+            canonical_overlay.replace(*replacement), encoding="utf-8"
+        )
+        with pytest.raises(
+            RegistryError,
+            match="scalar rollback init policy/source mounts are invalid",
+        ):
+            preflight_scalar_rollback_guard(
+                compose_base=compose_base,
+                compose_overlay=compose_overlay,
+                gateway_config=gateway_config,
+                native_launcher=REPO_ROOT / "scripts/scalar_rollback_native.sh",
+                rollback_vault_binding_id=registration.vault_binding_id,
+                selected_root=root,
+            )
+    compose_overlay.write_text(canonical_overlay, encoding="utf-8")
     compose_overlay.write_text(
         (REPO_ROOT / "docker-compose.scalar-rollback.yml")
         .read_text(encoding="utf-8")
@@ -310,6 +339,12 @@ def test_rollback_gateway_and_mounts_enforce_selected_binding(
         ),
         Loader=_ComposeLoader,
     )
+    rollback_init = rollback_compose["services"]["instance-state-init"]
+    assert set(rollback_init["volumes"]) == {
+        "./docker-compose.yaml:/run/scalar-rollback-policy/docker-compose.yaml:ro",
+        "./docker-compose.scalar-rollback.yml:/run/scalar-rollback-policy/docker-compose.scalar-rollback.yml:ro",
+        "./ops/scalar-rollback/nginx.conf:/run/scalar-rollback-policy/nginx.conf:ro",
+    }
     assert rollback_compose["services"]["api"]["environment"] | {
         "VAULT_ROOT": "/app/selected-vault",
         "VAULT_ROOT_DEV": "/app/selected-vault",

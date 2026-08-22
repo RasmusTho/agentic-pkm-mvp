@@ -7,7 +7,23 @@
 x-requires-explicit-full-host-vault: "${DEPLOY_VAULT_CONTAINER_ROOT:?DEPLOY_VAULT_CONTAINER_ROOT must be set for a full-host vault binding}"
 
 services:
+  # The deployment fence validates drained legacy-owner roots from inside the
+  # instance-state-init container. On Linux hosts the selected vault is an
+  # absolute host path outside /Users and /Volumes, so expose that same path
+  # to the fence controller as well as to the runtime consumers.
+  instance-state-init:
+    volumes:
+      - type: bind
+        source: ${DEPLOY_VAULT_CONTAINER_ROOT:?DEPLOY_VAULT_CONTAINER_ROOT must be set for a full-host vault binding}
+        target: ${DEPLOY_VAULT_CONTAINER_ROOT:?DEPLOY_VAULT_CONTAINER_ROOT must be set for a full-host vault binding}
+        read_only: true
+
   api:
+    volumes:
+      - type: bind
+        source: ${DEPLOY_VAULT_CONTAINER_ROOT:?DEPLOY_VAULT_CONTAINER_ROOT must be set for a full-host vault binding}
+        target: ${DEPLOY_VAULT_CONTAINER_ROOT:?DEPLOY_VAULT_CONTAINER_ROOT must be set for a full-host vault binding}
+        read_only: true
     environment:
       VAULT_ROOT: ${DEPLOY_VAULT_CONTAINER_ROOT:?DEPLOY_VAULT_CONTAINER_ROOT must be set for a full-host vault binding}
       VAULT_ROOT_DEV: ${DEPLOY_VAULT_CONTAINER_ROOT:?DEPLOY_VAULT_CONTAINER_ROOT must be set for a full-host vault binding}
@@ -15,6 +31,11 @@ services:
       WATCHER_VAULT_PATH: ${DEPLOY_VAULT_CONTAINER_ROOT:?DEPLOY_VAULT_CONTAINER_ROOT must be set for a full-host vault binding}
 
   worker:
+    volumes:
+      - type: bind
+        source: ${DEPLOY_VAULT_CONTAINER_ROOT:?DEPLOY_VAULT_CONTAINER_ROOT must be set for a full-host vault binding}
+        target: ${DEPLOY_VAULT_CONTAINER_ROOT:?DEPLOY_VAULT_CONTAINER_ROOT must be set for a full-host vault binding}
+        read_only: true
     environment:
       VAULT_ROOT: ${DEPLOY_VAULT_CONTAINER_ROOT:?DEPLOY_VAULT_CONTAINER_ROOT must be set for a full-host vault binding}
       VAULT_ROOT_DEV: ${DEPLOY_VAULT_CONTAINER_ROOT:?DEPLOY_VAULT_CONTAINER_ROOT must be set for a full-host vault binding}
@@ -22,6 +43,11 @@ services:
       WATCHER_VAULT_PATH: ${DEPLOY_VAULT_CONTAINER_ROOT:?DEPLOY_VAULT_CONTAINER_ROOT must be set for a full-host vault binding}
 
   watcher:
+    volumes:
+      - type: bind
+        source: ${DEPLOY_VAULT_CONTAINER_ROOT:?DEPLOY_VAULT_CONTAINER_ROOT must be set for a full-host vault binding}
+        target: ${DEPLOY_VAULT_CONTAINER_ROOT:?DEPLOY_VAULT_CONTAINER_ROOT must be set for a full-host vault binding}
+        read_only: true
     environment:
       VAULT_ROOT: ${DEPLOY_VAULT_CONTAINER_ROOT:?DEPLOY_VAULT_CONTAINER_ROOT must be set for a full-host vault binding}
       VAULT_ROOT_DEV: ${DEPLOY_VAULT_CONTAINER_ROOT:?DEPLOY_VAULT_CONTAINER_ROOT must be set for a full-host vault binding}
