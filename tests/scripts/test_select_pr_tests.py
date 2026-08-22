@@ -66,6 +66,23 @@ def test_briefing_change_selects_briefing_coverage() -> None:
     assert "tests/briefing" in selection.targets
 
 
+def test_archival_contract_change_selects_archival_coverage() -> None:
+    selection = select_tests(
+        [
+            "app/archival/contracts.py",
+            "docs/contracts/GOVERNED_ARCHIVAL_FLOW.md",
+            "tests/archival/test_contracts.py",
+            "tests/architecture/test_governed_archival_contract.py",
+        ]
+    )
+
+    assert selection.full_suite is False
+    assert "archival" in selection.subsystems
+    assert selection.unowned_paths == ()
+    assert "tests/archival" in selection.targets
+    assert "tests/architecture/test_governed_archival_contract.py" in selection.targets
+
+
 def test_instance_registry_change_selects_vault_coverage() -> None:
     selection = select_tests(
         ["app/instance/vault_registry.py", "tests/instance/test_vault_registry.py"]
