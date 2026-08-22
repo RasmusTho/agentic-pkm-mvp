@@ -1251,6 +1251,29 @@ class BuilderOpsVerificationLedger:
             "repair_budget": self.repair_budget_projection(run.run_id),
         }
 
+    def _verification_containment(
+        self, run: VerificationRun
+    ) -> dict[str, object] | None:
+        """Read containment from the durable current-head model attempt."""
+
+        candidates: builtins.list[dict[str, object]] = []
+        for attempt in self.attempts(run.run_id):
+            receipt = attempt.get("receipt")
+            if (
+                attempt.get("kind") == "verification"
+                and isinstance(receipt, Mapping)
+                and receipt.get("head_sha") == run.current_head_sha
+            ):
+                candidates.append(attempt)
+        if not candidates:
+            raise ValueError(
+                "merge readiness has no current-head verification attempt"
+            )
+        containment = candidates[-1].get("containment")
+        if containment is None:
+            return None
+        return validated_linux_containment_receipt(containment)
+
     def mark_merge_ready(
         self,
         run_id: str,
@@ -1273,6 +1296,16 @@ class BuilderOpsVerificationLedger:
             )
         lease = self._assert_lease(snapshot, holder, lease_id)
         document = dict(_snapshot_payload(snapshot))
+        expected_containment = self._verification_containment(run)
+        supplied_containment = (
+            validated_linux_containment_receipt(containment_receipt)
+            if containment_receipt is not None
+            else None
+        )
+        if supplied_containment != expected_containment:
+            raise ValueError(
+                "merge-ready containment does not match durable verification"
+            )
         merge_ready_receipt: dict[str, object] = {
             "contract": "builderops_merge_ready.v1",
             "run_id": run_id,
@@ -1282,10 +1315,8 @@ class BuilderOpsVerificationLedger:
             **self._merge_ready_authority(run),
             "coordinator_receipt": dict(receipt),
         }
-        if containment_receipt is not None:
-            merge_ready_receipt["containment"] = (
-                validated_linux_containment_receipt(containment_receipt)
-            )
+        if expected_containment is not None:
+            merge_ready_receipt["containment"] = expected_containment
         document["merge_ready_receipt"] = merge_ready_receipt
         self.client.transition_task(
             envelope=self.envelope,
@@ -1328,6 +1359,7 @@ class BuilderOpsVerificationLedger:
             key: marker.get(key)
             for key in expected
         }
+        expected_containment = self._verification_containment(run)
         allowed_keys = {
             "contract",
             "run_id",
@@ -1353,6 +1385,10 @@ class BuilderOpsVerificationLedger:
             raise ValueError("BuilderOps merge-ready receipt is malformed or stale")
         if "containment" in marker:
             validated_linux_containment_receipt(marker["containment"])
+        if marker.get("containment") != expected_containment:
+            raise ValueError(
+                "BuilderOps merge-ready containment is stale or substituted"
+            )
         return dict(marker)
 
     def pending_effect_binding(

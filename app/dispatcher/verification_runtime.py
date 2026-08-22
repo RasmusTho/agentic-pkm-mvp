@@ -248,6 +248,13 @@ class HostFencedVerificationCycle:
         pending = self.ledger.pending_effect_binding(run_id)
         merge_ready = self.ledger.merge_ready_receipt(run_id)
         if merge_ready is not None:
+            if (
+                self.containment_receipt_required
+                and "containment" not in merge_ready
+            ):
+                raise ValueError(
+                    "verification Linux containment evidence is unavailable"
+                )
             # A durable merge-ready marker means model work must not be
             # relaunched. Rebind every remaining effect and settlement to a
             # fresh task fence before touching the outbox.
@@ -300,13 +307,21 @@ class HostFencedVerificationCycle:
         self, run_id: str
     ) -> Mapping[str, object]:
         run = self.ledger.get(run_id)
+        merge_ready = self.ledger.merge_ready_receipt(run_id)
         if (
             run is None
             or run.lease_id is None
-            or self.ledger.merge_ready_receipt(run_id) is None
+            or merge_ready is None
         ):
             raise ValueError(
                 "verification cycle did not reach durable merge readiness"
+            )
+        if (
+            self.containment_receipt_required
+            and "containment" not in merge_ready
+        ):
+            raise ValueError(
+                "verification Linux containment evidence is unavailable"
             )
         merge_receipt = self.merge_executor.execute(
             run,

@@ -146,11 +146,13 @@ def test_host_cycle_projects_linux_containment_into_durable_receipt() -> None:
         LinuxVerifiedLauncher(),
         holder="verification-host",
     )
+    repository = RepositoryAuthority()
+    credentials = Credentials()
     runtime = HostFencedVerificationCycle(
         ledger,
         consumer,
         VerificationMergeExecutor(
-            ledger, outbox, RepositoryAuthority(), Credentials()
+            ledger, outbox, repository, credentials
         ),
         holder="verification-host",
         containment_receipt_required=True,
@@ -192,11 +194,13 @@ def test_linux_cycle_requires_containment_in_merge_ready_evidence() -> None:
         VerifiedLauncher(),
         holder="verification-host",
     )
+    repository = RepositoryAuthority()
+    credentials = Credentials()
     runtime = HostFencedVerificationCycle(
         ledger,
         consumer,
         VerificationMergeExecutor(
-            ledger, outbox, RepositoryAuthority(), Credentials()
+            ledger, outbox, repository, credentials
         ),
         holder="verification-host",
         containment_receipt_required=True,
@@ -214,6 +218,8 @@ def test_linux_cycle_requires_containment_in_merge_ready_evidence() -> None:
     recovered = ledger.get(run_id)
     assert recovered is not None
     assert recovered.status == "running"
+    assert repository.calls == []
+    assert credentials.calls == []
 
 
 def test_containment_receipt_validator_rejects_non_allowlisted_evidence() -> None:
