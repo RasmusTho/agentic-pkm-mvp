@@ -209,7 +209,11 @@ def relocate_raw_record(
         or volume_proof.mountpoint != archive_root
     ):
         raise ArchiveDegradedError("archive_mount_unavailable")
-    raw_store.configure_cold_archive_root(archive_root, verified_volume=volume_proof)
+    raw_store.configure_cold_archive_root(
+        archive_root,
+        verified_volume=volume_proof,
+        expected_archive_ref=archive_ref,
+    )
 
     objects, manifests = _ensure_archive_dirs(archive_root)
     hot = _active_hot(record.id)
