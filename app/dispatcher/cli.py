@@ -1214,8 +1214,8 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help=(
             "Required allowlisted whole-process-tree containment profile; "
-            "installed-main currently supports "
-            "darwin-launchd-resource-coalition-v1"
+            "installed-main supports darwin-launchd-resource-coalition-v1 "
+            "or linux-systemd-cgroup-v2-scope-v1"
         ),
     )
     p.add_argument("--json", action="store_true")

@@ -566,11 +566,29 @@ def select_verification_containment(
     *,
     platform: str = sys.platform,
     kernel: DarwinCoalitionKernel | None = None,
+    linux_kernel: Any | None = None,
+    linux_scope_name: str | None = None,
     current_pid: int | None = None,
     sleeper: Callable[[float], None] = time.sleep,
     monotonic: Callable[[], float] = time.monotonic,
-) -> Callable[[], DarwinLaunchdCoalitionContainment]:
-    """Preflight and return the one allowlisted production containment factory."""
+) -> Callable[[], Any]:
+    """Preflight and return an explicitly allowlisted containment factory."""
+
+    from app.dispatcher.linux_containment import (
+        LINUX_SYSTEMD_CGROUP_V2_SCOPE_PROFILE,
+        select_linux_verification_containment,
+    )
+
+    if profile == LINUX_SYSTEMD_CGROUP_V2_SCOPE_PROFILE:
+        if platform != "linux":
+            raise ValueError(
+                "verification containment profile is unsupported on this platform"
+            )
+        return select_linux_verification_containment(
+            kernel=linux_kernel,
+            scope_name=linux_scope_name,
+            sleeper=sleeper,
+        )
 
     if profile != DARWIN_LAUNCHD_COALITION_PROFILE:
         raise ValueError("verification containment profile is absent or unsupported")
