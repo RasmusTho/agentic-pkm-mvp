@@ -830,6 +830,8 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
             "tests/journaling",
             "tests/activation/test_journal_draft_activation.py",
             "tests/knowledge_compilation/test_proposal_builders.py",
+            "tests/proposals/test_declined_ledger.py",
+            "tests/cli/test_journaling_review_cli.py",
         ),
     ),
     (

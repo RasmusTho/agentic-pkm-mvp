@@ -108,6 +108,7 @@ class JournalReviewResult:
 class JournalReviewTickResult:
     scanned_dates: tuple[str, ...]
     results: tuple[JournalReviewResult, ...]
+    errors: tuple[str, ...] = ()
 
     @property
     def materialized(self) -> int:
@@ -283,6 +284,18 @@ def process_journal_review(
                 "journal candidate disappeared while its per-day lifecycle lock was held"
             ) from None
 
+        current_now = _aware_now(now)
+        if candidate.action is None and _candidate_expired(candidate, current_now):
+            return _dismiss_candidate(
+                candidate,
+                directory_fd=directory_fd,
+                canonical_rel=canonical_rel,
+                outbox_path=Path(outbox_path),
+                declined_ledger=declined_ledger or default_declined_ledger(),
+                write_guard=write_guard,
+                now=current_now,
+                reason="expired",
+            )
         if candidate.action is None:
             return _result(
                 state=JournalReviewState.NOT_YET_REVIEWED,
@@ -345,20 +358,27 @@ def process_journal_reviews_tick(
 
     dates = (only_date,) if only_date is not None else _candidate_dates(vault_context)
     receipt_path = outbox_path or default_journal_review_outbox_path()
-    results = tuple(
-        process_journal_review(
-            vault_context=vault_context,
-            for_date=for_date,
-            outbox_path=receipt_path,
-            declined_ledger=declined_ledger,
-            write_guard=write_guard,
-            now=now,
-        )
-        for for_date in dates
-    )
+    results_list: list[JournalReviewResult] = []
+    errors: list[str] = []
+    for for_date in dates:
+        try:
+            results_list.append(
+                process_journal_review(
+                    vault_context=vault_context,
+                    for_date=for_date,
+                    outbox_path=receipt_path,
+                    declined_ledger=declined_ledger,
+                    write_guard=write_guard,
+                    now=now,
+                )
+            )
+        except JournalReviewConflictError as exc:
+            errors.append(f"{for_date.isoformat()}: {exc}")
+    results = tuple(results_list)
     return JournalReviewTickResult(
         scanned_dates=tuple(item.isoformat() for item in dates),
         results=results,
+        errors=tuple(errors),
     )
 
 
@@ -576,6 +596,7 @@ def _dismiss_candidate(
     declined_ledger: DeclinedLedger,
     write_guard: WriteGuard,
     now: datetime,
+    reason: str = "human_dismissed",
 ) -> JournalReviewResult:
     # Reading/reconciling the receipt creates its lock file on first use, so
     # assert the shared decline action before any dismissal-owned filesystem
@@ -612,7 +633,7 @@ def _dismiss_candidate(
     durable_decline = declined_ledger.record_decline(
         finding_id,
         finding_class="journal.candidate",
-        reason="human_dismissed",
+        reason=reason,
         declined_at=timestamp,
         write_guard=write_guard,
     )
@@ -630,7 +651,7 @@ def _dismiss_candidate(
             "finding_id": finding_id,
             "candidate_type": candidate.candidate_type,
             "sources": list(_sources(candidate.frontmatter)),
-            "reason": "human_dismissed",
+            "reason": reason,
         },
     )
     _retire_candidate_if_unchanged(
@@ -1481,6 +1502,23 @@ def _sources(frontmatter: dict[str, Any]) -> tuple[str, ...]:
     if not isinstance(raw, list):
         return ()
     return tuple(str(item) for item in raw if str(item).strip())
+
+
+def _candidate_expired(candidate: _Candidate, now: datetime) -> bool:
+    raw_expires = candidate.frontmatter.get("expires")
+    if raw_expires is None:
+        return False
+    try:
+        expires = datetime.fromisoformat(str(raw_expires).replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise JournalReviewConflictError(
+            "journal candidate has an invalid expires timestamp"
+        ) from exc
+    if expires.tzinfo is None:
+        raise JournalReviewConflictError(
+            "journal candidate expires timestamp must carry a timezone"
+        )
+    return expires.astimezone(timezone.utc) <= now
 
 
 def _projection_state(action: str | None) -> tuple[JournalReviewState, str]:

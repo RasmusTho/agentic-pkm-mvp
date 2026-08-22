@@ -61,19 +61,20 @@ def _candidate_path(root: Path, *, addendum: bool = False) -> Path:
 def _stage_candidate(
     root: Path,
     *,
+    for_date: date = DAY,
     addendum: bool = False,
     body: str = "I reflected on the day from the generated draft.\n",
     accept_checked: bool = False,
     dismiss_checked: bool = False,
 ) -> Path:
-    path = _candidate_path(root, addendum=addendum)
+    path = root / journal_draft_relative_path(root, for_date, is_addendum=addendum)
     path.parent.mkdir(parents=True, exist_ok=True)
-    draft_id = f"journal-{DAY.isoformat()}{'-addendum' if addendum else ''}"
+    draft_id = f"journal-{for_date.isoformat()}{'-addendum' if addendum else ''}"
     frontmatter = {
         "uuid": draft_id,
         "kind": "journal-draft",
         "journal_candidate_type": "addendum" if addendum else "primary",
-        "for_date": DAY.isoformat(),
+        "for_date": for_date.isoformat(),
         "derived_by": "conversation",
         "authority_state": "proposal",
         "sources": ["session:session-abc", "Sources/capture-one.md"],
@@ -194,6 +195,64 @@ def test_dismiss_records_declined_ledger_entry(tmp_path: Path) -> None:
         project_journal_review(vault_context=_context(root), for_date=DAY).state
         is JournalReviewState.DISMISSED
     )
+
+
+def test_unreviewed_expired_candidate_is_declined_via_shared_ledger(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "vault"
+    root.mkdir()
+    candidate = _stage_candidate(root)
+    text = candidate.read_text(encoding="utf-8")
+    frontmatter, body = load_frontmatter(text)
+    frontmatter["expires"] = "2026-07-15T20:29:59Z"
+    candidate.write_text(dump_frontmatter(frontmatter, body), encoding="utf-8")
+    ledger = DeclinedLedger(tmp_path / "declined.jsonl")
+    outbox = tmp_path / "outbox.jsonl"
+
+    result = process_journal_review(
+        vault_context=_context(root),
+        for_date=DAY,
+        outbox_path=outbox,
+        declined_ledger=ledger,
+        write_guard=WriteGuard(lambda: {"state": "healthy"}),
+        now=NOW,
+    )
+
+    assert result.state is JournalReviewState.DISMISSED
+    assert result.action == "dismiss"
+    assert not candidate.exists()
+    rows = _outbox(outbox)
+    assert rows[-1]["payload"]["reason"] == "expired"
+
+
+def test_tick_isolates_one_conflicting_date_from_later_candidates(tmp_path: Path) -> None:
+    root = tmp_path / "vault"
+    root.mkdir()
+    conflicting = _stage_candidate(root)
+    conflict_text = conflicting.read_text(encoding="utf-8")
+    conflicting.write_text(
+        conflict_text.replace("- [ ] Accept", "- [x] Accept").replace(
+            "- [ ] Dismiss", "- [x] Dismiss"
+        ),
+        encoding="utf-8",
+    )
+    later = date(2026, 7, 16)
+    valid = _stage_candidate(root, for_date=later, accept_checked=True)
+    outbox = tmp_path / "outbox.jsonl"
+
+    tick = process_journal_reviews_tick(
+        vault_context=_context(root),
+        outbox_path=outbox,
+        write_guard=WriteGuard(lambda: {"state": "healthy"}),
+        now=NOW,
+    )
+
+    assert tick.scanned_dates == (DAY.isoformat(), later.isoformat())
+    assert len(tick.errors) == 1
+    assert tick.materialized == 1
+    assert not valid.exists()
+    assert conflicting.exists()
 
 
 def test_blocked_dismissal_mutates_no_receipt_or_ledger_surface(tmp_path: Path) -> None:
