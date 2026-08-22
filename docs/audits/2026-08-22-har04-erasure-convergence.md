@@ -42,6 +42,9 @@ memory governed path. Ordinary representation registration cannot delete identit
 
 - HAR-03 verified-volume startup and HAR-04 relocation bind `HEIMDAL_ARCHIVE_ROOT` only after the
   proof validates encryption, mount identity, archive id, and exact mountpoint.
+- The serving process performs the same verified-volume startup binding in its API lifespan after
+  restart; `HEIMDAL_ARCHIVE_ROOT` alone is never a resolver authority and cold reads fail closed
+  until that process-local binding exists.
 - Cold location binding, archive-root configuration, and cold representation registration all
   require the same issuer-gated `ArchiveVolumeReady` capability; direct raw-store calls cannot
   place or activate a cold copy under an arbitrary local path.
@@ -58,8 +61,9 @@ memory governed path. Ordinary representation registration cannot delete identit
   registration. Stale observations cannot authorize deletion because the receipt/tombstone and
   row locks are the authority.
 - PG schema preflight validates the reconciliation trigger function body, not just trigger name;
-  it requires the guarded UPDATE return path and rejecting exception path. Partial/pre-e2f3 or
-  semantically drifted schemas fail at the migration boundary before any erase state transition.
+  it requires the guarded UPDATE return path, immutable-column equality, monotonic removal-only
+  queue progress, and rejecting exception path. Partial/pre-e2f3 or semantically drifted schemas
+  fail at the migration boundary before any erase state transition.
 
 ## Prior findings and proof map
 

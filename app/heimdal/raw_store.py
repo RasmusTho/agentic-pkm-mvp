@@ -98,6 +98,7 @@ _COLD_STORAGE_KIND = "encrypted_local_cold"
 _LOCATION_REF_PREFIX = "heimloc:"
 _COLD_ARCHIVE_ROOT_ENV = "HEIMDAL_ARCHIVE_ROOT"
 _cold_location_paths: Dict[str, Path] = {}
+_verified_cold_archive_root: Path | None = None
 
 
 class RawStoreSchemaMissingError(RuntimeError):
@@ -165,18 +166,19 @@ def configure_cold_archive_root(
     if not archive_root.is_absolute():
         raise ValueError("cold archive root must be absolute")
     _require_verified_cold_volume(archive_root, verified_volume, expected_archive_ref)
+    global _verified_cold_archive_root
+    _verified_cold_archive_root = archive_root
     os.environ[_COLD_ARCHIVE_ROOT_ENV] = str(archive_root)
 
 
 def _resolve_cold_ciphertext(location_ref: str) -> bytes:
     object_path = _cold_location_paths.get(location_ref)
     if object_path is None:
-        root_value = os.environ.get(_COLD_ARCHIVE_ROOT_ENV, "")
         object_id = location_ref.rsplit(":", 1)[-1]
-        if root_value and Path(root_value).is_absolute() and re.fullmatch(
+        if _verified_cold_archive_root is not None and re.fullmatch(
             r"[0-9a-f-]{36}", object_id
         ):
-            object_path = Path(root_value) / "representations" / f"{object_id}.bin"
+            object_path = _verified_cold_archive_root / "representations" / f"{object_id}.bin"
     if object_path is None:
         raise RawRepresentationUnavailableError("cold representation resolver is unavailable")
     ciphertext: bytes | None = None
@@ -193,10 +195,9 @@ def _cold_object_path(location_ref: str) -> Path | None:
     object_path = _cold_location_paths.get(location_ref)
     if object_path is not None:
         return object_path
-    root_value = os.environ.get(_COLD_ARCHIVE_ROOT_ENV, "")
     object_id = location_ref.rsplit(":", 1)[-1]
-    if root_value and Path(root_value).is_absolute() and re.fullmatch(r"[0-9a-f-]{36}", object_id):
-        return Path(root_value) / "representations" / f"{object_id}.bin"
+    if _verified_cold_archive_root is not None and re.fullmatch(r"[0-9a-f-]{36}", object_id):
+        return _verified_cold_archive_root / "representations" / f"{object_id}.bin"
     return None
 
 
@@ -848,6 +849,8 @@ _MEMORY_STORE = _MemoryRawStore()
 def reset_memory_raw_store() -> None:
     """Test-only reset hook, mirroring the other memory-backend reset helpers."""
     _MEMORY_STORE.clear()
+    global _verified_cold_archive_root
+    _verified_cold_archive_root = None
     from app.heimdal.raw_liveness import reset_memory_raw_liveness
 
     reset_memory_raw_liveness()

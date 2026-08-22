@@ -42,13 +42,15 @@ _MIGRATION_HINT = (
     "database. See revision c5d8a1e4f2b7."
 )
 
-_RECEIPT_TRIGGER_GUARDED_UPDATE = re.compile(
-    r"^if\s+tg_op\s*=\s*'update'\s+and\s+current_setting\(\s*'"
-    + re.escape(_RETENTION_RECONCILE_GUARD_SETTING)
-    + r"'\s*,\s*true\s*\)\s*=\s*'true'\s+then\s+return\s+new\s*;\s*"
-    r"end\s+if\s*;\s*raise\s+exception\s+'heimdal_raw_deletion_receipt\s+"
-    r"is\s+append-only:\s+%\s+is\s+not\s+permitted',\s*tg_op\s*;\s*$",
-    re.IGNORECASE,
+_RECEIPT_TRIGGER_BODY = (
+    "if tg_op = 'update' and current_setting('app.heimdal_retention_reconcile', true) = 'true' "
+    "and new.id is not distinct from old.id and new.record_id is not distinct from old.record_id "
+    "and new.content_identity is not distinct from old.content_identity and new.reason is not distinct from old.reason "
+    "and new.retention_window_days is not distinct from old.retention_window_days "
+    "and new.deleted_at is not distinct from old.deleted_at and new.sequence is not distinct from old.sequence "
+    "and (new.payload - 'cold_cleanup_location_refs') is not distinct from (old.payload - 'cold_cleanup_location_refs') "
+    "and coalesce(old.payload->'cold_cleanup_location_refs', '[]'::jsonb) @> coalesce(new.payload->'cold_cleanup_location_refs', '[]'::jsonb) "
+    "then return new; end if; raise exception 'heimdal_raw_deletion_receipt is append-only: % is not permitted', tg_op;"
 )
 
 
@@ -59,7 +61,7 @@ def _receipt_trigger_is_migration_ready(function_def: str, trigger_def: str) -> 
     body_match = re.search(r"\bbegin\s+(.*?)\bend\s*;", normalized, re.IGNORECASE)
     body = body_match.group(1).strip() if body_match else ""
     return bool(
-        _RECEIPT_TRIGGER_GUARDED_UPDATE.fullmatch(body)
+        body == _RECEIPT_TRIGGER_BODY
         and re.fullmatch(
             r"create trigger heimdal_raw_deletion_receipt_no_update "
             r"before delete or update on (?:[a-z_][a-z0-9_]*\.)?heimdal_raw_deletion_receipt "
@@ -584,7 +586,18 @@ def _bootstrap_pg(conn: Any) -> None:
         RETURNS trigger AS $$
         BEGIN
             IF TG_OP = 'UPDATE'
-               AND current_setting('{_RETENTION_RECONCILE_GUARD_SETTING}', true) = 'true' THEN
+               AND current_setting('{_RETENTION_RECONCILE_GUARD_SETTING}', true) = 'true'
+               AND NEW.id IS NOT DISTINCT FROM OLD.id
+               AND NEW.record_id IS NOT DISTINCT FROM OLD.record_id
+               AND NEW.content_identity IS NOT DISTINCT FROM OLD.content_identity
+               AND NEW.reason IS NOT DISTINCT FROM OLD.reason
+               AND NEW.retention_window_days IS NOT DISTINCT FROM OLD.retention_window_days
+               AND NEW.deleted_at IS NOT DISTINCT FROM OLD.deleted_at
+               AND NEW.sequence IS NOT DISTINCT FROM OLD.sequence
+               AND (NEW.payload - 'cold_cleanup_location_refs')
+                   IS NOT DISTINCT FROM (OLD.payload - 'cold_cleanup_location_refs')
+               AND COALESCE(OLD.payload->'cold_cleanup_location_refs', '[]'::jsonb)
+                   @> COALESCE(NEW.payload->'cold_cleanup_location_refs', '[]'::jsonb) THEN
                 RETURN NEW;
             END IF;
             RAISE EXCEPTION 'heimdal_raw_deletion_receipt is append-only: % is not permitted', TG_OP;

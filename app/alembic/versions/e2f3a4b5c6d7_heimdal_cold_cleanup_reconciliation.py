@@ -19,7 +19,18 @@ def upgrade() -> None:
         RETURNS trigger AS $$
         BEGIN
             IF TG_OP = 'UPDATE'
-               AND current_setting('app.heimdal_retention_reconcile', true) = 'true' THEN
+               AND current_setting('app.heimdal_retention_reconcile', true) = 'true'
+               AND NEW.id IS NOT DISTINCT FROM OLD.id
+               AND NEW.record_id IS NOT DISTINCT FROM OLD.record_id
+               AND NEW.content_identity IS NOT DISTINCT FROM OLD.content_identity
+               AND NEW.reason IS NOT DISTINCT FROM OLD.reason
+               AND NEW.retention_window_days IS NOT DISTINCT FROM OLD.retention_window_days
+               AND NEW.deleted_at IS NOT DISTINCT FROM OLD.deleted_at
+               AND NEW.sequence IS NOT DISTINCT FROM OLD.sequence
+               AND (NEW.payload - 'cold_cleanup_location_refs')
+                   IS NOT DISTINCT FROM (OLD.payload - 'cold_cleanup_location_refs')
+               AND COALESCE(OLD.payload->'cold_cleanup_location_refs', '[]'::jsonb)
+                   @> COALESCE(NEW.payload->'cold_cleanup_location_refs', '[]'::jsonb) THEN
                 RETURN NEW;
             END IF;
             RAISE EXCEPTION 'heimdal_raw_deletion_receipt is append-only: % is not permitted', TG_OP;
