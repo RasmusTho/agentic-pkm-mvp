@@ -98,22 +98,32 @@ class LivenessState(str, Enum):
     REFUSED = "refused"
 
 
-def _looks_like_location(value: str) -> bool:
-    normalized = value.strip()
-    return (
-        "/" in normalized
-        or "\\" in normalized
-        or normalized.startswith("~")
-        or bool(re.match(r"^[A-Za-z]:", normalized))
-        or bool(re.match(r"^[A-Za-z][A-Za-z0-9+.-]*:", normalized))
-    )
+_OPAQUE_NAMESPACE = re.compile(r"^[a-z][a-z0-9_-]*$")
+_OPAQUE_TOKEN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 
 
-def _require_opaque(value: str, field_name: str) -> str:
-    if not isinstance(value, str) or not value.strip():
-        raise ValueError(f"{field_name} must be a non-empty opaque reference")
-    if _looks_like_location(value):
-        raise ValueError(f"{field_name} must be opaque; location text cannot mint authority")
+def _require_token(value: str, field_name: str) -> str:
+    if not isinstance(value, str) or not _OPAQUE_NAMESPACE.fullmatch(value):
+        raise ValueError(f"{field_name} must be an opaque token")
+    return value
+
+
+@dataclass(frozen=True)
+class OpaqueReference:
+    """A typed owner-native handle; common types never parse location text."""
+
+    namespace: str
+    token: str
+
+    def __post_init__(self) -> None:
+        _require_token(self.namespace, "opaque reference namespace")
+        if not isinstance(self.token, str) or not _OPAQUE_TOKEN.fullmatch(self.token):
+            raise ValueError("opaque reference token must not contain location text")
+
+
+def _require_opaque_reference(value: OpaqueReference, field_name: str) -> OpaqueReference:
+    if not isinstance(value, OpaqueReference):
+        raise ValueError(f"{field_name} must be a typed opaque reference, not location text")
     return value
 
 
@@ -122,15 +132,15 @@ class ArtifactIdentity:
     """An owner-native identity, not a generated global archive identifier."""
 
     owner: OwnerAuthority
-    owner_native_id: str
+    owner_native_id: OpaqueReference
     owner_namespace: str | None = None
 
     def __post_init__(self) -> None:
-        _require_opaque(self.owner_native_id, "owner_native_id")
+        _require_opaque_reference(self.owner_native_id, "owner_native_id")
         if self.owner is OwnerAuthority.CLASS_ADAPTER:
             if self.owner_namespace is None:
                 raise ValueError("class-adapter identity requires an owner namespace")
-            _require_opaque(self.owner_namespace, "owner_namespace")
+            _require_token(self.owner_namespace, "owner_namespace")
         elif self.owner_namespace is not None:
             raise ValueError("owner_namespace is only valid for class-adapter identities")
 
@@ -140,11 +150,11 @@ class RepresentationRef:
     """Opaque adapter handle; only the owner adapter resolves it."""
 
     adapter: str
-    opaque_id: str
+    opaque_id: OpaqueReference
 
     def __post_init__(self) -> None:
-        _require_opaque(self.adapter, "adapter")
-        _require_opaque(self.opaque_id, "opaque_id")
+        _require_token(self.adapter, "adapter")
+        _require_opaque_reference(self.opaque_id, "opaque_id")
 
 
 @dataclass(frozen=True)
@@ -152,10 +162,10 @@ class AccessAuthority:
     """A GOV or owner-issued grant; a mount, path, or URL cannot substitute for it."""
 
     issuer: OwnerAuthority
-    grant_ref: str
+    grant_ref: OpaqueReference
 
     def __post_init__(self) -> None:
-        _require_opaque(self.grant_ref, "grant_ref")
+        _require_opaque_reference(self.grant_ref, "grant_ref")
 
 
 @dataclass(frozen=True)
@@ -172,11 +182,11 @@ class Generation:
 @dataclass(frozen=True)
 class ProvenanceRef:
     kind: str
-    reference: str
+    reference: OpaqueReference
 
     def __post_init__(self) -> None:
-        _require_opaque(self.kind, "provenance kind")
-        _require_opaque(self.reference, "provenance reference")
+        _require_token(self.kind, "provenance kind")
+        _require_opaque_reference(self.reference, "provenance reference")
 
 
 @dataclass(frozen=True)
@@ -204,10 +214,10 @@ class Liveness:
     """Typed result that prevents partial cleanup from being reported as terminal success."""
 
     state: LivenessState
-    evidence_ref: str
+    evidence_ref: OpaqueReference
 
     def __post_init__(self) -> None:
-        _require_opaque(self.evidence_ref, "liveness evidence_ref")
+        _require_opaque_reference(self.evidence_ref, "liveness evidence_ref")
 
     @property
     def is_terminal(self) -> bool:
@@ -228,10 +238,10 @@ class RepresentationReservation:
     artifact: ArtifactIdentity
     target: RepresentationRef
     generation: Generation
-    reservation_ref: str
+    reservation_ref: OpaqueReference
 
     def __post_init__(self) -> None:
-        _require_opaque(self.reservation_ref, "reservation_ref")
+        _require_opaque_reference(self.reservation_ref, "reservation_ref")
 
 
 @dataclass(frozen=True)
@@ -239,17 +249,17 @@ class VerificationResult:
     representation: RepresentationRef
     generation: Generation
     verified: bool
-    evidence_ref: str
+    evidence_ref: OpaqueReference
 
     def __post_init__(self) -> None:
-        _require_opaque(self.evidence_ref, "verification evidence_ref")
+        _require_opaque_reference(self.evidence_ref, "verification evidence_ref")
 
 
 @dataclass(frozen=True)
 class ArchivalReceipt:
     """Redacted transition evidence that cannot replace owner-native state."""
 
-    receipt_ref: str
+    receipt_ref: OpaqueReference
     artifact: ArtifactIdentity
     generation: Generation
     stage: TransitionStage
@@ -260,7 +270,7 @@ class ArchivalReceipt:
     redacted: bool = True
 
     def __post_init__(self) -> None:
-        _require_opaque(self.receipt_ref, "receipt_ref")
+        _require_opaque_reference(self.receipt_ref, "receipt_ref")
         if not self.redacted:
             raise ValueError("archival receipts must be redacted")
 
@@ -273,11 +283,11 @@ class DoctorFinding:
     artifact: ArtifactIdentity | None
     representation: RepresentationRef | None
     liveness: Liveness
-    evidence_ref: str
+    evidence_ref: OpaqueReference
 
     def __post_init__(self) -> None:
-        _require_opaque(self.code, "doctor finding code")
-        _require_opaque(self.evidence_ref, "doctor finding evidence_ref")
+        _require_token(self.code, "doctor finding code")
+        _require_opaque_reference(self.evidence_ref, "doctor finding evidence_ref")
 
 
 class ArchivalAdapter(Protocol):

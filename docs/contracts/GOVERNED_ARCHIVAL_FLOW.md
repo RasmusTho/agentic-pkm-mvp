@@ -19,8 +19,9 @@ This contract MUST NOT create a central archive authority, registry, or store. H
 
 `app.archival.contracts` defines the following provider-free values:
 
-- `ArtifactIdentity` is an opaque owner-native identity, never a generated universal archive ID. A class-adapter identity carries its concrete adapter namespace, so equal native IDs from different adapters cannot collide.
-- `RepresentationRef` is an opaque adapter-local resolver handle. A filesystem path, mount, URL, manifest location, or object key is not an identity, representation reference, or access grant.
+- `OpaqueReference` carries a separately typed owner namespace and opaque token. Common values never parse a string into a reference, so a filesystem path, mount, URL, manifest location, object key, or bare filename is not an identity, representation reference, provenance reference, access grant, receipt, or liveness evidence. Owner adapters map their existing native handles into these two fields without exposing a location.
+- `ArtifactIdentity` is an owner-native identity using an `OpaqueReference`, never a generated universal archive ID. A class-adapter identity carries its concrete adapter namespace, so equal native IDs from different adapters cannot collide.
+- `RepresentationRef` is an adapter-local resolver handle using an `OpaqueReference`.
 - `ArtifactDescriptor` keeps artifact class (`source`, `human`, `derived`, `receipt`), derivation, durability, authoritative owner, generation, provenance references, and policy profile separate.
 - `Liveness` reports typed active, pending, stale, missing, erased, or refused state. Only verified terminal physical outcome may project `erased`.
 - `ArchivalReceipt` is redacted transition evidence. It cannot replace HKA artifact state, SIP identity, GOV policy/receipt authority, PDM representation state, or DRI rebuild lineage.
