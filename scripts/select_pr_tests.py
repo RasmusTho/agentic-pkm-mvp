@@ -231,6 +231,12 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
         (
             "app/builderops/",
             "app/dispatcher/",
+            # The TARS inventory boundary is Builder System/CES machinery.
+            # It carries an inventory-only PVE token and its direct proof
+            # lives in tests/proxmox; leaving this new app prefix unowned
+            # fails the required selector before its deny-before-HTTP tests
+            # can run.
+            "app/proxmox/",
             # Static Builder surfaces (signboard, cockpit) render dispatcher/
             # BuilderOps state; their regressions live in tests/dispatcher and
             # tests/builderops. companion_ui co-owns this prefix because the
@@ -238,6 +244,7 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
             "app/web/",
             "tests/builderops/",
             "tests/dispatcher/",
+            "tests/proxmox/",
             "tests/governance/",
             # BuilderOps store-access inventory fitness. Keep this exact file
             # owned without widening builder_system to all architecture tests.
@@ -262,6 +269,7 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
         (
             "tests/builderops",
             "tests/dispatcher",
+            "tests/proxmox",
             "tests/governance",
             "tests/architecture/test_builderops_store_boundary.py",
             "tests/architecture/test_pr_hot_path_governance.py",
