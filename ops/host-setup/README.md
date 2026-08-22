@@ -1,17 +1,22 @@
-# Yggdrasil two-box host setup
+# Yggdrasil Ollama host setup
 
-Turn a base **Mac mini** (always-on core) + your **Windows gaming PC** (burst
-inference) + a **MacBook Air** (thin client) into the local-first host for
-Yggdrasil — with LLM routing that **prefers the gaming GPU when it's idle and
-backs off the moment you start a game**.
+State: Legacy host-setup reference; product runtime deployment is owned by `docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md`.
+
+**Current boundary (2026-08-22): the Mac mini is Ollama-only.** Do not install or run the Yggdrasil
+API, database, worker, watcher, Companion UI, or gateway on it. Product runtime belongs on the new
+Linux/Tailscale `ygg-dev`, `ygg-test`, and `ygg-prod` hosts. The playbooks below predate that split and
+must not be treated as a live deployment procedure until they are reconciled with the new host handoff.
+
+The remaining supported purpose of this setup is to provide optional Ollama capacity to the product
+runtime over the private Tailscale network.
 
 ```
             Tailscale (private, MagicDNS)
-  MacBook Air ──────── Mac mini ──────── Gaming PC (Windows)
-  thin client          ALWAYS-ON         BURST INFERENCE
-  Screen Share/SSH     • runtime         • Ollama (fast MoE)
-  Moonlight            • Ollama 8B+embed • gpu-warden (/status)
-                       • llm-gateway ◀──── routes here when GPU is free
+  MacBook Air ──────── ygg-dev / ygg-test / ygg-prod
+  thin client          Linux product runtime hosts
+       │                         │
+       └──── Tailscale ──── Mac mini Ollama-only
+                              (optional Gaming PC Ollama)
 ```
 
 ## The whole operator process
@@ -22,27 +27,23 @@ each box does the rest by reading that box's playbook.
 1. **Install Tailscale on all three machines** and sign in to the same account.
    Enable **MagicDNS** in the Tailscale admin so `mac-mini` / `gaming-pc` resolve
    by name.
-2. **Install Claude Code (or Codex) on the Mac mini and the gaming PC**, and clone
-   this repo on each (the mini probably already has it).
-3. **Edit `ops/host-setup/config.env` once** (copy it from `config.example.env`):
+2. **Edit `ops/host-setup/config.env` once** (copy it from `config.example.env`):
    set `MAC_MINI_HOST`, `GAMING_PC_HOST`, and — on the gaming side —
    `WARDEN_GAME_PROCESSES` to your games' `.exe` names. Defaults for ports/models
    are fine.
-4. **On the gaming PC**, open the agent and paste:
+3. **On the gaming PC**, open the agent and paste:
    > Set up this machine. Read and execute `ops/host-setup/gaming-pc/AGENT_PLAYBOOK.md`.
-5. **On the Mac mini**, open the agent and paste:
-   > Set up this machine. Read and execute `ops/host-setup/mac-mini/AGENT_PLAYBOOK.md`.
-6. **On the MacBook Air**, follow `ops/host-setup/macbook-air/AGENT_PLAYBOOK.md`
+4. **On the MacBook Air**, follow `ops/host-setup/macbook-air/AGENT_PLAYBOOK.md`
    (mostly just Tailscale + connection shortcuts — no services).
 
-That's it. After step 5 the mini is serving the prosthesis 24/7 and routing chat
-to the gaming PC whenever it's free.
+The product hosts are separate from this optional inference setup. They must be
+deployed and verified through the governed deployment handoff.
 
 ## What each playbook does
 
 | Machine | Role | Installs |
 |---|---|---|
-| `mac-mini/` | always-on core | Ollama (`nomic-embed-text` + `llama3.1:8b`), `llm-gateway` (launchd), wires Yggdrasil's `OLLAMA_URL` |
+| `mac-mini/` | Ollama-only model host | Ollama (`nomic-embed-text` + `llama3.1:8b`); no product runtime or gateway |
 | `gaming-pc/` | burst inference | Ollama (`gpt-oss:20b`), `gpu-warden` (Scheduled Task) |
 | `macbook-air/` | thin client | nothing — Tailscale + Screen Sharing / Moonlight |
 

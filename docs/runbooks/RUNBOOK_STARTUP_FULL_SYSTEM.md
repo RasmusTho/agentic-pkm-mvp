@@ -8,6 +8,14 @@ Reading note:
 - not the full target-state architecture,
 - and not a claim that the current compose/runtime wiring is the permanent system decomposition.
 
+## New-host boundary (verified 2026-08-22)
+
+This runbook's `make` and Compose commands operate the local fallback runtime. They do not deploy or
+verify the new Linux/Tailscale hosts. The Mac mini is reserved for Ollama/model serving only. Do not
+use the old Mac mini `pkm-*` containers, or a local Compose health check, as evidence for promotion to
+the new `ygg-dev`, `ygg-test`, or `ygg-prod` runtime. Promotion requires the exact-host deployment
+handoff and a durable test verification receipt.
+
 ## Concept map: startup vs verification vs promotion vs rollback
 
 These are four separate operations with different goals, risks, and rollback surfaces. Do not conflate them.

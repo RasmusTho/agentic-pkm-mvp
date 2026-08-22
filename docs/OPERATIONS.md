@@ -1,11 +1,12 @@
-State: SoT v5.5 Reality-MVP baseline locked; v5.6 delivery line closed; this is the top-level operations entrypoint for the current runtime while v6.0 seams are shipped in bounded form and broader v6.1+ consumption remains planned.
+State: SoT v5.5 Reality-MVP baseline locked; v5.6 delivery line closed; this is the top-level operations entrypoint for the current runtime while v6.0 seams are shipped in bounded form and broader v6.1+ consumption remains planned. The live host split was re-verified on 2026-08-22: Mac mini is Ollama-only and product runtime belongs on the new Linux/Tailscale hosts.
 Doc role: Core SoT
 Authority: Top-level operator guidance for the current runtime; delegates specialized operational detail to linked companion docs but remains the main operational entrypoint.
 Owner: Runtime / operator playbook
 Temporal class: operational
 Review cadence: event-driven
 Source of truth: mixed
-Last reviewed: 2026-07-29
+Last reviewed: 2026-08-22
+Last live runtime verification: 2026-08-22 (see `docs/ENVIRONMENTS.md`)
 Last verified against: docs/STATUS.md, docs/ARCHITECTURE.md, docs/ROADMAP.md, docs/HEALTH.md, docs/INFRASTRUCTURE.md, docs/ENVIRONMENTS.md, docs/OBSERVABILITY.md, docs/ASK_PROVENANCE_MANIFEST/README.md, docs/CONTEXTUAL_RELEVANCE_ENGINE/README.md, app/agent_memory/ask_provenance_manifest.py, app/relevance/now_surface.py, tests/agent_memory/test_ask_provenance_manifest.py, tests/relevance/test_vault_native_moments.py, Makefile, docker-compose.test.yml, docker-compose.legacy-vault.yml, docker-compose.test-vault.yml, scripts/start_full_system.sh, scripts/verify_runtime_stack.sh, merged PRs #1948/#1977/#2115/#2119/#2127/#2128/#2129/#2131/#2135/#2140/#2142, and current repo state on 2026-07-15
 # Operations Playbook
 
@@ -374,7 +375,8 @@ Companion docs:
   operator-visible failures rather than generic vault setup prompts.
 - Companion TTS is a local-first runtime surface: configured local voices can be selected for clean
   Markdown read-back, mixed-language segments may route to different voices, and production
-  deployment still depends on the Mac mini/local model health path.
+  deployment depends on an explicitly configured, Tailscale-reachable external Ollama endpoint; the
+  Mac mini is model-serving infrastructure only.
 - Governed channel deploys obtain `TTS_ENABLED` and `TTS_HOST_ROOT` only from the selected generated
   runtime-env snapshot. The canonical exporter publishes that file atomically; deploy preflight
   fail-closes unreadable, malformed, duplicate, or invalid enabled configuration before migration,

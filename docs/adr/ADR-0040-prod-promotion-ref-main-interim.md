@@ -1,4 +1,8 @@
 State: Accepted (operator decision, 2026-06-29). Records the interim prod promotion ref and the reproducibility invariant that backs it. The gated `stable` model in docs/RELEASE_CHANNELS/README.md §"Promotion contract" is unchanged and remains the target; this ADR does not relax it.
+Applicability note (2026-08-22): this ADR remains the decision record for the legacy/local Compose
+promotion baseline. The observed move of runtime services toward new Linux/Tailscale hosts does not
+supersede it, because no authoritative remote deployment path, immutable artifact identity, or live
+test channel has been established yet. A new ADR is required when that promotion authority is chosen.
 Doc role: Decision record (ADR)
 Authority: Authoritative for the *decision* that prod tracks `main` as the interim promotion ref, that `origin/stable` is dormant and must not be treated as the prod source-of-truth until restored, and that the prod runtime must equal the promotion ref with a clean working tree (reproducible from git alone). Channel identity, isolation invariants, and the target four-phase gated promotion contract remain owned by `docs/RELEASE_CHANNELS/README.md`; this ADR reconciles that doc with prod reality and points at it, it does not redefine it.
 Owner: Release channels / deployment governance

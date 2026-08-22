@@ -5,10 +5,26 @@ Doc role: Core SoT (deployment)
 Authority: Canonical deployment + environment-separation contract. `docs/ENVIRONMENTS.md` owns environment *selection* and *path scoping* (what data/config each channel touches); `docs/RELEASE_CHANNELS/README.md` owns *channel identity, per-channel DB isolation, promotion-plan contract, migration reversibility classification, and rollback semantics*. `docs/YGGDRASIL_PLATFORM_AND_OPERATIONS_SYSTEM/README.md` owns the target ecosystem boundary for the operational platform; it does not replace this current deployment contract. This document owns *how a deploy physically happens*: image build/promote, managed gateways, deploy/rollback runbook, health gates, and the proxy-trust topology. Operations, runbooks, and component docs should reference this document instead of restating deployment procedure.
 Temporal class: operational
 Review cadence: as deployment topology, build pipeline, or channel ports change
-Last reviewed: 2026-07-19
+Last reviewed: 2026-08-22
+Last live runtime verification: 2026-08-22 (new-host topology; no authoritative SSH/deploy path was available from this workstation)
 Last verified against: `docker-compose.yaml`, `docker-compose.{dev,test,prod}.yml`, `docker-compose.{full-host-vault,legacy-vault,test-vault}.yml`, `Makefile`, `Dockerfile`, `scripts/lib/companion_ui_startup.sh`, `scripts/lib/instance_ownership_host_state.sh`, `companion-ui/companion-app/companion_ui/workspace/serve_dev_page.py`, `serve_production_page.py`, `app/auth.py`, `app/version.py`, `app/api/routes/health_contract.py`, `app/activation/ask_synthesis.py`
 
 ## Why this document exists
+
+## Current live runtime posture
+
+The intended live split is now: Mac mini for Ollama only, and the product runtime on isolated Linux
+hosts reached through Tailscale. On 2026-08-22, `ygg-dev` served API `:18001` and UI `:8111`,
+`ygg-prod` served API liveness on `:18000` while its UI `:8113` was unavailable, and no `ygg-test`
+host or endpoint was available. Dev and prod both reported `git_sha=unknown`; prod functional health
+was failing because the watcher was stale/paused and the worker had no heartbeat. These observations
+are the current baseline and do not prove a deployable promotion chain.
+
+The repository does not yet contain an authoritative deployment/startup handoff for these new hosts,
+and this workstation has no usable SSH/deploy authority for them. Do not use the old Mac mini Compose
+projects or the local Compose matrix below as evidence for the new-host runtime. The required sequence
+remains exact candidate identity → dev verification → test deployment and verification → prod promotion
+and verification.
 
 RCA on 2026-06-29 (BuilderOps LearningSignal `lrn_20260629093241_59713bc1`) found that the system had **no deployment source-of-truth**. The observed reality:
 
@@ -27,9 +43,12 @@ This document is the canonical spec that epic #2655 (deployment + environment-se
 
 ## Environment matrix
 
-Three channels run in parallel on one host: `dev`, `test`, `prod`. They are isolated by DB name, vault binding, ports, and runtime-artifact paths — see `docs/ENVIRONMENTS.md` for the environment-selection contract these values implement.
+The contract spans three channels: `dev`, `test`, and `prod`. The local Compose fallback can run them in
+parallel on one host; the intended live topology assigns them to isolated Linux/Tailscale hosts. They
+are isolated by DB name, vault binding, ports, and runtime-artifact paths — see `docs/ENVIRONMENTS.md`
+for the environment-selection contract these values implement.
 
-### Current reality (verified 2026-07-06)
+### Local Compose fallback matrix (verified 2026-07-06; not the live Product Runtime)
 
 | Surface | dev | test | prod |
 | --- | --- | --- | --- |

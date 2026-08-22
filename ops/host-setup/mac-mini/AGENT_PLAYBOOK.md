@@ -1,9 +1,10 @@
 # Agent Playbook — Mac mini (macOS)
 
-You are a coding agent (Claude Code / Codex) running on the Mac mini. Set this
-machine up as the **always-on core**: Ollama (embeddings + small chat) + the
-gaming-aware `llm-gateway`, and point the Yggdrasil runtime at the gateway.
-Work top to bottom; stop and report if a step fails.
+You are an operator or host agent running on the Mac mini. The Mac mini is
+**Ollama-only**: install and verify Ollama/model serving, but do not install or
+start the Yggdrasil API, database, worker, watcher, Companion UI, or gateway.
+Those product-runtime services belong on the new Linux/Tailscale hosts. Work
+top to bottom; stop and report if a step fails.
 
 ## Preconditions (the operator did these by hand)
 - Tailscale installed and signed in (same tailnet as the gaming PC + Air).
@@ -15,36 +16,20 @@ Work top to bottom; stop and report if a step fails.
    `config.example.env`). Set `GAMING_PC_HOST` to the gaming PC's Tailscale name
    (`tailscale status` lists peers). Keep `EMBED_MODEL` as-is — it is pinned here.
 
-2. **Run the installer:** `bash ops/host-setup/mac-mini/install.sh`
-   It installs Ollama, pulls `nomic-embed-text` + `llama3.1:8b`, creates the
-   gateway venv, and loads the `com.yggdrasil.llm-gateway` launchd service.
+2. **Install and verify Ollama only.** The existing `install.sh` also provisions
+   the legacy gateway and is not an approved live-runtime installer for this
+   topology. Until that script is split, install Ollama and pull the approved
+   models through the normal host package flow without running the legacy gateway
+   setup.
 
-3. **Verify the gateway:**
-   `curl -sS http://127.0.0.1:11500/healthz` → JSON. Check `gaming` is the
-   expected host and `gaming_available` reflects reality (start a game on the PC
-   and confirm it flips to `false`).
+3. **Verify Ollama only:** confirm the Ollama service is reachable on its
+   operator-approved host endpoint and that the approved models are present.
+   Do not verify or start the legacy gateway; it is not part of the Mac mini
+   runtime boundary anymore.
 
-4. **Wire Yggdrasil.** In the runtime's env (`.env` / `.env.<channel>.local`), set:
-   ```
-   LLM_PROVIDER=ollama
-   OLLAMA_URL=http://127.0.0.1:11500     # the gateway, not Ollama directly
-   OLLAMA_EMBED_MODEL=nomic-embed-text:latest
-   LLM_MODEL=llama3.1:8b
-   ```
-   Do **not** also set `OLLAMA_URL` to the raw `:11434` anywhere — everything must
-   go through the gateway so the embedding-identity pin and routing hold.
-
-5. **Start / restart the stack** the usual way (`make start` or
-   `scripts/start_full_system.sh`) and confirm `/api/health` reports the llm
-   router healthy and embeddings compatible (no rebuild required).
-
-6. **End-to-end check:** with a game NOT running, send a chat through Yggdrasil
-   (e.g. `/api/ask` or a panel action) and confirm via the gateway log
-   (`/tmp/yggdrasil-llm-gateway.log`) that it routed to the gaming host; start a
-   game and confirm the next chat stays local.
-
-7. **Report** to the operator: gateway `/healthz`, the env you set, and the
-   routed-vs-local check result.
+4. **Report only the Ollama endpoint and model inventory** to the operator. The
+   product-runtime host must later configure its explicit Tailscale-reachable
+   endpoint; do not start a local Yggdrasil stack from this playbook.
 
 ## BuilderOps Model Inquiry host entrypoints
 

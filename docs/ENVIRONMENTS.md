@@ -5,7 +5,8 @@ Doc role: Core SoT
 Authority: Canonical environment contract for the current baseline and forward-line work; defines what `dev`, `test`, and `prod` mean, what must remain invariant, and what may vary. Architecture, operations, testing, status, and component docs should reference this document instead of restating environment policy. Release-channel semantics (channel identity, DB-per-channel, promotion, rollback) are owned by `docs/RELEASE_CHANNELS/README.md`.
 Temporal class: operational
 Review cadence: as environment/channel posture changes
-Last reviewed: 2026-07-18
+Last reviewed: 2026-08-22
+Last live runtime verification: 2026-08-22 (Tailscale hosts `ygg-dev` and `ygg-prod`; `ygg-test` was not present/reachable)
 Last verified against: docs/RELEASE_CHANNELS/README.md, docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md, docker-compose.full-host-vault.yml, scripts/lib/deploy_channel_compose.sh, docs/STATUS.md (§Cognitive Expansion — activation status), ops/promotions/2026-06-13-cc3ce65d.md
 
 ## Overview
@@ -17,6 +18,23 @@ The purpose of this document is to make environment boundaries explicit and ensu
 Reading rule:
 - Use this document when a change touches environment-specific behavior, storage boundaries, runtime topology, write safety, rollout posture, or local bootstrap expectations.
 - Use `docs/ARCHITECTURE.md` for system structure, `docs/OPERATIONS.md` for operator procedure, `docs/TESTING.md` for verification layers, and `docs/STATUS.md` for current rollout posture.
+
+## Current live runtime topology
+
+The live product runtime is now intended to run on the new Linux/Tailscale hosts. The Mac mini is an
+Ollama/model host only; its legacy `pkm-*` Compose stacks are not evidence that the product runtime is
+deployed there. The following is the verified live baseline as of 2026-08-22:
+
+| Environment | Live endpoint evidence | Current state | Artifact identity |
+| --- | --- | --- | --- |
+| `dev` (`ygg-dev`) | API `:18001` and Companion UI `:8111` respond | API required checks pass, but runtime is degraded: watcher paused and two dead-lettered events; LLM provider is `mock` | `/version` reports `git_sha=unknown`, `built_at` empty |
+| `test` | No `ygg-test` peer or reachable test API/UI endpoint was found | Not deployed/available for staged verification | No candidate identity available |
+| `prod` (`ygg-prod`) | API liveness `:18000` responds; UI `:8113` unavailable | Functional health is failing: stale/paused watcher and no worker heartbeat | `/version` reports `git_sha=unknown`, `built_at` empty |
+
+This table is runtime evidence, not a replacement for the environment contract below. Promotion is
+blocked until the new host deployment path is authoritative, the candidate has an exact immutable
+identity, `test` is reachable, and the test verification receipt is green. Until then, local Compose
+commands are a fallback for development/testing only and must not be reported as promotion evidence.
 
 ## Vault terminology
 
@@ -341,28 +359,18 @@ Environment separation MUST be explicit across the following surfaces.
 
 <a id="prod-ollama-topology"></a>
 
-### Production Ollama topology
+### Ollama topology
 
-Production's API and worker use the `ollama` service in the `pkm-prod` Compose project at
-`http://ollama:11434`. The production overlay starts that service before API/worker readiness and
-does **not** publish port `11434` to the macOS host. This avoids relying on
-`host.docker.internal` and prevents a collision with any host-local Ollama process.
+The live host boundary reserves the Mac mini for Ollama/model serving only. The product runtime must
+reach that service through an explicitly configured Tailscale-reachable endpoint; it must not assume a
+co-resident Compose sidecar, `host.docker.internal`, or a local `ollama` service name on the Linux
+runtime host. The exact endpoint, authentication posture, model inventory, and embedding identity are
+deployment inputs that still require host-side qualification.
 
-The provider cache is the project-scoped `pkm-prod_ollama` volume inherited from the base Compose
-file. It is persistent across normal recreate/redeploy operations, but Compose never downloads a
-model implicitly. Before enabling Ollama-backed work, the operator must confirm that this cache
-contains the configured models — currently `nomic-embed-text:latest` (768 dimensions) and the
-configured chat model — without changing the existing embedding provider/model/dimension identity.
-
-The Mac mini's shared Colima budget remains 4 GB. A sidecar restores transport; it does not make
-the co-resident embedding and chat models fit more memory. Keep embedding work serial and do not
-start a rebuild or download models as part of a transport-only redeploy. Inspect model/cache disk
-usage and the running container memory before any later rebuild.
-
-To roll back this topology, redeploy the previous committed production revision (where the
-production API/worker point at the prior provider route) using the same `pkm-prod` project. The
-named cache volume is preserved; do not remove it unless an operator intentionally accepts losing
-the cached models.
+The local Compose overlays retain an Ollama sidecar as a fallback for local development/testing. That
+fallback is not the live production topology and its project-scoped cache is not evidence that the Mac
+mini or a new Linux host has the required models. Never change the provider/model/dimension identity or
+start a rebuild/download as part of a transport-only runtime repair.
 
 ## Runtime Control Surface
 

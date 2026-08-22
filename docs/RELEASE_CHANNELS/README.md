@@ -18,12 +18,26 @@ Doc role: Core SoT for the release-channels capability
 Owner: `docs/ROADMAP.md`
 Temporal class: strategic
 Review cadence: biweekly
-Last reviewed: 2026-06-29
+Last reviewed: 2026-08-22
+Last live runtime verification: 2026-08-22 (new-host topology; `ygg-test` unavailable)
 Last verified against: docs/ENVIRONMENTS.md, docs/ARCHITECTURE.md, docs/STATUS.md, docs/OPERATIONS.md, docs/DB_SCHEMA.md, docs/adr/ADR-0040-prod-promotion-ref-main-interim.md
 
 # Release Channels Specification
 
-This directory specifies the capability that lets a **stable build run in prod against the real vault** while **new feature work continues in dev on the same machine**, without dev churn destabilizing prod and without prod freeze blocking dev.
+## Current live posture
+
+The operator's current topology is Mac mini = Ollama only; the product runtime belongs on the new
+Linux/Tailscale hosts. The live baseline is incomplete: `ygg-dev` answers on API `:18001` and UI
+`:8111` but is degraded and uses the `mock` LLM provider; `ygg-test` is not available; `ygg-prod`
+answers API liveness on `:18000` but fails functional health and has no reachable UI on `:8113`.
+Both live APIs report an unknown build identity. The old single-host Compose model described in this
+specification is therefore a local fallback/reference model, not current live topology.
+
+The promotion chain remains `dev → test → prod`, but it cannot start until the candidate identity is
+immutable and observable, the new-host deployment handoff is authoritative, `test` is reachable, and
+test verification produces a durable PASS receipt. A liveness response alone is not a promotion gate.
+
+This directory specifies the capability that lets a **stable build run in prod against the real vault** while **new feature work continues in dev across the same governed runtime fleet**, without dev churn destabilizing prod and without prod freeze blocking dev.
 
 This is the capability that turns the existing `dev` / `test` / `prod` environment model into something the operator can actually *use* day-to-day. [ENVIRONMENTS.md](../ENVIRONMENTS.md) today defines environment selection and artifact path scoping, but it explicitly leaves deployment automation, schema separation between long-lived environments, and cross-channel safety out of scope. That gap is what blocks running a stable operator-facing system while active development continues — and therefore what this capability closes.
 
@@ -347,7 +361,7 @@ This capability is docs-authoring at this stage. Task-level verification lives i
 Capability-level acceptance — the point at which the operator can honestly claim the system is usable — requires the following observable conditions, not a single test:
 
 - A **stable build** is running against the real vault and has run unsupervised for a bounded soak window (measured, not asserted).
-- A **dev session** on the same machine has exercised schema change, vault reset, and runtime restart without altering prod state.
+- A **dev session** on its isolated runtime host has exercised schema change, vault reset, and runtime restart without altering prod state.
 - A **promotion** has been performed end-to-end (prepare → execute → verify → accept) with a recorded plan and verification receipt.
 - A **rollback** has been performed at least once in a controlled setting, with the migration reversal path exercised.
 

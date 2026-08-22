@@ -114,12 +114,14 @@ In the current v5.5 baseline, the implemented center of gravity is still the Mim
 ### Deployed infrastructure classification (current reality)
 
 This subsection is **non-SBS-owned**: it is a current-reality infrastructure classification, not a
-boundary allocation, and it does not create a new allocation table. It applies the four-class
+boundary allocation, and it does not create a new allocation table. The Compose rows describe the
+local fallback; the live product runtime is the Linux/Tailscale host split recorded in
+`docs/ENVIRONMENTS.md`. It applies the four-class
 lifecycle-role rule from `docs/architecture/system-context-overlay.md` (SBI-1) — SoI component /
 COTS system element (deployed configuration) / enabling system / external system — to every
 `docker-compose.yaml` service and every host process listed in
-`docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md :: Environment matrix :: Current reality (verified
-2026-06-29)`. For module/host detail, see `docs/architecture/SBS_BOUNDARY_REGISTER.md` (target SBS
+`docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md :: Environment matrix :: Local Compose fallback
+matrix (verified 2026-07-06)`. For module/host detail, see `docs/architecture/SBS_BOUNDARY_REGISTER.md` (target SBS
 boundary maturity) and `docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md` (deploy topology,
 ports, gateways) — this table references, and does not duplicate, either.
 
@@ -127,8 +129,8 @@ ports, gateways) — this table references, and does not duplicate, either.
 | --- | --- | --- |
 | `app/`, `mimer_runtime/`, contracts/schemas, companion-note surface | in-repo runtime code | SoI component |
 | `db` (Postgres/pgvector, `docker-compose.yaml:2-14`) | compose service | COTS system element |
-| `ollama` (`docker-compose.yaml:16-31`) | compose service | COTS system element |
-| Ollama reached as a host/remote LLM or embedding provider (`docs/ARCHITECTURE.md:109`) | host/remote service, not the compose service | External system |
+| `ollama` (`docker-compose.yaml:16-31`) | local fallback compose service | COTS system element |
+| Mac mini Ollama reached from the Linux runtime | Tailscale-reachable remote provider | External system |
 | `api` (`docker-compose.yaml:37-99`) | compose service (SoI component runtime, containerized) | SoI component |
 | `worker` (`docker-compose.yaml:101-142`) | compose service (SoI component runtime, containerized) | SoI component |
 | `watcher` (`docker-compose.yaml:144-188`) | compose service (SoI component runtime, containerized) | SoI component |
@@ -147,10 +149,9 @@ above because they are two distinct bindings, never both at once for a given dep
 
 This table classifies lifecycle role only; it does not resolve the dual-role hazard (infrastructure
 as both enabling system and a domain of interest the SoI observes/actuates), which is deferred to
-the companion thread named in `docs/architecture/system-context-overlay.md`. It does not reflect a
-post-#2655 pinned-image topology: deployment epic #2655 (S5/S7) is still open, so the classification
-above is verified against the current `docker-compose.yaml` and the "Current reality (verified
-2026-06-29)" row of the environment matrix, not the "Target" row.
+the companion thread named in `docs/architecture/system-context-overlay.md`. The Compose entries are
+the local fallback classification; live new-host deployment remains unqualified until the authoritative
+deployment handoff, immutable artifact identity, and host isolation proofs exist.
 
 The host-global ownership ledger is an additional deployment-boundary guard:
 ledger schema v2 stores the selected vault's primary filesystem identity and
