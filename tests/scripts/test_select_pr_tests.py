@@ -145,6 +145,16 @@ def test_unknown_runtime_surface_fails_closed_until_it_has_an_owner() -> None:
     assert selection.unowned_paths == ("app/new_surface/example.py",)
 
 
+def test_governed_archival_contract_surface_selects_archival_coverage() -> None:
+    selection = select_tests(["app/archival/contracts.py"])
+
+    assert selection.full_suite is False
+    assert selection.subsystems == ("archival_contracts",)
+    assert selection.unowned_paths == ()
+    assert "tests/archival" in selection.targets
+    assert "tests/architecture/test_governed_archival_contract.py" in selection.targets
+
+
 def test_builder_system_architecture_fitness_test_has_ci_owner() -> None:
     path = "tests/architecture/test_builderops_store_boundary.py"
 

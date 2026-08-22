@@ -773,6 +773,17 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
         ("tests/test_transcribe_smoke.py",),
     ),
     (
+        "archival_contracts",
+        (
+            "app/archival/",
+            "tests/archival/",
+            "tests/architecture/test_governed_archival_contract.py",
+            "docs/GOVERNED_ARCHIVAL_FLOW/",
+            "docs/contracts/GOVERNED_ARCHIVAL_FLOW.md",
+        ),
+        ("tests/archival", "tests/architecture/test_governed_archival_contract.py"),
+    ),
+    (
         "events_receipts",
         ("app/events/", "app/receipts/", "docs/contracts/events/", "tests/events/", "tests/receipts/"),
         ("tests/events", "tests/receipts", "tests/contracts"),
