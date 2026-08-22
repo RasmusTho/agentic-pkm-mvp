@@ -64,7 +64,11 @@ from app.heimdal import (
     raw_store,
 )
 from app.heimdal.capture_adapter import SensorIdentity
-from app.heimdal.consent_ledger import MEDIA_CAPTURE_SCOPE, admit_raw_evidence
+from app.heimdal.consent_ledger import (
+    MEDIA_CAPTURE_SCOPE,
+    admit_raw_evidence,
+    consent_raw_admission,
+)
 from app.heimdal.media_receipts import MediaReceipt
 from app.heimdal.raw_read_gate import raw_ref_for
 from app.outbox.events import INDEX_OUTBOX_PATH
@@ -193,7 +197,8 @@ def _lease_receipt_or_erased(
     fields in place. A response may report admitted only after the exact raw
     generation and active representation have been validated under the shared
     liveness fence and a bounded response lease has been issued. Absence without
-    a tombstone propagates as unavailable; only a governed tombstone is erased.
+    a tombstone propagates as unavailable; a governed tombstone with pending
+    cold cleanup stays unavailable, and only completed cleanup is erased.
     """
     try:
         lease = raw_liveness.issue_response_lease(
@@ -501,20 +506,21 @@ def admit_media_bytes(
     try:
         # Idempotent by content hash: two captures of byte-identical content
         # share one raw object, so `lineage` here is the *first* admission's.
-        # Each capture's own lineage lives on its own receipt, which is why the
-        # receipt store is keyed by transfer identity and not by content hash.
-        record, _raw_created = raw_store.insert_raw_record(
-            content_identity=content_sha256,
-            capture_chain=list(CAPTURE_CHAIN_MEDIA_INGRESS),
-            sensor=sensor.as_dict(),
-            consent=admitted.consent.as_dict(),
-            ciphertext=ciphertext,
-            nonce=nonce,
-            key_ref="v1-process-key",
-            key=encryption_key,
-            source_path=MEDIA_INGRESS_SOURCE_PATH,
-            payload=lineage,
-        )
+        # Final consent revalidation is serialized with revocation so no
+        # admitted-but-not-yet-written generation can escape the erasure scan.
+        with consent_raw_admission(admitted.grant.grant_ref):
+            record, _raw_created = raw_store.insert_raw_record(
+                content_identity=content_sha256,
+                capture_chain=list(CAPTURE_CHAIN_MEDIA_INGRESS),
+                sensor=sensor.as_dict(),
+                consent=admitted.consent.as_dict(),
+                ciphertext=ciphertext,
+                nonce=nonce,
+                key_ref="v1-process-key",
+                key=encryption_key,
+                source_path=MEDIA_INGRESS_SOURCE_PATH,
+                payload=lineage,
+            )
     except Exception as exc:
         logger.error(
             "Heimdal media ingress: durable write failed capture_id=%s content_sha256=%s: %s. "
@@ -702,7 +708,7 @@ def receipt_answer(
     *,
     liveness_by_raw_ref: Optional[Dict[str, raw_liveness.RawLivenessProjection]] = None,
 ) -> Dict[str, Any]:
-    """Render one receipt-query answer: `admitted`, `erased`, or `unknown`.
+    """Render one receipt-query answer without overstating pending erasure.
 
     ``unknown`` is a first-class answer, not an error: it is how a client
     distinguishes "my response was lost" from "my capture never arrived"
@@ -720,9 +726,17 @@ def receipt_answer(
             [(receipt.raw_ref, receipt.content_sha256)]
         )
     projection = liveness_by_raw_ref[receipt.raw_ref]
+    if projection.outcome == "erasure_pending":
+        raise raw_liveness.RawLivenessUnavailableError(
+            "raw erasure is pending durable cold cleanup; no public receipt state is asserted"
+        )
+    projected_outcome = {
+        "active": "admitted",
+        "erased": "erased",
+    }[projection.outcome]
     answer: Dict[str, Any] = {
         "capture_id": capture_id,
-        "outcome": "admitted" if projection.outcome == "active" else "erased",
+        "outcome": projected_outcome,
         "receipt_id": receipt.receipt_id,
         "content_sha256": receipt.content_sha256,
         "raw_ref": receipt.raw_ref,

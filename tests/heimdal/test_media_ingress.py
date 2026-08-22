@@ -60,6 +60,7 @@ from app.heimdal.raw_store import (
     reset_memory_raw_store,
 )
 from app.heimdal.retention import (
+    RetentionErasurePendingError,
     enforce_hard_retention_bound,
     enforce_screen_frame_retention,
 )
@@ -571,9 +572,8 @@ def test_response_fence_serializes_every_producer_against_both_retention_writers
         assert not retention_future.done(), "retention crossed a held response fence"
         release_response.set()
         produced = producer_future.result(timeout=5)
-        retained = retention_future.result(timeout=5)
-
-    assert retained.deleted_count == 0
+        with pytest.raises(RetentionErasurePendingError, match="draining"):
+            retention_future.result(timeout=5)
     assert len(all_raw_records()) == 1
     if producer == "watched_folder":
         assert produced.source_deleted is True
@@ -686,6 +686,37 @@ def test_receipt_query_reports_raw_state_lookup_failure_as_unavailable(
     assert response.json()["detail"]["error"] == "raw_liveness_unavailable"
     assert response.json()["detail"]["state"] == "unavailable"
     assert response.json()["detail"]["trace_id"]
+
+
+def test_pending_cold_erasure_is_public_503_not_a_new_receipt_outcome(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    media = b"pending-cold-erasure-public-contract"
+    sidecar = _sidecar(media)
+    assert _post_media(client, media, sidecar).status_code == 200
+    record = all_raw_records()[0]
+    generation = raw_liveness._MEMORY.generations_by_record[record.id]  # noqa: SLF001
+
+    def pending(
+        requests: set[tuple[str, str]], *, now: datetime | None = None
+    ) -> dict[str, raw_liveness.RawLivenessProjection]:
+        del now
+        return {
+            raw_ref: raw_liveness.RawLivenessProjection(
+                outcome="erasure_pending",
+                generation=generation,
+            )
+            for raw_ref, _content_identity in requests
+        }
+
+    monkeypatch.setattr(raw_liveness, "project_with_response_leases", pending)
+
+    query = _get_receipts(client, sidecar["capture_id"])
+    replay = _post_media(client, media, sidecar)
+    for response in (query, replay):
+        assert response.status_code == 503, response.text
+        assert response.json()["detail"]["error"] == "raw_liveness_unavailable"
+        assert response.json()["detail"]["state"] == "unavailable"
 
 
 def test_receipt_identity_includes_the_capture_id(client: TestClient) -> None:

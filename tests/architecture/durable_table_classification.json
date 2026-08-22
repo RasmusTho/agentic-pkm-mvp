@@ -345,6 +345,26 @@
       "rebuild_mechanism": "row-scoped",
       "escalation_conditions": []
     },
+    "heimdal_raw_consent_association": {
+      "classification": "explicitly-global",
+      "reason": "`heimdal_raw_consent_association` is the append-only many-grant lineage authority for each global raw liveness generation, written by `app/heimdal/raw_store.py` during raw admission. It carries no vault binding and is explicitly global per MVR-05's acceptance criteria.",
+      "owning_revision": "a9d7c5e3b1f0",
+      "declaring_revisions": [
+        "a9d7c5e3b1f0"
+      ],
+      "binding_key": "not-applicable",
+      "binding_column": null,
+      "producers": [
+        {
+          "module": "app/heimdal/raw_store.py",
+          "operations": [
+            "insert"
+          ]
+        }
+      ],
+      "rebuild_mechanism": "row-scoped",
+      "escalation_conditions": []
+    },
     "heimdal_media_receipt": {
       "classification": "explicitly-global",
       "reason": "`heimdal_media_receipt` is append-only receipts for media capture, written by `app/heimdal/media_receipts.py` and keyed by capture id. The row attests that a device captured media under a consent grant. Explicitly global per MVR-05's acceptance criteria.",

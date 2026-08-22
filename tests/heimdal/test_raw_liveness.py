@@ -12,6 +12,7 @@ import pytest
 from app.heimdal import raw_liveness, raw_store
 from app.heimdal.raw_read_gate import raw_ref_for
 from app.heimdal.retention import (
+    RetentionErasurePendingError,
     all_deletion_receipts,
     enforce_hard_retention_bound,
     enforce_screen_frame_retention,
@@ -245,8 +246,8 @@ def test_valid_response_lease_blocks_both_retention_writers_until_expiry(
         now=retention_time,
     )
 
-    skipped = _run_retention(writer, root=root, now=retention_time)
-    assert skipped.deleted_count == 0
+    with pytest.raises(RetentionErasurePendingError, match="draining"):
+        _run_retention(writer, root=root, now=retention_time)
     assert raw_store.get_raw_record_by_content_identity(record.content_identity) is not None
     assert all_deletion_receipts() == []
 
@@ -367,8 +368,8 @@ def test_retention_claim_stops_lease_reopening_while_existing_lease_drains(
         content_identity=record.content_identity,
         now=retention_time,
     )
-    result = _run_retention("hard", root=root, now=retention_time)
-    assert result.deleted_count == 0
+    with pytest.raises(RetentionErasurePendingError, match="draining"):
+        _run_retention("hard", root=root, now=retention_time)
     claims = raw_liveness.all_retention_claims()
     assert len(claims) == 1
     assert claims[0].drain_after == first.expires_at

@@ -21,6 +21,14 @@ What this module builds (build-now per §11#13):
   that performs it -- there is no "delete now, receipt later" step, exactly
   mirroring the raw-read-receipt discipline in `app.heimdal.raw_read_gate`.
   A deletion is never silent; a deletion without a receipt is a defect.
+- **Consent-revocation propagation (HAR-05).**
+  :func:`enforce_consent_revocation` selects raw generations by their stamped
+  ``consent.grant_ref`` and routes them through that same deletion primitive.
+  Cold cleanup remains loud and retryable, and a response lease leaves a
+  durable retirement claim instead of a false completion. The scheduled hard-
+  retention entrypoint replays every durable revocation row before age-based
+  work, and every deletion reason carries a redacted grant digest so cleanup
+  remains correlated after raw identity removal.
 - **Markdown-first policy** (ADR-0049 §2): the retention window is read from
   `_heimdal/settings.md` (`app.heimdal.settings_notes.SETTINGS`,
   `retention_window_days`, A14 substrate) -- never a hidden store or an
@@ -39,11 +47,11 @@ What this module explicitly does NOT touch (Constraints, binding):
   raw record (declared-absent, never a silent None/empty return) -- no
   change to that gate was needed for this slice.
 
-Out of scope (declared v2 contract-stub gaps per §11#13/#14, not built
+Out of scope (remaining v2 contract-stub gaps per §11#13/#14, not built
 here): event-triggered relevance-decay (the decay-model half of HEIM-7
 stays a named future runtime, see `docs/HEIMDAL/FABLE_COMPANION.md` §8);
-consent-revocation-triggered deletion runtime (§11#14); cryptographic
-erasure of published event content (v2 hardening candidate).
+published-event suppression after consent revocation; cryptographic erasure
+of published event content (v2 hardening candidate).
 """
 
 from __future__ import annotations
@@ -51,7 +59,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import List, Optional
+from typing import Callable, List, Optional
 
 from app.heimdal import raw_liveness, raw_store
 from app.heimdal.raw_liveness import DeletionReceipt
@@ -69,6 +77,7 @@ from app.heimdal.settings_notes import (
 # silently precluded.
 REASON_HARD_RETENTION_BOUND = "hard_retention_bound"
 REASON_SCREEN_FRAME_RETENTION_BUFFER = "screen_frame_retention_buffer"
+REASON_CONSENT_REVOKED = "consent_revoked"
 
 
 class RetentionWindowMissingError(RuntimeError):
@@ -78,6 +87,14 @@ class RetentionWindowMissingError(RuntimeError):
     `raw_store.resolve_raw_store_key` / `raw_read_gate.resolve_read_allowlist`):
     an irreversible governed deletion job never guesses a default bound.
     """
+
+
+class ConsentRevocationErasurePendingError(RuntimeError):
+    """Raised while a revoked grant still has raw state waiting on a fence."""
+
+
+class RetentionErasurePendingError(RuntimeError):
+    """Raised when a retention claim is draining and the run is incomplete."""
 
 
 DeletionReceiptSchemaMissingError = raw_liveness.RawLivenessSchemaMissingError
@@ -102,7 +119,20 @@ class RetentionEnforcementReceipt:
     receipted: bool = True
 
 
-def _reconcile_pending_cold_cleanup() -> None:
+@dataclass(frozen=True)
+class ConsentRevocationErasureReceipt:
+    """Secret-safe result of propagating one consent revocation to raw state."""
+
+    deleted_count: int
+    deletions: tuple[DeletionReceipt, ...]
+    receipted: bool = True
+
+
+def _reconcile_pending_cold_cleanup(
+    *,
+    fail_loud: bool,
+    receipt_filter: Optional[Callable[[DeletionReceipt], bool]] = None,
+) -> None:
     """Retry durable post-commit cold cleanup after scanning active records.
 
     A completed DB erasure is no longer present in ``all_raw_records``. The
@@ -113,6 +143,8 @@ def _reconcile_pending_cold_cleanup() -> None:
     for receipt in raw_liveness.all_deletion_receipts():
         if not receipt.payload.get("cold_cleanup_location_refs"):
             continue
+        if receipt_filter is not None and not receipt_filter(receipt):
+            continue
         try:
             raw_liveness.governed_delete_raw_record(
                 record_id=receipt.record_id,
@@ -122,7 +154,109 @@ def _reconcile_pending_cold_cleanup() -> None:
                 payload=receipt.payload,
             )
         except raw_store.RawRepresentationDeletionError:
-            continue
+            if fail_loud:
+                raise
+
+
+def _receipt_matches_raw_modality(
+    receipt: DeletionReceipt,
+    expected_modality: str,
+) -> bool:
+    """Match a current receipt; unclassified pending history is indeterminate."""
+
+    key = raw_liveness.RAW_MODALITY_PAYLOAD_KEY
+    if key not in receipt.payload:
+        raise raw_liveness.RawLivenessUnavailableError(
+            "pending cold cleanup lacks durable raw modality classification"
+        )
+    try:
+        modality = raw_store.canonical_raw_modality(receipt.payload[key])
+    except raw_store.RawRepresentationUnavailableError as exc:
+        raise raw_liveness.RawLivenessUnavailableError(
+            "pending cold cleanup has malformed raw modality classification"
+        ) from exc
+    return modality == expected_modality
+
+
+def _receipt_correlates_to_grant(receipt: DeletionReceipt, grant_digest: str) -> bool:
+    """Match current lineage exactly; only wholly keyless receipts are legacy."""
+
+    payload = receipt.payload
+    scalar_key = raw_liveness.CONSENT_GRANT_DIGEST_PAYLOAD_KEY
+    set_key = raw_liveness.CONSENT_GRANT_DIGESTS_PAYLOAD_KEY
+    scalar_present = scalar_key in payload
+    set_present = set_key in payload
+    if not scalar_present and not set_present:
+        return True
+
+    scalar = payload.get(scalar_key)
+    digest_set = payload.get(set_key)
+    if scalar_present and not isinstance(scalar, str):
+        raise raw_liveness.RawLivenessUnavailableError(
+            "pending cleanup has malformed scalar consent lineage"
+        )
+    if set_present and (
+        not isinstance(digest_set, list)
+        or any(not isinstance(item, str) for item in digest_set)
+    ):
+        raise raw_liveness.RawLivenessUnavailableError(
+            "pending cleanup has malformed consent lineage set"
+        )
+    return scalar == grant_digest or (
+        isinstance(digest_set, list) and grant_digest in digest_set
+    )
+
+
+def enforce_consent_revocation(
+    *,
+    grant_ref: str,
+    revoked_at: Optional[datetime] = None,
+) -> ConsentRevocationErasureReceipt:
+    """Erase every raw generation covered by one revoked consent grant.
+
+    This reuses the same fenced all-copy deletion primitive as hard retention.
+    A cold cleanup failure raises and remains queued in the durable deletion
+    receipt; retrying this function reconciles that queue before it reports
+    completion.  The receipt carries only a digest of the grant reference.
+    """
+
+    if not isinstance(grant_ref, str) or not grant_ref.strip():
+        raise ValueError("grant_ref must be a non-empty string")
+    reference_time = revoked_at or datetime.now(timezone.utc)
+    grant_digest = raw_liveness.consent_grant_digest(grant_ref)
+    deletions: List[DeletionReceipt] = []
+    pending_count = 0
+    for record_id in raw_store.raw_record_ids_by_consent_grant(grant_ref):
+        result = raw_liveness.governed_delete_raw_record(
+            record_id=record_id,
+            reason=REASON_CONSENT_REVOKED,
+            retention_window_days=0,
+            deleted_at=reference_time,
+            consent_grant_ref=grant_ref,
+        )
+        if result.outcome == "deleted":
+            assert result.receipt is not None
+            deletions.append(result.receipt)
+        elif result.outcome == "lease_valid":
+            pending_count += 1
+
+    # A prior attempt may already have committed DB erasure and left only its
+    # durable cold-cleanup queue.  Do not report completion until that queue is
+    # empty; failures stay loud and the same call is safe to retry.
+    _reconcile_pending_cold_cleanup(
+        fail_loud=True,
+        receipt_filter=lambda receipt: _receipt_correlates_to_grant(
+            receipt, grant_digest
+        ),
+    )
+    if pending_count:
+        raise ConsentRevocationErasurePendingError(
+            "consent revocation erasure is waiting for an active raw-response lease; retry required"
+        )
+    return ConsentRevocationErasureReceipt(
+        deleted_count=len(deletions),
+        deletions=tuple(deletions),
+    )
 
 
 def _resolve_retention_window_days(vault_root: Path, *, settings_dir: str = DEFAULT_SETTINGS_DIR) -> int:
@@ -254,34 +388,39 @@ def enforce_hard_retention_bound(
     reference_time = now if now is not None else datetime.now(timezone.utc)
     cutoff = reference_time - timedelta(days=window_days)
 
-    deletions: List[DeletionReceipt] = []
-    for record in raw_store.all_raw_records():
-        ingested_at = record.ingested_at
-        if ingested_at.tzinfo is None:
-            ingested_at = ingested_at.replace(tzinfo=timezone.utc)
-        if ingested_at >= cutoff:
-            continue  # within the bound: not deleted (negative AC)
+    # The append-only revocation row is durable replay authority. Consume it
+    # before ordinary age selection so a crash after revocation commit cannot
+    # strand active raw state until another operator action.
+    from app.heimdal.consent_ledger import reconcile_revoked_consent_erasure
 
+    reconcile_revoked_consent_erasure()
+
+    deletions: List[DeletionReceipt] = []
+    pending_count = 0
+    for record in raw_store.expired_raw_record_metadata(ingested_before=cutoff):
         result = raw_liveness.governed_delete_raw_record(
-            record_id=record.id,
+            record_id=record.record_id,
             reason=REASON_HARD_RETENTION_BOUND,
             retention_window_days=window_days,
             deleted_at=reference_time,
         )
-        if result.outcome != "deleted":
-            # A concurrent run may already have erased this generation, while
-            # a valid response lease makes this bounded run skip and retry on
-            # its next schedule. Neither case fabricates another receipt.
-            continue
-        assert result.receipt is not None
-        deletions.append(result.receipt)
+        if result.outcome == "deleted":
+            assert result.receipt is not None
+            deletions.append(result.receipt)
+        elif result.outcome == "lease_valid":
+            pending_count += 1
 
     # Read the durable retry queue only after active generations have entered
     # the governed delete path.  The memory receipt snapshot takes the same
     # liveness fence as response-lease issuance; consuming it first would wait
     # behind an in-flight response before the retention writer could announce
     # its own fence entry, inverting the producer/retention handshake.
-    _reconcile_pending_cold_cleanup()
+    _reconcile_pending_cold_cleanup(fail_loud=True)
+
+    if pending_count:
+        raise RetentionErasurePendingError(
+            "hard-retention erasure is draining active raw-response leases; retry required"
+        )
 
     if record_last_enforced:
         apply_agent_update(
@@ -312,14 +451,13 @@ def enforce_screen_frame_retention(
     reference_time = now if now is not None else datetime.now(timezone.utc)
     cutoff = reference_time - timedelta(minutes=minutes)
     deletions: List[DeletionReceipt] = []
-    for record in raw_store.all_raw_records():
-        if record.payload.get("modality") != "screen":
-            continue
-        ingested_at = record.ingested_at if record.ingested_at.tzinfo else record.ingested_at.replace(tzinfo=timezone.utc)
-        if ingested_at >= cutoff:
-            continue
+    pending_count = 0
+    for record in raw_store.expired_raw_record_metadata(
+        ingested_before=cutoff,
+        modality="screen",
+    ):
         result = raw_liveness.governed_delete_raw_record(
-            record_id=record.id,
+            record_id=record.record_id,
             reason=REASON_SCREEN_FRAME_RETENTION_BUFFER,
             retention_window_days=0,
             deleted_at=reference_time,
@@ -328,19 +466,45 @@ def enforce_screen_frame_retention(
         if result.outcome == "deleted":
             assert result.receipt is not None
             deletions.append(result.receipt)
-    return RetentionEnforcementReceipt(deleted_count=len(deletions), retention_window_days=0, deletions=tuple(deletions))
+        elif result.outcome == "lease_valid":
+            pending_count += 1
+
+    # Once DB erasure commits, this reason-scoped receipt queue is the only
+    # restart authority. A run cannot report success while any cold object or
+    # manifest remains pending, even though the active identity is gone.
+    _reconcile_pending_cold_cleanup(
+        fail_loud=True,
+        receipt_filter=lambda receipt: _receipt_matches_raw_modality(
+            receipt,
+            "screen",
+        ),
+    )
+    if pending_count:
+        raise RetentionErasurePendingError(
+            "screen-frame retention is draining an active raw-response lease; retry required"
+        )
+    return RetentionEnforcementReceipt(
+        deleted_count=len(deletions),
+        retention_window_days=0,
+        deletions=tuple(deletions),
+    )
 
 
 __all__ = [
     "AppendOnlyViolationError",
+    "ConsentRevocationErasurePendingError",
+    "ConsentRevocationErasureReceipt",
     "DeletionReceipt",
     "DeletionReceiptSchemaMissingError",
+    "REASON_CONSENT_REVOKED",
     "REASON_HARD_RETENTION_BOUND",
     "REASON_SCREEN_FRAME_RETENTION_BUFFER",
     "RetentionEnforcementReceipt",
+    "RetentionErasurePendingError",
     "RetentionWindowMissingError",
     "all_deletion_receipts",
     "enforce_hard_retention_bound",
+    "enforce_consent_revocation",
     "reset_memory_deletion_receipts",
     "resolve_retention_window_days",
     "resolve_screen_frame_retention_minutes",

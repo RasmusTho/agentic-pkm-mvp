@@ -71,6 +71,36 @@ def _reset_raw_store(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyP
     reset_memory_raw_read_receipts()
 
 
+@pytest.fixture
+def pg_raw_store_database(monkeypatch: pytest.MonkeyPatch):
+    """Give direct PG store tests a fresh migration-equivalent producer shape."""
+
+    psycopg = pytest.importorskip("psycopg")
+    from app.db.dsn import resolve_dsn
+
+    admin_dsn = resolve_dsn()
+    if not admin_dsn:
+        pytest.skip("DATABASE_URL/DB_DSN not configured")
+    database_name = f"scratch_raw_store_{secrets.token_hex(6)}"
+    base, separator, _database = admin_dsn.rpartition("/")
+    if not separator:
+        pytest.fail("direct PG raw-store tests require a database-qualified DSN")
+    scratch_dsn = f"{base}/{database_name}"
+    try:
+        with psycopg.connect(admin_dsn, autocommit=True) as conn:
+            conn.execute(f'CREATE DATABASE "{database_name}"')
+        with psycopg.connect(scratch_dsn, autocommit=True) as conn:
+            conn.execute("CREATE EXTENSION IF NOT EXISTS vector")
+        monkeypatch.setenv("DATABASE_URL", scratch_dsn)
+        monkeypatch.delenv("DB_DSN", raising=False)
+        monkeypatch.setenv("STORE_BACKEND", "pg")
+        monkeypatch.setenv("STORE_SCHEMA_AUTOCREATE", "1")
+        yield scratch_dsn
+    finally:
+        with psycopg.connect(admin_dsn, autocommit=True) as conn:
+            conn.execute(f'DROP DATABASE IF EXISTS "{database_name}" WITH (FORCE)')
+
+
 def _consent_block(grant_ref: str = "grant-test") -> dict:
     return {
         "basis": "self_record",
@@ -263,7 +293,7 @@ def test_no_mutation_method_on_resolved_backend() -> None:
 
 
 @pytest.mark.pg
-def test_append_only_enforced_pg() -> None:
+def test_append_only_enforced_pg(pg_raw_store_database: str) -> None:
     """Real Postgres trigger rejects UPDATE/DELETE against heimdal_raw_record (HEIM-1)."""
     pytest.importorskip("psycopg")
 
@@ -299,7 +329,9 @@ def test_append_only_enforced_pg() -> None:
 
 
 @pytest.mark.pg
-def test_archive_relocation_lease_serializes_postgres_scheduler_sessions() -> None:
+def test_archive_relocation_lease_serializes_postgres_scheduler_sessions(
+    pg_raw_store_database: str,
+) -> None:
     """Two independently scheduled HAR-04 passes cannot overlap on one DB."""
     pytest.importorskip("psycopg")
 
@@ -314,7 +346,9 @@ def test_archive_relocation_lease_serializes_postgres_scheduler_sessions() -> No
 
 
 @pytest.mark.pg
-def test_archive_eligible_hot_selector_is_bounded_in_postgres() -> None:
+def test_archive_eligible_hot_selector_is_bounded_in_postgres(
+    pg_raw_store_database: str,
+) -> None:
     pytest.importorskip("psycopg")
     plaintext = f"archive-selector-{secrets.token_hex(12)}".encode()
     ciphertext, nonce = encrypt_raw_bytes(plaintext, key=_TEST_KEY)
@@ -509,7 +543,10 @@ def test_gated_read_exercises_real_production_call_site(monkeypatch: pytest.Monk
 
 
 @pytest.mark.pg
-def test_append_only_enforced_pg_read_receipt(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_append_only_enforced_pg_read_receipt(
+    monkeypatch: pytest.MonkeyPatch,
+    pg_raw_store_database: str,
+) -> None:
     """Real Postgres trigger rejects UPDATE/DELETE against heimdal_raw_read_receipt (HEIM-1)."""
     pytest.importorskip("psycopg")
     monkeypatch.setenv("HEIMDAL_RAW_READ_ALLOWLIST", "asr_stage")

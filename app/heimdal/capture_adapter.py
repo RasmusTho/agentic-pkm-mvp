@@ -77,6 +77,7 @@ from app.heimdal.consent_ledger import (
     SELF_RECORD_SCOPE,
     AdmittedEvidence,
     admit_raw_evidence,
+    consent_raw_admission,
 )
 from app.heimdal.raw_store import RawRecord
 
@@ -404,18 +405,23 @@ def admit_capture_file(
     ciphertext, nonce = raw_store.encrypt_raw_bytes(raw_bytes, key=encryption_key)
 
     try:
-        record, created = raw_store.insert_raw_record(
-            content_identity=content_identity,
-            capture_chain=chain,
-            sensor=resolved_sensor.as_dict(),
-            consent=admitted.consent.as_dict(),
-            ciphertext=ciphertext,
-            nonce=nonce,
-            key_ref="v1-process-key",
-            key=encryption_key,
-            source_path=str(path),
-            payload={"capture_time_metadata": capture_sidecar} if capture_sidecar is not None else None,
-        )
+        with consent_raw_admission(admitted.grant.grant_ref):
+            record, created = raw_store.insert_raw_record(
+                content_identity=content_identity,
+                capture_chain=chain,
+                sensor=resolved_sensor.as_dict(),
+                consent=admitted.consent.as_dict(),
+                ciphertext=ciphertext,
+                nonce=nonce,
+                key_ref="v1-process-key",
+                key=encryption_key,
+                source_path=str(path),
+                payload=(
+                    {"capture_time_metadata": capture_sidecar}
+                    if capture_sidecar is not None
+                    else None
+                ),
+            )
     except Exception as exc:
         # Fail loud: the durable write did not confirm, so the source file
         # MUST remain queued for a future retry. Never delete on a failed

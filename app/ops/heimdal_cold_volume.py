@@ -205,7 +205,7 @@ class CommandResult:
 _ARCHIVE_VOLUME_READY_ISSUER = object()
 
 
-_VERIFIED_VOLUME_PROOFS: dict[int, tuple[str, Path]] = {}
+_VERIFIED_VOLUME_PROOFS: dict[int, tuple[str, Path, str]] = {}
 
 
 @dataclass(frozen=True, init=False)
@@ -213,17 +213,26 @@ class ArchiveVolumeReady:
     ready: bool
     archive_ref: str
     mountpoint: Path
+    archive_generation: str
 
-    def __init__(self, *, _issuer: object, archive_ref: str, mountpoint: Path) -> None:
+    def __init__(
+        self,
+        *,
+        _issuer: object,
+        archive_ref: str,
+        mountpoint: Path,
+        archive_generation: str,
+    ) -> None:
         if _issuer is not _ARCHIVE_VOLUME_READY_ISSUER:
             raise _refused()
-        if not mountpoint.is_absolute():
+        if not mountpoint.is_absolute() or _SHA256.fullmatch(archive_generation) is None:
             raise _refused()
         object.__setattr__(self, "ready", True)
         object.__setattr__(self, "archive_ref", archive_ref)
         object.__setattr__(self, "mountpoint", mountpoint)
+        object.__setattr__(self, "archive_generation", archive_generation)
         proof_id = id(self)
-        _VERIFIED_VOLUME_PROOFS[proof_id] = (archive_ref, mountpoint)
+        _VERIFIED_VOLUME_PROOFS[proof_id] = (archive_ref, mountpoint, archive_generation)
         weakref.finalize(self, _VERIFIED_VOLUME_PROOFS.pop, proof_id, None)
 
 
@@ -236,19 +245,55 @@ def _is_verified_archive_volume_ready(
         and binding is not None
         and proof.archive_ref == binding[0]
         and proof.mountpoint == binding[1]
+        and proof.archive_generation == binding[2]
         and (expected_archive_ref is None or binding[0] == expected_archive_ref)
         and binding[1] == expected_mountpoint
     )
 
 
+def _archive_generation(
+    archive_ref: str,
+    mountpoint: Path,
+    *,
+    binding_material: str = "",
+) -> str:
+    """Return a redacted generation for one exact archive-volume binding."""
+
+    return hashlib.sha256(
+        f"{archive_ref}\0{mountpoint}\0{binding_material}".encode("utf-8")
+    ).hexdigest()
+
+
+def _metadata_archive_generation(metadata: ArchiveVolumeMetadata) -> str:
+    return _archive_generation(
+        metadata.archive_id,
+        metadata.mountpoint,
+        binding_material="\0".join(
+            (
+                str(metadata.bundle_inode or ""),
+                str(metadata.image_metadata_sha256 or ""),
+                str(metadata.volume_uuid or ""),
+                metadata.parent_volume_uuid,
+            )
+        ),
+    )
+
+
 def _issue_archive_volume_ready(
-    archive_ref: str, mountpoint: Path, *, _issuer: object
+    archive_ref: str,
+    mountpoint: Path,
+    *,
+    _issuer: object,
+    archive_generation: str | None = None,
 ) -> ArchiveVolumeReady:
     """Issue a proof for the verified-volume boundary and its bound archive."""
     return ArchiveVolumeReady(
         _issuer=_issuer,
         archive_ref=archive_ref,
         mountpoint=mountpoint,
+        archive_generation=(
+            archive_generation or _archive_generation(archive_ref, mountpoint)
+        ),
     )
 
 
@@ -1345,6 +1390,7 @@ def require_archive_volume_ready(
         _issuer=_ARCHIVE_VOLUME_READY_ISSUER,
         archive_ref=metadata.archive_id,
         mountpoint=metadata.mountpoint,
+        archive_generation=_metadata_archive_generation(metadata),
     )
     raw_store.configure_cold_archive_root(
         metadata.mountpoint,
@@ -1425,7 +1471,10 @@ def mount_archive_volume(
     )
     _mount_and_validate(metadata, credential=credential, runner=selected)
     return _issue_archive_volume_ready(
-        metadata.archive_id, metadata.mountpoint, _issuer=_ARCHIVE_VOLUME_READY_ISSUER
+        metadata.archive_id,
+        metadata.mountpoint,
+        _issuer=_ARCHIVE_VOLUME_READY_ISSUER,
+        archive_generation=_metadata_archive_generation(metadata),
     )
 
 
@@ -1722,7 +1771,10 @@ def provision_archive_volume(
         _require_bundle_directory(metadata)
         _mount_and_validate(metadata, credential=credential, runner=selected)
         return _issue_archive_volume_ready(
-            metadata.archive_id, metadata.mountpoint, _issuer=_ARCHIVE_VOLUME_READY_ISSUER
+            metadata.archive_id,
+            metadata.mountpoint,
+            _issuer=_ARCHIVE_VOLUME_READY_ISSUER,
+            archive_generation=_metadata_archive_generation(metadata),
         )
 
     if metadata_path is None:
@@ -1761,7 +1813,10 @@ def provision_archive_volume(
                 _detach_exact(selected, attachment.detach_authority)
             raise
         return _issue_archive_volume_ready(
-            metadata.archive_id, metadata.mountpoint, _issuer=_ARCHIVE_VOLUME_READY_ISSUER
+            active.archive_id,
+            active.mountpoint,
+            _issuer=_ARCHIVE_VOLUME_READY_ISSUER,
+            archive_generation=_metadata_archive_generation(active),
         )
 
     _require_empty_mount_directory(metadata)
@@ -1840,7 +1895,10 @@ def provision_archive_volume(
     finally:
         os.close(parent_descriptor)
     return _issue_archive_volume_ready(
-        metadata.archive_id, metadata.mountpoint, _issuer=_ARCHIVE_VOLUME_READY_ISSUER
+        active.archive_id,
+        active.mountpoint,
+        _issuer=_ARCHIVE_VOLUME_READY_ISSUER,
+        archive_generation=_metadata_archive_generation(active),
     )
 
 

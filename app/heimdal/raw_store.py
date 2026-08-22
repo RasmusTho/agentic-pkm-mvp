@@ -61,6 +61,7 @@ path (allowlist + receipt evaluation over the active registry entry) is
 from __future__ import annotations
 
 from contextlib import contextmanager
+from contextvars import ContextVar
 import fcntl
 import hashlib
 import json
@@ -71,8 +72,8 @@ import stat
 import threading
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
-from typing import Any, Dict, Iterator, List, Optional
-from uuid import uuid4
+from typing import Any, Callable, Dict, Iterator, List, Optional
+from uuid import UUID, uuid4
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
@@ -80,11 +81,17 @@ from app.heimdal._backend import resolve_heimdal_backend
 
 _TABLE = "heimdal_raw_record"
 _REPRESENTATION_TABLE = "heimdal_raw_representation"
+_CONSENT_ASSOCIATION_TABLE = "heimdal_raw_consent_association"
+_GENERATION_TABLE = "heimdal_raw_liveness_generation"
+_TOMBSTONE_TABLE = "heimdal_raw_deletion_tombstone"
+_RETENTION_CLAIM_TABLE = "heimdal_raw_retention_claim"
+_DELETION_RECEIPT_TABLE = "heimdal_raw_deletion_receipt"
 
 _MIGRATION_HINT = (
     "the location-aware Heimdal raw schema is migration-owned: run "
     "'alembic upgrade head' against this database. See revisions "
-    "e7b4c9d2a6f1, c5d8a1e4f2b7, e2f3a4b5c6d7, and f4b6c8d0e2a1."
+    "e7b4c9d2a6f1, c5d8a1e4f2b7, e2f3a4b5c6d7, f4b6c8d0e2a1, "
+    "and a9d7c5e3b1f0."
 )
 
 _KEY_ENV_VAR = "HEIMDAL_RAW_STORE_KEY"
@@ -102,14 +109,64 @@ _LOCATION_REF_PREFIX = "heimloc:"
 _COLD_ARCHIVE_ROOT_ENV = "HEIMDAL_ARCHIVE_ROOT"
 _COLD_ARCHIVE_MUTATION_LOCK = ".heimdal-archive-mutation.lock"
 _COLD_LOCATION_CONSTRAINT = "heimdal_raw_representation_cold_location_bound_check"
+_ARCHIVE_GENERATION_CONSTRAINT = "heimdal_raw_representation_archive_generation_check"
+_COLD_OWNER_CONSTRAINT = "heimdal_raw_representation_cold_owner_check"
+_GENERATION_FK_CONSTRAINT = "heimdal_raw_representation_generation_fk"
 _COLD_LOCATION_REF_PATTERN = (
     r"^heimloc:cold:[0-9a-f]{64}:"
     r"[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
 )
 _COLD_LOCATION_REF_RE = re.compile(_COLD_LOCATION_REF_PATTERN)
+
+
+@dataclass(frozen=True)
+class _ColdArchiveBinding:
+    archive_root: Path
+    archive_token: str
+    archive_generation: str
+
+
+@dataclass(frozen=True)
+class _ColdObjectOwnership:
+    location_ref: str
+    archive_token: str
+    archive_generation: str
+    raw_generation: int
+    representation_id: str
+    record_id: str | None = None
+    content_identity: str | None = None
+    nonce: bytes | None = None
+
+
+@dataclass(frozen=True)
+class _ColdBindingSnapshot:
+    """Immutable process authority captured before taking the archive lock."""
+
+    binding: _ColdArchiveBinding
+    expected: _ColdObjectOwnership
+    object_path: Path
+    cached_path: Path | None
+    cached_ownership: _ColdObjectOwnership | None
+
+
 _cold_location_paths: Dict[str, Path] = {}
-_verified_cold_archive_root: Path | None = None
-_verified_cold_archive_token: str | None = None
+_cold_location_ownership: Dict[str, _ColdObjectOwnership] = {}
+_COLD_BINDING_LOCK = threading.RLock()
+_verified_cold_archive_binding: _ColdArchiveBinding | None = None
+_expected_cold_delete_ownership: ContextVar[_ColdObjectOwnership | None] = ContextVar(
+    "heimdal_expected_cold_delete_ownership",
+    default=None,
+)
+_expected_cold_delete_snapshot: ContextVar[_ColdBindingSnapshot | None] = ContextVar(
+    "heimdal_expected_cold_delete_snapshot",
+    default=None,
+)
+_cold_archive_lock_held: ContextVar[bool] = ContextVar(
+    "heimdal_cold_archive_lock_held",
+    default=False,
+)
+_cold_read_stage_hook: Callable[[str, str], None] = lambda _stage, _location_ref: None
+_cold_delete_stage_hook: Callable[[str, Path], None] = lambda _stage, _path: None
 _MEMORY_ARCHIVE_RELOCATION_LEASE = threading.Lock()
 _ARCHIVE_RELOCATION_ADVISORY_LOCK = int.from_bytes(
     hashlib.sha256(b"heimdal.har04.archive-relocation").digest()[:8],
@@ -136,6 +193,22 @@ class RawRepresentationIdentityMismatchError(RuntimeError):
 
 class RawArchiveRelocationLeaseUnavailableError(RuntimeError):
     """Raised when another bounded HAR-04 relocation pass owns the run lease."""
+
+
+RAW_MODALITY_UNSPECIFIED = "unspecified"
+_RAW_MODALITY_RE = re.compile(r"[a-z][a-z0-9_-]{0,63}")
+
+
+def canonical_raw_modality(value: object) -> str:
+    """Return one non-secret canonical modality for retirement receipts."""
+
+    if value is None:
+        return RAW_MODALITY_UNSPECIFIED
+    if not isinstance(value, str) or _RAW_MODALITY_RE.fullmatch(value) is None:
+        raise RawRepresentationUnavailableError(
+            "raw record modality metadata is not canonical"
+        )
+    return value
 
 
 def _archive_binding_token(archive_ref: str) -> str:
@@ -185,6 +258,121 @@ def _cold_location_constraint_is_ready(definition: str, validated: bool) -> bool
     return validated and normalize(definition) == normalize(expected)
 
 
+def _archive_generation_constraint_is_ready(definition: str, validated: bool) -> bool:
+    def normalize(value: str) -> str:
+        return (
+            re.sub(r"\s+", "", value.lower())
+            .replace("::text", "")
+            .replace("~~", "like")
+            .replace("(", "")
+            .replace(")", "")
+        )
+
+    expected = (
+        "CHECK ((storage_kind = 'postgres_hot' "
+        "AND archive_token IS NULL AND archive_generation IS NULL) OR "
+        "(storage_kind = 'encrypted_local_cold' "
+        "AND archive_token ~ '^[0-9a-f]{64}$' "
+        "AND (archive_generation ~ '^[0-9a-f]{64}$' OR archive_generation IS NULL) "
+        "AND location_ref LIKE 'heimloc:cold:' || archive_token || ':%'))"
+    )
+    return validated and normalize(definition) == normalize(expected)
+
+
+_REPRESENTATION_TRIGGER_BODY = (
+    "if tg_op in ('insert', 'update') then "
+    "select content_identity, generation into authority_identity, authority_generation "
+    "from heimdal_raw_liveness_generation where record_id = new.record_id; "
+    "if authority_identity is null or new.raw_generation is distinct from authority_generation then "
+    "raise exception 'raw representation has no matching liveness generation'; end if; "
+    "perform pg_advisory_xact_lock(hashtextextended(authority_identity, 0)); "
+    "if exists (select 1 from heimdal_raw_retention_claim where record_id = new.record_id) "
+    "or exists (select 1 from heimdal_raw_deletion_tombstone where record_id = new.record_id) then "
+    "raise exception 'raw representation cannot mutate a retiring generation'; end if; "
+    "if new.storage_kind = 'encrypted_local_cold' and exists (select 1 from heimdal_raw_deletion_receipt "
+    "where coalesce(payload->'cold_cleanup_location_refs', '[]'::jsonb) ? new.location_ref) then "
+    "raise exception 'cold location remains owned by pending governed cleanup'; end if; "
+    "if tg_op = 'insert' then return new; end if; end if; "
+    "if tg_op = 'update' and current_setting('app.heimdal_legacy_archive_reconcile', true) = 'true' "
+    "and new.id is not distinct from old.id and new.record_id is not distinct from old.record_id "
+    "and new.storage_kind is not distinct from old.storage_kind and new.location_ref is not distinct from old.location_ref "
+    "and new.ciphertext is not distinct from old.ciphertext and new.nonce is not distinct from old.nonce "
+    "and new.key_ref is not distinct from old.key_ref and new.raw_generation is not distinct from old.raw_generation "
+    "and new.archive_token is not distinct from old.archive_token and old.archive_generation is null "
+    "and new.archive_generation ~ '^[0-9a-f]{64}$' and new.registered_at is not distinct from old.registered_at "
+    "and new.sequence is not distinct from old.sequence then return new; end if; "
+    "if tg_op = 'update' and current_setting('app.heimdal_representation_activation', true) = 'true' "
+    "and new.id is not distinct from old.id and new.record_id is not distinct from old.record_id "
+    "and new.storage_kind is not distinct from old.storage_kind and new.location_ref is not distinct from old.location_ref "
+    "and new.ciphertext is not distinct from old.ciphertext and new.nonce is not distinct from old.nonce "
+    "and new.key_ref is not distinct from old.key_ref and new.raw_generation is not distinct from old.raw_generation "
+    "and new.archive_token is not distinct from old.archive_token and new.archive_generation is not distinct from old.archive_generation "
+    "and new.registered_at is not distinct from old.registered_at and new.sequence is not distinct from old.sequence then "
+    "return new; end if; "
+    "if tg_op = 'delete' and current_setting('app.heimdal_retention_bypass', true) = 'true' "
+    "and exists (select 1 from heimdal_raw_deletion_tombstone where record_id = old.record_id) then "
+    "return old; end if; "
+    "raise exception 'heimdal_raw_representation mutation is governed: % is not permitted', tg_op;"
+)
+
+
+def _normalize_trigger_sql(value: str) -> str:
+    normalized = re.sub(r"\s+", " ", value).lower().strip()
+    normalized = re.sub(r"\s*->\s*", "->", normalized)
+    normalized = re.sub(r"::text\b", "", normalized)
+    normalized = re.sub(r"\(\s*", "(", normalized)
+    normalized = re.sub(r"\s*\)", ")", normalized)
+    return normalized
+
+
+def _representation_guard_is_migration_ready(
+    definition: str, trigger_definition: str
+) -> bool:
+    """Authenticate the exact guarded representation trigger and binding."""
+
+    normalized = _normalize_trigger_sql(definition)
+    trigger = _normalize_trigger_sql(trigger_definition)
+    begin_matches = list(re.finditer(r"\bbegin\b", normalized, re.IGNORECASE))
+    end_matches = list(re.finditer(r"\bend\s*;", normalized, re.IGNORECASE))
+    body = (
+        normalized[begin_matches[0].end() : end_matches[0].start()].strip()
+        if len(begin_matches) == 1 and len(end_matches) == 1
+        else ""
+    )
+    trigger_bound = re.fullmatch(
+        r"create trigger heimdal_raw_representation_no_mutation "
+        r"before ((?:insert|update|delete)(?: or (?:insert|update|delete)){2}) on "
+        r"(?:[a-z_][a-z0-9_]*\.)?heimdal_raw_representation "
+        r"for each row execute function "
+        r"(?:[a-z_][a-z0-9_]*\.)?heimdal_raw_representation_reject_mutation\(\)",
+        trigger,
+    )
+    expected_body = _normalize_trigger_sql(_REPRESENTATION_TRIGGER_BODY)
+    return bool(
+        body == expected_body
+        and trigger_bound is not None
+        and set(trigger_bound.group(1).split(" or ")) == {"insert", "update", "delete"}
+    )
+
+
+def _cold_owner_constraint_is_ready(definition: str, validated: bool) -> bool:
+    """Require a cold locator's object UUID to equal its representation id."""
+
+    def normalize(value: str) -> str:
+        return (
+            re.sub(r"\s+", "", value.lower())
+            .replace("::text", "")
+            .replace("(", "")
+            .replace(")", "")
+        )
+
+    expected = (
+        "CHECK (storage_kind <> 'encrypted_local_cold' OR "
+        "location_ref = 'heimloc:cold:' || archive_token || ':' || id::text)"
+    )
+    return validated and normalize(definition) == normalize(expected)
+
+
 def _require_verified_cold_volume(
     archive_root: Path, verified_volume: object, expected_archive_ref: str | None = None
 ) -> None:
@@ -205,11 +393,23 @@ def _require_verified_cold_volume(
 
 
 def register_cold_location(
-    location_ref: str, object_path: Path, *, verified_volume: object
+    location_ref: str,
+    object_path: Path,
+    *,
+    verified_volume: object,
+    raw_generation: int,
+    representation_id: str,
 ) -> None:
-    """Bind an opaque cold handle only under a verified-volume capability."""
+    """Bind one exact cold owner under a verified-volume capability."""
     parsed = _parse_cold_location_ref(location_ref)
-    if parsed is None or not object_path.is_absolute() or object_path.name != f"{parsed[1]}.bin":
+    if (
+        parsed is None
+        or not object_path.is_absolute()
+        or object_path.name != f"{parsed[1]}.bin"
+        or parsed[1] != representation_id
+        or type(raw_generation) is not int
+        or raw_generation <= 0
+    ):
         raise ValueError("cold object path does not match its opaque location handle")
     archive_ref = getattr(verified_volume, "archive_ref", "")
     if parsed[0] != _archive_binding_token(str(archive_ref)):
@@ -221,7 +421,42 @@ def register_cold_location(
         verified_volume,
         expected_archive_ref=str(archive_ref),
     )
-    _cold_location_paths[location_ref] = object_path
+    archive_generation = str(getattr(verified_volume, "archive_generation", ""))
+    ownership = _ColdObjectOwnership(
+        location_ref=location_ref,
+        archive_token=parsed[0],
+        archive_generation=archive_generation,
+        raw_generation=raw_generation,
+        representation_id=representation_id,
+    )
+    from app.heimdal import raw_liveness
+
+    if raw_liveness.cold_cleanup_location_is_pending(location_ref):
+        raise RawRepresentationDeletionError(
+            "cold location remains owned by pending governed cleanup"
+        )
+    with _COLD_BINDING_LOCK:
+        binding = _verified_cold_archive_binding
+        if (
+            binding is None
+            or binding.archive_root != object_path.parent.parent
+            or binding.archive_token != parsed[0]
+            or binding.archive_generation != archive_generation
+        ):
+            raise RawRepresentationDeletionError(
+                "cold location proof does not match the active archive generation"
+            )
+        existing_path = _cold_location_paths.get(location_ref)
+        existing_ownership = _cold_location_ownership.get(location_ref)
+        if (
+            existing_path is not None
+            and (existing_path != object_path or existing_ownership != ownership)
+        ):
+            raise RawRepresentationDeletionError(
+                "cold location is already bound to a different raw generation"
+            )
+        _cold_location_paths[location_ref] = object_path
+        _cold_location_ownership[location_ref] = ownership
 
 
 @contextmanager
@@ -257,20 +492,27 @@ def cold_archive_mutation_lock(archive_root: Path, *, verified_volume: object) -
 
     _require_verified_cold_volume(archive_root, verified_volume)
     with _cold_archive_mutation_lock(archive_root, blocking=True):
-        yield
+        token = _cold_archive_lock_held.set(True)
+        try:
+            yield
+        finally:
+            _cold_archive_lock_held.reset(token)
 
 
 def discard_cold_location(location_ref: str) -> None:
     """Forget a location handle when registration never reached raw authority."""
-    _cold_location_paths.pop(location_ref, None)
+    with _COLD_BINDING_LOCK:
+        _cold_location_paths.pop(location_ref, None)
+        _cold_location_ownership.pop(location_ref, None)
 
 
 def revoke_cold_archive_binding() -> None:
     """Revoke process-local cold authority before a failed restart rebind."""
-    global _verified_cold_archive_root, _verified_cold_archive_token
-    _verified_cold_archive_root = None
-    _verified_cold_archive_token = None
-    _cold_location_paths.clear()
+    global _verified_cold_archive_binding
+    with _COLD_BINDING_LOCK:
+        _verified_cold_archive_binding = None
+        _cold_location_paths.clear()
+        _cold_location_ownership.clear()
     os.environ.pop(_COLD_ARCHIVE_ROOT_ENV, None)
 
 
@@ -326,48 +568,489 @@ def configure_cold_archive_root(
     _require_verified_cold_volume(archive_root, verified_volume, expected_archive_ref)
     archive_ref = str(getattr(verified_volume, "archive_ref", ""))
     archive_token = _archive_binding_token(archive_ref)
-    global _verified_cold_archive_root, _verified_cold_archive_token
-    _verified_cold_archive_root = archive_root
-    _verified_cold_archive_token = archive_token
-    # A rebind revokes every cache entry minted under the prior capability.
-    # Bound handles remain resolvable from their persisted archive token only
-    # when the newly verified archive identity matches.
-    _cold_location_paths.clear()
+    archive_generation = str(getattr(verified_volume, "archive_generation", ""))
+    if re.fullmatch(r"[0-9a-f]{64}", archive_generation) is None:
+        raise RawRepresentationDeletionError("verified archive generation is invalid")
+    global _verified_cold_archive_binding
+    with _COLD_BINDING_LOCK:
+        _verified_cold_archive_binding = _ColdArchiveBinding(
+            archive_root=archive_root,
+            archive_token=archive_token,
+            archive_generation=archive_generation,
+        )
+        # A rebind revokes every cache entry minted under the prior capability.
+        _cold_location_paths.clear()
+        _cold_location_ownership.clear()
     os.environ[_COLD_ARCHIVE_ROOT_ENV] = str(archive_root)
 
 
-def _resolve_cold_ciphertext(location_ref: str) -> bytes:
-    parsed = _parse_cold_location_ref(location_ref)
-    if parsed is None or parsed[0] != _verified_cold_archive_token:
-        raise RawRepresentationUnavailableError(
-            "cold representation archive identity is unavailable"
+def reconcile_legacy_cold_representation(
+    record_id: str,
+    representation_id: str,
+    *,
+    verified_volume: object,
+) -> None:
+    """Bind one pre-HAR-05 cold row after proving its existing archive.
+
+    HAR-04 persisted the archive token in the opaque location and in its
+    redacted receipt, but HAR-05 adds the independently verified volume
+    generation and manifest ownership state.  The migration therefore keeps
+    bound legacy rows readable only as metadata; this explicit operator path
+    upgrades one row after checking the mounted bytes and receipt.  No
+    generation is guessed from the location token.
+    """
+
+    if resolve_heimdal_backend() != "pg":
+        raise RawRepresentationDeletionError(
+            "legacy cold reconciliation requires the PostgreSQL backend"
         )
-    object_path = _cold_location_paths.get(location_ref)
-    if object_path is None:
-        if _verified_cold_archive_root is not None:
-            object_path = _verified_cold_archive_root / "representations" / f"{parsed[1]}.bin"
-    if object_path is None:
-        raise RawRepresentationUnavailableError("cold representation resolver is unavailable")
+    try:
+        record_uuid = str(UUID(record_id))
+        representation_uuid = str(UUID(representation_id))
+    except (TypeError, ValueError, AttributeError) as exc:
+        raise ValueError("record_id and representation_id must be canonical UUIDs") from exc
+    if record_uuid != record_id or representation_uuid != representation_id:
+        raise ValueError("record_id and representation_id must be canonical UUIDs")
+    _require_verified_cold_volume(
+        Path(str(getattr(verified_volume, "mountpoint", ""))),
+        verified_volume,
+    )
+    archive_root = Path(str(getattr(verified_volume, "mountpoint")))
+    archive_ref = str(getattr(verified_volume, "archive_ref", ""))
+    archive_token = _archive_binding_token(archive_ref)
+    archive_generation = str(getattr(verified_volume, "archive_generation", ""))
+    if re.fullmatch(r"[0-9a-f]{64}", archive_generation) is None:
+        raise RawRepresentationDeletionError("verified archive generation is invalid")
+
+    conn = _pg_connect(autocommit=False)
+    try:
+        _assert_pg_schema(conn, allow_legacy_reconciliation=True)
+        cur = conn.cursor()
+        cur.execute(
+            f"SELECT p.record_id, r.content_identity, p.storage_kind, p.location_ref, "
+            f"p.raw_generation, p.archive_token, p.archive_generation, p.nonce "
+            f"FROM {_REPRESENTATION_TABLE} AS p "
+            f"JOIN {_TABLE} AS r ON r.id = p.record_id "
+            "WHERE p.id = %s",
+            (representation_uuid,),
+        )
+        row = cur.fetchone()
+        if row is None or str(row[0]) != record_uuid:
+            raise RawRepresentationUnavailableError(
+                "legacy cold representation is unavailable"
+            )
+        content_identity = str(row[1])
+        from app.heimdal import raw_liveness
+
+        # Retirement and reconciliation share the same content-identity
+        # advisory fence. Acquire it before the representation row lock so a
+        # concurrent governed delete cannot invert the lock order.
+        raw_liveness.acquire_pg_fence(cur, content_identity)
+        cur.execute(
+            f"SELECT p.record_id, r.content_identity, p.storage_kind, p.location_ref, "
+            f"p.raw_generation, p.archive_token, p.archive_generation, p.nonce "
+            f"FROM {_REPRESENTATION_TABLE} AS p "
+            f"JOIN {_TABLE} AS r ON r.id = p.record_id "
+            "WHERE p.id = %s FOR UPDATE",
+            (representation_uuid,),
+        )
+        row = cur.fetchone()
+        if row is None or str(row[0]) != record_uuid:
+            raise RawRepresentationUnavailableError(
+                "legacy cold representation changed during reconciliation"
+            )
+        if row[2] != _COLD_STORAGE_KIND:
+            raise RawRepresentationUnavailableError(
+                "legacy reconciliation requires an encrypted local-cold representation"
+            )
+        location_ref = str(row[3])
+        parsed = _parse_cold_location_ref(location_ref)
+        if parsed is None or parsed[0] != archive_token or parsed[1] != representation_uuid:
+            raise RawRepresentationUnavailableError(
+                "legacy cold representation archive identity does not match the proof"
+            )
+        if row[6] is not None:
+            if str(row[6]) != archive_generation:
+                raise RawRepresentationUnavailableError(
+                    "cold representation is bound to a different archive generation"
+                )
+            conn.commit()
+            return
+        if row[5] != archive_token:
+            raise RawRepresentationUnavailableError(
+                "legacy cold representation lacks the proven archive token"
+            )
+
+        from app.heimdal.local_archive import _durable_write
+
+        manifest_path = archive_root / "manifests" / f"{representation_uuid}.json"
+        object_path = archive_root / "representations" / f"{representation_uuid}.bin"
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+            raise RawRepresentationUnavailableError(
+                "legacy cold archive manifest is unavailable"
+            ) from exc
+        required = {
+            "record_id": record_uuid,
+            "representation_id": representation_uuid,
+            "content_identity": content_identity,
+        }
+        try:
+            receipt_id = str(UUID(str(manifest.get("receipt_id"))))
+            verified_at = datetime.fromisoformat(
+                str(manifest.get("verified_at", "")).replace("Z", "+00:00")
+            )
+            receipt_shape_valid = (
+                manifest.get("schema") == "heimdal_archive_receipt.v1"
+                and receipt_id == manifest.get("receipt_id")
+                and verified_at.tzinfo is not None
+            )
+        except (TypeError, ValueError, AttributeError):
+            receipt_shape_valid = False
+        if (
+            not object_path.is_file()
+            or not isinstance(manifest, dict)
+            or not receipt_shape_valid
+            or any(manifest.get(key) != value for key, value in required.items())
+            or manifest.get("encrypted_bytes") != object_path.stat().st_size
+            or manifest.get("ciphertext_sha256")
+            != hashlib.sha256(object_path.read_bytes()).hexdigest()
+        ):
+            raise RawRepresentationUnavailableError(
+                "legacy cold archive proof does not match the representation"
+            )
+        ciphertext = object_path.read_bytes()
+        decrypt_and_verify_raw_bytes(
+            content_identity,
+            ciphertext,
+            bytes(row[7]),
+            key=resolve_raw_store_key(),
+        )
+        # HAR-04 manifests are receipts, not ownership records: the archive
+        # token, volume generation, and raw generation were durable only in
+        # the registry/proof. Materialize those trusted values only after the
+        # legacy receipt and ciphertext have been independently verified.
+        manifest.update(
+            {
+                "location_ref": location_ref,
+                "archive_token": archive_token,
+                "archive_generation": archive_generation,
+                "raw_generation": int(row[4]),
+            }
+        )
+        manifest["ownership_state"] = "verified"
+        _durable_write(
+            manifest_path,
+            (json.dumps(manifest, sort_keys=True, separators=(",", ":")) + "\n").encode(),
+        )
+        cur.execute(
+            "SELECT set_config('app.heimdal_legacy_archive_reconcile', 'true', true)"
+        )
+        cur.execute(
+            f"UPDATE {_REPRESENTATION_TABLE} SET archive_generation = %s "
+            "WHERE id = %s AND archive_generation IS NULL",
+            (archive_generation, representation_uuid),
+        )
+        if cur.rowcount != 1:
+            raise RawRepresentationUnavailableError(
+                "legacy cold representation changed during reconciliation"
+            )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def _snapshot_cold_binding(
+    location_ref: str,
+    *,
+    expected_archive_token: str,
+    expected_archive_generation: str,
+    expected_raw_generation: int,
+    expected_representation_id: str,
+    expected_record_id: str | None = None,
+    expected_content_identity: str | None = None,
+    expected_nonce: bytes | None = None,
+) -> _ColdBindingSnapshot | None:
+    """Capture one exact binding/cache view without performing archive I/O."""
+
+    parsed = _parse_cold_location_ref(location_ref)
+    expected = _ColdObjectOwnership(
+        location_ref=location_ref,
+        archive_token=expected_archive_token,
+        archive_generation=expected_archive_generation,
+        raw_generation=expected_raw_generation,
+        representation_id=expected_representation_id,
+        record_id=expected_record_id,
+        content_identity=expected_content_identity,
+        nonce=expected_nonce,
+    )
+    with _COLD_BINDING_LOCK:
+        binding = _verified_cold_archive_binding
+        if (
+            parsed is None
+            or parsed[0] != expected_archive_token
+            or binding is None
+            or binding.archive_token != expected_archive_token
+            or binding.archive_generation != expected_archive_generation
+            or parsed[1] != expected_representation_id
+        ):
+            return None
+        cached_path = _cold_location_paths.get(location_ref)
+        cached_ownership = _cold_location_ownership.get(location_ref)
+        # The path cache is optional across a restart; the ownership cache may
+        # still be present while the path entry is rebuilt from the verified
+        # archive binding.  The inverse state (a path without its ownership)
+        # is ambiguous and must fail closed.
+        if cached_path is not None and cached_ownership is None:
+            return None
+        if cached_ownership is not None and (
+            cached_ownership.location_ref != expected.location_ref
+            or cached_ownership.archive_token != expected.archive_token
+            or cached_ownership.archive_generation != expected.archive_generation
+            or cached_ownership.raw_generation != expected.raw_generation
+            or cached_ownership.representation_id != expected.representation_id
+        ):
+            return None
+        object_path = cached_path or (
+            binding.archive_root / "representations" / f"{expected_representation_id}.bin"
+        )
+        return _ColdBindingSnapshot(
+            binding=binding,
+            expected=expected,
+            object_path=object_path,
+            cached_path=cached_path,
+            cached_ownership=cached_ownership,
+        )
+
+
+def _cold_binding_snapshot_is_current(snapshot: _ColdBindingSnapshot) -> bool:
+    """Revalidate one snapshot while the caller holds ``_COLD_BINDING_LOCK``."""
+
+    return (
+        _verified_cold_archive_binding == snapshot.binding
+        and _cold_location_paths.get(snapshot.expected.location_ref) == snapshot.cached_path
+        and _cold_location_ownership.get(snapshot.expected.location_ref)
+        == snapshot.cached_ownership
+    )
+
+
+def _resolve_cold_ciphertext(
+    location_ref: str,
+    *,
+    expected_archive_token: str,
+    expected_archive_generation: str,
+    expected_raw_generation: int,
+    expected_representation_id: str,
+) -> bytes:
+    snapshot = _snapshot_cold_binding(
+        location_ref,
+        expected_archive_token=expected_archive_token,
+        expected_archive_generation=expected_archive_generation,
+        expected_raw_generation=expected_raw_generation,
+        expected_representation_id=expected_representation_id,
+    )
+    if snapshot is None:
+        raise RawRepresentationUnavailableError(
+            "cold representation archive identity/generation is unavailable"
+        )
+    _cold_read_stage_hook("after_binding_snapshot", location_ref)
     ciphertext: bytes | None = None
     try:
-        ciphertext = object_path.read_bytes()
-    except OSError:
+
+        def read_verified() -> bytes:
+            # Canonical lock order is archive mutation lock, then binding lock.
+            # Holding the latter through manifest/object I/O prevents a rebind
+            # from invalidating the revalidated capability mid-read.
+            with _COLD_BINDING_LOCK:
+                if not _cold_binding_snapshot_is_current(snapshot):
+                    raise RawRepresentationDeletionError(
+                        "cold representation binding changed before archive read"
+                    )
+                _verify_cold_manifest_ownership(
+                    snapshot.object_path,
+                    snapshot.expected,
+                )
+                return snapshot.object_path.read_bytes()
+
+        # Revalidate before trying to acquire the archive lock.  Relocation
+        # publishes a new binding before taking that lock; returning here on
+        # the changed snapshot avoids a binding/archive lock cycle.
+        with _COLD_BINDING_LOCK:
+            if not _cold_binding_snapshot_is_current(snapshot):
+                raise RawRepresentationDeletionError(
+                    "cold representation binding changed before archive lock"
+                )
+        if _cold_archive_lock_held.get():
+            ciphertext = read_verified()
+        else:
+            with _cold_archive_mutation_lock(snapshot.binding.archive_root, blocking=True):
+                _cold_read_stage_hook("after_archive_lock", location_ref)
+                ciphertext = read_verified()
+    except (OSError, RawRepresentationDeletionError):
         pass
     if ciphertext is None:
         raise RawRepresentationUnavailableError("cold representation bytes are unavailable")
     return ciphertext
 
 
-def _cold_object_path(location_ref: str) -> Path | None:
+def _cold_object_path(
+    location_ref: str,
+    *,
+    expected_archive_token: str | None = None,
+    expected_archive_generation: str | None = None,
+    expected_raw_generation: int | None = None,
+    expected_representation_id: str | None = None,
+) -> Path | None:
     parsed = _parse_cold_location_ref(location_ref)
-    if parsed is None or parsed[0] != _verified_cold_archive_token:
-        return None
-    object_path = _cold_location_paths.get(location_ref)
-    if object_path is not None:
-        return object_path
-    if _verified_cold_archive_root is not None:
-        return _verified_cold_archive_root / "representations" / f"{parsed[1]}.bin"
-    return None
+    with _COLD_BINDING_LOCK:
+        binding = _verified_cold_archive_binding
+        if (
+            parsed is None
+            or binding is None
+            or parsed[0] != binding.archive_token
+            or (
+                expected_archive_token is not None
+                and expected_archive_token != binding.archive_token
+            )
+            or (
+                expected_archive_generation is not None
+                and expected_archive_generation != binding.archive_generation
+            )
+            or (
+                expected_representation_id is not None
+                and parsed[1] != expected_representation_id
+            )
+        ):
+            return None
+        object_path = _cold_location_paths.get(location_ref)
+        cached_ownership = _cold_location_ownership.get(location_ref)
+        if cached_ownership is not None and (
+            (
+                expected_raw_generation is not None
+                and cached_ownership.raw_generation != expected_raw_generation
+            )
+            or (
+                expected_representation_id is not None
+                and cached_ownership.representation_id != expected_representation_id
+            )
+            or cached_ownership.archive_token != binding.archive_token
+            or cached_ownership.archive_generation != binding.archive_generation
+        ):
+            return None
+        if object_path is not None:
+            return object_path
+        return binding.archive_root / "representations" / f"{parsed[1]}.bin"
+
+
+def _verify_cold_manifest_ownership(
+    object_path: Path,
+    expected: _ColdObjectOwnership,
+    *,
+    allow_reserved: bool = False,
+    allow_missing_object: bool = False,
+) -> None:
+    """Fail closed unless the redacted manifest owns this exact object tuple."""
+
+    manifest_path = object_path.parent.parent / "manifests" / f"{object_path.stem}.json"
+    try:
+        payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise RawRepresentationDeletionError(
+            "cold representation manifest ownership is unavailable"
+        ) from exc
+    required = {
+        "location_ref": expected.location_ref,
+        "archive_token": expected.archive_token,
+        "archive_generation": expected.archive_generation,
+        "raw_generation": expected.raw_generation,
+        "representation_id": expected.representation_id,
+    }
+    ownership_state = payload.get("ownership_state") if isinstance(payload, dict) else None
+    if not isinstance(payload, dict) or ownership_state is None:
+        # Explicit HAR-05 boundary: historical manifests without a governed
+        # state require reconciliation/re-archive and carry no implicit read,
+        # activation, or cleanup authority.
+        raise RawRepresentationDeletionError(
+            "cold representation manifest ownership state is unavailable"
+        )
+    accepted_states = {"verified", "reserved"} if allow_reserved else {"verified"}
+    if (
+        ownership_state not in accepted_states
+        or any(payload.get(key) != value for key, value in required.items())
+    ):
+        raise RawRepresentationDeletionError(
+            "cold representation manifest ownership generation mismatch"
+        )
+    if expected.record_id is not None and payload.get("record_id") != expected.record_id:
+        raise RawRepresentationDeletionError("cold representation manifest record mismatch")
+    if expected.content_identity is not None:
+        if allow_missing_object and not object_path.is_file():
+            if payload.get("content_identity") != expected.content_identity:
+                raise RawRepresentationDeletionError(
+                    "cold representation manifest content identity mismatch"
+                )
+            return
+        ciphertext = object_path.read_bytes()
+        if payload.get("content_identity") != expected.content_identity:
+            raise RawRepresentationDeletionError(
+                "cold representation manifest content identity mismatch"
+            )
+        if payload.get("encrypted_bytes") != len(ciphertext):
+            raise RawRepresentationDeletionError(
+                "cold representation manifest byte count mismatch"
+            )
+        if payload.get("ciphertext_sha256") != hashlib.sha256(ciphertext).hexdigest():
+            raise RawRepresentationDeletionError(
+                "cold representation manifest ciphertext mismatch"
+            )
+        if expected.nonce is None:
+            raise RawRepresentationDeletionError("cold representation nonce authority unavailable")
+        decrypt_and_verify_raw_bytes(
+            expected.content_identity,
+            ciphertext,
+            expected.nonce,
+            key=resolve_raw_store_key(),
+        )
+
+
+def _delete_bound_cold_object(
+    location_ref: str,
+    *,
+    expected_archive_token: str,
+    expected_archive_generation: str,
+    expected_raw_generation: int,
+    expected_representation_id: str,
+    expected_record_id: str | None = None,
+    expected_content_identity: str | None = None,
+    expected_nonce: bytes | None = None,
+) -> None:
+    """Resolve and delete under one indivisible verified binding snapshot."""
+
+    snapshot = _snapshot_cold_binding(
+        location_ref,
+        expected_archive_token=expected_archive_token,
+        expected_archive_generation=expected_archive_generation,
+        expected_raw_generation=expected_raw_generation,
+        expected_representation_id=expected_representation_id,
+        expected_record_id=expected_record_id,
+        expected_content_identity=expected_content_identity,
+        expected_nonce=expected_nonce,
+    )
+    if snapshot is None:
+        raise RawRepresentationDeletionError(
+            "cold representation archive binding is unavailable"
+        )
+    ownership_token = _expected_cold_delete_ownership.set(snapshot.expected)
+    snapshot_token = _expected_cold_delete_snapshot.set(snapshot)
+    try:
+        _delete_cold_object_path(snapshot.object_path)
+    finally:
+        _expected_cold_delete_snapshot.reset(snapshot_token)
+        _expected_cold_delete_ownership.reset(ownership_token)
 
 
 def _delete_cold_objects_for_record(record_id: str) -> None:
@@ -375,70 +1058,148 @@ def _delete_cold_objects_for_record(record_id: str) -> None:
     for representation in all_raw_representations(record_id):
         if representation.storage_kind != _COLD_STORAGE_KIND:
             continue
-        object_path = _cold_object_path(representation.location_ref)
-        if object_path is None:
-            raise RawRepresentationDeletionError("cold representation resolver is unavailable")
-        _delete_cold_object_path(object_path)
+        if not representation.archive_token or not representation.archive_generation:
+            raise RawRepresentationDeletionError(
+                "cold representation lacks exact archive ownership"
+            )
+        _delete_bound_cold_object(
+            representation.location_ref,
+            expected_archive_token=representation.archive_token,
+            expected_archive_generation=representation.archive_generation,
+            expected_raw_generation=representation.raw_generation,
+            expected_representation_id=representation.id,
+            expected_record_id=record_id,
+            expected_content_identity=next(
+                record.content_identity
+                for record in all_raw_records()
+                if record.id == record_id
+            ),
+            expected_nonce=representation.nonce,
+        )
 
 
 def _delete_cold_objects_for_pg_cursor(cur: Any, record_id: str) -> None:
     """Remove cold objects while the deletion transaction owns representation locks."""
-    for object_path in _cold_object_paths_for_pg_cursor(cur, record_id):
-        _delete_cold_object_path(object_path)
-
-
-def _cold_object_paths_for_pg_cursor(cur: Any, record_id: str) -> list[Path]:
-    """Capture locked cold paths for post-commit cleanup."""
     cur.execute(
-        f"SELECT location_ref FROM {_REPRESENTATION_TABLE} "
-        "WHERE record_id = %s AND storage_kind = %s FOR UPDATE",
+        f"SELECT p.id, p.location_ref, p.archive_token, p.archive_generation, "
+        f"p.raw_generation, p.nonce, r.content_identity "
+        f"FROM {_REPRESENTATION_TABLE} AS p JOIN {_TABLE} AS r ON r.id = p.record_id "
+        "WHERE p.record_id = %s AND p.storage_kind = %s FOR UPDATE",
         (record_id, _COLD_STORAGE_KIND),
     )
-    paths: list[Path] = []
     for row in cur.fetchall():
-        object_path = _cold_object_path(str(row[0]))
-        if object_path is None:
-            raise RawRepresentationDeletionError("cold representation resolver is unavailable")
-        paths.append(object_path)
-    return paths
-
-
-def _cold_location_paths_for_pg_cursor(cur: Any, record_id: str) -> list[tuple[str, Path]]:
-    """Capture opaque cold refs and paths under representation locks."""
-    cur.execute(
-        f"SELECT location_ref FROM {_REPRESENTATION_TABLE} "
-        "WHERE record_id = %s AND storage_kind = %s FOR UPDATE",
-        (record_id, _COLD_STORAGE_KIND),
-    )
-    locations: list[tuple[str, Path]] = []
-    for row in cur.fetchall():
-        location_ref = str(row[0])
-        object_path = _cold_object_path(location_ref)
-        if object_path is None:
-            raise RawRepresentationDeletionError("cold representation resolver is unavailable")
-        locations.append((location_ref, object_path))
-    return locations
+        if len(row) == 5:
+            # Compatibility for narrow in-memory cursor fakes; the real PG
+            # query above always returns the cryptographic authority columns.
+            representation_id, location_ref, archive_token, archive_generation, raw_generation = row
+            nonce = None
+            content_identity = None
+        else:
+            (
+                representation_id,
+                location_ref,
+                archive_token,
+                archive_generation,
+                raw_generation,
+                nonce,
+                content_identity,
+            ) = row
+        if not archive_token or not archive_generation:
+            raise RawRepresentationDeletionError(
+                "cold representation lacks exact archive ownership"
+            )
+        _delete_bound_cold_object(
+            str(location_ref),
+            expected_archive_token=str(archive_token),
+            expected_archive_generation=str(archive_generation),
+            expected_raw_generation=int(raw_generation),
+            expected_representation_id=str(representation_id),
+            expected_record_id=record_id if content_identity is not None else None,
+            expected_content_identity=(
+                str(content_identity) if content_identity is not None else None
+            ),
+            expected_nonce=bytes(nonce) if nonce is not None else None,
+        )
 
 
 def _delete_cold_object_path(object_path: Path) -> None:
-    deletion_failed = False
     try:
         with _cold_archive_mutation_lock(object_path.parent.parent, blocking=False):
-            object_path.unlink(missing_ok=True)
-            object_path.parent.parent.joinpath("manifests", f"{object_path.stem}.json").unlink(
-                missing_ok=True
+            manifest_path = object_path.parent.parent.joinpath(
+                "manifests", f"{object_path.stem}.json"
             )
-    except OSError:
-        deletion_failed = True
+            expected = _expected_cold_delete_ownership.get()
+            snapshot = _expected_cold_delete_snapshot.get()
+            if expected is None or snapshot is None or snapshot.object_path != object_path:
+                raise RawRepresentationDeletionError(
+                    "cold representation deletion lacks exact binding authority"
+                )
+            # Canonical order is archive mutation lock, then binding lock.
+            # Revalidation plus external I/O stay inside that order so neither
+            # rebind nor cache replacement can retarget this cleanup.
+            with _COLD_BINDING_LOCK:
+                if not _cold_binding_snapshot_is_current(snapshot):
+                    raise RawRepresentationDeletionError(
+                        "cold representation binding changed before deletion"
+                    )
+                object_exists = object_path.exists()
+                manifest_exists = manifest_path.exists()
+                if object_exists or manifest_exists:
+                    _verify_cold_manifest_ownership(
+                        object_path,
+                        expected,
+                        allow_reserved=True,
+                        allow_missing_object=not object_exists and manifest_exists,
+                    )
+                if object_exists and not manifest_exists:
+                    raise RawRepresentationDeletionError(
+                        "cold representation manifest ownership is unavailable"
+                    )
+
+                # Receipt/queue authority may advance only after each removal
+                # is independently crash durable in this exact sequence.
+                _cold_delete_stage_hook("before_unlink", object_path)
+                object_path.unlink(missing_ok=True)
+                _cold_delete_stage_hook("after_object_unlink", object_path)
+                directory_fd = os.open(object_path.parent, os.O_RDONLY)
+                try:
+                    os.fsync(directory_fd)
+                finally:
+                    os.close(directory_fd)
+                _cold_delete_stage_hook("after_object_directory_fsync", object_path)
+
+                manifest_path.unlink(missing_ok=True)
+                _cold_delete_stage_hook("after_manifest_unlink", manifest_path)
+                directory_fd = os.open(manifest_path.parent, os.O_RDONLY)
+                try:
+                    os.fsync(directory_fd)
+                finally:
+                    os.close(directory_fd)
+                _cold_delete_stage_hook("after_manifest_directory_fsync", manifest_path)
+
+                _cold_location_paths.pop(expected.location_ref, None)
+                _cold_location_ownership.pop(expected.location_ref, None)
     except RawRepresentationDeletionError:
-        deletion_failed = True
-    if deletion_failed:
-        raise RawRepresentationDeletionError("cold representation deletion failed")
+        raise
+    except OSError as exc:
+        raise RawRepresentationDeletionError(
+            "cold representation deletion failed"
+        ) from exc
 
 
 def _representation_ciphertext(representation: "RawRepresentation") -> bytes:
     if representation.storage_kind == _COLD_STORAGE_KIND:
-        return _resolve_cold_ciphertext(representation.location_ref)
+        if not representation.archive_token or not representation.archive_generation:
+            raise RawRepresentationUnavailableError(
+                "cold representation lacks durable archive binding"
+            )
+        return _resolve_cold_ciphertext(
+            representation.location_ref,
+            expected_archive_token=representation.archive_token,
+            expected_archive_generation=representation.archive_generation,
+            expected_raw_generation=representation.raw_generation,
+            expected_representation_id=representation.id,
+        )
     return representation.ciphertext
 
 
@@ -581,6 +1342,9 @@ class RawRepresentation:
     active: bool
     registered_at: datetime
     sequence: int
+    raw_generation: int = 0
+    archive_token: Optional[str] = None
+    archive_generation: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -611,6 +1375,27 @@ class RawRecordCapacityMetadata:
     encrypted_bytes: int
 
 
+@dataclass(frozen=True)
+class RawConsentAssociation:
+    """Append-only consent coverage for one exact raw generation."""
+
+    record_id: str
+    generation: int
+    grant_ref: str
+    admitted_at: datetime
+    sequence: int
+
+
+@dataclass(frozen=True)
+class RawRetentionMetadata:
+    """Ciphertext-free selector row for one active raw generation."""
+
+    record_id: str
+    content_identity: str
+    generation: int
+    ingested_at: datetime
+
+
 class _MemoryRawStore:
     """In-process append-only store. Test/dev backend; volatile by design."""
 
@@ -620,6 +1405,33 @@ class _MemoryRawStore:
         self._by_identity: Dict[str, _RawIdentity] = {}
         self._representations: Dict[str, RawRepresentation] = {}
         self._representation_ids_by_record: Dict[str, List[str]] = {}
+        self._consent_associations: Dict[str, Dict[str, RawConsentAssociation]] = {}
+
+    def _associate_consent_locked(
+        self,
+        *,
+        record_id: str,
+        generation: int,
+        grant_ref: str,
+        admitted_at: datetime,
+    ) -> RawConsentAssociation:
+        associations = self._consent_associations.setdefault(record_id, {})
+        existing = associations.get(grant_ref)
+        if existing is not None:
+            if existing.generation != generation:
+                raise RawRepresentationUnavailableError(
+                    "consent association replay targets a different raw generation"
+                )
+            return existing
+        association = RawConsentAssociation(
+            record_id=record_id,
+            generation=generation,
+            grant_ref=grant_ref,
+            admitted_at=admitted_at,
+            sequence=sum(len(items) for items in self._consent_associations.values()),
+        )
+        associations[grant_ref] = association
+        return association
 
     def _active_representation_locked(self, record_id: str) -> RawRepresentation:
         active = [
@@ -630,7 +1442,22 @@ class _MemoryRawStore:
         if len(active) != 1 or active[0].storage_kind not in {
             _HOT_STORAGE_KIND,
             _COLD_STORAGE_KIND,
-        }:
+        } or active[0].raw_generation <= 0 or (
+            active[0].storage_kind == _HOT_STORAGE_KIND
+            and (
+                active[0].archive_token is not None
+                or active[0].archive_generation is not None
+            )
+        ) or (
+            active[0].storage_kind == _COLD_STORAGE_KIND
+            and (
+                not active[0].archive_token
+                or not active[0].archive_generation
+                or not active[0].location_ref.startswith(
+                    f"{_LOCATION_REF_PREFIX}cold:{active[0].archive_token}:"
+                )
+            )
+        ):
             raise RawRepresentationUnavailableError(
                 "raw identity does not have exactly one supported active registered representation"
             )
@@ -660,9 +1487,15 @@ class _MemoryRawStore:
         with raw_liveness.memory_fence(), self._lock:
             existing = self._by_identity.get(record.content_identity)
             if existing is not None:
-                raw_liveness.assert_memory_generation_active(
+                generation = raw_liveness.assert_memory_generation_active(
                     record_id=existing.id,
                     content_identity=record.content_identity,
+                )
+                self._associate_consent_locked(
+                    record_id=existing.id,
+                    generation=generation.generation,
+                    grant_ref=str(record.consent["grant_ref"]),
+                    admitted_at=datetime.now(timezone.utc),
                 )
                 return (
                     self._compose(existing, self._active_representation_locked(existing.id)),
@@ -696,16 +1529,28 @@ class _MemoryRawStore:
                 self._by_identity[record.content_identity] = identity
                 self._representations[representation.id] = representation
                 self._representation_ids_by_record[record.id] = [representation.id]
-                raw_liveness.register_memory_generation(
+                generation = raw_liveness.register_memory_generation(
                     record_id=record.id,
                     content_identity=record.content_identity,
                     activated_at=identity.ingested_at,
+                )
+                representation = replace(
+                    representation,
+                    raw_generation=generation.generation,
+                )
+                self._representations[representation.id] = representation
+                self._associate_consent_locked(
+                    record_id=record.id,
+                    generation=generation.generation,
+                    grant_ref=str(record.consent["grant_ref"]),
+                    admitted_at=identity.ingested_at,
                 )
             except Exception:
                 self._rows = [row for row in self._rows if row.id != record.id]
                 self._by_identity.pop(record.content_identity, None)
                 self._representations.pop(representation.id, None)
                 self._representation_ids_by_record.pop(record.id, None)
+                self._consent_associations.pop(record.id, None)
                 raise
             return self._compose(identity, representation), True
 
@@ -724,9 +1569,26 @@ class _MemoryRawStore:
 
     def all_rows(self) -> List[RawRecord]:
         with self._lock:
-            return [
-                self._compose(row, self._active_representation_locked(row.id)) for row in self._rows
+            snapshots = [
+                (row, self._active_representation_locked(row.id)) for row in self._rows
             ]
+        return [self._compose(row, representation) for row, representation in snapshots]
+
+    def record_ids_by_consent_grant(self, grant_ref: str) -> List[str]:
+        """Select raw identities by consent metadata without reading representations."""
+
+        with self._lock:
+            return [
+                row.id
+                for row in self._rows
+                if grant_ref in self._consent_associations.get(row.id, {})
+            ]
+
+    def consent_grant_refs(self, record_id: str) -> List[str]:
+        """Resolve every consent grant associated with one raw generation."""
+
+        with self._lock:
+            return list(self._consent_associations.get(record_id, {}))
 
     def archive_eligible_hot_rows(
         self,
@@ -764,12 +1626,57 @@ class _MemoryRawStore:
                 for row in self._rows
             ]
 
+    def retention_metadata_before(
+        self,
+        cutoff: datetime,
+        *,
+        modality: str | None = None,
+    ) -> List[RawRetentionMetadata]:
+        """Select expired identities without resolving any representation bytes."""
+
+        with self._lock:
+            selected: List[RawRetentionMetadata] = []
+            for row in self._rows:
+                if row.ingested_at >= cutoff or (
+                    modality is not None and row.payload.get("modality") != modality
+                ):
+                    continue
+                generations = {
+                    association.generation
+                    for association in self._consent_associations.get(row.id, {}).values()
+                }
+                if len(generations) != 1:
+                    raise RawRepresentationUnavailableError(
+                        "active raw identity lacks one correlated consent generation"
+                    )
+                selected.append(
+                    RawRetentionMetadata(
+                        record_id=row.id,
+                        content_identity=row.content_identity,
+                        generation=next(iter(generations)),
+                        ingested_at=row.ingested_at,
+                    )
+                )
+            return selected
+
+    def raw_modality(self, record_id: str) -> str:
+        """Read only non-secret modality metadata for governed deletion."""
+
+        with self._lock:
+            row = next((item for item in self._rows if item.id == record_id), None)
+            if row is None:
+                raise RawRepresentationUnavailableError(
+                    "raw record modality metadata is unavailable"
+                )
+            return canonical_raw_modality(row.payload.get("modality"))
+
     def get_by_content_identity(self, content_identity: str) -> Optional[RawRecord]:
         with self._lock:
             identity = self._by_identity.get(content_identity)
             if identity is None:
                 return None
-            return self._compose(identity, self._active_representation_locked(identity.id))
+            representation = self._active_representation_locked(identity.id)
+        return self._compose(identity, representation)
 
     def active_record_ids_by_content_identities(
         self, content_identities: List[str]
@@ -788,7 +1695,11 @@ class _MemoryRawStore:
             identity = next((row for row in self._rows if row.id == record_id), None)
             if identity is None:
                 return None
-            return self._compose(identity, self._active_representation_locked(record_id))
+            representation = self._active_representation_locked(record_id)
+        # Compose outside the store mutex: cold reads may perform verified
+        # archive I/O and must not prevent relocation from advancing the raw
+        # authority while a read snapshot is being revalidated.
+        return self._compose(identity, representation)
 
     def register_representation(
         self,
@@ -800,11 +1711,19 @@ class _MemoryRawStore:
         key: bytes,
         representation_id: str,
         activate: bool,
+        authority: object,
     ) -> tuple[RawRepresentation, bool]:
         with self._lock:
             identity = next((row for row in self._rows if row.id == record_id), None)
             if identity is None:
                 raise RawRepresentationUnavailableError("raw identity does not exist")
+            from app.heimdal import raw_liveness
+
+            mutation_authority = raw_liveness.require_raw_mutation_authority(
+                authority,
+                record_id=record_id,
+                content_identity=identity.content_identity,
+            )
             decrypt_and_verify_raw_bytes(
                 identity.content_identity,
                 ciphertext,
@@ -813,13 +1732,25 @@ class _MemoryRawStore:
             )
             existing = self._representations.get(representation_id)
             if existing is not None:
-                expected = (record_id, ciphertext, nonce, key_ref, _HOT_STORAGE_KIND)
+                expected = (
+                    record_id,
+                    ciphertext,
+                    nonce,
+                    key_ref,
+                    _HOT_STORAGE_KIND,
+                    mutation_authority.generation,
+                    None,
+                    None,
+                )
                 actual = (
                     existing.record_id,
                     existing.ciphertext,
                     existing.nonce,
                     existing.key_ref,
                     existing.storage_kind,
+                    existing.raw_generation,
+                    existing.archive_token,
+                    existing.archive_generation,
                 )
                 if actual != expected:
                     raise ValueError("representation id replay does not match registered bytes")
@@ -839,6 +1770,7 @@ class _MemoryRawStore:
                 active=False,
                 registered_at=datetime.now(timezone.utc),
                 sequence=len(self._representation_ids_by_record.get(record_id, [])),
+                raw_generation=mutation_authority.generation,
             )
             self._representations[representation.id] = representation
             self._representation_ids_by_record.setdefault(record_id, []).append(representation.id)
@@ -858,21 +1790,43 @@ class _MemoryRawStore:
         key: bytes,
         representation_id: str,
         location_ref: str,
+        archive_token: str,
+        archive_generation: str,
+        authority: object,
     ) -> tuple[RawRepresentation, bool]:
         with self._lock:
             identity = next((row for row in self._rows if row.id == record_id), None)
             if identity is None:
                 raise RawRepresentationUnavailableError("raw identity does not exist")
+            from app.heimdal import raw_liveness
+
+            mutation_authority = raw_liveness.require_raw_mutation_authority(
+                authority,
+                record_id=record_id,
+                content_identity=identity.content_identity,
+            )
             decrypt_and_verify_raw_bytes(identity.content_identity, ciphertext, nonce, key=key)
             existing = self._representations.get(representation_id)
             if existing is not None:
-                expected = (record_id, nonce, key_ref, _COLD_STORAGE_KIND, location_ref)
+                expected = (
+                    record_id,
+                    nonce,
+                    key_ref,
+                    _COLD_STORAGE_KIND,
+                    location_ref,
+                    mutation_authority.generation,
+                    archive_token,
+                    archive_generation,
+                )
                 actual = (
                     existing.record_id,
                     existing.nonce,
                     existing.key_ref,
                     existing.storage_kind,
                     existing.location_ref,
+                    existing.raw_generation,
+                    existing.archive_token,
+                    existing.archive_generation,
                 )
                 if actual != expected:
                     raise ValueError(
@@ -890,6 +1844,9 @@ class _MemoryRawStore:
                 active=False,
                 registered_at=datetime.now(timezone.utc),
                 sequence=len(self._representation_ids_by_record.get(record_id, [])),
+                raw_generation=mutation_authority.generation,
+                archive_token=archive_token,
+                archive_generation=archive_generation,
             )
             self._representations[representation.id] = representation
             self._representation_ids_by_record.setdefault(record_id, []).append(representation.id)
@@ -920,9 +1877,24 @@ class _MemoryRawStore:
         return self._representations[representation_id]
 
     def activate_representation(
-        self, record_id: str, representation_id: str, *, key: bytes
+        self,
+        record_id: str,
+        representation_id: str,
+        *,
+        key: bytes,
+        authority: object,
     ) -> RawRepresentation:
         with self._lock:
+            identity = next((row for row in self._rows if row.id == record_id), None)
+            if identity is None:
+                raise RawRepresentationUnavailableError("raw identity does not exist")
+            from app.heimdal import raw_liveness
+
+            raw_liveness.require_raw_mutation_authority(
+                authority,
+                record_id=record_id,
+                content_identity=identity.content_identity,
+            )
             return self._activate_representation_locked(record_id, representation_id, key=key)
 
     def all_representations(self, record_id: str) -> List[RawRepresentation]:
@@ -942,6 +1914,7 @@ class _MemoryRawStore:
         Dict[str, _RawIdentity],
         Dict[str, RawRepresentation],
         Dict[str, List[str]],
+        Dict[str, Dict[str, RawConsentAssociation]],
     ]:
         """Snapshot memory raw state while the liveness fence is held.
 
@@ -956,6 +1929,7 @@ class _MemoryRawStore:
                 dict(self._by_identity),
                 dict(self._representations),
                 {key: list(value) for key, value in self._representation_ids_by_record.items()},
+                {key: dict(value) for key, value in self._consent_associations.items()},
             )
 
     def restore_state(
@@ -965,17 +1939,21 @@ class _MemoryRawStore:
             Dict[str, _RawIdentity],
             Dict[str, RawRepresentation],
             Dict[str, List[str]],
+            Dict[str, Dict[str, RawConsentAssociation]],
         ],
     ) -> None:
         """Restore a deletion snapshot while the liveness fence is held."""
 
         with self._lock:
-            rows, by_identity, representations, representation_ids = snapshot
+            rows, by_identity, representations, representation_ids, associations = snapshot
             self._rows = list(rows)
             self._by_identity = dict(by_identity)
             self._representations = dict(representations)
             self._representation_ids_by_record = {
                 key: list(value) for key, value in representation_ids.items()
+            }
+            self._consent_associations = {
+                key: dict(value) for key, value in associations.items()
             }
 
     def hard_delete(self, record_id: str) -> bool:
@@ -1012,11 +1990,16 @@ class _MemoryRawStore:
             row = self._rows.pop(row_index)
             self._by_identity.pop(row.content_identity, None)
             self._representation_ids_by_record.pop(record_id, None)
+            self._consent_associations.pop(record_id, None)
             return True
 
     def clear(self) -> None:
         with self._lock:
             self._rows.clear()
+            self._by_identity.clear()
+            self._representations.clear()
+            self._representation_ids_by_record.clear()
+            self._consent_associations.clear()
             self._by_identity.clear()
             self._representations.clear()
             self._representation_ids_by_record.clear()
@@ -1054,7 +2037,7 @@ def _schema_autocreate_enabled() -> bool:
     return (os.environ.get("STORE_SCHEMA_AUTOCREATE") or "").strip().lower() in {"1", "true", "yes"}
 
 
-def _assert_pg_schema(conn: Any) -> None:
+def _assert_pg_schema(conn: Any, *, allow_legacy_reconciliation: bool = False) -> None:
     cur = conn.cursor()
     cur.execute(
         "SELECT to_regclass(%s), to_regclass(%s)",
@@ -1097,6 +2080,9 @@ def _assert_pg_schema(conn: Any) -> None:
         "ciphertext",
         "nonce",
         "key_ref",
+        "raw_generation",
+        "archive_token",
+        "archive_generation",
         "active",
         "registered_at",
         "sequence",
@@ -1129,6 +2115,89 @@ def _assert_pg_schema(conn: Any) -> None:
     ):
         raise RawStoreSchemaMissingError(
             "Cold representation archive binding constraint is not migration-ready. "
+            + _MIGRATION_HINT
+        )
+    cur.execute(
+        """
+        SELECT pg_get_constraintdef(c.oid), c.convalidated
+        FROM pg_constraint AS c
+        WHERE c.conrelid = %s::regclass
+          AND c.conname = %s
+          AND c.contype = 'c'
+        """,
+        (_REPRESENTATION_TABLE, _ARCHIVE_GENERATION_CONSTRAINT),
+    )
+    archive_generation_constraints = cur.fetchall()
+    if len(archive_generation_constraints) != 1 or not _archive_generation_constraint_is_ready(
+        str(archive_generation_constraints[0][0]),
+        bool(archive_generation_constraints[0][1]),
+    ):
+        raise RawStoreSchemaMissingError(
+            "Cold representation archive generation constraint is not migration-ready. "
+            + _MIGRATION_HINT
+        )
+    cur.execute(
+        """
+        SELECT pg_get_constraintdef(c.oid), c.convalidated
+        FROM pg_constraint AS c
+        WHERE c.conrelid = %s::regclass
+          AND c.conname = %s
+          AND c.contype = 'c'
+        """,
+        (_REPRESENTATION_TABLE, _COLD_OWNER_CONSTRAINT),
+    )
+    cold_owner_constraints = cur.fetchall()
+    if len(cold_owner_constraints) != 1 or not _cold_owner_constraint_is_ready(
+        str(cold_owner_constraints[0][0]),
+        bool(cold_owner_constraints[0][1]),
+    ):
+        raise RawStoreSchemaMissingError(
+            "Cold representation object ownership constraint is not migration-ready. "
+            + _MIGRATION_HINT
+        )
+    cur.execute(
+        """
+        SELECT c.convalidated,
+               ARRAY(
+                   SELECT a.attname
+                   FROM unnest(c.conkey) WITH ORDINALITY AS key(attnum, ord)
+                   JOIN pg_attribute AS a
+                     ON a.attrelid = c.conrelid AND a.attnum = key.attnum
+                   ORDER BY key.ord
+               ),
+               referenced.relname,
+               ARRAY(
+                   SELECT a.attname
+                   FROM unnest(c.confkey) WITH ORDINALITY AS key(attnum, ord)
+                   JOIN pg_attribute AS a
+                     ON a.attrelid = c.confrelid AND a.attnum = key.attnum
+                   ORDER BY key.ord
+               ),
+               c.confdeltype
+        FROM pg_constraint AS c
+        JOIN pg_class AS referenced ON referenced.oid = c.confrelid
+        JOIN pg_namespace AS referenced_namespace
+          ON referenced_namespace.oid = referenced.relnamespace
+        WHERE c.conrelid = %s::regclass
+          AND c.conname = %s
+          AND c.contype = 'f'
+          AND referenced_namespace.nspname = current_schema()
+        """,
+        (_REPRESENTATION_TABLE, _GENERATION_FK_CONSTRAINT),
+    )
+    generation_fk_rows = cur.fetchall()
+    generation_fk_ready = len(generation_fk_rows) == 1 and (
+        bool(generation_fk_rows[0][0])
+        and tuple(str(column) for column in generation_fk_rows[0][1])
+        == ("record_id", "raw_generation")
+        and str(generation_fk_rows[0][2]) == _GENERATION_TABLE
+        and tuple(str(column) for column in generation_fk_rows[0][3])
+        == ("record_id", "generation")
+        and str(generation_fk_rows[0][4]) == "r"
+    )
+    if not generation_fk_ready:
+        raise RawStoreSchemaMissingError(
+            "Raw representation generation binding is not migration-ready. "
             + _MIGRATION_HINT
         )
 
@@ -1232,17 +2301,49 @@ def _assert_pg_schema(conn: Any) -> None:
             "ROW",
             "EXECUTE FUNCTION heimdal_raw_representation_reject_mutation()",
         )
-        for event in ("DELETE", "UPDATE")
+        for event in ("DELETE", "INSERT", "UPDATE")
     }
     if trigger_rows != expected_trigger_rows:
         raise RawStoreSchemaMissingError(
             "Raw identity/representation mutation triggers do not match the "
             "migration-owned schema. " + _MIGRATION_HINT
         )
+    cur.execute(
+        """
+        SELECT pg_get_functiondef(t.tgfoid), pg_get_triggerdef(t.oid)
+        FROM pg_trigger AS t
+        JOIN pg_class AS c ON c.oid = t.tgrelid
+        JOIN pg_namespace AS n ON n.oid = c.relnamespace
+        WHERE n.nspname = current_schema()
+          AND c.relname = %s
+          AND t.tgname = 'heimdal_raw_representation_no_mutation'
+          AND NOT t.tgisinternal
+        """,
+        (_REPRESENTATION_TABLE,),
+    )
+    representation_guard_rows = cur.fetchall()
+    guard_definition = (
+        (str(representation_guard_rows[0][0]), str(representation_guard_rows[0][1]))
+        if len(representation_guard_rows) == 1
+        else ("", "")
+    )
+    if not _representation_guard_is_migration_ready(*guard_definition):
+        raise RawStoreSchemaMissingError(
+            "Raw representation pending-cleanup reuse guard is not migration-ready. "
+            + _MIGRATION_HINT
+        )
 
     # Fail loud before serving any production call when backfill or activation
     # is incomplete. The gate must never fall back to legacy inline bytes or an
     # unchecked locator.
+    cold_generation_clause = (
+        "TRUE" if allow_legacy_reconciliation else "p.archive_generation IS NOT NULL"
+    )
+    invalid_cold_generation_clause = (
+        "p.archive_generation IS NULL AND p.active IS NOT TRUE"
+        if allow_legacy_reconciliation
+        else "p.archive_generation IS NULL"
+    )
     cur.execute(
         f"""
         SELECT r.id
@@ -1250,6 +2351,10 @@ def _assert_pg_schema(conn: Any) -> None:
         LEFT JOIN {_REPRESENTATION_TABLE} AS p ON p.record_id = r.id
         GROUP BY r.id
         HAVING count(*) FILTER (WHERE p.active) <> 1
+            OR count(*) FILTER (
+                WHERE p.storage_kind = 'encrypted_local_cold'
+                  AND {invalid_cold_generation_clause}
+            ) <> 0
             OR count(*) FILTER (
                 WHERE p.active
                   AND (
@@ -1260,19 +2365,27 @@ def _assert_pg_schema(conn: Any) -> None:
                             AND p.ciphertext IS NOT NULL
                             AND p.nonce IS NOT NULL
                             AND p.key_ref IS NOT NULL
+                            AND p.archive_token IS NULL
+                            AND p.archive_generation IS NULL
                         )
                         OR (
                             p.storage_kind = 'encrypted_local_cold'
                             AND p.location_ref LIKE %s
-                            AND p.nonce IS NOT NULL
-                            AND p.key_ref IS NOT NULL
+                                AND p.nonce IS NOT NULL
+                                AND p.key_ref IS NOT NULL
+                            AND p.archive_token IS NOT NULL
+                            AND {cold_generation_clause}
+                            AND p.location_ref LIKE
+                                'heimloc:cold:' || p.archive_token || %s
+                            AND p.location_ref =
+                                'heimloc:cold:' || p.archive_token || ':' || p.id::text
                         )
                     )
                   )
             ) <> 0
         LIMIT 1
         """,
-        (f"{_LOCATION_REF_PREFIX}%", f"{_LOCATION_REF_PREFIX}cold:%"),
+        (f"{_LOCATION_REF_PREFIX}%", f"{_LOCATION_REF_PREFIX}cold:%", ":%"),
     )
     if cur.fetchone() is not None:
         raise RawStoreSchemaMissingError(
@@ -1363,9 +2476,34 @@ def _bootstrap_pg(conn: Any) -> None:
                     active boolean NOT NULL DEFAULT false,
                     registered_at timestamptz NOT NULL DEFAULT now(),
                     sequence bigserial NOT NULL,
+                    raw_generation integer NOT NULL,
+                    archive_token text,
+                    archive_generation text,
                     CONSTRAINT {_COLD_LOCATION_CONSTRAINT} CHECK (
                         storage_kind <> '{_COLD_STORAGE_KIND}'
                         OR location_ref ~ '{_COLD_LOCATION_REF_PATTERN}'
+                    ),
+                    CONSTRAINT {_COLD_OWNER_CONSTRAINT} CHECK (
+                        storage_kind <> '{_COLD_STORAGE_KIND}'
+                        OR location_ref = '{_LOCATION_REF_PREFIX}cold:'
+                            || archive_token || ':' || id::text
+                    ),
+                    CONSTRAINT heimdal_raw_representation_archive_generation_check CHECK (
+                        (
+                            storage_kind = '{_HOT_STORAGE_KIND}'
+                            AND archive_token IS NULL
+                            AND archive_generation IS NULL
+                        )
+                        OR (
+                            storage_kind = '{_COLD_STORAGE_KIND}'
+                            AND archive_token ~ '^[0-9a-f]{{64}}$'
+                            AND (
+                                archive_generation ~ '^[0-9a-f]{{64}}$'
+                                OR archive_generation IS NULL
+                            )
+                            AND location_ref LIKE
+                                '{_LOCATION_REF_PREFIX}cold:' || archive_token || ':%'
+                        )
                     )
                 )
                 """,
@@ -1376,11 +2514,49 @@ def _bootstrap_pg(conn: Any) -> None:
                 f"""
                 CREATE OR REPLACE FUNCTION heimdal_raw_representation_reject_mutation()
                 RETURNS trigger AS $$
+                DECLARE
+                    authority_identity text;
+                    authority_generation integer;
                 BEGIN
+                    IF TG_OP IN ('INSERT', 'UPDATE') THEN
+                        SELECT content_identity, generation
+                        INTO authority_identity, authority_generation
+                        FROM {_GENERATION_TABLE}
+                        WHERE record_id = NEW.record_id;
+                        IF authority_identity IS NULL
+                           OR NEW.raw_generation IS DISTINCT FROM authority_generation THEN
+                            RAISE EXCEPTION
+                                'raw representation has no matching liveness generation';
+                        END IF;
+                        PERFORM pg_advisory_xact_lock(
+                            hashtextextended(authority_identity, 0)
+                        );
+                        IF EXISTS (
+                            SELECT 1 FROM {_RETENTION_CLAIM_TABLE}
+                            WHERE record_id = NEW.record_id
+                        ) OR EXISTS (
+                            SELECT 1 FROM {_TOMBSTONE_TABLE}
+                            WHERE record_id = NEW.record_id
+                        ) THEN
+                            RAISE EXCEPTION
+                                'raw representation cannot mutate a retiring generation';
+                        END IF;
+                        IF NEW.storage_kind = '{_COLD_STORAGE_KIND}'
+                           AND EXISTS (
+                               SELECT 1 FROM {_DELETION_RECEIPT_TABLE}
+                               WHERE COALESCE(
+                                   payload->'cold_cleanup_location_refs', '[]'::jsonb
+                               ) ? NEW.location_ref
+                           ) THEN
+                            RAISE EXCEPTION
+                                'cold location remains owned by pending governed cleanup';
+                        END IF;
+                        IF TG_OP = 'INSERT' THEN
+                            RETURN NEW;
+                        END IF;
+                    END IF;
                     IF TG_OP = 'UPDATE'
-                       AND current_setting(
-                           '{_REPRESENTATION_ACTIVATION_GUARD_SETTING}', true
-                       ) = 'true'
+                       AND current_setting('app.heimdal_legacy_archive_reconcile', true) = 'true'
                        AND NEW.id IS NOT DISTINCT FROM OLD.id
                        AND NEW.record_id IS NOT DISTINCT FROM OLD.record_id
                        AND NEW.storage_kind IS NOT DISTINCT FROM OLD.storage_kind
@@ -1388,6 +2564,26 @@ def _bootstrap_pg(conn: Any) -> None:
                        AND NEW.ciphertext IS NOT DISTINCT FROM OLD.ciphertext
                        AND NEW.nonce IS NOT DISTINCT FROM OLD.nonce
                        AND NEW.key_ref IS NOT DISTINCT FROM OLD.key_ref
+                       AND NEW.raw_generation IS NOT DISTINCT FROM OLD.raw_generation
+                       AND NEW.archive_token IS NOT DISTINCT FROM OLD.archive_token
+                       AND OLD.archive_generation IS NULL
+                       AND NEW.archive_generation ~ '^[0-9a-f]{{64}}$'
+                       AND NEW.registered_at IS NOT DISTINCT FROM OLD.registered_at
+                       AND NEW.sequence IS NOT DISTINCT FROM OLD.sequence THEN
+                        RETURN NEW;
+                    END IF;
+                    IF TG_OP = 'UPDATE'
+                       AND current_setting('{_REPRESENTATION_ACTIVATION_GUARD_SETTING}', true) = 'true'
+                       AND NEW.id IS NOT DISTINCT FROM OLD.id
+                       AND NEW.record_id IS NOT DISTINCT FROM OLD.record_id
+                       AND NEW.storage_kind IS NOT DISTINCT FROM OLD.storage_kind
+                       AND NEW.location_ref IS NOT DISTINCT FROM OLD.location_ref
+                       AND NEW.ciphertext IS NOT DISTINCT FROM OLD.ciphertext
+                       AND NEW.nonce IS NOT DISTINCT FROM OLD.nonce
+                       AND NEW.key_ref IS NOT DISTINCT FROM OLD.key_ref
+                       AND NEW.raw_generation IS NOT DISTINCT FROM OLD.raw_generation
+                       AND NEW.archive_token IS NOT DISTINCT FROM OLD.archive_token
+                       AND NEW.archive_generation IS NOT DISTINCT FROM OLD.archive_generation
                        AND NEW.registered_at IS NOT DISTINCT FROM OLD.registered_at
                        AND NEW.sequence IS NOT DISTINCT FROM OLD.sequence THEN
                         RETURN NEW;
@@ -1404,7 +2600,7 @@ def _bootstrap_pg(conn: Any) -> None:
                 """,
                 f"""
                 CREATE TRIGGER heimdal_raw_representation_no_mutation
-                BEFORE UPDATE OR DELETE ON {_REPRESENTATION_TABLE}
+                BEFORE INSERT OR UPDATE OR DELETE ON {_REPRESENTATION_TABLE}
                 FOR EACH ROW EXECUTE FUNCTION heimdal_raw_representation_reject_mutation()
                 """,
             ),
@@ -1431,11 +2627,15 @@ def _row_from_db(row: tuple) -> RawRecord:
         capture_chain,
         sensor,
         consent,
+        representation_id,
         storage_kind,
         location_ref,
         ciphertext,
         nonce,
         key_ref,
+        raw_generation,
+        archive_token,
+        archive_generation,
         source_path,
         ingested_at,
         payload,
@@ -1456,8 +2656,19 @@ def _row_from_db(row: tuple) -> RawRecord:
             return []
         return json.loads(value)
 
+    resolved_representation_id = str(representation_id)
+    if str(storage_kind) == _COLD_STORAGE_KIND:
+        parsed_location = _parse_cold_location_ref(str(location_ref))
+        if (
+            parsed_location is None
+            or parsed_location[1] != resolved_representation_id
+            or int(raw_generation) <= 0
+        ):
+            raise RawRepresentationUnavailableError(
+                "active cold representation lacks exact durable ownership identity"
+            )
     representation = RawRepresentation(
-        id="row",
+        id=resolved_representation_id,
         record_id=str(row_id),
         storage_kind=str(storage_kind),
         location_ref=str(location_ref),
@@ -1467,6 +2678,11 @@ def _row_from_db(row: tuple) -> RawRecord:
         active=True,
         registered_at=ingested_at,
         sequence=int(sequence),
+        raw_generation=int(raw_generation),
+        archive_token=str(archive_token) if archive_token is not None else None,
+        archive_generation=(
+            str(archive_generation) if archive_generation is not None else None
+        ),
     )
     return RawRecord(
         id=str(row_id),
@@ -1486,13 +2702,14 @@ def _row_from_db(row: tuple) -> RawRecord:
 
 _SELECT_COLUMNS = (
     "r.id, r.content_identity, r.capture_chain, r.sensor, r.consent, "
-    "p.storage_kind, p.location_ref, p.ciphertext, p.nonce, p.key_ref, "
+    "p.id, p.storage_kind, p.location_ref, p.ciphertext, p.nonce, p.key_ref, "
+    "p.raw_generation, p.archive_token, p.archive_generation, "
     "r.source_path, r.ingested_at, r.payload, r.sequence"
 )
 
 _REPRESENTATION_SELECT_COLUMNS = (
     "id, record_id, storage_kind, location_ref, ciphertext, nonce, key_ref, "
-    "active, registered_at, sequence"
+    "raw_generation, archive_token, archive_generation, active, registered_at, sequence"
 )
 
 
@@ -1505,9 +2722,12 @@ def _representation_from_db(row: tuple) -> RawRepresentation:
         ciphertext=bytes(row[4] or b""),
         nonce=bytes(row[5]),
         key_ref=str(row[6]),
-        active=bool(row[7]),
-        registered_at=row[8],
-        sequence=int(row[9]),
+        raw_generation=int(row[7]),
+        archive_token=str(row[8]) if row[8] is not None else None,
+        archive_generation=str(row[9]) if row[9] is not None else None,
+        active=bool(row[10]),
+        registered_at=row[11],
+        sequence=int(row[12]),
     )
 
 
@@ -1554,11 +2774,24 @@ class _PgRawStore:
             row = cur.fetchone()
             if row is not None:
                 cur.execute(
+                    f"SELECT id, content_identity, ingested_at FROM {_TABLE} WHERE id = %s",
+                    (record.id,),
+                )
+                identity_row = cur.fetchone()
+                assert identity_row is not None
+                generation = raw_liveness.register_pg_generation(
+                    cur,
+                    record_id=str(identity_row[0]),
+                    content_identity=str(identity_row[1]),
+                    activated_at=identity_row[2],
+                )
+                cur.execute(
                     f"""
                     INSERT INTO {_REPRESENTATION_TABLE} (
                         id, record_id, storage_kind, location_ref,
-                        ciphertext, nonce, key_ref, active
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, true)
+                        ciphertext, nonce, key_ref, raw_generation,
+                        archive_token, archive_generation, active
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, NULL, NULL, true)
                     """,
                     (
                         record.id,
@@ -1568,11 +2801,41 @@ class _PgRawStore:
                         record.ciphertext,
                         record.nonce,
                         record.key_ref,
+                        generation.generation,
                     ),
                 )
                 created = True
             else:
                 created = False
+                cur.execute(
+                    f"SELECT id, content_identity, ingested_at FROM {_TABLE} "
+                    "WHERE content_identity = %s",
+                    (record.content_identity,),
+                )
+                identity_row = cur.fetchone()
+                if identity_row is None:
+                    raise RawRepresentationUnavailableError(
+                        "raw identity replay could not resolve durable identity"
+                    )
+                generation = raw_liveness.assert_pg_generation_active(
+                    cur,
+                    record_id=str(identity_row[0]),
+                    content_identity=str(identity_row[1]),
+                )
+            cur.execute(
+                f"""
+                INSERT INTO {_CONSENT_ASSOCIATION_TABLE} (
+                    record_id, generation, grant_ref, admitted_at
+                ) VALUES (%s, %s, %s, %s)
+                ON CONFLICT (record_id, generation, grant_ref) DO NOTHING
+                """,
+                (
+                    str(identity_row[0]),
+                    generation.generation,
+                    str(record.consent["grant_ref"]),
+                    datetime.now(timezone.utc),
+                ),
+            )
             cur.execute(
                 f"""
                 SELECT {_SELECT_COLUMNS}
@@ -1588,19 +2851,6 @@ class _PgRawStore:
                     "raw identity insert/replay has no active registered representation"
                 )
             persisted_record = _row_from_db(persisted)
-            if created:
-                raw_liveness.register_pg_generation(
-                    cur,
-                    record_id=persisted_record.id,
-                    content_identity=persisted_record.content_identity,
-                    activated_at=persisted_record.ingested_at,
-                )
-            else:
-                raw_liveness.assert_pg_generation_active(
-                    cur,
-                    record_id=persisted_record.id,
-                    content_identity=persisted_record.content_identity,
-                )
             conn.commit()
             return persisted_record, created
         except Exception:
@@ -1623,6 +2873,43 @@ class _PgRawStore:
                 """
             )
             return [_row_from_db(row) for row in cur.fetchall()]
+        finally:
+            conn.close()
+
+    def record_ids_by_consent_grant(self, grant_ref: str) -> List[str]:
+        """Select raw identities by consent metadata without materializing ciphertext."""
+
+        conn = _pg_connect()
+        try:
+            _assert_pg_schema(conn)
+            cur = conn.cursor()
+            cur.execute(
+                f"""
+                SELECT r.id
+                FROM {_CONSENT_ASSOCIATION_TABLE} AS a
+                JOIN {_TABLE} AS r ON r.id = a.record_id
+                WHERE a.grant_ref = %s OR a.legacy_lineage_ambiguous
+                ORDER BY r.sequence ASC
+                """,
+                (grant_ref,),
+            )
+            return [str(row[0]) for row in cur.fetchall()]
+        finally:
+            conn.close()
+
+    def consent_grant_refs(self, record_id: str) -> List[str]:
+        """Resolve every consent grant associated with one raw generation."""
+
+        conn = _pg_connect()
+        try:
+            _assert_pg_schema(conn)
+            cur = conn.cursor()
+            cur.execute(
+                f"SELECT grant_ref FROM {_CONSENT_ASSOCIATION_TABLE} "
+                "WHERE record_id = %s ORDER BY sequence",
+                (record_id,),
+            )
+            return [str(row[0]) for row in cur.fetchall()]
         finally:
             conn.close()
 
@@ -1687,6 +2974,63 @@ class _PgRawStore:
                 RawRecordCapacityMetadata(ingested_at=row[0], encrypted_bytes=int(row[1]))
                 for row in cur.fetchall()
             ]
+        finally:
+            conn.close()
+
+    def retention_metadata_before(
+        self,
+        cutoff: datetime,
+        *,
+        modality: str | None = None,
+    ) -> List[RawRetentionMetadata]:
+        """Select expired identities without selecting a representation or locator."""
+
+        conn = _pg_connect()
+        try:
+            _assert_pg_schema(conn)
+            cur = conn.cursor()
+            cur.execute(
+                """
+                SELECT r.id, r.content_identity, g.generation, r.ingested_at
+                FROM heimdal_raw_record AS r
+                JOIN heimdal_raw_liveness_generation AS g ON g.record_id = r.id
+                LEFT JOIN heimdal_raw_deletion_tombstone AS t ON t.record_id = r.id
+                WHERE r.ingested_at < %s
+                  AND (%s::text IS NULL OR r.payload->>'modality' = %s)
+                  AND t.record_id IS NULL
+                ORDER BY r.sequence
+                """,
+                (cutoff, modality, modality),
+            )
+            return [
+                RawRetentionMetadata(
+                    record_id=str(row[0]),
+                    content_identity=str(row[1]),
+                    generation=int(row[2]),
+                    ingested_at=row[3],
+                )
+                for row in cur.fetchall()
+            ]
+        finally:
+            conn.close()
+
+    def raw_modality(self, record_id: str) -> str:
+        """Read only non-secret modality metadata for governed deletion."""
+
+        conn = _pg_connect()
+        try:
+            _assert_pg_schema(conn)
+            cur = conn.cursor()
+            cur.execute(
+                f"SELECT payload->>'modality' FROM {_TABLE} WHERE id = %s",
+                (record_id,),
+            )
+            row = cur.fetchone()
+            if row is None:
+                raise RawRepresentationUnavailableError(
+                    "raw record modality metadata is unavailable"
+                )
+            return canonical_raw_modality(row[0])
         finally:
             conn.close()
 
@@ -1770,82 +3114,85 @@ class _PgRawStore:
         key: bytes,
         representation_id: str,
         activate: bool,
+        authority: object,
     ) -> tuple[RawRepresentation, bool]:
-        conn = _pg_connect(autocommit=False)
-        try:
-            _assert_pg_schema(conn)
-            cur = conn.cursor()
-            cur.execute(
-                f"SELECT content_identity FROM {_TABLE} WHERE id = %s FOR UPDATE",
-                (record_id,),
-            )
-            identity_row = cur.fetchone()
-            if identity_row is None:
-                raise RawRepresentationUnavailableError("raw identity does not exist")
-            decrypt_and_verify_raw_bytes(
-                str(identity_row[0]),
+        from app.heimdal import raw_liveness
+
+        cur = raw_liveness.pg_cursor_for_raw_mutation(authority, record_id=record_id)
+        cur.execute(
+            f"SELECT content_identity FROM {_TABLE} WHERE id = %s FOR UPDATE",
+            (record_id,),
+        )
+        identity_row = cur.fetchone()
+        if identity_row is None:
+            raise RawRepresentationUnavailableError("raw identity does not exist")
+        mutation_authority = raw_liveness.require_raw_mutation_authority(
+            authority,
+            record_id=record_id,
+            content_identity=str(identity_row[0]),
+        )
+        decrypt_and_verify_raw_bytes(
+            str(identity_row[0]),
+            ciphertext,
+            nonce,
+            key=key,
+        )
+        cur.execute(
+            f"""
+            INSERT INTO {_REPRESENTATION_TABLE} (
+                id, record_id, storage_kind, location_ref,
+                ciphertext, nonce, key_ref, raw_generation,
+                archive_token, archive_generation, active
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, NULL, NULL, false)
+            ON CONFLICT (id) DO NOTHING
+            RETURNING {_REPRESENTATION_SELECT_COLUMNS}
+            """,
+            (
+                representation_id,
+                record_id,
+                _HOT_STORAGE_KIND,
+                f"{_LOCATION_REF_PREFIX}{representation_id}",
                 ciphertext,
                 nonce,
-                key=key,
-            )
+                key_ref,
+                mutation_authority.generation,
+            ),
+        )
+        inserted = cur.fetchone()
+        created = inserted is not None
+        if inserted is None:
             cur.execute(
-                f"""
-                INSERT INTO {_REPRESENTATION_TABLE} (
-                    id, record_id, storage_kind, location_ref,
-                    ciphertext, nonce, key_ref, active
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, false)
-                ON CONFLICT (id) DO NOTHING
-                RETURNING {_REPRESENTATION_SELECT_COLUMNS}
-                """,
-                (
-                    representation_id,
-                    record_id,
-                    _HOT_STORAGE_KIND,
-                    f"{_LOCATION_REF_PREFIX}{representation_id}",
-                    ciphertext,
-                    nonce,
-                    key_ref,
-                ),
+                f"SELECT {_REPRESENTATION_SELECT_COLUMNS} "
+                f"FROM {_REPRESENTATION_TABLE} WHERE id = %s",
+                (representation_id,),
             )
             inserted = cur.fetchone()
-            created = inserted is not None
             if inserted is None:
-                cur.execute(
-                    f"SELECT {_REPRESENTATION_SELECT_COLUMNS} "
-                    f"FROM {_REPRESENTATION_TABLE} WHERE id = %s",
-                    (representation_id,),
+                raise RawRepresentationUnavailableError(
+                    "representation replay could not resolve registered state"
                 )
-                inserted = cur.fetchone()
-                if inserted is None:
-                    raise RawRepresentationUnavailableError(
-                        "representation replay could not resolve registered state"
-                    )
-                existing = _representation_from_db(inserted)
-                if (
-                    existing.record_id != record_id
-                    or existing.storage_kind != _HOT_STORAGE_KIND
-                    or existing.ciphertext != ciphertext
-                    or existing.nonce != nonce
-                    or existing.key_ref != key_ref
-                ):
-                    raise ValueError("representation id replay does not match registered bytes")
-            if activate:
-                self._activate_with_cursor(cur, record_id, representation_id, key=key)
-                cur.execute(
-                    f"SELECT {_REPRESENTATION_SELECT_COLUMNS} "
-                    f"FROM {_REPRESENTATION_TABLE} WHERE id = %s",
-                    (representation_id,),
-                )
-                inserted = cur.fetchone()
-            assert inserted is not None
-            result = _representation_from_db(inserted)
-            conn.commit()
-            return result, created
-        except Exception:
-            conn.rollback()
-            raise
-        finally:
-            conn.close()
+            existing = _representation_from_db(inserted)
+            if (
+                existing.record_id != record_id
+                or existing.storage_kind != _HOT_STORAGE_KIND
+                or existing.ciphertext != ciphertext
+                or existing.nonce != nonce
+                or existing.key_ref != key_ref
+                or existing.raw_generation != mutation_authority.generation
+                or existing.archive_token is not None
+                or existing.archive_generation is not None
+            ):
+                raise ValueError("representation id replay does not match registered bytes")
+        if activate:
+            self._activate_with_cursor(cur, record_id, representation_id, key=key)
+            cur.execute(
+                f"SELECT {_REPRESENTATION_SELECT_COLUMNS} "
+                f"FROM {_REPRESENTATION_TABLE} WHERE id = %s",
+                (representation_id,),
+            )
+            inserted = cur.fetchone()
+        assert inserted is not None
+        return _representation_from_db(inserted), created
 
     def register_cold_representation(
         self,
@@ -1857,69 +3204,76 @@ class _PgRawStore:
         key: bytes,
         representation_id: str,
         location_ref: str,
+        archive_token: str,
+        archive_generation: str,
+        authority: object,
     ) -> tuple[RawRepresentation, bool]:
-        conn = _pg_connect(autocommit=False)
-        try:
-            _assert_pg_schema(conn)
-            cur = conn.cursor()
+        from app.heimdal import raw_liveness
+
+        cur = raw_liveness.pg_cursor_for_raw_mutation(authority, record_id=record_id)
+        cur.execute(
+            f"SELECT content_identity FROM {_TABLE} WHERE id = %s FOR UPDATE", (record_id,)
+        )
+        identity_row = cur.fetchone()
+        if identity_row is None:
+            raise RawRepresentationUnavailableError("raw identity does not exist")
+        mutation_authority = raw_liveness.require_raw_mutation_authority(
+            authority,
+            record_id=record_id,
+            content_identity=str(identity_row[0]),
+        )
+        decrypt_and_verify_raw_bytes(str(identity_row[0]), ciphertext, nonce, key=key)
+        cur.execute(
+            f"""
+            INSERT INTO {_REPRESENTATION_TABLE} (
+                id, record_id, storage_kind, location_ref,
+                ciphertext, nonce, key_ref, raw_generation,
+                archive_token, archive_generation, active
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, false)
+            ON CONFLICT (id) DO NOTHING
+            RETURNING {_REPRESENTATION_SELECT_COLUMNS}
+            """,
+            (
+                representation_id,
+                record_id,
+                _COLD_STORAGE_KIND,
+                location_ref,
+                None,
+                nonce,
+                key_ref,
+                mutation_authority.generation,
+                archive_token,
+                archive_generation,
+            ),
+        )
+        inserted = cur.fetchone()
+        created = inserted is not None
+        if inserted is None:
             cur.execute(
-                f"SELECT content_identity FROM {_TABLE} WHERE id = %s FOR UPDATE", (record_id,)
-            )
-            identity_row = cur.fetchone()
-            if identity_row is None:
-                raise RawRepresentationUnavailableError("raw identity does not exist")
-            decrypt_and_verify_raw_bytes(str(identity_row[0]), ciphertext, nonce, key=key)
-            cur.execute(
-                f"""
-                INSERT INTO {_REPRESENTATION_TABLE} (
-                    id, record_id, storage_kind, location_ref,
-                    ciphertext, nonce, key_ref, active
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, false)
-                ON CONFLICT (id) DO NOTHING
-                RETURNING {_REPRESENTATION_SELECT_COLUMNS}
-                """,
-                (
-                    representation_id,
-                    record_id,
-                    _COLD_STORAGE_KIND,
-                    location_ref,
-                    None,
-                    nonce,
-                    key_ref,
-                ),
+                f"SELECT {_REPRESENTATION_SELECT_COLUMNS} FROM {_REPRESENTATION_TABLE} WHERE id = %s",
+                (representation_id,),
             )
             inserted = cur.fetchone()
-            created = inserted is not None
             if inserted is None:
-                cur.execute(
-                    f"SELECT {_REPRESENTATION_SELECT_COLUMNS} FROM {_REPRESENTATION_TABLE} WHERE id = %s",
-                    (representation_id,),
+                raise RawRepresentationUnavailableError(
+                    "cold representation replay could not resolve"
                 )
-                inserted = cur.fetchone()
-                if inserted is None:
-                    raise RawRepresentationUnavailableError(
-                        "cold representation replay could not resolve"
-                    )
-                existing = _representation_from_db(inserted)
-                if (
-                    existing.record_id != record_id
-                    or existing.storage_kind != _COLD_STORAGE_KIND
-                    or existing.location_ref != location_ref
-                    or existing.nonce != nonce
-                    or existing.key_ref != key_ref
-                ):
-                    raise ValueError(
-                        "cold representation id replay does not match registered state"
-                    )
-            assert inserted is not None
-            result = _representation_from_db(inserted)
-            conn.commit()
-            return result, created
-        except Exception:
-            conn.rollback()
-            raise
-        finally:
-            conn.close()
+            existing = _representation_from_db(inserted)
+            if (
+                existing.record_id != record_id
+                or existing.storage_kind != _COLD_STORAGE_KIND
+                or existing.location_ref != location_ref
+                or existing.nonce != nonce
+                or existing.key_ref != key_ref
+                or existing.raw_generation != mutation_authority.generation
+                or existing.archive_token != archive_token
+                or existing.archive_generation != archive_generation
+            ):
+                raise ValueError(
+                    "cold representation id replay does not match registered state"
+                )
+        assert inserted is not None
+        return _representation_from_db(inserted), created
 
     @staticmethod
     def _activate_with_cursor(
@@ -1937,7 +3291,8 @@ class _PgRawStore:
         if identity_row is None:
             raise RawRepresentationUnavailableError("raw identity does not exist")
         cur.execute(
-            f"SELECT storage_kind, location_ref, ciphertext, nonce FROM {_REPRESENTATION_TABLE} "
+            f"SELECT storage_kind, location_ref, ciphertext, nonce, raw_generation, "
+            f"archive_token, archive_generation FROM {_REPRESENTATION_TABLE} "
             "WHERE id = %s AND record_id = %s FOR UPDATE",
             (representation_id, record_id),
         )
@@ -1960,6 +3315,11 @@ class _PgRawStore:
                     active=False,
                     registered_at=datetime.now(timezone.utc),
                     sequence=0,
+                    raw_generation=int(target_row[4]),
+                    archive_token=(str(target_row[5]) if target_row[5] is not None else None),
+                    archive_generation=(
+                        str(target_row[6]) if target_row[6] is not None else None
+                    ),
                 )
             ),
             bytes(target_row[3]),
@@ -1979,28 +3339,25 @@ class _PgRawStore:
         )
 
     def activate_representation(
-        self, record_id: str, representation_id: str, *, key: bytes
+        self,
+        record_id: str,
+        representation_id: str,
+        *,
+        key: bytes,
+        authority: object,
     ) -> RawRepresentation:
-        conn = _pg_connect(autocommit=False)
-        try:
-            _assert_pg_schema(conn)
-            cur = conn.cursor()
-            self._activate_with_cursor(cur, record_id, representation_id, key=key)
-            cur.execute(
-                f"SELECT {_REPRESENTATION_SELECT_COLUMNS} "
-                f"FROM {_REPRESENTATION_TABLE} WHERE id = %s",
-                (representation_id,),
-            )
-            row = cur.fetchone()
-            assert row is not None
-            result = _representation_from_db(row)
-            conn.commit()
-            return result
-        except Exception:
-            conn.rollback()
-            raise
-        finally:
-            conn.close()
+        from app.heimdal import raw_liveness
+
+        cur = raw_liveness.pg_cursor_for_raw_mutation(authority, record_id=record_id)
+        self._activate_with_cursor(cur, record_id, representation_id, key=key)
+        cur.execute(
+            f"SELECT {_REPRESENTATION_SELECT_COLUMNS} "
+            f"FROM {_REPRESENTATION_TABLE} WHERE id = %s",
+            (representation_id,),
+        )
+        row = cur.fetchone()
+        assert row is not None
+        return _representation_from_db(row)
 
     def all_representations(self, record_id: str) -> List[RawRepresentation]:
         conn = _pg_connect()
@@ -2147,6 +3504,29 @@ def resolve_active_raw_record(record_id: str) -> Optional[RawRecord]:
     return _backend().resolve_active(record_id)
 
 
+def raw_record_ids_by_consent_grant(grant_ref: str) -> List[str]:
+    """Return matching raw ids from metadata only, never cold bytes or paths."""
+
+    if not isinstance(grant_ref, str) or not grant_ref.strip():
+        raise ValueError("grant_ref must be a non-empty string")
+    return _backend().record_ids_by_consent_grant(grant_ref)
+
+
+def raw_record_consent_grant_refs(record_id: str) -> List[str]:
+    """Return all grants for one raw generation without reading representations."""
+
+    if not isinstance(record_id, str) or not record_id.strip():
+        raise ValueError("record_id must be a non-empty string")
+    return _backend().consent_grant_refs(record_id)
+
+
+def raw_record_consent_grant_ref(record_id: str) -> Optional[str]:
+    """Compatibility projection for callers that can handle only one grant."""
+
+    refs = raw_record_consent_grant_refs(record_id)
+    return refs[0] if refs else None
+
+
 def register_raw_representation(
     *,
     record_id: str,
@@ -2156,6 +3536,7 @@ def register_raw_representation(
     key: Optional[bytes] = None,
     representation_id: Optional[str] = None,
     activate: bool = False,
+    _authority: object | None = None,
 ) -> tuple[RawRepresentation, bool]:
     """Register an encrypted Postgres-hot copy, idempotently by representation id.
 
@@ -2168,15 +3549,30 @@ def register_raw_representation(
         raise ValueError("ciphertext, nonce, and key_ref are required")
     verification_key = key if key is not None else resolve_raw_store_key()
     resolved_id = representation_id or str(uuid4())
-    return _backend().register_representation(
+    from app.heimdal import raw_liveness
+
+    backend = _backend()
+
+    def register(authority: object) -> tuple[RawRepresentation, bool]:
+        return backend.register_representation(
+            record_id=record_id,
+            ciphertext=ciphertext,
+            nonce=nonce,
+            key_ref=key_ref,
+            key=verification_key,
+            representation_id=resolved_id,
+            activate=activate,
+            authority=authority,
+        )
+
+    if _authority is not None:
+        return register(_authority)
+    content_identity = raw_liveness.content_identity_for_raw_record(record_id)
+    with raw_liveness.raw_relocation_fence(
         record_id=record_id,
-        ciphertext=ciphertext,
-        nonce=nonce,
-        key_ref=key_ref,
-        key=verification_key,
-        representation_id=resolved_id,
-        activate=activate,
-    )
+        content_identity=content_identity,
+    ) as authority:
+        return register(authority)
 
 
 def register_cold_raw_representation(
@@ -2189,12 +3585,14 @@ def register_cold_raw_representation(
     key: Optional[bytes] = None,
     representation_id: Optional[str] = None,
     verified_volume: object,
+    _authority: object | None = None,
 ) -> tuple[RawRepresentation, bool]:
     """Register one verified encrypted local-cold representation, inactive."""
     if not record_id or not ciphertext or not nonce or not key_ref:
         raise ValueError("record_id, ciphertext, nonce, and key_ref are required")
+    resolved_id = representation_id or str(uuid4())
     parsed = _parse_cold_location_ref(location_ref)
-    if parsed is None:
+    if parsed is None or parsed[1] != resolved_id:
         raise ValueError("cold location_ref must be an opaque heimloc:cold: handle")
     object_path = _cold_object_path(location_ref)
     if object_path is None:
@@ -2210,15 +3608,36 @@ def register_cold_raw_representation(
         expected_archive_ref=archive_ref,
     )
     verification_key = key if key is not None else resolve_raw_store_key()
-    return _backend().register_cold_representation(
+    from app.heimdal import raw_liveness
+
+    backend = _backend()
+    if raw_liveness.cold_cleanup_location_is_pending(location_ref):
+        raise RawRepresentationDeletionError(
+            "cold location remains owned by pending governed cleanup"
+        )
+
+    def register(authority: object) -> tuple[RawRepresentation, bool]:
+        return backend.register_cold_representation(
+            record_id=record_id,
+            ciphertext=ciphertext,
+            nonce=nonce,
+            key_ref=key_ref,
+            key=verification_key,
+            representation_id=resolved_id,
+            location_ref=location_ref,
+            archive_token=parsed[0],
+            archive_generation=str(getattr(verified_volume, "archive_generation", "")),
+            authority=authority,
+        )
+
+    if _authority is not None:
+        return register(_authority)
+    content_identity = raw_liveness.content_identity_for_raw_record(record_id)
+    with raw_liveness.raw_relocation_fence(
         record_id=record_id,
-        ciphertext=ciphertext,
-        nonce=nonce,
-        key_ref=key_ref,
-        key=verification_key,
-        representation_id=representation_id or str(uuid4()),
-        location_ref=location_ref,
-    )
+        content_identity=content_identity,
+    ) as authority:
+        return register(authority)
 
 
 def activate_raw_representation(
@@ -2226,10 +3645,30 @@ def activate_raw_representation(
     representation_id: str,
     *,
     key: Optional[bytes] = None,
+    _authority: object | None = None,
 ) -> RawRepresentation:
     """Atomically select one already-registered representation for gated reads."""
     verification_key = key if key is not None else resolve_raw_store_key()
-    return _backend().activate_representation(record_id, representation_id, key=verification_key)
+    from app.heimdal import raw_liveness
+
+    backend = _backend()
+
+    def activate(authority: object) -> RawRepresentation:
+        return backend.activate_representation(
+            record_id,
+            representation_id,
+            key=verification_key,
+            authority=authority,
+        )
+
+    if _authority is not None:
+        return activate(_authority)
+    content_identity = raw_liveness.content_identity_for_raw_record(record_id)
+    with raw_liveness.raw_relocation_fence(
+        record_id=record_id,
+        content_identity=content_identity,
+    ) as authority:
+        return activate(authority)
 
 
 def all_raw_representations(record_id: str) -> List[RawRepresentation]:
@@ -2240,6 +3679,29 @@ def all_raw_representations(record_id: str) -> List[RawRepresentation]:
 def all_raw_records() -> List[RawRecord]:
     """Return every raw record in insertion order (diagnostic/test helper)."""
     return _backend().all_rows()
+
+
+def raw_record_modality(record_id: str) -> str:
+    """Return canonical non-secret modality without materializing raw bytes."""
+
+    if not isinstance(record_id, str) or not record_id.strip():
+        raise ValueError("record_id must be a non-empty string")
+    return _backend().raw_modality(record_id)
+
+
+def expired_raw_record_metadata(
+    *,
+    ingested_before: datetime,
+    modality: str | None = None,
+) -> List[RawRetentionMetadata]:
+    """Return ciphertext-free expiry candidates for the retention state machine."""
+
+    if ingested_before.tzinfo is None:
+        raise ValueError("ingested_before must be timezone-aware")
+    return _backend().retention_metadata_before(
+        ingested_before.astimezone(timezone.utc),
+        modality=modality,
+    )
 
 
 def archive_eligible_hot_raw_records(
@@ -2277,11 +3739,13 @@ __all__ = [
     "AppendOnlyViolationError",
     "RawRecord",
     "RawRecordCapacityMetadata",
+    "RawRetentionMetadata",
     "RawRepresentation",
     "RawArchiveRelocationLeaseUnavailableError",
     "RawRepresentationDeletionError",
     "RawRepresentationIdentityMismatchError",
     "RawRepresentationUnavailableError",
+    "RAW_MODALITY_UNSPECIFIED",
     "RawStoreKeyMissingError",
     "RawStoreSchemaMissingError",
     "activate_raw_representation",
@@ -2291,16 +3755,23 @@ __all__ = [
     "all_raw_record_capacity_metadata",
     "all_raw_representations",
     "compute_raw_content_identity",
+    "canonical_raw_modality",
     "cold_archive_mutation_lock",
     "decrypt_and_verify_raw_bytes",
     "decrypt_raw_bytes",
     "encrypt_raw_bytes",
     "get_raw_record_by_content_identity",
     "find_active_raw_record_ids_by_content_identities",
+    "expired_raw_record_metadata",
     "insert_raw_record",
     "register_raw_representation",
     "register_cold_raw_representation",
+    "reconcile_legacy_cold_representation",
     "reset_memory_raw_store",
     "resolve_active_raw_record",
+    "raw_record_ids_by_consent_grant",
+    "raw_record_modality",
+    "raw_record_consent_grant_ref",
+    "raw_record_consent_grant_refs",
     "resolve_raw_store_key",
 ]

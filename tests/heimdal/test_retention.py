@@ -393,7 +393,7 @@ def test_scheduled_retention_retries_pending_cold_receipts_after_raw_scan_gap(
     )
     monkeypatch.setattr(retention_module.raw_liveness, "governed_delete_raw_record", retry)
 
-    retention_module._reconcile_pending_cold_cleanup()  # noqa: SLF001
+    retention_module._reconcile_pending_cold_cleanup(fail_loud=True)  # noqa: SLF001
 
     assert calls == [
         {

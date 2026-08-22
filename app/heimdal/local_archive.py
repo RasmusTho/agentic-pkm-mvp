@@ -19,7 +19,7 @@ import re
 from typing import Callable, Optional
 from uuid import UUID, uuid4
 
-from app.heimdal import raw_liveness, raw_store
+from app.heimdal import raw_liveness, raw_read_gate, raw_store
 from app.heimdal.raw_store import RawRecord, RawRepresentation
 from app.heimdal.retention import RetentionWindowMissingError, resolve_retention_window_days
 from app.ops.heimdal_cold_volume import (
@@ -57,6 +57,10 @@ class ArchiveReceipt:
     record_id: str
     content_identity: str
     representation_id: str
+    location_ref: str
+    archive_token: str
+    archive_generation: str
+    raw_generation: int
     encrypted_bytes: int
     ciphertext_sha256: str
     verified_at: datetime
@@ -69,8 +73,36 @@ class ArchiveReceipt:
             "record_id": self.record_id,
             "content_identity": self.content_identity,
             "representation_id": self.representation_id,
+            "location_ref": self.location_ref,
+            "archive_token": self.archive_token,
+            "archive_generation": self.archive_generation,
+            "raw_generation": self.raw_generation,
             "encrypted_bytes": self.encrypted_bytes,
             "ciphertext_sha256": self.ciphertext_sha256,
+            "verified_at": _iso(self.verified_at),
+        }
+
+
+@dataclass(frozen=True)
+class RestoreDrillReceipt:
+    """Redacted proof that one cold representation restored through GOV."""
+
+    raw_ref: str
+    content_identity: str
+    read_receipt_id: str
+    verified_at: datetime
+    storage_kind: str = ARCHIVE_STORAGE_KIND
+    proven: bool = True
+    schema: str = "heimdal_archive_restore_drill.v1"
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "schema": self.schema,
+            "proven": self.proven,
+            "raw_ref": self.raw_ref,
+            "content_identity": self.content_identity,
+            "storage_kind": self.storage_kind,
+            "read_receipt_id": self.read_receipt_id,
             "verified_at": _iso(self.verified_at),
         }
 
@@ -210,7 +242,17 @@ def _durable_write(path: Path, payload: bytes) -> None:
 
 
 def _manifest_payload(receipt: ArchiveReceipt) -> bytes:
-    return (json.dumps(receipt.as_dict(), sort_keys=True, separators=(",", ":")) + "\n").encode()
+    payload = receipt.as_dict()
+    payload["ownership_state"] = "verified"
+    return (json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n").encode()
+
+
+def _reserved_ownership_manifest_payload(receipt: ArchiveReceipt) -> bytes:
+    """Persist exact unlink authority before any cold object can exist."""
+
+    payload = receipt.as_dict()
+    payload["ownership_state"] = "reserved"
+    return (json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n").encode()
 
 
 def _active_hot(record_id: str) -> RawRepresentation:
@@ -225,6 +267,8 @@ def _pending_cold(
     hot: RawRepresentation,
     *,
     archive_ref: str,
+    archive_generation: str,
+    raw_generation: int,
 ) -> RawRepresentation | None:
     """Resolve the one retryable durable reservation without reading its object."""
 
@@ -247,6 +291,9 @@ def _pending_cold(
         or candidate.location_ref != raw_store._cold_location_ref(archive_ref, candidate.id)  # noqa: SLF001
         or candidate.nonce != hot.nonce
         or candidate.key_ref != hot.key_ref
+        or candidate.archive_token != raw_store._archive_binding_token(archive_ref)  # noqa: SLF001
+        or candidate.archive_generation != archive_generation
+        or candidate.raw_generation != raw_generation
     ):
         raise ArchiveDegradedError("archive_pending_state_invalid")
     return candidate
@@ -296,11 +343,17 @@ def relocate_raw_record(
     with raw_liveness.raw_relocation_fence(
         record_id=record.id,
         content_identity=record.content_identity,
-    ):
+    ) as mutation_authority:
         hot = _active_hot(record.id)
         ciphertext = hot.ciphertext
         ciphertext_hash = hashlib.sha256(ciphertext).hexdigest()
-        pending = _pending_cold(record.id, hot, archive_ref=archive_ref)
+        pending = _pending_cold(
+            record.id,
+            hot,
+            archive_ref=archive_ref,
+            archive_generation=volume_proof.archive_generation,
+            raw_generation=mutation_authority.generation,
+        )
         representation_id = pending.id if pending is not None else str(uuid4())
         receipt_id = str(uuid4())
         location_ref = raw_store._cold_location_ref(  # noqa: SLF001
@@ -314,10 +367,15 @@ def relocate_raw_record(
         failure: ArchiveDegradedError | None = None
 
         try:
-            raw_store.register_cold_location(
-                location_ref, object_path, verified_volume=volume_proof
-            )
             with raw_store.cold_archive_mutation_lock(archive_root, verified_volume=volume_proof):
+                _relocation_stage_hook("after_archive_lock")
+                raw_store.register_cold_location(
+                    location_ref,
+                    object_path,
+                    verified_volume=volume_proof,
+                    raw_generation=mutation_authority.generation,
+                    representation_id=representation_id,
+                )
                 try:
                     cold, _ = raw_store.register_cold_raw_representation(
                         record_id=record.id,
@@ -328,9 +386,33 @@ def relocate_raw_record(
                         key=key,
                         representation_id=representation_id,
                         verified_volume=volume_proof,
+                        _authority=mutation_authority,
+                    )
+                    raw_liveness._checkpoint_raw_mutation_authority(  # noqa: SLF001
+                        mutation_authority
                     )
                     reservation_durable = True
                     _relocation_stage_hook("after_reservation")
+                    receipt = ArchiveReceipt(
+                        receipt_id=receipt_id,
+                        record_id=record.id,
+                        content_identity=record.content_identity,
+                        representation_id=representation_id,
+                        location_ref=location_ref,
+                        archive_token=raw_store._archive_binding_token(archive_ref),  # noqa: SLF001
+                        archive_generation=volume_proof.archive_generation,
+                        raw_generation=mutation_authority.generation,
+                        encrypted_bytes=len(ciphertext),
+                        ciphertext_sha256=ciphertext_hash,
+                        verified_at=_utc(reference),
+                    )
+                    # The reserved manifest is not a successful archive receipt.
+                    # It is exact, redacted cleanup authority that must become
+                    # durable before the first external byte can be written.
+                    _durable_write(
+                        manifest_path,
+                        _reserved_ownership_manifest_payload(receipt),
+                    )
                     _durable_write(object_path, ciphertext)
                     _relocation_stage_hook("after_object_write")
                     copied = object_path.read_bytes()
@@ -345,19 +427,15 @@ def relocate_raw_record(
                         hot.nonce,
                         key=key or raw_store.resolve_raw_store_key(),
                     )
-                    receipt = ArchiveReceipt(
-                        receipt_id=receipt_id,
-                        record_id=record.id,
-                        content_identity=record.content_identity,
-                        representation_id=representation_id,
-                        encrypted_bytes=len(copied),
-                        ciphertext_sha256=ciphertext_hash,
-                        verified_at=_utc(reference),
-                    )
                     _durable_write(manifest_path, _manifest_payload(receipt))
                     _relocation_stage_hook("after_manifest_write")
                     activation_started = True
-                    active = raw_store.activate_raw_representation(record.id, cold.id, key=key)
+                    active = raw_store.activate_raw_representation(
+                        record.id,
+                        cold.id,
+                        key=key,
+                        _authority=mutation_authority,
+                    )
                     _relocation_stage_hook("after_activation")
                     return ArchiveResult(receipt, ArchiveHealth(True, "ok"), active)
                 except ArchiveDegradedError as exc:
@@ -415,6 +493,38 @@ def _redacted_failure_reason(error: ArchiveDegradedError) -> str:
     if re.fullmatch(r"[a-z0-9_]+", error.reason):
         return error.reason
     return "archive_relocation_failed"
+
+
+def run_restore_drill(
+    raw_ref: str,
+    *,
+    reader: str,
+    key: Optional[bytes] = None,
+) -> RestoreDrillReceipt:
+    """Restore one archived identity through the production gated read path.
+
+    Authorization and the durable read receipt are deliberately delegated to
+    :func:`raw_read_gate.read_raw_record`; this function never resolves cold
+    bytes directly.  The returned evidence contains only opaque identity and
+    receipt fields, never plaintext or a filesystem path.
+    """
+
+    restored = raw_read_gate.read_raw_record(
+        raw_ref,
+        reader=reader,
+        purpose="heimdal_archive_restore_drill",
+        key=key,
+    )
+    if restored.storage_kind != ARCHIVE_STORAGE_KIND:
+        raise ArchiveDegradedError("archived_representation_unavailable")
+    if raw_store.compute_raw_content_identity(restored.plaintext) != restored.receipt.content_identity:
+        raise ArchiveDegradedError("restore_identity_mismatch")
+    return RestoreDrillReceipt(
+        raw_ref=raw_ref,
+        content_identity=restored.receipt.content_identity,
+        read_receipt_id=restored.receipt.id,
+        verified_at=restored.receipt.read_at,
+    )
 
 
 def run_archive_pass(
@@ -533,8 +643,10 @@ __all__ = [
     "ArchivePassReceipt",
     "ArchiveReceipt",
     "ArchiveResult",
+    "RestoreDrillReceipt",
     "archive_eligible",
     "eligible_raw_records",
     "relocate_raw_record",
     "run_archive_pass",
+    "run_restore_drill",
 ]

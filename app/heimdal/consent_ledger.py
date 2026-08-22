@@ -56,6 +56,15 @@ Contract:
   FABLE_COMPANION §6.1) via `app.heimdal.publish.publish_observation` --
   this module references those topic *values* but does not define the
   constants; sibling slice A4 owns `app/events/types.py` topic constants.
+- **Revocation propagates to raw erasure (HAR-05).** Once the append-only
+  revocation row is durable, :func:`revoke_consent` invokes the same fenced,
+  receipted all-copy deletion primitive as hard retention for every raw
+  generation stamped with that ``grant_ref``. Pending response leases and
+  cold cleanup fail loud and remain retryable; the call does not report
+  completion while a cold object or manifest remains. The durable revocation
+  row is also replay authority for the scheduled retention entrypoint, so a
+  process loss between append and immediate propagation needs no second
+  operator revocation.
 
 Backend selection mirrors `app.heimdal.observation_log` (dual-backend,
 fail-loud resolution via `app.heimdal._backend.resolve_heimdal_backend`):
@@ -64,9 +73,9 @@ append-only list seeded with the same standing grants the migrations seed for
 Postgres; a resolvable Postgres DSN uses the real `heimdal_consent_grant`
 table.
 
-Out of scope for this slice (per governing Issue #3042): the capture
+Still out of scope after HAR-05: the capture
 adapter itself, ASR, third-party voice detection, place/session grant
-runtime (contract-stub only), revocation propagation/suppression runtime
+runtime (contract-stub only), and published-event suppression propagation
 (§11#14, contract-stub).
 """
 
@@ -75,9 +84,10 @@ from __future__ import annotations
 import json
 import os
 import threading
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Mapping, Optional
+from typing import Any, Dict, Iterator, List, Mapping, Optional
 from uuid import uuid4
 
 from app.heimdal._backend import resolve_heimdal_backend
@@ -337,6 +347,9 @@ class _MemoryConsentLedger:
 
 
 _MEMORY_LEDGER = _MemoryConsentLedger()
+_GRANT_FENCE_GUARD = threading.Lock()
+_MEMORY_GRANT_FENCES: Dict[str, threading.RLock] = {}
+_raw_admission_stage_hook = lambda _stage: None
 
 
 def reset_memory_consent_ledger() -> None:
@@ -361,6 +374,36 @@ def _pg_connect() -> Any:
     if not url:
         raise RuntimeError("DATABASE_URL or DB_DSN not set")
     return psycopg.connect(resolve_dsn(url), autocommit=True)
+
+
+@contextmanager
+def consent_grant_fence(grant_ref: str) -> Iterator[None]:
+    """Serialize final raw admission and revocation for one consent grant.
+
+    PostgreSQL uses a session advisory lock so the fence spans the ledger and
+    raw-store transactions opened by the caller. Memory uses a per-grant
+    re-entrant lock with the same grant -> raw-generation lock order.
+    """
+
+    if not isinstance(grant_ref, str) or not grant_ref.strip():
+        raise ValueError("grant_ref must be a non-empty string")
+    if resolve_heimdal_backend() == "memory":
+        with _GRANT_FENCE_GUARD:
+            fence = _MEMORY_GRANT_FENCES.setdefault(grant_ref, threading.RLock())
+        with fence:
+            yield
+        return
+
+    lock_key = f"heimdal:consent-grant:{grant_ref}"
+    conn = _pg_connect()
+    try:
+        conn.execute("SELECT pg_advisory_lock(hashtextextended(%s, 0))", (lock_key,))
+        yield
+    finally:
+        try:
+            conn.execute("SELECT pg_advisory_unlock(hashtextextended(%s, 0))", (lock_key,))
+        finally:
+            conn.close()
 
 
 def _schema_autocreate_enabled() -> bool:
@@ -635,14 +678,49 @@ def grant_consent(
     return _backend().append(grant)
 
 
+def assert_consent_grant_active(
+    grant_ref: str, *, at: Optional[datetime] = None
+) -> ConsentGrant:
+    """Fail loud unless the exact stamped grant remains active.
+
+    Production raw producers call this while holding
+    :func:`consent_grant_fence`, immediately before their durable insert.
+    """
+
+    reference = at or datetime.now(timezone.utc)
+    rows = _backend().all_rows()
+    revoked = _revoked_grant_refs(rows)
+    for row in reversed(rows):
+        if row.is_revocation or row.grant_ref != grant_ref:
+            continue
+        if row.grant_ref in revoked or (row.expiry is not None and row.expiry <= reference):
+            break
+        return row
+    raise ConsentRefusedError(
+        f"Capture refused (HEIM-3): consent grant {grant_ref!r} is no longer active. "
+        "No raw evidence was admitted."
+    )
+
+
+@contextmanager
+def consent_raw_admission(grant_ref: str) -> Iterator[None]:
+    """Fence and revalidate the exact grant around one raw-store insert."""
+
+    with consent_grant_fence(grant_ref):
+        assert_consent_grant_active(grant_ref)
+        _raw_admission_stage_hook("after_final_consent_validation")
+        yield
+
+
 def revoke_consent(*, grant_ref: str, revoked_by: str, payload: Optional[Mapping[str, Any]] = None) -> ConsentGrant:
     """Append a revocation row that lapses ``grant_ref`` (HEIM-1: new event, never a rewrite).
 
     FABLE_COMPANION §6.4: future capture lapses immediately (the ledger is
     checked at capture time -- :func:`resolve_active_grant` stops returning
-    the revoked grant the instant this row is visible); raw-layer erasure
-    and published-event suppression are separate concerns this slice only
-    contract-stubs (§11#14, out of scope here).
+    the revoked grant the instant this row is visible). HAR-05 then propagates
+    the durable revocation through the shared governed raw-erasure primitive;
+    a cold cleanup failure raises and remains retryable. Published-event
+    suppression remains a separate future concern.
     """
     if not isinstance(grant_ref, str) or not grant_ref.strip():
         raise ValueError(f"revoke_consent requires a non-empty grant_ref, got {grant_ref!r}")
@@ -666,11 +744,52 @@ def revoke_consent(*, grant_ref: str, revoked_by: str, payload: Optional[Mapping
         created_at=datetime.now(timezone.utc),
         sequence=-1,
     )
-    return _backend().append(revocation)
+    with consent_grant_fence(grant_ref):
+        persisted = _backend().append(revocation)
+        # Local import keeps the consent ledger's read/admission path independent
+        # of raw-store initialization while making the production revocation call
+        # the authority that starts all-copy erasure.
+        from app.heimdal.retention import enforce_consent_revocation
+
+        enforce_consent_revocation(grant_ref=grant_ref, revoked_at=persisted.created_at)
+        return persisted
 
 
 def _revoked_grant_refs(rows: List[ConsentGrant]) -> set:
     return {r.revokes_grant_ref for r in rows if r.is_revocation and r.revokes_grant_ref}
+
+
+def list_revoked_grant_refs() -> List[str]:
+    """Return durable revocation work identities in first-observed order."""
+
+    refs: List[str] = []
+    seen: set[str] = set()
+    for row in _backend().all_rows():
+        grant_ref = row.revokes_grant_ref
+        if not row.is_revocation or not grant_ref or grant_ref in seen:
+            continue
+        seen.add(grant_ref)
+        refs.append(grant_ref)
+    return refs
+
+
+def reconcile_revoked_consent_erasure() -> int:
+    """Replay durable revocation rows through all-copy erasure.
+
+    The append-only revocation row is the durable work item. The scheduled
+    retention entrypoint calls this on every run, so a process loss after the
+    row commits but before immediate propagation converges without another
+    operator revocation.
+    """
+
+    from app.heimdal.retention import enforce_consent_revocation
+
+    reconciled = 0
+    for grant_ref in list_revoked_grant_refs():
+        with consent_grant_fence(grant_ref):
+            enforce_consent_revocation(grant_ref=grant_ref)
+        reconciled += 1
+    return reconciled
 
 
 def list_active_grants(*, scope: Optional[str] = None, at: Optional[datetime] = None) -> List[ConsentGrant]:
@@ -805,6 +924,9 @@ __all__ = [
     "ConsentGrant",
     "ConsentLedgerSchemaMissingError",
     "ConsentRefusedError",
+    "assert_consent_grant_active",
+    "consent_grant_fence",
+    "consent_raw_admission",
     "MEDIA_CAPTURE_BASIS",
     "MEDIA_CAPTURE_GRANT_REF",
     "MEDIA_CAPTURE_MODALITIES",
@@ -815,6 +937,8 @@ __all__ = [
     "admit_raw_evidence",
     "grant_consent",
     "list_active_grants",
+    "list_revoked_grant_refs",
+    "reconcile_revoked_consent_erasure",
     "reset_memory_consent_ledger",
     "resolve_active_grant",
     "revoke_consent",
