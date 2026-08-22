@@ -40,7 +40,8 @@ ADR):
   the id scheme it consumes.
 - **Idempotent decline recording.** Recording the same ``finding_id`` as
   declined twice is a no-op (one ledger line survives per finding_id, keeping
-  the newest receipt); it never raises and never duplicates suppression.
+  the first durable receipt); it never changes evidence under a stable id and
+  never duplicates suppression.
 - **WriteGuard-gated, named action.** :data:`DECLINED_LEDGER_WRITE_ACTION`
   (``proposals.declined_ledger.record``) is asserted before any file I/O,
   matching the dotted ``<module>.<verb>`` convention used elsewhere
@@ -53,8 +54,14 @@ from __future__ import annotations
 
 import json
 import os
+from contextlib import contextmanager
 from dataclasses import dataclass
+import fcntl
 from pathlib import Path
+import stat
+import threading
+from typing import Iterator
+from uuid import uuid4
 
 from app.write_guard import DEFAULT_WRITE_GUARD, WriteGuard
 
@@ -65,6 +72,8 @@ DECLINED_LEDGER_WRITE_ACTION = "proposals.declined_ledger.record"
 # app.relevance.attention_loop.DEFAULT_REACHOUT_RECEIPTS_PATH and siblings
 # (runtime/<module>/*.jsonl, gitignored, safe to delete wholesale).
 DEFAULT_DECLINED_LEDGER_PATH = Path("runtime/proposals/declined.jsonl")
+_PROCESS_LOCKS_GUARD = threading.Lock()
+_PROCESS_LOCKS: dict[str, threading.RLock] = {}
 
 
 @dataclass(frozen=True)
@@ -155,6 +164,11 @@ class DeclinedLedger:
         """
         return finding_id in self._read_all()
 
+    def get_receipt(self, finding_id: str) -> DeclineReceipt | None:
+        """Return the first durable receipt for one suppression identity."""
+
+        return self._read_all().get(finding_id)
+
     def record_decline(
         self,
         finding_id: str,
@@ -163,25 +177,116 @@ class DeclinedLedger:
         reason: str | None = None,
         declined_at: str | None = None,
         write_guard: WriteGuard = DEFAULT_WRITE_GUARD,
-    ) -> None:
+    ) -> DeclineReceipt:
         """Record *finding_id* as declined. Idempotent: re-recording the same
-        finding_id replaces its single ledger line rather than duplicating
-        it (rewrite-on-write keeps the store O(distinct finding_ids), not
-        O(decline events))."""
+        finding_id preserves its first durable receipt rather than changing
+        evidence under a stable identity. The complete read/merge/replace is
+        serialized across threads and processes and published atomically."""
         write_guard.assert_writes_allowed(DECLINED_LEDGER_WRITE_ACTION)
 
-        receipts = self._read_all()
-        receipts[finding_id] = DeclineReceipt(
+        proposed = DeclineReceipt(
             finding_id=finding_id,
             finding_class=finding_class,
             reason=reason,
             declined_at=declined_at,
         )
+        with self._locked_store():
+            receipts = self._read_all()
+            receipt = receipts.get(finding_id) or proposed
+            receipts[finding_id] = receipt
+            self._atomic_replace(receipts)
+            return receipt
+
+    @contextmanager
+    def _locked_store(self) -> Iterator[None]:
         self._path.parent.mkdir(parents=True, exist_ok=True)
-        lines = [receipt.to_json_line() for receipt in receipts.values()]
-        self._path.write_text(
-            "\n".join(lines) + ("\n" if lines else ""), encoding="utf-8"
+        key = os.path.abspath(os.fspath(self._path))
+        with _PROCESS_LOCKS_GUARD:
+            process_lock = _PROCESS_LOCKS.setdefault(key, threading.RLock())
+        with process_lock:
+            lock_path = self._path.with_name(f".{self._path.name}.lock")
+            descriptor = os.open(
+                lock_path,
+                os.O_RDWR
+                | os.O_CREAT
+                | getattr(os, "O_NOFOLLOW", 0)
+                | getattr(os, "O_CLOEXEC", 0),
+                0o600,
+            )
+            try:
+                observed = os.fstat(descriptor)
+                named = lock_path.lstat()
+                if (
+                    not stat.S_ISREG(observed.st_mode)
+                    or observed.st_nlink != 1
+                    or not stat.S_ISREG(named.st_mode)
+                    or (observed.st_dev, observed.st_ino)
+                    != (named.st_dev, named.st_ino)
+                ):
+                    raise RuntimeError("declined ledger lock must be one stable file")
+                fcntl.flock(descriptor, fcntl.LOCK_EX)
+                named_after_lock = lock_path.lstat()
+                opened_after_lock = os.fstat(descriptor)
+                if (
+                    not stat.S_ISREG(named_after_lock.st_mode)
+                    or named_after_lock.st_nlink != 1
+                    or opened_after_lock.st_nlink != 1
+                    or (opened_after_lock.st_dev, opened_after_lock.st_ino)
+                    != (named_after_lock.st_dev, named_after_lock.st_ino)
+                ):
+                    raise RuntimeError(
+                        "declined ledger lock changed during acquisition"
+                    )
+                yield
+            finally:
+                fcntl.flock(descriptor, fcntl.LOCK_UN)
+                os.close(descriptor)
+
+    def _atomic_replace(self, receipts: dict[str, DeclineReceipt]) -> None:
+        lines = [receipts[key].to_json_line() for key in sorted(receipts)]
+        encoded = ("\n".join(lines) + ("\n" if lines else "")).encode("utf-8")
+        parent_fd = os.open(
+            self._path.parent,
+            os.O_RDONLY
+            | getattr(os, "O_DIRECTORY", 0)
+            | getattr(os, "O_NOFOLLOW", 0),
         )
+        temp_name = f".{self._path.name}.{uuid4().hex}.tmp"
+        temp_fd: int | None = None
+        try:
+            temp_fd = os.open(
+                temp_name,
+                os.O_WRONLY
+                | os.O_CREAT
+                | os.O_EXCL
+                | getattr(os, "O_NOFOLLOW", 0),
+                0o600,
+                dir_fd=parent_fd,
+            )
+            written = 0
+            while written < len(encoded):
+                count = os.write(temp_fd, encoded[written:])
+                if count <= 0:
+                    raise OSError("declined ledger atomic write made no progress")
+                written += count
+            os.fsync(temp_fd)
+            os.close(temp_fd)
+            temp_fd = None
+            os.replace(
+                temp_name,
+                self._path.name,
+                src_dir_fd=parent_fd,
+                dst_dir_fd=parent_fd,
+            )
+            os.fsync(parent_fd)
+        finally:
+            if temp_fd is not None:
+                os.close(temp_fd)
+            try:
+                os.unlink(temp_name, dir_fd=parent_fd)
+            except FileNotFoundError:
+                pass
+            os.close(parent_fd)
 
     def suppressed_count(self, finding_ids: list[str]) -> int:
         """Count how many of *finding_ids* are currently declined -- a small
