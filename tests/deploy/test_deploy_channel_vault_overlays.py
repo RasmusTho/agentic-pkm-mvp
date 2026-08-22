@@ -358,6 +358,21 @@ def test_scalar_rollback_overrides_full_host_environment_selectors(
     )
     assert _mount_source(api, "/Users") is None
     assert api.get("ports", []) == []
+    init = services["instance-state-init"]
+    expected_policy_mounts = {
+        "/run/scalar-rollback-policy/docker-compose.yaml": (
+            REPO_ROOT / "docker-compose.yaml"
+        ),
+        "/run/scalar-rollback-policy/docker-compose.scalar-rollback.yml": (
+            REPO_ROOT / "docker-compose.scalar-rollback.yml"
+        ),
+        "/run/scalar-rollback-policy/nginx.conf": (
+            REPO_ROOT / "ops/scalar-rollback/nginx.conf"
+        ),
+    }
+    for target, source in expected_policy_mounts.items():
+        assert _mount_source(init, target) == str(source)
+        assert _mount_is_read_only(init, target)
     gateway_ports = services["scalar-rollback-gateway"]["ports"]
     assert isinstance(gateway_ports, list)
     assert gateway_ports[0]["host_ip"] == "127.0.0.1"
