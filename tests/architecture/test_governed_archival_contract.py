@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 from pathlib import Path
+import inspect
+
+from app.archival.transition import ArchivalTransitionKernel
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -30,3 +33,10 @@ def test_normative_contract_and_invariant_registry_match() -> None:
     ):
         assert identifier in contract
         assert identifier in registry
+
+
+def test_transition_kernel_has_no_private_persistence_or_content_store() -> None:
+    source = inspect.getsource(ArchivalTransitionKernel)
+    assert "dict[" not in source
+    assert "bytes" not in source
+    assert "registry" not in source.lower()
