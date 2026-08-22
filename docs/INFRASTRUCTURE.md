@@ -1,9 +1,11 @@
-State: SoT v5.5 baseline (descriptive, ops-oriented). If a detail drifts, prefer scripts/compose and update this doc.
+State: SoT v5.5 baseline (descriptive, ops-oriented). Local Compose is the fallback runtime; the live
+product topology is the new Linux/Tailscale host split recorded below. If a detail drifts, prefer live
+host evidence and the deployment contract, then update this doc.
 
 Documentation hierarchy: `docs/YGGDRASIL_PLATFORM_AND_OPERATIONS_SYSTEM/README.md` owns the
-target operational-platform boundary. This document remains the current local Docker/Colima runtime
-description; it does not claim that the target platform boundary is already a separately delivered
-implementation.
+target operational-platform boundary. This document owns the local Docker/Colima fallback description
+and records the verified live host boundary; it does not claim that the new-host deployment handoff is
+already a separately delivered implementation.
 
 ## v5.5 Baseline Delta (Current Reality)
 - Registry watcher is the runtime default; legacy snapshot watcher is dev-only.
@@ -11,11 +13,24 @@ implementation.
 - Watcher auto-run defaults on (`WATCHER_AUTO_EXEC=1`); set `WATCHER_AUTO_EXEC=0` for emit-only mode. LangGraph/Reasoning rollout remains opt-in.
 - See `docs/STATUS.md` and `docs/ARCHITECTURE.md` for the current baseline and forward line.
 
-# Infrastructure — Local Runtime (Docker + Colima)
+# Infrastructure — Local Fallback and New-Host Runtime
 
-This document describes the current local runtime for the Agentic PKM stack. It mirrors the active docker-compose setup and the supporting scripts.
+This document describes the local Docker + Colima fallback and the current live host boundary for the
+Agentic PKM stack. It does not claim that local Compose is the live product deployment.
 
-## Stack Overview
+## Current live host boundary (verified 2026-08-22)
+
+- Dedicated Ollama host: Ollama/model serving only; no product API, worker, watcher, database, or Companion UI.
+- `ygg-dev`: Linux/Tailscale dev runtime, API `:18001`, Companion UI `:8111`; reachable but degraded.
+- `ygg-test`: intended isolated test runtime; no reachable host or endpoint was found.
+- `ygg-prod`: Linux/Tailscale prod runtime, API `:18000`; liveness responds but functional health is
+  failing and Companion UI `:8113` is unavailable.
+- Both live APIs report `git_sha=unknown`; promotion cannot use them as immutable artifact evidence.
+
+The repository still documents and supports local Compose commands for fallback development and
+verification. Those commands do not deploy the new hosts and are not promotion evidence.
+
+## Local fallback stack overview
 - Host: macOS
 - Container runtime: Colima provides the Docker daemon.
 - Orchestration: Docker Compose in repo root.

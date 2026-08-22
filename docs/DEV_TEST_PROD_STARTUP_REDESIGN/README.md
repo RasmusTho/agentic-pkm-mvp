@@ -1,4 +1,8 @@
 State: Filed capability specification. P1 is active under #4914; later slices remain dependency-blocked. It does not claim a running deployment model.
+Current-state note (2026-08-22): the live topology is now intended to be a dedicated Ollama host plus
+Linux/Tailscale `ygg-dev` / `ygg-test` / `ygg-prod` runtime hosts. The redesign contract is not yet
+implemented as a remote-host deployment path; `ygg-test` and immutable live artifact identity remain
+gates before staged promotion.
 Doc role: Capability specification directory (Product/Runtime + Builder System release boundary)
 Owning SoT: `docs/ENVIRONMENTS.md`, `docs/RELEASE_CHANNELS/README.md`, and `docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md`
 
