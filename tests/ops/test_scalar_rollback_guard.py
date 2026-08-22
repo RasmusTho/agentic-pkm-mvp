@@ -310,6 +310,16 @@ def test_rollback_gateway_and_mounts_enforce_selected_binding(
         ),
         Loader=_ComposeLoader,
     )
+    rollback_init = rollback_compose["services"]["instance-state-init"]
+    assert {
+        mount.split(":", 2)[1]
+        for mount in rollback_init["volumes"]
+        if isinstance(mount, str)
+    } == {
+        "/run/scalar-rollback-policy/docker-compose.yaml",
+        "/run/scalar-rollback-policy/docker-compose.scalar-rollback.yml",
+        "/run/scalar-rollback-policy/nginx.conf",
+    }
     assert rollback_compose["services"]["api"]["environment"] | {
         "VAULT_ROOT": "/app/selected-vault",
         "VAULT_ROOT_DEV": "/app/selected-vault",

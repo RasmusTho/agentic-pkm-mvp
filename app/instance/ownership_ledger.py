@@ -769,6 +769,7 @@ class OwnershipLedger:
             self._assert_no_collision(
                 current,
                 candidate,
+                key=key,
                 allow_same_channel_nested=allow_same_channel_nested,
             )
             leases = dict(current.leases)
@@ -841,7 +842,9 @@ class OwnershipLedger:
                 key=key,
                 state="active",
             )
-            self._assert_no_collision(current, active, allow_same_channel_nested=True)
+            self._assert_no_collision(
+                current, active, key=key, allow_same_channel_nested=True
+            )
             leases = dict(current.leases)
             leases[vault_binding_id] = active
             self._write_ledger_locked(self._replace(current, leases=leases), key)
@@ -995,7 +998,9 @@ class OwnershipLedger:
                     key=key,
                     state="active",
                 )
-                self._assert_no_collision(staged, candidate, allow_same_channel_nested=True)
+                self._assert_no_collision(
+                    staged, candidate, key=key, allow_same_channel_nested=True
+                )
                 leases[candidate.vault_binding_id] = candidate
                 staged = self._replace(staged, leases=leases)
             staged = self._replace(staged, legacy_bootstrap_complete=True)
@@ -1120,6 +1125,7 @@ class OwnershipLedger:
         current: LedgerSnapshot,
         candidate: OwnershipLease,
         *,
+        key: _KeyMaterial,
         allow_same_channel_nested: bool,
     ) -> None:
         leases = list(current.leases.values()) + list(current.tombstones.values())
@@ -1142,6 +1148,19 @@ class OwnershipLedger:
                 or candidate.root_fingerprint in lease.ancestor_fingerprints
                 or lease.root_fingerprint in candidate.ancestor_fingerprints
             )
+            if not overlap:
+                try:
+                    candidate_root = Path(self._open_root(candidate.sealed_root, key))
+                    lease_root = Path(self._open_root(lease.sealed_root, key))
+                    overlap = (
+                        candidate_root != lease_root
+                        and (
+                            candidate_root.is_relative_to(lease_root)
+                            or lease_root.is_relative_to(candidate_root)
+                        )
+                    )
+                except (LedgerError, OSError, ValueError):
+                    overlap = False
             if not overlap or lease.vault_binding_id == candidate.vault_binding_id:
                 continue
             if (
@@ -1469,12 +1488,12 @@ def _identity_material(root: Path) -> tuple[str, tuple[str, ...]]:
     )
     ancestors: list[str] = []
     for ancestor in resolved.parents:
-        ancestor_identity = resolve_filesystem_root_identity(ancestor)
-        ancestors.append(
-            f"inode:{ancestor_identity.device}:{ancestor_identity.inode}"
-            if ancestor_identity.materialized
-            else f"path:{ancestor_identity.canonical_path}"
-        )
+        # Parent directories can be bind-mount roots whose device/inode
+        # identity belongs to the current container mount namespace rather
+        # than to the selected vault. Persisting those inode values makes an
+        # otherwise identical vault fail cross-container verification. The
+        # vault itself remains inode-bound; its parent chain is path-bound.
+        ancestors.append(f"path:{ancestor}")
     return primary, tuple(ancestors)
 
 
