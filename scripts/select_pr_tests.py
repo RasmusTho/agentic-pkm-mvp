@@ -571,6 +571,17 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
         ("tests/heimdal",),
     ),
     (
+        "archival",
+        (
+            "app/archival/",
+            "tests/archival/",
+            "tests/architecture/test_governed_archival_contract.py",
+            "docs/contracts/GOVERNED_ARCHIVAL_FLOW.md",
+            "docs/GOVERNED_ARCHIVAL_FLOW/",
+        ),
+        ("tests/archival", "tests/architecture/test_governed_archival_contract.py"),
+    ),
+    (
         "orchestration",
         (
             "app/orchestrator/",
