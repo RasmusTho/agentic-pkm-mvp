@@ -111,6 +111,22 @@ def test_forbidden_requests_fail_before_http() -> None:
     assert transport.sessions == []
 
 
+def test_arbitrary_path_cannot_reach_transport() -> None:
+    transport = Transport()
+    client = _client(transport)
+
+    with pytest.raises(TypeError):
+        client._read(  # type: ignore[call-arg]  # noqa: SLF001
+            "health_check",
+            "/api2/json/nodes/TARS/qemu/100/status/start",
+        )
+    with pytest.raises(ProxmoxInventoryError, match="operation"):
+        client._read("/api2/json/nodes/TARS/qemu/100/status/start")  # type: ignore[arg-type]  # noqa: SLF001
+
+    assert transport.sessions == []
+    assert transport.calls == []
+
+
 def test_scope_or_tls_refusals_happen_before_http() -> None:
     transport = Transport(fingerprint="sha256:wrong")
     with pytest.raises(ProxmoxInventoryError, match="TLS"):

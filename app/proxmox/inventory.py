@@ -6,8 +6,10 @@ capability-scoped inventory token into an arbitrary PVE proxy.
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
+from enum import Enum
 from hashlib import sha256
 import json
+from types import MappingProxyType
 from typing import Any, Callable, Mapping, Protocol, Sequence
 from urllib.parse import urlparse
 
@@ -18,6 +20,27 @@ ALLOWED_STORAGES = frozenset({"local", "local-lvm"})
 RECEIPT_VERSION = "proxmox.inventory.receipt.v1"
 MCP_DESCRIPTOR_ID = "mcp.proxmox.inventory.v1"
 INVENTORY_SCOPE_CAPABILITY = "inventory-read-only"
+
+
+class _InventoryOperation(Enum):
+    HEALTH_CHECK = "health_check"
+    GET_CLUSTER_SUMMARY = "get_cluster_summary"
+    LIST_ALLOWED_VMS = "list_allowed_vms"
+    GET_VM_STATUS = "get_vm_status"
+    GET_STORAGE_STATUS = "get_storage_status"
+    LIST_RECENT_TASKS = "list_recent_tasks"
+
+
+_READ_PATH_TEMPLATES: Mapping[_InventoryOperation, str] = MappingProxyType(
+    {
+        _InventoryOperation.HEALTH_CHECK: "/api2/json/version",
+        _InventoryOperation.GET_CLUSTER_SUMMARY: "/api2/json/cluster/status",
+        _InventoryOperation.LIST_ALLOWED_VMS: "/api2/json/nodes/{node}/qemu",
+        _InventoryOperation.GET_VM_STATUS: "/api2/json/nodes/{node}/qemu/{identifier}/status/current",
+        _InventoryOperation.GET_STORAGE_STATUS: "/api2/json/nodes/{node}/storage/{identifier}/status",
+        _InventoryOperation.LIST_RECENT_TASKS: "/api2/json/nodes/{node}/tasks",
+    }
+)
 
 
 class ProxmoxInventoryError(RuntimeError):
@@ -158,13 +181,13 @@ class ProxmoxInventoryClient:
         self._transport = transport
 
     def health_check(self) -> InventoryResult:
-        return self._read("health_check", "/api2/json/version")
+        return self._read(_InventoryOperation.HEALTH_CHECK)
 
     def get_cluster_summary(self) -> InventoryResult:
-        return self._read("get_cluster_summary", "/api2/json/cluster/status")
+        return self._read(_InventoryOperation.GET_CLUSTER_SUMMARY)
 
     def list_allowed_vms(self) -> InventoryResult:
-        result = self._read("list_allowed_vms", f"/api2/json/nodes/{self._config.policy.node}/qemu")
+        result = self._read(_InventoryOperation.LIST_ALLOWED_VMS)
         rows = result.result.get("data", [])
         if not isinstance(rows, Sequence):
             rows = []
@@ -172,19 +195,16 @@ class ProxmoxInventoryClient:
         return self._result("list_allowed_vms", {"data": filtered}, endpoint_identity=result.receipt.endpoint_identity)
 
     def get_vm_status(self, vm_id: int | object) -> InventoryResult:
-        if not isinstance(vm_id, int) or vm_id not in self._config.policy.vm_ids:
-            raise ProxmoxInventoryError("unknown VMID")
-        return self._read("get_vm_status", f"/api2/json/nodes/{self._config.policy.node}/qemu/{vm_id}/status/current")
+        return self._read(_InventoryOperation.GET_VM_STATUS, identifier=vm_id)
 
     def get_storage_status(self, storage: str | object) -> InventoryResult:
-        if not isinstance(storage, str) or storage not in self._config.policy.storage_names:
-            raise ProxmoxInventoryError("unknown storage")
-        return self._read("get_storage_status", f"/api2/json/nodes/{self._config.policy.node}/storage/{storage}/status")
+        return self._read(_InventoryOperation.GET_STORAGE_STATUS, identifier=storage)
 
     def list_recent_tasks(self) -> InventoryResult:
-        return self._read("list_recent_tasks", f"/api2/json/nodes/{self._config.policy.node}/tasks")
+        return self._read(_InventoryOperation.LIST_RECENT_TASKS)
 
-    def _read(self, operation: str, path: str) -> InventoryResult:
+    def _read(self, operation: _InventoryOperation, *, identifier: object | None = None) -> InventoryResult:
+        path = self._path_for_operation(operation, identifier=identifier)
         endpoint = self._endpoint()
         token = self._resolve_secret(self._config.token_secret_ref)
         if not isinstance(token, str) or not token:
@@ -200,7 +220,23 @@ class ProxmoxInventoryClient:
             expected_fingerprint=self._config.tls_fingerprint,
         )
         payload = session.get(path=path, token=token)
-        return self._result(operation, payload, endpoint_identity=sha256(endpoint.encode("utf-8")).hexdigest())
+        return self._result(operation.value, payload, endpoint_identity=sha256(endpoint.encode("utf-8")).hexdigest())
+
+    def _path_for_operation(self, operation: _InventoryOperation, *, identifier: object | None) -> str:
+        if not isinstance(operation, _InventoryOperation):
+            raise ProxmoxInventoryError("operation is not admitted")
+        if operation is _InventoryOperation.GET_VM_STATUS:
+            if not isinstance(identifier, int) or identifier not in self._config.policy.vm_ids:
+                raise ProxmoxInventoryError("unknown VMID")
+        elif operation is _InventoryOperation.GET_STORAGE_STATUS:
+            if not isinstance(identifier, str) or identifier not in self._config.policy.storage_names:
+                raise ProxmoxInventoryError("unknown storage")
+        elif identifier is not None:
+            raise ProxmoxInventoryError("operation does not accept an identifier")
+        return _READ_PATH_TEMPLATES[operation].format(
+            node=self._config.policy.node,
+            identifier=identifier,
+        )
 
     def _endpoint(self) -> str:
         endpoint = self._resolve_secret(self._config.endpoint_secret_ref)
