@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
+import re
 from typing import Protocol, Sequence
 
 
@@ -98,8 +99,14 @@ class LivenessState(str, Enum):
 
 
 def _looks_like_location(value: str) -> bool:
-    normalized = value.strip().lower()
-    return normalized.startswith(("/", "\\", "~/", "file:", "s3:", "http:", "https:"))
+    normalized = value.strip()
+    return (
+        "/" in normalized
+        or "\\" in normalized
+        or normalized.startswith("~")
+        or bool(re.match(r"^[A-Za-z]:", normalized))
+        or bool(re.match(r"^[A-Za-z][A-Za-z0-9+.-]*:", normalized))
+    )
 
 
 def _require_opaque(value: str, field_name: str) -> str:
@@ -116,9 +123,16 @@ class ArtifactIdentity:
 
     owner: OwnerAuthority
     owner_native_id: str
+    owner_namespace: str | None = None
 
     def __post_init__(self) -> None:
         _require_opaque(self.owner_native_id, "owner_native_id")
+        if self.owner is OwnerAuthority.CLASS_ADAPTER:
+            if self.owner_namespace is None:
+                raise ValueError("class-adapter identity requires an owner namespace")
+            _require_opaque(self.owner_namespace, "owner_namespace")
+        elif self.owner_namespace is not None:
+            raise ValueError("owner_namespace is only valid for class-adapter identities")
 
 
 @dataclass(frozen=True)

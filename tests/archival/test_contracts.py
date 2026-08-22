@@ -45,14 +45,41 @@ def test_artifact_classification_preserves_authority_and_durability_axes() -> No
 
 
 def test_location_cannot_mint_identity_or_access_authority() -> None:
-    with pytest.raises(ValueError, match="location"):
-        ArtifactIdentity(OwnerAuthority.HKA, "/vault/Notes/Archive.md")
+    location_values = (
+        "/vault/Notes/Archive.md",
+        "vault/Notes/Archive.md",
+        r"C:\\vault\\Archive.md",
+        "private-archive/object",
+        "file:///cold/archive/object",
+        "s3://private-archive/read-grant",
+        "ssh://archive-host/object",
+    )
 
-    with pytest.raises(ValueError, match="location"):
-        RepresentationRef("heimdal", "file:///cold/archive/object")
+    for location in location_values:
+        with pytest.raises(ValueError, match="location"):
+            ArtifactIdentity(OwnerAuthority.HKA, location)
+        with pytest.raises(ValueError, match="location"):
+            RepresentationRef("heimdal", location)
+        with pytest.raises(ValueError, match="location"):
+            AccessAuthority(OwnerAuthority.GOV, location)
 
-    with pytest.raises(ValueError, match="location"):
-        AccessAuthority(OwnerAuthority.GOV, "s3://private-archive/read-grant")
+
+def test_class_adapter_identities_require_distinct_owner_namespaces() -> None:
+    heimdal_identity = ArtifactIdentity(
+        OwnerAuthority.CLASS_ADAPTER,
+        "object-42",
+        owner_namespace="heimdal",
+    )
+    retained_source_identity = ArtifactIdentity(
+        OwnerAuthority.CLASS_ADAPTER,
+        "object-42",
+        owner_namespace="retained-source",
+    )
+
+    assert heimdal_identity != retained_source_identity
+
+    with pytest.raises(ValueError, match="namespace"):
+        ArtifactIdentity(OwnerAuthority.CLASS_ADAPTER, "object-42")
 
 
 def test_policy_profiles_keep_class_specific_terminal_outcomes() -> None:
