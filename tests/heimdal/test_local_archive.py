@@ -834,6 +834,7 @@ def test_cleanup_refuses_a_different_verified_archive_after_rebind(
     )
 
     assert retried.outcome == "already_erased"
+    receipt = raw_liveness.all_deletion_receipts()[0]
     assert receipt.payload["cold_cleanup_location_refs"] == []
     assert not original_object.exists()
 

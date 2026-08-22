@@ -2,15 +2,18 @@
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 import json
 from pathlib import Path
 import secrets
+import threading
 
 import pytest
 
 from app.heimdal import (
+    consent_ledger,
     local_archive,
     media_ingress,
     media_receipts,
@@ -18,6 +21,7 @@ from app.heimdal import (
     raw_store,
     retention,
 )
+from app.heimdal import raw_read_gate
 from app.heimdal.consent_ledger import (
     grant_consent,
     reset_memory_consent_ledger,
@@ -288,3 +292,144 @@ def test_cold_delete_failure_is_loud_and_retryable(
     )["outcome"] == "erased"
     assert list((archive_root / "representations").glob("*.bin")) == []
     assert list((archive_root / "manifests").glob("*.json")) == []
+
+
+def test_restore_proof_is_bound_to_the_representation_actually_read(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    now = datetime.now(timezone.utc)
+    archive_root = tmp_path / "mounted-cold"
+    archive_root.mkdir()
+    record = _age_record(_insert(b"representation-race", grant_ref="grant-race"), now=now)
+    read_fenced = threading.Event()
+    release_read = threading.Event()
+
+    def pause_read(stage: str) -> None:
+        assert stage == "after_active_representation_resolution"
+        read_fenced.set()
+        assert release_read.wait(timeout=10)
+
+    monkeypatch.setattr(raw_read_gate, "_raw_read_stage_hook", pause_read)
+
+    def restore() -> str:
+        try:
+            local_archive.run_restore_drill(raw_ref_for(record), reader=_READER, key=_KEY)
+        except local_archive.ArchiveDegradedError as exc:
+            return exc.reason
+        raise AssertionError("a hot read must not become a cold restore proof")
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        restore_future = executor.submit(restore)
+        assert read_fenced.wait(timeout=10)
+        archive_future = executor.submit(_archive, record, archive_root=archive_root, now=now)
+        assert not archive_future.done()
+        release_read.set()
+        assert restore_future.result(timeout=10) == "archived_representation_unavailable"
+        assert archive_future.result(timeout=10).active_representation.storage_kind == (
+            local_archive.ARCHIVE_STORAGE_KIND
+        )
+
+
+def test_consent_fence_covers_both_capture_revocation_orderings() -> None:
+    grant_ref = "grant-fenced-race"
+    scope = "session:fenced-race"
+    grant_consent(
+        grant_ref=grant_ref,
+        basis="session_optin",
+        scope=scope,
+        granted_by="operator",
+    )
+    admitted = consent_ledger.admit_raw_evidence(scope=scope)
+    insert_fenced = threading.Event()
+    release_insert = threading.Event()
+
+    def insert_before_revocation():
+        with consent_ledger.consent_raw_admission(grant_ref):
+            insert_fenced.set()
+            assert release_insert.wait(timeout=10)
+            return _insert(b"insert-before-revocation", grant_ref=grant_ref)
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        insertion = executor.submit(insert_before_revocation)
+        assert insert_fenced.wait(timeout=10)
+        revocation = executor.submit(
+            revoke_consent,
+            grant_ref=grant_ref,
+            revoked_by="operator",
+        )
+        assert not revocation.done()
+        release_insert.set()
+        inserted = insertion.result(timeout=10)
+        revocation.result(timeout=10)
+
+    assert raw_store.resolve_active_raw_record(inserted.id) is None
+    assert admitted.grant.grant_ref == grant_ref
+    with pytest.raises(consent_ledger.ConsentRefusedError):
+        with consent_ledger.consent_raw_admission(grant_ref):
+            _insert(b"insert-after-revocation", grant_ref=grant_ref)
+
+
+def test_revocation_selector_does_not_materialize_unrelated_cold_bytes(tmp_path: Path) -> None:
+    now = datetime.now(timezone.utc)
+    archive_root = tmp_path / "mounted-cold"
+    archive_root.mkdir()
+    unrelated = _age_record(
+        _insert(b"unrelated-cold", grant_ref="grant-unrelated"),
+        now=now,
+    )
+    _archive(unrelated, archive_root=archive_root, now=now)
+    grant_ref = "grant-metadata-selector"
+    grant_consent(
+        grant_ref=grant_ref,
+        basis="session_optin",
+        scope="session:metadata-selector",
+        granted_by="operator",
+    )
+    target = _insert(b"target-hot", grant_ref=grant_ref)
+    raw_store.revoke_cold_archive_binding()
+
+    revoke_consent(grant_ref=grant_ref, revoked_by="operator")
+
+    assert raw_store.resolve_active_raw_record(target.id) is None
+    assert raw_store.raw_record_ids_by_consent_grant("grant-unrelated") == [unrelated.id]
+
+
+def test_cold_directory_sync_failure_preserves_erasure_pending(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    now = datetime.now(timezone.utc)
+    archive_root = tmp_path / "mounted-cold"
+    archive_root.mkdir()
+    record = _age_record(_insert(b"durable-unlink", grant_ref="grant-sync"), now=now)
+    _archive(record, archive_root=archive_root, now=now)
+    original_fsync = raw_store.os.fsync
+    monkeypatch.setattr(raw_store.os, "fsync", lambda _fd: (_ for _ in ()).throw(OSError("sync")))
+
+    with pytest.raises(raw_store.RawRepresentationDeletionError):
+        raw_liveness.governed_delete_raw_record(
+            record_id=record.id,
+            reason=retention.REASON_HARD_RETENTION_BOUND,
+            retention_window_days=30,
+            deleted_at=now,
+        )
+
+    detached = raw_liveness.all_deletion_receipts()[0]
+    assert detached.payload["cold_cleanup_location_refs"]
+    detached.payload["cold_cleanup_location_refs"].clear()
+    projection = raw_liveness.project_with_response_leases(
+        [(raw_ref_for(record), record.content_identity)],
+        now=now,
+    )
+    assert projection[raw_ref_for(record)].outcome == "erasure_pending"
+
+    monkeypatch.setattr(raw_store.os, "fsync", original_fsync)
+    retried = raw_liveness.governed_delete_raw_record(
+        record_id=record.id,
+        reason=retention.REASON_HARD_RETENTION_BOUND,
+        retention_window_days=30,
+        deleted_at=now,
+    )
+    assert retried.outcome == "already_erased"
+    assert raw_liveness.all_deletion_receipts()[0].payload["cold_cleanup_location_refs"] == []

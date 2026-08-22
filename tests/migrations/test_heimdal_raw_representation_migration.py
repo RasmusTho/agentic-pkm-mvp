@@ -1335,3 +1335,71 @@ def test_test_bootstrap_and_migration_shapes_converge(
         and "BEFORE DELETE OR UPDATE" in trigger_def
         for function_def, trigger_def in receipt_functions
     )
+
+
+def test_pg_consent_fence_and_revocation_projection_cover_both_race_orderings(
+    scratch_db_factory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    dsn = scratch_db_factory()
+    _upgrade(dsn, monkeypatch, CURRENT_REPRESENTATION_HEAD)
+    monkeypatch.setenv("DATABASE_URL", dsn)
+    monkeypatch.setenv("STORE_BACKEND", "pg")
+    monkeypatch.delenv("STORE_SCHEMA_AUTOCREATE", raising=False)
+    monkeypatch.setenv("HEIMDAL_RAW_STORE_KEY", _KEY.hex())
+
+    from app.heimdal import consent_ledger, raw_liveness, raw_store
+    from app.heimdal.raw_read_gate import raw_ref_for
+
+    grant_ref = "grant-pg-har05-race"
+    consent_ledger.grant_consent(
+        grant_ref=grant_ref,
+        basis="session_optin",
+        scope="session:pg-har05-race",
+        granted_by="operator",
+    )
+    insert_fenced = threading.Event()
+    release_insert = threading.Event()
+
+    def insert_under_grant():
+        plaintext = b"pg-insert-before-revocation"
+        ciphertext, nonce = raw_store.encrypt_raw_bytes(plaintext, key=_KEY)
+        with consent_ledger.consent_raw_admission(grant_ref):
+            insert_fenced.set()
+            assert release_insert.wait(timeout=10)
+            record, created = raw_store.insert_raw_record(
+                content_identity=raw_store.compute_raw_content_identity(plaintext),
+                capture_chain=["migration-test"],
+                sensor={"adapter": "migration-test"},
+                consent={"grant_ref": grant_ref},
+                ciphertext=ciphertext,
+                nonce=nonce,
+                key_ref="migration-test-key",
+                key=_KEY,
+                source_path="source-class-redacted",
+            )
+        assert created
+        return record
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        insertion = executor.submit(insert_under_grant)
+        assert insert_fenced.wait(timeout=10)
+        revocation = executor.submit(
+            consent_ledger.revoke_consent,
+            grant_ref=grant_ref,
+            revoked_by="operator",
+        )
+        assert not revocation.done()
+        release_insert.set()
+        record = insertion.result(timeout=10)
+        revocation.result(timeout=10)
+
+    assert raw_store.resolve_active_raw_record(record.id) is None
+    projection = raw_liveness.project_with_response_leases(
+        [(raw_ref_for(record), record.content_identity)]
+    )
+    assert projection[raw_ref_for(record)].outcome == "erased"
+
+    with pytest.raises(consent_ledger.ConsentRefusedError):
+        with consent_ledger.consent_raw_admission(grant_ref):
+            raise AssertionError("revoked grant reached raw insertion")

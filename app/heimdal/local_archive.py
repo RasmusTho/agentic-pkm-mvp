@@ -461,16 +461,7 @@ def run_restore_drill(
         purpose="heimdal_archive_restore_drill",
         key=key,
     )
-    record_id = raw_read_gate._record_id_from_raw_ref(raw_ref)  # noqa: SLF001
-    record = raw_store.resolve_active_raw_record(record_id)
-    if record is None or record.content_identity != restored.receipt.content_identity:
-        raise ArchiveDegradedError("restore_identity_unavailable")
-    active = [
-        representation
-        for representation in raw_store.all_raw_representations(record_id)
-        if representation.active
-    ]
-    if len(active) != 1 or active[0].storage_kind != ARCHIVE_STORAGE_KIND:
+    if restored.storage_kind != ARCHIVE_STORAGE_KIND:
         raise ArchiveDegradedError("archived_representation_unavailable")
     if raw_store.compute_raw_content_identity(restored.plaintext) != restored.receipt.content_identity:
         raise ArchiveDegradedError("restore_identity_mismatch")

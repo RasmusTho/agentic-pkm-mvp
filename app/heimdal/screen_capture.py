@@ -13,7 +13,10 @@ from typing import Any, Mapping
 
 from app.heimdal import raw_store
 from app.heimdal.capture_adapter import SensorIdentity, _assert_sensor_registered
-from app.heimdal.consent_ledger import admit_raw_evidence
+from app.heimdal.consent_ledger import (
+    admit_raw_evidence,
+    consent_raw_admission,
+)
 from app.heimdal.publish import publish_full_observation
 
 SCREEN_CAPTURE_SCOPE = "screen_always_on"
@@ -79,18 +82,23 @@ def ingest_screen_bundle(bundle: Mapping[str, Any], *, key: bytes | None = None)
     identity = hashlib.sha256(plaintext).hexdigest()
     encryption_key = key if key is not None else raw_store.resolve_raw_store_key()
     ciphertext, nonce = raw_store.encrypt_raw_bytes(plaintext, key=encryption_key)
-    record, created = raw_store.insert_raw_record(
-        content_identity=identity,
-        capture_chain=list(bundle.get("capture_chain") or ["screen_capture_post"]),
-        sensor={"adapter": sensor.adapter, "version": sensor.version, "machine": sensor.device},
-        consent=admitted.consent.as_dict(),
-        ciphertext=ciphertext,
-        nonce=nonce,
-        key_ref="v1-process-key",
-        key=encryption_key,
-        source_path="screen-capture-endpoint",
-        payload={"modality": "screen", "bundle_shape": shape},
-    )
+    with consent_raw_admission(admitted.grant.grant_ref):
+        record, created = raw_store.insert_raw_record(
+            content_identity=identity,
+            capture_chain=list(bundle.get("capture_chain") or ["screen_capture_post"]),
+            sensor={
+                "adapter": sensor.adapter,
+                "version": sensor.version,
+                "machine": sensor.device,
+            },
+            consent=admitted.consent.as_dict(),
+            ciphertext=ciphertext,
+            nonce=nonce,
+            key_ref="v1-process-key",
+            key=encryption_key,
+            source_path="screen-capture-endpoint",
+            payload={"modality": "screen", "bundle_shape": shape},
+        )
     published = False
     if shape == DERIVED_OBSERVATION:
         # The declared on-device path is still admitted through the same

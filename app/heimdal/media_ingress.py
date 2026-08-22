@@ -64,7 +64,11 @@ from app.heimdal import (
     raw_store,
 )
 from app.heimdal.capture_adapter import SensorIdentity
-from app.heimdal.consent_ledger import MEDIA_CAPTURE_SCOPE, admit_raw_evidence
+from app.heimdal.consent_ledger import (
+    MEDIA_CAPTURE_SCOPE,
+    admit_raw_evidence,
+    consent_raw_admission,
+)
 from app.heimdal.media_receipts import MediaReceipt
 from app.heimdal.raw_read_gate import raw_ref_for
 from app.outbox.events import INDEX_OUTBOX_PATH
@@ -502,20 +506,21 @@ def admit_media_bytes(
     try:
         # Idempotent by content hash: two captures of byte-identical content
         # share one raw object, so `lineage` here is the *first* admission's.
-        # Each capture's own lineage lives on its own receipt, which is why the
-        # receipt store is keyed by transfer identity and not by content hash.
-        record, _raw_created = raw_store.insert_raw_record(
-            content_identity=content_sha256,
-            capture_chain=list(CAPTURE_CHAIN_MEDIA_INGRESS),
-            sensor=sensor.as_dict(),
-            consent=admitted.consent.as_dict(),
-            ciphertext=ciphertext,
-            nonce=nonce,
-            key_ref="v1-process-key",
-            key=encryption_key,
-            source_path=MEDIA_INGRESS_SOURCE_PATH,
-            payload=lineage,
-        )
+        # Final consent revalidation is serialized with revocation so no
+        # admitted-but-not-yet-written generation can escape the erasure scan.
+        with consent_raw_admission(admitted.grant.grant_ref):
+            record, _raw_created = raw_store.insert_raw_record(
+                content_identity=content_sha256,
+                capture_chain=list(CAPTURE_CHAIN_MEDIA_INGRESS),
+                sensor=sensor.as_dict(),
+                consent=admitted.consent.as_dict(),
+                ciphertext=ciphertext,
+                nonce=nonce,
+                key_ref="v1-process-key",
+                key=encryption_key,
+                source_path=MEDIA_INGRESS_SOURCE_PATH,
+                payload=lineage,
+            )
     except Exception as exc:
         logger.error(
             "Heimdal media ingress: durable write failed capture_id=%s content_sha256=%s: %s. "

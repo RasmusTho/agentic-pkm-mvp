@@ -65,10 +65,12 @@ already enforces irreversible deletion.
 - **INV-HAR-3 — no silent data loss.** Incomplete copy, checksum mismatch, unavailable mount, or
   missing receipt prevents hot retirement and surfaces health/debt evidence.
 - **INV-HAR-4 — bounded retention deletes all raw copies.** Consent revocation and configured hard
-  retention traverse hot and cold locations. A deletion receipt identifies record and locations
-  without disclosing audio paths or content.
+  retention traverse hot and cold locations. Directory deletions become durable before the opaque
+  cleanup queue advances, and no public receipt can mutate that authority. A deletion receipt
+  identifies record and locations without disclosing audio paths or content.
 - **INV-HAR-5 — restore remains gated.** Cold archive access reuses the raw-read allowlist and receipt
-  discipline; mounting an archive does not make raw audio generally readable.
+  discipline and binds proof to the exact representation read under the shared fence; mounting an
+  archive does not make raw audio generally readable.
 
 HAR-04's runtime producer is the bounded `python -m app.cli heimdal archive-eligible` pass. A host
 scheduler may invoke it repeatedly; the pass serializes against another invocation through the raw

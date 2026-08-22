@@ -332,6 +332,13 @@ Contract:
   adapter (§11#5) is required to call this function rather than
   reimplement grant resolution — that is what keeps this the only
   signal→raw path, so no capture route can bypass the ledger.
+- **Final admission/revocation fence (HAR-05).** Every production raw producer
+  revalidates its stamped grant inside `consent_raw_admission` immediately
+  around the durable raw insert. `revoke_consent` takes the same per-grant
+  process lock (memory) or PostgreSQL session advisory lock across revocation
+  append and raw erasure. An admitted-but-not-yet-written capture therefore
+  either lands before the revocation scan and is erased, or fails final
+  revalidation after revocation; it cannot escape between them.
 - **`consent.grant_ref` stamping.** `stamp_consent_block(grant, ...)`
   builds the `consent` block (`basis`, `granted_by`, `granted_at`,
   `third_party`, `grant_ref`) every raw record and published event must
@@ -534,8 +541,11 @@ Contract:
   Cold object/manifest cleanup follows under the archive mutation lock from an
   opaque durable queue in that receipt. A cleanup failure raises and preserves
   the remaining queue for retry; liveness and media-receipt projections remain
-  `erasure_pending` until the queue is empty. Consent revocation reuses this
-  same primitive rather than deleting a single location.
+  `erasure_pending` until the queue is empty. Object and manifest directories
+  are fsynced before the durable queue advances, and public memory receipts are
+  detached copies rather than mutable queue authority. Consent revocation uses
+  a metadata-only grant selector and reuses this same primitive rather than
+  materializing unrelated cold bytes or deleting a single location.
 - **The one governed exception to append-only (D-RETENTION).**
   `app.heimdal.raw_liveness.governed_delete_raw_record` is the only runtime
   path that can remove a raw identity. The Postgres trigger
@@ -585,7 +595,10 @@ to the channel-bound encrypted cold volume and restore them only through
 `app.heimdal.raw_read_gate.read_raw_record`. `run_restore_drill` returns a
 redacted identity/read-receipt proof and never returns a path or stores raw
 bytes in its receipt. Unauthorized callers are refused by the unchanged
-production allowlist before the drill can inspect archive state.
+production allowlist before the drill can inspect archive state. The read gate
+binds its result to the exact active representation under the relocation/
+retention fence, so a concurrent hot-to-cold transition cannot turn a hot read
+into a false cold-restore proof.
 
 Hard retention and consent revocation both call
 `raw_liveness.governed_delete_raw_record`. The mechanism removes hot/cold

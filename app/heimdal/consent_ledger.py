@@ -81,9 +81,10 @@ from __future__ import annotations
 import json
 import os
 import threading
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Mapping, Optional
+from typing import Any, Dict, Iterator, List, Mapping, Optional
 from uuid import uuid4
 
 from app.heimdal._backend import resolve_heimdal_backend
@@ -343,6 +344,9 @@ class _MemoryConsentLedger:
 
 
 _MEMORY_LEDGER = _MemoryConsentLedger()
+_GRANT_FENCE_GUARD = threading.Lock()
+_MEMORY_GRANT_FENCES: Dict[str, threading.RLock] = {}
+_raw_admission_stage_hook = lambda _stage: None
 
 
 def reset_memory_consent_ledger() -> None:
@@ -367,6 +371,36 @@ def _pg_connect() -> Any:
     if not url:
         raise RuntimeError("DATABASE_URL or DB_DSN not set")
     return psycopg.connect(resolve_dsn(url), autocommit=True)
+
+
+@contextmanager
+def consent_grant_fence(grant_ref: str) -> Iterator[None]:
+    """Serialize final raw admission and revocation for one consent grant.
+
+    PostgreSQL uses a session advisory lock so the fence spans the ledger and
+    raw-store transactions opened by the caller. Memory uses a per-grant
+    re-entrant lock with the same grant -> raw-generation lock order.
+    """
+
+    if not isinstance(grant_ref, str) or not grant_ref.strip():
+        raise ValueError("grant_ref must be a non-empty string")
+    if resolve_heimdal_backend() == "memory":
+        with _GRANT_FENCE_GUARD:
+            fence = _MEMORY_GRANT_FENCES.setdefault(grant_ref, threading.RLock())
+        with fence:
+            yield
+        return
+
+    lock_key = f"heimdal:consent-grant:{grant_ref}"
+    conn = _pg_connect()
+    try:
+        conn.execute("SELECT pg_advisory_lock(hashtextextended(%s, 0))", (lock_key,))
+        yield
+    finally:
+        try:
+            conn.execute("SELECT pg_advisory_unlock(hashtextextended(%s, 0))", (lock_key,))
+        finally:
+            conn.close()
 
 
 def _schema_autocreate_enabled() -> bool:
@@ -641,6 +675,40 @@ def grant_consent(
     return _backend().append(grant)
 
 
+def assert_consent_grant_active(
+    grant_ref: str, *, at: Optional[datetime] = None
+) -> ConsentGrant:
+    """Fail loud unless the exact stamped grant remains active.
+
+    Production raw producers call this while holding
+    :func:`consent_grant_fence`, immediately before their durable insert.
+    """
+
+    reference = at or datetime.now(timezone.utc)
+    rows = _backend().all_rows()
+    revoked = _revoked_grant_refs(rows)
+    for row in reversed(rows):
+        if row.is_revocation or row.grant_ref != grant_ref:
+            continue
+        if row.grant_ref in revoked or (row.expiry is not None and row.expiry <= reference):
+            break
+        return row
+    raise ConsentRefusedError(
+        f"Capture refused (HEIM-3): consent grant {grant_ref!r} is no longer active. "
+        "No raw evidence was admitted."
+    )
+
+
+@contextmanager
+def consent_raw_admission(grant_ref: str) -> Iterator[None]:
+    """Fence and revalidate the exact grant around one raw-store insert."""
+
+    with consent_grant_fence(grant_ref):
+        assert_consent_grant_active(grant_ref)
+        _raw_admission_stage_hook("after_final_consent_validation")
+        yield
+
+
 def revoke_consent(*, grant_ref: str, revoked_by: str, payload: Optional[Mapping[str, Any]] = None) -> ConsentGrant:
     """Append a revocation row that lapses ``grant_ref`` (HEIM-1: new event, never a rewrite).
 
@@ -673,14 +741,15 @@ def revoke_consent(*, grant_ref: str, revoked_by: str, payload: Optional[Mapping
         created_at=datetime.now(timezone.utc),
         sequence=-1,
     )
-    persisted = _backend().append(revocation)
-    # Local import keeps the consent ledger's read/admission path independent
-    # of raw-store initialization while making the production revocation call
-    # the authority that starts all-copy erasure.
-    from app.heimdal.retention import enforce_consent_revocation
+    with consent_grant_fence(grant_ref):
+        persisted = _backend().append(revocation)
+        # Local import keeps the consent ledger's read/admission path independent
+        # of raw-store initialization while making the production revocation call
+        # the authority that starts all-copy erasure.
+        from app.heimdal.retention import enforce_consent_revocation
 
-    enforce_consent_revocation(grant_ref=grant_ref, revoked_at=persisted.created_at)
-    return persisted
+        enforce_consent_revocation(grant_ref=grant_ref, revoked_at=persisted.created_at)
+        return persisted
 
 
 def _revoked_grant_refs(rows: List[ConsentGrant]) -> set:
@@ -819,6 +888,9 @@ __all__ = [
     "ConsentGrant",
     "ConsentLedgerSchemaMissingError",
     "ConsentRefusedError",
+    "assert_consent_grant_active",
+    "consent_grant_fence",
+    "consent_raw_admission",
     "MEDIA_CAPTURE_BASIS",
     "MEDIA_CAPTURE_GRANT_REF",
     "MEDIA_CAPTURE_MODALITIES",

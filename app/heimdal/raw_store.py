@@ -424,10 +424,20 @@ def _delete_cold_object_path(object_path: Path) -> None:
     deletion_failed = False
     try:
         with _cold_archive_mutation_lock(object_path.parent.parent, blocking=False):
-            object_path.unlink(missing_ok=True)
-            object_path.parent.parent.joinpath("manifests", f"{object_path.stem}.json").unlink(
-                missing_ok=True
+            manifest_path = object_path.parent.parent.joinpath(
+                "manifests", f"{object_path.stem}.json"
             )
+            object_path.unlink(missing_ok=True)
+            manifest_path.unlink(missing_ok=True)
+            # Queue authority may advance only after both directory-entry
+            # removals are crash durable. If either fsync fails, the caller
+            # preserves this opaque ref for an idempotent retry.
+            for directory in (object_path.parent, manifest_path.parent):
+                directory_fd = os.open(directory, os.O_RDONLY)
+                try:
+                    os.fsync(directory_fd)
+                finally:
+                    os.close(directory_fd)
     except OSError:
         deletion_failed = True
     except RawRepresentationDeletionError:
@@ -727,6 +737,12 @@ class _MemoryRawStore:
             return [
                 self._compose(row, self._active_representation_locked(row.id)) for row in self._rows
             ]
+
+    def record_ids_by_consent_grant(self, grant_ref: str) -> List[str]:
+        """Select raw identities by consent metadata without reading representations."""
+
+        with self._lock:
+            return [row.id for row in self._rows if row.consent.get("grant_ref") == grant_ref]
 
     def archive_eligible_hot_rows(
         self,
@@ -1626,6 +1642,22 @@ class _PgRawStore:
         finally:
             conn.close()
 
+    def record_ids_by_consent_grant(self, grant_ref: str) -> List[str]:
+        """Select raw identities by consent metadata without materializing ciphertext."""
+
+        conn = _pg_connect()
+        try:
+            _assert_pg_schema(conn)
+            cur = conn.cursor()
+            cur.execute(
+                f"SELECT id FROM {_TABLE} "
+                "WHERE consent->>'grant_ref' = %s ORDER BY sequence ASC",
+                (grant_ref,),
+            )
+            return [str(row[0]) for row in cur.fetchall()]
+        finally:
+            conn.close()
+
     def archive_eligible_hot_rows(
         self,
         *,
@@ -2147,6 +2179,14 @@ def resolve_active_raw_record(record_id: str) -> Optional[RawRecord]:
     return _backend().resolve_active(record_id)
 
 
+def raw_record_ids_by_consent_grant(grant_ref: str) -> List[str]:
+    """Return matching raw ids from metadata only, never cold bytes or paths."""
+
+    if not isinstance(grant_ref, str) or not grant_ref.strip():
+        raise ValueError("grant_ref must be a non-empty string")
+    return _backend().record_ids_by_consent_grant(grant_ref)
+
+
 def register_raw_representation(
     *,
     record_id: str,
@@ -2302,5 +2342,6 @@ __all__ = [
     "register_cold_raw_representation",
     "reset_memory_raw_store",
     "resolve_active_raw_record",
+    "raw_record_ids_by_consent_grant",
     "resolve_raw_store_key",
 ]

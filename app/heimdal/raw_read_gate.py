@@ -58,10 +58,10 @@ import os
 import threading
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 from uuid import uuid4
 
-from app.heimdal import raw_store
+from app.heimdal import raw_liveness, raw_store
 from app.heimdal._backend import resolve_heimdal_backend
 
 _TABLE = "heimdal_raw_read_receipt"
@@ -73,6 +73,7 @@ _MIGRATION_HINT = (
 
 _RAW_REF_PREFIX = "heimraw:"
 _ALLOWLIST_ENV_VAR = "HEIMDAL_RAW_READ_ALLOWLIST"
+_raw_read_stage_hook: Callable[[str], None] = lambda _stage: None
 
 
 class RawReadReceiptSchemaMissingError(RuntimeError):
@@ -167,6 +168,8 @@ class GatedRawRead:
 
     plaintext: bytes
     receipt: RawReadReceipt
+    representation_id: str
+    storage_kind: str
 
 
 class _MemoryReceiptStore:
@@ -409,40 +412,60 @@ def read_raw_record(
     # the read, and unauthorized callers never reach either store.
     receipt_backend = _backend()
 
-    record = raw_store.resolve_active_raw_record(record_id)
-    if record is None:
+    initial = raw_store.resolve_active_raw_record(record_id)
+    if initial is None:
         raise RawReadRefusedError(
             f"Raw read refused: raw_ref {raw_ref!r} does not resolve to any known raw "
             "record."
         )
 
     encryption_key = key if key is not None else raw_store.resolve_raw_store_key()
-    try:
-        plaintext = raw_store.decrypt_and_verify_raw_bytes(
-            record.content_identity,
-            record.ciphertext,
-            record.nonce,
-            key=encryption_key,
+    with raw_liveness.raw_relocation_fence(
+        record_id=record_id,
+        content_identity=initial.content_identity,
+    ):
+        record = raw_store.resolve_active_raw_record(record_id)
+        active = [
+            representation
+            for representation in raw_store.all_raw_representations(record_id)
+            if representation.active
+        ]
+        if record is None or len(active) != 1:
+            raise RawReadRefusedError(
+                "Raw read refused: the exact active representation is unavailable."
+            )
+        _raw_read_stage_hook("after_active_representation_resolution")
+        try:
+            plaintext = raw_store.decrypt_and_verify_raw_bytes(
+                record.content_identity,
+                record.ciphertext,
+                record.nonce,
+                key=encryption_key,
+            )
+        except raw_store.RawRepresentationIdentityMismatchError as exc:
+            raise RawReadRefusedError(
+                "Raw read refused: active representation does not match immutable content identity. "
+                "No receipt written and no plaintext returned."
+            ) from exc
+
+        receipt = RawReadReceipt(
+            id=str(uuid4()),
+            raw_ref=raw_ref,
+            content_identity=record.content_identity,
+            reader=reader,
+            purpose=purpose,
+            read_at=datetime.now(timezone.utc),
+            payload=dict(payload or {}),
+            sequence=-1,
         )
-    except raw_store.RawRepresentationIdentityMismatchError as exc:
-        raise RawReadRefusedError(
-            "Raw read refused: active representation does not match immutable content identity. "
-            "No receipt written and no plaintext returned."
-        ) from exc
+        persisted_receipt = receipt_backend.append(receipt)
 
-    receipt = RawReadReceipt(
-        id=str(uuid4()),
-        raw_ref=raw_ref,
-        content_identity=record.content_identity,
-        reader=reader,
-        purpose=purpose,
-        read_at=datetime.now(timezone.utc),
-        payload=dict(payload or {}),
-        sequence=-1,
-    )
-    persisted_receipt = receipt_backend.append(receipt)
-
-    return GatedRawRead(plaintext=plaintext, receipt=persisted_receipt)
+        return GatedRawRead(
+            plaintext=plaintext,
+            receipt=persisted_receipt,
+            representation_id=active[0].id,
+            storage_kind=active[0].storage_kind,
+        )
 
 
 def all_raw_read_receipts() -> List[RawReadReceipt]:

@@ -17,6 +17,7 @@ may project terminal ``erased``.
 from __future__ import annotations
 
 from contextlib import contextmanager
+import copy
 import json
 import os
 import re
@@ -1907,26 +1908,48 @@ def governed_delete_raw_record(
     """Apply the one fenced, receipted raw-erasure transaction."""
 
     if resolve_heimdal_backend() == "memory":
-        return _governed_delete_memory(
+        result = _governed_delete_memory(
             record_id=record_id,
             reason=reason,
             retention_window_days=retention_window_days,
             deleted_at=deleted_at,
             payload=dict(payload or {}),
         )
-    return _governed_delete_pg(
-        record_id=record_id,
-        reason=reason,
-        retention_window_days=retention_window_days,
-        deleted_at=deleted_at,
-        payload=dict(payload or {}),
+    else:
+        result = _governed_delete_pg(
+            record_id=record_id,
+            reason=reason,
+            retention_window_days=retention_window_days,
+            deleted_at=deleted_at,
+            payload=dict(payload or {}),
+        )
+    return GovernedDeletionResult(
+        outcome=result.outcome,
+        receipt=_copy_deletion_receipt(result.receipt) if result.receipt is not None else None,
+        tombstone=result.tombstone,
+    )
+
+
+def _copy_deletion_receipt(receipt: DeletionReceipt) -> DeletionReceipt:
+    """Return a detached receipt so callers cannot mutate cleanup authority."""
+
+    return DeletionReceipt(
+        id=receipt.id,
+        record_id=receipt.record_id,
+        content_identity=receipt.content_identity,
+        reason=receipt.reason,
+        retention_window_days=receipt.retention_window_days,
+        deleted_at=receipt.deleted_at,
+        payload=copy.deepcopy(receipt.payload),
+        sequence=receipt.sequence,
+        receipted=receipt.receipted,
     )
 
 
 def all_deletion_receipts() -> list[DeletionReceipt]:
     if resolve_heimdal_backend() == "memory":
         with _MEMORY_FENCE:
-            return list(_MEMORY.deletion_receipts)
+            return [_copy_deletion_receipt(receipt) for receipt in _MEMORY.deletion_receipts]
     conn = _pg_connect(autocommit=True)
     try:
         _assert_pg_schema(conn)

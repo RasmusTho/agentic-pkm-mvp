@@ -171,11 +171,9 @@ def enforce_consent_revocation(
     grant_digest = hashlib.sha256(grant_ref.encode("utf-8")).hexdigest()
     deletions: List[DeletionReceipt] = []
     pending_count = 0
-    for record in raw_store.all_raw_records():
-        if record.consent.get("grant_ref") != grant_ref:
-            continue
+    for record_id in raw_store.raw_record_ids_by_consent_grant(grant_ref):
         result = raw_liveness.governed_delete_raw_record(
-            record_id=record.id,
+            record_id=record_id,
             reason=REASON_CONSENT_REVOKED,
             retention_window_days=0,
             deleted_at=reference_time,
