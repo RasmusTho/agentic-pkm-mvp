@@ -17,6 +17,7 @@ pytestmark = pytest.mark.pg
 REPO_ROOT = Path(__file__).resolve().parents[2]
 PRE_LIVENESS_HEAD = "f8a05a9b0001"
 LIVENESS_HEAD = "c5d8a1e4f2b7"
+CURRENT_LIVENESS_HEAD = "f4b6c8d0e2a1"
 _KEY = bytes(range(32))
 _TABLES = (
     "heimdal_raw_liveness_generation",
@@ -356,7 +357,7 @@ def test_pg_governed_deletion_rolls_back_every_crash_stage(
     crash_stage: str,
 ) -> None:
     dsn = scratch_db_factory()
-    _upgrade(dsn, monkeypatch, LIVENESS_HEAD)
+    _upgrade(dsn, monkeypatch, CURRENT_LIVENESS_HEAD)
     _runtime(dsn, monkeypatch)
     from app.heimdal import raw_liveness
     from app.heimdal.raw_store import all_raw_records
@@ -384,7 +385,7 @@ def test_pg_response_lease_and_deletion_share_transaction_fence(
     scratch_db_factory, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     dsn = scratch_db_factory()
-    _upgrade(dsn, monkeypatch, LIVENESS_HEAD)
+    _upgrade(dsn, monkeypatch, CURRENT_LIVENESS_HEAD)
     _runtime(dsn, monkeypatch)
     from app.heimdal import raw_liveness
     from app.heimdal.raw_read_gate import raw_ref_for
@@ -453,7 +454,7 @@ def test_pg_missing_raw_without_tombstone_is_unavailable(
     scratch_db_factory, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     dsn = scratch_db_factory()
-    _upgrade(dsn, monkeypatch, LIVENESS_HEAD)
+    _upgrade(dsn, monkeypatch, CURRENT_LIVENESS_HEAD)
     _runtime(dsn, monkeypatch)
     from app.heimdal import raw_liveness
     from app.heimdal.raw_read_gate import raw_ref_for
@@ -462,9 +463,7 @@ def test_pg_missing_raw_without_tombstone_is_unavailable(
     with psycopg.connect(dsn, autocommit=True) as conn:
         conn.execute("ALTER TABLE heimdal_raw_representation DISABLE TRIGGER USER")
         conn.execute("ALTER TABLE heimdal_raw_record DISABLE TRIGGER USER")
-        conn.execute(
-            "DELETE FROM heimdal_raw_representation WHERE record_id = %s", (record.id,)
-        )
+        conn.execute("DELETE FROM heimdal_raw_representation WHERE record_id = %s", (record.id,))
         conn.execute("DELETE FROM heimdal_raw_record WHERE id = %s", (record.id,))
         conn.execute("ALTER TABLE heimdal_raw_record ENABLE TRIGGER USER")
         conn.execute("ALTER TABLE heimdal_raw_representation ENABLE TRIGGER USER")

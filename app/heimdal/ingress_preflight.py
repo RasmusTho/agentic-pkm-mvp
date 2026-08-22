@@ -190,8 +190,9 @@ def run_ingress_preflight() -> IngressPreflightResult:
     if not liveness_schema_available:
         logger.error(
             "Heimdal ingress preflight: raw-liveness authority is unavailable; "
-            "media and screen ingress lanes will refuse admissions until migration "
-            "c5d8a1e4f2b7 is applied. All other API functions keep serving. Detail: %s",
+            "media and screen ingress lanes will refuse admissions until the current "
+            "raw/liveness migrations are applied with 'alembic upgrade head'. All other "
+            "API functions keep serving. Detail: %s",
             result.detail,
         )
     if key_available and liveness_schema_available and media_grant_available:

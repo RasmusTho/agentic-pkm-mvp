@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import shlex
 import subprocess
+import sys
 import time
 
 import pytest
@@ -82,6 +83,7 @@ def test_governed_runtime_env_supplies_tts_selectors_to_compose(tmp_path: Path) 
     env.update(
         {
             "PATH": f"{bin_dir}:{env['PATH']}",
+            "PYTHON": sys.executable,
             "TTS_CAPTURE": str(capture),
             "TTS_ENABLED": "false",
             "TTS_HOST_ROOT": "hostile-caller-value",

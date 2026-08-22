@@ -8,23 +8,33 @@ activates a registered cold representation.
 
 from __future__ import annotations
 
+from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 import hashlib
 import json
 import os
 from pathlib import Path
+import re
 from typing import Callable, Optional
-from uuid import uuid4
+from uuid import UUID, uuid4
 
-from app.heimdal import raw_store
+from app.heimdal import raw_liveness, raw_store
 from app.heimdal.raw_store import RawRecord, RawRepresentation
-from app.heimdal.retention import resolve_retention_window_days
-from app.ops.heimdal_cold_volume import ArchiveVolumeReady
+from app.heimdal.retention import RetentionWindowMissingError, resolve_retention_window_days
+from app.ops.heimdal_cold_volume import (
+    ArchiveVolumeReady,
+    ArchiveVolumeRefusedError,
+    load_channel_archive_metadata,
+    require_archive_volume_ready,
+)
 
 ARCHIVE_SCHEMA = "heimdal_archive_receipt.v1"
 ARCHIVE_STORAGE_KIND = "encrypted_local_cold"
 ARCHIVE_MINIMUM_AGE_DAYS = 7
+DEFAULT_ARCHIVE_PASS_LIMIT = 100
+
+_relocation_stage_hook: Callable[[str], None] = lambda _stage: None
 
 
 class ArchiveDegradedError(RuntimeError):
@@ -72,12 +82,44 @@ class ArchiveResult:
     active_representation: RawRepresentation
 
 
+@dataclass(frozen=True)
+class ArchivePassReceipt:
+    """Secret-safe outcome for one bounded production archive pass."""
+
+    ran: bool
+    healthy: bool
+    reason: str
+    eligible_count: int
+    selected_count: int
+    archived_count: int
+    failed_count: int
+    deferred_count: int
+    failure_reason_counts: tuple[tuple[str, int], ...] = ()
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "ran": self.ran,
+            "healthy": self.healthy,
+            "reason": self.reason,
+            "eligible_count": self.eligible_count,
+            "selected_count": self.selected_count,
+            "archived_count": self.archived_count,
+            "failed_count": self.failed_count,
+            "deferred_count": self.deferred_count,
+            "failure_reason_counts": dict(self.failure_reason_counts),
+        }
+
+
 def _iso(value: datetime) -> str:
     return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
 def _utc(value: datetime) -> datetime:
-    return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value.astimezone(timezone.utc)
+    return (
+        value.replace(tzinfo=timezone.utc)
+        if value.tzinfo is None
+        else value.astimezone(timezone.utc)
+    )
 
 
 def archive_eligible(
@@ -90,10 +132,9 @@ def archive_eligible(
     """Return true only inside the seven-day-to-retention window."""
     reference = _utc(now)
     ingested = _utc(record.ingested_at)
-    return (
-        ingested < reference - timedelta(days=minimum_age_days)
-        and ingested >= reference - timedelta(days=retention_window_days)
-    )
+    return ingested < reference - timedelta(
+        days=minimum_age_days
+    ) and ingested >= reference - timedelta(days=retention_window_days)
 
 
 def eligible_raw_records(
@@ -112,6 +153,10 @@ def eligible_raw_records(
         record
         for record in raw_store.all_raw_records()
         if archive_eligible(record, now=reference, retention_window_days=window)
+        and any(
+            representation.active and representation.storage_kind == "postgres_hot"
+            for representation in raw_store.all_raw_representations(record.id)
+        )
     ]
 
 
@@ -175,6 +220,38 @@ def _active_hot(record_id: str) -> RawRepresentation:
     return active[0]
 
 
+def _pending_cold(
+    record_id: str,
+    hot: RawRepresentation,
+    *,
+    archive_ref: str,
+) -> RawRepresentation | None:
+    """Resolve the one retryable durable reservation without reading its object."""
+
+    pending = [
+        item
+        for item in raw_store.all_raw_representations(record_id)
+        if item.storage_kind == ARCHIVE_STORAGE_KIND and not item.active
+    ]
+    if not pending:
+        return None
+    if len(pending) != 1:
+        raise ArchiveDegradedError("archive_pending_state_invalid")
+    candidate = pending[0]
+    try:
+        canonical_id = str(UUID(candidate.id))
+    except (TypeError, ValueError, AttributeError):
+        canonical_id = ""
+    if (
+        canonical_id != candidate.id
+        or candidate.location_ref != raw_store._cold_location_ref(archive_ref, candidate.id)  # noqa: SLF001
+        or candidate.nonce != hot.nonce
+        or candidate.key_ref != hot.key_ref
+    ):
+        raise ArchiveDegradedError("archive_pending_state_invalid")
+    return candidate
+
+
 def relocate_raw_record(
     record: RawRecord,
     *,
@@ -216,80 +293,248 @@ def relocate_raw_record(
     )
 
     objects, manifests = _ensure_archive_dirs(archive_root)
-    hot = _active_hot(record.id)
-    ciphertext = hot.ciphertext
-    ciphertext_hash = hashlib.sha256(ciphertext).hexdigest()
-    representation_id = str(uuid4())
-    receipt_id = str(uuid4())
-    location_ref = f"heimloc:cold:{representation_id}"
-    object_path = objects / f"{representation_id}.bin"
-    manifest_written = False
-    representation_registered = False
-    manifest_path = manifests / f"{representation_id}.json"
-    failure: ArchiveDegradedError | None = None
+    with raw_liveness.raw_relocation_fence(
+        record_id=record.id,
+        content_identity=record.content_identity,
+    ):
+        hot = _active_hot(record.id)
+        ciphertext = hot.ciphertext
+        ciphertext_hash = hashlib.sha256(ciphertext).hexdigest()
+        pending = _pending_cold(record.id, hot, archive_ref=archive_ref)
+        representation_id = pending.id if pending is not None else str(uuid4())
+        receipt_id = str(uuid4())
+        location_ref = raw_store._cold_location_ref(  # noqa: SLF001
+            archive_ref,
+            representation_id,
+        )
+        object_path = objects / f"{representation_id}.bin"
+        manifest_path = manifests / f"{representation_id}.json"
+        reservation_durable = False
+        activation_started = False
+        failure: ArchiveDegradedError | None = None
+
+        try:
+            raw_store.register_cold_location(
+                location_ref, object_path, verified_volume=volume_proof
+            )
+            with raw_store.cold_archive_mutation_lock(archive_root, verified_volume=volume_proof):
+                try:
+                    cold, _ = raw_store.register_cold_raw_representation(
+                        record_id=record.id,
+                        ciphertext=ciphertext,
+                        nonce=hot.nonce,
+                        key_ref=hot.key_ref,
+                        location_ref=location_ref,
+                        key=key,
+                        representation_id=representation_id,
+                        verified_volume=volume_proof,
+                    )
+                    reservation_durable = True
+                    _relocation_stage_hook("after_reservation")
+                    _durable_write(object_path, ciphertext)
+                    _relocation_stage_hook("after_object_write")
+                    copied = object_path.read_bytes()
+                    if (
+                        copied != ciphertext
+                        or hashlib.sha256(copied).hexdigest() != ciphertext_hash
+                    ):
+                        raise ArchiveDegradedError("archive_copy_verification_failed")
+                    raw_store.decrypt_and_verify_raw_bytes(
+                        record.content_identity,
+                        copied,
+                        hot.nonce,
+                        key=key or raw_store.resolve_raw_store_key(),
+                    )
+                    receipt = ArchiveReceipt(
+                        receipt_id=receipt_id,
+                        record_id=record.id,
+                        content_identity=record.content_identity,
+                        representation_id=representation_id,
+                        encrypted_bytes=len(copied),
+                        ciphertext_sha256=ciphertext_hash,
+                        verified_at=_utc(reference),
+                    )
+                    _durable_write(manifest_path, _manifest_payload(receipt))
+                    _relocation_stage_hook("after_manifest_write")
+                    activation_started = True
+                    active = raw_store.activate_raw_representation(record.id, cold.id, key=key)
+                    _relocation_stage_hook("after_activation")
+                    return ArchiveResult(receipt, ArchiveHealth(True, "ok"), active)
+                except ArchiveDegradedError as exc:
+                    failure = exc
+                except Exception:
+                    failure = ArchiveDegradedError("archive_relocation_failed")
+
+                # Before activation starts, hot remains authoritative and
+                # external artifacts can be removed safely. Keep the durable
+                # inactive reservation so retry and retention retain cleanup
+                # authority. Once activation starts its commit may be
+                # ambiguous, so preserve verified bytes.
+                if not activation_started:
+                    _discard_uncommitted_object(object_path)
+                    _discard_uncommitted_manifest(manifest_path)
+                if failure is not None:
+                    raise failure
+        except ArchiveDegradedError as exc:
+            failure = exc
+        except Exception:
+            failure = ArchiveDegradedError("archive_relocation_failed")
+
+        if not reservation_durable:
+            raw_store.discard_cold_location(location_ref)
+        if failure is not None:
+            raise failure
+
+
+def _pass_receipt(
+    *,
+    ran: bool,
+    healthy: bool,
+    reason: str,
+    eligible_count: int = 0,
+    selected_count: int = 0,
+    archived_count: int = 0,
+    failed_count: int = 0,
+    deferred_count: int = 0,
+    failure_reasons: Counter[str] | None = None,
+) -> ArchivePassReceipt:
+    return ArchivePassReceipt(
+        ran=ran,
+        healthy=healthy,
+        reason=reason,
+        eligible_count=eligible_count,
+        selected_count=selected_count,
+        archived_count=archived_count,
+        failed_count=failed_count,
+        deferred_count=deferred_count,
+        failure_reason_counts=tuple(sorted((failure_reasons or Counter()).items())),
+    )
+
+
+def _redacted_failure_reason(error: ArchiveDegradedError) -> str:
+    if re.fullmatch(r"[a-z0-9_]+", error.reason):
+        return error.reason
+    return "archive_relocation_failed"
+
+
+def run_archive_pass(
+    *,
+    vault_root: Path,
+    config_root: Path,
+    channel: str,
+    now: Optional[datetime] = None,
+    max_records: int = DEFAULT_ARCHIVE_PASS_LIMIT,
+) -> ArchivePassReceipt:
+    """Relocate one bounded batch through the channel-governed volume authority.
+
+    This is HAR-04's production one-shot scheduler boundary.  It holds the raw
+    store's cross-process run lease, revalidates the encrypted volume before
+    every external write, continues past record-local failures, and reports
+    only counts plus closed reason codes.  A later invocation retries every
+    record whose hot representation remains active.
+    """
+    if type(max_records) is not int or max_records <= 0:
+        raise ValueError("max_records must be a positive integer")
+    reference = now or datetime.now(timezone.utc)
 
     try:
-        _durable_write(object_path, ciphertext)
-        copied = object_path.read_bytes()
-        if copied != ciphertext or hashlib.sha256(copied).hexdigest() != ciphertext_hash:
-            raise ArchiveDegradedError("archive_copy_verification_failed")
-        raw_store.register_cold_location(
-            location_ref, object_path, verified_volume=volume_proof
+        with raw_store.archive_relocation_lease():
+            try:
+                metadata = load_channel_archive_metadata(
+                    config_root=config_root,
+                    channel=channel,
+                )
+                require_archive_volume_ready(metadata, expected_channel=channel)
+            except ArchiveVolumeRefusedError:
+                return _pass_receipt(
+                    ran=True,
+                    healthy=False,
+                    reason="archive_mount_unavailable",
+                )
+
+            try:
+                retention_window_days = resolve_retention_window_days(vault_root)
+            except RetentionWindowMissingError:
+                return _pass_receipt(
+                    ran=True,
+                    healthy=False,
+                    reason="retention_policy_unavailable",
+                )
+
+            if retention_window_days <= ARCHIVE_MINIMUM_AGE_DAYS:
+                return _pass_receipt(
+                    ran=True,
+                    healthy=True,
+                    reason="ok",
+                )
+
+            reference_utc = _utc(reference)
+            try:
+                batch, eligible_count = raw_store.archive_eligible_hot_raw_records(
+                    ingested_before=reference_utc - timedelta(days=ARCHIVE_MINIMUM_AGE_DAYS),
+                    ingested_at_or_after=reference_utc - timedelta(days=retention_window_days),
+                    limit=max_records,
+                )
+            except Exception:
+                return _pass_receipt(
+                    ran=True,
+                    healthy=False,
+                    reason="archive_selection_failed",
+                )
+
+            archived_count = 0
+            failure_reasons: Counter[str] = Counter()
+            for record in batch:
+                try:
+                    relocate_raw_record(
+                        record,
+                        archive_root=metadata.mountpoint,
+                        archive_ref=metadata.archive_id,
+                        now=reference,
+                        retention_window_days=retention_window_days,
+                        volume_ready=lambda: require_archive_volume_ready(
+                            metadata,
+                            expected_channel=channel,
+                        ),
+                    )
+                    archived_count += 1
+                except ArchiveDegradedError as exc:
+                    failure_reasons[_redacted_failure_reason(exc)] += 1
+                except Exception:
+                    failure_reasons["archive_relocation_failed"] += 1
+
+            failed_count = sum(failure_reasons.values())
+            return _pass_receipt(
+                ran=True,
+                healthy=failed_count == 0,
+                reason="ok" if failed_count == 0 else "archive_relocation_degraded",
+                eligible_count=eligible_count,
+                selected_count=len(batch),
+                archived_count=archived_count,
+                failed_count=failed_count,
+                deferred_count=eligible_count - len(batch),
+                failure_reasons=failure_reasons,
+            )
+    except raw_store.RawArchiveRelocationLeaseUnavailableError:
+        return _pass_receipt(
+            ran=False,
+            healthy=False,
+            reason="archive_pass_already_running",
         )
-        raw_store.decrypt_and_verify_raw_bytes(
-            record.content_identity, copied, hot.nonce, key=key or raw_store.resolve_raw_store_key()
-        )
-        receipt = ArchiveReceipt(
-            receipt_id=receipt_id,
-            record_id=record.id,
-            content_identity=record.content_identity,
-            representation_id=representation_id,
-            encrypted_bytes=len(copied),
-            ciphertext_sha256=ciphertext_hash,
-            verified_at=_utc(reference),
-        )
-        _durable_write(manifest_path, _manifest_payload(receipt))
-        manifest_written = True
-        cold, _ = raw_store.register_cold_raw_representation(
-            record_id=record.id,
-            ciphertext=copied,
-            nonce=hot.nonce,
-            key_ref=hot.key_ref,
-            location_ref=location_ref,
-            key=key,
-            representation_id=representation_id,
-            verified_volume=volume_proof,
-        )
-        representation_registered = True
-        active = raw_store.activate_raw_representation(record.id, cold.id, key=key)
-        return ArchiveResult(receipt, ArchiveHealth(True, "ok"), active)
-    except ArchiveDegradedError as exc:
-        if not representation_registered:
-            raw_store.discard_cold_location(location_ref)
-            _discard_uncommitted_object(object_path)
-            if manifest_written:
-                _discard_uncommitted_manifest(manifest_path)
-        failure = exc
-    except Exception:
-        if not representation_registered:
-            raw_store.discard_cold_location(location_ref)
-            _discard_uncommitted_object(object_path)
-            if manifest_written:
-                _discard_uncommitted_manifest(manifest_path)
-        failure = ArchiveDegradedError("archive_relocation_failed")
-    if failure is not None:
-        raise failure
 
 
 __all__ = [
     "ARCHIVE_MINIMUM_AGE_DAYS",
     "ARCHIVE_SCHEMA",
     "ARCHIVE_STORAGE_KIND",
+    "DEFAULT_ARCHIVE_PASS_LIMIT",
     "ArchiveDegradedError",
     "ArchiveHealth",
+    "ArchivePassReceipt",
     "ArchiveReceipt",
     "ArchiveResult",
     "archive_eligible",
     "eligible_raw_records",
     "relocate_raw_record",
+    "run_archive_pass",
 ]

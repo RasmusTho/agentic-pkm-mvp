@@ -21,6 +21,7 @@ the gated read call).
 
 from __future__ import annotations
 
+from datetime import timedelta
 import secrets
 
 import pytest
@@ -295,6 +296,50 @@ def test_append_only_enforced_pg() -> None:
         assert "append-only" in str(excinfo_del.value).lower() or "HEIM-1" in str(excinfo_del.value)
     finally:
         conn.close()
+
+
+@pytest.mark.pg
+def test_archive_relocation_lease_serializes_postgres_scheduler_sessions() -> None:
+    """Two independently scheduled HAR-04 passes cannot overlap on one DB."""
+    pytest.importorskip("psycopg")
+
+    with raw_store.archive_relocation_lease():
+        with pytest.raises(raw_store.RawArchiveRelocationLeaseUnavailableError):
+            with raw_store.archive_relocation_lease():
+                pytest.fail("a second PostgreSQL session acquired the HAR-04 run lease")
+
+    # Closing the owning connection is the crash-safe release operation.
+    with raw_store.archive_relocation_lease():
+        pass
+
+
+@pytest.mark.pg
+def test_archive_eligible_hot_selector_is_bounded_in_postgres() -> None:
+    pytest.importorskip("psycopg")
+    plaintext = f"archive-selector-{secrets.token_hex(12)}".encode()
+    ciphertext, nonce = encrypt_raw_bytes(plaintext, key=_TEST_KEY)
+    record, created = insert_raw_record(
+        content_identity=compute_raw_content_identity(plaintext),
+        capture_chain=["archive-selector-test"],
+        sensor=_sensor_block(),
+        consent=_consent_block(),
+        ciphertext=ciphertext,
+        nonce=nonce,
+        key_ref="v1-process-key",
+        key=_TEST_KEY,
+        source_path="selector-test.raw",
+    )
+    assert created
+
+    selected, eligible_count = raw_store.archive_eligible_hot_raw_records(
+        ingested_before=record.ingested_at + timedelta(microseconds=1),
+        ingested_at_or_after=record.ingested_at - timedelta(microseconds=1),
+        limit=1,
+    )
+
+    assert eligible_count >= 1
+    assert len(selected) == 1
+    assert selected[0].id == record.id
 
 
 # --- Gated read path (A7, HEIM-5) -------------------------------------------

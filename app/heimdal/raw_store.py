@@ -60,15 +60,18 @@ path (allowlist + receipt evaluation over the active registry entry) is
 
 from __future__ import annotations
 
+from contextlib import contextmanager
+import fcntl
 import hashlib
 import json
 import os
 from pathlib import Path
 import re
+import stat
 import threading
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterator, List, Optional
 from uuid import uuid4
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
@@ -81,7 +84,7 @@ _REPRESENTATION_TABLE = "heimdal_raw_representation"
 _MIGRATION_HINT = (
     "the location-aware Heimdal raw schema is migration-owned: run "
     "'alembic upgrade head' against this database. See revisions "
-    "e7b4c9d2a6f1 and c5d8a1e4f2b7."
+    "e7b4c9d2a6f1, c5d8a1e4f2b7, e2f3a4b5c6d7, and f4b6c8d0e2a1."
 )
 
 _KEY_ENV_VAR = "HEIMDAL_RAW_STORE_KEY"
@@ -97,8 +100,22 @@ _HOT_STORAGE_KIND = "postgres_hot"
 _COLD_STORAGE_KIND = "encrypted_local_cold"
 _LOCATION_REF_PREFIX = "heimloc:"
 _COLD_ARCHIVE_ROOT_ENV = "HEIMDAL_ARCHIVE_ROOT"
+_COLD_ARCHIVE_MUTATION_LOCK = ".heimdal-archive-mutation.lock"
+_COLD_LOCATION_CONSTRAINT = "heimdal_raw_representation_cold_location_bound_check"
+_COLD_LOCATION_REF_PATTERN = (
+    r"^heimloc:cold:[0-9a-f]{64}:"
+    r"[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+)
+_COLD_LOCATION_REF_RE = re.compile(_COLD_LOCATION_REF_PATTERN)
 _cold_location_paths: Dict[str, Path] = {}
 _verified_cold_archive_root: Path | None = None
+_verified_cold_archive_token: str | None = None
+_MEMORY_ARCHIVE_RELOCATION_LEASE = threading.Lock()
+_ARCHIVE_RELOCATION_ADVISORY_LOCK = int.from_bytes(
+    hashlib.sha256(b"heimdal.har04.archive-relocation").digest()[:8],
+    byteorder="big",
+    signed=True,
+)
 
 
 class RawStoreSchemaMissingError(RuntimeError):
@@ -115,6 +132,57 @@ class RawRepresentationDeletionError(RuntimeError):
 
 class RawRepresentationIdentityMismatchError(RuntimeError):
     """Raised when encrypted representation bytes do not match immutable identity."""
+
+
+class RawArchiveRelocationLeaseUnavailableError(RuntimeError):
+    """Raised when another bounded HAR-04 relocation pass owns the run lease."""
+
+
+def _archive_binding_token(archive_ref: str) -> str:
+    """Return the opaque stable binding persisted in cold location handles."""
+
+    if not archive_ref:
+        raise ValueError("archive_ref must be non-empty")
+    return hashlib.sha256(archive_ref.encode("utf-8")).hexdigest()
+
+
+def _cold_location_ref(archive_ref: str, representation_id: str) -> str:
+    """Build one archive-bound opaque location handle."""
+
+    from uuid import UUID
+
+    try:
+        canonical_id = str(UUID(representation_id))
+    except (TypeError, ValueError, AttributeError) as exc:
+        raise ValueError("cold representation id must be a canonical UUID") from exc
+    if canonical_id != representation_id:
+        raise ValueError("cold representation id must be a canonical UUID")
+    return f"{_LOCATION_REF_PREFIX}cold:{_archive_binding_token(archive_ref)}:{canonical_id}"
+
+
+def _parse_cold_location_ref(location_ref: str) -> tuple[str, str] | None:
+    if _COLD_LOCATION_REF_RE.fullmatch(location_ref) is None:
+        return None
+    _prefix, _kind, archive_token, object_id = location_ref.split(":", 3)
+    return archive_token, object_id
+
+
+def _cold_location_constraint_is_ready(definition: str, validated: bool) -> bool:
+    """Require the exact archive-bound cold-location CHECK semantics."""
+
+    def normalize(value: str) -> str:
+        return (
+            re.sub(r"\s+", "", value.lower())
+            .replace("::text", "")
+            .replace("(", "")
+            .replace(")", "")
+        )
+
+    expected = (
+        "CHECK (storage_kind <> 'encrypted_local_cold' OR "
+        f"location_ref ~ '{_COLD_LOCATION_REF_PATTERN}')"
+    )
+    return validated and normalize(definition) == normalize(expected)
 
 
 def _require_verified_cold_volume(
@@ -140,15 +208,56 @@ def register_cold_location(
     location_ref: str, object_path: Path, *, verified_volume: object
 ) -> None:
     """Bind an opaque cold handle only under a verified-volume capability."""
-    object_id = location_ref.rsplit(":", 1)[-1]
-    if (
-        not location_ref.startswith(f"{_LOCATION_REF_PREFIX}cold:")
-        or not object_path.is_absolute()
-        or object_path.name != f"{object_id}.bin"
-    ):
+    parsed = _parse_cold_location_ref(location_ref)
+    if parsed is None or not object_path.is_absolute() or object_path.name != f"{parsed[1]}.bin":
         raise ValueError("cold object path does not match its opaque location handle")
-    _require_verified_cold_volume(object_path.parent.parent, verified_volume)
+    archive_ref = getattr(verified_volume, "archive_ref", "")
+    if parsed[0] != _archive_binding_token(str(archive_ref)):
+        raise RawRepresentationDeletionError(
+            "cold location is bound to a different archive identity"
+        )
+    _require_verified_cold_volume(
+        object_path.parent.parent,
+        verified_volume,
+        expected_archive_ref=str(archive_ref),
+    )
     _cold_location_paths[location_ref] = object_path
+
+
+@contextmanager
+def _cold_archive_mutation_lock(archive_root: Path, *, blocking: bool) -> Iterator[None]:
+    """Serialize external writes and post-authority cleanup on the archive volume."""
+
+    flags = os.O_CREAT | os.O_RDWR | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    descriptor: int | None = None
+    locked = False
+    try:
+        descriptor = os.open(archive_root / _COLD_ARCHIVE_MUTATION_LOCK, flags, 0o600)
+        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+            raise OSError("archive mutation lock is not a regular file")
+        operation = fcntl.LOCK_EX | (0 if blocking else fcntl.LOCK_NB)
+        fcntl.flock(descriptor, operation)
+        locked = True
+        yield
+    except (BlockingIOError, OSError) as exc:
+        raise RawRepresentationDeletionError("cold archive mutation lock is unavailable") from exc
+    finally:
+        if descriptor is not None:
+            if locked:
+                try:
+                    fcntl.flock(descriptor, fcntl.LOCK_UN)
+                except OSError:
+                    pass
+            os.close(descriptor)
+
+
+@contextmanager
+def cold_archive_mutation_lock(archive_root: Path, *, verified_volume: object) -> Iterator[None]:
+    """Hold the verified volume lock across reservation, copy, and activation."""
+
+    _require_verified_cold_volume(archive_root, verified_volume)
+    with _cold_archive_mutation_lock(archive_root, blocking=True):
+        yield
 
 
 def discard_cold_location(location_ref: str) -> None:
@@ -158,10 +267,51 @@ def discard_cold_location(location_ref: str) -> None:
 
 def revoke_cold_archive_binding() -> None:
     """Revoke process-local cold authority before a failed restart rebind."""
-    global _verified_cold_archive_root
+    global _verified_cold_archive_root, _verified_cold_archive_token
     _verified_cold_archive_root = None
+    _verified_cold_archive_token = None
     _cold_location_paths.clear()
     os.environ.pop(_COLD_ARCHIVE_ROOT_ENV, None)
+
+
+@contextmanager
+def archive_relocation_lease() -> Iterator[None]:
+    """Serialize production HAR-04 passes across processes without row locks.
+
+    The memory backend mirrors the contract with a non-blocking process lock.
+    PostgreSQL uses one session advisory lock, so independently scheduled CLI
+    processes cannot both copy and activate the same hot generation.  Closing
+    the connection releases the lease after normal completion or a crash.
+    """
+    if resolve_heimdal_backend() == "memory":
+        if not _MEMORY_ARCHIVE_RELOCATION_LEASE.acquire(blocking=False):
+            raise RawArchiveRelocationLeaseUnavailableError(
+                "another archive relocation pass is already running"
+            )
+        try:
+            yield
+        finally:
+            _MEMORY_ARCHIVE_RELOCATION_LEASE.release()
+        return
+
+    conn = _pg_connect()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT pg_try_advisory_lock(%s)",
+            (_ARCHIVE_RELOCATION_ADVISORY_LOCK,),
+        )
+        row = cur.fetchone()
+        if row is None or row[0] is not True:
+            raise RawArchiveRelocationLeaseUnavailableError(
+                "another archive relocation pass is already running"
+            )
+        yield
+    finally:
+        # Session-level advisory locks are released even when the body raises
+        # or the process loses the connection.  Avoid an unlock round-trip that
+        # could mask the original fail-closed relocation error.
+        conn.close()
 
 
 def configure_cold_archive_root(
@@ -174,19 +324,28 @@ def configure_cold_archive_root(
     if not archive_root.is_absolute():
         raise ValueError("cold archive root must be absolute")
     _require_verified_cold_volume(archive_root, verified_volume, expected_archive_ref)
-    global _verified_cold_archive_root
+    archive_ref = str(getattr(verified_volume, "archive_ref", ""))
+    archive_token = _archive_binding_token(archive_ref)
+    global _verified_cold_archive_root, _verified_cold_archive_token
     _verified_cold_archive_root = archive_root
+    _verified_cold_archive_token = archive_token
+    # A rebind revokes every cache entry minted under the prior capability.
+    # Bound handles remain resolvable from their persisted archive token only
+    # when the newly verified archive identity matches.
+    _cold_location_paths.clear()
     os.environ[_COLD_ARCHIVE_ROOT_ENV] = str(archive_root)
 
 
 def _resolve_cold_ciphertext(location_ref: str) -> bytes:
+    parsed = _parse_cold_location_ref(location_ref)
+    if parsed is None or parsed[0] != _verified_cold_archive_token:
+        raise RawRepresentationUnavailableError(
+            "cold representation archive identity is unavailable"
+        )
     object_path = _cold_location_paths.get(location_ref)
     if object_path is None:
-        object_id = location_ref.rsplit(":", 1)[-1]
-        if _verified_cold_archive_root is not None and re.fullmatch(
-            r"[0-9a-f-]{36}", object_id
-        ):
-            object_path = _verified_cold_archive_root / "representations" / f"{object_id}.bin"
+        if _verified_cold_archive_root is not None:
+            object_path = _verified_cold_archive_root / "representations" / f"{parsed[1]}.bin"
     if object_path is None:
         raise RawRepresentationUnavailableError("cold representation resolver is unavailable")
     ciphertext: bytes | None = None
@@ -200,12 +359,14 @@ def _resolve_cold_ciphertext(location_ref: str) -> bytes:
 
 
 def _cold_object_path(location_ref: str) -> Path | None:
+    parsed = _parse_cold_location_ref(location_ref)
+    if parsed is None or parsed[0] != _verified_cold_archive_token:
+        return None
     object_path = _cold_location_paths.get(location_ref)
     if object_path is not None:
         return object_path
-    object_id = location_ref.rsplit(":", 1)[-1]
-    if _verified_cold_archive_root is not None and re.fullmatch(r"[0-9a-f-]{36}", object_id):
-        return _verified_cold_archive_root / "representations" / f"{object_id}.bin"
+    if _verified_cold_archive_root is not None:
+        return _verified_cold_archive_root / "representations" / f"{parsed[1]}.bin"
     return None
 
 
@@ -217,16 +378,7 @@ def _delete_cold_objects_for_record(record_id: str) -> None:
         object_path = _cold_object_path(representation.location_ref)
         if object_path is None:
             raise RawRepresentationDeletionError("cold representation resolver is unavailable")
-        deletion_failed = False
-        try:
-            object_path.unlink(missing_ok=True)
-            object_path.parent.parent.joinpath("manifests", f"{object_path.stem}.json").unlink(
-                missing_ok=True
-            )
-        except OSError:
-            deletion_failed = True
-        if deletion_failed:
-            raise RawRepresentationDeletionError("cold representation deletion failed")
+        _delete_cold_object_path(object_path)
 
 
 def _delete_cold_objects_for_pg_cursor(cur: Any, record_id: str) -> None:
@@ -271,11 +423,14 @@ def _cold_location_paths_for_pg_cursor(cur: Any, record_id: str) -> list[tuple[s
 def _delete_cold_object_path(object_path: Path) -> None:
     deletion_failed = False
     try:
-        object_path.unlink(missing_ok=True)
-        object_path.parent.parent.joinpath("manifests", f"{object_path.stem}.json").unlink(
-            missing_ok=True
-        )
+        with _cold_archive_mutation_lock(object_path.parent.parent, blocking=False):
+            object_path.unlink(missing_ok=True)
+            object_path.parent.parent.joinpath("manifests", f"{object_path.stem}.json").unlink(
+                missing_ok=True
+            )
     except OSError:
+        deletion_failed = True
+    except RawRepresentationDeletionError:
         deletion_failed = True
     if deletion_failed:
         raise RawRepresentationDeletionError("cold representation deletion failed")
@@ -320,9 +475,7 @@ def resolve_raw_store_key() -> bytes:
     try:
         key = bytes.fromhex(raw.strip())
     except ValueError as exc:
-        raise RawStoreKeyMissingError(
-            f"{_KEY_ENV_VAR} is not valid hex: {exc}"
-        ) from exc
+        raise RawStoreKeyMissingError(f"{_KEY_ENV_VAR} is not valid hex: {exc}") from exc
     if len(key) != _AES_KEY_BYTES:
         raise RawStoreKeyMissingError(
             f"{_KEY_ENV_VAR} must decode to {_AES_KEY_BYTES} bytes (AES-256), got {len(key)}"
@@ -572,9 +725,31 @@ class _MemoryRawStore:
     def all_rows(self) -> List[RawRecord]:
         with self._lock:
             return [
-                self._compose(row, self._active_representation_locked(row.id))
-                for row in self._rows
+                self._compose(row, self._active_representation_locked(row.id)) for row in self._rows
             ]
+
+    def archive_eligible_hot_rows(
+        self,
+        *,
+        ingested_before: datetime,
+        ingested_at_or_after: datetime,
+        limit: int,
+    ) -> tuple[List[RawRecord], int]:
+        with self._lock:
+            selected: List[RawRecord] = []
+            eligible_count = 0
+            for row in self._rows:
+                active = self._active_representation_locked(row.id)
+                if (
+                    active.storage_kind != _HOT_STORAGE_KIND
+                    or row.ingested_at >= ingested_before
+                    or row.ingested_at < ingested_at_or_after
+                ):
+                    continue
+                eligible_count += 1
+                if len(selected) < limit:
+                    selected.append(self._compose(row, active))
+            return selected, eligible_count
 
     def capacity_metadata(self) -> List[RawRecordCapacityMetadata]:
         with self._lock:
@@ -691,17 +866,18 @@ class _MemoryRawStore:
             decrypt_and_verify_raw_bytes(identity.content_identity, ciphertext, nonce, key=key)
             existing = self._representations.get(representation_id)
             if existing is not None:
-                expected = (record_id, ciphertext, nonce, key_ref, _COLD_STORAGE_KIND, location_ref)
+                expected = (record_id, nonce, key_ref, _COLD_STORAGE_KIND, location_ref)
                 actual = (
                     existing.record_id,
-                    _representation_ciphertext(existing),
                     existing.nonce,
                     existing.key_ref,
                     existing.storage_kind,
                     existing.location_ref,
                 )
                 if actual != expected:
-                    raise ValueError("cold representation id replay does not match registered bytes")
+                    raise ValueError(
+                        "cold representation id replay does not match registered state"
+                    )
                 return existing, False
             representation = RawRepresentation(
                 id=representation_id,
@@ -747,9 +923,7 @@ class _MemoryRawStore:
         self, record_id: str, representation_id: str, *, key: bytes
     ) -> RawRepresentation:
         with self._lock:
-            return self._activate_representation_locked(
-                record_id, representation_id, key=key
-            )
+            return self._activate_representation_locked(record_id, representation_id, key=key)
 
     def all_representations(self, record_id: str) -> List[RawRepresentation]:
         with self._lock:
@@ -781,10 +955,7 @@ class _MemoryRawStore:
                 list(self._rows),
                 dict(self._by_identity),
                 dict(self._representations),
-                {
-                    key: list(value)
-                    for key, value in self._representation_ids_by_record.items()
-                },
+                {key: list(value) for key, value in self._representation_ids_by_record.items()},
             )
 
     def restore_state(
@@ -857,8 +1028,7 @@ _MEMORY_STORE = _MemoryRawStore()
 def reset_memory_raw_store() -> None:
     """Test-only reset hook, mirroring the other memory-backend reset helpers."""
     _MEMORY_STORE.clear()
-    global _verified_cold_archive_root
-    _verified_cold_archive_root = None
+    revoke_cold_archive_binding()
     from app.heimdal.raw_liveness import reset_memory_raw_liveness
 
     reset_memory_raw_liveness()
@@ -909,12 +1079,27 @@ def _assert_pg_schema(conn: Any) -> None:
     for table_name, column_name in cur.fetchall():
         columns[str(table_name)].add(str(column_name))
     identity_required = {
-        "id", "content_identity", "capture_chain", "sensor", "consent",
-        "source_path", "ingested_at", "payload", "sequence",
+        "id",
+        "content_identity",
+        "capture_chain",
+        "sensor",
+        "consent",
+        "source_path",
+        "ingested_at",
+        "payload",
+        "sequence",
     }
     representation_required = {
-        "id", "record_id", "storage_kind", "location_ref", "ciphertext",
-        "nonce", "key_ref", "active", "registered_at", "sequence",
+        "id",
+        "record_id",
+        "storage_kind",
+        "location_ref",
+        "ciphertext",
+        "nonce",
+        "key_ref",
+        "active",
+        "registered_at",
+        "sequence",
     }
     legacy_blob_columns = {"ciphertext", "nonce", "key_ref"}
     if (
@@ -924,6 +1109,26 @@ def _assert_pg_schema(conn: Any) -> None:
     ):
         raise RawStoreSchemaMissingError(
             "Raw identity/representation columns do not match the location-aware schema. "
+            + _MIGRATION_HINT
+        )
+
+    cur.execute(
+        """
+        SELECT pg_get_constraintdef(c.oid), c.convalidated
+        FROM pg_constraint AS c
+        WHERE c.conrelid = %s::regclass
+          AND c.conname = %s
+          AND c.contype = 'c'
+        """,
+        (_REPRESENTATION_TABLE, _COLD_LOCATION_CONSTRAINT),
+    )
+    cold_location_constraints = cur.fetchall()
+    if len(cold_location_constraints) != 1 or not _cold_location_constraint_is_ready(
+        str(cold_location_constraints[0][0]),
+        bool(cold_location_constraints[0][1]),
+    ):
+        raise RawStoreSchemaMissingError(
+            "Cold representation archive binding constraint is not migration-ready. "
             + _MIGRATION_HINT
         )
 
@@ -1032,8 +1237,7 @@ def _assert_pg_schema(conn: Any) -> None:
     if trigger_rows != expected_trigger_rows:
         raise RawStoreSchemaMissingError(
             "Raw identity/representation mutation triggers do not match the "
-            "migration-owned schema. "
-            + _MIGRATION_HINT
+            "migration-owned schema. " + _MIGRATION_HINT
         )
 
     # Fail loud before serving any production call when backfill or activation
@@ -1158,7 +1362,11 @@ def _bootstrap_pg(conn: Any) -> None:
                     key_ref text,
                     active boolean NOT NULL DEFAULT false,
                     registered_at timestamptz NOT NULL DEFAULT now(),
-                    sequence bigserial NOT NULL
+                    sequence bigserial NOT NULL,
+                    CONSTRAINT {_COLD_LOCATION_CONSTRAINT} CHECK (
+                        storage_kind <> '{_COLD_STORAGE_KIND}'
+                        OR location_ref ~ '{_COLD_LOCATION_REF_PATTERN}'
+                    )
                 )
                 """,
                 f"CREATE INDEX heimdal_raw_representation_record_idx "
@@ -1218,9 +1426,20 @@ def _bootstrap_pg(conn: Any) -> None:
 
 def _row_from_db(row: tuple) -> RawRecord:
     (
-        row_id, content_identity, capture_chain, sensor, consent,
-        storage_kind, location_ref, ciphertext, nonce, key_ref,
-        source_path, ingested_at, payload, sequence,
+        row_id,
+        content_identity,
+        capture_chain,
+        sensor,
+        consent,
+        storage_kind,
+        location_ref,
+        ciphertext,
+        nonce,
+        key_ref,
+        source_path,
+        ingested_at,
+        payload,
+        sequence,
     ) = row
 
     def _as_dict(value: Any) -> Dict[str, Any]:
@@ -1407,6 +1626,48 @@ class _PgRawStore:
         finally:
             conn.close()
 
+    def archive_eligible_hot_rows(
+        self,
+        *,
+        ingested_before: datetime,
+        ingested_at_or_after: datetime,
+        limit: int,
+    ) -> tuple[List[RawRecord], int]:
+        """Select a bounded hot batch while counting the full eligible window."""
+        conn = _pg_connect()
+        try:
+            _assert_pg_schema(conn)
+            cur = conn.cursor()
+            cur.execute(
+                f"""
+                SELECT {_SELECT_COLUMNS}, count(*) OVER ()
+                FROM {_TABLE} AS r
+                JOIN {_REPRESENTATION_TABLE} AS p
+                  ON p.record_id = r.id
+                 AND p.active
+                 AND p.storage_kind = %s
+                WHERE r.ingested_at < %s
+                  AND r.ingested_at >= %s
+                ORDER BY r.sequence ASC
+                LIMIT %s
+                """,
+                (
+                    _HOT_STORAGE_KIND,
+                    ingested_before,
+                    ingested_at_or_after,
+                    limit,
+                ),
+            )
+            rows = cur.fetchall()
+            if not rows:
+                return [], 0
+            return (
+                [_row_from_db(tuple(row[:-1])) for row in rows],
+                int(rows[0][-1]),
+            )
+        finally:
+            conn.close()
+
     def capacity_metadata(self) -> List[RawRecordCapacityMetadata]:
         """Query aggregate-report metadata without selecting sensitive row fields."""
         conn = _pg_connect()
@@ -1473,7 +1734,10 @@ class _PgRawStore:
                 """,
                 (identities,),
             )
-            return {str(content_identity): str(record_id) for content_identity, record_id in cur.fetchall()}
+            return {
+                str(content_identity): str(record_id)
+                for content_identity, record_id in cur.fetchall()
+            }
         finally:
             conn.close()
 
@@ -1598,7 +1862,9 @@ class _PgRawStore:
         try:
             _assert_pg_schema(conn)
             cur = conn.cursor()
-            cur.execute(f"SELECT content_identity FROM {_TABLE} WHERE id = %s FOR UPDATE", (record_id,))
+            cur.execute(
+                f"SELECT content_identity FROM {_TABLE} WHERE id = %s FOR UPDATE", (record_id,)
+            )
             identity_row = cur.fetchone()
             if identity_row is None:
                 raise RawRepresentationUnavailableError("raw identity does not exist")
@@ -1631,17 +1897,20 @@ class _PgRawStore:
                 )
                 inserted = cur.fetchone()
                 if inserted is None:
-                    raise RawRepresentationUnavailableError("cold representation replay could not resolve")
+                    raise RawRepresentationUnavailableError(
+                        "cold representation replay could not resolve"
+                    )
                 existing = _representation_from_db(inserted)
                 if (
                     existing.record_id != record_id
                     or existing.storage_kind != _COLD_STORAGE_KIND
                     or existing.location_ref != location_ref
-                    or _representation_ciphertext(existing) != ciphertext
                     or existing.nonce != nonce
                     or existing.key_ref != key_ref
                 ):
-                    raise ValueError("cold representation id replay does not match registered bytes")
+                    raise ValueError(
+                        "cold representation id replay does not match registered state"
+                    )
             assert inserted is not None
             result = _representation_from_db(inserted)
             conn.commit()
@@ -1701,8 +1970,7 @@ class _PgRawStore:
             (_REPRESENTATION_ACTIVATION_GUARD_SETTING,),
         )
         cur.execute(
-            f"UPDATE {_REPRESENTATION_TABLE} SET active = false "
-            "WHERE record_id = %s AND active",
+            f"UPDATE {_REPRESENTATION_TABLE} SET active = false " "WHERE record_id = %s AND active",
             (record_id,),
         )
         cur.execute(
@@ -1823,7 +2091,9 @@ def insert_raw_record(
     if not capture_chain:
         raise ValueError("capture_chain must be a non-empty list (FABLE_COMPANION §1.1)")
     if not sensor:
-        raise ValueError("sensor identity must be provided (T5 mitigation: no unregistered-source ingestion)")
+        raise ValueError(
+            "sensor identity must be provided (T5 mitigation: no unregistered-source ingestion)"
+        )
     if not consent or not consent.get("grant_ref"):
         raise ValueError("consent block with a resolvable grant_ref must be provided (HEIM-3)")
     decrypt_and_verify_raw_bytes(
@@ -1923,12 +2193,22 @@ def register_cold_raw_representation(
     """Register one verified encrypted local-cold representation, inactive."""
     if not record_id or not ciphertext or not nonce or not key_ref:
         raise ValueError("record_id, ciphertext, nonce, and key_ref are required")
-    if not location_ref.startswith(f"{_LOCATION_REF_PREFIX}cold:"):
+    parsed = _parse_cold_location_ref(location_ref)
+    if parsed is None:
         raise ValueError("cold location_ref must be an opaque heimloc:cold: handle")
     object_path = _cold_object_path(location_ref)
     if object_path is None:
         raise RawRepresentationDeletionError("cold location is not bound to a verified volume")
-    _require_verified_cold_volume(object_path.parent.parent, verified_volume)
+    archive_ref = str(getattr(verified_volume, "archive_ref", ""))
+    if parsed[0] != _archive_binding_token(archive_ref):
+        raise RawRepresentationDeletionError(
+            "cold location is bound to a different archive identity"
+        )
+    _require_verified_cold_volume(
+        object_path.parent.parent,
+        verified_volume,
+        expected_archive_ref=archive_ref,
+    )
     verification_key = key if key is not None else resolve_raw_store_key()
     return _backend().register_cold_representation(
         record_id=record_id,
@@ -1949,9 +2229,7 @@ def activate_raw_representation(
 ) -> RawRepresentation:
     """Atomically select one already-registered representation for gated reads."""
     verification_key = key if key is not None else resolve_raw_store_key()
-    return _backend().activate_representation(
-        record_id, representation_id, key=verification_key
-    )
+    return _backend().activate_representation(record_id, representation_id, key=verification_key)
 
 
 def all_raw_representations(record_id: str) -> List[RawRepresentation]:
@@ -1964,6 +2242,32 @@ def all_raw_records() -> List[RawRecord]:
     return _backend().all_rows()
 
 
+def archive_eligible_hot_raw_records(
+    *,
+    ingested_before: datetime,
+    ingested_at_or_after: datetime,
+    limit: int,
+) -> tuple[List[RawRecord], int]:
+    """Return a bounded active-hot batch and the exact eligible count.
+
+    HAR-04's production producer uses this metadata-bounded query instead of
+    materializing every raw row and issuing one representation query per item.
+    """
+    if (
+        type(limit) is not int
+        or limit <= 0
+        or ingested_before.tzinfo is None
+        or ingested_at_or_after.tzinfo is None
+        or ingested_at_or_after >= ingested_before
+    ):
+        raise ValueError("archive eligibility bounds and limit are invalid")
+    return _backend().archive_eligible_hot_rows(
+        ingested_before=ingested_before.astimezone(timezone.utc),
+        ingested_at_or_after=ingested_at_or_after.astimezone(timezone.utc),
+        limit=limit,
+    )
+
+
 def all_raw_record_capacity_metadata() -> List[RawRecordCapacityMetadata]:
     """Return only ingest time and encrypted byte count for HAR-01 reporting."""
     return _backend().capacity_metadata()
@@ -1974,16 +2278,20 @@ __all__ = [
     "RawRecord",
     "RawRecordCapacityMetadata",
     "RawRepresentation",
+    "RawArchiveRelocationLeaseUnavailableError",
     "RawRepresentationDeletionError",
     "RawRepresentationIdentityMismatchError",
     "RawRepresentationUnavailableError",
     "RawStoreKeyMissingError",
     "RawStoreSchemaMissingError",
     "activate_raw_representation",
+    "archive_eligible_hot_raw_records",
+    "archive_relocation_lease",
     "all_raw_records",
     "all_raw_record_capacity_metadata",
     "all_raw_representations",
     "compute_raw_content_identity",
+    "cold_archive_mutation_lock",
     "decrypt_and_verify_raw_bytes",
     "decrypt_raw_bytes",
     "encrypt_raw_bytes",

@@ -70,6 +70,16 @@ already enforces irreversible deletion.
 - **INV-HAR-5 — restore remains gated.** Cold archive access reuses the raw-read allowlist and receipt
   discipline; mounting an archive does not make raw audio generally readable.
 
+HAR-04's runtime producer is the bounded `python -m app.cli heimdal archive-eligible` pass. A host
+scheduler may invoke it repeatedly; the pass serializes against another invocation through the raw
+store, revalidates the channel-governed encrypted volume, and leaves every failed item hot for retry.
+It commits an inactive opaque-location reservation before writing record bytes and holds both the
+retention generation fence and verified archive-volume mutation lock through activation, so process
+or DB-fence loss remains discoverable and cleanup-retryable. The opaque location includes a digest
+binding to the producing archive identity (not a filesystem path), so a restart or valid rebind to
+another root cannot redirect reads or consume pending cleanup. Its receipt contains aggregate
+counts and closed reason codes only.
+
 ## Capability acceptance criteria
 
 - [ ] Aggregate capture-volume evidence forecasts the seven-day hot tier and remaining retention

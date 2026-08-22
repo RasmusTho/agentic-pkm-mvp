@@ -301,7 +301,19 @@ def _run_cold_volume_startup_binding() -> None:
             config_root=config_root,
             channel=channel,
         )
-        require_archive_volume_ready(metadata, expected_channel=channel)
+        volume_proof = require_archive_volume_ready(
+            metadata,
+            expected_channel=channel,
+        )
+        # The readiness boundary also binds today, but startup owns the
+        # process-local resolver explicitly: retaining and applying the proof
+        # here prevents a future validation-only refactor from silently
+        # revoking cold reads and cleanup after every process restart.
+        raw_store.configure_cold_archive_root(
+            metadata.mountpoint,
+            verified_volume=volume_proof,
+            expected_archive_ref=metadata.archive_id,
+        )
     except Exception as exc:  # pragma: no cover - production host dependent
         raw_store.revoke_cold_archive_binding()
         logger.error("Verified Heimdal cold-volume binding unavailable; cold reads fail closed: %s", type(exc).__name__)

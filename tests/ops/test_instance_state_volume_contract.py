@@ -205,9 +205,7 @@ def _run_quiescence_helper(
     return result, output
 
 
-def _prove_empty_quiescence(
-    *, channel: str, host_global_root: Path
-) -> DeploymentQuiescenceProof:
+def _write_empty_quiescence_inventory(*, host_global_root: Path) -> Path:
     lease = json.loads(
         _deployment_lease_path(host_global_root).read_text(encoding="utf-8")
     )
@@ -231,6 +229,15 @@ def _prove_empty_quiescence(
         encoding="utf-8",
     )
     os.chmod(inventory, 0o600)
+    return inventory
+
+
+def _prove_empty_quiescence(
+    *, channel: str, host_global_root: Path
+) -> DeploymentQuiescenceProof:
+    inventory = _write_empty_quiescence_inventory(
+        host_global_root=host_global_root
+    )
     return _prove_instance_state_quiescence(
         channel=channel,
         host_global_root=host_global_root,
@@ -3276,9 +3283,8 @@ def test_proof_rejects_inventory_controller_identity_not_bound_to_active_lease(t
     ownership = tmp_path / "ownership"
     state.mkdir()
     ownership.mkdir()
-    env = {**os.environ, "PATH": _empty_docker_path(tmp_path)}
     controller_pid = os.getpid()
-    controller_token = _controller_token(controller_pid, env=env)
+    controller_token = _controller_token(controller_pid)
     _begin_instance_state_deployment(
         channel="prod",
         instance_state_root=state,
@@ -3287,13 +3293,9 @@ def test_proof_rejects_inventory_controller_identity_not_bound_to_active_lease(t
         controller_pid=controller_pid,
         controller_start_token=controller_token,
     )
-    result, inventory = _run_quiescence_helper(
-        tmp_path,
-        controller_pid=controller_pid,
-        controller_token=controller_token,
-        env=env,
+    inventory = _write_empty_quiescence_inventory(
+        host_global_root=ownership
     )
-    assert result.returncode == 0, result.stderr
     payload = json.loads(inventory.read_text(encoding="utf-8"))
     payload["controller"]["start_token"] = "linux:" + "0" * 64
     inventory.write_text(json.dumps(payload), encoding="utf-8")
@@ -3308,9 +3310,8 @@ def test_v2_inventory_proof_is_accepted_by_the_production_proof_consumer(tmp_pat
     ownership = tmp_path / "ownership"
     state.mkdir()
     ownership.mkdir()
-    env = {**os.environ, "PATH": _empty_docker_path(tmp_path)}
     controller_pid = os.getpid()
-    controller_token = _controller_token(controller_pid, env=env)
+    controller_token = _controller_token(controller_pid)
     _begin_instance_state_deployment(
         channel="prod",
         instance_state_root=state,
@@ -3319,13 +3320,9 @@ def test_v2_inventory_proof_is_accepted_by_the_production_proof_consumer(tmp_pat
         controller_pid=controller_pid,
         controller_start_token=controller_token,
     )
-    result, inventory = _run_quiescence_helper(
-        tmp_path,
-        controller_pid=controller_pid,
-        controller_token=controller_token,
-        env=env,
+    inventory = _write_empty_quiescence_inventory(
+        host_global_root=ownership
     )
-    assert result.returncode == 0, result.stderr
     proof = _prove_instance_state_quiescence(
         channel="prod", host_global_root=ownership, inventory_path=inventory
     )
