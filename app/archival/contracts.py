@@ -106,7 +106,6 @@ class LivenessState(str, Enum):
 
 
 _OPAQUE_NAMESPACE = re.compile(r"^[a-z][a-z0-9_-]*$")
-_OPAQUE_TOKEN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
 
 
 def _require_token(value: str, field_name: str) -> str:
@@ -124,14 +123,29 @@ class OpaqueReference:
 
     def __post_init__(self) -> None:
         _require_token(self.namespace, "opaque reference namespace")
-        if not isinstance(self.token, str) or not _OPAQUE_TOKEN.fullmatch(self.token):
-            raise ValueError("opaque reference token must not contain location text")
+        if not isinstance(self.token, str) or not self.token:
+            raise ValueError("opaque reference token must be a non-empty string")
 
 
 def _require_opaque_reference(value: OpaqueReference, field_name: str) -> OpaqueReference:
     if not isinstance(value, OpaqueReference):
         raise ValueError(f"{field_name} must be a typed opaque reference, not location text")
     return value
+
+
+def _require_reference_tuple(
+    value: object,
+    expected_type: type[object],
+    field_name: str,
+    *,
+    non_empty: bool = False,
+) -> None:
+    if not isinstance(value, tuple):
+        raise ValueError(f"{field_name} must be a tuple of {expected_type.__name__} values")
+    if non_empty and not value:
+        raise ValueError(f"{field_name} must contain at least one {expected_type.__name__} value")
+    if any(not isinstance(item, expected_type) for item in value):
+        raise ValueError(f"{field_name} must contain only {expected_type.__name__} values")
 
 
 @dataclass(frozen=True)
@@ -212,8 +226,12 @@ class ArtifactDescriptor:
     def __post_init__(self) -> None:
         if self.identity.owner is not self.owner:
             raise ValueError("artifact identity owner must match the declared authoritative owner")
-        if not self.provenance_refs:
-            raise ValueError("artifact descriptors require at least one provenance reference")
+        _require_reference_tuple(
+            self.provenance_refs,
+            ProvenanceRef,
+            "provenance_refs",
+            non_empty=True,
+        )
 
 
 @dataclass(frozen=True)
@@ -278,6 +296,12 @@ class ArchivalReceipt:
 
     def __post_init__(self) -> None:
         _require_opaque_reference(self.receipt_ref, "receipt_ref")
+        _require_reference_tuple(self.provenance_refs, ProvenanceRef, "provenance_refs")
+        _require_reference_tuple(
+            self.representation_refs,
+            RepresentationRef,
+            "representation_refs",
+        )
         if not self.redacted:
             raise ValueError("archival receipts must be redacted")
 
