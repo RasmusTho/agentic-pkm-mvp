@@ -53,6 +53,10 @@ _RECEIPT_TRIGGER_BODY = (
     "then return new; end if; raise exception 'heimdal_raw_deletion_receipt is append-only: % is not permitted', tg_op;"
 )
 
+_PRE_HAR04_RECEIPT_TRIGGER_BODY = (
+    "raise exception 'heimdal_raw_deletion_receipt is append-only (heim-1): % is not permitted', tg_op;"
+)
+
 _CLEANUP_QUEUE_HELPER_BODY = (
     "declare old_refs text[] := array( select jsonb_array_elements_text(coalesce(old_payload, '[]'::jsonb)) ); "
     "new_ref text; old_index integer := 1; old_length integer := coalesce(array_length(old_refs, 1), 0); "
@@ -63,14 +67,25 @@ _CLEANUP_QUEUE_HELPER_BODY = (
 )
 
 
-def _receipt_trigger_is_migration_ready(function_def: str, trigger_def: str) -> bool:
-    """Accept only the canonical guarded-update/append-only trigger shape."""
-    normalized = re.sub(r"\s+", " ", function_def).lower()
-    normalized_trigger = re.sub(r"\s+", " ", trigger_def).lower()
+def _normalize_trigger_sql(value: str) -> str:
+    """Normalize PostgreSQL's deparsed operator/cast spelling for exact checks."""
+    normalized = re.sub(r"\s+", " ", value).lower().strip()
+    normalized = re.sub(r"\s*->\s*", "->", normalized)
+    normalized = re.sub(r"::text\b", "", normalized)
+    normalized = re.sub(r"\(\s*", "(", normalized)
+    normalized = re.sub(r"\s*\)", ")", normalized)
+    return normalized
+
+
+def _receipt_trigger_matches(
+    function_def: str, trigger_def: str, expected_body: str
+) -> bool:
+    normalized = _normalize_trigger_sql(function_def)
+    normalized_trigger = _normalize_trigger_sql(trigger_def)
     body_match = re.search(r"\bbegin\s+(.*?)\bend\s*;", normalized, re.IGNORECASE)
     body = body_match.group(1).strip() if body_match else ""
     return bool(
-        body == _RECEIPT_TRIGGER_BODY
+        body == _normalize_trigger_sql(expected_body)
         and re.fullmatch(
             r"create trigger heimdal_raw_deletion_receipt_no_update "
             r"before delete or update on (?:[a-z_][a-z0-9_]*\.)?heimdal_raw_deletion_receipt "
@@ -78,6 +93,18 @@ def _receipt_trigger_is_migration_ready(function_def: str, trigger_def: str) -> 
             r"(?:[a-z_][a-z0-9_]*\.)?heimdal_raw_deletion_receipt_reject_mutation\(\)",
             normalized_trigger,
         )
+    )
+
+
+def _receipt_trigger_is_migration_ready(function_def: str, trigger_def: str) -> bool:
+    """Accept the current HAR-04 guarded update trigger shape."""
+    return _receipt_trigger_matches(function_def, trigger_def, _RECEIPT_TRIGGER_BODY)
+
+
+def _receipt_trigger_is_legacy_migration_ready(function_def: str, trigger_def: str) -> bool:
+    """Accept the historical pre-HAR-04 trigger shape at its version boundary."""
+    return _receipt_trigger_matches(
+        function_def, trigger_def, _PRE_HAR04_RECEIPT_TRIGGER_BODY
     )
 
 
@@ -519,35 +546,58 @@ def _assert_pg_schema(conn: Any) -> None:
         (_DELETION_RECEIPT_TABLE,),
     )
     trigger_rows = cur.fetchall()
-    if not any(
+    current_trigger = any(
         _receipt_trigger_is_migration_ready(str(row[0]), str(row[1]))
         for row in trigger_rows
-    ):
+    )
+    legacy_trigger = any(
+        _receipt_trigger_is_legacy_migration_ready(str(row[0]), str(row[1]))
+        for row in trigger_rows
+    )
+    if not current_trigger and not legacy_trigger:
         raise RawLivenessSchemaMissingError(
             "Deletion-receipt reconciliation trigger is not migration-ready. "
             + _MIGRATION_HINT
         )
-    cur.execute(
-        """
-        SELECT pg_get_functiondef(p.oid), pg_get_function_arguments(p.oid),
-               p.provolatile, p.proisstrict
-        FROM pg_proc AS p
-        JOIN pg_namespace AS n ON n.oid = p.pronamespace
-        WHERE n.nspname = current_schema()
-          AND p.proname = 'heimdal_raw_cleanup_queue_is_subsequence'
-          AND p.proargtypes = ARRAY['jsonb'::regtype, 'jsonb'::regtype]::oidvector
-        """
-    )
-    helper_rows = cur.fetchall()
-    if not any(
-        _cleanup_queue_helper_is_migration_ready(
-            str(row[0]), str(row[1]), str(row[2]), bool(row[3])
+    if current_trigger:
+        cur.execute(
+            """
+            SELECT pg_get_functiondef(p.oid), pg_get_function_arguments(p.oid),
+                   p.provolatile, p.proisstrict
+            FROM pg_proc AS p
+            JOIN pg_namespace AS n ON n.oid = p.pronamespace
+            WHERE n.nspname = current_schema()
+              AND p.proname = 'heimdal_raw_cleanup_queue_is_subsequence'
+              AND p.proargtypes = ARRAY['jsonb'::regtype, 'jsonb'::regtype]::oidvector
+            """
         )
-        for row in helper_rows
-    ):
-        raise RawLivenessSchemaMissingError(
-            "Deletion-receipt queue helper is not migration-ready. " + _MIGRATION_HINT
+        helper_rows = cur.fetchall()
+        if not any(
+            _cleanup_queue_helper_is_migration_ready(
+                str(row[0]), str(row[1]), str(row[2]), bool(row[3])
+            )
+            for row in helper_rows
+        ):
+            raise RawLivenessSchemaMissingError(
+                "Deletion-receipt queue helper is not migration-ready. " + _MIGRATION_HINT
+            )
+    elif legacy_trigger:
+        cur.execute(
+            """
+            SELECT 1
+            FROM pg_proc AS p
+            JOIN pg_namespace AS n ON n.oid = p.pronamespace
+            WHERE n.nspname = current_schema()
+              AND p.proname = 'heimdal_raw_cleanup_queue_is_subsequence'
+              AND p.proargtypes = ARRAY['jsonb'::regtype, 'jsonb'::regtype]::oidvector
+            LIMIT 1
+            """
         )
+        if cur.fetchone() is not None:
+            raise RawLivenessSchemaMissingError(
+                "Legacy deletion-receipt trigger is behind HAR-04 migration. "
+                + _MIGRATION_HINT
+            )
     cur.execute(
         f"""
         SELECT r.id

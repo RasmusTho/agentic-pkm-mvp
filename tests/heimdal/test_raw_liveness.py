@@ -107,6 +107,13 @@ def test_receipt_trigger_preflight_rejects_extra_delete_return_path() -> None:
         "public.heimdal_raw_deletion_receipt_reject_mutation()"
     )
     assert raw_liveness._receipt_trigger_is_migration_ready(canonical, trigger)  # noqa: SLF001
+    assert raw_liveness._receipt_trigger_is_migration_ready(  # noqa: SLF001
+        canonical.replace(
+            "heimdal_raw_cleanup_queue_is_subsequence(\n                 OLD.payload->'cold_cleanup_location_refs',\n                 NEW.payload->'cold_cleanup_location_refs'\n             )",
+            "heimdal_raw_cleanup_queue_is_subsequence(OLD.payload -> 'cold_cleanup_location_refs'::text, NEW.payload -> 'cold_cleanup_location_refs'::text)",
+        ),
+        trigger,
+    )
     assert not raw_liveness._receipt_trigger_is_migration_ready(
         """
         BEGIN
@@ -192,6 +199,36 @@ def test_cleanup_queue_helper_preflight_binds_exact_immutable_function() -> None
     )
     assert not raw_liveness._cleanup_queue_helper_is_migration_ready(  # noqa: SLF001
         function_def, "old_payload jsonb, new_payload jsonb", "i", False
+    )
+
+
+def test_pre_har04_trigger_boundary_rejects_weak_queue_guard() -> None:
+    trigger = (
+        "CREATE TRIGGER heimdal_raw_deletion_receipt_no_update BEFORE DELETE OR UPDATE "
+        "ON public.heimdal_raw_deletion_receipt FOR EACH ROW EXECUTE FUNCTION "
+        "public.heimdal_raw_deletion_receipt_reject_mutation()"
+    )
+    historical = """
+        BEGIN
+          RAISE EXCEPTION 'heimdal_raw_deletion_receipt is append-only (HEIM-1): % is not permitted', TG_OP;
+        END;
+    """
+    weak_har04 = """
+        BEGIN
+          IF TG_OP = 'UPDATE'
+             AND current_setting('app.heimdal_retention_reconcile', true) = 'true'
+             AND COALESCE(OLD.payload->'cold_cleanup_location_refs', '[]'::jsonb)
+                 @> COALESCE(NEW.payload->'cold_cleanup_location_refs', '[]'::jsonb) THEN
+            RETURN NEW;
+          END IF;
+          RAISE EXCEPTION 'heimdal_raw_deletion_receipt is append-only: % is not permitted', TG_OP;
+        END;
+    """
+    assert raw_liveness._receipt_trigger_is_legacy_migration_ready(  # noqa: SLF001
+        historical, trigger
+    )
+    assert not raw_liveness._receipt_trigger_is_legacy_migration_ready(  # noqa: SLF001
+        weak_har04, trigger
     )
 
 
