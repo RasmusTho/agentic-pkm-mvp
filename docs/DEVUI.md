@@ -499,9 +499,11 @@ preserve the explicit withdrawal state.
 ARO-02 / [#4743](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4743) is superseded by the
 accepted no-source decision: there is no producer enrichment to implement until a separately
 governed source contract exists. ARO-03 / [#4744](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4744)
-therefore exposes the existing `devui-overview-view.v1` composer through the admitted local GET
-route without candidates. It preserves the composer's `classification_withdrawn` limitations for
-both **Needs you** and **Ready to try**, rather than fabricating facts or measured-empty claims.
+exposes the existing `devui-overview-view.v1` composer through the admitted local GET route.
+The bounded #4834 adapter derives **Now** candidates only from the same composed, trusted Cockpit
+`working` payload; it adds no owner, delivery, readiness, or navigation fact. The route preserves
+the composer's `classification_withdrawn` limitations for both **Needs you** and **Ready to try**,
+rather than fabricating facts or measured-empty claims.
 
 ### DEVUI-FCP-BOUNDARY — Focus and Conversation Port
 
@@ -677,13 +679,13 @@ Delivered now:
   #4710 / PR #4711;
 - the pure `devui-overview-view.v1` server-side composer, which preserves missing producer
   classification as an explicit withdrawal rather than an empty owner or ready list;
-- admitted local GET `/api/devui/overview`, rebuilding live composition and invoking the delivered
-  Overview composer without candidates, delivered by #4744 / PR #4772;
+- admitted local GET `/api/devui/overview`, rebuilding live composition once and invoking the
+  delivered Overview composer with only trusted, source-ordered Cockpit `working` candidates,
+  delivered by #4744 / PR #4772 and #4834;
 - DDO-01 through DDO-04 fast lane, contracts, plan compiler, reducer, and WorkerRuntime seam; and
 - parts of the BuilderOps API/PostgreSQL control-plane development baseline.
 
-Not delivered now: the #4834 source-owned **Now** adapter and stable fixture; one devUI shell;
-request/preview/authenticated approval in one owner experience;
+Not delivered now: one devUI shell; request/preview/authenticated approval in one owner experience;
 PostgreSQL authority cutover; full live run controls; receipt-to-CKM reassessment in the unified
 surface; Focus browser UI, capability-subject route, and Overview-to-Focus
 navigation; provider conversation runtime; authenticated command preview/Start/Hold;
