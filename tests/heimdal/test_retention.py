@@ -31,6 +31,7 @@ from pathlib import Path
 
 import pytest
 
+from app.heimdal import raw_liveness, retention as retention_module
 from app.heimdal.raw_read_gate import (
     RawReadRefusedError,
     raw_ref_for,
@@ -353,6 +354,56 @@ def test_deletion_receipts_accumulate_append_only(tmp_path: Path) -> None:
     receipts = all_deletion_receipts()
     assert len(receipts) == 2
     assert [r.sequence for r in receipts] == sorted(r.sequence for r in receipts)
+
+
+def test_scheduled_retention_retries_pending_cold_receipts_after_raw_scan_gap(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    now = datetime.now(timezone.utc)
+    pending = raw_liveness.DeletionReceipt(
+        id="receipt-pending",
+        record_id="record-erased",
+        content_identity="identity",
+        reason=REASON_HARD_RETENTION_BOUND,
+        retention_window_days=30,
+        deleted_at=now,
+        payload={"cold_cleanup_location_refs": ["heimloc:cold:one"]},
+        sequence=1,
+    )
+    complete = raw_liveness.DeletionReceipt(
+        id="receipt-complete",
+        record_id="record-complete",
+        content_identity="identity-2",
+        reason=REASON_HARD_RETENTION_BOUND,
+        retention_window_days=30,
+        deleted_at=now,
+        payload={"cold_cleanup_location_refs": []},
+        sequence=2,
+    )
+    calls: list[dict[str, object]] = []
+
+    def retry(**kwargs: object) -> raw_liveness.GovernedDeletionResult:
+        calls.append(kwargs)
+        return raw_liveness.GovernedDeletionResult(outcome="already_erased")
+
+    monkeypatch.setattr(
+        retention_module.raw_liveness,
+        "all_deletion_receipts",
+        lambda: [pending, complete],
+    )
+    monkeypatch.setattr(retention_module.raw_liveness, "governed_delete_raw_record", retry)
+
+    retention_module._reconcile_pending_cold_cleanup()  # noqa: SLF001
+
+    assert calls == [
+        {
+            "record_id": "record-erased",
+            "reason": REASON_HARD_RETENTION_BOUND,
+            "retention_window_days": 30,
+            "deleted_at": now,
+            "payload": {"cold_cleanup_location_refs": ["heimloc:cold:one"]},
+        }
+    ]
 
 
 # ---------------------------------------------------------------------------

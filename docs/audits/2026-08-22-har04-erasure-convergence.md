@@ -58,8 +58,11 @@ memory governed path. Ordinary representation registration cannot delete identit
   succeed. The memory writer follows the same post-authority-delete ordering and persists its
   reduced receipt queue on cleanup failure. The PG post-commit reconciliation reacquires the
   content fence before consuming the queue, so cleanup cannot race a new generation or
-  registration. Stale observations cannot authorize deletion because the receipt/tombstone and
-  row locks are the authority.
+  registration. The scheduled retention writer indexes pending cleanup from durable receipts,
+  rather than active raw rows (which are already gone after DB erasure), and invokes the same
+  governed retry path; failed external deletion remains queued for the next run. Stale
+  observations cannot authorize deletion because the receipt/tombstone and row locks are the
+  authority.
 - PG schema preflight validates the reconciliation trigger function body, not just trigger name;
   it requires the guarded UPDATE return path, immutable-column equality, order-preserving
   monotonic removal-only queue progress, and rejecting exception path. Partial/pre-e2f3 or

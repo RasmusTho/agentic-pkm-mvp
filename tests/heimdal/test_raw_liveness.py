@@ -179,15 +179,19 @@ def test_cleanup_queue_helper_preflight_binds_exact_immutable_function() -> None
         $$ LANGUAGE plpgsql IMMUTABLE STRICT;
     """
     assert raw_liveness._cleanup_queue_helper_is_migration_ready(  # noqa: SLF001
-        function_def, "old_payload jsonb, new_payload jsonb", "i"
+        function_def, "old_payload jsonb, new_payload jsonb", "i", True
     )
     assert not raw_liveness._cleanup_queue_helper_is_migration_ready(  # noqa: SLF001
         function_def.replace("RETURN true", "RETURN false"),
         "old_payload jsonb, new_payload jsonb",
         "i",
+        True,
     )
     assert not raw_liveness._cleanup_queue_helper_is_migration_ready(  # noqa: SLF001
-        function_def, "old_payload jsonb, new_payload jsonb", "v"
+        function_def, "old_payload jsonb, new_payload jsonb", "v", True
+    )
+    assert not raw_liveness._cleanup_queue_helper_is_migration_ready(  # noqa: SLF001
+        function_def, "old_payload jsonb, new_payload jsonb", "i", False
     )
 
 

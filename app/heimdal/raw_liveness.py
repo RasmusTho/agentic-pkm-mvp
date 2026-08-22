@@ -82,7 +82,7 @@ def _receipt_trigger_is_migration_ready(function_def: str, trigger_def: str) -> 
 
 
 def _cleanup_queue_helper_is_migration_ready(
-    function_def: str, arguments: str, volatility: str
+    function_def: str, arguments: str, volatility: str, is_strict: bool
 ) -> bool:
     """Accept only the canonical order-preserving queue helper."""
     normalized = re.sub(r"\s+", " ", function_def).lower()
@@ -91,6 +91,7 @@ def _cleanup_queue_helper_is_migration_ready(
     return bool(
         arguments.strip().lower() == "old_payload jsonb, new_payload jsonb"
         and volatility == "i"
+        and is_strict
         and body == _CLEANUP_QUEUE_HELPER_BODY
     )
 
@@ -528,7 +529,8 @@ def _assert_pg_schema(conn: Any) -> None:
         )
     cur.execute(
         """
-        SELECT pg_get_functiondef(p.oid), pg_get_function_arguments(p.oid), p.provolatile
+        SELECT pg_get_functiondef(p.oid), pg_get_function_arguments(p.oid),
+               p.provolatile, p.proisstrict
         FROM pg_proc AS p
         JOIN pg_namespace AS n ON n.oid = p.pronamespace
         WHERE n.nspname = current_schema()
@@ -539,7 +541,7 @@ def _assert_pg_schema(conn: Any) -> None:
     helper_rows = cur.fetchall()
     if not any(
         _cleanup_queue_helper_is_migration_ready(
-            str(row[0]), str(row[1]), str(row[2])
+            str(row[0]), str(row[1]), str(row[2]), bool(row[3])
         )
         for row in helper_rows
     ):

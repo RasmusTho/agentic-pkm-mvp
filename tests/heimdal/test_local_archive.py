@@ -9,7 +9,7 @@ import secrets
 
 import pytest
 
-from app.heimdal import local_archive, raw_store
+from app.heimdal import local_archive, raw_store, retention as retention_module
 from app.heimdal.raw_store import (
     all_raw_representations,
     compute_raw_content_identity,
@@ -361,6 +361,59 @@ def test_governed_cold_cleanup_removes_object_and_manifest(tmp_path: Path) -> No
     assert list((archive_root / "representations").glob("*.bin")) == []
     assert list((archive_root / "manifests").glob("*.json")) == []
     assert result.receipt.representation_id
+
+
+def test_scheduled_retention_retries_pending_cleanup_after_db_erasure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    record, now = _eligible(_insert(b"scheduled-retry"))
+    archive_root = tmp_path / "mounted-cold"
+    archive_root.mkdir()
+    local_archive.relocate_raw_record(
+        record,
+        archive_root=archive_root,
+        archive_ref=_ARCHIVE_REF,
+        now=now,
+        retention_window_days=30,
+        key=_KEY,
+        volume_ready=lambda: _test_volume_ready(_ARCHIVE_REF, archive_root),
+    )
+
+    original_delete = raw_store._delete_cold_object_path  # noqa: SLF001
+    attempts = 0
+
+    def fail_once(path: Path) -> None:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise raw_store.RawRepresentationDeletionError("simulated cold outage")
+        original_delete(path)
+
+    monkeypatch.setattr(raw_store, "_delete_cold_object_path", fail_once)
+    with pytest.raises(raw_store.RawRepresentationDeletionError):
+        raw_liveness.governed_delete_raw_record(
+            record_id=record.id,
+            reason="hard_retention_bound",
+            retention_window_days=30,
+            deleted_at=now,
+        )
+
+    assert raw_store.all_raw_records() == []
+    pending = raw_liveness.all_deletion_receipts()
+    assert len(pending) == 1
+    assert pending[0].payload["cold_cleanup_location_refs"]
+
+    monkeypatch.setattr(
+        retention_module, "_resolve_retention_window_days", lambda *_args, **_kwargs: 30
+    )
+    scheduled = retention_module.enforce_hard_retention_bound(
+        vault_root=tmp_path, now=now, record_last_enforced=False
+    )
+
+    assert scheduled.deleted_count == 0
+    assert raw_liveness.all_deletion_receipts()[0].payload["cold_cleanup_location_refs"] == []
+    assert list((archive_root / "representations").glob("*.bin")) == []
+    assert list((archive_root / "manifests").glob("*.json")) == []
 
 
 def test_pg_cursor_cold_cleanup_locks_rows_and_removes_files(tmp_path: Path) -> None:

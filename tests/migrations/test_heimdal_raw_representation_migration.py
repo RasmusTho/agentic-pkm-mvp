@@ -255,7 +255,8 @@ def _raw_schema_snapshot(dsn: str) -> dict[str, object]:
         receipt_functions = [tuple(row) for row in cur.fetchall()]
         cur.execute(
             """
-            SELECT pg_get_functiondef(p.oid), pg_get_function_arguments(p.oid), p.provolatile
+            SELECT pg_get_functiondef(p.oid), pg_get_function_arguments(p.oid),
+                   p.provolatile, p.proisstrict
             FROM pg_proc AS p
             JOIN pg_namespace AS n ON n.oid = p.pronamespace
             WHERE n.nspname = 'public'
