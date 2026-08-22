@@ -156,6 +156,15 @@ def test_builder_system_architecture_fitness_test_has_ci_owner() -> None:
     assert path in selection.targets
 
 
+def test_proxmox_inventory_boundary_has_builder_system_ci_owner() -> None:
+    selection = select_tests(["app/proxmox/inventory.py"])
+
+    assert selection.full_suite is False
+    assert selection.subsystems == ("builder_system",)
+    assert selection.unowned_paths == ()
+    assert "tests/proxmox" in selection.targets
+
+
 def test_model_access_kernel_change_selects_contract_and_boundary_coverage() -> None:
     selection = select_tests(["llm_contract/__init__.py"])
 
