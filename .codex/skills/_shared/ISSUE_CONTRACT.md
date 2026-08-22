@@ -142,8 +142,9 @@ Acceptance Criteria must name a finite, reviewable surface. An AC that names pro
 enumerate the concrete production entrypoints in the Issue, or reference an owner-document list
 that does; an open class such as "direct-service producers" is not a reviewable surface. Include
 CI workflows when they invoke the guarded persisted-schema surface directly. If a named producer
-can only be proven after merge, name it as `unprovable-in-PR` and require its post-merge proof in
-the Issue rather than discovering it through a later review round.
+can only be proven after merge, record it as `unprovable-in-PR`; its post-merge proof must not be a
+`Verify:` target on a closing slice Issue. Route that proof to a named parent-validation authority
+that remains open, or to an explicit non-closing lifecycle with its own durable evidence target.
 
 Do not use absolute quantifiers over an open caller set (`every`, `never`, or `cannot`) as a
 stand-alone AC guarantee. Either enumerate the bounded surface or name the mechanical boundary
@@ -155,7 +156,8 @@ Concrete rewrite:
 Bad: every direct-service producer persists the schema.
 Good: `scripts/bootstrap_vault.py`, `app/api/routes/capture.py`, and
 `.github/workflows/ci-smoke.yaml` satisfy the schema preflight; the raw-compose
-smoke producer is `unprovable-in-PR` and is verified by its post-merge workflow run.
+smoke producer is `unprovable-in-PR`; its post-merge workflow proof belongs to the named
+parent-validation authority, not to this closing slice.
 ```
 
 ## Body template

@@ -112,6 +112,9 @@ include raw paths, vault names, environment values, DSNs, secrets, or raw startu
   reply or disposition evidence for each; missing, substituted, or still-unresolved original-thread
   evidence fails closure. Record that final readback in the delivery receipt. [review-thread-closure]
 - On resume or recovery, re-check branch, `origin/main`, relevant merged PRs, and expected implementation files before continuing publication, reimplementation, or closure. [post-resume-current-state-gate]
+- A closing slice Issue may not carry a `Verify:` target whose producer is observable only after
+  merge. Route that proof to a named parent-validation authority or explicit non-closing lifecycle;
+  the non-closing authority must remain open through that proof and retain its durable evidence.
 - If the work is a slice under a larger feature, keep post-merge validation evidence on the parent issue
 - If post-merge validation advanced but acceptance is still pending, record the new evidence on the parent issue body or comments
 - If work is incomplete, do not close the loop falsely; create a bounded follow-up Issue instead

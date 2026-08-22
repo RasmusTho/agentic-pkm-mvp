@@ -149,6 +149,32 @@ def test_pr_contract_trigger_excludes_review_requested_and_cancels_stale_runs() 
     assert "cancel-in-progress: true" in concurrency_block
 
 
+def test_post_merge_proof_cannot_be_required_by_closing_slice() -> None:
+    """A closing slice must not promise evidence that exists only after its merge."""
+    contract = (
+        REPO_ROOT / ".codex" / "skills" / "_shared" / "ISSUE_CONTRACT.md"
+    ).read_text(encoding="utf-8")
+
+    assert (
+        "must not be a `Verify:` target on a closing slice Issue"
+        in " ".join(contract.split())
+    )
+    assert "require its post-merge proof in the Issue" not in contract
+
+
+def test_post_merge_proof_uses_non_closing_validation_authority() -> None:
+    """Post-merge proof stays on a parent or explicit non-closing authority."""
+    hot_path = (REPO_ROOT / "docs" / "development" / "PR_HOT_PATH.md").read_text(
+        encoding="utf-8"
+    )
+    closure_guidance = (
+        REPO_ROOT / ".codex" / "skills" / "verification-and-closure" / "SKILL.md"
+    ).read_text(encoding="utf-8")
+
+    assert "parent-validation authority or an explicit non-closing lifecycle" in hot_path
+    assert "must remain open through that proof" in closure_guidance
+
+
 def _read_workflow() -> str:
     return (REPO_ROOT / ".github/workflows/issue-pr-governance.yml").read_text(
         encoding="utf-8"
