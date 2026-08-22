@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "tars_operator_evidence_bundle.v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "policy_version", "collected_at", "evidence", "evidence_fingerprints"],
+  "properties": {
+    "schema_version": {"const": "tars_operator_evidence_bundle.v1"},
+    "policy_version": {"const": "tars-builder-system-baseline.v1"},
+    "collected_at": {"type": "string", "format": "date-time"},
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["host", "vm_102", "builderops"],
+      "properties": {
+        "host": {"type": "object"},
+        "vm_102": {"type": "object"},
+        "builderops": {"type": "object"}
+      }
+    },
+    "evidence_fingerprints": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["host", "vm_102", "builderops"],
+      "properties": {
+        "host": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+        "vm_102": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+        "builderops": {"type": "string", "pattern": "^[a-f0-9]{64}$"}
+      }
+    }
+  }
+}
