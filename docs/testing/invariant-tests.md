@@ -1075,6 +1075,27 @@ per HEIM-1..14, each xfail (honestly, via a Heimdal-local `require_future_heimda
 Heimdal slices A3/A5/A6 already discharge the invariant for real (HEIM-3, HEIM-8, HEIM-9), calling the
 real production path directly so a regression would fail the test rather than silently re-xfail.
 
+## Governed archival flow
+
+GAF-01 (#5063) adds the common vocabulary only. These are shared fitness entries, not a second archive authority or a claim that any adapter is wired. HKA, SIP, GOV, PDM, DRI, and the relevant class adapter retain their current owner-native authority; adapter slices promote runtime enforcement.
+
+| ID | Category | Purpose | Current enforcement | Eventual test path |
+| --- | --- | --- | --- | --- |
+| ARCHIVE-MUST-01 | MUST | Identity and authority are never reconstructed from a path, mount, URL, or manifest location. | `static_test` | `tests/archival/test_contracts.py` |
+| ARCHIVE-MUST-02 | MUST | Ordinary reads and restore share the owner-native gated-read seam. | `doc_only` | adapter production-path tests |
+| ARCHIVE-MUST-03 | MUST | Receipts and manifests record custody without replacing owner-native authority. | `static_test` | `tests/architecture/test_governed_archival_contract.py` |
+| ARCHIVE-MUST-04 | MUST | Verification and activation precede representation retirement. | `future_runtime` | GAF-02 transition tests |
+| ARCHIVE-MUST-05 | MUST | Terminal erasure waits for all-copy handling and terminal physical cleanup. | `future_runtime` | durable adapter liveness tests |
+| ARCHIVE-MUST-06 | MUST | Durable admission carries identity, provenance, policy, generation, and an initial representation or fails closed. | `doc_only` | class-adapter admission tests |
+| ARCHIVE-MUST-07 | MUST | Reads use a registered resolver that verifies identity and active generation. | `doc_only` | class-adapter gated-read tests |
+| ARCHIVE-GATE-01 | GATE | Each adapter proves gated restore, provenance preservation, and redacted receipt emission. | `future_runtime` | GAF-03 through GAF-05 tests |
+| ARCHIVE-GATE-02 | GATE | Cross-class validation covers raw media, a human artifact, and a rebuildable derivative. | `future_runtime` | GAF-07 conformance tests |
+| ARCHIVE-GATE-03 | GATE | Durable adapters prove no false-success retention/revocation and retryable cleanup. | `future_runtime` | GAF-03 through GAF-05 liveness tests |
+| ARCHIVE-GATE-04 | GATE | Parent acceptance and owner-doc promotion await all mandatory adapter gates. | `future_runtime` | GAF-07 validation receipt |
+| ARCHIVE-DOCTOR-01 | DOCTOR | Read-only doctor detects orphan, missing, and identity-mismatched representations. | `future_runtime` | GAF-07 doctor tests |
+| ARCHIVE-DOCTOR-02 | DOCTOR | Read-only doctor detects stale generation, unresolved cleanup, missing tombstone, and resolver mismatch. | `future_runtime` | GAF-07 doctor tests |
+| ARCHIVE-DOCTOR-03 | DOCTOR | Read-only doctor detects derivatives treated as source authority and human identity/provenance held only in a projection. | `future_runtime` | GAF-06 and GAF-07 tests |
+
 ## Settings Spine invariants (SET-1..7)
 
 The Settings Spine (feature #3156, Option B ruling) consolidates five settings substrates into two
