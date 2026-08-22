@@ -53,7 +53,7 @@ class PolicyProfile(_ValueEnum):
         return {
             self.RAW_EVIDENCE: frozenset({"erased"}),
             self.RETAINED_SOURCE: frozenset({"retained", "restored"}),
-            self.HKA_RECOVERY: frozenset({"recovered", "conflict"}),
+            self.HKA_RECOVERY: frozenset({"recovered"}),
             self.REBUILDABLE_DERIVATIVE: frozenset({"rebuildable", "discarded"}),
         }[self]
 
@@ -173,13 +173,13 @@ class Receipt:
         if self.generation < 1:
             raise ValueError("receipt generation must be positive")
         allowed_liveness = {
-            TransitionStage.RESERVED: frozenset({Liveness.PENDING}),
-            TransitionStage.COPIED: frozenset({Liveness.PENDING}),
-            TransitionStage.VERIFIED: frozenset({Liveness.PENDING, Liveness.ACTIVE}),
-            TransitionStage.ACTIVE: frozenset({Liveness.ACTIVE}),
-            TransitionStage.RESTORING: frozenset({Liveness.RESTORING}),
-            TransitionStage.RETIREMENT_PENDING: frozenset({Liveness.PENDING}),
-            TransitionStage.ERASURE_PENDING: frozenset({Liveness.ERASURE_PENDING}),
+            TransitionStage.RESERVED: frozenset({Liveness.PENDING, Liveness.UNAVAILABLE}),
+            TransitionStage.COPIED: frozenset({Liveness.PENDING, Liveness.UNAVAILABLE}),
+            TransitionStage.VERIFIED: frozenset({Liveness.PENDING, Liveness.ACTIVE, Liveness.UNAVAILABLE}),
+            TransitionStage.ACTIVE: frozenset({Liveness.ACTIVE, Liveness.UNAVAILABLE}),
+            TransitionStage.RESTORING: frozenset({Liveness.RESTORING, Liveness.UNAVAILABLE}),
+            TransitionStage.RETIREMENT_PENDING: frozenset({Liveness.PENDING, Liveness.UNAVAILABLE}),
+            TransitionStage.ERASURE_PENDING: frozenset({Liveness.ERASURE_PENDING, Liveness.UNAVAILABLE}),
             TransitionStage.RETIRED: frozenset({Liveness.TERMINAL}),
             TransitionStage.RESTORED: frozenset({Liveness.ACTIVE}),
             TransitionStage.ERASED: frozenset({Liveness.TERMINAL}),

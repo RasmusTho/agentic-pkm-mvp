@@ -64,6 +64,7 @@ def test_location_cannot_mint_identity_or_access_authority():
 def test_policy_profiles_keep_class_specific_terminal_outcomes():
     assert "erased" in PolicyProfile.RAW_EVIDENCE.terminal_outcomes
     assert "recovered" in PolicyProfile.HKA_RECOVERY.terminal_outcomes
+    assert "conflict" not in PolicyProfile.HKA_RECOVERY.terminal_outcomes
     assert "discarded" in PolicyProfile.REBUILDABLE_DERIVATIVE.terminal_outcomes
     assert all("unavailable" not in profile.terminal_outcomes for profile in PolicyProfile)
     assert "erased" not in PolicyProfile.HKA_RECOVERY.terminal_outcomes
@@ -84,6 +85,18 @@ def test_receipts_cannot_claim_contradictory_stage_and_liveness():
         assert "incompatible" in str(exc)
     else:
         raise AssertionError("erased receipt accepted active liveness")
+
+
+def test_unavailable_liveness_is_retryable_receipt_evidence():
+    receipt = Receipt(
+        "archive.doctor",
+        ArtifactIdentity("artifact-001"),
+        None,
+        1,
+        TransitionStage.ACTIVE,
+        Liveness.UNAVAILABLE,
+    )
+    assert receipt.liveness is Liveness.UNAVAILABLE
 
 
 def test_content_identity_is_not_a_path_or_uri():
