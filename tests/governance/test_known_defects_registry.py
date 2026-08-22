@@ -1167,6 +1167,202 @@ def test_registry_reconciliation_rejects_malformed_entry_before_mutation() -> No
     assert len(gateway.comments[issue["number"]]) == 1
 
 
+def test_reconcile_rejects_untrusted_source_author() -> None:
+    gateway = FakeGateway()
+    issue = gateway.create_registry_issue()
+    gateway.lock_registry_issue(issue["number"])
+    comment = gateway.add_comment(issue["number"], _defect().render_entry())
+    comment["author_association"] = "CONTRIBUTOR"
+
+    with pytest.raises(known_defects.KnownDefectsError, match="untrusted author"):
+        known_defects.reconcile_registry(gateway, issue["number"], apply=True)
+    assert len(gateway.comments[issue["number"]]) == 1
+
+
+def test_reconcile_preserves_pending_phase_and_finalizes_earliest_reservation() -> None:
+    gateway = FakeGateway()
+    issue = gateway.create_registry_issue()
+    gateway.lock_registry_issue(issue["number"])
+    defect = _defect()
+    pending = gateway.add_comment(issue["number"], defect.render_entry(phase="pending"))
+    later_final = gateway.add_comment(issue["number"], defect.render_entry())
+
+    plan = known_defects.reconcile_registry(gateway, issue["number"])
+    assert [action["action"] for action in plan["actions"]] == ["update", "delete"]
+    receipt = known_defects.reconcile_registry(gateway, issue["number"], apply=True)
+
+    assert receipt["status"] == "reconciled"
+    assert [item["id"] for item in gateway.comments[issue["number"]]] == [pending["id"]]
+    assert "phase=final" in pending["body"].splitlines()[0]
+    assert later_final["id"] not in [item["id"] for item in gateway.comments[issue["number"]]]
+
+
+def test_reconcile_rejects_marker_after_preamble() -> None:
+    gateway = FakeGateway()
+    issue = gateway.create_registry_issue()
+    gateway.lock_registry_issue(issue["number"])
+    original = "Owner note: preserve this text.\n\n" + _defect().render_entry()
+    gateway.add_comment(issue["number"], original)
+
+    with pytest.raises(known_defects.KnownDefectsError, match="non-empty preamble"):
+        known_defects.reconcile_registry(gateway, issue["number"], apply=True)
+    assert gateway.comments[issue["number"]][0]["body"] == original
+
+
+def test_reconcile_adds_split_comments_before_destructive_update() -> None:
+    class OrderedGateway(FakeGateway):
+        def __init__(self) -> None:
+            super().__init__()
+            self.operations: list[str] = []
+
+        def add_comment(self, issue_number: int, body: str) -> dict[str, Any]:
+            self.operations.append("add")
+            return super().add_comment(issue_number, body)
+
+        def update_comment(self, comment_id: int, body: str) -> dict[str, Any]:
+            self.operations.append("update")
+            return super().update_comment(comment_id, body)
+
+        def delete_comment(self, comment_id: int) -> None:
+            self.operations.append("delete")
+            super().delete_comment(comment_id)
+
+    gateway = OrderedGateway()
+    issue = gateway.create_registry_issue()
+    gateway.lock_registry_issue(issue["number"])
+    first = _defect()
+    second = _defect(source_pr=4322, source_sha="b" * 40, review_url="https://github.com/RasmusTho/agentic-pkm-mvp/pull/4322#discussion_r124")
+    gateway.add_comment(issue["number"], first.render_entry() + "\n\n" + second.render_entry())
+    gateway.operations.clear()
+
+    known_defects.reconcile_registry(gateway, issue["number"], apply=True)
+
+    assert gateway.operations == ["add", "update"]
+
+
+def test_reconcile_lost_addition_cannot_use_existing_duplicate_before_update() -> None:
+    class LostSplitAddGateway(FakeGateway):
+        def __init__(self) -> None:
+            super().__init__()
+            self.drop_next_add = False
+            self.operations: list[str] = []
+
+        def add_comment(self, issue_number: int, body: str) -> dict[str, Any]:
+            if self.drop_next_add:
+                self.drop_next_add = False
+                return {
+                    "id": 999,
+                    "created_at": "2026-07-27T00:00:59Z",
+                    "body": body,
+                    "author_association": "OWNER",
+                }
+            return super().add_comment(issue_number, body)
+
+        def update_comment(self, comment_id: int, body: str) -> dict[str, Any]:
+            self.operations.append("update")
+            return super().update_comment(comment_id, body)
+
+        def delete_comment(self, comment_id: int) -> None:
+            self.operations.append("delete")
+            super().delete_comment(comment_id)
+
+    gateway = LostSplitAddGateway()
+    issue = gateway.create_registry_issue()
+    gateway.lock_registry_issue(issue["number"])
+    first = _defect()
+    second = _defect(source_pr=4322, source_sha="b" * 40, review_url="https://github.com/RasmusTho/agentic-pkm-mvp/pull/4322#discussion_r124")
+    gateway.add_comment(issue["number"], first.render_entry() + "\n\n" + second.render_entry())
+    # This same-body duplicate would have hidden a lost POST under the prior
+    # body-set reread; it must not authorize truncating the legacy source.
+    gateway.add_comment(issue["number"], second.render_entry())
+    gateway.drop_next_add = True
+
+    with pytest.raises(known_defects.KnownDefectsError, match="additive comment verification"):
+        known_defects.reconcile_registry(gateway, issue["number"], apply=True)
+    assert gateway.operations == []
+
+
+def test_reconcile_replayed_addition_id_cannot_use_existing_duplicate_before_update() -> None:
+    class ReplayedSplitAddGateway(FakeGateway):
+        def __init__(self) -> None:
+            super().__init__()
+            self.replay_id: int | None = None
+            self.operations: list[str] = []
+
+        def add_comment(self, issue_number: int, body: str) -> dict[str, Any]:
+            if self.replay_id is not None:
+                return next(
+                    comment
+                    for comment in self.comments[issue_number]
+                    if int(comment["id"]) == self.replay_id
+                )
+            return super().add_comment(issue_number, body)
+
+        def update_comment(self, comment_id: int, body: str) -> dict[str, Any]:
+            self.operations.append("update")
+            return super().update_comment(comment_id, body)
+
+        def delete_comment(self, comment_id: int) -> None:
+            self.operations.append("delete")
+            super().delete_comment(comment_id)
+
+    gateway = ReplayedSplitAddGateway()
+    issue = gateway.create_registry_issue()
+    gateway.lock_registry_issue(issue["number"])
+    first = _defect()
+    second = _defect(source_pr=4322, source_sha="b" * 40, review_url="https://github.com/RasmusTho/agentic-pkm-mvp/pull/4322#discussion_r124")
+    gateway.add_comment(issue["number"], first.render_entry() + "\n\n" + second.render_entry())
+    existing = gateway.add_comment(issue["number"], second.render_entry())
+    gateway.replay_id = int(existing["id"])
+
+    with pytest.raises(known_defects.KnownDefectsError, match="replayed an existing"):
+        known_defects.reconcile_registry(gateway, issue["number"], apply=True)
+    assert gateway.operations == []
+
+
+def test_reconcile_rejects_replaced_defect_id_at_final_readback() -> None:
+    class ReplacedFinalReadbackGateway(FakeGateway):
+        def __init__(self) -> None:
+            super().__init__()
+            self.replacement: dict[str, Any] | None = None
+
+        def list_comments(self, issue_number: int) -> list[dict[str, Any]]:
+            comments = super().list_comments(issue_number)
+            if self.replacement is not None:
+                comments[0]["body"] = self.replacement["body"]
+            return comments
+
+        def update_comment(self, comment_id: int, body: str) -> dict[str, Any]:
+            result = super().update_comment(comment_id, body)
+            self.replacement = {"body": replacement.render_entry()}
+            return result
+
+    gateway = ReplacedFinalReadbackGateway()
+    issue = gateway.create_registry_issue()
+    gateway.lock_registry_issue(issue["number"])
+    original = _defect()
+    second = _defect(
+        source_pr=4322,
+        source_sha="b" * 40,
+        review_url="https://github.com/RasmusTho/agentic-pkm-mvp/pull/4322#discussion_r124",
+    )
+    replacement = _defect(
+        source_pr=4323,
+        source_sha="c" * 40,
+        review_url="https://github.com/RasmusTho/agentic-pkm-mvp/pull/4323#discussion_r125",
+    )
+    gateway.add_comment(
+        issue["number"],
+        original.render_entry() + "\n\n" + second.render_entry(),
+    )
+
+    with pytest.raises(
+        known_defects.KnownDefectsError,
+        match="exactly one comment per expected defect ID",
+    ):
+        known_defects.reconcile_registry(gateway, issue["number"], apply=True)
+
+
 def test_schema_comment_requires_stable_creation_authority() -> None:
     gateway = FakeGateway()
     issue = gateway.create_registry_issue()

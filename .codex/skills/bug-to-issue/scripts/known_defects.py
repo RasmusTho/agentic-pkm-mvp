@@ -968,6 +968,23 @@ def _reconciliation_entries(
         if not blocks:
             _validate_schema_comment(comment)
             continue
+        # A legacy multi-entry comment is eligible for repair only when its
+        # schema starts at the comment boundary.  Treating an embedded marker
+        # as an entry would let reconciliation rewrite an owner note into
+        # registry authority.
+        lines = body.splitlines()
+        if not lines or not lines[0].startswith("<!-- known-defect-entry:"):
+            raise KnownDefectsError(
+                f"comment #{comment.get('id')} contains an entry marker after "
+                "a non-empty preamble"
+            )
+        association = str(comment.get("author_association") or "").upper()
+        if association not in TRUSTED_AUTHOR_ASSOCIATIONS:
+            raise KnownDefectsError(
+                f"schema comment #{comment.get('id')} has untrusted author association "
+                f"{association or '<missing>'}"
+            )
+        _comment_reservation_order(comment)
         for index, block in enumerate(blocks):
             parsed = _entry_marker_from_comment(block)
             if parsed is None:
@@ -1004,11 +1021,19 @@ def reconcile_registry(
     by_comment: dict[int, list[tuple[str, str, int]]] = {}
     for comment, block, defect_id, index in entries:
         if (int(comment["id"]), index) in canonical:
+            parsed = _entry_marker_from_comment(block)
+            assert parsed is not None
+            # Pending reservations are durable but non-authoritative.  The
+            # earliest reservation remains canonical; reconciliation commits
+            # it before it can remove a later final duplicate.
+            if parsed[1] == "pending":
+                block = block.replace(" phase=pending -->", " phase=final -->", 1)
             by_comment.setdefault(int(comment["id"]), []).append(
                 (defect_id, block, index)
             )
 
-    actions: list[dict[str, Any]] = []
+    additive_actions: list[dict[str, Any]] = []
+    destructive_actions: list[dict[str, Any]] = []
     for comment in sorted(
         {id(comment): comment for comment, *_ in entries}.values(),
         key=lambda item: _comment_reservation_order(item),
@@ -1016,11 +1041,11 @@ def reconcile_registry(
         comment_id = int(comment["id"])
         kept = by_comment.get(comment_id, [])
         if not kept:
-            actions.append({"action": "delete", "comment_id": comment_id})
+            destructive_actions.append({"action": "delete", "comment_id": comment_id})
             continue
         first_block = kept[0][1]
         if len(kept) > 1 or (comment.get("body") or "").strip() != first_block:
-            actions.append(
+            destructive_actions.append(
                 {
                     "action": "update",
                     "comment_id": comment_id,
@@ -1028,7 +1053,7 @@ def reconcile_registry(
                 }
             )
         for defect_id, block, _index in kept[1:]:
-            actions.append(
+            additive_actions.append(
                 {
                     "action": "add",
                     "registry_issue": registry_issue,
@@ -1037,6 +1062,7 @@ def reconcile_registry(
                 }
             )
 
+    actions = additive_actions + destructive_actions
     report = {
         "schema": "known-defect-reconciliation.v1",
         "status": "planned" if not apply else "reconciled",
@@ -1054,25 +1080,79 @@ def reconcile_registry(
     if not apply:
         return report
 
-    for action in actions:
+    preexisting_comment_ids = {
+        int(comment.get("id") or 0)
+        for comment in gateway.list_comments(registry_issue)
+    }
+    added_comment_bodies: dict[int, str] = {}
+    for action in additive_actions:
+        created = gateway.add_comment(action["registry_issue"], action["body"])
+        _validate_schema_comment(created)
+        created_id = int(created.get("id") or 0)
+        created_body = str(created.get("body") or "")
+        if created_body != action["body"]:
+            raise KnownDefectsError(
+                "reconciliation additive comment response does not match the "
+                "planned schema body"
+            )
+        if created_id in preexisting_comment_ids:
+            raise KnownDefectsError(
+                "reconciliation additive comment response replayed an existing "
+                "comment ID"
+            )
+        if created_id in added_comment_bodies:
+            raise KnownDefectsError(
+                "reconciliation additive comment response reused a comment ID"
+            )
+        added_comment_bodies[created_id] = created_body
+
+    # GitHub has no transaction spanning a new comment and a destructive
+    # source update.  Re-read each exact POST response ID before the
+    # irreversible half of the plan; an older same-body duplicate cannot
+    # stand in for a lost newly-created split comment.
+    if added_comment_bodies:
+        observed_by_id = {
+            int(comment.get("id") or 0): comment
+            for comment in gateway.list_comments(registry_issue)
+        }
+        for comment_id, expected_body in added_comment_bodies.items():
+            observed = observed_by_id.get(comment_id)
+            if observed is None:
+                raise KnownDefectsError(
+                    "reconciliation additive comment verification failed before "
+                    "destructive update"
+                )
+            _validate_schema_comment(observed)
+            if str(observed.get("body") or "") != expected_body:
+                raise KnownDefectsError(
+                    "reconciliation additive comment changed before destructive "
+                    "update"
+                )
+        if len(added_comment_bodies) != len(additive_actions):
+            raise KnownDefectsError(
+                "reconciliation additive comments did not retain distinct "
+                "creation authority"
+            )
+
+    for action in destructive_actions:
         if action["action"] == "delete":
             gateway.delete_comment(action["comment_id"])
-        elif action["action"] == "update":
-            gateway.update_comment(action["comment_id"], action["body"])
         else:
-            gateway.add_comment(action["registry_issue"], action["body"])
+            gateway.update_comment(action["comment_id"], action["body"])
 
     verified = _reconciliation_entries(gateway, registry_issue)
     verified_ids = {entry[2] for entry in verified}
     verified_comments = {int(entry[0]["id"]) for entry in verified}
     if (
         len(verified) != len(by_id)
-        or len(verified_ids) != len(by_id)
+        or verified_ids != set(by_id)
         or len(verified_comments) != len(by_id)
     ):
         raise KnownDefectsError(
-            "reconciliation did not produce one comment per unique defect ID"
+            "reconciliation did not preserve exactly one comment per expected defect ID"
         )
+    if any(_entry_marker_from_comment(entry[1])[1] != "final" for entry in verified):
+        raise KnownDefectsError("reconciliation left a pending canonical entry")
     report["verified_comment_count"] = len(verified_comments)
     return report
 
