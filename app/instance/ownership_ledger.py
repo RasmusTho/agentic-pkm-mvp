@@ -735,7 +735,9 @@ class OwnershipLedger:
                 key=key,
                 state="active",
             )
-            self._assert_no_collision(current, candidate, allow_same_channel_nested=False)
+            self._assert_no_collision(
+                current, candidate, key=key, allow_same_channel_nested=False
+            )
             self._write_ledger_locked(
                 self._replace(current, leases={vault_binding_id: candidate}), key
             )
