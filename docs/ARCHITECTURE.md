@@ -22,6 +22,10 @@ Forward-looking plan lives in `docs/ROADMAP.md`. Historical snapshots are no lon
 
 Current architecture and target architecture may intentionally differ during transition. Major changes should classify SBS impact, update the relevant target contract/register when needed, and avoid claiming target-state boundaries as shipped behavior unless `docs/STATUS.md` and runtime evidence support the claim.
 
+The target-state Governed Archival Flow contract is recorded in
+`docs/contracts/GOVERNED_ARCHIVAL_FLOW.md`; its provider-free `app.archival` package is an
+enabling contract seam only and does not claim production archival wiring or a central store.
+
 This architecture focuses on the runtime and data model for the Mimer module (the Obsidian vault + ingestion/indexing/agents) within the broader Yggdrasil system.
 
 ## Executive Summary

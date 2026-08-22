@@ -1156,7 +1156,7 @@ added as their child slices land.
   policy is applied to every class, a representation retires before verification, or a derivative
   becomes the last authoritative copy of meaning.
 - **Named kernel:** `ARCHIVE-MUST-01`, `ARCHIVE-MUST-02`, `ARCHIVE-MUST-03`, `ARCHIVE-MUST-04`,
-  `ARCHIVE-MUST-05`, `ARCHIVE-GATE-01`, `ARCHIVE-GATE-02`, `ARCHIVE-GATE-03`,
+  `ARCHIVE-MUST-05`, `ARCHIVE-MUST-06`, `ARCHIVE-MUST-07`, `ARCHIVE-GATE-01`, `ARCHIVE-GATE-02`, `ARCHIVE-GATE-03`,
   `ARCHIVE-GATE-04`, `ARCHIVE-DOCTOR-01`, `ARCHIVE-DOCTOR-02`, and `ARCHIVE-DOCTOR-03`.
 - **Current enforcement:** `static_test` — GAF-01 defines the provider-free contract and registry
   entries; production adapter enforcement is future work under GAF-02 through GAF-07.

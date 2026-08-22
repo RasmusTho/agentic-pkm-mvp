@@ -65,8 +65,42 @@ def test_policy_profiles_keep_class_specific_terminal_outcomes():
     assert "erased" in PolicyProfile.RAW_EVIDENCE.terminal_outcomes
     assert "recovered" in PolicyProfile.HKA_RECOVERY.terminal_outcomes
     assert "discarded" in PolicyProfile.REBUILDABLE_DERIVATIVE.terminal_outcomes
+    assert all("unavailable" not in profile.terminal_outcomes for profile in PolicyProfile)
     assert "erased" not in PolicyProfile.HKA_RECOVERY.terminal_outcomes
     assert "erased" not in PolicyProfile.REBUILDABLE_DERIVATIVE.terminal_outcomes
+
+
+def test_receipts_cannot_claim_contradictory_stage_and_liveness():
+    try:
+        Receipt(
+            "archive.erased",
+            ArtifactIdentity("artifact-001"),
+            None,
+            1,
+            TransitionStage.ERASED,
+            Liveness.ACTIVE,
+        )
+    except ValueError as exc:
+        assert "incompatible" in str(exc)
+    else:
+        raise AssertionError("erased receipt accepted active liveness")
+
+
+def test_content_identity_is_not_a_path_or_uri():
+    for value in ("/tmp/raw.bin", "file://archive/raw.bin", "archive\\raw.bin"):
+        try:
+            RepresentationDescriptor(
+                RepresentationRef("repr-001"),
+                ArtifactIdentity("artifact-001"),
+                1,
+                value,
+                "audio/wav",
+                True,
+            )
+        except ValueError as exc:
+            assert "content identity" in str(exc)
+        else:
+            raise AssertionError("location accepted as content identity")
 
 
 def test_representation_is_opaque_and_generation_bound():

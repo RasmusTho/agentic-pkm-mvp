@@ -51,10 +51,10 @@ class PolicyProfile(_ValueEnum):
         """Return policy-specific terminal outcomes, never one universal delete rule."""
 
         return {
-            self.RAW_EVIDENCE: frozenset({"erased", "unavailable"}),
-            self.RETAINED_SOURCE: frozenset({"retained", "restored", "unavailable"}),
-            self.HKA_RECOVERY: frozenset({"recovered", "conflict", "unavailable"}),
-            self.REBUILDABLE_DERIVATIVE: frozenset({"rebuildable", "discarded", "unavailable"}),
+            self.RAW_EVIDENCE: frozenset({"erased"}),
+            self.RETAINED_SOURCE: frozenset({"retained", "restored"}),
+            self.HKA_RECOVERY: frozenset({"recovered", "conflict"}),
+            self.REBUILDABLE_DERIVATIVE: frozenset({"rebuildable", "discarded"}),
         }[self]
 
 
@@ -151,8 +151,9 @@ class RepresentationDescriptor:
     def __post_init__(self) -> None:
         if self.generation < 1:
             raise ValueError("representation generation must be positive")
-        if not self.content_identity.strip() or not self.format.strip():
+        if not self.format.strip():
             raise ValueError("representation content_identity and format are required")
+        object.__setattr__(self, "content_identity", _opaque(self.content_identity, "content identity"))
 
 
 @dataclass(frozen=True, slots=True)
@@ -171,6 +172,20 @@ class Receipt:
             raise ValueError("receipt kind is required")
         if self.generation < 1:
             raise ValueError("receipt generation must be positive")
+        allowed_liveness = {
+            TransitionStage.RESERVED: frozenset({Liveness.PENDING}),
+            TransitionStage.COPIED: frozenset({Liveness.PENDING}),
+            TransitionStage.VERIFIED: frozenset({Liveness.PENDING, Liveness.ACTIVE}),
+            TransitionStage.ACTIVE: frozenset({Liveness.ACTIVE}),
+            TransitionStage.RESTORING: frozenset({Liveness.RESTORING}),
+            TransitionStage.RETIREMENT_PENDING: frozenset({Liveness.PENDING}),
+            TransitionStage.ERASURE_PENDING: frozenset({Liveness.ERASURE_PENDING}),
+            TransitionStage.RETIRED: frozenset({Liveness.TERMINAL}),
+            TransitionStage.RESTORED: frozenset({Liveness.ACTIVE}),
+            TransitionStage.ERASED: frozenset({Liveness.TERMINAL}),
+        }
+        if self.liveness not in allowed_liveness[self.stage]:
+            raise ValueError(f"incompatible receipt stage/liveness: {self.stage}/{self.liveness}")
 
 
 class ArchivalAdapter(Protocol):

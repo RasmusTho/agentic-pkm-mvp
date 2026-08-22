@@ -25,6 +25,8 @@ def test_normative_contract_and_invariant_registry_match():
         "ARCHIVE-MUST-03",
         "ARCHIVE-MUST-04",
         "ARCHIVE-MUST-05",
+        "ARCHIVE-MUST-06",
+        "ARCHIVE-MUST-07",
         "ARCHIVE-GATE-01",
         "ARCHIVE-GATE-02",
         "ARCHIVE-GATE-03",

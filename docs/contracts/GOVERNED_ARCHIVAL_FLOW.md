@@ -85,6 +85,12 @@ These entries extend the existing invariant registry; this contract creates no c
   owner receipt and activation precede retirement of a superseded representation.
 - **ARCHIVE-MUST-05 — All-copy deletion precedes terminal erasure.** Pending external cleanup keeps
   liveness non-terminal and retryable.
+- **ARCHIVE-MUST-06 — Admission is atomic.** Every admitted durable source has identity,
+  origin/provenance, policy/consent class, generation, and one registered initial representation,
+  or admission fails closed.
+- **ARCHIVE-MUST-07 — Reads are resolver-bound.** A representation is readable only through a
+  registered resolver that verifies encryption/key posture, byte/content identity, and active
+  generation.
 - **ARCHIVE-GATE-01 — Adapter restore proof.** Every adapter proves restore through its production
   gated-read seam and emits a redacted receipt.
 - **ARCHIVE-GATE-02 — Cross-class matrix.** The capability matrix covers source, human, derived and
