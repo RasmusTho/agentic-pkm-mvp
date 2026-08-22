@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 from hashlib import sha256
+import json
 from typing import Any, Callable, Mapping, Protocol, Sequence
 from urllib.parse import urlparse
 
@@ -16,6 +17,7 @@ ALLOWED_VM_IDS = frozenset({100, 101, 102, 104})
 ALLOWED_STORAGES = frozenset({"local", "local-lvm"})
 RECEIPT_VERSION = "proxmox.inventory.receipt.v1"
 MCP_DESCRIPTOR_ID = "mcp.proxmox.inventory.v1"
+INVENTORY_SCOPE_CAPABILITY = "inventory-read-only"
 
 
 class ProxmoxInventoryError(RuntimeError):
@@ -23,9 +25,11 @@ class ProxmoxInventoryError(RuntimeError):
 
 
 class PVETransport(Protocol):
-    """A transport that reports the TLS identity observed for every response."""
+    """Transport with certificate pin admission before credential transmission."""
 
-    def get(self, *, endpoint: str, path: str, token: str) -> tuple[Mapping[str, Any], str]: ...
+    def verify_tls(self, *, endpoint: str, expected_fingerprint: str) -> None: ...
+
+    def get(self, *, endpoint: str, path: str, token: str) -> Mapping[str, Any]: ...
 
 
 SecretResolver = Callable[[str], str]
@@ -50,18 +54,20 @@ class InventoryPolicy:
 class InventoryConfig:
     endpoint_secret_ref: str
     token_secret_ref: str
+    principal_scope_secret_ref: str
     token_fingerprint: str
+    endpoint_identity: str
     tls_fingerprint: str
     principal_scope_digest: str
     policy: InventoryPolicy = InventoryPolicy()
 
     def __post_init__(self) -> None:
-        if not self.endpoint_secret_ref or not self.token_secret_ref:
-            raise ProxmoxInventoryError("endpoint and token secret references are required")
+        if not self.endpoint_secret_ref or not self.token_secret_ref or not self.principal_scope_secret_ref:
+            raise ProxmoxInventoryError("endpoint, token, and scope secret references are required")
         if not self.token_fingerprint or not self.tls_fingerprint:
             raise ProxmoxInventoryError("token and TLS fingerprints are required")
-        if not self.principal_scope_digest:
-            raise ProxmoxInventoryError("principal/scope digest is required")
+        if not self.endpoint_identity or not self.principal_scope_digest:
+            raise ProxmoxInventoryError("endpoint identity and principal/scope digest are required")
 
 
 @dataclass(frozen=True)
@@ -176,9 +182,11 @@ class ProxmoxInventoryClient:
             raise ProxmoxInventoryError("token secret reference did not resolve")
         if sha256(token.encode("utf-8")).hexdigest() != self._config.token_fingerprint:
             raise ProxmoxInventoryError("token fingerprint mismatch")
-        payload, observed_fingerprint = self._transport.get(endpoint=endpoint, path=path, token=token)
-        if observed_fingerprint != self._config.tls_fingerprint:
-            raise ProxmoxInventoryError("TLS certificate fingerprint mismatch")
+        self._validate_inventory_scope()
+        # The transport must complete certificate-pin verification before it is
+        # given a credential, not report a mismatch after the request is sent.
+        self._transport.verify_tls(endpoint=endpoint, expected_fingerprint=self._config.tls_fingerprint)
+        payload = self._transport.get(endpoint=endpoint, path=path, token=token)
         return self._result(operation, payload, endpoint_identity=sha256(endpoint.encode("utf-8")).hexdigest())
 
     def _endpoint(self) -> str:
@@ -186,7 +194,37 @@ class ProxmoxInventoryClient:
         parsed = urlparse(endpoint)
         if parsed.scheme != "https" or not parsed.netloc or parsed.path not in {"", "/"} or parsed.query or parsed.fragment:
             raise ProxmoxInventoryError("PVE endpoint must be a bare HTTPS authority")
-        return endpoint.rstrip("/")
+        if parsed.username or parsed.password:
+            raise ProxmoxInventoryError("PVE endpoint must not contain user credentials")
+        normalized = endpoint.rstrip("/")
+        if sha256(normalized.encode("utf-8")).hexdigest() != self._config.endpoint_identity:
+            raise ProxmoxInventoryError("PVE endpoint does not match fixed TARS endpoint identity")
+        return normalized
+
+    def _validate_inventory_scope(self) -> None:
+        raw_scope = self._resolve_secret(self._config.principal_scope_secret_ref)
+        try:
+            scope = json.loads(raw_scope)
+        except (TypeError, json.JSONDecodeError) as exc:
+            raise ProxmoxInventoryError("inventory token scope is not valid JSON") from exc
+        if not isinstance(scope, Mapping):
+            raise ProxmoxInventoryError("inventory token scope is not an object")
+        if sha256(_canonical_bytes(scope)).hexdigest() != self._config.principal_scope_digest:
+            raise ProxmoxInventoryError("principal/scope digest mismatch")
+        operations = scope.get("operations")
+        vm_ids = scope.get("vm_ids")
+        storage_names = scope.get("storage_names")
+        if (
+            scope.get("capability") != INVENTORY_SCOPE_CAPABILITY
+            or scope.get("node") != self._config.policy.node
+            or not isinstance(operations, list)
+            or set(operations) != set(ProxmoxInventoryDescriptor().operations)
+            or not isinstance(vm_ids, list)
+            or not set(vm_ids).issubset(self._config.policy.vm_ids)
+            or not isinstance(storage_names, list)
+            or not set(storage_names).issubset(self._config.policy.storage_names)
+        ):
+            raise ProxmoxInventoryError("token scope is broader than inventory policy")
 
     def _result(
         self,
