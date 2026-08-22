@@ -6,17 +6,24 @@ import pytest
 
 from app.archival.contracts import (
     AccessAuthority,
+    ArchivalReceipt,
     ArtifactClass,
     ArtifactDescriptor,
     ArtifactIdentity,
     DerivationClass,
+    DoctorFinding,
     DurabilityClass,
     Generation,
+    Liveness,
+    LivenessState,
     OpaqueReference,
     OwnerAuthority,
     PolicyProfile,
     ProvenanceRef,
+    RepresentationReservation,
     RepresentationRef,
+    TransitionStage,
+    VerificationResult,
 )
 
 
@@ -66,19 +73,81 @@ def test_location_cannot_mint_identity_or_access_authority() -> None:
         with pytest.raises(ValueError, match="typed opaque reference"):
             AccessAuthority(OwnerAuthority.GOV, location)
 
-    with pytest.raises(ValueError, match="location text"):
-        OpaqueReference("heimraw", "vault/Notes/Archive.md")
-    with pytest.raises(ValueError, match="opaque reference token"):
-        OpaqueReference("heimraw", "Archive.md")
 
-
-def test_namespaced_opaque_handles_remain_valid_without_string_parsing() -> None:
+def test_typed_opaque_references_preserve_owner_tokens_without_lexical_path_inference() -> None:
     raw_ref = OpaqueReference("heimraw", "123e4567-e89b-12d3-a456-426614174000")
-    grant_ref = OpaqueReference("grant", "karakeep-source-ingestion")
+    grant_ref = OpaqueReference("grant", "karakeep.source.ingestion")
+    extensionless_ref = OpaqueReference("owner", "Archive")
+    dot_bearing_ref = OpaqueReference("owner", "Archive.md")
 
     assert ArtifactIdentity(OwnerAuthority.HKA, raw_ref).owner_native_id is raw_ref
     assert RepresentationRef("heimdal", raw_ref).opaque_id is raw_ref
     assert AccessAuthority(OwnerAuthority.GOV, grant_ref).grant_ref is grant_ref
+    assert RepresentationRef("owner", extensionless_ref).opaque_id is extensionless_ref
+    assert RepresentationRef("owner", dot_bearing_ref).opaque_id is dot_bearing_ref
+
+
+def test_raw_strings_cannot_cross_archival_authority_boundaries() -> None:
+    artifact = ArtifactIdentity(OwnerAuthority.HKA, OpaqueReference("hka", "note-42"))
+    generation = Generation(1)
+    liveness = Liveness(LivenessState.ACTIVE, OpaqueReference("live", "note-42"))
+    representation = RepresentationRef("heimdal", OpaqueReference("heimraw", "object-42"))
+
+    constructors = (
+        lambda: ArtifactIdentity(OwnerAuthority.HKA, "Archive.md"),
+        lambda: RepresentationRef("heimdal", "Archive.md"),
+        lambda: AccessAuthority(OwnerAuthority.GOV, "Archive.md"),
+        lambda: ProvenanceRef("origin", "Archive.md"),
+        lambda: Liveness(LivenessState.ACTIVE, "Archive.md"),
+        lambda: RepresentationReservation(artifact, representation, generation, "Archive.md"),
+        lambda: VerificationResult(representation, generation, True, "Archive.md"),
+        lambda: ArchivalReceipt(
+            "Archive.md",
+            artifact,
+            generation,
+            TransitionStage.ACTIVE,
+            PolicyProfile.HKA_RECOVERY,
+            liveness,
+            (),
+            (),
+        ),
+        lambda: DoctorFinding("missing", artifact, representation, liveness, "Archive.md"),
+    )
+
+    for constructor in constructors:
+        with pytest.raises(ValueError, match="typed opaque reference"):
+            constructor()
+
+
+def test_nested_reference_collections_require_contract_types() -> None:
+    artifact = ArtifactIdentity(OwnerAuthority.HKA, OpaqueReference("hka", "note-42"))
+    generation = Generation(1)
+    liveness = Liveness(LivenessState.ACTIVE, OpaqueReference("live", "note-42"))
+
+    with pytest.raises(ValueError, match="provenance_refs"):
+        ArtifactDescriptor(
+            identity=artifact,
+            artifact_class=ArtifactClass.HUMAN,
+            derivation=DerivationClass.SOURCE,
+            durability=DurabilityClass.DURABLE,
+            owner=OwnerAuthority.HKA,
+            generation=generation,
+            provenance_refs=("Archive.md",),
+            policy_profile=PolicyProfile.HKA_RECOVERY,
+        )
+
+    receipt_fields = {
+        "receipt_ref": OpaqueReference("receipt", "receipt-42"),
+        "artifact": artifact,
+        "generation": generation,
+        "stage": TransitionStage.ACTIVE,
+        "policy_profile": PolicyProfile.HKA_RECOVERY,
+        "liveness": liveness,
+    }
+    with pytest.raises(ValueError, match="provenance_refs"):
+        ArchivalReceipt(**receipt_fields, provenance_refs=("Archive.md",), representation_refs=())
+    with pytest.raises(ValueError, match="representation_refs"):
+        ArchivalReceipt(**receipt_fields, provenance_refs=(), representation_refs=("Archive.md",))
 
 
 def test_class_adapter_identities_require_distinct_owner_namespaces() -> None:
