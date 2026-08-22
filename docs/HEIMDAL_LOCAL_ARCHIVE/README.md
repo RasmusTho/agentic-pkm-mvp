@@ -1,11 +1,11 @@
-State: Specification directory (design + bounded slices). HAR-01 through HAR-04 are delivered; restore/expiry and parent acceptance remain future work. Defines a local, encrypted cold tier for Heimdal raw audio; it does not change the existing retention bound or claim cloud/off-site durability.
+State: Specification directory (design + bounded slices). HAR-01 through HAR-05 are delivered; parent real-channel acceptance remains pending. Defines a local, encrypted cold tier for Heimdal raw audio; it does not change the existing retention bound or claim cloud/off-site durability.
 Doc role: Capability specification (feature-breakdown lane)
 Authority: Owns the proposed local raw-audio archive design. Subordinate to `docs/HEIMDAL/OWNER_DECISIONS.md :: R-RETENTION`, `docs/HEIMDAL/FABLE_COMPANION.md` for the raw-store boundary, and `docs/EVENTS.md` for current raw-store behavior.
 Owner: Architecture / product
 Temporal class: strategic
 Review cadence: event-driven (task merge, retention change, storage-device change, or restore drill)
 Source of truth: this directory for the proposed capability; GitHub parent/child issues are execution artifacts once filed
-Last reviewed: 2026-07-16
+Last reviewed: 2026-08-22
 
 # Heimdal Local Archive
 
@@ -94,7 +94,7 @@ counts and closed reason codes only.
 - [x] Cold archival verifies identity/hash and a durable receipt before hot copy retirement; a forced
       verification failure retains the hot copy.
       Verify: `tests/heimdal/test_local_archive.py::test_verify_before_hot_representation_retire_and_fail_closed`
-- [ ] A raw item can be restored through the existing gated read path, and expiry/revocation removes
+- [x] A raw item can be restored through the existing gated read path, and expiry/revocation removes
       both tiers with durable receipts.
       Verify: `tests/heimdal/test_local_archive_retention.py::test_restore_then_delete_all_raw_copies`
 - [ ] A real dev/test archive receipt establishes measured capacity, mounted encrypted storage, one

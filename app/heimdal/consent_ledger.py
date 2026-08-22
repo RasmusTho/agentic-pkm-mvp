@@ -56,6 +56,12 @@ Contract:
   FABLE_COMPANION §6.1) via `app.heimdal.publish.publish_observation` --
   this module references those topic *values* but does not define the
   constants; sibling slice A4 owns `app/events/types.py` topic constants.
+- **Revocation propagates to raw erasure (HAR-05).** Once the append-only
+  revocation row is durable, :func:`revoke_consent` invokes the same fenced,
+  receipted all-copy deletion primitive as hard retention for every raw
+  generation stamped with that ``grant_ref``. Pending response leases and
+  cold cleanup fail loud and remain retryable; the call does not report
+  completion while a cold object or manifest remains.
 
 Backend selection mirrors `app.heimdal.observation_log` (dual-backend,
 fail-loud resolution via `app.heimdal._backend.resolve_heimdal_backend`):
@@ -64,9 +70,9 @@ append-only list seeded with the same standing grants the migrations seed for
 Postgres; a resolvable Postgres DSN uses the real `heimdal_consent_grant`
 table.
 
-Out of scope for this slice (per governing Issue #3042): the capture
+Still out of scope after HAR-05: the capture
 adapter itself, ASR, third-party voice detection, place/session grant
-runtime (contract-stub only), revocation propagation/suppression runtime
+runtime (contract-stub only), and published-event suppression propagation
 (§11#14, contract-stub).
 """
 
@@ -640,9 +646,10 @@ def revoke_consent(*, grant_ref: str, revoked_by: str, payload: Optional[Mapping
 
     FABLE_COMPANION §6.4: future capture lapses immediately (the ledger is
     checked at capture time -- :func:`resolve_active_grant` stops returning
-    the revoked grant the instant this row is visible); raw-layer erasure
-    and published-event suppression are separate concerns this slice only
-    contract-stubs (§11#14, out of scope here).
+    the revoked grant the instant this row is visible). HAR-05 then propagates
+    the durable revocation through the shared governed raw-erasure primitive;
+    a cold cleanup failure raises and remains retryable. Published-event
+    suppression remains a separate future concern.
     """
     if not isinstance(grant_ref, str) or not grant_ref.strip():
         raise ValueError(f"revoke_consent requires a non-empty grant_ref, got {grant_ref!r}")
@@ -666,7 +673,14 @@ def revoke_consent(*, grant_ref: str, revoked_by: str, payload: Optional[Mapping
         created_at=datetime.now(timezone.utc),
         sequence=-1,
     )
-    return _backend().append(revocation)
+    persisted = _backend().append(revocation)
+    # Local import keeps the consent ledger's read/admission path independent
+    # of raw-store initialization while making the production revocation call
+    # the authority that starts all-copy erasure.
+    from app.heimdal.retention import enforce_consent_revocation
+
+    enforce_consent_revocation(grant_ref=grant_ref, revoked_at=persisted.created_at)
+    return persisted
 
 
 def _revoked_grant_refs(rows: List[ConsentGrant]) -> set:

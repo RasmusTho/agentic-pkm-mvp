@@ -8,7 +8,7 @@ depends_on: [HAR-04]
 can_parallelize_with: []
 ---
 
-State: Authored task specification (future-state; child issue not yet filed)
+State: Delivered task specification (HAR-05 implementation; parent real-channel acceptance pending)
 
 # Prove Restore And Expiry
 
@@ -28,15 +28,15 @@ revocation and hard retention still erase every raw copy with a durable receipt.
 
 ## Acceptance criteria
 
-- [ ] An authorized raw read resolves an archived record and emits the existing read receipt; an
+- [x] An authorized raw read resolves an archived record and emits the existing read receipt; an
       unauthorized read remains rejected.
       Verify: `tests/heimdal/test_local_archive_retention.py::test_archived_read_reuses_gated_read_path`
-- [ ] A redacted restore drill proves archived bytes match their raw-record identity.
+- [x] A redacted restore drill proves archived bytes match their raw-record identity.
       Verify: `tests/heimdal/test_local_archive_retention.py::test_restore_drill_proves_archived_identity`
-- [ ] Hard retention and consent revocation remove hot/cold copies and manifests atomically enough to
+- [x] Hard retention and consent revocation remove hot/cold copies and manifests atomically enough to
       never report complete while a location remains.
       Verify: `tests/heimdal/test_local_archive_retention.py::test_restore_then_delete_all_raw_copies`
-- [ ] A cold-delete failure fails loud and leaves retryable receipt/state rather than silently
+- [x] A cold-delete failure fails loud and leaves retryable receipt/state rather than silently
       claiming erasure.
       Verify: `tests/heimdal/test_local_archive_retention.py::test_cold_delete_failure_is_loud_and_retryable`
 

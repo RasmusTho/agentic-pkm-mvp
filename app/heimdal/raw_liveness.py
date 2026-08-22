@@ -9,8 +9,9 @@ The same per-content fence is used by response-lease issuance, raw insertion,
 and both retention writers.  PostgreSQL uses a transaction-scoped advisory
 lock followed by the immutable generation row lock; memory uses one re-entrant
 lock with the same ordering.  A governed deletion commits its deletion
-receipt, tombstone, all representation deletes, and identity delete in one
-transaction.
+receipt, tombstone, all registry deletes, and identity delete in one
+transaction, then drains durable cold object/manifest cleanup before liveness
+may project terminal ``erased``.
 """
 
 from __future__ import annotations
@@ -212,7 +213,7 @@ class RawRetentionClaim:
 
 @dataclass(frozen=True)
 class RawLivenessProjection:
-    outcome: Literal["active", "erased"]
+    outcome: Literal["active", "erasure_pending", "erased"]
     generation: RawLivenessGeneration
     response_lease: Optional[RawResponseLease] = None
     tombstone: Optional[RawDeletionTombstone] = None
@@ -360,7 +361,27 @@ def _memory_projection_locked(
             raise RawLivenessUnavailableError(
                 "tombstoned raw generation still has an active representation"
             )
-        return RawLivenessProjection(outcome="erased", generation=generation, tombstone=tombstone)
+        receipt = next(
+            (
+                item
+                for item in _MEMORY.deletion_receipts
+                if item.id == tombstone.deletion_receipt_id
+            ),
+            None,
+        )
+        if receipt is None:
+            raise RawLivenessUnavailableError(
+                "tombstoned raw generation has no matching deletion receipt"
+            )
+        return RawLivenessProjection(
+            outcome=(
+                "erasure_pending"
+                if receipt.payload.get(_COLD_CLEANUP_PAYLOAD_KEY)
+                else "erased"
+            ),
+            generation=generation,
+            tombstone=tombstone,
+        )
     if not raw_active:
         raise RawLivenessUnavailableError(
             "untombstoned raw generation is missing its exact active representation"
@@ -1210,7 +1231,7 @@ def project_with_response_leases(
 
     The operation is all-or-nothing for a batch.  An unavailable item raises
     and no admitted response is produced; an erased item is returned only when
-    its exact generation has a governed tombstone.
+    its exact generation has a governed tombstone and no pending cold cleanup.
     """
 
     unique = sorted(set(requests), key=lambda item: (item[1], item[0]))
@@ -1262,8 +1283,28 @@ def project_with_response_leases(
                         "tombstoned raw generation still has durable raw state"
                     )
                 tombstone = _load_pg_tombstone(cur, record_id=record_id)
+                cur.execute(
+                    f"SELECT payload FROM {_DELETION_RECEIPT_TABLE} WHERE id = %s",
+                    (tombstone.deletion_receipt_id,),
+                )
+                receipt_row = cur.fetchone()
+                if receipt_row is None:
+                    raise RawLivenessUnavailableError(
+                        "tombstoned raw generation has no matching deletion receipt"
+                    )
+                receipt_payload = (
+                    receipt_row[0]
+                    if isinstance(receipt_row[0], dict)
+                    else json.loads(receipt_row[0] or "{}")
+                )
                 projections[raw_ref] = RawLivenessProjection(
-                    outcome="erased", generation=generation, tombstone=tombstone
+                    outcome=(
+                        "erasure_pending"
+                        if receipt_payload.get(_COLD_CLEANUP_PAYLOAD_KEY)
+                        else "erased"
+                    ),
+                    generation=generation,
+                    tombstone=tombstone,
                 )
                 continue
             if not raw_active:
@@ -1355,6 +1396,10 @@ def issue_response_lease(
     if projection.outcome == "erased":
         assert projection.tombstone is not None
         raise RawEvidenceErasedError(projection.tombstone)
+    if projection.outcome == "erasure_pending":
+        raise RawLivenessUnavailableError(
+            "raw evidence erasure is pending durable cold cleanup"
+        )
     if projection.response_lease is None:
         raise RawLivenessUnavailableError("active liveness projection has no response lease")
     return projection.response_lease

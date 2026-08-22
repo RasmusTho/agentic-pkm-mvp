@@ -193,7 +193,8 @@ def _lease_receipt_or_erased(
     fields in place. A response may report admitted only after the exact raw
     generation and active representation have been validated under the shared
     liveness fence and a bounded response lease has been issued. Absence without
-    a tombstone propagates as unavailable; only a governed tombstone is erased.
+    a tombstone propagates as unavailable; a governed tombstone with pending
+    cold cleanup stays unavailable, and only completed cleanup is erased.
     """
     try:
         lease = raw_liveness.issue_response_lease(
@@ -702,7 +703,7 @@ def receipt_answer(
     *,
     liveness_by_raw_ref: Optional[Dict[str, raw_liveness.RawLivenessProjection]] = None,
 ) -> Dict[str, Any]:
-    """Render one receipt-query answer: `admitted`, `erased`, or `unknown`.
+    """Render one receipt-query answer without overstating pending erasure.
 
     ``unknown`` is a first-class answer, not an error: it is how a client
     distinguishes "my response was lost" from "my capture never arrived"
@@ -720,9 +721,14 @@ def receipt_answer(
             [(receipt.raw_ref, receipt.content_sha256)]
         )
     projection = liveness_by_raw_ref[receipt.raw_ref]
+    projected_outcome = {
+        "active": "admitted",
+        "erasure_pending": "erasure_pending",
+        "erased": "erased",
+    }[projection.outcome]
     answer: Dict[str, Any] = {
         "capture_id": capture_id,
-        "outcome": "admitted" if projection.outcome == "active" else "erased",
+        "outcome": projected_outcome,
         "receipt_id": receipt.receipt_id,
         "content_sha256": receipt.content_sha256,
         "raw_ref": receipt.raw_ref,

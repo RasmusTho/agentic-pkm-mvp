@@ -19,7 +19,7 @@ import re
 from typing import Callable, Optional
 from uuid import UUID, uuid4
 
-from app.heimdal import raw_liveness, raw_store
+from app.heimdal import raw_liveness, raw_read_gate, raw_store
 from app.heimdal.raw_store import RawRecord, RawRepresentation
 from app.heimdal.retention import RetentionWindowMissingError, resolve_retention_window_days
 from app.ops.heimdal_cold_volume import (
@@ -71,6 +71,30 @@ class ArchiveReceipt:
             "representation_id": self.representation_id,
             "encrypted_bytes": self.encrypted_bytes,
             "ciphertext_sha256": self.ciphertext_sha256,
+            "verified_at": _iso(self.verified_at),
+        }
+
+
+@dataclass(frozen=True)
+class RestoreDrillReceipt:
+    """Redacted proof that one cold representation restored through GOV."""
+
+    raw_ref: str
+    content_identity: str
+    read_receipt_id: str
+    verified_at: datetime
+    storage_kind: str = ARCHIVE_STORAGE_KIND
+    proven: bool = True
+    schema: str = "heimdal_archive_restore_drill.v1"
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "schema": self.schema,
+            "proven": self.proven,
+            "raw_ref": self.raw_ref,
+            "content_identity": self.content_identity,
+            "storage_kind": self.storage_kind,
+            "read_receipt_id": self.read_receipt_id,
             "verified_at": _iso(self.verified_at),
         }
 
@@ -417,6 +441,47 @@ def _redacted_failure_reason(error: ArchiveDegradedError) -> str:
     return "archive_relocation_failed"
 
 
+def run_restore_drill(
+    raw_ref: str,
+    *,
+    reader: str,
+    key: Optional[bytes] = None,
+) -> RestoreDrillReceipt:
+    """Restore one archived identity through the production gated read path.
+
+    Authorization and the durable read receipt are deliberately delegated to
+    :func:`raw_read_gate.read_raw_record`; this function never resolves cold
+    bytes directly.  The returned evidence contains only opaque identity and
+    receipt fields, never plaintext or a filesystem path.
+    """
+
+    restored = raw_read_gate.read_raw_record(
+        raw_ref,
+        reader=reader,
+        purpose="heimdal_archive_restore_drill",
+        key=key,
+    )
+    record_id = raw_read_gate._record_id_from_raw_ref(raw_ref)  # noqa: SLF001
+    record = raw_store.resolve_active_raw_record(record_id)
+    if record is None or record.content_identity != restored.receipt.content_identity:
+        raise ArchiveDegradedError("restore_identity_unavailable")
+    active = [
+        representation
+        for representation in raw_store.all_raw_representations(record_id)
+        if representation.active
+    ]
+    if len(active) != 1 or active[0].storage_kind != ARCHIVE_STORAGE_KIND:
+        raise ArchiveDegradedError("archived_representation_unavailable")
+    if raw_store.compute_raw_content_identity(restored.plaintext) != restored.receipt.content_identity:
+        raise ArchiveDegradedError("restore_identity_mismatch")
+    return RestoreDrillReceipt(
+        raw_ref=raw_ref,
+        content_identity=restored.receipt.content_identity,
+        read_receipt_id=restored.receipt.id,
+        verified_at=restored.receipt.read_at,
+    )
+
+
 def run_archive_pass(
     *,
     vault_root: Path,
@@ -533,8 +598,10 @@ __all__ = [
     "ArchivePassReceipt",
     "ArchiveReceipt",
     "ArchiveResult",
+    "RestoreDrillReceipt",
     "archive_eligible",
     "eligible_raw_records",
     "relocate_raw_record",
     "run_archive_pass",
+    "run_restore_drill",
 ]

@@ -339,7 +339,8 @@ Contract:
 - **B-shaped fields present-but-dormant.** Every grant record carries
   `vad_gate`, `third_party`, `retention`, and `erasure` fields, populated
   with v1-inert defaults (`vad_gate.enabled = False`,
-  `third_party.policy = "degrade"`, no retention/erasure runtime), so
+  `third_party.policy = "degrade"`; per-grant retention policy remains
+  dormant), so
   enabling Posture B later is a grant + adapter change, not a schema
   redesign (ADR-0049 §3).
 - **Grant/revocation events reference the observation-log topic family by
@@ -352,12 +353,20 @@ Contract:
 - **No direct DB imports across boundaries.** Other constituents reference
   consent by `grant_ref`, never by importing `app.heimdal.consent_ledger`
   and querying the table directly.
+- **Raw erasure follows revocation (HAR-05).** The production
+  `revoke_consent` call first appends the revocation row, then invokes
+  `app.heimdal.retention.enforce_consent_revocation` for every raw generation
+  stamped with that `grant_ref`. The shared liveness fence, deletion receipt,
+  tombstone, all-representation delete, and durable cold-cleanup queue are the
+  same mechanism used by hard retention. A response lease or cold-delete
+  failure is loud and retryable; pending cold bytes project as
+  `erasure_pending`, never `erased`.
 - **Out of scope for this slice:** the capture adapter itself (§11#5), ASR,
   third-party voice detection/degradation runtime (§6.3), place/session
   grant runtime (contract-stub only — `grant_consent(basis=...)` accepts
   `session_optin`/`place_optin` values but no adapter issues them yet),
-  revocation → raw-erasure / published-event-suppression propagation
-  (§11#14, contract-stub).
+  and revocation → published-event-suppression propagation (§11#14,
+  contract-stub). Raw-erasure propagation is delivered by HAR-05.
 
 ## Heimdal raw-evidence store + voice-memo capture adapter (§11#5 — delivered #3025)
 
@@ -521,11 +530,12 @@ Contract:
   local original only while the lease is valid, and must re-query after expiry.
 - **All registered copies precede success.** The shared raw-store erasure
   transaction writes the tombstone and deletion receipt, then enumerates and
-  deletes every registered representation before removing identity. Any copy
-  failure rolls the whole attempt back, so retention cannot append a success
-  receipt while bytes remain. Consent-revocation propagation remains a later
-  runtime, but it must reuse this same primitive rather than deleting a single
-  location.
+  deletes every registered database representation before removing identity.
+  Cold object/manifest cleanup follows under the archive mutation lock from an
+  opaque durable queue in that receipt. A cleanup failure raises and preserves
+  the remaining queue for retry; liveness and media-receipt projections remain
+  `erasure_pending` until the queue is empty. Consent revocation reuses this
+  same primitive rather than deleting a single location.
 - **The one governed exception to append-only (D-RETENTION).**
   `app.heimdal.raw_liveness.governed_delete_raw_record` is the only runtime
   path that can remove a raw identity. The Postgres trigger
@@ -543,9 +553,9 @@ Contract:
   never a silent `None`) for any `raw_ref` that does not resolve to a known
   record, so A7's gate needed no change for this slice.
 - **Out of scope for this slice (v2 contract-stubs, §11#13/#14):**
-  event-triggered relevance decay (the decay-model half of HEIM-7);
-  consent-revocation-triggered deletion runtime; cryptographic erasure of
-  published event content.
+  event-triggered relevance decay (the decay-model half of HEIM-7),
+  revoked-event suppression, and cryptographic erasure of published event
+  content.
 
 ## Heimdal aggregate capacity report (HAR-01 — delivered #3847)
 
@@ -567,6 +577,26 @@ Contract:
 - **No archive lifecycle claim.** This slice measures capacity only. It does
   not mount storage, move audio, alter retention, or make the planned local
   cold tier a supported capability; those remain parent acceptance work.
+
+## Heimdal local archive restore + all-copy expiry (HAR-04/HAR-05 — delivered #3850/#3851)
+
+The local archive runtime can relocate eligible encrypted raw representations
+to the channel-bound encrypted cold volume and restore them only through
+`app.heimdal.raw_read_gate.read_raw_record`. `run_restore_drill` returns a
+redacted identity/read-receipt proof and never returns a path or stores raw
+bytes in its receipt. Unauthorized callers are refused by the unchanged
+production allowlist before the drill can inspect archive state.
+
+Hard retention and consent revocation both call
+`raw_liveness.governed_delete_raw_record`. The mechanism removes hot/cold
+registry rows and raw identity under the shared generation fence, then drains
+the durable opaque cold-cleanup queue under the archive mutation lock. Object
+or manifest deletion failure is loud and retryable; while any queue entry
+remains, receipt projection is `erasure_pending`, not terminal `erased`.
+
+This is code-path truth, not parent capability acceptance. #3842 still
+requires the redacted real dev/test channel receipt before local archive is
+described as operationally accepted.
 
 ## Heimdal capture-note + receipt / J0 (delivered #3035)
 
