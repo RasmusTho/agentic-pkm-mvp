@@ -9,7 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum
 import re
-from typing import Protocol, Sequence
+from typing import Protocol, Sequence, TypeVar, cast
 
 
 class ArtifactClass(str, Enum):
@@ -106,12 +106,40 @@ class LivenessState(str, Enum):
 
 
 _OPAQUE_NAMESPACE = re.compile(r"^[a-z][a-z0-9_-]*$")
+_ConcreteContractT = TypeVar("_ConcreteContractT")
 
 
 def _require_token(value: str, field_name: str) -> str:
     if not isinstance(value, str) or not _OPAQUE_NAMESPACE.fullmatch(value):
         raise ValueError(f"{field_name} must be an opaque token")
     return value
+
+
+def _require_concrete_contract(
+    value: object,
+    expected_type: type[_ConcreteContractT],
+    field_name: str,
+    *,
+    expected_description: str | None = None,
+) -> _ConcreteContractT:
+    if type(value) is not expected_type:
+        description = expected_description or f"an exact {expected_type.__name__} value"
+        raise ValueError(f"{field_name} must be {description}")
+    return cast(_ConcreteContractT, value)
+
+
+def _require_optional_contract(
+    value: object | None,
+    expected_type: type[_ConcreteContractT],
+    field_name: str,
+) -> _ConcreteContractT | None:
+    if value is None:
+        return None
+    return _require_concrete_contract(value, expected_type, field_name)
+
+
+def _require_exact_bool(value: object, field_name: str) -> bool:
+    return _require_concrete_contract(value, bool, field_name)
 
 
 @dataclass(frozen=True)
@@ -157,6 +185,7 @@ class ArtifactIdentity:
     owner_namespace: str | None = None
 
     def __post_init__(self) -> None:
+        _require_concrete_contract(self.owner, OwnerAuthority, "owner")
         _require_opaque_reference(self.owner_native_id, "owner_native_id")
         if self.owner is OwnerAuthority.CLASS_ADAPTER:
             if self.owner_namespace is None:
@@ -186,6 +215,7 @@ class AccessAuthority:
     grant_ref: OpaqueReference
 
     def __post_init__(self) -> None:
+        _require_concrete_contract(self.issuer, OwnerAuthority, "issuer")
         _require_opaque_reference(self.grant_ref, "grant_ref")
 
 
@@ -196,7 +226,13 @@ class Generation:
     value: int
 
     def __post_init__(self) -> None:
-        if not isinstance(self.value, int) or self.value < 0:
+        _require_concrete_contract(
+            self.value,
+            int,
+            "generation",
+            expected_description="a non-negative integer",
+        )
+        if self.value < 0:
             raise ValueError("generation must be a non-negative integer")
 
 
@@ -224,6 +260,13 @@ class ArtifactDescriptor:
     policy_profile: PolicyProfile
 
     def __post_init__(self) -> None:
+        _require_concrete_contract(self.identity, ArtifactIdentity, "identity")
+        _require_concrete_contract(self.artifact_class, ArtifactClass, "artifact_class")
+        _require_concrete_contract(self.derivation, DerivationClass, "derivation")
+        _require_concrete_contract(self.durability, DurabilityClass, "durability")
+        _require_concrete_contract(self.owner, OwnerAuthority, "owner")
+        _require_concrete_contract(self.generation, Generation, "generation")
+        _require_concrete_contract(self.policy_profile, PolicyProfile, "policy_profile")
         if self.identity.owner is not self.owner:
             raise ValueError("artifact identity owner must match the declared authoritative owner")
         _require_reference_tuple(
@@ -242,6 +285,7 @@ class Liveness:
     evidence_ref: OpaqueReference
 
     def __post_init__(self) -> None:
+        _require_concrete_contract(self.state, LivenessState, "state")
         _require_opaque_reference(self.evidence_ref, "liveness evidence_ref")
 
     @property
@@ -257,6 +301,13 @@ class Representation:
     stage: TransitionStage
     liveness: Liveness
 
+    def __post_init__(self) -> None:
+        _require_concrete_contract(self.artifact, ArtifactIdentity, "artifact")
+        _require_concrete_contract(self.ref, RepresentationRef, "ref")
+        _require_concrete_contract(self.generation, Generation, "generation")
+        _require_concrete_contract(self.stage, TransitionStage, "stage")
+        _require_concrete_contract(self.liveness, Liveness, "liveness")
+
 
 @dataclass(frozen=True)
 class RepresentationReservation:
@@ -266,6 +317,9 @@ class RepresentationReservation:
     reservation_ref: OpaqueReference
 
     def __post_init__(self) -> None:
+        _require_concrete_contract(self.artifact, ArtifactIdentity, "artifact")
+        _require_concrete_contract(self.target, RepresentationRef, "target")
+        _require_concrete_contract(self.generation, Generation, "generation")
         _require_opaque_reference(self.reservation_ref, "reservation_ref")
 
 
@@ -277,6 +331,9 @@ class VerificationResult:
     evidence_ref: OpaqueReference
 
     def __post_init__(self) -> None:
+        _require_concrete_contract(self.representation, RepresentationRef, "representation")
+        _require_concrete_contract(self.generation, Generation, "generation")
+        _require_exact_bool(self.verified, "verified")
         _require_opaque_reference(self.evidence_ref, "verification evidence_ref")
 
 
@@ -296,13 +353,19 @@ class ArchivalReceipt:
 
     def __post_init__(self) -> None:
         _require_opaque_reference(self.receipt_ref, "receipt_ref")
+        _require_concrete_contract(self.artifact, ArtifactIdentity, "artifact")
+        _require_concrete_contract(self.generation, Generation, "generation")
+        _require_concrete_contract(self.stage, TransitionStage, "stage")
+        _require_concrete_contract(self.policy_profile, PolicyProfile, "policy_profile")
+        _require_concrete_contract(self.liveness, Liveness, "liveness")
         _require_reference_tuple(self.provenance_refs, ProvenanceRef, "provenance_refs")
         _require_reference_tuple(
             self.representation_refs,
             RepresentationRef,
             "representation_refs",
         )
-        if not self.redacted:
+        _require_exact_bool(self.redacted, "redacted")
+        if self.redacted is not True:
             raise ValueError("archival receipts must be redacted")
 
 
@@ -318,6 +381,9 @@ class DoctorFinding:
 
     def __post_init__(self) -> None:
         _require_token(self.code, "doctor finding code")
+        _require_optional_contract(self.artifact, ArtifactIdentity, "artifact")
+        _require_optional_contract(self.representation, RepresentationRef, "representation")
+        _require_concrete_contract(self.liveness, Liveness, "liveness")
         _require_opaque_reference(self.evidence_ref, "doctor finding evidence_ref")
 
 
