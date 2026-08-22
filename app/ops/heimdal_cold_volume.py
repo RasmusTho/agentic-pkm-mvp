@@ -234,6 +234,8 @@ def _is_verified_archive_volume_ready(
     return (
         isinstance(proof, ArchiveVolumeReady)
         and binding is not None
+        and proof.archive_ref == binding[0]
+        and proof.mountpoint == binding[1]
         and (expected_archive_ref is None or binding[0] == expected_archive_ref)
         and binding[1] == expected_mountpoint
     )

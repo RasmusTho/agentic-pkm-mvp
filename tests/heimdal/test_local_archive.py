@@ -56,7 +56,7 @@ def test_verified_volume_proof_cannot_be_reused_as_minting_authority(tmp_path: P
         raw_store.configure_cold_archive_root(
             tmp_path / "verified",
             verified_volume=proof,
-            expected_archive_ref="forged-archive",
+            expected_archive_ref=_ARCHIVE_REF,
         )
 
 
