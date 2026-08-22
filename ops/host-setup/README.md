@@ -111,17 +111,15 @@ until the change receipt is accepted.
 
 ## How the routing works
 
-- Yggdrasil talks to **one** endpoint: the `llm-gateway` on the mini
-  (`OLLAMA_URL=http://127.0.0.1:11500`). The runtime's own LLM fabric doesn't
-  load-balance (see `docs/LLM_ROUTING.md`), so the gateway does it.
-- **Embeddings always stay on the mini** — moving them would change embedding
-  identity and force a full vector-index rebuild. The gateway enforces this pin.
-- **Chat/reasoning** goes to the gaming PC **only when `gpu-warden` says the GPU is
-  free** (no listed game running and GPU utilization below the threshold).
-  Otherwise it serves from the mini's small model. When it does burst, the gateway
-  **rewrites the request to the gaming host's model** (`GAMING_CHAT_MODEL`) so the
-  two boxes can run different models; if the gaming box disappears mid-request or
-  rejects it (e.g. model-not-found), the gateway degrades to the mini automatically.
+- The current Linux/Tailscale runtime binds to one explicit Ollama endpoint. The
+  dedicated Ollama host provides model service only; it does not run the Yggdrasil
+  API, watcher, or an `llm-gateway`.
+- Keep the embedding model identity stable. A runtime change of embedding provider
+  or model requires the repository's explicit index-rebuild decision; it is not an
+  automatic routing fallback.
+- Chat and reasoning use the selected runtime's declared provider binding. Do not
+  infer a second host, gaming-PC burst route, or gateway fallback from this
+  playbook. Local Compose remains a separate fallback/reference environment.
 
 ## Tuning & options
 

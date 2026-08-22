@@ -1,11 +1,13 @@
 # Agent Playbook — MacBook Air (thin client)
 
 The Air is just a **thin client**. No services run here; it only needs to reach
-the mini and the gaming PC over Tailscale. This is mostly manual operator setup.
+the approved Linux/Tailscale runtime hosts and the dedicated Ollama host. This
+is mostly manual operator setup.
 
 ## Steps
 1. **Tailscale** installed and signed in (same tailnet). Verify with
-   `tailscale status` that both `mac-mini` and `gaming-pc` are reachable.
+   `tailscale status` that the approved runtime and model-service peers are
+   reachable.
 
 2. **Reach the Mac mini (macOS):**
    - GUI: Finder → Go → Connect to Server → `vnc://mac-mini` (Screen Sharing).
@@ -18,9 +20,11 @@ the mini and the gaming PC over Tailscale. This is mostly manual operator setup.
      simpler alternative for casual remote desktop.
    - Note: Windows 11 **Home cannot host RDP** — use Sunshine/Moonlight or RustDesk.
 
-4. **Use the prosthesis:** open the Yggdrasil companion UI at the mini's API port
-   over Tailscale (e.g. `http://mac-mini:18000`). Everything else (LLM routing,
-   embeddings, the watcher) is handled by the mini.
+4. **Use the prosthesis:** open the Yggdrasil companion UI on the Linux runtime
+   over Tailscale, for example `http://ygg-dev:8111` for development. The
+   production UI is `http://ygg-prod:8113` only when the live readback says it is
+   available. The Ollama host provides model service only; the API, watcher, and
+   routing belong to the selected Linux runtime host.
 
 There is nothing to install as a service here. If the operator wants a one-click
 "connect" experience, create Shortcuts/bookmarks for the VNC, SSH, and companion
