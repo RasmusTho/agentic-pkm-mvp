@@ -116,7 +116,9 @@ class RawRepresentationIdentityMismatchError(RuntimeError):
     """Raised when encrypted representation bytes do not match immutable identity."""
 
 
-def _require_verified_cold_volume(archive_root: Path, verified_volume: object) -> None:
+def _require_verified_cold_volume(
+    archive_root: Path, verified_volume: object, expected_archive_ref: str | None = None
+) -> None:
     from app.ops.heimdal_cold_volume import (
         ArchiveVolumeReady,
         _is_verified_archive_volume_ready,
@@ -126,7 +128,9 @@ def _require_verified_cold_volume(archive_root: Path, verified_volume: object) -
         not isinstance(verified_volume, ArchiveVolumeReady)
         or not verified_volume.ready
         or verified_volume.mountpoint != archive_root
-        or not _is_verified_archive_volume_ready(verified_volume, archive_root)
+        or not _is_verified_archive_volume_ready(
+            verified_volume, expected_archive_ref, archive_root
+        )
     ):
         raise RawRepresentationDeletionError("verified cold volume proof is required")
 
@@ -151,11 +155,16 @@ def discard_cold_location(location_ref: str) -> None:
     _cold_location_paths.pop(location_ref, None)
 
 
-def configure_cold_archive_root(archive_root: Path, *, verified_volume: object) -> None:
+def configure_cold_archive_root(
+    archive_root: Path,
+    *,
+    verified_volume: object,
+    expected_archive_ref: str | None = None,
+) -> None:
     """Bind the verified archive root for cold reads after process restart."""
     if not archive_root.is_absolute():
         raise ValueError("cold archive root must be absolute")
-    _require_verified_cold_volume(archive_root, verified_volume)
+    _require_verified_cold_volume(archive_root, verified_volume, expected_archive_ref)
     os.environ[_COLD_ARCHIVE_ROOT_ENV] = str(archive_root)
 
 

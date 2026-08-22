@@ -227,11 +227,14 @@ class ArchiveVolumeReady:
         weakref.finalize(self, _VERIFIED_VOLUME_PROOFS.pop, proof_id, None)
 
 
-def _is_verified_archive_volume_ready(proof: object, expected_mountpoint: Path) -> bool:
+def _is_verified_archive_volume_ready(
+    proof: object, expected_archive_ref: str | None, expected_mountpoint: Path
+) -> bool:
     binding = _VERIFIED_VOLUME_PROOFS.get(id(proof))
     return (
         isinstance(proof, ArchiveVolumeReady)
         and binding is not None
+        and (expected_archive_ref is None or binding[0] == expected_archive_ref)
         and binding[1] == expected_mountpoint
     )
 
@@ -1341,7 +1344,11 @@ def require_archive_volume_ready(
         archive_ref=metadata.archive_id,
         mountpoint=metadata.mountpoint,
     )
-    raw_store.configure_cold_archive_root(metadata.mountpoint, verified_volume=proof)
+    raw_store.configure_cold_archive_root(
+        metadata.mountpoint,
+        verified_volume=proof,
+        expected_archive_ref=metadata.archive_id,
+    )
     return proof
 
 
