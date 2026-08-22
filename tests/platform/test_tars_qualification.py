@@ -96,6 +96,54 @@ def test_evidence_bundle_redacts_credentials_and_secrets() -> None:
     assert bundle["evidence"]["builderops"]["nested"]["password"] == "[REDACTED]"
 
 
+def test_opaque_credential_fields_are_refused() -> None:
+    opaque_fields = {
+        "session_cookie": "opaque-session-cookie",
+        "passwd": "opaque-password",
+        "database_url": "postgresql://user:password@example.invalid/app",
+        "dsn": "host=example.invalid user=app password=opaque",
+    }
+
+    for field, secret in opaque_fields.items():
+        evidence = _evidence()
+        evidence["builderops"][field] = secret
+        evidence["builderops"][f"{field}_ref"] = f"keychain:builderops.{field}"
+
+        bundle = emit_redacted_evidence_bundle(evidence)
+        receipt = evaluate_qualification(bundle)
+
+        assert secret not in str(bundle)
+        assert bundle["evidence"]["builderops"][field] == "[REDACTED]"
+        assert (
+            bundle["evidence"]["builderops"][f"{field}_ref"]
+            == f"keychain:builderops.{field}"
+        )
+        assert receipt["candidate_verdict"] == "fail"
+        assert any("secret-bearing" in refusal for refusal in receipt["refusals"])
+
+
+def test_product_engine_identity_is_required_for_isolation() -> None:
+    invalid_product_engine_ids: tuple[object, ...] = (None, 102, "", "   ", "engine-builder-102")
+
+    missing = _evidence()
+    del missing["builderops"]["product_engine_id"]
+    invalid_evidence = [missing]
+    for product_engine_id in invalid_product_engine_ids:
+        evidence = _evidence()
+        evidence["builderops"]["product_engine_id"] = product_engine_id
+        invalid_evidence.append(evidence)
+
+    whitespace_alias = _evidence()
+    whitespace_alias["builderops"]["product_engine_id"] = " engine-builder-102 "
+    invalid_evidence.append(whitespace_alias)
+
+    for evidence in invalid_evidence:
+        receipt = evaluate_qualification(emit_redacted_evidence_bundle(evidence))
+
+        assert receipt["candidate_verdict"] == "fail"
+        assert any("Product Docker engine" in refusal for refusal in receipt["refusals"])
+
+
 def test_qualification_policy_has_no_gpu_or_test_tailnet_prerequisite() -> None:
     serialized = str(DEFAULT_POLICY).lower()
     assert "gpu" not in serialized

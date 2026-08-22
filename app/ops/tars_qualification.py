@@ -25,6 +25,7 @@ MAX_EVIDENCE_AGE = timedelta(hours=24)
 _ROOT = Path(__file__).resolve().parents[2]
 _SECRET_KEY = re.compile(r"(?:api[_-]?key|authorization|credential|password|private[_-]?key|secret|token)", re.I)
 _SECRET_VALUE = re.compile(r"(?:bearer\s+|gh[pousr]_[A-Za-z0-9_]|pve[ta]=|-----BEGIN [A-Z ]+PRIVATE KEY-----)", re.I)
+_OPAQUE_CREDENTIAL_KEYS = frozenset({"database_url", "dsn", "passwd", "session_cookie"})
 _FINGERPRINT = re.compile(r"^[a-f0-9]{64}$")
 
 # The baseline is intentionally limited to builder-system.  It has no GPU or
@@ -72,12 +73,14 @@ def _key_is_secret(key: str) -> bool:
     return (
         not normalized.endswith("_ref")
         and not normalized.endswith("_refs")
-        and _SECRET_KEY.search(normalized) is not None
+        and (normalized in _OPAQUE_CREDENTIAL_KEYS or _SECRET_KEY.search(normalized) is not None)
     )
 
 
 def _contains_secret(value: Any, *, key: str | None = None) -> bool:
     if key is not None and _key_is_secret(key):
+        if key.lower().replace("-", "_") in _OPAQUE_CREDENTIAL_KEYS:
+            return True
         return value != "[REDACTED]"
     if isinstance(value, str):
         return value != "[REDACTED]" and _SECRET_VALUE.search(value) is not None
@@ -157,7 +160,13 @@ def _baseline_refusals(evidence: Mapping[str, Any]) -> list[str]:
 
     builder_engine = builderops.get("builder_engine_id")
     product_engine = builderops.get("product_engine_id")
-    if not isinstance(builder_engine, str) or not builder_engine or builder_engine == product_engine:
+    if (
+        not isinstance(builder_engine, str)
+        or not builder_engine.strip()
+        or not isinstance(product_engine, str)
+        or not product_engine.strip()
+        or builder_engine.strip() == product_engine.strip()
+    ):
         refusals.append("VM 102 must not share the Product Docker engine")
     projects = builderops.get("compose_projects")
     if not isinstance(projects, list) or any(not isinstance(item, str) or item.startswith("pkm-") for item in projects):
