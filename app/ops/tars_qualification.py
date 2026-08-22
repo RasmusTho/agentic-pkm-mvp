@@ -26,6 +26,9 @@ _ROOT = Path(__file__).resolve().parents[2]
 _SECRET_KEY = re.compile(r"(?:api[_-]?key|authorization|credential|password|private[_-]?key|secret|token)", re.I)
 _SECRET_VALUE = re.compile(r"(?:bearer\s+|gh[pousr]_[A-Za-z0-9_]|pve[ta]=|-----BEGIN [A-Z ]+PRIVATE KEY-----)", re.I)
 _OPAQUE_CREDENTIAL_KEYS = frozenset({"database_url", "dsn", "passwd", "session_cookie"})
+_SECRET_REFERENCE = re.compile(
+    r"^(?:keychain:(?://)?[A-Za-z0-9][A-Za-z0-9._/-]*|\$\{SECRET:[A-Za-z0-9][A-Za-z0-9._/-]*\})$"
+)
 _FINGERPRINT = re.compile(r"^[a-f0-9]{64}$")
 
 # The baseline is intentionally limited to builder-system.  It has no GPU or
@@ -77,7 +80,28 @@ def _key_is_secret(key: str) -> bool:
     )
 
 
+def _reference_cardinality(key: str) -> str | None:
+    normalized = key.lower().replace("-", "_")
+    if normalized.endswith("_refs"):
+        return "many"
+    if normalized.endswith("_ref"):
+        return "one"
+    return None
+
+
+def _is_valid_secret_reference(value: Any) -> bool:
+    return isinstance(value, str) and _SECRET_REFERENCE.fullmatch(value) is not None
+
+
 def _contains_secret(value: Any, *, key: str | None = None) -> bool:
+    if key is not None:
+        reference_cardinality = _reference_cardinality(key)
+        if reference_cardinality == "one":
+            return not _is_valid_secret_reference(value)
+        if reference_cardinality == "many":
+            return not isinstance(value, list) or any(
+                not _is_valid_secret_reference(item) for item in value
+            )
     if key is not None and _key_is_secret(key):
         if key.lower().replace("-", "_") in _OPAQUE_CREDENTIAL_KEYS:
             return True
@@ -92,6 +116,14 @@ def _contains_secret(value: Any, *, key: str | None = None) -> bool:
 
 
 def _redact(value: Any, *, key: str | None = None) -> Any:
+    if key is not None:
+        reference_cardinality = _reference_cardinality(key)
+        if reference_cardinality == "one":
+            return value if _is_valid_secret_reference(value) else "[REDACTED]"
+        if reference_cardinality == "many":
+            if not isinstance(value, list):
+                return "[REDACTED]"
+            return [item if _is_valid_secret_reference(item) else "[REDACTED]" for item in value]
     if key is not None and _key_is_secret(key):
         return "[REDACTED]"
     if isinstance(value, str):
