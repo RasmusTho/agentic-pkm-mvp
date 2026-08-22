@@ -17,17 +17,38 @@ from app.proxmox.inventory import (
 
 class Transport:
     def __init__(self, fingerprint: str = "sha256:certificate") -> None:
-        self.calls: list[tuple[str, str, str]] = []
-        self.verifications: list[tuple[str, str]] = []
+        self.calls: list[tuple[int, str, str]] = []
+        self.sessions: list[Session] = []
         self.fingerprint = fingerprint
+        self._active_connection_id = 0
 
-    def verify_tls(self, *, endpoint: str, expected_fingerprint: str) -> None:
-        self.verifications.append((endpoint, expected_fingerprint))
+    def open_pinned_session(self, *, endpoint: str, expected_fingerprint: str) -> "Session":
         if self.fingerprint != expected_fingerprint:
             raise ProxmoxInventoryError("TLS certificate fingerprint mismatch")
+        self._active_connection_id += 1
+        session = Session(
+            transport=self,
+            connection_id=self._active_connection_id,
+            endpoint=endpoint,
+            expected_fingerprint=expected_fingerprint,
+        )
+        self.sessions.append(session)
+        return session
 
-    def get(self, *, endpoint: str, path: str, token: str):
-        self.calls.append((endpoint, path, token))
+
+class Session:
+    def __init__(self, *, transport: Transport, connection_id: int, endpoint: str, expected_fingerprint: str) -> None:
+        self._transport = transport
+        self._connection_id = connection_id
+        self._endpoint = endpoint
+        self._expected_fingerprint = expected_fingerprint
+
+    def get(self, *, path: str, token: str):
+        if self._transport.fingerprint != self._expected_fingerprint:
+            raise ProxmoxInventoryError("session pin was not verified")
+        if self._connection_id != self._transport._active_connection_id:  # noqa: SLF001
+            raise ProxmoxInventoryError("session is no longer the verified connection")
+        self._transport.calls.append((self._connection_id, self._endpoint, path))
         return {"data": [{"vmid": 100}, {"vmid": 999}]}
 
 
@@ -70,8 +91,8 @@ def test_named_inventory_operations_are_allowlisted() -> None:
     assert client.get_vm_status(100).receipt.operation == "get_vm_status"
     assert client.get_storage_status("local").receipt.operation == "get_storage_status"
     assert client.list_recent_tasks().receipt.operation == "list_recent_tasks"
-    assert all("/nodes/TARS/" in path or path == "/api2/json/version" or path == "/api2/json/cluster/status" for _, path, _ in transport.calls)
-    assert len(transport.verifications) == len(transport.calls)
+    assert all("/nodes/TARS/" in path or path == "/api2/json/version" or path == "/api2/json/cluster/status" for _, _, path in transport.calls)
+    assert len(transport.sessions) == len(transport.calls)
 
 
 def test_forbidden_requests_fail_before_http() -> None:
@@ -87,14 +108,14 @@ def test_forbidden_requests_fail_before_http() -> None:
         with pytest.raises(ProxmoxInventoryError):
             invalid_call()
     assert transport.calls == []
-    assert transport.verifications == []
+    assert transport.sessions == []
 
 
 def test_scope_or_tls_refusals_happen_before_http() -> None:
     transport = Transport(fingerprint="sha256:wrong")
     with pytest.raises(ProxmoxInventoryError, match="TLS"):
         _client(transport).health_check()
-    assert transport.verifications == [("https://tars.internal", "sha256:certificate")]
+    assert transport.sessions == []
     assert transport.calls == []
 
     scope_transport = Transport()
@@ -105,8 +126,31 @@ def test_scope_or_tls_refusals_happen_before_http() -> None:
     }[ref]
     with pytest.raises(ProxmoxInventoryError, match="scope"):
         client.health_check()
-    assert scope_transport.verifications == []
+    assert scope_transport.sessions == []
     assert scope_transport.calls == []
+
+
+def test_token_read_uses_the_same_pinned_session() -> None:
+    transport = Transport()
+
+    _client(transport).health_check()
+
+    assert not hasattr(transport, "get")
+    assert len(transport.sessions) == 1
+    assert transport.calls == [(1, "https://tars.internal", "/api2/json/version")]
+    assert transport.sessions[0]._connection_id == transport.calls[0][0]  # noqa: SLF001
+    assert transport.sessions[0]._endpoint == transport.calls[0][1]  # noqa: SLF001
+
+
+def test_token_read_is_refused_after_transport_reconnect() -> None:
+    transport = Transport()
+    first = transport.open_pinned_session(endpoint="https://tars.internal", expected_fingerprint="sha256:certificate")
+    transport.open_pinned_session(endpoint="https://tars.internal", expected_fingerprint="sha256:certificate")
+
+    with pytest.raises(ProxmoxInventoryError, match="verified connection"):
+        first.get(path="/api2/json/version", token="PVEAPIToken=never-transmitted")
+
+    assert transport.calls == []
 
 
 def test_receipts_never_persist_raw_credentials() -> None:

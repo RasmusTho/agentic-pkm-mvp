@@ -24,12 +24,21 @@ class ProxmoxInventoryError(RuntimeError):
     """Raised when the inventory boundary refuses a request."""
 
 
+class PVEAuthenticatedReadSession(Protocol):
+    """Capability for reads on the same connection that passed pin verification."""
+
+    def get(self, *, path: str, token: str) -> Mapping[str, Any]: ...
+
+
 class PVETransport(Protocol):
-    """Transport with certificate pin admission before credential transmission."""
+    """Opens one connection-bound, pin-verified read session."""
 
-    def verify_tls(self, *, endpoint: str, expected_fingerprint: str) -> None: ...
-
-    def get(self, *, endpoint: str, path: str, token: str) -> Mapping[str, Any]: ...
+    def open_pinned_session(
+        self,
+        *,
+        endpoint: str,
+        expected_fingerprint: str,
+    ) -> PVEAuthenticatedReadSession: ...
 
 
 SecretResolver = Callable[[str], str]
@@ -183,10 +192,14 @@ class ProxmoxInventoryClient:
         if sha256(token.encode("utf-8")).hexdigest() != self._config.token_fingerprint:
             raise ProxmoxInventoryError("token fingerprint mismatch")
         self._validate_inventory_scope()
-        # The transport must complete certificate-pin verification before it is
-        # given a credential, not report a mismatch after the request is sent.
-        self._transport.verify_tls(endpoint=endpoint, expected_fingerprint=self._config.tls_fingerprint)
-        payload = self._transport.get(endpoint=endpoint, path=path, token=token)
+        # `session` is an object capability bound to the same connection whose
+        # certificate pin was verified.  There is deliberately no token-bearing
+        # transport-level `get` that could reconnect after verification.
+        session = self._transport.open_pinned_session(
+            endpoint=endpoint,
+            expected_fingerprint=self._config.tls_fingerprint,
+        )
+        payload = session.get(path=path, token=token)
         return self._result(operation, payload, endpoint_identity=sha256(endpoint.encode("utf-8")).hexdigest())
 
     def _endpoint(self) -> str:
@@ -268,6 +281,7 @@ __all__ = [
     "LocalProxmoxInventoryExecutor",
     "MCP_DESCRIPTOR_ID",
     "PVETransport",
+    "PVEAuthenticatedReadSession",
     "ProxmoxInventoryClient",
     "ProxmoxInventoryDescriptor",
     "ProxmoxInventoryError",
