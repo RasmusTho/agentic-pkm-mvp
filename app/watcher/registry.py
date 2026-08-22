@@ -1789,6 +1789,8 @@ def _run_journal_review_tick(cfg: RegistryConfig) -> dict[str, object]:
         return {"scanned": 0, "reason": "watcher_paused"}
     try:
         context = VaultManager().validate_vault(cfg.vault_path)
+        if context.status != "selected" or not context.active_vault_path:
+            return {"scanned": 0, "reason": "vault_not_selected"}
         override = os.getenv("JOURNAL_REVIEW_OUTBOX_PATH", "").strip()
         receipt_path = (
             Path(override).expanduser()
