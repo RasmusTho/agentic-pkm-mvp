@@ -47,6 +47,9 @@ def test_location_cannot_mint_identity_or_access_authority():
             "file://archive/raw.bin",
             "file:archive/raw.bin",
             "volume\\raw.bin",
+            "raw.bin",
+            ".",
+            "..",
         ):
             try:
                 constructor(location)

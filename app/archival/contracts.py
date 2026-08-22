@@ -91,6 +91,7 @@ def _opaque(value: str, field: str, allowed_schemes: tuple[str, ...] = ()) -> st
     if (
         "/" in candidate
         or "\\" in candidate
+        or "." in candidate
         or "://" in candidate
         or (separator and scheme not in allowed_schemes)
     ):
