@@ -17,7 +17,7 @@ pytestmark = pytest.mark.pg
 REPO_ROOT = Path(__file__).resolve().parents[2]
 PRE_LIVENESS_HEAD = "f8a05a9b0001"
 LIVENESS_HEAD = "c5d8a1e4f2b7"
-CURRENT_LIVENESS_HEAD = "f4b6c8d0e2a1"
+CURRENT_LIVENESS_HEAD = "a9d7c5e3b1f0"
 _KEY = bytes(range(32))
 _TABLES = (
     "heimdal_raw_liveness_generation",
@@ -25,6 +25,7 @@ _TABLES = (
     "heimdal_raw_response_lease",
     "heimdal_raw_retention_claim",
     "heimdal_raw_deletion_receipt",
+    "heimdal_raw_consent_association",
 )
 
 
@@ -263,7 +264,7 @@ def test_autocreate_and_migration_liveness_schemas_match(
 ) -> None:
     migrated = scratch_db_factory()
     bootstrapped = scratch_db_factory()
-    _upgrade(migrated, monkeypatch, LIVENESS_HEAD)
+    _upgrade(migrated, monkeypatch, CURRENT_LIVENESS_HEAD)
 
     monkeypatch.setenv("DATABASE_URL", bootstrapped)
     monkeypatch.setenv("STORE_BACKEND", "pg")
@@ -461,12 +462,14 @@ def test_pg_missing_raw_without_tombstone_is_unavailable(
 
     record = _insert_runtime_raw(b"pg-untombstoned-absence")
     with psycopg.connect(dsn, autocommit=True) as conn:
+        conn.execute("ALTER TABLE heimdal_raw_consent_association DISABLE TRIGGER USER")
         conn.execute("ALTER TABLE heimdal_raw_representation DISABLE TRIGGER USER")
         conn.execute("ALTER TABLE heimdal_raw_record DISABLE TRIGGER USER")
         conn.execute("DELETE FROM heimdal_raw_representation WHERE record_id = %s", (record.id,))
         conn.execute("DELETE FROM heimdal_raw_record WHERE id = %s", (record.id,))
         conn.execute("ALTER TABLE heimdal_raw_record ENABLE TRIGGER USER")
         conn.execute("ALTER TABLE heimdal_raw_representation ENABLE TRIGGER USER")
+        conn.execute("ALTER TABLE heimdal_raw_consent_association ENABLE TRIGGER USER")
 
     with pytest.raises(raw_liveness.RawLivenessUnavailableError):
         raw_liveness.issue_response_lease(

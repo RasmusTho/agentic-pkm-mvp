@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import nullcontext
 from dataclasses import replace
 import hashlib
 import json
@@ -21,7 +20,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 PRE_REPRESENTATION_HEAD = "d1e8a0c5f37b"
 REPRESENTATION_HEAD = "e7b4c9d2a6f1"
 COLD_REPRESENTATION_HEAD = "d1a4b7c9e2f0"
-CURRENT_REPRESENTATION_HEAD = "f4b6c8d0e2a1"
+CURRENT_REPRESENTATION_HEAD = "a9d7c5e3b1f0"
 _KEY = bytes(range(32))
 
 
@@ -247,7 +246,11 @@ def _raw_schema_snapshot(dsn: str) -> dict[str, object]:
             SELECT table_name, column_name, data_type, is_nullable, COALESCE(column_default, '')
             FROM information_schema.columns
             WHERE table_schema = 'public'
-              AND table_name IN ('heimdal_raw_record', 'heimdal_raw_representation')
+              AND table_name IN (
+                  'heimdal_raw_record',
+                  'heimdal_raw_representation',
+                  'heimdal_raw_consent_association'
+              )
             ORDER BY table_name, ordinal_position
             """
         )
@@ -257,7 +260,11 @@ def _raw_schema_snapshot(dsn: str) -> dict[str, object]:
             SELECT tablename, indexname, indexdef
             FROM pg_indexes
             WHERE schemaname = 'public'
-              AND tablename IN ('heimdal_raw_record', 'heimdal_raw_representation')
+              AND tablename IN (
+                  'heimdal_raw_record',
+                  'heimdal_raw_representation',
+                  'heimdal_raw_consent_association'
+              )
             ORDER BY tablename, indexname
             """
         )
@@ -268,7 +275,9 @@ def _raw_schema_snapshot(dsn: str) -> dict[str, object]:
             FROM pg_constraint
             WHERE conrelid IN (
                 'heimdal_raw_record'::regclass,
-                'heimdal_raw_representation'::regclass
+                'heimdal_raw_representation'::regclass,
+                'heimdal_raw_consent_association'::regclass,
+                'heimdal_raw_liveness_generation'::regclass
             )
             ORDER BY conrelid::regclass::text, conname
             """
@@ -281,7 +290,9 @@ def _raw_schema_snapshot(dsn: str) -> dict[str, object]:
             FROM information_schema.triggers
             WHERE trigger_schema = 'public'
               AND event_object_table IN (
-                  'heimdal_raw_record', 'heimdal_raw_representation'
+                  'heimdal_raw_record',
+                  'heimdal_raw_representation',
+                  'heimdal_raw_consent_association'
               )
             ORDER BY event_object_table, trigger_name, event_manipulation
             """
@@ -419,6 +430,18 @@ def test_failed_legacy_backfill_is_loud_resumable_and_readable(
         )
         identity_columns = {row[0] for row in cur.fetchall()}
         assert {"ciphertext", "nonce", "key_ref"}.isdisjoint(identity_columns)
+        cur.execute(
+            """
+            SELECT generation, grant_ref
+            FROM heimdal_raw_consent_association
+            WHERE record_id = %s
+            """,
+            (record_id,),
+        )
+        association = cur.fetchone()
+        assert association is not None
+        assert association[0] == 1
+        assert association[1] == "standing-grant"
 
 
 def test_legacy_content_identity_mismatch_rolls_back_and_corrected_replay_succeeds(
@@ -612,6 +635,59 @@ def test_current_upgrade_refuses_unbound_cold_locations_without_rewriting_them(
         assert cur.fetchone() == (0,)
 
 
+def test_current_upgrade_refuses_uncorrelated_active_raw_generation(
+    scratch_db_factory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    dsn = scratch_db_factory()
+    _upgrade(dsn, monkeypatch, "f4b6c8d0e2a1")
+    record_id = uuid.uuid4()
+    content_identity = _content_identity(b"uncorrelated-active-row")
+    with psycopg.connect(dsn, autocommit=True) as conn:
+        conn.execute(
+            """
+            INSERT INTO heimdal_raw_record (
+                id, content_identity, capture_chain, sensor, consent,
+                source_path, ingested_at, payload
+            ) VALUES (%s, %s, '[]'::jsonb, '{}'::jsonb, '{}'::jsonb,
+                      'source-class-redacted', now(), '{}'::jsonb)
+            """,
+            (record_id, content_identity),
+        )
+        conn.execute(
+            """
+            INSERT INTO heimdal_raw_liveness_generation (
+                content_identity, generation, record_id, raw_ref, activated_at
+            ) VALUES (%s, 1, %s, %s, now())
+            """,
+            (content_identity, record_id, f"heimraw:{record_id}"),
+        )
+        conn.execute(
+            """
+            INSERT INTO heimdal_raw_representation (
+                id, record_id, storage_kind, location_ref,
+                ciphertext, nonce, key_ref, active
+            ) VALUES (%s, %s, 'postgres_hot', %s, %s, %s, 'test-key', true)
+            """,
+            (record_id, record_id, f"heimloc:{record_id}", b"ciphertext", b"012345678901"),
+        )
+
+    with pytest.raises(Exception, match="lacks durable consent association"):
+        _upgrade(dsn, monkeypatch, CURRENT_REPRESENTATION_HEAD)
+
+    with psycopg.connect(dsn) as conn:
+        assert conn.execute("SELECT version_num FROM alembic_version").fetchone() == (
+            "f4b6c8d0e2a1",
+        )
+        assert conn.execute(
+            "SELECT count(*) FROM heimdal_raw_record WHERE id = %s",
+            (record_id,),
+        ).fetchone() == (1,)
+        assert conn.execute(
+            "SELECT to_regclass('heimdal_raw_consent_association')"
+        ).fetchone() == (None,)
+
+
 def test_ingress_preflight_refuses_e2_schema_without_archive_binding_constraint(
     scratch_db_factory,
     monkeypatch: pytest.MonkeyPatch,
@@ -677,6 +753,11 @@ def test_ingress_preflight_refuses_e2_schema_without_archive_binding_constraint(
         ),
         (
             "ALTER TABLE heimdal_raw_representation DROP CONSTRAINT "
+            "heimdal_raw_representation_generation_fk",
+            "heimdal_raw_representation_generation_fk",
+        ),
+        (
+            "ALTER TABLE heimdal_raw_representation DROP CONSTRAINT "
             "heimdal_raw_representation_cold_location_bound_check",
             "heimdal_raw_representation_cold_location_bound_check",
         ),
@@ -685,6 +766,7 @@ def test_ingress_preflight_refuses_e2_schema_without_archive_binding_constraint(
         "one-active-index",
         "identity-trigger",
         "representation-trigger",
+        "representation-generation-fk",
         "cold-location-binding-constraint",
     ],
 )
@@ -726,6 +808,59 @@ def test_test_bootstrap_refuses_malformed_final_schema_without_self_repair(
         )
         row = cur.fetchone()
         assert row is not None and row[0] is False
+
+
+@pytest.mark.parametrize(
+    ("drop_statement", "missing_object"),
+    [
+        (
+            "DROP INDEX heimdal_raw_consent_association_grant_idx",
+            "heimdal_raw_consent_association_grant_idx",
+        ),
+        (
+            "DROP TRIGGER heimdal_raw_consent_association_no_mutation "
+            "ON heimdal_raw_consent_association",
+            "heimdal_raw_consent_association_no_mutation",
+        ),
+    ],
+    ids=["consent-association-index", "consent-association-trigger"],
+)
+def test_test_bootstrap_never_repairs_existing_har05_liveness_ddl(
+    scratch_db_factory,
+    monkeypatch: pytest.MonkeyPatch,
+    drop_statement: str,
+    missing_object: str,
+) -> None:
+    """Existing tables stay Alembic-owned even with fixture autocreate enabled."""
+    dsn = scratch_db_factory()
+    _upgrade(dsn, monkeypatch, CURRENT_REPRESENTATION_HEAD)
+    with psycopg.connect(dsn, autocommit=True) as conn:
+        conn.execute(drop_statement)
+
+    monkeypatch.setenv("DATABASE_URL", dsn)
+    monkeypatch.setenv("STORE_BACKEND", "pg")
+    monkeypatch.setenv("STORE_SCHEMA_AUTOCREATE", "1")
+    from app.heimdal import raw_liveness, raw_store
+
+    try:
+        raw_store._PgRawStore()  # noqa: SLF001
+    except (raw_store.RawStoreSchemaMissingError, raw_liveness.RawLivenessSchemaMissingError) as exc:
+        assert "alembic upgrade head" in str(exc)
+
+    with psycopg.connect(dsn) as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT EXISTS (
+                SELECT 1 FROM pg_indexes
+                WHERE schemaname = current_schema() AND indexname = %s
+            ) OR EXISTS (
+                SELECT 1 FROM information_schema.triggers
+                WHERE trigger_schema = current_schema() AND trigger_name = %s
+            )
+            """,
+            (missing_object, missing_object),
+        )
+        assert cur.fetchone() == (False,)
 
 
 def test_test_bootstrap_refuses_weakened_cold_location_constraint_semantics(
@@ -867,8 +1002,13 @@ def test_pg_representation_activation_and_all_copy_erasure_are_transactional(
             """
             INSERT INTO heimdal_raw_representation (
                 id, record_id, storage_kind, location_ref,
-                ciphertext, nonce, key_ref, active
-            ) VALUES (%s, %s, 'postgres_hot', %s, %s, %s, %s, false)
+                ciphertext, nonce, key_ref, raw_generation,
+                archive_token, archive_generation, active
+            ) VALUES (
+                %s, %s, 'postgres_hot', %s, %s, %s, %s,
+                (SELECT generation FROM heimdal_raw_liveness_generation WHERE record_id = %s),
+                NULL, NULL, false
+            )
             """,
             (
                 corrupt_id,
@@ -877,6 +1017,7 @@ def test_pg_representation_activation_and_all_copy_erasure_are_transactional(
                 bad_ciphertext,
                 bad_nonce,
                 "test-key-v1",
+                record.id,
             ),
         )
     with pytest.raises(RawRepresentationIdentityMismatchError):
@@ -974,22 +1115,34 @@ def test_pre_cleanup_reconciliation_schema_refuses_erasure_before_transition(
 
     from app.heimdal import raw_liveness, raw_store
 
-    # Keep the historical e2 boundary explicit even though the current runtime
-    # now also requires the later archive-bound location constraint. The
-    # version-scoped liveness assertion must still identify the missing queue
-    # reconciliation contract on this d1 schema.
-    with psycopg.connect(dsn) as conn:
-        with pytest.raises(
-            raw_liveness.RawLivenessSchemaMissingError,
-            match="reconciliation trigger is not migration-ready",
-        ):
-            raw_liveness._assert_pg_schema(conn)  # noqa: SLF001
+    # Keep the historical d1 boundary explicit without asking the current
+    # schema assertion to accept it. At this exact head the legacy append-only
+    # receipt trigger is valid, while the guarded cleanup transition is not.
+    with psycopg.connect(dsn) as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT pg_get_functiondef(t.tgfoid), pg_get_triggerdef(t.oid)
+            FROM pg_trigger AS t
+            JOIN pg_class AS c ON c.oid = t.tgrelid
+            WHERE c.relname = 'heimdal_raw_deletion_receipt'
+              AND t.tgname = 'heimdal_raw_deletion_receipt_no_update'
+              AND NOT t.tgisinternal
+            """
+        )
+        historical_trigger = cur.fetchone()
+        assert historical_trigger is not None
+        assert raw_liveness._receipt_trigger_is_legacy_migration_ready(  # noqa: SLF001
+            str(historical_trigger[0]), str(historical_trigger[1])
+        )
+        assert not raw_liveness._receipt_trigger_is_migration_ready(  # noqa: SLF001
+            str(historical_trigger[0]), str(historical_trigger[1])
+        )
 
     # The current runtime checks the complete current schema first and must
     # refuse this historical database before it can begin an erase transition.
     with pytest.raises(
         raw_store.RawStoreSchemaMissingError,
-        match="archive binding constraint is not migration-ready",
+        match="columns do not match the location-aware schema",
     ):
         raw_liveness.governed_delete_raw_record(
             record_id=str(record_id),
@@ -1176,10 +1329,26 @@ def test_pg_archive_lock_keeps_cleanup_retryable_if_db_fence_is_lost(
     # alive. The verified archive lock must still stop cleanup from declaring a
     # missing object terminal before that writer has quiesced.
     monkeypatch.setattr(local_archive, "_relocation_stage_hook", pause_after_object)
+    durable_checkpoint = raw_liveness._checkpoint_raw_mutation_authority  # noqa: SLF001
+
+    def checkpoint_then_lose_db_fence(authority: object) -> None:
+        durable_checkpoint(authority)
+        cursor = raw_liveness.pg_cursor_for_raw_mutation(
+            authority,
+            record_id=record.id,
+            content_identity=record.content_identity,
+        )
+        cursor.execute(
+            "SELECT pg_advisory_unlock(hashtextextended(%s, 0))",
+            (record.content_identity,),
+        )
+        assert cursor.fetchone() == (True,)
+        cursor.connection.commit()
+
     monkeypatch.setattr(
         raw_liveness,
-        "raw_relocation_fence",
-        lambda **_kwargs: nullcontext(),
+        "_checkpoint_raw_mutation_authority",
+        checkpoint_then_lose_db_fence,
     )
 
     def relocate_after_fence_loss() -> str:
@@ -1274,8 +1443,8 @@ def test_pg_cleanup_refuses_a_different_verified_archive_after_rebind(
     replacement_root = tmp_path / "replacement-archive"
     original_root.mkdir()
     replacement_root.mkdir()
-    original_ref = "pg-original-archive"
-    replacement_ref = "pg-replacement-archive"
+    original_ref = "pg-shared-archive-identity"
+    replacement_ref = original_ref
     original_proof = _issue_archive_volume_ready(
         original_ref,
         original_root,
@@ -1299,6 +1468,8 @@ def test_pg_cleanup_refuses_a_different_verified_archive_after_rebind(
             volume_ready=lambda: original_proof,
         )
         location_ref = result.active_representation.location_ref
+        original_generation = result.active_representation.archive_generation
+        assert original_generation is not None
         original_object = (
             original_root / "representations" / f"{result.active_representation.id}.bin"
         )
@@ -1312,10 +1483,7 @@ def test_pg_cleanup_refuses_a_different_verified_archive_after_rebind(
                 )
 
         monkeypatch.setattr(raw_liveness, "_retention_stage_hook", rebind_after_authority)
-        with pytest.raises(
-            raw_store.RawRepresentationDeletionError,
-            match="resolver is unavailable",
-        ):
+        with pytest.raises(raw_store.RawRepresentationDeletionError, match="binding"):
             raw_liveness.governed_delete_raw_record(
                 record_id=record.id,
                 reason="hard_retention_bound",
@@ -1327,7 +1495,10 @@ def test_pg_cleanup_refuses_a_different_verified_archive_after_rebind(
         receipt = raw_liveness.all_deletion_receipts()[0]
         assert receipt.payload["cold_cleanup_location_refs"] == [location_ref]
         assert original_object.exists()
-        assert raw_store._cold_object_path(location_ref) is None  # noqa: SLF001
+        assert raw_store._cold_object_path(  # noqa: SLF001
+            location_ref,
+            expected_archive_generation=original_generation,
+        ) is None
 
         monkeypatch.setattr(raw_liveness, "_retention_stage_hook", lambda _stage: None)
         raw_store.configure_cold_archive_root(
@@ -1446,6 +1617,107 @@ def test_pg_consent_fence_and_revocation_projection_cover_both_race_orderings(
     with pytest.raises(consent_ledger.ConsentRefusedError):
         with consent_ledger.consent_raw_admission(grant_ref):
             raise AssertionError("revoked grant reached raw insertion")
+
+
+@pytest.mark.parametrize("revoked_grant", ["grant-pg-a", "grant-pg-b"])
+def test_pg_identical_bytes_preserve_all_grants_and_either_revocation_erases(
+    scratch_db_factory,
+    monkeypatch: pytest.MonkeyPatch,
+    revoked_grant: str,
+) -> None:
+    dsn = scratch_db_factory()
+    _upgrade(dsn, monkeypatch, CURRENT_REPRESENTATION_HEAD)
+    monkeypatch.setenv("DATABASE_URL", dsn)
+    monkeypatch.setenv("STORE_BACKEND", "pg")
+    monkeypatch.delenv("STORE_SCHEMA_AUTOCREATE", raising=False)
+    monkeypatch.setenv("HEIMDAL_RAW_STORE_KEY", _KEY.hex())
+
+    from app.heimdal import raw_liveness, raw_store, retention
+
+    plaintext = b"pg-identical-evidence-under-two-grants"
+    first = _insert_runtime_raw(plaintext, grant_ref="grant-pg-a")
+    ciphertext, nonce = raw_store.encrypt_raw_bytes(plaintext, key=_KEY)
+    replay, created = raw_store.insert_raw_record(
+        content_identity=raw_store.compute_raw_content_identity(plaintext),
+        capture_chain=["migration-test"],
+        sensor={"adapter": "migration-test"},
+        consent={"grant_ref": "grant-pg-b"},
+        ciphertext=ciphertext,
+        nonce=nonce,
+        key_ref="migration-test-key",
+        key=_KEY,
+        source_path="source-class-redacted",
+    )
+
+    assert created is False and replay.id == first.id
+    assert raw_store.raw_record_ids_by_consent_grant("grant-pg-a") == [first.id]
+    assert raw_store.raw_record_ids_by_consent_grant("grant-pg-b") == [first.id]
+    erased = retention.enforce_consent_revocation(
+        grant_ref=revoked_grant,
+        revoked_at=datetime.now(timezone.utc),
+    )
+
+    assert erased.deleted_count == 1
+    assert raw_store.resolve_active_raw_record(first.id) is None
+    assert set(
+        erased.deletions[0].payload[raw_liveness.CONSENT_GRANT_DIGESTS_PAYLOAD_KEY]
+    ) == {
+        raw_liveness.consent_grant_digest("grant-pg-a"),
+        raw_liveness.consent_grant_digest("grant-pg-b"),
+    }
+    with psycopg.connect(dsn) as conn:
+        assert conn.execute(
+            "SELECT count(*) FROM heimdal_raw_consent_association WHERE record_id = %s",
+            (first.id,),
+        ).fetchone() == (0,)
+
+
+def test_pg_retirement_claim_refuses_read_registration_and_activation(
+    scratch_db_factory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    dsn = scratch_db_factory()
+    _upgrade(dsn, monkeypatch, CURRENT_REPRESENTATION_HEAD)
+    monkeypatch.setenv("DATABASE_URL", dsn)
+    monkeypatch.setenv("STORE_BACKEND", "pg")
+    monkeypatch.delenv("STORE_SCHEMA_AUTOCREATE", raising=False)
+    monkeypatch.setenv("HEIMDAL_RAW_STORE_KEY", _KEY.hex())
+    monkeypatch.setenv("HEIMDAL_RAW_READ_ALLOWLIST", "pg-retirement-reader")
+
+    from app.heimdal import raw_liveness, raw_read_gate, raw_store, retention
+
+    record = _insert_runtime_raw(b"pg-retirement-fence", grant_ref="grant-pg-retiring")
+    now = datetime.now(timezone.utc)
+    raw_liveness.issue_response_lease(
+        raw_ref=raw_read_gate.raw_ref_for(record),
+        content_identity=record.content_identity,
+        now=now,
+    )
+    assert raw_liveness.governed_delete_raw_record(
+        record_id=record.id,
+        reason=retention.REASON_HARD_RETENTION_BOUND,
+        retention_window_days=30,
+        deleted_at=now,
+    ).outcome == "lease_valid"
+
+    with pytest.raises(raw_read_gate.RawReadRefusedError, match="retiring"):
+        raw_read_gate.read_raw_record(
+            raw_read_gate.raw_ref_for(record),
+            reader="pg-retirement-reader",
+            purpose="must refuse after claim",
+            key=_KEY,
+        )
+    ciphertext, nonce = raw_store.encrypt_raw_bytes(b"pg-retirement-fence", key=_KEY)
+    with pytest.raises(raw_liveness.RawLivenessUnavailableError, match="retiring"):
+        raw_store.register_raw_representation(
+            record_id=record.id,
+            ciphertext=ciphertext,
+            nonce=nonce,
+            key_ref="migration-test-key",
+            key=_KEY,
+        )
+    with pytest.raises(raw_liveness.RawLivenessUnavailableError, match="retiring"):
+        raw_store.activate_raw_representation(record.id, record.id, key=_KEY)
 
 
 def test_pg_durable_revocation_row_replays_after_propagation_crash(

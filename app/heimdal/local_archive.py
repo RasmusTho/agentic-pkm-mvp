@@ -249,6 +249,8 @@ def _pending_cold(
     hot: RawRepresentation,
     *,
     archive_ref: str,
+    archive_generation: str,
+    raw_generation: int,
 ) -> RawRepresentation | None:
     """Resolve the one retryable durable reservation without reading its object."""
 
@@ -271,6 +273,9 @@ def _pending_cold(
         or candidate.location_ref != raw_store._cold_location_ref(archive_ref, candidate.id)  # noqa: SLF001
         or candidate.nonce != hot.nonce
         or candidate.key_ref != hot.key_ref
+        or candidate.archive_token != raw_store._archive_binding_token(archive_ref)  # noqa: SLF001
+        or candidate.archive_generation != archive_generation
+        or candidate.raw_generation != raw_generation
     ):
         raise ArchiveDegradedError("archive_pending_state_invalid")
     return candidate
@@ -320,11 +325,17 @@ def relocate_raw_record(
     with raw_liveness.raw_relocation_fence(
         record_id=record.id,
         content_identity=record.content_identity,
-    ):
+    ) as mutation_authority:
         hot = _active_hot(record.id)
         ciphertext = hot.ciphertext
         ciphertext_hash = hashlib.sha256(ciphertext).hexdigest()
-        pending = _pending_cold(record.id, hot, archive_ref=archive_ref)
+        pending = _pending_cold(
+            record.id,
+            hot,
+            archive_ref=archive_ref,
+            archive_generation=volume_proof.archive_generation,
+            raw_generation=mutation_authority.generation,
+        )
         representation_id = pending.id if pending is not None else str(uuid4())
         receipt_id = str(uuid4())
         location_ref = raw_store._cold_location_ref(  # noqa: SLF001
@@ -352,6 +363,10 @@ def relocate_raw_record(
                         key=key,
                         representation_id=representation_id,
                         verified_volume=volume_proof,
+                        _authority=mutation_authority,
+                    )
+                    raw_liveness._checkpoint_raw_mutation_authority(  # noqa: SLF001
+                        mutation_authority
                     )
                     reservation_durable = True
                     _relocation_stage_hook("after_reservation")
@@ -381,7 +396,12 @@ def relocate_raw_record(
                     _durable_write(manifest_path, _manifest_payload(receipt))
                     _relocation_stage_hook("after_manifest_write")
                     activation_started = True
-                    active = raw_store.activate_raw_representation(record.id, cold.id, key=key)
+                    active = raw_store.activate_raw_representation(
+                        record.id,
+                        cold.id,
+                        key=key,
+                        _authority=mutation_authority,
+                    )
                     _relocation_stage_hook("after_activation")
                     return ArchiveResult(receipt, ArchiveHealth(True, "ok"), active)
                 except ArchiveDegradedError as exc:

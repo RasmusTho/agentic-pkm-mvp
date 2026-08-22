@@ -127,6 +127,228 @@ def _write_retention_window(vault_root: Path, *, days: int) -> None:
     )
 
 
+@pytest.mark.parametrize("revoked_grant", ["grant-a", "grant-b"])
+def test_identical_bytes_preserve_every_grant_and_either_revocation_erases(
+    revoked_grant: str,
+) -> None:
+    plaintext = b"one raw identity admitted under two independent grants"
+    first = _insert(plaintext, grant_ref="grant-a")
+    replay_ciphertext, replay_nonce = raw_store.encrypt_raw_bytes(plaintext, key=_KEY)
+
+    replay, created = raw_store.insert_raw_record(
+        content_identity=raw_store.compute_raw_content_identity(plaintext),
+        capture_chain=["registered-sensor", "heimdal"],
+        sensor={"sensor_id": "registered-sensor"},
+        consent={"grant_ref": "grant-b"},
+        ciphertext=replay_ciphertext,
+        nonce=replay_nonce,
+        key_ref="test-key-v1",
+        key=_KEY,
+        source_path="source-class-redacted",
+    )
+
+    assert created is False
+    assert replay.id == first.id
+    assert raw_store.raw_record_ids_by_consent_grant("grant-a") == [first.id]
+    assert raw_store.raw_record_ids_by_consent_grant("grant-b") == [first.id]
+
+    result = retention.enforce_consent_revocation(
+        grant_ref=revoked_grant,
+        revoked_at=datetime.now(timezone.utc),
+    )
+
+    assert result.deleted_count == 1
+    assert raw_store.resolve_active_raw_record(first.id) is None
+    assert raw_store.all_raw_representations(first.id) == []
+    receipt = result.deletions[0]
+    assert receipt.payload[raw_liveness.CONSENT_GRANT_DIGEST_PAYLOAD_KEY] == (
+        raw_liveness.consent_grant_digest(revoked_grant)
+    )
+    assert set(receipt.payload[raw_liveness.CONSENT_GRANT_DIGESTS_PAYLOAD_KEY]) == {
+        raw_liveness.consent_grant_digest("grant-a"),
+        raw_liveness.consent_grant_digest("grant-b"),
+    }
+
+
+def test_retirement_claim_refuses_reads_writers_and_freshness_until_drained(
+    tmp_path: Path,
+) -> None:
+    now = datetime.now(timezone.utc)
+    enforcement_time = now + timedelta(days=31)
+    vault_root = tmp_path / "vault"
+    _write_retention_window(vault_root, days=30)
+    record = _age_record(_insert(b"retirement fence", grant_ref="grant-retiring"), now=now)
+    lease = raw_liveness.issue_response_lease(
+        raw_ref=raw_ref_for(record),
+        content_identity=record.content_identity,
+        now=enforcement_time,
+    )
+
+    with pytest.raises(retention.RetentionErasurePendingError, match="draining"):
+        retention.enforce_hard_retention_bound(
+            vault_root=vault_root,
+            now=enforcement_time,
+        )
+
+    with pytest.raises(RawReadRefusedError, match="retiring"):
+        read_raw_record(
+            raw_ref_for(record),
+            reader=_READER,
+            purpose="must stop after retirement claim",
+            key=_KEY,
+        )
+    with pytest.raises(raw_liveness.RawLivenessUnavailableError, match="retiring"):
+        raw_liveness.issue_response_lease(
+            raw_ref=raw_ref_for(record),
+            content_identity=record.content_identity,
+            now=enforcement_time,
+        )
+    replacement_ciphertext, replacement_nonce = raw_store.encrypt_raw_bytes(
+        b"retirement fence",
+        key=_KEY,
+    )
+    with pytest.raises(raw_liveness.RawLivenessUnavailableError, match="retiring"):
+        raw_store.register_raw_representation(
+            record_id=record.id,
+            ciphertext=replacement_ciphertext,
+            nonce=replacement_nonce,
+            key_ref="test-key-v1",
+            key=_KEY,
+            activate=False,
+        )
+    with pytest.raises(raw_liveness.RawLivenessUnavailableError, match="retiring"):
+        raw_store.activate_raw_representation(record.id, record.id, key=_KEY)
+    settings = read_settings_note(vault_root, SETTINGS)
+    assert settings is not None
+    assert "last_enforced_at" not in settings.values
+    assert raw_liveness.all_deletion_receipts() == []
+
+    completed = retention.enforce_hard_retention_bound(
+        vault_root=vault_root,
+        now=lease.expires_at + timedelta(microseconds=1),
+    )
+    assert completed.deleted_count == 1
+    settings = read_settings_note(vault_root, SETTINGS)
+    assert settings is not None and settings.values["last_enforced_at"]
+
+
+def test_unmounted_cold_expiry_selects_metadata_and_leaves_retry_authority(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    now = datetime.now(timezone.utc)
+    archive_root = tmp_path / "mounted-cold"
+    archive_root.mkdir()
+    vault_root = tmp_path / "vault"
+    _write_retention_window(vault_root, days=30)
+    record = _age_record(_insert(b"metadata-only expiry", grant_ref="grant-expiry"), now=now)
+    _archive(record, archive_root=archive_root, now=now)
+
+    monkeypatch.setattr(
+        raw_store,
+        "_resolve_cold_ciphertext",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("expiry discovery resolved cold ciphertext")
+        ),
+    )
+    raw_store.revoke_cold_archive_binding()
+    with pytest.raises(raw_store.RawRepresentationDeletionError, match="binding"):
+        retention.enforce_hard_retention_bound(
+            vault_root=vault_root,
+            now=now + timedelta(days=31),
+            record_last_enforced=False,
+        )
+
+    assert raw_store.raw_record_ids_by_consent_grant("grant-expiry") == []
+    pending = raw_liveness.all_deletion_receipts()[0]
+    assert pending.payload["cold_cleanup_location_refs"]
+    assert pending.payload["cold_cleanup_archive_bindings"]
+
+    proof = _volume_ready(archive_root)
+    raw_store.configure_cold_archive_root(
+        archive_root,
+        verified_volume=proof,
+        expected_archive_ref=_ARCHIVE_REF,
+    )
+    retention.enforce_hard_retention_bound(
+        vault_root=vault_root,
+        now=now + timedelta(days=31),
+        record_last_enforced=False,
+    )
+    assert raw_liveness.all_deletion_receipts()[0].payload[
+        "cold_cleanup_location_refs"
+    ] == []
+
+
+def test_pending_cleanup_never_retargets_same_identity_new_archive_generation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    now = datetime.now(timezone.utc)
+    archive_a = tmp_path / "archive-a"
+    archive_b = tmp_path / "archive-b"
+    archive_a.mkdir()
+    archive_b.mkdir()
+    record = _age_record(_insert(b"generation-bound cleanup", grant_ref="grant-binding"), now=now)
+    archived = _archive(record, archive_root=archive_a, now=now)
+    representation_id = archived.active_representation.id
+    original_delete = raw_store._delete_cold_object_path  # noqa: SLF001
+    monkeypatch.setattr(
+        raw_store,
+        "_delete_cold_object_path",
+        lambda _path: (_ for _ in ()).throw(
+            raw_store.RawRepresentationDeletionError("leave cleanup pending")
+        ),
+    )
+    with pytest.raises(raw_store.RawRepresentationDeletionError):
+        raw_liveness.governed_delete_raw_record(
+            record_id=record.id,
+            reason=retention.REASON_HARD_RETENTION_BOUND,
+            retention_window_days=30,
+            deleted_at=now,
+        )
+
+    monkeypatch.setattr(raw_store, "_delete_cold_object_path", original_delete)
+    proof_b = _volume_ready(archive_b)
+    raw_store.configure_cold_archive_root(
+        archive_b,
+        verified_volume=proof_b,
+        expected_archive_ref=_ARCHIVE_REF,
+    )
+    (archive_b / "representations").mkdir()
+    (archive_b / "manifests").mkdir()
+    decoy_object = archive_b / "representations" / f"{representation_id}.bin"
+    decoy_manifest = archive_b / "manifests" / f"{representation_id}.json"
+    decoy_object.write_bytes(b"must-not-delete")
+    decoy_manifest.write_text("{}", encoding="utf-8")
+
+    with pytest.raises(raw_store.RawRepresentationDeletionError, match="binding"):
+        raw_liveness.governed_delete_raw_record(
+            record_id=record.id,
+            reason=retention.REASON_HARD_RETENTION_BOUND,
+            retention_window_days=30,
+            deleted_at=now,
+        )
+    assert decoy_object.read_bytes() == b"must-not-delete"
+    assert decoy_manifest.exists()
+
+    proof_a = _volume_ready(archive_a)
+    raw_store.configure_cold_archive_root(
+        archive_a,
+        verified_volume=proof_a,
+        expected_archive_ref=_ARCHIVE_REF,
+    )
+    assert raw_liveness.governed_delete_raw_record(
+        record_id=record.id,
+        reason=retention.REASON_HARD_RETENTION_BOUND,
+        retention_window_days=30,
+        deleted_at=now,
+    ).outcome == "already_erased"
+    assert raw_liveness.all_deletion_receipts()[0].payload[
+        "cold_cleanup_location_refs"
+    ] == []
+
+
 def test_archived_read_reuses_gated_read_path(tmp_path: Path) -> None:
     now = datetime.now(timezone.utc)
     archive_root = tmp_path / "mounted-cold"

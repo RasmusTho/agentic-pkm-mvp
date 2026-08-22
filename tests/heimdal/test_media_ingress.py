@@ -60,6 +60,7 @@ from app.heimdal.raw_store import (
     reset_memory_raw_store,
 )
 from app.heimdal.retention import (
+    RetentionErasurePendingError,
     enforce_hard_retention_bound,
     enforce_screen_frame_retention,
 )
@@ -571,9 +572,15 @@ def test_response_fence_serializes_every_producer_against_both_retention_writers
         assert not retention_future.done(), "retention crossed a held response fence"
         release_response.set()
         produced = producer_future.result(timeout=5)
-        retained = retention_future.result(timeout=5)
+        if writer == "hard":
+            with pytest.raises(RetentionErasurePendingError, match="draining"):
+                retention_future.result(timeout=5)
+            retained = None
+        else:
+            retained = retention_future.result(timeout=5)
 
-    assert retained.deleted_count == 0
+    if retained is not None:
+        assert retained.deleted_count == 0
     assert len(all_raw_records()) == 1
     if producer == "watched_folder":
         assert produced.source_deleted is True

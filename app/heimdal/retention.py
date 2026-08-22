@@ -93,6 +93,10 @@ class ConsentRevocationErasurePendingError(RuntimeError):
     """Raised while a revoked grant still has raw state waiting on a fence."""
 
 
+class RetentionErasurePendingError(RuntimeError):
+    """Raised when a retention claim is draining and the run is incomplete."""
+
+
 DeletionReceiptSchemaMissingError = raw_liveness.RawLivenessSchemaMissingError
 
 
@@ -179,6 +183,7 @@ def enforce_consent_revocation(
             reason=REASON_CONSENT_REVOKED,
             retention_window_days=0,
             deleted_at=reference_time,
+            consent_grant_ref=grant_ref,
         )
         if result.outcome == "deleted":
             assert result.receipt is not None
@@ -197,8 +202,11 @@ def enforce_consent_revocation(
         # receipts for another grant remain isolated.
         receipt_filter=lambda receipt: (
             receipt.payload.get(raw_liveness.CONSENT_GRANT_DIGEST_PAYLOAD_KEY) is None
-            or receipt.payload.get(raw_liveness.CONSENT_GRANT_DIGEST_PAYLOAD_KEY)
-            == grant_digest
+            and grant_digest
+            not in receipt.payload.get(raw_liveness.CONSENT_GRANT_DIGESTS_PAYLOAD_KEY, [])
+            or receipt.payload.get(raw_liveness.CONSENT_GRANT_DIGEST_PAYLOAD_KEY) == grant_digest
+            or grant_digest
+            in receipt.payload.get(raw_liveness.CONSENT_GRANT_DIGESTS_PAYLOAD_KEY, [])
         ),
     )
     if pending_count:
@@ -348,26 +356,19 @@ def enforce_hard_retention_bound(
     reconcile_revoked_consent_erasure()
 
     deletions: List[DeletionReceipt] = []
-    for record in raw_store.all_raw_records():
-        ingested_at = record.ingested_at
-        if ingested_at.tzinfo is None:
-            ingested_at = ingested_at.replace(tzinfo=timezone.utc)
-        if ingested_at >= cutoff:
-            continue  # within the bound: not deleted (negative AC)
-
+    pending_count = 0
+    for record in raw_store.expired_raw_record_metadata(ingested_before=cutoff):
         result = raw_liveness.governed_delete_raw_record(
-            record_id=record.id,
+            record_id=record.record_id,
             reason=REASON_HARD_RETENTION_BOUND,
             retention_window_days=window_days,
             deleted_at=reference_time,
         )
-        if result.outcome != "deleted":
-            # A concurrent run may already have erased this generation, while
-            # a valid response lease makes this bounded run skip and retry on
-            # its next schedule. Neither case fabricates another receipt.
-            continue
-        assert result.receipt is not None
-        deletions.append(result.receipt)
+        if result.outcome == "deleted":
+            assert result.receipt is not None
+            deletions.append(result.receipt)
+        elif result.outcome == "lease_valid":
+            pending_count += 1
 
     # Read the durable retry queue only after active generations have entered
     # the governed delete path.  The memory receipt snapshot takes the same
@@ -375,6 +376,11 @@ def enforce_hard_retention_bound(
     # behind an in-flight response before the retention writer could announce
     # its own fence entry, inverting the producer/retention handshake.
     _reconcile_pending_cold_cleanup(fail_loud=True)
+
+    if pending_count:
+        raise RetentionErasurePendingError(
+            "hard-retention erasure is draining active raw-response leases; retry required"
+        )
 
     if record_last_enforced:
         apply_agent_update(
@@ -434,6 +440,7 @@ __all__ = [
     "REASON_HARD_RETENTION_BOUND",
     "REASON_SCREEN_FRAME_RETENTION_BUFFER",
     "RetentionEnforcementReceipt",
+    "RetentionErasurePendingError",
     "RetentionWindowMissingError",
     "all_deletion_receipts",
     "enforce_hard_retention_bound",

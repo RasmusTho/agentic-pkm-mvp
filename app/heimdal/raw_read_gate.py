@@ -412,60 +412,67 @@ def read_raw_record(
     # the read, and unauthorized callers never reach either store.
     receipt_backend = _backend()
 
-    initial = raw_store.resolve_active_raw_record(record_id)
-    if initial is None:
+    try:
+        content_identity = raw_liveness.content_identity_for_raw_record(record_id)
+    except (raw_liveness.RawLivenessUnavailableError, raw_liveness.RawEvidenceErasedError) as exc:
         raise RawReadRefusedError(
             f"Raw read refused: raw_ref {raw_ref!r} does not resolve to any known raw "
             "record."
-        )
+        ) from exc
 
     encryption_key = key if key is not None else raw_store.resolve_raw_store_key()
-    with raw_liveness.raw_relocation_fence(
-        record_id=record_id,
-        content_identity=initial.content_identity,
-    ):
-        record = raw_store.resolve_active_raw_record(record_id)
-        active = [
-            representation
-            for representation in raw_store.all_raw_representations(record_id)
-            if representation.active
-        ]
-        if record is None or len(active) != 1:
-            raise RawReadRefusedError(
-                "Raw read refused: the exact active representation is unavailable."
-            )
-        _raw_read_stage_hook("after_active_representation_resolution")
-        try:
-            plaintext = raw_store.decrypt_and_verify_raw_bytes(
-                record.content_identity,
-                record.ciphertext,
-                record.nonce,
-                key=encryption_key,
-            )
-        except raw_store.RawRepresentationIdentityMismatchError as exc:
-            raise RawReadRefusedError(
-                "Raw read refused: active representation does not match immutable content identity. "
-                "No receipt written and no plaintext returned."
-            ) from exc
+    try:
+        with raw_liveness.raw_relocation_fence(
+            record_id=record_id,
+            content_identity=content_identity,
+        ):
+            record = raw_store.resolve_active_raw_record(record_id)
+            active = [
+                representation
+                for representation in raw_store.all_raw_representations(record_id)
+                if representation.active
+            ]
+            if record is None or len(active) != 1:
+                raise RawReadRefusedError(
+                    "Raw read refused: the exact active representation is unavailable."
+                )
+            _raw_read_stage_hook("after_active_representation_resolution")
+            try:
+                plaintext = raw_store.decrypt_and_verify_raw_bytes(
+                    record.content_identity,
+                    record.ciphertext,
+                    record.nonce,
+                    key=encryption_key,
+                )
+            except raw_store.RawRepresentationIdentityMismatchError as exc:
+                raise RawReadRefusedError(
+                    "Raw read refused: active representation does not match immutable content identity. "
+                    "No receipt written and no plaintext returned."
+                ) from exc
 
-        receipt = RawReadReceipt(
-            id=str(uuid4()),
-            raw_ref=raw_ref,
-            content_identity=record.content_identity,
-            reader=reader,
-            purpose=purpose,
-            read_at=datetime.now(timezone.utc),
-            payload=dict(payload or {}),
-            sequence=-1,
-        )
-        persisted_receipt = receipt_backend.append(receipt)
+            receipt = RawReadReceipt(
+                id=str(uuid4()),
+                raw_ref=raw_ref,
+                content_identity=record.content_identity,
+                reader=reader,
+                purpose=purpose,
+                read_at=datetime.now(timezone.utc),
+                payload=dict(payload or {}),
+                sequence=-1,
+            )
+            persisted_receipt = receipt_backend.append(receipt)
 
-        return GatedRawRead(
-            plaintext=plaintext,
-            receipt=persisted_receipt,
-            representation_id=active[0].id,
-            storage_kind=active[0].storage_kind,
-        )
+            return GatedRawRead(
+                plaintext=plaintext,
+                receipt=persisted_receipt,
+                representation_id=active[0].id,
+                storage_kind=active[0].storage_kind,
+            )
+    except (raw_liveness.RawLivenessUnavailableError, raw_liveness.RawEvidenceErasedError) as exc:
+        raise RawReadRefusedError(
+            "Raw read refused: the exact raw generation is retiring or erased. "
+            "No receipt written and no plaintext returned."
+        ) from exc
 
 
 def all_raw_read_receipts() -> List[RawReadReceipt]:

@@ -35,17 +35,21 @@ _TOMBSTONE_TABLE = "heimdal_raw_deletion_tombstone"
 _LEASE_TABLE = "heimdal_raw_response_lease"
 _RETENTION_CLAIM_TABLE = "heimdal_raw_retention_claim"
 _DELETION_RECEIPT_TABLE = "heimdal_raw_deletion_receipt"
+_CONSENT_ASSOCIATION_TABLE = "heimdal_raw_consent_association"
 _RAW_REF_PREFIX = "heimraw:"
 _RETENTION_GUARD_SETTING = "app.heimdal_retention_bypass"
 _RETENTION_RECONCILE_GUARD_SETTING = "app.heimdal_retention_reconcile"
 _COLD_CLEANUP_PAYLOAD_KEY = "cold_cleanup_location_refs"
+_COLD_CLEANUP_BINDINGS_PAYLOAD_KEY = "cold_cleanup_archive_bindings"
 CONSENT_GRANT_DIGEST_PAYLOAD_KEY = "consent_grant_digest"
+CONSENT_GRANT_DIGESTS_PAYLOAD_KEY = "consent_grant_digests"
 
 RESPONSE_LEASE_SECONDS = 30
 
 _MIGRATION_HINT = (
     "raw liveness is migration-owned: run 'alembic upgrade head' against this "
-    "database. See revisions c5d8a1e4f2b7, e2f3a4b5c6d7, and f4b6c8d0e2a1."
+    "database. See revisions c5d8a1e4f2b7, e2f3a4b5c6d7, f4b6c8d0e2a1, "
+    "and a9d7c5e3b1f0."
 )
 
 _RECEIPT_TRIGGER_BODY = (
@@ -152,6 +156,50 @@ class RawLivenessGeneration:
     sequence: int
 
 
+_MUTATION_AUTHORITY_ISSUER = object()
+_ACTIVE_MUTATION_AUTHORITIES: Dict[int, "RawMutationAuthority"] = {}
+_MUTATION_AUTHORITY_LOCK = threading.Lock()
+
+
+@dataclass(frozen=True, init=False)
+class RawMutationAuthority:
+    """Unforgeable, context-bound authority for one active raw generation.
+
+    PostgreSQL authorities carry the cursor whose session owns the advisory
+    lock. This keeps registration/activation on one connection, while allowing
+    a cold reservation to commit before external bytes are written without
+    opening a retirement check/use gap.
+    """
+
+    record_id: str
+    content_identity: str
+    generation: int
+    backend: Literal["memory", "pg"]
+    owner_thread_id: int
+    _issuer: object
+    _cursor: Any | None
+
+    def __init__(
+        self,
+        *,
+        _issuer: object,
+        record_id: str,
+        content_identity: str,
+        generation: int,
+        backend: Literal["memory", "pg"],
+        cursor: Any | None = None,
+    ) -> None:
+        if _issuer is not _MUTATION_AUTHORITY_ISSUER:
+            raise RawLivenessUnavailableError("raw mutation authority cannot be forged")
+        object.__setattr__(self, "record_id", record_id)
+        object.__setattr__(self, "content_identity", content_identity)
+        object.__setattr__(self, "generation", generation)
+        object.__setattr__(self, "backend", backend)
+        object.__setattr__(self, "owner_thread_id", threading.get_ident())
+        object.__setattr__(self, "_issuer", _issuer)
+        object.__setattr__(self, "_cursor", cursor)
+
+
 @dataclass(frozen=True)
 class RawResponseLease:
     lease_id: str
@@ -244,9 +292,17 @@ def _iso_timestamp(value: datetime) -> str:
 
 
 def _assert_new_deletion_payload(payload: Mapping[str, Any]) -> None:
-    if _COLD_CLEANUP_PAYLOAD_KEY in payload:
-        raise ValueError("cold cleanup queue is reserved for governed retention authority")
-    if CONSENT_GRANT_DIGEST_PAYLOAD_KEY in payload:
+    if (
+        _COLD_CLEANUP_PAYLOAD_KEY in payload
+        or _COLD_CLEANUP_BINDINGS_PAYLOAD_KEY in payload
+    ):
+        raise ValueError(
+            "cold cleanup authority is reserved for governed retention authority"
+        )
+    if (
+        CONSENT_GRANT_DIGEST_PAYLOAD_KEY in payload
+        or CONSENT_GRANT_DIGESTS_PAYLOAD_KEY in payload
+    ):
         raise ValueError("consent grant correlation is reserved for governed retention authority")
 
 
@@ -259,11 +315,26 @@ def consent_grant_digest(grant_ref: str) -> str:
 
 
 def _governed_deletion_payload(
-    payload: Mapping[str, Any], *, grant_ref: Optional[str]
+    payload: Mapping[str, Any],
+    *,
+    grant_refs: Iterable[str],
+    correlation_grant_ref: Optional[str],
 ) -> Dict[str, Any]:
     governed = dict(payload)
-    if grant_ref:
-        governed[CONSENT_GRANT_DIGEST_PAYLOAD_KEY] = consent_grant_digest(grant_ref)
+    refs = sorted({ref for ref in grant_refs if isinstance(ref, str) and ref})
+    if not refs:
+        raise RawLivenessUnavailableError(
+            "active raw generation has no durable consent association"
+        )
+    if correlation_grant_ref is not None and correlation_grant_ref not in refs:
+        raise RawLivenessUnavailableError(
+            "deletion correlation grant is not associated with the raw generation"
+        )
+    digests = sorted(consent_grant_digest(ref) for ref in refs)
+    governed[CONSENT_GRANT_DIGESTS_PAYLOAD_KEY] = digests
+    selected = correlation_grant_ref or (refs[0] if len(refs) == 1 else None)
+    if selected is not None:
+        governed[CONSENT_GRANT_DIGEST_PAYLOAD_KEY] = consent_grant_digest(selected)
     return governed
 
 
@@ -352,6 +423,10 @@ def assert_memory_generation_active(
         tombstone = _MEMORY.tombstones_by_record.get(record_id)
         if tombstone is not None:
             raise RawEvidenceErasedError(tombstone)
+        if record_id in _MEMORY.retention_claims_by_record:
+            raise RawLivenessUnavailableError(
+                "raw generation is retiring and refuses new work"
+            )
         return generation
 
 
@@ -463,6 +538,7 @@ def _assert_pg_schema(conn: Any) -> None:
         _LEASE_TABLE,
         _RETENTION_CLAIM_TABLE,
         _DELETION_RECEIPT_TABLE,
+        _CONSENT_ASSOCIATION_TABLE,
     )
     cur.execute("SELECT " + ", ".join("to_regclass(%s)" for _ in tables), tables)
     row = cur.fetchone()
@@ -523,6 +599,13 @@ def _assert_pg_schema(conn: Any) -> None:
             "payload",
             "sequence",
         },
+        _CONSENT_ASSOCIATION_TABLE: {
+            "record_id",
+            "generation",
+            "grant_ref",
+            "admitted_at",
+            "sequence",
+        },
     }
     cur.execute(
         """
@@ -551,7 +634,8 @@ def _assert_pg_schema(conn: Any) -> None:
               'heimdal_raw_response_lease_no_mutation',
               'heimdal_raw_retention_claim_no_mutation',
               'heimdal_raw_response_lease_reject_retiring',
-              'heimdal_raw_deletion_receipt_no_update'
+              'heimdal_raw_deletion_receipt_no_update',
+              'heimdal_raw_consent_association_no_mutation'
           )
         """
     )
@@ -563,6 +647,7 @@ def _assert_pg_schema(conn: Any) -> None:
         "heimdal_raw_retention_claim_no_mutation",
         "heimdal_raw_response_lease_reject_retiring",
         "heimdal_raw_deletion_receipt_no_update",
+        "heimdal_raw_consent_association_no_mutation",
     }
     if triggers != expected:
         raise RawLivenessSchemaMissingError(
@@ -630,6 +715,24 @@ def _assert_pg_schema(conn: Any) -> None:
             "Active raw identities are not covered by exactly one untombstoned "
             "liveness generation. " + _MIGRATION_HINT
         )
+    cur.execute(
+        f"""
+        SELECT r.id
+        FROM heimdal_raw_record AS r
+        JOIN {_GENERATION_TABLE} AS g ON g.record_id = r.id
+        LEFT JOIN {_TOMBSTONE_TABLE} AS t ON t.record_id = r.id
+        LEFT JOIN {_CONSENT_ASSOCIATION_TABLE} AS a
+          ON a.record_id = r.id AND a.generation = g.generation
+        WHERE t.record_id IS NULL
+        GROUP BY r.id
+        HAVING count(a.grant_ref) = 0
+        LIMIT 1
+        """
+    )
+    if cur.fetchone() is not None:
+        raise RawLivenessSchemaMissingError(
+            "Active raw generation lacks durable consent association. " + _MIGRATION_HINT
+        )
 
 
 def assert_runtime_schema() -> None:
@@ -664,9 +767,16 @@ def _bootstrap_pg(conn: Any) -> None:
         _assert_pg_schema(conn)
         return
     cur = conn.cursor()
+    fixture_tables = (
+        _GENERATION_TABLE,
+        _TOMBSTONE_TABLE,
+        _LEASE_TABLE,
+        _RETENTION_CLAIM_TABLE,
+        _CONSENT_ASSOCIATION_TABLE,
+    )
     cur.execute(
-        "SELECT to_regclass(%s), to_regclass(%s), to_regclass(%s), to_regclass(%s)",
-        (_GENERATION_TABLE, _TOMBSTONE_TABLE, _LEASE_TABLE, _RETENTION_CLAIM_TABLE),
+        "SELECT " + ", ".join("to_regclass(%s)" for _ in fixture_tables),
+        fixture_tables,
     )
     existing = cur.fetchone()
     if existing and any(existing):
@@ -766,19 +876,114 @@ def _bootstrap_pg(conn: Any) -> None:
         FOR EACH ROW EXECUTE FUNCTION heimdal_raw_deletion_receipt_reject_mutation()
         """
     )
-    cur.execute(
-        f"""
-        CREATE TABLE {_GENERATION_TABLE} (
-            content_identity text NOT NULL,
-            generation integer NOT NULL CHECK (generation > 0),
-            record_id uuid NOT NULL UNIQUE,
-            raw_ref text NOT NULL UNIQUE CHECK (raw_ref LIKE '{_RAW_REF_PREFIX}%'),
-            activated_at timestamptz NOT NULL,
-            sequence bigserial NOT NULL,
-            PRIMARY KEY (content_identity, generation)
-        )
-        """
+    generation_table_groups = (
+        (
+            _GENERATION_TABLE,
+            (
+                f"""
+                CREATE TABLE {_GENERATION_TABLE} (
+                    content_identity text NOT NULL,
+                    generation integer NOT NULL CHECK (generation > 0),
+                    record_id uuid NOT NULL UNIQUE,
+                    raw_ref text NOT NULL UNIQUE CHECK (raw_ref LIKE '{_RAW_REF_PREFIX}%'),
+                    activated_at timestamptz NOT NULL,
+                    sequence bigserial NOT NULL,
+                    PRIMARY KEY (content_identity, generation),
+                    CONSTRAINT heimdal_raw_liveness_generation_record_generation_uq
+                        UNIQUE (record_id, generation)
+                )
+                """,
+                f"""
+                ALTER TABLE heimdal_raw_representation
+                ADD CONSTRAINT heimdal_raw_representation_generation_fk
+                FOREIGN KEY (record_id, raw_generation)
+                    REFERENCES {_GENERATION_TABLE}(record_id, generation)
+                    ON DELETE RESTRICT
+                """,
+                f"""
+                CREATE OR REPLACE FUNCTION heimdal_raw_representation_reject_mutation()
+                RETURNS trigger AS $$
+                DECLARE
+                    authority_identity text;
+                    authority_generation integer;
+                BEGIN
+                    IF TG_OP IN ('INSERT', 'UPDATE') THEN
+                        SELECT content_identity, generation
+                        INTO authority_identity, authority_generation
+                        FROM {_GENERATION_TABLE}
+                        WHERE record_id = NEW.record_id;
+                        IF authority_identity IS NULL
+                           OR NEW.raw_generation IS DISTINCT FROM authority_generation THEN
+                            RAISE EXCEPTION
+                                'raw representation has no matching liveness generation';
+                        END IF;
+                        PERFORM pg_advisory_xact_lock(
+                            hashtextextended(authority_identity, 0)
+                        );
+                        IF EXISTS (
+                            SELECT 1 FROM {_RETENTION_CLAIM_TABLE}
+                            WHERE record_id = NEW.record_id
+                        ) OR EXISTS (
+                            SELECT 1 FROM {_TOMBSTONE_TABLE}
+                            WHERE record_id = NEW.record_id
+                        ) THEN
+                            RAISE EXCEPTION
+                                'raw representation cannot mutate a retiring generation';
+                        END IF;
+                        IF TG_OP = 'INSERT' THEN
+                            RETURN NEW;
+                        END IF;
+                    END IF;
+                    IF TG_OP = 'UPDATE'
+                       AND current_setting(
+                           'app.heimdal_representation_activation', true
+                       ) = 'true'
+                       AND NEW.id IS NOT DISTINCT FROM OLD.id
+                       AND NEW.record_id IS NOT DISTINCT FROM OLD.record_id
+                       AND NEW.storage_kind IS NOT DISTINCT FROM OLD.storage_kind
+                       AND NEW.location_ref IS NOT DISTINCT FROM OLD.location_ref
+                       AND NEW.ciphertext IS NOT DISTINCT FROM OLD.ciphertext
+                       AND NEW.nonce IS NOT DISTINCT FROM OLD.nonce
+                       AND NEW.key_ref IS NOT DISTINCT FROM OLD.key_ref
+                       AND NEW.raw_generation IS NOT DISTINCT FROM OLD.raw_generation
+                       AND NEW.archive_token IS NOT DISTINCT FROM OLD.archive_token
+                       AND NEW.archive_generation IS NOT DISTINCT FROM OLD.archive_generation
+                       AND NEW.registered_at IS NOT DISTINCT FROM OLD.registered_at
+                       AND NEW.sequence IS NOT DISTINCT FROM OLD.sequence THEN
+                        RETURN NEW;
+                    END IF;
+                    IF TG_OP = 'DELETE'
+                       AND current_setting('{_RETENTION_GUARD_SETTING}', true) = 'true'
+                       AND EXISTS (
+                           SELECT 1 FROM {_TOMBSTONE_TABLE}
+                           WHERE record_id = OLD.record_id
+                       ) THEN
+                        RETURN OLD;
+                    END IF;
+                    RAISE EXCEPTION
+                        'heimdal_raw_representation mutation is governed: % is not permitted',
+                        TG_OP;
+                END;
+                $$ LANGUAGE plpgsql
+                """,
+                "DROP TRIGGER IF EXISTS heimdal_raw_representation_no_mutation "
+                "ON heimdal_raw_representation",
+                """
+                CREATE TRIGGER heimdal_raw_representation_no_mutation
+                BEFORE INSERT OR UPDATE OR DELETE ON heimdal_raw_representation
+                FOR EACH ROW EXECUTE FUNCTION heimdal_raw_representation_reject_mutation()
+                """,
+            ),
+        ),
     )
+    for table_name, statements in generation_table_groups:
+        cur.execute("SELECT to_regclass(%s)", (table_name,))
+        table_present_row = cur.fetchone()
+        table_present = bool(table_present_row and table_present_row[0])
+        if table_present:
+            continue
+        for statement in statements:
+            cur.execute(statement)
     cur.execute(
         f"CREATE INDEX heimdal_raw_liveness_generation_record_idx "
         f"ON {_GENERATION_TABLE} (record_id)"
@@ -851,6 +1056,88 @@ def _bootstrap_pg(conn: Any) -> None:
         f"CREATE INDEX heimdal_raw_retention_claim_record_idx "
         f"ON {_RETENTION_CLAIM_TABLE} (record_id)"
     )
+    consent_association_table_groups = (
+        (
+            _CONSENT_ASSOCIATION_TABLE,
+            (
+                f"""
+                CREATE TABLE {_CONSENT_ASSOCIATION_TABLE} (
+                    record_id uuid NOT NULL
+                        REFERENCES heimdal_raw_record(id) ON DELETE CASCADE,
+                    generation integer NOT NULL,
+                    grant_ref text NOT NULL CHECK (btrim(grant_ref) <> ''),
+                    admitted_at timestamptz NOT NULL,
+                    sequence bigserial NOT NULL,
+                    PRIMARY KEY (record_id, generation, grant_ref),
+                    FOREIGN KEY (record_id, generation)
+                        REFERENCES {_GENERATION_TABLE}(record_id, generation)
+                        ON DELETE RESTRICT
+                )
+                """,
+                f"CREATE INDEX heimdal_raw_consent_association_grant_idx "
+                f"ON {_CONSENT_ASSOCIATION_TABLE} (grant_ref, sequence)",
+                f"""
+                CREATE OR REPLACE FUNCTION
+                    heimdal_raw_consent_association_reject_mutation()
+                RETURNS trigger AS $$
+                DECLARE
+                    authority_identity text;
+                BEGIN
+                    IF TG_OP = 'INSERT' THEN
+                        SELECT content_identity INTO authority_identity
+                        FROM {_GENERATION_TABLE}
+                        WHERE record_id = NEW.record_id
+                          AND generation = NEW.generation;
+                        IF authority_identity IS NULL THEN
+                            RAISE EXCEPTION
+                                'consent association has no matching raw generation';
+                        END IF;
+                        PERFORM pg_advisory_xact_lock(
+                            hashtextextended(authority_identity, 0)
+                        );
+                        IF EXISTS (
+                            SELECT 1 FROM {_RETENTION_CLAIM_TABLE}
+                            WHERE record_id = NEW.record_id
+                        ) OR EXISTS (
+                            SELECT 1 FROM {_TOMBSTONE_TABLE}
+                            WHERE record_id = NEW.record_id
+                        ) THEN
+                            RAISE EXCEPTION
+                                'consent association cannot admit a retiring raw generation';
+                        END IF;
+                        RETURN NEW;
+                    END IF;
+                    IF TG_OP = 'DELETE'
+                       AND current_setting('{_RETENTION_GUARD_SETTING}', true) = 'true'
+                       AND EXISTS (
+                           SELECT 1 FROM {_TOMBSTONE_TABLE}
+                           WHERE record_id = OLD.record_id
+                       ) THEN
+                        RETURN OLD;
+                    END IF;
+                    RAISE EXCEPTION
+                        'heimdal_raw_consent_association is append-only: % is not permitted',
+                        TG_OP;
+                END;
+                $$ LANGUAGE plpgsql
+                """,
+                f"""
+                CREATE TRIGGER heimdal_raw_consent_association_no_mutation
+                BEFORE INSERT OR UPDATE OR DELETE ON {_CONSENT_ASSOCIATION_TABLE}
+                FOR EACH ROW EXECUTE FUNCTION
+                    heimdal_raw_consent_association_reject_mutation()
+                """,
+            ),
+        ),
+    )
+    for consent_table_name, consent_statements in consent_association_table_groups:
+        cur.execute("SELECT to_regclass(%s)", (consent_table_name,))
+        table_present_row = cur.fetchone()
+        table_present = bool(table_present_row and table_present_row[0])
+        if table_present:
+            continue
+        for statement in consent_statements:
+            cur.execute(statement)
     cur.execute(
         """
         CREATE OR REPLACE FUNCTION heimdal_raw_liveness_generation_reject_mutation()
@@ -962,37 +1249,6 @@ def _bootstrap_pg(conn: Any) -> None:
         $$ LANGUAGE plpgsql
         """
     )
-    cur.execute(
-        f"""
-        CREATE OR REPLACE FUNCTION heimdal_raw_representation_reject_mutation()
-        RETURNS trigger AS $$
-        BEGIN
-            IF TG_OP = 'UPDATE'
-               AND current_setting('app.heimdal_representation_activation', true) = 'true'
-               AND NEW.id IS NOT DISTINCT FROM OLD.id
-               AND NEW.record_id IS NOT DISTINCT FROM OLD.record_id
-               AND NEW.storage_kind IS NOT DISTINCT FROM OLD.storage_kind
-               AND NEW.location_ref IS NOT DISTINCT FROM OLD.location_ref
-               AND NEW.ciphertext IS NOT DISTINCT FROM OLD.ciphertext
-               AND NEW.nonce IS NOT DISTINCT FROM OLD.nonce
-               AND NEW.key_ref IS NOT DISTINCT FROM OLD.key_ref
-               AND NEW.registered_at IS NOT DISTINCT FROM OLD.registered_at
-               AND NEW.sequence IS NOT DISTINCT FROM OLD.sequence THEN
-                RETURN NEW;
-            END IF;
-            IF TG_OP = 'DELETE'
-               AND current_setting('{_RETENTION_GUARD_SETTING}', true) = 'true'
-               AND EXISTS (
-                   SELECT 1 FROM {_TOMBSTONE_TABLE} WHERE record_id = OLD.record_id
-               ) THEN
-                RETURN OLD;
-            END IF;
-            RAISE EXCEPTION
-                'heimdal_raw_representation mutation is governed: % is not permitted', TG_OP;
-        END;
-        $$ LANGUAGE plpgsql
-        """
-    )
     _assert_pg_schema(conn)
 
 
@@ -1093,6 +1349,11 @@ def assert_pg_generation_active(
     cur.execute(f"SELECT 1 FROM {_TOMBSTONE_TABLE} WHERE record_id = %s", (record_id,))
     if cur.fetchone() is not None:
         raise RawEvidenceErasedError(_load_pg_tombstone(cur, record_id=record_id))
+    cur.execute(f"SELECT 1 FROM {_RETENTION_CLAIM_TABLE} WHERE record_id = %s", (record_id,))
+    if cur.fetchone() is not None:
+        raise RawLivenessUnavailableError(
+            "raw generation is retiring and refuses new work"
+        )
     return RawLivenessGeneration(
         content_identity=content_identity,
         generation=int(row[0]),
@@ -1103,8 +1364,117 @@ def assert_pg_generation_active(
     )
 
 
+def _activate_mutation_authority(authority: RawMutationAuthority) -> None:
+    with _MUTATION_AUTHORITY_LOCK:
+        _ACTIVE_MUTATION_AUTHORITIES[id(authority)] = authority
+
+
+def _deactivate_mutation_authority(authority: RawMutationAuthority) -> None:
+    with _MUTATION_AUTHORITY_LOCK:
+        if _ACTIVE_MUTATION_AUTHORITIES.get(id(authority)) is authority:
+            _ACTIVE_MUTATION_AUTHORITIES.pop(id(authority), None)
+
+
+def require_raw_mutation_authority(
+    authority: object,
+    *,
+    record_id: str,
+    content_identity: Optional[str] = None,
+) -> RawMutationAuthority:
+    """Validate one live, same-thread generation-fence capability."""
+
+    if not isinstance(authority, RawMutationAuthority):
+        raise RawLivenessUnavailableError("raw mutation requires generation-fence authority")
+    with _MUTATION_AUTHORITY_LOCK:
+        active = _ACTIVE_MUTATION_AUTHORITIES.get(id(authority))
+    if (
+        active is not authority
+        or authority._issuer is not _MUTATION_AUTHORITY_ISSUER
+        or authority.owner_thread_id != threading.get_ident()
+        or authority.record_id != record_id
+        or (content_identity is not None and authority.content_identity != content_identity)
+        or authority.backend != resolve_heimdal_backend()
+    ):
+        raise RawLivenessUnavailableError(
+            "raw mutation authority is stale or bound to a different generation"
+        )
+    return authority
+
+
+def pg_cursor_for_raw_mutation(
+    authority: object,
+    *,
+    record_id: str,
+    content_identity: Optional[str] = None,
+) -> Any:
+    validated = require_raw_mutation_authority(
+        authority,
+        record_id=record_id,
+        content_identity=content_identity,
+    )
+    if validated.backend != "pg" or validated._cursor is None:
+        raise RawLivenessUnavailableError("PostgreSQL mutation authority is unavailable")
+    return validated._cursor
+
+
+def _checkpoint_raw_mutation_authority(authority: object) -> None:
+    """Commit a durable PG producer checkpoint without releasing its fence.
+
+    The PG relocation fence is session-scoped, so committing an inactive cold
+    reservation leaves retirement blocked on the same identity while making
+    the reservation visible as crash/restart cleanup authority. Memory writes
+    are already durable for the lifetime of their single process fence.
+    """
+
+    validated = require_raw_mutation_authority(
+        authority,
+        record_id=(authority.record_id if isinstance(authority, RawMutationAuthority) else ""),
+    )
+    if validated.backend == "memory":
+        return
+    if validated._cursor is None:
+        raise RawLivenessUnavailableError("PostgreSQL mutation authority is unavailable")
+    validated._cursor.connection.commit()
+
+
+def content_identity_for_raw_record(record_id: str) -> str:
+    """Resolve only durable identity metadata before acquiring its work fence."""
+
+    if resolve_heimdal_backend() == "memory":
+        with _MEMORY_FENCE:
+            generation = _MEMORY.generations_by_record.get(record_id)
+            if generation is None:
+                raise RawLivenessUnavailableError(
+                    "raw identity has no durable liveness generation"
+                )
+            if record_id in _MEMORY.tombstones_by_record:
+                raise RawEvidenceErasedError(_MEMORY.tombstones_by_record[record_id])
+            return generation.content_identity
+    conn = _pg_connect(autocommit=True)
+    try:
+        _assert_pg_schema(conn)
+        cur = conn.cursor()
+        cur.execute(
+            f"SELECT content_identity FROM {_GENERATION_TABLE} WHERE record_id = %s",
+            (record_id,),
+        )
+        row = cur.fetchone()
+        if row is None:
+            raise RawLivenessUnavailableError(
+                "raw identity has no durable liveness generation"
+            )
+        cur.execute(f"SELECT 1 FROM {_TOMBSTONE_TABLE} WHERE record_id = %s", (record_id,))
+        if cur.fetchone() is not None:
+            raise RawEvidenceErasedError(_load_pg_tombstone(cur, record_id=record_id))
+        return str(row[0])
+    finally:
+        conn.close()
+
+
 @contextmanager
-def raw_relocation_fence(*, record_id: str, content_identity: str) -> Iterator[None]:
+def raw_relocation_fence(
+    *, record_id: str, content_identity: str
+) -> Iterator[RawMutationAuthority]:
     """Fence one relocation against retention for its exact live generation.
 
     The fence spans durable cold reservation, external writes, verification,
@@ -1115,24 +1485,56 @@ def raw_relocation_fence(*, record_id: str, content_identity: str) -> Iterator[N
 
     if resolve_heimdal_backend() == "memory":
         with _MEMORY_FENCE:
-            assert_memory_generation_active(
+            generation = assert_memory_generation_active(
                 record_id=record_id,
                 content_identity=content_identity,
             )
-            yield
+            authority = RawMutationAuthority(
+                _issuer=_MUTATION_AUTHORITY_ISSUER,
+                record_id=record_id,
+                content_identity=content_identity,
+                generation=generation.generation,
+                backend="memory",
+            )
+            _activate_mutation_authority(authority)
+            try:
+                yield authority
+            finally:
+                _deactivate_mutation_authority(authority)
         return
 
     conn = _pg_connect(autocommit=False)
     try:
         _assert_pg_schema(conn)
         cur = conn.cursor()
-        acquire_pg_fence(cur, content_identity)
-        assert_pg_generation_active(
+        cur.execute(
+            "SELECT pg_advisory_lock(hashtextextended(%s, 0))",
+            (content_identity,),
+        )
+        generation = assert_pg_generation_active(
             cur,
             record_id=record_id,
             content_identity=content_identity,
         )
-        yield
+        authority = RawMutationAuthority(
+            _issuer=_MUTATION_AUTHORITY_ISSUER,
+            record_id=record_id,
+            content_identity=content_identity,
+            generation=generation.generation,
+            backend="pg",
+            cursor=cur,
+        )
+        _activate_mutation_authority(authority)
+        try:
+            yield authority
+        finally:
+            _deactivate_mutation_authority(authority)
+        conn.commit()
+        cur.execute(
+            "SELECT pg_advisory_unlock(hashtextextended(%s, 0))",
+            (content_identity,),
+        )
+        cur.fetchone()
         conn.commit()
     except BaseException:
         conn.rollback()
@@ -1229,13 +1631,25 @@ def _pg_exact_active(cur: Any, generation: RawLivenessGeneration) -> bool:
                    AND p.location_ref LIKE 'heimloc:%%'
                    AND p.nonce IS NOT NULL
                    AND p.key_ref IS NOT NULL
+                   AND p.raw_generation = %s
+                   AND (
+                       (p.storage_kind = 'postgres_hot'
+                        AND p.archive_token IS NULL
+                        AND p.archive_generation IS NULL)
+                       OR
+                       (p.storage_kind = 'encrypted_local_cold'
+                        AND p.archive_token IS NOT NULL
+                        AND p.archive_generation IS NOT NULL
+                        AND p.location_ref LIKE
+                            'heimloc:cold:' || p.archive_token || ':%%')
+                   )
                )
         FROM heimdal_raw_record AS r
         LEFT JOIN heimdal_raw_representation AS p ON p.record_id = r.id
         WHERE r.id = %s AND r.content_identity = %s
         GROUP BY r.id
         """,
-        (generation.record_id, generation.content_identity),
+        (generation.generation, generation.record_id, generation.content_identity),
     )
     row = cur.fetchone()
     return bool(row and int(row[0]) == 1 and int(row[1]) == 1)
@@ -1484,6 +1898,34 @@ def _memory_claim_retention_locked(
     return claim
 
 
+def _cold_cleanup_binding(
+    payload: Mapping[str, Any],
+    location_ref: str,
+    *,
+    expected_raw_generation: int,
+) -> tuple[str, str]:
+    bindings = payload.get(_COLD_CLEANUP_BINDINGS_PAYLOAD_KEY)
+    binding = bindings.get(location_ref) if isinstance(bindings, dict) else None
+    if not isinstance(binding, dict):
+        raise RawLivenessUnavailableError(
+            "cold cleanup item lacks durable archive binding"
+        )
+    archive_token = binding.get("archive_token")
+    archive_generation = binding.get("archive_generation")
+    raw_generation = binding.get("raw_generation")
+    if (
+        not isinstance(archive_token, str)
+        or re.fullmatch(r"[0-9a-f]{64}", archive_token) is None
+        or not isinstance(archive_generation, str)
+        or re.fullmatch(r"[0-9a-f]{64}", archive_generation) is None
+        or raw_generation != expected_raw_generation
+    ):
+        raise RawLivenessUnavailableError(
+            "cold cleanup item is stale or bound to a different generation"
+        )
+    return archive_token, archive_generation
+
+
 def _reconcile_memory_cold_cleanup(tombstone: RawDeletionTombstone) -> None:
     from app.heimdal import raw_store
 
@@ -1496,15 +1938,19 @@ def _reconcile_memory_cold_cleanup(tombstone: RawDeletionTombstone) -> None:
     refs = list(receipt.payload.get("cold_cleanup_location_refs", []))
     remaining = list(refs)
     for location_ref in refs:
-        object_path = raw_store._cold_object_path(str(location_ref))  # noqa: SLF001
-        if object_path is None:
-            raise raw_store.RawRepresentationDeletionError(
-                "cold representation resolver is unavailable"
-            )
+        archive_token, archive_generation = _cold_cleanup_binding(
+            receipt.payload,
+            str(location_ref),
+            expected_raw_generation=tombstone.generation,
+        )
         try:
-            raw_store._delete_cold_object_path(object_path)  # noqa: SLF001
+            raw_store._delete_bound_cold_object(  # noqa: SLF001
+                str(location_ref),
+                expected_archive_token=archive_token,
+                expected_archive_generation=archive_generation,
+            )
         except raw_store.RawRepresentationDeletionError:
-            raise raw_store.RawRepresentationDeletionError("cold representation deletion failed")
+            raise
         remaining.remove(str(location_ref))
         receipt.payload["cold_cleanup_location_refs"] = list(remaining)
     if remaining:
@@ -1518,6 +1964,7 @@ def _governed_delete_memory(
     retention_window_days: int,
     deleted_at: datetime,
     payload: Mapping[str, Any],
+    correlation_grant_ref: Optional[str],
 ) -> GovernedDeletionResult:
     from app.heimdal import raw_store
 
@@ -1542,7 +1989,8 @@ def _governed_delete_memory(
             )
         governed_payload = _governed_deletion_payload(
             payload,
-            grant_ref=raw_store.raw_record_consent_grant_ref(record_id),
+            grant_refs=raw_store.raw_record_consent_grant_refs(record_id),
+            correlation_grant_ref=correlation_grant_ref,
         )
         reference_time = _as_utc(deleted_at)
         claim_was_new = record_id not in _MEMORY.retention_claims_by_record
@@ -1577,17 +2025,25 @@ def _governed_delete_memory(
             sequence=len(_MEMORY.tombstones),
         )
         raw_snapshot = raw_store._MEMORY_STORE.snapshot_state()  # noqa: SLF001
-        cold_paths = []
+        cold_bindings: Dict[str, Dict[str, Any]] = {}
         for representation in raw_store.all_raw_representations(record_id):
             if representation.storage_kind == "encrypted_local_cold":
-                object_path = raw_store._cold_object_path(representation.location_ref)  # noqa: SLF001
-                if object_path is None:
-                    raise raw_store.RawRepresentationDeletionError(
-                        "cold representation resolver is unavailable"
+                if (
+                    not representation.archive_token
+                    or not representation.archive_generation
+                    or representation.raw_generation != generation.generation
+                ):
+                    raise RawLivenessUnavailableError(
+                        "cold representation lacks exact archive/generation authority"
                     )
-                cold_paths.append((representation.location_ref, object_path))
-        if cold_paths:
-            receipt.payload["cold_cleanup_location_refs"] = [ref for ref, _path in cold_paths]
+                cold_bindings[representation.location_ref] = {
+                    "archive_token": representation.archive_token,
+                    "archive_generation": representation.archive_generation,
+                    "raw_generation": representation.raw_generation,
+                }
+        if cold_bindings:
+            receipt.payload[_COLD_CLEANUP_PAYLOAD_KEY] = list(cold_bindings)
+            receipt.payload[_COLD_CLEANUP_BINDINGS_PAYLOAD_KEY] = cold_bindings
         _MEMORY.deletion_receipts.append(receipt)
         raw_deleted = False
         try:
@@ -1642,7 +2098,7 @@ def _reconcile_pg_cold_cleanup(cur: Any, record_id: str, *, conn: Any | None = N
     from app.heimdal import raw_store
 
     cur.execute(
-        f"SELECT deletion_receipt_id FROM {_TOMBSTONE_TABLE} WHERE record_id = %s",
+        f"SELECT deletion_receipt_id, generation FROM {_TOMBSTONE_TABLE} WHERE record_id = %s",
         (record_id,),
     )
     tombstone_row = cur.fetchone()
@@ -1658,14 +2114,18 @@ def _reconcile_pg_cold_cleanup(cur: Any, record_id: str, *, conn: Any | None = N
         payload = json.loads(payload)
     remaining = [str(ref) for ref in payload.get("cold_cleanup_location_refs", [])]
     for location_ref in list(remaining):
-        object_path = raw_store._cold_object_path(str(location_ref))  # noqa: SLF001
-        if object_path is None:
-            raise raw_store.RawRepresentationDeletionError(
-                "cold representation resolver is unavailable"
-            )
+        archive_token, archive_generation = _cold_cleanup_binding(
+            payload,
+            location_ref,
+            expected_raw_generation=int(tombstone_row[1]),
+        )
         try:
-            raw_store._delete_cold_object_path(object_path)  # noqa: SLF001
-        except raw_store.RawRepresentationDeletionError:
+            raw_store._delete_bound_cold_object(  # noqa: SLF001
+                location_ref,
+                expected_archive_token=archive_token,
+                expected_archive_generation=archive_generation,
+            )
+        except raw_store.RawRepresentationDeletionError as exc:
             updated_payload = dict(payload)
             updated_payload["cold_cleanup_location_refs"] = remaining
             if conn is not None:
@@ -1679,7 +2139,7 @@ def _reconcile_pg_cold_cleanup(cur: Any, record_id: str, *, conn: Any | None = N
             )
             if conn is not None:
                 conn.commit()
-            raise raw_store.RawRepresentationDeletionError("cold representation deletion failed")
+            raise exc
         remaining.remove(location_ref)
         updated_payload = dict(payload)
         updated_payload["cold_cleanup_location_refs"] = remaining
@@ -1703,6 +2163,7 @@ def _governed_delete_pg(
     retention_window_days: int,
     deleted_at: datetime,
     payload: Mapping[str, Any],
+    correlation_grant_ref: Optional[str],
 ) -> GovernedDeletionResult:
     from app.heimdal import raw_store
 
@@ -1712,9 +2173,8 @@ def _governed_delete_pg(
         cur = conn.cursor()
         cur.execute(
             f"""
-            SELECT g.content_identity, r.consent->>'grant_ref'
+            SELECT g.content_identity
             FROM {_GENERATION_TABLE} AS g
-            LEFT JOIN heimdal_raw_record AS r ON r.id = g.record_id
             WHERE g.record_id = %s
             """,
             (record_id,),
@@ -1754,7 +2214,15 @@ def _governed_delete_pg(
             )
         governed_payload = _governed_deletion_payload(
             payload,
-            grant_ref=str(identity_row[1]) if identity_row[1] else None,
+            grant_refs=(
+                str(row[0])
+                for row in cur.execute(
+                    f"SELECT grant_ref FROM {_CONSENT_ASSOCIATION_TABLE} "
+                    "WHERE record_id = %s ORDER BY sequence",
+                    (record_id,),
+                ).fetchall()
+            ),
+            correlation_grant_ref=correlation_grant_ref,
         )
         reference_time = _as_utc(deleted_at)
         claim = _load_pg_retention_claim(cur, record_id=record_id)
@@ -1812,6 +2280,7 @@ def _governed_delete_pg(
             return GovernedDeletionResult(outcome="lease_valid")
 
         cold_location_refs: list[str] = []
+        cold_bindings: Dict[str, Dict[str, Any]] = {}
         try:
             cur.execute(
                 "SELECT 1 FROM heimdal_raw_record WHERE id = %s FOR UPDATE",
@@ -1821,8 +2290,32 @@ def _governed_delete_pg(
                 raise RawLivenessUnavailableError(
                     "raw identity disappeared before governed deletion"
                 )
-            locations = raw_store._cold_location_paths_for_pg_cursor(cur, record_id)  # noqa: SLF001
-            cold_location_refs = [location_ref for location_ref, _path in locations]
+            cur.execute(
+                """
+                SELECT location_ref, archive_token, archive_generation, raw_generation
+                FROM heimdal_raw_representation
+                WHERE record_id = %s AND storage_kind = 'encrypted_local_cold'
+                ORDER BY sequence
+                FOR UPDATE
+                """,
+                (record_id,),
+            )
+            for location_ref, archive_token, archive_generation, raw_generation in cur.fetchall():
+                if (
+                    not archive_token
+                    or not archive_generation
+                    or int(raw_generation) != generation.generation
+                ):
+                    raise RawLivenessUnavailableError(
+                        "cold representation lacks exact archive/generation authority"
+                    )
+                ref = str(location_ref)
+                cold_location_refs.append(ref)
+                cold_bindings[ref] = {
+                    "archive_token": str(archive_token),
+                    "archive_generation": str(archive_generation),
+                    "raw_generation": int(raw_generation),
+                }
         except Exception as exc:
             raise raw_store.RawRepresentationDeletionError(
                 "governed all-copy deletion failed; no identity was removed"
@@ -1830,7 +2323,8 @@ def _governed_delete_pg(
 
         receipt_payload = dict(governed_payload)
         if cold_location_refs:
-            receipt_payload["cold_cleanup_location_refs"] = cold_location_refs
+            receipt_payload[_COLD_CLEANUP_PAYLOAD_KEY] = cold_location_refs
+            receipt_payload[_COLD_CLEANUP_BINDINGS_PAYLOAD_KEY] = cold_bindings
         receipt_id = str(uuid4())
         cur.execute(
             f"""
@@ -1938,6 +2432,7 @@ def governed_delete_raw_record(
     retention_window_days: int,
     deleted_at: datetime,
     payload: Optional[Mapping[str, Any]] = None,
+    consent_grant_ref: Optional[str] = None,
 ) -> GovernedDeletionResult:
     """Apply the one fenced, receipted raw-erasure transaction."""
 
@@ -1948,6 +2443,7 @@ def governed_delete_raw_record(
             retention_window_days=retention_window_days,
             deleted_at=deleted_at,
             payload=dict(payload or {}),
+            correlation_grant_ref=consent_grant_ref,
         )
     else:
         result = _governed_delete_pg(
@@ -1956,6 +2452,7 @@ def governed_delete_raw_record(
             retention_window_days=retention_window_days,
             deleted_at=deleted_at,
             payload=dict(payload or {}),
+            correlation_grant_ref=consent_grant_ref,
         )
     return GovernedDeletionResult(
         outcome=result.outcome,
@@ -2059,6 +2556,7 @@ _retention_fence_hook: Callable[[str], None] = lambda _record_id: None
 
 __all__ = [
     "CONSENT_GRANT_DIGEST_PAYLOAD_KEY",
+    "CONSENT_GRANT_DIGESTS_PAYLOAD_KEY",
     "DeletionReceipt",
     "GovernedDeletionResult",
     "RESPONSE_LEASE_SECONDS",
