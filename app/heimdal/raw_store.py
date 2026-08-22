@@ -156,6 +156,14 @@ def discard_cold_location(location_ref: str) -> None:
     _cold_location_paths.pop(location_ref, None)
 
 
+def revoke_cold_archive_binding() -> None:
+    """Revoke process-local cold authority before a failed restart rebind."""
+    global _verified_cold_archive_root
+    _verified_cold_archive_root = None
+    _cold_location_paths.clear()
+    os.environ.pop(_COLD_ARCHIVE_ROOT_ENV, None)
+
+
 def configure_cold_archive_root(
     archive_root: Path,
     *,

@@ -45,6 +45,9 @@ def test_verified_volume_proof_cannot_be_reused_as_minting_authority(tmp_path: P
             "forged-archive", tmp_path / "arbitrary", _issuer=getattr(proof, "_issuer", object())
         )
 
+    raw_store.revoke_cold_archive_binding()
+    assert raw_store._cold_object_path("heimloc:cold:33333333-3333-4333-8333-333333333333") is None  # noqa: SLF001
+
     forged_root = tmp_path / "forged"
     object.__setattr__(proof, "mountpoint", forged_root)
     with pytest.raises(raw_store.RawRepresentationDeletionError):

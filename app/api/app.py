@@ -284,6 +284,9 @@ def _run_ingress_key_preflight() -> None:
 
 def _run_cold_volume_startup_binding() -> None:
     """Bind the verified cold root in this serving process after restart."""
+    from app.heimdal import raw_store
+
+    raw_store.revoke_cold_archive_binding()
     if os.getenv("PKM_ENVIRONMENT", "dev").lower() != "prod":
         return
     try:
@@ -300,6 +303,7 @@ def _run_cold_volume_startup_binding() -> None:
         )
         require_archive_volume_ready(metadata, expected_channel=channel)
     except Exception as exc:  # pragma: no cover - production host dependent
+        raw_store.revoke_cold_archive_binding()
         logger.error("Verified Heimdal cold-volume binding unavailable; cold reads fail closed: %s", type(exc).__name__)
 
 
