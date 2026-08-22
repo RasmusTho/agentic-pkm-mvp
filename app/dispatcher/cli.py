@@ -421,17 +421,25 @@ _PUBLIC_VERIFICATION_CYCLE_RECEIPT_KEYS = frozenset(
         "raw_secret_count",
     }
 )
+_PUBLIC_VERIFICATION_CYCLE_OPTIONAL_KEYS = frozenset({"containment"})
 
 
 def _public_verification_cycle_receipt(
     receipt: Mapping[str, object],
+    *,
+    containment_receipt_required: bool = False,
 ) -> dict[str, object]:
     """Return only the exact, secret-free BCP-05 receipt contract."""
 
     if (
-        set(receipt) != _PUBLIC_VERIFICATION_CYCLE_RECEIPT_KEYS
+        not _PUBLIC_VERIFICATION_CYCLE_RECEIPT_KEYS.issubset(receipt)
+        or not set(receipt).issubset(
+            _PUBLIC_VERIFICATION_CYCLE_RECEIPT_KEYS
+            | _PUBLIC_VERIFICATION_CYCLE_OPTIONAL_KEYS
+        )
         or receipt.get("contract") != "bcp05_demerzel_cycle.v1"
         or receipt.get("raw_secret_count") != 0
+        or (containment_receipt_required and "containment" not in receipt)
         or not isinstance(receipt.get("readback"), Mapping)
         or not isinstance(receipt.get("merge_authority"), Mapping)
     ):
@@ -626,6 +634,9 @@ class _InstalledMainExactHeadLauncher:
     ) -> None:
         self.launcher = launcher
         self.config = launcher.config
+        self.containment_receipt_required = bool(
+            getattr(launcher, "containment_receipt_required", False)
+        )
         self.installed_main = installed_main
         self.context_path = context_path
         self.git_runner = git_runner
@@ -689,6 +700,15 @@ class _InstalledMainExactHeadLauncher:
         finally:
             patch_path.unlink(missing_ok=True)
 
+    def containment_receipt(self) -> Mapping[str, object] | None:
+        """Expose the inner launch's validated host-containment evidence."""
+
+        reader = getattr(self.launcher, "containment_receipt", None)
+        if not callable(reader):
+            return None
+        candidate = reader()
+        return dict(candidate) if isinstance(candidate, Mapping) else None
+
 
 def _build_host_fenced_verification_cycle(
     client: Any,
@@ -698,6 +718,7 @@ def _build_host_fenced_verification_cycle(
     worktree: Path,
     context_path: Path,
     containment_factory: Callable[[], Any],
+    containment_receipt_required: bool = False,
 ) -> tuple[Any, Callable[[], None]]:
     from app.dispatcher.verification_consumer import (
         CANONICAL_RECEIPT_SCHEMA_PATH,
@@ -741,6 +762,7 @@ def _build_host_fenced_verification_cycle(
             CANONICAL_RECEIPT_SCHEMA_PATH,
             context_path,
             containment_factory=containment_factory,
+            containment_receipt_required=containment_receipt_required,
         )
         launcher = _InstalledMainExactHeadLauncher(
             raw_launcher,
@@ -765,6 +787,7 @@ def _build_host_fenced_verification_cycle(
             consumer,
             executor,
             holder=holder,
+            containment_receipt_required=containment_receipt_required,
         )
     except Exception:
         repository_authority.close()
@@ -819,6 +842,9 @@ def _cmd_verification_cycle(
         containment_factory = select_verification_containment(
             args.containment_profile
         )
+        from app.dispatcher.linux_containment import (
+            LINUX_SYSTEMD_CGROUP_V2_SCOPE_PROFILE,
+        )
         with tempfile.TemporaryDirectory(
             prefix="yggdrasil-verification-cycle-"
         ) as scratch:
@@ -831,6 +857,10 @@ def _cmd_verification_cycle(
                         worktree=worktree,
                         context_path=Path(scratch) / "context.json",
                         containment_factory=containment_factory,
+                        containment_receipt_required=(
+                            args.containment_profile
+                            == LINUX_SYSTEMD_CGROUP_V2_SCOPE_PROFILE
+                        ),
                     )
                 )
                 try:
@@ -852,7 +882,13 @@ def _cmd_verification_cycle(
             1,
         )
     try:
-        public_receipt = _public_verification_cycle_receipt(receipt)
+        public_receipt = _public_verification_cycle_receipt(
+            receipt,
+            containment_receipt_required=(
+                args.containment_profile
+                == LINUX_SYSTEMD_CGROUP_V2_SCOPE_PROFILE
+            ),
+        )
     except Exception as exc:
         return _emit_payload(
             {
@@ -1214,8 +1250,8 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help=(
             "Required allowlisted whole-process-tree containment profile; "
-            "installed-main currently supports "
-            "darwin-launchd-resource-coalition-v1"
+            "installed-main supports darwin-launchd-resource-coalition-v1 "
+            "or linux-systemd-cgroup-v2-scope-v1"
         ),
     )
     p.add_argument("--json", action="store_true")

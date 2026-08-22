@@ -185,6 +185,18 @@ python -m app.dispatcher.cli verification-cycle \
   --json
 ```
 
+On an installed-main Linux host, the only admitted Linux profile is selected
+explicitly instead:
+
+```bash
+python -m app.dispatcher.cli verification-cycle \
+  <verification_dispatch_request.v3.json> \
+  --holder verification-host \
+  --worktree <installed-main-checkout> \
+  --containment-profile linux-systemd-cgroup-v2-scope-v1 \
+  --json
+```
+
 It resolves the BuilderOps API connection from `BUILDEROPS_API_URL` plus exactly one of
 `BUILDEROPS_API_TOKEN_FILE` or `BUILDEROPS_API_TOKEN`, and resolves GitHub effect credentials only
 through `BUILDEROPS_EXECUTOR_CREDENTIAL_MANIFEST_FILE`. The addressed repository must have exactly
@@ -204,12 +216,17 @@ python -m app.dispatcher.cli verification-cycle \
   --json
 ```
 
+Linux recovery uses the same explicit
+`linux-systemd-cgroup-v2-scope-v1` profile. There is no platform-derived or
+best-effort fallback between the Linux and Darwin profiles.
+
 Both forms are dry-run-safe and API/PostgreSQL-only. A successful command emits the existing
 `bcp05_demerzel_cycle.v1` receipt; repository delivery is not accepted until a real installed-main
 Demerzel invocation posts that receipt to #3603. The command itself does not satisfy that parent
 gate or activate BCP-06. Before constructing any client or effect adapter, the command requires the
 selected worktree to be clean `main` at the exact locally fetched `origin/main`; a detached, dirty,
 stale, or feature-branch checkout fails closed. It also requires the explicit
+containment profile matching the host. On Darwin this remains the unchanged
 `darwin-launchd-resource-coalition-v1` profile while running inside the dedicated launchd job whose
 resource coalition is inherited by the child-wrapper topology. Before API construction or claim,
 the profile enumerates PIDs, binds each task to its PID-version and resource-coalition identity,
@@ -240,6 +257,22 @@ whole-tree authority; raw
 PID, process-group, and Tagged-process tracking are not used for the Darwin profile. The fence
 does not grant the model child GitHub authority: the installed-main cycle remains
 `github.merge.dry_run`, and BCP-06 stays disabled.
+
+On Linux, `linux-systemd-cgroup-v2-scope-v1` fails before API construction or
+claim unless the unified cgroup-v2 hierarchy, user systemd manager, transient
+scope properties, and pidfd signalling are available. The one-shot wrapper is
+started through a uniquely named `yggdrasil-verification-*.scope`; before
+release, the executor binds that scope's unit name, cgroup filesystem identity,
+root start-time tick, complete membership, and root-closing ancestry. Cleanup
+enumerates only that exact cgroup subtree, revalidates the scope and each
+process start-time/cgroup identity, signals through pidfds, and requires bounded
+stable emptiness before retiring the scope. Its public containment receipt
+contains only the explicit profile name, scope-unit identity, attach/cleanup
+evidence digests, and outcome—never raw PIDs, cgroup paths, credentials, or
+unrelated process observations. This development-baseline profile does not by
+itself accept the Linux migration: a disposable-host check and the separately
+governed live VM receipt remain required before the parent acceptance gate can
+move.
 
 That checkout supplies the installed composition
 code only: before launching the network-fenced reviewer, the host materializes an immutable

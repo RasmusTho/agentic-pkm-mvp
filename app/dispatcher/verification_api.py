@@ -44,6 +44,9 @@ from app.dispatcher.verification_dispatch import (
     _request_final_review_rounds,
     _validate_request,
 )
+from app.dispatcher.linux_containment import (
+    validated_linux_containment_receipt,
+)
 
 _TASK_PREFIX = "vrun-"
 _PAYLOAD_CONTRACT = "builderops_verification_run.v1"
@@ -887,7 +890,12 @@ class BuilderOpsVerificationLedger:
                         raise ValueError("BuilderOps verification attempt batch is malformed")
                     result.append(dict(event))
             else:
-                result.append(dict(payload))
+                attempt = dict(payload)
+                if "containment" in attempt:
+                    validated_linux_containment_receipt(
+                        attempt["containment"]
+                    )
+                result.append(attempt)
         return result
 
     def record_attempt(
@@ -904,6 +912,7 @@ class BuilderOpsVerificationLedger:
         holder: str,
         lease_id: str,
         idempotency_key: str | None = None,
+        containment_receipt: Mapping[str, object] | None = None,
     ) -> int:
         if kind not in {*REPAIR_ATTEMPT_KINDS, "review", "verification"}:
             raise ValueError("invalid verification attempt kind")
@@ -925,6 +934,13 @@ class BuilderOpsVerificationLedger:
             )
             if replay is not None:
                 expected_receipt = dict(receipt) if receipt is not None else None
+                expected_containment = (
+                    validated_linux_containment_receipt(
+                        containment_receipt
+                    )
+                    if containment_receipt is not None
+                    else None
+                )
                 if (
                     replay.get("kind") != kind
                     or replay.get("session_id") != session_id
@@ -932,6 +948,7 @@ class BuilderOpsVerificationLedger:
                     or replay.get("reasoning_effort") != reasoning_effort
                     or replay.get("outcome") != outcome
                     or replay.get("receipt") != expected_receipt
+                    or replay.get("containment") != expected_containment
                 ):
                     raise ValueError("verification attempt replay conflicts")
                 ordinal = replay.get("ordinal")
@@ -967,6 +984,10 @@ class BuilderOpsVerificationLedger:
             "mechanism_id": mechanism_id,
             "receipt": dict(receipt) if receipt is not None else None,
         }
+        if containment_receipt is not None:
+            document["containment"] = validated_linux_containment_receipt(
+                containment_receipt
+            )
         self.client.commit_attempt(
             envelope=self.envelope,
             task_id=run_id,
@@ -1230,6 +1251,29 @@ class BuilderOpsVerificationLedger:
             "repair_budget": self.repair_budget_projection(run.run_id),
         }
 
+    def _verification_containment(
+        self, run: VerificationRun
+    ) -> dict[str, object] | None:
+        """Read containment from the durable current-head model attempt."""
+
+        candidates: builtins.list[dict[str, object]] = []
+        for attempt in self.attempts(run.run_id):
+            receipt = attempt.get("receipt")
+            if (
+                attempt.get("kind") == "verification"
+                and isinstance(receipt, Mapping)
+                and receipt.get("head_sha") == run.current_head_sha
+            ):
+                candidates.append(attempt)
+        if not candidates:
+            raise ValueError(
+                "merge readiness has no current-head verification attempt"
+            )
+        containment = candidates[-1].get("containment")
+        if containment is None:
+            return None
+        return validated_linux_containment_receipt(containment)
+
     def mark_merge_ready(
         self,
         run_id: str,
@@ -1237,6 +1281,7 @@ class BuilderOpsVerificationLedger:
         *,
         holder: str,
         lease_id: str,
+        containment_receipt: Mapping[str, object] | None = None,
     ) -> VerificationRun:
         """Persist exact review-only authority before the host merge effect."""
         snapshot = self._snapshot(run_id)
@@ -1251,7 +1296,17 @@ class BuilderOpsVerificationLedger:
             )
         lease = self._assert_lease(snapshot, holder, lease_id)
         document = dict(_snapshot_payload(snapshot))
-        document["merge_ready_receipt"] = {
+        expected_containment = self._verification_containment(run)
+        supplied_containment = (
+            validated_linux_containment_receipt(containment_receipt)
+            if containment_receipt is not None
+            else None
+        )
+        if supplied_containment != expected_containment:
+            raise ValueError(
+                "merge-ready containment does not match durable verification"
+            )
+        merge_ready_receipt: dict[str, object] = {
             "contract": "builderops_merge_ready.v1",
             "run_id": run_id,
             "repository": self.repository,
@@ -1260,6 +1315,9 @@ class BuilderOpsVerificationLedger:
             **self._merge_ready_authority(run),
             "coordinator_receipt": dict(receipt),
         }
+        if expected_containment is not None:
+            merge_ready_receipt["containment"] = expected_containment
+        document["merge_ready_receipt"] = merge_ready_receipt
         self.client.transition_task(
             envelope=self.envelope,
             task_id=run_id,
@@ -1301,8 +1359,20 @@ class BuilderOpsVerificationLedger:
             key: marker.get(key)
             for key in expected
         }
+        expected_containment = self._verification_containment(run)
+        allowed_keys = {
+            "contract",
+            "run_id",
+            "repository",
+            "pr_number",
+            "head_sha",
+            "coordinator_receipt",
+            "containment",
+            *expected,
+        }
         if (
-            marker.get("contract") != "builderops_merge_ready.v1"
+            not set(marker).issubset(allowed_keys)
+            or marker.get("contract") != "builderops_merge_ready.v1"
             or marker.get("run_id") != run_id
             or marker.get("repository") != self.repository
             or marker.get("pr_number") != run.pr_number
@@ -1313,6 +1383,12 @@ class BuilderOpsVerificationLedger:
             or coordinator.get("head_sha") != run.current_head_sha
         ):
             raise ValueError("BuilderOps merge-ready receipt is malformed or stale")
+        if "containment" in marker:
+            validated_linux_containment_receipt(marker["containment"])
+        if marker.get("containment") != expected_containment:
+            raise ValueError(
+                "BuilderOps merge-ready containment is stale or substituted"
+            )
         return dict(marker)
 
     def pending_effect_binding(

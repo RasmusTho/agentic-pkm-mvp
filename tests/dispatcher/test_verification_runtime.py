@@ -14,7 +14,10 @@ from app.dispatcher.verification_merge import (
     MergeAuthorityError,
     VerificationMergeExecutor,
 )
-from app.dispatcher.verification_runtime import HostFencedVerificationCycle
+from app.dispatcher.verification_runtime import (
+    HostFencedVerificationCycle,
+    validated_containment_receipt_shape,
+)
 from tests.dispatcher.builderops_verification_fakes import (
     FakeBuilderOpsClient,
     FakeVerificationOutbox,
@@ -111,6 +114,129 @@ def test_host_cycle_is_api_only_and_emits_terminal_dry_run_receipt() -> None:
     with pytest.raises(ValueError, match="receipt is malformed"):
         runtime.recover_dry_cycle(str(receipt["run_id"]))
     outbox.states[operation_key] = "succeeded"
+
+
+def test_host_cycle_projects_linux_containment_into_durable_receipt() -> None:
+    api = FakeBuilderOpsClient()
+    outbox = FakeVerificationOutbox(api)
+    ledger = BuilderOpsVerificationLedger(
+        api, repository=REPO, effect_outbox=outbox
+    )
+    containment_receipt: dict[str, object] = {
+        "contract": "builderops_linux_containment.v1",
+        "profile_name": "linux-systemd-cgroup-v2-scope-v1",
+        "scope_identity": f"yggdrasil-verification-{'a' * 24}.scope",
+        "evidence_digests": {
+            "attach": "b" * 64,
+            "cleanup": "c" * 64,
+        },
+        "outcome": "clean",
+    }
+
+    class LinuxVerifiedLauncher(VerifiedLauncher):
+        containment_receipt_required = True
+
+        def containment_receipt(self):
+            return containment_receipt
+
+    consumer = VerificationConsumer(
+        ledger,
+        Truth(eligible_pr(), GREEN),
+        Auth(),
+        LinuxVerifiedLauncher(),
+        holder="verification-host",
+    )
+    repository = RepositoryAuthority()
+    credentials = Credentials()
+    runtime = HostFencedVerificationCycle(
+        ledger,
+        consumer,
+        VerificationMergeExecutor(
+            ledger, outbox, repository, credentials
+        ),
+        holder="verification-host",
+        containment_receipt_required=True,
+    )
+
+    receipt = runtime.run_dry_cycle(request())
+
+    assert receipt["containment"] == containment_receipt
+    merge_ready = ledger.merge_ready_receipt(str(receipt["run_id"]))
+    assert merge_ready is not None
+    assert merge_ready["containment"] == containment_receipt
+    terminal = api.tasks[str(receipt["run_id"])]["payload"]["run"][
+        "terminal_receipt"
+    ]
+    assert terminal["containment"] == containment_receipt
+    assert runtime.recover_dry_cycle(str(receipt["run_id"])) == receipt
+
+    terminal.pop("containment")
+    with pytest.raises(ValueError, match="receipt is malformed"):
+        runtime.recover_dry_cycle(str(receipt["run_id"]))
+    terminal["containment"] = {
+        **containment_receipt,
+        "scope_identity": f"yggdrasil-verification-{'d' * 24}.scope",
+    }
+    with pytest.raises(ValueError, match="receipt is malformed"):
+        runtime.recover_dry_cycle(str(receipt["run_id"]))
+
+
+def test_linux_cycle_requires_containment_in_merge_ready_evidence() -> None:
+    api = FakeBuilderOpsClient()
+    outbox = FakeVerificationOutbox(api)
+    ledger = BuilderOpsVerificationLedger(
+        api, repository=REPO, effect_outbox=outbox
+    )
+    consumer = VerificationConsumer(
+        ledger,
+        Truth(eligible_pr(), GREEN),
+        Auth(),
+        VerifiedLauncher(),
+        holder="verification-host",
+    )
+    repository = RepositoryAuthority()
+    credentials = Credentials()
+    runtime = HostFencedVerificationCycle(
+        ledger,
+        consumer,
+        VerificationMergeExecutor(
+            ledger, outbox, repository, credentials
+        ),
+        holder="verification-host",
+        containment_receipt_required=True,
+    )
+
+    with pytest.raises(
+        ValueError, match="Linux containment evidence is unavailable"
+    ):
+        runtime.run_dry_cycle(request())
+
+    run_id = next(iter(api.tasks))
+    marker = ledger.merge_ready_receipt(run_id)
+    assert marker is not None
+    assert "containment" not in marker
+    recovered = ledger.get(run_id)
+    assert recovered is not None
+    assert recovered.status == "running"
+    assert repository.calls == []
+    assert credentials.calls == []
+
+
+def test_containment_receipt_validator_rejects_non_allowlisted_evidence() -> None:
+    unsafe = {
+        "contract": "builderops_linux_containment.v1",
+        "profile_name": "linux-systemd-cgroup-v2-scope-v1",
+        "scope_identity": f"yggdrasil-verification-{'a' * 24}.scope",
+        "evidence_digests": {
+            "attach": "b" * 64,
+            "cleanup": "c" * 64,
+        },
+        "outcome": "clean",
+        "cgroup_path": "/user.slice/private.scope",
+    }
+
+    with pytest.raises(ValueError, match="containment receipt is malformed"):
+        validated_containment_receipt_shape(unsafe)
 
 
 def test_pending_dry_recovery_rejects_contradictory_merge_evidence() -> None:

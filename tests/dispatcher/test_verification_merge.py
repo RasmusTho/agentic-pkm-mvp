@@ -403,6 +403,106 @@ def claimed_run(
     return ledger, ready, outbox
 
 
+def test_merge_ready_containment_matches_durable_verification_attempt() -> None:
+    api = FakeBuilderOpsClient()
+    ledger = BuilderOpsVerificationLedger(api, repository=REPO)
+    run = ledger.ingest(request())
+    claimed = ledger.claim(run.run_id, "verification-host")
+    assert claimed.lease_id is not None
+    containment = {
+        "contract": "builderops_linux_containment.v1",
+        "profile_name": "linux-systemd-cgroup-v2-scope-v1",
+        "scope_identity": f"yggdrasil-verification-{'a' * 24}.scope",
+        "evidence_digests": {
+            "attach": "b" * 64,
+            "cleanup": "c" * 64,
+        },
+        "outcome": "clean",
+    }
+    ledger.record_attempt(
+        run.run_id,
+        "verification",
+        "verification-session",
+        "gpt-5.6-sol",
+        "high",
+        {"head_sha": HEAD},
+        "passed",
+        {"head_sha": HEAD},
+        holder="verification-host",
+        lease_id=claimed.lease_id,
+        idempotency_key="contained-verification",
+        containment_receipt=containment,
+    )
+    anchor = ledger.attempts(run.run_id)[-1]["attempt_id"]
+    ledger.record_attempt(
+        run.run_id,
+        "review",
+        "independent-review-session",
+        "gpt-5.6-sol",
+        "xhigh",
+        {"head_sha": HEAD},
+        "clean",
+        {"head_sha": HEAD, "reviewed_attempt_id": anchor},
+        holder="verification-host",
+        lease_id=claimed.lease_id,
+        idempotency_key="contained-review",
+    )
+    coordinator_receipt = {
+        "verdict": "verified",
+        "head_sha": HEAD,
+        "summary": "host-fenced merge ready",
+        "receipt_ids": ["verified-review"],
+        "retry_after": None,
+        "review_events": [],
+        "human_exception": None,
+    }
+    substituted = {
+        **containment,
+        "scope_identity": f"yggdrasil-verification-{'d' * 24}.scope",
+    }
+
+    with pytest.raises(
+        ValueError,
+        match="containment does not match durable verification",
+    ):
+        ledger.mark_merge_ready(
+            run.run_id,
+            coordinator_receipt,
+            holder="verification-host",
+            lease_id=claimed.lease_id,
+            containment_receipt=substituted,
+        )
+
+    assert ledger.merge_ready_receipt(run.run_id) is None
+    ledger.mark_merge_ready(
+        run.run_id,
+        coordinator_receipt,
+        holder="verification-host",
+        lease_id=claimed.lease_id,
+        containment_receipt=containment,
+    )
+    marker = ledger.merge_ready_receipt(run.run_id)
+    assert marker is not None
+    assert marker["containment"] == containment
+    with pytest.raises(
+        ValueError,
+        match="containment does not match durable verification",
+    ):
+        ledger.mark_merge_ready(
+            run.run_id,
+            coordinator_receipt,
+            holder="verification-host",
+            lease_id=claimed.lease_id,
+            containment_receipt=substituted,
+        )
+    assert ledger.merge_ready_receipt(run.run_id) == marker
+    api.tasks[run.run_id]["payload"]["merge_ready_receipt"][
+        "containment"
+    ] = substituted
+    with pytest.raises(ValueError, match="containment is stale or substituted"):
+        ledger.merge_ready_receipt(run.run_id)
+
+
 def test_blocking_review_wins_atomic_merge_intent_race() -> None:
     api = BlockingReviewWinsIntentRaceClient()
     ledger, run, outbox = claimed_run(api=api)

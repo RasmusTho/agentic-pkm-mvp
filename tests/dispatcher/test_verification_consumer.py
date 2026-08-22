@@ -6175,6 +6175,107 @@ def test_barrier_release_failure_close_error_still_cleans_r_coalition(
     assert containment.cleanup_calls == 1
 
 
+def test_linux_post_release_cleanup_never_signals_raw_popen_pid(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events: list[str] = []
+
+    class Barrier:
+        command = ["barrier", "coordinator"]
+        pass_fds = (71,)
+        may_have_released = False
+
+        def after_spawn(self) -> None:
+            return None
+
+        def release(self) -> None:
+            self.may_have_released = True
+            raise RuntimeError("release delivery indeterminate")
+
+        def close(self) -> None:
+            raise OSError("barrier close failed")
+
+    class LiveRootProcess(_AuthorityLossProcess):
+        pid = 42_030
+
+        def poll(self) -> int | None:
+            events.append("poll")
+            return super().poll()
+
+        def terminate(self) -> None:
+            events.append("raw-terminate")
+            super().terminate()
+
+        def kill(self) -> None:
+            events.append("raw-kill")
+            super().kill()
+
+    process = LiveRootProcess([])
+
+    class LinuxBarrierContainment(_ProvenContainment):
+        cleanup_before_direct_reap = True
+
+        def __init__(self) -> None:
+            self.cleanup_calls = 0
+
+        def launch_barrier(self, _command: list[str]) -> Barrier:
+            return Barrier()
+
+        def capture_launch_root(self, root_pid: int) -> tuple[str, int]:
+            return ("identity", root_pid)
+
+        def attach(self, root_pid: int, identity: object | None = None) -> None:
+            assert identity == ("identity", root_pid)
+            super().attach(root_pid)
+
+        def cleanup(self) -> bool:
+            events.append("scope-cleanup")
+            self.cleanup_calls += 1
+            process.returncode = -verification_consumer.signal.SIGTERM
+            return True
+
+        def receipt(self) -> Mapping[str, object]:
+            return {
+                "contract": "builderops_linux_containment.v1",
+                "profile_name": "linux-systemd-cgroup-v2-scope-v1",
+                "scope_identity": f"yggdrasil-verification-{'a' * 24}.scope",
+                "evidence_digests": {
+                    "attach": "b" * 64,
+                    "cleanup": "c" * 64,
+                },
+                "outcome": "clean",
+            }
+
+    containment = LinuxBarrierContainment()
+    monkeypatch.setattr(
+        verification_consumer.subprocess,
+        "Popen",
+        lambda *args, **kwargs: process,
+    )
+    monkeypatch.setattr(
+        verification_consumer.os,
+        "killpg",
+        lambda *_args: (_ for _ in ()).throw(
+            AssertionError("Linux scope cleanup must not use PGID")
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="verification coordinator setup failed"):
+        _authority_loss_launcher(
+            tmp_path,
+            containment_factory=lambda: containment,
+            cleanup_tracker_factory=_ProvenContainment,
+        ).launch({"head_sha": HEAD})
+
+    assert containment.cleanup_calls == 1
+    assert process.terminate_calls == 0
+    assert process.kill_calls == 0
+    assert "raw-terminate" not in events
+    assert "raw-kill" not in events
+    assert events.index("scope-cleanup") < events.index("poll")
+
+
 def test_barrier_release_cleanup_runs_coalition_after_direct_root_failure(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
