@@ -41,5 +41,8 @@ def test_normative_contract_and_invariant_registry_match():
     assert "ArchivalAdapter" in contract
     assert "Provider-free" in contract
     assert "ARCHIVE-MUST-01" in contract
+    assert "durable owner receipt" in contract
+    assert "partial failure keeps the source readable" in contract
+    assert "durable retry authority" in contract
     assert ArchivalAdapter is not None
     assert PolicyProfile.RAW_EVIDENCE.value == "raw_evidence"

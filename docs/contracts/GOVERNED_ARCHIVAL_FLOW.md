@@ -83,8 +83,10 @@ These entries extend the existing invariant registry; this contract creates no c
   mounts, paths and manifests never authorize reads.
 - **ARCHIVE-MUST-03 — No authority fork.** Archive manifests and receipts describe custody and
   verification without replacing HKA, SIP, GOV, PDM, DRI or source-owner truth.
-- **ARCHIVE-MUST-04 — Verify before retirement.** Reservation, durable copy, identity verification,
-  owner receipt and activation precede retirement of a superseded representation.
+- **ARCHIVE-MUST-04 — Verify before retirement and preserve retry authority.** Reservation, durable
+  copy, identity verification, durable owner receipt and activation precede retirement of a
+  superseded representation. A partial failure keeps the source readable, never reports retirement
+  success, and preserves durable retry authority.
 - **ARCHIVE-MUST-05 — All-copy deletion precedes terminal erasure.** Pending external cleanup keeps
   liveness non-terminal and retryable.
 - **ARCHIVE-MUST-06 — Admission is atomic.** Every admitted durable source has identity,
