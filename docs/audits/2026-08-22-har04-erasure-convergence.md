@@ -1,5 +1,7 @@
 # HAR-04 cold-erasure mechanism convergence packet
 
+State: Advisory mechanism-review evidence for Issue #3850 and PR #5035; not runtime authority.
+
 Mechanism key: `heimdal.raw_liveness.pg_cold_erasure.v2`
 
 Protected invariant: a governed erase either leaves the durable identity and every active
@@ -58,7 +60,8 @@ memory governed path. Ordinary representation registration cannot delete identit
   succeed. The memory writer follows the same post-authority-delete ordering and persists its
   reduced receipt queue on cleanup failure. The PG post-commit reconciliation reacquires the
   content fence before consuming the queue, so cleanup cannot race a new generation or
-  registration. The scheduled retention writer indexes pending cleanup from durable receipts,
+  registration. The scheduled retention writer scans active generations first so an in-flight
+  response lease cannot invert the producer/retention fence handshake, then indexes pending cleanup from durable receipts,
   rather than active raw rows (which are already gone after DB erasure), and invokes the same
   governed retry path; failed external deletion remains queued for the next run. Stale
   observations cannot authorize deletion because the receipt/tombstone and row locks are the

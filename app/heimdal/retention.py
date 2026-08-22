@@ -103,7 +103,7 @@ class RetentionEnforcementReceipt:
 
 
 def _reconcile_pending_cold_cleanup() -> None:
-    """Retry durable post-commit cold cleanup before scanning active records.
+    """Retry durable post-commit cold cleanup after scanning active records.
 
     A completed DB erasure is no longer present in ``all_raw_records``. The
     receipt log is therefore the scheduled retry index; the governed delete
@@ -255,7 +255,6 @@ def enforce_hard_retention_bound(
     cutoff = reference_time - timedelta(days=window_days)
 
     deletions: List[DeletionReceipt] = []
-    _reconcile_pending_cold_cleanup()
     for record in raw_store.all_raw_records():
         ingested_at = record.ingested_at
         if ingested_at.tzinfo is None:
@@ -276,6 +275,13 @@ def enforce_hard_retention_bound(
             continue
         assert result.receipt is not None
         deletions.append(result.receipt)
+
+    # Read the durable retry queue only after active generations have entered
+    # the governed delete path.  The memory receipt snapshot takes the same
+    # liveness fence as response-lease issuance; consuming it first would wait
+    # behind an in-flight response before the retention writer could announce
+    # its own fence entry, inverting the producer/retention handshake.
+    _reconcile_pending_cold_cleanup()
 
     if record_last_enforced:
         apply_agent_update(
