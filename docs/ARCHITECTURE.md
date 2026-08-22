@@ -130,7 +130,7 @@ ports, gateways) — this table references, and does not duplicate, either.
 | `app/`, `mimer_runtime/`, contracts/schemas, companion-note surface | in-repo runtime code | SoI component |
 | `db` (Postgres/pgvector, `docker-compose.yaml:2-14`) | compose service | COTS system element |
 | `ollama` (`docker-compose.yaml:16-31`) | local fallback compose service | COTS system element |
-| Mac mini Ollama reached from the Linux runtime | Tailscale-reachable remote provider | External system |
+| Dedicated Ollama host reached from the Linux runtime | Tailscale-reachable remote provider | External system |
 | `api` (`docker-compose.yaml:37-99`) | compose service (SoI component runtime, containerized) | SoI component |
 | `worker` (`docker-compose.yaml:101-142`) | compose service (SoI component runtime, containerized) | SoI component |
 | `watcher` (`docker-compose.yaml:144-188`) | compose service (SoI component runtime, containerized) | SoI component |

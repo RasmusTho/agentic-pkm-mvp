@@ -20,7 +20,7 @@ Agentic PKM stack. It does not claim that local Compose is the live product depl
 
 ## Current live host boundary (verified 2026-08-22)
 
-- Mac mini: Ollama/model serving only; no product API, worker, watcher, database, or Companion UI.
+- Dedicated Ollama host: Ollama/model serving only; no product API, worker, watcher, database, or Companion UI.
 - `ygg-dev`: Linux/Tailscale dev runtime, API `:18001`, Companion UI `:8111`; reachable but degraded.
 - `ygg-test`: intended isolated test runtime; no reachable host or endpoint was found.
 - `ygg-prod`: Linux/Tailscale prod runtime, API `:18000`; liveness responds but functional health is

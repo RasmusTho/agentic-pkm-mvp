@@ -26,7 +26,7 @@ Last verified against: docs/ENVIRONMENTS.md, docs/ARCHITECTURE.md, docs/STATUS.m
 
 ## Current live posture
 
-The operator's current topology is Mac mini = Ollama only; the product runtime belongs on the new
+The operator's current topology is a dedicated Ollama host only; the product runtime belongs on the new
 Linux/Tailscale hosts. The live baseline is incomplete: `ygg-dev` answers on API `:18001` and UI
 `:8111` but is degraded and uses the `mock` LLM provider; `ygg-test` is not available; `ygg-prod`
 answers API liveness on `:18000` but fails functional health and has no reachable UI on `:8113`.
