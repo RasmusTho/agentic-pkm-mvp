@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import click
 
 from app.heimdal.archive_capacity import build_archive_capacity_report
+from app.heimdal.local_archive import run_archive_pass
 from app.heimdal.time_spend import (
     TimeSpendProjectionError,
     rebuild_time_spend,
@@ -106,6 +108,67 @@ def capacity(vault_root: Path) -> None:
     except RuntimeError as exc:
         raise click.ClickException(str(exc)) from exc
     click.echo(json.dumps(receipt, ensure_ascii=False))
+
+
+@heimdal_group.command(
+    name="archive-eligible",
+    help=(
+        "Run one bounded HAR-04 pass over hot records in the archive window. "
+        "The result contains counts and reason codes only."
+    ),
+)
+@click.option(
+    "--vault-root",
+    type=click.Path(path_type=Path, exists=True, file_okay=False),
+    required=True,
+    help="Vault containing _heimdal/settings.md with retention_window_days.",
+)
+@click.option(
+    "--config-root",
+    type=click.Path(path_type=Path, exists=True, file_okay=False),
+    default=None,
+    help="Repository config root; defaults to absolute PKM_CONFIG_ROOT or the current directory.",
+)
+@click.option(
+    "--channel",
+    type=click.Choice(["dev", "test", "prod"], case_sensitive=True),
+    default=None,
+    help="Channel authority; defaults to PKM_ENVIRONMENT (dev when unset).",
+)
+@click.option(
+    "--max-records",
+    type=click.IntRange(min=1, max=1000),
+    default=100,
+    show_default=True,
+    help="Maximum eligible hot records attempted in this pass.",
+)
+def archive_eligible(
+    vault_root: Path,
+    config_root: Path | None,
+    channel: str | None,
+    max_records: int,
+) -> None:
+    """Expose the bounded, retryable archive producer to an external scheduler."""
+    resolved_channel = channel or os.getenv("PKM_ENVIRONMENT", "dev").lower()
+    if resolved_channel not in {"dev", "test", "prod"}:
+        raise click.ClickException("PKM_ENVIRONMENT must resolve to dev, test, or prod")
+    resolved_config_root = config_root or Path(os.getenv("PKM_CONFIG_ROOT", Path.cwd()))
+    if not resolved_config_root.is_absolute():
+        raise click.ClickException("PKM_CONFIG_ROOT must be absolute")
+    try:
+        receipt = run_archive_pass(
+            vault_root=vault_root,
+            config_root=resolved_config_root,
+            channel=resolved_channel,
+            max_records=max_records,
+        )
+    except Exception as exc:
+        raise click.ClickException(
+            "archive pass failed before a redacted receipt was available"
+        ) from exc
+    click.echo(json.dumps(receipt.as_dict(), ensure_ascii=False, sort_keys=True))
+    if not receipt.healthy:
+        raise click.exceptions.Exit(1)
 
 
 @heimdal_group.command(

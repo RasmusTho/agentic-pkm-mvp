@@ -102,6 +102,29 @@ class RetentionEnforcementReceipt:
     receipted: bool = True
 
 
+def _reconcile_pending_cold_cleanup() -> None:
+    """Retry durable post-commit cold cleanup after scanning active records.
+
+    A completed DB erasure is no longer present in ``all_raw_records``. The
+    receipt log is therefore the scheduled retry index; the governed delete
+    path re-acquires the same fence and reconciles only its durable queue.
+    Failed external cleanup remains queued for the next run.
+    """
+    for receipt in raw_liveness.all_deletion_receipts():
+        if not receipt.payload.get("cold_cleanup_location_refs"):
+            continue
+        try:
+            raw_liveness.governed_delete_raw_record(
+                record_id=receipt.record_id,
+                reason=receipt.reason,
+                retention_window_days=receipt.retention_window_days,
+                deleted_at=receipt.deleted_at,
+                payload=receipt.payload,
+            )
+        except raw_store.RawRepresentationDeletionError:
+            continue
+
+
 def _resolve_retention_window_days(vault_root: Path, *, settings_dir: str = DEFAULT_SETTINGS_DIR) -> int:
     """Read the hard-retention bound from `_heimdal/settings.md` (A14, markdown-first).
 
@@ -252,6 +275,13 @@ def enforce_hard_retention_bound(
             continue
         assert result.receipt is not None
         deletions.append(result.receipt)
+
+    # Read the durable retry queue only after active generations have entered
+    # the governed delete path.  The memory receipt snapshot takes the same
+    # liveness fence as response-lease issuance; consuming it first would wait
+    # behind an in-flight response before the retention writer could announce
+    # its own fence entry, inverting the producer/retention handshake.
+    _reconcile_pending_cold_cleanup()
 
     if record_last_enforced:
         apply_agent_update(

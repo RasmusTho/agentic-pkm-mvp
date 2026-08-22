@@ -594,7 +594,7 @@
     },
     "heimdal_raw_deletion_receipt": {
       "classification": "explicitly-global",
-      "reason": "`heimdal_raw_deletion_receipt` is append-only receipts for governed raw erasure, written by `app/heimdal/retention.py`. Its columns are the deleted record's id, content identity, reason and retention window. The module reads a vault settings note to resolve that window, but the receipt stores no vault reference. Explicitly global per MVR-05's acceptance criteria.",
+      "reason": "`heimdal_raw_deletion_receipt` is the durable receipt and post-erasure cold-cleanup queue for governed raw erasure, written by `app/heimdal/raw_liveness.py`. Receipt identity and erasure facts stay append-only; the same module may update only the payload's ordered cleanup refs under the reconciliation guard. The rows store no vault reference and are explicitly global per MVR-05's acceptance criteria.",
       "owning_revision": "a3f9d1c6e2b8",
       "declaring_revisions": [
         "a3f9d1c6e2b8"
@@ -605,7 +605,8 @@
         {
           "module": "app/heimdal/raw_liveness.py",
           "operations": [
-            "insert"
+            "insert",
+            "update"
           ]
         }
       ],

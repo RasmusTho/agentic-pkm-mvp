@@ -1,4 +1,4 @@
-State: Specification directory (design + bounded slices). HAR-01 through HAR-03 are delivered; archive copy/receipt, restore/expiry, and parent acceptance remain future work. Defines a local, encrypted cold tier for Heimdal raw audio; it does not change the existing retention bound or claim cloud/off-site durability.
+State: Specification directory (design + bounded slices). HAR-01 through HAR-04 are delivered; restore/expiry and parent acceptance remain future work. Defines a local, encrypted cold tier for Heimdal raw audio; it does not change the existing retention bound or claim cloud/off-site durability.
 Doc role: Capability specification (feature-breakdown lane)
 Authority: Owns the proposed local raw-audio archive design. Subordinate to `docs/HEIMDAL/OWNER_DECISIONS.md :: R-RETENTION`, `docs/HEIMDAL/FABLE_COMPANION.md` for the raw-store boundary, and `docs/EVENTS.md` for current raw-store behavior.
 Owner: Architecture / product
@@ -70,6 +70,16 @@ already enforces irreversible deletion.
 - **INV-HAR-5 — restore remains gated.** Cold archive access reuses the raw-read allowlist and receipt
   discipline; mounting an archive does not make raw audio generally readable.
 
+HAR-04's runtime producer is the bounded `python -m app.cli heimdal archive-eligible` pass. A host
+scheduler may invoke it repeatedly; the pass serializes against another invocation through the raw
+store, revalidates the channel-governed encrypted volume, and leaves every failed item hot for retry.
+It commits an inactive opaque-location reservation before writing record bytes and holds both the
+retention generation fence and verified archive-volume mutation lock through activation, so process
+or DB-fence loss remains discoverable and cleanup-retryable. The opaque location includes a digest
+binding to the producing archive identity (not a filesystem path), so a restart or valid rebind to
+another root cannot redirect reads or consume pending cleanup. Its receipt contains aggregate
+counts and closed reason codes only.
+
 ## Capability acceptance criteria
 
 - [ ] Aggregate capture-volume evidence forecasts the seven-day hot tier and remaining retention
@@ -81,7 +91,7 @@ already enforces irreversible deletion.
 - [ ] A hot-to-cold relocation preserves `raw_ref`, read-gate authorization, immutable provenance,
       and all-copy deletion semantics; no direct raw-record deletion acts as relocation.
       Verify: `tests/heimdal/test_local_archive_migration.py::test_relocation_preserves_raw_ref_and_gated_read`
-- [ ] Cold archival verifies identity/hash and a durable receipt before hot copy retirement; a forced
+- [x] Cold archival verifies identity/hash and a durable receipt before hot copy retirement; a forced
       verification failure retains the hot copy.
       Verify: `tests/heimdal/test_local_archive.py::test_verify_before_hot_representation_retire_and_fail_closed`
 - [ ] A raw item can be restored through the existing gated read path, and expiry/revocation removes

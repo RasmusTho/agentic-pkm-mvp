@@ -19,8 +19,10 @@ from pathlib import Path
 import pytest
 from click.testing import CliRunner
 
+import app.cli.heimdal as heimdal_cli
 from app.cli import cli
 from app.heimdal import capture_runtime
+from app.heimdal.local_archive import ArchivePassReceipt
 from app.heimdal.consent_ledger import reset_memory_consent_ledger
 from app.heimdal.raw_store import all_raw_records, reset_memory_raw_store
 
@@ -139,3 +141,95 @@ def test_capture_watch_forever_mode_retries_instead_of_exiting_on_missing_dir(
     assert result.exit_code == 0, result.output
     assert len(sleep_calls) >= 2
     assert "stopped after 0 ticks" in result.output
+
+
+def test_archive_eligible_cli_invokes_bounded_production_pass(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    captured: dict[str, object] = {}
+
+    def run_pass(**kwargs: object) -> ArchivePassReceipt:
+        captured.update(kwargs)
+        return ArchivePassReceipt(
+            ran=True,
+            healthy=True,
+            reason="ok",
+            eligible_count=2,
+            selected_count=2,
+            archived_count=2,
+            failed_count=0,
+            deferred_count=0,
+        )
+
+    monkeypatch.setattr(heimdal_cli, "run_archive_pass", run_pass)
+    result = CliRunner().invoke(
+        cli,
+        [
+            "heimdal",
+            "archive-eligible",
+            "--vault-root",
+            str(tmp_path),
+            "--config-root",
+            str(tmp_path),
+            "--channel",
+            "test",
+            "--max-records",
+            "2",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert captured == {
+        "vault_root": tmp_path,
+        "config_root": tmp_path,
+        "channel": "test",
+        "max_records": 2,
+    }
+    assert json.loads(result.output) == {
+        "archived_count": 2,
+        "deferred_count": 0,
+        "eligible_count": 2,
+        "failed_count": 0,
+        "failure_reason_counts": {},
+        "healthy": True,
+        "ran": True,
+        "reason": "ok",
+        "selected_count": 2,
+    }
+
+
+def test_archive_eligible_cli_fails_loud_with_redacted_degraded_receipt(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(
+        heimdal_cli,
+        "run_archive_pass",
+        lambda **_kwargs: ArchivePassReceipt(
+            ran=True,
+            healthy=False,
+            reason="archive_mount_unavailable",
+            eligible_count=0,
+            selected_count=0,
+            archived_count=0,
+            failed_count=0,
+            deferred_count=0,
+        ),
+    )
+    result = CliRunner().invoke(
+        cli,
+        [
+            "heimdal",
+            "archive-eligible",
+            "--vault-root",
+            str(tmp_path),
+            "--config-root",
+            str(tmp_path),
+            "--channel",
+            "prod",
+        ],
+    )
+
+    assert result.exit_code == 1
+    payload = json.loads(result.output)
+    assert payload["reason"] == "archive_mount_unavailable"
+    assert str(tmp_path) not in result.output

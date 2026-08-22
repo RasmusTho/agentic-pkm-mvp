@@ -282,12 +282,50 @@ def _run_ingress_key_preflight() -> None:
         logger.warning("Heimdal ingress preflight failed to run: %s", exc)
 
 
+def _run_cold_volume_startup_binding() -> None:
+    """Bind the verified cold root in this serving process after restart."""
+    from app.heimdal import raw_store
+
+    raw_store.revoke_cold_archive_binding()
+    if os.getenv("PKM_ENVIRONMENT", "dev").lower() != "prod":
+        return
+    try:
+        from app.ops.heimdal_cold_volume import (
+            _channel_archive_metadata_authority,
+            require_archive_volume_ready,
+        )
+
+        config_root = Path(os.getenv("PKM_CONFIG_ROOT", Path.cwd()))
+        channel = os.getenv("PKM_ENVIRONMENT", "prod").lower()
+        _metadata_path, metadata = _channel_archive_metadata_authority(
+            config_root=config_root,
+            channel=channel,
+        )
+        volume_proof = require_archive_volume_ready(
+            metadata,
+            expected_channel=channel,
+        )
+        # The readiness boundary also binds today, but startup owns the
+        # process-local resolver explicitly: retaining and applying the proof
+        # here prevents a future validation-only refactor from silently
+        # revoking cold reads and cleanup after every process restart.
+        raw_store.configure_cold_archive_root(
+            metadata.mountpoint,
+            verified_volume=volume_proof,
+            expected_archive_ref=metadata.archive_id,
+        )
+    except Exception as exc:  # pragma: no cover - production host dependent
+        raw_store.revoke_cold_archive_binding()
+        logger.error("Verified Heimdal cold-volume binding unavailable; cold reads fail closed: %s", type(exc).__name__)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     from app.agent_memory.ask_provenance_manifest import start_ask_provenance_runtime
 
     start_ask_provenance_runtime()
     _run_ingress_key_preflight()
+    _run_cold_volume_startup_binding()
     await _run_index_preflight()
     _log_v6_seam_status()
     _ingest_settings_at_startup()

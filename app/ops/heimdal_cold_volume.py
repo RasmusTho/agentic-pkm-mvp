@@ -22,6 +22,7 @@ import re
 import secrets
 import stat
 import subprocess
+import weakref
 import sys
 import threading
 import unicodedata
@@ -201,10 +202,54 @@ class CommandResult:
     cwd_identity: tuple[int, int] | None = None
 
 
-@dataclass(frozen=True)
+_ARCHIVE_VOLUME_READY_ISSUER = object()
+
+
+_VERIFIED_VOLUME_PROOFS: dict[int, tuple[str, Path]] = {}
+
+
+@dataclass(frozen=True, init=False)
 class ArchiveVolumeReady:
-    ready: bool = True
-    archive_ref: str = "archive-volume-verified"
+    ready: bool
+    archive_ref: str
+    mountpoint: Path
+
+    def __init__(self, *, _issuer: object, archive_ref: str, mountpoint: Path) -> None:
+        if _issuer is not _ARCHIVE_VOLUME_READY_ISSUER:
+            raise _refused()
+        if not mountpoint.is_absolute():
+            raise _refused()
+        object.__setattr__(self, "ready", True)
+        object.__setattr__(self, "archive_ref", archive_ref)
+        object.__setattr__(self, "mountpoint", mountpoint)
+        proof_id = id(self)
+        _VERIFIED_VOLUME_PROOFS[proof_id] = (archive_ref, mountpoint)
+        weakref.finalize(self, _VERIFIED_VOLUME_PROOFS.pop, proof_id, None)
+
+
+def _is_verified_archive_volume_ready(
+    proof: object, expected_archive_ref: str | None, expected_mountpoint: Path
+) -> bool:
+    binding = _VERIFIED_VOLUME_PROOFS.get(id(proof))
+    return (
+        isinstance(proof, ArchiveVolumeReady)
+        and binding is not None
+        and proof.archive_ref == binding[0]
+        and proof.mountpoint == binding[1]
+        and (expected_archive_ref is None or binding[0] == expected_archive_ref)
+        and binding[1] == expected_mountpoint
+    )
+
+
+def _issue_archive_volume_ready(
+    archive_ref: str, mountpoint: Path, *, _issuer: object
+) -> ArchiveVolumeReady:
+    """Issue a proof for the verified-volume boundary and its bound archive."""
+    return ArchiveVolumeReady(
+        _issuer=_issuer,
+        archive_ref=archive_ref,
+        mountpoint=mountpoint,
+    )
 
 
 CommandRunner = Callable[..., CommandResult]
@@ -1292,7 +1337,21 @@ def require_archive_volume_ready(
         )
     finally:
         os.close(parent_descriptor)
-    return ArchiveVolumeReady()
+    # Startup callers use the same verified boundary to rebind cold reads
+    # after a process restart; never bind an unverified mountpoint.
+    from app.heimdal import raw_store
+
+    proof = ArchiveVolumeReady(
+        _issuer=_ARCHIVE_VOLUME_READY_ISSUER,
+        archive_ref=metadata.archive_id,
+        mountpoint=metadata.mountpoint,
+    )
+    raw_store.configure_cold_archive_root(
+        metadata.mountpoint,
+        verified_volume=proof,
+        expected_archive_ref=metadata.archive_id,
+    )
+    return proof
 
 
 @dataclass(frozen=True)
@@ -1365,7 +1424,9 @@ def mount_archive_volume(
         else runner
     )
     _mount_and_validate(metadata, credential=credential, runner=selected)
-    return ArchiveVolumeReady()
+    return _issue_archive_volume_ready(
+        metadata.archive_id, metadata.mountpoint, _issuer=_ARCHIVE_VOLUME_READY_ISSUER
+    )
 
 
 def _mount_and_validate(
@@ -1660,7 +1721,9 @@ def provision_archive_volume(
     if metadata.state == BOUND_ACTIVE:
         _require_bundle_directory(metadata)
         _mount_and_validate(metadata, credential=credential, runner=selected)
-        return ArchiveVolumeReady()
+        return _issue_archive_volume_ready(
+            metadata.archive_id, metadata.mountpoint, _issuer=_ARCHIVE_VOLUME_READY_ISSUER
+        )
 
     if metadata_path is None:
         raise _refused()
@@ -1697,7 +1760,9 @@ def provision_archive_volume(
             if attachment.detach_authority is not None:
                 _detach_exact(selected, attachment.detach_authority)
             raise
-        return ArchiveVolumeReady()
+        return _issue_archive_volume_ready(
+            metadata.archive_id, metadata.mountpoint, _issuer=_ARCHIVE_VOLUME_READY_ISSUER
+        )
 
     _require_empty_mount_directory(metadata)
     if _attached_device(metadata, selected) is not None:
@@ -1774,7 +1839,9 @@ def provision_archive_volume(
             raise
     finally:
         os.close(parent_descriptor)
-    return ArchiveVolumeReady()
+    return _issue_archive_volume_ready(
+        metadata.archive_id, metadata.mountpoint, _issuer=_ARCHIVE_VOLUME_READY_ISSUER
+    )
 
 
 def _bootstrap_credential(

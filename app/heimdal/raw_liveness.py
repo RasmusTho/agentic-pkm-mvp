@@ -15,12 +15,14 @@ transaction.
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 import json
 import os
+import re
 import threading
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Any, Callable, Dict, Iterable, Literal, Mapping, Optional
+from typing import Any, Callable, Dict, Iterable, Iterator, Literal, Mapping, Optional
 from uuid import UUID, uuid4
 
 from app.heimdal._backend import resolve_heimdal_backend
@@ -32,13 +34,89 @@ _RETENTION_CLAIM_TABLE = "heimdal_raw_retention_claim"
 _DELETION_RECEIPT_TABLE = "heimdal_raw_deletion_receipt"
 _RAW_REF_PREFIX = "heimraw:"
 _RETENTION_GUARD_SETTING = "app.heimdal_retention_bypass"
+_RETENTION_RECONCILE_GUARD_SETTING = "app.heimdal_retention_reconcile"
+_COLD_CLEANUP_PAYLOAD_KEY = "cold_cleanup_location_refs"
 
 RESPONSE_LEASE_SECONDS = 30
 
 _MIGRATION_HINT = (
     "raw liveness is migration-owned: run 'alembic upgrade head' against this "
-    "database. See revision c5d8a1e4f2b7."
+    "database. See revisions c5d8a1e4f2b7, e2f3a4b5c6d7, and f4b6c8d0e2a1."
 )
+
+_RECEIPT_TRIGGER_BODY = (
+    "if tg_op = 'update' and current_setting('app.heimdal_retention_reconcile', true) = 'true' "
+    "and new.id is not distinct from old.id and new.record_id is not distinct from old.record_id "
+    "and new.content_identity is not distinct from old.content_identity and new.reason is not distinct from old.reason "
+    "and new.retention_window_days is not distinct from old.retention_window_days "
+    "and new.deleted_at is not distinct from old.deleted_at and new.sequence is not distinct from old.sequence "
+    "and (new.payload - 'cold_cleanup_location_refs') is not distinct from (old.payload - 'cold_cleanup_location_refs') "
+    "and heimdal_raw_cleanup_queue_is_subsequence( old.payload->'cold_cleanup_location_refs', new.payload->'cold_cleanup_location_refs' ) "
+    "then return new; end if; raise exception 'heimdal_raw_deletion_receipt is append-only: % is not permitted', tg_op;"
+)
+
+_PRE_HAR04_RECEIPT_TRIGGER_BODY = "raise exception 'heimdal_raw_deletion_receipt is append-only (heim-1): % is not permitted', tg_op;"
+
+_CLEANUP_QUEUE_HELPER_BODY = (
+    "declare old_refs text[] := array( select jsonb_array_elements_text(coalesce(old_payload, '[]'::jsonb)) ); "
+    "new_ref text; old_index integer := 1; old_length integer := coalesce(array_length(old_refs, 1), 0); "
+    "begin for new_ref in select jsonb_array_elements_text(coalesce(new_payload, '[]'::jsonb)) loop "
+    "while old_index <= old_length and old_refs[old_index] <> new_ref loop old_index := old_index + 1; end loop; "
+    "if old_index > old_length then return false; end if; old_index := old_index + 1; end loop; "
+    "return true; end;"
+)
+
+
+def _normalize_trigger_sql(value: str) -> str:
+    """Normalize PostgreSQL's deparsed operator/cast spelling for exact checks."""
+    normalized = re.sub(r"\s+", " ", value).lower().strip()
+    normalized = re.sub(r"\s*->\s*", "->", normalized)
+    normalized = re.sub(r"::text\b", "", normalized)
+    normalized = re.sub(r"\(\s*", "(", normalized)
+    normalized = re.sub(r"\s*\)", ")", normalized)
+    return normalized
+
+
+def _receipt_trigger_matches(function_def: str, trigger_def: str, expected_body: str) -> bool:
+    normalized = _normalize_trigger_sql(function_def)
+    normalized_trigger = _normalize_trigger_sql(trigger_def)
+    body_match = re.search(r"\bbegin\s+(.*?)\bend\s*;", normalized, re.IGNORECASE)
+    body = body_match.group(1).strip() if body_match else ""
+    return bool(
+        body == _normalize_trigger_sql(expected_body)
+        and re.fullmatch(
+            r"create trigger heimdal_raw_deletion_receipt_no_update "
+            r"before delete or update on (?:[a-z_][a-z0-9_]*\.)?heimdal_raw_deletion_receipt "
+            r"for each row execute function "
+            r"(?:[a-z_][a-z0-9_]*\.)?heimdal_raw_deletion_receipt_reject_mutation\(\)",
+            normalized_trigger,
+        )
+    )
+
+
+def _receipt_trigger_is_migration_ready(function_def: str, trigger_def: str) -> bool:
+    """Accept the current HAR-04 guarded update trigger shape."""
+    return _receipt_trigger_matches(function_def, trigger_def, _RECEIPT_TRIGGER_BODY)
+
+
+def _receipt_trigger_is_legacy_migration_ready(function_def: str, trigger_def: str) -> bool:
+    """Accept the historical pre-HAR-04 trigger shape at its version boundary."""
+    return _receipt_trigger_matches(function_def, trigger_def, _PRE_HAR04_RECEIPT_TRIGGER_BODY)
+
+
+def _cleanup_queue_helper_is_migration_ready(
+    function_def: str, arguments: str, volatility: str, is_strict: bool
+) -> bool:
+    """Accept only the canonical order-preserving queue helper."""
+    normalized = re.sub(r"\s+", " ", function_def).lower()
+    body_match = re.search(r"\bdeclare\s+(.*?)\bend\s*;", normalized, re.IGNORECASE)
+    body = body_match.group(0).strip() if body_match else ""
+    return bool(
+        arguments.strip().lower() == "old_payload jsonb, new_payload jsonb"
+        and volatility == "i"
+        and is_strict
+        and body == _CLEANUP_QUEUE_HELPER_BODY
+    )
 
 
 class RawLivenessSchemaMissingError(RuntimeError):
@@ -161,6 +239,11 @@ def _iso_timestamp(value: datetime) -> str:
     return _as_utc(value).isoformat().replace("+00:00", "Z")
 
 
+def _assert_new_deletion_payload(payload: Mapping[str, Any]) -> None:
+    if _COLD_CLEANUP_PAYLOAD_KEY in payload:
+        raise ValueError("cold cleanup queue is reserved for governed retention authority")
+
+
 def _record_id_from_raw_ref(raw_ref: str) -> str:
     if not isinstance(raw_ref, str) or not raw_ref.startswith(_RAW_REF_PREFIX):
         raise RawLivenessUnavailableError(f"invalid raw reference {raw_ref!r}")
@@ -277,9 +360,7 @@ def _memory_projection_locked(
             raise RawLivenessUnavailableError(
                 "tombstoned raw generation still has an active representation"
             )
-        return RawLivenessProjection(
-            outcome="erased", generation=generation, tombstone=tombstone
-        )
+        return RawLivenessProjection(outcome="erased", generation=generation, tombstone=tombstone)
     if not raw_active:
         raise RawLivenessUnavailableError(
             "untombstoned raw generation is missing its exact active representation"
@@ -309,9 +390,7 @@ def _memory_projection_locked(
     )
     _MEMORY.leases.append(lease)
     _response_lease_stage_hook("after_lease_append")
-    return RawLivenessProjection(
-        outcome="active", generation=generation, response_lease=lease
-    )
+    return RawLivenessProjection(outcome="active", generation=generation, response_lease=lease)
 
 
 def _pg_connect(*, autocommit: bool = False) -> Any:
@@ -446,6 +525,52 @@ def _assert_pg_schema(conn: Any) -> None:
         raise RawLivenessSchemaMissingError(
             "Raw-liveness append-only triggers are incomplete. " + _MIGRATION_HINT
         )
+    # The trigger must remain bound to both mutation events, while the function
+    # must admit exactly the guarded UPDATE path and reject everything else.
+    # Normalize PostgreSQL's pretty-printed body before checking the complete
+    # control-flow shape; independent token presence is insufficient here.
+    cur.execute(
+        """
+        SELECT pg_get_functiondef(t.tgfoid), pg_get_triggerdef(t.oid)
+        FROM pg_trigger AS t
+        JOIN pg_class AS c ON c.oid = t.tgrelid
+        JOIN pg_namespace AS n ON n.oid = c.relnamespace
+        WHERE n.nspname = current_schema()
+          AND c.relname = %s
+          AND t.tgname = 'heimdal_raw_deletion_receipt_no_update'
+          AND NOT t.tgisinternal
+        """,
+        (_DELETION_RECEIPT_TABLE,),
+    )
+    trigger_rows = cur.fetchall()
+    current_trigger = any(
+        _receipt_trigger_is_migration_ready(str(row[0]), str(row[1])) for row in trigger_rows
+    )
+    if not current_trigger:
+        raise RawLivenessSchemaMissingError(
+            "Deletion-receipt reconciliation trigger is not migration-ready. " + _MIGRATION_HINT
+        )
+    cur.execute(
+        """
+        SELECT pg_get_functiondef(p.oid), pg_get_function_arguments(p.oid),
+               p.provolatile, p.proisstrict
+        FROM pg_proc AS p
+        JOIN pg_namespace AS n ON n.oid = p.pronamespace
+        WHERE n.nspname = current_schema()
+          AND p.proname = 'heimdal_raw_cleanup_queue_is_subsequence'
+          AND p.proargtypes = ARRAY['jsonb'::regtype, 'jsonb'::regtype]::oidvector
+        """
+    )
+    helper_rows = cur.fetchall()
+    if not any(
+        _cleanup_queue_helper_is_migration_ready(
+            str(row[0]), str(row[1]), str(row[2]), bool(row[3])
+        )
+        for row in helper_rows
+    ):
+        raise RawLivenessSchemaMissingError(
+            "Deletion-receipt queue helper is not migration-ready. " + _MIGRATION_HINT
+        )
     cur.execute(
         f"""
         SELECT r.id
@@ -460,23 +585,33 @@ def _assert_pg_schema(conn: Any) -> None:
     if cur.fetchone() is not None:
         raise RawLivenessSchemaMissingError(
             "Active raw identities are not covered by exactly one untombstoned "
-            "liveness generation. "
-            + _MIGRATION_HINT
+            "liveness generation. " + _MIGRATION_HINT
         )
 
 
 def assert_runtime_schema() -> None:
-    """Fail closed when the migration-owned liveness authority is unavailable.
+    """Fail closed unless the complete raw/liveness authority is current.
 
     Memory-backed test fixtures have no durable schema to check. PostgreSQL
     callers use a fresh read-only connection so startup/status can report an
-    incomplete migration before the first media admission.
+    incomplete migration before the first media admission. The raw-store
+    assertion includes this module's liveness assertion, so calling it here
+    validates the complete current contract without recursing through this
+    public startup entrypoint.
     """
     if resolve_heimdal_backend() != "pg":
         return
+    from app.heimdal import raw_store
+
     conn = _pg_connect(autocommit=True)
     try:
-        _assert_pg_schema(conn)
+        try:
+            raw_store._assert_pg_schema(conn)  # noqa: SLF001
+        except raw_store.RawStoreSchemaMissingError as exc:
+            raise RawLivenessSchemaMissingError(
+                "Raw identity/representation schema is not migration-ready for liveness. "
+                + _MIGRATION_HINT
+            ) from exc
     finally:
         conn.close()
 
@@ -525,9 +660,53 @@ def _bootstrap_pg(conn: Any) -> None:
     )
     cur.execute(
         """
+        CREATE OR REPLACE FUNCTION heimdal_raw_cleanup_queue_is_subsequence(
+            old_payload jsonb, new_payload jsonb
+        ) RETURNS boolean AS $$
+        DECLARE
+            old_refs text[] := ARRAY(
+                SELECT jsonb_array_elements_text(COALESCE(old_payload, '[]'::jsonb))
+            );
+            new_ref text;
+            old_index integer := 1;
+            old_length integer := COALESCE(array_length(old_refs, 1), 0);
+        BEGIN
+            FOR new_ref IN SELECT jsonb_array_elements_text(COALESCE(new_payload, '[]'::jsonb)) LOOP
+                WHILE old_index <= old_length AND old_refs[old_index] <> new_ref LOOP
+                    old_index := old_index + 1;
+                END LOOP;
+                IF old_index > old_length THEN
+                    RETURN false;
+                END IF;
+                old_index := old_index + 1;
+            END LOOP;
+            RETURN true;
+        END;
+        $$ LANGUAGE plpgsql IMMUTABLE STRICT
+        """
+    )
+    cur.execute(
+        f"""
         CREATE OR REPLACE FUNCTION heimdal_raw_deletion_receipt_reject_mutation()
         RETURNS trigger AS $$
         BEGIN
+            IF TG_OP = 'UPDATE'
+               AND current_setting('{_RETENTION_RECONCILE_GUARD_SETTING}', true) = 'true'
+               AND NEW.id IS NOT DISTINCT FROM OLD.id
+               AND NEW.record_id IS NOT DISTINCT FROM OLD.record_id
+               AND NEW.content_identity IS NOT DISTINCT FROM OLD.content_identity
+               AND NEW.reason IS NOT DISTINCT FROM OLD.reason
+               AND NEW.retention_window_days IS NOT DISTINCT FROM OLD.retention_window_days
+               AND NEW.deleted_at IS NOT DISTINCT FROM OLD.deleted_at
+               AND NEW.sequence IS NOT DISTINCT FROM OLD.sequence
+               AND (NEW.payload - 'cold_cleanup_location_refs')
+                   IS NOT DISTINCT FROM (OLD.payload - 'cold_cleanup_location_refs')
+               AND heimdal_raw_cleanup_queue_is_subsequence(
+                   OLD.payload->'cold_cleanup_location_refs',
+                   NEW.payload->'cold_cleanup_location_refs'
+               ) THEN
+                RETURN NEW;
+            END IF;
             RAISE EXCEPTION 'heimdal_raw_deletion_receipt is append-only: % is not permitted', TG_OP;
         END;
         $$ LANGUAGE plpgsql
@@ -798,13 +977,9 @@ def register_pg_generation(
     prior_rows = cur.fetchall()
     for generation, prior_record_id, raw_ref, prior_activated_at, sequence in prior_rows:
         if str(prior_record_id) == record_id:
-            cur.execute(
-                f"SELECT 1 FROM {_TOMBSTONE_TABLE} WHERE record_id = %s", (record_id,)
-            )
+            cur.execute(f"SELECT 1 FROM {_TOMBSTONE_TABLE} WHERE record_id = %s", (record_id,))
             if cur.fetchone() is not None:
-                raise RawEvidenceErasedError(
-                    _load_pg_tombstone(cur, record_id=record_id)
-                )
+                raise RawEvidenceErasedError(_load_pg_tombstone(cur, record_id=record_id))
             return RawLivenessGeneration(
                 content_identity=content_identity,
                 generation=int(generation),
@@ -885,6 +1060,44 @@ def assert_pg_generation_active(
     )
 
 
+@contextmanager
+def raw_relocation_fence(*, record_id: str, content_identity: str) -> Iterator[None]:
+    """Fence one relocation against retention for its exact live generation.
+
+    The fence spans durable cold reservation, external writes, verification,
+    and activation.  Retention takes the same authority before it captures
+    cold cleanup refs, so it can never commit between an external write and
+    the registry state that makes that write discoverable.
+    """
+
+    if resolve_heimdal_backend() == "memory":
+        with _MEMORY_FENCE:
+            assert_memory_generation_active(
+                record_id=record_id,
+                content_identity=content_identity,
+            )
+            yield
+        return
+
+    conn = _pg_connect(autocommit=False)
+    try:
+        _assert_pg_schema(conn)
+        cur = conn.cursor()
+        acquire_pg_fence(cur, content_identity)
+        assert_pg_generation_active(
+            cur,
+            record_id=record_id,
+            content_identity=content_identity,
+        )
+        yield
+        conn.commit()
+    except BaseException:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
 def _load_pg_generation(cur: Any, *, record_id: str) -> Optional[RawLivenessGeneration]:
     cur.execute(
         f"""
@@ -934,9 +1147,7 @@ def _load_pg_tombstone(cur: Any, *, record_id: str) -> RawDeletionTombstone:
     )
 
 
-def _load_pg_retention_claim(
-    cur: Any, *, record_id: str
-) -> Optional[RawRetentionClaim]:
+def _load_pg_retention_claim(cur: Any, *, record_id: str) -> Optional[RawRetentionClaim]:
     cur.execute(
         f"""
         SELECT id, content_identity, generation, raw_ref, reason,
@@ -971,11 +1182,10 @@ def _pg_exact_active(cur: Any, generation: RawLivenessGeneration) -> bool:
         SELECT count(*) FILTER (WHERE p.active),
                count(*) FILTER (
                    WHERE p.active
-                     AND p.storage_kind = 'postgres_hot'
-                     AND p.location_ref LIKE 'heimloc:%%'
-                     AND p.ciphertext IS NOT NULL
-                     AND p.nonce IS NOT NULL
-                     AND p.key_ref IS NOT NULL
+                   AND p.storage_kind IN ('postgres_hot', 'encrypted_local_cold')
+                   AND p.location_ref LIKE 'heimloc:%%'
+                   AND p.nonce IS NOT NULL
+                   AND p.key_ref IS NOT NULL
                )
         FROM heimdal_raw_record AS r
         LEFT JOIN heimdal_raw_representation AS p ON p.record_id = r.id
@@ -1043,9 +1253,7 @@ def project_with_response_leases(
                 raise RawLivenessUnavailableError(
                     "receipt raw ref has no matching durable liveness generation"
                 )
-            cur.execute(
-                f"SELECT 1 FROM {_TOMBSTONE_TABLE} WHERE record_id = %s", (record_id,)
-            )
+            cur.execute(f"SELECT 1 FROM {_TOMBSTONE_TABLE} WHERE record_id = %s", (record_id,))
             tombstoned = cur.fetchone() is not None
             raw_active = _pg_exact_active(cur, generation)
             if tombstoned:
@@ -1209,6 +1417,33 @@ def _memory_claim_retention_locked(
     return claim
 
 
+def _reconcile_memory_cold_cleanup(tombstone: RawDeletionTombstone) -> None:
+    from app.heimdal import raw_store
+
+    receipt = next(
+        (item for item in _MEMORY.deletion_receipts if item.id == tombstone.deletion_receipt_id),
+        None,
+    )
+    if receipt is None:
+        return
+    refs = list(receipt.payload.get("cold_cleanup_location_refs", []))
+    remaining = list(refs)
+    for location_ref in refs:
+        object_path = raw_store._cold_object_path(str(location_ref))  # noqa: SLF001
+        if object_path is None:
+            raise raw_store.RawRepresentationDeletionError(
+                "cold representation resolver is unavailable"
+            )
+        try:
+            raw_store._delete_cold_object_path(object_path)  # noqa: SLF001
+        except raw_store.RawRepresentationDeletionError:
+            raise raw_store.RawRepresentationDeletionError("cold representation deletion failed")
+        remaining.remove(str(location_ref))
+        receipt.payload["cold_cleanup_location_refs"] = list(remaining)
+    if remaining:
+        raise raw_store.RawRepresentationDeletionError("cold representation deletion failed")
+
+
 def _governed_delete_memory(
     *,
     record_id: str,
@@ -1223,19 +1458,17 @@ def _governed_delete_memory(
     with _MEMORY_FENCE:
         generation = _MEMORY.generations_by_record.get(record_id)
         if generation is None:
-            raise RawLivenessUnavailableError(
-                "retention target has no durable liveness generation"
-            )
+            raise RawLivenessUnavailableError("retention target has no durable liveness generation")
         existing_tombstone = _MEMORY.tombstones_by_record.get(record_id)
         raw_active = _memory_raw_is_exact_active(generation)
         if existing_tombstone is not None:
+            _reconcile_memory_cold_cleanup(existing_tombstone)
             if raw_active:
                 raise RawLivenessUnavailableError(
                     "tombstoned retention target still has active raw state"
                 )
-            return GovernedDeletionResult(
-                outcome="already_erased", tombstone=existing_tombstone
-            )
+            return GovernedDeletionResult(outcome="already_erased", tombstone=existing_tombstone)
+        _assert_new_deletion_payload(payload)
         if not raw_active:
             raise RawLivenessUnavailableError(
                 "untombstoned retention target is missing its active representation"
@@ -1273,7 +1506,19 @@ def _governed_delete_memory(
             sequence=len(_MEMORY.tombstones),
         )
         raw_snapshot = raw_store._MEMORY_STORE.snapshot_state()  # noqa: SLF001
+        cold_paths = []
+        for representation in raw_store.all_raw_representations(record_id):
+            if representation.storage_kind == "encrypted_local_cold":
+                object_path = raw_store._cold_object_path(representation.location_ref)  # noqa: SLF001
+                if object_path is None:
+                    raise raw_store.RawRepresentationDeletionError(
+                        "cold representation resolver is unavailable"
+                    )
+                cold_paths.append((representation.location_ref, object_path))
+        if cold_paths:
+            receipt.payload["cold_cleanup_location_refs"] = [ref for ref, _path in cold_paths]
         _MEMORY.deletion_receipts.append(receipt)
+        raw_deleted = False
         try:
             _retention_stage_hook("after_deletion_receipt")
             _MEMORY.tombstones.append(tombstone)
@@ -1284,7 +1529,11 @@ def _governed_delete_memory(
                     "retention target disappeared without a governed tombstone commit"
                 )
             _retention_stage_hook("after_raw_delete")
+            raw_deleted = True
+            _reconcile_memory_cold_cleanup(tombstone)
         except Exception:
+            if raw_deleted:
+                raise
             raw_store._MEMORY_STORE.restore_state(raw_snapshot)  # noqa: SLF001
             if claim_was_new and _MEMORY.retention_claims and _MEMORY.retention_claims[-1] == claim:
                 _MEMORY.retention_claims.pop()
@@ -1295,9 +1544,7 @@ def _governed_delete_memory(
                 _MEMORY.tombstones.pop()
             _MEMORY.tombstones_by_record.pop(record_id, None)
             raise
-        return GovernedDeletionResult(
-            outcome="deleted", receipt=receipt, tombstone=tombstone
-        )
+        return GovernedDeletionResult(outcome="deleted", receipt=receipt, tombstone=tombstone)
 
 
 _DELETION_RECEIPT_COLUMNS = (
@@ -1320,6 +1567,64 @@ def _deletion_receipt_from_row(row: tuple[Any, ...]) -> DeletionReceipt:
     )
 
 
+def _reconcile_pg_cold_cleanup(cur: Any, record_id: str, *, conn: Any | None = None) -> None:
+    from app.heimdal import raw_store
+
+    cur.execute(
+        f"SELECT deletion_receipt_id FROM {_TOMBSTONE_TABLE} WHERE record_id = %s",
+        (record_id,),
+    )
+    tombstone_row = cur.fetchone()
+    if tombstone_row is None:
+        return
+    cur.execute(
+        f"SELECT payload FROM {_DELETION_RECEIPT_TABLE} WHERE id = %s",
+        (tombstone_row[0],),
+    )
+    receipt_row = cur.fetchone()
+    payload = receipt_row[0] if receipt_row else {}
+    if isinstance(payload, str):
+        payload = json.loads(payload)
+    remaining = [str(ref) for ref in payload.get("cold_cleanup_location_refs", [])]
+    for location_ref in list(remaining):
+        object_path = raw_store._cold_object_path(str(location_ref))  # noqa: SLF001
+        if object_path is None:
+            raise raw_store.RawRepresentationDeletionError(
+                "cold representation resolver is unavailable"
+            )
+        try:
+            raw_store._delete_cold_object_path(object_path)  # noqa: SLF001
+        except raw_store.RawRepresentationDeletionError:
+            updated_payload = dict(payload)
+            updated_payload["cold_cleanup_location_refs"] = remaining
+            if conn is not None:
+                cur.execute(
+                    "SELECT set_config(%s, 'true', true)",
+                    (_RETENTION_RECONCILE_GUARD_SETTING,),
+                )
+            cur.execute(
+                f"UPDATE {_DELETION_RECEIPT_TABLE} SET payload = %s::jsonb WHERE id = %s",
+                (json.dumps(updated_payload), tombstone_row[0]),
+            )
+            if conn is not None:
+                conn.commit()
+            raise raw_store.RawRepresentationDeletionError("cold representation deletion failed")
+        remaining.remove(location_ref)
+        updated_payload = dict(payload)
+        updated_payload["cold_cleanup_location_refs"] = remaining
+        if conn is not None:
+            cur.execute(
+                "SELECT set_config(%s, 'true', true)",
+                (_RETENTION_RECONCILE_GUARD_SETTING,),
+            )
+        cur.execute(
+            f"UPDATE {_DELETION_RECEIPT_TABLE} SET payload = %s::jsonb WHERE id = %s",
+            (json.dumps(updated_payload), tombstone_row[0]),
+        )
+        if conn is not None:
+            conn.commit()
+
+
 def _governed_delete_pg(
     *,
     record_id: str,
@@ -1340,17 +1645,13 @@ def _governed_delete_pg(
         )
         identity_row = cur.fetchone()
         if identity_row is None:
-            raise RawLivenessUnavailableError(
-                "retention target has no durable liveness generation"
-            )
+            raise RawLivenessUnavailableError("retention target has no durable liveness generation")
         content_identity = str(identity_row[0])
         _retention_fence_hook(record_id)
         acquire_pg_fence(cur, content_identity)
         generation = _load_pg_generation(cur, record_id=record_id)
         assert generation is not None
-        cur.execute(
-            f"SELECT 1 FROM {_TOMBSTONE_TABLE} WHERE record_id = %s", (record_id,)
-        )
+        cur.execute(f"SELECT 1 FROM {_TOMBSTONE_TABLE} WHERE record_id = %s", (record_id,))
         tombstoned = cur.fetchone() is not None
         raw_active = _pg_exact_active(cur, generation)
         if tombstoned:
@@ -1359,8 +1660,18 @@ def _governed_delete_pg(
                     "tombstoned retention target still has durable raw state"
                 )
             tombstone = _load_pg_tombstone(cur, record_id=record_id)
-            conn.rollback()
+            cur.execute(
+                "SELECT set_config(%s, 'true', true)",
+                (_RETENTION_RECONCILE_GUARD_SETTING,),
+            )
+            try:
+                _reconcile_pg_cold_cleanup(cur, record_id, conn=conn)
+            except Exception:
+                conn.commit()
+                raise
+            conn.commit()
             return GovernedDeletionResult(outcome="already_erased", tombstone=tombstone)
+        _assert_new_deletion_payload(payload)
         if not raw_active:
             raise RawLivenessUnavailableError(
                 "untombstoned retention target is missing its active representation"
@@ -1420,6 +1731,26 @@ def _governed_delete_pg(
             conn.commit()
             return GovernedDeletionResult(outcome="lease_valid")
 
+        cold_location_refs: list[str] = []
+        try:
+            cur.execute(
+                "SELECT 1 FROM heimdal_raw_record WHERE id = %s FOR UPDATE",
+                (record_id,),
+            )
+            if cur.fetchone() is None:
+                raise RawLivenessUnavailableError(
+                    "raw identity disappeared before governed deletion"
+                )
+            locations = raw_store._cold_location_paths_for_pg_cursor(cur, record_id)  # noqa: SLF001
+            cold_location_refs = [location_ref for location_ref, _path in locations]
+        except Exception as exc:
+            raise raw_store.RawRepresentationDeletionError(
+                "governed all-copy deletion failed; no identity was removed"
+            ) from exc
+
+        receipt_payload = dict(payload)
+        if cold_location_refs:
+            receipt_payload["cold_cleanup_location_refs"] = cold_location_refs
         receipt_id = str(uuid4())
         cur.execute(
             f"""
@@ -1436,7 +1767,7 @@ def _governed_delete_pg(
                 reason,
                 retention_window_days,
                 reference_time,
-                json.dumps(dict(payload)),
+                json.dumps(receipt_payload),
             ),
         )
         receipt = _deletion_receipt_from_row(cur.fetchone())
@@ -1498,9 +1829,21 @@ def _governed_delete_pg(
             )
         _retention_stage_hook("after_raw_delete")
         conn.commit()
-        return GovernedDeletionResult(
-            outcome="deleted", receipt=receipt, tombstone=tombstone
-        )
+        try:
+            if cold_location_refs:
+                acquire_pg_fence(cur, content_identity)
+                cur.execute(
+                    "SELECT set_config(%s, 'true', true)",
+                    (_RETENTION_RECONCILE_GUARD_SETTING,),
+                )
+                _reconcile_pg_cold_cleanup(cur, record_id, conn=conn)
+                conn.commit()
+        except Exception:
+            # The DB erasure is already committed. Preserve any reduced queue
+            # update so the next retry converges instead of replaying refs.
+            conn.commit()
+            raise
+        return GovernedDeletionResult(outcome="deleted", receipt=receipt, tombstone=tombstone)
     except Exception:
         conn.rollback()
         raise
@@ -1560,9 +1903,7 @@ def all_deletion_tombstones() -> list[RawDeletionTombstone]:
     try:
         _assert_pg_schema(conn)
         cur = conn.cursor()
-        cur.execute(
-            f"SELECT record_id FROM {_TOMBSTONE_TABLE} ORDER BY sequence"
-        )
+        cur.execute(f"SELECT record_id FROM {_TOMBSTONE_TABLE} ORDER BY sequence")
         return [_load_pg_tombstone(cur, record_id=str(row[0])) for row in cur.fetchall()]
     finally:
         conn.close()
@@ -1576,9 +1917,7 @@ def all_retention_claims() -> list[RawRetentionClaim]:
     try:
         _assert_pg_schema(conn)
         cur = conn.cursor()
-        cur.execute(
-            f"SELECT record_id FROM {_RETENTION_CLAIM_TABLE} ORDER BY sequence"
-        )
+        cur.execute(f"SELECT record_id FROM {_RETENTION_CLAIM_TABLE} ORDER BY sequence")
         claims = []
         for row in cur.fetchall():
             claim = _load_pg_retention_claim(cur, record_id=str(row[0]))
@@ -1633,5 +1972,6 @@ __all__ = [
     "governed_delete_raw_record",
     "issue_response_lease",
     "project_with_response_leases",
+    "raw_relocation_fence",
     "reset_memory_deletion_receipts",
 ]

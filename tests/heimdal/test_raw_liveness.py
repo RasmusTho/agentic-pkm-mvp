@@ -78,6 +78,160 @@ def _run_retention(writer: str, *, root: Path, now: datetime):
     return enforce_screen_frame_retention(vault_root=root, now=now)
 
 
+def test_receipt_trigger_preflight_rejects_extra_delete_return_path() -> None:
+    canonical = """
+        BEGIN
+          IF TG_OP = 'UPDATE'
+             AND current_setting('app.heimdal_retention_reconcile', true) = 'true'
+             AND NEW.id IS NOT DISTINCT FROM OLD.id
+             AND NEW.record_id IS NOT DISTINCT FROM OLD.record_id
+             AND NEW.content_identity IS NOT DISTINCT FROM OLD.content_identity
+             AND NEW.reason IS NOT DISTINCT FROM OLD.reason
+             AND NEW.retention_window_days IS NOT DISTINCT FROM OLD.retention_window_days
+             AND NEW.deleted_at IS NOT DISTINCT FROM OLD.deleted_at
+             AND NEW.sequence IS NOT DISTINCT FROM OLD.sequence
+             AND (NEW.payload - 'cold_cleanup_location_refs') IS NOT DISTINCT FROM
+                 (OLD.payload - 'cold_cleanup_location_refs')
+             AND heimdal_raw_cleanup_queue_is_subsequence(
+                 OLD.payload->'cold_cleanup_location_refs',
+                 NEW.payload->'cold_cleanup_location_refs'
+             ) THEN
+            RETURN NEW;
+          END IF;
+          RAISE EXCEPTION 'heimdal_raw_deletion_receipt is append-only: % is not permitted', TG_OP;
+        END;
+    """
+    trigger = (
+        "CREATE TRIGGER heimdal_raw_deletion_receipt_no_update BEFORE DELETE OR UPDATE "
+        "ON public.heimdal_raw_deletion_receipt FOR EACH ROW EXECUTE FUNCTION "
+        "public.heimdal_raw_deletion_receipt_reject_mutation()"
+    )
+    assert raw_liveness._receipt_trigger_is_migration_ready(canonical, trigger)  # noqa: SLF001
+    assert raw_liveness._receipt_trigger_is_migration_ready(  # noqa: SLF001
+        canonical.replace(
+            "heimdal_raw_cleanup_queue_is_subsequence(\n                 OLD.payload->'cold_cleanup_location_refs',\n                 NEW.payload->'cold_cleanup_location_refs'\n             )",
+            "heimdal_raw_cleanup_queue_is_subsequence(OLD.payload -> 'cold_cleanup_location_refs'::text, NEW.payload -> 'cold_cleanup_location_refs'::text)",
+        ),
+        trigger,
+    )
+    assert not raw_liveness._receipt_trigger_is_migration_ready(
+        """
+        BEGIN
+          IF TG_OP = 'DELETE' THEN RETURN OLD; END IF;
+          IF TG_OP = 'UPDATE'
+             AND current_setting('app.heimdal_retention_reconcile', true) = 'true' THEN
+            RETURN NEW;
+          END IF;
+          RAISE EXCEPTION 'heimdal_raw_deletion_receipt is append-only: % is not permitted', TG_OP;
+        END;
+        """,
+        trigger,
+    )  # noqa: SLF001
+    assert not raw_liveness._receipt_trigger_is_migration_ready(
+        """
+        BEGIN
+          IF TG_OP = 'UPDATE'
+             AND current_setting('app.heimdal_retention_reconcile', true) = 'true' THEN
+            RETURN NEW;
+          END IF;
+          RAISE EXCEPTION 'heimdal_raw_deletion_receipt is append-only: % is not permitted', TG_OP
+            USING HINT = side_effecting_function();
+        END;
+        """,
+        trigger,
+    )  # noqa: SLF001
+    assert not raw_liveness._receipt_trigger_is_migration_ready(
+        """
+        BEGIN
+          DELETE FROM unrelated_table;
+          IF TG_OP = 'UPDATE'
+             AND current_setting('app.heimdal_retention_reconcile', true) = 'true' THEN
+            RETURN NEW;
+          END IF;
+          RAISE EXCEPTION 'heimdal_raw_deletion_receipt is append-only: % is not permitted', TG_OP;
+        END;
+        """,
+        trigger,
+    )  # noqa: SLF001
+    assert not raw_liveness._receipt_trigger_is_migration_ready(
+        canonical,
+        trigger + " WHEN (false)",
+    )  # noqa: SLF001
+
+
+def test_cleanup_queue_helper_preflight_binds_exact_immutable_function() -> None:
+    function_def = """
+        CREATE OR REPLACE FUNCTION public.heimdal_raw_cleanup_queue_is_subsequence(
+            old_payload jsonb, new_payload jsonb
+        ) RETURNS boolean AS $$
+        DECLARE
+            old_refs text[] := ARRAY(
+                SELECT jsonb_array_elements_text(COALESCE(old_payload, '[]'::jsonb))
+            );
+            new_ref text;
+            old_index integer := 1;
+            old_length integer := COALESCE(array_length(old_refs, 1), 0);
+        BEGIN
+            FOR new_ref IN SELECT jsonb_array_elements_text(COALESCE(new_payload, '[]'::jsonb)) LOOP
+                WHILE old_index <= old_length AND old_refs[old_index] <> new_ref LOOP
+                    old_index := old_index + 1;
+                END LOOP;
+                IF old_index > old_length THEN
+                    RETURN false;
+                END IF;
+                old_index := old_index + 1;
+            END LOOP;
+            RETURN true;
+        END;
+        $$ LANGUAGE plpgsql IMMUTABLE STRICT;
+    """
+    assert raw_liveness._cleanup_queue_helper_is_migration_ready(  # noqa: SLF001
+        function_def, "old_payload jsonb, new_payload jsonb", "i", True
+    )
+    assert not raw_liveness._cleanup_queue_helper_is_migration_ready(  # noqa: SLF001
+        function_def.replace("RETURN true", "RETURN false"),
+        "old_payload jsonb, new_payload jsonb",
+        "i",
+        True,
+    )
+    assert not raw_liveness._cleanup_queue_helper_is_migration_ready(  # noqa: SLF001
+        function_def, "old_payload jsonb, new_payload jsonb", "v", True
+    )
+    assert not raw_liveness._cleanup_queue_helper_is_migration_ready(  # noqa: SLF001
+        function_def, "old_payload jsonb, new_payload jsonb", "i", False
+    )
+
+
+def test_pre_har04_trigger_boundary_rejects_weak_queue_guard() -> None:
+    trigger = (
+        "CREATE TRIGGER heimdal_raw_deletion_receipt_no_update BEFORE DELETE OR UPDATE "
+        "ON public.heimdal_raw_deletion_receipt FOR EACH ROW EXECUTE FUNCTION "
+        "public.heimdal_raw_deletion_receipt_reject_mutation()"
+    )
+    historical = """
+        BEGIN
+          RAISE EXCEPTION 'heimdal_raw_deletion_receipt is append-only (HEIM-1): % is not permitted', TG_OP;
+        END;
+    """
+    weak_har04 = """
+        BEGIN
+          IF TG_OP = 'UPDATE'
+             AND current_setting('app.heimdal_retention_reconcile', true) = 'true'
+             AND COALESCE(OLD.payload->'cold_cleanup_location_refs', '[]'::jsonb)
+                 @> COALESCE(NEW.payload->'cold_cleanup_location_refs', '[]'::jsonb) THEN
+            RETURN NEW;
+          END IF;
+          RAISE EXCEPTION 'heimdal_raw_deletion_receipt is append-only: % is not permitted', TG_OP;
+        END;
+    """
+    assert raw_liveness._receipt_trigger_is_legacy_migration_ready(  # noqa: SLF001
+        historical, trigger
+    )
+    assert not raw_liveness._receipt_trigger_is_legacy_migration_ready(  # noqa: SLF001
+        weak_har04, trigger
+    )
+
+
 @pytest.mark.parametrize("writer", ["hard", "screen"])
 def test_valid_response_lease_blocks_both_retention_writers_until_expiry(
     writer: str, tmp_path: Path
