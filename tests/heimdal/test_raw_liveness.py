@@ -246,12 +246,8 @@ def test_valid_response_lease_blocks_both_retention_writers_until_expiry(
         now=retention_time,
     )
 
-    if writer == "hard":
-        with pytest.raises(RetentionErasurePendingError, match="draining"):
-            _run_retention(writer, root=root, now=retention_time)
-    else:
-        skipped = _run_retention(writer, root=root, now=retention_time)
-        assert skipped.deleted_count == 0
+    with pytest.raises(RetentionErasurePendingError, match="draining"):
+        _run_retention(writer, root=root, now=retention_time)
     assert raw_store.get_raw_record_by_content_identity(record.content_identity) is not None
     assert all_deletion_receipts() == []
 

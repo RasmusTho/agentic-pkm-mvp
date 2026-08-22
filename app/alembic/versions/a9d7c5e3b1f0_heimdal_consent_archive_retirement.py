@@ -51,8 +51,40 @@ def upgrade() -> None:
                 WHERE jsonb_array_length(
                     COALESCE(payload->'cold_cleanup_location_refs', '[]'::jsonb)
                 ) > 0
-                  AND jsonb_typeof(payload->'cold_cleanup_archive_bindings')
-                      IS DISTINCT FROM 'object'
+                  AND (
+                      jsonb_typeof(payload->'cold_cleanup_archive_bindings')
+                          IS DISTINCT FROM 'object'
+                      OR EXISTS (
+                          SELECT 1
+                          FROM jsonb_array_elements_text(
+                              payload->'cold_cleanup_location_refs'
+                          ) AS queued(location_ref)
+                          WHERE jsonb_typeof(
+                              payload->'cold_cleanup_archive_bindings'
+                                  ->queued.location_ref
+                          ) IS DISTINCT FROM 'object'
+                             OR payload->'cold_cleanup_archive_bindings'
+                                  ->queued.location_ref->>'archive_token'
+                                  !~ '^[0-9a-f]{64}$'
+                             OR payload->'cold_cleanup_archive_bindings'
+                                  ->queued.location_ref->>'archive_generation'
+                                  !~ '^[0-9a-f]{64}$'
+                             OR payload->'cold_cleanup_archive_bindings'
+                                  ->queued.location_ref->>'raw_generation'
+                                  !~ '^[1-9][0-9]*$'
+                             OR payload->'cold_cleanup_archive_bindings'
+                                  ->queued.location_ref->>'representation_id'
+                                  !~ '^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'
+                             OR queued.location_ref <> concat(
+                                  'heimloc:cold:',
+                                  payload->'cold_cleanup_archive_bindings'
+                                      ->queued.location_ref->>'archive_token',
+                                  ':',
+                                  payload->'cold_cleanup_archive_bindings'
+                                      ->queued.location_ref->>'representation_id'
+                             )
+                      )
+                  )
             ) THEN
                 RAISE EXCEPTION USING
                     MESSAGE = 'pending cold cleanup lacks durable archive binding',
@@ -203,6 +235,12 @@ def upgrade() -> None:
                         AND location_ref LIKE
                             'heimloc:cold:' || archive_token || ':%'
                     )
+                ),
+            ADD CONSTRAINT heimdal_raw_representation_cold_owner_check
+                CHECK (
+                    storage_kind <> 'encrypted_local_cold'
+                    OR location_ref =
+                        'heimloc:cold:' || archive_token || ':' || id::text
                 );
 
         CREATE OR REPLACE FUNCTION heimdal_raw_representation_reject_mutation()
@@ -231,6 +269,16 @@ def upgrade() -> None:
                 ) THEN
                     RAISE EXCEPTION
                         'raw representation cannot mutate a retiring generation';
+                END IF;
+                IF NEW.storage_kind = 'encrypted_local_cold'
+                   AND EXISTS (
+                       SELECT 1 FROM heimdal_raw_deletion_receipt
+                       WHERE COALESCE(
+                           payload->'cold_cleanup_location_refs', '[]'::jsonb
+                       ) ? NEW.location_ref
+                   ) THEN
+                    RAISE EXCEPTION
+                        'cold location remains owned by pending governed cleanup';
                 END IF;
                 IF TG_OP = 'INSERT' THEN
                     RETURN NEW;

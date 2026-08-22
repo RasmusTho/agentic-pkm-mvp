@@ -61,6 +61,7 @@ path (allowlist + receipt evaluation over the active registry entry) is
 from __future__ import annotations
 
 from contextlib import contextmanager
+from contextvars import ContextVar
 import fcntl
 import hashlib
 import json
@@ -71,7 +72,7 @@ import stat
 import threading
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
-from typing import Any, Dict, Iterator, List, Optional
+from typing import Any, Callable, Dict, Iterator, List, Optional
 from uuid import uuid4
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
@@ -106,6 +107,7 @@ _COLD_ARCHIVE_ROOT_ENV = "HEIMDAL_ARCHIVE_ROOT"
 _COLD_ARCHIVE_MUTATION_LOCK = ".heimdal-archive-mutation.lock"
 _COLD_LOCATION_CONSTRAINT = "heimdal_raw_representation_cold_location_bound_check"
 _ARCHIVE_GENERATION_CONSTRAINT = "heimdal_raw_representation_archive_generation_check"
+_COLD_OWNER_CONSTRAINT = "heimdal_raw_representation_cold_owner_check"
 _GENERATION_FK_CONSTRAINT = "heimdal_raw_representation_generation_fk"
 _COLD_LOCATION_REF_PATTERN = (
     r"^heimloc:cold:[0-9a-f]{64}:"
@@ -121,9 +123,28 @@ class _ColdArchiveBinding:
     archive_generation: str
 
 
+@dataclass(frozen=True)
+class _ColdObjectOwnership:
+    location_ref: str
+    archive_token: str
+    archive_generation: str
+    raw_generation: int
+    representation_id: str
+
+
 _cold_location_paths: Dict[str, Path] = {}
+_cold_location_ownership: Dict[str, _ColdObjectOwnership] = {}
 _COLD_BINDING_LOCK = threading.RLock()
 _verified_cold_archive_binding: _ColdArchiveBinding | None = None
+_expected_cold_delete_ownership: ContextVar[_ColdObjectOwnership | None] = ContextVar(
+    "heimdal_expected_cold_delete_ownership",
+    default=None,
+)
+_cold_archive_lock_held: ContextVar[bool] = ContextVar(
+    "heimdal_cold_archive_lock_held",
+    default=False,
+)
+_cold_delete_stage_hook: Callable[[str, Path], None] = lambda _stage, _path: None
 _MEMORY_ARCHIVE_RELOCATION_LEASE = threading.Lock()
 _ARCHIVE_RELOCATION_ADVISORY_LOCK = int.from_bytes(
     hashlib.sha256(b"heimdal.har04.archive-relocation").digest()[:8],
@@ -220,6 +241,24 @@ def _archive_generation_constraint_is_ready(definition: str, validated: bool) ->
     return validated and normalize(definition) == normalize(expected)
 
 
+def _cold_owner_constraint_is_ready(definition: str, validated: bool) -> bool:
+    """Require a cold locator's object UUID to equal its representation id."""
+
+    def normalize(value: str) -> str:
+        return (
+            re.sub(r"\s+", "", value.lower())
+            .replace("::text", "")
+            .replace("(", "")
+            .replace(")", "")
+        )
+
+    expected = (
+        "CHECK (storage_kind <> 'encrypted_local_cold' OR "
+        "location_ref = 'heimloc:cold:' || archive_token || ':' || id::text)"
+    )
+    return validated and normalize(definition) == normalize(expected)
+
+
 def _require_verified_cold_volume(
     archive_root: Path, verified_volume: object, expected_archive_ref: str | None = None
 ) -> None:
@@ -240,11 +279,23 @@ def _require_verified_cold_volume(
 
 
 def register_cold_location(
-    location_ref: str, object_path: Path, *, verified_volume: object
+    location_ref: str,
+    object_path: Path,
+    *,
+    verified_volume: object,
+    raw_generation: int,
+    representation_id: str,
 ) -> None:
-    """Bind an opaque cold handle only under a verified-volume capability."""
+    """Bind one exact cold owner under a verified-volume capability."""
     parsed = _parse_cold_location_ref(location_ref)
-    if parsed is None or not object_path.is_absolute() or object_path.name != f"{parsed[1]}.bin":
+    if (
+        parsed is None
+        or not object_path.is_absolute()
+        or object_path.name != f"{parsed[1]}.bin"
+        or parsed[1] != representation_id
+        or type(raw_generation) is not int
+        or raw_generation <= 0
+    ):
         raise ValueError("cold object path does not match its opaque location handle")
     archive_ref = getattr(verified_volume, "archive_ref", "")
     if parsed[0] != _archive_binding_token(str(archive_ref)):
@@ -257,6 +308,19 @@ def register_cold_location(
         expected_archive_ref=str(archive_ref),
     )
     archive_generation = str(getattr(verified_volume, "archive_generation", ""))
+    ownership = _ColdObjectOwnership(
+        location_ref=location_ref,
+        archive_token=parsed[0],
+        archive_generation=archive_generation,
+        raw_generation=raw_generation,
+        representation_id=representation_id,
+    )
+    from app.heimdal import raw_liveness
+
+    if raw_liveness.cold_cleanup_location_is_pending(location_ref):
+        raise RawRepresentationDeletionError(
+            "cold location remains owned by pending governed cleanup"
+        )
     with _COLD_BINDING_LOCK:
         binding = _verified_cold_archive_binding
         if (
@@ -268,7 +332,17 @@ def register_cold_location(
             raise RawRepresentationDeletionError(
                 "cold location proof does not match the active archive generation"
             )
+        existing_path = _cold_location_paths.get(location_ref)
+        existing_ownership = _cold_location_ownership.get(location_ref)
+        if (
+            existing_path is not None
+            and (existing_path != object_path or existing_ownership != ownership)
+        ):
+            raise RawRepresentationDeletionError(
+                "cold location is already bound to a different raw generation"
+            )
         _cold_location_paths[location_ref] = object_path
+        _cold_location_ownership[location_ref] = ownership
 
 
 @contextmanager
@@ -304,13 +378,18 @@ def cold_archive_mutation_lock(archive_root: Path, *, verified_volume: object) -
 
     _require_verified_cold_volume(archive_root, verified_volume)
     with _cold_archive_mutation_lock(archive_root, blocking=True):
-        yield
+        token = _cold_archive_lock_held.set(True)
+        try:
+            yield
+        finally:
+            _cold_archive_lock_held.reset(token)
 
 
 def discard_cold_location(location_ref: str) -> None:
     """Forget a location handle when registration never reached raw authority."""
     with _COLD_BINDING_LOCK:
         _cold_location_paths.pop(location_ref, None)
+        _cold_location_ownership.pop(location_ref, None)
 
 
 def revoke_cold_archive_binding() -> None:
@@ -319,6 +398,7 @@ def revoke_cold_archive_binding() -> None:
     with _COLD_BINDING_LOCK:
         _verified_cold_archive_binding = None
         _cold_location_paths.clear()
+        _cold_location_ownership.clear()
     os.environ.pop(_COLD_ARCHIVE_ROOT_ENV, None)
 
 
@@ -386,6 +466,7 @@ def configure_cold_archive_root(
         )
         # A rebind revokes every cache entry minted under the prior capability.
         _cold_location_paths.clear()
+        _cold_location_ownership.clear()
     os.environ[_COLD_ARCHIVE_ROOT_ENV] = str(archive_root)
 
 
@@ -394,6 +475,8 @@ def _resolve_cold_ciphertext(
     *,
     expected_archive_token: str,
     expected_archive_generation: str,
+    expected_raw_generation: int,
+    expected_representation_id: str,
 ) -> bytes:
     parsed = _parse_cold_location_ref(location_ref)
     ciphertext: bytes | None = None
@@ -405,6 +488,7 @@ def _resolve_cold_ciphertext(
             or binding is None
             or binding.archive_token != expected_archive_token
             or binding.archive_generation != expected_archive_generation
+            or parsed[1] != expected_representation_id
         ):
             raise RawRepresentationUnavailableError(
                 "cold representation archive identity/generation is unavailable"
@@ -413,8 +497,25 @@ def _resolve_cold_ciphertext(
         if object_path is None:
             object_path = binding.archive_root / "representations" / f"{parsed[1]}.bin"
         try:
-            ciphertext = object_path.read_bytes()
-        except OSError:
+            def read_verified() -> bytes:
+                _verify_cold_manifest_ownership(
+                    object_path,
+                    _ColdObjectOwnership(
+                        location_ref=location_ref,
+                        archive_token=expected_archive_token,
+                        archive_generation=expected_archive_generation,
+                        raw_generation=expected_raw_generation,
+                        representation_id=expected_representation_id,
+                    ),
+                )
+                return object_path.read_bytes()
+
+            if _cold_archive_lock_held.get():
+                ciphertext = read_verified()
+            else:
+                with _cold_archive_mutation_lock(binding.archive_root, blocking=True):
+                    ciphertext = read_verified()
+        except (OSError, RawRepresentationDeletionError):
             pass
     if ciphertext is None:
         raise RawRepresentationUnavailableError("cold representation bytes are unavailable")
@@ -426,6 +527,8 @@ def _cold_object_path(
     *,
     expected_archive_token: str | None = None,
     expected_archive_generation: str | None = None,
+    expected_raw_generation: int | None = None,
+    expected_representation_id: str | None = None,
 ) -> Path | None:
     parsed = _parse_cold_location_ref(location_ref)
     with _COLD_BINDING_LOCK:
@@ -442,12 +545,66 @@ def _cold_object_path(
                 expected_archive_generation is not None
                 and expected_archive_generation != binding.archive_generation
             )
+            or (
+                expected_representation_id is not None
+                and parsed[1] != expected_representation_id
+            )
         ):
             return None
         object_path = _cold_location_paths.get(location_ref)
+        cached_ownership = _cold_location_ownership.get(location_ref)
+        if cached_ownership is not None and (
+            (
+                expected_raw_generation is not None
+                and cached_ownership.raw_generation != expected_raw_generation
+            )
+            or (
+                expected_representation_id is not None
+                and cached_ownership.representation_id != expected_representation_id
+            )
+            or cached_ownership.archive_token != binding.archive_token
+            or cached_ownership.archive_generation != binding.archive_generation
+        ):
+            return None
         if object_path is not None:
             return object_path
         return binding.archive_root / "representations" / f"{parsed[1]}.bin"
+
+
+def _verify_cold_manifest_ownership(
+    object_path: Path,
+    expected: _ColdObjectOwnership,
+    *,
+    allow_reserved: bool = False,
+) -> None:
+    """Fail closed unless the redacted manifest owns this exact object tuple."""
+
+    manifest_path = object_path.parent.parent / "manifests" / f"{object_path.stem}.json"
+    try:
+        payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise RawRepresentationDeletionError(
+            "cold representation manifest ownership is unavailable"
+        ) from exc
+    required = {
+        "location_ref": expected.location_ref,
+        "archive_token": expected.archive_token,
+        "archive_generation": expected.archive_generation,
+        "raw_generation": expected.raw_generation,
+        "representation_id": expected.representation_id,
+    }
+    ownership_state = payload.get("ownership_state") if isinstance(payload, dict) else None
+    state_is_accepted = ownership_state in {None, "verified"} or (
+        allow_reserved and ownership_state == "reserved"
+    )
+    if (
+        not isinstance(payload, dict)
+        or not state_is_accepted
+        or any(payload.get(key) != value for key, value in required.items())
+    ):
+        raise RawRepresentationDeletionError(
+            "cold representation manifest ownership generation mismatch"
+        )
 
 
 def _delete_bound_cold_object(
@@ -455,6 +612,8 @@ def _delete_bound_cold_object(
     *,
     expected_archive_token: str,
     expected_archive_generation: str,
+    expected_raw_generation: int,
+    expected_representation_id: str,
 ) -> None:
     """Resolve and delete under one indivisible verified binding snapshot."""
 
@@ -463,12 +622,25 @@ def _delete_bound_cold_object(
             location_ref,
             expected_archive_token=expected_archive_token,
             expected_archive_generation=expected_archive_generation,
+            expected_raw_generation=expected_raw_generation,
+            expected_representation_id=expected_representation_id,
         )
         if object_path is None:
             raise RawRepresentationDeletionError(
                 "cold representation archive binding is unavailable"
             )
-        _delete_cold_object_path(object_path)
+        ownership = _ColdObjectOwnership(
+            location_ref=location_ref,
+            archive_token=expected_archive_token,
+            archive_generation=expected_archive_generation,
+            raw_generation=expected_raw_generation,
+            representation_id=expected_representation_id,
+        )
+        token = _expected_cold_delete_ownership.set(ownership)
+        try:
+            _delete_cold_object_path(object_path)
+        finally:
+            _expected_cold_delete_ownership.reset(token)
 
 
 def _delete_cold_objects_for_record(record_id: str) -> None:
@@ -476,58 +648,62 @@ def _delete_cold_objects_for_record(record_id: str) -> None:
     for representation in all_raw_representations(record_id):
         if representation.storage_kind != _COLD_STORAGE_KIND:
             continue
-        object_path = _cold_object_path(representation.location_ref)
-        if object_path is None:
-            raise RawRepresentationDeletionError("cold representation resolver is unavailable")
-        _delete_cold_object_path(object_path)
+        if not representation.archive_token or not representation.archive_generation:
+            raise RawRepresentationDeletionError(
+                "cold representation lacks exact archive ownership"
+            )
+        _delete_bound_cold_object(
+            representation.location_ref,
+            expected_archive_token=representation.archive_token,
+            expected_archive_generation=representation.archive_generation,
+            expected_raw_generation=representation.raw_generation,
+            expected_representation_id=representation.id,
+        )
 
 
 def _delete_cold_objects_for_pg_cursor(cur: Any, record_id: str) -> None:
     """Remove cold objects while the deletion transaction owns representation locks."""
-    for object_path in _cold_object_paths_for_pg_cursor(cur, record_id):
-        _delete_cold_object_path(object_path)
-
-
-def _cold_object_paths_for_pg_cursor(cur: Any, record_id: str) -> list[Path]:
-    """Capture locked cold paths for post-commit cleanup."""
     cur.execute(
-        f"SELECT location_ref FROM {_REPRESENTATION_TABLE} "
+        f"SELECT id, location_ref, archive_token, archive_generation, raw_generation "
+        f"FROM {_REPRESENTATION_TABLE} "
         "WHERE record_id = %s AND storage_kind = %s FOR UPDATE",
         (record_id, _COLD_STORAGE_KIND),
     )
-    paths: list[Path] = []
-    for row in cur.fetchall():
-        object_path = _cold_object_path(str(row[0]))
-        if object_path is None:
-            raise RawRepresentationDeletionError("cold representation resolver is unavailable")
-        paths.append(object_path)
-    return paths
-
-
-def _cold_location_paths_for_pg_cursor(cur: Any, record_id: str) -> list[tuple[str, Path]]:
-    """Capture opaque cold refs and paths under representation locks."""
-    cur.execute(
-        f"SELECT location_ref FROM {_REPRESENTATION_TABLE} "
-        "WHERE record_id = %s AND storage_kind = %s FOR UPDATE",
-        (record_id, _COLD_STORAGE_KIND),
-    )
-    locations: list[tuple[str, Path]] = []
-    for row in cur.fetchall():
-        location_ref = str(row[0])
-        object_path = _cold_object_path(location_ref)
-        if object_path is None:
-            raise RawRepresentationDeletionError("cold representation resolver is unavailable")
-        locations.append((location_ref, object_path))
-    return locations
+    for representation_id, location_ref, archive_token, archive_generation, raw_generation in cur.fetchall():
+        if not archive_token or not archive_generation:
+            raise RawRepresentationDeletionError(
+                "cold representation lacks exact archive ownership"
+            )
+        _delete_bound_cold_object(
+            str(location_ref),
+            expected_archive_token=str(archive_token),
+            expected_archive_generation=str(archive_generation),
+            expected_raw_generation=int(raw_generation),
+            expected_representation_id=str(representation_id),
+        )
 
 
 def _delete_cold_object_path(object_path: Path) -> None:
-    deletion_failed = False
     try:
         with _cold_archive_mutation_lock(object_path.parent.parent, blocking=False):
             manifest_path = object_path.parent.parent.joinpath(
                 "manifests", f"{object_path.stem}.json"
             )
+            expected = _expected_cold_delete_ownership.get()
+            if expected is not None:
+                object_exists = object_path.exists()
+                manifest_exists = manifest_path.exists()
+                if object_exists or manifest_exists:
+                    _verify_cold_manifest_ownership(
+                        object_path,
+                        expected,
+                        allow_reserved=True,
+                    )
+                if object_exists and not manifest_exists:
+                    raise RawRepresentationDeletionError(
+                        "cold representation manifest ownership is unavailable"
+                    )
+            _cold_delete_stage_hook("before_unlink", object_path)
             object_path.unlink(missing_ok=True)
             manifest_path.unlink(missing_ok=True)
             # Queue authority may advance only after both directory-entry
@@ -539,12 +715,16 @@ def _delete_cold_object_path(object_path: Path) -> None:
                     os.fsync(directory_fd)
                 finally:
                     os.close(directory_fd)
-    except OSError:
-        deletion_failed = True
+            if expected is not None:
+                with _COLD_BINDING_LOCK:
+                    _cold_location_paths.pop(expected.location_ref, None)
+                    _cold_location_ownership.pop(expected.location_ref, None)
     except RawRepresentationDeletionError:
-        deletion_failed = True
-    if deletion_failed:
-        raise RawRepresentationDeletionError("cold representation deletion failed")
+        raise
+    except OSError as exc:
+        raise RawRepresentationDeletionError(
+            "cold representation deletion failed"
+        ) from exc
 
 
 def _representation_ciphertext(representation: "RawRepresentation") -> bytes:
@@ -557,6 +737,8 @@ def _representation_ciphertext(representation: "RawRepresentation") -> bytes:
             representation.location_ref,
             expected_archive_token=representation.archive_token,
             expected_archive_generation=representation.archive_generation,
+            expected_raw_generation=representation.raw_generation,
+            expected_representation_id=representation.id,
         )
     return representation.ciphertext
 
@@ -983,13 +1165,20 @@ class _MemoryRawStore:
                 for row in self._rows
             ]
 
-    def retention_metadata_before(self, cutoff: datetime) -> List[RawRetentionMetadata]:
+    def retention_metadata_before(
+        self,
+        cutoff: datetime,
+        *,
+        modality: str | None = None,
+    ) -> List[RawRetentionMetadata]:
         """Select expired identities without resolving any representation bytes."""
 
         with self._lock:
             selected: List[RawRetentionMetadata] = []
             for row in self._rows:
-                if row.ingested_at >= cutoff:
+                if row.ingested_at >= cutoff or (
+                    modality is not None and row.payload.get("modality") != modality
+                ):
                     continue
                 generations = {
                     association.generation
@@ -1472,6 +1661,25 @@ def _assert_pg_schema(conn: Any) -> None:
         )
     cur.execute(
         """
+        SELECT pg_get_constraintdef(c.oid), c.convalidated
+        FROM pg_constraint AS c
+        WHERE c.conrelid = %s::regclass
+          AND c.conname = %s
+          AND c.contype = 'c'
+        """,
+        (_REPRESENTATION_TABLE, _COLD_OWNER_CONSTRAINT),
+    )
+    cold_owner_constraints = cur.fetchall()
+    if len(cold_owner_constraints) != 1 or not _cold_owner_constraint_is_ready(
+        str(cold_owner_constraints[0][0]),
+        bool(cold_owner_constraints[0][1]),
+    ):
+        raise RawStoreSchemaMissingError(
+            "Cold representation object ownership constraint is not migration-ready. "
+            + _MIGRATION_HINT
+        )
+    cur.execute(
+        """
         SELECT c.convalidated,
                ARRAY(
                    SELECT a.attname
@@ -1623,6 +1831,34 @@ def _assert_pg_schema(conn: Any) -> None:
             "Raw identity/representation mutation triggers do not match the "
             "migration-owned schema. " + _MIGRATION_HINT
         )
+    cur.execute(
+        """
+        SELECT pg_get_functiondef(t.tgfoid)
+        FROM pg_trigger AS t
+        JOIN pg_class AS c ON c.oid = t.tgrelid
+        JOIN pg_namespace AS n ON n.oid = c.relnamespace
+        WHERE n.nspname = current_schema()
+          AND c.relname = %s
+          AND t.tgname = 'heimdal_raw_representation_no_mutation'
+          AND NOT t.tgisinternal
+        """,
+        (_REPRESENTATION_TABLE,),
+    )
+    representation_guard_rows = cur.fetchall()
+    guard_definition = (
+        str(representation_guard_rows[0][0]).lower()
+        if len(representation_guard_rows) == 1
+        else ""
+    )
+    if (
+        "cold_cleanup_location_refs" not in guard_definition
+        or "new.location_ref" not in guard_definition
+        or "pending governed cleanup" not in guard_definition
+    ):
+        raise RawStoreSchemaMissingError(
+            "Raw representation pending-cleanup reuse guard is not migration-ready. "
+            + _MIGRATION_HINT
+        )
 
     # Fail loud before serving any production call when backfill or activation
     # is incomplete. The gate must never fall back to legacy inline bytes or an
@@ -1656,6 +1892,8 @@ def _assert_pg_schema(conn: Any) -> None:
                             AND p.archive_generation IS NOT NULL
                             AND p.location_ref LIKE
                                 'heimloc:cold:' || p.archive_token || %s
+                            AND p.location_ref =
+                                'heimloc:cold:' || p.archive_token || ':' || p.id::text
                         )
                     )
                   )
@@ -1760,6 +1998,11 @@ def _bootstrap_pg(conn: Any) -> None:
                         storage_kind <> '{_COLD_STORAGE_KIND}'
                         OR location_ref ~ '{_COLD_LOCATION_REF_PATTERN}'
                     ),
+                    CONSTRAINT {_COLD_OWNER_CONSTRAINT} CHECK (
+                        storage_kind <> '{_COLD_STORAGE_KIND}'
+                        OR location_ref = '{_LOCATION_REF_PREFIX}cold:'
+                            || archive_token || ':' || id::text
+                    ),
                     CONSTRAINT heimdal_raw_representation_archive_generation_check CHECK (
                         (
                             storage_kind = '{_HOT_STORAGE_KIND}'
@@ -1841,6 +2084,7 @@ def _row_from_db(row: tuple) -> RawRecord:
         capture_chain,
         sensor,
         consent,
+        representation_id,
         storage_kind,
         location_ref,
         ciphertext,
@@ -1869,8 +2113,19 @@ def _row_from_db(row: tuple) -> RawRecord:
             return []
         return json.loads(value)
 
+    resolved_representation_id = str(representation_id)
+    if str(storage_kind) == _COLD_STORAGE_KIND:
+        parsed_location = _parse_cold_location_ref(str(location_ref))
+        if (
+            parsed_location is None
+            or parsed_location[1] != resolved_representation_id
+            or int(raw_generation) <= 0
+        ):
+            raise RawRepresentationUnavailableError(
+                "active cold representation lacks exact durable ownership identity"
+            )
     representation = RawRepresentation(
-        id="row",
+        id=resolved_representation_id,
         record_id=str(row_id),
         storage_kind=str(storage_kind),
         location_ref=str(location_ref),
@@ -1904,7 +2159,7 @@ def _row_from_db(row: tuple) -> RawRecord:
 
 _SELECT_COLUMNS = (
     "r.id, r.content_identity, r.capture_chain, r.sensor, r.consent, "
-    "p.storage_kind, p.location_ref, p.ciphertext, p.nonce, p.key_ref, "
+    "p.id, p.storage_kind, p.location_ref, p.ciphertext, p.nonce, p.key_ref, "
     "p.raw_generation, p.archive_token, p.archive_generation, "
     "r.source_path, r.ingested_at, r.payload, r.sequence"
 )
@@ -2179,7 +2434,12 @@ class _PgRawStore:
         finally:
             conn.close()
 
-    def retention_metadata_before(self, cutoff: datetime) -> List[RawRetentionMetadata]:
+    def retention_metadata_before(
+        self,
+        cutoff: datetime,
+        *,
+        modality: str | None = None,
+    ) -> List[RawRetentionMetadata]:
         """Select expired identities without selecting a representation or locator."""
 
         conn = _pg_connect()
@@ -2192,10 +2452,12 @@ class _PgRawStore:
                 FROM heimdal_raw_record AS r
                 JOIN heimdal_raw_liveness_generation AS g ON g.record_id = r.id
                 LEFT JOIN heimdal_raw_deletion_tombstone AS t ON t.record_id = r.id
-                WHERE r.ingested_at < %s AND t.record_id IS NULL
+                WHERE r.ingested_at < %s
+                  AND (%s::text IS NULL OR r.payload->>'modality' = %s)
+                  AND t.record_id IS NULL
                 ORDER BY r.sequence
                 """,
-                (cutoff,),
+                (cutoff, modality, modality),
             )
             return [
                 RawRetentionMetadata(
@@ -2765,8 +3027,9 @@ def register_cold_raw_representation(
     """Register one verified encrypted local-cold representation, inactive."""
     if not record_id or not ciphertext or not nonce or not key_ref:
         raise ValueError("record_id, ciphertext, nonce, and key_ref are required")
+    resolved_id = representation_id or str(uuid4())
     parsed = _parse_cold_location_ref(location_ref)
-    if parsed is None:
+    if parsed is None or parsed[1] != resolved_id:
         raise ValueError("cold location_ref must be an opaque heimloc:cold: handle")
     object_path = _cold_object_path(location_ref)
     if object_path is None:
@@ -2785,7 +3048,10 @@ def register_cold_raw_representation(
     from app.heimdal import raw_liveness
 
     backend = _backend()
-    resolved_id = representation_id or str(uuid4())
+    if raw_liveness.cold_cleanup_location_is_pending(location_ref):
+        raise RawRepresentationDeletionError(
+            "cold location remains owned by pending governed cleanup"
+        )
 
     def register(authority: object) -> tuple[RawRepresentation, bool]:
         return backend.register_cold_representation(
@@ -2852,12 +3118,19 @@ def all_raw_records() -> List[RawRecord]:
     return _backend().all_rows()
 
 
-def expired_raw_record_metadata(*, ingested_before: datetime) -> List[RawRetentionMetadata]:
+def expired_raw_record_metadata(
+    *,
+    ingested_before: datetime,
+    modality: str | None = None,
+) -> List[RawRetentionMetadata]:
     """Return ciphertext-free expiry candidates for the retention state machine."""
 
     if ingested_before.tzinfo is None:
         raise ValueError("ingested_before must be timezone-aware")
-    return _backend().retention_metadata_before(ingested_before.astimezone(timezone.utc))
+    return _backend().retention_metadata_before(
+        ingested_before.astimezone(timezone.utc),
+        modality=modality,
+    )
 
 
 def archive_eligible_hot_raw_records(

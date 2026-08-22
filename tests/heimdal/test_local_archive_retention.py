@@ -77,7 +77,7 @@ def _volume_ready(archive_root: Path):
     )
 
 
-def _insert(plaintext: bytes, *, grant_ref: str):
+def _insert(plaintext: bytes, *, grant_ref: str, modality: str | None = None):
     ciphertext, nonce = raw_store.encrypt_raw_bytes(plaintext, key=_KEY)
     record, created = raw_store.insert_raw_record(
         content_identity=raw_store.compute_raw_content_identity(plaintext),
@@ -89,6 +89,7 @@ def _insert(plaintext: bytes, *, grant_ref: str):
         key_ref="test-key-v1",
         key=_KEY,
         source_path="source-class-redacted",
+        payload={"modality": modality} if modality is not None else None,
     )
     assert created
     return record
@@ -123,6 +124,21 @@ def _write_retention_window(vault_root: Path, *, days: int) -> None:
     write_settings_note(
         vault_root,
         SettingsNote(spec=SETTINGS, values={"retention_window_days": days}),
+        write_guard=WriteGuard(lambda: {"state": "healthy"}),
+    )
+
+
+def _write_screen_retention_window(vault_root: Path, *, minutes: int) -> None:
+    vault_root.mkdir(parents=True, exist_ok=True)
+    write_settings_note(
+        vault_root,
+        SettingsNote(
+            spec=SETTINGS,
+            values={
+                "retention_window_days": 30,
+                "screen_frame_retention_minutes": minutes,
+            },
+        ),
         write_guard=WriteGuard(lambda: {"state": "healthy"}),
     )
 
@@ -230,6 +246,77 @@ def test_retirement_claim_refuses_reads_writers_and_freshness_until_drained(
     assert completed.deleted_count == 1
     settings = read_settings_note(vault_root, SETTINGS)
     assert settings is not None and settings.values["last_enforced_at"]
+
+
+def test_screen_retention_live_lease_is_pending_not_receipted(tmp_path: Path) -> None:
+    now = datetime.now(timezone.utc)
+    vault_root = tmp_path / "vault"
+    _write_screen_retention_window(vault_root, minutes=1)
+    record = _age_record(
+        _insert(
+            b"screen retention lease",
+            grant_ref="grant-screen-lease",
+            modality="screen",
+        ),
+        now=now,
+    )
+    lease = raw_liveness.issue_response_lease(
+        raw_ref=raw_ref_for(record),
+        content_identity=record.content_identity,
+        now=now,
+    )
+
+    with pytest.raises(retention.RetentionErasurePendingError, match="drain|lease"):
+        retention.enforce_screen_frame_retention(vault_root=vault_root, now=now)
+
+    assert raw_store.resolve_active_raw_record(record.id) is not None
+    assert raw_liveness.all_deletion_receipts() == []
+    completed = retention.enforce_screen_frame_retention(
+        vault_root=vault_root,
+        now=lease.expires_at + timedelta(microseconds=1),
+    )
+    assert completed.deleted_count == 1
+
+
+def test_screen_retention_unmounted_selection_and_queued_cleanup_are_loud(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    now = datetime.now(timezone.utc)
+    vault_root = tmp_path / "vault"
+    archive_root = tmp_path / "mounted-cold"
+    archive_root.mkdir()
+    _write_screen_retention_window(vault_root, minutes=1)
+    record = _age_record(
+        _insert(
+            b"screen retention cold retry",
+            grant_ref="grant-screen-cold",
+            modality="screen",
+        ),
+        now=now,
+    )
+    _archive(record, archive_root=archive_root, now=now)
+    monkeypatch.setattr(
+        raw_store,
+        "_resolve_cold_ciphertext",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("screen retention discovery resolved cold ciphertext")
+        ),
+    )
+    raw_store.revoke_cold_archive_binding()
+
+    with pytest.raises(raw_store.RawRepresentationDeletionError, match="binding"):
+        retention.enforce_screen_frame_retention(vault_root=vault_root, now=now)
+
+    assert raw_store.raw_record_ids_by_consent_grant("grant-screen-cold") == []
+    pending = raw_liveness.all_deletion_receipts()[0]
+    assert pending.reason == retention.REASON_SCREEN_FRAME_RETENTION_BUFFER
+    assert pending.payload["cold_cleanup_location_refs"]
+
+    # Restart-like retry has no active identity to discover. The durable queue
+    # remains authority and must still prevent a successful screen receipt.
+    with pytest.raises(raw_store.RawRepresentationDeletionError, match="binding"):
+        retention.enforce_screen_frame_retention(vault_root=vault_root, now=now)
 
 
 def test_unmounted_cold_expiry_selects_metadata_and_leaves_retry_authority(
@@ -347,6 +434,79 @@ def test_pending_cleanup_never_retargets_same_identity_new_archive_generation(
     assert raw_liveness.all_deletion_receipts()[0].payload[
         "cold_cleanup_location_refs"
     ] == []
+
+
+def test_pending_cleanup_refuses_same_archive_new_raw_generation_manifest_alias(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    now = datetime.now(timezone.utc)
+    archive_root = tmp_path / "mounted-cold"
+    archive_root.mkdir()
+    plaintext = b"same archive newer raw generation"
+    original = _age_record(
+        _insert(plaintext, grant_ref="grant-generation-one"),
+        now=now,
+    )
+    archived = _archive(original, archive_root=archive_root, now=now)
+    representation_id = archived.active_representation.id
+    location_ref = archived.active_representation.location_ref
+    object_path = archive_root / "representations" / f"{representation_id}.bin"
+    manifest_path = archive_root / "manifests" / f"{representation_id}.json"
+    original_delete = raw_store._delete_cold_object_path  # noqa: SLF001
+    monkeypatch.setattr(
+        raw_store,
+        "_delete_cold_object_path",
+        lambda _path: (_ for _ in ()).throw(
+            raw_store.RawRepresentationDeletionError("leave generation one cleanup pending")
+        ),
+    )
+    with pytest.raises(raw_store.RawRepresentationDeletionError):
+        raw_liveness.governed_delete_raw_record(
+            record_id=original.id,
+            reason=retention.REASON_HARD_RETENTION_BOUND,
+            retention_window_days=30,
+            deleted_at=now,
+        )
+
+    newer = _insert(plaintext, grant_ref="grant-generation-two")
+    with raw_liveness.memory_fence():
+        newer_generation = raw_liveness._MEMORY.generations_by_record[newer.id].generation  # noqa: SLF001
+    assert newer_generation == archived.active_representation.raw_generation + 1
+    newer_bytes = b"newer-generation-object-must-survive"
+    object_path.write_bytes(newer_bytes)
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "schema": local_archive.ARCHIVE_SCHEMA,
+                "record_id": newer.id,
+                "content_identity": newer.content_identity,
+                "representation_id": representation_id,
+                "location_ref": location_ref,
+                "archive_token": archived.active_representation.archive_token,
+                "archive_generation": archived.active_representation.archive_generation,
+                "raw_generation": newer_generation,
+            },
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(raw_store, "_delete_cold_object_path", original_delete)
+
+    with pytest.raises(
+        raw_store.RawRepresentationDeletionError,
+        match="generation|manifest|ownership",
+    ):
+        raw_liveness.governed_delete_raw_record(
+            record_id=original.id,
+            reason=retention.REASON_HARD_RETENTION_BOUND,
+            retention_window_days=30,
+            deleted_at=now,
+        )
+
+    assert object_path.read_bytes() == newer_bytes
+    assert manifest_path.exists()
 
 
 def test_archived_read_reuses_gated_read_path(tmp_path: Path) -> None:
@@ -570,6 +730,110 @@ def test_hard_retention_pending_cleanup_blocks_revocation_until_retry(
     ] == []
 
 
+@pytest.mark.parametrize("matching_grant", ["grant-a", "grant-b"])
+def test_multigrant_cleanup_ignores_unrelated_grant_and_true_legacy_is_keyless(
+    matching_grant: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    now = datetime.now(timezone.utc)
+    archive_root = tmp_path / "mounted-cold"
+    archive_root.mkdir()
+    plaintext = f"multigrant-cleanup-{matching_grant}".encode()
+    first = _insert(plaintext, grant_ref="grant-a")
+    replay_ciphertext, replay_nonce = raw_store.encrypt_raw_bytes(plaintext, key=_KEY)
+    replay, created = raw_store.insert_raw_record(
+        content_identity=raw_store.compute_raw_content_identity(plaintext),
+        capture_chain=["registered-sensor", "heimdal"],
+        sensor={"sensor_id": "registered-sensor"},
+        consent={"grant_ref": "grant-b"},
+        ciphertext=replay_ciphertext,
+        nonce=replay_nonce,
+        key_ref="test-key-v1",
+        key=_KEY,
+        source_path="source-class-redacted",
+    )
+    assert created is False and replay.id == first.id
+    record = _age_record(first, now=now)
+    _archive(record, archive_root=archive_root, now=now)
+    original_delete = raw_store._delete_cold_object_path  # noqa: SLF001
+    monkeypatch.setattr(
+        raw_store,
+        "_delete_cold_object_path",
+        lambda _path: (_ for _ in ()).throw(
+            raw_store.RawRepresentationDeletionError("A+B cleanup remains pending")
+        ),
+    )
+    with pytest.raises(raw_store.RawRepresentationDeletionError):
+        raw_liveness.governed_delete_raw_record(
+            record_id=record.id,
+            reason=retention.REASON_HARD_RETENTION_BOUND,
+            retention_window_days=30,
+            deleted_at=now,
+        )
+    current = raw_liveness.all_deletion_receipts()[0]
+    assert raw_liveness.CONSENT_GRANT_DIGEST_PAYLOAD_KEY not in current.payload
+    assert set(current.payload[raw_liveness.CONSENT_GRANT_DIGESTS_PAYLOAD_KEY]) == {
+        raw_liveness.consent_grant_digest("grant-a"),
+        raw_liveness.consent_grant_digest("grant-b"),
+    }
+
+    unrelated = retention.enforce_consent_revocation(
+        grant_ref="grant-c",
+        revoked_at=now,
+    )
+    assert unrelated.deleted_count == 0
+    assert raw_liveness.all_deletion_receipts()[0].payload[
+        "cold_cleanup_location_refs"
+    ]
+
+    monkeypatch.setattr(raw_store, "_delete_cold_object_path", original_delete)
+    matched = retention.enforce_consent_revocation(
+        grant_ref=matching_grant,
+        revoked_at=now,
+    )
+    assert matched.deleted_count == 0
+    assert raw_liveness.all_deletion_receipts()[0].payload[
+        "cold_cleanup_location_refs"
+    ] == []
+
+    legacy = _age_record(
+        _insert(
+            f"true-keyless-legacy-{matching_grant}".encode(),
+            grant_ref="grant-historical-row",
+        ),
+        now=now,
+    )
+    _archive(legacy, archive_root=archive_root, now=now)
+    monkeypatch.setattr(
+        raw_store,
+        "_delete_cold_object_path",
+        lambda _path: (_ for _ in ()).throw(
+            raw_store.RawRepresentationDeletionError("legacy cleanup remains pending")
+        ),
+    )
+    with pytest.raises(raw_store.RawRepresentationDeletionError):
+        raw_liveness.governed_delete_raw_record(
+            record_id=legacy.id,
+            reason=retention.REASON_HARD_RETENTION_BOUND,
+            retention_window_days=30,
+            deleted_at=now,
+        )
+    with raw_liveness.memory_fence():
+        legacy_payload = raw_liveness._MEMORY.deletion_receipts[-1].payload  # noqa: SLF001
+        legacy_payload.pop(raw_liveness.CONSENT_GRANT_DIGEST_PAYLOAD_KEY, None)
+        legacy_payload.pop(raw_liveness.CONSENT_GRANT_DIGESTS_PAYLOAD_KEY, None)
+    legacy_receipt = raw_liveness.all_deletion_receipts()[-1]
+    assert raw_liveness.CONSENT_GRANT_DIGEST_PAYLOAD_KEY not in legacy_receipt.payload
+    assert raw_liveness.CONSENT_GRANT_DIGESTS_PAYLOAD_KEY not in legacy_receipt.payload
+
+    with pytest.raises(raw_store.RawRepresentationDeletionError, match="legacy cleanup"):
+        retention.enforce_consent_revocation(
+            grant_ref="grant-legacy-trigger",
+            revoked_at=now,
+        )
+
+
 def test_revocation_isolates_tagged_other_grant_but_reconciles_legacy_cleanup(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -638,11 +902,12 @@ def test_revocation_isolates_tagged_other_grant_but_reconciles_legacy_cleanup(
     # redacted grant correlation. The migration posture is conservative:
     # unknown legacy ownership is retried, never silently excluded.
     with raw_liveness.memory_fence():
-        raw_liveness._MEMORY.deletion_receipts[-1].payload.pop(  # noqa: SLF001
-            raw_liveness.CONSENT_GRANT_DIGEST_PAYLOAD_KEY
-        )
+        legacy_payload = raw_liveness._MEMORY.deletion_receipts[-1].payload  # noqa: SLF001
+        legacy_payload.pop(raw_liveness.CONSENT_GRANT_DIGEST_PAYLOAD_KEY, None)
+        legacy_payload.pop(raw_liveness.CONSENT_GRANT_DIGESTS_PAYLOAD_KEY, None)
     legacy_receipt = raw_liveness.all_deletion_receipts()[-1]
     assert raw_liveness.CONSENT_GRANT_DIGEST_PAYLOAD_KEY not in legacy_receipt.payload
+    assert raw_liveness.CONSENT_GRANT_DIGESTS_PAYLOAD_KEY not in legacy_receipt.payload
 
     legacy_trigger_ref = "grant-legacy-trigger"
     grant_consent(

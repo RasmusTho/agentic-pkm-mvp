@@ -158,6 +158,35 @@ def _reconcile_pending_cold_cleanup(
                 raise
 
 
+def _receipt_correlates_to_grant(receipt: DeletionReceipt, grant_digest: str) -> bool:
+    """Match current lineage exactly; only wholly keyless receipts are legacy."""
+
+    payload = receipt.payload
+    scalar_key = raw_liveness.CONSENT_GRANT_DIGEST_PAYLOAD_KEY
+    set_key = raw_liveness.CONSENT_GRANT_DIGESTS_PAYLOAD_KEY
+    scalar_present = scalar_key in payload
+    set_present = set_key in payload
+    if not scalar_present and not set_present:
+        return True
+
+    scalar = payload.get(scalar_key)
+    digest_set = payload.get(set_key)
+    if scalar_present and not isinstance(scalar, str):
+        raise raw_liveness.RawLivenessUnavailableError(
+            "pending cleanup has malformed scalar consent lineage"
+        )
+    if set_present and (
+        not isinstance(digest_set, list)
+        or any(not isinstance(item, str) for item in digest_set)
+    ):
+        raise raw_liveness.RawLivenessUnavailableError(
+            "pending cleanup has malformed consent lineage set"
+        )
+    return scalar == grant_digest or (
+        isinstance(digest_set, list) and grant_digest in digest_set
+    )
+
+
 def enforce_consent_revocation(
     *,
     grant_ref: str,
@@ -196,17 +225,8 @@ def enforce_consent_revocation(
     # empty; failures stay loud and the same call is safe to retry.
     _reconcile_pending_cold_cleanup(
         fail_loud=True,
-        # Current receipts carry a redacted grant digest regardless of their
-        # deletion reason. Legacy pending receipts have no digest, so they are
-        # conservatively reconciled rather than silently excluded; tagged
-        # receipts for another grant remain isolated.
-        receipt_filter=lambda receipt: (
-            receipt.payload.get(raw_liveness.CONSENT_GRANT_DIGEST_PAYLOAD_KEY) is None
-            and grant_digest
-            not in receipt.payload.get(raw_liveness.CONSENT_GRANT_DIGESTS_PAYLOAD_KEY, [])
-            or receipt.payload.get(raw_liveness.CONSENT_GRANT_DIGEST_PAYLOAD_KEY) == grant_digest
-            or grant_digest
-            in receipt.payload.get(raw_liveness.CONSENT_GRANT_DIGESTS_PAYLOAD_KEY, [])
+        receipt_filter=lambda receipt: _receipt_correlates_to_grant(
+            receipt, grant_digest
         ),
     )
     if pending_count:
@@ -411,14 +431,13 @@ def enforce_screen_frame_retention(
     reference_time = now if now is not None else datetime.now(timezone.utc)
     cutoff = reference_time - timedelta(minutes=minutes)
     deletions: List[DeletionReceipt] = []
-    for record in raw_store.all_raw_records():
-        if record.payload.get("modality") != "screen":
-            continue
-        ingested_at = record.ingested_at if record.ingested_at.tzinfo else record.ingested_at.replace(tzinfo=timezone.utc)
-        if ingested_at >= cutoff:
-            continue
+    pending_count = 0
+    for record in raw_store.expired_raw_record_metadata(
+        ingested_before=cutoff,
+        modality="screen",
+    ):
         result = raw_liveness.governed_delete_raw_record(
-            record_id=record.id,
+            record_id=record.record_id,
             reason=REASON_SCREEN_FRAME_RETENTION_BUFFER,
             retention_window_days=0,
             deleted_at=reference_time,
@@ -427,7 +446,27 @@ def enforce_screen_frame_retention(
         if result.outcome == "deleted":
             assert result.receipt is not None
             deletions.append(result.receipt)
-    return RetentionEnforcementReceipt(deleted_count=len(deletions), retention_window_days=0, deletions=tuple(deletions))
+        elif result.outcome == "lease_valid":
+            pending_count += 1
+
+    # Once DB erasure commits, this reason-scoped receipt queue is the only
+    # restart authority. A run cannot report success while any cold object or
+    # manifest remains pending, even though the active identity is gone.
+    _reconcile_pending_cold_cleanup(
+        fail_loud=True,
+        receipt_filter=lambda receipt: (
+            receipt.reason == REASON_SCREEN_FRAME_RETENTION_BUFFER
+        ),
+    )
+    if pending_count:
+        raise RetentionErasurePendingError(
+            "screen-frame retention is draining an active raw-response lease; retry required"
+        )
+    return RetentionEnforcementReceipt(
+        deleted_count=len(deletions),
+        retention_window_days=0,
+        deletions=tuple(deletions),
+    )
 
 
 __all__ = [

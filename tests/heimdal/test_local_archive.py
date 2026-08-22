@@ -5,6 +5,7 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
+import json
 from pathlib import Path
 import secrets
 import threading
@@ -366,6 +367,8 @@ def test_verified_archive_receipt_precedes_hot_retirement(tmp_path: Path) -> Non
             result.active_representation.location_ref,
             expected_archive_token=result.active_representation.archive_token,
             expected_archive_generation=result.active_representation.archive_generation,
+            expected_raw_generation=result.active_representation.raw_generation,
+            expected_representation_id=result.active_representation.id,
         )
         == next(  # noqa: SLF001
             (archive_root / "representations").glob("*.bin")
@@ -698,6 +701,8 @@ def test_registration_failure_discards_unregistered_archive_artifacts(
             _cold_ref("33333333-3333-4333-8333-333333333333"),
             arbitrary_object,
             verified_volume=_test_volume_ready(_ARCHIVE_REF, archive_root),
+            raw_generation=1,
+            representation_id="33333333-3333-4333-8333-333333333333",
         )
 
 
@@ -855,8 +860,21 @@ def test_pg_cursor_cold_cleanup_locks_rows_and_removes_files(tmp_path: Path) -> 
     location_ref = _cold_ref(representation_id)
     object_path = objects / f"{representation_id}.bin"
     object_path.write_bytes(b"ciphertext")
-    (manifests / f"{representation_id}.json").write_text("{}\n")
     proof = _test_volume_ready(_ARCHIVE_REF, archive_root)
+    archive_token = raw_store._archive_binding_token(proof.archive_ref)  # noqa: SLF001
+    (manifests / f"{representation_id}.json").write_text(
+        json.dumps(
+            {
+                "ownership_state": "verified",
+                "location_ref": location_ref,
+                "archive_token": archive_token,
+                "archive_generation": proof.archive_generation,
+                "raw_generation": 1,
+                "representation_id": representation_id,
+            }
+        )
+        + "\n"
+    )
     raw_store.configure_cold_archive_root(
         archive_root,
         verified_volume=proof,
@@ -866,6 +884,8 @@ def test_pg_cursor_cold_cleanup_locks_rows_and_removes_files(tmp_path: Path) -> 
         location_ref,
         object_path,
         verified_volume=proof,
+        raw_generation=1,
+        representation_id=representation_id,
     )
 
     class Cursor:
@@ -875,8 +895,16 @@ def test_pg_cursor_cold_cleanup_locks_rows_and_removes_files(tmp_path: Path) -> 
         def execute(self, query: str, params: object) -> None:
             self.queries.append(query)
 
-        def fetchall(self) -> list[tuple[str]]:
-            return [(location_ref,)]
+        def fetchall(self) -> list[tuple[object, ...]]:
+            return [
+                (
+                    representation_id,
+                    location_ref,
+                    archive_token,
+                    proof.archive_generation,
+                    1,
+                )
+            ]
 
     cursor = Cursor()
     raw_store._delete_cold_objects_for_pg_cursor(cursor, "record-id")  # noqa: SLF001
@@ -895,8 +923,21 @@ def test_pg_erasure_cleanup_receipt_reconciles_after_commit(tmp_path: Path) -> N
     location_ref = _cold_ref(representation_id)
     object_path = objects / f"{representation_id}.bin"
     object_path.write_bytes(b"ciphertext")
-    (manifests / f"{representation_id}.json").write_text("{}\n")
     proof = _test_volume_ready(_ARCHIVE_REF, archive_root)
+    archive_token = raw_store._archive_binding_token(proof.archive_ref)  # noqa: SLF001
+    (manifests / f"{representation_id}.json").write_text(
+        json.dumps(
+            {
+                "ownership_state": "verified",
+                "location_ref": location_ref,
+                "archive_token": archive_token,
+                "archive_generation": proof.archive_generation,
+                "raw_generation": 1,
+                "representation_id": representation_id,
+            }
+        )
+        + "\n"
+    )
     raw_store.configure_cold_archive_root(
         archive_root,
         verified_volume=proof,
@@ -906,6 +947,8 @@ def test_pg_erasure_cleanup_receipt_reconciles_after_commit(tmp_path: Path) -> N
         location_ref,
         object_path,
         verified_volume=proof,
+        raw_generation=1,
+        representation_id=representation_id,
     )
 
     class ReceiptCursor:
@@ -928,6 +971,7 @@ def test_pg_erasure_cleanup_receipt_reconciles_after_commit(tmp_path: Path) -> N
                             ),
                             "archive_generation": proof.archive_generation,
                             "raw_generation": 1,
+                            "representation_id": representation_id,
                         }
                     },
                 },

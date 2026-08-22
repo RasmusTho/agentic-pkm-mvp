@@ -57,6 +57,10 @@ class ArchiveReceipt:
     record_id: str
     content_identity: str
     representation_id: str
+    location_ref: str
+    archive_token: str
+    archive_generation: str
+    raw_generation: int
     encrypted_bytes: int
     ciphertext_sha256: str
     verified_at: datetime
@@ -69,6 +73,10 @@ class ArchiveReceipt:
             "record_id": self.record_id,
             "content_identity": self.content_identity,
             "representation_id": self.representation_id,
+            "location_ref": self.location_ref,
+            "archive_token": self.archive_token,
+            "archive_generation": self.archive_generation,
+            "raw_generation": self.raw_generation,
             "encrypted_bytes": self.encrypted_bytes,
             "ciphertext_sha256": self.ciphertext_sha256,
             "verified_at": _iso(self.verified_at),
@@ -234,7 +242,17 @@ def _durable_write(path: Path, payload: bytes) -> None:
 
 
 def _manifest_payload(receipt: ArchiveReceipt) -> bytes:
-    return (json.dumps(receipt.as_dict(), sort_keys=True, separators=(",", ":")) + "\n").encode()
+    payload = receipt.as_dict()
+    payload["ownership_state"] = "verified"
+    return (json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n").encode()
+
+
+def _reserved_ownership_manifest_payload(receipt: ArchiveReceipt) -> bytes:
+    """Persist exact unlink authority before any cold object can exist."""
+
+    payload = receipt.as_dict()
+    payload["ownership_state"] = "reserved"
+    return (json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n").encode()
 
 
 def _active_hot(record_id: str) -> RawRepresentation:
@@ -349,10 +367,14 @@ def relocate_raw_record(
         failure: ArchiveDegradedError | None = None
 
         try:
-            raw_store.register_cold_location(
-                location_ref, object_path, verified_volume=volume_proof
-            )
             with raw_store.cold_archive_mutation_lock(archive_root, verified_volume=volume_proof):
+                raw_store.register_cold_location(
+                    location_ref,
+                    object_path,
+                    verified_volume=volume_proof,
+                    raw_generation=mutation_authority.generation,
+                    representation_id=representation_id,
+                )
                 try:
                     cold, _ = raw_store.register_cold_raw_representation(
                         record_id=record.id,
@@ -370,6 +392,26 @@ def relocate_raw_record(
                     )
                     reservation_durable = True
                     _relocation_stage_hook("after_reservation")
+                    receipt = ArchiveReceipt(
+                        receipt_id=receipt_id,
+                        record_id=record.id,
+                        content_identity=record.content_identity,
+                        representation_id=representation_id,
+                        location_ref=location_ref,
+                        archive_token=raw_store._archive_binding_token(archive_ref),  # noqa: SLF001
+                        archive_generation=volume_proof.archive_generation,
+                        raw_generation=mutation_authority.generation,
+                        encrypted_bytes=len(ciphertext),
+                        ciphertext_sha256=ciphertext_hash,
+                        verified_at=_utc(reference),
+                    )
+                    # The reserved manifest is not a successful archive receipt.
+                    # It is exact, redacted cleanup authority that must become
+                    # durable before the first external byte can be written.
+                    _durable_write(
+                        manifest_path,
+                        _reserved_ownership_manifest_payload(receipt),
+                    )
                     _durable_write(object_path, ciphertext)
                     _relocation_stage_hook("after_object_write")
                     copied = object_path.read_bytes()
@@ -383,15 +425,6 @@ def relocate_raw_record(
                         copied,
                         hot.nonce,
                         key=key or raw_store.resolve_raw_store_key(),
-                    )
-                    receipt = ArchiveReceipt(
-                        receipt_id=receipt_id,
-                        record_id=record.id,
-                        content_identity=record.content_identity,
-                        representation_id=representation_id,
-                        encrypted_bytes=len(copied),
-                        ciphertext_sha256=ciphertext_hash,
-                        verified_at=_utc(reference),
                     )
                     _durable_write(manifest_path, _manifest_payload(receipt))
                     _relocation_stage_hook("after_manifest_write")

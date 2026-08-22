@@ -930,6 +930,16 @@ def _bootstrap_pg(conn: Any) -> None:
                             RAISE EXCEPTION
                                 'raw representation cannot mutate a retiring generation';
                         END IF;
+                        IF NEW.storage_kind = 'encrypted_local_cold'
+                           AND EXISTS (
+                               SELECT 1 FROM {_DELETION_RECEIPT_TABLE}
+                               WHERE COALESCE(
+                                   payload->'{_COLD_CLEANUP_PAYLOAD_KEY}', '[]'::jsonb
+                               ) ? NEW.location_ref
+                           ) THEN
+                            RAISE EXCEPTION
+                                'cold location remains owned by pending governed cleanup';
+                        END IF;
                         IF TG_OP = 'INSERT' THEN
                             RETURN NEW;
                         END IF;
@@ -1903,7 +1913,7 @@ def _cold_cleanup_binding(
     location_ref: str,
     *,
     expected_raw_generation: int,
-) -> tuple[str, str]:
+) -> tuple[str, str, str]:
     bindings = payload.get(_COLD_CLEANUP_BINDINGS_PAYLOAD_KEY)
     binding = bindings.get(location_ref) if isinstance(bindings, dict) else None
     if not isinstance(binding, dict):
@@ -1913,17 +1923,25 @@ def _cold_cleanup_binding(
     archive_token = binding.get("archive_token")
     archive_generation = binding.get("archive_generation")
     raw_generation = binding.get("raw_generation")
+    representation_id = binding.get("representation_id")
+    try:
+        canonical_representation_id = str(UUID(str(representation_id)))
+    except (TypeError, ValueError, AttributeError):
+        canonical_representation_id = ""
     if (
         not isinstance(archive_token, str)
         or re.fullmatch(r"[0-9a-f]{64}", archive_token) is None
         or not isinstance(archive_generation, str)
         or re.fullmatch(r"[0-9a-f]{64}", archive_generation) is None
         or raw_generation != expected_raw_generation
+        or canonical_representation_id != representation_id
+        or location_ref
+        != f"heimloc:cold:{archive_token}:{canonical_representation_id}"
     ):
         raise RawLivenessUnavailableError(
             "cold cleanup item is stale or bound to a different generation"
         )
-    return archive_token, archive_generation
+    return archive_token, archive_generation, canonical_representation_id
 
 
 def _reconcile_memory_cold_cleanup(tombstone: RawDeletionTombstone) -> None:
@@ -1938,7 +1956,7 @@ def _reconcile_memory_cold_cleanup(tombstone: RawDeletionTombstone) -> None:
     refs = list(receipt.payload.get("cold_cleanup_location_refs", []))
     remaining = list(refs)
     for location_ref in refs:
-        archive_token, archive_generation = _cold_cleanup_binding(
+        archive_token, archive_generation, representation_id = _cold_cleanup_binding(
             receipt.payload,
             str(location_ref),
             expected_raw_generation=tombstone.generation,
@@ -1948,6 +1966,8 @@ def _reconcile_memory_cold_cleanup(tombstone: RawDeletionTombstone) -> None:
                 str(location_ref),
                 expected_archive_token=archive_token,
                 expected_archive_generation=archive_generation,
+                expected_raw_generation=tombstone.generation,
+                expected_representation_id=representation_id,
             )
         except raw_store.RawRepresentationDeletionError:
             raise
@@ -2040,6 +2060,7 @@ def _governed_delete_memory(
                     "archive_token": representation.archive_token,
                     "archive_generation": representation.archive_generation,
                     "raw_generation": representation.raw_generation,
+                    "representation_id": representation.id,
                 }
         if cold_bindings:
             receipt.payload[_COLD_CLEANUP_PAYLOAD_KEY] = list(cold_bindings)
@@ -2114,7 +2135,7 @@ def _reconcile_pg_cold_cleanup(cur: Any, record_id: str, *, conn: Any | None = N
         payload = json.loads(payload)
     remaining = [str(ref) for ref in payload.get("cold_cleanup_location_refs", [])]
     for location_ref in list(remaining):
-        archive_token, archive_generation = _cold_cleanup_binding(
+        archive_token, archive_generation, representation_id = _cold_cleanup_binding(
             payload,
             location_ref,
             expected_raw_generation=int(tombstone_row[1]),
@@ -2124,6 +2145,8 @@ def _reconcile_pg_cold_cleanup(cur: Any, record_id: str, *, conn: Any | None = N
                 location_ref,
                 expected_archive_token=archive_token,
                 expected_archive_generation=archive_generation,
+                expected_raw_generation=int(tombstone_row[1]),
+                expected_representation_id=representation_id,
             )
         except raw_store.RawRepresentationDeletionError as exc:
             updated_payload = dict(payload)
@@ -2292,7 +2315,7 @@ def _governed_delete_pg(
                 )
             cur.execute(
                 """
-                SELECT location_ref, archive_token, archive_generation, raw_generation
+                SELECT id, location_ref, archive_token, archive_generation, raw_generation
                 FROM heimdal_raw_representation
                 WHERE record_id = %s AND storage_kind = 'encrypted_local_cold'
                 ORDER BY sequence
@@ -2300,7 +2323,13 @@ def _governed_delete_pg(
                 """,
                 (record_id,),
             )
-            for location_ref, archive_token, archive_generation, raw_generation in cur.fetchall():
+            for (
+                representation_id,
+                location_ref,
+                archive_token,
+                archive_generation,
+                raw_generation,
+            ) in cur.fetchall():
                 if (
                     not archive_token
                     or not archive_generation
@@ -2315,6 +2344,7 @@ def _governed_delete_pg(
                     "archive_token": str(archive_token),
                     "archive_generation": str(archive_generation),
                     "raw_generation": int(raw_generation),
+                    "representation_id": str(representation_id),
                 }
         except Exception as exc:
             raise raw_store.RawRepresentationDeletionError(
@@ -2477,6 +2507,33 @@ def _copy_deletion_receipt(receipt: DeletionReceipt) -> DeletionReceipt:
     )
 
 
+def cold_cleanup_location_is_pending(location_ref: str) -> bool:
+    """Return whether durable cleanup still exclusively owns an opaque ref."""
+
+    if not isinstance(location_ref, str) or not location_ref:
+        raise ValueError("location_ref must be non-empty")
+    if resolve_heimdal_backend() == "memory":
+        with _MEMORY_FENCE:
+            return any(
+                location_ref
+                in receipt.payload.get(_COLD_CLEANUP_PAYLOAD_KEY, [])
+                for receipt in _MEMORY.deletion_receipts
+            )
+    conn = _pg_connect(autocommit=True)
+    try:
+        _assert_pg_schema(conn)
+        cur = conn.cursor()
+        cur.execute(
+            f"SELECT 1 FROM {_DELETION_RECEIPT_TABLE} "
+            f"WHERE COALESCE(payload->'{_COLD_CLEANUP_PAYLOAD_KEY}', '[]'::jsonb) ? %s "
+            "LIMIT 1",
+            (location_ref,),
+        )
+        return cur.fetchone() is not None
+    finally:
+        conn.close()
+
+
 def all_deletion_receipts() -> list[DeletionReceipt]:
     if resolve_heimdal_backend() == "memory":
         with _MEMORY_FENCE:
@@ -2559,6 +2616,7 @@ __all__ = [
     "CONSENT_GRANT_DIGESTS_PAYLOAD_KEY",
     "DeletionReceipt",
     "GovernedDeletionResult",
+    "cold_cleanup_location_is_pending",
     "RESPONSE_LEASE_SECONDS",
     "RawDeletionTombstone",
     "RawEvidenceErasedError",
