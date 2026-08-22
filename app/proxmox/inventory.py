@@ -154,7 +154,7 @@ class ProxmoxInventoryClient:
         if not isinstance(rows, Sequence):
             rows = []
         filtered = [row for row in rows if isinstance(row, Mapping) and row.get("vmid") in self._config.policy.vm_ids]
-        return self._result("list_allowed_vms", {"data": filtered})
+        return self._result("list_allowed_vms", {"data": filtered}, endpoint_identity=result.receipt.endpoint_identity)
 
     def get_vm_status(self, vm_id: int | object) -> InventoryResult:
         if not isinstance(vm_id, int) or vm_id not in self._config.policy.vm_ids:
@@ -179,7 +179,7 @@ class ProxmoxInventoryClient:
         payload, observed_fingerprint = self._transport.get(endpoint=endpoint, path=path, token=token)
         if observed_fingerprint != self._config.tls_fingerprint:
             raise ProxmoxInventoryError("TLS certificate fingerprint mismatch")
-        return self._result(operation, payload)
+        return self._result(operation, payload, endpoint_identity=sha256(endpoint.encode("utf-8")).hexdigest())
 
     def _endpoint(self) -> str:
         endpoint = self._resolve_secret(self._config.endpoint_secret_ref)
@@ -188,13 +188,18 @@ class ProxmoxInventoryClient:
             raise ProxmoxInventoryError("PVE endpoint must be a bare HTTPS authority")
         return endpoint.rstrip("/")
 
-    def _result(self, operation: str, payload: Mapping[str, Any]) -> InventoryResult:
+    def _result(
+        self,
+        operation: str,
+        payload: Mapping[str, Any],
+        *,
+        endpoint_identity: str | None = None,
+    ) -> InventoryResult:
         safe_payload = dict(payload)
         digest = sha256(_canonical_bytes(safe_payload)).hexdigest()
-        endpoint_identity = sha256(self._config.endpoint_secret_ref.encode()).hexdigest()
         receipt = InventoryReceipt(
             version=RECEIPT_VERSION,
-            endpoint_identity=endpoint_identity,
+            endpoint_identity=endpoint_identity or sha256(self._config.endpoint_secret_ref.encode()).hexdigest(),
             tls_fingerprint=self._config.tls_fingerprint,
             principal_scope_digest=self._config.principal_scope_digest,
             allowlist_policy={
