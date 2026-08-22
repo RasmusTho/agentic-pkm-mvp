@@ -1143,6 +1143,30 @@ added as their child slices land.
   `docs/audits/SETTINGS_ARCHITECTURE_2026-07-07.md :: F5`.
 - **Related issues:** #3162; parent #3156.
 
+### governed_archival_flow
+
+- **Purpose:** Preserve owner-native identity, authority, gated access, verified representation
+  transitions, class-specific retention outcomes, and honest liveness across archival adapters.
+- **Protected principle:** ARCHIVE-MUST/GATE/DOCTOR kernel; an archive is a lifecycle overlay, not
+  a central artifact or storage authority.
+- **Affected boundaries:** HKA, SIP, GOV, PDM, DRI, and source-specific adapters.
+- **Required fixture / data:** provider-free contract values, opaque identity/reference values,
+  class-specific policy profiles, and architecture ownership assertions.
+- **Expected failure mode:** a path or archive backend mints identity/access authority, one delete
+  policy is applied to every class, a representation retires before verification, or a derivative
+  becomes the last authoritative copy of meaning.
+- **Named kernel:** `ARCHIVE-MUST-01`, `ARCHIVE-MUST-02`, `ARCHIVE-MUST-03`, `ARCHIVE-MUST-04`,
+  `ARCHIVE-MUST-05`, `ARCHIVE-GATE-01`, `ARCHIVE-GATE-02`, `ARCHIVE-GATE-03`,
+  `ARCHIVE-GATE-04`, `ARCHIVE-DOCTOR-01`, `ARCHIVE-DOCTOR-02`, and `ARCHIVE-DOCTOR-03`.
+- **Current enforcement:** `static_test` — GAF-01 defines the provider-free contract and registry
+  entries; production adapter enforcement is future work under GAF-02 through GAF-07.
+- **Eventual test paths:** `tests/archival/test_contracts.py`,
+  `tests/architecture/test_governed_archival_contract.py`.
+- **Related docs / contracts:** `docs/contracts/GOVERNED_ARCHIVAL_FLOW.md`,
+  `docs/GOVERNED_ARCHIVAL_FLOW/README.md`,
+  `docs/audits/GOVERNED_ARCHIVAL_FLOW_2026-08-22.md`.
+- **Related issues:** #5063–#5069; parent #5062.
+
 ## Related documents
 
 - [Traceability matrix](../architecture/traceability-matrix.md) — principle → contract → **this registry** → test → issue
