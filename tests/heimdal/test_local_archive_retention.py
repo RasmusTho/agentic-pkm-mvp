@@ -319,6 +319,100 @@ def test_screen_retention_unmounted_selection_and_queued_cleanup_are_loud(
         retention.enforce_screen_frame_retention(vault_root=vault_root, now=now)
 
 
+def test_screen_retry_finds_cross_reason_pending_receipt_by_modality(
+    tmp_path: Path,
+) -> None:
+    now = datetime.now(timezone.utc)
+    vault_root = tmp_path / "vault"
+    archive_root = tmp_path / "mounted-cold"
+    archive_root.mkdir()
+    vault_root.mkdir()
+    write_settings_note(
+        vault_root,
+        SettingsNote(
+            spec=SETTINGS,
+            values={
+                "retention_window_days": 1,
+                "screen_frame_retention_minutes": 1,
+            },
+        ),
+        write_guard=WriteGuard(lambda: {"state": "healthy"}),
+    )
+    record = _age_record(
+        _insert(
+            b"screen cleanup created by hard retention",
+            grant_ref="grant-screen-cross-reason",
+            modality="screen",
+        ),
+        now=now,
+    )
+    _archive(record, archive_root=archive_root, now=now)
+    raw_store.revoke_cold_archive_binding()
+
+    with pytest.raises(raw_store.RawRepresentationDeletionError, match="binding"):
+        retention.enforce_hard_retention_bound(
+            vault_root=vault_root,
+            now=now,
+            record_last_enforced=False,
+        )
+
+    pending = raw_liveness.all_deletion_receipts()[0]
+    assert pending.reason == retention.REASON_HARD_RETENTION_BOUND
+    assert pending.payload.get("raw_modality") == "screen"
+    assert pending.payload["cold_cleanup_location_refs"]
+
+    with pytest.raises(raw_store.RawRepresentationDeletionError, match="binding"):
+        retention.enforce_screen_frame_retention(vault_root=vault_root, now=now)
+
+    proof = _volume_ready(archive_root)
+    raw_store.configure_cold_archive_root(
+        archive_root,
+        verified_volume=proof,
+        expected_archive_ref=_ARCHIVE_REF,
+    )
+    converged = retention.enforce_screen_frame_retention(
+        vault_root=vault_root,
+        now=now,
+    )
+    assert converged.deleted_count == 0
+    assert raw_liveness.all_deletion_receipts()[0].payload[
+        "cold_cleanup_location_refs"
+    ] == []
+
+
+def test_screen_retry_refuses_unclassified_historical_pending_receipt(
+    tmp_path: Path,
+) -> None:
+    now = datetime.now(timezone.utc)
+    vault_root = tmp_path / "vault"
+    archive_root = tmp_path / "mounted-cold"
+    archive_root.mkdir()
+    _write_screen_retention_window(vault_root, minutes=1)
+    record = _age_record(
+        _insert(
+            b"historical unclassified screen cleanup",
+            grant_ref="grant-screen-unclassified",
+            modality="screen",
+        ),
+        now=now,
+    )
+    _archive(record, archive_root=archive_root, now=now)
+    raw_store.revoke_cold_archive_binding()
+    with pytest.raises(raw_store.RawRepresentationDeletionError, match="binding"):
+        retention.enforce_screen_frame_retention(vault_root=vault_root, now=now)
+
+    with raw_liveness.memory_fence():
+        raw_liveness._MEMORY.deletion_receipts[0].payload.pop(  # noqa: SLF001
+            raw_liveness.RAW_MODALITY_PAYLOAD_KEY
+        )
+
+    with pytest.raises(
+        raw_liveness.RawLivenessUnavailableError,
+        match="modality classification",
+    ):
+        retention.enforce_screen_frame_retention(vault_root=vault_root, now=now)
+
+
 def test_unmounted_cold_expiry_selects_metadata_and_leaves_retry_authority(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -536,6 +630,288 @@ def test_archived_read_reuses_gated_read_path(tmp_path: Path) -> None:
     assert authorized.receipt.raw_ref == raw_ref_for(record)
     assert authorized.receipt.content_identity == record.content_identity
     assert len(all_raw_read_receipts()) == 1
+
+
+def test_cold_read_never_acquires_archive_lock_while_binding_lock_is_held(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    now = datetime.now(timezone.utc)
+    archive_root = tmp_path / "mounted-cold"
+    archive_root.mkdir()
+    record = _age_record(
+        _insert(b"cold-read-lock-order", grant_ref="grant-read-lock-order"),
+        now=now,
+    )
+    _archive(record, archive_root=archive_root, now=now)
+    original_archive_lock = raw_store._cold_archive_mutation_lock  # noqa: SLF001
+    acquisitions: list[Path] = []
+
+    def assert_canonical_lock_order(archive: Path, *, blocking: bool):
+        assert not raw_store._COLD_BINDING_LOCK._is_owned()  # noqa: SLF001
+        acquisitions.append(archive)
+        return original_archive_lock(archive, blocking=blocking)
+
+    monkeypatch.setattr(
+        raw_store,
+        "_cold_archive_mutation_lock",
+        assert_canonical_lock_order,
+    )
+
+    resolved = raw_store.resolve_active_raw_record(record.id)
+
+    assert resolved is not None
+    assert resolved.ciphertext
+    assert acquisitions == [archive_root]
+
+
+def test_cross_identity_cold_read_and_relocation_revalidate_without_lock_cycle(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    now = datetime.now(timezone.utc)
+    archive_root = tmp_path / "mounted-cold"
+    archive_root.mkdir()
+    read_record = _age_record(
+        _insert(b"cross-identity-cold-read", grant_ref="grant-cross-read"),
+        now=now,
+    )
+    archived_read = _archive(read_record, archive_root=archive_root, now=now)
+    relocation_record = _age_record(
+        _insert(b"cross-identity-relocation", grant_ref="grant-cross-relocation"),
+        now=now,
+    )
+    read_snapshotted = threading.Event()
+    relocation_locked = threading.Event()
+    reader_advancing = threading.Event()
+
+    def coordinate_read(stage: str, location_ref: str) -> None:
+        if (
+            stage != "after_binding_snapshot"
+            or location_ref != archived_read.active_representation.location_ref
+        ):
+            return
+        read_snapshotted.set()
+        assert relocation_locked.wait(timeout=10)
+        reader_advancing.set()
+
+    def coordinate_relocation(stage: str) -> None:
+        if stage != "after_archive_lock":
+            return
+        relocation_locked.set()
+        assert reader_advancing.wait(timeout=10)
+
+    monkeypatch.setattr(raw_store, "_cold_read_stage_hook", coordinate_read)
+    monkeypatch.setattr(local_archive, "_relocation_stage_hook", coordinate_relocation)
+
+    def read_from_snapshot() -> str:
+        try:
+            raw_store.resolve_active_raw_record(read_record.id)
+        except raw_store.RawRepresentationUnavailableError:
+            return "stale_snapshot_refused"
+        return "read_completed"
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        read_future = executor.submit(read_from_snapshot)
+        assert read_snapshotted.wait(timeout=10)
+        relocation_future = executor.submit(
+            _archive,
+            relocation_record,
+            archive_root=archive_root,
+            now=now,
+        )
+        assert read_future.result(timeout=10) == "stale_snapshot_refused"
+        relocated = relocation_future.result(timeout=10)
+
+    assert relocated.active_representation.storage_kind == local_archive.ARCHIVE_STORAGE_KIND
+    retried = raw_store.resolve_active_raw_record(read_record.id)
+    assert retried is not None and retried.ciphertext
+
+
+@pytest.mark.parametrize("ownership_state", ["missing", None, "reserved", "unknown"])
+def test_cold_read_requires_exact_verified_manifest_state(
+    tmp_path: Path,
+    ownership_state: str | None,
+) -> None:
+    now = datetime.now(timezone.utc)
+    archive_root = tmp_path / "mounted-cold"
+    archive_root.mkdir()
+    record = _age_record(
+        _insert(
+            f"cold-read-state-{ownership_state}".encode(),
+            grant_ref=f"grant-read-state-{ownership_state}",
+        ),
+        now=now,
+    )
+    archived = _archive(record, archive_root=archive_root, now=now)
+    manifest_path = archive_root / "manifests" / f"{archived.receipt.representation_id}.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    if ownership_state == "missing":
+        manifest.pop("ownership_state")
+    else:
+        manifest["ownership_state"] = ownership_state
+    manifest_path.write_text(json.dumps(manifest, sort_keys=True) + "\n", encoding="utf-8")
+
+    with pytest.raises(
+        raw_store.RawRepresentationUnavailableError,
+        match="cold representation bytes are unavailable",
+    ):
+        raw_store.resolve_active_raw_record(record.id)
+
+
+@pytest.mark.parametrize("ownership_state", ["missing", None, "unknown"])
+def test_cold_cleanup_rejects_unclassified_manifest_state(
+    tmp_path: Path,
+    ownership_state: str | None,
+) -> None:
+    now = datetime.now(timezone.utc)
+    archive_root = tmp_path / "mounted-cold"
+    archive_root.mkdir()
+    record = _age_record(
+        _insert(
+            f"cold-cleanup-state-{ownership_state}".encode(),
+            grant_ref=f"grant-cleanup-state-{ownership_state}",
+        ),
+        now=now,
+    )
+    archived = _archive(record, archive_root=archive_root, now=now)
+    object_path = archive_root / "representations" / f"{archived.receipt.representation_id}.bin"
+    manifest_path = archive_root / "manifests" / f"{archived.receipt.representation_id}.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    if ownership_state == "missing":
+        manifest.pop("ownership_state")
+    else:
+        manifest["ownership_state"] = ownership_state
+    manifest_path.write_text(json.dumps(manifest, sort_keys=True) + "\n", encoding="utf-8")
+
+    with pytest.raises(raw_store.RawRepresentationDeletionError, match="manifest ownership"):
+        raw_liveness.governed_delete_raw_record(
+            record_id=record.id,
+            reason=retention.REASON_HARD_RETENTION_BOUND,
+            retention_window_days=30,
+            deleted_at=now,
+        )
+
+    assert object_path.exists()
+    assert manifest_path.exists()
+    assert raw_liveness.all_deletion_receipts()[0].payload["cold_cleanup_location_refs"]
+
+
+def test_reserved_manifest_refuses_activation_but_authorizes_exact_cleanup(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    now = datetime.now(timezone.utc)
+    archive_root = tmp_path / "mounted-cold"
+    archive_root.mkdir()
+    record = _age_record(
+        _insert(b"reserved-activation-boundary", grant_ref="grant-reserved-activation"),
+        now=now,
+    )
+    monkeypatch.setattr(
+        local_archive,
+        "_manifest_payload",
+        local_archive._reserved_ownership_manifest_payload,  # noqa: SLF001
+    )
+
+    with pytest.raises(local_archive.ArchiveDegradedError, match="archive_relocation_failed"):
+        _archive(record, archive_root=archive_root, now=now)
+
+    representations = raw_store.all_raw_representations(record.id)
+    hot = next(item for item in representations if item.storage_kind == "postgres_hot")
+    reserved = next(
+        item for item in representations if item.storage_kind == local_archive.ARCHIVE_STORAGE_KIND
+    )
+    manifest_path = archive_root / "manifests" / f"{reserved.id}.json"
+    object_path = archive_root / "representations" / f"{reserved.id}.bin"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert manifest["ownership_state"] == "reserved"
+    assert hot.active is True and reserved.active is False
+
+    deleted = raw_liveness.governed_delete_raw_record(
+        record_id=record.id,
+        reason=retention.REASON_HARD_RETENTION_BOUND,
+        retention_window_days=30,
+        deleted_at=now,
+    )
+
+    assert deleted.outcome == "deleted"
+    assert not object_path.exists()
+    assert not manifest_path.exists()
+
+
+@pytest.mark.parametrize(
+    "crash_stage",
+    [
+        "after_object_unlink",
+        "after_object_directory_fsync",
+        "after_manifest_unlink",
+        "after_manifest_directory_fsync",
+    ],
+)
+def test_cold_cleanup_crash_cuts_restart_idempotently_before_queue_progress(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    crash_stage: str,
+) -> None:
+    now = datetime.now(timezone.utc)
+    archive_root = tmp_path / "mounted-cold"
+    archive_root.mkdir()
+    record = _age_record(
+        _insert(
+            f"cold-cleanup-crash-{crash_stage}".encode(),
+            grant_ref=f"grant-cleanup-crash-{crash_stage}",
+        ),
+        now=now,
+    )
+    archived = _archive(record, archive_root=archive_root, now=now)
+    object_path = archive_root / "representations" / f"{archived.receipt.representation_id}.bin"
+    manifest_path = archive_root / "manifests" / f"{archived.receipt.representation_id}.json"
+    stages: list[str] = []
+
+    def crash_at_cut(stage: str, _path: Path) -> None:
+        stages.append(stage)
+        if stage == crash_stage:
+            raise raw_store.RawRepresentationDeletionError(f"crash cut {stage}")
+
+    monkeypatch.setattr(raw_store, "_cold_delete_stage_hook", crash_at_cut)
+    with pytest.raises(raw_store.RawRepresentationDeletionError, match="crash cut"):
+        raw_liveness.governed_delete_raw_record(
+            record_id=record.id,
+            reason=retention.REASON_HARD_RETENTION_BOUND,
+            retention_window_days=30,
+            deleted_at=now,
+        )
+
+    pending = raw_liveness.all_deletion_receipts()[0]
+    assert pending.payload["cold_cleanup_location_refs"]
+    assert crash_stage in stages
+    assert not object_path.exists()
+    assert manifest_path.exists() is (
+        crash_stage in {"after_object_unlink", "after_object_directory_fsync"}
+    )
+
+    raw_store.revoke_cold_archive_binding()
+    proof = _volume_ready(archive_root)
+    raw_store.configure_cold_archive_root(
+        archive_root,
+        verified_volume=proof,
+        expected_archive_ref=_ARCHIVE_REF,
+    )
+    monkeypatch.setattr(raw_store, "_cold_delete_stage_hook", lambda _stage, _path: None)
+    retried = raw_liveness.governed_delete_raw_record(
+        record_id=record.id,
+        reason=retention.REASON_HARD_RETENTION_BOUND,
+        retention_window_days=30,
+        deleted_at=now,
+    )
+
+    assert retried.outcome == "already_erased"
+    assert raw_liveness.all_deletion_receipts()[0].payload[
+        "cold_cleanup_location_refs"
+    ] == []
+    assert not object_path.exists()
+    assert not manifest_path.exists()
 
 
 def test_restore_drill_proves_archived_identity(tmp_path: Path) -> None:

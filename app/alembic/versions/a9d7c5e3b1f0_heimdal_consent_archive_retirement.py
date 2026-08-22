@@ -28,20 +28,22 @@ def upgrade() -> None:
     op.execute("LOCK TABLE heimdal_raw_liveness_generation IN SHARE ROW EXCLUSIVE MODE")
     op.execute("LOCK TABLE heimdal_raw_representation IN SHARE ROW EXCLUSIVE MODE")
     op.execute("LOCK TABLE heimdal_raw_deletion_receipt IN SHARE ROW EXCLUSIVE MODE")
+    op.execute("LOCK TABLE heimdal_raw_retention_claim IN SHARE ROW EXCLUSIVE MODE")
     op.execute(
         """
-        DO $heimdal_archive_generation_preflight$
+        DO $heimdal_archive_identity_preflight$
         BEGIN
             IF EXISTS (
                 SELECT 1 FROM heimdal_raw_representation
                 WHERE storage_kind = 'encrypted_local_cold'
+                  AND location_ref !~ '^heimloc:cold:[0-9a-f]{64}:[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'
             ) THEN
                 RAISE EXCEPTION USING
-                    MESSAGE = 'cold representation lacks durable archive generation',
-                    HINT = 'Reconcile existing cold representations to their verified volume generation before retrying.';
+                    MESSAGE = 'cold representation lacks durable archive identity',
+                    HINT = 'Reconcile the unbound cold location before retrying the migration.';
             END IF;
         END
-        $heimdal_archive_generation_preflight$;
+        $heimdal_archive_identity_preflight$;
 
         DO $heimdal_cleanup_binding_preflight$
         BEGIN
@@ -107,6 +109,7 @@ def upgrade() -> None:
             generation integer NOT NULL,
             grant_ref text NOT NULL CHECK (btrim(grant_ref) <> ''),
             admitted_at timestamptz NOT NULL,
+            legacy_lineage_ambiguous boolean NOT NULL DEFAULT false,
             sequence bigserial NOT NULL,
             PRIMARY KEY (record_id, generation, grant_ref),
             FOREIGN KEY (record_id, generation)
@@ -117,9 +120,9 @@ def upgrade() -> None:
             ON heimdal_raw_consent_association (grant_ref, sequence);
 
         INSERT INTO heimdal_raw_consent_association (
-            record_id, generation, grant_ref, admitted_at
+            record_id, generation, grant_ref, admitted_at, legacy_lineage_ambiguous
         )
-        SELECT r.id, g.generation, r.consent->>'grant_ref', r.ingested_at
+        SELECT r.id, g.generation, r.consent->>'grant_ref', r.ingested_at, true
         FROM heimdal_raw_record AS r
         JOIN heimdal_raw_liveness_generation AS g ON g.record_id = r.id
         WHERE jsonb_typeof(r.consent->'grant_ref') = 'string'
@@ -152,6 +155,12 @@ def upgrade() -> None:
             authority_identity text;
         BEGIN
             IF TG_OP = 'INSERT' THEN
+                IF NEW.legacy_lineage_ambiguous
+                   AND current_setting('app.heimdal_legacy_lineage_backfill', true)
+                       IS DISTINCT FROM 'true' THEN
+                    RAISE EXCEPTION
+                        'legacy lineage ambiguity is migration-only authority';
+                END IF;
                 SELECT content_identity INTO authority_identity
                 FROM heimdal_raw_liveness_generation
                 WHERE record_id = NEW.record_id AND generation = NEW.generation;
@@ -203,6 +212,44 @@ def upgrade() -> None:
         FROM heimdal_raw_liveness_generation AS g
         WHERE g.record_id = p.record_id;
 
+        UPDATE heimdal_raw_representation
+        SET archive_token = substring(
+            location_ref FROM '^heimloc:cold:([0-9a-f]{64}):'
+        )
+        WHERE storage_kind = 'encrypted_local_cold';
+
+        DO $heimdal_legacy_claim_preflight$
+        BEGIN
+            IF EXISTS (
+                SELECT 1
+                FROM heimdal_raw_representation AS p
+                JOIN heimdal_raw_retention_claim AS c ON c.record_id = p.record_id
+                WHERE p.storage_kind = 'encrypted_local_cold'
+                  AND p.archive_generation IS NULL
+            ) THEN
+                RAISE EXCEPTION USING
+                    MESSAGE = 'legacy cold representation has an active retention claim',
+                    HINT = 'Drain governed retention claims on the HAR-04 schema before retrying HAR-05 migration.';
+            END IF;
+        END
+        $heimdal_legacy_claim_preflight$;
+
+        DO $heimdal_legacy_reservation_preflight$
+        BEGIN
+            IF EXISTS (
+                SELECT 1
+                FROM heimdal_raw_representation AS p
+                WHERE p.storage_kind = 'encrypted_local_cold'
+                  AND p.active = false
+                  AND p.archive_generation IS NULL
+            ) THEN
+                RAISE EXCEPTION USING
+                    MESSAGE = 'legacy inactive cold reservation lacks archive generation',
+                    HINT = 'Repair or remove the orphaned HAR-04 reservation and rerun the HAR-05 migration.';
+            END IF;
+        END
+        $heimdal_legacy_reservation_preflight$;
+
         DO $heimdal_representation_generation_backfill$
         BEGIN
             IF EXISTS (
@@ -231,7 +278,10 @@ def upgrade() -> None:
                     OR (
                         storage_kind = 'encrypted_local_cold'
                         AND archive_token ~ '^[0-9a-f]{64}$'
-                        AND archive_generation ~ '^[0-9a-f]{64}$'
+                        AND (
+                            archive_generation ~ '^[0-9a-f]{64}$'
+                            OR archive_generation IS NULL
+                        )
                         AND location_ref LIKE
                             'heimloc:cold:' || archive_token || ':%'
                     )
@@ -283,6 +333,23 @@ def upgrade() -> None:
                 IF TG_OP = 'INSERT' THEN
                     RETURN NEW;
                 END IF;
+            END IF;
+            IF TG_OP = 'UPDATE'
+               AND current_setting('app.heimdal_legacy_archive_reconcile', true) = 'true'
+               AND NEW.id IS NOT DISTINCT FROM OLD.id
+               AND NEW.record_id IS NOT DISTINCT FROM OLD.record_id
+               AND NEW.storage_kind IS NOT DISTINCT FROM OLD.storage_kind
+               AND NEW.location_ref IS NOT DISTINCT FROM OLD.location_ref
+               AND NEW.ciphertext IS NOT DISTINCT FROM OLD.ciphertext
+               AND NEW.nonce IS NOT DISTINCT FROM OLD.nonce
+               AND NEW.key_ref IS NOT DISTINCT FROM OLD.key_ref
+               AND NEW.raw_generation IS NOT DISTINCT FROM OLD.raw_generation
+               AND NEW.archive_token IS NOT DISTINCT FROM OLD.archive_token
+               AND OLD.archive_generation IS NULL
+               AND NEW.archive_generation ~ '^[0-9a-f]{64}$'
+               AND NEW.registered_at IS NOT DISTINCT FROM OLD.registered_at
+               AND NEW.sequence IS NOT DISTINCT FROM OLD.sequence THEN
+                RETURN NEW;
             END IF;
             IF TG_OP = 'UPDATE'
                AND current_setting('app.heimdal_representation_activation', true) = 'true'

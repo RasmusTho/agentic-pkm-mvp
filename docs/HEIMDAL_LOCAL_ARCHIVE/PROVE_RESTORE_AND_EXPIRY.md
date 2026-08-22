@@ -25,6 +25,15 @@ revocation and hard retention still erase every raw copy with a durable receipt.
 3. Traverse cold manifests during consent revocation and hard-retention enforcement, deleting cold
    bytes and manifest state together with a location-aware but content-redacted receipt.
 4. Prove partial failures fail loud and do not report deletion complete while any raw copy remains.
+5. Reconcile pre-HAR-05 cold rows only through an explicit verified-volume path: bound rows are
+   retained during migration, while archive bytes, manifest identity, ciphertext hash, and raw
+   identity must all be proven before the archive generation is activated. Unbound or mismatched
+   rows remain fail-closed.
+   A legacy cold row with an active pre-HAR-05 retention claim fails the migration preflight and
+   must be drained under the old governed path before retrying the upgrade.
+6. Mark migrated consent associations whose pre-HAR-05 duplicate-grant lineage cannot be proven as
+   ambiguous; revocation conservatively selects those generations for governed erasure rather than
+   claiming a grant-specific result that the historical data cannot support.
 
 ## Acceptance criteria
 
@@ -39,6 +48,9 @@ revocation and hard retention still erase every raw copy with a durable receipt.
 - [x] A cold-delete failure fails loud and leaves retryable receipt/state rather than silently
       claiming erasure.
       Verify: `tests/heimdal/test_local_archive_retention.py::test_cold_delete_failure_is_loud_and_retryable`
+- [x] A bound HAR-04 cold row survives upgrade as legacy metadata and becomes active only after
+      explicit archive reconciliation verifies the mounted object and manifest identity.
+      Verify: `tests/migrations/test_heimdal_raw_representation_migration.py::test_current_upgrade_preserves_bound_har04_cold_row_until_verified_reconciliation`
 
 ## Out of scope
 

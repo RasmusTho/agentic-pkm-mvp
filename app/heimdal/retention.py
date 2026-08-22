@@ -141,9 +141,9 @@ def _reconcile_pending_cold_cleanup(
     Failed external cleanup remains queued for the next run.
     """
     for receipt in raw_liveness.all_deletion_receipts():
-        if receipt_filter is not None and not receipt_filter(receipt):
-            continue
         if not receipt.payload.get("cold_cleanup_location_refs"):
+            continue
+        if receipt_filter is not None and not receipt_filter(receipt):
             continue
         try:
             raw_liveness.governed_delete_raw_record(
@@ -156,6 +156,26 @@ def _reconcile_pending_cold_cleanup(
         except raw_store.RawRepresentationDeletionError:
             if fail_loud:
                 raise
+
+
+def _receipt_matches_raw_modality(
+    receipt: DeletionReceipt,
+    expected_modality: str,
+) -> bool:
+    """Match a current receipt; unclassified pending history is indeterminate."""
+
+    key = raw_liveness.RAW_MODALITY_PAYLOAD_KEY
+    if key not in receipt.payload:
+        raise raw_liveness.RawLivenessUnavailableError(
+            "pending cold cleanup lacks durable raw modality classification"
+        )
+    try:
+        modality = raw_store.canonical_raw_modality(receipt.payload[key])
+    except raw_store.RawRepresentationUnavailableError as exc:
+        raise raw_liveness.RawLivenessUnavailableError(
+            "pending cold cleanup has malformed raw modality classification"
+        ) from exc
+    return modality == expected_modality
 
 
 def _receipt_correlates_to_grant(receipt: DeletionReceipt, grant_digest: str) -> bool:
@@ -454,8 +474,9 @@ def enforce_screen_frame_retention(
     # manifest remains pending, even though the active identity is gone.
     _reconcile_pending_cold_cleanup(
         fail_loud=True,
-        receipt_filter=lambda receipt: (
-            receipt.reason == REASON_SCREEN_FRAME_RETENTION_BUFFER
+        receipt_filter=lambda receipt: _receipt_matches_raw_modality(
+            receipt,
+            "screen",
         ),
     )
     if pending_count:

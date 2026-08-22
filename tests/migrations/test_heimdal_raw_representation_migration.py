@@ -682,6 +682,120 @@ def test_current_upgrade_refuses_unbound_cold_locations_without_rewriting_them(
         assert cur.fetchone() == (0,)
 
 
+def test_current_upgrade_preserves_bound_har04_cold_row_until_verified_reconciliation(
+    scratch_db_factory,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    dsn = scratch_db_factory()
+    _upgrade(dsn, monkeypatch, "e2f3a4b5c6d7")
+    record_id = uuid.uuid4()
+    representation_id = uuid.uuid4()
+    archive_ref = "legacy-har04-archive"
+    archive_token = hashlib.sha256(archive_ref.encode()).hexdigest()
+    location_ref = f"heimloc:cold:{archive_token}:{representation_id}"
+    from app.heimdal.raw_store import encrypt_raw_bytes
+
+    plaintext = b"bound-har04-cold"
+    ciphertext, nonce = encrypt_raw_bytes(plaintext, key=_KEY)
+    with psycopg.connect(dsn, autocommit=True) as conn:
+        conn.execute(
+            """
+            INSERT INTO heimdal_raw_record (
+                id, content_identity, capture_chain, sensor, consent,
+                source_path, ingested_at, payload
+            ) VALUES (%s, %s, '[]'::jsonb, '{}'::jsonb,
+                      '{\"grant_ref\": \"legacy-grant\"}'::jsonb,
+                      'source-class-redacted', now(), '{}'::jsonb)
+            """,
+            (record_id, _content_identity(b"bound-har04-cold")),
+        )
+        conn.execute(
+            """
+            INSERT INTO heimdal_raw_liveness_generation (
+                content_identity, generation, record_id, raw_ref, activated_at
+            ) VALUES (%s, 1, %s, %s, now())
+            """,
+            (
+                _content_identity(b"bound-har04-cold"),
+                record_id,
+                f"heimraw:{record_id}",
+            ),
+        )
+        conn.execute(
+            """
+            INSERT INTO heimdal_raw_representation (
+                id, record_id, storage_kind, location_ref,
+                ciphertext, nonce, key_ref, active
+            ) VALUES (%s, %s, 'encrypted_local_cold', %s, NULL, %s, %s, true)
+            """,
+            (representation_id, record_id, location_ref, nonce, "test-key-v1"),
+        )
+
+    archive_root = tmp_path / "mounted-cold"
+    archive_root.mkdir()
+    (archive_root / "representations").mkdir()
+    (archive_root / "manifests").mkdir()
+    object_path = archive_root / "representations" / f"{representation_id}.bin"
+    object_path.write_bytes(ciphertext)
+    from app.ops.heimdal_cold_volume import (
+        _ARCHIVE_VOLUME_READY_ISSUER,
+        _issue_archive_volume_ready,
+    )
+
+    proof = _issue_archive_volume_ready(
+        archive_ref,
+        archive_root,
+        _issuer=_ARCHIVE_VOLUME_READY_ISSUER,
+    )
+    manifest = {
+        "schema": "heimdal_archive_receipt.v1",
+        "receipt_id": str(uuid.uuid4()),
+        "verified_at": "2026-08-22T00:00:00Z",
+        "record_id": str(record_id),
+        "representation_id": str(representation_id),
+        "content_identity": _content_identity(plaintext),
+        "encrypted_bytes": len(ciphertext),
+        "ciphertext_sha256": hashlib.sha256(ciphertext).hexdigest(),
+    }
+    (archive_root / "manifests" / f"{representation_id}.json").write_text(
+        json.dumps(manifest) + "\n", encoding="utf-8"
+    )
+
+    _upgrade(dsn, monkeypatch, CURRENT_REPRESENTATION_HEAD)
+    monkeypatch.setenv("DATABASE_URL", dsn)
+    monkeypatch.setenv("STORE_BACKEND", "pg")
+    monkeypatch.delenv("STORE_SCHEMA_AUTOCREATE", raising=False)
+    monkeypatch.setenv("HEIMDAL_RAW_STORE_KEY", _KEY.hex())
+    from app.heimdal import raw_store
+
+    object_path.write_bytes(b"tampered-legacy-ciphertext")
+    with pytest.raises(raw_store.RawRepresentationUnavailableError):
+        raw_store.reconcile_legacy_cold_representation(
+            str(record_id),
+            str(representation_id),
+            verified_volume=proof,
+        )
+    object_path.write_bytes(ciphertext)
+    raw_store.reconcile_legacy_cold_representation(
+        str(record_id),
+        str(representation_id),
+        verified_volume=proof,
+    )
+    with psycopg.connect(dsn) as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT archive_token, archive_generation FROM heimdal_raw_representation "
+            "WHERE id = %s",
+            (representation_id,),
+        )
+        assert cur.fetchone() == (archive_token, proof.archive_generation)
+    assert json.loads(
+        (archive_root / "manifests" / f"{representation_id}.json").read_text(
+            encoding="utf-8"
+        )
+    )["ownership_state"] == "verified"
+
+
 def test_current_upgrade_refuses_uncorrelated_active_raw_generation(
     scratch_db_factory,
     monkeypatch: pytest.MonkeyPatch,
@@ -1766,6 +1880,124 @@ def test_pg_screen_retention_lease_then_postcommit_cleanup_restart_converges_met
     assert settings is not None and "last_enforced_at" not in settings.values
 
 
+@pytest.mark.parametrize(
+    ("deletion_source", "expected_reason"),
+    [
+        ("hard_retention", "hard_retention_bound"),
+        ("consent_revocation", "consent_revoked"),
+    ],
+)
+def test_pg_screen_cross_reason_pending_cleanup_restart_converges_by_modality(
+    scratch_db_factory,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    deletion_source: str,
+    expected_reason: str,
+) -> None:
+    dsn = scratch_db_factory()
+    _upgrade(dsn, monkeypatch, CURRENT_REPRESENTATION_HEAD)
+    monkeypatch.setenv("DATABASE_URL", dsn)
+    monkeypatch.setenv("STORE_BACKEND", "pg")
+    monkeypatch.delenv("STORE_SCHEMA_AUTOCREATE", raising=False)
+    monkeypatch.setenv("HEIMDAL_RAW_STORE_KEY", _KEY.hex())
+
+    from app.heimdal import raw_liveness, raw_store, retention
+    from app.heimdal.settings_notes import SETTINGS, SettingsNote, write_settings_note
+    from app.ops.heimdal_cold_volume import (
+        _ARCHIVE_VOLUME_READY_ISSUER,
+        _issue_archive_volume_ready,
+    )
+    from app.write_guard import WriteGuard
+
+    vault_root = tmp_path / "vault"
+    archive_root = tmp_path / "mounted-cold"
+    vault_root.mkdir()
+    archive_root.mkdir()
+    write_settings_note(
+        vault_root,
+        SettingsNote(
+            spec=SETTINGS,
+            values={
+                "retention_window_days": 1,
+                "screen_frame_retention_minutes": 1,
+            },
+        ),
+        write_guard=WriteGuard(lambda: {"state": "healthy"}),
+    )
+    now = datetime.now(timezone.utc) + timedelta(days=2)
+    grant_ref = f"grant-pg-screen-{deletion_source}"
+    record = _insert_runtime_raw(
+        f"pg-screen-{deletion_source}".encode(),
+        grant_ref=grant_ref,
+        modality="screen",
+    )
+    _archive_runtime_raw(record, archive_root=archive_root, now=now)
+    raw_store.revoke_cold_archive_binding()
+
+    with pytest.raises(raw_store.RawRepresentationDeletionError, match="binding"):
+        if deletion_source == "hard_retention":
+            retention.enforce_hard_retention_bound(
+                vault_root=vault_root,
+                now=now,
+                record_last_enforced=False,
+            )
+        else:
+            retention.enforce_consent_revocation(
+                grant_ref=grant_ref,
+                revoked_at=now,
+            )
+
+    pending = next(
+        receipt
+        for receipt in raw_liveness.all_deletion_receipts()
+        if receipt.record_id == record.id
+    )
+    assert pending.reason == expected_reason
+    assert pending.payload[raw_liveness.RAW_MODALITY_PAYLOAD_KEY] == "screen"
+    assert pending.payload["cold_cleanup_location_refs"]
+    assert grant_ref not in json.dumps(pending.payload, sort_keys=True)
+
+    # A fresh store instance has no active DB identity to rediscover and the
+    # archive binding remains unavailable. Screen retry must use only durable
+    # receipt metadata and stay loud until external cleanup can converge.
+    restarted_store = raw_store._PgRawStore()  # noqa: SLF001
+    assert restarted_store.retention_metadata_before(
+        now - timedelta(minutes=1),
+        modality="screen",
+    ) == []
+    monkeypatch.setattr(
+        raw_store,
+        "_resolve_cold_ciphertext",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("screen receipt recovery materialized cold ciphertext")
+        ),
+    )
+    with pytest.raises(raw_store.RawRepresentationDeletionError, match="binding"):
+        retention.enforce_screen_frame_retention(vault_root=vault_root, now=now)
+
+    proof = _issue_archive_volume_ready(
+        "pg-har05-archive",
+        archive_root,
+        _issuer=_ARCHIVE_VOLUME_READY_ISSUER,
+    )
+    raw_store.configure_cold_archive_root(
+        archive_root,
+        verified_volume=proof,
+        expected_archive_ref="pg-har05-archive",
+    )
+    converged = retention.enforce_screen_frame_retention(
+        vault_root=vault_root,
+        now=now,
+    )
+    assert converged.deleted_count == 0
+    pending = next(
+        receipt
+        for receipt in raw_liveness.all_deletion_receipts()
+        if receipt.record_id == record.id
+    )
+    assert pending.payload["cold_cleanup_location_refs"] == []
+
+
 def test_pg_pending_cleanup_serializes_same_archive_generation_alias_relocation(
     scratch_db_factory,
     monkeypatch: pytest.MonkeyPatch,
@@ -2483,3 +2715,333 @@ def test_pg_archived_read_and_deletion_share_exact_representation_fence(
     assert raw_store.resolve_active_raw_record(record.id) is None
     assert list((archive_root / "representations").glob("*.bin")) == []
     assert list((archive_root / "manifests").glob("*.json")) == []
+
+
+def test_pg_cross_identity_cold_read_and_relocation_revalidate_without_lock_cycle(
+    scratch_db_factory,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    dsn = scratch_db_factory()
+    _upgrade(dsn, monkeypatch, CURRENT_REPRESENTATION_HEAD)
+    monkeypatch.setenv("DATABASE_URL", dsn)
+    monkeypatch.setenv("STORE_BACKEND", "pg")
+    monkeypatch.delenv("STORE_SCHEMA_AUTOCREATE", raising=False)
+    monkeypatch.setenv("HEIMDAL_RAW_STORE_KEY", _KEY.hex())
+
+    from app.heimdal import local_archive, raw_store
+
+    now = datetime.now(timezone.utc)
+    archive_root = tmp_path / "mounted-cold"
+    archive_root.mkdir()
+    read_record = _insert_runtime_raw(
+        b"pg-cross-identity-cold-read",
+        grant_ref="grant-pg-cross-read",
+    )
+    archived_read = _archive_runtime_raw(read_record, archive_root=archive_root, now=now)
+    relocation_record = _insert_runtime_raw(
+        b"pg-cross-identity-relocation",
+        grant_ref="grant-pg-cross-relocation",
+    )
+    read_snapshotted = threading.Event()
+    relocation_locked = threading.Event()
+    reader_advancing = threading.Event()
+
+    def coordinate_read(stage: str, location_ref: str) -> None:
+        if (
+            stage != "after_binding_snapshot"
+            or location_ref != archived_read.active_representation.location_ref
+        ):
+            return
+        read_snapshotted.set()
+        assert relocation_locked.wait(timeout=10)
+        reader_advancing.set()
+
+    def coordinate_relocation(stage: str) -> None:
+        if stage != "after_archive_lock":
+            return
+        relocation_locked.set()
+        assert reader_advancing.wait(timeout=10)
+
+    monkeypatch.setattr(raw_store, "_cold_read_stage_hook", coordinate_read)
+    monkeypatch.setattr(local_archive, "_relocation_stage_hook", coordinate_relocation)
+
+    def read_from_snapshot() -> str:
+        try:
+            raw_store.resolve_active_raw_record(read_record.id)
+        except raw_store.RawRepresentationUnavailableError:
+            return "stale_snapshot_refused"
+        return "read_completed"
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        read_future = executor.submit(read_from_snapshot)
+        assert read_snapshotted.wait(timeout=10)
+        relocation_future = executor.submit(
+            _archive_runtime_raw,
+            relocation_record,
+            archive_root=archive_root,
+            now=now,
+        )
+        assert read_future.result(timeout=10) == "stale_snapshot_refused"
+        relocated = relocation_future.result(timeout=10)
+
+    assert relocated.active_representation.storage_kind == "encrypted_local_cold"
+    retried = raw_store.resolve_active_raw_record(read_record.id)
+    assert retried is not None and retried.ciphertext
+
+
+@pytest.mark.parametrize("ownership_state", ["missing", None, "reserved", "unknown"])
+def test_pg_cold_read_requires_exact_verified_manifest_state(
+    scratch_db_factory,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    ownership_state: str | None,
+) -> None:
+    dsn = scratch_db_factory()
+    _upgrade(dsn, monkeypatch, CURRENT_REPRESENTATION_HEAD)
+    monkeypatch.setenv("DATABASE_URL", dsn)
+    monkeypatch.setenv("STORE_BACKEND", "pg")
+    monkeypatch.delenv("STORE_SCHEMA_AUTOCREATE", raising=False)
+    monkeypatch.setenv("HEIMDAL_RAW_STORE_KEY", _KEY.hex())
+
+    from app.heimdal import raw_store
+
+    now = datetime.now(timezone.utc)
+    archive_root = tmp_path / "mounted-cold"
+    archive_root.mkdir()
+    record = _insert_runtime_raw(
+        f"pg-cold-read-state-{ownership_state}".encode(),
+        grant_ref=f"grant-pg-read-state-{ownership_state}",
+    )
+    archived = _archive_runtime_raw(record, archive_root=archive_root, now=now)
+    manifest_path = archive_root / "manifests" / f"{archived.receipt.representation_id}.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    if ownership_state == "missing":
+        manifest.pop("ownership_state")
+    else:
+        manifest["ownership_state"] = ownership_state
+    manifest_path.write_text(json.dumps(manifest, sort_keys=True) + "\n", encoding="utf-8")
+
+    with pytest.raises(
+        raw_store.RawRepresentationUnavailableError,
+        match="cold representation bytes are unavailable",
+    ):
+        raw_store.resolve_active_raw_record(record.id)
+
+
+@pytest.mark.parametrize("ownership_state", ["missing", None, "unknown"])
+def test_pg_cold_cleanup_rejects_unclassified_manifest_state(
+    scratch_db_factory,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    ownership_state: str | None,
+) -> None:
+    dsn = scratch_db_factory()
+    _upgrade(dsn, monkeypatch, CURRENT_REPRESENTATION_HEAD)
+    monkeypatch.setenv("DATABASE_URL", dsn)
+    monkeypatch.setenv("STORE_BACKEND", "pg")
+    monkeypatch.delenv("STORE_SCHEMA_AUTOCREATE", raising=False)
+    monkeypatch.setenv("HEIMDAL_RAW_STORE_KEY", _KEY.hex())
+
+    from app.heimdal import raw_liveness, raw_store, retention
+
+    now = datetime.now(timezone.utc)
+    archive_root = tmp_path / "mounted-cold"
+    archive_root.mkdir()
+    record = _insert_runtime_raw(
+        f"pg-cold-cleanup-state-{ownership_state}".encode(),
+        grant_ref=f"grant-pg-cleanup-state-{ownership_state}",
+    )
+    archived = _archive_runtime_raw(record, archive_root=archive_root, now=now)
+    object_path = archive_root / "representations" / f"{archived.receipt.representation_id}.bin"
+    manifest_path = archive_root / "manifests" / f"{archived.receipt.representation_id}.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    if ownership_state == "missing":
+        manifest.pop("ownership_state")
+    else:
+        manifest["ownership_state"] = ownership_state
+    manifest_path.write_text(json.dumps(manifest, sort_keys=True) + "\n", encoding="utf-8")
+
+    with pytest.raises(raw_store.RawRepresentationDeletionError, match="manifest ownership"):
+        raw_liveness.governed_delete_raw_record(
+            record_id=record.id,
+            reason=retention.REASON_HARD_RETENTION_BOUND,
+            retention_window_days=30,
+            deleted_at=now,
+        )
+
+    assert object_path.exists()
+    assert manifest_path.exists()
+    pending = next(
+        receipt
+        for receipt in raw_liveness.all_deletion_receipts()
+        if receipt.record_id == record.id
+    )
+    assert pending.payload["cold_cleanup_location_refs"]
+
+
+def test_pg_reserved_manifest_refuses_activation_but_authorizes_exact_cleanup(
+    scratch_db_factory,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    dsn = scratch_db_factory()
+    _upgrade(dsn, monkeypatch, CURRENT_REPRESENTATION_HEAD)
+    monkeypatch.setenv("DATABASE_URL", dsn)
+    monkeypatch.setenv("STORE_BACKEND", "pg")
+    monkeypatch.delenv("STORE_SCHEMA_AUTOCREATE", raising=False)
+    monkeypatch.setenv("HEIMDAL_RAW_STORE_KEY", _KEY.hex())
+
+    from app.heimdal import local_archive, raw_liveness, raw_store, retention
+    from app.ops.heimdal_cold_volume import (
+        _ARCHIVE_VOLUME_READY_ISSUER,
+        _issue_archive_volume_ready,
+    )
+
+    now = datetime.now(timezone.utc)
+    archive_root = tmp_path / "mounted-cold"
+    archive_root.mkdir()
+    archive_ref = "pg-har05-archive"
+    proof = _issue_archive_volume_ready(
+        archive_ref,
+        archive_root,
+        _issuer=_ARCHIVE_VOLUME_READY_ISSUER,
+    )
+    record = _insert_runtime_raw(
+        b"pg-reserved-activation-boundary",
+        grant_ref="grant-pg-reserved-activation",
+    )
+    monkeypatch.setattr(
+        local_archive,
+        "_manifest_payload",
+        local_archive._reserved_ownership_manifest_payload,  # noqa: SLF001
+    )
+
+    with pytest.raises(local_archive.ArchiveDegradedError, match="archive_relocation_failed"):
+        local_archive.relocate_raw_record(
+            replace(record, ingested_at=now - timedelta(days=8)),
+            archive_root=archive_root,
+            archive_ref=archive_ref,
+            now=now,
+            retention_window_days=30,
+            key=_KEY,
+            volume_ready=lambda: proof,
+        )
+
+    representations = raw_store.all_raw_representations(record.id)
+    hot = next(item for item in representations if item.storage_kind == "postgres_hot")
+    reserved = next(
+        item for item in representations if item.storage_kind == "encrypted_local_cold"
+    )
+    manifest_path = archive_root / "manifests" / f"{reserved.id}.json"
+    object_path = archive_root / "representations" / f"{reserved.id}.bin"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert manifest["ownership_state"] == "reserved"
+    assert hot.active is True and reserved.active is False
+
+    deleted = raw_liveness.governed_delete_raw_record(
+        record_id=record.id,
+        reason=retention.REASON_HARD_RETENTION_BOUND,
+        retention_window_days=30,
+        deleted_at=now,
+    )
+    assert deleted.outcome == "deleted"
+    assert not object_path.exists()
+    assert not manifest_path.exists()
+
+
+@pytest.mark.parametrize(
+    "crash_stage",
+    [
+        "after_object_unlink",
+        "after_object_directory_fsync",
+        "after_manifest_unlink",
+        "after_manifest_directory_fsync",
+    ],
+)
+def test_pg_cold_cleanup_crash_cuts_restart_idempotently_before_queue_progress(
+    scratch_db_factory,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    crash_stage: str,
+) -> None:
+    dsn = scratch_db_factory()
+    _upgrade(dsn, monkeypatch, CURRENT_REPRESENTATION_HEAD)
+    monkeypatch.setenv("DATABASE_URL", dsn)
+    monkeypatch.setenv("STORE_BACKEND", "pg")
+    monkeypatch.delenv("STORE_SCHEMA_AUTOCREATE", raising=False)
+    monkeypatch.setenv("HEIMDAL_RAW_STORE_KEY", _KEY.hex())
+
+    from app.heimdal import raw_liveness, raw_store, retention
+    from app.ops.heimdal_cold_volume import (
+        _ARCHIVE_VOLUME_READY_ISSUER,
+        _issue_archive_volume_ready,
+    )
+
+    now = datetime.now(timezone.utc)
+    archive_root = tmp_path / "mounted-cold"
+    archive_root.mkdir()
+    record = _insert_runtime_raw(
+        f"pg-cold-cleanup-crash-{crash_stage}".encode(),
+        grant_ref=f"grant-pg-cleanup-crash-{crash_stage}",
+    )
+    archived = _archive_runtime_raw(record, archive_root=archive_root, now=now)
+    object_path = archive_root / "representations" / f"{archived.receipt.representation_id}.bin"
+    manifest_path = archive_root / "manifests" / f"{archived.receipt.representation_id}.json"
+    stages: list[str] = []
+
+    def crash_at_cut(stage: str, _path: Path) -> None:
+        stages.append(stage)
+        if stage == crash_stage:
+            raise raw_store.RawRepresentationDeletionError(f"crash cut {stage}")
+
+    monkeypatch.setattr(raw_store, "_cold_delete_stage_hook", crash_at_cut)
+    with pytest.raises(raw_store.RawRepresentationDeletionError, match="crash cut"):
+        raw_liveness.governed_delete_raw_record(
+            record_id=record.id,
+            reason=retention.REASON_HARD_RETENTION_BOUND,
+            retention_window_days=30,
+            deleted_at=now,
+        )
+
+    pending = next(
+        receipt
+        for receipt in raw_liveness.all_deletion_receipts()
+        if receipt.record_id == record.id
+    )
+    assert pending.payload["cold_cleanup_location_refs"]
+    assert crash_stage in stages
+    assert not object_path.exists()
+    assert manifest_path.exists() is (
+        crash_stage in {"after_object_unlink", "after_object_directory_fsync"}
+    )
+
+    raw_store.revoke_cold_archive_binding()
+    raw_store._PgRawStore()  # noqa: SLF001
+    proof = _issue_archive_volume_ready(
+        "pg-har05-archive",
+        archive_root,
+        _issuer=_ARCHIVE_VOLUME_READY_ISSUER,
+    )
+    raw_store.configure_cold_archive_root(
+        archive_root,
+        verified_volume=proof,
+        expected_archive_ref="pg-har05-archive",
+    )
+    monkeypatch.setattr(raw_store, "_cold_delete_stage_hook", lambda _stage, _path: None)
+    retried = raw_liveness.governed_delete_raw_record(
+        record_id=record.id,
+        reason=retention.REASON_HARD_RETENTION_BOUND,
+        retention_window_days=30,
+        deleted_at=now,
+    )
+
+    assert retried.outcome == "already_erased"
+    reconciled = next(
+        receipt
+        for receipt in raw_liveness.all_deletion_receipts()
+        if receipt.record_id == record.id
+    )
+    assert reconciled.payload["cold_cleanup_location_refs"] == []
+    assert not object_path.exists()
+    assert not manifest_path.exists()

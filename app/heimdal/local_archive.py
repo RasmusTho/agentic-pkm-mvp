@@ -368,6 +368,7 @@ def relocate_raw_record(
 
         try:
             with raw_store.cold_archive_mutation_lock(archive_root, verified_volume=volume_proof):
+                _relocation_stage_hook("after_archive_lock")
                 raw_store.register_cold_location(
                     location_ref,
                     object_path,
