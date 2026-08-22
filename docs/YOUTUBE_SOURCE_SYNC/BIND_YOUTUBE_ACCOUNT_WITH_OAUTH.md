@@ -115,6 +115,24 @@ non-current-user-owned/non-`0700` private directories, and non-current-user-owne
 files before credential or admission effects. The shipped sticky `1777` channel scratch mount is a
 container/bootstrap boundary only; credential and admission state stays in its private child.
 
+When `YOUTUBE_TOKEN_STORE_PATH` is unset, the first dev-channel default-bound open after an upgrade
+preflights the former process-CWD-relative
+`runtime/knowledge_acquisition/youtube_token_store.enc` locations associated with the launch CWD,
+canonical checkout, and registered linked worktrees before reading status or refreshing credentials.
+The former producer was dev-only, so test/prod never claim or delete that unscoped legacy state;
+multiple surviving legacy locations fail loud as ambiguous. A safe current-user-owned legacy ciphertext file is
+copied byte-for-byte through a mode-`0600`, fsynced stage into the active channel's mode-`0700`
+private directory whose parent link is also fsynced, atomically published without overwriting an existing target, re-read and
+verified, and only then removed. An interruption leaves the legacy file, an equal durable target,
+or both; retry converges those states. Divergent legacy/new ciphertext, symlinks, unsafe ownership
+or writable peer permissions fail loud without deleting any authority or pre-existing stage. Explicit path overrides
+remain explicit and never trigger this default-path migration. Migration validates encrypted
+structure only and never decrypts, rewrites, or falls back to plaintext. A channel runtime authority
+whose default target would alias the unscoped legacy path is refused in every channel; wrong-type
+leaves such as FIFOs are checked without a blocking open and fail loud both during default
+construction and through ordinary status/refresh reads. Alias identity includes physical inode,
+canonical, case-folded, and Unicode-normalized path spellings rather than lexical equality alone.
+
 V1 admits one connect or reconnect transition at a time across processes and permits at most one
 durable YouTube account binding. Admission happens before provider egress and remains held through
 token and binding persistence. Tokens remain the first durable write, but only a matching durable

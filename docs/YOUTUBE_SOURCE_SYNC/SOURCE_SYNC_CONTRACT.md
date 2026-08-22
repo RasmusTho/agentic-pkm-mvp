@@ -245,6 +245,15 @@ Per `docs/SECURITY.md`, ADR-0046 (zero secrets in the public tree), the private-
   binding (default under the channel runtime dir; never the vault, never the repo), key from
   `YOUTUBE_TOKEN_STORE_KEY` (32 bytes, same provisioning boundary). Missing key with an existing
   binding ⇒ `auth_key_missing` degraded state — never a plaintext fallback (fail closed).
+- A default-path upgrade migrates the dev-only former process-CWD-relative encrypted store into the
+  dev channel root before status/refresh reads. Discovery covers the launch CWD, canonical checkout,
+  and registered linked worktrees; test/prod never claim the unscoped legacy authority. The migration
+  is permission-checked and fsyncs both file content and the target directory's parent link,
+  atomically published without replacement, byte-verified before legacy deletion, and retry-safe
+  across interrupted equal dual states. Multiple legacy locations, divergent or unsafe states fail loud and preserve every
+  encrypted copy; a default target that aliases the unscoped legacy path is refused in every
+  channel using physical and normalized path identity, and an explicit `YOUTUBE_TOKEN_STORE_PATH`
+  is never auto-migrated. Wrong-type leaves fail without blocking migration, status, or refresh.
 - Redaction: all sync surfaces route through redaction-aware serialization; field names carry
   `token`/`secret`/`credential` tokens so existing key-name redactors match. Exception text from
   the OAuth/HTTP layer is sanitized (status + class, never response bodies that may echo tokens).
