@@ -426,6 +426,8 @@ _PUBLIC_VERIFICATION_CYCLE_OPTIONAL_KEYS = frozenset({"containment"})
 
 def _public_verification_cycle_receipt(
     receipt: Mapping[str, object],
+    *,
+    containment_receipt_required: bool = False,
 ) -> dict[str, object]:
     """Return only the exact, secret-free BCP-05 receipt contract."""
 
@@ -437,6 +439,7 @@ def _public_verification_cycle_receipt(
         )
         or receipt.get("contract") != "bcp05_demerzel_cycle.v1"
         or receipt.get("raw_secret_count") != 0
+        or (containment_receipt_required and "containment" not in receipt)
         or not isinstance(receipt.get("readback"), Mapping)
         or not isinstance(receipt.get("merge_authority"), Mapping)
     ):
@@ -784,6 +787,7 @@ def _build_host_fenced_verification_cycle(
             consumer,
             executor,
             holder=holder,
+            containment_receipt_required=containment_receipt_required,
         )
     except Exception:
         repository_authority.close()
@@ -878,7 +882,13 @@ def _cmd_verification_cycle(
             1,
         )
     try:
-        public_receipt = _public_verification_cycle_receipt(receipt)
+        public_receipt = _public_verification_cycle_receipt(
+            receipt,
+            containment_receipt_required=(
+                args.containment_profile
+                == LINUX_SYSTEMD_CGROUP_V2_SCOPE_PROFILE
+            ),
+        )
     except Exception as exc:
         return _emit_payload(
             {

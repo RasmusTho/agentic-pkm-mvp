@@ -153,6 +153,7 @@ def test_host_cycle_projects_linux_containment_into_durable_receipt() -> None:
             ledger, outbox, RepositoryAuthority(), Credentials()
         ),
         holder="verification-host",
+        containment_receipt_required=True,
     )
 
     receipt = runtime.run_dry_cycle(request())
@@ -166,6 +167,53 @@ def test_host_cycle_projects_linux_containment_into_durable_receipt() -> None:
     ]
     assert terminal["containment"] == containment_receipt
     assert runtime.recover_dry_cycle(str(receipt["run_id"])) == receipt
+
+    terminal.pop("containment")
+    with pytest.raises(ValueError, match="receipt is malformed"):
+        runtime.recover_dry_cycle(str(receipt["run_id"]))
+    terminal["containment"] = {
+        **containment_receipt,
+        "scope_identity": f"yggdrasil-verification-{'d' * 24}.scope",
+    }
+    with pytest.raises(ValueError, match="receipt is malformed"):
+        runtime.recover_dry_cycle(str(receipt["run_id"]))
+
+
+def test_linux_cycle_requires_containment_in_merge_ready_evidence() -> None:
+    api = FakeBuilderOpsClient()
+    outbox = FakeVerificationOutbox(api)
+    ledger = BuilderOpsVerificationLedger(
+        api, repository=REPO, effect_outbox=outbox
+    )
+    consumer = VerificationConsumer(
+        ledger,
+        Truth(eligible_pr(), GREEN),
+        Auth(),
+        VerifiedLauncher(),
+        holder="verification-host",
+    )
+    runtime = HostFencedVerificationCycle(
+        ledger,
+        consumer,
+        VerificationMergeExecutor(
+            ledger, outbox, RepositoryAuthority(), Credentials()
+        ),
+        holder="verification-host",
+        containment_receipt_required=True,
+    )
+
+    with pytest.raises(
+        ValueError, match="Linux containment evidence is unavailable"
+    ):
+        runtime.run_dry_cycle(request())
+
+    run_id = next(iter(api.tasks))
+    marker = ledger.merge_ready_receipt(run_id)
+    assert marker is not None
+    assert "containment" not in marker
+    recovered = ledger.get(run_id)
+    assert recovered is not None
+    assert recovered.status == "running"
 
 
 def test_containment_receipt_validator_rejects_non_allowlisted_evidence() -> None:

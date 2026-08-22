@@ -198,6 +198,7 @@ class HostFencedVerificationCycle:
         merge_executor: VerificationMergeExecutor,
         *,
         holder: str,
+        containment_receipt_required: bool = False,
     ) -> None:
         if consumer.ledger is not ledger or not consumer.host_fenced_merge:
             raise ValueError(
@@ -218,6 +219,7 @@ class HostFencedVerificationCycle:
         self.consumer = consumer
         self.merge_executor = merge_executor
         self.holder = holder
+        self.containment_receipt_required = containment_receipt_required
 
     def run_dry_cycle(
         self, request: Mapping[str, object]
@@ -379,6 +381,13 @@ class HostFencedVerificationCycle:
         merge_ready = self.ledger.merge_ready_receipt(run_id)
         if not isinstance(merge_ready, Mapping):
             raise ValueError("verification merge readiness is unavailable")
+        if (
+            self.containment_receipt_required
+            and "containment" not in merge_ready
+        ):
+            raise ValueError(
+                "verification Linux containment evidence is unavailable"
+            )
         if "containment" in merge_ready:
             receipt["containment"] = validated_containment_receipt_shape(
                 merge_ready["containment"]
@@ -469,6 +478,13 @@ class HostFencedVerificationCycle:
             or dict(authority) != expected_authority
             or receipt.get("raw_secret_count") != 0
         ):
+            raise ValueError("verification cycle receipt is malformed")
+        if (
+            self.containment_receipt_required
+            and "containment" not in marker
+        ) or (("containment" in marker) != ("containment" in receipt)):
+            raise ValueError("verification cycle receipt is malformed")
+        if marker.get("containment") != receipt.get("containment"):
             raise ValueError("verification cycle receipt is malformed")
         return validated_cycle_receipt_shape(receipt)
 

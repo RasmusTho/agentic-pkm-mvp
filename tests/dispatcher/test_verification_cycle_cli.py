@@ -235,12 +235,20 @@ def test_cycle_command_composes_api_outbox_and_host_runtime(
     monkeypatch.setattr(
         verification_runtime,
         "HostFencedVerificationCycle",
-        lambda actual_ledger, actual_consumer, actual_executor, *, holder: (
+        lambda actual_ledger,
+        actual_consumer,
+        actual_executor,
+        *,
+        holder,
+        containment_receipt_required: (
             seen.update(
                 runtime_ledger=actual_ledger,
                 consumer=actual_consumer,
                 executor=actual_executor,
                 runtime_holder=holder,
+                runtime_containment_receipt_required=(
+                    containment_receipt_required
+                ),
             )
             or runtime
         ),
@@ -272,6 +280,7 @@ def test_cycle_command_composes_api_outbox_and_host_runtime(
     assert seen["read_token"] == "github-secret"
     assert seen["consumer_holder"] == "verification-host"
     assert seen["runtime_holder"] == "verification-host"
+    assert seen["runtime_containment_receipt_required"] is False
 
 
 def test_exact_head_launcher_supplies_immutable_review_patch(
@@ -581,6 +590,12 @@ def test_cycle_command_output_is_secret_free_and_fail_closed(
     }
     with pytest.raises(ValueError, match="containment receipt is malformed"):
         dispatcher_cli._public_verification_cycle_receipt(unsafe_containment)
+
+    with pytest.raises(ValueError, match="receipt is malformed"):
+        dispatcher_cli._public_verification_cycle_receipt(
+            _Runtime._receipt("vrun-test"),
+            containment_receipt_required=True,
+        )
 
 
 def test_cycle_command_rejects_non_installed_main_worktree(
