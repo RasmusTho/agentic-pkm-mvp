@@ -68,6 +68,8 @@ def test_location_cannot_mint_identity_or_access_authority() -> None:
 
     with pytest.raises(ValueError, match="location text"):
         OpaqueReference("heimraw", "vault/Notes/Archive.md")
+    with pytest.raises(ValueError, match="opaque reference token"):
+        OpaqueReference("heimraw", "Archive.md")
 
 
 def test_namespaced_opaque_handles_remain_valid_without_string_parsing() -> None:

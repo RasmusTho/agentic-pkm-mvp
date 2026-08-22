@@ -99,7 +99,7 @@ class LivenessState(str, Enum):
 
 
 _OPAQUE_NAMESPACE = re.compile(r"^[a-z][a-z0-9_-]*$")
-_OPAQUE_TOKEN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+_OPAQUE_TOKEN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
 
 
 def _require_token(value: str, field_name: str) -> str:

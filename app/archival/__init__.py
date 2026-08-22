@@ -10,6 +10,7 @@ from app.archival.contracts import (
     DurabilityClass,
     Generation,
     OwnerAuthority,
+    OpaqueReference,
     PolicyProfile,
     RepresentationRef,
 )
@@ -24,6 +25,7 @@ __all__ = [
     "DurabilityClass",
     "Generation",
     "OwnerAuthority",
+    "OpaqueReference",
     "PolicyProfile",
     "RepresentationRef",
 ]
