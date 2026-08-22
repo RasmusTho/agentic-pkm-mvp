@@ -726,9 +726,12 @@ def receipt_answer(
             [(receipt.raw_ref, receipt.content_sha256)]
         )
     projection = liveness_by_raw_ref[receipt.raw_ref]
+    if projection.outcome == "erasure_pending":
+        raise raw_liveness.RawLivenessUnavailableError(
+            "raw erasure is pending durable cold cleanup; no public receipt state is asserted"
+        )
     projected_outcome = {
         "active": "admitted",
-        "erasure_pending": "erasure_pending",
         "erased": "erased",
     }[projection.outcome]
     answer: Dict[str, Any] = {

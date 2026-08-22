@@ -25,7 +25,10 @@ What this module builds (build-now per §11#13):
   :func:`enforce_consent_revocation` selects raw generations by their stamped
   ``consent.grant_ref`` and routes them through that same deletion primitive.
   Cold cleanup remains loud and retryable, and a response lease leaves a
-  durable retirement claim instead of a false completion.
+  durable retirement claim instead of a false completion. The scheduled hard-
+  retention entrypoint replays every durable revocation row before age-based
+  work, and every deletion reason carries a redacted grant digest so cleanup
+  remains correlated after raw identity removal.
 - **Markdown-first policy** (ADR-0049 §2): the retention window is read from
   `_heimdal/settings.md` (`app.heimdal.settings_notes.SETTINGS`,
   `retention_window_days`, A14 substrate) -- never a hidden store or an
@@ -55,7 +58,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-import hashlib
 from pathlib import Path
 from typing import Callable, List, Optional
 
@@ -124,7 +126,7 @@ class ConsentRevocationErasureReceipt:
 
 def _reconcile_pending_cold_cleanup(
     *,
-    fail_loud: bool = False,
+    fail_loud: bool,
     receipt_filter: Optional[Callable[[DeletionReceipt], bool]] = None,
 ) -> None:
     """Retry durable post-commit cold cleanup after scanning active records.
@@ -168,7 +170,7 @@ def enforce_consent_revocation(
     if not isinstance(grant_ref, str) or not grant_ref.strip():
         raise ValueError("grant_ref must be a non-empty string")
     reference_time = revoked_at or datetime.now(timezone.utc)
-    grant_digest = hashlib.sha256(grant_ref.encode("utf-8")).hexdigest()
+    grant_digest = raw_liveness.consent_grant_digest(grant_ref)
     deletions: List[DeletionReceipt] = []
     pending_count = 0
     for record_id in raw_store.raw_record_ids_by_consent_grant(grant_ref):
@@ -177,7 +179,6 @@ def enforce_consent_revocation(
             reason=REASON_CONSENT_REVOKED,
             retention_window_days=0,
             deleted_at=reference_time,
-            payload={"consent_grant_digest": grant_digest},
         )
         if result.outcome == "deleted":
             assert result.receipt is not None
@@ -190,9 +191,14 @@ def enforce_consent_revocation(
     # empty; failures stay loud and the same call is safe to retry.
     _reconcile_pending_cold_cleanup(
         fail_loud=True,
+        # Current receipts carry a redacted grant digest regardless of their
+        # deletion reason. Legacy pending receipts have no digest, so they are
+        # conservatively reconciled rather than silently excluded; tagged
+        # receipts for another grant remain isolated.
         receipt_filter=lambda receipt: (
-            receipt.reason == REASON_CONSENT_REVOKED
-            and receipt.payload.get("consent_grant_digest") == grant_digest
+            receipt.payload.get(raw_liveness.CONSENT_GRANT_DIGEST_PAYLOAD_KEY) is None
+            or receipt.payload.get(raw_liveness.CONSENT_GRANT_DIGEST_PAYLOAD_KEY)
+            == grant_digest
         ),
     )
     if pending_count:
@@ -334,6 +340,13 @@ def enforce_hard_retention_bound(
     reference_time = now if now is not None else datetime.now(timezone.utc)
     cutoff = reference_time - timedelta(days=window_days)
 
+    # The append-only revocation row is durable replay authority. Consume it
+    # before ordinary age selection so a crash after revocation commit cannot
+    # strand active raw state until another operator action.
+    from app.heimdal.consent_ledger import reconcile_revoked_consent_erasure
+
+    reconcile_revoked_consent_erasure()
+
     deletions: List[DeletionReceipt] = []
     for record in raw_store.all_raw_records():
         ingested_at = record.ingested_at
@@ -361,7 +374,7 @@ def enforce_hard_retention_bound(
     # liveness fence as response-lease issuance; consuming it first would wait
     # behind an in-flight response before the retention writer could announce
     # its own fence entry, inverting the producer/retention handshake.
-    _reconcile_pending_cold_cleanup()
+    _reconcile_pending_cold_cleanup(fail_loud=True)
 
     if record_last_enforced:
         apply_agent_update(

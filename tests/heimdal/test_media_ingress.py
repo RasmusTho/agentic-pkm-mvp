@@ -688,6 +688,37 @@ def test_receipt_query_reports_raw_state_lookup_failure_as_unavailable(
     assert response.json()["detail"]["trace_id"]
 
 
+def test_pending_cold_erasure_is_public_503_not_a_new_receipt_outcome(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    media = b"pending-cold-erasure-public-contract"
+    sidecar = _sidecar(media)
+    assert _post_media(client, media, sidecar).status_code == 200
+    record = all_raw_records()[0]
+    generation = raw_liveness._MEMORY.generations_by_record[record.id]  # noqa: SLF001
+
+    def pending(
+        requests: set[tuple[str, str]], *, now: datetime | None = None
+    ) -> dict[str, raw_liveness.RawLivenessProjection]:
+        del now
+        return {
+            raw_ref: raw_liveness.RawLivenessProjection(
+                outcome="erasure_pending",
+                generation=generation,
+            )
+            for raw_ref, _content_identity in requests
+        }
+
+    monkeypatch.setattr(raw_liveness, "project_with_response_leases", pending)
+
+    query = _get_receipts(client, sidecar["capture_id"])
+    replay = _post_media(client, media, sidecar)
+    for response in (query, replay):
+        assert response.status_code == 503, response.text
+        assert response.json()["detail"]["error"] == "raw_liveness_unavailable"
+        assert response.json()["detail"]["state"] == "unavailable"
+
+
 def test_receipt_identity_includes_the_capture_id(client: TestClient) -> None:
     """INV-CDLM-3's identity is the *pair*, so identical bytes do not share a receipt.
 

@@ -66,8 +66,12 @@ already enforces irreversible deletion.
   missing receipt prevents hot retirement and surfaces health/debt evidence.
 - **INV-HAR-4 — bounded retention deletes all raw copies.** Consent revocation and configured hard
   retention traverse hot and cold locations. Directory deletions become durable before the opaque
-  cleanup queue advances, and no public receipt can mutate that authority. A deletion receipt
-  identifies record and locations without disclosing audio paths or content.
+  cleanup queue advances, and no public receipt can mutate that authority. Every deletion reason
+  preserves a redacted consent-grant correlation; append-only revocation rows are replayed by the
+  scheduled retention path after a restart. Repeated cleanup failure raises before successful
+  enforcement/freshness output, while public media receipt recovery remains on its existing 503
+  unavailable contract until internal cleanup converges. A deletion receipt identifies record and
+  locations without disclosing audio paths or content.
 - **INV-HAR-5 — restore remains gated.** Cold archive access reuses the raw-read allowlist and receipt
   discipline and binds proof to the exact representation read under the shared fence; mounting an
   archive does not make raw audio generally readable.

@@ -744,6 +744,16 @@ class _MemoryRawStore:
         with self._lock:
             return [row.id for row in self._rows if row.consent.get("grant_ref") == grant_ref]
 
+    def consent_grant_ref(self, record_id: str) -> Optional[str]:
+        """Resolve only the consent grant metadata for one raw identity."""
+
+        with self._lock:
+            identity = next((row for row in self._rows if row.id == record_id), None)
+            if identity is None:
+                return None
+            grant_ref = identity.consent.get("grant_ref")
+            return str(grant_ref) if isinstance(grant_ref, str) and grant_ref else None
+
     def archive_eligible_hot_rows(
         self,
         *,
@@ -1658,6 +1668,24 @@ class _PgRawStore:
         finally:
             conn.close()
 
+    def consent_grant_ref(self, record_id: str) -> Optional[str]:
+        """Resolve only the consent grant metadata for one raw identity."""
+
+        conn = _pg_connect()
+        try:
+            _assert_pg_schema(conn)
+            cur = conn.cursor()
+            cur.execute(
+                f"SELECT consent->>'grant_ref' FROM {_TABLE} WHERE id = %s",
+                (record_id,),
+            )
+            row = cur.fetchone()
+            if row is None or not row[0]:
+                return None
+            return str(row[0])
+        finally:
+            conn.close()
+
     def archive_eligible_hot_rows(
         self,
         *,
@@ -2187,6 +2215,14 @@ def raw_record_ids_by_consent_grant(grant_ref: str) -> List[str]:
     return _backend().record_ids_by_consent_grant(grant_ref)
 
 
+def raw_record_consent_grant_ref(record_id: str) -> Optional[str]:
+    """Return one raw identity's grant ref without reading any representation."""
+
+    if not isinstance(record_id, str) or not record_id.strip():
+        raise ValueError("record_id must be a non-empty string")
+    return _backend().consent_grant_ref(record_id)
+
+
 def register_raw_representation(
     *,
     record_id: str,
@@ -2343,5 +2379,6 @@ __all__ = [
     "reset_memory_raw_store",
     "resolve_active_raw_record",
     "raw_record_ids_by_consent_grant",
+    "raw_record_consent_grant_ref",
     "resolve_raw_store_key",
 ]

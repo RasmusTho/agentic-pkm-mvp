@@ -365,9 +365,14 @@ Contract:
   `app.heimdal.retention.enforce_consent_revocation` for every raw generation
   stamped with that `grant_ref`. The shared liveness fence, deletion receipt,
   tombstone, all-representation delete, and durable cold-cleanup queue are the
-  same mechanism used by hard retention. A response lease or cold-delete
-  failure is loud and retryable; pending cold bytes project as
-  `erasure_pending`, never `erased`.
+  same mechanism used by hard retention. The append-only row remains durable
+  replay authority: each scheduled hard-retention run replays revocations
+  before age-based work, covering a process loss after append but before
+  immediate propagation. Every deletion reason stamps a redacted grant digest;
+  current unrelated grants stay isolated while untagged historical queues are
+  conservatively retried. A response lease or cold-delete failure is loud and
+  retryable; pending cold bytes project internally as `erasure_pending`, never
+  `erased`.
 - **Out of scope for this slice:** the capture adapter itself (§11#5), ASR,
   third-party voice detection/degradation runtime (§6.3), place/session
   grant runtime (contract-stub only — `grant_consent(basis=...)` accepts
@@ -540,12 +545,16 @@ Contract:
   deletes every registered database representation before removing identity.
   Cold object/manifest cleanup follows under the archive mutation lock from an
   opaque durable queue in that receipt. A cleanup failure raises and preserves
-  the remaining queue for retry; liveness and media-receipt projections remain
-  `erasure_pending` until the queue is empty. Object and manifest directories
-  are fsynced before the durable queue advances, and public memory receipts are
-  detached copies rather than mutable queue authority. Consent revocation uses
-  a metadata-only grant selector and reuses this same primitive rather than
-  materializing unrelated cold bytes or deleting a single location.
+  the remaining queue for retry; internal liveness remains `erasure_pending`
+  until the queue is empty, while the public media-receipt API returns its
+  existing fail-closed 503 unavailable state instead of adding an outcome.
+  Scheduled retries raise before advancing enforcement freshness when cleanup
+  fails again. Object and manifest directories are fsynced before the durable
+  queue advances, and public memory receipts are detached copies rather than
+  mutable queue authority. Consent revocation uses a metadata-only grant
+  selector and redacted digest correlation across deletion reasons, and reuses
+  this same primitive rather than materializing unrelated cold bytes or deleting
+  a single location.
 - **The one governed exception to append-only (D-RETENTION).**
   `app.heimdal.raw_liveness.governed_delete_raw_record` is the only runtime
   path that can remove a raw identity. The Postgres trigger
@@ -606,6 +615,10 @@ registry rows and raw identity under the shared generation fence, then drains
 the durable opaque cold-cleanup queue under the archive mutation lock. Object
 or manifest deletion failure is loud and retryable; while any queue entry
 remains, receipt projection is `erasure_pending`, not terminal `erased`.
+That projection is internal lifecycle truth; the public media receipt boundary
+returns 503 unavailable until cleanup completes. Durable revocation rows are
+replayed by the scheduled retention entrypoint, and repeated scheduled cleanup
+failure raises before success or freshness writeback.
 
 This is code-path truth, not parent capability acceptance. #3842 still
 requires the redacted real dev/test channel receipt before local archive is

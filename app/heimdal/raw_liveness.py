@@ -18,6 +18,7 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 import copy
+import hashlib
 import json
 import os
 import re
@@ -38,6 +39,7 @@ _RAW_REF_PREFIX = "heimraw:"
 _RETENTION_GUARD_SETTING = "app.heimdal_retention_bypass"
 _RETENTION_RECONCILE_GUARD_SETTING = "app.heimdal_retention_reconcile"
 _COLD_CLEANUP_PAYLOAD_KEY = "cold_cleanup_location_refs"
+CONSENT_GRANT_DIGEST_PAYLOAD_KEY = "consent_grant_digest"
 
 RESPONSE_LEASE_SECONDS = 30
 
@@ -244,6 +246,25 @@ def _iso_timestamp(value: datetime) -> str:
 def _assert_new_deletion_payload(payload: Mapping[str, Any]) -> None:
     if _COLD_CLEANUP_PAYLOAD_KEY in payload:
         raise ValueError("cold cleanup queue is reserved for governed retention authority")
+    if CONSENT_GRANT_DIGEST_PAYLOAD_KEY in payload:
+        raise ValueError("consent grant correlation is reserved for governed retention authority")
+
+
+def consent_grant_digest(grant_ref: str) -> str:
+    """Return the content-redacted durable correlation for one consent grant."""
+
+    if not isinstance(grant_ref, str) or not grant_ref.strip():
+        raise ValueError("grant_ref must be a non-empty string")
+    return hashlib.sha256(grant_ref.encode("utf-8")).hexdigest()
+
+
+def _governed_deletion_payload(
+    payload: Mapping[str, Any], *, grant_ref: Optional[str]
+) -> Dict[str, Any]:
+    governed = dict(payload)
+    if grant_ref:
+        governed[CONSENT_GRANT_DIGEST_PAYLOAD_KEY] = consent_grant_digest(grant_ref)
+    return governed
 
 
 def _record_id_from_raw_ref(raw_ref: str) -> str:
@@ -1519,6 +1540,10 @@ def _governed_delete_memory(
             raise RawLivenessUnavailableError(
                 "untombstoned retention target is missing its active representation"
             )
+        governed_payload = _governed_deletion_payload(
+            payload,
+            grant_ref=raw_store.raw_record_consent_grant_ref(record_id),
+        )
         reference_time = _as_utc(deleted_at)
         claim_was_new = record_id not in _MEMORY.retention_claims_by_record
         claim = _memory_claim_retention_locked(
@@ -1526,7 +1551,7 @@ def _governed_delete_memory(
             reason=reason,
             retention_window_days=retention_window_days,
             claimed_at=reference_time,
-            payload=payload,
+            payload=governed_payload,
         )
         if reference_time < claim.drain_after:
             return GovernedDeletionResult(outcome="lease_valid")
@@ -1537,7 +1562,7 @@ def _governed_delete_memory(
             reason=reason,
             retention_window_days=retention_window_days,
             deleted_at=reference_time,
-            payload=payload,
+            payload=governed_payload,
             sequence=len(_MEMORY.deletion_receipts),
         )
         tombstone = RawDeletionTombstone(
@@ -1686,7 +1711,12 @@ def _governed_delete_pg(
         raw_store._assert_pg_schema(conn)  # noqa: SLF001
         cur = conn.cursor()
         cur.execute(
-            f"SELECT content_identity FROM {_GENERATION_TABLE} WHERE record_id = %s",
+            f"""
+            SELECT g.content_identity, r.consent->>'grant_ref'
+            FROM {_GENERATION_TABLE} AS g
+            LEFT JOIN heimdal_raw_record AS r ON r.id = g.record_id
+            WHERE g.record_id = %s
+            """,
             (record_id,),
         )
         identity_row = cur.fetchone()
@@ -1722,6 +1752,10 @@ def _governed_delete_pg(
             raise RawLivenessUnavailableError(
                 "untombstoned retention target is missing its active representation"
             )
+        governed_payload = _governed_deletion_payload(
+            payload,
+            grant_ref=str(identity_row[1]) if identity_row[1] else None,
+        )
         reference_time = _as_utc(deleted_at)
         claim = _load_pg_retention_claim(cur, record_id=record_id)
         if claim is None:
@@ -1752,7 +1786,7 @@ def _governed_delete_pg(
                     retention_window_days,
                     reference_time,
                     drain_after,
-                    json.dumps(dict(payload)),
+                    json.dumps(governed_payload),
                 ),
             )
             claim_row = cur.fetchone()
@@ -1794,7 +1828,7 @@ def _governed_delete_pg(
                 "governed all-copy deletion failed; no identity was removed"
             ) from exc
 
-        receipt_payload = dict(payload)
+        receipt_payload = dict(governed_payload)
         if cold_location_refs:
             receipt_payload["cold_cleanup_location_refs"] = cold_location_refs
         receipt_id = str(uuid4())
@@ -2024,6 +2058,7 @@ _retention_fence_hook: Callable[[str], None] = lambda _record_id: None
 
 
 __all__ = [
+    "CONSENT_GRANT_DIGEST_PAYLOAD_KEY",
     "DeletionReceipt",
     "GovernedDeletionResult",
     "RESPONSE_LEASE_SECONDS",
@@ -2037,6 +2072,7 @@ __all__ = [
     "all_deletion_receipts",
     "all_deletion_tombstones",
     "all_retention_claims",
+    "consent_grant_digest",
     "governed_delete_raw_record",
     "issue_response_lease",
     "project_with_response_leases",

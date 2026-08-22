@@ -171,6 +171,9 @@ and will not erase that generation while the lease is valid. Once retention clai
 the claim records a finite lease-drain frontier and subsequent polling cannot renew or reopen a
 lease; PostgreSQL enforces that boundary at the lease write trigger as well. Raw absence without a governed
 tombstone is `503 receipt_store_unavailable`/`raw_liveness_unavailable`, never `erased`.
+The same fail-closed `503 raw_liveness_unavailable` applies while governed DB erasure has committed
+but durable local cold-object/manifest cleanup is still pending; the public API does not add a fourth
+receipt outcome or expose internal cleanup state.
 
 Error contract (a client must branch on `error`; never retry blindly):
 

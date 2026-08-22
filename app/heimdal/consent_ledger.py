@@ -61,7 +61,10 @@ Contract:
   receipted all-copy deletion primitive as hard retention for every raw
   generation stamped with that ``grant_ref``. Pending response leases and
   cold cleanup fail loud and remain retryable; the call does not report
-  completion while a cold object or manifest remains.
+  completion while a cold object or manifest remains. The durable revocation
+  row is also replay authority for the scheduled retention entrypoint, so a
+  process loss between append and immediate propagation needs no second
+  operator revocation.
 
 Backend selection mirrors `app.heimdal.observation_log` (dual-backend,
 fail-loud resolution via `app.heimdal._backend.resolve_heimdal_backend`):
@@ -756,6 +759,39 @@ def _revoked_grant_refs(rows: List[ConsentGrant]) -> set:
     return {r.revokes_grant_ref for r in rows if r.is_revocation and r.revokes_grant_ref}
 
 
+def list_revoked_grant_refs() -> List[str]:
+    """Return durable revocation work identities in first-observed order."""
+
+    refs: List[str] = []
+    seen: set[str] = set()
+    for row in _backend().all_rows():
+        grant_ref = row.revokes_grant_ref
+        if not row.is_revocation or not grant_ref or grant_ref in seen:
+            continue
+        seen.add(grant_ref)
+        refs.append(grant_ref)
+    return refs
+
+
+def reconcile_revoked_consent_erasure() -> int:
+    """Replay durable revocation rows through all-copy erasure.
+
+    The append-only revocation row is the durable work item. The scheduled
+    retention entrypoint calls this on every run, so a process loss after the
+    row commits but before immediate propagation converges without another
+    operator revocation.
+    """
+
+    from app.heimdal.retention import enforce_consent_revocation
+
+    reconciled = 0
+    for grant_ref in list_revoked_grant_refs():
+        with consent_grant_fence(grant_ref):
+            enforce_consent_revocation(grant_ref=grant_ref)
+        reconciled += 1
+    return reconciled
+
+
 def list_active_grants(*, scope: Optional[str] = None, at: Optional[datetime] = None) -> List[ConsentGrant]:
     """Return every currently-active (non-revoked, non-expired) grant.
 
@@ -901,6 +937,8 @@ __all__ = [
     "admit_raw_evidence",
     "grant_consent",
     "list_active_grants",
+    "list_revoked_grant_refs",
+    "reconcile_revoked_consent_erasure",
     "reset_memory_consent_ledger",
     "resolve_active_grant",
     "revoke_consent",
