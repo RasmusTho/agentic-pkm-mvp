@@ -187,6 +187,12 @@ review of the local publishable SHA before the selected expensive validation; se
 repair with no declared high-risk surface must bypass this local gate, use `--bypass-reason` and name
 the bypass in the PR/issue receipt. A declared high-risk surface is never bypassable.
 
+When workflow-risk inference requires `--workflow-review-receipt`, receipt producers must bind
+`base_sha` to the resolved merge base (`git merge-base <requested-base> <candidate-head>`), not to
+the requested base ref or endpoint. `head_sha` remains the distinct candidate head, and workflow
+paths, risks, and digest must describe the resolved-merge-base-relative candidate diff. This local
+receipt preserves ordering evidence only; it does not replace hosted current-head CI or final review.
+
 ```bash
 PR_LANE="<implementation|docs-authoring|governance|direct-repair>"
 TCD_RISK_SURFACES="<space-separated applicable surfaces, or empty>"

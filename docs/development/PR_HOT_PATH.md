@@ -137,14 +137,18 @@ governance/contract review should run before CI waiting becomes the main feedbac
 replace required GitHub checks, branch protection, or final review triage.
 
 For actual `.github/workflows/*.yml` or `.yaml` changes, the gate derives risk from the Git diff
-between its resolved base and head; callers cannot suppress that inference by omitting a changed
-file or risk flag. The bounded structural interpretation covers root `concurrency` (including
-quoted keys and block scalars), `pull_request` trigger forms, and direct `jobs.<job>.if` admission
-only. Step conditions and nested reusable-workflow input names are not admission. When inference
-finds a high-risk form, supply `--workflow-review-receipt <ignored-json-path>`: it must bind the
-resolved base SHA, head SHA, workflow-diff digest, inferred risk set, a pass verdict, reviewer, and
-scenario-matrix completion. This is local ordering evidence; hosted current-head CI and final
-independent review remain the merge authorities.
+between its resolved merge base and candidate head; callers cannot suppress that inference by
+omitting a changed file or risk flag. The bounded structural interpretation covers root
+`concurrency` (including quoted keys and block scalars), `pull_request` trigger forms, and direct
+`jobs.<job>.if` admission only. Step conditions and nested reusable-workflow input names are not
+admission. The requested base ref is only an input that resolves to a moving endpoint; it is not the
+receipt's `base_sha`. The gate resolves `base_sha` as `git merge-base <requested-base> <candidate-head>`.
+The candidate head is separately recorded as `head_sha`, and the workflow paths, inferred risk set,
+and digest are all derived from that resolved-merge-base-relative candidate diff. When inference
+finds a high-risk form, supply `--workflow-review-receipt <ignored-json-path>`: it must bind that
+resolved `base_sha`, the distinct candidate `head_sha`, workflow-diff digest, inferred risk set, a
+pass verdict, reviewer, and scenario-matrix completion. This is local ordering evidence; hosted
+current-head CI and final independent review remain the merge authorities.
 
 An emergency direct repair may bypass the local gate only after an explicit completed risk
 assessment finds no high-risk surface. A declared high-risk surface is never bypassable:

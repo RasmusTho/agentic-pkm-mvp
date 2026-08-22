@@ -140,6 +140,65 @@ def test_structural_forms_require_exact_bound_receipt_from_actual_diff(tmp_path:
         validate_workflow_review_receipt(json.dumps(receipt), evidence)
 
 
+def test_moving_base_does_not_invent_candidate_changes(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    for command in (
+        ["git", "init", "-q"],
+        ["git", "config", "user.email", "test@example.invalid"],
+        ["git", "config", "user.name", "test"],
+    ):
+        subprocess.run(command, cwd=repo, check=True)
+    workflow = repo / ".github/workflows/check.yml"
+    workflow.parent.mkdir(parents=True)
+    workflow.write_text("name: check\n'on': push\n", encoding="utf-8")
+    subprocess.run(["git", "add", "."], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-qm", "base"], cwd=repo, check=True)
+    requested_base_branch = subprocess.check_output(
+        ["git", "symbolic-ref", "--short", "HEAD"], cwd=repo, text=True
+    ).strip()
+    merge_base = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=repo, text=True
+    ).strip()
+
+    subprocess.run(["git", "checkout", "-qb", "candidate"], cwd=repo, check=True)
+    workflow.write_text("name: check\n'on': pull_request\n", encoding="utf-8")
+    subprocess.run(["git", "commit", "-am", "candidate", "-q"], cwd=repo, check=True)
+    candidate_head = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=repo, text=True
+    ).strip()
+
+    subprocess.run(["git", "checkout", "-q", requested_base_branch], cwd=repo, check=True)
+    (repo / "unrelated.txt").write_text("moving endpoint\n", encoding="utf-8")
+    subprocess.run(["git", "add", "unrelated.txt"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-qm", "moving base"], cwd=repo, check=True)
+    requested_base = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=repo, text=True
+    ).strip()
+
+    evidence = workflow_risk_evidence_from_git(
+        repo, base=requested_base, head=candidate_head
+    )
+    assert evidence.base_sha == merge_base
+    assert evidence.base_sha != requested_base
+    assert evidence.head_sha == candidate_head
+
+    receipt = {
+        "version": 1,
+        "base_sha": evidence.base_sha,
+        "head_sha": evidence.head_sha,
+        "diff_digest": evidence.diff_digest,
+        "risks": list(evidence.risks),
+        "verdict": "pass",
+        "reviewer": "independent reviewer",
+        "scenario_matrix_complete": True,
+    }
+    assert validate_workflow_review_receipt(json.dumps(receipt), evidence) == receipt
+    receipt["base_sha"] = requested_base
+    with pytest.raises(WorkflowReviewRiskError, match="base_sha"):
+        validate_workflow_review_receipt(json.dumps(receipt), evidence)
+
+
 def test_review_gate_consumes_actual_workflow_risk_and_requires_exact_receipt(
     tmp_path: Path,
 ) -> None:
