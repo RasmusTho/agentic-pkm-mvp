@@ -215,6 +215,14 @@ bucket list cannot override this canonical routing.
 - record BuilderOps routing: records/projections/receipts created, or `none` with a short reason
 - include enough traceability to prove the current delivery state without replaying the full procedure
 
+5. Issue/PR lifecycle and post-merge proof placement
+- a closing slice Issue may require only `Verify:` evidence that is available before its PR merges;
+  do not make a producer proof that becomes observable only after merge a closing-slice target
+- route such proof to a named parent-validation authority or an explicit non-closing lifecycle;
+  that authority remains open and records the durable post-merge evidence
+- closing the slice proves only its pre-merge contract. It neither proves nor implies completion of
+  the separately routed post-merge obligation
+
 ## Default Non-Blockers
 
 These are follow-up tasks, not default PR blockers:
