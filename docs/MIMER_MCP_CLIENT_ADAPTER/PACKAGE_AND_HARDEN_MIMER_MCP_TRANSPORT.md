@@ -1,6 +1,6 @@
 ---
 name: Package and Harden Mimer MCP Transport
-description: Package the owner-accepted MCP wire transport with explicit trust enforcement, configuration, lifecycle, and health
+description: Package the owner-accepted stdio-only MCP sidecar with fail-closed transport configuration, lifecycle, and health
 task_id: MIMER-MCP-03
 source_anchor: "docs/MIMER_MCP_CLIENT_ADAPTER/README.md :: Cross-Task Invariants / Interaction Safety"
 parent_capability: Mimer MCP Client Adapter
@@ -13,48 +13,49 @@ can_parallelize_with: [Expose Governed Mimer Tools Over MCP]
 
 ## Purpose
 
-Turn the owner-accepted adapter boundary into a deterministic, installable process without widening the
-current LAN/loopback/tailnet trust envelope or relying on shell-history startup.
+Turn the owner-accepted adapter boundary into a deterministic, client-spawned stdio process without
+widening the current trust envelope, adding a network listener, or relying on shell-history setup.
 
 ## What This Task Does
 
-- Adds the owner-selected MCP SDK/runtime dependency and a stable executable entrypoint.
-- Implements only the transport(s), bind defaults, authentication, and origin/trust checks selected
-  by MIMER-MCP-01.
-- Adds typed configuration with fail-closed validation and secret-safe diagnostics.
-- Adds deterministic liveness/readiness, structured logs, graceful shutdown, and supervised restart
-  behavior.
-- Adds packaging/deployment documentation that contains no concrete private endpoint or credential.
+- Adds the owner-selected MCP SDK/runtime dependency and a stable stdio executable entrypoint.
+- Implements **B1 stdio only**. It opens no network listener and accepts no Streamable HTTP, bind, origin,
+  TLS, or per-device-auth configuration in v1.
+- Adds typed, fail-closed configuration that rejects every non-stdio transport or network option.
+- Adds deterministic health, stderr-safe structured diagnostics, graceful EOF/shutdown, and clean
+  client-spawned restart behavior without durable replay.
+- Adds packaging documentation with no service unit, private endpoint, credential, or startup change.
 
 ## Concretely
 
 ```text
-python -m app.mimer_mcp --transport <owner-selected-value>
+python -m app.mimer_mcp --transport stdio
   -> validate typed config
-  -> refuse an unapproved bind/auth posture
-  -> start MCP lifecycle
-  -> health/readiness identify configured transport without exposing secrets
+  -> reject every network/listener/auth option
+  -> start stdio MCP lifecycle with no socket bind
+  -> health identifies stdio transport without exposing private runtime configuration
 ```
 
 ## Why This Matters
 
-A correct tool handler can still be unsafe if packaging exposes it broadly, silently disables
-authentication, leaks secrets, or leaves an unsupervised process that disappears after restart.
+A correct tool handler can still violate the owner decision if packaging opens a listener, admits a
+second transport, treats deferred auth as implemented, leaks configuration, or replays an ambiguous
+capture after a client restart.
 
 ## Acceptance Criteria
 
-- [ ] The packaged entrypoint negotiates the owner-selected MCP transport and shuts down cleanly without
-      orphaned listeners or requests.
-  Verify: `tests/mcp/test_mimer_server_transport.py::test_transport_lifecycle_negotiates_and_shuts_down_cleanly`
-- [ ] Typed configuration rejects unsupported transports, unapproved network exposure, missing
-      required auth, and malformed secrets before listener startup.
-  Verify: `tests/mcp/test_mimer_server_security.py::test_invalid_or_unsafe_configuration_fails_before_bind`
-- [ ] The production request path rejects an untrusted or unauthenticated caller according to the
-      owner-accepted posture; header-only/unit-guard tests are insufficient.
-  Verify: `tests/mcp/test_mimer_server_security.py::test_transport_rejects_untrusted_production_call`
-- [ ] Health/readiness and logs identify transport state and dependency degradation without exposing
-      credentials; a supervised restart restores service without replaying in-flight capture.
-  Verify: `tests/mcp/test_mimer_server_transport.py::test_supervised_restart_restores_service_without_replay`
+- [ ] The packaged entrypoint negotiates stdio and shuts down cleanly on EOF without orphaned
+      requests or durable adapter state.
+  Verify: `tests/mcp/test_mimer_server_transport.py::test_stdio_transport_lifecycle_negotiates_and_shuts_down_cleanly`
+- [ ] Typed configuration rejects Streamable HTTP, bind/listener, TLS, and auth options before the
+      adapter starts.
+  Verify: `tests/mcp/test_mimer_server_security.py::test_network_transport_and_listener_configuration_are_rejected`
+- [ ] The production entrypoint opens no network socket and exposes no transport other than stdio;
+      a unit-only config assertion is insufficient.
+  Verify: `tests/mcp/test_mimer_server_security.py::test_stdio_production_entrypoint_opens_no_network_listener`
+- [ ] Health and diagnostics identify stdio/dependency state without exposing private runtime
+      configuration; a client-spawned restart restores the process without replaying in-flight capture.
+  Verify: `tests/mcp/test_mimer_server_transport.py::test_client_spawned_restart_restores_stdio_without_replay`
 - [ ] Dependency metadata, lock surfaces, executable packaging, and operator docs remain consistent.
   Verify: `tests/architecture/test_requirements_consistency.py::test_pyproject_and_requirements_are_consistent` and doc writeback at `docs/OPERATIONS.md :: Mimer MCP adapter`
 
@@ -62,8 +63,8 @@ authentication, leaks secrets, or leaves an unsupervised process that disappears
 
 - `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q tests/mcp/test_mimer_server_transport.py tests/mcp/test_mimer_server_security.py`
 - `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q tests/architecture/test_requirements_consistency.py`
-- Start the executable against an isolated test runtime, run its health probe, stop it, and confirm
-  the listener exits; repeat once under the documented supervisor fixture.
+- Spawn the executable against an isolated test runtime, negotiate over stdio, run its health tool,
+  stop it, and prove no listener was opened; repeat once through the client-spawn fixture.
 - `ruff check app tests`
 
 ## Out of Scope
@@ -72,16 +73,19 @@ authentication, leaks secrets, or leaves an unsupervised process that disappears
 - Concrete private host bindings, credentials, desktop-client edits, or operator fleet cutover.
 - A shared ecosystem registry, dynamic remote discovery, or support for transports not selected in
   the owner-accepted ADR-0061 decision.
+- Streamable HTTP over tailnet/LAN, any network listener, and per-device authentication. B2 + C2 are
+  separately gated follow-ons and must not be enabled by this task.
 
 ## Restart / Durability Posture
 
-The transport is stateless and restartable. Configuration is durable only in existing typed
-operator settings/secret surfaces; credentials never enter logs or receipts. Connections and
-in-flight responses do not survive restart. No capture request is durably queued or replayed by the
-transport, preventing a restart from duplicating an append whose acknowledgement was lost.
+The transport is stateless and client-spawned. v1 has no listener credentials or service state;
+configuration selects stdio and the governed loopback API only. Connections and in-flight responses
+do not survive restart. No capture request is durably queued or replayed by the transport,
+preventing a restart from duplicating an append whose acknowledgement was lost.
 
 ## Related Docs
 
+- `docs/adr/ADR-0061-mimer-mcp-client-adapter.md`
 - `docs/contracts/MIMER_CLIENT_CONTRACT.md`
 - `docs/SECURITY_TRUST_BOUNDARIES.md`
 - `docs/OPERATIONS.md`
@@ -90,7 +94,8 @@ transport, preventing a restart from duplicating an append whose acknowledgement
 
 ## Related GitHub Issues
 
-Issue #3369 stays blocked until ADR-0061 is Accepted and links the explicit owner-decision receipt;
-merging the spec or a Proposed ADR is insufficient. It may then run in parallel with MIMER-MCP-02
-under an isolated worktree. TCD hint: **Codex / xhigh** because this is security-sensitive external transport
-and deployment work; require security review and production-call-site trust tests.
+Issue #3369 stays blocked until #3371's Accepted ADR/client-contract writeback lands and its live
+contract is reconciled to B1 stdio-only; the owner receipt alone is insufficient. It may then run in
+parallel with MIMER-MCP-02 under an isolated worktree. TCD hint: **Codex / xhigh** because this is a
+security-sensitive external transport boundary; require production-entrypoint proof that no
+network listener exists.

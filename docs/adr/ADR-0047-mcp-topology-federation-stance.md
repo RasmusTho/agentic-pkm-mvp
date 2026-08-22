@@ -1,6 +1,6 @@
-State: Deferred (owner decision, 2026-07-04; RESEARCH-08 decision D4). The owner deferred ratifying the four-rule MCP topology stance until a concrete remote/sibling MCP server is actually on the table (Option 2). The stance as designed in `docs/architecture/ecosystem-federation.md` remains the leading candidate; this ADR records the deferral and the residual risk, and files no follow-up issues. Constituent model per ADR-0044 (Yggdrasil = the whole; Mimer + Heimdal constituents): "Yggdrasil" as the current MCP-consumer system reads as Mimer post-rename (deferred); the deferral and residual risk are unaffected.
+State: Deferred for the consumer-side remote/sibling MCP seam (owner decision, 2026-07-04; RESEARCH-08 decision D4), with a producer-side successor decision recorded by ADR-0061 on 2026-08-21. ADR-0061 accepts constituent ownership for Mimer's external MCP client adapter (Rule 2) under A2/B1/C1, but does not ratify this ADR's remote-provider registry/admission bundle, enable remote multiplex, or ship a server. The consumer-side deferral and silent-fallback residual risk remain in force.
 Doc role: Decision record (ADR)
-Authority: Authoritative for the *decision* of how MCP server/registry ownership and remote-attachment admission are governed at the ecosystem-federation seam. MCP's protocol-tier status is unchanged (ADR-0036; doctrine §2.7); this ADR does not promote MCP to architecture. The design content is owned by `docs/architecture/ecosystem-federation.md` § Dual-role + MCP → *MCP topology stance*; this ADR ratifies its adoption, it does not restate the design.
+Authority: Authoritative for the deferred consumer-side remote-provider/registry/admission stance at the ecosystem-federation seam. MCP's protocol-tier status is unchanged (ADR-0036; doctrine §2.7); this ADR does not promote MCP to architecture. ADR-0061 is the narrower successor authority for Mimer's producer-side external client adapter and supersedes only the Rule-2 ownership deferral for that surface. The design content is owned by `docs/architecture/ecosystem-federation.md` § Dual-role + MCP → *MCP topology stance*; this ADR records its deferral, not its adoption.
 Owner: Architecture / CES stewardship
 Temporal class: Durable decision (supersede via a new ADR only if the stance is reversed, or when a real remote/sibling MCP server first attaches and the follow-up fixes are evaluated against real traffic).
 Source of truth: This ADR plus `docs/architecture/ecosystem-federation.md` § Dual-role + MCP → *MCP topology stance* and § Owner decisions (D4); ADR-0036; `docs/foundation/00-yggdrasil-doctrine.md` §2.7.
@@ -141,10 +141,23 @@ to be filed only once D4 is ratified.
   (capture/ingest pipeline or A2A) rather than as an MCP server, so deferring D4 now is coherent —
   it does not presuppose Heimdal will be the trigger.
 
+## 2026-08-21 producer-side successor decision
+
+ADR-0061 and its linked owner receipt accept **Rule 2 only for Mimer's producer-side external MCP
+client adapter**: the constituent owns a separate sidecar that delegates to Mimer's governed HTTP
+API. Its v1 wire is stdio, so it adds no network listener and no new authentication. This is not a
+remote provider attached through `RemoteMCPProvider`, does not enable or modify the internal
+ToolProvider/multiplex seam, and does not close that seam's silent-fallback, allowlist, or typed-flag
+debt.
+
+Streamable HTTP over tailnet/LAN plus per-device authentication are separately gated follow-ons
+under ADR-0061. Their deferral is not permission to enable a listener under this ADR's unresolved
+consumer-side admission posture.
+
 ## When to revisit
 
-Revisit when a concrete remote/sibling MCP server — or any MCP-based sibling attachment — first
-appears. If the operator's incoming **Heimdal** sensor system attaches via MCP rather than a
+Revisit the remaining consumer-side stance when a concrete remote/sibling MCP provider attaches
+through the multiplex seam. If the operator's incoming **Heimdal** sensor system attaches via MCP rather than a
 non-MCP adapter, that is a possible trigger. At that point, ratify, revise, or decline the four-rule
 stance against the real attachment's actual constraints, and evaluate the rule-4 fixes against
 genuine remote traffic rather than the current `RemoteMCPProvider` test fake.
@@ -162,6 +175,8 @@ genuine remote traffic rather than the current `RemoteMCPProvider` test fake.
 - `docs/INTEGRATION_FABRIC_CONTRACT.md:44` (target-state phrasing; divergence DV-3).
 - ADR-0036 (standards are adapters, not the ontology); `docs/foundation/00-yggdrasil-doctrine.md:65-67`
   (§2.7 commitment).
+- ADR-0061 (accepted producer-side Mimer client adapter; A2/B1/C1; no shipped server or network
+  listener).
 - `docs/audits/YGGDRASIL_SYSTEM_BOUNDARY_INCOSE_2026-07-03.md:322-327,339-342` (debt recommendation;
   MCP protocol-tier finding).
 - ADR-0044 (D1 — SoI target-state framing); ADR-0045 (D2 — SFC interaction-tier rule); the

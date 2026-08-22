@@ -85,6 +85,7 @@ human may see an uncertain outcome rather than a duplicate hidden replay.
 
 ## Related Docs
 
+- `docs/adr/ADR-0061-mimer-mcp-client-adapter.md`
 - `docs/contracts/MIMER_CLIENT_CONTRACT.md`
 - `docs/contracts/GOVERNED_WRITE_PROTOCOL.md`
 - `docs/contracts/TOOL_POLICY_AND_MCP_ADAPTER_CONTRACT.md`
@@ -92,8 +93,8 @@ human may see an uncertain outcome rather than a duplicate hidden replay.
 
 ## Related GitHub Issues
 
-Issue #3368 stays blocked until ADR-0061 is Accepted and links the explicit owner-decision receipt;
-merging the spec or a Proposed ADR is insufficient. It may then run in parallel with MIMER-MCP-03
-when file ownership is isolated. TCD hint: **Codex / xhigh** because an external protocol maps an
+Issue #3368 stays blocked until #3371's Accepted ADR/client-contract writeback lands and its live
+contract is reconciled; the owner receipt alone is insufficient. It may then run in parallel with
+MIMER-MCP-03 when file ownership is isolated. TCD hint: **Codex / xhigh** because an external protocol maps an
 authority-bearing write and subtle ambiguous-failure semantics; require architecture/security
 review plus the full non-Postgres suite.

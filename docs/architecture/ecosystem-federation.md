@@ -16,7 +16,9 @@ Authority: Evidence-based design of the ecosystem/SoS seam, read through the rat
 > contracts. The seam and interaction *substance* (public/private invariant INV-EF1, tier
 > classification, governed event/candidate intake) is unchanged by this reconciliation; only naming
 > and whole-vs-constituent framing were rewritten. Owner decisions D1–D3 were ratified as designed
-> (ADR-0044/45/46); D4 was deferred, not adopted (ADR-0047) — see § Owner decisions.
+> (ADR-0044/45/46); D4 was deferred for the consumer-side remote/sibling seam (ADR-0047), while
+> ADR-0061 later accepted constituent ownership for Mimer's distinct producer-side client adapter
+> under A2/B1/C1 — see § Owner decisions.
 
 # Ecosystem Federation — Yggdrasil (the Whole) and the Public/Private Seam
 
@@ -454,20 +456,22 @@ bounded stance, using only existing machinery plus one static proposal:
 
 ### MCP topology stance
 
-**Status: deferred, not ratified (ADR-0047, D4).** The four-rule stance below remains the leading
-design candidate but carries no decision force until a concrete remote/sibling MCP server exists;
-it is preserved here for when D4 is revisited (see § Owner decisions).
+**Status: split by seam.** ADR-0061 accepts Rule 1 plus constituent ownership (Rule 2) for Mimer's
+producer-side external client adapter under A2/B1/C1. ADR-0047 continues to defer Rules 3–4 for the
+consumer-side remote-provider/multiplex seam. Streamable HTTP and per-device authentication for the
+producer side are also separately deferred.
 
-Current reality, stated honestly (all anchors verified against code): Mimer today is an MCP
-**tool consumer only** — a local registry-backed ToolProvider
+Current reality, stated honestly (all anchors verified against code): Mimer today has an internal
+MCP **tool-consumer** boundary — a local registry-backed ToolProvider
 (`docs/contracts/TOOL_POLICY_AND_MCP_ADAPTER_CONTRACT.md:22-36`; registry
 `docs/settings/tools/registry.yaml`) plus an *unimplemented* remote seam: `RemoteMCPProvider` is a
 Protocol with zero production implementations (`app/orchestrator/mcp_tool_provider.py:14-27`; test
-fakes only). No MCP server exists anywhere in `app/`. The Integration Fabric Contract's phrase
+fakes only). No external MCP server exists anywhere in `app/`; ADR-0061 is an accepted decision,
+not implementation evidence. The Integration Fabric Contract's phrase
 "remote MCP servers behind the flagged multiplex seam"
 (`docs/INTEGRATION_FABRIC_CONTRACT.md:44`) is target-state language (divergence DV-3).
 
-The deferred candidate stance (four rules, each conform/extend as tagged in § SBS reconciliation):
+The four-rule stance, with its current decision status (each conform/extend as tagged in § SBS reconciliation):
 
 1. **MCP stays protocol-tier.** The SoS relationship does not promote MCP to architecture.
    Capability contracts are the boundary; MCP is one adapter (ADR-0036; doctrine §2.7;
@@ -477,7 +481,8 @@ The deferred candidate stance (four rules, each conform/extend as tagged in § S
    surfaces (§ Capability boundary); each sibling exposes its domain capabilities behind its own
    server. No shared ecosystem mega-server, no third-party-hosted registry of the operator's
    surfaces — server ownership follows capability ownership, exactly as adapter ownership follows
-   the port today. *(Extend — design rule for a surface that does not exist yet.)*
+   the port today. *(Extend — accepted for Mimer's producer-side A2 sidecar by ADR-0061; not yet
+   implemented. Other constituent/consumer-side attachments remain under ADR-0047.)*
 3. **Registry split along the seam.** The registry *schema and admission policy* — descriptor
    format, tool policy, allowlist semantics — are public Mimer contracts (the existing
    `docs/settings/tools/registry.yaml` + descriptor pattern generalizes). The registry *contents*
@@ -547,7 +552,7 @@ claim is classified against `docs/SYSTEM_BREAKDOWN_STRUCTURE.md` and `docs/archi
 | 5 | Private binding surface named as proto-constituent / first-sibling target | **Extend** — names existing unowned reality; creating the sibling is follow-up work |
 | 6 | Capability boundary = contract set; five-surface grouping view over existing enumerations | **Extend** — view only; `CAPABILITY_CONTRACT_MODEL.md` and IFC stay authoritative |
 | 7 | MCP protocol-tier posture | **Conform** (ADR-0036; doctrine §2.7; audit §7) |
-| 8 | Constituent-owned MCP servers; registry schema public / registry contents private | **Extend** — design rule for a not-yet-built surface; **deferred, not ratified** (D4, ADR-0047) |
+| 8 | Constituent-owned MCP servers; registry schema public / registry contents private | **Extend** — constituent ownership is accepted for Mimer's producer-side A2 client adapter (ADR-0061; not shipped); registry/admission posture for consumer-side remote providers remains deferred (D4, ADR-0047) |
 | 9 | Remote-multiplex fixes: admission allowlist, legible degradation, typed flag | **Extend** — conforms to audit §6's debt recommendation; **deferred with D4** (ADR-0047); no follow-up issues filed until ratified |
 | 10 | INV-EF1 two-scope public/private invariant + register + `public_seam_lint` hook | **Extend** — new fitness/invariant proposal (GATE+DOCTOR) extending `docs/testing/invariant-tests.md` semantics; **adopted** (D3, ADR-0046); owner-doc rows (PRIVACY, SECURITY_TRUST_BOUNDARIES) are follow-up issues |
 | 11 | TCD placement heuristic | **Extend** — derives from `AGENTS.md :: TCD`; adoption into policy surface is builder-governance follow-up |
@@ -559,7 +564,8 @@ claim is classified against `docs/SYSTEM_BREAKDOWN_STRUCTURE.md` and `docs/archi
 
 No reshape beyond the ratified naming/model decisions (D1, D2) is enacted by this artifact.
 D3 is adopted as a decision (enactment — the lint script, register, owner-doc rows — is separate
-follow-up work); D4 remains deferred, not adopted.
+follow-up work). D4 remains deferred for the consumer-side remote/multiplex seam; ADR-0061 is the
+narrow producer-side successor for Mimer's client adapter only.
 
 ## Owner decisions
 
@@ -642,23 +648,24 @@ destructive; silence is drift.
 
 ### D4 — Ratify the MCP topology stance?
 
-**Resolved: deferred, not adopted, ADR-0047 (2026-07-04).** The owner chose **Option 2**: defer
-until a concrete remote/sibling MCP server exists. The four-rule stance (§ MCP topology stance)
-remains the leading candidate, preserved for when D4 is revisited, but carries no decision force
-today. The silent-fallback gap in the remote-multiplex seam remains live and unaddressed by this
-deferral; no follow-up issues are filed until D4 is ratified.
+**Resolved in two stages.** ADR-0047 (2026-07-04) chose **Option 2** and still defers the
+consumer-side remote-provider registry/admission stance. ADR-0061 and the 2026-08-21 owner receipt
+later accept constituent ownership for Mimer's separate producer-side client adapter under
+**A2 + B1 + C1**: sidecar over governed HTTP, stdio only, no network listener, and no new auth.
+This does not implement a server or resolve the internal remote-multiplex seam's silent fallback.
+Streamable HTTP plus per-device auth remain separately gated follow-ons.
 
 **Problem (as originally posed).** MCP server/registry ownership has no stated stance; the remote
 seam has a silent fallback, no admission gate, and an untyped flag; siblings will need a rule
 before the first one attaches.
 
-- **Option 1 (recommended at the time, not adopted): adopt the four-rule stance** (protocol-tier;
+- **Option 1 (recommended at the time, adopted only for producer-side Rules 1–2 by ADR-0061): adopt the four-rule stance** (protocol-tier;
   constituent-owned servers; registry schema public / contents private; admission-allowlist +
   legible-degradation + typed-flag fixes as follow-up implementation issues).
 - **Option 2 (chosen): defer until a concrete sibling/server exists.** *Consequences:* zero cost
   now; the silent-fallback gap remains live (reachable today by enabling one flag with any injected
-  provider); the next MCP-related change re-litigates ownership without a stance until D4 is
-  revisited.
+  provider). ADR-0061 later resolves producer-side Mimer ownership without changing this
+  consumer-side debt; the first real remote-provider attachment must still revisit Rules 3–4.
 
 ## Divergences
 
