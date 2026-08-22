@@ -576,5 +576,95 @@ def test_overview_route_uses_live_composition_and_delivered_composer(monkeypatch
             "cockpit_reader": devui_route.read_cockpit_registry,
             "ckm_reader": devui_route._read_ckm_capabilities,
         },
-        "overview": {"composition": composition},
+        "overview": {"composition": composition, "candidates": {"now": []}},
     }
+
+
+def test_overview_get_uses_live_working_threads_without_injected_candidates(monkeypatch) -> None:
+    cockpit = {
+        "authority": "read_time_join",
+        "generated_at": "2026-08-22T12:00:00+00:00",
+        "claim": {
+            "kind": "counted",
+            "text": "one thread",
+            "as_of": "2026-08-22T12:00:00+00:00",
+        },
+        "sources": [_dispatcher_source("2026-08-22T12:00:00+00:00")],
+        "unread_planes": [],
+        "withdrawn_counts": [],
+        "bands": [
+            {
+                "key": "working",
+                "question": "What are we working on?",
+                "countable": True,
+                "count": 1,
+                "items": [
+                    {
+                        "repo": "RasmusTho/agentic-pkm-mvp",
+                        "issue_number": 4834,
+                        "title": "Exact Cockpit title",
+                        "why_now": "The source owns this working placement.",
+                        "updated_at": "2026-08-22T11:59:00+00:00",
+                    }
+                ],
+            }
+        ],
+    }
+    reads: list[str] = []
+
+    class Ckm:
+        def __init__(self, db_path: Path) -> None:
+            self.db_path = db_path
+
+        def list_capabilities(self):
+            return _empty_ckm_envelope()
+
+    def read_cockpit() -> dict:
+        reads.append("cockpit")
+        return cockpit
+
+    monkeypatch.setattr(devui_route, "read_cockpit_registry", read_cockpit)
+    monkeypatch.setattr(
+        devui_route,
+        "load_builderops_paths",
+        lambda: SimpleNamespace(db_path=Path("/state/builderops.sqlite3")),
+    )
+    monkeypatch.setattr(devui_route, "CkmQueryService", Ckm)
+
+    payload = TestClient(app).get("/api/devui/overview").json()
+
+    assert reads == ["cockpit"]
+    assert payload["now"] == [
+        {
+            "subject_ref": {
+                "source_type": "github_issue",
+                "source_id": "github:RasmusTho/agentic-pkm-mvp#4834",
+                "locator": "https://github.com/RasmusTho/agentic-pkm-mvp/issues/4834",
+                "version": "2026-08-22T11:59:00+00:00",
+            },
+            "display_label": "Exact Cockpit title",
+            "reason": "The source owns this working placement.",
+            "evidence": [
+                {
+                    "evidence_id": "cockpit-working:github:RasmusTho/agentic-pkm-mvp#4834:2026-08-22T11:59:00+00:00",
+                    "claim": "Cockpit working projection contains this source-owned item.",
+                    "source_ref": {
+                        "source_type": "builderops_cockpit_working_projection",
+                        "source_id": "cockpit:working:github:RasmusTho/agentic-pkm-mvp#4834",
+                        "locator": "/api/cockpit/registry#working",
+                        "version": "2026-08-22T11:59:00+00:00",
+                    },
+                    "availability": "available",
+                    "freshness": "fresh",
+                    "completeness": "complete",
+                    "cardinality": "nonempty",
+                    "linkage": "linked",
+                    "captured_at": "2026-08-22T12:00:00+00:00",
+                    "read_watermark": "2026-08-22T12:00:00+00:00",
+                    "limitation": None,
+                }
+            ],
+            "navigation_refs": [],
+            "limitations": [],
+        }
+    ]
