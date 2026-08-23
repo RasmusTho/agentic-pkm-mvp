@@ -600,6 +600,26 @@ def test_owner_writer_rechecks_missing_pending_manifest_inside_relocation_fence(
                 operation_binding=manifest["gaf_operation"],
                 existing_manifest=stale_outer_read,
             )
+    typed_corruption = dict(manifest)
+    typed_corruption["encrypted_bytes"] = str(manifest["encrypted_bytes"])
+    manifest_path.write_text(
+        json.dumps(typed_corruption, sort_keys=True, separators=(",", ":")) + "\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(local_archive.ArchiveDegradedError, match="archive_manifest_invalid"):
+        local_archive._relocate_raw_record_owner_native(
+            record,
+            archive_root=archive_root,
+            archive_ref=_ARCHIVE_REF,
+            now=now,
+            retention_window_days=30,
+            key=_KEY,
+            volume_ready=lambda: _test_volume_ready(_ARCHIVE_REF, archive_root),
+            requested_representation_id=pending.id,
+            requested_receipt_id=str(manifest["receipt_id"]),
+            operation_binding=manifest["gaf_operation"],
+            existing_manifest=manifest,
+        )
     rows = all_raw_representations(record.id)
     assert next(item for item in rows if item.active).storage_kind == "postgres_hot"
     assert len([item for item in rows if not item.active]) == 1

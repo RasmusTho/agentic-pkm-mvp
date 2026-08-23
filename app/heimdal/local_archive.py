@@ -284,23 +284,43 @@ def _manifest_with_operation(
 def _archive_receipt_from_manifest(payload: Mapping[str, object]) -> ArchiveReceipt:
     """Load exact owner receipt fields for an additive pre-GAF retry."""
 
+    expected_types = {
+        "receipt_id": str,
+        "record_id": str,
+        "content_identity": str,
+        "representation_id": str,
+        "location_ref": str,
+        "archive_token": str,
+        "archive_generation": str,
+        "raw_generation": int,
+        "encrypted_bytes": int,
+        "ciphertext_sha256": str,
+        "verified_at": str,
+        "schema": str,
+        "ownership_state": str,
+    }
+    if any(type(payload.get(field)) is not expected for field, expected in expected_types.items()):
+        raise ArchiveDegradedError("archive_manifest_invalid")
+    if payload["ownership_state"] not in {"reserved", "verified"}:
+        raise ArchiveDegradedError("archive_manifest_invalid")
     try:
+        verified_at_raw = cast(str, payload["verified_at"])
         verified_at = datetime.fromisoformat(
-            str(payload["verified_at"]).replace("Z", "+00:00")
+            verified_at_raw.replace("Z", "+00:00")
         )
         receipt = ArchiveReceipt(
-            receipt_id=str(payload["receipt_id"]),
-            record_id=str(payload["record_id"]),
-            content_identity=str(payload["content_identity"]),
-            representation_id=str(payload["representation_id"]),
-            location_ref=str(payload["location_ref"]),
-            archive_token=str(payload["archive_token"]),
-            archive_generation=str(payload["archive_generation"]),
-            raw_generation=int(str(payload["raw_generation"])),
-            encrypted_bytes=int(str(payload["encrypted_bytes"])),
-            ciphertext_sha256=str(payload["ciphertext_sha256"]),
+            receipt_id=cast(str, payload["receipt_id"]),
+            record_id=cast(str, payload["record_id"]),
+            content_identity=cast(str, payload["content_identity"]),
+            representation_id=cast(str, payload["representation_id"]),
+            location_ref=cast(str, payload["location_ref"]),
+            archive_token=cast(str, payload["archive_token"]),
+            archive_generation=cast(str, payload["archive_generation"]),
+            raw_generation=cast(int, payload["raw_generation"]),
+            encrypted_bytes=cast(int, payload["encrypted_bytes"]),
+            ciphertext_sha256=cast(str, payload["ciphertext_sha256"]),
             verified_at=verified_at,
-            schema=str(payload["schema"]),
+            schema=cast(str, payload["schema"]),
         )
     except (KeyError, TypeError, ValueError) as exc:
         raise ArchiveDegradedError("archive_manifest_invalid") from exc

@@ -11,6 +11,7 @@ import secrets
 import threading
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Mapping
 from uuid import uuid4
 
 import pytest
@@ -376,6 +377,56 @@ def test_archive_operation_binding_and_receipt_survive_process_loss(
     )
     assert recovered.receipt.receipt_id == manifest["receipt_id"]
     assert recovered.receipt.representation_id == manifest["representation_id"]
+
+
+def test_terminal_replay_returns_only_the_strictly_validated_owner_receipt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    records = _admit_all_modalities()
+    record = records[0]
+    archive_root, _adapters = _archive_all(
+        records, tmp_path=tmp_path, monkeypatch=monkeypatch
+    )
+    manifest_path, manifest = next(
+        (path, candidate)
+        for path in (archive_root / "manifests").glob("*.json")
+        if (candidate := json.loads(path.read_text(encoding="utf-8")))["record_id"]
+        == record.id
+    )
+    original_read = local_archive._read_archive_manifest
+    target_reads = 0
+
+    def mutate_after_strict_read(
+        path: Path, *, required: bool
+    ) -> Mapping[str, object] | None:
+        nonlocal target_reads
+        payload = original_read(path, required=required)
+        if path == manifest_path:
+            target_reads += 1
+            if target_reads == 3:
+                forged = dict(manifest)
+                forged["record_id"] = str(uuid4())
+                manifest_path.write_text(
+                    json.dumps(forged, sort_keys=True, separators=(",", ":")) + "\n",
+                    encoding="utf-8",
+                )
+        return payload
+
+    monkeypatch.setattr(local_archive, "_read_archive_manifest", mutate_after_strict_read)
+    recovered = local_archive.relocate_raw_record(
+        record,
+        archive_root=archive_root,
+        archive_ref=_ARCHIVE_REF,
+        now=datetime.now(timezone.utc),
+        retention_window_days=30,
+        key=_KEY,
+        volume_ready=lambda: _issue_archive_volume_ready(
+            _ARCHIVE_REF, archive_root, _issuer=_ARCHIVE_VOLUME_READY_ISSUER
+        ),
+    )
+    assert target_reads == 3
+    assert recovered.receipt.record_id == record.id
+    assert json.loads(manifest_path.read_text(encoding="utf-8"))["record_id"] != record.id
 
 
 def test_current_manifest_corruption_never_replays_terminal_success(

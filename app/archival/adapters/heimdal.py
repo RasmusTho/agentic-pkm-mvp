@@ -131,6 +131,7 @@ class HeimdalRawMediaAdapter:
         self._read_key = read_key
         self._binding: OperationBinding | None = None
         self._archive_result: object | None = None
+        self._validated_owner_archive_receipt: object | None = None
         self._failure_reason: str | None = None
         self._restore_attempt: ContextVar[_RestoreAttempt | None] = ContextVar(
             f"heimdal_restore_attempt_{record.id}", default=None
@@ -153,34 +154,9 @@ class HeimdalRawMediaAdapter:
 
     @property
     def owner_archive_receipt(self) -> object | None:
-        """Reconstruct the canonical HAR receipt from its exact manifest."""
+        """Return only the canonical HAR receipt cached by strict readback."""
 
-        if self._binding is None:
-            return None
-        manifest = self._read_manifest(self._binding)
-        if manifest is None or manifest.get("ownership_state") != "verified":
-            return None
-        try:
-            from app.heimdal.local_archive import ArchiveReceipt
-
-            verified_at = datetime.fromisoformat(
-                str(manifest["verified_at"]).replace("Z", "+00:00")
-            )
-            return ArchiveReceipt(
-                receipt_id=str(manifest["receipt_id"]),
-                record_id=str(manifest["record_id"]),
-                content_identity=str(manifest["content_identity"]),
-                representation_id=str(manifest["representation_id"]),
-                location_ref=str(manifest["location_ref"]),
-                archive_token=str(manifest["archive_token"]),
-                archive_generation=str(manifest["archive_generation"]),
-                raw_generation=int(str(manifest["raw_generation"])),
-                encrypted_bytes=int(str(manifest["encrypted_bytes"])),
-                ciphertext_sha256=str(manifest["ciphertext_sha256"]),
-                verified_at=verified_at,
-            )
-        except (KeyError, TypeError, ValueError):
-            return None
+        return self._validated_owner_archive_receipt
 
     @staticmethod
     def ref_for(representation: RawRepresentation | str) -> RepresentationRef:
@@ -279,6 +255,7 @@ class HeimdalRawMediaAdapter:
         return loaded
 
     def read_operation(self, idempotency_key: str) -> OperationRecord | None:
+        self._validated_owner_archive_receipt = None
         binding = self._binding
         if binding is None or binding.idempotency_key != idempotency_key:
             return None
@@ -303,6 +280,12 @@ class HeimdalRawMediaAdapter:
                 manifest,
                 legacy=legacy_manifest,
             )
+            if manifest.get("ownership_state") == "verified":
+                from app.heimdal.local_archive import _archive_receipt_from_manifest
+
+                self._validated_owner_archive_receipt = _archive_receipt_from_manifest(
+                    manifest
+                )
         if target is None:
             return OperationRecord(binding)
         reservation = RepresentationReservation(
