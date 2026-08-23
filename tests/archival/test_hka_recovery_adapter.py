@@ -138,6 +138,22 @@ def test_human_artifact_export_is_portable_and_provenance_complete() -> None:
     assert exported.integrity_digest == hashlib.sha256(exported.content.encode("utf-8")).hexdigest()
 
 
+def test_human_artifact_export_preserves_portable_integrity_across_line_endings() -> None:
+    adapter, _port, descriptor = _fixture()
+
+    exported = adapter.export(
+        descriptor,
+        "# Durable note\r\n\r\nA human-readable recovery representation.\r\n",
+    )
+
+    assert exported.content.endswith("\r\n")
+    assert exported.integrity_digest == next(
+        item.reference.token
+        for item in descriptor.provenance_refs
+        if item.kind == "content"
+    )
+
+
 def test_hka_recovery_invokes_production_governed_write_after_verification() -> None:
     adapter, port, descriptor = _fixture()
 

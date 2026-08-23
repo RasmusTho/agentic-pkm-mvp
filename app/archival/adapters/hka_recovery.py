@@ -276,7 +276,7 @@ class HkaRecoveryAdapter:
     def export(self, artifact: ArtifactDescriptor, content: str, format: str = _FORMAT) -> HkaRecoveryExport:
         """Create portable material without assigning it HKA authority."""
         _require_hka_artifact(artifact)
-        content_digest = hashlib.sha256(content.encode("utf-8")).hexdigest()
+        content_digest = _portable_content_digest(content)
         _require_content_provenance(artifact, content_digest)
         return HkaRecoveryExport(artifact.identity, artifact.artifact_class, artifact.derivation, artifact.durability, artifact.owner, artifact.generation, artifact.provenance_refs, format, artifact.policy_profile, content, content_digest)
 
@@ -327,7 +327,7 @@ def _require_export_contract(export: HkaRecoveryExport) -> None:
         raise ValueError("HKA recovery export requires typed provenance")
     if export.format != _FORMAT or not isinstance(export.content, str) or not export.content.strip():
         raise ValueError("HKA recovery export must be human-readable text/markdown")
-    if export.integrity_digest != hashlib.sha256(export.content.encode("utf-8")).hexdigest():
+    if export.integrity_digest != _portable_content_digest(export.content):
         raise ValueError("HKA recovery export integrity digest differs from content")
 
 
@@ -342,6 +342,12 @@ def _require_content_provenance(artifact: ArtifactDescriptor, content_digest: st
     matches = tuple(item.reference.token for item in artifact.provenance_refs if item.kind == "content" and item.reference.namespace == "content-sha256")
     if matches != (content_digest,):
         raise ValueError("HKA recovery content differs from HKA provenance")
+
+
+def _portable_content_digest(content: str) -> str:
+    """Hash canonical text so line-ending conversion cannot change HKA meaning."""
+    normalized = content.replace("\r\n", "\n").replace("\r", "\n")
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
 
 
 __all__ = ["ADAPTER_ID", "HkaGovernedWriteAuthority", "HkaNewerGenerationConflict", "HkaOwnerVersion", "HkaOwnerVersionReader", "HkaProductionGovernedWriter", "HkaRecoveryAdapter", "HkaRecoveryConflict", "HkaRecoveryExport", "HkaRecoveryReceipt", "HkaRecoveryResult", "HkaRecoveryStage", "HkaRecoveryStageVerifier", "HkaRecoveryStager", "HkaRecoveryVaultPort", "HkaRecoveryVaultPortAdapter", "HkaRecoveryVerification"]
