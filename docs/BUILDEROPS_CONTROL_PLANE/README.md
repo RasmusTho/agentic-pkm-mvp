@@ -67,6 +67,29 @@ locator, minimum fence, and closed readback outcome. This is mechanism support o
 production authority activation, and legacy `finish_effect`/self-closure behavior remain unchanged
 and are not claimed as delivered here.
 
+## TARS qualification contract
+
+The repository-side candidate evaluator is `tars_host_qualification.v1`, with policy version
+`tars-builder-system-baseline.v1`. This is the canonical BuilderOps owner contract for that evaluator;
+the Platform and Operations specification remains the separate owner of host/platform boundaries.
+It does not qualify a live host, authorize host or Proxmox mutation, or change Product/Runtime,
+deployment, credential, network, or firewall authority.
+
+The fixed VM 102 BuilderOps isolation baseline is: VM ID `102`, name `builder-system`, two cores,
+4096 MiB memory, 60 GiB disk, `vmbr0`, VLAN tag `42`, and network scope `guest-vlan-42`. The
+candidate evidence must also prove an independent BuilderOps engine, no `pkm-*` Product Compose
+project, and no production credential, vault, or network-identity references on VM 102.
+
+Candidate evidence is accepted only when it is no more than 24 hours old, fingerprint-verifiable,
+and redacted: receipts may retain non-secret references and fingerprints but never raw secrets.
+Malformed, stale, secret-bearing, or partial evidence fails closed. A passing candidate result is
+still not live qualification: `live_qualified` remains `false` until a separate governed
+live-operations receipt exists.
+
+GPU passthrough and test Tailscale are deliberately not qualification prerequisites. Repository
+fixtures and candidate-policy tests are evidence of evaluator behavior only; they cannot establish
+the live TARS state.
+
 ## Target boundary
 
 - Demerzel hosts the independently deployed BuilderOps API, PostgreSQL store, migration gate, and
