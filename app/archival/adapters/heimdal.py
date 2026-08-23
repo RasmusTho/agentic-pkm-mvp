@@ -9,7 +9,9 @@ receipts.
 from __future__ import annotations
 
 import hashlib
-from typing import Callable, Sequence
+from datetime import datetime
+from typing import Callable, Mapping, Sequence
+from uuid import UUID
 
 from app.archival.contracts import (
     AccessAuthority,
@@ -44,6 +46,7 @@ ADAPTER_ID = "heimdal"
 _REPRESENTATION_NAMESPACE = "heimdal-representation"
 _RAW_ID_NAMESPACE = "heimdal-raw"
 _RESTORE_CORRELATION_KEY = "archival_restore_correlation"
+_OPERATION_SCHEMA = "heimdal_gaf_operation.v1"
 
 
 def _opaque(namespace: str, token: str) -> OpaqueReference:
@@ -102,11 +105,15 @@ class HeimdalRawMediaAdapter:
         record: RawRecord,
         *,
         generation: int | None = None,
-        archive_action: Callable[[str, str], object] | None = None,
+        archive_action: Callable[[str, str, Mapping[str, object]], object] | None = None,
+        operation_reader: Callable[[str], Mapping[str, object] | None] | None = None,
+        read_key: bytes | None = None,
     ) -> None:
         self.record = record
         self.artifact = describe_raw_media(record, generation=generation)
         self._archive_action = archive_action
+        self._operation_reader = operation_reader
+        self._read_key = read_key
         self._binding: OperationBinding | None = None
         self._archive_result: object | None = None
         self._failure_reason: str | None = None
@@ -126,6 +133,37 @@ class HeimdalRawMediaAdapter:
     @property
     def restored_storage_kind(self) -> str | None:
         return self._restored_storage_kind
+
+    @property
+    def owner_archive_receipt(self) -> object | None:
+        """Reconstruct the canonical HAR receipt from its exact manifest."""
+
+        if self._binding is None:
+            return None
+        manifest = self._read_manifest(self._binding)
+        if manifest is None or manifest.get("ownership_state") != "verified":
+            return None
+        try:
+            from app.heimdal.local_archive import ArchiveReceipt
+
+            verified_at = datetime.fromisoformat(
+                str(manifest["verified_at"]).replace("Z", "+00:00")
+            )
+            return ArchiveReceipt(
+                receipt_id=str(manifest["receipt_id"]),
+                record_id=str(manifest["record_id"]),
+                content_identity=str(manifest["content_identity"]),
+                representation_id=str(manifest["representation_id"]),
+                location_ref=str(manifest["location_ref"]),
+                archive_token=str(manifest["archive_token"]),
+                archive_generation=str(manifest["archive_generation"]),
+                raw_generation=int(str(manifest["raw_generation"])),
+                encrypted_bytes=int(str(manifest["encrypted_bytes"])),
+                ciphertext_sha256=str(manifest["ciphertext_sha256"]),
+                verified_at=verified_at,
+            )
+        except (KeyError, TypeError, ValueError):
+            return None
 
     @staticmethod
     def ref_for(representation: RawRepresentation | str) -> RepresentationRef:
@@ -186,12 +224,17 @@ class HeimdalRawMediaAdapter:
         if binding.artifact != self.artifact.identity or binding.generation != self.artifact.generation:
             raise TransitionConflict("archive binding differs from exact Heimdal generation")
         self._binding = binding
+        loaded = self.read_operation(binding.idempotency_key)
+        if loaded is not None and loaded.completed:
+            return loaded
         if self._archive_action is None:
             raise TransitionFailure(FaultStage.BINDING, "archive owner action unavailable")
         try:
+            receipt_digest = hashlib.sha256(binding.idempotency_key.encode("utf-8")).hexdigest()
             self._archive_result = self._archive_action(
                 _representation_id(binding.target),
-                hashlib.sha256(binding.idempotency_key.encode("utf-8")).hexdigest()[:32],
+                str(UUID(receipt_digest[:32])),
+                self._binding_payload(binding),
             )
         except Exception as exc:
             reason = getattr(exc, "reason", "archive_relocation_failed")
@@ -206,6 +249,11 @@ class HeimdalRawMediaAdapter:
         binding = self._binding
         if binding is None or binding.idempotency_key != idempotency_key:
             return None
+        manifest = self._read_manifest(binding)
+        if manifest is not None:
+            persisted_binding = manifest.get("gaf_operation")
+            if persisted_binding != self._binding_payload(binding):
+                raise TransitionConflict("durable Heimdal operation binding differs")
         target_id = _representation_id(binding.target)
         rows = raw_store.all_raw_representations(self.record.id)
         target = next((row for row in rows if row.id == target_id), None)
@@ -218,8 +266,9 @@ class HeimdalRawMediaAdapter:
             binding.generation,
             _opaque("heimdal-reservation", target.id),
         )
-        completed = bool(target.active and source is not None and not source.active)
-        if not completed:
+        verified = bool(manifest is not None and manifest.get("ownership_state") == "verified")
+        completed = bool(verified and target.active and source is not None and not source.active)
+        if not verified:
             return OperationRecord(binding, reservation=reservation)
         verification = VerificationResult(
             binding.target,
@@ -227,19 +276,22 @@ class HeimdalRawMediaAdapter:
             True,
             _opaque("heimdal-archive-verification", target.id),
         )
+        receipt_id = str(manifest.get("receipt_id", "")) if manifest is not None else ""
+        if not receipt_id:
+            raise TransitionFailure(FaultStage.READBACK, "HAR archive receipt id is unavailable")
         return OperationRecord(
             binding,
             reservation=reservation,
             copied=True,
             verification=verification,
             receipt=self._receipt(
-                stage=TransitionStage.RETIRED,
+                stage=TransitionStage.RETIRED if completed else TransitionStage.VERIFIED,
                 refs=(binding.source, binding.target),
-                receipt_id=f"archive-{target.id}",
+                receipt_id=receipt_id,
             ),
-            activated=True,
-            retired=True,
-            completed=True,
+            activated=target.active,
+            retired=bool(source is not None and not source.active),
+            completed=completed,
         )
 
     def reserve(self, binding: OperationBinding) -> RepresentationReservation:
@@ -283,14 +335,17 @@ class HeimdalRawMediaAdapter:
         self._require_artifact(artifact)
         if authority != self._restore_authority:
             raise TransitionConflict("restore authority differs from the authorized gate")
-        correlation = hashlib.sha256(
-            f"{self.record.id}:{artifact.generation.value}:{_representation_id(representation)}:{authority.grant_ref.token}".encode()
-        ).hexdigest()
+        correlation = self._restore_correlation(artifact, representation, authority)
         restored = raw_read_gate.read_raw_record(
             raw_read_gate.raw_ref_for(self.record),
             reader=authority.grant_ref.token,
             purpose="heimdal_archive_restore_drill",
-            payload={_RESTORE_CORRELATION_KEY: correlation},
+            key=self._read_key,
+            payload={
+                _RESTORE_CORRELATION_KEY: correlation,
+                "archival_generation": artifact.generation.value,
+                "archival_representation_id": _representation_id(representation),
+            },
         )
         self._restored_storage_kind = restored.storage_kind
         if restored.representation_id != _representation_id(representation):
@@ -307,12 +362,20 @@ class HeimdalRawMediaAdapter:
         self, artifact: ArtifactDescriptor, representation: RepresentationRef
     ) -> ArchivalReceipt | None:
         self._require_artifact(artifact)
+        authority = self._restore_authority
+        if authority is None:
+            return None
+        correlation = self._restore_correlation(artifact, representation, authority)
         matches = [
             receipt
             for receipt in raw_read_gate.all_raw_read_receipts()
             if receipt.raw_ref == raw_read_gate.raw_ref_for(self.record)
             and receipt.purpose == "heimdal_archive_restore_drill"
-            and receipt.payload.get(_RESTORE_CORRELATION_KEY)
+            and receipt.reader == authority.grant_ref.token
+            and receipt.payload.get(_RESTORE_CORRELATION_KEY) == correlation
+            and receipt.payload.get("archival_generation") == artifact.generation.value
+            and receipt.payload.get("archival_representation_id")
+            == _representation_id(representation)
         ]
         if not matches:
             return None
@@ -350,6 +413,36 @@ class HeimdalRawMediaAdapter:
 
     def doctor(self) -> Sequence[DoctorFinding]:
         return ()
+
+    @staticmethod
+    def _binding_payload(binding: OperationBinding) -> dict[str, object]:
+        return {
+            "schema": _OPERATION_SCHEMA,
+            "idempotency_key": binding.idempotency_key,
+            "artifact_id": binding.artifact.owner_native_id.token,
+            "generation": binding.generation.value,
+            "policy": binding.policy.value,
+            "source_representation_id": _representation_id(binding.source),
+            "target_representation_id": _representation_id(binding.target),
+        }
+
+    def _read_manifest(self, binding: OperationBinding) -> Mapping[str, object] | None:
+        if self._operation_reader is None:
+            return None
+        return self._operation_reader(_representation_id(binding.target))
+
+    def _restore_correlation(
+        self,
+        artifact: ArtifactDescriptor,
+        representation: RepresentationRef,
+        authority: AccessAuthority,
+    ) -> str:
+        return hashlib.sha256(
+            (
+                f"{self.record.id}:{artifact.generation.value}:"
+                f"{_representation_id(representation)}:{authority.grant_ref.token}"
+            ).encode()
+        ).hexdigest()
 
     def _project(self, row: RawRepresentation) -> Representation:
         stage = TransitionStage.ACTIVE if row.active else TransitionStage.RETIRED

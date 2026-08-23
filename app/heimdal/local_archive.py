@@ -16,7 +16,7 @@ import json
 import os
 from pathlib import Path
 import re
-from typing import Callable, Optional, cast
+from typing import Callable, Mapping, Optional, cast
 from uuid import UUID, uuid4
 
 from app.heimdal import raw_liveness, raw_read_gate, raw_store
@@ -255,6 +255,21 @@ def _reserved_ownership_manifest_payload(receipt: ArchiveReceipt) -> bytes:
     return (json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n").encode()
 
 
+def _manifest_with_operation(
+    payload: bytes,
+    operation_binding: Mapping[str, object] | None,
+) -> bytes:
+    """Bind GAF operation identity inside the existing HAR owner manifest."""
+
+    if operation_binding is None:
+        return payload
+    parsed = json.loads(payload.decode("utf-8"))
+    if not isinstance(parsed, dict):
+        raise ArchiveDegradedError("archive_manifest_invalid")
+    parsed["gaf_operation"] = dict(operation_binding)
+    return (json.dumps(parsed, sort_keys=True, separators=(",", ":")) + "\n").encode()
+
+
 def _active_hot(record_id: str) -> RawRepresentation:
     active = [item for item in raw_store.all_raw_representations(record_id) if item.active]
     if len(active) != 1 or active[0].storage_kind != "postgres_hot":
@@ -311,6 +326,7 @@ def _relocate_raw_record_owner_native(
     volume_ready: Callable[[], ArchiveVolumeReady],
     requested_representation_id: str | None = None,
     requested_receipt_id: str | None = None,
+    operation_binding: Mapping[str, object] | None = None,
 ) -> ArchiveResult:
     """Copy, verify, receipt, then activate cold; fail closed on every error."""
     reference = now or datetime.now(timezone.utc)
@@ -373,10 +389,33 @@ def _relocate_raw_record_owner_native(
         reservation_durable = False
         activation_started = False
         failure: ArchiveDegradedError | None = None
+        receipt = ArchiveReceipt(
+            receipt_id=receipt_id,
+            record_id=record.id,
+            content_identity=record.content_identity,
+            representation_id=representation_id,
+            location_ref=location_ref,
+            archive_token=raw_store._archive_binding_token(archive_ref),  # noqa: SLF001
+            archive_generation=volume_proof.archive_generation,
+            raw_generation=mutation_authority.generation,
+            encrypted_bytes=len(ciphertext),
+            ciphertext_sha256=ciphertext_hash,
+            verified_at=_utc(reference),
+        )
 
         try:
             with raw_store.cold_archive_mutation_lock(archive_root, verified_volume=volume_proof):
                 _relocation_stage_hook("after_archive_lock")
+                # Existing HAR manifest authority is also the GAF operation
+                # journal. Persist the immutable tuple before reservation or
+                # external bytes, without adding a store or sidecar registry.
+                _durable_write(
+                    manifest_path,
+                    _manifest_with_operation(
+                        _reserved_ownership_manifest_payload(receipt),
+                        operation_binding,
+                    ),
+                )
                 raw_store.register_cold_location(
                     location_ref,
                     object_path,
@@ -401,26 +440,6 @@ def _relocate_raw_record_owner_native(
                     )
                     reservation_durable = True
                     _relocation_stage_hook("after_reservation")
-                    receipt = ArchiveReceipt(
-                        receipt_id=receipt_id,
-                        record_id=record.id,
-                        content_identity=record.content_identity,
-                        representation_id=representation_id,
-                        location_ref=location_ref,
-                        archive_token=raw_store._archive_binding_token(archive_ref),  # noqa: SLF001
-                        archive_generation=volume_proof.archive_generation,
-                        raw_generation=mutation_authority.generation,
-                        encrypted_bytes=len(ciphertext),
-                        ciphertext_sha256=ciphertext_hash,
-                        verified_at=_utc(reference),
-                    )
-                    # The reserved manifest is not a successful archive receipt.
-                    # It is exact, redacted cleanup authority that must become
-                    # durable before the first external byte can be written.
-                    _durable_write(
-                        manifest_path,
-                        _reserved_ownership_manifest_payload(receipt),
-                    )
                     _durable_write(object_path, ciphertext)
                     _relocation_stage_hook("after_object_write")
                     copied = object_path.read_bytes()
@@ -435,7 +454,13 @@ def _relocate_raw_record_owner_native(
                         hot.nonce,
                         key=key or raw_store.resolve_raw_store_key(),
                     )
-                    _durable_write(manifest_path, _manifest_payload(receipt))
+                    _durable_write(
+                        manifest_path,
+                        _manifest_with_operation(
+                            _manifest_payload(receipt),
+                            operation_binding,
+                        ),
+                    )
                     _relocation_stage_hook("after_manifest_write")
                     activation_started = True
                     active = raw_store.activate_raw_representation(
@@ -498,7 +523,19 @@ def relocate_raw_record(
         ),
         None,
     )
-    if hot is None:
+    active_cold = next(
+        (
+            item
+            for item in representations
+            if item.active and item.storage_kind == ARCHIVE_STORAGE_KIND
+        ),
+        None,
+    )
+    source_hot = hot or next(
+        (item for item in representations if item.storage_kind == "postgres_hot"),
+        None,
+    )
+    if source_hot is None or (hot is None and active_cold is None):
         raise ArchiveDegradedError("hot_representation_unavailable")
     pending = [
         item
@@ -507,9 +544,27 @@ def relocate_raw_record(
     ]
     if len(pending) > 1:
         raise ArchiveDegradedError("archive_pending_state_invalid")
-    target_id = pending[0].id if pending else str(uuid4())
+    target_id = (
+        active_cold.id
+        if active_cold is not None
+        else pending[0].id
+        if pending
+        else str(uuid4())
+    )
 
-    def owner_action(representation_id: str, receipt_id: str) -> ArchiveResult:
+    def read_operation_manifest(representation_id: str) -> Mapping[str, object] | None:
+        manifest_path = archive_root / "manifests" / f"{representation_id}.json"
+        try:
+            payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError):
+            return None
+        return payload if isinstance(payload, dict) else None
+
+    def owner_action(
+        representation_id: str,
+        receipt_id: str,
+        operation_binding: Mapping[str, object],
+    ) -> ArchiveResult:
         return _relocate_raw_record_owner_native(
             record,
             archive_root=archive_root,
@@ -521,27 +576,45 @@ def relocate_raw_record(
             volume_ready=volume_ready,
             requested_representation_id=representation_id,
             requested_receipt_id=receipt_id,
+            operation_binding=operation_binding,
         )
 
     adapter = HeimdalRawMediaAdapter(
         record,
-        generation=hot.raw_generation,
+        generation=source_hot.raw_generation,
         archive_action=owner_action,
+        operation_reader=read_operation_manifest,
     )
-    source = adapter.ref_for(hot)
+    source = adapter.ref_for(source_hot)
     target = adapter.ref_for(target_id)
-    idempotency_key = f"heimdal-raw-archive:{record.id}:{hot.raw_generation}:{target_id}"
+    idempotency_key = f"heimdal-raw-archive:{record.id}:{source_hot.raw_generation}:{target_id}"
     outcome = ArchivalTransitionKernel(adapter).transition(
         adapter.artifact,
         source,
         target,
         idempotency_key,
     )
-    if outcome.stage is not TransitionStage.RETIRED or adapter.archive_result is None:
+    if outcome.stage is not TransitionStage.RETIRED:
         operation = adapter.read_operation(idempotency_key)
-        if operation is not None and operation.completed and adapter.archive_result is not None:
-            return cast(ArchiveResult, adapter.archive_result)
-        raise ArchiveDegradedError(adapter.failure_reason or "archive_relocation_failed")
+        if operation is None or not operation.completed:
+            raise ArchiveDegradedError(adapter.failure_reason or "archive_relocation_failed")
+    if adapter.archive_result is None:
+        owner_receipt = adapter.owner_archive_receipt
+        current_active_cold = next(
+            (
+                item
+                for item in raw_store.all_raw_representations(record.id)
+                if item.active and item.storage_kind == ARCHIVE_STORAGE_KIND
+            ),
+            None,
+        )
+        if owner_receipt is None or current_active_cold is None:
+            raise ArchiveDegradedError("archive_relocation_failed")
+        return ArchiveResult(
+            cast(ArchiveReceipt, owner_receipt),
+            ArchiveHealth(True, "ok"),
+            current_active_cold,
+        )
     return cast(ArchiveResult, adapter.archive_result)
 
 
@@ -603,7 +676,11 @@ def run_restore_drill(
     active = [item for item in raw_store.all_raw_representations(record.id) if item.active]
     if len(active) != 1:
         raise ArchiveDegradedError("archived_representation_unavailable")
-    adapter = HeimdalRawMediaAdapter(record, generation=active[0].raw_generation)
+    adapter = HeimdalRawMediaAdapter(
+        record,
+        generation=active[0].raw_generation,
+        read_key=key,
+    )
     authority = AccessAuthority(
         OwnerAuthority.CLASS_ADAPTER,
         OpaqueReference("heimdal-reader", reader),

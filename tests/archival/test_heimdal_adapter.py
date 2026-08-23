@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 import hashlib
+import json
 import secrets
 from pathlib import Path
 from types import SimpleNamespace
@@ -14,10 +15,12 @@ import pytest
 
 from app.archival.adapters.heimdal import HeimdalRawMediaAdapter
 from app.archival.contracts import (
+    AccessAuthority,
     ArtifactClass,
     DerivationClass,
     DurabilityClass,
     LivenessState,
+    OpaqueReference,
     OwnerAuthority,
     PolicyProfile,
     TransitionStage,
@@ -146,6 +149,7 @@ def test_raw_media_restore_reuses_production_gated_read(
 ) -> None:
     records = _admit_all_modalities()
     _archive_root, _adapters = _archive_all(records, tmp_path=tmp_path, monkeypatch=monkeypatch)
+    monkeypatch.delenv("HEIMDAL_RAW_STORE_KEY")
 
     for record in records:
         receipt = local_archive.run_restore_drill(
@@ -158,10 +162,88 @@ def test_raw_media_restore_reuses_production_gated_read(
     assert all(row.purpose == "heimdal_archive_restore_drill" for row in owner_receipts)
     assert all("path" not in row.payload for row in owner_receipts)
 
+    first_representations = raw_store.all_raw_representations(records[0].id)
+    active = next(row for row in first_representations if row.active)
+    retired = next(row for row in first_representations if not row.active)
+    adapter = HeimdalRawMediaAdapter(
+        records[0], generation=active.raw_generation, read_key=_KEY
+    )
+    authority = AccessAuthority(
+        OwnerAuthority.CLASS_ADAPTER,
+        OpaqueReference("heimdal-reader", "authorized-reader"),
+    )
+    restored = ArchivalTransitionKernel(adapter).restore(
+        adapter.artifact,
+        authority,
+        adapter.ref_for(active),
+    )
+    assert restored.stage is TransitionStage.RESTORED
+    assert adapter.read_restore(adapter.artifact, adapter.ref_for(retired)) is None
+
     with pytest.raises(raw_read_gate.RawReadRefusedError):
         local_archive.run_restore_drill(
             raw_read_gate.raw_ref_for(records[0]), reader="not-authorized", key=_KEY
         )
+
+
+def test_archive_operation_binding_and_receipt_survive_process_loss(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    record = _admit_all_modalities()[0]
+    now = datetime.now(timezone.utc)
+    _age_for_archive([record], now=now)
+    record = raw_store.resolve_active_raw_record(record.id)
+    assert record is not None
+    archive_root = tmp_path / "restartable-cold"
+    archive_root.mkdir()
+
+    class SimulatedProcessLoss(BaseException):
+        pass
+
+    def lose_process_after_activation(stage: str) -> None:
+        if stage == "after_activation":
+            raise SimulatedProcessLoss
+
+    monkeypatch.setattr(local_archive, "_relocation_stage_hook", lose_process_after_activation)
+    with pytest.raises(SimulatedProcessLoss):
+        local_archive.relocate_raw_record(
+            record,
+            archive_root=archive_root,
+            archive_ref=_ARCHIVE_REF,
+            now=now,
+            retention_window_days=30,
+            key=_KEY,
+            volume_ready=lambda: _issue_archive_volume_ready(
+                _ARCHIVE_REF,
+                archive_root,
+                _issuer=_ARCHIVE_VOLUME_READY_ISSUER,
+            ),
+        )
+
+    manifest_path = next((archive_root / "manifests").glob("*.json"))
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    operation = manifest["gaf_operation"]
+    assert operation["schema"] == "heimdal_gaf_operation.v1"
+    assert operation["artifact_id"] == record.id
+    assert operation["target_representation_id"] == manifest["representation_id"]
+    assert operation["generation"] == manifest["raw_generation"]
+
+    monkeypatch.setattr(local_archive, "_relocation_stage_hook", lambda _stage: None)
+    recovered = local_archive.relocate_raw_record(
+        record,
+        archive_root=archive_root,
+        archive_ref=_ARCHIVE_REF,
+        now=now,
+        retention_window_days=30,
+        key=_KEY,
+        volume_ready=lambda: _issue_archive_volume_ready(
+            _ARCHIVE_REF,
+            archive_root,
+            _issuer=_ARCHIVE_VOLUME_READY_ISSUER,
+        ),
+    )
+    assert recovered.receipt.receipt_id == manifest["receipt_id"]
+    assert recovered.receipt.representation_id == manifest["representation_id"]
 
 
 def test_raw_media_revocation_preserves_har05_liveness_for_every_modality(
