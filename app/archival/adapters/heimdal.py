@@ -235,11 +235,14 @@ class HeimdalRawMediaAdapter:
         active = [item for item in raw_store.all_raw_representations(self.record.id) if item.active]
         if len(active) != 1:
             raise TransitionFailure(FaultStage.AUTHORIZATION, "active raw representation unavailable")
-        attempt = _RestoreAttempt(str(uuid4()), artifact, authority)
+        representation = self.ref_for(active[0])
+        attempt = _RestoreAttempt(
+            str(uuid4()), artifact, authority, representation
+        )
         self._restore_attempt.set(attempt)
         return self._receipt(
             stage=TransitionStage.ACTIVE,
-            refs=(self.ref_for(active[0]),),
+            refs=(representation,),
             receipt_id=f"read-gate-{attempt.operation_id}",
         )
 
@@ -390,13 +393,10 @@ class HeimdalRawMediaAdapter:
             or authority != attempt.authority
         ):
             raise TransitionConflict("restore authority differs from the authorized gate")
-        attempt = _RestoreAttempt(
-            attempt.operation_id,
-            attempt.artifact,
-            attempt.authority,
-            representation,
-        )
-        self._restore_attempt.set(attempt)
+        if attempt.representation != representation:
+            raise TransitionConflict(
+                "restore representation differs from the authorized gate"
+            )
         correlation = self._restore_correlation(
             artifact, representation, authority, attempt.operation_id
         )
@@ -576,8 +576,13 @@ class HeimdalRawMediaAdapter:
                 if not isinstance(manifest.get(field), str) or not manifest.get(field):
                     raise TransitionConflict(f"{lineage} HAR manifest binding differs")
         ownership_state = manifest.get("ownership_state")
-        if manifest.get("ownership_state") not in {"reserved", "verified"} or any(
-            manifest.get(field) != value for field, value in expected.items()
+        if type(ownership_state) is not str or ownership_state not in {
+            "reserved",
+            "verified",
+        } or any(
+            type(manifest.get(field)) is not type(value)
+            or manifest.get(field) != value
+            for field, value in expected.items()
         ):
             raise TransitionConflict(f"{lineage} HAR manifest binding differs")
         if target is None:
@@ -588,6 +593,8 @@ class HeimdalRawMediaAdapter:
         receipt_id = manifest.get("receipt_id")
         ciphertext_hash = hashlib.sha256(source.ciphertext).hexdigest()
         verified_at = manifest.get("verified_at")
+        if type(receipt_id) is not str or type(verified_at) is not str:
+            raise TransitionConflict(f"{lineage} HAR receipt fields are invalid")
         try:
             canonical_receipt_id = str(UUID(str(receipt_id)))
             parsed_verified_at = datetime.fromisoformat(
@@ -598,7 +605,9 @@ class HeimdalRawMediaAdapter:
         if (
             manifest.get("schema") != _HAR_ARCHIVE_SCHEMA
             or canonical_receipt_id != receipt_id
+            or type(manifest.get("encrypted_bytes")) is not int
             or manifest.get("encrypted_bytes") != len(source.ciphertext)
+            or type(manifest.get("ciphertext_sha256")) is not str
             or manifest.get("ciphertext_sha256") != ciphertext_hash
             or parsed_verified_at.tzinfo is None
         ):

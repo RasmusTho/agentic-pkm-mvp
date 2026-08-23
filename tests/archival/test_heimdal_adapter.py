@@ -305,6 +305,15 @@ def test_restore_refuses_representation_change_between_authorization_and_read(
             authority,
             adapter.ref_for(active),
         )
+    with pytest.raises(
+        TransitionConflict,
+        match="restore representation differs from the authorized gate",
+    ):
+        adapter.restore(
+            adapter.artifact,
+            authority,
+            adapter.ref_for(retired),
+        )
     assert raw_read_gate.all_raw_read_receipts() == []
     assert adapter.read_restore(adapter.artifact, adapter.ref_for(active)) is None
 
@@ -391,6 +400,7 @@ def test_current_manifest_corruption_never_replays_terminal_success(
         "record_id": str(uuid4()),
         "receipt_id": "not-a-uuid",
         "schema": "wrong-schema",
+        "raw_generation": True,
         "encrypted_bytes": manifest["encrypted_bytes"] + 1,
         "ciphertext_sha256": "0" * 64,
     }
@@ -537,6 +547,26 @@ def test_registered_pending_target_requires_readable_object_manifest(
     ]
     assert len(pending) == 1
     monkeypatch.setattr(local_archive, "_relocation_stage_hook", lambda _stage: None)
+
+    boolean_generation = json.loads(manifest_bytes)
+    boolean_generation["raw_generation"] = True
+    manifest_path.write_text(
+        json.dumps(boolean_generation, sort_keys=True, separators=(",", ":")) + "\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(TransitionConflict, match="current HAR manifest binding differs"):
+        local_archive.relocate_raw_record(
+            record,
+            archive_root=archive_root,
+            archive_ref=_ARCHIVE_REF,
+            now=now,
+            retention_window_days=30,
+            key=_KEY,
+            volume_ready=lambda: _issue_archive_volume_ready(
+                _ARCHIVE_REF, archive_root, _issuer=_ARCHIVE_VOLUME_READY_ISSUER
+            ),
+        )
+    manifest_path.write_bytes(manifest_bytes)
 
     for malformed in (b"{", b"[]", None):
         if malformed is None:
