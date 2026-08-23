@@ -395,7 +395,7 @@ a new owner-doc authority surface.
 After two rejected independent review rounds on one PR, the production review/publication gate
 fails closed before another expensive proof or publication cycle. This count is PR-level: changing a
 mechanism identifier, reviewer, model, branch, or head SHA does not reset it. The gate composes with
-and does not replace the per-mechanism 2+2 repair budget or the Mechanism Convergence Gate.
+and does not replace the existing per-mechanism repair accounting or the Mechanism Convergence Gate.
 
 An authenticated receipt bound to the current PR number, head SHA, governing Issue, and a canonical
 SHA-256 governing-contract identity must select exactly one outcome: `continue_unchanged`, `split`,
