@@ -433,6 +433,126 @@ def test_operation_binding_crash_before_registration_reuses_exact_target(
     ]
 
 
+def test_registered_pending_target_requires_readable_object_manifest(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    record = _admit_all_modalities()[0]
+    now = datetime.now(timezone.utc)
+    _age_for_archive([record], now=now)
+    record = raw_store.resolve_active_raw_record(record.id)
+    assert record is not None
+    archive_root = tmp_path / "pending-manifest-cold"
+    archive_root.mkdir()
+
+    class PendingProcessLoss(BaseException):
+        pass
+
+    def lose_after_reservation(stage: str) -> None:
+        if stage == "after_reservation":
+            raise PendingProcessLoss
+
+    monkeypatch.setattr(local_archive, "_relocation_stage_hook", lose_after_reservation)
+    with pytest.raises(PendingProcessLoss):
+        local_archive.relocate_raw_record(
+            record,
+            archive_root=archive_root,
+            archive_ref=_ARCHIVE_REF,
+            now=now,
+            retention_window_days=30,
+            key=_KEY,
+            volume_ready=lambda: _issue_archive_volume_ready(
+                _ARCHIVE_REF, archive_root, _issuer=_ARCHIVE_VOLUME_READY_ISSUER
+            ),
+        )
+    manifest_path = next((archive_root / "manifests").glob("*.json"))
+    manifest_bytes = manifest_path.read_bytes()
+    pending = [
+        row
+        for row in raw_store.all_raw_representations(record.id)
+        if row.storage_kind == local_archive.ARCHIVE_STORAGE_KIND and not row.active
+    ]
+    assert len(pending) == 1
+    monkeypatch.setattr(local_archive, "_relocation_stage_hook", lambda _stage: None)
+
+    for malformed in (b"{", b"[]", None):
+        if malformed is None:
+            manifest_path.unlink()
+        else:
+            manifest_path.write_bytes(malformed)
+        with pytest.raises(
+            local_archive.ArchiveDegradedError, match="archive_manifest_invalid"
+        ):
+            local_archive.relocate_raw_record(
+                record,
+                archive_root=archive_root,
+                archive_ref=_ARCHIVE_REF,
+                now=now,
+                retention_window_days=30,
+                key=_KEY,
+                volume_ready=lambda: _issue_archive_volume_ready(
+                    _ARCHIVE_REF,
+                    archive_root,
+                    _issuer=_ARCHIVE_VOLUME_READY_ISSUER,
+                ),
+            )
+        rows = raw_store.all_raw_representations(record.id)
+        assert len([row for row in rows if row.active]) == 1
+        assert next(row for row in rows if row.active).storage_kind == "postgres_hot"
+        assert len(
+            [
+                row
+                for row in rows
+                if row.storage_kind == local_archive.ARCHIVE_STORAGE_KIND
+                and not row.active
+            ]
+        ) == 1
+        manifest_path.write_bytes(manifest_bytes)
+
+
+def test_registered_terminal_target_requires_readable_object_manifest(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    records = _admit_all_modalities()
+    record = records[0]
+    archive_root, _adapters = _archive_all(
+        records, tmp_path=tmp_path, monkeypatch=monkeypatch
+    )
+    manifest_path, manifest = next(
+        (path, candidate)
+        for path in (archive_root / "manifests").glob("*.json")
+        if (candidate := json.loads(path.read_text(encoding="utf-8")))["record_id"]
+        == record.id
+    )
+    manifest_bytes = manifest_path.read_bytes()
+
+    for malformed in (b"{", b"[]", None):
+        if malformed is None:
+            manifest_path.unlink()
+        else:
+            manifest_path.write_bytes(malformed)
+        with pytest.raises(
+            local_archive.ArchiveDegradedError, match="archive_manifest_invalid"
+        ):
+            local_archive.relocate_raw_record(
+                record,
+                archive_root=archive_root,
+                archive_ref=_ARCHIVE_REF,
+                now=datetime.now(timezone.utc),
+                retention_window_days=30,
+                key=_KEY,
+                volume_ready=lambda: _issue_archive_volume_ready(
+                    _ARCHIVE_REF,
+                    archive_root,
+                    _issuer=_ARCHIVE_VOLUME_READY_ISSUER,
+                ),
+            )
+        rows = raw_store.all_raw_representations(record.id)
+        active = [row for row in rows if row.active]
+        assert len(active) == 1
+        assert active[0].id == manifest["representation_id"]
+        manifest_path.write_bytes(manifest_bytes)
+
+
 def test_legacy_har_manifest_retry_upgrades_binding_without_fabricated_completion(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

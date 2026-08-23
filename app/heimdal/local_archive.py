@@ -621,11 +621,22 @@ def relocate_raw_record(
 
     def read_operation_manifest(representation_id: str) -> Mapping[str, object] | None:
         manifest_path = archive_root / "manifests" / f"{representation_id}.json"
+        registered_target = any(
+            item.id == representation_id
+            and item.storage_kind == ARCHIVE_STORAGE_KIND
+            for item in representations
+        )
         try:
             payload = json.loads(manifest_path.read_text(encoding="utf-8"))
-        except (OSError, UnicodeError, json.JSONDecodeError):
+        except FileNotFoundError as exc:
+            if registered_target:
+                raise ArchiveDegradedError("archive_manifest_invalid") from exc
             return None
-        return payload if isinstance(payload, dict) else None
+        except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+            raise ArchiveDegradedError("archive_manifest_invalid") from exc
+        if not isinstance(payload, dict):
+            raise ArchiveDegradedError("archive_manifest_invalid")
+        return payload
 
     def owner_action(
         representation_id: str,
