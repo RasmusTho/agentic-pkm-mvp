@@ -24,8 +24,9 @@ without sharing an artifact ontology, database, retention policy, or access poli
 - Add provider-free typed values and protocols under `app/archival/` for artifact identity,
   representation identity, authority owner, durability/derivation class, generation, policy profile,
   transition stage, typed liveness, and redacted receipts.
-- Define adapter methods for enumerate/resolve, authorize read, reserve representation, verify,
-  activate, retire, restore, erase/revoke where allowed, and doctor/reconcile.
+- Define one public adapter protocol for enumerate/resolve, authorize read, immutable pre-effect
+  operation binding and readback, reserve/copy/verify/receipt/activate/retire/complete, exact
+  restore and receipt readback, all-representation cleanup proof, and doctor/reconcile.
 - Add ARCHIVE-MUST/GATE/DOCTOR entries to the existing invariant registry; do not create a second
   registry.
 - Encode that location is never identity and that class-specific owner state remains authoritative.
@@ -54,6 +55,14 @@ artifact type or create another central registry that competes with HKA/PDM/GOV/
 - [ ] Adapter and receipt types carry opaque representation refs and reject path text as identity or
       access authority.
       Verify: `tests/archival/test_contracts.py::test_location_cannot_mint_identity_or_access_authority`
+- [ ] The transition kernel consumes only the published `ArchivalAdapter`; the contract carries
+      immutable operation binding for distinct source and target references, owner-native readable
+      source and cleanup-state readback, exact restore, and cleanup-proof types without adding a
+      kernel registry, lock, content store, or artifact/policy authority.
+      Verify: `tests/architecture/test_governed_archival_contract.py::test_transition_kernel_uses_only_published_archival_adapter`
+      Verify: `tests/architecture/test_governed_archival_contract.py::test_transition_kernel_has_no_private_persistence_or_content_store`
+      Verify: `tests/archival/test_transition_kernel.py::test_equal_source_and_target_fail_closed_before_binding`
+      Verify: `tests/archival/test_transition_kernel.py::test_restore_requires_successful_exact_authorization_gate`
 - [ ] Policy profiles distinguish raw evidence, retained source, HKA recovery, and rebuildable
       derivative outcomes rather than exposing one universal delete rule.
       Verify: `tests/archival/test_contracts.py::test_policy_profiles_keep_class_specific_terminal_outcomes`

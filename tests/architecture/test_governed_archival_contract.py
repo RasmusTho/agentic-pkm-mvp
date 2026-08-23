@@ -5,6 +5,9 @@ from __future__ import annotations
 from pathlib import Path
 import inspect
 
+from typing import get_type_hints
+
+from app.archival.contracts import ArchivalAdapter
 from app.archival.transition import ArchivalTransitionKernel
 
 
@@ -40,3 +43,13 @@ def test_transition_kernel_has_no_private_persistence_or_content_store() -> None
     assert "dict[" not in source
     assert "bytes" not in source
     assert "registry" not in source.lower()
+    assert "Lock(" not in source
+    assert "RLock(" not in source
+
+
+def test_transition_kernel_uses_only_published_archival_adapter() -> None:
+    module_source = (ROOT / "app/archival/transition.py").read_text()
+    hints = get_type_hints(ArchivalTransitionKernel.__init__)
+
+    assert hints["adapter"] is ArchivalAdapter
+    assert "class TransitionAdapter" not in module_source
