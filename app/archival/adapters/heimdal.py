@@ -431,7 +431,10 @@ class HeimdalRawMediaAdapter:
             and receipt.reader == authority.grant_ref.token
             and receipt.payload.get(_RESTORE_OPERATION_KEY) == attempt.operation_id
             and receipt.payload.get(_RESTORE_CORRELATION_KEY) == correlation
-            and receipt.payload.get("archival_generation") == artifact.generation.value
+            and receipt.content_identity == self.record.content_identity
+            and type(receipt.payload.get("archival_generation")) is int
+            and receipt.payload.get("archival_generation")
+            == artifact.generation.value
             and receipt.payload.get("archival_representation_id")
             == _representation_id(representation)
             and receipt.payload.get(
@@ -602,6 +605,31 @@ class HeimdalRawMediaAdapter:
             or parsed_verified_at.tzinfo is None
         ):
             raise TransitionConflict(f"{lineage} HAR receipt fields differ")
+        if target is not None and ownership_state == "verified":
+            try:
+                target_ciphertext = raw_store._representation_ciphertext(target)  # noqa: SLF001
+                raw_store.decrypt_and_verify_raw_bytes(
+                    self.record.content_identity,
+                    target_ciphertext,
+                    target.nonce,
+                    key=self._read_key or raw_store.resolve_raw_store_key(),
+                )
+            except (
+                raw_store.RawRepresentationUnavailableError,
+                raw_store.RawRepresentationIdentityMismatchError,
+                OSError,
+            ) as exc:
+                raise TransitionConflict(
+                    f"{lineage} HAR target ciphertext is unavailable"
+                ) from exc
+            if (
+                len(target_ciphertext) != manifest.get("encrypted_bytes")
+                or hashlib.sha256(target_ciphertext).hexdigest()
+                != manifest.get("ciphertext_sha256")
+            ):
+                raise TransitionConflict(
+                    f"{lineage} HAR target ciphertext differs"
+                )
 
     def _restore_correlation(
         self,

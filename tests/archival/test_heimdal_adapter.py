@@ -269,6 +269,39 @@ def test_concurrent_restore_attempts_read_back_only_their_own_receipt(
     ) == 2
 
 
+def test_restore_readback_rejects_typed_generation_or_content_identity_forgery(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    records = _admit_all_modalities()
+    record = records[0]
+    _archive_root, _adapters = _archive_all(
+        records, tmp_path=tmp_path, monkeypatch=monkeypatch
+    )
+    active = next(
+        row for row in raw_store.all_raw_representations(record.id) if row.active
+    )
+    adapter = HeimdalRawMediaAdapter(
+        record, generation=active.raw_generation, read_key=_KEY
+    )
+    authority = AccessAuthority(
+        OwnerAuthority.CLASS_ADAPTER,
+        OpaqueReference("heimdal-reader", "authorized-reader"),
+    )
+    adapter.authorize_read(adapter.artifact, authority)
+    representation = adapter.ref_for(active)
+    adapter.restore(adapter.artifact, authority, representation)
+    receipt_store = raw_read_gate._MEMORY_STORE  # noqa: SLF001
+    with receipt_store._lock:  # noqa: SLF001
+        owner_receipt = receipt_store._rows[0]  # noqa: SLF001
+        receipt_store._rows[0] = replace(  # noqa: SLF001
+            owner_receipt,
+            content_identity="forged-content-identity",
+            payload={**owner_receipt.payload, "archival_generation": True},
+        )
+
+    assert adapter.read_restore(adapter.artifact, representation) is None
+
+
 def test_restore_refuses_representation_change_between_authorization_and_read(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -459,6 +492,51 @@ def test_terminal_replay_returns_only_the_strictly_validated_owner_receipt(
     assert target_reads == 3
     assert recovered.receipt.record_id == record.id
     assert json.loads(manifest_path.read_text(encoding="utf-8"))["record_id"] != record.id
+
+
+def test_terminal_replay_requires_intact_bound_cold_ciphertext(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    records = _admit_all_modalities()
+    record = records[0]
+    archive_root, _adapters = _archive_all(
+        records, tmp_path=tmp_path, monkeypatch=monkeypatch
+    )
+    manifest_path, manifest = next(
+        (path, candidate)
+        for path in (archive_root / "manifests").glob("*.json")
+        if (candidate := json.loads(path.read_text(encoding="utf-8")))["record_id"]
+        == record.id
+    )
+    object_path = (
+        archive_root / "representations" / f"{manifest['representation_id']}.bin"
+    )
+    object_bytes = object_path.read_bytes()
+
+    for corrupted_bytes in (None, b"corrupt-cold-ciphertext"):
+        if corrupted_bytes is None:
+            object_path.unlink()
+        else:
+            object_path.write_bytes(corrupted_bytes)
+        with pytest.raises(TransitionConflict, match="HAR target ciphertext"):
+            local_archive.relocate_raw_record(
+                record,
+                archive_root=archive_root,
+                archive_ref=_ARCHIVE_REF,
+                now=datetime.now(timezone.utc),
+                retention_window_days=30,
+                key=_KEY,
+                volume_ready=lambda: _issue_archive_volume_ready(
+                    _ARCHIVE_REF,
+                    archive_root,
+                    _issuer=_ARCHIVE_VOLUME_READY_ISSUER,
+                ),
+            )
+        rows = raw_store.all_raw_representations(record.id)
+        active = [row for row in rows if row.active]
+        assert len(active) == 1
+        assert active[0].id == manifest["representation_id"]
+        object_path.write_bytes(object_bytes)
 
 
 def test_current_manifest_corruption_never_replays_terminal_success(

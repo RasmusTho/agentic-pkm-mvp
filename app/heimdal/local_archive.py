@@ -725,6 +725,7 @@ def relocate_raw_record(
         generation=source_hot.raw_generation,
         archive_action=owner_action,
         operation_reader=read_operation_manifest,
+        read_key=key,
     )
     source = adapter.ref_for(source_hot)
     target = adapter.ref_for(target_id)
