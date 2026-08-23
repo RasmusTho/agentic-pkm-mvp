@@ -298,6 +298,22 @@ def _archive_receipt_from_manifest(payload: Mapping[str, object]) -> ArchiveRece
     return receipt
 
 
+def _read_archive_manifest(
+    manifest_path: Path, *, required: bool
+) -> Mapping[str, object] | None:
+    try:
+        payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except FileNotFoundError as exc:
+        if required:
+            raise ArchiveDegradedError("archive_manifest_invalid") from exc
+        return None
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise ArchiveDegradedError("archive_manifest_invalid") from exc
+    if not isinstance(payload, dict):
+        raise ArchiveDegradedError("archive_manifest_invalid")
+    return payload
+
+
 def _active_hot(record_id: str) -> RawRepresentation:
     active = [item for item in raw_store.all_raw_representations(record_id) if item.active]
     if len(active) != 1 or active[0].storage_kind != "postgres_hot":
@@ -415,6 +431,11 @@ def _relocate_raw_record_owner_native(
         )
         object_path = objects / f"{representation_id}.bin"
         manifest_path = manifests / f"{representation_id}.json"
+        if existing_manifest is None:
+            existing_manifest = _read_archive_manifest(
+                manifest_path,
+                required=pending is not None,
+            )
         reservation_durable = False
         activation_started = False
         failure: ArchiveDegradedError | None = None
@@ -492,10 +513,13 @@ def _relocate_raw_record_owner_native(
                         verified_volume=volume_proof,
                         _authority=mutation_authority,
                     )
+                    # The registration call has crossed the commit boundary.
+                    # Preserve its operation manifest even if the following
+                    # checkpoint commits and raises before acknowledging it.
+                    reservation_durable = True
                     raw_liveness._checkpoint_raw_mutation_authority(  # noqa: SLF001
                         mutation_authority
                     )
-                    reservation_durable = True
                     _relocation_stage_hook("after_reservation")
                     if (
                         existing_manifest is None
@@ -625,19 +649,9 @@ def relocate_raw_record(
         registered_target = any(
             item.id == representation_id
             and item.storage_kind == ARCHIVE_STORAGE_KIND
-            for item in representations
+            for item in raw_store.all_raw_representations(record.id)
         )
-        try:
-            payload = json.loads(manifest_path.read_text(encoding="utf-8"))
-        except FileNotFoundError as exc:
-            if registered_target:
-                raise ArchiveDegradedError("archive_manifest_invalid") from exc
-            return None
-        except (OSError, UnicodeError, json.JSONDecodeError) as exc:
-            raise ArchiveDegradedError("archive_manifest_invalid") from exc
-        if not isinstance(payload, dict):
-            raise ArchiveDegradedError("archive_manifest_invalid")
-        return payload
+        return _read_archive_manifest(manifest_path, required=registered_target)
 
     def owner_action(
         representation_id: str,

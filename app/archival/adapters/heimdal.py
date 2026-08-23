@@ -282,8 +282,7 @@ class HeimdalRawMediaAdapter:
         manifest = self._read_manifest(binding)
         legacy_manifest = manifest is not None and "gaf_operation" not in manifest
         if manifest is not None and not legacy_manifest:
-            if manifest.get("gaf_operation") != self._binding_payload(binding):
-                raise TransitionConflict("durable Heimdal operation binding differs")
+            self._validate_operation_binding(binding, manifest)
         target_id = _representation_id(binding.target)
         rows = raw_store.all_raw_representations(self.record.id)
         target = next((row for row in rows if row.id == target_id), None)
@@ -517,6 +516,20 @@ class HeimdalRawMediaAdapter:
             "source_representation_id": _representation_id(binding.source),
             "target_representation_id": _representation_id(binding.target),
         }
+
+    @classmethod
+    def _validate_operation_binding(
+        cls, binding: OperationBinding, manifest: Mapping[str, object]
+    ) -> None:
+        expected = cls._binding_payload(binding)
+        actual = manifest.get("gaf_operation")
+        if not isinstance(actual, dict) or set(actual) != set(expected):
+            raise TransitionConflict("durable Heimdal operation binding differs")
+        if any(
+            type(actual[field]) is not type(value) or actual[field] != value
+            for field, value in expected.items()
+        ):
+            raise TransitionConflict("durable Heimdal operation binding differs")
 
     def _read_manifest(self, binding: OperationBinding) -> Mapping[str, object] | None:
         if self._operation_reader is None:

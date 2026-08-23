@@ -374,6 +374,29 @@ def test_current_manifest_corruption_never_replays_terminal_success(
                     _issuer=_ARCHIVE_VOLUME_READY_ISSUER,
                 ),
             )
+    boolean_generation = dict(manifest)
+    boolean_generation["gaf_operation"] = {
+        **manifest["gaf_operation"],
+        "generation": True,
+    }
+    manifest_path.write_text(
+        json.dumps(boolean_generation, sort_keys=True, separators=(",", ":")) + "\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(TransitionConflict, match="durable Heimdal operation binding differs"):
+        local_archive.relocate_raw_record(
+            active,
+            archive_root=archive_root,
+            archive_ref=_ARCHIVE_REF,
+            now=datetime.now(timezone.utc),
+            retention_window_days=30,
+            key=_KEY,
+            volume_ready=lambda: _issue_archive_volume_ready(
+                _ARCHIVE_REF,
+                archive_root,
+                _issuer=_ARCHIVE_VOLUME_READY_ISSUER,
+            ),
+        )
     manifest_path.write_text(
         json.dumps(manifest, sort_keys=True, separators=(",", ":")) + "\n",
         encoding="utf-8",

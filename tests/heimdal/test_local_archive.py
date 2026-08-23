@@ -442,6 +442,116 @@ def test_verify_before_hot_representation_retire_and_fail_closed(
     assert retried.active_representation.active
 
 
+def test_registration_checkpoint_after_effect_preserves_retry_manifest(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    record, now = _eligible(_insert(b"checkpoint-after-effect"))
+    archive_root = tmp_path / "mounted-cold"
+    archive_root.mkdir()
+    original_checkpoint = raw_liveness._checkpoint_raw_mutation_authority  # noqa: SLF001
+
+    def commit_then_raise(authority: raw_liveness.RawMutationAuthority) -> None:
+        original_checkpoint(authority)
+        raise RuntimeError("checkpoint acknowledgement lost")
+
+    monkeypatch.setattr(
+        raw_liveness,
+        "_checkpoint_raw_mutation_authority",
+        commit_then_raise,
+    )
+    with pytest.raises(local_archive.ArchiveDegradedError, match="archive_relocation_failed"):
+        local_archive.relocate_raw_record(
+            record,
+            archive_root=archive_root,
+            archive_ref=_ARCHIVE_REF,
+            now=now,
+            retention_window_days=30,
+            key=_KEY,
+            volume_ready=lambda: _test_volume_ready(_ARCHIVE_REF, archive_root),
+        )
+    pending = [
+        item
+        for item in all_raw_representations(record.id)
+        if item.storage_kind == "encrypted_local_cold" and not item.active
+    ]
+    assert len(pending) == 1
+    manifest_path = archive_root / "manifests" / f"{pending[0].id}.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert manifest["ownership_state"] == "reserved"
+    assert manifest["representation_id"] == pending[0].id
+
+    monkeypatch.setattr(
+        raw_liveness,
+        "_checkpoint_raw_mutation_authority",
+        original_checkpoint,
+    )
+    retried = local_archive.relocate_raw_record(
+        record,
+        archive_root=archive_root,
+        archive_ref=_ARCHIVE_REF,
+        now=now,
+        retention_window_days=30,
+        key=_KEY,
+        volume_ready=lambda: _test_volume_ready(_ARCHIVE_REF, archive_root),
+    )
+    assert retried.receipt.representation_id == pending[0].id
+    assert retried.active_representation.active
+
+
+def test_owner_writer_rechecks_missing_pending_manifest_inside_relocation_fence(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    record, now = _eligible(_insert(b"manifest-fence-recheck"))
+    archive_root = tmp_path / "mounted-cold"
+    archive_root.mkdir()
+
+    class PendingProcessLoss(BaseException):
+        pass
+
+    def lose_after_reservation(stage: str) -> None:
+        if stage == "after_reservation":
+            raise PendingProcessLoss
+
+    monkeypatch.setattr(local_archive, "_relocation_stage_hook", lose_after_reservation)
+    with pytest.raises(PendingProcessLoss):
+        local_archive.relocate_raw_record(
+            record,
+            archive_root=archive_root,
+            archive_ref=_ARCHIVE_REF,
+            now=now,
+            retention_window_days=30,
+            key=_KEY,
+            volume_ready=lambda: _test_volume_ready(_ARCHIVE_REF, archive_root),
+        )
+    pending = next(
+        item
+        for item in all_raw_representations(record.id)
+        if item.storage_kind == "encrypted_local_cold" and not item.active
+    )
+    manifest_path = archive_root / "manifests" / f"{pending.id}.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest_path.unlink()
+    monkeypatch.setattr(local_archive, "_relocation_stage_hook", lambda _stage: None)
+
+    with pytest.raises(local_archive.ArchiveDegradedError, match="archive_manifest_invalid"):
+        local_archive._relocate_raw_record_owner_native(
+            record,
+            archive_root=archive_root,
+            archive_ref=_ARCHIVE_REF,
+            now=now,
+            retention_window_days=30,
+            key=_KEY,
+            volume_ready=lambda: _test_volume_ready(_ARCHIVE_REF, archive_root),
+            requested_representation_id=pending.id,
+            requested_receipt_id=str(manifest["receipt_id"]),
+            operation_binding=manifest["gaf_operation"],
+            existing_manifest=None,
+        )
+    rows = all_raw_representations(record.id)
+    assert next(item for item in rows if item.active).storage_kind == "postgres_hot"
+    assert len([item for item in rows if not item.active]) == 1
+
+
 def test_relocation_reservation_fences_retention_and_crash_cleanup(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
