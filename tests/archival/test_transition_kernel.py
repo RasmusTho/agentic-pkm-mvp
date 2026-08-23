@@ -310,10 +310,14 @@ def test_resumed_and_after_effect_faults_reconcile_through_readback() -> None:
         adapter.fail_once(fault)
 
         uncertain = kernel.transition(descriptor, source, target, key)
-        assert uncertain.liveness.state in {
-            LivenessState.TRANSITION_PENDING,
-            LivenessState.UNAVAILABLE,
-        }
+        if fault is FaultStage.COMPLETION_AFTER_EFFECT:
+            assert uncertain.stage is TransitionStage.RETIRED
+            assert uncertain.receipt is not None
+        else:
+            assert uncertain.liveness.state in {
+                LivenessState.TRANSITION_PENDING,
+                LivenessState.UNAVAILABLE,
+            }
 
         completed = kernel.transition(descriptor, source, target, key)
         assert completed.stage is TransitionStage.RETIRED
@@ -337,6 +341,27 @@ def test_first_success_and_retry_return_identical_completed_receipt() -> None:
     assert first.receipt.stage is TransitionStage.RETIRED
     assert first.receipt == retried.receipt
     assert operation is not None
+    assert first.receipt == operation.receipt
+
+
+def test_completion_after_effect_returns_canonical_completed_receipt() -> None:
+    descriptor, source, target, adapter, kernel = _fixture()
+    adapter.fail_once(FaultStage.COMPLETION_AFTER_EFFECT)
+
+    first = kernel.transition(
+        descriptor, source, target, "completion-after-effect-canonical"
+    )
+    retried = kernel.transition(
+        descriptor, source, target, "completion-after-effect-canonical"
+    )
+    operation = adapter.read_operation("completion-after-effect-canonical")
+
+    assert first.stage is TransitionStage.RETIRED
+    assert first.terminal
+    assert first.receipt is not None
+    assert first.receipt == retried.receipt
+    assert operation is not None
+    assert operation.completed
     assert first.receipt == operation.receipt
 
 

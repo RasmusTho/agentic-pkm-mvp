@@ -74,6 +74,7 @@ ordering would let each adapter recreate the same crash windows that HAR-04/HAR-
       Verify: `tests/archival/test_transition_kernel.py::test_resumed_and_after_effect_faults_reconcile_through_readback`
 - [ ] First success and retry return the identical canonical completed `retired` receipt.
       Verify: `tests/archival/test_transition_kernel.py::test_first_success_and_retry_return_identical_completed_receipt`
+      Verify: `tests/archival/test_transition_kernel.py::test_completion_after_effect_returns_canonical_completed_receipt`
       Verify: `tests/archival/test_transition_kernel.py::test_indeterminate_transition_receipt_cannot_activate_or_retire`
 - [ ] Concurrent same-key calls converge on one owner operation; incompatible competing bindings
       return typed conflict before source retirement.

@@ -618,6 +618,8 @@ class ArchivalTransitionKernel:
                 self._validate_operation(binding, operation)
             except TransitionConflict:
                 return self._conflict("operation-readback-binding-conflict")
+            if operation.completed:
+                return self._completed(binding, operation)
         return TransitionResult(
             TransitionStage.RESERVED,
             Liveness(
