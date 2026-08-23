@@ -389,6 +389,7 @@ class HeimdalRawMediaAdapter:
             purpose="heimdal_archive_restore_drill",
             key=self._read_key,
             expected_representation_id=_representation_id(representation),
+            expected_raw_generation=artifact.generation.value,
             payload={
                 _RESTORE_OPERATION_KEY: attempt.operation_id,
                 _RESTORE_CORRELATION_KEY: correlation,
@@ -437,6 +438,12 @@ class HeimdalRawMediaAdapter:
                 raw_read_gate.ACTUAL_REPRESENTATION_ID_PAYLOAD_KEY
             )
             == _representation_id(representation)
+            and type(
+                receipt.payload.get(raw_read_gate.ACTUAL_RAW_GENERATION_PAYLOAD_KEY)
+            )
+            is int
+            and receipt.payload.get(raw_read_gate.ACTUAL_RAW_GENERATION_PAYLOAD_KEY)
+            == artifact.generation.value
         ]
         if not matches:
             return None

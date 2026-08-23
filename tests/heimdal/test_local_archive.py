@@ -620,9 +620,58 @@ def test_owner_writer_rechecks_missing_pending_manifest_inside_relocation_fence(
             operation_binding=manifest["gaf_operation"],
             existing_manifest=manifest,
         )
+    naive_timestamp = dict(manifest)
+    naive_timestamp["verified_at"] = str(manifest["verified_at"]).removesuffix("Z")
+    manifest_path.write_text(
+        json.dumps(naive_timestamp, sort_keys=True, separators=(",", ":")) + "\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(local_archive.ArchiveDegradedError, match="archive_manifest_invalid"):
+        local_archive._relocate_raw_record_owner_native(
+            record,
+            archive_root=archive_root,
+            archive_ref=_ARCHIVE_REF,
+            now=now,
+            retention_window_days=30,
+            key=_KEY,
+            volume_ready=lambda: _test_volume_ready(_ARCHIVE_REF, archive_root),
+            requested_representation_id=pending.id,
+            requested_receipt_id=str(manifest["receipt_id"]),
+            operation_binding=manifest["gaf_operation"],
+            existing_manifest=manifest,
+        )
     rows = all_raw_representations(record.id)
     assert next(item for item in rows if item.active).storage_kind == "postgres_hot"
     assert len([item for item in rows if not item.active]) == 1
+
+
+def test_relocation_rejects_source_generation_drift_before_manifest_write(
+    tmp_path: Path,
+) -> None:
+    record, now = _eligible(_insert(b"source-generation-drift"))
+    archive_root = tmp_path / "mounted-cold"
+    archive_root.mkdir()
+    hot = next(item for item in all_raw_representations(record.id) if item.active)
+    store = raw_store._MEMORY_STORE  # noqa: SLF001
+    with store._lock:  # noqa: SLF001
+        store._representations[hot.id] = replace(  # noqa: SLF001
+            hot, raw_generation=hot.raw_generation + 1
+        )
+
+    with pytest.raises(local_archive.ArchiveDegradedError, match="archive_manifest_invalid"):
+        local_archive.relocate_raw_record(
+            record,
+            archive_root=archive_root,
+            archive_ref=_ARCHIVE_REF,
+            now=now,
+            retention_window_days=30,
+            key=_KEY,
+            volume_ready=lambda: _test_volume_ready(_ARCHIVE_REF, archive_root),
+        )
+    rows = all_raw_representations(record.id)
+    assert len(rows) == 1 and rows[0].active
+    assert list((archive_root / "manifests").glob("*.json")) == []
+    assert list((archive_root / "representations").glob("*.bin")) == []
 
 
 def test_relocation_reservation_fences_retention_and_crash_cleanup(

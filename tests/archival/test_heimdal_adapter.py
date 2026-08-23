@@ -319,6 +319,38 @@ def test_restore_refuses_representation_change_between_authorization_and_read(
     assert adapter.read_restore(adapter.artifact, adapter.ref_for(active)) is None
 
 
+def test_restore_refuses_owner_liveness_generation_drift() -> None:
+    record = _admit_all_modalities()[0]
+    active = next(
+        row for row in raw_store.all_raw_representations(record.id) if row.active
+    )
+    adapter = HeimdalRawMediaAdapter(
+        record, generation=active.raw_generation, read_key=_KEY
+    )
+    authority = AccessAuthority(
+        OwnerAuthority.CLASS_ADAPTER,
+        OpaqueReference("heimdal-reader", "authorized-reader"),
+    )
+    adapter.authorize_read(adapter.artifact, authority)
+    with raw_liveness._MEMORY_FENCE:  # noqa: SLF001
+        generation = raw_liveness._MEMORY.generations_by_record[record.id]  # noqa: SLF001
+        raw_liveness._MEMORY.generations_by_record[record.id] = replace(  # noqa: SLF001
+            generation, generation=generation.generation + 1
+        )
+
+    with pytest.raises(
+        raw_read_gate.RawReadRefusedError,
+        match="active raw generation differs",
+    ):
+        adapter.restore(
+            adapter.artifact,
+            authority,
+            adapter.ref_for(active),
+        )
+    assert raw_read_gate.all_raw_read_receipts() == []
+    assert adapter.read_restore(adapter.artifact, adapter.ref_for(active)) is None
+
+
 def test_archive_operation_binding_and_receipt_survive_process_loss(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

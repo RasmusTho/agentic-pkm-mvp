@@ -308,6 +308,8 @@ def _archive_receipt_from_manifest(payload: Mapping[str, object]) -> ArchiveRece
         verified_at = datetime.fromisoformat(
             verified_at_raw.replace("Z", "+00:00")
         )
+        if verified_at.tzinfo is None or _iso(verified_at) != verified_at_raw:
+            raise ValueError("verified_at is not canonical UTC evidence")
         receipt = ArchiveReceipt(
             receipt_id=cast(str, payload["receipt_id"]),
             record_id=cast(str, payload["record_id"]),
@@ -439,6 +441,14 @@ def _relocate_raw_record_owner_native(
         content_identity=record.content_identity,
     ) as mutation_authority:
         hot = _active_hot(record.id)
+        if hot.raw_generation != mutation_authority.generation:
+            raise ArchiveDegradedError("archive_manifest_invalid")
+        if operation_binding is not None and (
+            type(operation_binding.get("generation")) is not int
+            or operation_binding.get("generation") != mutation_authority.generation
+            or operation_binding.get("source_representation_id") != hot.id
+        ):
+            raise ArchiveDegradedError("archive_manifest_invalid")
         ciphertext = hot.ciphertext
         ciphertext_hash = hashlib.sha256(ciphertext).hexdigest()
         pending = _pending_cold(

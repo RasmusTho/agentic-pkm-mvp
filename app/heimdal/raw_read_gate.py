@@ -74,6 +74,7 @@ _MIGRATION_HINT = (
 _RAW_REF_PREFIX = "heimraw:"
 _ALLOWLIST_ENV_VAR = "HEIMDAL_RAW_READ_ALLOWLIST"
 ACTUAL_REPRESENTATION_ID_PAYLOAD_KEY = "raw_read_representation_id"
+ACTUAL_RAW_GENERATION_PAYLOAD_KEY = "raw_read_generation"
 _raw_read_stage_hook: Callable[[str], None] = lambda _stage: None
 
 
@@ -372,6 +373,7 @@ def read_raw_record(
     key: Optional[bytes] = None,
     payload: Optional[Dict[str, Any]] = None,
     expected_representation_id: Optional[str] = None,
+    expected_raw_generation: Optional[int] = None,
 ) -> GatedRawRead:
     """The one sanctioned raw->plaintext read call (HEIM-5).
 
@@ -403,6 +405,8 @@ def read_raw_record(
         or not expected_representation_id.strip()
     ):
         raise ValueError("expected_representation_id must be a non-empty string")
+    if expected_raw_generation is not None and type(expected_raw_generation) is not int:
+        raise ValueError("expected_raw_generation must be an integer")
 
     record_id = _record_id_from_raw_ref(raw_ref)
 
@@ -432,7 +436,7 @@ def read_raw_record(
         with raw_liveness.raw_relocation_fence(
             record_id=record_id,
             content_identity=content_identity,
-        ):
+        ) as read_authority:
             record = raw_store.resolve_active_raw_record(record_id)
             active = [
                 representation
@@ -442,6 +446,14 @@ def read_raw_record(
             if record is None or len(active) != 1:
                 raise RawReadRefusedError(
                     "Raw read refused: the exact active representation is unavailable."
+                )
+            if active[0].raw_generation != read_authority.generation or (
+                expected_raw_generation is not None
+                and expected_raw_generation != read_authority.generation
+            ):
+                raise RawReadRefusedError(
+                    "Raw read refused: the active raw generation differs from "
+                    "owner liveness authority. No receipt written and no plaintext returned."
                 )
             if (
                 expected_representation_id is not None
@@ -467,6 +479,7 @@ def read_raw_record(
 
             receipt_payload = dict(payload or {})
             receipt_payload[ACTUAL_REPRESENTATION_ID_PAYLOAD_KEY] = active[0].id
+            receipt_payload[ACTUAL_RAW_GENERATION_PAYLOAD_KEY] = read_authority.generation
             receipt = RawReadReceipt(
                 id=str(uuid4()),
                 raw_ref=raw_ref,
