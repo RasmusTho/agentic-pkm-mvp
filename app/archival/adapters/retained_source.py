@@ -222,7 +222,13 @@ class RetainedSourceAdapter:
     ) -> ArchivalReceipt:
         """Perform the generation-fenced StorePort byte recovery and readback."""
         self._require_active_representation(artifact, representation)
-        payload = self._store.read_bytes(representation)
+        try:
+            payload = self._store.read_bytes(representation)
+        except KeyError as exc:
+            raise TransitionFailure(
+                FaultStage.RESTORE,
+                "retained-source payload is unavailable for retryable restore",
+            ) from exc
         self._verify_content(payload)
         self._store.restore_bytes_if_generation_current(
             self.admission.restore_destination,
