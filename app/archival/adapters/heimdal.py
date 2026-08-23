@@ -250,23 +250,36 @@ class HeimdalRawMediaAdapter:
         if binding is None or binding.idempotency_key != idempotency_key:
             return None
         manifest = self._read_manifest(binding)
-        if manifest is not None:
-            persisted_binding = manifest.get("gaf_operation")
-            if persisted_binding != self._binding_payload(binding):
+        legacy_manifest = manifest is not None and "gaf_operation" not in manifest
+        if manifest is not None and not legacy_manifest:
+            if manifest.get("gaf_operation") != self._binding_payload(binding):
                 raise TransitionConflict("durable Heimdal operation binding differs")
         target_id = _representation_id(binding.target)
         rows = raw_store.all_raw_representations(self.record.id)
         target = next((row for row in rows if row.id == target_id), None)
         source = next((row for row in rows if row.id == _representation_id(binding.source)), None)
         if target is None:
+            if legacy_manifest:
+                raise TransitionConflict("legacy HAR manifest has no registered target")
             return OperationRecord(binding)
+        if legacy_manifest:
+            assert manifest is not None
+            self._validate_legacy_manifest(binding, target, manifest)
         reservation = RepresentationReservation(
             binding.artifact,
             binding.target,
             binding.generation,
             _opaque("heimdal-reservation", target.id),
         )
-        verified = bool(manifest is not None and manifest.get("ownership_state") == "verified")
+        # A valid pre-GAF manifest is owner retry evidence, not a durable GAF
+        # completion. The owner action resumes it and writes the immutable GAF
+        # tuple before any new effect; only that upgraded manifest can complete
+        # the common operation.
+        verified = bool(
+            manifest is not None
+            and not legacy_manifest
+            and manifest.get("ownership_state") == "verified"
+        )
         completed = bool(verified and target.active and source is not None and not source.active)
         if not verified:
             return OperationRecord(binding, reservation=reservation)
@@ -430,6 +443,26 @@ class HeimdalRawMediaAdapter:
         if self._operation_reader is None:
             return None
         return self._operation_reader(_representation_id(binding.target))
+
+    def _validate_legacy_manifest(
+        self,
+        binding: OperationBinding,
+        target: RawRepresentation,
+        manifest: Mapping[str, object],
+    ) -> None:
+        expected = {
+            "record_id": self.record.id,
+            "content_identity": self.record.content_identity,
+            "representation_id": target.id,
+            "location_ref": target.location_ref,
+            "archive_token": target.archive_token,
+            "archive_generation": target.archive_generation,
+            "raw_generation": binding.generation.value,
+        }
+        if manifest.get("ownership_state") not in {"reserved", "verified"} or any(
+            manifest.get(field) != value for field, value in expected.items()
+        ):
+            raise TransitionConflict("legacy HAR manifest binding differs")
 
     def _restore_correlation(
         self,
