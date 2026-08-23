@@ -223,6 +223,7 @@ def test_retained_source_restore_is_gated_and_generation_bound() -> None:
 
     restored = adapter.restore_to(descriptor, source, _owner_gate())
     assert restored.stage is TransitionStage.RESTORED
+    assert restored == store.read_restore(descriptor, source)
     assert store.write_calls == 1
 
     forged_gate = AccessAuthority(
@@ -231,6 +232,24 @@ def test_retained_source_restore_is_gated_and_generation_bound() -> None:
     )
     with pytest.raises(TransitionConflict, match="owner gate"):
         ArchivalTransitionKernel(adapter).restore(descriptor, forged_gate, source)
+
+    foreign = RepresentationRef(
+        "retained_source", OpaqueReference("retained-source-representation", "foreign-42")
+    )
+    foreign_identity = ArtifactIdentity(
+        OwnerAuthority.CLASS_ADAPTER,
+        OpaqueReference("retained-source", "foreign-owner-kept-42"),
+        "retained_source",
+    )
+    store.payloads[foreign] = store.payloads[source]
+    store.register_source(
+        Representation(
+            foreign_identity, foreign, descriptor.generation, TransitionStage.ACTIVE,
+            Liveness(LivenessState.ACTIVE, OpaqueReference("retained-source-liveness", "foreign-live")),
+        )
+    )
+    with pytest.raises(TransitionConflict, match="artifact identity"):
+        adapter.restore_to(descriptor, foreign, _owner_gate())
 
 
 def test_retained_source_policy_does_not_inherit_raw_ttl() -> None:

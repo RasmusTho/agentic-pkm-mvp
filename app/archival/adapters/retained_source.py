@@ -215,7 +215,12 @@ class RetainedSourceAdapter:
             (representation,),
         )
         self._store.record_restore_receipt(receipt)
-        return receipt
+        loaded = self._store.read_restore(artifact, representation)
+        if loaded != receipt:
+            raise TransitionFailure(
+                FaultStage.READBACK, "retained-source restore receipt readback is unavailable"
+            )
+        return loaded
 
     def enumerate(self, artifact: ArtifactIdentity) -> Sequence[Representation]:
         return self._store.enumerate(artifact) if artifact == self.artifact.identity else ()
@@ -323,6 +328,8 @@ class RetainedSourceAdapter:
         self, artifact: ArtifactDescriptor, representation: RepresentationRef
     ) -> None:
         resolved = self.resolve(representation)
+        if resolved.artifact != artifact.identity:
+            raise TransitionConflict("restore representation differs from owner-native artifact identity")
         if resolved.generation != artifact.generation:
             raise TransitionConflict("restore generation differs from owner-native representation")
         if resolved.stage is not TransitionStage.ACTIVE or resolved.liveness.state is not LivenessState.ACTIVE:
