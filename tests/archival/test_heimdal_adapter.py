@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 import hashlib
 import json
 import secrets
+import threading
 from pathlib import Path
 from types import SimpleNamespace
 from uuid import uuid4
@@ -16,16 +18,23 @@ import pytest
 from app.archival.adapters.heimdal import HeimdalRawMediaAdapter
 from app.archival.contracts import (
     AccessAuthority,
+    ArchivalReceipt,
     ArtifactClass,
+    ArtifactDescriptor,
     DerivationClass,
     DurabilityClass,
     LivenessState,
     OpaqueReference,
     OwnerAuthority,
     PolicyProfile,
+    RepresentationRef,
     TransitionStage,
 )
-from app.archival.transition import ArchivalTransitionKernel, TransitionConflict
+from app.archival.transition import (
+    ArchivalTransitionKernel,
+    TransitionConflict,
+    TransitionResult,
+)
 from app.heimdal import (
     local_archive,
     media_ingress,
@@ -194,6 +203,71 @@ def test_raw_media_restore_reuses_production_gated_read(
         )
 
 
+def test_concurrent_restore_attempts_read_back_only_their_own_receipt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    records = _admit_all_modalities()
+    record = records[0]
+    _archive_root, _adapters = _archive_all(
+        records, tmp_path=tmp_path, monkeypatch=monkeypatch
+    )
+    active = next(
+        row for row in raw_store.all_raw_representations(record.id) if row.active
+    )
+    adapter = HeimdalRawMediaAdapter(
+        record, generation=active.raw_generation, read_key=_KEY
+    )
+    authority = AccessAuthority(
+        OwnerAuthority.CLASS_ADAPTER,
+        OpaqueReference("heimdal-reader", "authorized-reader"),
+    )
+    original_restore = adapter.restore
+    restore_barrier = threading.Barrier(2)
+
+    def synchronized_restore(
+        artifact: ArtifactDescriptor,
+        restore_authority: AccessAuthority,
+        representation: RepresentationRef,
+    ) -> ArchivalReceipt:
+        receipt = original_restore(artifact, restore_authority, representation)
+        restore_barrier.wait(timeout=5)
+        return receipt
+
+    monkeypatch.setattr(adapter, "restore", synchronized_restore)
+
+    def restore_once() -> TransitionResult:
+        return ArchivalTransitionKernel(adapter).restore(
+            adapter.artifact,
+            authority,
+            adapter.ref_for(active),
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        outcomes = list(pool.map(lambda _index: restore_once(), range(2)))
+
+    assert all(outcome.stage is TransitionStage.RESTORED for outcome in outcomes)
+    receipt_ids = {
+        outcome.receipt.receipt_ref.token
+        for outcome in outcomes
+        if outcome.receipt is not None
+    }
+    assert len(receipt_ids) == 2
+    owner_receipts = raw_read_gate.all_raw_read_receipts()
+    assert {receipt.id for receipt in owner_receipts} == receipt_ids
+    assert len(
+        {
+            receipt.payload["archival_restore_operation_id"]
+            for receipt in owner_receipts
+        }
+    ) == 2
+    assert len(
+        {
+            receipt.payload["archival_restore_correlation"]
+            for receipt in owner_receipts
+        }
+    ) == 2
+
+
 def test_archive_operation_binding_and_receipt_survive_process_loss(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -252,6 +326,58 @@ def test_archive_operation_binding_and_receipt_survive_process_loss(
     )
     assert recovered.receipt.receipt_id == manifest["receipt_id"]
     assert recovered.receipt.representation_id == manifest["representation_id"]
+
+
+def test_current_manifest_corruption_never_replays_terminal_success(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    records = _admit_all_modalities()
+    record = records[0]
+    archive_root, _adapters = _archive_all(
+        records, tmp_path=tmp_path, monkeypatch=monkeypatch
+    )
+    active = raw_store.resolve_active_raw_record(record.id)
+    assert active is not None
+    manifest_path, manifest = next(
+        (path, candidate)
+        for path in (archive_root / "manifests").glob("*.json")
+        if (candidate := json.loads(path.read_text(encoding="utf-8")))["record_id"]
+        == record.id
+    )
+    assert manifest["gaf_operation"]["schema"] == "heimdal_gaf_operation.v1"
+
+    corruptions = {
+        "record_id": str(uuid4()),
+        "receipt_id": "not-a-uuid",
+        "schema": "wrong-schema",
+        "encrypted_bytes": manifest["encrypted_bytes"] + 1,
+        "ciphertext_sha256": "0" * 64,
+    }
+    for field, value in corruptions.items():
+        corrupted = dict(manifest)
+        corrupted[field] = value
+        manifest_path.write_text(
+            json.dumps(corrupted, sort_keys=True, separators=(",", ":")) + "\n",
+            encoding="utf-8",
+        )
+        with pytest.raises(TransitionConflict, match="current HAR"):
+            local_archive.relocate_raw_record(
+                active,
+                archive_root=archive_root,
+                archive_ref=_ARCHIVE_REF,
+                now=datetime.now(timezone.utc),
+                retention_window_days=30,
+                key=_KEY,
+                volume_ready=lambda: _issue_archive_volume_ready(
+                    _ARCHIVE_REF,
+                    archive_root,
+                    _issuer=_ARCHIVE_VOLUME_READY_ISSUER,
+                ),
+            )
+    manifest_path.write_text(
+        json.dumps(manifest, sort_keys=True, separators=(",", ":")) + "\n",
+        encoding="utf-8",
+    )
 
 
 def test_operation_binding_crash_before_registration_reuses_exact_target(
@@ -513,3 +639,38 @@ def test_cleanup_stays_pending_while_har05_cold_queue_is_not_empty(
     terminal = ArchivalTransitionKernel(pending_adapter).cleanup(pending_adapter.artifact)
     assert terminal.stage is TransitionStage.ERASED
     assert terminal.liveness.state is LivenessState.ERASED
+
+
+def test_cleanup_requires_explicit_empty_owner_queue_evidence(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    records = _admit_all_modalities()
+    _archive_root, adapters = _archive_all(
+        records, tmp_path=tmp_path, monkeypatch=monkeypatch
+    )
+    revoke_consent(grant_ref=MEDIA_CAPTURE_GRANT_REF, revoked_by="gaf03-test")
+    adapter = adapters[0]
+    receipt = raw_liveness.all_deletion_receipts()[0]
+    assert receipt.payload["cold_cleanup_location_refs"] == []
+
+    missing_queue_payload = dict(receipt.payload)
+    missing_queue_payload.pop("cold_cleanup_location_refs")
+    candidates = (
+        replace(receipt, payload=missing_queue_payload),
+        replace(receipt, record_id=str(uuid4())),
+        replace(
+            receipt,
+            payload={**receipt.payload, "cold_cleanup_location_refs": None},
+        ),
+    )
+    for candidate in candidates:
+        monkeypatch.setattr(
+            raw_liveness,
+            "all_deletion_receipts",
+            lambda candidate=candidate: [candidate],
+        )
+        assert adapter.read_cleanup(adapter.artifact) is None
+        projected = adapter.enumerate(adapter.artifact.identity)
+        assert len(projected) == 1
+        assert projected[0].stage is TransitionStage.ERASE_PENDING
+        assert projected[0].liveness.state is LivenessState.ERASURE_PENDING
