@@ -421,6 +421,12 @@ def test_verify_before_hot_representation_retire_and_fail_closed(
     ]
     assert len(pending) == 1
     assert list((archive_root / "representations").glob("*.bin")) == []
+    manifests = list((archive_root / "manifests").glob("*.json"))
+    assert len(manifests) == 1
+    reserved_manifest = json.loads(manifests[0].read_text(encoding="utf-8"))
+    assert reserved_manifest["ownership_state"] == "reserved"
+    assert reserved_manifest["representation_id"] == pending[0].id
+    assert reserved_manifest["gaf_operation"]["target_representation_id"] == pending[0].id
 
     monkeypatch.setattr(local_archive, "_durable_write", original_write)
     retried = local_archive.relocate_raw_record(

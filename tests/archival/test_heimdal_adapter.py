@@ -553,6 +553,96 @@ def test_registered_terminal_target_requires_readable_object_manifest(
         manifest_path.write_bytes(manifest_bytes)
 
 
+def test_pending_manifest_rejects_registered_row_generation_mismatch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    record = _admit_all_modalities()[0]
+    now = datetime.now(timezone.utc)
+    _age_for_archive([record], now=now)
+    record = raw_store.resolve_active_raw_record(record.id)
+    assert record is not None
+    archive_root = tmp_path / "pending-generation-cold"
+    archive_root.mkdir()
+
+    class PendingProcessLoss(BaseException):
+        pass
+
+    def lose_after_reservation(stage: str) -> None:
+        if stage == "after_reservation":
+            raise PendingProcessLoss
+
+    monkeypatch.setattr(local_archive, "_relocation_stage_hook", lose_after_reservation)
+    with pytest.raises(PendingProcessLoss):
+        local_archive.relocate_raw_record(
+            record,
+            archive_root=archive_root,
+            archive_ref=_ARCHIVE_REF,
+            now=now,
+            retention_window_days=30,
+            key=_KEY,
+            volume_ready=lambda: _issue_archive_volume_ready(
+                _ARCHIVE_REF, archive_root, _issuer=_ARCHIVE_VOLUME_READY_ISSUER
+            ),
+        )
+    pending = next(
+        row
+        for row in raw_store.all_raw_representations(record.id)
+        if row.storage_kind == local_archive.ARCHIVE_STORAGE_KIND and not row.active
+    )
+    store = raw_store._MEMORY_STORE  # noqa: SLF001
+    with store._lock:  # noqa: SLF001
+        store._representations[pending.id] = replace(  # noqa: SLF001
+            pending, raw_generation=pending.raw_generation + 1
+        )
+    monkeypatch.setattr(local_archive, "_relocation_stage_hook", lambda _stage: None)
+
+    with pytest.raises(TransitionConflict, match="current HAR registered generation differs"):
+        local_archive.relocate_raw_record(
+            record,
+            archive_root=archive_root,
+            archive_ref=_ARCHIVE_REF,
+            now=now,
+            retention_window_days=30,
+            key=_KEY,
+            volume_ready=lambda: _issue_archive_volume_ready(
+                _ARCHIVE_REF, archive_root, _issuer=_ARCHIVE_VOLUME_READY_ISSUER
+            ),
+        )
+    rows = raw_store.all_raw_representations(record.id)
+    assert next(row for row in rows if row.active).storage_kind == "postgres_hot"
+
+
+def test_terminal_manifest_rejects_registered_row_generation_mismatch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    records = _admit_all_modalities()
+    record = records[0]
+    archive_root, _adapters = _archive_all(
+        records, tmp_path=tmp_path, monkeypatch=monkeypatch
+    )
+    active = next(
+        row for row in raw_store.all_raw_representations(record.id) if row.active
+    )
+    store = raw_store._MEMORY_STORE  # noqa: SLF001
+    with store._lock:  # noqa: SLF001
+        store._representations[active.id] = replace(  # noqa: SLF001
+            active, raw_generation=active.raw_generation + 1
+        )
+
+    with pytest.raises(TransitionConflict, match="current HAR registered generation differs"):
+        local_archive.relocate_raw_record(
+            record,
+            archive_root=archive_root,
+            archive_ref=_ARCHIVE_REF,
+            now=datetime.now(timezone.utc),
+            retention_window_days=30,
+            key=_KEY,
+            volume_ready=lambda: _issue_archive_volume_ready(
+                _ARCHIVE_REF, archive_root, _issuer=_ARCHIVE_VOLUME_READY_ISSUER
+            ),
+        )
+
+
 def test_legacy_har_manifest_retry_upgrades_binding_without_fabricated_completion(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -533,6 +533,12 @@ class HeimdalRawMediaAdapter:
         legacy: bool,
     ) -> None:
         lineage = "legacy" if legacy else "current"
+        if source.raw_generation != binding.generation.value or (
+            target is not None and target.raw_generation != binding.generation.value
+        ):
+            raise TransitionConflict(
+                f"{lineage} HAR registered generation differs"
+            )
         expected = {
             "record_id": self.record.id,
             "content_identity": self.record.content_identity,

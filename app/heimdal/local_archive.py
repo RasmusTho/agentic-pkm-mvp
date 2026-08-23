@@ -544,7 +544,8 @@ def _relocate_raw_record_owner_native(
                 # ambiguous, so preserve verified bytes.
                 if not activation_started:
                     _discard_uncommitted_object(object_path)
-                    _discard_uncommitted_manifest(manifest_path)
+                    if not reservation_durable:
+                        _discard_uncommitted_manifest(manifest_path)
                 if failure is not None:
                     raise failure
         except ArchiveDegradedError as exc:
