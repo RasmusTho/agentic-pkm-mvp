@@ -10,6 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum
 import hashlib
+import re
 from typing import Protocol, Sequence
 
 from app.archival.contracts import (
@@ -40,6 +41,7 @@ from app.archival.transition import FaultStage, TransitionConflict, TransitionFa
 
 
 ADAPTER_ID = "retained_source"
+_MEDIA_TYPE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]*/[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]*$")
 
 
 class RetainedSourceKind(str, Enum):
@@ -119,7 +121,7 @@ class RetainedSourceAdmission:
             raise ValueError("restore destination must be a typed opaque reference")
         if self.restore_destination.namespace != "retained-source-destination":
             raise ValueError("restore destination must be owner-native retained-source authority")
-        if not isinstance(self.format, str) or not self.format or self.format.startswith("/"):
+        if not isinstance(self.format, str) or not _MEDIA_TYPE.fullmatch(self.format):
             raise ValueError("retained source format must be a non-location format identifier")
         descriptor = self.descriptor
         if (
@@ -192,11 +194,7 @@ class RetainedSourceAdapter:
         self._require_artifact(artifact)
         if destination != self.admission.restore_destination:
             raise TransitionConflict("restore destination differs from the owner gate")
-        resolved = self.resolve(representation)
-        if resolved.generation != artifact.generation:
-            raise TransitionConflict("restore generation differs from owner-native representation")
-        if resolved.stage is not TransitionStage.ACTIVE or resolved.liveness.state is not LivenessState.ACTIVE:
-            raise TransitionConflict("restore representation is not active")
+        self._require_active_representation(artifact, representation)
         authority = AccessAuthority(OwnerAuthority.CLASS_ADAPTER, OpaqueReference("retained-source-owner", destination.token))
         self.authorize_read(artifact, authority)
         payload = self._store.read_bytes(representation)
@@ -225,7 +223,8 @@ class RetainedSourceAdapter:
 
     def authorize_read(self, artifact: ArtifactDescriptor, authority: AccessAuthority) -> ArchivalReceipt:
         self._require_artifact(artifact)
-        if authority.issuer is not OwnerAuthority.CLASS_ADAPTER or authority.grant_ref.namespace != "retained-source-owner":
+        expected = OpaqueReference("retained-source-owner", self.admission.restore_destination.token)
+        if authority.issuer is not OwnerAuthority.CLASS_ADAPTER or authority.grant_ref != expected:
             raise TransitionConflict("retained-source restore requires the owner gate")
         return self._store.authorize_read(artifact, authority)
 
@@ -281,6 +280,7 @@ class RetainedSourceAdapter:
     def restore(self, artifact: ArtifactDescriptor, authority: AccessAuthority, representation: RepresentationRef) -> ArchivalReceipt:
         self._require_artifact(artifact)
         self.authorize_read(artifact, authority)
+        self._require_active_representation(artifact, representation)
         return self._store.restore(artifact, authority, representation)
 
     def read_restore(self, artifact: ArtifactDescriptor, representation: RepresentationRef) -> ArchivalReceipt | None:
@@ -314,6 +314,15 @@ class RetainedSourceAdapter:
             or binding.target.adapter != ADAPTER_ID
         ):
             raise TransitionConflict("retained-source operation differs from explicit owner admission")
+
+    def _require_active_representation(
+        self, artifact: ArtifactDescriptor, representation: RepresentationRef
+    ) -> None:
+        resolved = self.resolve(representation)
+        if resolved.generation != artifact.generation:
+            raise TransitionConflict("restore generation differs from owner-native representation")
+        if resolved.stage is not TransitionStage.ACTIVE or resolved.liveness.state is not LivenessState.ACTIVE:
+            raise TransitionConflict("restore representation is not active")
 
     def _verify_content(self, payload: bytes) -> None:
         content_refs = [ref.reference.token for ref in self.artifact.provenance_refs if ref.kind == "content" and ref.reference.namespace == "content-sha256"]

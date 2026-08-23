@@ -7,6 +7,7 @@ import hashlib
 import pytest
 
 from app.archival import (
+    AccessAuthority,
     ArchivalTransitionKernel,
     ArtifactClass,
     ArtifactDescriptor,
@@ -166,6 +167,12 @@ def test_retained_source_admission_requires_owner_keep_decision() -> None:
             descriptor, "/private/source.jpg", RetainedSourceKind.MEDIA_ORIGINAL, "image/jpeg",
             OwnerKeepDecision(OpaqueReference("retained-source-admission", "keep-path")), _owner_gate(),
         )
+    for location_like_format in ("file:///private/source", r"C:\\private\\source.pdf", "/private/source.pdf"):
+        with pytest.raises(ValueError, match="non-location format"):
+            RetainedSourceAdmission(
+                descriptor, source, RetainedSourceKind.MEDIA_ORIGINAL, location_like_format,
+                OwnerKeepDecision(OpaqueReference("retained-source-admission", "keep-format")), _owner_gate(),
+            )
 
 
 def test_retained_source_uses_store_port_and_redacted_receipts() -> None:
@@ -199,6 +206,13 @@ def test_retained_source_restore_is_gated_and_generation_bound() -> None:
     restored = adapter.restore_to(descriptor, source, _owner_gate())
     assert restored.stage is TransitionStage.RESTORED
     assert store.write_calls == 1
+
+    forged_gate = AccessAuthority(
+        OwnerAuthority.CLASS_ADAPTER,
+        OpaqueReference("retained-source-owner", "forged-destination"),
+    )
+    with pytest.raises(TransitionConflict, match="owner gate"):
+        ArchivalTransitionKernel(adapter).restore(descriptor, forged_gate, source)
 
 
 def test_retained_source_policy_does_not_inherit_raw_ttl() -> None:
