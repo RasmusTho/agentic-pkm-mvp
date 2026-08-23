@@ -46,6 +46,7 @@ class _StorePort(DurableFakeAdapter):
         super().__init__()
         self.payloads = {source: payload}
         self.restored: dict[OpaqueReference, bytes] = {}
+        self.restored_generations: dict[OpaqueReference, Generation] = {}
         self.receipt_metadata = {}
         self.restore_receipts = {}
         self.admissions = {"keep-42"}
@@ -58,7 +59,7 @@ class _StorePort(DurableFakeAdapter):
         self.read_calls += 1
         return self.payloads[reference]
 
-    def write_restored(
+    def restore_bytes_if_generation_current(
         self,
         destination: OpaqueReference,
         payload: bytes,
@@ -66,8 +67,12 @@ class _StorePort(DurableFakeAdapter):
         generation: Generation,
         format: str,
     ) -> None:
+        current_generation = self.restored_generations.get(destination)
+        if current_generation is not None and current_generation.value > generation.value:
+            raise TransitionConflict("restore destination has a newer generation")
         self.write_calls += 1
         self.restored[destination] = payload
+        self.restored_generations[destination] = generation
 
     def copy_bytes(self, source: RepresentationRef, target: RepresentationRef) -> None:
         self.payloads[target] = self.payloads[source]
@@ -239,6 +244,14 @@ def test_retained_source_restore_is_gated_and_generation_bound() -> None:
     )
     protocol_restored = ArchivalTransitionKernel(adapter).restore(descriptor, owner_gate, source)
     assert protocol_restored.receipt == store.read_restore(descriptor, source)
+    assert store.restored[_owner_gate()] == store.payloads[source]
+
+    store.restored_generations[_owner_gate()] = Generation(8)
+    stale_destination = ArchivalTransitionKernel(adapter).restore(
+        descriptor, owner_gate, source
+    )
+    assert stale_destination.stage is TransitionStage.CONFLICT
+    assert store.restored_generations[_owner_gate()] == Generation(8)
 
     foreign = RepresentationRef(
         "retained_source", OpaqueReference("retained-source-representation", "foreign-42")

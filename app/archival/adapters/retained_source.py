@@ -170,7 +170,16 @@ class RetainedSourceStorePort(Protocol):
     def doctor(self) -> Sequence[DoctorFinding]: ...
     def read_bytes(self, reference: RepresentationRef) -> bytes: ...
     def copy_bytes(self, source: RepresentationRef, target: RepresentationRef) -> None: ...
-    def write_restored(self, destination: OpaqueReference, payload: bytes, *, generation: Generation, format: str) -> None: ...
+    def restore_bytes_if_generation_current(
+        self,
+        destination: OpaqueReference,
+        payload: bytes,
+        *,
+        generation: Generation,
+        format: str,
+    ) -> None:
+        """Atomically restore only when no newer generation owns destination."""
+        ...
     def record_restore_receipt(self, receipt: ArchivalReceipt) -> None: ...
     def record_retained_source_receipt(self, receipt: ArchivalReceipt, metadata: RetainedSourceReceiptMetadata) -> None: ...
 
@@ -202,19 +211,41 @@ class RetainedSourceAdapter:
         self._require_artifact(artifact)
         if destination != self.admission.restore_destination:
             raise TransitionConflict("restore destination differs from the owner gate")
-        self._require_active_representation(artifact, representation)
         authority = AccessAuthority(OwnerAuthority.CLASS_ADAPTER, OpaqueReference("retained-source-owner", destination.token))
         self.authorize_read(artifact, authority)
+        return self._restore_retained_bytes(artifact, representation)
+
+    def _restore_retained_bytes(
+        self,
+        artifact: ArtifactDescriptor,
+        representation: RepresentationRef,
+    ) -> ArchivalReceipt:
+        """Perform the generation-fenced StorePort byte recovery and readback."""
+        self._require_active_representation(artifact, representation)
         payload = self._store.read_bytes(representation)
         self._verify_content(payload)
-        self._store.write_restored(destination, payload, generation=artifact.generation, format=self.admission.format)
+        self._store.restore_bytes_if_generation_current(
+            self.admission.restore_destination,
+            payload,
+            generation=artifact.generation,
+            format=self.admission.format,
+        )
         receipt = ArchivalReceipt(
-            OpaqueReference("retained-source-receipt", f"restore-{destination.token}"),
+            OpaqueReference(
+                "retained-source-receipt",
+                f"restore-{self.admission.restore_destination.token}",
+            ),
             artifact.identity,
             artifact.generation,
             TransitionStage.RESTORED,
             artifact.policy_profile,
-            Liveness(LivenessState.ACTIVE, OpaqueReference("retained-source-liveness", f"restored-{destination.token}")),
+            Liveness(
+                LivenessState.ACTIVE,
+                OpaqueReference(
+                    "retained-source-liveness",
+                    f"restored-{self.admission.restore_destination.token}",
+                ),
+            ),
             artifact.provenance_refs,
             (representation,),
         )
@@ -287,9 +318,7 @@ class RetainedSourceAdapter:
     def restore(self, artifact: ArtifactDescriptor, authority: AccessAuthority, representation: RepresentationRef) -> ArchivalReceipt:
         self._require_artifact(artifact)
         self.authorize_read(artifact, authority)
-        self._require_active_representation(artifact, representation)
-        receipt = self._store.restore(artifact, authority, representation)
-        return self._record_restore_receipt(artifact, representation, receipt)
+        return self._restore_retained_bytes(artifact, representation)
 
     def read_restore(self, artifact: ArtifactDescriptor, representation: RepresentationRef) -> ArchivalReceipt | None:
         self._require_artifact(artifact)
