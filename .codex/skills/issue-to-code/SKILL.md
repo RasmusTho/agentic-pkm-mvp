@@ -63,11 +63,6 @@ genuinely insufficient to classify the case in front of you:
   SBS contract updates, or BuilderOps promotion into repo artifacts. Route through both the Builder
   System model and the affected Product/Runtime owner docs.
 
-At implementation preflight, apply `docs/development/DELIVERY_FEEDBACK_LOOP.md :: Cross-stage
-simplicity check`. If the implementation reveals that the Issue is too large or needs a new
-mechanism not demanded by its contract, stop and capture the divergence rather than widening the
-Issue locally.
-
 Tie-breaker (inlined from `docs/architecture/SBS_OPERATING_MODEL.md :: Classification Procedure`, the
 one rule in that section this skill does not otherwise reproduce): if the classification is still
 unclear, choose the stricter boundary route and name both owner surfaces in the Issue/PR.
