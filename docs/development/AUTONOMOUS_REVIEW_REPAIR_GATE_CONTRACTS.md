@@ -5,8 +5,8 @@ Owner: Builder System governance
 Temporal class: strategic
 Review cadence: event-driven
 Source of truth: mixed
-Last reviewed: 2026-08-12
-Last verified against: 2026-08-12 current main, issue #3211, issue #3224, issue #3225, issue #3814, `docs/development/BUILDER_SYSTEM_PROCESS_MAP.md`, `.codex/skills/issue-to-code/SKILL.md`, `.codex/skills/publish-pr/SKILL.md`, `.codex/skills/verification-and-closure/SKILL.md`, `.codex/skills/bug-to-issue/SKILL.md`, `.codex/skills/pr-integration/SKILL.md`, `.codex/skills/_shared/CI_WAIT_CONTRACT.md`
+Last reviewed: 2026-08-23
+Last verified against: 2026-08-23 current main, issue #3211, issue #3224, issue #3225, issue #3814, issue #4028, `docs/development/BUILDER_SYSTEM_PROCESS_MAP.md`, `.codex/skills/issue-to-code/SKILL.md`, `.codex/skills/publish-pr/SKILL.md`, `.codex/skills/verification-and-closure/SKILL.md`, `.codex/skills/bug-to-issue/SKILL.md`, `.codex/skills/pr-integration/SKILL.md`, `.codex/skills/_shared/CI_WAIT_CONTRACT.md`
 
 # Autonomous Review and Repair Gate Contracts
 
@@ -389,6 +389,33 @@ final independent review gate are never carried forward.
 Record the triggering review round, mechanism key, packet location or concise receipt, reviewer
 capability, verdict, and the expensive validation/CI cycles avoided or repeated. This is delivery evidence, not
 a new owner-doc authority surface.
+
+## PR-Level Scope Revalidation Gate
+
+After two rejected independent review rounds on one PR, the production review/publication gate
+fails closed before another expensive proof or publication cycle. This count is PR-level: changing a
+mechanism identifier, reviewer, model, branch, or head SHA does not reset it. The gate composes with
+and does not replace the per-mechanism 2+2 repair budget or the Mechanism Convergence Gate.
+
+An authenticated receipt bound to the current PR number, head SHA, governing Issue, and a canonical
+SHA-256 governing-contract identity must select exactly one outcome: `continue_unchanged`, `split`,
+or `expanded_contract`. It must include authenticated GitHub review evidence. `continue_unchanged`
+permits only governing-contract blockers and PR-introduced regressions. `split` routes the affected
+work to a bounded follow-up Issue. `expanded_contract` requires an authenticated updated governing
+Issue and updated contract identity before repair continues.
+
+Classify every newly observed finding exactly once as one of:
+
+- `governing_contract_blocker`;
+- `pr_introduced_regression`;
+- `security_authority_scope_expansion`; or
+- `adjacent_pre_existing`.
+
+An `adjacent_pre_existing` finding must name a bounded follow-up Issue and cannot expand the current
+PR. A `security_authority_scope_expansion` finding requires `expanded_contract`; no receipt may use a
+new mechanism name, reviewer identity, or head change to evade this rule. The executable evaluator
+is `scripts/review_before_ci_gate.py`; `issue-to-code`, `publish-pr`, and
+`verification-and-closure` route here rather than duplicating its rules.
 
 ## Review Repair Loop
 

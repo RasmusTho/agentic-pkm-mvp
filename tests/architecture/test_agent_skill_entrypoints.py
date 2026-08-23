@@ -40,7 +40,9 @@ def test_canonical_agents_entrypoint_routes_to_repo_skill_index() -> None:
 def test_shared_issue_contract_requires_duplicate_search_before_issue_creation() -> None:
     contract = _read(".codex/skills/_shared/ISSUE_CONTRACT.md")
     self_sufficiency = " ".join(
-        _section_between(contract, "## Issue self-sufficiency rule", "## Child to parent reference").split()
+        _section_between(
+            contract, "## Issue self-sufficiency rule", "## Child to parent reference"
+        ).split()
     )
 
     assert "Before creating or normalizing a governance or contract Issue" in self_sufficiency
@@ -56,13 +58,18 @@ def test_duplicate_search_rule_is_present_in_canonical_agent_instructions() -> N
 
     assert "Before creating or normalizing a governance or contract Issue" in delivery_governance
     assert "open Issues, recently merged PRs, and closed Issues" in delivery_governance
-    assert "Use GitHub CLI/REST search; do not require GraphQL or ProjectV2 operations" in delivery_governance
+    assert (
+        "Use GitHub CLI/REST search; do not require GraphQL or ProjectV2 operations"
+        in delivery_governance
+    )
 
 
 def test_shared_issue_contract_bounds_producer_and_caller_surfaces() -> None:
     contract = _read(".codex/skills/_shared/ISSUE_CONTRACT.md")
     bounded_surfaces = " ".join(
-        _section_between(contract, "## Bounded producer and caller surfaces", "## Body template").split()
+        _section_between(
+            contract, "## Bounded producer and caller surfaces", "## Body template"
+        ).split()
     )
 
     assert "enumerate the concrete production entrypoints" in bounded_surfaces
@@ -74,7 +81,9 @@ def test_shared_issue_contract_bounds_producer_and_caller_surfaces() -> None:
 def test_dormant_capability_proofs_stay_with_the_activation_slice() -> None:
     gate = _read("docs/development/AUTONOMOUS_REVIEW_REPAIR_GATE_CONTRACTS.md")
     placement = " ".join(
-        _section_between(gate, "### Dormant-capability proof placement", "### Stateful fallback boundary matrix").split()
+        _section_between(
+            gate, "### Dormant-capability proof placement", "### Stateful fallback boundary matrix"
+        ).split()
     )
     implementation = _read(".codex/skills/issue-to-code/SKILL.md")
 
@@ -127,7 +136,10 @@ def test_repo_skill_index_describes_connected_workflow_paths() -> None:
         "verification-and-closure",
     ):
         assert name in text
-    assert "agentic-pkm -> issue-to-code -> publish-pr -> [pr-integration when repair/readiness is needed] -> verification-and-closure" in text
+    assert (
+        "agentic-pkm -> issue-to-code -> publish-pr -> [pr-integration when repair/readiness is needed] -> verification-and-closure"
+        in text
+    )
 
 
 def _owner_decision_contract_preflight() -> str:
@@ -138,7 +150,9 @@ def _owner_decision_contract_preflight() -> str:
     )
 
 
-def test_owner_decision_preflight_selects_applicable_contract_without_manufacturing_issue_authority() -> None:
+def test_owner_decision_preflight_selects_applicable_contract_without_manufacturing_issue_authority() -> (
+    None
+):
     preflight = " ".join(_owner_decision_contract_preflight().split())
 
     assert "live contract that actually governs the work" in preflight
@@ -180,8 +194,7 @@ def test_owner_decision_preflight_preserves_escalation_classifier_authority() ->
     preflight = " ".join(_owner_decision_contract_preflight().split())
 
     assert (
-        "docs/development/AUTONOMOUS_REVIEW_REPAIR_GATE_CONTRACTS.md :: "
-        "Escalation Classifier"
+        "docs/development/AUTONOMOUS_REVIEW_REPAIR_GATE_CONTRACTS.md :: Escalation Classifier"
     ) in preflight
     assert "Contradictory source authority remains `needs_owner`" in preflight
     assert "every other explicit `needs_owner` authority category in that classifier" in preflight
@@ -208,8 +221,13 @@ def test_owner_decision_profile_delegates_classification_and_preserves_operator_
     for route in ("auto_repair", "auto_backoff", "blocked_technical", "needs_owner"):
         assert f"| `{route}` |" in classifier
     assert "## Contractual operator gates" in profile
-    assert "Never use the decision ownership gate to remove an unconditional operator gate" in profile
-    assert "Contractual operator gates still fire exactly as their owning workflows define" in preflight
+    assert (
+        "Never use the decision ownership gate to remove an unconditional operator gate" in profile
+    )
+    assert (
+        "Contractual operator gates still fire exactly as their owning workflows define"
+        in preflight
+    )
 
 
 def test_builder_thread_contract_is_executable_and_discoverable() -> None:
@@ -229,9 +247,7 @@ def test_builder_thread_contract_is_executable_and_discoverable() -> None:
 
 
 def test_builder_thread_hooks_are_non_authoritative() -> None:
-    contract = " ".join(
-        _read(".codex/skills/_shared/BUILDER_THREAD_CONTRACT.md").lower().split()
-    )
+    contract = " ".join(_read(".codex/skills/_shared/BUILDER_THREAD_CONTRACT.md").lower().split())
     store_doc = _read("docs/builderops/BUILDEROPS_VAULT_STORE.md").lower()
 
     for authority in ("issue", "pr", "ci", "merge", "approval", "promotion", "receipt"):
@@ -266,12 +282,8 @@ def test_yggdrasil_design_handoff_is_routed_and_fail_closed() -> None:
     principles = _read("docs/DESIGN_PRINCIPLES.md")
     governance = _read("companion-ui/docs/DESIGN_HANDOFF_GOVERNANCE.md")
     prompts = _read("companion-ui/prompts/claude-design/README.md")
-    epic_runner = _read(
-        "companion-ui/prompts/codex/deliver-epic-autonomous-runner.md"
-    )
-    template = _read(
-        "companion-ui/prompts/claude-design/YGGDRASIL_HANDOFF_TEMPLATE.md"
-    )
+    epic_runner = _read("companion-ui/prompts/codex/deliver-epic-autonomous-runner.md")
+    template = _read("companion-ui/prompts/claude-design/YGGDRASIL_HANDOFF_TEMPLATE.md")
 
     skill_path = ".codex/skills/yggdrasil-design-handoff/SKILL.md"
     token_path = "companion-ui/companion-app/colors_and_type.css"
@@ -280,10 +292,7 @@ def test_yggdrasil_design_handoff_is_routed_and_fail_closed() -> None:
 
     assert skill_path in agents
     assert "yggdrasil-design-handoff" in index
-    assert (
-        "yggdrasil-design-handoff -> governed exploration/handoff"
-        in index
-    )
+    assert "yggdrasil-design-handoff -> governed exploration/handoff" in index
     assert "other surface: local owner doc/spec" in index
 
     for surface in (skill, principles, governance, prompts, template):
@@ -309,14 +318,8 @@ def test_yggdrasil_design_handoff_is_routed_and_fail_closed() -> None:
     assert ".codex/skills/yggdrasil-design-handoff/SKILL.md" in epic_runner
     assert "YGGDRASIL_HANDOFF_TEMPLATE.md" in epic_runner
     assert "For another Product or Builder surface" in epic_runner
-    assert (
-        "whether it belongs to a Product surface or a Builder surface"
-        in principles_flat
-    )
-    assert (
-        "it does not claim that every historical surface already conforms"
-        in principles_flat
-    )
+    assert "whether it belongs to a Product surface or a Builder surface" in principles_flat
+    assert "it does not claim that every historical surface already conforms" in principles_flat
     assert "For other Product or Builder surfaces" in skill
 
 
@@ -497,10 +500,7 @@ def test_model_inquiry_subscription_route_is_distinct_from_provider_api_mechanis
     for skill in (codex_skill, claude_skill):
         assert "sanctioned host-local subscription launcher" in skill
         assert "$HOME/.local/bin/yggdrasil-model-inquiry --question-file" in skill
-        assert (
-            "Do not invoke `$HOME/.local/bin/yggdrasil-model-inquiry-provider-api`"
-            in skill
-        )
+        assert "Do not invoke `$HOME/.local/bin/yggdrasil-model-inquiry-provider-api`" in skill
         assert "treat every nonzero" in skill.lower()
 
     assert 'FIXED_LAUNCHER_NAME = "yggdrasil-model-inquiry-provider-api"' in installer
@@ -513,3 +513,16 @@ def test_model_inquiry_subscription_route_is_distinct_from_provider_api_mechanis
         "docs/CKM_DESIGN_AGENT_INTEGRATION/REGISTER_DESIGN_AGENT_ADAPTERS.md",
     ):
         assert withdrawn_gate not in _read(doc_path)
+
+
+def test_pr_scope_circuit_breaker_is_shared_across_delivery_skills() -> None:
+    canonical = "PR-Level Scope Revalidation Gate"
+    for path in (
+        ".codex/skills/issue-to-code/SKILL.md",
+        ".codex/skills/publish-pr/SKILL.md",
+        ".codex/skills/verification-and-closure/SKILL.md",
+    ):
+        assert canonical in _read(path)
+    assert "## PR-Level Scope Revalidation Gate" in _read(
+        "docs/development/AUTONOMOUS_REVIEW_REPAIR_GATE_CONTRACTS.md"
+    )

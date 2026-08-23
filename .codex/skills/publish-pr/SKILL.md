@@ -217,6 +217,8 @@ credential-durability, and state-machine. After a multi-blocker or adjacent
 repeat finding in one mechanism, do not set `--review-gate-complete` again until the low-convergence
 circuit breaker in `verification-and-closure` has produced and reviewed a new convergence packet.
 
+After two rejected independent review rounds, invoke `docs/development/AUTONOMOUS_REVIEW_REPAIR_GATE_CONTRACTS.md :: PR-Level Scope Revalidation Gate` through this shared gate before another expensive proof or push; do not recreate its receipt schema here.
+
 For any implementation, governance, or direct-repair lane with a declared high-risk surface, the
 executable order is mandatory and fail-closed:
 

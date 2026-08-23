@@ -13,6 +13,7 @@ import pytest
 from scripts.review_before_ci_gate import (
     ReviewBeforeCiGateError,
     evaluate_review_before_ci_gate,
+    validate_pr_scope_revalidation,
 )
 
 
@@ -20,9 +21,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 PUBLISH_PR_SKILL = REPO_ROOT / ".codex/skills/publish-pr/SKILL.md"
 ISSUE_TO_CODE_SKILL = REPO_ROOT / ".codex/skills/issue-to-code/SKILL.md"
 VERIFICATION_SKILL = REPO_ROOT / ".codex/skills/verification-and-closure/SKILL.md"
-REVIEW_REPAIR_CONTRACT = (
-    REPO_ROOT / "docs/development/AUTONOMOUS_REVIEW_REPAIR_GATE_CONTRACTS.md"
-)
+REVIEW_REPAIR_CONTRACT = REPO_ROOT / "docs/development/AUTONOMOUS_REVIEW_REPAIR_GATE_CONTRACTS.md"
 DEV_WORKFLOW = REPO_ROOT / "docs/development/DEV_WORKFLOW.md"
 PROCESS_MAP = REPO_ROOT / "docs/development/BUILDER_SYSTEM_PROCESS_MAP.md"
 DISPATCHER_CONTRACT = REPO_ROOT / "docs/AGENT_ISSUE_DISPATCHER.md"
@@ -72,9 +71,7 @@ def test_rejects_stale_workflow_review_receipt(tmp_path: Path) -> None:
         ),
         encoding="utf-8",
     )
-    workflow.write_text(
-        "name: check\n'on': {push: {}, pull_request: {}}\n", encoding="utf-8"
-    )
+    workflow.write_text("name: check\n'on': {push: {}, pull_request: {}}\n", encoding="utf-8")
     subprocess.run(["git", "commit", "-am", "stale receipt", "-q"], cwd=repo, check=True)
 
     result = subprocess.run(
@@ -289,7 +286,9 @@ def test_high_risk_implementation_requires_convergence_review_before_expensive_g
     assert "risk:auth" in gate.matched_surfaces
     assert "risk:credential-durability" in gate.matched_surfaces
     assert any("convergence packet" in check for check in gate.required_local_checks)
-    assert any("before selected expensive validation" in check for check in gate.required_local_checks)
+    assert any(
+        "before selected expensive validation" in check for check in gate.required_local_checks
+    )
 
 
 def test_stateful_fallback_requires_executable_boundary_matrix_before_handoff() -> None:
@@ -314,7 +313,10 @@ def test_stateful_fallback_requires_executable_boundary_matrix_before_handoff() 
     assert blocked.status == "required"
     assert blocked.may_handoff_to_ci is False
     assert blocked.stateful_fallback_matrix_complete is False
-    assert any("executable stateful fallback boundary matrix" in check for check in blocked.required_local_checks)
+    assert any(
+        "executable stateful fallback boundary matrix" in check
+        for check in blocked.required_local_checks
+    )
     assert complete.status == "satisfied"
     assert complete.may_handoff_to_ci is True
     assert complete.stateful_fallback_matrix_complete is True
@@ -356,9 +358,84 @@ def test_standard_implementation_keeps_existing_hot_path() -> None:
     assert gate.may_handoff_to_ci is True
 
 
-@pytest.mark.parametrize(
-    "lane", ["implmentation", "docs", "code", "maintenance", "promotion"]
-)
+def _scope_revalidation_receipt(
+    *, head_sha: str = "a" * 40, outcome: str = "continue_unchanged"
+) -> dict[str, object]:
+    return {
+        "version": 1,
+        "pr_number": 4029,
+        "head_sha": head_sha,
+        "governing_issue": 4028,
+        "governing_contract_sha256": "b" * 64,
+        "outcome": outcome,
+        "authentication": {
+            "source": "github-review",
+            "actor": "independent-reviewer",
+            "receipt_url": "https://github.example/receipt/1",
+        },
+    }
+
+
+def test_pr_level_rejection_circuit_breaker_ignores_mechanism_id_changes() -> None:
+    history = [
+        {"verdict": "rejected", "mechanism_id": "oauth.pending"},
+        {"verdict": "rejected", "mechanism_id": "oauth.recovery"},
+    ]
+    with pytest.raises(ReviewBeforeCiGateError, match="contract revalidation receipt"):
+        validate_pr_scope_revalidation(4029, 4028, "a" * 40, history, None)
+    assert (
+        validate_pr_scope_revalidation(
+            4029, 4028, "a" * 40, history, _scope_revalidation_receipt()
+        )["outcome"]
+        == "continue_unchanged"
+    )
+
+
+def test_pr_level_contract_revalidation_receipt_is_exact_and_authenticated() -> None:
+    receipt = _scope_revalidation_receipt(outcome="split")
+    assert (
+        validate_pr_scope_revalidation(4029, 4028, "a" * 40, [{"verdict": "rejected"}] * 2, receipt)
+        == receipt
+    )
+    for field, value in (
+        ("head_sha", "c" * 40),
+        ("governing_issue", 9999),
+        ("governing_contract_sha256", "not-a-digest"),
+    ):
+        invalid = dict(receipt)
+        invalid[field] = value
+        with pytest.raises(ReviewBeforeCiGateError):
+            validate_pr_scope_revalidation(
+                4029, 4028, "a" * 40, [{"verdict": "rejected"}] * 2, invalid
+            )
+    unauthenticated = dict(receipt)
+    unauthenticated["authentication"] = {"source": "local", "actor": "", "receipt_url": ""}
+    with pytest.raises(ReviewBeforeCiGateError, match="authenticated"):
+        validate_pr_scope_revalidation(
+            4029, 4028, "a" * 40, [{"verdict": "rejected"}] * 2, unauthenticated
+        )
+
+
+def test_adjacent_findings_require_follow_up_issue_not_same_pr_scope() -> None:
+    receipt = _scope_revalidation_receipt(outcome="split")
+    receipt["finding_classifications"] = [
+        {"finding_id": "f-1", "scope_class": "adjacent_pre_existing", "follow_up_issue": 4172}
+    ]
+    assert (
+        validate_pr_scope_revalidation(4029, 4028, "a" * 40, [{"verdict": "rejected"}] * 2, receipt)
+        == receipt
+    )
+    missing_follow_up = dict(receipt)
+    missing_follow_up["finding_classifications"] = [
+        {"finding_id": "f-1", "scope_class": "adjacent_pre_existing"}
+    ]
+    with pytest.raises(ReviewBeforeCiGateError, match="follow-up Issue"):
+        validate_pr_scope_revalidation(
+            4029, 4028, "a" * 40, [{"verdict": "rejected"}] * 2, missing_follow_up
+        )
+
+
+@pytest.mark.parametrize("lane", ["implmentation", "docs", "code", "maintenance", "promotion"])
 def test_unknown_lane_is_rejected_instead_of_failing_open(lane: str) -> None:
     with pytest.raises(ReviewBeforeCiGateError, match=f"unknown lane: {lane}"):
         evaluate_review_before_ci_gate(
@@ -398,7 +475,9 @@ def test_bypass_requires_explicit_reason() -> None:
     assert required.bypass_reason is None
     assert bypassed.status == "bypassed"
     assert bypassed.may_handoff_to_ci is True
-    assert bypassed.bypass_reason == "Emergency wording repair; receipt will name skipped local gate."
+    assert (
+        bypassed.bypass_reason == "Emergency wording repair; receipt will name skipped local gate."
+    )
     assert bypassed.preserves_ci_authority is True
 
 
@@ -542,8 +621,7 @@ def test_one_final_review_round_governs_every_full_path() -> None:
     normalized_process_map = " ".join(process_map.split())
     assert (
         "Full-path review repair loop: re-run after every substantive P0/P1 fix and stop after "
-        "one clean independent round on the repaired current head SHA"
-        in normalized_process_map
+        "one clean independent round on the repaired current head SHA" in normalized_process_map
     )
     assert "Light-path PRs do not enter this loop" in process_map
     assert "two clean rounds for high-risk surfaces" not in process_map
@@ -573,10 +651,14 @@ def test_review_severity_routing_blocks_only_p0_and_p1() -> None:
 
 def test_fast_lane_consumes_structured_severity_without_weakening_gates() -> None:
     skill = (REPO_ROOT / ".codex/skills/deliver-issue-set/SKILL.md").read_text(encoding="utf-8")
-    runner = (REPO_ROOT / "companion-ui/prompts/codex/deliver-epic-autonomous-runner.md").read_text(encoding="utf-8")
+    runner = (REPO_ROOT / "companion-ui/prompts/codex/deliver-epic-autonomous-runner.md").read_text(
+        encoding="utf-8"
+    )
     for surface in (skill, runner):
         assert "AUTONOMOUS_REVIEW_REPAIR_GATE_CONTRACTS.md" in surface
-        assert ".codex/skills/bug-to-issue/SKILL.md" in surface or "known-defect contracts" in surface
+        assert (
+            ".codex/skills/bug-to-issue/SKILL.md" in surface or "known-defect contracts" in surface
+        )
         assert "P2" in surface
         assert "P0/P1" in surface
 
@@ -691,8 +773,7 @@ def test_pr_hot_path_requires_explicit_risk_classification_before_bypass() -> No
     assert "--risk-assessment-complete" in hot_path
     assert "A declared high-risk surface is never bypassable" in hot_path
     assert (
-        "`lane`: `docs-authoring` | `implementation` | `governance` | "
-        "`direct-repair`"
+        "`lane`: `docs-authoring` | `implementation` | `governance` | `direct-repair`"
     ) in hot_path
     assert "Promotion is not a PR hot-path lane" in hot_path
 
@@ -712,15 +793,9 @@ def test_validation_scope_defaults_to_affected_subsystem_across_owner_docs() -> 
 def test_host_global_full_suite_uses_atomic_wrapper_in_canonical_workflow() -> None:
     agents = AGENTS.read_text(encoding="utf-8")
     workflow = DEV_WORKFLOW.read_text(encoding="utf-8")
-    template = (REPO_ROOT / ".github/pull_request_template.md").read_text(
-        encoding="utf-8"
-    )
-    runtime_chain = (REPO_ROOT / "scripts/verify_runtime_chain.sh").read_text(
-        encoding="utf-8"
-    )
-    py312_smoke = (REPO_ROOT / "scripts/py312_smoke_test.sh").read_text(
-        encoding="utf-8"
-    )
+    template = (REPO_ROOT / ".github/pull_request_template.md").read_text(encoding="utf-8")
+    runtime_chain = (REPO_ROOT / "scripts/verify_runtime_chain.sh").read_text(encoding="utf-8")
+    py312_smoke = (REPO_ROOT / "scripts/py312_smoke_test.sh").read_text(encoding="utf-8")
     makefile = (REPO_ROOT / "Makefile").read_text(encoding="utf-8")
     verify_promotion = (REPO_ROOT / ".codex/skills/verify-promotion/SKILL.md").read_text(
         encoding="utf-8"
@@ -770,9 +845,9 @@ def test_owner_docs_do_not_prescribe_bare_repo_wide_not_pg_suites() -> None:
     )
 
     for owner_doc in owner_docs:
-        assert _bare_repo_wide_not_pg_commands(
-            owner_doc.read_text(encoding="utf-8")
-        ) == [], owner_doc
+        assert _bare_repo_wide_not_pg_commands(owner_doc.read_text(encoding="utf-8")) == [], (
+            owner_doc
+        )
 
 
 @pytest.mark.parametrize(
@@ -801,8 +876,7 @@ def test_owner_docs_do_not_prescribe_bare_repo_wide_not_pg_suites() -> None:
         'pytest -q tests/foo/../.. -m "not pg"',
         "python3 scripts/run_with_host_lease.py --resource other "
         "--execution-id pytest-not-pg -- pytest -m 'not pg'",
-        "pytest -m 'not pg' and a targeted example "
-        "`pytest tests/chat -m 'not pg'`",
+        "pytest -m 'not pg' and a targeted example `pytest tests/chat -m 'not pg'`",
         "python3 scripts/run_with_host_lease.py --resource pytest-not-pg "
         "--resource other -- pytest -q -m 'not pg'",
         "python3 scripts/run_with_host_lease.py --resource other "
@@ -823,15 +897,19 @@ def test_bare_repo_wide_not_pg_classifier_rejects_bypasses(command: str) -> None
 
 
 def test_bare_repo_wide_not_pg_classifier_allows_targeted_or_leased() -> None:
-    assert _bare_repo_wide_not_pg_commands(
-        'pytest tests/chat -q -m "not pg"'
-    ) == []
-    assert _bare_repo_wide_not_pg_commands(
-        "python3 scripts/run_with_host_lease.py --resource pytest-not-pg -- "
-        'pytest -q -m "not pg"'
-    ) == []
-    assert _bare_repo_wide_not_pg_commands(
-        "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 "
-        "scripts/run_with_host_lease.py --resource=pytest-not-pg -- "
-        'pytest -q -m "not pg"'
-    ) == []
+    assert _bare_repo_wide_not_pg_commands('pytest tests/chat -q -m "not pg"') == []
+    assert (
+        _bare_repo_wide_not_pg_commands(
+            "python3 scripts/run_with_host_lease.py --resource pytest-not-pg -- "
+            'pytest -q -m "not pg"'
+        )
+        == []
+    )
+    assert (
+        _bare_repo_wide_not_pg_commands(
+            "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 "
+            "scripts/run_with_host_lease.py --resource=pytest-not-pg -- "
+            'pytest -q -m "not pg"'
+        )
+        == []
+    )

@@ -8,7 +8,7 @@ import json
 import sys
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Sequence
+from typing import Mapping, Sequence
 
 try:  # Supports both ``python scripts/...`` and package imports in tests.
     from scripts.workflow_review_risk import (
@@ -47,10 +47,100 @@ RISK_SURFACES = {
     "security",
     "state-machine",
 }
+PR_SCOPE_REVALIDATION_OUTCOMES = frozenset({"continue_unchanged", "split", "expanded_contract"})
 
 
 class ReviewBeforeCiGateError(ValueError):
     """Raised when review-before-CI gate input is malformed."""
+
+
+def validate_pr_scope_revalidation(
+    pr_number: int,
+    governing_issue: int,
+    head_sha: str,
+    rejected_rounds: Sequence[Mapping[str, object]],
+    receipt: Mapping[str, object] | None,
+) -> Mapping[str, object] | None:
+    """Require an exact authenticated revalidation receipt after two rejections."""
+    if sum(1 for round_ in rejected_rounds if round_.get("verdict") == "rejected") < 2:
+        return None
+    if not isinstance(receipt, Mapping):
+        raise ReviewBeforeCiGateError(
+            "two rejected independent review rounds require a contract revalidation receipt"
+        )
+    for field, value in {
+        "version": 1,
+        "pr_number": pr_number,
+        "head_sha": head_sha,
+        "governing_issue": governing_issue,
+    }.items():
+        if receipt.get(field) != value:
+            raise ReviewBeforeCiGateError(
+                f"contract revalidation receipt {field} does not bind the current PR contract"
+            )
+    if not _is_sha256(receipt.get("governing_contract_sha256")):
+        raise ReviewBeforeCiGateError(
+            "contract revalidation receipt requires a canonical governing contract SHA-256"
+        )
+    outcome = receipt.get("outcome")
+    if outcome not in PR_SCOPE_REVALIDATION_OUTCOMES:
+        raise ReviewBeforeCiGateError(
+            "contract revalidation receipt outcome must be continue_unchanged, split, or expanded_contract"
+        )
+    authentication = receipt.get("authentication")
+    if (
+        not isinstance(authentication, Mapping)
+        or authentication.get("source") != "github-review"
+        or not _nonempty_string(authentication.get("actor"))
+        or not _nonempty_string(authentication.get("receipt_url"))
+    ):
+        raise ReviewBeforeCiGateError(
+            "contract revalidation receipt must carry authenticated GitHub review evidence"
+        )
+    if outcome == "expanded_contract" and (
+        receipt.get("expanded_issue") != governing_issue
+        or not _is_sha256(receipt.get("expanded_contract_sha256"))
+    ):
+        raise ReviewBeforeCiGateError(
+            "expanded_contract requires the authenticated updated governing Issue and contract SHA-256"
+        )
+    classifications = receipt.get("finding_classifications", [])
+    if not isinstance(classifications, list):
+        raise ReviewBeforeCiGateError(
+            "contract revalidation receipt finding_classifications must be a list"
+        )
+    valid_classes = {
+        "governing_contract_blocker",
+        "pr_introduced_regression",
+        "security_authority_scope_expansion",
+        "adjacent_pre_existing",
+    }
+    for finding in classifications:
+        if not isinstance(finding, Mapping) or not _nonempty_string(finding.get("finding_id")):
+            raise ReviewBeforeCiGateError("each revalidation finding requires an identifier")
+        scope_class = finding.get("scope_class")
+        if scope_class not in valid_classes:
+            raise ReviewBeforeCiGateError(
+                "each revalidation finding requires one canonical scope class"
+            )
+        if outcome == "continue_unchanged" and scope_class not in {
+            "governing_contract_blocker",
+            "pr_introduced_regression",
+        }:
+            raise ReviewBeforeCiGateError(
+                "continue_unchanged permits only governing-contract blockers and PR-introduced regressions"
+            )
+        if scope_class == "adjacent_pre_existing" and not isinstance(
+            finding.get("follow_up_issue"), int
+        ):
+            raise ReviewBeforeCiGateError(
+                "adjacent/pre-existing findings require a bounded follow-up Issue"
+            )
+        if scope_class == "security_authority_scope_expansion" and outcome != "expanded_contract":
+            raise ReviewBeforeCiGateError(
+                "security/authority findings require authenticated expanded_contract scope"
+            )
+    return receipt
 
 
 @dataclass(frozen=True)
@@ -116,7 +206,9 @@ def evaluate_review_before_ci_gate(
     required = bool(matched)
     bypass = _clean_text(bypass_reason)
     if bypass and not required:
-        raise ReviewBeforeCiGateError("bypass_reason is only valid when the review gate is required")
+        raise ReviewBeforeCiGateError(
+            "bypass_reason is only valid when the review gate is required"
+        )
     if bypass and (normalized_lane != "direct-repair" or risks):
         raise ReviewBeforeCiGateError(
             "bypass_reason is valid only for an emergency direct-repair with no "
@@ -224,9 +316,7 @@ def _gate(
     )
 
 
-def _matched_surfaces(
-    lane: str, files: Sequence[str], risk_surfaces: Sequence[str]
-) -> list[str]:
+def _matched_surfaces(lane: str, files: Sequence[str], risk_surfaces: Sequence[str]) -> list[str]:
     matched: set[str] = set()
     if lane in DOCS_GOVERNANCE_LANES:
         matched.add(f"lane:{lane}")
@@ -239,9 +329,7 @@ def _matched_surfaces(
     return sorted(matched)
 
 
-def _required_checks(
-    matched: Sequence[str], *, stateful_fallback: bool = False
-) -> list[str]:
+def _required_checks(matched: Sequence[str], *, stateful_fallback: bool = False) -> list[str]:
     if not matched:
         return []
     checks: list[str] = []
@@ -294,6 +382,18 @@ def _clean_text(value: str | None) -> str | None:
     return text or None
 
 
+def _nonempty_string(value: object) -> bool:
+    return isinstance(value, str) and bool(value.strip())
+
+
+def _is_sha256(value: object) -> bool:
+    return (
+        isinstance(value, str)
+        and len(value) == 64
+        and all(char in "0123456789abcdef" for char in value)
+    )
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--lane", required=True)
@@ -307,6 +407,10 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--workflow-review-receipt")
     parser.add_argument("--workflow-risk-base", default="origin/main")
     parser.add_argument("--workflow-risk-head", default="HEAD")
+    parser.add_argument("--pr-number", type=int)
+    parser.add_argument("--governing-issue", type=int)
+    parser.add_argument("--rejected-review-history")
+    parser.add_argument("--contract-revalidation-receipt")
     return parser
 
 
@@ -316,6 +420,38 @@ def main(argv: Sequence[str] | None = None) -> int:
         evidence = workflow_risk_evidence_from_git(
             Path.cwd(), base=args.workflow_risk_base, head=args.workflow_risk_head
         )
+        if any(
+            value is not None
+            for value in (
+                args.pr_number,
+                args.governing_issue,
+                args.rejected_review_history,
+                args.contract_revalidation_receipt,
+            )
+        ):
+            if (
+                args.pr_number is None
+                or args.governing_issue is None
+                or not args.rejected_review_history
+            ):
+                raise ReviewBeforeCiGateError(
+                    "PR scope revalidation requires --pr-number, --governing-issue, and --rejected-review-history"
+                )
+            history = json.loads(Path(args.rejected_review_history).read_text(encoding="utf-8"))
+            if not isinstance(history, list) or not all(
+                isinstance(item, Mapping) for item in history
+            ):
+                raise ReviewBeforeCiGateError(
+                    "rejected review history must be a JSON list of review receipts"
+                )
+            receipt = (
+                json.loads(Path(args.contract_revalidation_receipt).read_text(encoding="utf-8"))
+                if args.contract_revalidation_receipt
+                else None
+            )
+            validate_pr_scope_revalidation(
+                args.pr_number, args.governing_issue, evidence.head_sha, history, receipt
+            )
         inferred_risks = list(evidence.risks)
         if inferred_risks:
             if not args.workflow_review_receipt:
