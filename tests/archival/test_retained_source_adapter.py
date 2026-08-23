@@ -47,6 +47,9 @@ class _StorePort(DurableFakeAdapter):
         self.payloads = {source: payload}
         self.restored: dict[OpaqueReference, bytes] = {}
         self.receipt_metadata = {}
+        self.restore_receipts = {}
+        self.admissions = {"keep-42"}
+        self.retirements = {"retire-42"}
         self.read_calls = 0
         self.write_calls = 0
         self.fail_cleanup = False
@@ -71,6 +74,20 @@ class _StorePort(DurableFakeAdapter):
 
     def record_retained_source_receipt(self, receipt, metadata) -> None:  # type: ignore[no-untyped-def]
         self.receipt_metadata[receipt.receipt_ref] = metadata
+
+    def validate_admission(self, admission) -> None:  # type: ignore[no-untyped-def]
+        if admission.keep_decision.reference.token not in self.admissions:
+            raise TransitionConflict("retained-source admission is not owner-issued")
+
+    def authorize_retirement(self, decision) -> None:  # type: ignore[no-untyped-def]
+        if decision.reference.token not in self.retirements:
+            raise TransitionConflict("retained-source retirement is not owner-issued")
+
+    def record_restore_receipt(self, receipt) -> None:  # type: ignore[no-untyped-def]
+        self.restore_receipts[(receipt.artifact, receipt.representation_refs[0])] = receipt
+
+    def read_restore(self, artifact, representation):  # type: ignore[no-untyped-def]
+        return self.restore_receipts.get((artifact.identity, representation))
 
     def cleanup(self, artifact: ArtifactDescriptor):  # type: ignore[no-untyped-def]
         if self.fail_cleanup:
@@ -148,6 +165,7 @@ def test_retained_source_round_trip_preserves_identity_and_provenance() -> None:
         assert restored.provenance_refs == descriptor.provenance_refs
         assert store.receipt_metadata[archived.receipt.receipt_ref].format == format
         assert store.restored[_owner_gate()] == payload
+        assert adapter.read_restore(descriptor, target) == restored
 
 
 def test_retained_source_admission_requires_owner_keep_decision() -> None:
@@ -224,6 +242,10 @@ def test_retained_source_policy_does_not_inherit_raw_ttl() -> None:
     assert pending.liveness.state is LivenessState.ERASURE_PENDING
 
     adapter.authorize_retirement(RetainedSourceRetirement(descriptor.identity, descriptor.generation, OpaqueReference("retained-source-retirement", "retire-42")))
+    with pytest.raises(TransitionConflict, match="not owner-issued"):
+        adapter.authorize_retirement(
+            RetainedSourceRetirement(descriptor.identity, descriptor.generation, OpaqueReference("retained-source-retirement", "forged-retire"))
+        )
     store.fail_cleanup = True
     pending_on_failure = kernel.cleanup(descriptor)
     assert pending_on_failure.liveness.state is LivenessState.ERASURE_PENDING

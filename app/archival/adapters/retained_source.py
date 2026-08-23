@@ -149,6 +149,8 @@ class RetainedSourceStorePort(Protocol):
     def resolve(self, reference: RepresentationRef) -> Representation: ...
     def authorize_read(self, artifact: ArtifactDescriptor, authority: AccessAuthority) -> ArchivalReceipt: ...
     def bind_operation(self, binding: OperationBinding) -> OperationRecord: ...
+    def validate_admission(self, admission: RetainedSourceAdmission) -> None: ...
+    def authorize_retirement(self, decision: RetainedSourceRetirement) -> None: ...
     def read_operation(self, idempotency_key: str) -> OperationRecord | None: ...
     def reserve(self, binding: OperationBinding) -> RepresentationReservation: ...
     def copy(self, binding: OperationBinding, reservation: RepresentationReservation) -> None: ...
@@ -165,6 +167,7 @@ class RetainedSourceStorePort(Protocol):
     def read_bytes(self, reference: RepresentationRef) -> bytes: ...
     def copy_bytes(self, source: RepresentationRef, target: RepresentationRef) -> None: ...
     def write_restored(self, destination: OpaqueReference, payload: bytes, *, generation: Generation, format: str) -> None: ...
+    def record_restore_receipt(self, receipt: ArchivalReceipt) -> None: ...
     def record_retained_source_receipt(self, receipt: ArchivalReceipt, metadata: RetainedSourceReceiptMetadata) -> None: ...
 
 
@@ -178,8 +181,8 @@ class RetainedSourceAdapter:
             raise ValueError("retained source storage must be a PDM StorePort binding")
         self.admission = admission
         self._store = store_port
+        self._store.validate_admission(admission)
         self._retirement: RetainedSourceRetirement | None = None
-        self._restore_receipts: dict[tuple[ArtifactIdentity, RepresentationRef], ArchivalReceipt] = {}
 
     @property
     def artifact(self) -> ArtifactDescriptor:
@@ -188,6 +191,7 @@ class RetainedSourceAdapter:
     def authorize_retirement(self, decision: RetainedSourceRetirement) -> None:
         if decision.artifact != self.artifact.identity or decision.generation != self.artifact.generation:
             raise TransitionConflict("retained-source retirement differs from exact owner generation")
+        self._store.authorize_retirement(decision)
         self._retirement = decision
 
     def restore_to(self, artifact: ArtifactDescriptor, representation: RepresentationRef, destination: OpaqueReference) -> ArchivalReceipt:
@@ -210,7 +214,7 @@ class RetainedSourceAdapter:
             artifact.provenance_refs,
             (representation,),
         )
-        self._restore_receipts[(artifact.identity, representation)] = receipt
+        self._store.record_restore_receipt(receipt)
         return receipt
 
     def enumerate(self, artifact: ArtifactIdentity) -> Sequence[Representation]:
@@ -285,7 +289,7 @@ class RetainedSourceAdapter:
 
     def read_restore(self, artifact: ArtifactDescriptor, representation: RepresentationRef) -> ArchivalReceipt | None:
         self._require_artifact(artifact)
-        return self._restore_receipts.get((artifact.identity, representation)) or self._store.read_restore(artifact, representation)
+        return self._store.read_restore(artifact, representation)
 
     def cleanup(self, artifact: ArtifactDescriptor) -> CleanupProof:
         self._require_artifact(artifact)
