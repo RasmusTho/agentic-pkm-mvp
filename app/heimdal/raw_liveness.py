@@ -23,6 +23,7 @@ import json
 import os
 import re
 import threading
+import textwrap
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Dict, Iterable, Iterator, Literal, Mapping, Optional
@@ -65,6 +66,12 @@ _MIGRATION_HINT = (
     "database. See revisions c5d8a1e4f2b7, e2f3a4b5c6d7, f4b6c8d0e2a1, "
     "and a9d7c5e3b1f0."
 )
+
+
+def _migration_fixture_sql(sql: str) -> str:
+    """Render test-fixture function SQL with Alembic's stored body indentation."""
+
+    return textwrap.indent(textwrap.dedent(sql), "        ")
 
 _RECEIPT_TRIGGER_BODY = (
     "if tg_op = 'update' and current_setting('app.heimdal_retention_reconcile', true) = 'true' "
@@ -915,7 +922,7 @@ def _bootstrap_pg(conn: Any) -> None:
                 f"ON {_DELETION_RECEIPT_TABLE} (sequence)",
                 f"CREATE INDEX heimdal_raw_deletion_receipt_record_id_idx "
                 f"ON {_DELETION_RECEIPT_TABLE} (record_id)",
-                """
+                _migration_fixture_sql("""
                 CREATE OR REPLACE FUNCTION heimdal_raw_cleanup_queue_is_subsequence(
                     old_payload jsonb, new_payload jsonb
                 ) RETURNS boolean AS $$
@@ -939,8 +946,8 @@ def _bootstrap_pg(conn: Any) -> None:
                     RETURN true;
                 END;
                 $$ LANGUAGE plpgsql IMMUTABLE STRICT
-                """,
-                f"""
+                """),
+                _migration_fixture_sql(f"""
                 CREATE OR REPLACE FUNCTION heimdal_raw_deletion_receipt_reject_mutation()
                 RETURNS trigger AS $$
                 BEGIN
@@ -964,7 +971,7 @@ def _bootstrap_pg(conn: Any) -> None:
                     RAISE EXCEPTION 'heimdal_raw_deletion_receipt is append-only: % is not permitted', TG_OP;
                 END;
                 $$ LANGUAGE plpgsql
-                """,
+                """),
                 f"""
                 CREATE TRIGGER heimdal_raw_deletion_receipt_no_update
                 BEFORE UPDATE OR DELETE ON {_DELETION_RECEIPT_TABLE}
