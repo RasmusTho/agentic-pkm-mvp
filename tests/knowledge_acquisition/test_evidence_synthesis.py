@@ -1,6 +1,9 @@
 """Contract tests for evidence-anchored synthesis rendering (YSNV2-05)."""
 
-from app.knowledge_acquisition.evidence_synthesis import render_evidence_anchored
+from app.knowledge_acquisition.evidence_synthesis import (
+    render_evidence_anchored,
+    validate_generated_language,
+)
 
 
 NORMALIZED = {
@@ -9,6 +12,13 @@ NORMALIZED = {
     "segments": [{"start": 0.0, "end": 2.0, "text": "Original source wording."}],
 }
 ANCHOR = {"segment_index": 0, "start": 0.0, "end": 2.0}
+
+
+def test_language_validation_rejects_invalid_d6_output() -> None:
+    assert validate_generated_language("Cats sleep frequently.", "en")
+    assert validate_generated_language("Katter sover ofta.", "sv")
+    assert not validate_generated_language("Bonjour a Paris.", "en")
+    assert not validate_generated_language("Cats sleep frequently.", "sv")
 
 
 def test_renderer_drops_anchorless_claims_and_synthesis_sentences() -> None:

@@ -126,7 +126,7 @@ def run(normalized: Mapping[str, Any], *, complete: CompletionFn | None = None) 
                 version=EXTRACTOR_VERSION,
                 reason="synthesis sentence language is not allowed by D6",
             )
-        if not any(
+        if not all(
             validate_resolvable_anchor(anchor, segments) for anchor in sentence["anchors"]
         ):
             raise ExtractionError(
