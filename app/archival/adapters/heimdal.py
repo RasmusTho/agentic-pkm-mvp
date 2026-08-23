@@ -47,6 +47,7 @@ _REPRESENTATION_NAMESPACE = "heimdal-representation"
 _RAW_ID_NAMESPACE = "heimdal-raw"
 _RESTORE_CORRELATION_KEY = "archival_restore_correlation"
 _OPERATION_SCHEMA = "heimdal_gaf_operation.v1"
+_HAR_ARCHIVE_SCHEMA = "heimdal_archive_receipt.v1"
 
 
 def _opaque(namespace: str, token: str) -> OpaqueReference:
@@ -105,7 +106,10 @@ class HeimdalRawMediaAdapter:
         record: RawRecord,
         *,
         generation: int | None = None,
-        archive_action: Callable[[str, str, Mapping[str, object]], object] | None = None,
+        archive_action: Callable[
+            [str, str, Mapping[str, object], Mapping[str, object] | None], object
+        ]
+        | None = None,
         operation_reader: Callable[[str], Mapping[str, object] | None] | None = None,
         read_key: bytes | None = None,
     ) -> None:
@@ -224,6 +228,12 @@ class HeimdalRawMediaAdapter:
         if binding.artifact != self.artifact.identity or binding.generation != self.artifact.generation:
             raise TransitionConflict("archive binding differs from exact Heimdal generation")
         self._binding = binding
+        owner_manifest = self._read_manifest(binding)
+        legacy_manifest = (
+            owner_manifest
+            if owner_manifest is not None and "gaf_operation" not in owner_manifest
+            else None
+        )
         loaded = self.read_operation(binding.idempotency_key)
         if loaded is not None and loaded.completed:
             return loaded
@@ -231,10 +241,16 @@ class HeimdalRawMediaAdapter:
             raise TransitionFailure(FaultStage.BINDING, "archive owner action unavailable")
         try:
             receipt_digest = hashlib.sha256(binding.idempotency_key.encode("utf-8")).hexdigest()
+            receipt_id = (
+                str(legacy_manifest["receipt_id"])
+                if legacy_manifest is not None
+                else str(UUID(receipt_digest[:32]))
+            )
             self._archive_result = self._archive_action(
                 _representation_id(binding.target),
-                str(UUID(receipt_digest[:32])),
+                receipt_id,
                 self._binding_payload(binding),
+                legacy_manifest,
             )
         except Exception as exc:
             reason = getattr(exc, "reason", "archive_relocation_failed")
@@ -264,7 +280,9 @@ class HeimdalRawMediaAdapter:
             return OperationRecord(binding)
         if legacy_manifest:
             assert manifest is not None
-            self._validate_legacy_manifest(binding, target, manifest)
+            if source is None:
+                raise TransitionConflict("legacy HAR manifest has no registered source")
+            self._validate_legacy_manifest(binding, source, target, manifest)
         reservation = RepresentationReservation(
             binding.artifact,
             binding.target,
@@ -415,6 +433,9 @@ class HeimdalRawMediaAdapter:
         )
         if receipt is None or raw_store.all_raw_representations(self.record.id):
             return None
+        cleanup_refs = receipt.payload.get("cold_cleanup_location_refs", [])
+        if not isinstance(cleanup_refs, list) or cleanup_refs:
+            return None
         return CleanupProof(
             artifact.identity,
             artifact.generation,
@@ -447,6 +468,7 @@ class HeimdalRawMediaAdapter:
     def _validate_legacy_manifest(
         self,
         binding: OperationBinding,
+        source: RawRepresentation,
         target: RawRepresentation,
         manifest: Mapping[str, object],
     ) -> None:
@@ -463,6 +485,24 @@ class HeimdalRawMediaAdapter:
             manifest.get(field) != value for field, value in expected.items()
         ):
             raise TransitionConflict("legacy HAR manifest binding differs")
+        receipt_id = manifest.get("receipt_id")
+        ciphertext_hash = hashlib.sha256(source.ciphertext).hexdigest()
+        verified_at = manifest.get("verified_at")
+        try:
+            canonical_receipt_id = str(UUID(str(receipt_id)))
+            parsed_verified_at = datetime.fromisoformat(
+                str(verified_at).replace("Z", "+00:00")
+            )
+        except (TypeError, ValueError, AttributeError) as exc:
+            raise TransitionConflict("legacy HAR receipt fields are invalid") from exc
+        if (
+            manifest.get("schema") != _HAR_ARCHIVE_SCHEMA
+            or canonical_receipt_id != receipt_id
+            or manifest.get("encrypted_bytes") != len(source.ciphertext)
+            or manifest.get("ciphertext_sha256") != ciphertext_hash
+            or parsed_verified_at.tzinfo is None
+        ):
+            raise TransitionConflict("legacy HAR receipt fields differ")
 
     def _restore_correlation(
         self,

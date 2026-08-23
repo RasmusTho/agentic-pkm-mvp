@@ -17,7 +17,7 @@ import os
 from pathlib import Path
 import re
 from typing import Callable, Mapping, Optional, cast
-from uuid import UUID, uuid4
+from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
 
 from app.heimdal import raw_liveness, raw_read_gate, raw_store
 from app.heimdal.raw_store import RawRecord, RawRepresentation
@@ -270,6 +270,34 @@ def _manifest_with_operation(
     return (json.dumps(parsed, sort_keys=True, separators=(",", ":")) + "\n").encode()
 
 
+def _archive_receipt_from_manifest(payload: Mapping[str, object]) -> ArchiveReceipt:
+    """Load exact owner receipt fields for an additive pre-GAF retry."""
+
+    try:
+        verified_at = datetime.fromisoformat(
+            str(payload["verified_at"]).replace("Z", "+00:00")
+        )
+        receipt = ArchiveReceipt(
+            receipt_id=str(payload["receipt_id"]),
+            record_id=str(payload["record_id"]),
+            content_identity=str(payload["content_identity"]),
+            representation_id=str(payload["representation_id"]),
+            location_ref=str(payload["location_ref"]),
+            archive_token=str(payload["archive_token"]),
+            archive_generation=str(payload["archive_generation"]),
+            raw_generation=int(str(payload["raw_generation"])),
+            encrypted_bytes=int(str(payload["encrypted_bytes"])),
+            ciphertext_sha256=str(payload["ciphertext_sha256"]),
+            verified_at=verified_at,
+            schema=str(payload["schema"]),
+        )
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ArchiveDegradedError("archive_manifest_invalid") from exc
+    if str(UUID(receipt.receipt_id)) != receipt.receipt_id or receipt.schema != ARCHIVE_SCHEMA:
+        raise ArchiveDegradedError("archive_manifest_invalid")
+    return receipt
+
+
 def _active_hot(record_id: str) -> RawRepresentation:
     active = [item for item in raw_store.all_raw_representations(record_id) if item.active]
     if len(active) != 1 or active[0].storage_kind != "postgres_hot":
@@ -327,6 +355,7 @@ def _relocate_raw_record_owner_native(
     requested_representation_id: str | None = None,
     requested_receipt_id: str | None = None,
     operation_binding: Mapping[str, object] | None = None,
+    legacy_manifest: Mapping[str, object] | None = None,
 ) -> ArchiveResult:
     """Copy, verify, receipt, then activate cold; fail closed on every error."""
     reference = now or datetime.now(timezone.utc)
@@ -389,19 +418,35 @@ def _relocate_raw_record_owner_native(
         reservation_durable = False
         activation_started = False
         failure: ArchiveDegradedError | None = None
-        receipt = ArchiveReceipt(
-            receipt_id=receipt_id,
-            record_id=record.id,
-            content_identity=record.content_identity,
-            representation_id=representation_id,
-            location_ref=location_ref,
-            archive_token=raw_store._archive_binding_token(archive_ref),  # noqa: SLF001
-            archive_generation=volume_proof.archive_generation,
-            raw_generation=mutation_authority.generation,
-            encrypted_bytes=len(ciphertext),
-            ciphertext_sha256=ciphertext_hash,
-            verified_at=_utc(reference),
+        receipt = (
+            _archive_receipt_from_manifest(legacy_manifest)
+            if legacy_manifest is not None
+            else ArchiveReceipt(
+                receipt_id=receipt_id,
+                record_id=record.id,
+                content_identity=record.content_identity,
+                representation_id=representation_id,
+                location_ref=location_ref,
+                archive_token=raw_store._archive_binding_token(archive_ref),  # noqa: SLF001
+                archive_generation=volume_proof.archive_generation,
+                raw_generation=mutation_authority.generation,
+                encrypted_bytes=len(ciphertext),
+                ciphertext_sha256=ciphertext_hash,
+                verified_at=_utc(reference),
+            )
         )
+        if (
+            receipt.record_id != record.id
+            or receipt.content_identity != record.content_identity
+            or receipt.representation_id != representation_id
+            or receipt.location_ref != location_ref
+            or receipt.archive_token != raw_store._archive_binding_token(archive_ref)  # noqa: SLF001
+            or receipt.archive_generation != volume_proof.archive_generation
+            or receipt.raw_generation != mutation_authority.generation
+            or receipt.encrypted_bytes != len(ciphertext)
+            or receipt.ciphertext_sha256 != ciphertext_hash
+        ):
+            raise ArchiveDegradedError("archive_manifest_invalid")
 
         try:
             with raw_store.cold_archive_mutation_lock(archive_root, verified_volume=volume_proof):
@@ -412,10 +457,15 @@ def _relocate_raw_record_owner_native(
                 _durable_write(
                     manifest_path,
                     _manifest_with_operation(
-                        _reserved_ownership_manifest_payload(receipt),
+                        (
+                            _manifest_payload(receipt)
+                            if legacy_manifest is not None
+                            else _reserved_ownership_manifest_payload(receipt)
+                        ),
                         operation_binding,
                     ),
                 )
+                _relocation_stage_hook("after_operation_binding")
                 raw_store.register_cold_location(
                     location_ref,
                     object_path,
@@ -440,7 +490,8 @@ def _relocate_raw_record_owner_native(
                     )
                     reservation_durable = True
                     _relocation_stage_hook("after_reservation")
-                    _durable_write(object_path, ciphertext)
+                    if legacy_manifest is None:
+                        _durable_write(object_path, ciphertext)
                     _relocation_stage_hook("after_object_write")
                     copied = object_path.read_bytes()
                     if (
@@ -544,12 +595,18 @@ def relocate_raw_record(
     ]
     if len(pending) > 1:
         raise ArchiveDegradedError("archive_pending_state_invalid")
+    deterministic_target_id = str(
+        uuid5(
+            NAMESPACE_URL,
+            f"heimdal-archive:{record.id}:{source_hot.raw_generation}:{archive_ref}",
+        )
+    )
     target_id = (
         active_cold.id
         if active_cold is not None
         else pending[0].id
         if pending
-        else str(uuid4())
+        else deterministic_target_id
     )
 
     def read_operation_manifest(representation_id: str) -> Mapping[str, object] | None:
@@ -564,6 +621,7 @@ def relocate_raw_record(
         representation_id: str,
         receipt_id: str,
         operation_binding: Mapping[str, object],
+        legacy_manifest: Mapping[str, object] | None,
     ) -> ArchiveResult:
         return _relocate_raw_record_owner_native(
             record,
@@ -577,6 +635,7 @@ def relocate_raw_record(
             requested_representation_id=representation_id,
             requested_receipt_id=receipt_id,
             operation_binding=operation_binding,
+            legacy_manifest=legacy_manifest,
         )
 
     adapter = HeimdalRawMediaAdapter(

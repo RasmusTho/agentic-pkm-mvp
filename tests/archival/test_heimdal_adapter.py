@@ -26,7 +26,15 @@ from app.archival.contracts import (
     TransitionStage,
 )
 from app.archival.transition import ArchivalTransitionKernel, TransitionConflict
-from app.heimdal import local_archive, media_ingress, media_receipts, raw_liveness, raw_read_gate, raw_store
+from app.heimdal import (
+    local_archive,
+    media_ingress,
+    media_receipts,
+    raw_liveness,
+    raw_read_gate,
+    raw_store,
+    retention,
+)
 from app.heimdal.consent_ledger import (
     MEDIA_CAPTURE_GRANT_REF,
     reset_memory_consent_ledger,
@@ -246,6 +254,59 @@ def test_archive_operation_binding_and_receipt_survive_process_loss(
     assert recovered.receipt.representation_id == manifest["representation_id"]
 
 
+def test_operation_binding_crash_before_registration_reuses_exact_target(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    record = _admit_all_modalities()[0]
+    now = datetime.now(timezone.utc)
+    _age_for_archive([record], now=now)
+    record = raw_store.resolve_active_raw_record(record.id)
+    assert record is not None
+    archive_root = tmp_path / "binding-crash-cold"
+    archive_root.mkdir()
+
+    class BindingProcessLoss(BaseException):
+        pass
+
+    def lose_after_binding(stage: str) -> None:
+        if stage == "after_operation_binding":
+            raise BindingProcessLoss
+
+    monkeypatch.setattr(local_archive, "_relocation_stage_hook", lose_after_binding)
+    with pytest.raises(BindingProcessLoss):
+        local_archive.relocate_raw_record(
+            record,
+            archive_root=archive_root,
+            archive_ref=_ARCHIVE_REF,
+            now=now,
+            retention_window_days=30,
+            key=_KEY,
+            volume_ready=lambda: _issue_archive_volume_ready(
+                _ARCHIVE_REF, archive_root, _issuer=_ARCHIVE_VOLUME_READY_ISSUER
+            ),
+        )
+    first_manifest_path = next((archive_root / "manifests").glob("*.json"))
+    first_manifest = json.loads(first_manifest_path.read_text(encoding="utf-8"))
+    assert len(raw_store.all_raw_representations(record.id)) == 1
+
+    monkeypatch.setattr(local_archive, "_relocation_stage_hook", lambda _stage: None)
+    recovered = local_archive.relocate_raw_record(
+        record,
+        archive_root=archive_root,
+        archive_ref=_ARCHIVE_REF,
+        now=now,
+        retention_window_days=30,
+        key=_KEY,
+        volume_ready=lambda: _issue_archive_volume_ready(
+            _ARCHIVE_REF, archive_root, _issuer=_ARCHIVE_VOLUME_READY_ISSUER
+        ),
+    )
+    assert recovered.receipt.representation_id == first_manifest["representation_id"]
+    assert [path.name for path in (archive_root / "manifests").glob("*.json")] == [
+        first_manifest_path.name
+    ]
+
+
 def test_legacy_har_manifest_retry_upgrades_binding_without_fabricated_completion(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -294,6 +355,39 @@ def test_legacy_har_manifest_retry_upgrades_binding_without_fabricated_completio
         for row in representations
     )
 
+    malformed_fields = {
+        "schema": "wrong-schema",
+        "receipt_id": "not-a-uuid",
+        "encrypted_bytes": legacy_manifest["encrypted_bytes"] + 1,
+        "ciphertext_sha256": "0" * 64,
+        "verified_at": "not-a-timestamp",
+    }
+    for field, malformed in malformed_fields.items():
+        candidate = dict(legacy_manifest)
+        candidate[field] = malformed
+        manifest_path.write_text(
+            json.dumps(candidate, sort_keys=True, separators=(",", ":")) + "\n",
+            encoding="utf-8",
+        )
+        with pytest.raises(TransitionConflict, match="legacy HAR"):
+            local_archive.relocate_raw_record(
+                record,
+                archive_root=archive_root,
+                archive_ref=_ARCHIVE_REF,
+                now=now,
+                retention_window_days=30,
+                key=_KEY,
+                volume_ready=lambda: _issue_archive_volume_ready(
+                    _ARCHIVE_REF,
+                    archive_root,
+                    _issuer=_ARCHIVE_VOLUME_READY_ISSUER,
+                ),
+            )
+    manifest_path.write_text(
+        json.dumps(legacy_manifest, sort_keys=True, separators=(",", ":")) + "\n",
+        encoding="utf-8",
+    )
+
     resumed_stages: list[str] = []
     monkeypatch.setattr(local_archive, "_relocation_stage_hook", resumed_stages.append)
     recovered = local_archive.relocate_raw_record(
@@ -314,6 +408,10 @@ def test_legacy_har_manifest_retry_upgrades_binding_without_fabricated_completio
     assert resumed_stages[-1] == "after_activation"
     assert upgraded["gaf_operation"]["target_representation_id"] == recovered.receipt.representation_id
     assert upgraded["receipt_id"] == recovered.receipt.receipt_id
+    assert upgraded["receipt_id"] == legacy_manifest["receipt_id"]
+    assert upgraded["verified_at"] == legacy_manifest["verified_at"]
+    assert upgraded["encrypted_bytes"] == legacy_manifest["encrypted_bytes"]
+    assert upgraded["ciphertext_sha256"] == legacy_manifest["ciphertext_sha256"]
 
     upgraded["gaf_operation"]["idempotency_key"] = "conflicting-operation"
     manifest_path.write_text(
@@ -358,3 +456,33 @@ def test_raw_media_revocation_preserves_har05_liveness_for_every_modality(
         assert outcome.liveness.state is LivenessState.ERASED
         proof = adapter.read_cleanup(adapter.artifact)
         assert proof is not None and proof.complete
+
+
+def test_cleanup_stays_pending_while_har05_cold_queue_is_not_empty(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    records = _admit_all_modalities()
+    _archive_root, adapters = _archive_all(records, tmp_path=tmp_path, monkeypatch=monkeypatch)
+    original_delete = raw_store._delete_bound_cold_object  # noqa: SLF001
+
+    def fail_cold_cleanup(*_args: object, **_kwargs: object) -> None:
+        raise raw_store.RawRepresentationDeletionError("injected cold cleanup failure")
+
+    monkeypatch.setattr(raw_store, "_delete_bound_cold_object", fail_cold_cleanup)
+    with pytest.raises(raw_store.RawRepresentationDeletionError):
+        revoke_consent(grant_ref=MEDIA_CAPTURE_GRANT_REF, revoked_by="gaf03-test")
+
+    pending_receipt = raw_liveness.all_deletion_receipts()[0]
+    assert pending_receipt.payload["cold_cleanup_location_refs"]
+    pending_adapter = next(
+        adapter for adapter in adapters if adapter.record.id == pending_receipt.record_id
+    )
+    pending = ArchivalTransitionKernel(pending_adapter).cleanup(pending_adapter.artifact)
+    assert pending.stage is TransitionStage.ERASE_PENDING
+    assert pending.liveness.state is LivenessState.ERASURE_PENDING
+
+    monkeypatch.setattr(raw_store, "_delete_bound_cold_object", original_delete)
+    retention.enforce_consent_revocation(grant_ref=MEDIA_CAPTURE_GRANT_REF)
+    terminal = ArchivalTransitionKernel(pending_adapter).cleanup(pending_adapter.artifact)
+    assert terminal.stage is TransitionStage.ERASED
+    assert terminal.liveness.state is LivenessState.ERASED
