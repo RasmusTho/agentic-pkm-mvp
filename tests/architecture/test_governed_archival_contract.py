@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import ast
 import inspect
 
 from typing import get_type_hints
@@ -53,3 +54,16 @@ def test_transition_kernel_uses_only_published_archival_adapter() -> None:
 
     assert hints["adapter"] is ArchivalAdapter
     assert "class TransitionAdapter" not in module_source
+
+
+def test_heimdal_adapter_has_no_parallel_authority_store() -> None:
+    source = (ROOT / "app/archival/adapters/heimdal.py").read_text()
+    tree = ast.parse(source)
+
+    assert "CREATE TABLE" not in source
+    assert "sqlite" not in source.lower()
+    assert "postgres" not in source.lower()
+    assert not any(isinstance(node, (ast.DictComp, ast.SetComp)) for node in ast.walk(tree))
+    assert "raw_store" in source
+    assert "raw_read_gate" in source
+    assert "raw_liveness" in source

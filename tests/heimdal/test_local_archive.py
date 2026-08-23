@@ -386,6 +386,74 @@ def test_verified_archive_receipt_precedes_hot_retirement(tmp_path: Path) -> Non
     )
 
 
+def test_terminal_archive_replay_rebinds_cold_volume_after_restart(tmp_path: Path) -> None:
+    record, now = _eligible(_insert(b"restart-terminal-replay"))
+    archive_root = tmp_path / "mounted-cold"
+    archive_root.mkdir()
+    first = local_archive.relocate_raw_record(
+        record,
+        archive_root=archive_root,
+        archive_ref=_ARCHIVE_REF,
+        now=now,
+        retention_window_days=30,
+        key=_KEY,
+        volume_ready=lambda: _test_volume_ready(_ARCHIVE_REF, archive_root),
+    )
+
+    raw_store.revoke_cold_archive_binding()
+    replay = local_archive.relocate_raw_record(
+        record,
+        archive_root=archive_root,
+        archive_ref=_ARCHIVE_REF,
+        now=now,
+        retention_window_days=30,
+        key=_KEY,
+        volume_ready=lambda: _test_volume_ready(_ARCHIVE_REF, archive_root),
+    )
+
+    assert replay.receipt == first.receipt
+    assert replay.active_representation == first.active_representation
+
+
+def test_terminal_pre_gaf_manifest_is_additively_bound_after_restart(tmp_path: Path) -> None:
+    record, now = _eligible(_insert(b"terminal-pre-gaf-replay"))
+    archive_root = tmp_path / "mounted-cold"
+    archive_root.mkdir()
+    first = local_archive.relocate_raw_record(
+        record,
+        archive_root=archive_root,
+        archive_ref=_ARCHIVE_REF,
+        now=now,
+        retention_window_days=30,
+        key=_KEY,
+        volume_ready=lambda: _test_volume_ready(_ARCHIVE_REF, archive_root),
+    )
+    manifest_path = archive_root / "manifests" / f"{first.receipt.representation_id}.json"
+    legacy = json.loads(manifest_path.read_text(encoding="utf-8"))
+    legacy.pop("gaf_operation")
+    manifest_path.write_text(
+        json.dumps(legacy, sort_keys=True, separators=(",", ":")) + "\n",
+        encoding="utf-8",
+    )
+    raw_store.revoke_cold_archive_binding()
+
+    replay = local_archive.relocate_raw_record(
+        record,
+        archive_root=archive_root,
+        archive_ref=_ARCHIVE_REF,
+        now=now + timedelta(days=31),
+        retention_window_days=30,
+        key=_KEY,
+        volume_ready=lambda: _test_volume_ready(_ARCHIVE_REF, archive_root),
+    )
+
+    upgraded = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert replay.receipt == first.receipt
+    assert {key: upgraded[key] for key in legacy} == legacy
+    assert upgraded["gaf_operation"]["source_representation_id"] != first.receipt.representation_id
+    assert upgraded["gaf_operation"]["target_representation_id"] == first.receipt.representation_id
+
+
 def test_verify_before_hot_representation_retire_and_fail_closed(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -421,6 +489,12 @@ def test_verify_before_hot_representation_retire_and_fail_closed(
     ]
     assert len(pending) == 1
     assert list((archive_root / "representations").glob("*.bin")) == []
+    manifests = list((archive_root / "manifests").glob("*.json"))
+    assert len(manifests) == 1
+    reserved_manifest = json.loads(manifests[0].read_text(encoding="utf-8"))
+    assert reserved_manifest["ownership_state"] == "reserved"
+    assert reserved_manifest["representation_id"] == pending[0].id
+    assert reserved_manifest["gaf_operation"]["target_representation_id"] == pending[0].id
 
     monkeypatch.setattr(local_archive, "_durable_write", original_write)
     retried = local_archive.relocate_raw_record(
@@ -434,6 +508,238 @@ def test_verify_before_hot_representation_retire_and_fail_closed(
     )
     assert retried.receipt.representation_id == pending[0].id
     assert retried.active_representation.active
+
+
+def test_registration_checkpoint_after_effect_preserves_retry_manifest(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    record, now = _eligible(_insert(b"checkpoint-after-effect"))
+    archive_root = tmp_path / "mounted-cold"
+    archive_root.mkdir()
+    original_checkpoint = raw_liveness._checkpoint_raw_mutation_authority  # noqa: SLF001
+
+    def commit_then_raise(authority: raw_liveness.RawMutationAuthority) -> None:
+        original_checkpoint(authority)
+        raise RuntimeError("checkpoint acknowledgement lost")
+
+    monkeypatch.setattr(
+        raw_liveness,
+        "_checkpoint_raw_mutation_authority",
+        commit_then_raise,
+    )
+    with pytest.raises(local_archive.ArchiveDegradedError, match="archive_relocation_failed"):
+        local_archive.relocate_raw_record(
+            record,
+            archive_root=archive_root,
+            archive_ref=_ARCHIVE_REF,
+            now=now,
+            retention_window_days=30,
+            key=_KEY,
+            volume_ready=lambda: _test_volume_ready(_ARCHIVE_REF, archive_root),
+        )
+    pending = [
+        item
+        for item in all_raw_representations(record.id)
+        if item.storage_kind == "encrypted_local_cold" and not item.active
+    ]
+    assert len(pending) == 1
+    manifest_path = archive_root / "manifests" / f"{pending[0].id}.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert manifest["ownership_state"] == "reserved"
+    assert manifest["representation_id"] == pending[0].id
+
+    monkeypatch.setattr(
+        raw_liveness,
+        "_checkpoint_raw_mutation_authority",
+        original_checkpoint,
+    )
+    retried = local_archive.relocate_raw_record(
+        record,
+        archive_root=archive_root,
+        archive_ref=_ARCHIVE_REF,
+        now=now,
+        retention_window_days=30,
+        key=_KEY,
+        volume_ready=lambda: _test_volume_ready(_ARCHIVE_REF, archive_root),
+    )
+    assert retried.receipt.representation_id == pending[0].id
+    assert retried.active_representation.active
+
+
+def test_verified_manifest_post_effect_failure_preserves_retryable_object(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    record, now = _eligible(_insert(b"verified-manifest-after-effect"))
+    archive_root = tmp_path / "mounted-cold"
+    archive_root.mkdir()
+    original_write = local_archive._durable_write
+
+    def write_then_lose_ack(path: Path, payload: bytes) -> None:
+        original_write(path, payload)
+        if path.suffix == ".json" and b'"ownership_state":"verified"' in payload:
+            raise RuntimeError("verified manifest acknowledgement lost")
+
+    monkeypatch.setattr(local_archive, "_durable_write", write_then_lose_ack)
+    with pytest.raises(local_archive.ArchiveDegradedError, match="archive_relocation_failed"):
+        local_archive.relocate_raw_record(
+            record,
+            archive_root=archive_root,
+            archive_ref=_ARCHIVE_REF,
+            now=now,
+            retention_window_days=30,
+            key=_KEY,
+            volume_ready=lambda: _test_volume_ready(_ARCHIVE_REF, archive_root),
+        )
+    pending = [
+        item
+        for item in all_raw_representations(record.id)
+        if item.storage_kind == "encrypted_local_cold" and not item.active
+    ]
+    assert len(pending) == 1
+    manifest_path = archive_root / "manifests" / f"{pending[0].id}.json"
+    object_path = archive_root / "representations" / f"{pending[0].id}.bin"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert manifest["ownership_state"] == "verified"
+    assert object_path.read_bytes() == record.ciphertext
+
+    monkeypatch.setattr(local_archive, "_durable_write", original_write)
+    retried = local_archive.relocate_raw_record(
+        record,
+        archive_root=archive_root,
+        archive_ref=_ARCHIVE_REF,
+        now=now,
+        retention_window_days=30,
+        key=_KEY,
+        volume_ready=lambda: _test_volume_ready(_ARCHIVE_REF, archive_root),
+    )
+    assert retried.receipt.representation_id == pending[0].id
+    assert retried.active_representation.active
+
+
+def test_owner_writer_rechecks_missing_pending_manifest_inside_relocation_fence(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    record, now = _eligible(_insert(b"manifest-fence-recheck"))
+    archive_root = tmp_path / "mounted-cold"
+    archive_root.mkdir()
+
+    class PendingProcessLoss(BaseException):
+        pass
+
+    def lose_after_reservation(stage: str) -> None:
+        if stage == "after_reservation":
+            raise PendingProcessLoss
+
+    monkeypatch.setattr(local_archive, "_relocation_stage_hook", lose_after_reservation)
+    with pytest.raises(PendingProcessLoss):
+        local_archive.relocate_raw_record(
+            record,
+            archive_root=archive_root,
+            archive_ref=_ARCHIVE_REF,
+            now=now,
+            retention_window_days=30,
+            key=_KEY,
+            volume_ready=lambda: _test_volume_ready(_ARCHIVE_REF, archive_root),
+        )
+    pending = next(
+        item
+        for item in all_raw_representations(record.id)
+        if item.storage_kind == "encrypted_local_cold" and not item.active
+    )
+    manifest_path = archive_root / "manifests" / f"{pending.id}.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest_path.unlink()
+    monkeypatch.setattr(local_archive, "_relocation_stage_hook", lambda _stage: None)
+
+    for stale_outer_read in (None, manifest):
+        with pytest.raises(
+            local_archive.ArchiveDegradedError, match="archive_manifest_invalid"
+        ):
+            local_archive._relocate_raw_record_owner_native(
+                record,
+                archive_root=archive_root,
+                archive_ref=_ARCHIVE_REF,
+                now=now,
+                retention_window_days=30,
+                key=_KEY,
+                volume_ready=lambda: _test_volume_ready(_ARCHIVE_REF, archive_root),
+                requested_representation_id=pending.id,
+                requested_receipt_id=str(manifest["receipt_id"]),
+                operation_binding=manifest["gaf_operation"],
+                existing_manifest=stale_outer_read,
+            )
+    typed_corruption = dict(manifest)
+    typed_corruption["encrypted_bytes"] = str(manifest["encrypted_bytes"])
+    manifest_path.write_text(
+        json.dumps(typed_corruption, sort_keys=True, separators=(",", ":")) + "\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(local_archive.ArchiveDegradedError, match="archive_manifest_invalid"):
+        local_archive._relocate_raw_record_owner_native(
+            record,
+            archive_root=archive_root,
+            archive_ref=_ARCHIVE_REF,
+            now=now,
+            retention_window_days=30,
+            key=_KEY,
+            volume_ready=lambda: _test_volume_ready(_ARCHIVE_REF, archive_root),
+            requested_representation_id=pending.id,
+            requested_receipt_id=str(manifest["receipt_id"]),
+            operation_binding=manifest["gaf_operation"],
+            existing_manifest=manifest,
+        )
+    naive_timestamp = dict(manifest)
+    naive_timestamp["verified_at"] = str(manifest["verified_at"]).removesuffix("Z")
+    manifest_path.write_text(
+        json.dumps(naive_timestamp, sort_keys=True, separators=(",", ":")) + "\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(local_archive.ArchiveDegradedError, match="archive_manifest_invalid"):
+        local_archive._relocate_raw_record_owner_native(
+            record,
+            archive_root=archive_root,
+            archive_ref=_ARCHIVE_REF,
+            now=now,
+            retention_window_days=30,
+            key=_KEY,
+            volume_ready=lambda: _test_volume_ready(_ARCHIVE_REF, archive_root),
+            requested_representation_id=pending.id,
+            requested_receipt_id=str(manifest["receipt_id"]),
+            operation_binding=manifest["gaf_operation"],
+            existing_manifest=manifest,
+        )
+    rows = all_raw_representations(record.id)
+    assert next(item for item in rows if item.active).storage_kind == "postgres_hot"
+    assert len([item for item in rows if not item.active]) == 1
+
+
+def test_relocation_rejects_source_generation_drift_before_manifest_write(
+    tmp_path: Path,
+) -> None:
+    record, now = _eligible(_insert(b"source-generation-drift"))
+    archive_root = tmp_path / "mounted-cold"
+    archive_root.mkdir()
+    hot = next(item for item in all_raw_representations(record.id) if item.active)
+    store = raw_store._MEMORY_STORE  # noqa: SLF001
+    with store._lock:  # noqa: SLF001
+        store._representations[hot.id] = replace(  # noqa: SLF001
+            hot, raw_generation=hot.raw_generation + 1
+        )
+
+    with pytest.raises(local_archive.ArchiveDegradedError, match="archive_manifest_invalid"):
+        local_archive.relocate_raw_record(
+            record,
+            archive_root=archive_root,
+            archive_ref=_ARCHIVE_REF,
+            now=now,
+            retention_window_days=30,
+            key=_KEY,
+            volume_ready=lambda: _test_volume_ready(_ARCHIVE_REF, archive_root),
+        )
+    rows = all_raw_representations(record.id)
+    assert len(rows) == 1 and rows[0].active
+    assert list((archive_root / "manifests").glob("*.json")) == []
+    assert list((archive_root / "representations").glob("*.bin")) == []
 
 
 def test_relocation_reservation_fences_retention_and_crash_cleanup(

@@ -73,6 +73,8 @@ _MIGRATION_HINT = (
 
 _RAW_REF_PREFIX = "heimraw:"
 _ALLOWLIST_ENV_VAR = "HEIMDAL_RAW_READ_ALLOWLIST"
+ACTUAL_REPRESENTATION_ID_PAYLOAD_KEY = "raw_read_representation_id"
+ACTUAL_RAW_GENERATION_PAYLOAD_KEY = "raw_read_generation"
 _raw_read_stage_hook: Callable[[str], None] = lambda _stage: None
 
 
@@ -370,6 +372,8 @@ def read_raw_record(
     purpose: str,
     key: Optional[bytes] = None,
     payload: Optional[Dict[str, Any]] = None,
+    expected_representation_id: Optional[str] = None,
+    expected_raw_generation: Optional[int] = None,
 ) -> GatedRawRead:
     """The one sanctioned raw->plaintext read call (HEIM-5).
 
@@ -396,6 +400,13 @@ def read_raw_record(
         raise ValueError(f"reader must be a non-empty string, got {reader!r}")
     if not isinstance(purpose, str) or not purpose.strip():
         raise ValueError(f"purpose must be a non-empty string, got {purpose!r}")
+    if expected_representation_id is not None and (
+        not isinstance(expected_representation_id, str)
+        or not expected_representation_id.strip()
+    ):
+        raise ValueError("expected_representation_id must be a non-empty string")
+    if expected_raw_generation is not None and type(expected_raw_generation) is not int:
+        raise ValueError("expected_raw_generation must be an integer")
 
     record_id = _record_id_from_raw_ref(raw_ref)
 
@@ -425,7 +436,7 @@ def read_raw_record(
         with raw_liveness.raw_relocation_fence(
             record_id=record_id,
             content_identity=content_identity,
-        ):
+        ) as read_authority:
             record = raw_store.resolve_active_raw_record(record_id)
             active = [
                 representation
@@ -435,6 +446,22 @@ def read_raw_record(
             if record is None or len(active) != 1:
                 raise RawReadRefusedError(
                     "Raw read refused: the exact active representation is unavailable."
+                )
+            if active[0].raw_generation != read_authority.generation or (
+                expected_raw_generation is not None
+                and expected_raw_generation != read_authority.generation
+            ):
+                raise RawReadRefusedError(
+                    "Raw read refused: the active raw generation differs from "
+                    "owner liveness authority. No receipt written and no plaintext returned."
+                )
+            if (
+                expected_representation_id is not None
+                and active[0].id != expected_representation_id
+            ):
+                raise RawReadRefusedError(
+                    "Raw read refused: the expected active representation changed. "
+                    "No receipt written and no plaintext returned."
                 )
             _raw_read_stage_hook("after_active_representation_resolution")
             try:
@@ -450,6 +477,9 @@ def read_raw_record(
                     "No receipt written and no plaintext returned."
                 ) from exc
 
+            receipt_payload = dict(payload or {})
+            receipt_payload[ACTUAL_REPRESENTATION_ID_PAYLOAD_KEY] = active[0].id
+            receipt_payload[ACTUAL_RAW_GENERATION_PAYLOAD_KEY] = read_authority.generation
             receipt = RawReadReceipt(
                 id=str(uuid4()),
                 raw_ref=raw_ref,
@@ -457,7 +487,7 @@ def read_raw_record(
                 reader=reader,
                 purpose=purpose,
                 read_at=datetime.now(timezone.utc),
-                payload=dict(payload or {}),
+                payload=receipt_payload,
                 sequence=-1,
             )
             persisted_receipt = receipt_backend.append(receipt)

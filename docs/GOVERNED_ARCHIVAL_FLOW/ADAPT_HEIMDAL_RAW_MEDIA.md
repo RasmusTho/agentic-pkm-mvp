@@ -50,21 +50,21 @@ implicit breadth into tested, bounded behavior while retaining the hard-won HAR 
 
 ## Acceptance Criteria
 
-- [ ] Audio, image, video, and document captures traverse the real media-ingress and production
+- [x] Audio, image, video, and document captures traverse the real media-ingress and production
       archive entrypoint and preserve capture/content identity through cold activation.
       Verify: `tests/archival/test_heimdal_adapter.py::test_all_admitted_raw_modalities_conform_to_archive_contract`
-- [ ] Every modality restores through the existing raw-read gate and emits the existing redacted
+- [x] Every modality restores through the existing raw-read gate and emits the existing redacted
       read/restore receipts; direct backend access remains unauthorized.
       Verify: `tests/archival/test_heimdal_adapter.py::test_raw_media_restore_reuses_production_gated_read`
-- [ ] Hard retention and consent revocation keep `erasure_pending` while cold cleanup remains and
+- [x] Hard retention and consent revocation keep `erasure_pending` while cold cleanup remains and
       reach `erased` only after all registered bytes/manifests are gone.
       Verify: `tests/archival/test_heimdal_adapter.py::test_raw_media_revocation_preserves_har05_liveness_for_every_modality`
-- [ ] The adapter delegates owner-native state to Heimdal and creates no second raw identity,
+- [x] The adapter delegates owner-native state to Heimdal and creates no second raw identity,
       representation registry, cleanup queue, or receipt store.
       Verify: `tests/architecture/test_governed_archival_contract.py::test_heimdal_adapter_has_no_parallel_authority_store`
-- [ ] Existing HAR-01..05 focused suites remain green without weakening their assertions.
+- [x] Existing HAR-01..05 focused suites remain green without weakening their assertions.
       Verify: `tests/heimdal/test_local_archive_retention.py::test_restore_then_delete_all_raw_copies`
-- [ ] Current owner docs distinguish delivered raw-media archival breadth from the still-target-state
+- [x] Current owner docs distinguish delivered raw-media archival breadth from the still-target-state
       cross-class capability.
       Verify: doc writeback at `docs/EVENTS.md :: Heimdal local archive restore + all-copy expiry`
 
