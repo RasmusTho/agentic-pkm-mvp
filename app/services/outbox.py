@@ -327,26 +327,46 @@ def bootstrap(conn: Any = None) -> None:
         # No longer swallowed (KERNEL-05, #2850): a failure here must surface,
         # not silently mask a broken connection/legacy-schema seam.
         ensure_schema(conn)  # type: ignore[arg-type]
+        cur = _exec(conn, "SELECT to_regclass('outbox') AS oid")
+        row = cur.fetchone() if hasattr(cur, "fetchone") else None
+        oid = row.get("oid") if isinstance(row, dict) else (row[0] if row else None)
+        if oid:
+            _assert_outbox_schema(conn)
+            return
         if not _outbox_schema_autocreate_enabled():
             _assert_outbox_schema(conn)
             return
-        _exec(conn, "create extension if not exists pgcrypto")
-        _exec(
-            conn,
-            """
-        create table if not exists outbox (
-            id uuid primary key default gen_random_uuid(),
-            topic text not null,
-            payload jsonb not null,
-            created_at timestamptz not null default now(),
-            delivered_at timestamptz,
-            attempts int not null default 0,
-            vault_binding_id text not null default 'legacy-compatibility-binding',
-            legacy_key uuid
-        )""",
+        table_groups = (
+            (
+                "outbox",
+                (
+                    "create extension if not exists pgcrypto",
+                    """
+                    create table outbox (
+                        id uuid primary key default gen_random_uuid(),
+                        topic text not null,
+                        payload jsonb not null,
+                        created_at timestamptz not null default now(),
+                        delivered_at timestamptz,
+                        attempts int not null default 0,
+                        vault_binding_id text not null default 'legacy-compatibility-binding',
+                        legacy_key uuid
+                    )""",
+                    "create index outbox_created_idx on outbox (created_at)",
+                    "create index outbox_delivered_idx on outbox (delivered_at)",
+                ),
+            ),
         )
-        _exec(conn, "create index if not exists outbox_created_idx on outbox (created_at)")
-        _exec(conn, "create index if not exists outbox_delivered_idx on outbox (delivered_at)")
+        for table_name, statements in table_groups:
+            cur = _exec(conn, "SELECT to_regclass(%s) AS oid", (table_name,))
+            row = cur.fetchone() if hasattr(cur, "fetchone") else None
+            table_present = bool(
+                row.get("oid") if isinstance(row, dict) else (row[0] if row else None)
+            )
+            if table_present:
+                continue
+            for statement in statements:
+                _exec(conn, statement)
     finally:
         if close:
             conn.close()

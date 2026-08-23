@@ -363,10 +363,17 @@ def ensure_journal_schema(conn: Any) -> None:
     holds byte-parity with the Alembic revision.
     """
     if _schema_autocreate_enabled():
-        _exec(conn, _TABLE_DDL)
-        _exec(conn, _ACTIVE_ENTRY_INDEX_DDL)
-        conn.commit()
-        return
+        table_groups = ((JOURNAL_TABLE, (_TABLE_DDL, _ACTIVE_ENTRY_INDEX_DDL)),)
+        for table_name, statements in table_groups:
+            cur = _exec(conn, "SELECT to_regclass(%s) AS oid", (table_name,))
+            row = cur.fetchone() if hasattr(cur, "fetchone") else None
+            table_present = bool(_col(row, 0, "oid")) if row is not None else False
+            if table_present:
+                continue
+            for statement in statements:
+                _exec(conn, statement)
+            conn.commit()
+            return
     cur = _exec(conn, "SELECT to_regclass(%s) AS oid", (JOURNAL_TABLE,))
     row = cur.fetchone() if hasattr(cur, "fetchone") else None
     oid = _col(row, 0, "oid") if row is not None else None

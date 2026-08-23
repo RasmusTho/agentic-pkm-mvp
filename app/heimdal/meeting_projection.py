@@ -601,7 +601,25 @@ class _PgProjectionStore:
         conn = _pg_connect()
         try:
             if _schema_autocreate_enabled():
-                conn.cursor().execute(_PG_AUTOCREATE_DDL)
+                cur = conn.cursor()
+                tables = (_DERIVATION_TABLE, _REVISION_TABLE)
+                cur.execute(
+                    "SELECT " + ", ".join("to_regclass(%s)" for _ in tables),
+                    tables,
+                )
+                existing = cur.fetchone()
+                if existing and any(existing):
+                    _assert_pg_schema(conn)
+                else:
+                    table_groups = ((_DERIVATION_TABLE, (_PG_AUTOCREATE_DDL,)),)
+                    for table_name, statements in table_groups:
+                        cur.execute("SELECT to_regclass(%s)", (table_name,))
+                        row = cur.fetchone()
+                        table_present = bool(row and row[0])
+                        if table_present:
+                            continue
+                        for statement in statements:
+                            cur.execute(statement)
             else:
                 _assert_pg_schema(conn)
         finally:

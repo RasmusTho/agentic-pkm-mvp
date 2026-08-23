@@ -786,9 +786,12 @@ def _bootstrap_pg(conn: Any) -> None:
         _assert_pg_schema(conn)
         return
     cur = conn.cursor()
-    cur.execute(
-        f"""
-        CREATE TABLE IF NOT EXISTS {_TABLE} (
+    table_groups = (
+        (
+            _TABLE,
+            (
+                f"""
+                CREATE TABLE {_TABLE} (
             binding_id TEXT PRIMARY KEY,
             account_binding_id TEXT,
             collection_kind TEXT NOT NULL,
@@ -829,23 +832,28 @@ def _bootstrap_pg(conn: Any) -> None:
                 account_binding_id IS NULL OR account_binding_id ~
                 '^[0-9a-f]{{8}}-[0-9a-f]{{4}}-[0-9a-f]{{4}}-[0-9a-f]{{4}}-[0-9a-f]{{12}}$'
             )
-        )
-        """
+                )
+                """,
+                "CREATE UNIQUE INDEX acquisition_source_registry_binding_triple_uq "
+                f"ON {_TABLE} (collection_kind, collection_ref, "
+                f"COALESCE(account_binding_id, '{_NULL_ACCOUNT_SENTINEL}'))",
+                "CREATE UNIQUE INDEX acquisition_source_registry_single_inbox_uq "
+                f"ON {_TABLE} (COALESCE(account_binding_id, '{_NULL_ACCOUNT_SENTINEL}')) "
+                "WHERE collection_kind = 'inbox_playlist' AND enabled = true",
+                f"CREATE INDEX acquisition_source_registry_account_idx ON {_TABLE} "
+                "(account_binding_id)",
+            ),
+        ),
     )
-    cur.execute(
-        "CREATE UNIQUE INDEX IF NOT EXISTS acquisition_source_registry_binding_triple_uq "
-        f"ON {_TABLE} (collection_kind, collection_ref, "
-        f"COALESCE(account_binding_id, '{_NULL_ACCOUNT_SENTINEL}'))"
-    )
-    cur.execute(
-        "CREATE UNIQUE INDEX IF NOT EXISTS acquisition_source_registry_single_inbox_uq "
-        f"ON {_TABLE} (COALESCE(account_binding_id, '{_NULL_ACCOUNT_SENTINEL}')) "
-        "WHERE collection_kind = 'inbox_playlist' AND enabled = true"
-    )
-    cur.execute(
-        "CREATE INDEX IF NOT EXISTS acquisition_source_registry_account_idx "
-        f"ON {_TABLE} (account_binding_id)"
-    )
+    for table_name, statements in table_groups:
+        cur.execute("SELECT to_regclass(%s)", (table_name,))
+        row = cur.fetchone()
+        table_present = bool(row and row[0])
+        if table_present:
+            continue
+        for statement in statements:
+            cur.execute(statement)
+    _assert_pg_schema(conn)
 
 
 def _row_to_binding(row: tuple[Any, ...]) -> SourceBinding:

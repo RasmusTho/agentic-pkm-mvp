@@ -696,6 +696,17 @@ def _assert_pg_schema(conn: Any) -> None:
             "Raw-liveness/deletion columns do not match the migration-owned schema. "
             + _MIGRATION_HINT
         )
+    from app.heimdal.trigger_ownership import (
+        RAW_DELETION_RECEIPT_TRIGGER,
+        assert_migration_owned_reject_mutation_trigger,
+    )
+
+    assert_migration_owned_reject_mutation_trigger(
+        conn,
+        RAW_DELETION_RECEIPT_TRIGGER,
+        error_type=RawLivenessSchemaMissingError,
+        migration_hint=_MIGRATION_HINT,
+    )
     cur.execute(
         """
         SELECT trigger_name
@@ -862,6 +873,7 @@ def _bootstrap_pg(conn: Any) -> None:
         return
     cur = conn.cursor()
     fixture_tables = (
+        _DELETION_RECEIPT_TABLE,
         _GENERATION_TABLE,
         _TOMBSTONE_TABLE,
         _LEASE_TABLE,
@@ -882,94 +894,93 @@ def _bootstrap_pg(conn: Any) -> None:
             "Test autocreate refuses to invent liveness generations for existing raw rows. "
             + _MIGRATION_HINT
         )
-    cur.execute("CREATE EXTENSION IF NOT EXISTS pgcrypto")
-    cur.execute(
-        f"""
-        CREATE TABLE IF NOT EXISTS {_DELETION_RECEIPT_TABLE} (
-            id uuid PRIMARY KEY,
-            record_id uuid NOT NULL,
-            content_identity text NOT NULL,
-            reason text NOT NULL,
-            retention_window_days integer NOT NULL,
-            deleted_at timestamptz NOT NULL DEFAULT now(),
-            payload jsonb NOT NULL DEFAULT '{{}}'::jsonb,
-            sequence bigserial NOT NULL
-        )
-        """
+    deletion_receipt_groups = (
+        (
+            _DELETION_RECEIPT_TABLE,
+            (
+                "CREATE EXTENSION IF NOT EXISTS pgcrypto",
+                f"""
+                CREATE TABLE {_DELETION_RECEIPT_TABLE} (
+                    id uuid PRIMARY KEY,
+                    record_id uuid NOT NULL,
+                    content_identity text NOT NULL,
+                    reason text NOT NULL,
+                    retention_window_days integer NOT NULL,
+                    deleted_at timestamptz NOT NULL DEFAULT now(),
+                    payload jsonb NOT NULL DEFAULT '{{}}'::jsonb,
+                    sequence bigserial NOT NULL
+                )
+                """,
+                f"CREATE INDEX heimdal_raw_deletion_receipt_seq_idx "
+                f"ON {_DELETION_RECEIPT_TABLE} (sequence)",
+                f"CREATE INDEX heimdal_raw_deletion_receipt_record_id_idx "
+                f"ON {_DELETION_RECEIPT_TABLE} (record_id)",
+                """
+                CREATE OR REPLACE FUNCTION heimdal_raw_cleanup_queue_is_subsequence(
+                    old_payload jsonb, new_payload jsonb
+                ) RETURNS boolean AS $$
+                DECLARE
+                    old_refs text[] := ARRAY(
+                        SELECT jsonb_array_elements_text(COALESCE(old_payload, '[]'::jsonb))
+                    );
+                    new_ref text;
+                    old_index integer := 1;
+                    old_length integer := COALESCE(array_length(old_refs, 1), 0);
+                BEGIN
+                    FOR new_ref IN SELECT jsonb_array_elements_text(COALESCE(new_payload, '[]'::jsonb)) LOOP
+                        WHILE old_index <= old_length AND old_refs[old_index] <> new_ref LOOP
+                            old_index := old_index + 1;
+                        END LOOP;
+                        IF old_index > old_length THEN
+                            RETURN false;
+                        END IF;
+                        old_index := old_index + 1;
+                    END LOOP;
+                    RETURN true;
+                END;
+                $$ LANGUAGE plpgsql IMMUTABLE STRICT
+                """,
+                f"""
+                CREATE OR REPLACE FUNCTION heimdal_raw_deletion_receipt_reject_mutation()
+                RETURNS trigger AS $$
+                BEGIN
+                    IF TG_OP = 'UPDATE'
+                       AND current_setting('{_RETENTION_RECONCILE_GUARD_SETTING}', true) = 'true'
+                       AND NEW.id IS NOT DISTINCT FROM OLD.id
+                       AND NEW.record_id IS NOT DISTINCT FROM OLD.record_id
+                       AND NEW.content_identity IS NOT DISTINCT FROM OLD.content_identity
+                       AND NEW.reason IS NOT DISTINCT FROM OLD.reason
+                       AND NEW.retention_window_days IS NOT DISTINCT FROM OLD.retention_window_days
+                       AND NEW.deleted_at IS NOT DISTINCT FROM OLD.deleted_at
+                       AND NEW.sequence IS NOT DISTINCT FROM OLD.sequence
+                       AND (NEW.payload - 'cold_cleanup_location_refs')
+                           IS NOT DISTINCT FROM (OLD.payload - 'cold_cleanup_location_refs')
+                       AND heimdal_raw_cleanup_queue_is_subsequence(
+                           OLD.payload->'cold_cleanup_location_refs',
+                           NEW.payload->'cold_cleanup_location_refs'
+                       ) THEN
+                        RETURN NEW;
+                    END IF;
+                    RAISE EXCEPTION 'heimdal_raw_deletion_receipt is append-only: % is not permitted', TG_OP;
+                END;
+                $$ LANGUAGE plpgsql
+                """,
+                f"""
+                CREATE TRIGGER heimdal_raw_deletion_receipt_no_update
+                BEFORE UPDATE OR DELETE ON {_DELETION_RECEIPT_TABLE}
+                FOR EACH ROW EXECUTE FUNCTION heimdal_raw_deletion_receipt_reject_mutation()
+                """,
+            ),
+        ),
     )
-    cur.execute(
-        f"CREATE INDEX IF NOT EXISTS heimdal_raw_deletion_receipt_seq_idx "
-        f"ON {_DELETION_RECEIPT_TABLE} (sequence)"
-    )
-    cur.execute(
-        f"CREATE INDEX IF NOT EXISTS heimdal_raw_deletion_receipt_record_id_idx "
-        f"ON {_DELETION_RECEIPT_TABLE} (record_id)"
-    )
-    cur.execute(
-        """
-        CREATE OR REPLACE FUNCTION heimdal_raw_cleanup_queue_is_subsequence(
-            old_payload jsonb, new_payload jsonb
-        ) RETURNS boolean AS $$
-        DECLARE
-            old_refs text[] := ARRAY(
-                SELECT jsonb_array_elements_text(COALESCE(old_payload, '[]'::jsonb))
-            );
-            new_ref text;
-            old_index integer := 1;
-            old_length integer := COALESCE(array_length(old_refs, 1), 0);
-        BEGIN
-            FOR new_ref IN SELECT jsonb_array_elements_text(COALESCE(new_payload, '[]'::jsonb)) LOOP
-                WHILE old_index <= old_length AND old_refs[old_index] <> new_ref LOOP
-                    old_index := old_index + 1;
-                END LOOP;
-                IF old_index > old_length THEN
-                    RETURN false;
-                END IF;
-                old_index := old_index + 1;
-            END LOOP;
-            RETURN true;
-        END;
-        $$ LANGUAGE plpgsql IMMUTABLE STRICT
-        """
-    )
-    cur.execute(
-        f"""
-        CREATE OR REPLACE FUNCTION heimdal_raw_deletion_receipt_reject_mutation()
-        RETURNS trigger AS $$
-        BEGIN
-            IF TG_OP = 'UPDATE'
-               AND current_setting('{_RETENTION_RECONCILE_GUARD_SETTING}', true) = 'true'
-               AND NEW.id IS NOT DISTINCT FROM OLD.id
-               AND NEW.record_id IS NOT DISTINCT FROM OLD.record_id
-               AND NEW.content_identity IS NOT DISTINCT FROM OLD.content_identity
-               AND NEW.reason IS NOT DISTINCT FROM OLD.reason
-               AND NEW.retention_window_days IS NOT DISTINCT FROM OLD.retention_window_days
-               AND NEW.deleted_at IS NOT DISTINCT FROM OLD.deleted_at
-               AND NEW.sequence IS NOT DISTINCT FROM OLD.sequence
-               AND (NEW.payload - 'cold_cleanup_location_refs')
-                   IS NOT DISTINCT FROM (OLD.payload - 'cold_cleanup_location_refs')
-               AND heimdal_raw_cleanup_queue_is_subsequence(
-                   OLD.payload->'cold_cleanup_location_refs',
-                   NEW.payload->'cold_cleanup_location_refs'
-               ) THEN
-                RETURN NEW;
-            END IF;
-            RAISE EXCEPTION 'heimdal_raw_deletion_receipt is append-only: % is not permitted', TG_OP;
-        END;
-        $$ LANGUAGE plpgsql
-        """
-    )
-    cur.execute(
-        f"DROP TRIGGER IF EXISTS heimdal_raw_deletion_receipt_no_update "
-        f"ON {_DELETION_RECEIPT_TABLE}"
-    )
-    cur.execute(
-        f"""
-        CREATE TRIGGER heimdal_raw_deletion_receipt_no_update
-        BEFORE UPDATE OR DELETE ON {_DELETION_RECEIPT_TABLE}
-        FOR EACH ROW EXECUTE FUNCTION heimdal_raw_deletion_receipt_reject_mutation()
-        """
-    )
+    for receipt_table_name, receipt_statements in deletion_receipt_groups:
+        cur.execute("SELECT to_regclass(%s)", (receipt_table_name,))
+        receipt_row = cur.fetchone()
+        receipt_table_present = bool(receipt_row and receipt_row[0])
+        if receipt_table_present:
+            continue
+        for receipt_statement in receipt_statements:
+            cur.execute(receipt_statement)
     generation_table_groups = (
         (
             _GENERATION_TABLE,
@@ -1089,96 +1100,173 @@ def _bootstrap_pg(conn: Any) -> None:
                 END;
                 $$ LANGUAGE plpgsql
                 """,
-                "DROP TRIGGER IF EXISTS heimdal_raw_representation_no_mutation "
-                "ON heimdal_raw_representation",
+                f"CREATE INDEX heimdal_raw_liveness_generation_record_idx "
+                f"ON {_GENERATION_TABLE} (record_id)",
                 """
-                CREATE TRIGGER heimdal_raw_representation_no_mutation
-                BEFORE INSERT OR UPDATE OR DELETE ON heimdal_raw_representation
-                FOR EACH ROW EXECUTE FUNCTION heimdal_raw_representation_reject_mutation()
+                CREATE OR REPLACE FUNCTION heimdal_raw_liveness_generation_reject_mutation()
+                RETURNS trigger AS $$
+                BEGIN
+                    RAISE EXCEPTION 'heimdal_raw_liveness_generation is append-only: % is not permitted', TG_OP;
+                END;
+                $$ LANGUAGE plpgsql
+                """,
+                f"""
+                CREATE TRIGGER heimdal_raw_liveness_generation_no_mutation
+                BEFORE UPDATE OR DELETE ON {_GENERATION_TABLE}
+                FOR EACH ROW EXECUTE FUNCTION heimdal_raw_liveness_generation_reject_mutation()
                 """,
             ),
         ),
     )
-    for table_name, statements in generation_table_groups:
-        cur.execute("SELECT to_regclass(%s)", (table_name,))
-        table_present_row = cur.fetchone()
-        table_present = bool(table_present_row and table_present_row[0])
-        if table_present:
+    for generation_table_name, generation_statements in generation_table_groups:
+        cur.execute("SELECT to_regclass(%s)", (generation_table_name,))
+        generation_table_row = cur.fetchone()
+        generation_table_present = bool(generation_table_row and generation_table_row[0])
+        if generation_table_present:
             continue
-        for statement in statements:
-            cur.execute(statement)
-    cur.execute(
-        f"CREATE INDEX heimdal_raw_liveness_generation_record_idx "
-        f"ON {_GENERATION_TABLE} (record_id)"
+        for generation_statement in generation_statements:
+            cur.execute(generation_statement)
+    authority_table_groups = (
+        (
+            _TOMBSTONE_TABLE,
+            (
+                f"""
+                CREATE TABLE {_TOMBSTONE_TABLE} (
+                    id uuid PRIMARY KEY,
+                    content_identity text NOT NULL,
+                    generation integer NOT NULL,
+                    record_id uuid NOT NULL UNIQUE,
+                    raw_ref text NOT NULL UNIQUE,
+                    deletion_receipt_id uuid NOT NULL UNIQUE
+                        REFERENCES {_DELETION_RECEIPT_TABLE}(id) ON DELETE RESTRICT,
+                    reason text NOT NULL,
+                    erased_at timestamptz NOT NULL,
+                    sequence bigserial NOT NULL,
+                    FOREIGN KEY (content_identity, generation)
+                        REFERENCES {_GENERATION_TABLE}(content_identity, generation)
+                        ON DELETE RESTRICT
+                )
+                """,
+                f"CREATE INDEX heimdal_raw_deletion_tombstone_identity_idx "
+                f"ON {_TOMBSTONE_TABLE} (content_identity, generation)",
+                """
+                CREATE OR REPLACE FUNCTION heimdal_raw_deletion_tombstone_reject_mutation()
+                RETURNS trigger AS $$
+                BEGIN
+                    RAISE EXCEPTION 'heimdal_raw_deletion_tombstone is append-only: % is not permitted', TG_OP;
+                END;
+                $$ LANGUAGE plpgsql
+                """,
+                f"""
+                CREATE TRIGGER heimdal_raw_deletion_tombstone_no_mutation
+                BEFORE UPDATE OR DELETE ON {_TOMBSTONE_TABLE}
+                FOR EACH ROW EXECUTE FUNCTION heimdal_raw_deletion_tombstone_reject_mutation()
+                """,
+            ),
+        ),
+        (
+            _LEASE_TABLE,
+            (
+                f"""
+                CREATE TABLE {_LEASE_TABLE} (
+                    lease_id uuid PRIMARY KEY,
+                    content_identity text NOT NULL,
+                    generation integer NOT NULL,
+                    record_id uuid NOT NULL,
+                    raw_ref text NOT NULL,
+                    issued_at timestamptz NOT NULL,
+                    expires_at timestamptz NOT NULL CHECK (expires_at > issued_at),
+                    sequence bigserial NOT NULL,
+                    FOREIGN KEY (content_identity, generation)
+                        REFERENCES {_GENERATION_TABLE}(content_identity, generation)
+                        ON DELETE RESTRICT
+                )
+                """,
+                f"CREATE INDEX heimdal_raw_response_lease_active_idx "
+                f"ON {_LEASE_TABLE} (record_id, expires_at)",
+                """
+                CREATE OR REPLACE FUNCTION heimdal_raw_response_lease_reject_mutation()
+                RETURNS trigger AS $$
+                BEGIN
+                    RAISE EXCEPTION 'heimdal_raw_response_lease is append-only: % is not permitted', TG_OP;
+                END;
+                $$ LANGUAGE plpgsql
+                """,
+                f"""
+                CREATE TRIGGER heimdal_raw_response_lease_no_mutation
+                BEFORE UPDATE OR DELETE ON {_LEASE_TABLE}
+                FOR EACH ROW EXECUTE FUNCTION heimdal_raw_response_lease_reject_mutation()
+                """,
+                f"""
+                CREATE OR REPLACE FUNCTION heimdal_raw_response_lease_reject_retiring()
+                RETURNS trigger AS $$
+                BEGIN
+                    PERFORM pg_advisory_xact_lock(hashtextextended(NEW.content_identity, 0));
+                    IF EXISTS (
+                        SELECT 1 FROM {_RETENTION_CLAIM_TABLE}
+                        WHERE record_id = NEW.record_id
+                    ) THEN
+                        RAISE EXCEPTION
+                            'heimdal_raw_response_lease cannot be issued for a retiring raw generation';
+                    END IF;
+                    RETURN NEW;
+                END;
+                $$ LANGUAGE plpgsql
+                """,
+                f"""
+                CREATE TRIGGER heimdal_raw_response_lease_reject_retiring
+                BEFORE INSERT ON {_LEASE_TABLE}
+                FOR EACH ROW EXECUTE FUNCTION heimdal_raw_response_lease_reject_retiring()
+                """,
+            ),
+        ),
+        (
+            _RETENTION_CLAIM_TABLE,
+            (
+                f"""
+                CREATE TABLE {_RETENTION_CLAIM_TABLE} (
+                    id uuid PRIMARY KEY,
+                    content_identity text NOT NULL,
+                    generation integer NOT NULL,
+                    record_id uuid NOT NULL UNIQUE,
+                    raw_ref text NOT NULL UNIQUE,
+                    reason text NOT NULL,
+                    retention_window_days integer NOT NULL,
+                    claimed_at timestamptz NOT NULL,
+                    drain_after timestamptz NOT NULL,
+                    payload jsonb NOT NULL DEFAULT '{{}}'::jsonb,
+                    sequence bigserial NOT NULL,
+                    FOREIGN KEY (content_identity, generation)
+                        REFERENCES {_GENERATION_TABLE}(content_identity, generation)
+                        ON DELETE RESTRICT
+                )
+                """,
+                f"CREATE INDEX heimdal_raw_retention_claim_record_idx "
+                f"ON {_RETENTION_CLAIM_TABLE} (record_id)",
+                """
+                CREATE OR REPLACE FUNCTION heimdal_raw_retention_claim_reject_mutation()
+                RETURNS trigger AS $$
+                BEGIN
+                    RAISE EXCEPTION 'heimdal_raw_retention_claim is append-only: % is not permitted', TG_OP;
+                END;
+                $$ LANGUAGE plpgsql
+                """,
+                f"""
+                CREATE TRIGGER heimdal_raw_retention_claim_no_mutation
+                BEFORE UPDATE OR DELETE ON {_RETENTION_CLAIM_TABLE}
+                FOR EACH ROW EXECUTE FUNCTION heimdal_raw_retention_claim_reject_mutation()
+                """,
+            ),
+        ),
     )
-    cur.execute(
-        f"""
-        CREATE TABLE {_TOMBSTONE_TABLE} (
-            id uuid PRIMARY KEY,
-            content_identity text NOT NULL,
-            generation integer NOT NULL,
-            record_id uuid NOT NULL UNIQUE,
-            raw_ref text NOT NULL UNIQUE,
-            deletion_receipt_id uuid NOT NULL UNIQUE
-                REFERENCES {_DELETION_RECEIPT_TABLE}(id) ON DELETE RESTRICT,
-            reason text NOT NULL,
-            erased_at timestamptz NOT NULL,
-            sequence bigserial NOT NULL,
-            FOREIGN KEY (content_identity, generation)
-                REFERENCES {_GENERATION_TABLE}(content_identity, generation)
-                ON DELETE RESTRICT
-        )
-        """
-    )
-    cur.execute(
-        f"CREATE INDEX heimdal_raw_deletion_tombstone_identity_idx "
-        f"ON {_TOMBSTONE_TABLE} (content_identity, generation)"
-    )
-    cur.execute(
-        f"""
-        CREATE TABLE {_LEASE_TABLE} (
-            lease_id uuid PRIMARY KEY,
-            content_identity text NOT NULL,
-            generation integer NOT NULL,
-            record_id uuid NOT NULL,
-            raw_ref text NOT NULL,
-            issued_at timestamptz NOT NULL,
-            expires_at timestamptz NOT NULL CHECK (expires_at > issued_at),
-            sequence bigserial NOT NULL,
-            FOREIGN KEY (content_identity, generation)
-                REFERENCES {_GENERATION_TABLE}(content_identity, generation)
-                ON DELETE RESTRICT
-        )
-        """
-    )
-    cur.execute(
-        f"CREATE INDEX heimdal_raw_response_lease_active_idx "
-        f"ON {_LEASE_TABLE} (record_id, expires_at)"
-    )
-    cur.execute(
-        f"""
-        CREATE TABLE {_RETENTION_CLAIM_TABLE} (
-            id uuid PRIMARY KEY,
-            content_identity text NOT NULL,
-            generation integer NOT NULL,
-            record_id uuid NOT NULL UNIQUE,
-            raw_ref text NOT NULL UNIQUE,
-            reason text NOT NULL,
-            retention_window_days integer NOT NULL,
-            claimed_at timestamptz NOT NULL,
-            drain_after timestamptz NOT NULL,
-            payload jsonb NOT NULL DEFAULT '{{}}'::jsonb,
-            sequence bigserial NOT NULL,
-            FOREIGN KEY (content_identity, generation)
-                REFERENCES {_GENERATION_TABLE}(content_identity, generation)
-                ON DELETE RESTRICT
-        )
-        """
-    )
-    cur.execute(
-        f"CREATE INDEX heimdal_raw_retention_claim_record_idx "
-        f"ON {_RETENTION_CLAIM_TABLE} (record_id)"
-    )
+    for authority_table_name, authority_statements in authority_table_groups:
+        cur.execute("SELECT to_regclass(%s)", (authority_table_name,))
+        authority_row = cur.fetchone()
+        authority_table_present = bool(authority_row and authority_row[0])
+        if authority_table_present:
+            continue
+        for authority_statement in authority_statements:
+            cur.execute(authority_statement)
     consent_association_table_groups = (
         (
             _CONSENT_ASSOCIATION_TABLE,
@@ -1268,117 +1356,6 @@ def _bootstrap_pg(conn: Any) -> None:
             continue
         for statement in consent_statements:
             cur.execute(statement)
-    cur.execute(
-        """
-        CREATE OR REPLACE FUNCTION heimdal_raw_liveness_generation_reject_mutation()
-        RETURNS trigger AS $$
-        BEGIN
-            RAISE EXCEPTION 'heimdal_raw_liveness_generation is append-only: % is not permitted', TG_OP;
-        END;
-        $$ LANGUAGE plpgsql
-        """
-    )
-    cur.execute(
-        f"""
-        CREATE TRIGGER heimdal_raw_liveness_generation_no_mutation
-        BEFORE UPDATE OR DELETE ON {_GENERATION_TABLE}
-        FOR EACH ROW EXECUTE FUNCTION heimdal_raw_liveness_generation_reject_mutation()
-        """
-    )
-    cur.execute(
-        """
-        CREATE OR REPLACE FUNCTION heimdal_raw_deletion_tombstone_reject_mutation()
-        RETURNS trigger AS $$
-        BEGIN
-            RAISE EXCEPTION 'heimdal_raw_deletion_tombstone is append-only: % is not permitted', TG_OP;
-        END;
-        $$ LANGUAGE plpgsql
-        """
-    )
-    cur.execute(
-        f"""
-        CREATE TRIGGER heimdal_raw_deletion_tombstone_no_mutation
-        BEFORE UPDATE OR DELETE ON {_TOMBSTONE_TABLE}
-        FOR EACH ROW EXECUTE FUNCTION heimdal_raw_deletion_tombstone_reject_mutation()
-        """
-    )
-    cur.execute(
-        """
-        CREATE OR REPLACE FUNCTION heimdal_raw_response_lease_reject_mutation()
-        RETURNS trigger AS $$
-        BEGIN
-            RAISE EXCEPTION 'heimdal_raw_response_lease is append-only: % is not permitted', TG_OP;
-        END;
-        $$ LANGUAGE plpgsql
-        """
-    )
-    cur.execute(
-        f"""
-        CREATE TRIGGER heimdal_raw_response_lease_no_mutation
-        BEFORE UPDATE OR DELETE ON {_LEASE_TABLE}
-        FOR EACH ROW EXECUTE FUNCTION heimdal_raw_response_lease_reject_mutation()
-        """
-    )
-    cur.execute(
-        f"""
-        CREATE OR REPLACE FUNCTION heimdal_raw_response_lease_reject_retiring()
-        RETURNS trigger AS $$
-        BEGIN
-            PERFORM pg_advisory_xact_lock(hashtextextended(NEW.content_identity, 0));
-            IF EXISTS (
-                SELECT 1 FROM {_RETENTION_CLAIM_TABLE}
-                WHERE record_id = NEW.record_id
-            ) THEN
-                RAISE EXCEPTION
-                    'heimdal_raw_response_lease cannot be issued for a retiring raw generation';
-            END IF;
-            RETURN NEW;
-        END;
-        $$ LANGUAGE plpgsql
-        """
-    )
-    cur.execute(
-        f"""
-        CREATE TRIGGER heimdal_raw_response_lease_reject_retiring
-        BEFORE INSERT ON {_LEASE_TABLE}
-        FOR EACH ROW EXECUTE FUNCTION heimdal_raw_response_lease_reject_retiring()
-        """
-    )
-    cur.execute(
-        """
-        CREATE OR REPLACE FUNCTION heimdal_raw_retention_claim_reject_mutation()
-        RETURNS trigger AS $$
-        BEGIN
-            RAISE EXCEPTION 'heimdal_raw_retention_claim is append-only: % is not permitted', TG_OP;
-        END;
-        $$ LANGUAGE plpgsql
-        """
-    )
-    cur.execute(
-        f"""
-        CREATE TRIGGER heimdal_raw_retention_claim_no_mutation
-        BEFORE UPDATE OR DELETE ON {_RETENTION_CLAIM_TABLE}
-        FOR EACH ROW EXECUTE FUNCTION heimdal_raw_retention_claim_reject_mutation()
-        """
-    )
-    cur.execute(
-        f"""
-        CREATE OR REPLACE FUNCTION heimdal_raw_record_reject_mutation()
-        RETURNS trigger AS $$
-        BEGIN
-            IF TG_OP = 'DELETE'
-               AND current_setting('{_RETENTION_GUARD_SETTING}', true) = 'true'
-               AND EXISTS (
-                   SELECT 1 FROM {_TOMBSTONE_TABLE} WHERE record_id = OLD.id
-               ) THEN
-                RETURN OLD;
-            END IF;
-            RAISE EXCEPTION 'heimdal_raw_record is append-only: % is not permitted '
-                'outside the governed tombstone transaction', TG_OP;
-        END;
-        $$ LANGUAGE plpgsql
-        """
-    )
     _assert_pg_schema(conn)
 
 

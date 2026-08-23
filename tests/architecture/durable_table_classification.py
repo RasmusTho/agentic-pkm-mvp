@@ -1567,104 +1567,10 @@ def _statement_sites(*, durable_source: bool) -> tuple[str, ...]:
 # 6. Recorded attached-object DDL debt (owned by #4598)
 # --------------------------------------------------------------------------- #
 
-#: Durable DDL against an object *attached to* a migration-owned table —
-#: indexes, triggers — that runs behind the `STORE_SCHEMA_AUTOCREATE` opt-in but
-#: without an existence probe, so it re-runs against an already-migrated table
-#: on every boot of the fixture path.
-#:
-#: This is **recorded debt, not a clean bill.** MVR-05A2 widened the scan's
-#: vocabulary past table-level DDL and this is what the wider vocabulary found;
-#: MVR-05A2's own AC-5 asks for the existence probe in exactly one place
-#: (`app/stores/pg.py`, delivered), so retiring these belongs to
-#: https://github.com/RasmusTho/agentic-pkm-mvp/issues/4598, which owns both the
-#: repair and shrinking this mapping as statements retire.
-#:
-#: The load-bearing entries are the five `drop trigger` / `create trigger` pairs.
-#: `app/heimdal/raw_read_gate.py`'s own module docstring records that migration
-#: `f1c7e2a9b4d6` installs an identical reject-mutation trigger — so a migration
-#: owns the object and the runtime drops and recreates it, which is structurally
-#: the mechanism MVR-05A1 (#4560) removed from `objects_pkey`.
-#:
-#: Keyed by (module, verb, table) with a count, so retiring one statement of a
-#: kind shows up as a number that must come down. A *new* attached-object
-#: statement is not in this mapping at all and fails the gate outright.
-RECORDED_ATTACHED_DDL_DEBT: Mapping[tuple[str, str, str], int] = MappingProxyType(
-    {
-        ("app/heimdal/consent_ledger.py", "create index", "heimdal_consent_grant"): 3,
-        ("app/heimdal/consent_ledger.py", "create trigger", "heimdal_consent_grant"): 1,
-        ("app/heimdal/consent_ledger.py", "drop trigger", "heimdal_consent_grant"): 1,
-        (
-            "app/heimdal/entity_review_operation_journal.py",
-            "create index",
-            "entity_review_operations",
-        ): 3,
-        ("app/heimdal/media_receipts.py", "create index", "heimdal_media_receipt"): 2,
-        ("app/heimdal/media_receipts.py", "create trigger", "heimdal_media_receipt"): 1,
-        ("app/heimdal/media_receipts.py", "drop trigger", "heimdal_media_receipt"): 1,
-        ("app/heimdal/meeting_blocks.py", "create index", "heimdal_meeting_block"): 1,
-        ("app/heimdal/meeting_blocks.py", "create index", "heimdal_meeting_block_refusal"): 1,
-        ("app/heimdal/meeting_ledger.py", "create index", "heimdal_meeting_segment"): 1,
-        ("app/heimdal/meeting_ledger.py", "create index", "heimdal_meeting_segment_conflict"): 1,
-        (
-            "app/heimdal/meeting_projection.py",
-            "create index",
-            "heimdal_meeting_analysis_revision",
-        ): 1,
-        ("app/heimdal/observation_log.py", "create index", "heimdal_observation_log"): 2,
-        ("app/heimdal/observation_log.py", "create trigger", "heimdal_observation_log"): 1,
-        ("app/heimdal/observation_log.py", "drop trigger", "heimdal_observation_log"): 1,
-        ("app/heimdal/raw_read_gate.py", "create index", "heimdal_raw_read_receipt"): 2,
-        ("app/heimdal/raw_read_gate.py", "create trigger", "heimdal_raw_read_receipt"): 1,
-        ("app/heimdal/raw_read_gate.py", "drop trigger", "heimdal_raw_read_receipt"): 1,
-        ("app/heimdal/raw_liveness.py", "create index", "heimdal_raw_deletion_receipt"): 2,
-        ("app/heimdal/raw_liveness.py", "create index", "heimdal_raw_deletion_tombstone"): 1,
-        ("app/heimdal/raw_liveness.py", "create index", "heimdal_raw_liveness_generation"): 1,
-        ("app/heimdal/raw_liveness.py", "create index", "heimdal_raw_response_lease"): 1,
-        ("app/heimdal/raw_liveness.py", "create index", "heimdal_raw_retention_claim"): 1,
-        (
-            "app/heimdal/raw_liveness.py",
-            "create trigger",
-            "heimdal_raw_deletion_receipt",
-        ): 1,
-        (
-            "app/heimdal/raw_liveness.py",
-            "create trigger",
-            "heimdal_raw_liveness_generation",
-        ): 1,
-        (
-            "app/heimdal/raw_liveness.py",
-            "create trigger",
-            "heimdal_raw_deletion_tombstone",
-        ): 1,
-        (
-            "app/heimdal/raw_liveness.py",
-            "create trigger",
-            "heimdal_raw_response_lease",
-        ): 2,
-        (
-            "app/heimdal/raw_liveness.py",
-            "create trigger",
-            "heimdal_raw_retention_claim",
-        ): 1,
-        ("app/heimdal/raw_liveness.py", "drop trigger", "heimdal_raw_deletion_receipt"): 1,
-        (
-            "app/knowledge_acquisition/acquisition_requests.py",
-            "create index",
-            "acquisition_requests",
-        ): 2,
-        (
-            "app/knowledge_acquisition/source_registry.py",
-            "create index",
-            "acquisition_source_registry",
-        ): 3,
-        (
-            "app/knowledge_acquisition/youtube_account_binding.py",
-            "create index",
-            "youtube_account_binding",
-        ): 1,
-        ("app/services/outbox.py", "create index", "outbox"): 6,
-    }
-)
+#: Attached-object DDL that still lacks the per-table existence probe.  #4598
+#: retired the recorded inventory; a future entry is a regression, not a new
+#: baseline to accept casually.
+RECORDED_ATTACHED_DDL_DEBT: Mapping[tuple[str, str, str], int] = MappingProxyType({})
 
 
 def observed_attached_ddl_debt(

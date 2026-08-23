@@ -2048,6 +2048,17 @@ def _assert_pg_schema(conn: Any, *, allow_legacy_reconciliation: bool = False) -
         raise RawStoreSchemaMissingError(
             "Missing raw identity or representation table. " + _MIGRATION_HINT
         )
+    from app.heimdal.trigger_ownership import (
+        RAW_RECORD_TRIGGER,
+        assert_migration_owned_reject_mutation_trigger,
+    )
+
+    assert_migration_owned_reject_mutation_trigger(
+        conn,
+        RAW_RECORD_TRIGGER,
+        error_type=RawStoreSchemaMissingError,
+        migration_hint=_MIGRATION_HINT,
+    )
 
     cur.execute(
         """
@@ -2443,11 +2454,15 @@ def _bootstrap_pg(conn: Any) -> None:
                 RETURNS trigger AS $$
                 BEGIN
                     IF TG_OP = 'DELETE'
-                       AND current_setting('{_RETENTION_GUARD_SETTING}', true) = 'true' THEN
+                       AND current_setting('{_RETENTION_GUARD_SETTING}', true) = 'true'
+                       AND EXISTS (
+                           SELECT 1 FROM {_TOMBSTONE_TABLE}
+                           WHERE record_id = OLD.id
+                       ) THEN
                         RETURN OLD;
                     END IF;
                     RAISE EXCEPTION 'heimdal_raw_record is append-only (HEIM-1): % is not permitted '
-                        'outside the governed hard-retention job (D-RETENTION)', TG_OP;
+                        'outside the governed tombstone transaction', TG_OP;
                 END;
                 $$ LANGUAGE plpgsql
                 """,
