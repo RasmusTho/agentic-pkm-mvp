@@ -56,10 +56,12 @@ artifact type or create another central registry that competes with HKA/PDM/GOV/
       access authority.
       Verify: `tests/archival/test_contracts.py::test_location_cannot_mint_identity_or_access_authority`
 - [ ] The transition kernel consumes only the published `ArchivalAdapter`; the contract carries
-      immutable operation binding, owner-native readback, exact restore, and cleanup-proof types
-      without adding a kernel registry, lock, content store, or artifact/policy authority.
+      immutable operation binding for distinct source and target references, owner-native readable
+      source and cleanup-state readback, exact restore, and cleanup-proof types without adding a
+      kernel registry, lock, content store, or artifact/policy authority.
       Verify: `tests/architecture/test_governed_archival_contract.py::test_transition_kernel_uses_only_published_archival_adapter`
       Verify: `tests/architecture/test_governed_archival_contract.py::test_transition_kernel_has_no_private_persistence_or_content_store`
+      Verify: `tests/archival/test_transition_kernel.py::test_equal_source_and_target_fail_closed_before_binding`
 - [ ] Policy profiles distinguish raw evidence, retained source, HKA recovery, and rebuildable
       derivative outcomes rather than exposing one universal delete rule.
       Verify: `tests/archival/test_contracts.py::test_policy_profiles_keep_class_specific_terminal_outcomes`

@@ -498,3 +498,60 @@ def test_cleanup_retry_reads_durable_proof_before_live_enumeration() -> None:
     assert retried.stage is TransitionStage.ERASED
     assert first.liveness == retried.liveness
     assert adapter.effect_counts["cleanup"] == 1
+
+
+def test_equal_source_and_target_fail_closed_before_binding() -> None:
+    descriptor, source, _target, adapter, kernel = _fixture()
+
+    result = kernel.transition(descriptor, source, source, "same-representation")
+
+    assert result.stage is TransitionStage.CONFLICT
+    assert adapter.source(source).stage is TransitionStage.ACTIVE
+    assert all(count == 0 for count in adapter.effect_counts.values())
+
+
+def test_unreadable_source_cannot_reserve_copy_or_complete() -> None:
+    descriptor, source, target, adapter, kernel = _fixture()
+    adapter.representations[source] = replace(
+        adapter.representations[source],
+        stage=TransitionStage.ERASED,
+        liveness=Liveness(
+            LivenessState.ERASED, OpaqueReference("fixture", "source-erased")
+        ),
+    )
+
+    result = kernel.transition(descriptor, source, target, "unreadable-source")
+
+    assert result.stage is not TransitionStage.RETIRED
+    assert result.liveness.state is LivenessState.CONFLICT
+    assert target not in adapter.representations
+    assert adapter.effect_counts["reserve"] == 0
+    assert adapter.effect_counts["copy"] == 0
+    assert adapter.effect_counts["complete"] == 0
+
+
+def test_stale_cleanup_proof_cannot_hide_new_live_representation() -> None:
+    descriptor, _source, _target, adapter, kernel = _fixture()
+    completed = kernel.cleanup(descriptor)
+    assert completed.stage is TransitionStage.ERASED
+
+    new_representation = RepresentationRef(
+        "fixture", OpaqueReference("fixture", "post-cleanup-live")
+    )
+    adapter.register_source(
+        Representation(
+            descriptor.identity,
+            new_representation,
+            descriptor.generation,
+            TransitionStage.ACTIVE,
+            Liveness(
+                LivenessState.ACTIVE, OpaqueReference("fixture", "new-live")
+            ),
+        )
+    )
+
+    retried = kernel.cleanup(descriptor)
+
+    assert retried.stage is TransitionStage.ERASE_PENDING
+    assert retried.liveness.state is LivenessState.ERASURE_PENDING
+    assert adapter.effect_counts["cleanup"] == 1

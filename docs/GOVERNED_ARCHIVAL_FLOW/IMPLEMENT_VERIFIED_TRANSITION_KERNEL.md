@@ -67,6 +67,8 @@ ordering would let each adapter recreate the same crash windows that HAR-04/HAR-
 - [ ] Reservation, verification, receipt, and loaded-operation evidence must match the exact key,
       artifact, generation, policy, source, and target before activation or source retirement.
       Verify: `tests/archival/test_transition_kernel.py::test_wrong_binding_proof_cannot_activate_or_retire`
+      Verify: `tests/archival/test_transition_kernel.py::test_equal_source_and_target_fail_closed_before_binding`
+      Verify: `tests/archival/test_transition_kernel.py::test_unreadable_source_cannot_reserve_copy_or_complete`
 - [ ] Initial, resumed, and after-effect faults reconcile through owner-native readback without
       blind duplicate effects and remain typed pending or unavailable until terminal proof exists.
       Verify: `tests/archival/test_transition_kernel.py::test_resumed_and_after_effect_faults_reconcile_through_readback`
@@ -91,6 +93,7 @@ ordering would let each adapter recreate the same crash windows that HAR-04/HAR-
       Verify: `tests/archival/test_transition_kernel.py::test_restore_and_cleanup_require_exact_owner_native_proof`
       Verify: `tests/archival/test_transition_kernel.py::test_restore_does_not_reuse_receipt_when_current_authorization_fails`
       Verify: `tests/archival/test_transition_kernel.py::test_cleanup_retry_reads_durable_proof_before_live_enumeration`
+      Verify: `tests/archival/test_transition_kernel.py::test_stale_cleanup_proof_cannot_hide_new_live_representation`
 - [ ] The kernel stores no global artifact registry or content bytes and can reconstruct operation
       state only through owner-native adapter queries and receipts.
       Verify: `tests/architecture/test_governed_archival_contract.py::test_transition_kernel_has_no_private_persistence_or_content_store`

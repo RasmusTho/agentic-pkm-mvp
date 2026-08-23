@@ -100,14 +100,17 @@ class ArchivalTransitionKernel:
         target: RepresentationRef,
         idempotency_key: str,
     ) -> TransitionResult:
-        binding = OperationBinding(
-            idempotency_key,
-            artifact.identity,
-            artifact.generation,
-            artifact.policy_profile,
-            source,
-            target,
-        )
+        try:
+            binding = OperationBinding(
+                idempotency_key,
+                artifact.identity,
+                artifact.generation,
+                artifact.policy_profile,
+                source,
+                target,
+            )
+        except ValueError:
+            return self._conflict("operation-binding-invalid")
         try:
             bound = self._adapter.bind_operation(binding)
             self._validate_operation(binding, bound)
@@ -136,10 +139,12 @@ class ArchivalTransitionKernel:
                 binding.artifact,
                 binding.generation,
             )
-            if source_representation.stage is TransitionStage.RETIRED and not operation.retired:
-                raise TransitionFailure(
-                    FaultStage.READBACK,
-                    "source retirement is not reflected in the owner operation journal",
+            if not operation.retired and (
+                source_representation.stage is not TransitionStage.ACTIVE
+                or source_representation.liveness.state is not LivenessState.ACTIVE
+            ):
+                raise TransitionConflict(
+                    "source representation is not owner-native readable"
                 )
 
             if operation.reservation is None:
@@ -299,8 +304,11 @@ class ArchivalTransitionKernel:
         if loaded is not None:
             try:
                 self._validate_cleanup_proof(artifact, None, loaded)
+                self._validate_cleanup_live_state(artifact, loaded)
             except TransitionConflict:
                 return self._cleanup_pending("cleanup-readback-mismatch")
+            except TransitionFailure:
+                return self._unavailable("cleanup-live-readback-unavailable")
             return TransitionResult(
                 TransitionStage.ERASED,
                 Liveness(LivenessState.ERASED, loaded.evidence_ref),
@@ -320,6 +328,7 @@ class ArchivalTransitionKernel:
                     FaultStage.READBACK, "cleanup proof readback is unavailable"
                 )
             self._validate_cleanup_proof(artifact, expected, loaded)
+            self._validate_cleanup_live_state(artifact, loaded)
             return TransitionResult(
                 TransitionStage.ERASED,
                 Liveness(LivenessState.ERASED, loaded.evidence_ref),
@@ -335,8 +344,11 @@ class ArchivalTransitionKernel:
                 return self._cleanup_pending("erasure-pending")
             try:
                 self._validate_cleanup_proof(artifact, expected, loaded)
+                self._validate_cleanup_live_state(artifact, loaded)
             except TransitionConflict:
                 return self._cleanup_pending("cleanup-readback-mismatch")
+            except TransitionFailure:
+                return self._unavailable("cleanup-live-readback-unavailable")
             return TransitionResult(
                 TransitionStage.ERASED,
                 Liveness(LivenessState.ERASED, loaded.evidence_ref),
@@ -544,6 +556,25 @@ class ArchivalTransitionKernel:
             )
         ):
             raise TransitionConflict("cleanup proof does not cover the exact owner scope")
+
+    def _validate_cleanup_live_state(
+        self, artifact: ArtifactDescriptor, proof: CleanupProof
+    ) -> None:
+        proof_refs = set(proof.representation_refs)
+        representations = self._adapter.enumerate(artifact.identity)
+        for representation in representations:
+            if (
+                representation.artifact == artifact.identity
+                and representation.generation == artifact.generation
+                and (
+                    representation.ref not in proof_refs
+                    or representation.stage is not TransitionStage.ERASED
+                    or representation.liveness.state is not LivenessState.ERASED
+                )
+            ):
+                raise TransitionConflict(
+                    "cleanup proof contradicts current owner-native state"
+                )
 
     @staticmethod
     def _completed(

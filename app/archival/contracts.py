@@ -388,6 +388,8 @@ class OperationBinding:
         _require_concrete_contract(self.policy, PolicyProfile, "policy")
         _require_concrete_contract(self.source, RepresentationRef, "source")
         _require_concrete_contract(self.target, RepresentationRef, "target")
+        if self.source == self.target:
+            raise ValueError("source and target representations must differ")
 
 
 @dataclass(frozen=True)
