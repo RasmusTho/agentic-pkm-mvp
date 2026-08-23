@@ -268,6 +268,47 @@ def test_concurrent_restore_attempts_read_back_only_their_own_receipt(
     ) == 2
 
 
+def test_restore_refuses_representation_change_between_authorization_and_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    records = _admit_all_modalities()
+    record = records[0]
+    _archive_root, _adapters = _archive_all(
+        records, tmp_path=tmp_path, monkeypatch=monkeypatch
+    )
+    rows = raw_store.all_raw_representations(record.id)
+    active = next(row for row in rows if row.active)
+    retired = next(row for row in rows if not row.active)
+    adapter = HeimdalRawMediaAdapter(
+        record, generation=active.raw_generation, read_key=_KEY
+    )
+    authority = AccessAuthority(
+        OwnerAuthority.CLASS_ADAPTER,
+        OpaqueReference("heimdal-reader", "authorized-reader"),
+    )
+    gate = adapter.authorize_read(adapter.artifact, authority)
+    assert adapter.ref_for(active) in gate.representation_refs
+
+    store = raw_store._MEMORY_STORE  # noqa: SLF001
+    with store._lock:  # noqa: SLF001
+        for row in rows:
+            store._representations[row.id] = replace(  # noqa: SLF001
+                row, active=row.id == retired.id
+            )
+
+    with pytest.raises(
+        raw_read_gate.RawReadRefusedError,
+        match="expected active representation changed",
+    ):
+        adapter.restore(
+            adapter.artifact,
+            authority,
+            adapter.ref_for(active),
+        )
+    assert raw_read_gate.all_raw_read_receipts() == []
+    assert adapter.read_restore(adapter.artifact, adapter.ref_for(active)) is None
+
+
 def test_archive_operation_binding_and_receipt_survive_process_loss(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

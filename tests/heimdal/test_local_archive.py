@@ -498,6 +498,56 @@ def test_registration_checkpoint_after_effect_preserves_retry_manifest(
     assert retried.active_representation.active
 
 
+def test_verified_manifest_post_effect_failure_preserves_retryable_object(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    record, now = _eligible(_insert(b"verified-manifest-after-effect"))
+    archive_root = tmp_path / "mounted-cold"
+    archive_root.mkdir()
+    original_write = local_archive._durable_write
+
+    def write_then_lose_ack(path: Path, payload: bytes) -> None:
+        original_write(path, payload)
+        if path.suffix == ".json" and b'"ownership_state":"verified"' in payload:
+            raise RuntimeError("verified manifest acknowledgement lost")
+
+    monkeypatch.setattr(local_archive, "_durable_write", write_then_lose_ack)
+    with pytest.raises(local_archive.ArchiveDegradedError, match="archive_relocation_failed"):
+        local_archive.relocate_raw_record(
+            record,
+            archive_root=archive_root,
+            archive_ref=_ARCHIVE_REF,
+            now=now,
+            retention_window_days=30,
+            key=_KEY,
+            volume_ready=lambda: _test_volume_ready(_ARCHIVE_REF, archive_root),
+        )
+    pending = [
+        item
+        for item in all_raw_representations(record.id)
+        if item.storage_kind == "encrypted_local_cold" and not item.active
+    ]
+    assert len(pending) == 1
+    manifest_path = archive_root / "manifests" / f"{pending[0].id}.json"
+    object_path = archive_root / "representations" / f"{pending[0].id}.bin"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert manifest["ownership_state"] == "verified"
+    assert object_path.read_bytes() == record.ciphertext
+
+    monkeypatch.setattr(local_archive, "_durable_write", original_write)
+    retried = local_archive.relocate_raw_record(
+        record,
+        archive_root=archive_root,
+        archive_ref=_ARCHIVE_REF,
+        now=now,
+        retention_window_days=30,
+        key=_KEY,
+        volume_ready=lambda: _test_volume_ready(_ARCHIVE_REF, archive_root),
+    )
+    assert retried.receipt.representation_id == pending[0].id
+    assert retried.active_representation.active
+
+
 def test_owner_writer_rechecks_missing_pending_manifest_inside_relocation_fence(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -533,20 +583,23 @@ def test_owner_writer_rechecks_missing_pending_manifest_inside_relocation_fence(
     manifest_path.unlink()
     monkeypatch.setattr(local_archive, "_relocation_stage_hook", lambda _stage: None)
 
-    with pytest.raises(local_archive.ArchiveDegradedError, match="archive_manifest_invalid"):
-        local_archive._relocate_raw_record_owner_native(
-            record,
-            archive_root=archive_root,
-            archive_ref=_ARCHIVE_REF,
-            now=now,
-            retention_window_days=30,
-            key=_KEY,
-            volume_ready=lambda: _test_volume_ready(_ARCHIVE_REF, archive_root),
-            requested_representation_id=pending.id,
-            requested_receipt_id=str(manifest["receipt_id"]),
-            operation_binding=manifest["gaf_operation"],
-            existing_manifest=None,
-        )
+    for stale_outer_read in (None, manifest):
+        with pytest.raises(
+            local_archive.ArchiveDegradedError, match="archive_manifest_invalid"
+        ):
+            local_archive._relocate_raw_record_owner_native(
+                record,
+                archive_root=archive_root,
+                archive_ref=_ARCHIVE_REF,
+                now=now,
+                retention_window_days=30,
+                key=_KEY,
+                volume_ready=lambda: _test_volume_ready(_ARCHIVE_REF, archive_root),
+                requested_representation_id=pending.id,
+                requested_receipt_id=str(manifest["receipt_id"]),
+                operation_binding=manifest["gaf_operation"],
+                existing_manifest=stale_outer_read,
+            )
     rows = all_raw_representations(record.id)
     assert next(item for item in rows if item.active).storage_kind == "postgres_hot"
     assert len([item for item in rows if not item.active]) == 1

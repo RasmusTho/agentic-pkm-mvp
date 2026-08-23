@@ -266,7 +266,18 @@ def _manifest_with_operation(
     parsed = json.loads(payload.decode("utf-8"))
     if not isinstance(parsed, dict):
         raise ArchiveDegradedError("archive_manifest_invalid")
-    parsed["gaf_operation"] = dict(operation_binding)
+    expected = dict(operation_binding)
+    existing = parsed.get("gaf_operation")
+    if existing is not None and (
+        not isinstance(existing, dict)
+        or set(existing) != set(expected)
+        or any(
+            type(existing[field]) is not type(value) or existing[field] != value
+            for field, value in expected.items()
+        )
+    ):
+        raise ArchiveDegradedError("archive_manifest_invalid")
+    parsed["gaf_operation"] = expected
     return (json.dumps(parsed, sort_keys=True, separators=(",", ":")) + "\n").encode()
 
 
@@ -431,13 +442,16 @@ def _relocate_raw_record_owner_native(
         )
         object_path = objects / f"{representation_id}.bin"
         manifest_path = manifests / f"{representation_id}.json"
-        if existing_manifest is None:
-            existing_manifest = _read_archive_manifest(
-                manifest_path,
-                required=pending is not None,
-            )
+        # The outer read is only an optimization/receipt hint. Re-read under
+        # the record relocation fence so stale evidence can never authorize a
+        # replacement manifest or target transition.
+        existing_manifest = _read_archive_manifest(
+            manifest_path,
+            required=pending is not None,
+        )
         reservation_durable = False
         activation_started = False
+        copied_verified = False
         failure: ArchiveDegradedError | None = None
         receipt = (
             _archive_receipt_from_manifest(existing_manifest)
@@ -539,6 +553,7 @@ def _relocate_raw_record_owner_native(
                         hot.nonce,
                         key=key or raw_store.resolve_raw_store_key(),
                     )
+                    copied_verified = True
                     _durable_write(
                         manifest_path,
                         _manifest_with_operation(
@@ -567,7 +582,8 @@ def _relocate_raw_record_owner_native(
                 # authority. Once activation starts its commit may be
                 # ambiguous, so preserve verified bytes.
                 if not activation_started:
-                    _discard_uncommitted_object(object_path)
+                    if not copied_verified:
+                        _discard_uncommitted_object(object_path)
                     if not reservation_durable:
                         _discard_uncommitted_manifest(manifest_path)
                 if failure is not None:

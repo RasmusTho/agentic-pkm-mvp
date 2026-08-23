@@ -73,6 +73,7 @@ _MIGRATION_HINT = (
 
 _RAW_REF_PREFIX = "heimraw:"
 _ALLOWLIST_ENV_VAR = "HEIMDAL_RAW_READ_ALLOWLIST"
+ACTUAL_REPRESENTATION_ID_PAYLOAD_KEY = "raw_read_representation_id"
 _raw_read_stage_hook: Callable[[str], None] = lambda _stage: None
 
 
@@ -370,6 +371,7 @@ def read_raw_record(
     purpose: str,
     key: Optional[bytes] = None,
     payload: Optional[Dict[str, Any]] = None,
+    expected_representation_id: Optional[str] = None,
 ) -> GatedRawRead:
     """The one sanctioned raw->plaintext read call (HEIM-5).
 
@@ -396,6 +398,11 @@ def read_raw_record(
         raise ValueError(f"reader must be a non-empty string, got {reader!r}")
     if not isinstance(purpose, str) or not purpose.strip():
         raise ValueError(f"purpose must be a non-empty string, got {purpose!r}")
+    if expected_representation_id is not None and (
+        not isinstance(expected_representation_id, str)
+        or not expected_representation_id.strip()
+    ):
+        raise ValueError("expected_representation_id must be a non-empty string")
 
     record_id = _record_id_from_raw_ref(raw_ref)
 
@@ -436,6 +443,14 @@ def read_raw_record(
                 raise RawReadRefusedError(
                     "Raw read refused: the exact active representation is unavailable."
                 )
+            if (
+                expected_representation_id is not None
+                and active[0].id != expected_representation_id
+            ):
+                raise RawReadRefusedError(
+                    "Raw read refused: the expected active representation changed. "
+                    "No receipt written and no plaintext returned."
+                )
             _raw_read_stage_hook("after_active_representation_resolution")
             try:
                 plaintext = raw_store.decrypt_and_verify_raw_bytes(
@@ -450,6 +465,8 @@ def read_raw_record(
                     "No receipt written and no plaintext returned."
                 ) from exc
 
+            receipt_payload = dict(payload or {})
+            receipt_payload[ACTUAL_REPRESENTATION_ID_PAYLOAD_KEY] = active[0].id
             receipt = RawReadReceipt(
                 id=str(uuid4()),
                 raw_ref=raw_ref,
@@ -457,7 +474,7 @@ def read_raw_record(
                 reader=reader,
                 purpose=purpose,
                 read_at=datetime.now(timezone.utc),
-                payload=dict(payload or {}),
+                payload=receipt_payload,
                 sequence=-1,
             )
             persisted_receipt = receipt_backend.append(receipt)

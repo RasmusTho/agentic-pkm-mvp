@@ -405,6 +405,7 @@ class HeimdalRawMediaAdapter:
             reader=authority.grant_ref.token,
             purpose="heimdal_archive_restore_drill",
             key=self._read_key,
+            expected_representation_id=_representation_id(representation),
             payload={
                 _RESTORE_OPERATION_KEY: attempt.operation_id,
                 _RESTORE_CORRELATION_KEY: correlation,
@@ -448,6 +449,10 @@ class HeimdalRawMediaAdapter:
             and receipt.payload.get(_RESTORE_CORRELATION_KEY) == correlation
             and receipt.payload.get("archival_generation") == artifact.generation.value
             and receipt.payload.get("archival_representation_id")
+            == _representation_id(representation)
+            and receipt.payload.get(
+                raw_read_gate.ACTUAL_REPRESENTATION_ID_PAYLOAD_KEY
+            )
             == _representation_id(representation)
         ]
         if not matches:
