@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+from threading import Event, Thread
 
 import pytest
 
@@ -54,6 +55,7 @@ class _StorePort(DurableFakeAdapter):
         self.read_calls = 0
         self.write_calls = 0
         self.fail_cleanup = False
+        self.pause_generation_write: tuple[int, Event, Event] | None = None
 
     def read_bytes(self, reference: RepresentationRef) -> bytes:
         self.read_calls += 1
@@ -67,12 +69,21 @@ class _StorePort(DurableFakeAdapter):
         generation: Generation,
         format: str,
     ) -> None:
-        current_generation = self.restored_generations.get(destination)
-        if current_generation is not None and current_generation.value > generation.value:
-            raise TransitionConflict("restore destination has a newer generation")
-        self.write_calls += 1
-        self.restored[destination] = payload
-        self.restored_generations[destination] = generation
+        with self._lock:
+            current_generation = self.restored_generations.get(destination)
+            if current_generation is not None and current_generation.value > generation.value:
+                raise TransitionConflict("restore destination has a newer generation")
+            if (
+                self.pause_generation_write is not None
+                and generation.value == self.pause_generation_write[0]
+            ):
+                entered, release = self.pause_generation_write[1:]
+                entered.set()
+                if not release.wait(timeout=2):
+                    raise AssertionError("coordinated restore writer was not released")
+            self.write_calls += 1
+            self.restored[destination] = payload
+            self.restored_generations[destination] = generation
 
     def copy_bytes(self, source: RepresentationRef, target: RepresentationRef) -> None:
         self.payloads[target] = self.payloads[source]
@@ -252,6 +263,53 @@ def test_retained_source_restore_is_gated_and_generation_bound() -> None:
     )
     assert stale_destination.stage is TransitionStage.CONFLICT
     assert store.restored_generations[_owner_gate()] == Generation(8)
+
+    entered = Event()
+    release = Event()
+    newer_started = Event()
+    errors: list[BaseException] = []
+    store.restored_generations.pop(_owner_gate())
+    store.pause_generation_write = (7, entered, release)
+
+    def restore_generation(generation: Generation, payload: bytes) -> None:
+        try:
+            if generation.value == 8:
+                newer_started.set()
+            store.restore_bytes_if_generation_current(
+                _owner_gate(), payload, generation=generation, format="image/jpeg"
+            )
+        except BaseException as exc:  # test thread receipt
+            errors.append(exc)
+
+    stale_writer = Thread(target=restore_generation, args=(Generation(7), b"stale"))
+    newer_writer = Thread(target=restore_generation, args=(Generation(8), b"newer"))
+    stale_writer.start()
+    assert entered.wait(timeout=2)
+    newer_writer.start()
+    assert newer_started.wait(timeout=2)
+    newer_writer.join(timeout=0.1)
+    assert newer_writer.is_alive()
+    release.set()
+    stale_writer.join(timeout=2)
+    newer_writer.join(timeout=2)
+    assert not stale_writer.is_alive()
+    assert not newer_writer.is_alive()
+    assert errors == []
+    assert store.restored[_owner_gate()] == b"newer"
+    assert store.restored_generations[_owner_gate()] == Generation(8)
+
+    missing_adapter, missing_store, missing_descriptor, missing_source, _ = _fixture()
+    del missing_store.payloads[missing_source]
+    missing_payload = ArchivalTransitionKernel(missing_adapter).restore(
+        missing_descriptor,
+        AccessAuthority(
+            OwnerAuthority.CLASS_ADAPTER,
+            OpaqueReference("retained-source-owner", _owner_gate().token),
+        ),
+        missing_source,
+    )
+    assert missing_payload.stage is TransitionStage.RESTORE_PENDING
+    assert missing_payload.liveness.state is LivenessState.RESTORE_PENDING
 
     foreign = RepresentationRef(
         "retained_source", OpaqueReference("retained-source-representation", "foreign-42")
