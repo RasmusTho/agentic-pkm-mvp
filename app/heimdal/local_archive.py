@@ -355,7 +355,7 @@ def _relocate_raw_record_owner_native(
     requested_representation_id: str | None = None,
     requested_receipt_id: str | None = None,
     operation_binding: Mapping[str, object] | None = None,
-    legacy_manifest: Mapping[str, object] | None = None,
+    existing_manifest: Mapping[str, object] | None = None,
 ) -> ArchiveResult:
     """Copy, verify, receipt, then activate cold; fail closed on every error."""
     reference = now or datetime.now(timezone.utc)
@@ -419,8 +419,8 @@ def _relocate_raw_record_owner_native(
         activation_started = False
         failure: ArchiveDegradedError | None = None
         receipt = (
-            _archive_receipt_from_manifest(legacy_manifest)
-            if legacy_manifest is not None
+            _archive_receipt_from_manifest(existing_manifest)
+            if existing_manifest is not None
             else ArchiveReceipt(
                 receipt_id=receipt_id,
                 record_id=record.id,
@@ -458,8 +458,15 @@ def _relocate_raw_record_owner_native(
                     manifest_path,
                     _manifest_with_operation(
                         (
-                            _manifest_payload(receipt)
-                            if legacy_manifest is not None
+                            (
+                                json.dumps(
+                                    dict(existing_manifest),
+                                    sort_keys=True,
+                                    separators=(",", ":"),
+                                )
+                                + "\n"
+                            ).encode()
+                            if existing_manifest is not None
                             else _reserved_ownership_manifest_payload(receipt)
                         ),
                         operation_binding,
@@ -490,7 +497,10 @@ def _relocate_raw_record_owner_native(
                     )
                     reservation_durable = True
                     _relocation_stage_hook("after_reservation")
-                    if legacy_manifest is None:
+                    if (
+                        existing_manifest is None
+                        or existing_manifest.get("ownership_state") != "verified"
+                    ):
                         _durable_write(object_path, ciphertext)
                     _relocation_stage_hook("after_object_write")
                     copied = object_path.read_bytes()
@@ -621,7 +631,7 @@ def relocate_raw_record(
         representation_id: str,
         receipt_id: str,
         operation_binding: Mapping[str, object],
-        legacy_manifest: Mapping[str, object] | None,
+        existing_manifest: Mapping[str, object] | None,
     ) -> ArchiveResult:
         return _relocate_raw_record_owner_native(
             record,
@@ -635,7 +645,7 @@ def relocate_raw_record(
             requested_representation_id=representation_id,
             requested_receipt_id=receipt_id,
             operation_binding=operation_binding,
-            legacy_manifest=legacy_manifest,
+            existing_manifest=existing_manifest,
         )
 
     adapter = HeimdalRawMediaAdapter(

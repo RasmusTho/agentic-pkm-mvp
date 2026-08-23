@@ -388,6 +388,29 @@ def test_legacy_har_manifest_retry_upgrades_binding_without_fabricated_completio
         encoding="utf-8",
     )
 
+    def lose_after_legacy_binding(stage: str) -> None:
+        if stage == "after_operation_binding":
+            raise LegacyProcessLoss
+
+    monkeypatch.setattr(local_archive, "_relocation_stage_hook", lose_after_legacy_binding)
+    with pytest.raises(LegacyProcessLoss):
+        local_archive.relocate_raw_record(
+            record,
+            archive_root=archive_root,
+            archive_ref=_ARCHIVE_REF,
+            now=now,
+            retention_window_days=30,
+            key=_KEY,
+            volume_ready=lambda: _issue_archive_volume_ready(
+                _ARCHIVE_REF,
+                archive_root,
+                _issuer=_ARCHIVE_VOLUME_READY_ISSUER,
+            ),
+        )
+    bound_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert bound_manifest["gaf_operation"]["schema"] == "heimdal_gaf_operation.v1"
+    assert bound_manifest["receipt_id"] == legacy_manifest["receipt_id"]
+
     resumed_stages: list[str] = []
     monkeypatch.setattr(local_archive, "_relocation_stage_hook", resumed_stages.append)
     recovered = local_archive.relocate_raw_record(
@@ -477,6 +500,10 @@ def test_cleanup_stays_pending_while_har05_cold_queue_is_not_empty(
     pending_adapter = next(
         adapter for adapter in adapters if adapter.record.id == pending_receipt.record_id
     )
+    projected = pending_adapter.enumerate(pending_adapter.artifact.identity)
+    assert len(projected) == 1
+    assert projected[0].stage is TransitionStage.ERASE_PENDING
+    assert projected[0].liveness.state is LivenessState.ERASURE_PENDING
     pending = ArchivalTransitionKernel(pending_adapter).cleanup(pending_adapter.artifact)
     assert pending.stage is TransitionStage.ERASE_PENDING
     assert pending.liveness.state is LivenessState.ERASURE_PENDING

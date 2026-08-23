@@ -183,14 +183,19 @@ class HeimdalRawMediaAdapter:
         tombstone = self._tombstone()
         if tombstone is None:
             return ()
+        cleanup = self.read_cleanup(self.artifact)
+        terminal = cleanup is not None
         terminal_ref = _representation_ref(f"erased-generation-{tombstone.generation}")
         return (
             Representation(
                 artifact,
                 terminal_ref,
                 Generation(tombstone.generation),
-                TransitionStage.ERASED,
-                Liveness(LivenessState.ERASED, _opaque("heimdal-deletion", tombstone.deletion_receipt_id)),
+                TransitionStage.ERASED if terminal else TransitionStage.ERASE_PENDING,
+                Liveness(
+                    LivenessState.ERASED if terminal else LivenessState.ERASURE_PENDING,
+                    _opaque("heimdal-deletion", tombstone.deletion_receipt_id),
+                ),
             ),
         )
 
@@ -229,11 +234,6 @@ class HeimdalRawMediaAdapter:
             raise TransitionConflict("archive binding differs from exact Heimdal generation")
         self._binding = binding
         owner_manifest = self._read_manifest(binding)
-        legacy_manifest = (
-            owner_manifest
-            if owner_manifest is not None and "gaf_operation" not in owner_manifest
-            else None
-        )
         loaded = self.read_operation(binding.idempotency_key)
         if loaded is not None and loaded.completed:
             return loaded
@@ -242,15 +242,15 @@ class HeimdalRawMediaAdapter:
         try:
             receipt_digest = hashlib.sha256(binding.idempotency_key.encode("utf-8")).hexdigest()
             receipt_id = (
-                str(legacy_manifest["receipt_id"])
-                if legacy_manifest is not None
+                str(owner_manifest["receipt_id"])
+                if owner_manifest is not None
                 else str(UUID(receipt_digest[:32]))
             )
             self._archive_result = self._archive_action(
                 _representation_id(binding.target),
                 receipt_id,
                 self._binding_payload(binding),
-                legacy_manifest,
+                owner_manifest,
             )
         except Exception as exc:
             reason = getattr(exc, "reason", "archive_relocation_failed")
