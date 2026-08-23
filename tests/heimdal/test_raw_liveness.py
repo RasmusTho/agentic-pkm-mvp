@@ -79,6 +79,46 @@ def _run_retention(writer: str, *, root: Path, now: datetime):
     return enforce_screen_frame_retention(vault_root=root, now=now)
 
 
+@pytest.mark.parametrize(
+    "legacy_queue",
+    ["missing", None, "not-a-list", ["", 1]],
+)
+def test_legacy_cleanup_queue_unknown_never_projects_or_reconciles_erased(
+    legacy_queue: object,
+) -> None:
+    record = _insert(b"legacy-cleanup-queue")
+    deleted_at = datetime.now(timezone.utc)
+    result = raw_liveness.governed_delete_raw_record(
+        record_id=record.id,
+        reason="test-cleanup",
+        retention_window_days=30,
+        deleted_at=deleted_at,
+    )
+    assert result.receipt is not None
+    with raw_liveness.memory_fence():
+        payload = raw_liveness._MEMORY.deletion_receipts[-1].payload  # noqa: SLF001
+        if legacy_queue == "missing":
+            payload.pop("cold_cleanup_location_refs")
+        else:
+            payload["cold_cleanup_location_refs"] = legacy_queue
+
+    projection = raw_liveness.project_with_response_leases(
+        [(raw_ref_for(record), record.content_identity)],
+        now=deleted_at,
+    )
+    assert projection[raw_ref_for(record)].outcome == "erasure_pending"
+    with pytest.raises(
+        raw_liveness.RawLivenessUnavailableError,
+        match="cleanup queue evidence",
+    ):
+        raw_liveness.governed_delete_raw_record(
+            record_id=record.id,
+            reason="test-cleanup",
+            retention_window_days=30,
+            deleted_at=deleted_at,
+        )
+
+
 def test_receipt_trigger_preflight_rejects_extra_delete_return_path() -> None:
     canonical = """
         BEGIN

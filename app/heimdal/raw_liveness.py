@@ -41,6 +41,19 @@ _RETENTION_GUARD_SETTING = "app.heimdal_retention_bypass"
 _RETENTION_RECONCILE_GUARD_SETTING = "app.heimdal_retention_reconcile"
 _COLD_CLEANUP_PAYLOAD_KEY = "cold_cleanup_location_refs"
 _COLD_CLEANUP_BINDINGS_PAYLOAD_KEY = "cold_cleanup_archive_bindings"
+
+
+def _cold_cleanup_queue(payload: object) -> list[str] | None:
+    """Return a validated owner queue; ``None`` means absent or malformed."""
+
+    if not isinstance(payload, Mapping) or _COLD_CLEANUP_PAYLOAD_KEY not in payload:
+        return None
+    refs = payload[_COLD_CLEANUP_PAYLOAD_KEY]
+    if type(refs) is not list or any(type(ref) is not str or not ref for ref in refs):
+        return None
+    return list(refs)
+
+
 CONSENT_GRANT_DIGEST_PAYLOAD_KEY = "consent_grant_digest"
 CONSENT_GRANT_DIGESTS_PAYLOAD_KEY = "consent_grant_digests"
 RAW_MODALITY_PAYLOAD_KEY = "raw_modality"
@@ -532,12 +545,9 @@ def _memory_projection_locked(
             raise RawLivenessUnavailableError(
                 "tombstoned raw generation has no matching deletion receipt"
             )
+        cleanup_queue = _cold_cleanup_queue(receipt.payload)
         return RawLivenessProjection(
-            outcome=(
-                "erasure_pending"
-                if receipt.payload.get(_COLD_CLEANUP_PAYLOAD_KEY)
-                else "erased"
-            ),
+            outcome="erased" if cleanup_queue == [] else "erasure_pending",
             generation=generation,
             tombstone=tombstone,
         )
@@ -1853,12 +1863,9 @@ def project_with_response_leases(
                     if isinstance(receipt_row[0], dict)
                     else json.loads(receipt_row[0] or "{}")
                 )
+                cleanup_queue = _cold_cleanup_queue(receipt_payload)
                 projections[raw_ref] = RawLivenessProjection(
-                    outcome=(
-                        "erasure_pending"
-                        if receipt_payload.get(_COLD_CLEANUP_PAYLOAD_KEY)
-                        else "erased"
-                    ),
+                    outcome="erased" if cleanup_queue == [] else "erasure_pending",
                     generation=generation,
                     tombstone=tombstone,
                 )
@@ -2062,8 +2069,14 @@ def _reconcile_memory_cold_cleanup(tombstone: RawDeletionTombstone) -> None:
         None,
     )
     if receipt is None:
-        return
-    refs = list(receipt.payload.get("cold_cleanup_location_refs", []))
+        raise RawLivenessUnavailableError(
+            "tombstoned raw generation has no matching deletion receipt"
+        )
+    refs = _cold_cleanup_queue(receipt.payload)
+    if refs is None:
+        raise RawLivenessUnavailableError(
+            "cold cleanup queue evidence is absent or malformed"
+        )
     remaining = list(refs)
     for location_ref in refs:
         archive_token, archive_generation, representation_id = _cold_cleanup_binding(
@@ -2259,7 +2272,12 @@ def _reconcile_pg_cold_cleanup(cur: Any, record_id: str, *, conn: Any | None = N
     payload = receipt_row[0] if receipt_row else {}
     if isinstance(payload, str):
         payload = json.loads(payload)
-    remaining = [str(ref) for ref in payload.get("cold_cleanup_location_refs", [])]
+    refs = _cold_cleanup_queue(payload)
+    if refs is None:
+        raise RawLivenessUnavailableError(
+            "cold cleanup queue evidence is absent or malformed"
+        )
+    remaining = list(refs)
     for location_ref in list(remaining):
         archive_token, archive_generation, representation_id = _cold_cleanup_binding(
             payload,

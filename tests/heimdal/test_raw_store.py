@@ -21,12 +21,12 @@ the gated read call).
 
 from __future__ import annotations
 
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 import secrets
 
 import pytest
 
-from app.heimdal import raw_read_gate, raw_store
+from app.heimdal import raw_liveness, raw_read_gate, raw_store
 from app.heimdal.raw_read_gate import (
     RawReadAllowlistMissingError,
     RawReadRefusedError,
@@ -343,6 +343,65 @@ def test_archive_relocation_lease_serializes_postgres_scheduler_sessions(
     # Closing the owning connection is the crash-safe release operation.
     with raw_store.archive_relocation_lease():
         pass
+
+
+@pytest.mark.pg
+def test_pg_legacy_cleanup_queue_unknown_never_projects_or_reconciles_erased(
+    pg_raw_store_database: str,
+) -> None:
+    pytest.importorskip("psycopg")
+    plaintext = f"pg-legacy-cleanup-{secrets.token_hex(8)}".encode()
+    ciphertext, nonce = encrypt_raw_bytes(plaintext, key=_TEST_KEY)
+    record, created = insert_raw_record(
+        content_identity=compute_raw_content_identity(plaintext),
+        capture_chain=["pg-legacy-cleanup"],
+        sensor=_sensor_block(),
+        consent=_consent_block(),
+        ciphertext=ciphertext,
+        nonce=nonce,
+        key_ref="v1-process-key",
+        key=_TEST_KEY,
+        source_path="pg-legacy-cleanup.raw",
+    )
+    assert created
+    deleted_at = datetime.now(timezone.utc)
+    raw_liveness.governed_delete_raw_record(
+        record_id=record.id,
+        reason="test-cleanup",
+        retention_window_days=30,
+        deleted_at=deleted_at,
+    )
+
+    conn = raw_liveness._pg_connect(autocommit=False)  # noqa: SLF001
+    try:
+        cur = conn.cursor()
+        cur.execute("ALTER TABLE heimdal_raw_deletion_receipt DISABLE TRIGGER USER")
+        cur.execute(
+            "UPDATE heimdal_raw_deletion_receipt "
+            "SET payload = payload - 'cold_cleanup_location_refs' "
+            "WHERE record_id = %s",
+            (record.id,),
+        )
+        cur.execute("ALTER TABLE heimdal_raw_deletion_receipt ENABLE TRIGGER USER")
+        conn.commit()
+    finally:
+        conn.close()
+
+    projection = raw_liveness.project_with_response_leases(
+        [(raw_ref_for(record), record.content_identity)],
+        now=deleted_at,
+    )
+    assert projection[raw_ref_for(record)].outcome == "erasure_pending"
+    with pytest.raises(
+        raw_liveness.RawLivenessUnavailableError,
+        match="cleanup queue evidence",
+    ):
+        raw_liveness.governed_delete_raw_record(
+            record_id=record.id,
+            reason="test-cleanup",
+            retention_window_days=30,
+            deleted_at=deleted_at,
+        )
 
 
 @pytest.mark.pg

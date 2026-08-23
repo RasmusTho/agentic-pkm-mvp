@@ -524,13 +524,6 @@ def _relocate_raw_record_owner_native(
     existing_manifest: Mapping[str, object] | None = None,
 ) -> ArchiveResult:
     """Copy, verify, receipt, then activate cold; fail closed on every error."""
-    reference = now or datetime.now(timezone.utc)
-    if retention_window_days is None:
-        if vault_root is None:
-            raise ArchiveDegradedError("retention_policy_unavailable")
-        retention_window_days = resolve_retention_window_days(vault_root)
-    if not archive_eligible(record, now=reference, retention_window_days=retention_window_days):
-        raise ArchiveDegradedError("record_outside_archive_window")
     volume_proof = _require_verified_archive_volume(
         archive_root=archive_root,
         archive_ref=archive_ref,
@@ -586,6 +579,17 @@ def _relocate_raw_record_owner_native(
                 raw_generation=mutation_authority.generation,
                 key=key,
             )
+        reference = now or datetime.now(timezone.utc)
+        if retention_window_days is None:
+            if vault_root is None:
+                raise ArchiveDegradedError("retention_policy_unavailable")
+            retention_window_days = resolve_retention_window_days(vault_root)
+        if not archive_eligible(
+            record,
+            now=reference,
+            retention_window_days=retention_window_days,
+        ):
+            raise ArchiveDegradedError("record_outside_archive_window")
         hot = _active_hot(record.id)
         if hot.raw_generation != mutation_authority.generation:
             raise ArchiveDegradedError("archive_manifest_invalid")

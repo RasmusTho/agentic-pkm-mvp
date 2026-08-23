@@ -441,7 +441,7 @@ def test_terminal_pre_gaf_manifest_is_additively_bound_after_restart(tmp_path: P
         record,
         archive_root=archive_root,
         archive_ref=_ARCHIVE_REF,
-        now=now,
+        now=now + timedelta(days=31),
         retention_window_days=30,
         key=_KEY,
         volume_ready=lambda: _test_volume_ready(_ARCHIVE_REF, archive_root),
