@@ -45,19 +45,19 @@ risk deletion, while bypassing HKA generation checks would let recovery overwrit
 
 ## Acceptance Criteria
 
-- [ ] Exported HKA recovery material is human-readable and carries stable artifact identity,
+- [x] Exported HKA recovery material is human-readable and carries stable artifact identity,
       provenance, generation, format, and a redacted integrity proof.
       Verify: `tests/archival/test_hka_recovery_adapter.py::test_human_artifact_export_is_portable_and_provenance_complete`
-- [ ] Recovery stages and verifies the exact exported representation before calling the production
+- [x] Recovery stages and verifies the exact exported representation before calling the production
       HKA governed-write seam.
       Verify: `tests/archival/test_hka_recovery_adapter.py::test_hka_recovery_invokes_production_governed_write_after_verification`
-- [ ] A newer owner-native generation is never overwritten; the adapter reports a typed conflict
+- [x] A newer owner-native generation is never overwritten; the adapter reports a typed conflict
       and leaves both representations available for governed resolution.
       Verify: `tests/archival/test_hka_recovery_adapter.py::test_human_artifact_recovery_refuses_newer_generation_overwrite`
-- [ ] HKA recovery never inherits raw-evidence TTL, consent-revocation cleanup, or Heimdal terminal
+- [x] HKA recovery never inherits raw-evidence TTL, consent-revocation cleanup, or Heimdal terminal
       liveness rules.
       Verify: `tests/archival/test_hka_recovery_adapter.py::test_hka_adapter_uses_governed_write_and_never_raw_delete_policy`
-- [ ] The adapter creates no parallel HKA artifact registry, generation ledger, or authority store.
+- [x] The adapter creates no parallel HKA artifact registry, generation ledger, or authority store.
       Verify: `tests/architecture/test_governed_archival_contract.py::test_hka_adapter_has_no_parallel_authority_store`
 
 ## How to Verify (Pre-Merge)

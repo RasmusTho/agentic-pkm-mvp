@@ -8,6 +8,7 @@ import inspect
 
 from typing import get_type_hints
 
+from app.archival.adapters.hka_recovery import HkaRecoveryAdapter
 from app.archival.contracts import ArchivalAdapter
 from app.archival.transition import ArchivalTransitionKernel
 
@@ -67,3 +68,23 @@ def test_heimdal_adapter_has_no_parallel_authority_store() -> None:
     assert "raw_store" in source
     assert "raw_read_gate" in source
     assert "raw_liveness" in source
+
+
+def test_hka_adapter_has_no_parallel_authority_store() -> None:
+    source = (ROOT / "app/archival/adapters/hka_recovery.py").read_text()
+    adapter_source = inspect.getsource(HkaRecoveryAdapter)
+
+    assert "CREATE TABLE" not in source
+    assert "sqlite" not in source.lower()
+    assert "generation_ledger" not in source
+    assert "authority_store" not in source
+    assert "VaultPort" in source
+    assert "governed_write_hka_recovery" in adapter_source
+    for forbidden_owner in (
+        "raw_store",
+        "raw_read_gate",
+        "raw_liveness",
+        "delete_note",
+        "consent",
+    ):
+        assert forbidden_owner not in adapter_source
