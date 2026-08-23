@@ -386,6 +386,74 @@ def test_verified_archive_receipt_precedes_hot_retirement(tmp_path: Path) -> Non
     )
 
 
+def test_terminal_archive_replay_rebinds_cold_volume_after_restart(tmp_path: Path) -> None:
+    record, now = _eligible(_insert(b"restart-terminal-replay"))
+    archive_root = tmp_path / "mounted-cold"
+    archive_root.mkdir()
+    first = local_archive.relocate_raw_record(
+        record,
+        archive_root=archive_root,
+        archive_ref=_ARCHIVE_REF,
+        now=now,
+        retention_window_days=30,
+        key=_KEY,
+        volume_ready=lambda: _test_volume_ready(_ARCHIVE_REF, archive_root),
+    )
+
+    raw_store.revoke_cold_archive_binding()
+    replay = local_archive.relocate_raw_record(
+        record,
+        archive_root=archive_root,
+        archive_ref=_ARCHIVE_REF,
+        now=now,
+        retention_window_days=30,
+        key=_KEY,
+        volume_ready=lambda: _test_volume_ready(_ARCHIVE_REF, archive_root),
+    )
+
+    assert replay.receipt == first.receipt
+    assert replay.active_representation == first.active_representation
+
+
+def test_terminal_pre_gaf_manifest_is_additively_bound_after_restart(tmp_path: Path) -> None:
+    record, now = _eligible(_insert(b"terminal-pre-gaf-replay"))
+    archive_root = tmp_path / "mounted-cold"
+    archive_root.mkdir()
+    first = local_archive.relocate_raw_record(
+        record,
+        archive_root=archive_root,
+        archive_ref=_ARCHIVE_REF,
+        now=now,
+        retention_window_days=30,
+        key=_KEY,
+        volume_ready=lambda: _test_volume_ready(_ARCHIVE_REF, archive_root),
+    )
+    manifest_path = archive_root / "manifests" / f"{first.receipt.representation_id}.json"
+    legacy = json.loads(manifest_path.read_text(encoding="utf-8"))
+    legacy.pop("gaf_operation")
+    manifest_path.write_text(
+        json.dumps(legacy, sort_keys=True, separators=(",", ":")) + "\n",
+        encoding="utf-8",
+    )
+    raw_store.revoke_cold_archive_binding()
+
+    replay = local_archive.relocate_raw_record(
+        record,
+        archive_root=archive_root,
+        archive_ref=_ARCHIVE_REF,
+        now=now,
+        retention_window_days=30,
+        key=_KEY,
+        volume_ready=lambda: _test_volume_ready(_ARCHIVE_REF, archive_root),
+    )
+
+    upgraded = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert replay.receipt == first.receipt
+    assert {key: upgraded[key] for key in legacy} == legacy
+    assert upgraded["gaf_operation"]["source_representation_id"] != first.receipt.representation_id
+    assert upgraded["gaf_operation"]["target_representation_id"] == first.receipt.representation_id
+
+
 def test_verify_before_hot_representation_retire_and_fail_closed(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

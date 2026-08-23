@@ -1072,6 +1072,21 @@ def test_raw_media_revocation_preserves_har05_liveness_for_every_modality(
         assert proof is not None and proof.complete
 
 
+def test_hot_only_revocation_receipts_explicitly_verify_empty_cleanup_queue() -> None:
+    records = _admit_all_modalities()
+    adapters = [HeimdalRawMediaAdapter(record, generation=1) for record in records]
+
+    revoke_consent(grant_ref=MEDIA_CAPTURE_GRANT_REF, revoked_by="gaf03-test")
+
+    receipts = raw_liveness.all_deletion_receipts()
+    assert len(receipts) == len(records)
+    assert all(receipt.payload["cold_cleanup_location_refs"] == [] for receipt in receipts)
+    for adapter in adapters:
+        outcome = ArchivalTransitionKernel(adapter).cleanup(adapter.artifact)
+        assert outcome.stage is TransitionStage.ERASED
+        assert outcome.liveness.state is LivenessState.ERASED
+
+
 def test_cleanup_stays_pending_while_har05_cold_queue_is_not_empty(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

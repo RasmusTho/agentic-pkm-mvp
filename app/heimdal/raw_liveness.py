@@ -2184,8 +2184,12 @@ def _governed_delete_memory(
                     "content_identity": generation.content_identity,
                     "nonce_hex": representation.nonce.hex(),
                 }
+        # Presence is owner-native evidence: an explicit empty queue means the
+        # producer verified that this generation had no cold copies.  Absence
+        # remains reserved for legacy/unknown receipts and must fail closed in
+        # GAF cleanup projection.
+        receipt.payload[_COLD_CLEANUP_PAYLOAD_KEY] = list(cold_bindings)
         if cold_bindings:
-            receipt.payload[_COLD_CLEANUP_PAYLOAD_KEY] = list(cold_bindings)
             receipt.payload[_COLD_CLEANUP_BINDINGS_PAYLOAD_KEY] = cold_bindings
         _MEMORY.deletion_receipts.append(receipt)
         raw_deleted = False
@@ -2498,8 +2502,10 @@ def _governed_delete_pg(
             ) from exc
 
         receipt_payload = dict(governed_payload)
+        # Persist explicit verification even for hot-only erasure.  A missing
+        # field is legacy/unknown evidence, not an empty cleanup queue.
+        receipt_payload[_COLD_CLEANUP_PAYLOAD_KEY] = cold_location_refs
         if cold_location_refs:
-            receipt_payload[_COLD_CLEANUP_PAYLOAD_KEY] = cold_location_refs
             receipt_payload[_COLD_CLEANUP_BINDINGS_PAYLOAD_KEY] = cold_bindings
         receipt_id = str(uuid4())
         cur.execute(
