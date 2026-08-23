@@ -77,10 +77,10 @@ class TransitionResult:
 
     @property
     def terminal(self) -> bool:
-        return self.liveness.is_terminal or self.stage in {
-            TransitionStage.RETIRED,
-            TransitionStage.RESTORED,
-        }
+        return self.liveness.is_terminal or (
+            self.stage in {TransitionStage.RETIRED, TransitionStage.RESTORED}
+            and self.liveness.state is LivenessState.ACTIVE
+        )
 
 
 def _evidence(token: str) -> OpaqueReference:
@@ -129,7 +129,6 @@ class ArchivalTransitionKernel:
         binding: OperationBinding,
         operation: OperationRecord,
     ) -> TransitionResult:
-        del artifact
         try:
             if operation.completed:
                 return self._completed(binding, operation)
@@ -143,19 +142,27 @@ class ArchivalTransitionKernel:
                 source_representation.stage is not TransitionStage.ACTIVE
                 or source_representation.liveness.state is not LivenessState.ACTIVE
             ):
-                raise TransitionConflict(
-                    "source representation is not owner-native readable"
-                )
+                operation = self._read_operation(binding)
+                if operation.completed:
+                    return self._completed(binding, operation)
+                if not operation.retired:
+                    raise TransitionConflict(
+                        "source representation is not owner-native readable"
+                    )
 
             if operation.reservation is None:
                 reservation = self._adapter.reserve(binding)
                 self._validate_reservation(binding, reservation)
                 operation = self._read_operation(binding)
+                if operation.completed:
+                    return self._completed(binding, operation)
             reservation = self._require_reservation(binding, operation)
 
             if not operation.copied:
                 self._adapter.copy(binding, reservation)
                 operation = self._read_operation(binding)
+                if operation.completed:
+                    return self._completed(binding, operation)
             copied_target = self._resolve_exact(
                 binding.target, binding.artifact, binding.generation
             )
@@ -176,6 +183,8 @@ class ArchivalTransitionKernel:
                 verification = self._adapter.verify(binding, reservation)
                 self._validate_verification(binding, reservation, verification)
                 operation = self._read_operation(binding)
+                if operation.completed:
+                    return self._completed(binding, operation)
             verification = self._require_verification(binding, reservation, operation)
             verified_target = self._resolve_exact(
                 binding.target, binding.artifact, binding.generation
@@ -192,6 +201,8 @@ class ArchivalTransitionKernel:
                 )
                 self._validate_receipt(binding, receipt, completed=False)
                 operation = self._read_operation(binding)
+                if operation.completed:
+                    return self._completed(binding, operation)
             receipt = self._require_receipt(binding, operation, completed=False)
 
             if not operation.activated:
@@ -199,6 +210,8 @@ class ArchivalTransitionKernel:
                     binding, reservation, verification, receipt
                 )
                 operation = self._read_operation(binding)
+                if operation.completed:
+                    return self._completed(binding, operation)
             if not operation.activated:
                 raise TransitionFailure(
                     FaultStage.READBACK,
@@ -207,7 +220,10 @@ class ArchivalTransitionKernel:
             active_target = self._resolve_exact(
                 binding.target, binding.artifact, binding.generation
             )
-            if active_target.stage is not TransitionStage.ACTIVE:
+            if (
+                active_target.stage is not TransitionStage.ACTIVE
+                or active_target.liveness.state is not LivenessState.ACTIVE
+            ):
                 raise TransitionFailure(
                     FaultStage.READBACK,
                     "destination activation lacks exact owner-native readback",
@@ -219,6 +235,8 @@ class ArchivalTransitionKernel:
                 )
                 self._adapter.retire(binding, source_representation, receipt)
                 operation = self._read_operation(binding)
+                if operation.completed:
+                    return self._completed(binding, operation)
             if not operation.retired:
                 raise TransitionFailure(
                     FaultStage.READBACK,
@@ -262,6 +280,9 @@ class ArchivalTransitionKernel:
         if (
             gate.artifact != artifact.identity
             or gate.generation != artifact.generation
+            or gate.policy_profile is not artifact.policy_profile
+            or gate.stage is not TransitionStage.ACTIVE
+            or gate.liveness.state is not LivenessState.ACTIVE
             or representation not in gate.representation_refs
         ):
             return self._conflict("restore-authorization-binding-mismatch", gate)
@@ -444,6 +465,7 @@ class ArchivalTransitionKernel:
             or receipt.generation != binding.generation
             or receipt.policy_profile is not binding.policy
             or receipt.stage is not expected_stage
+            or receipt.liveness.state is not LivenessState.ACTIVE
             or receipt.representation_refs != (binding.source, binding.target)
         ):
             raise TransitionConflict("receipt binding differs")
@@ -518,6 +540,7 @@ class ArchivalTransitionKernel:
             or receipt.generation != artifact.generation
             or receipt.policy_profile is not artifact.policy_profile
             or receipt.stage is not TransitionStage.RESTORED
+            or receipt.liveness.state is not LivenessState.ACTIVE
             or receipt.representation_refs != (representation,)
         ):
             raise TransitionConflict("restore receipt binding differs")

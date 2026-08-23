@@ -62,6 +62,7 @@ artifact type or create another central registry that competes with HKA/PDM/GOV/
       Verify: `tests/architecture/test_governed_archival_contract.py::test_transition_kernel_uses_only_published_archival_adapter`
       Verify: `tests/architecture/test_governed_archival_contract.py::test_transition_kernel_has_no_private_persistence_or_content_store`
       Verify: `tests/archival/test_transition_kernel.py::test_equal_source_and_target_fail_closed_before_binding`
+      Verify: `tests/archival/test_transition_kernel.py::test_restore_requires_successful_exact_authorization_gate`
 - [ ] Policy profiles distinguish raw evidence, retained source, HKA recovery, and rebuildable
       derivative outcomes rather than exposing one universal delete rule.
       Verify: `tests/archival/test_contracts.py::test_policy_profiles_keep_class_specific_terminal_outcomes`

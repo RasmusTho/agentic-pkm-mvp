@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
-from threading import Barrier
+from threading import Barrier, Event, Lock
 
 from app.archival import (
     ArchivalTransitionKernel,
@@ -555,3 +555,227 @@ def test_stale_cleanup_proof_cannot_hide_new_live_representation() -> None:
     assert retried.stage is TransitionStage.ERASE_PENDING
     assert retried.liveness.state is LivenessState.ERASURE_PENDING
     assert adapter.effect_counts["cleanup"] == 1
+
+
+def test_same_key_stale_snapshot_rereads_concurrent_completion() -> None:
+    class OrderedSameKeyAdapter(DurableFakeAdapter):
+        def __init__(self, source: RepresentationRef) -> None:
+            super().__init__()
+            self._source = source
+            self._source_calls = 0
+            self._control_lock = Lock()
+            self._first_source_waiting = Event()
+            self._operation_completed = Event()
+
+        def resolve(self, reference):  # type: ignore[no-untyped-def]
+            if reference == self._source:
+                with self._control_lock:
+                    self._source_calls += 1
+                    source_call = self._source_calls
+                if source_call == 1:
+                    self._first_source_waiting.set()
+                    assert self._operation_completed.wait(timeout=5)
+                elif source_call == 2:
+                    assert self._first_source_waiting.wait(timeout=5)
+            return super().resolve(reference)
+
+        def complete_operation(self, binding, receipt):  # type: ignore[no-untyped-def]
+            completed = super().complete_operation(binding, receipt)
+            self._operation_completed.set()
+            return completed
+
+    descriptor, source, target, _adapter, _kernel = _fixture()
+    adapter = OrderedSameKeyAdapter(source)
+    adapter.register_source(
+        Representation(
+            descriptor.identity,
+            source,
+            descriptor.generation,
+            TransitionStage.ACTIVE,
+            Liveness(LivenessState.ACTIVE, OpaqueReference("fixture", "live")),
+        )
+    )
+    kernel = ArchivalTransitionKernel(adapter)
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = list(
+            executor.map(
+                lambda _index: kernel.transition(
+                    descriptor, source, target, "ordered-same-key"
+                ),
+                range(2),
+            )
+        )
+
+    assert {result.stage for result in results} == {TransitionStage.RETIRED}
+    assert results[0].receipt == results[1].receipt
+    assert adapter.effect_counts["retire"] == 1
+    assert adapter.effect_counts["complete"] == 1
+
+
+def test_same_key_completion_between_readback_checkpoints_converges() -> None:
+    class OrderedReservationAdapter(DurableFakeAdapter):
+        def __init__(self) -> None:
+            super().__init__()
+            self._reserve_calls = 0
+            self._control_lock = Lock()
+            self._first_reservation_waiting = Event()
+            self._operation_completed = Event()
+
+        def reserve(self, binding):  # type: ignore[no-untyped-def]
+            with self._control_lock:
+                self._reserve_calls += 1
+                reserve_call = self._reserve_calls
+            if reserve_call == 1:
+                self._first_reservation_waiting.set()
+                assert self._operation_completed.wait(timeout=5)
+            elif reserve_call == 2:
+                assert self._first_reservation_waiting.wait(timeout=5)
+            return super().reserve(binding)
+
+        def complete_operation(self, binding, receipt):  # type: ignore[no-untyped-def]
+            completed = super().complete_operation(binding, receipt)
+            self._operation_completed.set()
+            return completed
+
+    descriptor, source, target, _adapter, _kernel = _fixture()
+    adapter = OrderedReservationAdapter()
+    adapter.register_source(
+        Representation(
+            descriptor.identity,
+            source,
+            descriptor.generation,
+            TransitionStage.ACTIVE,
+            Liveness(LivenessState.ACTIVE, OpaqueReference("fixture", "live")),
+        )
+    )
+    kernel = ArchivalTransitionKernel(adapter)
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = list(
+            executor.map(
+                lambda _index: kernel.transition(
+                    descriptor, source, target, "checkpoint-same-key"
+                ),
+                range(2),
+            )
+        )
+
+    assert {result.stage for result in results} == {TransitionStage.RETIRED}
+    assert results[0].receipt == results[1].receipt
+    assert adapter.effect_counts["reserve"] == 1
+    assert adapter.effect_counts["complete"] == 1
+
+
+def test_restore_requires_successful_exact_authorization_gate() -> None:
+    class InexactAuthorizationAdapter(DurableFakeAdapter):
+        def __init__(self, mutation):  # type: ignore[no-untyped-def]
+            super().__init__()
+            self._mutation = mutation
+
+        def authorize_read(self, artifact, authority):  # type: ignore[no-untyped-def]
+            return replace(super().authorize_read(artifact, authority), **self._mutation)
+
+    descriptor, source, _target, _adapter, _kernel = _fixture()
+    authority = AccessAuthority(
+        OwnerAuthority.GOV, OpaqueReference("grant", "exact-gate")
+    )
+    mutations = (
+        {"stage": TransitionStage.REFUSED},
+        {
+            "liveness": Liveness(
+                LivenessState.REFUSED, OpaqueReference("fixture", "gate-refused")
+            )
+        },
+        {"policy_profile": PolicyProfile.HKA_RECOVERY},
+    )
+
+    for mutation in mutations:
+        adapter = InexactAuthorizationAdapter(mutation)
+        adapter.register_source(
+            Representation(
+                descriptor.identity,
+                source,
+                descriptor.generation,
+                TransitionStage.ACTIVE,
+                Liveness(
+                    LivenessState.ACTIVE, OpaqueReference("fixture", "live")
+                ),
+            )
+        )
+        result = ArchivalTransitionKernel(adapter).restore(
+            descriptor, authority, source
+        )
+
+        assert result.stage is TransitionStage.CONFLICT
+        assert adapter.effect_counts["restore"] == 0
+
+
+def test_restore_receipt_requires_terminal_active_liveness() -> None:
+    class PendingReceiptAdapter(DurableFakeAdapter):
+        def restore(self, artifact, authority, representation):  # type: ignore[no-untyped-def]
+            receipt = super().restore(artifact, authority, representation)
+            return replace(
+                receipt,
+                liveness=Liveness(
+                    LivenessState.RESTORE_PENDING,
+                    OpaqueReference("fixture", "restore-indeterminate"),
+                ),
+            )
+
+    descriptor, source, _target, _adapter, _kernel = _fixture()
+    adapter = PendingReceiptAdapter()
+    adapter.register_source(
+        Representation(
+            descriptor.identity,
+            source,
+            descriptor.generation,
+            TransitionStage.ACTIVE,
+            Liveness(LivenessState.ACTIVE, OpaqueReference("fixture", "live")),
+        )
+    )
+
+    result = ArchivalTransitionKernel(adapter).restore(
+        descriptor,
+        AccessAuthority(
+            OwnerAuthority.GOV, OpaqueReference("grant", "pending-receipt")
+        ),
+        source,
+    )
+
+    assert result.stage is TransitionStage.CONFLICT
+    assert not result.terminal
+
+
+def test_indeterminate_transition_receipt_cannot_activate_or_retire() -> None:
+    class PendingTransitionReceiptAdapter(DurableFakeAdapter):
+        def durable_receipt(self, binding, reservation, verification):  # type: ignore[no-untyped-def]
+            receipt = super().durable_receipt(binding, reservation, verification)
+            return replace(
+                receipt,
+                liveness=Liveness(
+                    LivenessState.TRANSITION_PENDING,
+                    OpaqueReference("fixture", "transition-indeterminate"),
+                ),
+            )
+
+    descriptor, source, target, _adapter, _kernel = _fixture()
+    adapter = PendingTransitionReceiptAdapter()
+    adapter.register_source(
+        Representation(
+            descriptor.identity,
+            source,
+            descriptor.generation,
+            TransitionStage.ACTIVE,
+            Liveness(LivenessState.ACTIVE, OpaqueReference("fixture", "live")),
+        )
+    )
+
+    result = ArchivalTransitionKernel(adapter).transition(
+        descriptor, source, target, "pending-transition-receipt"
+    )
+
+    assert result.stage is TransitionStage.CONFLICT
+    assert not result.terminal
+    assert adapter.effect_counts["activate"] == 0
+    assert adapter.effect_counts["retire"] == 0

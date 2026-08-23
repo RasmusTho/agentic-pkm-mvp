@@ -74,9 +74,12 @@ ordering would let each adapter recreate the same crash windows that HAR-04/HAR-
       Verify: `tests/archival/test_transition_kernel.py::test_resumed_and_after_effect_faults_reconcile_through_readback`
 - [ ] First success and retry return the identical canonical completed `retired` receipt.
       Verify: `tests/archival/test_transition_kernel.py::test_first_success_and_retry_return_identical_completed_receipt`
+      Verify: `tests/archival/test_transition_kernel.py::test_indeterminate_transition_receipt_cannot_activate_or_retire`
 - [ ] Concurrent same-key calls converge on one owner operation; incompatible competing bindings
       return typed conflict before source retirement.
       Verify: `tests/archival/test_transition_kernel.py::test_concurrent_same_key_and_competing_bindings_converge_or_conflict`
+      Verify: `tests/archival/test_transition_kernel.py::test_same_key_stale_snapshot_rereads_concurrent_completion`
+      Verify: `tests/archival/test_transition_kernel.py::test_same_key_completion_between_readback_checkpoints_converges`
 - [ ] A stale generation, changed policy decision, or changed destination binding is refused before
       effect and cannot retire or erase the current generation.
       Verify: `tests/archival/test_transition_kernel.py::test_stale_generation_and_binding_fail_closed_before_effect`
@@ -94,6 +97,8 @@ ordering would let each adapter recreate the same crash windows that HAR-04/HAR-
       Verify: `tests/archival/test_transition_kernel.py::test_restore_does_not_reuse_receipt_when_current_authorization_fails`
       Verify: `tests/archival/test_transition_kernel.py::test_cleanup_retry_reads_durable_proof_before_live_enumeration`
       Verify: `tests/archival/test_transition_kernel.py::test_stale_cleanup_proof_cannot_hide_new_live_representation`
+      Verify: `tests/archival/test_transition_kernel.py::test_restore_requires_successful_exact_authorization_gate`
+      Verify: `tests/archival/test_transition_kernel.py::test_restore_receipt_requires_terminal_active_liveness`
 - [ ] The kernel stores no global artifact registry or content bytes and can reconstruct operation
       state only through owner-native adapter queries and receipts.
       Verify: `tests/architecture/test_governed_archival_contract.py::test_transition_kernel_has_no_private_persistence_or_content_store`
