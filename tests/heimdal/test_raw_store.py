@@ -346,7 +346,7 @@ def test_archive_relocation_lease_serializes_postgres_scheduler_sessions(
 
 
 @pytest.mark.pg
-def test_pg_legacy_cleanup_queue_unknown_never_projects_or_reconciles_erased(
+def test_pg_legacy_cleanup_evidence_unknown_or_type_confused_never_erases(
     pg_raw_store_database: str,
 ) -> None:
     pytest.importorskip("psycopg")
@@ -395,6 +395,50 @@ def test_pg_legacy_cleanup_queue_unknown_never_projects_or_reconciles_erased(
     with pytest.raises(
         raw_liveness.RawLivenessUnavailableError,
         match="cleanup queue evidence",
+    ):
+        raw_liveness.governed_delete_raw_record(
+            record_id=record.id,
+            reason="test-cleanup",
+            retention_window_days=30,
+            deleted_at=deleted_at,
+        )
+
+    representation_id = "33333333-3333-4333-8333-333333333333"
+    archive_token = "a" * 64
+    location_ref = f"heimloc:cold:{archive_token}:{representation_id}"
+    conn = raw_liveness._pg_connect(autocommit=False)  # noqa: SLF001
+    try:
+        cur = conn.cursor()
+        cur.execute("ALTER TABLE heimdal_raw_deletion_receipt DISABLE TRIGGER USER")
+        cur.execute(
+            "UPDATE heimdal_raw_deletion_receipt SET payload = jsonb_build_object("
+            "'cold_cleanup_location_refs', jsonb_build_array(%s::text), "
+            "'cold_cleanup_archive_bindings', jsonb_build_object(%s::text, "
+            "jsonb_build_object('archive_token', %s::text, "
+            "'archive_generation', %s::text, 'raw_generation', true, "
+            "'representation_id', %s::text))) WHERE record_id = %s",
+            (
+                location_ref,
+                location_ref,
+                archive_token,
+                "b" * 64,
+                representation_id,
+                record.id,
+            ),
+        )
+        cur.execute("ALTER TABLE heimdal_raw_deletion_receipt ENABLE TRIGGER USER")
+        conn.commit()
+    finally:
+        conn.close()
+
+    type_confused = raw_liveness.project_with_response_leases(
+        [(raw_ref_for(record), record.content_identity)],
+        now=deleted_at,
+    )
+    assert type_confused[raw_ref_for(record)].outcome == "erasure_pending"
+    with pytest.raises(
+        raw_liveness.RawLivenessUnavailableError,
+        match="stale or bound to a different generation",
     ):
         raw_liveness.governed_delete_raw_record(
             record_id=record.id,

@@ -2050,6 +2050,7 @@ def _cold_cleanup_binding(
         or re.fullmatch(r"[0-9a-f]{64}", archive_token) is None
         or not isinstance(archive_generation, str)
         or re.fullmatch(r"[0-9a-f]{64}", archive_generation) is None
+        or type(raw_generation) is not int
         or raw_generation != expected_raw_generation
         or canonical_representation_id != representation_id
         or location_ref

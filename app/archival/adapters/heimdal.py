@@ -132,6 +132,7 @@ class HeimdalRawMediaAdapter:
         self._binding: OperationBinding | None = None
         self._archive_result: object | None = None
         self._validated_owner_archive_receipt: object | None = None
+        self._fenced_terminal_operation: OperationRecord | None = None
         self._failure_reason: str | None = None
         self._restore_attempt: ContextVar[_RestoreAttempt | None] = ContextVar(
             f"heimdal_restore_attempt_{record.id}", default=None
@@ -228,8 +229,6 @@ class HeimdalRawMediaAdapter:
         self._binding = binding
         owner_manifest = self._read_manifest(binding)
         loaded = self.read_operation(binding.idempotency_key)
-        if loaded is not None and loaded.completed:
-            return loaded
         if self._archive_action is None:
             raise TransitionFailure(FaultStage.BINDING, "archive owner action unavailable")
         try:
@@ -249,16 +248,36 @@ class HeimdalRawMediaAdapter:
             reason = getattr(exc, "reason", "archive_relocation_failed")
             self._failure_reason = str(reason)
             raise TransitionFailure(FaultStage.BINDING_AFTER_EFFECT, str(reason)) from exc
+        if loaded is not None and loaded.completed:
+            owner_receipt = getattr(self._archive_result, "receipt", None)
+            owner_receipt_id = getattr(owner_receipt, "receipt_id", None)
+            if (
+                loaded.receipt is None
+                or owner_receipt_id != loaded.receipt.receipt_ref.token
+            ):
+                raise TransitionConflict(
+                    "fenced owner receipt differs from terminal operation readback"
+                )
+            self._validated_owner_archive_receipt = owner_receipt
+            self._fenced_terminal_operation = loaded
+            return loaded
         loaded = self.read_operation(binding.idempotency_key)
         if loaded is None:
             raise TransitionFailure(FaultStage.READBACK, "archive owner receipt unavailable")
         return loaded
 
     def read_operation(self, idempotency_key: str) -> OperationRecord | None:
-        self._validated_owner_archive_receipt = None
         binding = self._binding
         if binding is None or binding.idempotency_key != idempotency_key:
             return None
+        if self._failure_reason is not None:
+            raise TransitionFailure(FaultStage.READBACK, self._failure_reason)
+        if (
+            self._fenced_terminal_operation is not None
+            and self._fenced_terminal_operation.binding == binding
+        ):
+            return self._fenced_terminal_operation
+        self._validated_owner_archive_receipt = None
         manifest = self._read_manifest(binding)
         legacy_manifest = manifest is not None and "gaf_operation" not in manifest
         if manifest is not None and not legacy_manifest:

@@ -494,17 +494,16 @@ def _bind_terminal_legacy_manifest(
         current = _read_archive_manifest(manifest_path, required=True)
         assert current is not None
         receipt, _ciphertext = validate(current)
-        _durable_write(
-            manifest_path,
-            _manifest_with_operation(
-                (
-                    json.dumps(dict(current), sort_keys=True, separators=(",", ":"))
-                    + "\n"
-                ).encode(),
-                operation_binding,
-            ),
+        bound_payload = _manifest_with_operation(
+            (
+                json.dumps(dict(current), sort_keys=True, separators=(",", ":"))
+                + "\n"
+            ).encode(),
+            operation_binding,
         )
-        _relocation_stage_hook("after_operation_binding")
+        if "gaf_operation" not in current:
+            _durable_write(manifest_path, bound_payload)
+            _relocation_stage_hook("after_operation_binding")
         return ArchiveResult(receipt, ArchiveHealth(True, "ok"), target)
 
 
@@ -904,6 +903,8 @@ def relocate_raw_record(
         target,
         idempotency_key,
     )
+    if adapter.failure_reason is not None:
+        raise ArchiveDegradedError(adapter.failure_reason)
     if outcome.stage is not TransitionStage.RETIRED:
         operation = adapter.read_operation(idempotency_key)
         if operation is None or not operation.completed:
@@ -976,6 +977,11 @@ def run_restore_drill(
     from app.archival.adapters.heimdal import HeimdalRawMediaAdapter
     from app.archival.contracts import AccessAuthority, OpaqueReference, OwnerAuthority
     from app.archival.transition import ArchivalTransitionKernel
+
+    if reader not in raw_read_gate.resolve_read_allowlist():
+        raise raw_read_gate.RawReadRefusedError(
+            f"reader {reader!r} is not permitted to read raw evidence"
+        )
 
     record_id = raw_read_gate._record_id_from_raw_ref(raw_ref)  # noqa: SLF001
     record = raw_store.resolve_active_raw_record(record_id)

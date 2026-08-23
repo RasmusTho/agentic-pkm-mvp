@@ -248,6 +248,52 @@ def test_retirement_claim_refuses_reads_writers_and_freshness_until_drained(
     assert settings is not None and settings.values["last_enforced_at"]
 
 
+def test_terminal_archive_replay_refuses_retiring_generation(tmp_path: Path) -> None:
+    now = datetime.now(timezone.utc)
+    enforcement_time = now + timedelta(days=31)
+    archive_root = tmp_path / "mounted-cold"
+    archive_root.mkdir()
+    vault_root = tmp_path / "vault"
+    _write_retention_window(vault_root, days=30)
+    record = _age_record(
+        _insert(b"terminal replay retirement fence", grant_ref="grant-replay-retiring"),
+        now=now,
+    )
+    archived = _archive(record, archive_root=archive_root, now=now)
+    lease = raw_liveness.issue_response_lease(
+        raw_ref=raw_ref_for(record),
+        content_identity=record.content_identity,
+        now=enforcement_time,
+    )
+    with pytest.raises(retention.RetentionErasurePendingError, match="draining"):
+        retention.enforce_hard_retention_bound(
+            vault_root=vault_root,
+            now=enforcement_time,
+            record_last_enforced=False,
+        )
+
+    with pytest.raises(local_archive.ArchiveDegradedError) as error:
+        local_archive.relocate_raw_record(
+            record,
+            archive_root=archive_root,
+            archive_ref=_ARCHIVE_REF,
+            now=now,
+            retention_window_days=30,
+            key=_KEY,
+            volume_ready=lambda: _volume_ready(archive_root),
+    )
+    assert error.value.reason == "archive_relocation_failed"
+    assert next(
+        row for row in raw_store.all_raw_representations(record.id) if row.active
+    ) == archived.active_representation
+
+    retention.enforce_hard_retention_bound(
+        vault_root=vault_root,
+        now=lease.expires_at + timedelta(microseconds=1),
+        record_last_enforced=False,
+    )
+
+
 def test_screen_retention_live_lease_is_pending_not_receipted(tmp_path: Path) -> None:
     now = datetime.now(timezone.utc)
     vault_root = tmp_path / "vault"

@@ -198,6 +198,13 @@ def test_raw_media_restore_reuses_production_gated_read(
     assert restored.stage is TransitionStage.RESTORED
     assert adapter.read_restore(adapter.artifact, adapter.ref_for(retired)) is None
 
+    monkeypatch.setattr(
+        raw_store,
+        "resolve_active_raw_record",
+        lambda _record_id: (_ for _ in ()).throw(
+            AssertionError("unauthorized restore inspected raw/archive state")
+        ),
+    )
     with pytest.raises(raw_read_gate.RawReadRefusedError):
         local_archive.run_restore_drill(
             raw_read_gate.raw_ref_for(records[0]), reader="not-authorized", key=_KEY
