@@ -185,7 +185,7 @@ def test_retained_source_admission_requires_owner_keep_decision() -> None:
             descriptor, "/private/source.jpg", RetainedSourceKind.MEDIA_ORIGINAL, "image/jpeg",
             OwnerKeepDecision(OpaqueReference("retained-source-admission", "keep-path")), _owner_gate(),
         )
-    for location_like_format in ("file:///private/source", r"C:\\private\\source.pdf", "/private/source.pdf"):
+    for location_like_format in ("file:///private/source", r"C:\\private\\source.pdf", "/private/source.pdf", "private/source.pdf"):
         with pytest.raises(ValueError, match="non-location format"):
             RetainedSourceAdmission(
                 descriptor, source, RetainedSourceKind.MEDIA_ORIGINAL, location_like_format,
@@ -232,6 +232,13 @@ def test_retained_source_restore_is_gated_and_generation_bound() -> None:
     )
     with pytest.raises(TransitionConflict, match="owner gate"):
         ArchivalTransitionKernel(adapter).restore(descriptor, forged_gate, source)
+
+    owner_gate = AccessAuthority(
+        OwnerAuthority.CLASS_ADAPTER,
+        OpaqueReference("retained-source-owner", _owner_gate().token),
+    )
+    protocol_restored = ArchivalTransitionKernel(adapter).restore(descriptor, owner_gate, source)
+    assert protocol_restored.receipt == store.read_restore(descriptor, source)
 
     foreign = RepresentationRef(
         "retained_source", OpaqueReference("retained-source-representation", "foreign-42")

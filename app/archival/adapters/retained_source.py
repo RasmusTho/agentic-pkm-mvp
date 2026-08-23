@@ -42,6 +42,9 @@ from app.archival.transition import FaultStage, TransitionConflict, TransitionFa
 
 ADAPTER_ID = "retained_source"
 _MEDIA_TYPE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]*/[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]*$")
+_MEDIA_TOP_LEVEL_TYPES = frozenset({
+    "application", "audio", "font", "example", "haptics", "image", "message", "model", "multipart", "text", "video",
+})
 
 
 class RetainedSourceKind(str, Enum):
@@ -121,7 +124,8 @@ class RetainedSourceAdmission:
             raise ValueError("restore destination must be a typed opaque reference")
         if self.restore_destination.namespace != "retained-source-destination":
             raise ValueError("restore destination must be owner-native retained-source authority")
-        if not isinstance(self.format, str) or not _MEDIA_TYPE.fullmatch(self.format):
+        media_type = self.format.split("/", 1)[0].lower() if isinstance(self.format, str) else ""
+        if not isinstance(self.format, str) or not _MEDIA_TYPE.fullmatch(self.format) or media_type not in _MEDIA_TOP_LEVEL_TYPES:
             raise ValueError("retained source format must be a non-location format identifier")
         descriptor = self.descriptor
         if (
@@ -214,13 +218,7 @@ class RetainedSourceAdapter:
             artifact.provenance_refs,
             (representation,),
         )
-        self._store.record_restore_receipt(receipt)
-        loaded = self._store.read_restore(artifact, representation)
-        if loaded != receipt:
-            raise TransitionFailure(
-                FaultStage.READBACK, "retained-source restore receipt readback is unavailable"
-            )
-        return loaded
+        return self._record_restore_receipt(artifact, representation, receipt)
 
     def enumerate(self, artifact: ArtifactIdentity) -> Sequence[Representation]:
         return self._store.enumerate(artifact) if artifact == self.artifact.identity else ()
@@ -290,7 +288,8 @@ class RetainedSourceAdapter:
         self._require_artifact(artifact)
         self.authorize_read(artifact, authority)
         self._require_active_representation(artifact, representation)
-        return self._store.restore(artifact, authority, representation)
+        receipt = self._store.restore(artifact, authority, representation)
+        return self._record_restore_receipt(artifact, representation, receipt)
 
     def read_restore(self, artifact: ArtifactDescriptor, representation: RepresentationRef) -> ArchivalReceipt | None:
         self._require_artifact(artifact)
@@ -334,6 +333,20 @@ class RetainedSourceAdapter:
             raise TransitionConflict("restore generation differs from owner-native representation")
         if resolved.stage is not TransitionStage.ACTIVE or resolved.liveness.state is not LivenessState.ACTIVE:
             raise TransitionConflict("restore representation is not active")
+
+    def _record_restore_receipt(
+        self,
+        artifact: ArtifactDescriptor,
+        representation: RepresentationRef,
+        receipt: ArchivalReceipt,
+    ) -> ArchivalReceipt:
+        self._store.record_restore_receipt(receipt)
+        loaded = self._store.read_restore(artifact, representation)
+        if loaded != receipt:
+            raise TransitionFailure(
+                FaultStage.READBACK, "retained-source restore receipt readback is unavailable"
+            )
+        return loaded
 
     def _verify_content(self, payload: bytes) -> None:
         content_refs = [ref.reference.token for ref in self.artifact.provenance_refs if ref.kind == "content" and ref.reference.namespace == "content-sha256"]
