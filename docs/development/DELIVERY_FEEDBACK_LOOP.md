@@ -21,6 +21,27 @@ its own process, guardrails, issue contracts, evidence surfaces, fitness rules, 
 still match observed delivery reality. That reevaluation is not part of the hot delivery path, but it
 is part of the Builder System's supported operating model.
 
+## Cross-stage simplicity check
+
+The same simplicity check applies at every handoff, not only before feature breakdown: Docs/SoT,
+research, design, breakdown, implementation, review/CI, runtime, and actual user use. At each
+handoff, ask:
+
+1. What user outcome is being proved now?
+2. What is the simplest existing authority and write path that can prove it?
+3. What new state, authority, writer, protocol, retry/replay mechanism, or recovery surface was
+   introduced, and what concrete evidence requires it?
+4. If the mechanism fails, is the failure cost bounded and is there a human-readable fallback?
+
+If the answer changes downstream, classify the observation as a defect, a scope mismatch, or a
+reusable Builder System learning. Capture reusable divergence through `capture-learning` as a
+BuilderOps `LearningSignal`; the next retrospective decides whether the outcome is an applied
+governance edit, an existing issue, a PromotionIntent, a fitness/debt entry, or a discard receipt.
+
+This is one shared decision pattern, not a new gate, record type, dashboard, or per-skill complexity
+framework. Missing evidence is a reason to keep the slice small, not permission to design the
+larger system.
+
 ## Design
 
 ```text

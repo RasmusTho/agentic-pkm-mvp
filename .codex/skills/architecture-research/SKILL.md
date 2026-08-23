@@ -33,6 +33,11 @@ Do **not** trigger for: a single bounded bug (use `bug-to-issue`), a known capab
 needs decomposition (use `feature-breakdown` directly), or doc-freshness sweeps
 (`temporal-doc-governance`).
 
+Before expanding research into a broader capability, apply `AGENTS.md :: Proportional delivery` and
+`docs/development/DELIVERY_FEEDBACK_LOOP.md :: Cross-stage simplicity check`. Research may expose a
+scope mismatch rather than a missing invariant; capture that downstream learning instead of
+escalating the mechanism by default.
+
 ## First context to load
 
 - `AGENTS.md` (Dispatcher policy, Parallel-agent execution, `AGENTS.md :: Total Cost of Development`)

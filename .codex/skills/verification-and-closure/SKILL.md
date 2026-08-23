@@ -364,6 +364,10 @@ finding and does not re-trigger review.
   validation evidence, and the last progress assessment. When TCD selects a strongest-capability
   repair, use the configured strongest capability with high or xhigh reasoning. Do not duplicate a
   provider/model ladder here; the canonical policy and live configuration govern.
+- A repeated finding or downstream observation can also be a scope mismatch. Apply
+  `docs/development/DELIVERY_FEEDBACK_LOOP.md :: Cross-stage simplicity check`; capture reusable
+  evidence as a BuilderOps `LearningSignal` and rescope the capability instead of turning the
+  verification loop into a larger mechanism by default.
 - Independently re-review after every substantive repair and record the selected capability,
   reasoning level, prior context supplied, fallback (if any), progress evidence, and outcome. Keep
   each finding bound to its original stable mechanism and failure domain; P2/P3 dispositions never

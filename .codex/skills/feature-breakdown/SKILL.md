@@ -197,7 +197,7 @@ By contrast, additive work on a single surface that mirrors an existing pattern 
 ## Working procedure
 
 1. Read the governing docs and identify one concrete capability boundary.
-2. Decide whether this should remain one bounded issue or become a specification directory with multiple implementation tasks.
+2. Decide whether this should remain one bounded issue or become a specification directory with multiple implementation tasks. At the boundary and again after decomposition, apply `docs/development/DELIVERY_FEEDBACK_LOOP.md :: Cross-stage simplicity check`; if the child map adds untriggered mechanisms, return to scope correction instead of creating more tasks.
 3. Search existing issues and PRs first so you do not create duplicates.
 4. Define four things before creating anything:
    - capability intent
