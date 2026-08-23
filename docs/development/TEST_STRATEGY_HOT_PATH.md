@@ -6,7 +6,7 @@ Temporal class: operational
 Review cadence: event-driven
 Source of truth: code, workflow files, and repo-local skill docs
 Last reviewed: 2026-08-12
-Last verified against: `.github/workflows/ci-smoke.yaml`, `.github/workflows/issue-pr-governance.yml`, `tests/architecture/test_agent_skill_entrypoints.py`, `tests/architecture/test_dispatcher_skill_integration.py`, `docs/development/PR_HOT_PATH.md`, `docs/development/PR_ESCALATION_PATHS.md`, `docs/development/PARENT_ISSUE_CLOSURE.md`, `.codex/skills/issue-to-code/SKILL.md`, `.codex/skills/pr-integration/SKILL.md`, `.codex/skills/verification-and-closure/SKILL.md`, `scripts/select_pr_tests.py`, `scripts/docs_guard_logic.py`, `tests/knowledge/linux_acl.py`, `tests/knowledge/test_linux_acl_fixture.py`, `tests/ops/test_review_before_ci_gate.py`, `tests/governance/test_ci_smoke_docs_only_gate.py`, `tests/governance/test_ci_smoke_post_merge_proof_concurrency.py`
+Last verified against: `.github/workflows/ci-smoke.yaml`, `.github/workflows/browser-runtime.yml`, `.github/workflows/issue-pr-governance.yml`, `tests/architecture/test_agent_skill_entrypoints.py`, `tests/architecture/test_dispatcher_skill_integration.py`, `docs/development/PR_HOT_PATH.md`, `docs/development/PR_ESCALATION_PATHS.md`, `docs/development/PARENT_ISSUE_CLOSURE.md`, `.codex/skills/issue-to-code/SKILL.md`, `.codex/skills/pr-integration/SKILL.md`, `.codex/skills/verification-and-closure/SKILL.md`, `scripts/select_pr_tests.py`, `scripts/docs_guard_logic.py`, `tests/knowledge/linux_acl.py`, `tests/knowledge/test_linux_acl_fixture.py`, `tests/ops/test_ci_workflow.py`, `tests/ops/test_review_before_ci_gate.py`, `tests/governance/test_ci_smoke_docs_only_gate.py`, `tests/governance/test_ci_smoke_post_merge_proof_concurrency.py`
 
 # Test Strategy for the Hot Path
 
@@ -67,6 +67,43 @@ The goal is to keep docs-only and governance/skill PRs cheap while preserving di
   fails the changing PR instead of first turning `main`'s post-merge smoke red. The docker-compose
   integration itself (mounts, launcher sequence, seeded vault) remains post-merge-only coverage.
 - E2E tests under `tests/e2e/` run after merge and in the nightly suite, not on ordinary PRs. Opt-in classes (live LLM, browser, human UAT, eval) remain in their dedicated post-merge or nightly lanes.
+- Combined devUI shell recovery #4836 has an explicit pre-merge exception to that post-merge
+  browser default: after publishing the candidate ref, an operator must dispatch
+  `.github/workflows/browser-runtime.yml` against that exact ref (for example,
+  `gh workflow run browser-runtime.yml --ref <published-candidate-ref>`). Native
+  `workflow_dispatch` resolution binds the pinned checkout and the evidence artifact to exact
+  `${{ github.sha }}`. The dispatch fails when
+  `tests/companion_ui/test_devui_overview_journeys.py` is absent, collects zero tests, fails, or
+  skips any required journey; a green run also requires its JUnit result, Overview browser receipt,
+  Playwright trace, screenshots, and hashed manifest in the exact-SHA artifact. The receipt is the
+  exact `devui-overview-browser-accessibility.v1` object: no fields may be missing or added; its
+  `github_sha` and test-module identity must match the run, and fixture versions must name exactly
+  `connected-overview-focus` and `hostile-source-state-matrix`. `token_sha256` must equal the
+  accepted binding-token SHA-256
+  `7d8cdd49f59061f895959159a08e82348e7e02eb8b8ba7426020a50c7fa915b1`, and the nonempty
+  screenshot list must exactly match the archived screenshots. Accessibility results must report
+  `passed` for exactly desktop, narrow, 200% zoom, keyboard, screen-reader name/focus order, print,
+  and JavaScript-off checks; `failures` must be an empty string list, and unresolved visual
+  questions must be a string list. The hashed manifest embeds that validated receipt and records the
+  receipt, JUnit, trace, and screenshot files consistently. Runner-temporary paths are declared only
+  at step scope, where the `runner` context is available for both push and dispatch evaluation. The
+  workflow retains its push-to-`main` path and deliberately has no `pull_request` trigger. The
+  ordinary PR unit CI does not provide this browser proof. Neither a local screenshot nor a
+  post-merge run substitutes for the exact published #4836 candidate run. The exact required JUnit
+  nodeid inventory for that candidate is:
+  - `tests/companion_ui/test_devui_overview_journeys.py::test_real_gateway_overview_focus_return_journey_preserves_subject_context_and_sha`
+  - `tests/companion_ui/test_devui_overview_journeys.py::test_focus_api_failure_renders_honest_visual_error_without_url_probing`
+  - `tests/companion_ui/test_devui_overview_journeys.py::test_connected_shell_freezes_server_identity_selector_and_aria_contract`
+  - `tests/companion_ui/test_devui_overview_journeys.py::test_connected_shell_renders_full_server_state_matrix_without_reclassification`
+  - `tests/companion_ui/test_devui_overview_journeys.py::test_gateway_shell_is_safe_accessible_no_egress_and_effect_free`
+  The dispatch rejects any missing, renamed, duplicated, unexpected, skipped, or unexecuted nodeid.
+  The receipt's canonical `required_nodeids` list and `journey_assertions` map must name exactly that
+  inventory, with every nodeid reporting passed URL assertions, network assertions, and status
+  assertions plus an empty page errors list. The manifest records both required and executed nodeids
+  plus per-node collected/executed/passed/skipped results and any JUnit-inventory error while hashing
+  the bound evidence. A later #4748 receipt may authenticate and reference this artifact only by its
+  exact SHA and exact nodeid inventory; the artifact does not by itself claim that downstream #4748
+  validation has run.
 
 ## Check Levels
 
@@ -125,6 +162,9 @@ The goal is to keep docs-only and governance/skill PRs cheap while preserving di
 - Runtime PRs should run focused tests first and add smoke only when the runtime surface is actually touched.
 - Subsystem-scoped CI must be conservative: workflow/test configuration, dependency files, migrations, and shared fixtures choose the broad deterministic suite. Unmapped runtime paths fail selection until an owner is declared; they must never silently borrow the whole repository's suite.
 - E2E coverage is reserved for post-merge, nightly, or explicit manual verification.
+- When a governing contract names an exact-ref browser proof, dispatch the dedicated workflow only
+  after publishing the candidate and authenticate the result and artifacts against its resolved
+  SHA; do not reinterpret ordinary unit CI as browser evidence.
 - Slow or flaky test classes should be marked and routed to their dedicated subsystem, nightly, or manual workflow. They must not install dependencies or invoke pytest on unrelated PRs.
 - Direct repair PRs are classified by the surfaces they touch, not by whether they carry a governing issue.
 - Failing required checks must be classified, not ignored as out-of-scope.

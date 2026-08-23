@@ -9,6 +9,7 @@ on:
       - 'app/web/**'
       - 'tests/companion_ui/**'
       - '.github/workflows/browser-runtime.yml'
+  workflow_dispatch:
 
 concurrency:
   group: companion-ui-browser-runtime-${{ github.ref }}
@@ -27,6 +28,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
 
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -42,6 +45,92 @@ jobs:
       - name: Install Playwright Chromium
         run: |
           python -m playwright install --with-deps chromium
+
+      # #4833: workflow_dispatch resolves the operator-selected published ref
+      # to github.sha. The checkout above pins that immutable commit, while this
+      # dispatch-only gate rejects absent, empty, or skipped #4836 journeys.
+      - name: Run exact-ref Overview browser journeys
+        id: overview-journeys
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          DEVUI_OVERVIEW_EVIDENCE_DIR: ${{ runner.temp }}/devui-overview
+          DEVUI_OVERVIEW_JUNIT: ${{ runner.temp }}/devui-overview/junit.xml
+          DEVUI_OVERVIEW_RECEIPT: ${{ runner.temp }}/devui-overview/receipts/devui-overview-browser-accessibility.v1.json
+          DEVUI_OVERVIEW_TRACE_DIR: ${{ runner.temp }}/devui-overview/traces
+          DEVUI_OVERVIEW_SCREENSHOT_DIR: ${{ runner.temp }}/devui-overview/screenshots
+        run: |
+          set -euo pipefail
+          mkdir -p \
+            "$DEVUI_OVERVIEW_EVIDENCE_DIR" \
+            "$(dirname "$DEVUI_OVERVIEW_RECEIPT")" \
+            "$DEVUI_OVERVIEW_TRACE_DIR" \
+            "$DEVUI_OVERVIEW_SCREENSHOT_DIR"
+          test -f tests/companion_ui/test_devui_overview_journeys.py
+          pytest -q \
+            --junitxml="$DEVUI_OVERVIEW_JUNIT" \
+            tests/companion_ui/test_devui_overview_journeys.py
+          python - "$DEVUI_OVERVIEW_JUNIT" <<'PY'
+          from collections import Counter
+          from pathlib import Path
+          import sys
+          import xml.etree.ElementTree as ET
+
+          TEST_MODULE = "tests/companion_ui/test_devui_overview_journeys.py"
+          TEST_CLASSNAME = "tests.companion_ui.test_devui_overview_journeys"
+          REQUIRED_NODEIDS = (
+              f"{TEST_MODULE}::"
+              "test_real_gateway_overview_focus_return_journey_preserves_subject_context_and_sha",
+              f"{TEST_MODULE}::"
+              "test_focus_api_failure_renders_honest_visual_error_without_url_probing",
+              f"{TEST_MODULE}::"
+              "test_connected_shell_freezes_server_identity_selector_and_aria_contract",
+              f"{TEST_MODULE}::"
+              "test_connected_shell_renders_full_server_state_matrix_without_reclassification",
+              f"{TEST_MODULE}::"
+              "test_gateway_shell_is_safe_accessible_no_egress_and_effect_free",
+          )
+
+          junit_path = Path(sys.argv[1])
+          root = ET.parse(junit_path).getroot()
+          testcases = list(root.findall(".//testcase"))
+          if not testcases:
+              raise SystemExit("required Overview journey collection is empty")
+          observed_nodeids = [
+              (
+                  f"{TEST_MODULE}::{case.attrib.get('name', '')}"
+                  if case.attrib.get("classname") == TEST_CLASSNAME
+                  else (
+                      f"{case.attrib.get('classname', '<missing-classname>')}::"
+                      f"{case.attrib.get('name', '<missing-name>')}"
+                  )
+              )
+              for case in testcases
+          ]
+          counts = Counter(observed_nodeids)
+          duplicates = sorted(nodeid for nodeid, count in counts.items() if count > 1)
+          if duplicates:
+              raise SystemExit(
+                  "required Overview journey nodeids are duplicated: "
+                  + ", ".join(duplicates)
+              )
+          missing = sorted(set(REQUIRED_NODEIDS) - set(observed_nodeids))
+          unexpected = sorted(set(observed_nodeids) - set(REQUIRED_NODEIDS))
+          if missing or unexpected:
+              raise SystemExit(
+                  "required Overview journey nodeids mismatch: "
+                  f"missing={missing} unexpected={unexpected}"
+              )
+          skipped_nodeids = sorted(
+              nodeid
+              for nodeid, case in zip(observed_nodeids, testcases, strict=True)
+              if case.find("skipped") is not None
+          )
+          if skipped_nodeids:
+              raise SystemExit(
+                  "required Overview journeys were skipped: "
+                  + ", ".join(skipped_nodeids)
+              )
+          PY
 
       # Deterministic, fully offline (rendered HTML + ESM stubs, no live vault):
       # this is a real regression gate, so it is NOT continue-on-error.
@@ -73,3 +162,445 @@ jobs:
         continue-on-error: true
         run: |
           pytest -q tests/companion_ui/test_mermaid_browser.py
+
+      # Always retain a diagnostic manifest for an explicit dispatch. A green
+      # journey step is accepted only when the separate receipt, trace, and
+      # screenshot evidence exists; missing evidence cannot false-green.
+      - name: Build exact-SHA Overview evidence manifest
+        if: ${{ always() && github.event_name == 'workflow_dispatch' }}
+        env:
+          DEVUI_OVERVIEW_EVIDENCE_DIR: ${{ runner.temp }}/devui-overview
+          DEVUI_OVERVIEW_JUNIT: ${{ runner.temp }}/devui-overview/junit.xml
+          DEVUI_OVERVIEW_RECEIPT: ${{ runner.temp }}/devui-overview/receipts/devui-overview-browser-accessibility.v1.json
+          DEVUI_OVERVIEW_TRACE_DIR: ${{ runner.temp }}/devui-overview/traces
+          DEVUI_OVERVIEW_SCREENSHOT_DIR: ${{ runner.temp }}/devui-overview/screenshots
+          DEVUI_OVERVIEW_MANIFEST: ${{ runner.temp }}/devui-overview/manifest.json
+          DEVUI_OVERVIEW_JOURNEY_OUTCOME: ${{ steps.overview-journeys.outcome }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$DEVUI_OVERVIEW_EVIDENCE_DIR"
+          python - <<'PY'
+          from __future__ import annotations
+
+          from collections import Counter
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+          import re
+          import subprocess
+          import xml.etree.ElementTree as ET
+
+          RECEIPT_CONTRACT = "devui-overview-browser-accessibility.v1"
+          RECEIPT_TEST_MODULE = (
+              "tests/companion_ui/test_devui_overview_journeys.py"
+          )
+          RECEIPT_TEST_CLASSNAME = (
+              "tests.companion_ui.test_devui_overview_journeys"
+          )
+          REQUIRED_NODEIDS = (
+              f"{RECEIPT_TEST_MODULE}::"
+              "test_real_gateway_overview_focus_return_journey_preserves_subject_context_and_sha",
+              f"{RECEIPT_TEST_MODULE}::"
+              "test_focus_api_failure_renders_honest_visual_error_without_url_probing",
+              f"{RECEIPT_TEST_MODULE}::"
+              "test_connected_shell_freezes_server_identity_selector_and_aria_contract",
+              f"{RECEIPT_TEST_MODULE}::"
+              "test_connected_shell_renders_full_server_state_matrix_without_reclassification",
+              f"{RECEIPT_TEST_MODULE}::"
+              "test_gateway_shell_is_safe_accessible_no_egress_and_effect_free",
+          )
+          JOURNEY_ASSERTION_KEYS = {
+              "url_assertions",
+              "network_assertions",
+              "status_assertions",
+              "page_errors",
+          }
+          RECEIPT_FIXTURE_KEYS = {
+              "connected-overview-focus",
+              "hostile-source-state-matrix",
+          }
+          RECEIPT_TOKEN_SHA256 = (
+              "7d8cdd49f59061f895959159a08e82348e7e02eb8b8ba7426020a50c7fa915b1"
+          )
+          RECEIPT_ACCESSIBILITY_CHECKS = {
+              "desktop",
+              "narrow",
+              "zoom-200",
+              "keyboard",
+              "screen-reader-name-focus-order",
+              "print",
+              "javascript-off",
+          }
+          RECEIPT_KEYS = {
+              "contract_version",
+              "github_sha",
+              "test_module",
+              "required_nodeids",
+              "journey_assertions",
+              "fixture_versions",
+              "token_sha256",
+              "screenshots",
+              "accessibility_results",
+              "failures",
+              "unresolved_visual_questions",
+          }
+
+          def nonempty_string(value: object) -> bool:
+              return isinstance(value, str) and bool(value.strip())
+
+          def string_list(value: object, *, allow_empty: bool) -> bool:
+              return (
+                  isinstance(value, list)
+                  and (allow_empty or bool(value))
+                  and all(nonempty_string(item) for item in value)
+              )
+
+          evidence_dir = Path(os.environ["DEVUI_OVERVIEW_EVIDENCE_DIR"])
+          junit_path = Path(os.environ["DEVUI_OVERVIEW_JUNIT"])
+          receipt_path = Path(os.environ["DEVUI_OVERVIEW_RECEIPT"])
+          trace_dir = Path(os.environ["DEVUI_OVERVIEW_TRACE_DIR"])
+          screenshot_dir = Path(os.environ["DEVUI_OVERVIEW_SCREENSHOT_DIR"])
+          manifest_path = Path(os.environ["DEVUI_OVERVIEW_MANIFEST"])
+          github_sha = os.environ["GITHUB_SHA"]
+          checkout_sha = subprocess.run(
+              ["git", "rev-parse", "HEAD"],
+              check=True,
+              capture_output=True,
+              text=True,
+          ).stdout.strip()
+
+          traces = sorted(
+              path
+              for path in trace_dir.rglob("*")
+              if path.is_file() and path.stat().st_size > 0
+          )
+          screenshots = sorted(
+              path
+              for path in screenshot_dir.rglob("*")
+              if path.is_file() and path.stat().st_size > 0
+          )
+          screenshot_paths = [
+              path.relative_to(evidence_dir).as_posix() for path in screenshots
+          ]
+          receipt = None
+          receipt_errors = []
+          if receipt_path.is_file() and receipt_path.stat().st_size > 0:
+              try:
+                  candidate = json.loads(receipt_path.read_text(encoding="utf-8"))
+              except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+                  receipt_errors.append("receipt is not valid UTF-8 JSON")
+              else:
+                  if not isinstance(candidate, dict):
+                      receipt_errors.append("receipt must be a JSON object")
+                  else:
+                      missing_keys = sorted(RECEIPT_KEYS - set(candidate))
+                      unexpected_keys = sorted(set(candidate) - RECEIPT_KEYS)
+                      if missing_keys:
+                          receipt_errors.append(
+                              "missing keys=" + ",".join(missing_keys)
+                          )
+                      if unexpected_keys:
+                          receipt_errors.append(
+                              "unexpected keys=" + ",".join(unexpected_keys)
+                          )
+                      if candidate.get("contract_version") != RECEIPT_CONTRACT:
+                          receipt_errors.append("contract_version mismatch")
+                      if candidate.get("github_sha") != github_sha:
+                          receipt_errors.append("github_sha mismatch")
+                      if candidate.get("test_module") != RECEIPT_TEST_MODULE:
+                          receipt_errors.append("test_module mismatch")
+
+                      required_nodeids = candidate.get("required_nodeids")
+                      if required_nodeids != list(REQUIRED_NODEIDS):
+                          receipt_errors.append("required_nodeids mismatch")
+
+                      journey_assertions = candidate.get("journey_assertions")
+                      if not isinstance(journey_assertions, dict) or set(
+                          journey_assertions
+                      ) != set(REQUIRED_NODEIDS):
+                          receipt_errors.append(
+                              "journey_assertions nodeids mismatch"
+                          )
+                      else:
+                          for nodeid in REQUIRED_NODEIDS:
+                              assertions = journey_assertions[nodeid]
+                              if not isinstance(assertions, dict) or set(
+                                  assertions
+                              ) != JOURNEY_ASSERTION_KEYS:
+                                  receipt_errors.append(
+                                      "journey_assertions fields mismatch: "
+                                      + nodeid
+                                  )
+                                  continue
+                              if any(
+                                  assertions[key] != "passed"
+                                  for key in (
+                                      "url_assertions",
+                                      "network_assertions",
+                                      "status_assertions",
+                                  )
+                              ):
+                                  receipt_errors.append(
+                                      "journey_assertions must pass URL, network, "
+                                      "and status: " + nodeid
+                                  )
+                              if assertions["page_errors"] != []:
+                                  receipt_errors.append(
+                                      "journey_assertions must report no page errors: "
+                                      + nodeid
+                                  )
+
+                      fixture_versions = candidate.get("fixture_versions")
+                      if not (
+                          isinstance(fixture_versions, dict)
+                          and set(fixture_versions) == RECEIPT_FIXTURE_KEYS
+                          and all(
+                              nonempty_string(key) and nonempty_string(value)
+                              for key, value in fixture_versions.items()
+                          )
+                      ):
+                          receipt_errors.append(
+                              "fixture_versions must name the exact required fixtures"
+                          )
+
+                      token_sha256 = candidate.get("token_sha256")
+                      if (
+                          not isinstance(token_sha256, str)
+                          or not re.fullmatch(r"[0-9a-f]{64}", token_sha256)
+                          or token_sha256 != RECEIPT_TOKEN_SHA256
+                      ):
+                          receipt_errors.append(
+                              "token_sha256 must match the binding token source"
+                          )
+
+                      declared_screenshots = candidate.get("screenshots")
+                      if not string_list(declared_screenshots, allow_empty=False):
+                          receipt_errors.append(
+                              "screenshots must be a nonempty string list"
+                          )
+                      elif (
+                          len(set(declared_screenshots)) != len(declared_screenshots)
+                          or sorted(declared_screenshots) != screenshot_paths
+                      ):
+                          receipt_errors.append(
+                              "screenshots do not match archived evidence"
+                          )
+
+                      accessibility = candidate.get("accessibility_results")
+                      if not (
+                          isinstance(accessibility, dict)
+                          and set(accessibility) == {"status", "checks"}
+                          and accessibility.get("status") == "passed"
+                          and string_list(accessibility.get("checks"), allow_empty=False)
+                          and set(accessibility["checks"])
+                          == RECEIPT_ACCESSIBILITY_CHECKS
+                          and len(accessibility["checks"])
+                          == len(RECEIPT_ACCESSIBILITY_CHECKS)
+                      ):
+                          receipt_errors.append(
+                              "accessibility_results must contain passed status "
+                              "and the exact required checks"
+                          )
+
+                      failures = candidate.get("failures")
+                      if not string_list(failures, allow_empty=True):
+                          receipt_errors.append("failures must be a string list")
+                      elif failures:
+                          receipt_errors.append(
+                              "failures must be empty for successful evidence"
+                          )
+
+                      unresolved = candidate.get("unresolved_visual_questions")
+                      if not string_list(unresolved, allow_empty=True):
+                          receipt_errors.append(
+                              "unresolved_visual_questions must be a string list"
+                          )
+
+                      if not receipt_errors:
+                          receipt = candidate
+          else:
+              receipt_errors.append("receipt file is missing or empty")
+
+          files = [
+              path
+              for path in [junit_path, receipt_path]
+              if path.is_file() and path.stat().st_size > 0
+          ]
+          files.extend(traces)
+          files.extend(screenshots)
+
+          junit_summary = None
+          junit_valid = False
+          executed_nodeids = []
+          junit_node_results = {}
+          junit_inventory_errors = []
+          if junit_path.is_file():
+              try:
+                  root = ET.parse(junit_path).getroot()
+              except (OSError, ET.ParseError) as exc:
+                  junit_inventory_errors.append(f"JUnit is not valid XML: {exc}")
+              else:
+                  suites = (
+                      [root]
+                      if root.tag == "testsuite"
+                      else list(root.findall("testsuite"))
+                  )
+                  junit_summary = {
+                      key: sum(int(suite.attrib.get(key, "0")) for suite in suites)
+                      for key in ("tests", "failures", "errors", "skipped")
+                  }
+                  testcases = list(root.findall(".//testcase"))
+                  observed_nodeids = [
+                      (
+                          f"{RECEIPT_TEST_MODULE}::{case.attrib.get('name', '')}"
+                          if case.attrib.get("classname")
+                          == RECEIPT_TEST_CLASSNAME
+                          else (
+                              f"{case.attrib.get('classname', '<missing-classname>')}::"
+                              f"{case.attrib.get('name', '<missing-name>')}"
+                          )
+                      )
+                      for case in testcases
+                  ]
+                  counts = Counter(observed_nodeids)
+                  duplicates = sorted(
+                      nodeid for nodeid, count in counts.items() if count > 1
+                  )
+                  missing_nodeids = sorted(
+                      set(REQUIRED_NODEIDS) - set(observed_nodeids)
+                  )
+                  unexpected_nodeids = sorted(
+                      set(observed_nodeids) - set(REQUIRED_NODEIDS)
+                  )
+                  if duplicates:
+                      junit_inventory_errors.append(
+                          "required Overview journey nodeids are duplicated: "
+                          + ", ".join(duplicates)
+                      )
+                  if missing_nodeids or unexpected_nodeids:
+                      junit_inventory_errors.append(
+                          "required Overview journey nodeids mismatch: "
+                          f"missing={missing_nodeids} "
+                          f"unexpected={unexpected_nodeids}"
+                      )
+                  if junit_summary["tests"] != len(testcases):
+                      junit_inventory_errors.append(
+                          "JUnit aggregate/testcase count mismatch: "
+                          f"aggregate={junit_summary['tests']} "
+                          f"testcases={len(testcases)}"
+                      )
+                  for nodeid in REQUIRED_NODEIDS:
+                      matches = [
+                          case
+                          for observed, case in zip(
+                              observed_nodeids, testcases, strict=True
+                          )
+                          if observed == nodeid
+                      ]
+                      collected = len(matches) == 1
+                      skipped = collected and matches[0].find("skipped") is not None
+                      executed = collected and not skipped
+                      passed = (
+                          executed
+                          and matches[0].find("failure") is None
+                          and matches[0].find("error") is None
+                      )
+                      junit_node_results[nodeid] = {
+                          "collected": collected,
+                          "executed": executed,
+                          "passed": passed,
+                          "skipped": skipped,
+                      }
+                      if executed:
+                          executed_nodeids.append(nodeid)
+                  junit_valid = (
+                      not junit_inventory_errors
+                      and junit_summary["tests"] == len(REQUIRED_NODEIDS)
+                      and junit_summary["failures"] == 0
+                      and junit_summary["errors"] == 0
+                      and junit_summary["skipped"] == 0
+                      and all(
+                          result
+                          == {
+                              "collected": True,
+                              "executed": True,
+                              "passed": True,
+                              "skipped": False,
+                          }
+                          for result in junit_node_results.values()
+                      )
+                  )
+          else:
+              junit_inventory_errors.append("JUnit file is missing")
+
+          missing = []
+          if not junit_valid:
+              missing.append("junit")
+          if receipt_errors:
+              missing.append("receipt")
+          if not traces:
+              missing.append("trace")
+          if not screenshots:
+              missing.append("screenshot")
+
+          payload = {
+              "artifact_name": f"devui-overview-browser-exact-{github_sha}",
+              "checkout_sha": checkout_sha,
+              "github_ref": os.environ["GITHUB_REF"],
+              "github_sha": github_sha,
+              "journey_outcome": os.environ["DEVUI_OVERVIEW_JOURNEY_OUTCOME"],
+              "junit": junit_summary,
+              "required_nodeids": list(REQUIRED_NODEIDS),
+              "executed_nodeids": executed_nodeids,
+              "junit_node_results": junit_node_results,
+              "junit_inventory_errors": junit_inventory_errors,
+              "receipt": receipt,
+              "receipt_validation_errors": receipt_errors,
+              "missing_evidence": missing,
+              "files": [
+                  {
+                      "path": str(path.relative_to(evidence_dir)),
+                      "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+                  }
+                  for path in sorted(files)
+              ],
+          }
+          manifest_path.write_text(
+              json.dumps(payload, indent=2, sort_keys=True) + "\n",
+              encoding="utf-8",
+          )
+
+          if checkout_sha != github_sha:
+              raise SystemExit(
+                  f"exact-ref mismatch: checkout={checkout_sha} github={github_sha}"
+              )
+          if payload["journey_outcome"] == "success" and receipt_errors:
+              raise SystemExit(
+                  "successful Overview journeys have invalid receipt: "
+                  + "; ".join(receipt_errors)
+              )
+          if payload["journey_outcome"] == "success" and junit_inventory_errors:
+              raise SystemExit(
+                  "successful Overview journeys have invalid JUnit inventory: "
+                  + "; ".join(junit_inventory_errors)
+              )
+          if payload["journey_outcome"] == "success" and missing:
+              raise SystemExit(
+                  "successful Overview journeys lack required evidence: "
+                  + ", ".join(missing)
+              )
+          PY
+
+      - name: Upload exact-SHA Overview browser evidence
+        if: ${{ always() && github.event_name == 'workflow_dispatch' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: devui-overview-browser-exact-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/devui-overview/junit.xml
+            ${{ runner.temp }}/devui-overview/manifest.json
+            ${{ runner.temp }}/devui-overview/receipts/**
+            ${{ runner.temp }}/devui-overview/traces/**
+            ${{ runner.temp }}/devui-overview/screenshots/**
+          if-no-files-found: error

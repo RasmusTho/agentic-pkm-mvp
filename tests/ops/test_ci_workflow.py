@@ -1,6 +1,13 @@
 from __future__ import annotations
 
+import json
+import os
 from pathlib import Path
+import re
+import subprocess
+import sys
+
+import yaml
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -12,10 +19,53 @@ IMPORT_LINTER_WORKFLOW = WORKFLOWS_DIR / "import-linter.yaml"
 INTEGRATION_NIGHTLY_WORKFLOW = WORKFLOWS_DIR / "integration-nightly.yaml"
 ARCHITECTURE_CI_WORKFLOW = WORKFLOWS_DIR / "architecture-ci.yaml"
 FAILURE_CONTEXT_WORKFLOW = WORKFLOWS_DIR / "pr-ci-failure-context.yml"
+OVERVIEW_JOURNEY_MODULE = "tests/companion_ui/test_devui_overview_journeys.py"
+OVERVIEW_REQUIRED_NODEIDS = (
+    f"{OVERVIEW_JOURNEY_MODULE}::"
+    "test_real_gateway_overview_focus_return_journey_preserves_subject_context_and_sha",
+    f"{OVERVIEW_JOURNEY_MODULE}::"
+    "test_focus_api_failure_renders_honest_visual_error_without_url_probing",
+    f"{OVERVIEW_JOURNEY_MODULE}::"
+    "test_connected_shell_freezes_server_identity_selector_and_aria_contract",
+    f"{OVERVIEW_JOURNEY_MODULE}::"
+    "test_connected_shell_renders_full_server_state_matrix_without_reclassification",
+    f"{OVERVIEW_JOURNEY_MODULE}::"
+    "test_gateway_shell_is_safe_accessible_no_egress_and_effect_free",
+)
 
 
 def _smoke_text() -> str:
     return CI_SMOKE_WORKFLOW.read_text(encoding="utf-8")
+
+
+def _browser_text() -> str:
+    return BROWSER_WORKFLOW.read_text(encoding="utf-8")
+
+
+def _workflow_step(workflow: str, name: str, next_name: str | None = None) -> str:
+    start = workflow.index(f"- name: {name}")
+    if next_name is None:
+        return workflow[start:]
+    return workflow[start : workflow.index(f"- name: {next_name}", start)]
+
+
+def _workflow_run(name: str) -> str:
+    return _browser_step(name)["run"]
+
+
+def _browser_job() -> dict:
+    workflow = yaml.safe_load(_browser_text())
+    return workflow["jobs"]["companion-ui-browser-runtime"]
+
+
+def _browser_step(name: str) -> dict:
+    return next(step for step in _browser_job()["steps"] if step.get("name") == name)
+
+
+def _python_heredoc(script: str) -> str:
+    match = re.search(r"<<'PY'\n(?P<body>.*?)\nPY(?:\n|$)", script, re.DOTALL)
+    assert match is not None
+    return match.group("body")
 
 
 def _unit_tests_job_text() -> str:
@@ -227,6 +277,514 @@ def test_dedicated_subsystem_workflows_have_path_filters_and_browser_runs_post_m
     assert "'Dockerfile'" in image
     assert "paths:" in import_linter
     assert "'app/**'" in import_linter
+
+
+def test_browser_runtime_supports_exact_ref_dispatch_without_pull_request_trigger() -> None:
+    browser = _browser_text()
+    triggers = browser[: browser.index("concurrency:")]
+    checkout = _workflow_step(browser, "Checkout", "Setup Python")
+
+    assert "push:" in triggers
+    assert "branches: [main]" in triggers
+    assert "workflow_dispatch:" in triggers
+    assert "pull_request:" not in triggers
+    assert "ref: ${{ github.sha }}" in checkout
+
+    job = _browser_job()
+    job_without_steps = {key: value for key, value in job.items() if key != "steps"}
+    assert "${{ runner." not in json.dumps(job_without_steps), (
+        "runner context is unavailable while jobs.<job_id>.env is evaluated"
+    )
+    journey_env = _browser_step("Run exact-ref Overview browser journeys")["env"]
+    manifest_env = _browser_step("Build exact-SHA Overview evidence manifest")["env"]
+    expected_runner_temp_env = {
+        "DEVUI_OVERVIEW_EVIDENCE_DIR": "${{ runner.temp }}/devui-overview",
+        "DEVUI_OVERVIEW_JUNIT": "${{ runner.temp }}/devui-overview/junit.xml",
+        "DEVUI_OVERVIEW_RECEIPT": (
+            "${{ runner.temp }}/devui-overview/receipts/"
+            "devui-overview-browser-accessibility.v1.json"
+        ),
+        "DEVUI_OVERVIEW_TRACE_DIR": "${{ runner.temp }}/devui-overview/traces",
+        "DEVUI_OVERVIEW_SCREENSHOT_DIR": (
+            "${{ runner.temp }}/devui-overview/screenshots"
+        ),
+    }
+    assert journey_env == expected_runner_temp_env
+    assert manifest_env == expected_runner_temp_env | {
+        "DEVUI_OVERVIEW_MANIFEST": "${{ runner.temp }}/devui-overview/manifest.json",
+        "DEVUI_OVERVIEW_JOURNEY_OUTCOME": "${{ steps.overview-journeys.outcome }}",
+    }
+    assert "${{ runner.temp }}" in _browser_step(
+        "Upload exact-SHA Overview browser evidence"
+    )["with"]["path"]
+    for existing_blocking_module in (
+        "tests/companion_ui/test_runtime_unavailable_browser.py",
+        "tests/companion_ui/test_overlay_history_browser.py",
+        "tests/companion_ui/test_cockpit_journeys.py",
+    ):
+        assert f"pytest -q {existing_blocking_module}" in browser
+
+
+def test_browser_runtime_dispatch_requires_non_skipped_overview_journeys(
+    tmp_path: Path,
+) -> None:
+    step = _workflow_step(
+        _browser_text(),
+        "Run exact-ref Overview browser journeys",
+        "Run deterministic Companion UI browser-runtime tests",
+    )
+
+    assert "if: github.event_name == 'workflow_dispatch'" in step
+    assert "set -euo pipefail" in step
+    assert "test -f tests/companion_ui/test_devui_overview_journeys.py" in step
+    assert "--junitxml=\"$DEVUI_OVERVIEW_JUNIT\"" in step
+    assert "tests/companion_ui/test_devui_overview_journeys.py" in step
+    assert "required Overview journey collection is empty" in step
+    assert "required Overview journeys were skipped" in step
+    assert "required Overview journey nodeids mismatch" in step
+    assert "required Overview journey nodeids are duplicated" in step
+    for nodeid in OVERVIEW_REQUIRED_NODEIDS:
+        module, name = nodeid.split("::", maxsplit=1)
+        assert module in step
+        assert name in step
+    assert "\n        continue-on-error:" not in step
+
+    junit_guard = _python_heredoc(
+        _workflow_run("Run exact-ref Overview browser journeys")
+    )
+    junit_path = tmp_path / "junit.xml"
+
+    def junit_case(nodeid: str, *, skipped: bool = False) -> str:
+        module, name = nodeid.split("::", maxsplit=1)
+        classname = module.removesuffix(".py").replace("/", ".")
+        child = '<skipped message="not run"/>' if skipped else ""
+        return f'<testcase classname="{classname}" name="{name}">{child}</testcase>'
+
+    scenarios = (
+        ((), (), False, "collection is empty"),
+        (OVERVIEW_REQUIRED_NODEIDS[:-1], (), False, "nodeids mismatch"),
+        (
+            OVERVIEW_REQUIRED_NODEIDS[:-1]
+            + (f"{OVERVIEW_JOURNEY_MODULE}::test_renamed_required_journey",),
+            (),
+            False,
+            "nodeids mismatch",
+        ),
+        (
+            OVERVIEW_REQUIRED_NODEIDS + (OVERVIEW_REQUIRED_NODEIDS[0],),
+            (),
+            False,
+            "nodeids are duplicated",
+        ),
+        (
+            OVERVIEW_REQUIRED_NODEIDS
+            + (f"{OVERVIEW_JOURNEY_MODULE}::test_unmapped_extra_journey",),
+            (),
+            False,
+            "nodeids mismatch",
+        ),
+        (
+            OVERVIEW_REQUIRED_NODEIDS,
+            (OVERVIEW_REQUIRED_NODEIDS[-1],),
+            False,
+            "journeys were skipped",
+        ),
+        (OVERVIEW_REQUIRED_NODEIDS, (), True, ""),
+    )
+    for nodeids, skipped_nodeids, should_pass, expected_error in scenarios:
+        cases = "".join(
+            junit_case(nodeid, skipped=nodeid in skipped_nodeids)
+            for nodeid in nodeids
+        )
+        junit_path.write_text(
+            "<testsuites><testsuite "
+            f'tests="{len(nodeids)}" skipped="{len(skipped_nodeids)}" '
+            f'failures="0" errors="0">{cases}</testsuite></testsuites>\n',
+            encoding="utf-8",
+        )
+        result = subprocess.run(
+            [sys.executable, "-", str(junit_path)],
+            input=junit_guard,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        assert (result.returncode == 0) is should_pass
+        assert expected_error in result.stderr
+
+
+def test_browser_runtime_dispatch_uploads_exact_sha_overview_evidence(
+    tmp_path: Path,
+) -> None:
+    browser = _browser_text()
+    manifest = _workflow_step(
+        browser,
+        "Build exact-SHA Overview evidence manifest",
+        "Upload exact-SHA Overview browser evidence",
+    )
+    upload = _workflow_step(browser, "Upload exact-SHA Overview browser evidence")
+
+    assert '["git", "rev-parse", "HEAD"]' in manifest
+    assert "GITHUB_SHA" in manifest
+    assert 'missing.append("junit")' in manifest
+    assert 'missing.append("receipt")' in manifest
+    assert "path.stat().st_size > 0" in manifest
+    assert "json.loads(receipt_path.read_text" in manifest
+    for required_receipt_field in (
+        "contract_version",
+        "github_sha",
+        "test_module",
+        "required_nodeids",
+        "journey_assertions",
+        "fixture_versions",
+        "token_sha256",
+        "screenshots",
+        "accessibility_results",
+        "failures",
+        "unresolved_visual_questions",
+    ):
+        assert f'"{required_receipt_field}"' in manifest
+    assert "trace" in manifest
+    assert "screenshot" in manifest
+    assert "name: devui-overview-browser-exact-${{ github.sha }}" in upload
+    assert "${{ runner.temp }}/devui-overview/junit.xml" in upload
+    assert "${{ runner.temp }}/devui-overview/manifest.json" in upload
+    assert "${{ runner.temp }}/devui-overview/receipts/**" in upload
+    assert "${{ runner.temp }}/devui-overview/traces/**" in upload
+    assert "${{ runner.temp }}/devui-overview/screenshots/**" in upload
+    assert "if-no-files-found: error" in upload
+
+    evidence_dir = tmp_path / "devui-overview"
+    receipt_path = evidence_dir / "receipts" / "devui-overview-browser-accessibility.v1.json"
+    trace_path = evidence_dir / "traces" / "trace.zip"
+    screenshot_path = evidence_dir / "screenshots" / "overview.png"
+    junit_path = evidence_dir / "junit.xml"
+    for parent in (receipt_path.parent, trace_path.parent, screenshot_path.parent):
+        parent.mkdir(parents=True, exist_ok=True)
+    trace_path.write_bytes(b"trace")
+    screenshot_path.write_bytes(b"screenshot")
+
+    def write_junit(nodeids: tuple[str, ...] = OVERVIEW_REQUIRED_NODEIDS) -> None:
+        cases = []
+        for nodeid in nodeids:
+            module, name = nodeid.split("::", maxsplit=1)
+            classname = module.removesuffix(".py").replace("/", ".")
+            cases.append(f'<testcase classname="{classname}" name="{name}"/>')
+        junit_path.write_text(
+            "<testsuites><testsuite "
+            f'tests="{len(nodeids)}" failures="0" errors="0" skipped="0">'
+            + "".join(cases)
+            + "</testsuite></testsuites>\n",
+            encoding="utf-8",
+        )
+
+    write_junit()
+    head_sha = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=REPO_ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    manifest_path = evidence_dir / "manifest.json"
+    env = os.environ | {
+        "DEVUI_OVERVIEW_EVIDENCE_DIR": str(evidence_dir),
+        "DEVUI_OVERVIEW_JUNIT": str(junit_path),
+        "DEVUI_OVERVIEW_RECEIPT": str(receipt_path),
+        "DEVUI_OVERVIEW_TRACE_DIR": str(trace_path.parent),
+        "DEVUI_OVERVIEW_SCREENSHOT_DIR": str(screenshot_path.parent),
+        "DEVUI_OVERVIEW_MANIFEST": str(manifest_path),
+        "DEVUI_OVERVIEW_JOURNEY_OUTCOME": "success",
+        "GITHUB_REF": "refs/heads/codex/exact-ref-proof",
+        "GITHUB_SHA": head_sha,
+    }
+    manifest_run = _workflow_run("Build exact-SHA Overview evidence manifest").replace(
+        "python - <<'PY'", f'"{sys.executable}" - <<\'PY\'', 1
+    )
+
+    valid_receipt = {
+        "contract_version": "devui-overview-browser-accessibility.v1",
+        "github_sha": head_sha,
+        "test_module": OVERVIEW_JOURNEY_MODULE,
+        "required_nodeids": list(OVERVIEW_REQUIRED_NODEIDS),
+        "journey_assertions": {
+            nodeid: {
+                "url_assertions": "passed",
+                "network_assertions": "passed",
+                "status_assertions": "passed",
+                "page_errors": [],
+            }
+            for nodeid in OVERVIEW_REQUIRED_NODEIDS
+        },
+        "fixture_versions": {
+            "connected-overview-focus": "v1",
+            "hostile-source-state-matrix": "v1",
+        },
+        "token_sha256": (
+            "7d8cdd49f59061f895959159a08e82348e7e02eb8b8ba7426020a50c7fa915b1"
+        ),
+        "screenshots": ["screenshots/overview.png"],
+        "accessibility_results": {
+            "status": "passed",
+            "checks": [
+                "desktop",
+                "narrow",
+                "zoom-200",
+                "keyboard",
+                "screen-reader-name-focus-order",
+                "print",
+                "javascript-off",
+            ],
+        },
+        "failures": [],
+        "unresolved_visual_questions": [],
+    }
+
+    def run_manifest(receipt: dict, *, run_env: dict | None = None):
+        receipt_path.write_text(
+            json.dumps(receipt, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        return subprocess.run(
+            ["bash", "-c", manifest_run],
+            cwd=REPO_ROOT,
+            env=run_env or env,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+
+    result = run_manifest(valid_receipt)
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert payload["artifact_name"] == f"devui-overview-browser-exact-{head_sha}"
+    assert payload["checkout_sha"] == head_sha
+    assert payload["github_sha"] == head_sha
+    assert payload["missing_evidence"] == []
+    assert payload["receipt_validation_errors"] == []
+    assert payload["receipt"] == valid_receipt
+    assert payload["required_nodeids"] == list(OVERVIEW_REQUIRED_NODEIDS)
+    assert payload["executed_nodeids"] == list(OVERVIEW_REQUIRED_NODEIDS)
+    assert payload["junit_node_results"] == {
+        nodeid: {
+            "collected": True,
+            "executed": True,
+            "passed": True,
+            "skipped": False,
+        }
+        for nodeid in OVERVIEW_REQUIRED_NODEIDS
+    }
+    assert payload["junit_inventory_errors"] == []
+    assert {item["path"] for item in payload["files"]} == {
+        "junit.xml",
+        "receipts/devui-overview-browser-accessibility.v1.json",
+        "screenshots/overview.png",
+        "traces/trace.zip",
+    }
+
+    invalid_receipts = (
+        ({}, "missing keys="),
+        (
+            valid_receipt | {"contract_version": "foreign-receipt.v1"},
+            "contract_version mismatch",
+        ),
+        (
+            valid_receipt | {"github_sha": "0" * 40},
+            "github_sha mismatch",
+        ),
+        (
+            valid_receipt | {"test_module": "tests/companion_ui/test_other.py"},
+            "test_module mismatch",
+        ),
+        (
+            valid_receipt
+            | {"required_nodeids": list(OVERVIEW_REQUIRED_NODEIDS[:-1])},
+            "required_nodeids mismatch",
+        ),
+        (
+            valid_receipt
+            | {
+                "required_nodeids": list(OVERVIEW_REQUIRED_NODEIDS)
+                + [OVERVIEW_REQUIRED_NODEIDS[0]]
+            },
+            "required_nodeids mismatch",
+        ),
+        (
+            valid_receipt
+            | {
+                "journey_assertions": {
+                    **valid_receipt["journey_assertions"],
+                    f"{OVERVIEW_JOURNEY_MODULE}::test_unmapped_extra_journey": {
+                        "url_assertions": "passed",
+                        "network_assertions": "passed",
+                        "status_assertions": "passed",
+                        "page_errors": [],
+                    },
+                }
+            },
+            "journey_assertions nodeids mismatch",
+        ),
+        (
+            valid_receipt
+            | {
+                "journey_assertions": valid_receipt["journey_assertions"]
+                | {
+                    OVERVIEW_REQUIRED_NODEIDS[0]: {
+                        "url_assertions": "passed",
+                        "network_assertions": "passed",
+                        "status_assertions": "passed",
+                    }
+                }
+            },
+            "journey_assertions fields mismatch",
+        ),
+        (
+            valid_receipt
+            | {
+                "journey_assertions": valid_receipt["journey_assertions"]
+                | {
+                    OVERVIEW_REQUIRED_NODEIDS[0]: {
+                        "url_assertions": "passed",
+                        "network_assertions": "failed",
+                        "status_assertions": "passed",
+                        "page_errors": [],
+                    }
+                }
+            },
+            "journey_assertions must pass URL, network, and status",
+        ),
+        (
+            valid_receipt
+            | {
+                "journey_assertions": valid_receipt["journey_assertions"]
+                | {
+                    OVERVIEW_REQUIRED_NODEIDS[0]: {
+                        "url_assertions": "passed",
+                        "network_assertions": "passed",
+                        "status_assertions": "passed",
+                        "page_errors": ["console error"],
+                    }
+                }
+            },
+            "journey_assertions must report no page errors",
+        ),
+        (
+            valid_receipt | {"fixture_versions": {}},
+            "fixture_versions must name the exact required fixtures",
+        ),
+        (
+            valid_receipt | {"fixture_versions": {"foreign-fixture": "v1"}},
+            "fixture_versions must name the exact required fixtures",
+        ),
+        (
+            valid_receipt | {"token_sha256": "not-a-sha"},
+            "token_sha256 must match the binding token source",
+        ),
+        (
+            valid_receipt | {"token_sha256": "a" * 64},
+            "token_sha256 must match the binding token source",
+        ),
+        (
+            valid_receipt | {"screenshots": ["screenshots/foreign.png"]},
+            "screenshots do not match archived evidence",
+        ),
+        (
+            valid_receipt
+            | {
+                "accessibility_results": {
+                    "status": "failed",
+                    "checks": ["keyboard"],
+                }
+            },
+            "accessibility_results must contain passed status",
+        ),
+        (
+            valid_receipt
+            | {
+                "accessibility_results": {
+                    "status": "passed",
+                    "checks": ["keyboard"],
+                }
+            },
+            "accessibility_results must contain passed status",
+        ),
+        (
+            valid_receipt | {"failures": ["page error"]},
+            "failures must be empty for successful evidence",
+        ),
+        (
+            valid_receipt | {"unresolved_visual_questions": None},
+            "unresolved_visual_questions must be a string list",
+        ),
+    )
+    for invalid_receipt, expected_error in invalid_receipts:
+        invalid_result = run_manifest(invalid_receipt)
+        assert invalid_result.returncode != 0
+        assert expected_error in invalid_result.stderr
+
+    mismatch_result = run_manifest(
+        valid_receipt,
+        run_env=env | {"GITHUB_SHA": "0" * 40},
+    )
+    assert mismatch_result.returncode != 0
+    assert "exact-ref mismatch" in mismatch_result.stderr
+
+    write_junit(OVERVIEW_REQUIRED_NODEIDS[:-1])
+    missing_nodeid_result = run_manifest(valid_receipt)
+    assert missing_nodeid_result.returncode != 0
+    assert "required Overview journey nodeids mismatch" in missing_nodeid_result.stderr
+    write_junit()
+
+    screenshot_path.unlink()
+    missing_result = run_manifest(valid_receipt)
+    assert missing_result.returncode != 0
+    assert "screenshots do not match archived evidence" in missing_result.stderr
+
+
+def test_browser_runtime_exact_ref_contract_is_owner_documented() -> None:
+    strategy = (
+        REPO_ROOT / "docs" / "development" / "TEST_STRATEGY_HOT_PATH.md"
+    ).read_text(encoding="utf-8")
+    normalized_strategy = " ".join(strategy.split())
+
+    assert "#4836" in strategy
+    assert "workflow_dispatch" in strategy
+    assert ".github/workflows/browser-runtime.yml" in strategy
+    assert "${{ github.sha }}" in strategy
+    assert "ordinary PR unit CI does not provide" in normalized_strategy
+    for receipt_contract_term in (
+        "devui-overview-browser-accessibility.v1",
+        "github_sha",
+        "test-module identity",
+        "fixture versions",
+        "token_sha256",
+        "screenshot list",
+        "Accessibility results",
+        "failures",
+        "unresolved visual questions",
+        "validated receipt",
+    ):
+        assert receipt_contract_term in normalized_strategy
+    for exact_receipt_identity in (
+        "connected-overview-focus",
+        "hostile-source-state-matrix",
+        "7d8cdd49f59061f895959159a08e82348e7e02eb8b8ba7426020a50c7fa915b1",
+        "screen-reader name/focus order",
+        "JavaScript-off",
+    ):
+        assert exact_receipt_identity in normalized_strategy
+    for nodeid in OVERVIEW_REQUIRED_NODEIDS:
+        assert nodeid in normalized_strategy
+    for per_journey_dimension in (
+        "required_nodeids",
+        "journey_assertions",
+        "URL assertions",
+        "network assertions",
+        "status assertions",
+        "page errors",
+    ):
+        assert per_journey_dimension in normalized_strategy
+    assert "Runner-temporary paths are declared only at step scope" in normalized_strategy
 
 
 def test_legacy_smoke_workflow_is_retired_without_stale_references() -> None:
