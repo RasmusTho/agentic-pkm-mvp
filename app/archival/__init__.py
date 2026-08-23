@@ -3,6 +3,7 @@
 from app.archival.contracts import (
     AccessAuthority,
     ArchivalAdapter,
+    CleanupProof,
     ArtifactClass,
     ArtifactDescriptor,
     ArtifactIdentity,
@@ -11,6 +12,8 @@ from app.archival.contracts import (
     Generation,
     Liveness,
     LivenessState,
+    OperationBinding,
+    OperationRecord,
     OwnerAuthority,
     OpaqueReference,
     PolicyProfile,
@@ -30,6 +33,7 @@ from app.archival.transition import (
 __all__ = [
     "AccessAuthority",
     "ArchivalAdapter",
+    "CleanupProof",
     "ArtifactClass",
     "ArtifactDescriptor",
     "ArtifactIdentity",
@@ -38,6 +42,8 @@ __all__ = [
     "Generation",
     "Liveness",
     "LivenessState",
+    "OperationBinding",
+    "OperationRecord",
     "OwnerAuthority",
     "OpaqueReference",
     "PolicyProfile",

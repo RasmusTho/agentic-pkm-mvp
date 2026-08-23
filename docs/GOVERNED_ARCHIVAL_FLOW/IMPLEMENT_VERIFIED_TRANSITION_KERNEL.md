@@ -21,6 +21,11 @@ restore, cleanup, and liveness without owning artifact meaning or storage state.
 
 - Implement the provider-free transition service under `app/archival/` against GAF-01 adapter
   protocols.
+- Use only the published `ArchivalAdapter`; the kernel owns no private adapter protocol, operation
+  journal, concurrency lock, content bytes, artifact registry, or policy authority.
+- Require the owner adapter to atomically bind idempotency key, artifact identity, generation,
+  policy, source, and target before reservation or copy effects, then validate every effect and
+  loaded record against that immutable tuple.
 - Require destination reservation before bytes, owner-native durable receipt before activation,
   activation before source retirement, and a loud retryable state on every partial failure.
 - Bind every operation to artifact identity, owner-native generation, representation ID, policy
@@ -29,6 +34,9 @@ restore, cleanup, and liveness without owning artifact meaning or storage state.
   `unavailable`, and `conflict` without projecting a pending state as terminal success.
 - Implement a fake durable adapter and fault-injection harness that proves crash/retry ordering. No
   production adapter is wired in this task.
+- Reconcile initial, resumed, and after-effect uncertainty through owner-native operation,
+  representation, restore-receipt, and cleanup-proof readback. Unproved outcomes remain typed
+  pending or unavailable.
 
 ## Concretely
 
@@ -53,6 +61,20 @@ ordering would let each adapter recreate the same crash windows that HAR-04/HAR-
 - [ ] Fault injection at every stage preserves a readable source or a typed retryable pending state,
       and idempotent retry converges without duplicate terminal receipts.
       Verify: `tests/archival/test_transition_kernel.py::test_crash_matrix_preserves_source_and_retry_authority`
+- [ ] The immutable operation tuple is owner-bound before reservation/copy effects, and pre-receipt
+      retry reuses the same operation and reservation.
+      Verify: `tests/archival/test_transition_kernel.py::test_pre_receipt_fault_reuses_bound_operation_and_reservation`
+- [ ] Reservation, verification, receipt, and loaded-operation evidence must match the exact key,
+      artifact, generation, policy, source, and target before activation or source retirement.
+      Verify: `tests/archival/test_transition_kernel.py::test_wrong_binding_proof_cannot_activate_or_retire`
+- [ ] Initial, resumed, and after-effect faults reconcile through owner-native readback without
+      blind duplicate effects and remain typed pending or unavailable until terminal proof exists.
+      Verify: `tests/archival/test_transition_kernel.py::test_resumed_and_after_effect_faults_reconcile_through_readback`
+- [ ] First success and retry return the identical canonical completed `retired` receipt.
+      Verify: `tests/archival/test_transition_kernel.py::test_first_success_and_retry_return_identical_completed_receipt`
+- [ ] Concurrent same-key calls converge on one owner operation; incompatible competing bindings
+      return typed conflict before source retirement.
+      Verify: `tests/archival/test_transition_kernel.py::test_concurrent_same_key_and_competing_bindings_converge_or_conflict`
 - [ ] A stale generation, changed policy decision, or changed destination binding is refused before
       effect and cannot retire or erase the current generation.
       Verify: `tests/archival/test_transition_kernel.py::test_stale_generation_and_binding_fail_closed_before_effect`
@@ -62,6 +84,9 @@ ordering would let each adapter recreate the same crash windows that HAR-04/HAR-
 - [ ] Cleanup failure remains `erasure_pending` and blocks terminal erasure until the adapter proves
       all policy-required representations handled.
       Verify: `tests/archival/test_transition_kernel.py::test_cleanup_failure_cannot_project_terminal_erasure`
+- [ ] Restore receipts bind the exact authorized representation, and cleanup projects terminal
+      erasure only from exact owner-native all-representation proof.
+      Verify: `tests/archival/test_transition_kernel.py::test_restore_and_cleanup_require_exact_owner_native_proof`
 - [ ] The kernel stores no global artifact registry or content bytes and can reconstruct operation
       state only through owner-native adapter queries and receipts.
       Verify: `tests/architecture/test_governed_archival_contract.py::test_transition_kernel_has_no_private_persistence_or_content_store`

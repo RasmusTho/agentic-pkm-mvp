@@ -1,11 +1,11 @@
-State: Enabling contract for GAF-01; no production adapter, persistence migration, backend, or generalized archival lifecycle is wired by this document.
+State: Enabling current contract for GAF-01/GAF-02; no production adapter, persistence migration, backend, or generalized archival lifecycle is wired by this document.
 Doc role: Cross-owner contract overlay
 Authority: Defines only the provider-free values and adapter seam for governed archival flow. It is subordinate to HKA artifact authority, SIP identity/provenance, GOV policy and access decisions, PDM storage mechanics, DRI derivative posture, and every class-specific owner contract.
 Owner: Product/Runtime architecture across HKA, SIP, GOV, PDM, DRI, and class adapters
 Temporal class: enabling current implementation / future adapter contract
 Review cadence: event-driven (adapter, policy, or liveness change)
 Source of truth: GAF-01 common vocabulary; class-specific owner state remains authoritative
-Last reviewed: 2026-08-22
+Last reviewed: 2026-08-23
 
 # Governed Archival Flow Contract
 
@@ -43,7 +43,13 @@ No profile inherits another profile's retention, revocation, or erasure authorit
 
 ## Adapter seam
 
-`ArchivalAdapter` is a protocol, not a runtime service. A later owner-native adapter provides enumerate and resolve; authorize read; reserve a representation; verify; activate; retire; restore; erase or revoke where its policy allows; and read-only doctor/reconcile. The protocol does not select a backend, allocate a database, write a receipt, or authorize a caller itself.
+`ArchivalAdapter` is the single public protocol used by both the transition kernel and later owner-native adapters; the kernel has no second private adapter seam. The adapter provides enumerate and resolve; authorize read; atomically bind and read an operation journal; reserve and copy a representation; verify; durably receipt; activate; retire; complete; restore with exact receipt readback; cleanup with all-representation proof readback; and read-only doctor/reconcile. The protocol does not select a backend, allocate a database, authorize a caller itself, or move owner state into the kernel.
+
+Before reservation or copy can have an effect, `OperationBinding` durably binds one idempotency key to the exact artifact identity, owner generation, policy profile, source representation, and target representation. A same-key call may resume only that immutable tuple. An incompatible same-key or competing source binding returns typed conflict before source retirement; atomic exclusion and durable operation readback remain owner-adapter responsibilities rather than a kernel lock or registry.
+
+Every reservation, verification, receipt, activated representation, retired representation, and loaded operation is checked against the complete binding before the next authority-changing effect. Initial and resumed uncertainty is reconciled through owner-native operation and representation readback and projects typed `transition_pending` or `unavailable` rather than blind replay or false success. Completion stores and returns one canonical `retired` receipt, so first success and retry expose identical terminal evidence.
+
+Restore authorization names the exact representation and terminal restore requires an exact owner-native restore receipt and readback. Cleanup may project `erased` only from an owner-native `CleanupProof` that matches the artifact, generation, policy, and complete set of policy-required representations; missing, partial, or contradictory proof remains `erasure_pending` or `unavailable`.
 
 Every adapter MUST use the owner's production read gate for normal reads and restore. It MUST retain a readable authoritative representation or a loud retryable state when reservation, verification, activation, retirement, or external cleanup is incomplete.
 

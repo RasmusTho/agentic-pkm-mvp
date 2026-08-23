@@ -370,6 +370,80 @@ class ArchivalReceipt:
 
 
 @dataclass(frozen=True)
+class OperationBinding:
+    """Immutable owner-journal identity established before transition effects."""
+
+    idempotency_key: str
+    artifact: ArtifactIdentity
+    generation: Generation
+    policy: PolicyProfile
+    source: RepresentationRef
+    target: RepresentationRef
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.idempotency_key, str) or not self.idempotency_key:
+            raise ValueError("idempotency_key must be a non-empty string")
+        _require_concrete_contract(self.artifact, ArtifactIdentity, "artifact")
+        _require_concrete_contract(self.generation, Generation, "generation")
+        _require_concrete_contract(self.policy, PolicyProfile, "policy")
+        _require_concrete_contract(self.source, RepresentationRef, "source")
+        _require_concrete_contract(self.target, RepresentationRef, "target")
+
+
+@dataclass(frozen=True)
+class OperationRecord:
+    """Owner-native transition-journal readback for one immutable binding."""
+
+    binding: OperationBinding
+    reservation: RepresentationReservation | None = None
+    copied: bool = False
+    verification: VerificationResult | None = None
+    receipt: ArchivalReceipt | None = None
+    activated: bool = False
+    retired: bool = False
+    completed: bool = False
+
+    def __post_init__(self) -> None:
+        _require_concrete_contract(self.binding, OperationBinding, "binding")
+        _require_optional_contract(
+            self.reservation, RepresentationReservation, "reservation"
+        )
+        _require_exact_bool(self.copied, "copied")
+        _require_optional_contract(
+            self.verification, VerificationResult, "verification"
+        )
+        _require_optional_contract(self.receipt, ArchivalReceipt, "receipt")
+        _require_exact_bool(self.activated, "activated")
+        _require_exact_bool(self.retired, "retired")
+        _require_exact_bool(self.completed, "completed")
+
+
+@dataclass(frozen=True)
+class CleanupProof:
+    """Owner-native proof that every policy-required representation was handled."""
+
+    artifact: ArtifactIdentity
+    generation: Generation
+    policy: PolicyProfile
+    representation_refs: tuple[RepresentationRef, ...]
+    complete: bool
+    evidence_ref: OpaqueReference
+
+    def __post_init__(self) -> None:
+        _require_concrete_contract(self.artifact, ArtifactIdentity, "artifact")
+        _require_concrete_contract(self.generation, Generation, "generation")
+        _require_concrete_contract(self.policy, PolicyProfile, "policy")
+        _require_reference_tuple(
+            self.representation_refs,
+            RepresentationRef,
+            "representation_refs",
+            non_empty=True,
+        )
+        _require_exact_bool(self.complete, "complete")
+        _require_opaque_reference(self.evidence_ref, "cleanup evidence_ref")
+
+
+@dataclass(frozen=True)
 class DoctorFinding:
     """Read-only reconciliation evidence; owners decide remediation."""
 
@@ -388,26 +462,69 @@ class DoctorFinding:
 
 
 class ArchivalAdapter(Protocol):
-    """Owner-native operations for later transition and class-adapter slices."""
+    """Owner-native journal, durability, access, restore, and cleanup seam."""
 
     def enumerate(self, artifact: ArtifactIdentity) -> Sequence[Representation]: ...
 
     def resolve(self, reference: RepresentationRef) -> Representation: ...
 
     def authorize_read(
-        self, artifact: ArtifactIdentity, authority: AccessAuthority
+        self, artifact: ArtifactDescriptor, authority: AccessAuthority
     ) -> ArchivalReceipt: ...
 
-    def reserve(self, artifact: ArtifactDescriptor, target: RepresentationRef) -> RepresentationReservation: ...
+    def bind_operation(self, binding: OperationBinding) -> OperationRecord: ...
 
-    def verify(self, reservation: RepresentationReservation) -> VerificationResult: ...
+    def read_operation(self, idempotency_key: str) -> OperationRecord | None: ...
 
-    def activate(self, reservation: RepresentationReservation, verification: VerificationResult) -> ArchivalReceipt: ...
+    def reserve(self, binding: OperationBinding) -> RepresentationReservation: ...
 
-    def retire(self, representation: Representation, receipt: ArchivalReceipt) -> ArchivalReceipt: ...
+    def copy(
+        self, binding: OperationBinding, reservation: RepresentationReservation
+    ) -> None: ...
 
-    def restore(self, artifact: ArtifactIdentity, authority: AccessAuthority) -> ArchivalReceipt: ...
+    def verify(
+        self, binding: OperationBinding, reservation: RepresentationReservation
+    ) -> VerificationResult: ...
 
-    def erase_or_revoke(self, artifact: ArtifactIdentity, authority: AccessAuthority) -> ArchivalReceipt: ...
+    def durable_receipt(
+        self,
+        binding: OperationBinding,
+        reservation: RepresentationReservation,
+        verification: VerificationResult,
+    ) -> ArchivalReceipt: ...
+
+    def activate(
+        self,
+        binding: OperationBinding,
+        reservation: RepresentationReservation,
+        verification: VerificationResult,
+        receipt: ArchivalReceipt,
+    ) -> None: ...
+
+    def retire(
+        self,
+        binding: OperationBinding,
+        representation: Representation,
+        receipt: ArchivalReceipt,
+    ) -> None: ...
+
+    def complete_operation(
+        self, binding: OperationBinding, receipt: ArchivalReceipt
+    ) -> ArchivalReceipt: ...
+
+    def restore(
+        self,
+        artifact: ArtifactDescriptor,
+        authority: AccessAuthority,
+        representation: RepresentationRef,
+    ) -> ArchivalReceipt: ...
+
+    def read_restore(
+        self, artifact: ArtifactDescriptor, representation: RepresentationRef
+    ) -> ArchivalReceipt | None: ...
+
+    def cleanup(self, artifact: ArtifactDescriptor) -> CleanupProof: ...
+
+    def read_cleanup(self, artifact: ArtifactDescriptor) -> CleanupProof | None: ...
 
     def doctor(self) -> Sequence[DoctorFinding]: ...
