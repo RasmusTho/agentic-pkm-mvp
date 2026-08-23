@@ -619,6 +619,66 @@ def test_class_adapter_identities_require_distinct_owner_namespaces() -> None:
         ArtifactIdentity(OwnerAuthority.CLASS_ADAPTER, OpaqueReference("heimdal", "object-42"))
 
 
+def test_class_adapter_identities_preserve_namespace() -> None:
+    identity = ArtifactIdentity(
+        OwnerAuthority.CLASS_ADAPTER,
+        OpaqueReference("adapter-native", "object-42"),
+        owner_namespace="retained-source",
+    )
+
+    assert identity.owner is OwnerAuthority.CLASS_ADAPTER
+    assert identity.owner_namespace == "retained-source"
+
+
+def test_class_adapter_namespace_collision_is_rejected() -> None:
+    heimdal_identity = ArtifactIdentity(
+        OwnerAuthority.CLASS_ADAPTER,
+        OpaqueReference("adapter-native", "object-42"),
+        owner_namespace="heimdal",
+    )
+    retained_source_identity = ArtifactIdentity(
+        OwnerAuthority.CLASS_ADAPTER,
+        OpaqueReference("adapter-native", "object-42"),
+        owner_namespace="retained-source",
+    )
+
+    assert heimdal_identity == ArtifactIdentity(
+        OwnerAuthority.CLASS_ADAPTER,
+        OpaqueReference("adapter-native", "object-42"),
+        owner_namespace="heimdal",
+    )
+    assert heimdal_identity != retained_source_identity
+
+
+def test_namespace_survives_reservation_and_receipt_identity() -> None:
+    identity = ArtifactIdentity(
+        OwnerAuthority.CLASS_ADAPTER,
+        OpaqueReference("adapter-native", "object-42"),
+        owner_namespace="retained-source",
+    )
+    generation = Generation(1)
+    reservation = RepresentationReservation(
+        identity,
+        RepresentationRef("archive", OpaqueReference("archive", "object-42")),
+        generation,
+        OpaqueReference("reservation", "reservation-42"),
+    )
+    receipt = ArchivalReceipt(
+        OpaqueReference("receipt", "receipt-42"),
+        identity,
+        generation,
+        TransitionStage.ACTIVE,
+        PolicyProfile.RETAINED_SOURCE,
+        Liveness(LivenessState.ACTIVE, OpaqueReference("liveness", "object-42")),
+        (),
+        (),
+    )
+
+    assert reservation.artifact.owner_namespace == "retained-source"
+    assert receipt.artifact.owner_namespace == "retained-source"
+    assert reservation.artifact == receipt.artifact == identity
+
+
 def test_policy_profiles_keep_class_specific_terminal_outcomes() -> None:
     outcomes = {profile: profile.terminal_outcome for profile in PolicyProfile}
 
