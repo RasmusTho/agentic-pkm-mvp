@@ -609,6 +609,16 @@ binds its result to the exact active representation under the relocation/
 retention fence, so a concurrent hot-to-cold transition cannot turn a hot read
 into a false cold-restore proof.
 
+The production `HeimdalRawMediaAdapter` now maps that same owner-native path
+to the public governed archival transition contract for every modality already
+admitted by media ingress: audio, image, video, and document originals. The
+adapter preserves the raw record id, content/capture provenance, exact raw
+generation, opaque representation ids, HAR-04 manifests, and existing read
+receipts; it adds no registry, backend, cleanup queue, retention decision, or
+archive-browsing surface. This is the delivered raw-evidence adapter only. It
+does not claim retained-source, HKA recovery, derivative, or generalized
+cross-class archival support.
+
 Hard retention and consent revocation both call
 `raw_liveness.governed_delete_raw_record`. The mechanism removes hot/cold
 registry rows and raw identity under the shared generation fence, then drains

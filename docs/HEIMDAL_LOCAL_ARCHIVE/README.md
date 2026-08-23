@@ -1,6 +1,6 @@
-State: Specification directory (design + bounded slices). HAR-01 through HAR-05 are delivered; parent real-channel acceptance remains pending. Defines a local, encrypted cold tier for Heimdal raw audio; it does not change the existing retention bound or claim cloud/off-site durability.
+State: Specification directory (design + bounded slices). HAR-01 through HAR-05 and the GAF-03 raw-media adapter are delivered; parent real-channel acceptance remains pending. Defines a local, encrypted cold tier for admitted Heimdal raw media; it does not change the existing retention bound or claim cloud/off-site durability.
 Doc role: Capability specification (feature-breakdown lane)
-Authority: Owns the proposed local raw-audio archive design. Subordinate to `docs/HEIMDAL/OWNER_DECISIONS.md :: R-RETENTION`, `docs/HEIMDAL/FABLE_COMPANION.md` for the raw-store boundary, and `docs/EVENTS.md` for current raw-store behavior.
+Authority: Owns the local raw-media archive design. Subordinate to `docs/HEIMDAL/OWNER_DECISIONS.md :: R-RETENTION`, `docs/HEIMDAL/FABLE_COMPANION.md` for the raw-store boundary, and `docs/EVENTS.md` for current raw-store behavior.
 Owner: Architecture / product
 Temporal class: strategic
 Review cadence: event-driven (task merge, retention change, storage-device change, or restore drill)
@@ -11,9 +11,9 @@ Last reviewed: 2026-08-22
 
 ## Outcome
 
-Keep raw audio on the normal encrypted Heimdal hot store for the first **seven days**, then make a
+Keep admitted raw media (audio, image, video, and document originals) on the normal encrypted Heimdal hot store for the first **seven days**, then make a
 verified cold copy on a locally attached external disk. The external disk hosts an **encrypted APFS
-sparsebundle**; it is not reformatted, and raw audio is never written directly to an unencrypted
+sparsebundle**; it is not reformatted, and raw media is never written directly to an unencrypted
 volume or iCloud. The raw-store encryption key stays outside both the database and the archive volume
 through Local Secret Provisioning.
 
@@ -52,7 +52,7 @@ already enforces irreversible deletion.
 
 ## Cross-task invariants
 
-- **INV-HAR-1 — raw audio never enters iCloud as archive storage or an unencrypted external volume.**
+- **INV-HAR-1 — raw media never enters iCloud as archive storage or an unencrypted external volume.**
   The existing accepted iCloud pre-seam capture inbox remains ingress only; archive writes target the
   mounted encrypted sparsebundle only.
 - **INV-HAR-2 — archive is not an authority fork.** An archive manifest refers to the existing raw
@@ -74,7 +74,7 @@ already enforces irreversible deletion.
   locations without disclosing audio paths or content.
 - **INV-HAR-5 — restore remains gated.** Cold archive access reuses the raw-read allowlist and receipt
   discipline and binds proof to the exact representation read under the shared fence; mounting an
-  archive does not make raw audio generally readable.
+  archive does not make raw media generally readable.
 
 HAR-04's runtime producer is the bounded `python -m app.cli heimdal archive-eligible` pass. A host
 scheduler may invoke it repeatedly; the pass serializes against another invocation through the raw
@@ -117,7 +117,7 @@ archive as supported behavior.
 
 ## Out of scope
 
-Changing the hard-retention duration, indefinite raw-audio retention, cloud/off-site backup,
+Changing the hard-retention duration, indefinite raw-media retention, cloud/off-site backup,
 unencrypted external media, Mimer storage of audio, DB disaster recovery (#2965), key rotation, and
 automatic external-drive purchases or replacement.
 

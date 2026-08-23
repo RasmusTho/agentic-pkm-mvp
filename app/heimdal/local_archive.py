@@ -16,7 +16,7 @@ import json
 import os
 from pathlib import Path
 import re
-from typing import Callable, Optional
+from typing import Callable, Optional, cast
 from uuid import UUID, uuid4
 
 from app.heimdal import raw_liveness, raw_read_gate, raw_store
@@ -299,7 +299,7 @@ def _pending_cold(
     return candidate
 
 
-def relocate_raw_record(
+def _relocate_raw_record_owner_native(
     record: RawRecord,
     *,
     archive_root: Path,
@@ -309,6 +309,8 @@ def relocate_raw_record(
     vault_root: Optional[Path] = None,
     key: Optional[bytes] = None,
     volume_ready: Callable[[], ArchiveVolumeReady],
+    requested_representation_id: str | None = None,
+    requested_receipt_id: str | None = None,
 ) -> ArchiveResult:
     """Copy, verify, receipt, then activate cold; fail closed on every error."""
     reference = now or datetime.now(timezone.utc)
@@ -354,8 +356,14 @@ def relocate_raw_record(
             archive_generation=volume_proof.archive_generation,
             raw_generation=mutation_authority.generation,
         )
-        representation_id = pending.id if pending is not None else str(uuid4())
-        receipt_id = str(uuid4())
+        representation_id = (
+            pending.id
+            if pending is not None
+            else requested_representation_id or str(uuid4())
+        )
+        if requested_representation_id is not None and representation_id != requested_representation_id:
+            raise ArchiveDegradedError("archive_pending_state_invalid")
+        receipt_id = requested_receipt_id or str(uuid4())
         location_ref = raw_store._cold_location_ref(  # noqa: SLF001
             archive_ref,
             representation_id,
@@ -464,6 +472,79 @@ def relocate_raw_record(
             raise failure
 
 
+def relocate_raw_record(
+    record: RawRecord,
+    *,
+    archive_root: Path,
+    archive_ref: str,
+    now: Optional[datetime] = None,
+    retention_window_days: Optional[int] = None,
+    vault_root: Optional[Path] = None,
+    key: Optional[bytes] = None,
+    volume_ready: Callable[[], ArchiveVolumeReady],
+) -> ArchiveResult:
+    """Run HAR-04's owner-native atomic relocation through the public GAF kernel."""
+
+    from app.archival.adapters.heimdal import HeimdalRawMediaAdapter
+    from app.archival.contracts import TransitionStage
+    from app.archival.transition import ArchivalTransitionKernel
+
+    representations = raw_store.all_raw_representations(record.id)
+    hot = next(
+        (
+            item
+            for item in representations
+            if item.active and item.storage_kind == "postgres_hot"
+        ),
+        None,
+    )
+    if hot is None:
+        raise ArchiveDegradedError("hot_representation_unavailable")
+    pending = [
+        item
+        for item in representations
+        if item.storage_kind == ARCHIVE_STORAGE_KIND and not item.active
+    ]
+    if len(pending) > 1:
+        raise ArchiveDegradedError("archive_pending_state_invalid")
+    target_id = pending[0].id if pending else str(uuid4())
+
+    def owner_action(representation_id: str, receipt_id: str) -> ArchiveResult:
+        return _relocate_raw_record_owner_native(
+            record,
+            archive_root=archive_root,
+            archive_ref=archive_ref,
+            now=now,
+            retention_window_days=retention_window_days,
+            vault_root=vault_root,
+            key=key,
+            volume_ready=volume_ready,
+            requested_representation_id=representation_id,
+            requested_receipt_id=receipt_id,
+        )
+
+    adapter = HeimdalRawMediaAdapter(
+        record,
+        generation=hot.raw_generation,
+        archive_action=owner_action,
+    )
+    source = adapter.ref_for(hot)
+    target = adapter.ref_for(target_id)
+    idempotency_key = f"heimdal-raw-archive:{record.id}:{hot.raw_generation}:{target_id}"
+    outcome = ArchivalTransitionKernel(adapter).transition(
+        adapter.artifact,
+        source,
+        target,
+        idempotency_key,
+    )
+    if outcome.stage is not TransitionStage.RETIRED or adapter.archive_result is None:
+        operation = adapter.read_operation(idempotency_key)
+        if operation is not None and operation.completed and adapter.archive_result is not None:
+            return cast(ArchiveResult, adapter.archive_result)
+        raise ArchiveDegradedError(adapter.failure_reason or "archive_relocation_failed")
+    return cast(ArchiveResult, adapter.archive_result)
+
+
 def _pass_receipt(
     *,
     ran: bool,
@@ -509,21 +590,49 @@ def run_restore_drill(
     receipt fields, never plaintext or a filesystem path.
     """
 
-    restored = raw_read_gate.read_raw_record(
-        raw_ref,
-        reader=reader,
-        purpose="heimdal_archive_restore_drill",
-        key=key,
-    )
-    if restored.storage_kind != ARCHIVE_STORAGE_KIND:
+    from app.archival.adapters.heimdal import HeimdalRawMediaAdapter
+    from app.archival.contracts import AccessAuthority, OpaqueReference, OwnerAuthority
+    from app.archival.transition import ArchivalTransitionKernel
+
+    record_id = raw_read_gate._record_id_from_raw_ref(raw_ref)  # noqa: SLF001
+    record = raw_store.resolve_active_raw_record(record_id)
+    if record is None:
+        raise raw_read_gate.RawReadRefusedError(
+            f"raw_ref {raw_ref!r} does not resolve to active raw evidence"
+        )
+    active = [item for item in raw_store.all_raw_representations(record.id) if item.active]
+    if len(active) != 1:
         raise ArchiveDegradedError("archived_representation_unavailable")
-    if raw_store.compute_raw_content_identity(restored.plaintext) != restored.receipt.content_identity:
+    adapter = HeimdalRawMediaAdapter(record, generation=active[0].raw_generation)
+    authority = AccessAuthority(
+        OwnerAuthority.CLASS_ADAPTER,
+        OpaqueReference("heimdal-reader", reader),
+    )
+    outcome = ArchivalTransitionKernel(adapter).restore(
+        adapter.artifact,
+        authority,
+        adapter.ref_for(active[0]),
+    )
+    if outcome.receipt is None:
+        raise ArchiveDegradedError("restore_identity_mismatch")
+    if adapter.restored_storage_kind != ARCHIVE_STORAGE_KIND:
+        raise ArchiveDegradedError("archived_representation_unavailable")
+    read_receipt_id = outcome.receipt.receipt_ref.token
+    owner_receipt = next(
+        (
+            receipt
+            for receipt in raw_read_gate.all_raw_read_receipts()
+            if receipt.id == read_receipt_id
+        ),
+        None,
+    )
+    if owner_receipt is None:
         raise ArchiveDegradedError("restore_identity_mismatch")
     return RestoreDrillReceipt(
         raw_ref=raw_ref,
-        content_identity=restored.receipt.content_identity,
-        read_receipt_id=restored.receipt.id,
-        verified_at=restored.receipt.read_at,
+        content_identity=owner_receipt.content_identity,
+        read_receipt_id=owner_receipt.id,
+        verified_at=owner_receipt.read_at,
     )
 
 

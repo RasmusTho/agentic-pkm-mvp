@@ -1,4 +1,4 @@
-State: Enabling current contract for GAF-01/GAF-02; no production adapter, persistence migration, backend, or generalized archival lifecycle is wired by this document.
+State: Enabling current contract with the GAF-03 Heimdal raw-media production adapter delivered; no persistence migration, new backend, central authority, or generalized cross-class archival lifecycle is wired by this document.
 Doc role: Cross-owner contract overlay
 Authority: Defines only the provider-free values and adapter seam for governed archival flow. It is subordinate to HKA artifact authority, SIP identity/provenance, GOV policy and access decisions, PDM storage mechanics, DRI derivative posture, and every class-specific owner contract.
 Owner: Product/Runtime architecture across HKA, SIP, GOV, PDM, DRI, and class adapters
