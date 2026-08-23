@@ -30,6 +30,7 @@ from app.archival.contracts import (
 
 
 class FaultStage(str, Enum):
+    AUTHORIZATION = "authorization"
     BINDING = "binding"
     BINDING_AFTER_EFFECT = "binding_after_effect"
     RESERVATION = "reservation"
@@ -245,12 +246,21 @@ class ArchivalTransitionKernel:
     ) -> TransitionResult:
         try:
             gate = self._adapter.authorize_read(artifact, authority)
-            if (
-                gate.artifact != artifact.identity
-                or gate.generation != artifact.generation
-                or representation not in gate.representation_refs
-            ):
-                return self._conflict("restore-authorization-binding-mismatch", gate)
+        except TransitionFailure:
+            return TransitionResult(
+                TransitionStage.RESTORE_PENDING,
+                Liveness(
+                    LivenessState.UNAVAILABLE,
+                    _evidence("restore-authorization-unavailable"),
+                ),
+            )
+        if (
+            gate.artifact != artifact.identity
+            or gate.generation != artifact.generation
+            or representation not in gate.representation_refs
+        ):
+            return self._conflict("restore-authorization-binding-mismatch", gate)
+        try:
             receipt = self._adapter.restore(artifact, authority, representation)
             self._validate_restore_receipt(artifact, representation, receipt)
             loaded = self._adapter.read_restore(artifact, representation)
@@ -283,7 +293,25 @@ class ArchivalTransitionKernel:
 
     def cleanup(self, artifact: ArtifactDescriptor) -> TransitionResult:
         try:
+            loaded = self._adapter.read_cleanup(artifact)
+        except TransitionFailure:
+            return self._unavailable("cleanup-readback-unavailable")
+        if loaded is not None:
+            try:
+                self._validate_cleanup_proof(artifact, None, loaded)
+            except TransitionConflict:
+                return self._cleanup_pending("cleanup-readback-mismatch")
+            return TransitionResult(
+                TransitionStage.ERASED,
+                Liveness(LivenessState.ERASED, loaded.evidence_ref),
+            )
+
+        try:
             expected = self._cleanup_scope(artifact)
+        except TransitionFailure:
+            return self._unavailable("cleanup-scope-unavailable")
+
+        try:
             proof = self._adapter.cleanup(artifact)
             self._validate_cleanup_proof(artifact, expected, proof)
             loaded = self._adapter.read_cleanup(artifact)
@@ -300,7 +328,6 @@ class ArchivalTransitionKernel:
             return self._cleanup_pending("cleanup-proof-mismatch")
         except TransitionFailure:
             try:
-                expected = self._cleanup_scope(artifact)
                 loaded = self._adapter.read_cleanup(artifact)
             except TransitionFailure:
                 return self._unavailable("cleanup-readback-unavailable")
@@ -502,7 +529,7 @@ class ArchivalTransitionKernel:
     @staticmethod
     def _validate_cleanup_proof(
         artifact: ArtifactDescriptor,
-        expected: tuple[RepresentationRef, ...],
+        expected: tuple[RepresentationRef, ...] | None,
         proof: CleanupProof,
     ) -> None:
         if (
@@ -511,7 +538,10 @@ class ArchivalTransitionKernel:
             or proof.policy is not artifact.policy_profile
             or not proof.complete
             or len(proof.representation_refs) != len(set(proof.representation_refs))
-            or set(proof.representation_refs) != set(expected)
+            or (
+                expected is not None
+                and set(proof.representation_refs) != set(expected)
+            )
         ):
             raise TransitionConflict("cleanup proof does not cover the exact owner scope")
 
@@ -654,6 +684,7 @@ class DurableFakeAdapter:
     ) -> ArchivalReceipt:
         del authority
         with self._lock:
+            self._fault(FaultStage.AUTHORIZATION)
             self.access_gate_called = True
             refs = tuple(
                 reference

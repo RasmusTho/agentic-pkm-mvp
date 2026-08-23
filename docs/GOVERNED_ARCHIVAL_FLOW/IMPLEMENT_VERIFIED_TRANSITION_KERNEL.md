@@ -85,8 +85,12 @@ ordering would let each adapter recreate the same crash windows that HAR-04/HAR-
       all policy-required representations handled.
       Verify: `tests/archival/test_transition_kernel.py::test_cleanup_failure_cannot_project_terminal_erasure`
 - [ ] Restore receipts bind the exact authorized representation, and cleanup projects terminal
-      erasure only from exact owner-native all-representation proof.
+      erasure only from exact owner-native all-representation proof. A current authorization
+      failure cannot reuse an older restore receipt, and cleanup retry reads durable proof before
+      live enumeration that successful cleanup may have emptied.
       Verify: `tests/archival/test_transition_kernel.py::test_restore_and_cleanup_require_exact_owner_native_proof`
+      Verify: `tests/archival/test_transition_kernel.py::test_restore_does_not_reuse_receipt_when_current_authorization_fails`
+      Verify: `tests/archival/test_transition_kernel.py::test_cleanup_retry_reads_durable_proof_before_live_enumeration`
 - [ ] The kernel stores no global artifact registry or content bytes and can reconstruct operation
       state only through owner-native adapter queries and receipts.
       Verify: `tests/architecture/test_governed_archival_contract.py::test_transition_kernel_has_no_private_persistence_or_content_store`

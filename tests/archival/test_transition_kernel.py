@@ -23,6 +23,7 @@ from app.archival import (
     Representation,
     RepresentationRef,
     TransitionStage,
+    TransitionFailure,
 )
 from app.archival.contracts import AccessAuthority, CleanupProof, Liveness
 
@@ -436,3 +437,64 @@ def test_restore_and_cleanup_require_exact_owner_native_proof() -> None:
     )
     inexact_result = ArchivalTransitionKernel(inexact).cleanup(descriptor)
     assert inexact_result.liveness.state is LivenessState.ERASURE_PENDING
+
+
+def test_restore_does_not_reuse_receipt_when_current_authorization_fails() -> None:
+    descriptor, source, _target, adapter, kernel = _fixture()
+    first_authority = AccessAuthority(
+        OwnerAuthority.GOV, OpaqueReference("grant", "restore-first")
+    )
+    current_authority = AccessAuthority(
+        OwnerAuthority.GOV, OpaqueReference("grant", "restore-current")
+    )
+    first = kernel.restore(descriptor, first_authority, source)
+    assert first.stage is TransitionStage.RESTORED
+
+    adapter.fail_once(FaultStage.AUTHORIZATION)
+    refused = kernel.restore(descriptor, current_authority, source)
+
+    assert refused.stage is not TransitionStage.RESTORED
+    assert refused.liveness.state in {
+        LivenessState.RESTORE_PENDING,
+        LivenessState.UNAVAILABLE,
+    }
+    assert refused.receipt is None
+
+
+def test_cleanup_retry_reads_durable_proof_before_live_enumeration() -> None:
+    class RemovingCleanupAdapter(DurableFakeAdapter):
+        def cleanup(self, artifact):  # type: ignore[no-untyped-def]
+            try:
+                proof = super().cleanup(artifact)
+            except TransitionFailure:
+                proof = self.read_cleanup(artifact)
+                if proof is not None:
+                    for reference in proof.representation_refs:
+                        self.representations.pop(reference, None)
+                raise
+            for reference in proof.representation_refs:
+                self.representations.pop(reference, None)
+            return proof
+
+    descriptor, source, _target, _adapter, _kernel = _fixture()
+    adapter = RemovingCleanupAdapter()
+    adapter.register_source(
+        Representation(
+            descriptor.identity,
+            source,
+            descriptor.generation,
+            TransitionStage.ACTIVE,
+            Liveness(LivenessState.ACTIVE, OpaqueReference("fixture", "live")),
+        )
+    )
+    kernel = ArchivalTransitionKernel(adapter)
+    adapter.fail_once(FaultStage.CLEANUP_AFTER_EFFECT)
+
+    first = kernel.cleanup(descriptor)
+    retried = kernel.cleanup(descriptor)
+
+    assert adapter.enumerate(descriptor.identity) == ()
+    assert first.stage is TransitionStage.ERASED
+    assert retried.stage is TransitionStage.ERASED
+    assert first.liveness == retried.liveness
+    assert adapter.effect_counts["cleanup"] == 1
