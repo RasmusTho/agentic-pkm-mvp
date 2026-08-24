@@ -33,6 +33,76 @@ def _receipt(state_dir: Path, root: Path) -> dict[str, object]:
     return build_receipt(state_dir=state_dir, participants=participants, reconciliation=report, actor="operator")
 
 
+def test_generate_bootstraps_absent_target_when_inventory_empty(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    state_dir, root = tmp_path / "state", tmp_path / "repo"
+    root.mkdir()
+    monkeypatch.chdir(root)
+
+    receipt = build_receipt(
+        state_dir=state_dir,
+        participants=[{"repository": "owner/repo", "root": str(root)}],
+        reconciliation=[],
+        actor="operator",
+    )
+    receipt_path = write_receipt(state_dir, receipt)
+
+    assert receipt_path.stat().st_mode & 0o777 == 0o600
+    assert not receipt_path.is_symlink()
+    assert receipt["legacy_store_inventory"] == []
+    assert receipt["reconciliation"] == []
+    assert receipt["target_store"]["record_count"] == 0
+    with sqlite3.connect(f"file:{state_dir / 'builderops.sqlite3'}?mode=ro", uri=True) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM builderops_records").fetchone()[0] == 0
+        assert conn.execute(
+            "SELECT value FROM builderops_meta WHERE key = 'host_store_cutover_v2'"
+        ).fetchone() is not None
+
+
+def test_generate_still_requires_non_empty_target_when_legacy_present(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    state_dir, root = tmp_path / "state", tmp_path / "repo"
+    legacy = root / "runtime" / "builderops" / "builderops.sqlite3"
+    legacy.parent.mkdir(parents=True)
+    SqliteBuilderOpsStore(legacy).initialize()
+    participants = [{"repository": "owner/repo", "root": str(root)}]
+    report = [{"path": str(legacy), "disposition": "retained"}]
+    monkeypatch.chdir(root)
+
+    with pytest.raises(CutoverEvidenceError, match="non-regular path"):
+        build_receipt(state_dir=state_dir, participants=participants, reconciliation=report, actor="operator")
+    SqliteBuilderOpsStore(state_dir / "builderops.sqlite3").initialize()
+    with pytest.raises(CutoverEvidenceError, match="target store is empty"):
+        build_receipt(state_dir=state_dir, participants=participants, reconciliation=report, actor="operator")
+
+
+def test_bootstrap_receipt_fails_on_later_legacy_store(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    state_dir, root = tmp_path / "state", tmp_path / "repo"
+    root.mkdir()
+    monkeypatch.chdir(root)
+    receipt = build_receipt(
+        state_dir=state_dir,
+        participants=[{"repository": "owner/repo", "root": str(root)}],
+        reconciliation=[],
+        actor="operator",
+    )
+    legacy = root / "runtime" / "builderops" / "builderops.sqlite3"
+    legacy.parent.mkdir(parents=True)
+    SqliteBuilderOpsStore(legacy).initialize()
+
+    with pytest.raises(CutoverEvidenceError, match="inventory is incomplete or stale"):
+        evidence.validate_receipt(
+            state_dir,
+            receipt,
+            host_id=config.current_host_id(),
+            user_id=config.current_user_id(),
+        )
+
+
 def _resign(receipt: dict[str, object]) -> None:
     receipt.pop("receipt_sha256", None)
     receipt["receipt_sha256"] = hashlib.sha256(json.dumps(receipt, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
