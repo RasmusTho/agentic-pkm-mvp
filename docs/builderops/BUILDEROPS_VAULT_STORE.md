@@ -110,7 +110,9 @@ python -m app.builderops builderops cutover-evidence generate \
 
 The ordered participant/repository/root list is the explicit inventory boundary. The producer
 recursively discovers every legacy store beneath those roots, binds its identity and disposition,
-the actual host and numeric user, one reconciliation epoch, and an already-existing non-empty target.
+the actual host and numeric user, one reconciliation epoch, and a reconciled target. When that
+inventory is empty, the producer may initialize and bind a zero-record host-stable target; when it
+is non-empty, the target must already be initialized and non-empty.
 Because this producer governs the implicit host-stable store, the group-level CLI `--db-path`
 override is rejected before inspection or mutation.
 The producer also applies the shared vault-confinement guard to the implicit target path before
@@ -217,47 +219,29 @@ selection.
 
 ### Bootstrapping the receipt on a host with no host-stable store
 
-`cutover-evidence generate` verifies an existing target; it never creates one. `build_receipt`
-inspects the implicit target with `inspect_target` and fails closed with `target store is empty`
-unless that database already exists, is an initialized BuilderOps database, and holds at least one
-record. The producer always resolves the target from the default state directory:
+`cutover-evidence generate` has one narrow fresh-host bootstrap: when the declared participant roots
+contain no legacy stores, it initializes the implicit target and binds its zero-record state in the
+receipt. `build_receipt` otherwise inspects the implicit target and fails closed with `target store
+is empty` unless the database already exists, is an initialized BuilderOps database, and holds at
+least one record. The producer always resolves the target from the default state directory:
 `BUILDEROPS_STATE_DIR` does not redirect it, and the CLI rejects `--db-path` before inspection.
 
-Because implicit selection is exactly what the guard blocks, the target cannot be created through
-the implicit path. On a host with no host-stable store yet, the receipt route is therefore
-override-first — the override is a prerequisite of the receipt, not an alternative to it:
+With an empty legacy inventory, the receipt route can bootstrap a fresh host without an override:
 
 ```bash
-# 1. Pin the store explicitly at the default state directory, because that is the only target the
-#    producer will inspect. Clear any inherited BUILDEROPS_DB_PATH first: an exact database path
-#    takes precedence over the state directory when both are set, so leaving it in place would
-#    write step 2 into the old database while the producer inspects the still-empty target.
-unset BUILDEROPS_DB_PATH
-export BUILDEROPS_STATE_DIR="$HOME/.local/state/builderops"
-
-# 2. Initialize the target and give it at least one record. An initialized but record-free
-#    database still fails with "target store is empty".
-scripts/builderops_cli.sh builderops create-worklog \
-  --summary "Host store bootstrap" \
-  --body "Initialized the host-stable target store." \
-  --source-ref repo_doc:docs/builderops/BUILDEROPS_VAULT_STORE.md \
-  --idempotency-key create:host_store_bootstrap
-
-# 3. Stop BuilderOps writers and reconcile every legacy store beneath the participant roots into
-#    that target, then generate the receipt from a working directory inside exactly one declared
-#    participant root.
+# 1. Run from a working directory inside exactly one declared participant root, then generate.
 python -m app.builderops builderops cutover-evidence generate \
   --participants-file participants.json --reconciliation-file reconciliation.json \
   --actor <operator> --json
 
-# 4. Drop the override and confirm that implicit selection now passes.
-unset BUILDEROPS_STATE_DIR
+# 2. Confirm that implicit selection now passes.
 scripts/builderops_cli.sh builderops list --json
 ```
 
-Stopping after step 2 leaves a working host-stable store under the explicit-override posture. The
-receipt only adds self-verifying implicit selection on top of it, and is worth producing only when
-the bindings in `Choosing a store posture for a host` hold.
+If any legacy store is discovered, this bootstrap does not apply: stop BuilderOps writers,
+reconcile every discovered store into an already-existing non-empty target, and then generate the
+receipt. An absent, zero-byte, uninitialized, or zero-record target still fails closed in that path.
+The receipt remains worthwhile only when the bindings in `Choosing a store posture for a host` hold.
 
 ### Shared artifact vault and advisory claim signals
 

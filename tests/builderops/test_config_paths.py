@@ -106,6 +106,27 @@ def test_default_db_path_is_host_stable_and_cwd_independent(
     assert first.db_path.is_absolute()
 
 
+def test_implicit_selection_accepts_bootstrap_receipt(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state_dir = tmp_path / "host-state" / "builderops"
+    root = tmp_path / "repo"
+    root.mkdir()
+    monkeypatch.chdir(root)
+    monkeypatch.setattr(builderops_config, "default_state_dir", lambda: state_dir)
+
+    receipt = build_receipt(
+        state_dir=state_dir,
+        participants=[{"repository": "owner/repo", "root": str(root)}],
+        reconciliation=[],
+        actor="operator-test",
+    )
+    write_receipt(state_dir, receipt)
+
+    assert builderops_config.load_paths({}).db_path == state_dir / "builderops.sqlite3"
+
+
 def test_host_stable_default_still_confined_outside_vault(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

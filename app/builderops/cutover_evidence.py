@@ -19,6 +19,7 @@ from typing import Any, Mapping
 from uuid import NAMESPACE_OID, UUID, uuid5
 
 from app.builderops.config import validate_db_path_outside_vault
+from app.builderops.store import SqliteBuilderOpsStore
 
 
 RECEIPT_SCHEMA = "builderops.host-store-cutover.v2"
@@ -67,7 +68,10 @@ def _utc(value: str) -> datetime:
 
 
 def _regular(path: Path) -> os.stat_result:
-    entry = path.lstat()
+    try:
+        entry = path.lstat()
+    except OSError as exc:
+        raise CutoverEvidenceError("cutover evidence contains a non-regular path") from exc
     if stat.S_ISLNK(entry.st_mode) or not stat.S_ISREG(entry.st_mode):
         raise CutoverEvidenceError("cutover evidence contains a non-regular path")
     return entry
@@ -125,8 +129,8 @@ def _records(path: Path) -> list[dict[str, str]]:
     return [{"id": str(row[0]), "payload_sha256": hashlib.sha256(str(row[1]).encode()).hexdigest()} for row in rows]
 
 
-def inspect_target(db_path: Path) -> dict[str, Any]:
-    """Inspect an existing target without creating or initializing it."""
+def inspect_target(db_path: Path, *, allow_empty: bool = False) -> dict[str, Any]:
+    """Inspect an initialized target, optionally admitting a zero-record bootstrap."""
     entry = _regular(db_path)
     if entry.st_size == 0:
         raise CutoverEvidenceError("target store is empty")
@@ -137,7 +141,7 @@ def inspect_target(db_path: Path) -> dict[str, Any]:
             marker = connection.execute("SELECT value FROM builderops_meta WHERE key = 'host_store_cutover_v2'").fetchone()
     except sqlite3.Error as exc:
         raise CutoverEvidenceError("target store is not an initialized BuilderOps database") from exc
-    if not isinstance(count, int) or count <= 0:
+    if not isinstance(count, int) or (count <= 0 and not allow_empty):
         raise CutoverEvidenceError("target store is empty")
     # The target necessarily changes after cutover as normal BuilderOps records
     # are appended.  Bind its identity and prove it was non-empty at receipt
@@ -198,7 +202,7 @@ def _reconciliation(
 
 
 def build_receipt(*, state_dir: Path, participants: Any, reconciliation: Any, actor: str) -> dict[str, Any]:
-    """Build a receipt only after a real, non-empty target has been reconciled."""
+    """Build a receipt after reconciliation, or bootstrap a proven-empty host."""
     target_path = state_dir / _LEGACY_DB
     validate_db_path_outside_vault(target_path)
     if not isinstance(actor, str) or not actor.strip():
@@ -208,8 +212,16 @@ def build_receipt(*, state_dir: Path, participants: Any, reconciliation: Any, ac
     inventory = discover_legacy_stores(participant_list)
     if any(item["mtime_ns"] > int(cutoff.timestamp() * 1_000_000_000) for item in inventory):
         raise CutoverEvidenceError("legacy store changed during reconciliation inventory")
-    report = _reconciliation(reconciliation, inventory, target_path, verify_migrated_target=True)
-    target = inspect_target(target_path)
+    bootstrap = not inventory
+    if bootstrap and not target_path.exists():
+        SqliteBuilderOpsStore(target_path).initialize()
+    target = inspect_target(target_path, allow_empty=bootstrap)
+    report = _reconciliation(
+        reconciliation,
+        inventory,
+        target_path,
+        verify_migrated_target=not bootstrap,
+    )
     host, user = __import__("platform").node().strip(), str(os.getuid())
     derived_epoch = _derived_epoch(host, user, participant_list, inventory, report, target["identity"])
     payload: dict[str, Any] = {
@@ -226,12 +238,17 @@ def build_receipt(*, state_dir: Path, participants: Any, reconciliation: Any, ac
     # drifted while source records were being inspected.  Re-run both source
     # discovery and reconciliation immediately before the sole write.
     final_inventory = discover_legacy_stores(participant_list)
-    final_report = _reconciliation(reconciliation, final_inventory, target_path, verify_migrated_target=True)
+    final_report = _reconciliation(
+        reconciliation,
+        final_inventory,
+        target_path,
+        verify_migrated_target=bool(final_inventory),
+    )
     if final_inventory != inventory or final_report != report:
         raise CutoverEvidenceError("legacy store inventory drifted during reconciliation")
     evidence_digest = hashlib.sha256(_canonical(_evidence_projection(payload))).hexdigest()
     _stamp_target(target_path, {"identity": target["identity"], "epoch": derived_epoch, "evidence_sha256": evidence_digest})
-    payload["target_store"] = inspect_target(target_path)
+    payload["target_store"] = inspect_target(target_path, allow_empty=bootstrap)
     payload["receipt_sha256"] = hashlib.sha256(_canonical(payload)).hexdigest()
     return payload
 
@@ -275,9 +292,10 @@ def validate_receipt(state_dir: Path, payload: Any, *, host_id: str, user_id: st
         report = _reconciliation(receipt.get("reconciliation"), inventory, state_dir / _LEGACY_DB, verify_migrated_target=False)
         if report != receipt.get("reconciliation") or hashlib.sha256(_canonical(report)).hexdigest() != receipt.get("reconciliation_sha256"):
             raise CutoverEvidenceError("cutover receipt reconciliation binding is invalid")
-        target = inspect_target(state_dir / _LEGACY_DB)
+        target = inspect_target(state_dir / _LEGACY_DB, allow_empty=not inventory)
         recorded_target = receipt.get("target_store")
-        if not isinstance(recorded_target, Mapping) or recorded_target.get("path") != target["path"] or target["identity"] != recorded_target.get("identity") or target.get("marker") != recorded_target.get("marker") or target["record_count"] < int(recorded_target.get("record_count", 1)):
+        minimum_count = 0 if not inventory else 1
+        if not isinstance(recorded_target, Mapping) or recorded_target.get("path") != target["path"] or target["identity"] != recorded_target.get("identity") or target.get("marker") != recorded_target.get("marker") or target["record_count"] < int(recorded_target.get("record_count", minimum_count)):
             raise CutoverEvidenceError("cutover target store is empty, changed, or unaccounted")
         marker = json.loads(str(target["marker"]))
         expected_epoch = _derived_epoch(host_id, user_id, participants, inventory, report, target["identity"])
