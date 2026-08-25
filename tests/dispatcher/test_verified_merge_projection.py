@@ -868,7 +868,9 @@ def test_pr_contract_authentication_rejects_missing_or_duplicate_requested_id(
 
 
 def test_projection_convergence_cli_orders_quorum_and_final_read(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     authority, neutralized_body, pr_contract, durable_convergence = (
         _projection_fixture()
@@ -967,6 +969,14 @@ def test_projection_convergence_cli_orders_quorum_and_final_read(
     assert output["final_projection_observation"]["observed_at"] == (
         "2026-08-12T05:00:07Z"
     )
+    terminal_output = json.loads(capsys.readouterr().out)
+    assert terminal_output == {
+        "convergence_receipt_sha256": output["convergence_receipt"][
+            "receipt_sha256"
+        ],
+        "status": "converged",
+    }
+    assert neutralized_body not in json.dumps(terminal_output)
     assert authority_reads == []
 
 
