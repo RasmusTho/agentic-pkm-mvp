@@ -622,6 +622,16 @@ def test_watchdog_rejects_invalid_same_authority_phase_beside_current_chain() ->
         + json.dumps(invalid_null_payload, separators=(",", ":"), sort_keys=True)
         + "\n```"
     )
+    invalid_extra = _phase_comment(
+        authority, phase="prepared", merge_commit_sha=None
+    )
+    invalid_extra_payload = _receipt_payload(invalid_extra)
+    invalid_extra_payload["unexpected"] = "forged-current-schema-extension"
+    invalid_extra["body"] = (
+        "verified issue-set merge phase:\n```json\n"
+        + json.dumps(invalid_extra_payload, separators=(",", ":"), sort_keys=True)
+        + "\n```"
+    )
     discontinuous = _phase_comment(
         authority, phase="merged", merge_commit_sha=merge_sha
     )
@@ -629,6 +639,7 @@ def test_watchdog_rejects_invalid_same_authority_phase_beside_current_chain() ->
     for invalid_phase, convergences in (
         (invalid_unknown, []),
         (invalid_null, []),
+        (invalid_extra, []),
         (discontinuous, [stale_convergence]),
     ):
         assert _node(
