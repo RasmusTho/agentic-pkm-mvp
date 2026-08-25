@@ -1565,8 +1565,16 @@ def resolve_verified_merge_projection_convergence_receipt(
     comments: Sequence[Mapping[str, object]],
     *,
     authority_receipt: Mapping[str, object],
+    pr_contract: Mapping[str, object] | None = None,
 ) -> dict[str, object] | None:
-    """Resolve exactly one trusted, content-authenticated convergence receipt."""
+    """Resolve one trusted convergence receipt, optionally for one body edit.
+
+    A body-only ABA edit can leave an older, otherwise authentic receipt on the
+    PR.  That receipt remains immutable audit evidence, but it is not current
+    convergence authority.  Callers with a live ``pr-contract`` therefore
+    select exactly one receipt bound to that contract instead of treating the
+    historical receipt as a duplicate or reusable proof.
+    """
 
     trusted_attempts = [
         comment
@@ -1576,23 +1584,83 @@ def resolve_verified_merge_projection_convergence_receipt(
         and VERIFIED_MERGE_PROJECTION_CONVERGENCE_MARKER
         in cast(str, comment["body"])
     ]
-    if len(trusted_attempts) != 1:
+    if not trusted_attempts:
         return None
     entries = _comment_receipt_entries(
         trusted_attempts, VERIFIED_MERGE_PROJECTION_CONVERGENCE_MARKER
     )
-    if len(entries) != 1:
+    if len(entries) != len(trusted_attempts):
         return None
-    receipt, _comment = entries[0]
-    if not _projection_convergence_matches_authority(
-        receipt,
-        authority_receipt=authority_receipt,
-        allow_legacy_terminal_lf=_comments_authenticate_legacy_authority(
-            comments, authority_receipt
-        ),
+    allow_legacy_terminal_lf = _comments_authenticate_legacy_authority(
+        comments, authority_receipt
+    )
+    receipts = [receipt for receipt, _comment in entries]
+    if any(
+        not _projection_convergence_matches_authority(
+            receipt,
+            authority_receipt=authority_receipt,
+            allow_legacy_terminal_lf=allow_legacy_terminal_lf,
+        )
+        for receipt in receipts
     ):
         return None
-    return dict(receipt)
+    if pr_contract is not None:
+        receipts = [
+            receipt
+            for receipt in receipts
+            if receipt.get("pr_contract") == pr_contract
+            and receipt.get("body_edit") == pr_contract.get("body_edit")
+        ]
+    elif len(receipts) > 1:
+        edit_times = [
+            cast(Mapping[str, object], receipt["body_edit"]).get("edited_at")
+            for receipt in receipts
+        ]
+        if not all(isinstance(edit_at, str) for edit_at in edit_times):
+            return None
+        latest_edit_at = max(cast(list[str], edit_times))
+        receipts = [
+            receipt
+            for receipt in receipts
+            if cast(Mapping[str, object], receipt["body_edit"]).get("edited_at")
+            == latest_edit_at
+        ]
+    if len(receipts) != 1:
+        return None
+    return dict(receipts[0])
+
+
+def projection_convergence_receipts_authenticate_authority(
+    comments: Sequence[Mapping[str, object]],
+    *,
+    authority_receipt: Mapping[str, object],
+) -> bool:
+    """Return whether every trusted convergence comment is authentic history."""
+
+    trusted_attempts = [
+        comment
+        for comment in comments
+        if comment.get("author_association") in _TRUSTED_AUTHOR_ASSOCIATIONS
+        and isinstance(comment.get("body"), str)
+        and VERIFIED_MERGE_PROJECTION_CONVERGENCE_MARKER
+        in cast(str, comment["body"])
+    ]
+    entries = _comment_receipt_entries(
+        trusted_attempts, VERIFIED_MERGE_PROJECTION_CONVERGENCE_MARKER
+    )
+    if len(entries) != len(trusted_attempts):
+        return False
+    allow_legacy_terminal_lf = _comments_authenticate_legacy_authority(
+        comments, authority_receipt
+    )
+    return all(
+        _projection_convergence_matches_authority(
+            receipt,
+            authority_receipt=authority_receipt,
+            allow_legacy_terminal_lf=allow_legacy_terminal_lf,
+        )
+        for receipt, _comment in entries
+    )
 
 
 def _final_projection_observation_matches(

@@ -6,7 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
-from typing import Sequence
+from typing import Mapping, Sequence
 
 from app.dispatcher.verified_merge import (
     build_verified_merge_phase,
@@ -98,8 +98,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     supplied_convergence = _nested_mapping(
         args.projection_convergence_json, "convergence_receipt"
     )
+    supplied_pr_contract = supplied_convergence.get("pr_contract")
+    if not isinstance(supplied_pr_contract, Mapping):
+        raise ValueError("phase requires a convergence receipt pr-contract")
     durable_convergence = resolve_verified_merge_projection_convergence_receipt(
-        comments, authority_receipt=authority_receipt
+        comments,
+        authority_receipt=authority_receipt,
+        pr_contract=supplied_pr_contract,
     )
     if durable_convergence is None or durable_convergence != supplied_convergence:
         raise ValueError("phase requires one authenticated durable projection convergence")
