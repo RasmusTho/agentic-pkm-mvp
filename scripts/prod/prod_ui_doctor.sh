@@ -18,15 +18,15 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 source "${SCRIPT_DIR}/../lib/companion_ui_startup.sh"
 
 CUI_CHANNEL="prod"
-CUI_EXPECTED_VAULT_PATTERN="midg(å|a)rd"
-CUI_EXPECTED_VAULT_LABEL="Midgård/Midgard"
+CUI_DEFAULT_EXPECTED_VAULT_PATTERN="midg(å|a)rd"
+CUI_DEFAULT_EXPECTED_VAULT_LABEL="Midgård/Midgard"
 CUI_API_PORT="18000"
 CUI_UI_PORT="8113"
 CUI_COMPOSE_FILES="docker-compose.yaml:docker-compose.prod.yml"
 CUI_COMPOSE_PROJECT="pkm-prod"
 CUI_SERVE_MODULE="companion_ui.workspace.serve_production_page"
 CUI_DB_LABEL="app"
-export CUI_CHANNEL CUI_EXPECTED_VAULT_PATTERN CUI_EXPECTED_VAULT_LABEL \
+export CUI_CHANNEL CUI_DEFAULT_EXPECTED_VAULT_PATTERN CUI_DEFAULT_EXPECTED_VAULT_LABEL \
   CUI_API_PORT CUI_UI_PORT CUI_COMPOSE_FILES CUI_COMPOSE_PROJECT CUI_SERVE_MODULE CUI_DB_LABEL
 
 # Prod-specific read-only check: surface automation/write-capable flags so the

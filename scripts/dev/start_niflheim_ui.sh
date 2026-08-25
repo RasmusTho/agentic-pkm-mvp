@@ -21,14 +21,14 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 source "${SCRIPT_DIR}/../lib/companion_ui_startup.sh"
 
 CUI_CHANNEL="dev"
-CUI_EXPECTED_VAULT_PATTERN="nife?lheim"
-CUI_EXPECTED_VAULT_LABEL="Niflheim/Nifelheim"
+CUI_DEFAULT_EXPECTED_VAULT_PATTERN="nife?lheim"
+CUI_DEFAULT_EXPECTED_VAULT_LABEL="Niflheim/Nifelheim"
 CUI_API_PORT="18001"
 CUI_UI_PORT="8111"
 CUI_COMPOSE_FILES="docker-compose.yaml:docker-compose.dev.yml"
 CUI_COMPOSE_PROJECT="pkm-dev"
 CUI_SERVE_MODULE="companion_ui.workspace.serve_dev_page"
-export CUI_CHANNEL CUI_EXPECTED_VAULT_PATTERN CUI_EXPECTED_VAULT_LABEL \
+export CUI_CHANNEL CUI_DEFAULT_EXPECTED_VAULT_PATTERN CUI_DEFAULT_EXPECTED_VAULT_LABEL \
   CUI_API_PORT CUI_UI_PORT CUI_COMPOSE_FILES CUI_COMPOSE_PROJECT CUI_SERVE_MODULE
 
 # Dev/Niflheim defaults to LAN binding so the UI is reachable over Tailscale for
