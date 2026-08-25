@@ -142,15 +142,16 @@ def _item(value: Any, *, index: int) -> dict[str, Any]:
     _keys(
         item,
         allowed={
-            "source_ref", "source_role", "authority_class", "artifact_class", "lifecycle",
+            "provider", "source_ref", "source_role", "authority_class", "artifact_class", "lifecycle",
             "provenance", "freshness", "limitations", "navigation",
         },
         required={
-            "source_ref", "source_role", "authority_class", "artifact_class", "lifecycle",
+            "provider", "source_ref", "source_role", "authority_class", "artifact_class", "lifecycle",
             "provenance", "freshness", "limitations", "navigation",
         },
         label=label,
     )
+    item["provider"] = _string(item["provider"], label=f"{label}.provider")
     item["source_ref"] = _source_ref(item["source_ref"], label=f"{label}.source_ref")
     if item["source_role"] not in _SOURCE_ROLES:
         raise DiscoveryContractError(f"{label}.source_role is unsupported")
@@ -273,7 +274,19 @@ def compose_discovery_projection(*, composition: Mapping[str, Any], items: Seque
     for index, declaration in enumerate(items):
         item = _item(declaration, index=index)
         state = item["freshness"]["state"]
-        item["claim_status"] = "available" if state == "fresh" else "withdrawn"
+        provider = envelope["providers"].get(item["provider"])
+        if provider is None:
+            raise DiscoveryContractError(
+                f"items[{index}].provider is not declared by the composition"
+            )
+        if provider["status"] == "refused":
+            item["claim_status"] = "withdrawn"
+            item["limitations"] = [
+                *item["limitations"],
+                f"Provider {item['provider']!r} refused the composition read.",
+            ]
+        else:
+            item["claim_status"] = "available" if state == "fresh" else "withdrawn"
         item["presentation"] = {
             "non_normative": item["authority_class"] == "non-normative",
             "ephemeral_or_rebuildable": item["source_ref"]["source_type"] == "builder_vault",

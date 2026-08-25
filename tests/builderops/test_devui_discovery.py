@@ -39,6 +39,7 @@ def _composition() -> dict:
 
 def _item() -> dict:
     return {
+        "provider": "work",
         "source_ref": _ref("4985"),
         "source_role": "working",
         "authority_class": "non-normative",
@@ -160,3 +161,44 @@ def test_discovery_rejects_refused_provider_that_carries_available_read_evidence
 
     with pytest.raises(DiscoveryContractError, match="cannot carry available-read evidence"):
         compose_discovery_projection(composition=refused, items=[_item()])
+
+
+def test_refused_provider_withdraws_only_the_items_bound_to_that_provider() -> None:
+    composition = _composition()
+    composition["providers"]["capabilities"] = {
+        "provider": "ckm",
+        "status": "available",
+        "authority": {"status": "derived_projection", "authoritative": False},
+        "captured_at": None,
+        "snapshot": {"epoch": "fixture"},
+        "completeness": {"complete": True},
+    }
+    composition["providers"]["work"] = {
+        "provider": "builderops_cockpit",
+        "status": "refused",
+        "authority": "read_time_join",
+        "captured_at": None,
+        "snapshot": None,
+        "completeness": None,
+        "refusal": {"code": "provider_unavailable"},
+    }
+    refused_item = _item()
+    available_item = _item()
+    available_item["provider"] = "capabilities"
+
+    result = compose_discovery_projection(
+        composition=composition, items=[refused_item, available_item]
+    )
+
+    assert result["items"][0]["claim_status"] == "withdrawn"
+    assert result["items"][0]["freshness"]["state"] == "fresh"
+    assert result["items"][0]["limitations"][-1] == "Provider 'work' refused the composition read."
+    assert result["items"][1]["claim_status"] == "available"
+
+
+def test_item_provider_must_be_declared_by_the_composition() -> None:
+    item = _item()
+    item["provider"] = "invented-provider"
+
+    with pytest.raises(DiscoveryContractError, match="not declared by the composition"):
+        compose_discovery_projection(composition=_composition(), items=[item])

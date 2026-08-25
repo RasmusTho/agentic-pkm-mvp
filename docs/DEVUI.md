@@ -669,9 +669,9 @@ Delivered now:
   independent Cockpit and CKM authority, snapshots, completeness, and typed refusals without
   persistence or mutation;
 - `devui.discovery-projection.v1`, a pure source-declared discovery composer over the existing
-  composition envelope that preserves authority, provenance, lifecycle, typed degraded-source
-  limitations, and source-bound read-only navigation without source I/O, a local registry, UI, or
-  promotion action, delivered by #4985;
+  composition envelope that binds every item to its declared provider and preserves authority,
+  provenance, lifecycle, typed degraded-source limitations, and source-bound read-only navigation
+  without source I/O, a local registry, UI, or promotion action, delivered by #4985;
 - `FocusView.v1` / `focus-view.v1`, a pure subject-centred projection with explicit correlation,
   delivered by #4694 / PR #4703;
 - admitted local GET `/api/devui/focus` for one stable governed GitHub Issue, rebuilding the
