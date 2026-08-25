@@ -782,6 +782,23 @@ PG_LANES = (
         "durable table ownership PG surface",
     ),
 )
+HEIMDAL_TRIGGER_OWNERSHIP_SOURCES = (
+    "app/heimdal/trigger_ownership.py",
+    "app/heimdal/consent_ledger.py",
+    "app/heimdal/media_receipts.py",
+    "app/heimdal/observation_log.py",
+    "app/heimdal/raw_read_gate.py",
+    "app/heimdal/raw_liveness.py",
+    "app/heimdal/raw_store.py",
+    "app/alembic/versions/8b21e6a1f0c4_heim_observation_log_and_cursor.py",
+    "app/alembic/versions/a3f9d1c6e2b8_heim_retention_deletion_receipt_v0.py",
+    "app/alembic/versions/c4f7a1b2d9e3_heim_consent_ledger_v0.py",
+    "app/alembic/versions/c5d8a1e4f2b7_heimdal_raw_liveness.py",
+    "app/alembic/versions/d5a8e2f1b6c3_heim_raw_record_v0.py",
+    "app/alembic/versions/e2f3a4b5c6d7_heimdal_cold_cleanup_reconciliation.py",
+    "app/alembic/versions/e3c1a7f5d2b8_heim_media_receipt_v0.py",
+    "app/alembic/versions/f1c7e2a9b4d6_heim_raw_read_receipt_v0.py",
+)
 DURABLE_OWNERSHIP_PG_TARGETS = (
     # #4598: restricted-role read-only authentication and continuous
     # append-only enforcement must run against the migrated catalog.
@@ -923,6 +940,7 @@ def test_the_pr_path_pg_lane_is_triggered_by_the_sources_it_guards() -> None:
         "app/store/membership_store.py",
         "app/objects/relation_types.py",
         "app/stores/postgres.py",
+        *HEIMDAL_TRIGGER_OWNERSHIP_SOURCES,
         "tests/architecture/durable_table_classification.py",
         "tests/architecture/test_durable_table_ownership.py",
         "tests/architecture/test_multi_vault_projection_inventory.py",
