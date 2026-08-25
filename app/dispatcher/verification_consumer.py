@@ -80,6 +80,10 @@ class AuthReceipt:
 class LiveTruthSource(Protocol):
     def pull_request(self, repository: str, pr_number: int) -> Mapping[str, object]: ...
 
+    def current_body_edit(
+        self, repository: str, pr_number: int
+    ) -> Mapping[str, object]: ...
+
     def checks(self, repository: str, head_sha: str) -> Sequence[Mapping[str, object]]: ...
 
     def pull_request_comments(
@@ -634,6 +638,26 @@ class GhCliVerificationSource:
             if size > max_response_bytes:
                 raise RuntimeError("GitHub response exceeds bounded read")
         return json.loads(result.stdout)
+
+    def _graphql_json(
+        self, query: str, variables: Mapping[str, object]
+    ) -> Mapping[str, object]:
+        command = ["gh", "api", "graphql", "-f", f"query={query}"]
+        for name, value in variables.items():
+            command.extend(["-F", f"{name}={value}"])
+        result = self.runner(
+            command, capture_output=True, text=True, check=False, timeout=60
+        )
+        if result.returncode != 0:
+            raise RuntimeError("gh GraphQL read failed")
+        payload = json.loads(result.stdout)
+        if (
+            not isinstance(payload, Mapping)
+            or payload.get("errors")
+            or not isinstance(payload.get("data"), Mapping)
+        ):
+            raise RuntimeError("malformed GitHub GraphQL response")
+        return cast(Mapping[str, object], payload)
 
     def _json_pages(self, endpoint: str, *, limit: int = 1_000) -> list[object]:
         rows: list[object] = []
@@ -1269,6 +1293,87 @@ class GhCliVerificationSource:
         if not isinstance(payload, Mapping):
             raise RuntimeError("malformed GitHub pull request response")
         return payload
+
+    def current_body_edit(
+        self, repository: str, pr_number: int
+    ) -> Mapping[str, object]:
+        """Read the one live body-edit identity that may resume a prepared run."""
+
+        if (
+            re.fullmatch(r"[0-9A-Za-z_.-]+/[0-9A-Za-z_.-]+", repository)
+            is None
+            or not isinstance(pr_number, int)
+            or isinstance(pr_number, bool)
+            or pr_number <= 0
+        ):
+            raise RuntimeError("malformed GitHub body-edit query")
+        owner, name = repository.split("/", 1)
+        response = self._graphql_json(
+            """
+            query($owner: String!, $name: String!, $number: Int!) {
+              repository(owner: $owner, name: $name) {
+                pullRequest(number: $number) {
+                  userContentEdits(last: 1) {
+                    nodes { id editedAt editor { login } }
+                    pageInfo { hasNextPage }
+                  }
+                }
+              }
+            }
+            """,
+            {"owner": owner, "name": name, "number": pr_number},
+        )
+        data = cast(Mapping[str, object], response["data"])
+        repository_row = data.get("repository")
+        pull = (
+            repository_row.get("pullRequest")
+            if isinstance(repository_row, Mapping)
+            else None
+        )
+        edits = pull.get("userContentEdits") if isinstance(pull, Mapping) else None
+        nodes = edits.get("nodes") if isinstance(edits, Mapping) else None
+        page_info = edits.get("pageInfo") if isinstance(edits, Mapping) else None
+        if (
+            not isinstance(nodes, list)
+            or len(nodes) != 1
+            or not isinstance(nodes[0], Mapping)
+            or not isinstance(page_info, Mapping)
+            or page_info.get("hasNextPage") is not False
+        ):
+            raise RuntimeError("GitHub body-edit evidence is incomplete")
+        edit = nodes[0]
+        editor = edit.get("editor")
+        login = editor.get("login") if isinstance(editor, Mapping) else None
+        if (
+            not isinstance(edit.get("id"), str)
+            or not edit.get("id")
+            or not isinstance(edit.get("editedAt"), str)
+            or not edit.get("editedAt")
+            or not isinstance(login, str)
+            or not login
+        ):
+            raise RuntimeError("GitHub body-edit identity is malformed")
+        if login.casefold() == owner.casefold():
+            association = "OWNER"
+        else:
+            permission = self._json(
+                f"repos/{repository}/collaborators/{login}/permission"
+            )
+            if (
+                not isinstance(permission, Mapping)
+                or permission.get("permission")
+                not in {"admin", "maintain", "write"}
+            ):
+                raise RuntimeError(
+                    "GitHub body editor is not an authenticated collaborator"
+                )
+            association = "COLLABORATOR"
+        return {
+            "node_id": edit["id"],
+            "edited_at": edit["editedAt"],
+            "editor_login": login,
+            "editor_association": association,
+        }
 
     def pull_request_comments(
         self, repository: str, pr_number: int
@@ -4163,6 +4268,9 @@ class VerificationConsumer:
             comments,
             authority_receipt=authority,
             pr=pr,
+            current_body_edit=self.truth.current_body_edit(
+                run.repository, run.pr_number
+            ),
         )
         if phase is None or phase.get("phase") != "prepared":
             raise ValueError(

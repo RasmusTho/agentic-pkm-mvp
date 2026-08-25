@@ -100,6 +100,14 @@ class Truth:
         self._last_pr = self.pr
         return self.pr
 
+    def current_body_edit(self, repository, pr_number):
+        return {
+            "node_id": f"UCE_fixture_{pr_number}",
+            "edited_at": "2026-08-12T05:00:00Z",
+            "editor_login": repository.split("/", 1)[0],
+            "editor_association": "OWNER",
+        }
+
     def checks(self, repository, head_sha):
         return self.check_rows
 
@@ -379,6 +387,14 @@ class TransitionTruth:
     def pull_request(self, repository, pr_number):
         self._last_pr = next(self.prs)
         return self._last_pr
+
+    def current_body_edit(self, repository, pr_number):
+        return {
+            "node_id": f"UCE_fixture_{pr_number}",
+            "edited_at": "2026-08-12T05:00:00Z",
+            "editor_login": repository.split("/", 1)[0],
+            "editor_association": "OWNER",
+        }
 
     def checks(self, repository, head_sha):
         return GREEN
@@ -1041,6 +1057,62 @@ def test_open_neutralized_run_resumes_from_trusted_prepared_phase(
     assert len(launcher.calls) == 1
     assert launcher.calls[0][1] == running.coordinator_session_id
     assert state.repair_budget_projection(running.run_id) == budget_before
+
+
+def test_open_neutralized_recovery_resumes_current_replacement_prepared_chain(
+    tmp_path,
+) -> None:
+    plan, neutral_pr, comments = _open_neutralized_recovery_evidence()
+    authority = plan["authority_receipt"]
+    assert isinstance(authority, Mapping)
+    current_body_edit = {
+        "node_id": "UCE_fixture_3603_replacement",
+        "edited_at": "2026-08-12T05:00:00Z",
+        "editor_login": REPO.split("/", 1)[0],
+        "editor_association": "OWNER",
+    }
+    replacement_kwargs = projection_phase_kwargs(
+        authority, neutral_pr, body_edit=current_body_edit
+    )
+    replacement_prepared = build_verified_merge_phase(
+        authority_receipt=authority,
+        phase="prepared",
+        pr=neutral_pr,
+        **replacement_kwargs,
+    )
+    comments.extend(
+        [
+            projection_convergence_comment(replacement_kwargs),
+            {
+                "author_association": "COLLABORATOR",
+                "body": replacement_prepared["phase_receipt_comment"],
+            },
+        ]
+    )
+
+    class RecoveryTruth(Truth):
+        def pull_request_comments(self, repository, pr_number):
+            return comments
+
+        def current_body_edit(self, repository, pr_number):
+            return current_body_edit
+
+    state = ledger(tmp_path / "replacement")
+    running = _expired_running_verification(state)
+    consumer = VerificationConsumer(
+        state, RecoveryTruth(neutral_pr, GREEN), Auth(), Launcher(), "recovery-host"
+    )
+
+    pack, _ = consumer._open_neutralized_recovery_pack(
+        running, neutral_pr, GREEN
+    )
+
+    assert pack["merge_recovery"] == {
+        "body_state": "neutralized",
+        "merge_commit_sha": None,
+        "merged_at": None,
+        "phase": "prepared",
+    }
 
 
 @pytest.mark.parametrize(
