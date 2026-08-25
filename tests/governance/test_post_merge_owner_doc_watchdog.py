@@ -595,6 +595,30 @@ def test_watchdog_rejects_malformed_or_causally_invalid_pr_contract_start() -> N
             authority,
         )
 
+    for field, value in (
+        ("workflow_run_id", 0),
+        ("check_run_id", "not-an-id"),
+    ):
+        malformed = json.loads(json.dumps(convergence))
+        malformed["pr_contract"][field] = value
+        unsigned = dict(malformed)
+        unsigned.pop("receipt_sha256")
+        malformed["receipt_sha256"] = _canonical_digest(unsigned)
+        assert not _node(
+            "validConvergenceReceipt(inputs[0], inputs[1])",
+            malformed,
+            authority,
+        )
+
+    malformed = json.loads(json.dumps(convergence))
+    malformed["pr_contract"]["body_edit"]["unexpected"] = "forged"
+    unsigned = dict(malformed)
+    unsigned.pop("receipt_sha256")
+    malformed["receipt_sha256"] = _canonical_digest(unsigned)
+    assert not _node(
+        "validConvergenceReceipt(inputs[0], inputs[1])", malformed, authority
+    )
+
 
 def test_watchdog_rejects_invalid_same_authority_phase_beside_current_chain() -> None:
     authority = _authority_comment()
@@ -655,6 +679,21 @@ def test_watchdog_rejects_invalid_same_authority_phase_beside_current_chain() ->
         + json.dumps(invalid_extra_payload, separators=(",", ":"), sort_keys=True)
         + "\n```"
     )
+    invalid_reconciled = _phase_comment(
+        authority,
+        phase="reconciled",
+        merge_commit_sha=merge_sha,
+        phase_kwargs=replacement_kwargs,
+    )
+    invalid_reconciled_payload = _receipt_payload(invalid_reconciled)
+    invalid_reconciled_payload["closed_issues"] = []
+    invalid_reconciled["body"] = (
+        "verified issue-set merge phase:\n```json\n"
+        + json.dumps(
+            invalid_reconciled_payload, separators=(",", ":"), sort_keys=True
+        )
+        + "\n```"
+    )
     discontinuous = _phase_comment(
         authority, phase="merged", merge_commit_sha=merge_sha
     )
@@ -663,6 +702,7 @@ def test_watchdog_rejects_invalid_same_authority_phase_beside_current_chain() ->
         (invalid_unknown, []),
         (invalid_null, []),
         (invalid_extra, []),
+        (invalid_reconciled, []),
         (discontinuous, [stale_convergence]),
     ):
         assert _node(

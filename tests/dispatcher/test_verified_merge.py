@@ -1006,6 +1006,22 @@ def test_current_phase_ledger_rejects_null_or_discontinuous_projection_digest() 
         pr=merged_pr,
     ) == merged
 
+    malformed_reconciled = copy.deepcopy(merged)
+    malformed_reconciled["phase"] = "reconciled"
+    assert (
+        resolve_verified_merge_phase(
+            [
+                durable_convergence_comment,
+                comment(prepared),
+                comment(merged),
+                comment(malformed_reconciled),
+            ],
+            authority_receipt=authority,
+            pr=merged_pr,
+        )
+        is None
+    )
+
     for phase_receipt in (prepared, merged):
         null_projection = copy.deepcopy(phase_receipt)
         null_projection["projection_convergence_sha256"] = None
