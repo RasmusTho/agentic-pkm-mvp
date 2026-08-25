@@ -2193,6 +2193,8 @@ def resolve_verified_merge_phase(
                 allow_empty=True,
             )
         except ValueError:
+            if current_schema:
+                invalid_current_projection_phase = True
             continue
         if (
             candidate.get("body_sha256") != expected_digest
@@ -2206,6 +2208,8 @@ def resolve_verified_merge_phase(
             )
             or (not merged_phase and candidate.get("merge_commit_sha") is not None)
         ):
+            if current_schema:
+                invalid_current_projection_phase = True
             continue
         chain = (
             cast(str, convergence_digest)

@@ -320,6 +320,33 @@ jobs:
                 matchesStoredBodyDigest(pull.body, authorityReceipt.neutralized_body_sha256);
             };
 
+            const validProjectionPrContract = (contract, receipt, authorityReceipt) => {
+              const bodyEdit = contract?.body_edit;
+              return hasExactFields(contract, PR_CONTRACT_FIELDS) &&
+                contract.name === "pr-contract" && contract.status === "completed" &&
+                contract.conclusion === "success" && contract.event === "pull_request" &&
+                contract.authority_sha256 === receipt.authority_sha256 &&
+                contract.neutralized_body_sha256 === receipt.neutralized_body_sha256 &&
+                contract.repository === receipt.repository && contract.pr_number === receipt.pr_number &&
+                contract.pull_request_node_id === receipt.pull_request_node_id &&
+                contract.head_sha === receipt.head_sha && contract.head_ref === receipt.head_ref &&
+                contract.base_ref === receipt.base_ref && contract.title === receipt.title &&
+                contract.default_branch === "main" && contract.default_branch_sha === receipt.default_branch_sha &&
+                Number.isInteger(contract.workflow_run_id) && contract.workflow_run_id > 0 &&
+                Number.isInteger(contract.check_run_id) && contract.check_run_id > 0 &&
+                Number.isInteger(contract.check_suite_id) && contract.check_suite_id > 0 &&
+                typeof contract.pull_request_node_id === "string" && contract.pull_request_node_id.length > 0 &&
+                typeof contract.head_ref === "string" && contract.head_ref.length > 0 &&
+                typeof contract.default_branch_sha === "string" && /^[0-9a-f]{40}$/.test(contract.default_branch_sha) &&
+                typeof contract.title === "string" && contract.title.length > 0 &&
+                resolveIssueAuthority(contract.title) === null &&
+                hasExactFields(bodyEdit, ["edited_at", "editor_association", "editor_login", "node_id"].sort()) &&
+                TRUSTED_ASSOCIATIONS.has(bodyEdit.editor_association) &&
+                typeof bodyEdit.node_id === "string" && bodyEdit.node_id.length > 0 &&
+                typeof bodyEdit.editor_login === "string" && bodyEdit.editor_login.length > 0 &&
+                canonicalJson(bodyEdit) === canonicalJson(receipt.body_edit);
+            };
+
             const validConvergenceReceipt = (receipt, authorityReceipt) => {
               if (!hasExactFields(receipt, CONVERGENCE_FIELDS)) return false;
               const digestInput = {...receipt};
@@ -340,18 +367,7 @@ jobs:
                   !hasExactFields(policy, ["minimum_backoff_seconds", "required_empty_observations"].sort()) ||
                   !Number.isInteger(policy.minimum_backoff_seconds) || policy.minimum_backoff_seconds < 1 ||
                   policy.required_empty_observations !== 2 || !Array.isArray(observations) ||
-                  observations.length !== 2 || !hasExactFields(contract, PR_CONTRACT_FIELDS) ||
-                  contract.name !== "pr-contract" || contract.status !== "completed" ||
-                  contract.conclusion !== "success" || contract.event !== "pull_request" ||
-                  contract.authority_sha256 !== receipt.authority_sha256 ||
-                  contract.neutralized_body_sha256 !== receipt.neutralized_body_sha256 ||
-                  contract.repository !== receipt.repository || contract.pr_number !== receipt.pr_number ||
-                  contract.pull_request_node_id !== receipt.pull_request_node_id ||
-                  contract.head_sha !== receipt.head_sha || contract.head_ref !== receipt.head_ref ||
-                  contract.base_ref !== receipt.base_ref || contract.title !== receipt.title ||
-                  contract.default_branch !== "main" ||
-                  contract.default_branch_sha !== receipt.default_branch_sha ||
-                  canonicalJson(contract.body_edit) !== canonicalJson(receipt.body_edit)) return false;
+                  observations.length !== 2 || !validProjectionPrContract(contract, receipt, authorityReceipt)) return false;
               const editAt = canonicalUtcInstant(receipt.body_edit?.edited_at);
               const createdAt = canonicalUtcInstant(contract.created_at);
               const startedAt = canonicalUtcInstant(contract.started_at);
@@ -450,6 +466,13 @@ jobs:
                       phaseFinalObservationDigest !== finalObservationDigest
                     )) ||
                     (phase !== "prepared" && phaseFinalObservationDigest !== null)
+                    || receipt.body_sha256 !== expectedDigest ||
+                    !isSortedIssueArray(closed) || !isSortedIssueArray(reopened) ||
+                    closed.some(number => reopened.includes(number)) ||
+                    (reconciledPhase && !arraysEqual(closed, authorityReceipt.closing_issues)) ||
+                    (!reconciledPhase && (closed.length > 0 || reopened.length > 0)) ||
+                    (mergedPhase && receipt.merge_commit_sha !== livePr.merge_commit_sha) ||
+                    (!mergedPhase && receipt.merge_commit_sha !== null)
                   ))
                 );
                 if (invalidCurrent) invalidCurrentProjectionPhase = true;
