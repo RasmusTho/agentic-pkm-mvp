@@ -8,7 +8,10 @@ import json
 from pathlib import Path
 from typing import Sequence
 
-from app.dispatcher.verified_merge import build_verified_merge_phase
+from app.dispatcher.verified_merge import (
+    build_verified_merge_phase,
+    resolve_verified_merge_projection_convergence_receipt,
+)
 
 
 def _mapping(path: Path) -> dict[str, object]:
@@ -37,10 +40,23 @@ def _issue_numbers(path: Path | None) -> list[int]:
     return value
 
 
+def _comments(path: Path) -> list[dict[str, object]]:
+    value = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(value, list) or any(not isinstance(item, dict) for item in value):
+        raise ValueError(f"{path} must contain a JSON array of comment objects")
+    return value
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--authority-json", type=Path, required=True)
     parser.add_argument("--authority-comment-json", type=Path)
+    parser.add_argument(
+        "--comments-json",
+        type=Path,
+        required=True,
+        help="complete bounded PR comments used to authenticate the durable receipt",
+    )
     parser.add_argument(
         "--projection-convergence-json",
         type=Path,
@@ -77,8 +93,18 @@ def main(argv: Sequence[str] | None = None) -> int:
         raise ValueError(
             "prepared phase requires projection convergence and final observation"
         )
+    authority_receipt = _mapping(args.authority_json)
+    comments = _comments(args.comments_json)
+    supplied_convergence = _nested_mapping(
+        args.projection_convergence_json, "convergence_receipt"
+    )
+    durable_convergence = resolve_verified_merge_projection_convergence_receipt(
+        comments, authority_receipt=authority_receipt
+    )
+    if durable_convergence is None or durable_convergence != supplied_convergence:
+        raise ValueError("phase requires one authenticated durable projection convergence")
     result = build_verified_merge_phase(
-        authority_receipt=_mapping(args.authority_json),
+        authority_receipt=authority_receipt,
         authority_comment=(
             _mapping(args.authority_comment_json)
             if args.authority_comment_json is not None
@@ -86,13 +112,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         ),
         phase=args.phase,
         pr=_mapping(args.pr_json),
-        projection_convergence_receipt=(
-            _nested_mapping(
-                args.projection_convergence_json, "convergence_receipt"
-            )
-            if args.projection_convergence_json is not None
-            else None
-        ),
+        projection_convergence_receipt=durable_convergence,
         final_projection_observation=(
             _nested_mapping(
                 args.final_projection_observation_json,

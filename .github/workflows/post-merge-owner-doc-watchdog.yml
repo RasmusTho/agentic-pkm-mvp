@@ -126,6 +126,7 @@ jobs:
 
             const TRUSTED_ASSOCIATIONS = new Set(["OWNER", "MEMBER", "COLLABORATOR"]);
             const AUTHORITY_MARKER = "verified issue-set merge authority:";
+            const CONVERGENCE_MARKER = "verified merge closing projection convergence:";
             const PHASE_MARKER = "verified issue-set merge phase:";
             const PHASES = ["prepared", "merged", "reconciled", "restored"];
             const AUTHORITY_FIELDS = [
@@ -138,6 +139,34 @@ jobs:
               "final_projection_observation_sha256", "head_sha", "merge_commit_sha", "phase",
               "pr_number", "projection_convergence_sha256", "reopened_unauthorized_issues",
               "repository", "run_id",
+            ].sort();
+            const CONVERGENCE_FIELDS = [
+              "authority_sha256", "base_ref", "body_edit", "contract",
+              "default_branch_sha", "final_projection_observation", "head_sha", "head_ref",
+              "neutralized_body_sha256", "observation_policy", "observations", "pr_contract",
+              "pr_number", "pull_request_node_id", "receipt_sha256", "repository", "run_id", "title",
+            ].sort();
+            const PR_CONTRACT_FIELDS = [
+              "authority_sha256", "base_ref", "body_edit", "check_run_id", "check_suite_id",
+              "completed_at", "conclusion", "created_at", "default_branch", "default_branch_sha",
+              "event", "head_ref", "head_sha", "name", "neutralized_body_sha256", "pr_number",
+              "pull_request_node_id", "repository", "started_at", "status", "title", "workflow_run_id",
+            ].sort();
+            const CONVERGENCE_OBSERVATION_FIELDS = [
+              "base_ref", "closing_issues", "default_branch_sha", "head_ref", "latest_body_edit",
+              "neutralized_body_sha256", "observed_at", "pull_request_node_id", "rate_limit",
+              "snapshot_sha256", "title",
+            ].sort();
+            const RAW_OBSERVATION_FIELDS = [
+              "errors", "observed_at", "pull_request", "rate_limit", "repository",
+            ].sort();
+            const RAW_REPOSITORY_FIELDS = [
+              "default_branch", "default_branch_sha", "name_with_owner",
+            ].sort();
+            const RAW_PULL_FIELDS = [
+              "base_ref", "body", "body_edits_page_info", "closing_issues",
+              "closing_issues_page_info", "draft", "head_ref", "head_sha", "last_edited_at",
+              "latest_body_edit", "node_id", "number", "state", "title",
             ].sort();
 
             const arraysEqual = (left, right) =>
@@ -254,9 +283,121 @@ jobs:
                   ));
             };
 
+            const validRateLimit = rateLimit =>
+              hasExactFields(rateLimit, ["cost", "kill_switch_active", "remaining", "reset_at"].sort()) &&
+              Number.isInteger(rateLimit.cost) && rateLimit.cost >= 0 &&
+              rateLimit.kill_switch_active === false &&
+              Number.isInteger(rateLimit.remaining) && rateLimit.remaining >= 0 &&
+              canonicalUtcInstant(rateLimit.reset_at) !== null;
+
+            const validDurableFinalObservation = (observation, receipt, authorityReceipt) => {
+              if (!hasExactFields(observation, RAW_OBSERVATION_FIELDS) ||
+                  !Array.isArray(observation.errors) || !arraysEqual(observation.errors, []) ||
+                  !validRateLimit(observation.rate_limit) ||
+                  !hasExactFields(observation.repository, RAW_REPOSITORY_FIELDS) ||
+                  !hasExactFields(observation.pull_request, RAW_PULL_FIELDS)) return false;
+              const repository = observation.repository;
+              const pull = observation.pull_request;
+              const observedAt = canonicalUtcInstant(observation.observed_at);
+              const quorumAt = canonicalUtcInstant(receipt.observations?.[1]?.observed_at);
+              return observedAt !== null && quorumAt !== null && observedAt > quorumAt &&
+                repository.name_with_owner === authorityReceipt.repository &&
+                repository.default_branch === "main" &&
+                repository.default_branch_sha === receipt.default_branch_sha &&
+                pull.node_id === receipt.pull_request_node_id && pull.number === authorityReceipt.pr_number &&
+                pull.head_sha === authorityReceipt.head_sha && pull.head_ref === receipt.head_ref &&
+                pull.base_ref === receipt.base_ref && pull.state === "OPEN" && pull.draft === false &&
+                pull.title === receipt.title && pull.latest_body_edit !== null &&
+                canonicalJson(pull.latest_body_edit) === canonicalJson(receipt.body_edit) &&
+                pull.last_edited_at === receipt.body_edit.edited_at &&
+                TRUSTED_ASSOCIATIONS.has(pull.latest_body_edit.editor_association) &&
+                hasExactFields(pull.body_edits_page_info, ["has_next_page"]) &&
+                pull.body_edits_page_info.has_next_page === false &&
+                Array.isArray(pull.closing_issues) && arraysEqual(pull.closing_issues, []) &&
+                hasExactFields(pull.closing_issues_page_info, ["has_next_page"]) &&
+                pull.closing_issues_page_info.has_next_page === false &&
+                typeof pull.body === "string" &&
+                matchesStoredBodyDigest(pull.body, authorityReceipt.neutralized_body_sha256);
+            };
+
+            const validConvergenceReceipt = (receipt, authorityReceipt) => {
+              if (!hasExactFields(receipt, CONVERGENCE_FIELDS)) return false;
+              const digestInput = {...receipt};
+              delete digestInput.receipt_sha256;
+              const policy = receipt.observation_policy;
+              const contract = receipt.pr_contract;
+              const observations = receipt.observations;
+              if (receipt.contract !== "verified-merge-closing-projection-convergence.v1" ||
+                  typeof receipt.receipt_sha256 !== "string" ||
+                  !/^[0-9a-f]{64}$/.test(receipt.receipt_sha256) ||
+                  canonicalSha256(digestInput) !== receipt.receipt_sha256 ||
+                  receipt.authority_sha256 !== canonicalSha256(authorityReceipt) ||
+                  receipt.repository !== authorityReceipt.repository ||
+                  receipt.pr_number !== authorityReceipt.pr_number ||
+                  receipt.head_sha !== authorityReceipt.head_sha || receipt.run_id !== authorityReceipt.run_id ||
+                  receipt.neutralized_body_sha256 !== authorityReceipt.neutralized_body_sha256 ||
+                  receipt.base_ref !== "main" || typeof receipt.head_ref !== "string" || !receipt.head_ref ||
+                  !hasExactFields(policy, ["minimum_backoff_seconds", "required_empty_observations"].sort()) ||
+                  !Number.isInteger(policy.minimum_backoff_seconds) || policy.minimum_backoff_seconds < 1 ||
+                  policy.required_empty_observations !== 2 || !Array.isArray(observations) ||
+                  observations.length !== 2 || !hasExactFields(contract, PR_CONTRACT_FIELDS) ||
+                  contract.name !== "pr-contract" || contract.status !== "completed" ||
+                  contract.conclusion !== "success" || contract.event !== "pull_request" ||
+                  contract.authority_sha256 !== receipt.authority_sha256 ||
+                  contract.neutralized_body_sha256 !== receipt.neutralized_body_sha256 ||
+                  contract.repository !== receipt.repository || contract.pr_number !== receipt.pr_number ||
+                  contract.pull_request_node_id !== receipt.pull_request_node_id ||
+                  contract.head_sha !== receipt.head_sha || contract.head_ref !== receipt.head_ref ||
+                  contract.base_ref !== receipt.base_ref || contract.title !== receipt.title ||
+                  contract.default_branch !== "main" ||
+                  contract.default_branch_sha !== receipt.default_branch_sha ||
+                  canonicalJson(contract.body_edit) !== canonicalJson(receipt.body_edit)) return false;
+              const editAt = canonicalUtcInstant(receipt.body_edit?.edited_at);
+              const createdAt = canonicalUtcInstant(contract.created_at);
+              const completedAt = canonicalUtcInstant(contract.completed_at);
+              const observedTimes = observations.map(row => canonicalUtcInstant(row?.observed_at));
+              if (editAt === null || createdAt === null || completedAt === null ||
+                  observedTimes.some(value => value === null) || editAt > createdAt ||
+                  createdAt > completedAt || completedAt > observedTimes[0] ||
+                  observedTimes[1] - observedTimes[0] < policy.minimum_backoff_seconds * 1000) return false;
+              for (const row of observations) {
+                if (!hasExactFields(row, CONVERGENCE_OBSERVATION_FIELDS) ||
+                    !Array.isArray(row.closing_issues) || !arraysEqual(row.closing_issues, []) ||
+                    !validRateLimit(row.rate_limit) ||
+                    row.base_ref !== receipt.base_ref || row.default_branch_sha !== receipt.default_branch_sha ||
+                    row.head_ref !== receipt.head_ref || row.pull_request_node_id !== receipt.pull_request_node_id ||
+                    row.neutralized_body_sha256 !== receipt.neutralized_body_sha256 || row.title !== receipt.title ||
+                    canonicalJson(row.latest_body_edit) !== canonicalJson(receipt.body_edit) ||
+                    typeof row.snapshot_sha256 !== "string" || !/^[0-9a-f]{64}$/.test(row.snapshot_sha256)) {
+                  return false;
+                }
+              }
+              return validDurableFinalObservation(
+                receipt.final_projection_observation, receipt, authorityReceipt
+              );
+            };
+
+            const resolveDurableConvergence = (comments, authorityReceipt) => {
+              const attempts = comments.filter(comment =>
+                TRUSTED_ASSOCIATIONS.has(comment.author_association) &&
+                typeof comment.body === "string" && comment.body.includes(CONVERGENCE_MARKER)
+              );
+              if (attempts.length !== 1) return null;
+              const receipts = commentReceipts(attempts, CONVERGENCE_MARKER);
+              return receipts.length === 1 && validConvergenceReceipt(receipts[0], authorityReceipt)
+                ? receipts[0]
+                : null;
+            };
+
             const resolveContinuousMergePhase = (comments, authorityReceipt, livePr) => {
               if (!hasCompleteMergedIdentity(livePr)) return null;
               const authorityDigest = canonicalSha256(authorityReceipt);
+              const convergenceReceipt = resolveDurableConvergence(comments, authorityReceipt);
+              if (convergenceReceipt === null) return null;
+              const convergenceDigest = convergenceReceipt.receipt_sha256;
+              const finalObservationDigest = canonicalSha256(
+                convergenceReceipt.final_projection_observation
+              );
               const validByPhase = new Map(PHASES.map(phase => [phase, []]));
               for (const receipt of commentReceipts(comments, PHASE_MARKER)) {
                 const phase = receipt.phase;
@@ -269,7 +410,7 @@ jobs:
                   ? authorityReceipt.body_sha256
                   : authorityReceipt.neutralized_body_sha256;
                 const projectionDigest = receipt.projection_convergence_sha256;
-                const finalObservationDigest = receipt.final_projection_observation_sha256;
+                const phaseFinalObservationDigest = receipt.final_projection_observation_sha256;
                 if (
                   !hasExactFields(receipt, PHASE_FIELDS) || phaseIndex < 0 ||
                   receipt.contract !== "verified_issue_set_merge_phase.v1" ||
@@ -281,10 +422,12 @@ jobs:
                   receipt.body_sha256 !== expectedDigest ||
                   typeof projectionDigest !== "string" ||
                   !/^[0-9a-f]{64}$/.test(projectionDigest) ||
+                  projectionDigest !== convergenceDigest ||
                   (phase === "prepared"
-                    ? typeof finalObservationDigest !== "string" ||
-                      !/^[0-9a-f]{64}$/.test(finalObservationDigest)
-                    : finalObservationDigest !== null) ||
+                    ? typeof phaseFinalObservationDigest !== "string" ||
+                      !/^[0-9a-f]{64}$/.test(phaseFinalObservationDigest) ||
+                      phaseFinalObservationDigest !== finalObservationDigest
+                    : phaseFinalObservationDigest !== null) ||
                   !isSortedIssueArray(closed) || !isSortedIssueArray(reopened) ||
                   closed.some(number => reopened.includes(number)) ||
                   (reconciledPhase && !arraysEqual(closed, authorityReceipt.closing_issues)) ||

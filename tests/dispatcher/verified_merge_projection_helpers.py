@@ -94,6 +94,7 @@ def projection_phase_kwargs(
             "observed_at": observed_at,
         }
 
+    final_observation = observation("2026-08-12T05:00:07Z")
     convergence = build_verified_merge_projection_convergence(
         authority_receipt=authority_receipt,
         authority_comment=authority_comment,
@@ -102,12 +103,27 @@ def projection_phase_kwargs(
             observation("2026-08-12T05:00:04Z"),
             observation("2026-08-12T05:00:06Z"),
         ],
+        final_projection_observation=final_observation,
         minimum_backoff_seconds=1,
     )["convergence_receipt"]
     assert isinstance(convergence, Mapping)
     return {
         "projection_convergence_receipt": convergence,
-        "final_projection_observation": observation(
-            "2026-08-12T05:00:07Z"
+        "final_projection_observation": final_observation,
+    }
+
+
+def projection_convergence_comment(
+    phase_kwargs: Mapping[str, Mapping[str, object]],
+    *,
+    association: str = "COLLABORATOR",
+) -> dict[str, object]:
+    receipt = phase_kwargs["projection_convergence_receipt"]
+    return {
+        "author_association": association,
+        "body": (
+            "verified merge closing projection convergence:\n```json\n"
+            + json.dumps(dict(receipt), sort_keys=True, separators=(",", ":"))
+            + "\n```"
         ),
     }

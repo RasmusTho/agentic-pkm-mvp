@@ -32,6 +32,7 @@ from app.dispatcher.verified_merge import (
     verified_merge_body_sha256,
 )
 from tests.dispatcher.verified_merge_projection_helpers import (
+    projection_convergence_comment,
     projection_phase_kwargs,
 )
 
@@ -629,13 +630,14 @@ def test_legacy_authority_receipt_preserves_continuous_phase_recovery() -> None:
         _trusted_comment(str(item["phase_receipt_comment"]))
         for item in (prepared, merged, reconciled, restored)
     ]
+    comments.insert(0, projection_convergence_comment(convergence_kwargs))
     comments.insert(0, authority_comment)
 
     assert resolve_verified_merge_phase(
         comments, authority_receipt=authority, pr=restored_pr
     ) == restored["phase_receipt"]
     assert resolve_verified_merge_phase(
-        comments[:1] + comments[2:], authority_receipt=authority, pr=restored_pr
+        comments[:2] + comments[3:], authority_receipt=authority, pr=restored_pr
     ) is None
 
 
@@ -990,8 +992,11 @@ def test_merge_phase_receipts_form_continuous_idempotent_recovery_chain() -> Non
         **convergence_kwargs,
     )
     comments = [
-        _trusted_comment(str(item["phase_receipt_comment"]))
-        for item in (prepared, prepared, merged, reconciled, restored)
+        projection_convergence_comment(convergence_kwargs),
+        *[
+            _trusted_comment(str(item["phase_receipt_comment"]))
+            for item in (prepared, prepared, merged, reconciled, restored)
+        ],
     ]
 
     phase = resolve_verified_merge_phase(
@@ -1062,8 +1067,11 @@ def test_current_phase_ledger_rejects_null_or_discontinuous_projection_digest() 
             + "\n```"
         )
 
+    durable_convergence_comment = projection_convergence_comment(
+        convergence_kwargs
+    )
     assert resolve_verified_merge_phase(
-        [comment(prepared), comment(merged)],
+        [durable_convergence_comment, comment(prepared), comment(merged)],
         authority_receipt=authority,
         pr=merged_pr,
     ) == merged
@@ -1072,8 +1080,12 @@ def test_current_phase_ledger_rejects_null_or_discontinuous_projection_digest() 
         null_projection = copy.deepcopy(phase_receipt)
         null_projection["projection_convergence_sha256"] = None
         null_projection["final_projection_observation_sha256"] = None
-        comments = [comment(prepared), comment(merged)]
-        comments[0 if phase_receipt is prepared else 1] = comment(
+        comments = [
+            durable_convergence_comment,
+            comment(prepared),
+            comment(merged),
+        ]
+        comments[1 if phase_receipt is prepared else 2] = comment(
             null_projection
         )
         assert (
@@ -1089,7 +1101,11 @@ def test_current_phase_ledger_rejects_null_or_discontinuous_projection_digest() 
     discontinuous["projection_convergence_sha256"] = "f" * 64
     assert (
         resolve_verified_merge_phase(
-            [comment(prepared), comment(discontinuous)],
+            [
+                durable_convergence_comment,
+                comment(prepared),
+                comment(discontinuous),
+            ],
             authority_receipt=authority,
             pr=merged_pr,
         )
@@ -1157,11 +1173,12 @@ def test_merge_phase_resolver_stops_at_premerge_phase_after_merge_crash() -> Non
     authority = plan["authority_receipt"]
     assert isinstance(authority, dict)
     neutral_pr = _pr(str(plan["neutralized_body"]))
+    convergence_kwargs = projection_phase_kwargs(authority, neutral_pr)
     prepared = build_verified_merge_phase(
         authority_receipt=authority,
         phase="prepared",
         pr=neutral_pr,
-        **projection_phase_kwargs(authority, neutral_pr),
+        **convergence_kwargs,
     )
     crashed_pr = {
         **neutral_pr,
@@ -1172,7 +1189,10 @@ def test_merge_phase_resolver_stops_at_premerge_phase_after_merge_crash() -> Non
     }
 
     phase = resolve_verified_merge_phase(
-        [_trusted_comment(str(prepared["phase_receipt_comment"]))],
+        [
+            projection_convergence_comment(convergence_kwargs),
+            _trusted_comment(str(prepared["phase_receipt_comment"])),
+        ],
         authority_receipt=authority,
         pr=crashed_pr,
     )
@@ -1190,11 +1210,12 @@ def test_merged_body_race_recovers_only_from_trusted_authority_bound_phase() -> 
     authority = plan["authority_receipt"]
     assert isinstance(authority, dict)
     neutral_pr = _pr(str(plan["neutralized_body"]))
+    convergence_kwargs = projection_phase_kwargs(authority, neutral_pr)
     prepared = build_verified_merge_phase(
         authority_receipt=authority,
         phase="prepared",
         pr=neutral_pr,
-        **projection_phase_kwargs(authority, neutral_pr),
+        **convergence_kwargs,
     )
     raced_pr = {
         **neutral_pr,
@@ -1205,10 +1226,11 @@ def test_merged_body_race_recovers_only_from_trusted_authority_bound_phase() -> 
         "body": "Governing-Issue: #3821\n\nRefs #3820\nFixes #4999",
     }
     authority_comment = _trusted_comment(str(plan["authority_receipt_comment"]))
+    convergence_comment = projection_convergence_comment(convergence_kwargs)
     prepared_comment = _trusted_comment(str(prepared["phase_receipt_comment"]))
 
     resolved = resolve_verified_merge_authority_receipt(
-        [authority_comment, prepared_comment],
+        [authority_comment, convergence_comment, prepared_comment],
         pr=raced_pr,
         repository=REPOSITORY,
         expected_run_id="vrun-authority",
@@ -1217,14 +1239,14 @@ def test_merged_body_race_recovers_only_from_trusted_authority_bound_phase() -> 
 
     assert resolved == authority
     assert resolve_verified_merge_phase(
-        [prepared_comment],
+        [convergence_comment, prepared_comment],
         authority_receipt=authority,
         pr=raced_pr,
         allow_merged_body_drift=True,
     ) == prepared["phase_receipt"]
     assert (
         resolve_verified_merge_authority_receipt(
-            [authority_comment, prepared_comment],
+            [authority_comment, convergence_comment, prepared_comment],
             pr={**raced_pr, "state": "open", "merged": False, "merged_at": None},
             repository=REPOSITORY,
         )
@@ -1377,18 +1399,33 @@ def test_merge_phase_cli_uses_production_phase_builder(tmp_path: Path) -> None:
     pr_path = tmp_path / "pr.json"
     closed_path = tmp_path / "closed.json"
     convergence_path = tmp_path / "convergence.json"
+    comments_path = tmp_path / "comments.json"
     output_path = tmp_path / "phase.json"
     authority_path.write_text(
         json.dumps(plan["authority_receipt"]), encoding="utf-8"
     )
     pr_path.write_text(json.dumps(merged_pr), encoding="utf-8")
     closed_path.write_text(json.dumps([3820, 3823]), encoding="utf-8")
-    convergence_path.write_text(
+    convergence = projection_phase_kwargs(
+        plan["authority_receipt"],
+        _pr(str(plan["neutralized_body"])),
+    )["projection_convergence_receipt"]
+    convergence_path.write_text(json.dumps(convergence), encoding="utf-8")
+    comments_path.write_text(
         json.dumps(
-            projection_phase_kwargs(
-                plan["authority_receipt"],
-                _pr(str(plan["neutralized_body"])),
-            )["projection_convergence_receipt"]
+            [
+                {
+                    "author_association": "OWNER",
+                    "body": (
+                        "verified merge closing projection convergence:\n"
+                        "```json\n"
+                        + json.dumps(
+                            convergence, sort_keys=True, separators=(",", ":")
+                        )
+                        + "\n```"
+                    ),
+                }
+            ]
         ),
         encoding="utf-8",
     )
@@ -1404,6 +1441,8 @@ def test_merge_phase_cli_uses_production_phase_builder(tmp_path: Path) -> None:
             "restored",
             "--projection-convergence-json",
             str(convergence_path),
+            "--comments-json",
+            str(comments_path),
             "--pr-json",
             str(pr_path),
             "--closed-issues-json",
