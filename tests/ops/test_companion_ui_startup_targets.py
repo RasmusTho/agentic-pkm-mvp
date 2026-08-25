@@ -421,6 +421,13 @@ exit 0
     fake_curl = fake_bin / "curl"
     fake_curl.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
     fake_curl.chmod(0o700)
+    preflight_capture = tmp_path / "preflight-invocation"
+    fake_python = fake_bin / "python"
+    fake_python.write_text(
+        "#!/bin/sh\nprintf '%s\\n%s\\n' \"${1:-}\" \"${2:-}\" >> \"${PREFLIGHT_CAPTURE}\"\nexit 0\n",
+        encoding="utf-8",
+    )
+    fake_python.chmod(0o700)
 
     env = os.environ.copy()
     env.update(
@@ -433,7 +440,8 @@ exit 0
             # HAR-03's cold-volume readiness is an independent production
             # prerequisite. This test isolates the later gateway environment
             # handoff after that gate has already passed.
-            "PYTHON": "/usr/bin/true",
+            "PYTHON": str(fake_python),
+            "PREFLIGHT_CAPTURE": str(preflight_capture),
         }
     )
     env.pop("VAULT_ROOT", None)
@@ -459,6 +467,25 @@ exit 0
         "compose_file=docker-compose.yaml:docker-compose.prod.yml",
         "compose_project=pkm-prod",
     ]
+    assert preflight_capture.read_text(encoding="utf-8").splitlines()[:2] == [
+        str(REPO_ROOT / "scripts" / "prod_devui_gateway_preflight.py"),
+        str(REPO_ROOT / "docker-compose.prod.yml"),
+    ]
+
+    lan_capture = tmp_path / "lan-compose-environment"
+    lan_env = dict(env)
+    lan_env.update({"CUI_BIND_LAN": "1", "DOCKER_CAPTURE": str(lan_capture)})
+    lan_result = subprocess.run(
+        ["bash", str(PROD_START)],
+        cwd=REPO_ROOT,
+        env=lan_env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert lan_result.returncode == 78
+    assert "production Companion publication is loopback-only" in lan_result.stderr
+    assert not lan_capture.exists()
 
 
 def test_prod_defaults_to_safe_posture_and_gates_automation() -> None:

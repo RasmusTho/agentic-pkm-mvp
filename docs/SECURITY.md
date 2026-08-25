@@ -7,8 +7,8 @@ Lightweight policy for local and CI runs.
 ## API keys & endpoints
 - Store keys (`OPENAI_API_KEY`, `DEEPSEEK_API_KEY`) only in local `.env` files or a secrets manager. Never commit them to Git, CI logs, or docs.
 - `LLM_PROVIDER=mock` is the CI default, so no external keys are needed for tests.
-- Integrated Runtime v1 still exposes non-UI local services on trusted interfaces by default: the FastAPI runtime starts `uvicorn` on `0.0.0.0:8000`, Compose publishes the API host port to container port `8000`, and Ollama sets `OLLAMA_HOST=0.0.0.0:11434`. Companion UI launchers bind the browser UI to `127.0.0.1` by default and require `CUI_BIND_LAN=1` for LAN/Tailscale UAT. This is not an internet-ready security boundary.
-- For Companion UI non-loopback UAT, set `CUI_BIND_LAN=1` deliberately. API and Ollama host binding changes are runtime/config changes and should be made deliberately outside the Companion UI launcher default.
+- Integrated Runtime v1 still exposes non-UI local services on trusted interfaces by default: the FastAPI runtime starts `uvicorn` on `0.0.0.0:8000`, Compose publishes the API host port to container port `8000`, and Ollama sets `OLLAMA_HOST=0.0.0.0:11434`. Dev/test Companion UI launchers bind the browser UI to `127.0.0.1` by default and require `CUI_BIND_LAN=1` for LAN/Tailscale UAT; the production launcher rejects that flag and publishes only loopback. This is not an internet-ready security boundary.
+- For Companion UI non-loopback UAT, set `CUI_BIND_LAN=1` deliberately on dev/test only. API and Ollama host binding changes are runtime/config changes and should be made deliberately outside the Companion UI launcher default.
 - Do not expose the API, Ollama, or Companion UI to untrusted networks without an explicit access-control boundary such as an SSH tunnel, VPN, or reverse-proxy design with auth and TLS.
 
 ## Delegated local operator principal (MVR-03, shipped)
@@ -65,9 +65,10 @@ browser boundary is the explicitly rendered host publish
 non-loopback, mixed-resolution, or unresolvable declarations leave ordinary Companion health
 available but keep the devUI gateway routes unavailable. Port `18000` remains direct API
 health/version diagnostics only; it is not a supported devUI browser origin.
-The canonical production Compose file fixes both sides of that producer pair to loopback, and the
-production deploy wrapper fails before mutation if the publish or process declaration is absent,
-ambient, wildcard, or otherwise drifts from the exact pair.
+The canonical production Compose file fixes both sides of that producer pair to loopback. Both
+production producers — the deploy wrapper and `scripts/prod/start_midgard_ui.sh` — fail before
+mutation if the publish or process declaration is absent, ambient, wildcard, or otherwise drifts
+from the exact pair; the latter also rejects `CUI_BIND_LAN=1`.
 
 The gateway admits only a local loopback `Host` with no forwarded identity header, including
 `Forwarded`, every `X-Forwarded-*` name, and `Via`. It proxies exactly GET
@@ -81,7 +82,7 @@ FastAPI rejects forwarded identity before resolving a subject. It then admits ei
 direct-loopback + local-Host path or the exact server-derived result
 `resolve_auth_subject(request, None) == SUBJECT_TRUSTED_COMPANION_PROXY`. API-key subjects,
 arbitrary bridge/LAN/Tailscale peers, and missing or unresolvable Companion proxy configuration
-fail closed. #4841 supplies transport only: it adds no FastAPI page/static route and no remote
+fail closed. #4841 supplies transport only: it adds no page/static route and no remote
 browser mode; presentation consumer #4836 must reuse this boundary unchanged.
 
 ## Least privilege

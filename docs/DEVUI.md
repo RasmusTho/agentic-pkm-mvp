@@ -688,8 +688,9 @@ Delivered now:
 The production Companion transport prerequisite for the existing Overview and Focus reads is
 delivered by #4841: `127.0.0.1:8113` loopback host publication, local-Host/no-forwarded admission,
 an exact two-GET allowlist, and a fresh upstream request with no client identity or credentials.
-It adds no page or asset route; port `18000` remains diagnostic-only and #4836 must consume this
-transport unchanged.
+The read endpoint is `http://127.0.0.1:8113/devui/overview`; #4841 is transport only: it adds no
+page or asset route, and port `18000` remains direct API health/version diagnostics.
+#4836 must consume this transport unchanged, and #4833 must verify its published candidate.
 
 Not delivered now: one devUI shell; request/preview/authenticated approval in one owner experience;
 PostgreSQL authority cutover; full live run controls; receipt-to-CKM reassessment in the unified

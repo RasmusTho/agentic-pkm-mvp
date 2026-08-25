@@ -33,9 +33,10 @@ personal use.
 
 Rules:
 
-- The Companion UI channel launchers bind to `127.0.0.1` by default.
-- LAN/Tailscale UAT requires an explicit `CUI_BIND_LAN=1` operator action, which binds the UI to
-  `0.0.0.0`.
+- The Companion UI channel launchers bind to `127.0.0.1` by default. Production fixes its host
+  publish to loopback and rejects `CUI_BIND_LAN=1`.
+- LAN/Tailscale UAT requires an explicit `CUI_BIND_LAN=1` operator action on dev/test, which binds
+  the UI to `0.0.0.0`.
 - `HOST` is not a Companion UI channel launcher exposure control.
 - The runtime API used by the page may still be local to the server process.
 - No token, cookie, or login is required for loopback-only personal use.
@@ -54,8 +55,8 @@ LAN or Tailscale access is opt-in trusted-device UAT posture.
 
 Rules:
 
-- The Companion UI channel launchers expose the UI on LAN/Tailscale only when `CUI_BIND_LAN=1` is
-  set.
+- The dev/test Companion UI channel launchers expose the UI on LAN/Tailscale only when
+  `CUI_BIND_LAN=1` is set. Production rejects that flag and remains loopback-only.
 - The operator is responsible for deciding that the LAN or Tailnet is trusted
   enough for the current dev/staging posture.
 - Public internet exposure is not supported.
@@ -96,8 +97,8 @@ Rules (implemented, #3102):
   LAN peer that forges `X-Forwarded-For: 127.0.0.1` is still rejected (the #2706
   anti-spoofing posture is preserved).
 - The browser→`companion-ui` hop remains the trust boundary and is still governed
-  by the UI bind: loopback by default, LAN/Tailscale only with the explicit
-  `CUI_BIND_LAN=1` operator opt-in on trusted devices. Enabling `CUI_BIND_LAN=1`
+  by the UI bind: loopback by default, LAN/Tailscale only on dev/test with the explicit
+  `CUI_BIND_LAN=1` operator opt-in on trusted devices. Enabling `CUI_BIND_LAN=1` on dev/test
   therefore also makes vault selection reachable from that LAN/Tailnet through
   the trusted proxy; treat the network as trusted-device only, as above.
 - Set `COMPANION_UI_PROXY_HOSTS=` (empty) to opt out and fall back to the plain
@@ -110,7 +111,7 @@ Companion vault routes:
   declaration. The production compose path is `127.0.0.1:8113:8113`; the container may listen on
   `0.0.0.0` and see a nonloopback Docker peer without treating either fact as browser authority.
   Missing, wildcard, LAN, bridge, Tailscale, mixed-resolution, or unresolvable declarations disable
-  the devUI routes. `CUI_BIND_LAN=1` does not widen this production devUI exception.
+  the devUI routes. Production rejects `CUI_BIND_LAN=1`; it cannot widen this devUI exception.
 - The browser request must use a loopback-local `Host` and carry no forwarded identity, including
   `Via`. The gateway sends no inbound Host, API key, authorization, forwarding, Via, client-IP, or
   proxy identity to FastAPI.
