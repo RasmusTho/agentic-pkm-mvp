@@ -243,8 +243,16 @@ def _validated_composition(value: Mapping[str, Any]) -> dict[str, Any]:
                 raise DiscoveryContractError(f"composition.providers.{name} available provider lacks a snapshot")
             if provider.get("refusal") is not None:
                 raise DiscoveryContractError(f"composition.providers.{name} available provider cannot carry refusal evidence")
-        elif provider["authority"] is None or provider.get("refusal") is None:
-            raise DiscoveryContractError(f"composition.providers.{name} refused provider lacks typed refusal evidence")
+        else:
+            if provider["authority"] is None or provider.get("refusal") is None:
+                raise DiscoveryContractError(f"composition.providers.{name} refused provider lacks typed refusal evidence")
+            if any(
+                provider[field] is not None
+                for field in ("captured_at", "snapshot", "completeness")
+            ) or "payload" in provider:
+                raise DiscoveryContractError(
+                    f"composition.providers.{name} refused provider cannot carry available-read evidence"
+                )
     envelope["providers"] = providers
     return envelope
 

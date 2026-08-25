@@ -150,3 +150,13 @@ def test_discovery_rejects_malformed_or_refusal_less_provider_envelopes() -> Non
     refused["providers"]["work"]["refusal"] = None
     with pytest.raises(DiscoveryContractError, match="lacks typed refusal evidence"):
         compose_discovery_projection(composition=refused, items=[])
+
+
+def test_discovery_rejects_refused_provider_that_carries_available_read_evidence() -> None:
+    refused = _composition()
+    provider = refused["providers"]["work"]
+    provider["status"] = "refused"
+    provider["refusal"] = {"code": "unavailable"}
+
+    with pytest.raises(DiscoveryContractError, match="cannot carry available-read evidence"):
+        compose_discovery_projection(composition=refused, items=[_item()])
