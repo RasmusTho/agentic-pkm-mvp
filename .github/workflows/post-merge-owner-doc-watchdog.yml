@@ -433,16 +433,23 @@ jobs:
                   receipt.pr_number === authorityReceipt.pr_number &&
                   receipt.head_sha === authorityReceipt.head_sha &&
                   receipt.run_id === authorityReceipt.run_id;
-                const invalidCurrent = matchingIdentity && hasExactFields(receipt, PHASE_FIELDS) && (
-                  typeof projectionDigest !== "string" ||
-                  !/^[0-9a-f]{64}$/.test(projectionDigest) ||
-                  convergenceReceipt === undefined || convergenceReceipt === null ||
-                  (phase === "prepared" && (
-                    typeof phaseFinalObservationDigest !== "string" ||
-                    !/^[0-9a-f]{64}$/.test(phaseFinalObservationDigest) ||
-                    phaseFinalObservationDigest !== finalObservationDigest
-                  )) ||
-                  (phase !== "prepared" && phaseFinalObservationDigest !== null)
+                const exactCurrentSchema = hasExactFields(receipt, PHASE_FIELDS);
+                const carriesCurrentProjectionFields =
+                  Object.prototype.hasOwnProperty.call(receipt, "projection_convergence_sha256") ||
+                  Object.prototype.hasOwnProperty.call(receipt, "final_projection_observation_sha256");
+                const invalidCurrent = matchingIdentity && (
+                  (!exactCurrentSchema && carriesCurrentProjectionFields) ||
+                  (exactCurrentSchema && (
+                    typeof projectionDigest !== "string" ||
+                    !/^[0-9a-f]{64}$/.test(projectionDigest) ||
+                    convergenceReceipt === undefined || convergenceReceipt === null ||
+                    (phase === "prepared" && (
+                      typeof phaseFinalObservationDigest !== "string" ||
+                      !/^[0-9a-f]{64}$/.test(phaseFinalObservationDigest) ||
+                      phaseFinalObservationDigest !== finalObservationDigest
+                    )) ||
+                    (phase !== "prepared" && phaseFinalObservationDigest !== null)
+                  ))
                 );
                 if (invalidCurrent) invalidCurrentProjectionPhase = true;
                 if (
