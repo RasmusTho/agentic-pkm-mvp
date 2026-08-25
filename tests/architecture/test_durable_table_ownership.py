@@ -783,6 +783,9 @@ PG_LANES = (
     ),
 )
 DURABLE_OWNERSHIP_PG_TARGETS = (
+    # #4598: restricted-role read-only authentication and continuous
+    # append-only enforcement must run against the migrated catalog.
+    "tests/heimdal/test_trigger_ownership_pg.py",
     "tests/migrations/test_file_state_adoption.py",
     "tests/migrations/test_objects_adoption.py",
     # Both were pg-marked and in no lane at all before #4560, and both guard the
