@@ -182,9 +182,11 @@ implementation delivered or bypass their readiness gates.
 - Process-health semantics remain in #4980 and are not part of discovery authority.
 - Source-lineage/evidence-independence remains in #4906 and is a Product/Runtime semantic track,
   not a DevUI source registry.
-- The remaining discovery implementation gap is a bounded, read-only projection over existing
-  authoritative sources with explicit artifact standing and navigation. It is recorded in blocked
-  #4985 and must remain blocked until this review is merged and reconciled with #4982.
+- The bounded, nonvisual read-only discovery composer is delivered by #4985. It preserves declared
+  source authority, artifact standing, provenance, degraded source state, and source-bound
+  navigation over the existing composition envelope; it delivers no UI, route, Builder Vault
+  discovery surface, or promotion execution. The unified owner-facing architecture and UX handoff
+  remains separately owned by #4982.
 
 ## Related documents
 
