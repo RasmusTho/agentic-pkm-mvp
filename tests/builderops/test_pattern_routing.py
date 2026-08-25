@@ -86,7 +86,8 @@ def test_repeated_failure_can_route_to_debt_or_fitness_with_source_refs() -> Non
     assert by_id["pat-debt"]["target_ref"] == "docs/architecture/SBS_TRANSITION_DEBT.md::D12"
     assert by_id["pat-debt"]["source_refs"]
     assert by_id["pat-fitness"]["route"] == "fitness_rule_candidate"
-    assert "pat-fitness=fitness_rule_candidate:debt_or_fitness_recorded" in report["receipt_body"]
+    assert "pat-fitness=fitness_rule_candidate" in report["receipt_body"]
+    assert "pat-fitness=debt_or_fitness_recorded" in report["receipt_body"]
 
 
 def test_one_off_signal_can_be_discarded_with_receipt_target() -> None:

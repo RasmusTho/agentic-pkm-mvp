@@ -175,7 +175,12 @@ def _load_json_value_file(path: Path | None, *, field: str) -> Any:
 def _merge_json_objects(*objects: dict[str, Any]) -> dict[str, Any]:
     merged: dict[str, Any] = {}
     for item in objects:
-        merged.update(item)
+        for key, value in item.items():
+            previous = merged.get(key)
+            if isinstance(previous, dict) and isinstance(value, dict):
+                merged[key] = _merge_json_objects(previous, value)
+            else:
+                merged[key] = value
     return merged
 
 
