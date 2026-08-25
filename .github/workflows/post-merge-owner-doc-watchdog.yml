@@ -442,21 +442,22 @@ jobs:
                 const finalObservationDigest = convergenceReceipt === undefined || convergenceReceipt === null
                   ? null
                   : canonicalSha256(convergenceReceipt.final_projection_observation);
-                const matchingIdentity =
-                  phaseIndex >= 0 &&
-                  receipt.contract === "verified_issue_set_merge_phase.v1" &&
+                const sameAuthorityIdentity =
                   receipt.authority_sha256 === authorityDigest &&
                   receipt.repository === authorityReceipt.repository &&
                   receipt.pr_number === authorityReceipt.pr_number &&
                   receipt.head_sha === authorityReceipt.head_sha &&
                   receipt.run_id === authorityReceipt.run_id;
+                const matchingIdentity =
+                  sameAuthorityIdentity && phaseIndex >= 0 &&
+                  receipt.contract === "verified_issue_set_merge_phase.v1";
                 const exactCurrentSchema = hasExactFields(receipt, PHASE_FIELDS);
                 const carriesCurrentProjectionFields =
                   Object.prototype.hasOwnProperty.call(receipt, "projection_convergence_sha256") ||
                   Object.prototype.hasOwnProperty.call(receipt, "final_projection_observation_sha256");
-                const invalidCurrent = matchingIdentity && (
+                const invalidCurrent = sameAuthorityIdentity && (
                   (!exactCurrentSchema && carriesCurrentProjectionFields) ||
-                  (exactCurrentSchema && (
+                  (exactCurrentSchema && (!matchingIdentity || (
                     typeof projectionDigest !== "string" ||
                     !/^[0-9a-f]{64}$/.test(projectionDigest) ||
                     convergenceReceipt === undefined || convergenceReceipt === null ||
@@ -473,7 +474,7 @@ jobs:
                     (!reconciledPhase && (closed.length > 0 || reopened.length > 0)) ||
                     (mergedPhase && receipt.merge_commit_sha !== livePr.merge_commit_sha) ||
                     (!mergedPhase && receipt.merge_commit_sha !== null)
-                  ))
+                  )))
                 );
                 if (invalidCurrent) invalidCurrentProjectionPhase = true;
                 if (
