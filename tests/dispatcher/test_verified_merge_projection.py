@@ -1341,3 +1341,12 @@ def test_phase_recovery_binds_same_second_aba_replacement_by_receipt_digest() ->
         pr=neutralized_pr,
         current_body_edit=current_body_edit,
     ) == prepared["phase_receipt"]
+    assert verified_merge.resolve_verified_merge_phase(
+        [
+            *comments,
+            _trusted_convergence_comment(replacement_convergence),
+        ],
+        authority_receipt=authority,
+        pr=neutralized_pr,
+        current_body_edit=current_body_edit,
+    ) is None
