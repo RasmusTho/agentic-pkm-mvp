@@ -34,6 +34,15 @@ identity. It validates supported `object_type` values and required fields before
 The #1502 safety layer is intentionally local and minimal. It does not provide distributed locking
 across machines, but it does serialize local SQLite writes and gives agents explicit failure modes.
 
+### Repository-qualified learning provenance
+
+`LearningSignal` creation is usable from every governed repository. When a signal cites a GitHub
+issue or repo-local upstream artifact, its `source_refs` must preserve the producing repository:
+`github_issue:<owner/repo>#<issue>` and `repo_doc:<owner/repo>:<path>`. These are provenance
+identities, not a cross-repository lifecycle command or a transfer of GitHub/repo authority. The
+same BuilderOps store may retain the signal; the originating repository remains the authority for
+its Issue, PR, and docs.
+
 ### Agent identity
 
 Every created record still carries `created_by`. Lease acquisition and state transitions require an

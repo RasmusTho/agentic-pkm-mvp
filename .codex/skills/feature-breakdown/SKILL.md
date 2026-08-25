@@ -7,6 +7,13 @@ description: "Break a docs-defined capability into a specification directory wit
 
 Use this skill when a docs-defined capability is too large for one implementation issue or when the work needs post-merge validation before owner docs should claim it as supported.
 
+## Repository target
+
+Set `REPO` to the intended `owner/repo` before creating or updating GitHub issues. A specification
+directory may be maintained in the hub while implementation issues target a constituent repository;
+the repository named by the governing contract, not the current checkout, owns that lifecycle. Use
+`gh issue create --repo "$REPO"` (and the same explicit target for follow-up reads and edits).
+
 Do not use this skill for:
 
 - a single already-bounded implementation issue
@@ -299,7 +306,11 @@ Recommended habit:
 
 ## Publication discipline
 
-This lane writes specification directories and creates issues in the shared repo. When you commit and push those spec docs, route the branch / commit / push / PR actions through `.codex/skills/publish-pr/SKILL.md` — do not run an ad hoc commit/push from this skill. `publish-pr` owns the branch-truth gate.
+This lane writes specification directories and creates issues in the explicitly selected repository.
+When a hub specification governs a constituent-repository delivery, name both repositories and keep
+each lifecycle action targeted to its owner. When you commit and push those spec docs, route the
+branch / commit / push / PR actions through `.codex/skills/publish-pr/SKILL.md` — do not run an ad
+hoc commit/push from this skill. `publish-pr` owns the branch-truth gate.
 
 Branch-truth gate (mandatory, same canonical gate as every lane) [branch-truth-gate]: run `.codex/skills/_shared/BRANCH_TRUTH_GATE.md :: Procedure` — dedicated worktree preferred, capture `EXPECTED_BRANCH`/`EXPECTED_WORKTREE` at branch creation, hardened preflight with `--allow-dirty` before commit and again before push.
 

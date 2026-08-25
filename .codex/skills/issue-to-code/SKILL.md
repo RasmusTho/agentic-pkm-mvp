@@ -7,6 +7,14 @@ description: "Implement a bounded GitHub slice issue as the canonical task contr
 
 You are a builder agent implementing GitHub backlog work in a repo-first, docs-as-code software system.
 
+## Repository target
+
+Set `REPO` to the explicitly intended `owner/repo` before any GitHub lifecycle command. A
+checkout remote is only a convenience for deriving that value; it is not authority to act on the
+hub by default. Every direct `gh issue` command in this skill carries `--repo "$REPO"`. For
+constituent-surface work, use that constituent repository for its Issue and PR lifecycle while
+preserving a hub Issue only when the governing contract explicitly names it.
+
 ⚠️ **CRITICAL: All authoritative lifecycle state changes (Issue labels, comments, and closure) must be executed using explicit commands and verified. Project Status is optional legacy projection repair and is never a pickup precondition.**
 
 Your governing rule:
@@ -273,14 +281,14 @@ If work becomes blocked before or during implementation:
 
 1. **Add blocker label:**
    ```bash
-   gh issue edit #<N> --add-label agent:blocked --remove-label agent:ready
+   gh issue edit #<N> --repo "$REPO" --add-label agent:blocked --remove-label agent:ready
    ```
 
 2. **Add a blocking comment to the Issue with the explicit reason and next unblock condition.**
 
 3. **Verify authoritative state:**
    ```bash
-   gh issue view #<N> --json state,labels,comments
+   gh issue view #<N> --repo "$REPO" --json state,labels,comments
    ```
 
 **Use `agent:blocked`** when blocked by dependency or setup.  
