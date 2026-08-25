@@ -30,7 +30,8 @@ _SECRET_VALUE = re.compile(
     r"gh[pousr]_[A-Za-z0-9_]+|"
     r"pve[ta]=|"
     r"-----BEGIN [A-Z ]+PRIVATE KEY-----|"
-    r"[A-Za-z][A-Za-z0-9+.-]*://[^\s/@:]+(?::[^\s/@]*)?@|"
+    r"[A-Za-z][A-Za-z0-9+.-]*://[^\s@]+@|"
+    r"(?:^|[\s;])[^\s;:@]+:[^\s;@]+@|"
     r"(?:password|passwd|pwd|secret|token|api[_-]?key)\s*=\s*(?!\[REDACTED\])\S+"
     r")",
     re.I,
@@ -42,6 +43,7 @@ _SECRET_REFERENCE = re.compile(
     r"^(?:keychain:(?://)?[A-Za-z0-9][A-Za-z0-9._/-]*|\$\{SECRET:[A-Za-z0-9][A-Za-z0-9._/-]*\})$"
 )
 _FINGERPRINT = re.compile(r"^[a-f0-9]{64}$")
+_CAMEL_CASE_BOUNDARY = re.compile(r"(?<=[a-z0-9])(?=[A-Z])")
 
 # The baseline is intentionally limited to builder-system.  It has no GPU or
 # test-tailnet vector; neither is a prerequisite for this qualification slice.
@@ -83,17 +85,28 @@ def _loads_schema(name: str) -> Mapping[str, Any]:
     return json.loads((_ROOT / "config" / "platform" / name).read_text(encoding="utf-8"))
 
 
+def _normalize_key(key: str) -> str:
+    return _CAMEL_CASE_BOUNDARY.sub("_", key).lower().replace("-", "_")
+
+
+def _is_opaque_credential_key(key: str) -> bool:
+    normalized = _normalize_key(key)
+    return normalized in _OPAQUE_CREDENTIAL_KEYS or any(
+        normalized.endswith(f"_{candidate}") for candidate in _OPAQUE_CREDENTIAL_KEYS
+    )
+
+
 def _key_is_secret(key: str) -> bool:
-    normalized = key.lower().replace("-", "_")
+    normalized = _normalize_key(key)
     return (
         not normalized.endswith("_ref")
         and not normalized.endswith("_refs")
-        and (normalized in _OPAQUE_CREDENTIAL_KEYS or _SECRET_KEY.search(normalized) is not None)
+        and (_is_opaque_credential_key(key) or _SECRET_KEY.search(normalized) is not None)
     )
 
 
 def _reference_cardinality(key: str) -> str | None:
-    normalized = key.lower().replace("-", "_")
+    normalized = _normalize_key(key)
     if normalized.endswith("_refs"):
         return "many"
     if normalized.endswith("_ref"):
@@ -115,8 +128,6 @@ def _contains_secret(value: Any, *, key: str | None = None) -> bool:
                 not _is_valid_secret_reference(item) for item in value
             )
     if key is not None and _key_is_secret(key):
-        if key.lower().replace("-", "_") in _OPAQUE_CREDENTIAL_KEYS:
-            return True
         return True
     if isinstance(value, str):
         return value == "[REDACTED]" or _SECRET_VALUE.search(value) is not None
