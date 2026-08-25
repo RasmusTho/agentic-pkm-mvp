@@ -647,12 +647,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         _write(args.output_json, success_payload)
         print(
             json.dumps(
-                {
-                    "convergence_receipt_sha256": durable_convergence.get(
-                        "receipt_sha256"
-                    ),
-                    "status": "converged",
-                },
+                {"status": "converged"},
                 indent=2,
                 sort_keys=True,
             )

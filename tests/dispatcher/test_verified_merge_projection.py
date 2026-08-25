@@ -970,12 +970,7 @@ def test_projection_convergence_cli_orders_quorum_and_final_read(
         "2026-08-12T05:00:07Z"
     )
     terminal_output = json.loads(capsys.readouterr().out)
-    assert terminal_output == {
-        "convergence_receipt_sha256": output["convergence_receipt"][
-            "receipt_sha256"
-        ],
-        "status": "converged",
-    }
+    assert terminal_output == {"status": "converged"}
     assert neutralized_body not in json.dumps(terminal_output)
     assert authority_reads == []
 
