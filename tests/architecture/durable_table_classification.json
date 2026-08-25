@@ -111,7 +111,7 @@
     },
     "decision_outcomes": {
       "classification": "binding-scoped",
-      "reason": "The `decision_outcomes` receipt projection now stamps every judgment with vault_binding_id; its per-binding decision/rung uniqueness prevents one vault's receipt from colliding with another.",
+      "reason": "The `decision_outcomes` receipt projection now stamps every judgment with vault_binding_id; its per-binding decision/rung uniqueness prevents one vault's receipt from colliding with another. CAL-04's calibration rebuild locks the table and replaces only the selected binding after exact canonical-log parity.",
       "owning_revision": "b1c2d3e4f5a6",
       "declaring_revisions": [
         "b1c2d3e4f5a6",
@@ -123,6 +123,13 @@
         {
           "module": "app/receipts/outcome_receipt_projection.py",
           "operations": [
+            "insert"
+          ]
+        },
+        {
+          "module": "app/jobs/calibration_projection.py",
+          "operations": [
+            "delete",
             "insert"
           ]
         }

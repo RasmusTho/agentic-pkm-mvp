@@ -908,6 +908,12 @@ jobs:
               - 'app/episodes/segmenter.py'
               - 'app/receipts/outcome_receipt_log.py'
               - 'app/receipts/outcome_receipt_projection.py'
+              # CAL-04 (#3322): a doctor-before-truncate rebuild is only safe
+              # when its real PostgreSQL refusal and interleaving proofs run
+              # on the PR head rather than waiting for the nightly lane.
+              - 'app/jobs/calibration_projection.py'
+              - 'tests/jobs/test_calibration_projection_rebuild.py'
+              - 'tests/integration/test_calibration_rebuild_from_log_only.py'
               - 'tests/migrations/test_multi_vault_ingest_projection_keys.py'
               - 'tests/store/test_membership_store.py'
               - 'tests/migrations/test_ingest_schema_parity.py'
@@ -1054,6 +1060,8 @@ jobs:
             tests/jobs/test_decisions_export.py \
             tests/jobs/test_decisions_projection_rebuild.py \
             tests/jobs/test_multi_vault_decisions_rebuild_scope.py \
+            tests/jobs/test_calibration_projection_rebuild.py \
+            tests/integration/test_calibration_rebuild_from_log_only.py \
             tests/stores/test_decisions_fk_semantics.py \
             tests/stores/test_ensure_tables_assert_only.py \
             tests/stores/test_multi_vault_store_reset_scope.py \

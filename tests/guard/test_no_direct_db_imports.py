@@ -35,6 +35,11 @@ ALLOW_FILES = (
     # for app/services/decisions.py and app/jobs/backfill.py above.
     'app/receipts/decision_receipt_log.py',
     'app/jobs/decisions_projection.py',
+    # Decision Calibration CAL-04 (#3322): the vault-canonical outcome log's
+    # bounded rebuild/doctor pair owns the decision_outcomes projection.  It
+    # must inspect DB-vs-log parity before its binding-scoped DELETE, so this
+    # job uses the same explicit conn_rw exception as decisions_projection.py.
+    'app/jobs/calibration_projection.py',
     # Slice 4 (#2973): one-time DB->log export of historical decision rows.
     # Same bounded pattern as decisions_projection.py above: reads the
     # `decisions` projection table directly through conn_rw to find rows not
