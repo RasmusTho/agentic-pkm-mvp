@@ -1929,10 +1929,8 @@ def resolve_verified_merge_phase(
         candidate_fields = frozenset(candidate)
         current_schema = candidate_fields == _PHASE_RECEIPT_FIELDS
         legacy_schema = candidate_fields == _LEGACY_PHASE_RECEIPT_FIELDS
-        matching_identity = (
-            candidate.get("contract") == VERIFIED_MERGE_PHASE_CONTRACT
-            and phase in _PHASES
-            and candidate.get("authority_sha256") == authority_digest
+        same_authority_identity = (
+            candidate.get("authority_sha256") == authority_digest
             and candidate.get("repository")
             == authority_receipt.get("repository")
             and candidate.get("pr_number")
@@ -1940,7 +1938,18 @@ def resolve_verified_merge_phase(
             and candidate.get("head_sha") == authority_receipt.get("head_sha")
             and candidate.get("run_id") == authority_receipt.get("run_id")
         )
+        matching_identity = (
+            same_authority_identity
+            and candidate.get("contract") == VERIFIED_MERGE_PHASE_CONTRACT
+            and phase in _PHASES
+        )
         if not matching_identity:
+            if same_authority_identity and (
+                current_schema
+                or candidate_fields
+                & (_PHASE_RECEIPT_FIELDS - _LEGACY_PHASE_RECEIPT_FIELDS)
+            ):
+                invalid_current_projection_phase = True
             continue
         if not (current_schema or legacy_schema):
             if candidate_fields & (

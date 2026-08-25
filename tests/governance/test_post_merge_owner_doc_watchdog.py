@@ -694,6 +694,32 @@ def test_watchdog_rejects_invalid_same_authority_phase_beside_current_chain() ->
         )
         + "\n```"
     )
+    invalid_phase = _phase_comment(
+        authority,
+        phase="prepared",
+        merge_commit_sha=None,
+        phase_kwargs=replacement_kwargs,
+    )
+    invalid_phase_payload = _receipt_payload(invalid_phase)
+    invalid_phase_payload["phase"] = "forged-phase"
+    invalid_phase["body"] = (
+        "verified issue-set merge phase:\n```json\n"
+        + json.dumps(invalid_phase_payload, separators=(",", ":"), sort_keys=True)
+        + "\n```"
+    )
+    invalid_contract = _phase_comment(
+        authority,
+        phase="prepared",
+        merge_commit_sha=None,
+        phase_kwargs=replacement_kwargs,
+    )
+    invalid_contract_payload = _receipt_payload(invalid_contract)
+    invalid_contract_payload["contract"] = "forged-contract"
+    invalid_contract["body"] = (
+        "verified issue-set merge phase:\n```json\n"
+        + json.dumps(invalid_contract_payload, separators=(",", ":"), sort_keys=True)
+        + "\n```"
+    )
     discontinuous = _phase_comment(
         authority, phase="merged", merge_commit_sha=merge_sha
     )
@@ -703,6 +729,8 @@ def test_watchdog_rejects_invalid_same_authority_phase_beside_current_chain() ->
         (invalid_null, []),
         (invalid_extra, []),
         (invalid_reconciled, []),
+        (invalid_phase, []),
+        (invalid_contract, []),
         (discontinuous, [stale_convergence]),
     ):
         assert _node(
