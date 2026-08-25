@@ -318,7 +318,12 @@ def _legacy_terminal_lf_provenance(comment: Mapping[str, object]) -> bool:
 
 
 def _canonical_digest(value: Mapping[str, object]) -> str:
-    encoded = json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
+    encoded = json.dumps(
+        value,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+    ).encode()
     return hashlib.sha256(encoded).hexdigest()
 
 
@@ -1832,16 +1837,24 @@ def resolve_verified_merge_phase(
         candidate_fields = frozenset(candidate)
         current_schema = candidate_fields == _PHASE_RECEIPT_FIELDS
         legacy_schema = candidate_fields == _LEGACY_PHASE_RECEIPT_FIELDS
-        if (
-            not (current_schema or legacy_schema)
-            or candidate.get("contract") != VERIFIED_MERGE_PHASE_CONTRACT
-            or phase not in _PHASES
-            or candidate.get("authority_sha256") != authority_digest
-            or candidate.get("repository") != authority_receipt.get("repository")
-            or candidate.get("pr_number") != authority_receipt.get("pr_number")
-            or candidate.get("head_sha") != authority_receipt.get("head_sha")
-            or candidate.get("run_id") != authority_receipt.get("run_id")
-        ):
+        matching_identity = (
+            candidate.get("contract") == VERIFIED_MERGE_PHASE_CONTRACT
+            and phase in _PHASES
+            and candidate.get("authority_sha256") == authority_digest
+            and candidate.get("repository")
+            == authority_receipt.get("repository")
+            and candidate.get("pr_number")
+            == authority_receipt.get("pr_number")
+            and candidate.get("head_sha") == authority_receipt.get("head_sha")
+            and candidate.get("run_id") == authority_receipt.get("run_id")
+        )
+        if not matching_identity:
+            continue
+        if not (current_schema or legacy_schema):
+            if candidate_fields & (
+                _PHASE_RECEIPT_FIELDS - _LEGACY_PHASE_RECEIPT_FIELDS
+            ):
+                invalid_current_projection_phase = True
             continue
         convergence_digest = candidate.get("projection_convergence_sha256")
         final_observation_digest = candidate.get(

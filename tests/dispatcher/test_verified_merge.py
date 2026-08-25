@@ -1073,6 +1073,7 @@ def test_explicit_legacy_phase_field_set_remains_continuous() -> None:
         pr=merged_pr,
         **convergence_kwargs,
     )["phase_receipt"]
+    current_prepared = copy.deepcopy(prepared)
     for receipt in (prepared, merged):
         assert isinstance(receipt, dict)
         receipt.pop("projection_convergence_sha256")
@@ -1091,6 +1092,23 @@ def test_explicit_legacy_phase_field_set_remains_continuous() -> None:
         authority_receipt=authority,
         pr=merged_pr,
     ) == merged
+
+    current_prepared.pop("final_projection_observation_sha256")
+    malformed_current_comment = _trusted_comment(
+        "verified issue-set merge phase:\n```json\n"
+        + json.dumps(
+            current_prepared, sort_keys=True, separators=(",", ":")
+        )
+        + "\n```"
+    )
+    assert (
+        resolve_verified_merge_phase(
+            [malformed_current_comment, *comments],
+            authority_receipt=authority,
+            pr=merged_pr,
+        )
+        is None
+    )
 
 
 def test_merge_phase_resolver_stops_at_premerge_phase_after_merge_crash() -> None:

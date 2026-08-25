@@ -3555,6 +3555,41 @@ def test_production_terminal_evidence_rejects_removed_ref_merge_closure(
     )
 
 
+def test_terminal_consumer_rejects_forged_final_observation_digest(
+    tmp_path,
+) -> None:
+    state = ledger(tmp_path)
+    run = state.ingest(request())
+    budget = state.repair_budget_projection(run.run_id)
+    terminal_pr = merged_pr()
+    comments = _merge_comments(terminal_pr, repair_budget=budget)
+    comments[2]["body"] = re.sub(
+        r'"final_projection_observation_sha256":"[0-9a-f]{64}"',
+        '"final_projection_observation_sha256":"' + "f" * 64 + '"',
+        str(comments[2]["body"]),
+    )
+    evidence = {
+        "comments": comments,
+        "merge_commit": {
+            "repository": REPO,
+            "sha": "b" * 40,
+            "message": "Merge verified issue set",
+        },
+    }
+
+    assert (
+        verification_consumer.delivered_live_truth_rejection(
+            run,
+            terminal_pr,
+            GREEN,
+            evidence,
+            expected_head_sha=HEAD,
+            expected_repair_budget=budget,
+        )
+        == "merge_phase_incomplete"
+    )
+
+
 def test_gh_source_rejects_malformed_repository_event_commit() -> None:
     class Result:
         returncode = 0
