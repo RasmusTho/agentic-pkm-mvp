@@ -85,6 +85,7 @@ it. See `docs/audits/BUILDER_SYSTEM_INTENT_EVIDENCE_GOVERNANCE_2026-08-10.md`.
 | Work/freshness | `build_registry`, Cockpit chain predicates, source-state model | Delivered read-only |
 | Queue/claim/lease activity | Dispatcher store and Signboard API contracts | Delivered operational source; standalone Signboard is not devUI navigation |
 | Unified read composition | `devui.composition.v1`, GET `/api/devui/composition` | Delivered per-request projection; no cache, mutation, or visual shell |
+| Authority-aware discovery | `devui.discovery-projection.v1` over declared source items | Pure nonvisual composer delivered by #4985; no source registry, UI, Builder Vault surface, or promotion execution |
 | Overview zones | `DevuiOverviewView.v1` over the composition envelope | Pure server-side composer delivered; it withdraws unsupported Needs you and Ready to try classifications until producer-authority enrichment exists |
 | Subject focus | `FocusView.v1` over existing read sources | Pure read-only composer delivered by PR #4703; Focus route/UI not delivered |
 | External conversation | `conversation-context-pack.v1` and explicit external adapter boundary | Nonvisual pack/export/disposition composer delivered by PR #4704; provider opening, embedded runtime, and session integration not delivered |
