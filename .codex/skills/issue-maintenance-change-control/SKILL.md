@@ -15,6 +15,13 @@ That includes PR lifecycle truth, not only Issue lifecycle truth.
 This is a cold-path maintenance role, not a hot-path implementation routine.
 Use `docs/development/PR_HOT_PATH.md` for normal PR delivery and `docs/development/PARENT_ISSUE_CLOSURE.md` when a delivered parent issue actually needs closure.
 
+## Repository target
+
+Set `REPO` to the explicitly intended `owner/repo` before reading or mutating GitHub state. Never
+infer the hub as the target merely because this skill is available from a hub checkout. Every
+direct `gh issue` command below uses `--repo "$REPO"`; use the constituent repository for its own
+Issue lifecycle and retain a hub issue only when its contract explicitly owns cross-repo tracking.
+
 See `.codex/skills/README.md :: Workflow map` for the canonical chain: issue maintenance sits on the
 conditional path (`Issue maintenance -> Agent`), not the hot path.
 
@@ -144,15 +151,15 @@ Impact` unparseable.
    ```bash
    set -euo pipefail
    body_file="$(mktemp)"
-   gh issue view <N> --repo <owner/repo> --json body --jq .body >"$body_file"
+   gh issue view <N> --repo "$REPO" --json body --jq .body >"$body_file"
    # Edit "$body_file" while preserving real newlines.
-   gh issue edit <N> --repo <owner/repo> --body-file "$body_file"
+   gh issue edit <N> --repo "$REPO" --body-file "$body_file"
    ```
 2. Re-read the authoritative GitHub body into a fresh file after the mutation. Do not validate the
    pre-write local copy as evidence that GitHub stored the intended newlines:
    ```bash
    verified_body_file="$(mktemp)"
-   gh issue view <N> --repo <owner/repo> --json body --jq .body >"$verified_body_file"
+   gh issue view <N> --repo "$REPO" --json body --jq .body >"$verified_body_file"
    python3 scripts/validate_issue_readiness.py \
      --body-file "$verified_body_file" \
      --issue-number <N> \
@@ -187,12 +194,12 @@ If an Issue is closed (already delivered):
 
 1. **Remove all agent labels:**
    ```bash
-   gh issue edit #<N> --remove-label agent:ready --remove-label agent:blocked --remove-label agent:needs-human
+   gh issue edit #<N> --repo "$REPO" --remove-label agent:ready --remove-label agent:blocked --remove-label agent:needs-human
    ```
 
 2. **Verify authoritative state:**
    ```bash
-   gh issue view #<N> --json state,labels
+   gh issue view #<N> --repo "$REPO" --json state,labels
    ```
 
 3. **Optional Project repair:** when explicitly in scope, apply and verify the `Done` projection.
@@ -203,19 +210,19 @@ If an open issue is no longer the truthful backlog item because an equivalent sl
 
 1. **Leave a maintenance receipt comment:**
    ```bash
-   gh issue comment #<N> --body "Maintenance reconciliation: this issue is superseded by delivered canonical issue #<M> / PR #<P> ..."
+   gh issue comment #<N> --repo "$REPO" --body "Maintenance reconciliation: this issue is superseded by delivered canonical issue #<M> / PR #<P> ..."
    ```
 
 2. **Close the stale issue:**
    ```bash
-   gh issue close #<N> --reason completed
+   gh issue close #<N> --repo "$REPO" --reason completed
    ```
 
 3. **Re-check terminal truth and strip lingering agent labels if needed:**
    ```bash
-   gh issue view #<N> --json state,labels
-   gh issue edit #<N> --remove-label agent:ready --remove-label agent:blocked --remove-label agent:needs-human
-   gh issue view #<N> --json state,labels
+   gh issue view #<N> --repo "$REPO" --json state,labels
+   gh issue edit #<N> --repo "$REPO" --remove-label agent:ready --remove-label agent:blocked --remove-label agent:needs-human
+   gh issue view #<N> --repo "$REPO" --json state,labels
    ```
 
 4. **Only then treat the dedupe as complete.**
@@ -226,7 +233,7 @@ If an open implementation Issue is malformed, stale, or no longer safely executa
 
 1. **Add needs-human label:**
    ```bash
-   gh issue edit #<N> --add-label agent:needs-human --remove-label agent:ready --remove-label agent:blocked
+   gh issue edit #<N> --repo "$REPO" --add-label agent:needs-human --remove-label agent:ready --remove-label agent:blocked
    ```
 
 2. **Post comment with the required action.**
@@ -253,7 +260,7 @@ Parent feature issues are validation hubs, not direct pickup issues. Unless expl
 
 1. **Keep them non-active:**
    ```bash
-   gh issue edit #<PARENT> --add-label agent:blocked --remove-label agent:ready --remove-label agent:needs-human
+   gh issue edit #<PARENT> --repo "$REPO" --add-label agent:blocked --remove-label agent:ready --remove-label agent:needs-human
    ```
 
 2. **Use them to track child slice delivery** in comments and body updates, including validation receipts posted by each delivered child
@@ -330,7 +337,7 @@ Lead with the human summary; include later sections only when they have content 
 Use this when the user asks for a maintenance run across everything not done.
 
 1. Resolve repo:
-   - If repo not given, ask for `owner/repo`.
+   - If repo not given, ask for `owner/repo` and set it as `REPO`.
    - If user says they are the owner, resolve the username via `gh api user --jq .login` or infer it from `git remote` (prefer the GitHub app account resolver when available, but do not depend on it).
 2. **Optional Project-state audit.** Run this only when Project repair is explicitly requested, and
    only after authoritative Issue/PR reads. It never gates label edits or pickup. If in scope, query
@@ -374,7 +381,7 @@ Use this when the user asks for a maintenance run across everything not done.
 
 3. List open issues:
    - Prefer GitHub app for structured data when possible.
-   - For bulk edits, use `gh issue list --state open --json number,title,labels,body,comments` for full bodies and blocker context.
+   - For bulk edits, use `gh issue list --repo "$REPO" --state open --json number,title,labels,body,comments` for full bodies and blocker context.
 4. For each open issue:
    - Establish issue/PR truth before deciding labels:
      - inspect recent comments for acceptance failures, blocker receipts, and follow-up issue links
@@ -394,11 +401,11 @@ Use this when the user asks for a maintenance run across everything not done.
    - **Execute label corrections** from established issue/PR truth before any Project reconciliation:
      ```bash
      # Example: set to ready if criteria are concrete
-     gh issue edit #<N> --add-label agent:ready --remove-label agent:blocked --remove-label agent:needs-human
+     gh issue edit #<N> --repo "$REPO" --add-label agent:ready --remove-label agent:blocked --remove-label agent:needs-human
      # OR: set to needs-human if ambiguous or boundary move
-     gh issue edit #<N> --add-label agent:needs-human --remove-label agent:ready --remove-label agent:blocked
+     gh issue edit #<N> --repo "$REPO" --add-label agent:needs-human --remove-label agent:ready --remove-label agent:blocked
      # OR: set to blocked if external dependency exists
-     gh issue edit #<N> --add-label agent:blocked --remove-label agent:ready --remove-label agent:needs-human
+     gh issue edit #<N> --repo "$REPO" --add-label agent:blocked --remove-label agent:ready --remove-label agent:needs-human
      ```
      - Add `agent:ready` only if Scope/Constraints/Acceptance Criteria are concrete and no ambiguity remains.
      - Do not add or preserve `agent:ready` when any AC lacks a resolvable `Verify:` marker.
@@ -415,12 +422,12 @@ Use this when the user asks for a maintenance run across everything not done.
 5. **Execute Deduplication:**
    - If duplicate issues have the same scope/contract:
      ```bash
-     gh issue comment #<DUPLICATE> --body "Duplicate of #<CANONICAL>. Closing in favor of canonical issue."
-     gh issue close #<DUPLICATE>
+     gh issue comment #<DUPLICATE> --repo "$REPO" --body "Duplicate of #<CANONICAL>. Closing in favor of canonical issue."
+     gh issue close #<DUPLICATE> --repo "$REPO"
      ```
    - Remove all agent labels from closed duplicate:
      ```bash
-     gh issue edit #<DUPLICATE> --remove-label agent:ready --remove-label agent:blocked --remove-label agent:needs-human
+     gh issue edit #<DUPLICATE> --repo "$REPO" --remove-label agent:ready --remove-label agent:blocked --remove-label agent:needs-human
      ```
 
 6. **When Project repair is in scope, reconcile terminal work stuck in non-terminal status**:

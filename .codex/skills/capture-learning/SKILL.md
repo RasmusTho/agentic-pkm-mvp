@@ -16,6 +16,16 @@ Product/Runtime truth requires the explicit Product System authority path named 
 `docs/learning-log.md` is historical/compatibility material after #1506. Do not treat it as the
 primary operational learning store.
 
+## Cross-repository capture
+
+Learning from constituent-repository work uses the same BuilderOps `LearningSignal` path. Set
+`REPO` to the repository that produced the observation and qualify GitHub provenance as
+`github_issue:${REPO}#<issue>`; qualify a repo-local upstream artifact as
+`repo_doc:${REPO}:<path>`. The source ref preserves origin only: it neither moves GitHub tracking
+to the hub nor transfers repo authority. The BuilderOps store accepts these repository-qualified
+references as provenance under `docs/builderops/BUILDEROPS_VAULT_STORE.md :: Repository-qualified
+learning provenance`.
+
 ## When to invoke
 
 Invoke only when:
@@ -56,8 +66,8 @@ Source: <skill name or human>
 Diverged: <one sentence>
 Upstream artifact: <path or section>" \
   --signal-type workflow_divergence \
-  --source-ref "github_issue:#<issue>" \
-  --source-ref "repo_doc:<upstream-artifact-path>" \
+  --source-ref "github_issue:${REPO}#<issue>" \
+  --source-ref "repo_doc:${REPO}:<upstream-artifact-path>" \
   --created-by "<agent-id>" \
   --idempotency-key "learning:<YYYY-MM-DD>:<issue-or-context>:<short-slug>" \
   --json
