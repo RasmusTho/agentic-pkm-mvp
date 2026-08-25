@@ -63,6 +63,9 @@ query($owner: String!, $name: String!, $number: Int!) {
 """
 
 
+_SUBPROCESS_DEADLINE: float | None = None
+
+
 def _mapping(path: Path) -> dict[str, object]:
     value = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(value, dict):
@@ -73,12 +76,18 @@ def _mapping(path: Path) -> dict[str, object]:
 def _run_json_value(
     argv: list[str], *, stdin: Mapping[str, object] | None = None
 ) -> object:
+    timeout: float | None = None
+    if _SUBPROCESS_DEADLINE is not None:
+        timeout = _SUBPROCESS_DEADLINE - time.monotonic()
+        if timeout <= 0:
+            raise subprocess.TimeoutExpired(argv, timeout)
     completed = subprocess.run(
         argv,
         input=(json.dumps(stdin) if stdin is not None else None),
         text=True,
         capture_output=True,
         check=False,
+        timeout=timeout,
     )
     if completed.returncode != 0:
         raise ValueError("GitHub read failed")
@@ -520,6 +529,7 @@ def _parser() -> argparse.ArgumentParser:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    global _SUBPROCESS_DEADLINE
     args = _parser().parse_args(argv)
     if (
         args.pr_number < 1
@@ -533,6 +543,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     authority = _mapping(args.authority_json)
     pr_contract = _mapping(args.pr_contract_json)
     deadline = time.monotonic() + args.timeout_seconds
+    _SUBPROCESS_DEADLINE = deadline
     try:
         _authenticate_pr_contract(
             args.gh_bin,
@@ -691,6 +702,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 sort_keys=True,
             )
         )
+        _SUBPROCESS_DEADLINE = None
         return 0
     except TimeoutError:
         failure = "timeout"
@@ -725,6 +737,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             payload["restoration"] = None
     _write(args.output_json, payload)
     print(json.dumps({"status": "failed_closed"}, indent=2, sort_keys=True))
+    _SUBPROCESS_DEADLINE = None
     return 2 if failure == "timeout" else 3
 
 
