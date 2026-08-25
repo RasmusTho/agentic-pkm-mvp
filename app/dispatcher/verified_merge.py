@@ -1561,20 +1561,12 @@ def _projection_convergence_matches_authority(
     return True
 
 
-def resolve_verified_merge_projection_convergence_receipt(
+def _authenticated_projection_convergence_receipts(
     comments: Sequence[Mapping[str, object]],
     *,
     authority_receipt: Mapping[str, object],
-    pr_contract: Mapping[str, object] | None = None,
-) -> dict[str, object] | None:
-    """Resolve one trusted convergence receipt, optionally for one body edit.
-
-    A body-only ABA edit can leave an older, otherwise authentic receipt on the
-    PR.  That receipt remains immutable audit evidence, but it is not current
-    convergence authority.  Callers with a live ``pr-contract`` therefore
-    select exactly one receipt bound to that contract instead of treating the
-    historical receipt as a duplicate or reusable proof.
-    """
+) -> list[Mapping[str, object]] | None:
+    """Return all authenticated convergence receipts, including audit history."""
 
     trusted_attempts = [
         comment
@@ -1585,7 +1577,7 @@ def resolve_verified_merge_projection_convergence_receipt(
         in cast(str, comment["body"])
     ]
     if not trusted_attempts:
-        return None
+        return []
     entries = _comment_receipt_entries(
         trusted_attempts, VERIFIED_MERGE_PROJECTION_CONVERGENCE_MARKER
     )
@@ -1603,6 +1595,29 @@ def resolve_verified_merge_projection_convergence_receipt(
         )
         for receipt in receipts
     ):
+        return None
+    return receipts
+
+
+def resolve_verified_merge_projection_convergence_receipt(
+    comments: Sequence[Mapping[str, object]],
+    *,
+    authority_receipt: Mapping[str, object],
+    pr_contract: Mapping[str, object] | None = None,
+) -> dict[str, object] | None:
+    """Resolve one trusted convergence receipt, optionally for one body edit.
+
+    A body-only ABA edit can leave an older, otherwise authentic receipt on the
+    PR.  That receipt remains immutable audit evidence, but it is not current
+    convergence authority.  Callers with a live ``pr-contract`` therefore
+    select exactly one receipt bound to that contract instead of treating the
+    historical receipt as a duplicate or reusable proof.
+    """
+
+    receipts = _authenticated_projection_convergence_receipts(
+        comments, authority_receipt=authority_receipt
+    )
+    if not receipts:
         return None
     if pr_contract is not None:
         receipts = [
@@ -1637,29 +1652,11 @@ def projection_convergence_receipts_authenticate_authority(
 ) -> bool:
     """Return whether every trusted convergence comment is authentic history."""
 
-    trusted_attempts = [
-        comment
-        for comment in comments
-        if comment.get("author_association") in _TRUSTED_AUTHOR_ASSOCIATIONS
-        and isinstance(comment.get("body"), str)
-        and VERIFIED_MERGE_PROJECTION_CONVERGENCE_MARKER
-        in cast(str, comment["body"])
-    ]
-    entries = _comment_receipt_entries(
-        trusted_attempts, VERIFIED_MERGE_PROJECTION_CONVERGENCE_MARKER
-    )
-    if len(entries) != len(trusted_attempts):
-        return False
-    allow_legacy_terminal_lf = _comments_authenticate_legacy_authority(
-        comments, authority_receipt
-    )
-    return all(
-        _projection_convergence_matches_authority(
-            receipt,
-            authority_receipt=authority_receipt,
-            allow_legacy_terminal_lf=allow_legacy_terminal_lf,
+    return (
+        _authenticated_projection_convergence_receipts(
+            comments, authority_receipt=authority_receipt
         )
-        for receipt, _comment in entries
+        is not None
     )
 
 
@@ -1881,24 +1878,15 @@ def resolve_verified_merge_phase(
     valid_by_phase: dict[str, list[dict[str, object]]] = {
         phase: [] for phase in _PHASES
     }
-    durable_convergence = resolve_verified_merge_projection_convergence_receipt(
+    durable_convergence_receipts = _authenticated_projection_convergence_receipts(
         comments, authority_receipt=authority_receipt
     )
-    durable_convergence_digest = (
-        durable_convergence.get("receipt_sha256")
-        if durable_convergence is not None
-        else None
-    )
-    durable_final_observation = (
-        durable_convergence.get("final_projection_observation")
-        if durable_convergence is not None
-        else None
-    )
-    durable_final_observation_digest = (
-        _canonical_digest(durable_final_observation)
-        if isinstance(durable_final_observation, Mapping)
-        else None
-    )
+    convergence_by_digest: dict[str, Mapping[str, object]] = {}
+    if durable_convergence_receipts is not None:
+        for receipt in durable_convergence_receipts:
+            receipt_digest = receipt.get("receipt_sha256")
+            if isinstance(receipt_digest, str):
+                convergence_by_digest[receipt_digest] = receipt
     invalid_current_projection_phase = False
     for candidate in _comment_receipts(comments, VERIFIED_MERGE_PHASE_MARKER):
         phase = candidate.get("phase")
@@ -1928,24 +1916,40 @@ def resolve_verified_merge_phase(
         final_observation_digest = candidate.get(
             "final_projection_observation_sha256"
         )
-        if current_schema and (
-            not isinstance(convergence_digest, str)
-            or _DIGEST_PATTERN.fullmatch(convergence_digest) is None
-            or convergence_digest != durable_convergence_digest
-            or (
-                phase == "prepared"
-                and (
-                    not isinstance(final_observation_digest, str)
-                    or _DIGEST_PATTERN.fullmatch(final_observation_digest)
-                    is None
-                    or final_observation_digest
-                    != durable_final_observation_digest
-                )
+        if current_schema:
+            matched_convergence = (
+                convergence_by_digest.get(convergence_digest)
+                if isinstance(convergence_digest, str)
+                else None
             )
-            or (phase != "prepared" and final_observation_digest is not None)
-        ):
-            invalid_current_projection_phase = True
-            continue
+            matched_final_observation = (
+                matched_convergence.get("final_projection_observation")
+                if matched_convergence is not None
+                else None
+            )
+            matched_final_observation_digest = (
+                _canonical_digest(matched_final_observation)
+                if isinstance(matched_final_observation, Mapping)
+                else None
+            )
+            if (
+                not isinstance(convergence_digest, str)
+                or _DIGEST_PATTERN.fullmatch(convergence_digest) is None
+                or matched_convergence is None
+                or (
+                    phase == "prepared"
+                    and (
+                        not isinstance(final_observation_digest, str)
+                        or _DIGEST_PATTERN.fullmatch(final_observation_digest)
+                        is None
+                        or final_observation_digest
+                        != matched_final_observation_digest
+                    )
+                )
+                or (phase != "prepared" and final_observation_digest is not None)
+            ):
+                invalid_current_projection_phase = True
+                continue
         expected_digest = (
             authority_receipt.get("body_sha256")
             if phase == "restored"

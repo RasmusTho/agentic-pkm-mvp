@@ -1271,3 +1271,55 @@ def test_projection_convergence_cli_rebuilds_after_body_edit_aba(
     output = json.loads(output_path.read_text(encoding="utf-8"))
     assert output["status"] == "converged"
     assert output["convergence_receipt"] == replacement_convergence
+
+
+def test_phase_recovery_binds_same_second_aba_replacement_by_receipt_digest() -> None:
+    authority, neutralized_body, stale_pr_contract, stale_convergence = (
+        _projection_fixture()
+    )
+    current_pr_contract = copy.deepcopy(stale_pr_contract)
+    current_body_edit = dict(current_pr_contract["body_edit"])
+    current_body_edit["node_id"] = "UCE_kwDOQEip6s4825_same_second_aba"
+    current_pr_contract["body_edit"] = current_body_edit
+
+    def current_observation(observed_at: str) -> dict[str, object]:
+        observation = _observation(
+            neutralized_body, observed_at=observed_at
+        )
+        pull_request = observation["pull_request"]
+        assert isinstance(pull_request, dict)
+        pull_request["latest_body_edit"] = current_body_edit
+        return observation
+
+    replacement_convergence = (
+        verified_merge.build_verified_merge_projection_convergence(
+            authority_receipt=authority,
+            pr_contract=current_pr_contract,
+            observations=[
+                current_observation("2026-08-12T05:00:04Z"),
+                current_observation("2026-08-12T05:00:06Z"),
+            ],
+            final_projection_observation=current_observation(
+                "2026-08-12T05:00:07Z"
+            ),
+            minimum_backoff_seconds=1,
+        )["convergence_receipt"]
+    )
+    neutralized_pr = {**_canonical_pr(), "body": neutralized_body}
+    prepared = verified_merge.build_verified_merge_phase(
+        authority_receipt=authority,
+        phase="prepared",
+        pr=neutralized_pr,
+        projection_convergence_receipt=replacement_convergence,
+        final_projection_observation=current_observation("2026-08-12T05:00:07Z"),
+    )
+
+    assert verified_merge.resolve_verified_merge_phase(
+        [
+            _trusted_convergence_comment(stale_convergence),
+            _trusted_convergence_comment(replacement_convergence),
+            _trusted_comment(str(prepared["phase_receipt_comment"])),
+        ],
+        authority_receipt=authority,
+        pr=neutralized_pr,
+    ) == prepared["phase_receipt"]
