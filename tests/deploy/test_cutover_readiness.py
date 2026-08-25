@@ -4,6 +4,7 @@ import subprocess
 from pathlib import Path
 
 from app.release_channels.cutover_readiness import (
+    _resolve_db_revision,
     check_cutover_readiness,
 )
 
@@ -336,6 +337,34 @@ def test_merge_revision_lists_shared_pending_parent_once(tmp_path: Path) -> None
 
     assert result.ok, result.summary()
     assert result.pending_migrations == ("002_shared.py", "left.py", "right.py", "merge.py")
+
+
+def test_multiple_current_heads_are_all_treated_as_applied(tmp_path: Path) -> None:
+    _write_base_fixture(tmp_path)
+    versions = tmp_path / "app" / "alembic" / "versions"
+    for child in versions.iterdir():
+        child.unlink()
+    _write_migration(tmp_path, filename="left.py", revision="left", down_revision=None, reversibility="reversible")
+    _write_migration(tmp_path, filename="right.py", revision="right", down_revision=None, reversibility="reversible")
+
+    result = check_cutover_readiness(
+        "prod",
+        TARGET_SHA,
+        root=tmp_path,
+        db_revision=("left", "right"),
+        runner=_runner,
+    )
+
+    assert result.ok, result.summary()
+    assert result.pending_migrations == ()
+
+
+def test_alembic_current_annotations_are_not_parsed_as_revisions(tmp_path: Path) -> None:
+    def annotated_runner(args: list[str], cwd: Path) -> subprocess.CompletedProcess[str]:
+        assert args == ["alembic", "-c", "alembic.ini", "current"]
+        return subprocess.CompletedProcess(args, 0, "left (head)\nright (head)\n", "")
+
+    assert _resolve_db_revision(tmp_path, annotated_runner) == ("left", "right")
 
 
 def test_unreachable_db_revision_fails_migration_state(tmp_path: Path) -> None:

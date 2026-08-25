@@ -117,7 +117,7 @@ class _ComposeModel:
 class _MigrationDelta:
     pending: tuple[MigrationInfo, ...] = ()
     forward_only: tuple[MigrationInfo, ...] = ()
-    head_revision: str | None = None
+    head_revisions: tuple[str, ...] = ()
     unreachable_detail: str | None = None
 
 
@@ -451,14 +451,13 @@ def _load_migrations(migrations_dir: Path) -> dict[str, MigrationInfo]:
     return migrations
 
 
-def _head_revision(migrations: Mapping[str, MigrationInfo]) -> str | None:
+def _head_revisions(migrations: Mapping[str, MigrationInfo]) -> tuple[str, ...]:
     down_revisions = {
         down_revision
         for info in migrations.values()
         for down_revision in info.down_revisions
     }
-    heads = sorted(set(migrations) - down_revisions)
-    return heads[-1] if heads else None
+    return tuple(sorted(set(migrations) - down_revisions))
 
 
 def _ancestor_revisions(
@@ -522,37 +521,71 @@ def _postorder_to_revision(
     return ordered
 
 
-def _pending_migration_delta(migrations_dir: Path, db_revision: str | None) -> _MigrationDelta:
+def _current_revisions(db_revision: str | Sequence[str] | None) -> tuple[str, ...]:
+    if db_revision is None:
+        return ()
+    if isinstance(db_revision, str):
+        return (db_revision,)
+    return tuple(dict.fromkeys(revision for revision in db_revision if revision))
+
+
+def _pending_migration_delta(
+    migrations_dir: Path,
+    db_revision: str | Sequence[str] | None,
+) -> _MigrationDelta:
     migrations = _load_migrations(migrations_dir)
-    head = _head_revision(migrations)
-    if head is None:
-        return _MigrationDelta(head_revision=None)
+    heads = _head_revisions(migrations)
+    if not heads:
+        return _MigrationDelta()
 
-    head_ancestors = _ancestor_revisions(migrations, head)
-    ordered_to_head = _postorder_to_revision(migrations, head)
-    if head_ancestors is None or ordered_to_head is None:
+    head_ancestors: set[str] = set()
+    ordered_to_heads: list[MigrationInfo] = []
+    emitted: set[str] = set()
+    for head in heads:
+        ancestors = _ancestor_revisions(migrations, head)
+        ordered = _postorder_to_revision(migrations, head)
+        if ancestors is None or ordered is None:
+            return _MigrationDelta(
+                head_revisions=heads,
+                unreachable_detail="migration graph is incomplete or cyclic",
+            )
+        head_ancestors.update(ancestors)
+        for info in ordered:
+            if info.revision not in emitted:
+                emitted.add(info.revision)
+                ordered_to_heads.append(info)
+    if not head_ancestors:
         return _MigrationDelta(
-            head_revision=head,
+            head_revisions=heads,
             unreachable_detail="migration graph is incomplete or cyclic",
         )
-    if db_revision not in head_ancestors:
+    current_revisions = _current_revisions(db_revision)
+    if not current_revisions:
         return _MigrationDelta(
-            head_revision=head,
-            unreachable_detail=(
-                f"DB revision {db_revision} is not reachable from selected Alembic head {head}"
-            ),
+            head_revisions=heads,
+            unreachable_detail="DB revision unavailable",
         )
 
-    db_ancestors = _ancestor_revisions(migrations, db_revision)
-    if db_ancestors is None:
-        return _MigrationDelta(
-            head_revision=head,
-            unreachable_detail="migration graph is incomplete or cyclic",
-        )
+    applied_revisions: set[str] = set()
+    for revision in current_revisions:
+        if revision not in head_ancestors:
+            return _MigrationDelta(
+                head_revisions=heads,
+                unreachable_detail=(
+                    f"DB revision {revision} is not reachable from selected Alembic head(s) {', '.join(heads)}"
+                ),
+            )
+        ancestors = _ancestor_revisions(migrations, revision)
+        if ancestors is None:
+            return _MigrationDelta(
+                head_revisions=heads,
+                unreachable_detail="migration graph is incomplete or cyclic",
+            )
+        applied_revisions.update(ancestors)
 
-    pending_revisions = head_ancestors - db_ancestors
+    pending_revisions = head_ancestors - applied_revisions
     pending = tuple(
-        info for info in ordered_to_head if info.revision in pending_revisions
+        info for info in ordered_to_heads if info.revision in pending_revisions
     )
 
     forward_only = [
@@ -561,29 +594,35 @@ def _pending_migration_delta(migrations_dir: Path, db_revision: str | None) -> _
     return _MigrationDelta(
         pending=pending,
         forward_only=tuple(forward_only),
-        head_revision=head,
+        head_revisions=heads,
     )
 
 
-def _resolve_db_revision(root: Path, runner: CommandRunner) -> str | None:
+def _resolve_db_revision(root: Path, runner: CommandRunner) -> tuple[str, ...] | None:
     env_revision = os.environ.get("CUTOVER_DB_REVISION")
     if env_revision:
-        return env_revision
+        return tuple(part for part in env_revision.split(",") if part)
     completed = runner(["alembic", "-c", "alembic.ini", "current"], root)
     if completed.returncode != 0:
         return None
-    for token in completed.stdout.replace("(", " ").replace(")", " ").split():
-        if re.fullmatch(r"[0-9A-Za-z_]+", token):
-            return token
-    return None
+    revisions = tuple(
+        dict.fromkeys(
+            revision
+            for line in completed.stdout.splitlines()
+            for revision in line.split("(", 1)[0].replace(",", " ").split()
+            if re.fullmatch(r"[0-9A-Za-z_]+", revision)
+        )
+    )
+    return revisions or None
 
 
 def _check_migration_state(
     root: Path,
-    db_revision: str | None,
+    db_revision: str | Sequence[str] | None,
     ack_forward_only: bool,
 ) -> tuple[ReadinessCheck, _MigrationDelta]:
-    if db_revision is None:
+    current_revisions = _current_revisions(db_revision)
+    if not current_revisions:
         return (
             ReadinessCheck(
                 "migration-state",
@@ -607,7 +646,7 @@ def _check_migration_state(
             ReadinessCheck(
                 "migration-state",
                 True,
-                f"DB revision {db_revision} is at alembic head {delta.head_revision}",
+                f"DB revision(s) {', '.join(current_revisions)} are at Alembic head(s) {', '.join(delta.head_revisions)}",
             ),
             delta,
         )
@@ -635,7 +674,7 @@ def check_cutover_readiness(
     target_sha: str,
     *,
     root: Path | str = Path("."),
-    db_revision: str | None = None,
+    db_revision: str | Sequence[str] | None = None,
     ack_forward_only: bool = False,
     image_repository: str = DEFAULT_IMAGE_REPOSITORY,
     promotion_ref: str = DEFAULT_PROMOTION_REF,

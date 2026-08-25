@@ -84,9 +84,7 @@ Embeddings are currently dispatched from `app/llm/embeddings.py` (superseded as 
 
 ## Timeouts, retries, breakers
 
-- `LLM_TIMEOUT` applies to every HTTP call.
-  - chat defaults to 120s
-  - embeddings and other adapter calls default to 60s
+- `LLM_TIMEOUT` applies to every HTTP call and defaults to 60s when unset.
 - `/api/ask` fails loud with the documented ASK timeout contract when the backend raises
   `LLMBackendTimeout` (the current Ollama socket-timeout path). The HTTP response is
   `504 Gateway Timeout` with the FastAPI error body also documented in
@@ -97,7 +95,7 @@ Embeddings are currently dispatched from `app/llm/embeddings.py` (superseded as 
     "detail": {
       "error": "llm_backend_timeout",
       "provider": "<provider>",
-      "timeout_seconds": 120.0,
+      "timeout_seconds": 60.0,
       "trace_id": "<trace id>",
       "message": "<backend timeout detail>"
     }

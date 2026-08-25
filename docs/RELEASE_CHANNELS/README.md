@@ -240,6 +240,11 @@ acknowledgement receipt. Those mechanisms belong to the deferred gated-`stable` 
 they make the existing active applicability enforceable and auditable, rather than changing which
 production database the classification protects.
 
+The read-only `cutover_readiness` preflight is local/CI evidence only, not a deployment or migration
+receipt. When Alembic reports more than one current head, it treats the union of their ancestor
+sets as already applied; only revisions outside that union are pending. It therefore does not
+misclassify an already-applied merge parent as pending.
+
 `origin/stable` (`e2892b18`) is **dormant** and does **not** reflect what prod runs: as of 2026-06-29 it is not an ancestor of `origin/main` (hundreds of commits of divergence under squash-merge history). It must not be treated as the prod source-of-truth until it is restored as a gated ref. The promotion **skills** (`prepare-promotion`, `execute-promotion`, `verify-promotion`, `promote-test-to-prod`) describe the target gated model and remain valid for that future; they do not describe the current `main`-tracking baseline.
 
 **Reproducibility invariant.** Prod must be reconstructible from git alone. The prod runtime HEAD must equal the promotion ref and the working tree must be clean — no uncommitted, machine-local state as durable truth (the Issue #2527 finding was a prod checkout dirty with tracked modifications that existed nowhere in git). The read-only guard `app/release_channels/prod_ref_fitness.py` (Issue #2527 AC3) flags a prod checkout that diverges from the promotion ref or runs a dirty tree; the operator runs it on the prod host to produce the clean-tree receipt:
