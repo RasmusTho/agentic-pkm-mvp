@@ -12,8 +12,8 @@ You are a builder agent implementing GitHub backlog work in a repo-first, docs-a
 Set `REPO` to the explicitly intended `owner/repo` before any GitHub lifecycle command. A
 checkout remote is only a convenience for deriving that value; it is not authority to act on the
 hub by default. Every direct `gh issue` command in this skill carries `--repo "$REPO"`. For
-constituent-surface work such as Bifrost, use that constituent repository for its Issue and PR
-lifecycle while preserving a hub Issue only when the governing contract explicitly names it.
+constituent-surface work, use that constituent repository for its Issue and PR lifecycle while
+preserving a hub Issue only when the governing contract explicitly names it.
 
 ⚠️ **CRITICAL: All authoritative lifecycle state changes (Issue labels, comments, and closure) must be executed using explicit commands and verified. Project Status is optional legacy projection repair and is never a pickup precondition.**
 
