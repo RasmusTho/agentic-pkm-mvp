@@ -9,6 +9,7 @@ import json
 import re
 import subprocess
 import sys
+from urllib.parse import quote
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Callable, Mapping, Sequence
@@ -322,6 +323,26 @@ def _github_api(path: str, paginate: bool) -> object:
     return payload
 
 
+def _current_branch_has_open_pr(repository: str) -> bool:
+    branch = subprocess.run(
+        ["git", "branch", "--show-current"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if branch.returncode != 0 or not _nonempty_string(branch.stdout):
+        raise ReviewBeforeCiGateError("new-PR publication cannot determine the current branch")
+    owner, _, _ = repository.partition("/")
+    payload = _github_api(
+        "repos/"
+        f"{repository}/pulls?state=open&head={quote(owner + ':' + branch.stdout.strip(), safe=':')}&per_page=100",
+        False,
+    )
+    if not isinstance(payload, list) or not all(isinstance(pr, Mapping) for pr in payload):
+        raise ReviewBeforeCiGateError("new-PR publication cannot authenticate open-PR state")
+    return bool(payload)
+
+
 def _canonical_contract_body(body: str) -> str:
     return body.replace("\r\n", "\n").replace("\r", "\n").rstrip("\n") + "\n"
 
@@ -599,6 +620,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--workflow-review-receipt")
     parser.add_argument("--workflow-risk-base", default="origin/main")
     parser.add_argument("--workflow-risk-head", default="HEAD")
+    parser.add_argument("--publication-mode", choices=("new", "existing"))
     parser.add_argument("--pr-scope-revalidation", action="store_true")
     parser.add_argument("--github-repository")
     parser.add_argument("--pr-number", type=int)
@@ -613,6 +635,24 @@ def main(argv: Sequence[str] | None = None) -> int:
         evidence = workflow_risk_evidence_from_git(
             Path.cwd(), base=args.workflow_risk_base, head=args.workflow_risk_head
         )
+        if args.publication_mode == "existing":
+            if not args.pr_scope_revalidation:
+                raise ReviewBeforeCiGateError(
+                    "existing-PR publication requires authenticated PR scope revalidation"
+                )
+        elif args.publication_mode == "new":
+            if args.pr_scope_revalidation:
+                raise ReviewBeforeCiGateError(
+                    "new-PR publication cannot claim existing-PR scope revalidation"
+                )
+            if not args.github_repository:
+                raise ReviewBeforeCiGateError(
+                    "new-PR publication requires GitHub repository identity"
+                )
+            if _current_branch_has_open_pr(args.github_repository):
+                raise ReviewBeforeCiGateError(
+                    "new-PR publication found an existing open PR for the current branch"
+                )
         if args.pr_scope_revalidation:
             if (
                 args.pr_number is None
@@ -645,12 +685,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         elif any(
             value is not None
             for value in (
-                args.github_repository,
                 args.pr_number,
                 args.governing_issue,
                 args.contract_revalidation_receipt,
             )
-        ):
+        ) or (args.github_repository is not None and args.publication_mode != "new"):
             raise ReviewBeforeCiGateError(
                 "PR scope revalidation evidence cannot be omitted; pass --pr-scope-revalidation"
             )

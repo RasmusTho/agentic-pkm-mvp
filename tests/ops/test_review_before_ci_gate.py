@@ -553,6 +553,54 @@ def test_pr_scope_revalidation_rejects_foreign_or_stale_live_pr_evidence() -> No
         )
 
 
+def test_existing_publication_mode_cannot_omit_pr_scope_revalidation() -> None:
+    result = subprocess.run(
+        [
+            sys.executable,
+            "scripts/review_before_ci_gate.py",
+            "--lane",
+            "governance",
+            "--changed-file",
+            "docs/development/PR_HOT_PATH.md",
+            "--risk-assessment-complete",
+            "--review-gate-complete",
+            "--publication-mode",
+            "existing",
+        ],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 2
+    assert "requires authenticated PR scope revalidation" in result.stderr
+
+
+def test_new_publication_mode_requires_repository_identity() -> None:
+    result = subprocess.run(
+        [
+            sys.executable,
+            "scripts/review_before_ci_gate.py",
+            "--lane",
+            "governance",
+            "--changed-file",
+            "docs/development/PR_HOT_PATH.md",
+            "--risk-assessment-complete",
+            "--review-gate-complete",
+            "--publication-mode",
+            "new",
+        ],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 2
+    assert "requires GitHub repository identity" in result.stderr
+
+
 def test_pr_scope_revalidation_rejects_unbound_governing_issue_or_review() -> None:
     responses, api = _live_pr_review_api()
     responses["repos/octo/repo/pulls/4029"]["body"] = "Governing-Issue: #9999\n\nFixes #9999\n"  # type: ignore[index]
