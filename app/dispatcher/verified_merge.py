@@ -359,17 +359,24 @@ def _comment_receipts(
     return [receipt for receipt, _ in _comment_receipt_entries(comments, marker)]
 
 
-def _trusted_marker_occurrences(
+def _trusted_structural_marker_occurrences(
     comments: Sequence[Mapping[str, object]], marker: str
 ) -> int:
-    """Count every trusted durable-receipt attempt, not just its comment."""
+    """Count trusted marker headings outside fenced receipt payloads."""
 
-    return sum(
-        cast(str, comment["body"]).count(marker)
-        for comment in comments
-        if comment.get("author_association") in _TRUSTED_AUTHOR_ASSOCIATIONS
-        and isinstance(comment.get("body"), str)
+    fenced_block = re.compile(r"```[^\r\n]*\r?\n[\s\S]*?```")
+    heading = re.compile(
+        rf"^{re.escape(marker)}[\t ]*(?:\r?\n|$)", re.MULTILINE
     )
+    total = 0
+    for comment in comments:
+        if comment.get("author_association") not in _TRUSTED_AUTHOR_ASSOCIATIONS:
+            continue
+        body = comment.get("body")
+        if not isinstance(body, str):
+            continue
+        total += len(heading.findall(fenced_block.sub("", body)))
+    return total
 
 
 def _comment_authenticates_legacy_authority(
@@ -1589,7 +1596,7 @@ def _authenticated_projection_convergence_receipts(
         and VERIFIED_MERGE_PROJECTION_CONVERGENCE_MARKER
         in cast(str, comment["body"])
     ]
-    marker_attempts = _trusted_marker_occurrences(
+    marker_attempts = _trusted_structural_marker_occurrences(
         comments, VERIFIED_MERGE_PROJECTION_CONVERGENCE_MARKER
     )
     if marker_attempts == 0:
@@ -1940,7 +1947,7 @@ def resolve_verified_merge_phase(
         )
 
     invalid_current_projection_phase = False
-    phase_attempts = _trusted_marker_occurrences(
+    phase_attempts = _trusted_structural_marker_occurrences(
         comments, VERIFIED_MERGE_PHASE_MARKER
     )
     phase_receipts = _comment_receipts(comments, VERIFIED_MERGE_PHASE_MARKER)

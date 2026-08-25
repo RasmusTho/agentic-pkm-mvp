@@ -1113,6 +1113,45 @@ def test_current_phase_ledger_rejects_null_or_discontinuous_projection_digest() 
             is None
         )
 
+    embedded_convergence_marker = dict(durable_convergence_comment)
+    embedded_convergence_body = embedded_convergence_marker["body"]
+    assert isinstance(embedded_convergence_body, str)
+    embedded_convergence_marker["body"] = (
+        embedded_convergence_body
+        + "\n```json\n"
+        + '{"audit":"verified merge closing projection convergence:"}'
+        + "\n```"
+    )
+    embedded_phase_marker = comment(prepared)
+    embedded_phase_body = embedded_phase_marker["body"]
+    assert isinstance(embedded_phase_body, str)
+    embedded_phase_marker["body"] = (
+        embedded_phase_body
+        + "\n```json\n"
+        + '{"audit":"verified issue-set merge phase:"}'
+        + "\n```"
+    )
+    for harmless_comment in (
+        embedded_convergence_marker,
+        embedded_phase_marker,
+    ):
+        assert (
+            resolve_verified_merge_phase(
+                [
+                    harmless_comment
+                    if harmless_comment is embedded_convergence_marker
+                    else durable_convergence_comment,
+                    harmless_comment
+                    if harmless_comment is embedded_phase_marker
+                    else comment(prepared),
+                    comment(merged),
+                ],
+                authority_receipt=authority,
+                pr=merged_pr,
+            )
+            == merged
+        )
+
 
 def test_explicit_legacy_phase_field_set_remains_continuous() -> None:
     plan = prepare_verified_merge(
