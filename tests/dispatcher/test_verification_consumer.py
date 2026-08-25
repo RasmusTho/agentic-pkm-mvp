@@ -1054,6 +1054,7 @@ def test_open_neutralized_run_resumes_from_trusted_prepared_phase(
         "conflicting_phase",
         "null_projection_phase",
         "discontinuous_projection_phase",
+        "final_observation_digest",
         "body_digest",
         "repair_budget",
     ],
@@ -1108,6 +1109,12 @@ def test_open_neutralized_recovery_fails_closed_on_untrusted_evidence(
                     ),
                 ),
             }
+        )
+    elif corruption == "final_observation_digest":
+        comments[2]["body"] = re.sub(
+            r'"final_projection_observation_sha256":"[0-9a-f]{64}"',
+            '"final_projection_observation_sha256":"' + "f" * 64 + '"',
+            str(comments[2]["body"]),
         )
     elif corruption == "body_digest":
         neutral_pr = {**neutral_pr, "body": f"{neutral_pr['body']}\n"}

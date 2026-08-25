@@ -1300,9 +1300,10 @@ def test_live_adapter_loads_manifest_from_exact_protected_base(
 
 
 @pytest.mark.parametrize(
-    ("closing_nodes", "accepted"),
+    ("closing_nodes", "forged_final_digest", "accepted"),
     [
-        ([], True),
+        ([], False, True),
+        ([], True, False),
         (
             [
                 {
@@ -1311,11 +1312,13 @@ def test_live_adapter_loads_manifest_from_exact_protected_base(
                 }
             ],
             False,
+            False,
         ),
     ],
 )
 def test_live_adapter_authenticates_exact_prepared_merge_window(
     closing_nodes: list[dict[str, object]],
+    forged_final_digest: bool,
     accepted: bool,
 ) -> None:
     repository = REPO.lower()
@@ -1372,6 +1375,14 @@ def test_live_adapter_authenticates_exact_prepared_merge_window(
         pr=prepared_pr,
         **convergence_kwargs,
     )
+    phase_receipt = dict(phase["phase_receipt"])
+    if forged_final_digest:
+        phase_receipt["final_projection_observation_sha256"] = "f" * 64
+    phase_comment = (
+        "verified issue-set merge phase:\n```json\n"
+        + json.dumps(phase_receipt, sort_keys=True, separators=(",", ":"))
+        + "\n```"
+    )
     comments = [
         {
             "author_association": "COLLABORATOR",
@@ -1380,7 +1391,7 @@ def test_live_adapter_authenticates_exact_prepared_merge_window(
         projection_convergence_comment(convergence_kwargs),
         {
             "author_association": "COLLABORATOR",
-            "body": phase["phase_receipt_comment"],
+            "body": phase_comment,
         },
     ]
 

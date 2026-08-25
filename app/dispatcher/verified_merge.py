@@ -1816,6 +1816,16 @@ def resolve_verified_merge_phase(
         if durable_convergence is not None
         else None
     )
+    durable_final_observation = (
+        durable_convergence.get("final_projection_observation")
+        if durable_convergence is not None
+        else None
+    )
+    durable_final_observation_digest = (
+        _canonical_digest(durable_final_observation)
+        if isinstance(durable_final_observation, Mapping)
+        else None
+    )
     invalid_current_projection_phase = False
     for candidate in _comment_receipts(comments, VERIFIED_MERGE_PHASE_MARKER):
         phase = candidate.get("phase")
@@ -1847,6 +1857,8 @@ def resolve_verified_merge_phase(
                     not isinstance(final_observation_digest, str)
                     or _DIGEST_PATTERN.fullmatch(final_observation_digest)
                     is None
+                    or final_observation_digest
+                    != durable_final_observation_digest
                 )
             )
             or (phase != "prepared" and final_observation_digest is not None)
