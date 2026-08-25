@@ -45,6 +45,7 @@ First-read map for common work areas. Use `docs/DOCS_INDEX.md` (this file) to lo
 | Canvas Chat / interaction surfaces | `docs/INTERACTION_SURFACES_AND_AUTHORITY/README.md`, `docs/CANVAS_CHAT_SURFACE/README.md` |
 | How the human meets the system (first contact, return, no/other vault, degraded, device role) | `docs/CONCEPTS/USER_SITUATION_MODEL.md`, then `docs/SYSTEM_ENTRY_POINT/ENTRY_STATE_MACHINE.md`, `docs/VAULT_OPTIONAL_RUNTIME/README.md` |
 | Governance-bearing mutation | `AGENTS.md` (GitHub delivery governance), `.codex/skills/issue-to-code/SKILL.md` |
+| TARS qualification owner entry | `docs/BUILDEROPS_CONTROL_PLANE/README.md :: TARS qualification contract` for the repo-side BuilderOps candidate-policy contract; `docs/YGGDRASIL_PLATFORM_AND_OPERATIONS_SYSTEM/README.md` retains the separate Platform and Operations boundary and does not make TARS live-qualified. |
 | Operations / runtime health | `docs/OPERATIONS.md`, `docs/HEALTH.md`, `docs/OBSERVABILITY.md` |
 
 ## Critical Authority Boundaries
