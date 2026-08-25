@@ -24,7 +24,17 @@ POLICY_VERSION = "tars-builder-system-baseline.v1"
 MAX_EVIDENCE_AGE = timedelta(hours=24)
 _ROOT = Path(__file__).resolve().parents[2]
 _SECRET_KEY = re.compile(r"(?:api[_-]?key|authorization|credential|password|private[_-]?key|secret|token)", re.I)
-_SECRET_VALUE = re.compile(r"(?:bearer\s+|gh[pousr]_[A-Za-z0-9_]|pve[ta]=|-----BEGIN [A-Z ]+PRIVATE KEY-----)", re.I)
+_SECRET_VALUE = re.compile(
+    r"(?:"
+    r"bearer\s+|"
+    r"gh[pousr]_[A-Za-z0-9_]+|"
+    r"pve[ta]=|"
+    r"-----BEGIN [A-Z ]+PRIVATE KEY-----|"
+    r"[A-Za-z][A-Za-z0-9+.-]*://[^\s/@:]+(?::[^\s/@]*)?@|"
+    r"(?:password|passwd|pwd|secret|token|api[_-]?key)\s*=\s*(?!\[REDACTED\])\S+"
+    r")",
+    re.I,
+)
 _OPAQUE_CREDENTIAL_KEYS = frozenset(
     {"connection_string", "database_url", "dsn", "passwd", "session_cookie"}
 )
@@ -107,9 +117,9 @@ def _contains_secret(value: Any, *, key: str | None = None) -> bool:
     if key is not None and _key_is_secret(key):
         if key.lower().replace("-", "_") in _OPAQUE_CREDENTIAL_KEYS:
             return True
-        return value != "[REDACTED]"
+        return True
     if isinstance(value, str):
-        return value != "[REDACTED]" and _SECRET_VALUE.search(value) is not None
+        return value == "[REDACTED]" or _SECRET_VALUE.search(value) is not None
     if isinstance(value, Mapping):
         return any(_contains_secret(item, key=str(child_key)) for child_key, item in value.items())
     if isinstance(value, list):
