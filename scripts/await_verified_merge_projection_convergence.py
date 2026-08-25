@@ -632,6 +632,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "convergence_receipt": durable_convergence,
                 "convergence_receipt_comment": None,
             }
+        if not isinstance(durable_convergence, Mapping):
+            raise ValueError("durable convergence receipt is malformed")
         durable_final_observation = durable_convergence.get(
             "final_projection_observation"
         )
@@ -643,7 +645,18 @@ def main(argv: Sequence[str] | None = None) -> int:
             "status": "converged",
         }
         _write(args.output_json, success_payload)
-        print(json.dumps(success_payload, indent=2, sort_keys=True))
+        print(
+            json.dumps(
+                {
+                    "convergence_receipt_sha256": durable_convergence.get(
+                        "receipt_sha256"
+                    ),
+                    "status": "converged",
+                },
+                indent=2,
+                sort_keys=True,
+            )
+        )
         return 0
     except TimeoutError:
         failure = "timeout"
