@@ -1456,3 +1456,74 @@ def test_phase_recovery_binds_same_second_aba_replacement_by_receipt_digest() ->
         pr=neutralized_pr,
         current_body_edit=current_body_edit,
     ) is None
+
+
+def test_post_merge_rejects_discontinuous_historical_current_schema_chain() -> None:
+    authority, neutralized_body, stale_pr_contract, stale_convergence = (
+        _projection_fixture()
+    )
+    current_pr_contract = copy.deepcopy(stale_pr_contract)
+    current_body_edit = dict(current_pr_contract["body_edit"])
+    current_body_edit["node_id"] = "UCE_kwDOQEip6s4825_discontinuous_history"
+    current_pr_contract["body_edit"] = current_body_edit
+
+    def current_observation(observed_at: str) -> dict[str, object]:
+        observation = _observation(neutralized_body, observed_at=observed_at)
+        pull_request = observation["pull_request"]
+        assert isinstance(pull_request, dict)
+        pull_request["latest_body_edit"] = current_body_edit
+        return observation
+
+    replacement_convergence = (
+        verified_merge.build_verified_merge_projection_convergence(
+            authority_receipt=authority,
+            pr_contract=current_pr_contract,
+            observations=[
+                current_observation("2026-08-12T05:00:04Z"),
+                current_observation("2026-08-12T05:00:06Z"),
+            ],
+            final_projection_observation=current_observation(
+                "2026-08-12T05:00:07Z"
+            ),
+            minimum_backoff_seconds=1,
+        )["convergence_receipt"]
+    )
+    neutralized_pr = {**_canonical_pr(), "body": neutralized_body}
+    merged_pr = {
+        **neutralized_pr,
+        "state": "closed",
+        "merged": True,
+        "merged_at": "2026-08-12T05:00:08Z",
+        "merge_commit_sha": "c" * 40,
+    }
+    stale_merged = verified_merge.build_verified_merge_phase(
+        authority_receipt=authority,
+        phase="merged",
+        pr=merged_pr,
+        projection_convergence_receipt=stale_convergence,
+    )
+    replacement_prepared = verified_merge.build_verified_merge_phase(
+        authority_receipt=authority,
+        phase="prepared",
+        pr=neutralized_pr,
+        projection_convergence_receipt=replacement_convergence,
+        final_projection_observation=current_observation("2026-08-12T05:00:07Z"),
+    )
+    replacement_merged = verified_merge.build_verified_merge_phase(
+        authority_receipt=authority,
+        phase="merged",
+        pr=merged_pr,
+        projection_convergence_receipt=replacement_convergence,
+    )
+
+    assert verified_merge.resolve_verified_merge_phase(
+        [
+            _trusted_convergence_comment(stale_convergence),
+            _trusted_convergence_comment(replacement_convergence),
+            _trusted_comment(str(stale_merged["phase_receipt_comment"])),
+            _trusted_comment(str(replacement_prepared["phase_receipt_comment"])),
+            _trusted_comment(str(replacement_merged["phase_receipt_comment"])),
+        ],
+        authority_receipt=authority,
+        pr=merged_pr,
+    ) is None

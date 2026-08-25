@@ -573,6 +573,29 @@ def test_watchdog_selects_the_only_delivered_replacement_receipt_chain() -> None
     }
 
 
+def test_watchdog_rejects_malformed_or_causally_invalid_pr_contract_start() -> None:
+    authority_comment = _authority_comment()
+    authority = _receipt_payload(authority_comment)
+    convergence = _receipt_payload(_convergence_comment(authority_comment))
+    assert _node("validConvergenceReceipt(inputs[0], inputs[1])", convergence, authority)
+
+    for started_at in (
+        "not-a-timestamp",
+        "2026-08-12T05:00:00Z",
+        "2026-08-12T05:00:04Z",
+    ):
+        malformed = json.loads(json.dumps(convergence))
+        malformed["pr_contract"]["started_at"] = started_at
+        unsigned = dict(malformed)
+        unsigned.pop("receipt_sha256")
+        malformed["receipt_sha256"] = _canonical_digest(unsigned)
+        assert not _node(
+            "validConvergenceReceipt(inputs[0], inputs[1])",
+            malformed,
+            authority,
+        )
+
+
 def test_watchdog_rejects_invalid_same_authority_phase_beside_current_chain() -> None:
     authority = _authority_comment()
     merge_sha = "c" * 40
