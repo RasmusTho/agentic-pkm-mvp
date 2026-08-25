@@ -406,6 +406,7 @@ jobs:
                   digest, new Map(PHASES.map(phase => [phase, []])),
                 ])
               );
+              let invalidCurrentProjectionPhase = false;
               for (const receipt of commentReceipts(comments, PHASE_MARKER)) {
                 const phase = receipt.phase;
                 const phaseIndex = PHASES.indexOf(phase);
@@ -424,6 +425,26 @@ jobs:
                 const finalObservationDigest = convergenceReceipt === undefined || convergenceReceipt === null
                   ? null
                   : canonicalSha256(convergenceReceipt.final_projection_observation);
+                const matchingIdentity =
+                  phaseIndex >= 0 &&
+                  receipt.contract === "verified_issue_set_merge_phase.v1" &&
+                  receipt.authority_sha256 === authorityDigest &&
+                  receipt.repository === authorityReceipt.repository &&
+                  receipt.pr_number === authorityReceipt.pr_number &&
+                  receipt.head_sha === authorityReceipt.head_sha &&
+                  receipt.run_id === authorityReceipt.run_id;
+                const invalidCurrent = matchingIdentity && hasExactFields(receipt, PHASE_FIELDS) && (
+                  typeof projectionDigest !== "string" ||
+                  !/^[0-9a-f]{64}$/.test(projectionDigest) ||
+                  convergenceReceipt === undefined || convergenceReceipt === null ||
+                  (phase === "prepared" && (
+                    typeof phaseFinalObservationDigest !== "string" ||
+                    !/^[0-9a-f]{64}$/.test(phaseFinalObservationDigest) ||
+                    phaseFinalObservationDigest !== finalObservationDigest
+                  )) ||
+                  (phase !== "prepared" && phaseFinalObservationDigest !== null)
+                );
+                if (invalidCurrent) invalidCurrentProjectionPhase = true;
                 if (
                   !hasExactFields(receipt, PHASE_FIELDS) || phaseIndex < 0 ||
                   receipt.contract !== "verified_issue_set_merge_phase.v1" ||
@@ -450,6 +471,16 @@ jobs:
                 ) continue;
                 validByChain.get(projectionDigest).get(phase).push(receipt);
               }
+              for (const validByPhase of validByChain.values()) {
+                const occupied = PHASES.map(phase => validByPhase.get(phase).length > 0);
+                const first = occupied.findIndex(Boolean);
+                const last = occupied.lastIndexOf(true);
+                if (first !== -1 && (first !== 0 ||
+                    occupied.slice(first, last + 1).some(phasePresent => !phasePresent))) {
+                  invalidCurrentProjectionPhase = true;
+                }
+              }
+              if (invalidCurrentProjectionPhase) return null;
               const resolveChain = validByPhase => {
                 let highest = null;
                 let reconciledEvidence = null;
