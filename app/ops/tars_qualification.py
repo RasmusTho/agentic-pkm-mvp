@@ -32,6 +32,7 @@ _SECRET_VALUE = re.compile(
     r"-----BEGIN [A-Z ]+PRIVATE KEY-----|"
     r"[A-Za-z][A-Za-z0-9+.-]*://[^\s@]+@|"
     r"(?:^|[\s;])[^\s;:@]+:[^\s;@]+@|"
+    r"(?:^|[\s;])[^\s;:@/]+/[^\s;@]+@|"
     r"(?:password|passwd|pwd|secret|token|api[_-]?key)\s*=\s*(?!\[REDACTED\])\S+"
     r")",
     re.I,
@@ -44,6 +45,7 @@ _SECRET_REFERENCE = re.compile(
 )
 _FINGERPRINT = re.compile(r"^[a-f0-9]{64}$")
 _CAMEL_CASE_BOUNDARY = re.compile(r"(?<=[a-z0-9])(?=[A-Z])")
+_CAMEL_CASE_ACRONYM_BOUNDARY = re.compile(r"([A-Z]+)([A-Z][a-z])")
 
 # The baseline is intentionally limited to builder-system.  It has no GPU or
 # test-tailnet vector; neither is a prerequisite for this qualification slice.
@@ -86,7 +88,8 @@ def _loads_schema(name: str) -> Mapping[str, Any]:
 
 
 def _normalize_key(key: str) -> str:
-    return _CAMEL_CASE_BOUNDARY.sub("_", key).lower().replace("-", "_")
+    with_acronym_boundaries = _CAMEL_CASE_ACRONYM_BOUNDARY.sub(r"\1_\2", key)
+    return _CAMEL_CASE_BOUNDARY.sub("_", with_acronym_boundaries).lower().replace("-", "_")
 
 
 def _is_opaque_credential_key(key: str) -> bool:

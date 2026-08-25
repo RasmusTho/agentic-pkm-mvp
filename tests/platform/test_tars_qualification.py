@@ -103,6 +103,8 @@ def test_opaque_credential_fields_are_refused() -> None:
         "connectionString": "postgresql://user:opaque@example.invalid/app",
         "redisConnectionString": "redis://:opaque@example.invalid/0",
         "mysqlDsn": "app:opaque@tcp(example.invalid:3306)/app",
+        "oracleConnect": "app/opaque@example.invalid/service",
+        "databaseURLRef": "postgresql://user:opaque@example.invalid/app",
         "session_cookie": "opaque-session-cookie",
         "passwd": "opaque-password",
         "database_url": "postgresql://user:password@example.invalid/app",
