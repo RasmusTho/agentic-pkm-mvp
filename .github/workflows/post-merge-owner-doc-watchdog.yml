@@ -234,6 +234,9 @@ jobs:
               }
               return receipts;
             };
+            const hasClosingIssueAttempt = candidate =>
+              typeof candidate === "string" &&
+              /(?:^|[^0-9A-Za-z_])(?:fix(?:es|ed)?|close(?:s|d)?|resolve(?:s|d)?)(?:[ \t\n\v\f\r\x85\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000\ufeff]+|[ \t\n\v\f\r\x85\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000\ufeff]*:[ \t\n\v\f\r\x85\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000\ufeff]*)(?:#|[0-9A-Za-z_.-]+\/[0-9A-Za-z_.-]+#|https?:\/\/github\.com\/[0-9A-Za-z_.-]+\/[0-9A-Za-z_.-]+\/issues\/)/i.test(candidate);
             const hasTrustedAuthorityAttempt = comments => comments.some(comment =>
               TRUSTED_ASSOCIATIONS.has(comment.author_association) &&
               typeof comment.body === "string" && comment.body.includes(AUTHORITY_MARKER)
@@ -339,7 +342,7 @@ jobs:
                 typeof contract.head_ref === "string" && contract.head_ref.length > 0 &&
                 typeof contract.default_branch_sha === "string" && /^[0-9a-f]{40}$/.test(contract.default_branch_sha) &&
                 typeof contract.title === "string" && contract.title.length > 0 &&
-                resolveIssueAuthority(contract.title) === null &&
+                !hasClosingIssueAttempt(contract.title) &&
                 hasExactFields(bodyEdit, ["edited_at", "editor_association", "editor_login", "node_id"].sort()) &&
                 TRUSTED_ASSOCIATIONS.has(bodyEdit.editor_association) &&
                 typeof bodyEdit.node_id === "string" && bodyEdit.node_id.length > 0 &&
@@ -423,8 +426,14 @@ jobs:
                   digest, new Map(PHASES.map(phase => [phase, []])),
                 ])
               );
+              const phaseAttempts = comments.filter(comment =>
+                TRUSTED_ASSOCIATIONS.has(comment.author_association) &&
+                typeof comment.body === "string" && comment.body.includes(PHASE_MARKER)
+              );
+              const phaseReceipts = commentReceipts(phaseAttempts, PHASE_MARKER);
+              if (phaseReceipts.length !== phaseAttempts.length) return null;
               let invalidCurrentProjectionPhase = false;
-              for (const receipt of commentReceipts(comments, PHASE_MARKER)) {
+              for (const receipt of phaseReceipts) {
                 const phase = receipt.phase;
                 const phaseIndex = PHASES.indexOf(phase);
                 const mergedPhase = phaseIndex >= PHASES.indexOf("merged");
@@ -444,10 +453,8 @@ jobs:
                   : canonicalSha256(convergenceReceipt.final_projection_observation);
                 const sameAuthorityIdentity =
                   receipt.authority_sha256 === authorityDigest &&
-                  receipt.repository === authorityReceipt.repository &&
                   receipt.pr_number === authorityReceipt.pr_number &&
-                  receipt.head_sha === authorityReceipt.head_sha &&
-                  receipt.run_id === authorityReceipt.run_id;
+                  receipt.head_sha === authorityReceipt.head_sha;
                 const matchingIdentity =
                   sameAuthorityIdentity && phaseIndex >= 0 &&
                   receipt.contract === "verified_issue_set_merge_phase.v1";

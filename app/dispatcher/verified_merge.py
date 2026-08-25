@@ -1924,19 +1924,26 @@ def resolve_verified_merge_phase(
         )
 
     invalid_current_projection_phase = False
-    for candidate in _comment_receipts(comments, VERIFIED_MERGE_PHASE_MARKER):
+    phase_attempts = [
+        comment
+        for comment in comments
+        if comment.get("author_association") in _TRUSTED_AUTHOR_ASSOCIATIONS
+        and isinstance(comment.get("body"), str)
+        and VERIFIED_MERGE_PHASE_MARKER in cast(str, comment["body"])
+    ]
+    phase_receipts = _comment_receipts(comments, VERIFIED_MERGE_PHASE_MARKER)
+    if len(phase_receipts) != len(phase_attempts):
+        return None
+    for candidate in phase_receipts:
         phase = candidate.get("phase")
         candidate_fields = frozenset(candidate)
         current_schema = candidate_fields == _PHASE_RECEIPT_FIELDS
         legacy_schema = candidate_fields == _LEGACY_PHASE_RECEIPT_FIELDS
         same_authority_identity = (
             candidate.get("authority_sha256") == authority_digest
-            and candidate.get("repository")
-            == authority_receipt.get("repository")
             and candidate.get("pr_number")
             == authority_receipt.get("pr_number")
             and candidate.get("head_sha") == authority_receipt.get("head_sha")
-            and candidate.get("run_id") == authority_receipt.get("run_id")
         )
         matching_identity = (
             same_authority_identity
