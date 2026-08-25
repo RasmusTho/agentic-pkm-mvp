@@ -1870,23 +1870,52 @@ def resolve_verified_merge_phase(
     authority_receipt: Mapping[str, object],
     pr: Mapping[str, object],
     allow_merged_body_drift: bool = False,
+    current_body_edit: Mapping[str, object] | None = None,
 ) -> dict[str, object] | None:
-    """Resolve the highest continuous, non-conflicting durable merge phase."""
+    """Resolve the highest continuous durable phase for one live receipt chain.
+
+    Convergence receipts are immutable audit history.  An open PR with more
+    than one current-schema receipt therefore needs the live body-edit identity
+    to select its active chain; timestamp ordering is not a body-edit fence.
+    Once merged, recovery can instead select one and only one chain that
+    reaches the immutable delivered merge identity.
+    """
 
     authority_digest = _canonical_digest(authority_receipt)
     expected_closing = authority_receipt.get("closing_issues")
-    valid_by_phase: dict[str, list[dict[str, object]]] = {
-        phase: [] for phase in _PHASES
-    }
     durable_convergence_receipts = _authenticated_projection_convergence_receipts(
         comments, authority_receipt=authority_receipt
     )
+    if durable_convergence_receipts is None:
+        return None
     convergence_by_digest: dict[str, Mapping[str, object]] = {}
-    if durable_convergence_receipts is not None:
-        for receipt in durable_convergence_receipts:
-            receipt_digest = receipt.get("receipt_sha256")
-            if isinstance(receipt_digest, str):
-                convergence_by_digest[receipt_digest] = receipt
+    for receipt in durable_convergence_receipts:
+        receipt_digest = receipt.get("receipt_sha256")
+        if isinstance(receipt_digest, str):
+            convergence_by_digest[receipt_digest] = receipt
+    active_convergence_digest: str | None = None
+    if current_body_edit is not None:
+        matching_receipts = [
+            receipt
+            for receipt in convergence_by_digest.values()
+            if receipt.get("body_edit") == current_body_edit
+        ]
+        if len(matching_receipts) != 1:
+            return None
+        active_convergence_digest = cast(
+            str, matching_receipts[0]["receipt_sha256"]
+        )
+    elif len(convergence_by_digest) > 1 and not _complete_merged_identity(pr):
+        # Pre-merge authority must bind to the latest authenticated body edit.
+        return None
+
+    valid_by_chain: dict[str, dict[str, list[dict[str, object]]]] = {}
+
+    def candidates_for(chain: str) -> dict[str, list[dict[str, object]]]:
+        return valid_by_chain.setdefault(
+            chain, {phase: [] for phase in _PHASES}
+        )
+
     invalid_current_projection_phase = False
     for candidate in _comment_receipts(comments, VERIFIED_MERGE_PHASE_MARKER):
         phase = candidate.get("phase")
@@ -1950,6 +1979,13 @@ def resolve_verified_merge_phase(
             ):
                 invalid_current_projection_phase = True
                 continue
+            if (
+                active_convergence_digest is not None
+                and convergence_digest != active_convergence_digest
+            ):
+                # Authentic historical phase receipts remain audit evidence,
+                # but cannot compete with the live body-edit contract.
+                continue
         expected_digest = (
             authority_receipt.get("body_sha256")
             if phase == "restored"
@@ -1985,54 +2021,74 @@ def resolve_verified_merge_phase(
             or (not merged_phase and candidate.get("merge_commit_sha") is not None)
         ):
             continue
-        valid_by_phase[str(phase)].append(dict(candidate))
+        chain = (
+            cast(str, convergence_digest)
+            if current_schema
+            else "__legacy_phase_chain__"
+        )
+        candidates_for(chain)[str(phase)].append(dict(candidate))
 
     if invalid_current_projection_phase:
         return None
 
-    highest: dict[str, object] | None = None
-    legacy_ledger: bool | None = None
-    prepared_convergence_digest: object = None
-    reconciled_evidence: tuple[tuple[int, ...], tuple[int, ...]] | None = None
-    for phase in _PHASES:
-        candidates = valid_by_phase[phase]
-        if not candidates:
-            if phase == "prepared" or any(
-                valid_by_phase[later_phase]
-                for later_phase in _PHASES[_PHASES.index(phase) + 1 :]
-            ):
+    def resolve_chain(
+        valid_by_phase: Mapping[str, Sequence[Mapping[str, object]]],
+    ) -> dict[str, object] | None:
+        highest: dict[str, object] | None = None
+        reconciled_evidence: tuple[tuple[int, ...], tuple[int, ...]] | None = None
+        for phase in _PHASES:
+            candidates = valid_by_phase[phase]
+            if not candidates:
+                if phase == "prepared" or any(
+                    valid_by_phase[later_phase]
+                    for later_phase in _PHASES[_PHASES.index(phase) + 1 :]
+                ):
+                    return None
+                break
+            if len({_canonical_digest(candidate) for candidate in candidates}) != 1:
                 return None
-            break
-        if len({_canonical_digest(candidate) for candidate in candidates}) != 1:
-            return None
-        highest = candidates[-1]
-        candidate_is_legacy = (
-            frozenset(highest) == _LEGACY_PHASE_RECEIPT_FIELDS
-        )
-        if phase == "prepared":
-            legacy_ledger = candidate_is_legacy
-            prepared_convergence_digest = highest.get(
-                "projection_convergence_sha256"
+            highest = dict(candidates[-1])
+            phase_evidence = (
+                tuple(cast(Sequence[int], highest["closed_issues"])),
+                tuple(
+                    cast(Sequence[int], highest["reopened_unauthorized_issues"])
+                ),
             )
-        elif (
-            candidate_is_legacy != legacy_ledger
-            or (
-                legacy_ledger is False
-                and highest.get("projection_convergence_sha256")
-                != prepared_convergence_digest
+            if phase == "reconciled":
+                reconciled_evidence = phase_evidence
+            elif phase == "restored" and phase_evidence != reconciled_evidence:
+                return None
+        return highest
+
+    if active_convergence_digest is not None:
+        highest = resolve_chain(
+            valid_by_chain.get(
+                active_convergence_digest,
+                {phase: [] for phase in _PHASES},
             )
-        ):
-            return None
-        phase_evidence = (
-            tuple(cast(Sequence[int], highest["closed_issues"])),
-            tuple(
-                cast(Sequence[int], highest["reopened_unauthorized_issues"])
-            ),
         )
-        if phase == "reconciled":
-            reconciled_evidence = phase_evidence
-        elif phase == "restored" and phase_evidence != reconciled_evidence:
+    elif len(convergence_by_digest) > 1:
+        merged_chains = [
+            chain
+            for chain in valid_by_chain.values()
+            if (
+                (resolved := resolve_chain(chain)) is not None
+                and _PHASES.index(cast(str, resolved["phase"]))
+                >= _PHASES.index("merged")
+            )
+        ]
+        if len(merged_chains) != 1:
             return None
+        highest = resolve_chain(merged_chains[0])
+    else:
+        chain = (
+            next(iter(convergence_by_digest), "__legacy_phase_chain__")
+            if convergence_by_digest
+            else "__legacy_phase_chain__"
+        )
+        highest = resolve_chain(
+            valid_by_chain.get(chain, {phase: [] for phase in _PHASES})
+        )
     if highest is None:
         return None
     current_body = pr.get("body")

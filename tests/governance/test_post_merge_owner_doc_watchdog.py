@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import subprocess
+from collections.abc import Mapping
 from pathlib import Path
 
 from app.dispatcher.verified_merge import _canonical_digest
@@ -136,9 +137,10 @@ def _phase_comment(
     *,
     phase: str,
     merge_commit_sha: str | None,
+    phase_kwargs: dict[str, Mapping[str, object]] | None = None,
 ) -> dict[str, object]:
     authority = _receipt_payload(authority_comment)
-    convergence = _convergence_kwargs(authority_comment)[
+    convergence = (phase_kwargs or _convergence_kwargs(authority_comment))[
         "projection_convergence_receipt"
     ]
     final_observation = convergence["final_projection_observation"]
@@ -518,6 +520,53 @@ def test_watchdog_target_selection_recovers_raced_body_from_continuous_phase_cha
     )
 
     assert selected == {
+        "closing_issues": [3820, 3823],
+        "governing_issue": 3821,
+        "mode": "durable_receipt",
+    }
+
+
+def test_watchdog_selects_the_only_delivered_replacement_receipt_chain() -> None:
+    authority = _authority_comment()
+    merge_sha = "c" * 40
+    replacement_kwargs = projection_phase_kwargs(
+        _receipt_payload(authority),
+        _pr(_neutralized_body(_body())),
+        body_edit={
+            "node_id": "UCE_fixture_3822_replacement",
+            "edited_at": "2026-08-12T05:00:00Z",
+            "editor_login": "fixture-owner",
+            "editor_association": "OWNER",
+        },
+    )
+    comments = [
+        authority,
+        _convergence_comment(authority),
+        _phase_comment(authority, phase="prepared", merge_commit_sha=None),
+        projection_convergence_comment(replacement_kwargs),
+        _phase_comment(
+            authority,
+            phase="prepared",
+            merge_commit_sha=None,
+            phase_kwargs=replacement_kwargs,
+        ),
+        _phase_comment(
+            authority,
+            phase="merged",
+            merge_commit_sha=merge_sha,
+            phase_kwargs=replacement_kwargs,
+        ),
+    ]
+
+    assert _node(
+        "selectWatchdogAuthority(inputs[0])",
+        {
+            "comments": comments,
+            "expectedRepository": REPOSITORY,
+            "linkedIssues": [4999],
+            "livePr": _merged_pr("Governing-Issue: #4999\n\nFixes #4999\n"),
+        },
+    ) == {
         "closing_issues": [3820, 3823],
         "governing_issue": 3821,
         "mode": "durable_receipt",

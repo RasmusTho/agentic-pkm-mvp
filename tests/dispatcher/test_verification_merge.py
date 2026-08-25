@@ -1369,6 +1369,10 @@ def test_live_adapter_authenticates_exact_prepared_merge_window(
     convergence_kwargs = projection_phase_kwargs(
         authority_receipt, prepared_pr
     )
+    convergence_receipt = convergence_kwargs["projection_convergence_receipt"]
+    assert isinstance(convergence_receipt, Mapping)
+    body_edit = convergence_receipt["body_edit"]
+    assert isinstance(body_edit, Mapping)
     phase = build_verified_merge_phase(
         authority_receipt=authority_receipt,
         phase="prepared",
@@ -1407,6 +1411,18 @@ def test_live_adapter_authenticates_exact_prepared_merge_window(
                     "data": {
                         "repository": {
                             "pullRequest": {
+                                "userContentEdits": {
+                                    "nodes": [
+                                        {
+                                            "id": body_edit["node_id"],
+                                            "editedAt": body_edit["edited_at"],
+                                            "editor": {
+                                                "login": body_edit["editor_login"],
+                                            },
+                                        }
+                                    ],
+                                    "pageInfo": {"hasNextPage": False},
+                                },
                                 "closingIssuesReferences": {
                                     "nodes": closing_nodes,
                                     "pageInfo": {"hasNextPage": False},

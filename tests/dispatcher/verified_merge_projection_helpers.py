@@ -14,6 +14,7 @@ def projection_phase_kwargs(
     pr: Mapping[str, object],
     *,
     authority_comment: Mapping[str, object] | None = None,
+    body_edit: Mapping[str, object] | None = None,
 ) -> dict[str, Mapping[str, object]]:
     """Build deterministic convergence evidence for phase-unit fixtures."""
 
@@ -23,10 +24,10 @@ def projection_phase_kwargs(
     title = str(pr.get("title", "verified merge fixture"))
     body = str(pr["body"])
     node_id = f"PR_fixture_{pr_number}"
-    edit = {
+    edit = dict(body_edit) if body_edit is not None else {
         "node_id": f"UCE_fixture_{pr_number}",
         "edited_at": "2026-08-12T05:00:00Z",
-        "editor_login": "fixture-owner",
+        "editor_login": repository.split("/", 1)[0],
         "editor_association": "OWNER",
     }
     authority_digest = hashlib.sha256(
