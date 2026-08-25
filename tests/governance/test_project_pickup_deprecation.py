@@ -36,7 +36,7 @@ def _signboard_imports(source: str, *, filename: str = "<source>") -> set[str]:
     return imports
 
 
-def test_active_pickup_contract_is_label_only() -> None:
+def test_project_status_is_not_a_hot_path_pickup_gate() -> None:
     agents = _read("AGENTS.md")
     issue_to_code = _read(".codex/skills/issue-to-code/SKILL.md")
     deliver_issue_set = _read(".codex/skills/deliver-issue-set/SKILL.md")
@@ -51,6 +51,11 @@ def test_active_pickup_contract_is_label_only() -> None:
     assert "Project Status is not a pickup gate" in dev_workflow
     assert "without requiring Project Status" in labels
     assert "label removal + claimant receipt" in issue_to_code
+
+    for contract in (agents, issue_to_code, _read("docs/architecture/SBS_OPERATING_MODEL.md"), _read(".github/github-governance.yml")):
+        assert "optional projection" in contract
+        assert "blocked-state" in contract
+        assert "review-handoff" in contract
 
     canonical_pickup_contracts = (
         agents,

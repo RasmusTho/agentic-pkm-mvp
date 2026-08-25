@@ -135,7 +135,8 @@ Treat every canonical Issue contract section (`.codex/skills/_shared/ISSUE_CONTR
 
 - GitHub Issue is the canonical implementation task contract.
 - GitHub Project `Agent Delivery Control Plane` is an optional legacy lifecycle projection.
-- Project repair is a cold-path maintenance concern and is not part of selection or claim.
+- Project Status is an optional projection; its repair is a cold-path maintenance concern and is
+  not part of selection, pickup, claim, blocked-state, or review-handoff flow.
 - Do not leave actively worked Issues labeled `agent:ready`.
 - Do not leave blocked Issues in `In Progress`.
 - Do not use `Review` only because a PR exists; keep work `In Progress` until review handoff is explicit.

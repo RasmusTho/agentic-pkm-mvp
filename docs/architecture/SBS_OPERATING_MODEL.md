@@ -455,7 +455,7 @@ An SBS-relevant PR is Done only when:
 
 - SBS-relevant work uses `.github/ISSUE_TEMPLATE/task.yml`. The `SBS Impact` section is a required section per `.github/github-governance.yml`.
 - Issues carry `agent:ready` only when the Definition of Ready (§5) holds; otherwise `agent:needs-human` or `agent:blocked`.
-- Project Status is a projection of issue/PR truth (governance config): opened → Backlog; ready → Ready; PR open → Review; merged/closed → Done. Do not hand-edit Status to mask issue state.
+- Project Status is an optional projection of issue/PR truth (governance config): opened → Backlog; ready → Ready; PR open → Review; merged/closed → Done. It is not a pickup, claim, blocked-state, or review-handoff gate. Do not hand-edit Status to mask issue state.
 - Larger SBS work hangs off the tracking issue `#2337` (Operationalize Target SBS) and the delivery parent `#2355`. New initiative-level SBS work should reference the relevant `docs/architecture/SBS_ROADMAP.md` phase.
 
 ## 8. PR lifecycle expectations
