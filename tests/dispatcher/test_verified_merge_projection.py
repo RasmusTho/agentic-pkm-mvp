@@ -614,6 +614,39 @@ def test_phase_recovery_requires_authenticated_durable_convergence_receipt() -> 
     ) == prepared
 
 
+def test_phase_recovery_rejects_mismatched_final_observation_digest() -> None:
+    authority, neutralized_body, _, convergence = _projection_fixture()
+    neutralized_pr = {**_canonical_pr(), "body": neutralized_body}
+    prepared = verified_merge.build_verified_merge_phase(
+        authority_receipt=authority,
+        phase="prepared",
+        pr=neutralized_pr,
+        projection_convergence_receipt=convergence,
+        final_projection_observation=_observation(
+            neutralized_body, observed_at="2026-08-12T05:00:07Z"
+        ),
+    )["phase_receipt"]
+    forged_prepared = {
+        **prepared,
+        "final_projection_observation_sha256": "f" * 64,
+    }
+
+    assert verified_merge.resolve_verified_merge_phase(
+        [
+            _trusted_convergence_comment(convergence),
+            _trusted_comment(
+                "verified issue-set merge phase:\n```json\n"
+                + json.dumps(
+                    forged_prepared, sort_keys=True, separators=(",", ":")
+                )
+                + "\n```"
+            ),
+        ],
+        authority_receipt=authority,
+        pr=neutralized_pr,
+    ) is None
+
+
 def test_restored_unique_authority_resumes_without_duplicate_receipt() -> None:
     plan = verified_merge.prepare_verified_merge(
         context=_context(),
