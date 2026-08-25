@@ -447,16 +447,21 @@ def _live_pr_review_api(
             "number": 4029,
             "head": {"sha": head_sha},
             "base": {"repo": {"full_name": repository}},
+            "body": "Governing-Issue: #4028\n\nFixes #4028\n",
         },
         f"repos/{repository}/issues/4028": {"number": 4028, "body": "## Contract\nLive body\n"},
         f"repos/{repository}/pulls/4029/reviews?per_page=100": [
-            {"id": 11, "state": "COMMENTED"},
-            {"id": 12, "state": "COMMENTED"},
+            {"id": 11, "state": "COMMENTED", "body": "P1 review summary"},
+            {"id": 12, "state": "COMMENTED", "body": ""},
         ],
         f"repos/{repository}/pulls/4029/comments?per_page=100": [
             {"id": 101, "pull_request_review_id": 11, "body": "P1 blocker"},
             {"id": 102, "pull_request_review_id": 12, "body": "P0 Badge"},
             {"id": 103, "pull_request_review_id": 12, "body": "P2 observation"},
+        ],
+        f"repos/{repository}/issues/4029/comments?per_page=100": [
+            {"id": 201, "body": "P0 conversation finding"},
+            {"id": 202, "body": "P2 conversation observation"},
         ],
     }
 
@@ -476,7 +481,12 @@ def test_pr_scope_revalidation_derives_live_history_and_requires_exact_classific
         head_sha="a" * 40,
         api=api,
     )
-    assert history["finding_ids"] == ["comment:101", "comment:102"]
+    assert history["finding_ids"] == [
+        "comment:101",
+        "comment:102",
+        "issue-comment:201",
+        "review:11",
+    ]
     receipt = {
         "version": 1,
         "pr_number": 4029,
@@ -488,6 +498,8 @@ def test_pr_scope_revalidation_derives_live_history_and_requires_exact_classific
         "finding_classifications": [
             {"finding_id": "comment:101", "scope_class": "governing_contract_blocker"},
             {"finding_id": "comment:102", "scope_class": "pr_introduced_regression"},
+            {"finding_id": "issue-comment:201", "scope_class": "pr_introduced_regression"},
+            {"finding_id": "review:11", "scope_class": "governing_contract_blocker"},
         ],
     }
     assert (
@@ -532,6 +544,32 @@ def test_pr_scope_revalidation_rejects_foreign_or_stale_live_pr_evidence() -> No
     responses, api = _live_pr_review_api()
     responses["repos/octo/repo/pulls/4029"]["head"]["sha"] = "b" * 40  # type: ignore[index]
     with pytest.raises(ReviewBeforeCiGateError, match="foreign or stale"):
+        authenticated_pr_scope_revalidation_history(
+            repository="octo/repo",
+            pr_number=4029,
+            governing_issue=4028,
+            head_sha="a" * 40,
+            api=api,
+        )
+
+
+def test_pr_scope_revalidation_rejects_unbound_governing_issue_or_review() -> None:
+    responses, api = _live_pr_review_api()
+    responses["repos/octo/repo/pulls/4029"]["body"] = "Governing-Issue: #9999\n\nFixes #9999\n"  # type: ignore[index]
+    with pytest.raises(ReviewBeforeCiGateError, match="governing Issue identity"):
+        authenticated_pr_scope_revalidation_history(
+            repository="octo/repo",
+            pr_number=4029,
+            governing_issue=4028,
+            head_sha="a" * 40,
+            api=api,
+        )
+
+    responses, api = _live_pr_review_api()
+    responses["repos/octo/repo/pulls/4029/comments?per_page=100"] = [  # type: ignore[index]
+        {"id": 101, "pull_request_review_id": 999, "body": "P1 blocker"}
+    ]
+    with pytest.raises(ReviewBeforeCiGateError, match="unknown review"):
         authenticated_pr_scope_revalidation_history(
             repository="octo/repo",
             pr_number=4029,

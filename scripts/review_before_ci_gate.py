@@ -13,6 +13,11 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Callable, Mapping, Sequence
 
+if __package__ in {None, ""}:  # Supports direct ``python scripts/...`` invocation.
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from app.dispatcher.verification_contract import resolve_issue_authority
+
 try:  # Supports both ``python scripts/...`` and package imports in tests.
     from scripts.workflow_review_risk import (
         WorkflowReviewRiskError,
@@ -204,7 +209,12 @@ def authenticated_pr_scope_revalidation_history(
     pr = github_api(f"repos/{repository}/pulls/{pr_number}", False)
     issue = github_api(f"repos/{repository}/issues/{governing_issue}", False)
     reviews = github_api(f"repos/{repository}/pulls/{pr_number}/reviews?per_page=100", True)
-    comments = github_api(f"repos/{repository}/pulls/{pr_number}/comments?per_page=100", True)
+    inline_comments = github_api(
+        f"repos/{repository}/pulls/{pr_number}/comments?per_page=100", True
+    )
+    conversation_comments = github_api(
+        f"repos/{repository}/issues/{pr_number}/comments?per_page=100", True
+    )
     if not isinstance(pr, Mapping) or not isinstance(issue, Mapping):
         raise ReviewBeforeCiGateError("GitHub PR or governing Issue response is malformed")
     if pr.get("number") != pr_number or issue.get("number") != governing_issue:
@@ -217,27 +227,57 @@ def authenticated_pr_scope_revalidation_history(
         )
     if not isinstance(issue.get("body"), str):
         raise ReviewBeforeCiGateError("GitHub governing Issue body is unavailable for contract binding")
-    if not isinstance(reviews, list) or not isinstance(comments, list):
+    if not isinstance(pr.get("body"), str):
+        raise ReviewBeforeCiGateError("GitHub PR body is unavailable for governing Issue binding")
+    authority = resolve_issue_authority(pr["body"])
+    if authority is None or authority.governing_issue != governing_issue:
+        raise ReviewBeforeCiGateError(
+            "GitHub PR governing Issue identity is missing, foreign, or stale"
+        )
+    if (
+        not isinstance(reviews, list)
+        or not isinstance(inline_comments, list)
+        or not isinstance(conversation_comments, list)
+    ):
         raise ReviewBeforeCiGateError("GitHub review history is incomplete")
 
-    reviews_by_id = {
-        review.get("id"): review
-        for review in reviews
-        if isinstance(review, Mapping) and isinstance(review.get("id"), int)
-    }
+    reviews_by_id: dict[int, Mapping[str, object]] = {}
+    for review in reviews:
+        if (
+            not isinstance(review, Mapping)
+            or not isinstance(review.get("id"), int)
+            or not isinstance(review.get("state"), str)
+            or not isinstance(review.get("body"), str)
+        ):
+            raise ReviewBeforeCiGateError("GitHub review history is malformed")
+        reviews_by_id[review["id"]] = review
     finding_ids_by_round: dict[str, set[str]] = {}
     for review_id, review in reviews_by_id.items():
         if review.get("state") == "CHANGES_REQUESTED":
             finding_ids_by_round.setdefault(f"review:{review_id}", set()).add(f"review:{review_id}")
-    for comment in comments:
+        if PROTECTED_REVIEW_SEVERITY.search(review["body"]):
+            finding_ids_by_round.setdefault(f"review:{review_id}", set()).add(
+                f"review:{review_id}"
+            )
+    for comment in inline_comments:
         if not isinstance(comment, Mapping) or not isinstance(comment.get("id"), int):
             raise ReviewBeforeCiGateError("GitHub review comment history is malformed")
         body = comment.get("body")
         if not isinstance(body, str) or not PROTECTED_REVIEW_SEVERITY.search(body):
             continue
         review_id = comment.get("pull_request_review_id")
+        if isinstance(review_id, int) and review_id not in reviews_by_id:
+            raise ReviewBeforeCiGateError("GitHub review comment references an unknown review")
         round_id = f"review:{review_id}" if isinstance(review_id, int) else f"comment:{comment['id']}"
         finding_ids_by_round.setdefault(round_id, set()).add(f"comment:{comment['id']}")
+    for comment in conversation_comments:
+        if not isinstance(comment, Mapping) or not isinstance(comment.get("id"), int):
+            raise ReviewBeforeCiGateError("GitHub PR conversation history is malformed")
+        body = comment.get("body")
+        if not isinstance(body, str) or not PROTECTED_REVIEW_SEVERITY.search(body):
+            continue
+        round_id = f"issue-comment:{comment['id']}"
+        finding_ids_by_round.setdefault(round_id, set()).add(f"issue-comment:{comment['id']}")
 
     rejected_rounds = [
         {"round_id": round_id, "verdict": "rejected", "finding_ids": sorted(finding_ids)}

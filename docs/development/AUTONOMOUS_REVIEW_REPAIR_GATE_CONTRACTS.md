@@ -400,7 +400,8 @@ and does not replace the existing per-mechanism repair accounting or the Mechani
 An authenticated receipt bound to the current PR number, head SHA, governing Issue, and a canonical
 SHA-256 governing-contract identity must select exactly one outcome: `continue_unchanged`, `split`,
 or `expanded_contract`. It must include authenticated GitHub review evidence. The executable gate
-fetches the current PR, complete paginated reviews/comments, and governing Issue itself; it binds the
+fetches the current PR, complete paginated review summaries, inline review comments, PR conversation,
+and governing Issue itself; it binds the
 repository/base identity, exact head, contract digest, rejected-round IDs, and protected finding IDs.
 Caller-supplied history, actors, URLs, labels, or finding subsets are never evidence. Omitted,
 foreign, stale, malformed, or partial evidence fails closed. `continue_unchanged`
