@@ -24,8 +24,28 @@ POLICY_VERSION = "tars-builder-system-baseline.v1"
 MAX_EVIDENCE_AGE = timedelta(hours=24)
 _ROOT = Path(__file__).resolve().parents[2]
 _SECRET_KEY = re.compile(r"(?:api[_-]?key|authorization|credential|password|private[_-]?key|secret|token)", re.I)
-_SECRET_VALUE = re.compile(r"(?:bearer\s+|gh[pousr]_[A-Za-z0-9_]|pve[ta]=|-----BEGIN [A-Z ]+PRIVATE KEY-----)", re.I)
+_SECRET_VALUE = re.compile(
+    r"(?:"
+    r"bearer\s+|"
+    r"gh[pousr]_[A-Za-z0-9_]+|"
+    r"pve[ta]=|"
+    r"-----BEGIN [A-Z ]+PRIVATE KEY-----|"
+    r"[A-Za-z][A-Za-z0-9+.-]*://[^\s@]+@|"
+    r"(?:^|[\s;])[^\s;:@]+:[^\s;@]+@|"
+    r"(?:^|[\s;])[^\s;:@/]+/[^\s;@]+@|"
+    r"(?:password|passwd|pwd|secret|token|api[_-]?key)\s*=\s*(?!\[REDACTED\])\S+"
+    r")",
+    re.I,
+)
+_OPAQUE_CREDENTIAL_KEYS = frozenset(
+    {"connection_string", "database_url", "dsn", "passwd", "session_cookie"}
+)
+_SECRET_REFERENCE = re.compile(
+    r"^(?:keychain:(?://)?[A-Za-z0-9][A-Za-z0-9._/-]*|\$\{SECRET:[A-Za-z0-9][A-Za-z0-9._/-]*\})$"
+)
 _FINGERPRINT = re.compile(r"^[a-f0-9]{64}$")
+_CAMEL_CASE_BOUNDARY = re.compile(r"(?<=[a-z0-9])(?=[A-Z])")
+_CAMEL_CASE_ACRONYM_BOUNDARY = re.compile(r"([A-Z]+)([A-Z][a-z])")
 
 # The baseline is intentionally limited to builder-system.  It has no GPU or
 # test-tailnet vector; neither is a prerequisite for this qualification slice.
@@ -67,20 +87,53 @@ def _loads_schema(name: str) -> Mapping[str, Any]:
     return json.loads((_ROOT / "config" / "platform" / name).read_text(encoding="utf-8"))
 
 
-def _key_is_secret(key: str) -> bool:
-    normalized = key.lower().replace("-", "_")
-    return (
-        not normalized.endswith("_ref")
-        and not normalized.endswith("_refs")
-        and _SECRET_KEY.search(normalized) is not None
+def _normalize_key(key: str) -> str:
+    with_acronym_boundaries = _CAMEL_CASE_ACRONYM_BOUNDARY.sub(r"\1_\2", key)
+    return _CAMEL_CASE_BOUNDARY.sub("_", with_acronym_boundaries).lower().replace("-", "_")
+
+
+def _is_opaque_credential_key(key: str) -> bool:
+    normalized = _normalize_key(key)
+    return normalized in _OPAQUE_CREDENTIAL_KEYS or any(
+        normalized.endswith(f"_{candidate}") for candidate in _OPAQUE_CREDENTIAL_KEYS
     )
 
 
+def _key_is_secret(key: str) -> bool:
+    normalized = _normalize_key(key)
+    return (
+        not normalized.endswith("_ref")
+        and not normalized.endswith("_refs")
+        and (_is_opaque_credential_key(key) or _SECRET_KEY.search(normalized) is not None)
+    )
+
+
+def _reference_cardinality(key: str) -> str | None:
+    normalized = _normalize_key(key)
+    if normalized.endswith("_refs"):
+        return "many"
+    if normalized.endswith("_ref"):
+        return "one"
+    return None
+
+
+def _is_valid_secret_reference(value: Any) -> bool:
+    return isinstance(value, str) and _SECRET_REFERENCE.fullmatch(value) is not None
+
+
 def _contains_secret(value: Any, *, key: str | None = None) -> bool:
+    if key is not None:
+        reference_cardinality = _reference_cardinality(key)
+        if reference_cardinality == "one":
+            return not _is_valid_secret_reference(value)
+        if reference_cardinality == "many":
+            return not isinstance(value, list) or any(
+                not _is_valid_secret_reference(item) for item in value
+            )
     if key is not None and _key_is_secret(key):
-        return value != "[REDACTED]"
+        return True
     if isinstance(value, str):
-        return value != "[REDACTED]" and _SECRET_VALUE.search(value) is not None
+        return value == "[REDACTED]" or _SECRET_VALUE.search(value) is not None
     if isinstance(value, Mapping):
         return any(_contains_secret(item, key=str(child_key)) for child_key, item in value.items())
     if isinstance(value, list):
@@ -89,6 +142,14 @@ def _contains_secret(value: Any, *, key: str | None = None) -> bool:
 
 
 def _redact(value: Any, *, key: str | None = None) -> Any:
+    if key is not None:
+        reference_cardinality = _reference_cardinality(key)
+        if reference_cardinality == "one":
+            return value if _is_valid_secret_reference(value) else "[REDACTED]"
+        if reference_cardinality == "many":
+            if not isinstance(value, list):
+                return "[REDACTED]"
+            return [item if _is_valid_secret_reference(item) else "[REDACTED]" for item in value]
     if key is not None and _key_is_secret(key):
         return "[REDACTED]"
     if isinstance(value, str):
@@ -157,7 +218,13 @@ def _baseline_refusals(evidence: Mapping[str, Any]) -> list[str]:
 
     builder_engine = builderops.get("builder_engine_id")
     product_engine = builderops.get("product_engine_id")
-    if not isinstance(builder_engine, str) or not builder_engine or builder_engine == product_engine:
+    if (
+        not isinstance(builder_engine, str)
+        or not builder_engine.strip()
+        or not isinstance(product_engine, str)
+        or not product_engine.strip()
+        or builder_engine.strip() == product_engine.strip()
+    ):
         refusals.append("VM 102 must not share the Product Docker engine")
     projects = builderops.get("compose_projects")
     if not isinstance(projects, list) or any(not isinstance(item, str) or item.startswith("pkm-") for item in projects):
