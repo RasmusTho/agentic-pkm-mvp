@@ -209,6 +209,22 @@ def _authenticate_unique_authority(
     return durable_convergence
 
 
+def _durable_convergence_matches_pr_contract(
+    receipt: Mapping[str, object],
+    pr_contract: Mapping[str, object],
+) -> bool:
+    receipt_pr_contract = receipt.get("pr_contract")
+    receipt_body_edit = receipt.get("body_edit")
+    current_body_edit = pr_contract.get("body_edit")
+    return bool(
+        isinstance(receipt_pr_contract, Mapping)
+        and isinstance(receipt_body_edit, Mapping)
+        and isinstance(current_body_edit, Mapping)
+        and receipt_pr_contract == pr_contract
+        and receipt_body_edit == current_body_edit
+    )
+
+
 def _post_convergence_receipt(
     gh_bin: str,
     *,
@@ -517,6 +533,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         projection_identity_sha256: str | None = None
         authority_authenticated = False
         durable_convergence: dict[str, object] | None = None
+        stale_durable_convergence = False
         next_read_at = time.monotonic()
         while len(empty_observations) < 2:
             remaining = deadline - time.monotonic()
@@ -531,12 +548,19 @@ def main(argv: Sequence[str] | None = None) -> int:
                 pr_number=args.pr_number,
             )
             if not authority_authenticated:
-                durable_convergence = _authenticate_unique_authority(
+                durable_candidate = _authenticate_unique_authority(
                     args.gh_bin,
                     repository=args.repository,
                     authority=authority,
                     snapshot=snapshot,
                 )
+                if durable_candidate is not None:
+                    if _durable_convergence_matches_pr_contract(
+                        durable_candidate, pr_contract
+                    ):
+                        durable_convergence = durable_candidate
+                    else:
+                        stale_durable_convergence = True
                 authority_authenticated = True
             admitted = validate_verified_merge_projection_observation(
                 authority_receipt=authority,
@@ -575,12 +599,19 @@ def main(argv: Sequence[str] | None = None) -> int:
         final_observation = _snapshot(
             args.gh_bin, repository=args.repository, pr_number=args.pr_number
         )
-        _authenticate_unique_authority(
+        final_durable_candidate = _authenticate_unique_authority(
             args.gh_bin,
             repository=args.repository,
             authority=authority,
             snapshot=final_observation,
         )
+        if final_durable_candidate is not None:
+            if _durable_convergence_matches_pr_contract(
+                final_durable_candidate, pr_contract
+            ):
+                durable_convergence = final_durable_candidate
+            else:
+                stale_durable_convergence = True
         _authenticate_pr_contract(
             args.gh_bin,
             repository=args.repository,
@@ -603,6 +634,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         ):
             raise ValueError("final closing projection is stale or drifted")
         if durable_convergence is None:
+            if stale_durable_convergence:
+                raise ValueError(
+                    "durable convergence receipt is stale for current pr-contract"
+                )
             convergence = build_verified_merge_projection_convergence(
                 authority_receipt=authority,
                 pr_contract=pr_contract,
@@ -685,7 +720,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         except (AssertionError, OSError, ValueError, subprocess.SubprocessError):
             payload["restoration"] = None
     _write(args.output_json, payload)
-    print(json.dumps(payload, indent=2, sort_keys=True))
+    print(json.dumps({"status": "failed_closed"}, indent=2, sort_keys=True))
     return 2 if failure == "timeout" else 3
 
 
