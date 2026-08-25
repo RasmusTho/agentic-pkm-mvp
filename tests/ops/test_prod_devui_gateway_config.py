@@ -74,9 +74,10 @@ def test_prod_deploy_preflight_rejects_missing_wildcard_or_ambient_bind(
     assert canonical.stdout.strip() == "prod devUI gateway preflight: ok"
 
     unsafe_variants = (
-        "ports:\n  - \"127.0.0.1:8113:8113\"\nenvironment: {}\n",
-        "ports:\n  - \"127.0.0.1:8113:8113\"\nenvironment:\n  COMPANION_UI_BIND_HOST: 0.0.0.0\n",
-        "ports:\n  - \"${COMPANION_UI_BIND_HOST:-127.0.0.1}:8113:8113\"\nenvironment:\n  COMPANION_UI_BIND_HOST: ${COMPANION_UI_BIND_HOST:-}\n",
+        "services:\n  companion-ui:\n    ports: !override\n      - \"127.0.0.1:8113:8113\"\n    environment: {}\n",
+        "services:\n  companion-ui:\n    ports: !override\n      - \"127.0.0.1:8113:8113\"\n    environment:\n      COMPANION_UI_BIND_HOST: 0.0.0.0\n",
+        "services:\n  companion-ui:\n    ports: !override\n      - \"${COMPANION_UI_BIND_HOST:-127.0.0.1}:8113:8113\"\n    environment:\n      COMPANION_UI_BIND_HOST: ${COMPANION_UI_BIND_HOST:-}\n",
+        "services:\n  companion-ui:\n    ports: !override\n      - \"127.0.0.1:8113:8113\"\n      - \"0.0.0.0:8114:8113\"\n    environment:\n      COMPANION_UI_BIND_HOST: 127.0.0.1\n",
     )
     for index, content in enumerate(unsafe_variants):
         compose_file = tmp_path / f"unsafe-{index}.yml"
