@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import os
 import re
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -49,6 +50,42 @@ def _bash_syntax_ok(path: Path) -> tuple[bool, str]:
         text=True,
     )
     return proc.returncode == 0, proc.stderr
+
+
+def _load_private_guard_config(tmp_path: Path, channel: str, env_text: str = "") -> tuple[str, str]:
+    """Load a channel's private override in an isolated minimal repo fixture."""
+    lib_dir = tmp_path / "scripts" / "lib"
+    lib_dir.mkdir(parents=True)
+    for name in ("companion_ui_startup.sh", "load_env_defaults.sh"):
+        shutil.copy2(REPO_ROOT / "scripts" / "lib" / name, lib_dir / name)
+    if env_text:
+        (tmp_path / f".env.{channel}.local").write_text(env_text, encoding="utf-8")
+
+    proc = subprocess.run(
+        [
+            "bash",
+            "-c",
+            """
+source "$1/scripts/lib/companion_ui_startup.sh"
+CUI_TEST_ROOT="$1"
+cui_repo_root() { printf '%s\\n' "$CUI_TEST_ROOT"; }
+CUI_CHANNEL="$2"
+CUI_DEFAULT_EXPECTED_VAULT_PATTERN="$3"
+CUI_DEFAULT_EXPECTED_VAULT_LABEL="$4"
+cui_load_channel_env
+printf '%s\\n%s\\n' "$CUI_EXPECTED_VAULT_PATTERN" "$CUI_EXPECTED_VAULT_LABEL"
+""",
+            "bash",
+            str(tmp_path),
+            channel,
+            "midg(å|a)rd",
+            "Midgård/Midgard",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return tuple(proc.stdout.strip().splitlines()[-2:])  # type: ignore[return-value]
 
 
 # ── shared library (delivered by #1358, reused by #1359 / #1360) ──────────────
@@ -541,6 +578,59 @@ def test_prod_vault_guard_pattern(vault_basename: str, should_match: bool) -> No
     assert matched is should_match, (
         f"vault guard pattern match for '{vault_basename}' was {matched}, expected {should_match}."
     )
+
+
+def test_vault_guard_parameterized_with_fallback(tmp_path: Path) -> None:
+    """Private channel config overrides the wrapper fallback guard values.
+
+    Verify: Issue #2893 AC2 —
+      tests/ops/test_companion_ui_startup_targets.py::test_vault_guard_parameterized_with_fallback
+    """
+    assert _load_private_guard_config(tmp_path / "fallback", "prod") == (
+        "midg(å|a)rd",
+        "Midgård/Midgard",
+    )
+    assert _load_private_guard_config(
+        tmp_path / "override",
+        "prod",
+        "CUI_EXPECTED_VAULT_PATTERN=private-prod\n"
+        "CUI_EXPECTED_VAULT_LABEL=Private production vault\n",
+    ) == ("private-prod", "Private production vault")
+
+
+def test_prod_vault_guard_fails_loud_without_override(tmp_path: Path) -> None:
+    """The fallback prod guard still rejects a mismatched configured vault.
+
+    Verify: Issue #2893 AC2 —
+      tests/ops/test_companion_ui_startup_targets.py::test_prod_vault_guard_fails_loud_without_override
+    """
+    lib_dir = tmp_path / "scripts" / "lib"
+    lib_dir.mkdir(parents=True)
+    for name in ("companion_ui_startup.sh", "load_env_defaults.sh"):
+        shutil.copy2(REPO_ROOT / "scripts" / "lib" / name, lib_dir / name)
+    proc = subprocess.run(
+        [
+            "bash",
+            "-c",
+            """
+source "$1/scripts/lib/companion_ui_startup.sh"
+CUI_TEST_ROOT="$1"
+cui_repo_root() { printf '%s\\n' "$CUI_TEST_ROOT"; }
+CUI_CHANNEL=prod
+CUI_DEFAULT_EXPECTED_VAULT_PATTERN='midg(å|a)rd'
+CUI_DEFAULT_EXPECTED_VAULT_LABEL='Midgård/Midgard'
+cui_load_channel_env
+VAULT_ROOT="$1/Niflheim"
+cui_guard_vault_name
+""",
+            "bash",
+            str(tmp_path),
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert proc.returncode != 0
+    assert "Refusing to boot the prod channel" in proc.stderr
 
 
 def test_prod_uses_distinct_ports_from_dev_and_test() -> None:

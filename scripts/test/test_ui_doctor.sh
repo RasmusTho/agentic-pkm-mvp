@@ -59,15 +59,15 @@ _run_channel_isolation_preflight() {
 source "${SCRIPT_DIR}/../lib/companion_ui_startup.sh"
 
 CUI_CHANNEL="test"
-CUI_EXPECTED_VAULT_PATTERN="bifr(ö|o)st"
-CUI_EXPECTED_VAULT_LABEL="Bifröst/Bifrost"
+CUI_DEFAULT_EXPECTED_VAULT_PATTERN="bifr(ö|o)st"
+CUI_DEFAULT_EXPECTED_VAULT_LABEL="Bifröst/Bifrost"
 CUI_API_PORT="18002"
 CUI_UI_PORT="8112"
 CUI_COMPOSE_FILES="docker-compose.yaml:docker-compose.test.yml"
 CUI_COMPOSE_PROJECT="pkm-test"
 CUI_SERVE_MODULE="companion_ui.workspace.serve_dev_page"
 CUI_DB_LABEL="app_test"
-export CUI_CHANNEL CUI_EXPECTED_VAULT_PATTERN CUI_EXPECTED_VAULT_LABEL \
+export CUI_CHANNEL CUI_DEFAULT_EXPECTED_VAULT_PATTERN CUI_DEFAULT_EXPECTED_VAULT_LABEL \
   CUI_API_PORT CUI_UI_PORT CUI_COMPOSE_FILES CUI_COMPOSE_PROJECT CUI_SERVE_MODULE CUI_DB_LABEL
 
 # Run channel-isolation preflight first; abort if it fails.

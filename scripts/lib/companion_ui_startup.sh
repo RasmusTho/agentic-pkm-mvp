@@ -12,8 +12,8 @@
 #
 # Required CUI_* configuration (set by the wrapper before calling an entry point):
 #   CUI_CHANNEL                 dev|test|prod
-#   CUI_EXPECTED_VAULT_PATTERN  egrep pattern matched against the VAULT_ROOT basename
-#   CUI_EXPECTED_VAULT_LABEL    human label for the expected vault (e.g. "Niflheim/Nifelheim")
+#   CUI_DEFAULT_EXPECTED_VAULT_PATTERN  fallback egrep pattern matched against VAULT_ROOT basename
+#   CUI_DEFAULT_EXPECTED_VAULT_LABEL    fallback human label for the expected vault
 #   CUI_API_PORT                runtime API host port (e.g. 18001)
 #   CUI_UI_PORT                 Companion UI host port (e.g. 8111)
 #   CUI_COMPOSE_FILES           COMPOSE_FILE value for start_full_system.sh
@@ -99,6 +99,16 @@ cui_promote_channel_scoped_vault_root() {
   cui_log "using channel-scoped ${scoped_name} as VAULT_ROOT for ${CUI_CHANNEL} ('${scoped_val}')"
 }
 
+# The public wrapper supplies only a compatibility fallback.  The private
+# channel env file may set CUI_EXPECTED_VAULT_PATTERN and
+# CUI_EXPECTED_VAULT_LABEL for its actual vault identity.  Do not let inherited
+# shell values win: as with VAULT_ROOT, the channel file is the authority.
+cui_apply_private_vault_guard_config() {
+  : "${CUI_EXPECTED_VAULT_PATTERN:=${CUI_DEFAULT_EXPECTED_VAULT_PATTERN:-}}"
+  : "${CUI_EXPECTED_VAULT_LABEL:=${CUI_DEFAULT_EXPECTED_VAULT_LABEL:-}}"
+  export CUI_EXPECTED_VAULT_PATTERN CUI_EXPECTED_VAULT_LABEL
+}
+
 cui_load_channel_env() {
   local root env_file deploy_pin_file
   root="$(cui_repo_root)"
@@ -115,7 +125,7 @@ cui_load_channel_env() {
   if [ -n "${VAULT_ROOT:-}" ] || [ -n "${VAULT_HOST_ROOT:-}" ]; then
     cui_warn "ignoring inherited VAULT_ROOT='${VAULT_ROOT:-}' — the ${CUI_CHANNEL} channel vault is defined by ${env_file}, not the ambient shell."
   fi
-  unset VAULT_ROOT VAULT_HOST_ROOT
+  unset VAULT_ROOT VAULT_HOST_ROOT CUI_EXPECTED_VAULT_PATTERN CUI_EXPECTED_VAULT_LABEL
   if [ -f "${root}/${env_file}" ]; then
     # shellcheck source=/dev/null
     source "${root}/scripts/lib/load_env_defaults.sh"
@@ -137,6 +147,7 @@ cui_load_channel_env() {
   # channel-scoped root instead of plain VAULT_ROOT; promote it so the launcher
   # honors it rather than idling (matches the resolver + test tooling).
   cui_promote_channel_scoped_vault_root
+  cui_apply_private_vault_guard_config
 }
 
 # Resolves the channel vault posture. Read-only. Honors no-vault idle boot
@@ -466,9 +477,9 @@ cui_print_summary() {
 
 cui_run_start() {
   local root _archive_helper
-  cui_require_config
   cui_log "canonical startup begin"
   cui_load_channel_env
+  cui_require_config
   cui_guard_vault_name
   root="$(cui_repo_root)"
   _archive_helper="${_CUI_STARTUP_LIB_DIR}/heimdal_cold_volume_preflight.sh"
@@ -518,7 +529,6 @@ cui_doctor_vault_name_status() {
 }
 
 cui_run_doctor() {
-  cui_require_config
   local rc=0
   echo "============ Companion UI doctor (${CUI_CHANNEL}) ============"
   echo "  channel: PKM_ENVIRONMENT=${CUI_CHANNEL}  project=${CUI_COMPOSE_PROJECT}  db=${CUI_DB_LABEL:-derived}"
@@ -535,21 +545,13 @@ cui_run_doctor() {
   local root env_file
   root="$(cui_repo_root)"
   env_file=".env.${CUI_CHANNEL}.local"
-  # Mirror the launcher: the channel vault is defined by the env file, not an
-  # ambient VAULT_ROOT. Report any inherited binding as ignored, then clear it so
-  # the resolution below reflects what the launcher would actually do.
-  if [ -n "${VAULT_ROOT:-}" ] || [ -n "${VAULT_HOST_ROOT:-}" ]; then
-    echo "  [info] ignoring inherited VAULT_ROOT='${VAULT_ROOT:-}' (the ${CUI_CHANNEL} vault is defined by ${env_file}, not the shell)"
-  fi
-  unset VAULT_ROOT VAULT_HOST_ROOT
+  # Use exactly the same private-side vault and guard-config resolution as the
+  # launcher. A doctor must never validate an ambient shell identity instead.
+  cui_load_channel_env
+  cui_require_config
   if [ -f "${root}/${env_file}" ]; then
     echo "  [ok]   ${env_file} present"
-    # shellcheck source=/dev/null
-    source "${root}/scripts/lib/load_env_defaults.sh"
-    ( cd "${root}" && load_env_defaults_file "${env_file}" ) >/dev/null 2>&1 || true
-    cd "${root}" 2>/dev/null && load_env_defaults_file "${env_file}" >/dev/null 2>&1 || true
   else
-    # Missing override is a valid no-vault idle posture (#2005), not a failure.
     echo "  [info] ${env_file} absent — no-vault idle boot (create from .env.example to pin a ${CUI_CHANNEL} vault)"
   fi
   cui_doctor_vault_name_status || rc=1

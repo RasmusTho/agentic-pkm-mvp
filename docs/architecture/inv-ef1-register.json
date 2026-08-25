@@ -1763,14 +1763,14 @@
       "category": "iv",
       "why_load_bearing": "Fail-loud production guard or startup path still identifies the operator-bound deployment.",
       "disposition": "parameterize",
-      "issue": "#2892"
+      "issue": "#2893"
     },
     {
       "artifact": "scripts/prod/prod_ui_doctor.sh",
       "category": "iv",
       "why_load_bearing": "Fail-loud production guard or startup path still identifies the operator-bound deployment.",
       "disposition": "parameterize",
-      "issue": "#2892"
+      "issue": "#2893"
     },
     {
       "artifact": "scripts/prod/start_midgard_stack.sh",
@@ -2141,7 +2141,7 @@
       "category": "iv",
       "why_load_bearing": "Test fixture pins the existing operator-bound compatibility behavior.",
       "disposition": "parameterize",
-      "issue": "#2892"
+      "issue": "#2893"
     },
     {
       "artifact": "tests/ops/test_promotion_plan_vault_settings_precheck.py",
