@@ -577,6 +577,28 @@ def test_existing_publication_mode_cannot_omit_pr_scope_revalidation() -> None:
     assert "requires authenticated PR scope revalidation" in result.stderr
 
 
+def test_open_pr_cannot_omit_publication_mode() -> None:
+    result = subprocess.run(
+        [
+            sys.executable,
+            "scripts/review_before_ci_gate.py",
+            "--lane",
+            "governance",
+            "--changed-file",
+            "docs/development/PR_HOT_PATH.md",
+            "--risk-assessment-complete",
+            "--review-gate-complete",
+        ],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 2
+    assert "requires explicit --publication-mode existing" in result.stderr
+
+
 def test_new_publication_mode_requires_repository_identity() -> None:
     result = subprocess.run(
         [
@@ -757,10 +779,10 @@ def test_cli_fails_until_review_gate_is_complete() -> None:
         check=False,
     )
 
-    assert blocked.returncode == 1
-    assert json.loads(blocked.stdout)["may_handoff_to_ci"] is False
-    assert allowed.returncode == 0
-    assert json.loads(allowed.stdout)["may_handoff_to_ci"] is True
+    assert blocked.returncode == 2
+    assert allowed.returncode == 2
+    assert "requires explicit --publication-mode existing" in blocked.stderr
+    assert "requires explicit --publication-mode existing" in allowed.stderr
 
 
 def test_publish_pr_skill_runs_review_gate_before_push() -> None:

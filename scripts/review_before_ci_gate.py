@@ -343,6 +343,22 @@ def _current_branch_has_open_pr(repository: str) -> bool:
     return bool(payload)
 
 
+def _github_repository_from_origin() -> str | None:
+    remote = subprocess.run(
+        ["git", "remote", "get-url", "origin"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if remote.returncode != 0:
+        return None
+    match = re.fullmatch(
+        r"(?:git@github\.com:|https://github\.com/)([^/\s]+/[^/\s]+?)(?:\.git)?\s*",
+        remote.stdout,
+    )
+    return match.group(1) if match else None
+
+
 def _canonical_contract_body(body: str) -> str:
     return body.replace("\r\n", "\n").replace("\r", "\n").rstrip("\n") + "\n"
 
@@ -653,6 +669,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                 raise ReviewBeforeCiGateError(
                     "new-PR publication found an existing open PR for the current branch"
                 )
+        elif (repository := _github_repository_from_origin()) is not None and _current_branch_has_open_pr(
+            repository
+        ):
+            raise ReviewBeforeCiGateError(
+                "open PR publication requires explicit --publication-mode existing"
+            )
         if args.pr_scope_revalidation:
             if (
                 args.pr_number is None
