@@ -573,6 +573,79 @@ def test_watchdog_selects_the_only_delivered_replacement_receipt_chain() -> None
     }
 
 
+def test_watchdog_rejects_invalid_same_authority_phase_beside_current_chain() -> None:
+    authority = _authority_comment()
+    merge_sha = "c" * 40
+    replacement_kwargs = projection_phase_kwargs(
+        _receipt_payload(authority),
+        _pr(_neutralized_body(_body())),
+        body_edit={
+            "node_id": "UCE_fixture_3822_replacement",
+            "edited_at": "2026-08-12T05:00:00Z",
+            "editor_login": "fixture-owner",
+            "editor_association": "OWNER",
+        },
+    )
+    current_chain = [
+        projection_convergence_comment(replacement_kwargs),
+        _phase_comment(
+            authority,
+            phase="prepared",
+            merge_commit_sha=None,
+            phase_kwargs=replacement_kwargs,
+        ),
+        _phase_comment(
+            authority,
+            phase="merged",
+            merge_commit_sha=merge_sha,
+            phase_kwargs=replacement_kwargs,
+        ),
+    ]
+    stale_convergence = _convergence_comment(authority)
+    invalid_unknown = _phase_comment(
+        authority, phase="prepared", merge_commit_sha=None
+    )
+    invalid_unknown_payload = _receipt_payload(invalid_unknown)
+    invalid_unknown_payload["projection_convergence_sha256"] = "f" * 64
+    invalid_unknown["body"] = (
+        "verified issue-set merge phase:\n```json\n"
+        + json.dumps(invalid_unknown_payload, separators=(",", ":"), sort_keys=True)
+        + "\n```"
+    )
+    invalid_null = _phase_comment(
+        authority, phase="prepared", merge_commit_sha=None
+    )
+    invalid_null_payload = _receipt_payload(invalid_null)
+    invalid_null_payload["projection_convergence_sha256"] = None
+    invalid_null["body"] = (
+        "verified issue-set merge phase:\n```json\n"
+        + json.dumps(invalid_null_payload, separators=(",", ":"), sort_keys=True)
+        + "\n```"
+    )
+    discontinuous = _phase_comment(
+        authority, phase="merged", merge_commit_sha=merge_sha
+    )
+
+    for invalid_phase, convergences in (
+        (invalid_unknown, []),
+        (invalid_null, []),
+        (discontinuous, [stale_convergence]),
+    ):
+        assert _node(
+            "selectWatchdogAuthority(inputs[0])",
+            {
+                "comments": [authority, *convergences, invalid_phase, *current_chain],
+                "expectedRepository": REPOSITORY,
+                "linkedIssues": [4999],
+                "livePr": _merged_pr("Governing-Issue: #4999\n\nFixes #4999\n"),
+            },
+        ) == {
+            "closing_issues": [],
+            "governing_issue": None,
+            "mode": "trusted_receipt_invalid",
+        }
+
+
 def test_watchdog_rejects_absent_forged_or_digest_mismatched_convergence() -> None:
     authority = _authority_comment()
     convergence = _convergence_comment(authority)

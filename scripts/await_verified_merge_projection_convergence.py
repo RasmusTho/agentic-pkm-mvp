@@ -25,8 +25,8 @@ from app.dispatcher.verified_merge import (
     build_verified_merge_projection_convergence,
     plan_projection_convergence_failure_restoration,
     projection_convergence_receipts_authenticate_authority,
+    resolve_verified_merge_authority_receipt,
     resolve_verified_merge_projection_convergence_receipt,
-    resume_verified_merge_projection_convergence,
     validate_verified_merge_projection_observation,
 )
 from app.dispatcher.github_call_logger import is_kill_switch_active
@@ -196,7 +196,7 @@ def _authenticate_unique_authority(
         )
     ):
         raise ValueError("trusted convergence receipt is malformed or conflicting")
-    result = resume_verified_merge_projection_convergence(
+    result = resolve_verified_merge_authority_receipt(
         comments,
         pr={
             "number": pull.get("number"),
@@ -214,7 +214,7 @@ def _authenticate_unique_authority(
             Mapping[str, object], authority.get("repair_budget")
         ),
     )
-    if result is None or result.get("authority_receipt") != authority:
+    if result is None or result != authority:
         raise ValueError("unique trusted verified-merge authority is unavailable")
     return durable_convergence
 

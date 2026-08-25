@@ -554,6 +554,77 @@ def _trusted_convergence_comment(
     }
 
 
+def test_unique_authority_authentication_allows_current_replacement_after_stale_prepared_phase(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    authority, neutralized_body, stale_contract, stale_convergence = (
+        _projection_fixture()
+    )
+    stale_prepared = verified_merge.build_verified_merge_phase(
+        authority_receipt=authority,
+        phase="prepared",
+        pr={**_canonical_pr(), "body": neutralized_body},
+        projection_convergence_receipt=stale_convergence,
+        final_projection_observation=_observation(
+            neutralized_body, observed_at="2026-08-12T05:00:07Z"
+        ),
+    )["phase_receipt"]
+
+    replacement_contract = copy.deepcopy(stale_contract)
+    replacement_edit = replacement_contract["body_edit"]
+    assert isinstance(replacement_edit, dict)
+    replacement_edit["node_id"] = "UCE_kwDOQEip6s4825_replacement"
+    replacement_edit["edited_at"] = "2026-08-12T05:00:08Z"
+    replacement_contract["created_at"] = "2026-08-12T05:00:08Z"
+    replacement_contract["started_at"] = "2026-08-12T05:00:09Z"
+    replacement_contract["completed_at"] = "2026-08-12T05:00:10Z"
+    replacement_observations = [
+        copy.deepcopy(_observation(neutralized_body, observed_at=observed_at))
+        for observed_at in (
+            "2026-08-12T05:00:11Z",
+            "2026-08-12T05:00:12Z",
+            "2026-08-12T05:00:13Z",
+        )
+    ]
+    for observation in replacement_observations:
+        pull_request = observation["pull_request"]
+        assert isinstance(pull_request, dict)
+        pull_request["latest_body_edit"] = copy.deepcopy(replacement_edit)
+        pull_request["last_edited_at"] = replacement_edit["edited_at"]
+    replacement_convergence = verified_merge.build_verified_merge_projection_convergence(
+        authority_receipt=authority,
+        pr_contract=replacement_contract,
+        observations=replacement_observations[:2],
+        final_projection_observation=replacement_observations[2],
+        minimum_backoff_seconds=1,
+    )["convergence_receipt"]
+    assert isinstance(replacement_convergence, dict)
+
+    comments = [
+        _trusted_comment(
+            "verified issue-set merge authority:\n```json\n"
+            + json.dumps(authority, sort_keys=True, separators=(",", ":"))
+            + "\n```"
+        ),
+        _trusted_convergence_comment(stale_convergence),
+        _trusted_comment(
+            "verified issue-set merge phase:\n```json\n"
+            + json.dumps(stale_prepared, sort_keys=True, separators=(",", ":"))
+            + "\n```"
+        ),
+        _trusted_convergence_comment(replacement_convergence),
+    ]
+    monkeypatch.setattr(await_projection, "_comments", lambda *args, **kwargs: comments)
+
+    assert await_projection._authenticate_unique_authority(
+        "gh",
+        repository=REPOSITORY,
+        authority=authority,
+        snapshot=replacement_observations[2],
+        pr_contract=replacement_contract,
+    ) == replacement_convergence
+
+
 def test_phase_recovery_requires_authenticated_durable_convergence_receipt() -> None:
     authority, neutralized_body, _, convergence = _projection_fixture()
     neutralized_pr = {**_canonical_pr(), "body": neutralized_body}
