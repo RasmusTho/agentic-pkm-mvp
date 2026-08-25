@@ -77,13 +77,16 @@ deployment, credential, network, or firewall authority.
 
 The fixed VM 102 BuilderOps isolation baseline is: VM ID `102`, name `builder-system`, two cores,
 4096 MiB memory, 60 GiB disk, `vmbr0`, VLAN tag `42`, and network scope `guest-vlan-42`. The
-candidate evidence must also prove an independent BuilderOps engine, no `pkm-*` Product Compose
-project, and no production credential, vault, or network-identity references on VM 102.
+candidate evaluator requires a non-empty BuilderOps engine identifier that does not equal the
+supplied Product engine identifier, no `pkm-*` Product Compose project, and no production
+credential, vault, or network-identity references on VM 102. It does not establish that a separate
+Product engine was supplied or valid; that admission defect is governed by Issue #5072.
 
-Candidate evidence is accepted only when it is no more than 24 hours old, fingerprint-verifiable,
-and redacted: receipts may retain non-secret references and fingerprints but never raw secrets.
-Malformed, stale, secret-bearing, or partial evidence fails closed. A passing candidate result is
-still not live qualification: `live_qualified` remains `false` until a separate governed
+Candidate evidence is accepted only when it is no more than 24 hours old and fingerprint-verifiable.
+The evaluator redacts recognized secret-key and secret-value patterns, and refuses evidence it
+recognizes as secret-bearing. It does not yet prove universal raw-secret exclusion for opaque
+credential-like fields; that admission defect is governed by Issue #5072. A passing candidate result
+is still not live qualification: `live_qualified` remains `false` until a separate governed
 live-operations receipt exists.
 
 GPU passthrough and test Tailscale are deliberately not qualification prerequisites. Repository
