@@ -42,12 +42,14 @@ import html as _html
 import json
 import os
 import re
+import socket
 import sys
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from ipaddress import ip_address
 from pathlib import Path
 from typing import Optional
-from urllib.parse import parse_qs, quote, urlencode, urlparse
+from urllib.parse import parse_qs, parse_qsl, quote, urlencode, urlparse
 
 import httpx
 
@@ -182,12 +184,55 @@ _DEFAULT_API_TIMEOUT_SECONDS = 2.0
 # timeout (see the 10.0s httpx.get calls below) independent of this value.
 _DEFAULT_ASK_TIMEOUT_SECONDS = 120.0
 _TRUTHY_ENV = {"1", "true", "yes", "on"}
+_DEVUI_GET_PROXY_PATHS = frozenset(
+    {
+        "/api/devui/focus",
+        "/api/devui/overview",
+    }
+)
+_DEVUI_FORWARDED_IDENTITY_HEADERS = frozenset(
+    {
+        "cf-connecting-ip",
+        "forwarded",
+        "true-client-ip",
+        "via",
+        "x-client-ip",
+        "x-envoy-external-address",
+        "x-original-forwarded-for",
+        "x-real-ip",
+    }
+)
 
 
 class CompanionThreadingHTTPServer(ThreadingHTTPServer):
     """Threaded HTTP server for local/LAN Companion UI browser clients."""
 
     daemon_threads = True
+
+
+def is_explicit_loopback_host(value: str | None) -> bool:
+    """Return whether one explicit bind declaration resolves only to loopback."""
+
+    candidate = (value or "").strip()
+    if not candidate:
+        return False
+    if candidate.startswith("[") and candidate.endswith("]"):
+        candidate = candidate[1:-1]
+    try:
+        return ip_address(candidate).is_loopback
+    except ValueError:
+        pass
+    try:
+        infos = socket.getaddrinfo(candidate, None, type=socket.SOCK_STREAM)
+    except (socket.gaierror, OSError):
+        return False
+    addresses = {str(info[4][0]) for info in infos if info[4]}
+    if not addresses:
+        return False
+    try:
+        return all(ip_address(address).is_loopback for address in addresses)
+    except ValueError:
+        return False
 
 
 def load_config() -> dict:
@@ -15963,6 +16008,7 @@ def make_handler(
     runtime_git_sha: str = "",
     static_assets: dict[str, tuple[str, bytes]] | None = None,
     ask_timeout_seconds: float = _DEFAULT_ASK_TIMEOUT_SECONDS,
+    devui_external_bind_host: str | None = None,
 ) -> type:
     """Return a configured BaseHTTPRequestHandler subclass.
 
@@ -15982,6 +16028,12 @@ def make_handler(
     _resolved_runtime_git_sha = (
         runtime_git_sha or os.getenv("VCS_REF") or "unknown"
     ).strip().lower()
+    # This is the rendered host-publish declaration, not the inside-container
+    # listener or request peer. Docker bridge peers are intentionally not used
+    # as browser-loopback authority.
+    _resolved_devui_enabled = production_profile and is_explicit_loopback_host(
+        devui_external_bind_host
+    )
 
     class _Handler(BaseHTTPRequestHandler):
         _client = client
@@ -15991,8 +16043,9 @@ def make_handler(
         _runtime_git_sha = _resolved_runtime_git_sha
         _static_assets = _merged_static_assets
         _ask_timeout_seconds = ask_timeout_seconds
+        _devui_enabled = _resolved_devui_enabled
 
-        def _send_json(self, status_code: int, payload: dict) -> None:
+        def _send_json(self, status_code: int, payload: object) -> None:
             body = json.dumps(payload).encode("utf-8")
             self.send_response(status_code)
             self.send_header("Content-Type", "application/json; charset=utf-8")
@@ -16085,8 +16138,142 @@ def make_handler(
             )
             self._send_html(404, body)
 
+        def _devui_has_forwarded_identity(self) -> bool:
+            return any(
+                name.lower().startswith("x-forwarded-")
+                or name.lower() in _DEVUI_FORWARDED_IDENTITY_HEADERS
+                for name in self.headers
+            )
+
+        def _devui_has_local_host(self) -> bool:
+            get_all = getattr(self.headers, "get_all", None)
+            if callable(get_all):
+                host_values = get_all("Host") or []
+            else:
+                host_value = self.headers.get("Host")
+                host_values = [host_value] if host_value is not None else []
+            if len(host_values) != 1:
+                return False
+            value = str(host_values[0]).strip().lower()
+            if not value or any(char.isspace() for char in value):
+                return False
+            if any(char in value for char in "/?#@\\,"):
+                return False
+            if value.startswith("["):
+                closing = value.find("]")
+                if closing <= 1:
+                    return False
+                hostname = value[1:closing]
+                suffix = value[closing + 1 :]
+                if suffix and not suffix.startswith(":"):
+                    return False
+                port_text = suffix[1:] if suffix else ""
+            else:
+                if value.count(":") > 1:
+                    return False
+                hostname, separator, port_text = value.rpartition(":")
+                if not separator:
+                    hostname = value
+                    port_text = ""
+            if port_text:
+                try:
+                    port = int(port_text)
+                except ValueError:
+                    return False
+                if not 1 <= port <= 65535:
+                    return False
+            elif value.endswith(":"):
+                return False
+            if hostname == "localhost":
+                return True
+            try:
+                return ip_address(hostname or "").is_loopback
+            except ValueError:
+                return False
+
+        def _devui_request_admitted(self) -> bool:
+            """Authorize a browser hop without treating the Docker peer as proof."""
+
+            if not self._devui_enabled:
+                return False
+            return (
+                not self._devui_has_forwarded_identity()
+                and self._devui_has_local_host()
+            )
+
+        def _proxy_devui_get(self, parsed) -> None:
+            if parsed.path not in _DEVUI_GET_PROXY_PATHS:
+                self._send_json(
+                    404,
+                    {"error": "not_found", "message": "Unknown Companion UI route"},
+                )
+                return
+            if not self._devui_enabled:
+                self._send_json(
+                    404,
+                    {"error": "not_found", "message": "Unknown Companion UI route"},
+                )
+                return
+            if not self._devui_request_admitted():
+                self._send_json(
+                    403,
+                    {
+                        "error": "forbidden",
+                        "message": "devUI is available only through the local loopback gateway",
+                    },
+                )
+                return
+
+            params: dict[str, str] = {}
+            if parsed.path == "/api/devui/overview":
+                if parsed.query:
+                    self._send_json(
+                        404,
+                        {"error": "not_found", "message": "Unknown Companion UI route"},
+                    )
+                    return
+            else:
+                if re.search(r"%(?![0-9a-fA-F]{2})", parsed.query):
+                    pairs: list[tuple[str, str]] = []
+                else:
+                    try:
+                        pairs = parse_qsl(
+                            parsed.query,
+                            keep_blank_values=True,
+                            strict_parsing=True,
+                        )
+                    except ValueError:
+                        pairs = []
+                if len(pairs) != 1 or pairs[0][0] != "subject":
+                    self._send_json(
+                        400,
+                        {"error": "invalid_query", "message": "One subject query is required"},
+                    )
+                    return
+                subject = pairs[0][1]
+                if not subject.strip():
+                    self._send_json(
+                        400,
+                        {"error": "invalid_query", "message": "One subject query is required"},
+                    )
+                    return
+                params = {"subject": subject}
+
+            try:
+                status_code, data = self._client.get_with_status(
+                    parsed.path,
+                    params=params,
+                )
+            except WorkspaceClientError as exc:
+                self._proxy_error(exc)
+                return
+            self._send_json(status_code, data)
+
         def do_GET(self) -> None:
             parsed = urlparse(self.path)
+            if parsed.path == "/api/devui" or parsed.path.startswith("/api/devui/"):
+                self._proxy_devui_get(parsed)
+                return
             if parsed.path == "/healthz":
                 try:
                     self._client.get("/api/health", params={})
@@ -16559,6 +16746,8 @@ def make_handler(
         def route_allowed(cls, method: str, path: str) -> bool:
             method = method.upper()
             if method == "GET":
+                if path in _DEVUI_GET_PROXY_PATHS:
+                    return cls._devui_enabled
                 return cls._get_path_allowed(path)
             if method == "POST":
                 if path in cls._POST_PROXY_PATHS:

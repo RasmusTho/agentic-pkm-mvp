@@ -230,6 +230,7 @@ prod-ui-doctor:
 
 prod-up:
 	@bash -c 'source scripts/lib/heimdal_cold_volume_preflight.sh; heimdal_cold_volume_preflight prod "$(CURDIR)"'
+	@python3 scripts/prod_devui_gateway_preflight.py docker-compose.prod.yml
 	@$(MAKE) --no-print-directory prepare-instance-ownership
 	@$(COMPOSE_PROD) up -d $(COMPOSE_UP_BUILD)
 

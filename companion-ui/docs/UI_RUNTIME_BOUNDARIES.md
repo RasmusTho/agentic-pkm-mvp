@@ -52,6 +52,18 @@
 - The runtime API target is configuration; it does not relax operator
   bind/exposure posture. Remote exposure of the UI origin remains an explicit
   operator choice, independent of this proxy path.
+- Production devUI transport is a separate, stricter two-route allowlist (#4841): exact GET
+  `/api/devui/overview` with no query and exact GET `/api/devui/focus` with one nonempty
+  `subject` query. Unknown/child devUI paths, duplicate or extra query keys, wildcards, and
+  POST/PUT/PATCH/DELETE are denied. The route is enabled only from an explicit all-loopback
+  `COMPANION_UI_BIND_HOST` declaration and requires a loopback-local browser `Host` with no
+  forwarded identity, including `Via`; it never treats the inside-container peer as loopback
+  authority.
+- For those two reads, the UI server creates a fresh request from only
+  `COMPANION_API_BASE_URL`, the exact path, and the validated query. It copies no inbound `Host`,
+  API key, authorization, forwarding, Via, client-IP, or proxy header, and returns the upstream
+  status and JSON body unchanged. #4841 adds no FastAPI page/static route, packaged page/asset, or
+  browser fallback. Presentation #4836 consumes this transport later at the Companion origin.
 
 ## Control-action register
 

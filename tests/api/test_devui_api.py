@@ -320,6 +320,101 @@ def test_devui_composition_refuses_other_forwarded_identity_headers() -> None:
     ).status_code == 403
 
 
+def test_devui_admits_only_direct_loopback_or_server_derived_companion_proxy(
+    monkeypatch,
+) -> None:
+    proxy_ip = "172.19.0.7"
+    monkeypatch.setattr(auth_module.settings, "api_key", "configured-key")
+    monkeypatch.setattr(auth_module.settings, "companion_ui_proxy_hosts", proxy_ip)
+    monkeypatch.setattr(auth_module, "_proxy_dns_cache", {})
+    monkeypatch.setattr(devui_route, "compose_owner_snapshot", lambda **_: {})
+    monkeypatch.setattr(
+        devui_route,
+        "compose_overview_view",
+        lambda **_: {"contract_version": "devui-overview-view.v1"},
+    )
+
+    assert TestClient(app).get("/api/devui/overview").status_code == 200
+    assert (
+        TestClient(app, client=(proxy_ip, 50000)).get(
+            "/api/devui/overview",
+            headers={"Host": "api:8000"},
+        ).status_code
+        == 200
+    )
+
+    for untrusted_host in (
+        "172.19.0.99",
+        "192.168.1.20",
+        "100.64.0.20",
+        "203.0.113.10",
+    ):
+        response = TestClient(app, client=(untrusted_host, 50000)).get(
+            "/api/devui/overview",
+            headers={"X-API-Key": "configured-key"},
+        )
+        assert response.status_code == 403
+
+    forwarded = TestClient(app, client=(proxy_ip, 50000)).get(
+        "/api/devui/overview",
+        headers={"Forwarded": "for=127.0.0.1"},
+    )
+    assert forwarded.status_code == 403
+
+    monkeypatch.setattr(auth_module.settings, "companion_ui_proxy_hosts", "")
+    missing_config = TestClient(app, client=(proxy_ip, 50000)).get(
+        "/api/devui/overview"
+    )
+    assert missing_config.status_code == 403
+
+    monkeypatch.setattr(auth_module.settings, "companion_ui_proxy_hosts", "companion-ui")
+    monkeypatch.setattr(
+        auth_module.socket,
+        "getaddrinfo",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            auth_module.socket.gaierror("unresolvable")
+        ),
+    )
+    unresolvable_config = TestClient(app, client=(proxy_ip, 50000)).get(
+        "/api/devui/overview"
+    )
+    assert unresolvable_config.status_code == 403
+
+
+def test_devui_proxy_admission_preserves_direct_loopback_contract(monkeypatch) -> None:
+    subject = "github:RasmusTho/agentic-pkm-mvp#4768"
+    monkeypatch.setattr(auth_module.settings, "api_key", "configured-key")
+    monkeypatch.setattr(auth_module.settings, "companion_ui_proxy_hosts", "172.19.0.7")
+    monkeypatch.setattr(devui_route, "compose_owner_snapshot", lambda **_: {})
+    monkeypatch.setattr(devui_route, "compose_overview_view", lambda **_: {})
+    monkeypatch.setattr(
+        devui_route,
+        "read_focus_inputs",
+        lambda requested: _focus_inputs(requested),
+    )
+
+    direct = TestClient(app)
+    assert direct.get("/api/devui/overview").status_code == 200
+    assert direct.get("/api/devui/focus", params={"subject": subject}).status_code == 200
+
+    for name, value in (
+        ("Forwarded", "for=127.0.0.1"),
+        ("Via", "1.1 local-proxy"),
+        ("X-Forwarded-For", "127.0.0.1"),
+        ("X-Real-IP", "127.0.0.1"),
+    ):
+        assert direct.get("/api/devui/overview", headers={name: value}).status_code == 403
+
+    assert direct.get(
+        "/api/devui/overview",
+        headers={"Host": "attacker.example"},
+    ).status_code == 403
+
+    for method in (direct.post, direct.put, direct.patch, direct.delete):
+        assert method("/api/devui/overview").status_code == 405
+        assert method("/api/devui/focus", params={"subject": subject}).status_code == 405
+
+
 def test_devui_composition_sanitizes_ckm_refusal_diagnostics(
     monkeypatch,
 ) -> None:

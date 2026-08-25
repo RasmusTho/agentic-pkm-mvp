@@ -7,6 +7,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 
+from app.auth import SUBJECT_TRUSTED_COMPANION_PROXY, resolve_auth_subject
 from app.api.routes.cockpit import read_registry as read_cockpit_registry
 from app.builderops.ckm.query_service import CkmQueryService
 from app.builderops.config import load_paths as load_builderops_paths
@@ -71,13 +72,26 @@ def _has_local_host_header(request: Request) -> bool:
 def _require_local_caller(
     request: Request,
 ) -> None:
-    """Admit only a direct loopback peer with no forwarded identity."""
+    """Admit direct loopback or the exact server-derived Companion proxy."""
 
-    if (
-        not _is_immediate_loopback(request)
-        or not _has_local_host_header(request)
-        or _has_forwarded_identity(request)
-    ):
+    # Reject spoofable forwarding before any subject resolution. In
+    # particular, resolve_auth_subject must never see attacker-supplied XFF and
+    # reinterpret a configured proxy request as loopback.
+    if _has_forwarded_identity(request):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=_LOCAL_ONLY_DETAIL,
+        )
+    if _is_immediate_loopback(request) and _has_local_host_header(request):
+        return
+    try:
+        subject = resolve_auth_subject(request, None)
+    except HTTPException as exc:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=_LOCAL_ONLY_DETAIL,
+        ) from exc
+    if subject != SUBJECT_TRUSTED_COMPANION_PROXY:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail=_LOCAL_ONLY_DETAIL,

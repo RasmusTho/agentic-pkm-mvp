@@ -34,6 +34,7 @@ _PRODUCTION_STATIC_ASSETS = {
 
 def load_config() -> dict:
     """Load production profile config from environment variables."""
+    devui_external_bind_host = os.environ.get("COMPANION_UI_BIND_HOST", "").strip()
     return {
         "host": os.environ.get("HOST", _DEFAULT_HOST),
         "port": int(os.environ.get("PORT", str(_PRODUCTION_PORT))),
@@ -41,6 +42,7 @@ def load_config() -> dict:
             "COMPANION_API_BASE_URL",
             _PRODUCTION_API_BASE_URL,
         ),
+        "devui_external_bind_host": devui_external_bind_host,
     }
 
 
@@ -70,6 +72,7 @@ def main() -> None:
         api_base_url=config["api_base_url"],
         production_profile=True,
         static_assets=_PRODUCTION_STATIC_ASSETS,
+        devui_external_bind_host=config["devui_external_bind_host"],
     )
     server = CompanionThreadingHTTPServer((config["host"], config["port"]), handler)
     print("[companion-ui] Production profile", flush=True)

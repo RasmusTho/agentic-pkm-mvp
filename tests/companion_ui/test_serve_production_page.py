@@ -10,6 +10,50 @@ production profiles; the production profile must not strip it."
 from __future__ import annotations
 
 
+def test_production_main_forwards_declared_browser_bind_to_gateway(monkeypatch) -> None:
+    """The real production entrypoint must carry the host-publish proof to the handler."""
+    from companion_ui.workspace import serve_production_page
+
+    captured: dict[str, object] = {}
+
+    class _Client:
+        def __init__(self, *, base_url: str) -> None:
+            captured["client_base_url"] = base_url
+
+    class _Server:
+        def __init__(self, address: tuple[str, int], handler: object) -> None:
+            captured["server_address"] = address
+            captured["server_handler"] = handler
+
+        def serve_forever(self) -> None:
+            captured["served"] = True
+
+    handler_token = object()
+
+    def _make_handler(**kwargs: object) -> object:
+        captured["handler_config"] = kwargs
+        return handler_token
+
+    monkeypatch.setenv("HOST", "0.0.0.0")
+    monkeypatch.setenv("PORT", "8113")
+    monkeypatch.setenv("COMPANION_API_BASE_URL", "http://api:8000")
+    monkeypatch.setenv("COMPANION_UI_BIND_HOST", "127.0.0.1")
+    monkeypatch.setattr(serve_production_page, "WorkspaceHttpClient", _Client)
+    monkeypatch.setattr(serve_production_page, "make_handler", _make_handler)
+    monkeypatch.setattr(serve_production_page, "CompanionThreadingHTTPServer", _Server)
+
+    serve_production_page.main()
+
+    handler_config = captured["handler_config"]
+    assert isinstance(handler_config, dict)
+    assert handler_config["devui_external_bind_host"] == "127.0.0.1"
+    assert handler_config["api_base_url"] == "http://api:8000"
+    assert handler_config["production_profile"] is True
+    assert captured["server_address"] == ("0.0.0.0", 8113)
+    assert captured["server_handler"] is handler_token
+    assert captured["served"] is True
+
+
 def test_production_profile_exposes_operator_overlay() -> None:
     """The production shell HTML includes the Operator overlay toggle and drawer.
 

@@ -19,6 +19,59 @@ def _read(rel_path: str) -> str:
     return path.read_text(encoding="utf-8")
 
 
+def test_devui_gateway_admission_owner_docs_preserve_security_and_topology() -> None:
+    security = _read("docs/SECURITY.md")
+    access = _read("companion-ui/docs/LOCAL_ACCESS_MODEL.md")
+    runtime = _read("companion-ui/docs/UI_RUNTIME_BOUNDARIES.md")
+    exposure = _read("companion-ui/docs/PRODUCTION_EXPOSURE_SECURITY_PROFILE.md")
+    deployment = _read("docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md")
+    devui = _read("docs/DEVUI.md")
+    strategy = _read("docs/development/TEST_STRATEGY_HOT_PATH.md")
+    stage = _read("docs/DEVUI_STAGE_A_READ_ONLY_OVERVIEW/README.md")
+    parent = _read("docs/DEVUI_STAGE_A_READ_ONLY_OVERVIEW/PARENT_FEATURE_ISSUE.md")
+
+    security_and_topology = "\n".join(
+        (security, access, runtime, exposure, deployment, devui)
+    )
+    for fragment in (
+        "COMPANION_UI_BIND_HOST=127.0.0.1",
+        "127.0.0.1:8113:8113",
+        "GET `/api/devui/overview`",
+        "GET `/api/devui/focus`",
+        "resolve_auth_subject(request, None)",
+        "SUBJECT_TRUSTED_COMPANION_PROXY",
+        "including `Via`",
+        "no page/static route",
+    ):
+        assert fragment in security_and_topology, fragment
+
+    assert "http://127.0.0.1:8113/devui/overview" in devui
+    assert "port `18000` remains direct API health/version diagnostics" in devui
+    assert "#4841 is transport only" in devui
+    assert "#4836 must consume this transport unchanged" in devui
+    assert "#4833 must verify its published candidate" in devui
+
+    for fragment in (
+        "tests/ops/test_prod_devui_gateway_config.py",
+        "tests/companion_ui/test_devui_gateway_admission.py",
+        "tests/api/test_devui_api.py",
+        "exact-head CI",
+    ):
+        assert fragment in strategy, fragment
+
+    for ledger in (stage, parent):
+        assert "#4841" in ledger
+        assert "#4836" in ledger
+        assert "127.0.0.1:8113" in ledger
+        assert "Port `18000` remains" in ledger
+
+    # Transport is not presentation authority. The actual #4836 candidate
+    # remains governed by the source-authorized Yggdrasil route.
+    for ledger in (devui, stage, parent):
+        assert "Yggdrasil" in ledger
+        assert "#4836" in ledger
+
+
 def test_hot_path_doc_defers_escalation_and_names_direct_repair_contract() -> None:
     text = _read("docs/development/PR_HOT_PATH.md")
 

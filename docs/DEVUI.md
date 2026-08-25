@@ -685,6 +685,13 @@ Delivered now:
 - DDO-01 through DDO-04 fast lane, contracts, plan compiler, reducer, and WorkerRuntime seam; and
 - parts of the BuilderOps API/PostgreSQL control-plane development baseline.
 
+The production Companion transport prerequisite for the existing Overview and Focus reads is
+delivered by #4841: `127.0.0.1:8113` loopback host publication, local-Host/no-forwarded admission,
+an exact two-GET allowlist, and a fresh upstream request with no client identity or credentials.
+The read endpoint is `http://127.0.0.1:8113/devui/overview`; #4841 is transport only: it adds no
+page or asset route, and port `18000` remains direct API health/version diagnostics.
+#4836 must consume this transport unchanged, and #4833 must verify its published candidate.
+
 Not delivered now: one devUI shell; request/preview/authenticated approval in one owner experience;
 PostgreSQL authority cutover; full live run controls; receipt-to-CKM reassessment in the unified
 surface; Focus browser UI, capability-subject route, and Overview-to-Focus

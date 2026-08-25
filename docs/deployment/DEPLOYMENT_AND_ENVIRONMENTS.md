@@ -70,6 +70,14 @@ Anchors for the values above: ports/DBs in `docker-compose.{dev,test,prod}.yml`;
 Notes on the current model:
 - `test` and `prod` still bind-mount the **same host checkout** at `/app`. That repo bind-mount is what removes code isolation: a `git checkout` in the one host tree changes the code under both channels' containers at once. `dev` differs only by running the baked local `pkm-app:dev-local` image, not by running a promoted GHCR SHA pin.
 - Companion UI gateways are now declared as managed compose units in the repo, but the running fleet has not yet adopted the pinned-image model. The cutover guard therefore checks gateway-unit participation in the recreate set before #2698 can treat a channel as ready.
+- Production Compose fixes Companion's publish to `127.0.0.1:8113` and passes the matching explicit
+  declaration `COMPANION_UI_BIND_HOST=127.0.0.1` into the gateway as one canonical producer pair;
+  ambient shell configuration cannot widen or silently disable it. The production deploy wrapper
+  fails before mutation if either half drifts. Noncanonical direct launches with missing or
+  nonloopback declarations keep only the devUI routes closed while
+  unrelated Companion health remains available. Port `18000` is direct API health/version
+  diagnostics, not a supported devUI browser origin; #4836's eventual canonical page is
+  `http://127.0.0.1:8113/devui/overview` only after its own deployment receipt.
 - A partial build-identity foundation already exists: #2602 bakes `VCS_REF`/`BUILT_AT` into the image (Dockerfile ARG/LABEL/ENV), `get_runtime_version()` in `app/version.py` reads them (falling back to `git rev-parse` for local dev), `/version` returns `{git_sha, built_at}`, and `/api/health` carries a top-level `version` field. **But the `test`/`prod` `/app` bind-mount overrides the baked code**, so today those channels run the host checkout, not the image — the SHA marker can disagree with what is actually executing until the bind-mount is retired.
 
 ### Multi-vault instance-state rollout boundary
@@ -264,7 +272,7 @@ Companion UI gateways must become **managed units** with deterministic recreate-
 Current reality: `scripts/lib/companion_ui_startup.sh` launches the gateway with `nohup … &`, writes a PID file, and curls `/healthz` to confirm liveness — but nothing supervises or restarts the process, and the launch lives in script + shell history rather than a declared unit. The dev/test gateways run `companion_ui.workspace.serve_dev_page`; prod runs `companion_ui.workspace.serve_production_page`; both render through `render_index_html`, so this is a deployment/supervision change, not a UI-behavior change.
 
 Target contract (S4):
-- **One declared unit per channel gateway.** Either containerize the gateway in the channel's compose project, or declare a `launchd` unit per channel. The unit owns host/port (`HOST`, `PORT`) and the API base URL (`COMPANION_API_BASE_URL`) exactly as the current startup script passes them.
+- **One declared unit per channel gateway.** Either containerize the gateway in the channel's compose project, or declare a `launchd` unit per channel. The unit owns host/port (`HOST`, `PORT`) and the API base URL (`COMPANION_API_BASE_URL`) exactly as the current startup script passes them. The production unit also carries the separate external host-publish declaration `COMPANION_UI_BIND_HOST`; its inside-container listener is not exposure authority.
 - **Recreate-on-deploy.** A deploy recreates the gateway unit so it picks up the deployed image/code, in lockstep with the API recreate — never a half-deployed state where the API is new and the gateway is old.
 - **Restart-on-failure.** The unit restarts the gateway if it exits (compose `restart: unless-stopped`, matching the API/db/worker services in `docker-compose.yaml`, or the `launchd` `KeepAlive` equivalent). A crashed gateway must come back without a human.
 - **Source-of-truth.** The unit definition is committed; there is no "remember the nohup command" step. The per-channel wrappers (`start_niflheim_ui.sh` / `start_bifrost_ui.sh` / `start_midgard_ui.sh`) and doctor scripts are reconciled to invoke the managed unit rather than `nohup`.
@@ -504,6 +512,14 @@ How it is implemented: `_effective_client_host()` in `app/auth.py` reads the fir
 - Untrusted non-loopback callers without a valid API key remain rejected (`require_loopback_or_api_key` still 401s — preserves #2223).
 - The deployment topology (managed gateway + API on the same host) must keep the proxy allowlist narrow; if a channel is ever bound to a LAN/Tailscale interface for UAT, the API-key path (not blanket loopback trust) governs untrusted callers.
 - S6 verification is locked by `tests/api/test_auth_proxy_topology.py` and `tests/api/test_companion_auth_loopback_behind_proxy.py`: a loopback-local or configured same-host proxy may assert the client via `X-Forwarded-For`, while a genuinely non-loopback caller or unconfigured bridge peer with forged `X-Forwarded-For` remains rejected.
+
+The production devUI read path does **not** reuse that forwarding mechanism. #4841 first rejects
+every forwarded identity header, including `Via`, then preserves direct loopback + local Host or
+accepts only `resolve_auth_subject(request, None) == SUBJECT_TRUSTED_COMPANION_PROXY` for the
+configured Companion container peer. The gateway exposes only exact GET `/api/devui/overview`
+and strict GET `/api/devui/focus?subject=...`, constructs a fresh no-credential/no-forwarding
+request, and preserves upstream status/JSON. No API key, arbitrary bridge peer, wildcard, write, or
+inside-container peer-loopback inference enters that exception.
 
 ## What this supersedes
 

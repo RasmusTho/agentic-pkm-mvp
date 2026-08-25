@@ -22,11 +22,11 @@
 #   scripts/prod/start_midgard_ui.sh
 #
 # Optional environment:
-#   CUI_BIND_LAN=1                 bind the UI to 0.0.0.0 for LAN/Tailscale UAT
 #   CUI_TARGET_NOTE=<rel-path>     verify a note path via /api/companion/workspace
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 # shellcheck source=../lib/companion_ui_startup.sh
 source "${SCRIPT_DIR}/../lib/companion_ui_startup.sh"
 
@@ -39,6 +39,11 @@ CUI_COMPOSE_FILES="docker-compose.yaml:docker-compose.prod.yml"
 CUI_COMPOSE_PROJECT="pkm-prod"
 CUI_SERVE_MODULE="companion_ui.workspace.serve_production_page"
 CUI_DB_LABEL="app"
+
+if [ "${CUI_BIND_LAN:-0}" = "1" ]; then
+  echo "[companion-ui:prod] CUI_BIND_LAN=1 is unsupported: production Companion publication is loopback-only." >&2
+  exit 78
+fi
 
 # Production guardrail: safest posture by default. Automation/write-capable
 # services (watcher auto-exec) are started ONLY on explicit acknowledgement.
@@ -55,5 +60,8 @@ fi
 export CUI_CHANNEL CUI_EXPECTED_VAULT_PATTERN CUI_EXPECTED_VAULT_LABEL \
   CUI_API_PORT CUI_UI_PORT CUI_COMPOSE_FILES CUI_COMPOSE_PROJECT CUI_SERVE_MODULE \
   CUI_DB_LABEL CUI_WATCHER_AUTO_EXEC
+
+"${PYTHON:-python3}" "${REPO_ROOT}/scripts/prod_devui_gateway_preflight.py" \
+  "${REPO_ROOT}/docker-compose.prod.yml" || exit $?
 
 cui_run_start

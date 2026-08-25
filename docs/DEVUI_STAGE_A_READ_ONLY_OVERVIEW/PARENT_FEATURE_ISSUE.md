@@ -22,6 +22,8 @@ subject until #4834 merges; **Needs you** and **Ready to try** remain withdrawn.
 binder and #4747 Overview-only shell remain preserved supersession candidates while the recovery
 path produces one connected Overview → visual Focus → return journey through #4746 and #4836. The
 parent coordinates validation only; it is never ready work and claims no deployed or accepted UI.
+#4841 additionally delivers the narrow production Companion transport for the existing two read
+APIs only; it supplies neither a page nor a visual destination.
 
 ## Scope
 
@@ -73,6 +75,9 @@ parent coordinates validation only; it is never ready work and claims no deploye
   receipt from #4746: either `yggdrasil-constrained-reuse.v1` or
   `yggdrasil-design-handoff.v1`. Exact shipped reuse does not run or claim the live system/token
   preflight; any novel, mixed, unknown, extension, or out-of-envelope delta must pass it.
+- #4836 must consume #4841's `127.0.0.1:8113` host publish, local-Host/no-forwarded admission,
+  exact two-GET/header-stripping contract, and direct-loopback-or-server-derived Companion API
+  admission unchanged. Port `18000` remains direct diagnostics, never a browser page origin.
 - No technical label/state, provider metadata, or terminal delivery fact substitutes for explicit
   canonical category or receipt-backed `ready_to_try` evidence.
 - ARO-08 remains serially blocked after #4748 until the repaired source contract, Demerzel
@@ -164,6 +169,8 @@ a compact exact-SHA receipt to the parent. Before #4746 readiness, re-read merge
 the other route. #4833 verifies the published #4836 candidate at its exact ref before merge. ARO-08
 additionally takes its deployed URL/SHA only from shell/browser/deployment receipts and records
 every required identity/effect proof in the structured owner-pilot ledger.
+Before #4836 pickup, re-read merged #4841 and bind its current transport regression evidence;
+#4833 verifies the published #4836 candidate at its exact ref before merge.
 
 ## Validation / Acceptance Path
 
