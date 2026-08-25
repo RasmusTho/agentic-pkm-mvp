@@ -5,6 +5,7 @@ import json
 import subprocess
 from pathlib import Path
 
+from app.dispatcher.verified_merge import _canonical_digest
 from tests.dispatcher.verified_merge_projection_helpers import (
     projection_convergence_comment,
     projection_phase_kwargs,
@@ -40,6 +41,17 @@ def _node(expression: str, *values: object) -> object:
     )
     assert completed.returncode == 0, completed.stderr
     return json.loads(completed.stdout)
+
+
+def test_python_and_watchdog_canonical_digests_match_unicode() -> None:
+    value = {
+        "body": "smörgås",
+        "nested": {"title": "Räksmörgås — 東京"},
+    }
+
+    assert _canonical_digest(value) == _node(
+        "canonicalSha256(inputs[0])", value
+    )
 
 
 def _body() -> str:
