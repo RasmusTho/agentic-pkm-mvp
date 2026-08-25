@@ -843,6 +843,42 @@ def test_watchdog_rejects_absent_forged_or_digest_mismatched_convergence() -> No
             "mode": "trusted_receipt_invalid",
         }
 
+    embedded_convergence_marker = dict(convergence)
+    embedded_convergence_body = embedded_convergence_marker["body"]
+    assert isinstance(embedded_convergence_body, str)
+    embedded_convergence_marker["body"] = (
+        embedded_convergence_body
+        + "\n```json\n"
+        + '{"audit":"verified merge closing projection convergence:"}'
+        + "\n```"
+    )
+    embedded_phase_marker = dict(prepared)
+    embedded_phase_body = embedded_phase_marker["body"]
+    assert isinstance(embedded_phase_body, str)
+    embedded_phase_marker["body"] = (
+        embedded_phase_body
+        + "\n```json\n"
+        + '{"audit":"verified issue-set merge phase:"}'
+        + "\n```"
+    )
+    for comments in (
+        [authority, embedded_convergence_marker, prepared, merged],
+        [authority, convergence, embedded_phase_marker, merged],
+    ):
+        assert _node(
+            "selectWatchdogAuthority(inputs[0])",
+            {
+                "comments": comments,
+                "expectedRepository": REPOSITORY,
+                "linkedIssues": [4999],
+                "livePr": _merged_pr(raced_body),
+            },
+        ) == {
+            "closing_issues": [3820, 3823],
+            "governing_issue": 3821,
+            "mode": "durable_receipt",
+        }
+
 
 def test_watchdog_target_selection_fails_closed_on_raced_body_without_phase_chain() -> None:
     raced_body = "Governing-Issue: #4999\n\nFixes #4999\n"

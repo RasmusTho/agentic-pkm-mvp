@@ -234,6 +234,13 @@ jobs:
               }
               return receipts;
             };
+            const structuralMarkerOccurrences = (body, marker) => {
+              const escaped = marker.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+              const outsideFences = body.replace(/```[^\r\n]*\r?\n[\s\S]*?```/g, "");
+              return [...outsideFences.matchAll(
+                new RegExp(`^${escaped}[\\t ]*(?:\\r?\\n|$)`, "gm")
+              )].length;
+            };
             const hasClosingIssueAttempt = candidate =>
               typeof candidate === "string" &&
               /(?:^|[^0-9A-Za-z_])(?:fix(?:es|ed)?|close(?:s|d)?|resolve(?:s|d)?)(?:[ \t\n\v\f\r\x85\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000\ufeff]+|[ \t\n\v\f\r\x85\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000\ufeff]*:[ \t\n\v\f\r\x85\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000\ufeff]*)(?:#|[0-9A-Za-z_.-]+\/[0-9A-Za-z_.-]+#|https?:\/\/github\.com\/[0-9A-Za-z_.-]+\/[0-9A-Za-z_.-]+\/issues\/)/i.test(candidate);
@@ -405,7 +412,9 @@ jobs:
               if (attempts.length === 0) return new Map();
               const receipts = commentReceipts(attempts, CONVERGENCE_MARKER);
               const markerAttempts = attempts.reduce(
-                (count, comment) => count + comment.body.split(CONVERGENCE_MARKER).length - 1,
+                (count, comment) => count + structuralMarkerOccurrences(
+                  comment.body, CONVERGENCE_MARKER
+                ),
                 0
               );
               if (receipts.length !== markerAttempts ||
@@ -436,7 +445,9 @@ jobs:
               );
               const phaseReceipts = commentReceipts(phaseAttempts, PHASE_MARKER);
               const phaseMarkerAttempts = phaseAttempts.reduce(
-                (count, comment) => count + comment.body.split(PHASE_MARKER).length - 1,
+                (count, comment) => count + structuralMarkerOccurrences(
+                  comment.body, PHASE_MARKER
+                ),
                 0
               );
               if (phaseReceipts.length !== phaseMarkerAttempts) return null;
