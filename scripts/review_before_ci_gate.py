@@ -4,11 +4,14 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
+import re
+import subprocess
 import sys
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Mapping, Sequence
+from typing import Callable, Mapping, Sequence
 
 try:  # Supports both ``python scripts/...`` and package imports in tests.
     from scripts.workflow_review_risk import (
@@ -48,6 +51,7 @@ RISK_SURFACES = {
     "state-machine",
 }
 PR_SCOPE_REVALIDATION_OUTCOMES = frozenset({"continue_unchanged", "split", "expanded_contract"})
+PROTECTED_REVIEW_SEVERITY = re.compile(r"(?:\bP[01]\b|P[01][ _-]?(?:Badge|blocker))", re.IGNORECASE)
 
 
 class ReviewBeforeCiGateError(ValueError):
@@ -60,6 +64,9 @@ def validate_pr_scope_revalidation(
     head_sha: str,
     rejected_rounds: Sequence[Mapping[str, object]],
     receipt: Mapping[str, object] | None,
+    *,
+    governing_contract_sha256: str | None = None,
+    authenticated_history: Mapping[str, object] | None = None,
 ) -> Mapping[str, object] | None:
     """Require an exact authenticated revalidation receipt after two rejections."""
     if sum(1 for round_ in rejected_rounds if round_.get("verdict") == "rejected") < 2:
@@ -82,17 +89,38 @@ def validate_pr_scope_revalidation(
         raise ReviewBeforeCiGateError(
             "contract revalidation receipt requires a canonical governing contract SHA-256"
         )
+    if (
+        governing_contract_sha256 is not None
+        and receipt.get("governing_contract_sha256") != governing_contract_sha256
+    ):
+        raise ReviewBeforeCiGateError(
+            "contract revalidation receipt does not bind the current governing Issue contract"
+        )
     outcome = receipt.get("outcome")
     if outcome not in PR_SCOPE_REVALIDATION_OUTCOMES:
         raise ReviewBeforeCiGateError(
             "contract revalidation receipt outcome must be continue_unchanged, split, or expanded_contract"
         )
-    authentication = receipt.get("authentication")
-    if (
-        not isinstance(authentication, Mapping)
-        or authentication.get("source") != "github-review"
-        or not _nonempty_string(authentication.get("actor"))
-        or not _nonempty_string(authentication.get("receipt_url"))
+    expected_finding_ids: set[str] | None = None
+    if authenticated_history is not None:
+        expected_authentication = authenticated_history.get("authentication")
+        if receipt.get("authentication") != expected_authentication:
+            raise ReviewBeforeCiGateError(
+                "contract revalidation receipt GitHub evidence is missing, foreign, or stale"
+            )
+        raw_finding_ids = authenticated_history.get("finding_ids")
+        if not isinstance(raw_finding_ids, list) or not all(
+            _nonempty_string(finding_id) for finding_id in raw_finding_ids
+        ):
+            raise ReviewBeforeCiGateError(
+                "authenticated GitHub review history has no exact protected finding set"
+            )
+        expected_finding_ids = set(raw_finding_ids)
+    elif (
+        not isinstance(receipt.get("authentication"), Mapping)
+        or receipt["authentication"].get("source") != "github-review"
+        or not _nonempty_string(receipt["authentication"].get("actor"))
+        or not _nonempty_string(receipt["authentication"].get("receipt_url"))
     ):
         raise ReviewBeforeCiGateError(
             "contract revalidation receipt must carry authenticated GitHub review evidence"
@@ -104,7 +132,7 @@ def validate_pr_scope_revalidation(
         raise ReviewBeforeCiGateError(
             "expanded_contract requires the authenticated updated governing Issue and contract SHA-256"
         )
-    classifications = receipt.get("finding_classifications", [])
+    classifications = receipt.get("finding_classifications")
     if not isinstance(classifications, list):
         raise ReviewBeforeCiGateError(
             "contract revalidation receipt finding_classifications must be a list"
@@ -115,9 +143,16 @@ def validate_pr_scope_revalidation(
         "security_authority_scope_expansion",
         "adjacent_pre_existing",
     }
+    classified_finding_ids: set[str] = set()
     for finding in classifications:
         if not isinstance(finding, Mapping) or not _nonempty_string(finding.get("finding_id")):
             raise ReviewBeforeCiGateError("each revalidation finding requires an identifier")
+        finding_id = str(finding["finding_id"])
+        if finding_id in classified_finding_ids:
+            raise ReviewBeforeCiGateError(
+                "each authenticated rejected finding must have exactly one classification"
+            )
+        classified_finding_ids.add(finding_id)
         scope_class = finding.get("scope_class")
         if scope_class not in valid_classes:
             raise ReviewBeforeCiGateError(
@@ -140,7 +175,124 @@ def validate_pr_scope_revalidation(
             raise ReviewBeforeCiGateError(
                 "security/authority findings require authenticated expanded_contract scope"
             )
+    if expected_finding_ids is not None and classified_finding_ids != expected_finding_ids:
+        raise ReviewBeforeCiGateError(
+            "contract revalidation receipt must classify every authenticated rejected finding exactly once"
+        )
     return receipt
+
+
+def authenticated_pr_scope_revalidation_history(
+    *,
+    repository: str,
+    pr_number: int,
+    governing_issue: int,
+    head_sha: str,
+    api: Callable[[str, bool], object] | None = None,
+) -> Mapping[str, object]:
+    """Fetch and bind the complete live GitHub review history for one PR.
+
+    This intentionally does not accept caller-supplied review URLs, actors, or finding IDs.
+    A receipt can state a scope disposition, but its evidence set is derived again from
+    GitHub immediately before the gate permits another expensive cycle.
+    """
+    if not re.fullmatch(r"[^/\s]+/[^/\s]+", repository):
+        raise ReviewBeforeCiGateError("GitHub repository must be an owner/repository identity")
+    if pr_number <= 0 or governing_issue <= 0:
+        raise ReviewBeforeCiGateError("GitHub PR and governing Issue numbers must be positive")
+    github_api = api or _github_api
+    pr = github_api(f"repos/{repository}/pulls/{pr_number}", False)
+    issue = github_api(f"repos/{repository}/issues/{governing_issue}", False)
+    reviews = github_api(f"repos/{repository}/pulls/{pr_number}/reviews?per_page=100", True)
+    comments = github_api(f"repos/{repository}/pulls/{pr_number}/comments?per_page=100", True)
+    if not isinstance(pr, Mapping) or not isinstance(issue, Mapping):
+        raise ReviewBeforeCiGateError("GitHub PR or governing Issue response is malformed")
+    if pr.get("number") != pr_number or issue.get("number") != governing_issue:
+        raise ReviewBeforeCiGateError("GitHub evidence does not identify the requested PR and Issue")
+    base_repo = _nested_value(pr, "base", "repo", "full_name")
+    live_head = _nested_value(pr, "head", "sha")
+    if base_repo != repository or live_head != head_sha:
+        raise ReviewBeforeCiGateError(
+            "GitHub PR evidence is foreign or stale for the current repository/head"
+        )
+    if not isinstance(issue.get("body"), str):
+        raise ReviewBeforeCiGateError("GitHub governing Issue body is unavailable for contract binding")
+    if not isinstance(reviews, list) or not isinstance(comments, list):
+        raise ReviewBeforeCiGateError("GitHub review history is incomplete")
+
+    reviews_by_id = {
+        review.get("id"): review
+        for review in reviews
+        if isinstance(review, Mapping) and isinstance(review.get("id"), int)
+    }
+    finding_ids_by_round: dict[str, set[str]] = {}
+    for review_id, review in reviews_by_id.items():
+        if review.get("state") == "CHANGES_REQUESTED":
+            finding_ids_by_round.setdefault(f"review:{review_id}", set()).add(f"review:{review_id}")
+    for comment in comments:
+        if not isinstance(comment, Mapping) or not isinstance(comment.get("id"), int):
+            raise ReviewBeforeCiGateError("GitHub review comment history is malformed")
+        body = comment.get("body")
+        if not isinstance(body, str) or not PROTECTED_REVIEW_SEVERITY.search(body):
+            continue
+        review_id = comment.get("pull_request_review_id")
+        round_id = f"review:{review_id}" if isinstance(review_id, int) else f"comment:{comment['id']}"
+        finding_ids_by_round.setdefault(round_id, set()).add(f"comment:{comment['id']}")
+
+    rejected_rounds = [
+        {"round_id": round_id, "verdict": "rejected", "finding_ids": sorted(finding_ids)}
+        for round_id, finding_ids in sorted(finding_ids_by_round.items())
+    ]
+    finding_ids = sorted(
+        finding_id for finding_set in finding_ids_by_round.values() for finding_id in finding_set
+    )
+    return {
+        "rejected_rounds": rejected_rounds,
+        "finding_ids": finding_ids,
+        "authentication": {
+            "source": "github-api",
+            "repository": repository,
+            "pr_number": pr_number,
+            "head_sha": head_sha,
+            "rejected_round_ids": [round_["round_id"] for round_ in rejected_rounds],
+            "finding_ids": finding_ids,
+        },
+        "governing_contract_sha256": hashlib.sha256(
+            _canonical_contract_body(issue["body"]).encode("utf-8")
+        ).hexdigest(),
+    }
+
+
+def _github_api(path: str, paginate: bool) -> object:
+    command = ["gh", "api"]
+    if paginate:
+        command.extend(["--paginate", "--slurp"])
+    command.append(path)
+    completed = subprocess.run(command, capture_output=True, text=True, check=False)
+    if completed.returncode != 0:
+        raise ReviewBeforeCiGateError("authenticated GitHub review history is unavailable")
+    try:
+        payload: object = json.loads(completed.stdout)
+    except json.JSONDecodeError as exc:
+        raise ReviewBeforeCiGateError("authenticated GitHub review history is malformed") from exc
+    if paginate:
+        if not isinstance(payload, list) or not all(isinstance(page, list) for page in payload):
+            raise ReviewBeforeCiGateError("authenticated GitHub review pagination is malformed")
+        return [item for page in payload for item in page]
+    return payload
+
+
+def _canonical_contract_body(body: str) -> str:
+    return body.replace("\r\n", "\n").replace("\r", "\n").rstrip("\n") + "\n"
+
+
+def _nested_value(payload: Mapping[str, object], *keys: str) -> object:
+    value: object = payload
+    for key in keys:
+        if not isinstance(value, Mapping):
+            return None
+        value = value.get(key)
+    return value
 
 
 @dataclass(frozen=True)
@@ -407,9 +559,10 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--workflow-review-receipt")
     parser.add_argument("--workflow-risk-base", default="origin/main")
     parser.add_argument("--workflow-risk-head", default="HEAD")
+    parser.add_argument("--pr-scope-revalidation", action="store_true")
+    parser.add_argument("--github-repository")
     parser.add_argument("--pr-number", type=int)
     parser.add_argument("--governing-issue", type=int)
-    parser.add_argument("--rejected-review-history")
     parser.add_argument("--contract-revalidation-receipt")
     return parser
 
@@ -420,37 +573,46 @@ def main(argv: Sequence[str] | None = None) -> int:
         evidence = workflow_risk_evidence_from_git(
             Path.cwd(), base=args.workflow_risk_base, head=args.workflow_risk_head
         )
-        if any(
-            value is not None
-            for value in (
-                args.pr_number,
-                args.governing_issue,
-                args.rejected_review_history,
-                args.contract_revalidation_receipt,
-            )
-        ):
+        if args.pr_scope_revalidation:
             if (
                 args.pr_number is None
                 or args.governing_issue is None
-                or not args.rejected_review_history
+                or not args.github_repository
             ):
                 raise ReviewBeforeCiGateError(
-                    "PR scope revalidation requires --pr-number, --governing-issue, and --rejected-review-history"
+                    "PR scope revalidation requires --github-repository, --pr-number, and --governing-issue"
                 )
-            history = json.loads(Path(args.rejected_review_history).read_text(encoding="utf-8"))
-            if not isinstance(history, list) or not all(
-                isinstance(item, Mapping) for item in history
-            ):
-                raise ReviewBeforeCiGateError(
-                    "rejected review history must be a JSON list of review receipts"
-                )
+            history = authenticated_pr_scope_revalidation_history(
+                repository=args.github_repository,
+                pr_number=args.pr_number,
+                governing_issue=args.governing_issue,
+                head_sha=evidence.head_sha,
+            )
             receipt = (
                 json.loads(Path(args.contract_revalidation_receipt).read_text(encoding="utf-8"))
                 if args.contract_revalidation_receipt
                 else None
             )
             validate_pr_scope_revalidation(
-                args.pr_number, args.governing_issue, evidence.head_sha, history, receipt
+                args.pr_number,
+                args.governing_issue,
+                evidence.head_sha,
+                history["rejected_rounds"],
+                receipt,
+                governing_contract_sha256=history["governing_contract_sha256"],
+                authenticated_history=history,
+            )
+        elif any(
+            value is not None
+            for value in (
+                args.github_repository,
+                args.pr_number,
+                args.governing_issue,
+                args.contract_revalidation_receipt,
+            )
+        ):
+            raise ReviewBeforeCiGateError(
+                "PR scope revalidation evidence cannot be omitted; pass --pr-scope-revalidation"
             )
         inferred_risks = list(evidence.risks)
         if inferred_risks:

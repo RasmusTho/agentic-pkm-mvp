@@ -12,6 +12,7 @@ import pytest
 
 from scripts.review_before_ci_gate import (
     ReviewBeforeCiGateError,
+    authenticated_pr_scope_revalidation_history,
     evaluate_review_before_ci_gate,
     validate_pr_scope_revalidation,
 )
@@ -373,6 +374,9 @@ def _scope_revalidation_receipt(
             "actor": "independent-reviewer",
             "receipt_url": "https://github.example/receipt/1",
         },
+        "finding_classifications": [
+            {"finding_id": "f-1", "scope_class": "governing_contract_blocker"}
+        ],
     }
 
 
@@ -432,6 +436,108 @@ def test_adjacent_findings_require_follow_up_issue_not_same_pr_scope() -> None:
     with pytest.raises(ReviewBeforeCiGateError, match="follow-up Issue"):
         validate_pr_scope_revalidation(
             4029, 4028, "a" * 40, [{"verdict": "rejected"}] * 2, missing_follow_up
+        )
+
+
+def _live_pr_review_api(
+    *, head_sha: str = "a" * 40, repository: str = "octo/repo"
+) -> tuple[dict[str, object], callable]:
+    responses: dict[str, object] = {
+        f"repos/{repository}/pulls/4029": {
+            "number": 4029,
+            "head": {"sha": head_sha},
+            "base": {"repo": {"full_name": repository}},
+        },
+        f"repos/{repository}/issues/4028": {"number": 4028, "body": "## Contract\nLive body\n"},
+        f"repos/{repository}/pulls/4029/reviews?per_page=100": [
+            {"id": 11, "state": "COMMENTED"},
+            {"id": 12, "state": "COMMENTED"},
+        ],
+        f"repos/{repository}/pulls/4029/comments?per_page=100": [
+            {"id": 101, "pull_request_review_id": 11, "body": "P1 blocker"},
+            {"id": 102, "pull_request_review_id": 12, "body": "P0 Badge"},
+            {"id": 103, "pull_request_review_id": 12, "body": "P2 observation"},
+        ],
+    }
+
+    def api(path: str, paginate: bool) -> object:
+        assert paginate is path.endswith(("reviews?per_page=100", "comments?per_page=100"))
+        return responses[path]
+
+    return responses, api
+
+
+def test_pr_scope_revalidation_derives_live_history_and_requires_exact_classification() -> None:
+    _, api = _live_pr_review_api()
+    history = authenticated_pr_scope_revalidation_history(
+        repository="octo/repo",
+        pr_number=4029,
+        governing_issue=4028,
+        head_sha="a" * 40,
+        api=api,
+    )
+    assert history["finding_ids"] == ["comment:101", "comment:102"]
+    receipt = {
+        "version": 1,
+        "pr_number": 4029,
+        "head_sha": "a" * 40,
+        "governing_issue": 4028,
+        "governing_contract_sha256": history["governing_contract_sha256"],
+        "outcome": "continue_unchanged",
+        "authentication": history["authentication"],
+        "finding_classifications": [
+            {"finding_id": "comment:101", "scope_class": "governing_contract_blocker"},
+            {"finding_id": "comment:102", "scope_class": "pr_introduced_regression"},
+        ],
+    }
+    assert (
+        validate_pr_scope_revalidation(
+            4029,
+            4028,
+            "a" * 40,
+            history["rejected_rounds"],
+            receipt,
+            governing_contract_sha256=history["governing_contract_sha256"],
+            authenticated_history=history,
+        )
+        == receipt
+    )
+    partial = dict(receipt)
+    partial["finding_classifications"] = receipt["finding_classifications"][:1]
+    with pytest.raises(ReviewBeforeCiGateError, match="every authenticated rejected finding"):
+        validate_pr_scope_revalidation(
+            4029,
+            4028,
+            "a" * 40,
+            history["rejected_rounds"],
+            partial,
+            governing_contract_sha256=history["governing_contract_sha256"],
+            authenticated_history=history,
+        )
+    stale = dict(receipt)
+    stale["authentication"] = {**history["authentication"], "head_sha": "b" * 40}
+    with pytest.raises(ReviewBeforeCiGateError, match="foreign, or stale"):
+        validate_pr_scope_revalidation(
+            4029,
+            4028,
+            "a" * 40,
+            history["rejected_rounds"],
+            stale,
+            governing_contract_sha256=history["governing_contract_sha256"],
+            authenticated_history=history,
+        )
+
+
+def test_pr_scope_revalidation_rejects_foreign_or_stale_live_pr_evidence() -> None:
+    responses, api = _live_pr_review_api()
+    responses["repos/octo/repo/pulls/4029"]["head"]["sha"] = "b" * 40  # type: ignore[index]
+    with pytest.raises(ReviewBeforeCiGateError, match="foreign or stale"):
+        authenticated_pr_scope_revalidation_history(
+            repository="octo/repo",
+            pr_number=4029,
+            governing_issue=4028,
+            head_sha="a" * 40,
+            api=api,
         )
 
 
