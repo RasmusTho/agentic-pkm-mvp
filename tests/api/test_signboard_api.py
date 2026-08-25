@@ -2,16 +2,19 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 
 from app.api.app import app
 from app.dispatcher.events import JsonlEventWriter
 from app.dispatcher.leases import claim
 from app.dispatcher.models import TaskRecord
+from app.dispatcher.services import move_task
 from app.dispatcher.signboard import STATUS_COLUMNS, VALID_STATUSES
 from app.dispatcher.store import SqliteStore
 
 ROUTE_SOURCE = Path(__file__).parents[2] / "app/api/routes/signboard.py"
+SIGNBOARD_SOURCE = Path(__file__).parents[2] / "app/web/static/signboard.js"
 
 
 def _seed(store: SqliteStore, *, status: str = "ready") -> TaskRecord:
@@ -168,6 +171,70 @@ def test_move_is_visible_without_export(tmp_path: Path, monkeypatch) -> None:
     }
     assert [card["id"] for card in reread["Review"]] == [task.task_id]
     assert not board_root.exists()
+
+
+@pytest.mark.parametrize("actor", ["lease-holder", "other-actor", "signboard-ui"])
+def test_claimed_card_moves_to_review_with_lease_holder(tmp_path: Path, monkeypatch, actor: str) -> None:
+    """Signboard cannot impersonate a holder; the holder path still succeeds."""
+    store = _configure(tmp_path, monkeypatch)
+    task = _seed(store)
+    claim(store, task.task_id, "lease-holder")
+
+    response = TestClient(app).post(
+        f"/api/signboard/cards/{task.task_id}/move",
+        json={"status": "Review", "actor": actor},
+    )
+
+    assert response.status_code == 409
+    assert "requires the dispatcher lease holder path" in response.json()["detail"]
+    moved = store.get_task(task.task_id)
+    assert moved is not None
+    assert moved.status == "claimed"
+    assert moved.claimed_by == "lease-holder"
+    assert moved.lease_id is not None
+
+    moved = move_task(store, task.task_id, "Review", "lease-holder")
+    assert moved.status == "review"
+    assert moved.claimed_by is None
+    assert moved.lease_id is None
+    events = store.list_events(task.task_id)
+    handoff_events = events[-2:]
+    assert {event.event_type for event in handoff_events} == {"task.released", "task.moved"}
+    assert next(event for event in handoff_events if event.event_type == "task.released").actor == "lease-holder"
+
+    # The browser must not carry the agent identity into its generic request.
+    source = SIGNBOARD_SOURCE.read_text(encoding="utf-8")
+    assert "select.value === 'Review' || select.value === 'Done'" not in source
+    assert "column === 'Review' || column === 'Done'" not in source
+
+
+def test_signboard_review_with_matching_actor_race_is_atomic(tmp_path: Path, monkeypatch) -> None:
+    """A matching user payload cannot pass a claim made after UI observation."""
+    store = _configure(tmp_path, monkeypatch)
+    task = _seed(store)
+    observed = store.get_task(task.task_id)
+    assert observed is not None
+    assert observed.lease_id is None
+    claim(store, task.task_id, "racing-agent")
+
+    response = TestClient(app).post(
+        f"/api/signboard/cards/{task.task_id}/move",
+        json={"status": "Review", "actor": "racing-agent"},
+    )
+
+    assert response.status_code == 409
+    assert "requires the dispatcher lease holder path" in response.json()["detail"]
+    stored = store.get_task(task.task_id)
+    assert stored is not None
+    assert stored.status == "claimed"
+    assert stored.claimed_by == "racing-agent"
+    assert stored.lease_id is not None
+
+    # The Signboard path's first decision is under the write lock, so this
+    # observable race cannot be widened by an API-side preflight read.
+    source = ROUTE_SOURCE.read_text(encoding="utf-8")
+    review_branch = source[source.index('next_status == "review"'):]
+    assert "store.get_task(task_id)" not in review_branch.split("except ValueError", 1)[0]
 
 
 def test_columns_follow_dispatcher_status_columns(tmp_path: Path, monkeypatch) -> None:

@@ -861,10 +861,18 @@ python -m app.dispatcher block github-issue-123 --reason "waiting for owner deci
 python -m app.dispatcher export-signboard --json
 ```
 
-Moving a claimed task to `review` is a terminal handoff for its pickup lease:
-the dispatcher atomically releases the current holder's lease while preserving
-the `review` status. A released review task cannot later be reclaimed as an
-expired ready task.
+Moving a task to `review` takes the task/lease decision, validation, release,
+and status write under one dispatcher SQLite write transaction. For a claimed
+task this is a terminal handoff for its pickup lease: only the current holder
+may move it, and the dispatcher atomically releases that holder's lease while
+preserving the `review` status. A released review task cannot later be
+reclaimed as an expired ready task.
+
+Signboard is a generic projection client, not an agent-identity authority. It
+may move an unclaimed task through its normal route, but it must refuse a
+claimed task's Review handoff even when a browser payload names `claimed_by`.
+The current holder performs that handoff through the dispatcher agent command;
+the generic Signboard route never impersonates the lease holder.
 
 The generated Markdown frontmatter is projection state only. Do not patch generated Signboard cards
 as the source of a claim, heartbeat, or lifecycle transition.

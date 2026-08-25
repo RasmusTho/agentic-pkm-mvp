@@ -405,6 +405,55 @@ def test_move_completed_rejects_active_lease(tmp_env, store):
     assert stored.claimed_by == "codex"
 
 
+def test_move_review_with_racing_claim_is_atomic(tmp_env, store):
+    """A claim after an observation is never erased by a stale Review move."""
+    from app.dispatcher.leases import claim
+    from app.dispatcher.services import move_task
+    from tests.dispatcher.helpers import seed_tasks
+
+    ready = next(task for task in seed_tasks(store) if task.status == "ready")
+    statements: list[str] = []
+    original_connect = store._connect
+
+    def traced_connect():
+        conn = original_connect()
+        conn.set_trace_callback(statements.append)
+        return conn
+
+    store._connect = traced_connect  # type: ignore[method-assign]
+    reviewed = move_task(store, ready.task_id, "Review", "reviewer")
+    assert reviewed.status == "review"
+    first_begin = next(index for index, statement in enumerate(statements) if statement == "BEGIN IMMEDIATE")
+    first_task_read = next(
+        index
+        for index, statement in enumerate(statements)
+        if "SELECT * FROM dispatcher_tasks" in statement
+    )
+    assert first_begin < first_task_read
+
+    # A later claimant cannot be overwritten by an actor that only observed the
+    # previous unclaimed state. This is the rejected-race branch of the same
+    # transaction contract.
+    store._connect = original_connect  # type: ignore[method-assign]
+    raced = next(task for task in seed_tasks(store) if task.status == "ready")
+    observed = store.get_task(raced.task_id)
+    assert observed is not None
+    assert observed.lease_id is None
+    claim(store, raced.task_id, "racing-agent")
+    code, data = _run(
+        ["move", raced.task_id, "--status", "Review", "--agent", "stale-agent", "--json"]
+    )
+
+    assert code == 1
+    assert data["ok"] is False
+    assert "held by racing-agent" in data["error"]
+    stored = store.get_task(raced.task_id)
+    assert stored is not None
+    assert stored.status == "claimed"
+    assert stored.claimed_by == "racing-agent"
+    assert stored.lease_id is not None
+
+
 def test_export_signboard_writes_markdown_columns(tmp_env, store, tmp_path: Path):
     from tests.dispatcher.helpers import seed_tasks
     tasks = seed_tasks(store)
