@@ -64,6 +64,7 @@ query($owner: String!, $name: String!, $number: Int!) {
 
 
 _SUBPROCESS_DEADLINE: float | None = None
+_RESTORATION_SUBPROCESS_TIMEOUT_SECONDS = 30
 
 
 def _mapping(path: Path) -> dict[str, object]:
@@ -716,6 +717,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     }
     if args.canonical_body_file is not None:
         canonical_body = args.canonical_body_file.read_text(encoding="utf-8")
+        # The convergence deadline may have expired inside the GitHub call that
+        # took us here.  Restoration is a separate, bounded read-only effect:
+        # give it one short deadline so it can still authenticate a body-only
+        # restore plan without reopening an unbounded subprocess wait.
+        _SUBPROCESS_DEADLINE = (
+            time.monotonic() + _RESTORATION_SUBPROCESS_TIMEOUT_SECONDS
+        )
         try:
             live = _snapshot(
                 args.gh_bin, repository=args.repository, pr_number=args.pr_number
