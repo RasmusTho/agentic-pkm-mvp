@@ -1120,7 +1120,7 @@ def test_projection_convergence_cli_failure_stdout_redacts_restoration(
     assert json.loads(capsys.readouterr().out) == {"status": "failed_closed"}
 
 
-def test_projection_convergence_cli_rejects_stale_receipt_after_body_edit_aba(
+def test_projection_convergence_cli_rebuilds_after_body_edit_aba(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     authority, neutralized_body, old_pr_contract, durable_convergence = (
@@ -1166,6 +1166,30 @@ def test_projection_convergence_cli_rejects_stale_receipt_after_body_edit_aba(
     ]
     clock = [0.0]
     events: list[str] = []
+    replacement_convergence = (
+        verified_merge.build_verified_merge_projection_convergence(
+            authority_receipt=authority,
+            pr_contract=current_pr_contract,
+            observations=snapshots[:2],
+            final_projection_observation=snapshots[2],
+            minimum_backoff_seconds=1,
+        )["convergence_receipt"]
+    )
+    historical_and_current_comments = [
+        _trusted_convergence_comment(durable_convergence),
+        _trusted_convergence_comment(replacement_convergence),
+    ]
+    assert verified_merge.resolve_verified_merge_projection_convergence_receipt(
+        historical_and_current_comments,
+        authority_receipt=authority,
+        pr_contract=current_pr_contract,
+    ) == replacement_convergence
+    assert verified_merge.resolve_verified_merge_projection_convergence_receipt(
+        historical_and_current_comments, authority_receipt=authority
+    ) == replacement_convergence
+    authority_reads = iter(
+        [durable_convergence, durable_convergence, replacement_convergence]
+    )
     monkeypatch.setattr(
         await_projection,
         "_authenticate_pr_contract",
@@ -1176,15 +1200,21 @@ def test_projection_convergence_cli_rejects_stale_receipt_after_body_edit_aba(
         "_authenticate_unique_authority",
         lambda *args, **kwargs: (
             events.append("authority"),
-            durable_convergence,
+            next(authority_reads),
         )[1],
     )
     monkeypatch.setattr(
         await_projection,
+        "build_verified_merge_projection_convergence",
+        lambda *args, **kwargs: {
+            "convergence_receipt": replacement_convergence,
+            "convergence_receipt_comment": "replacement",
+        },
+    )
+    monkeypatch.setattr(
+        await_projection,
         "_post_convergence_receipt",
-        lambda *args, **kwargs: pytest.fail(
-            "stale durable receipt must not be duplicated"
-        ),
+        lambda *args, **kwargs: events.append("post"),
     )
     monkeypatch.setattr(
         await_projection,
@@ -1223,7 +1253,7 @@ def test_projection_convergence_cli_rejects_stale_receipt_after_body_edit_aba(
         ]
     )
 
-    assert result == 3
+    assert result == 0
     assert snapshots == []
     assert events == [
         "pr-contract",
@@ -1235,10 +1265,9 @@ def test_projection_convergence_cli_rejects_stale_receipt_after_body_edit_aba(
         "snapshot",
         "authority",
         "pr-contract",
+        "post",
+        "authority",
     ]
     output = json.loads(output_path.read_text(encoding="utf-8"))
-    assert output == {
-        "failure": "failed_convergence",
-        "restoration_required": True,
-        "status": "failed_closed",
-    }
+    assert output["status"] == "converged"
+    assert output["convergence_receipt"] == replacement_convergence

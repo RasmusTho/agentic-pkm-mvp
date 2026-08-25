@@ -24,6 +24,7 @@ from app.dispatcher.verified_merge import (
     VERIFIED_MERGE_PROJECTION_CONVERGENCE_MARKER,
     build_verified_merge_projection_convergence,
     plan_projection_convergence_failure_restoration,
+    projection_convergence_receipts_authenticate_authority,
     resolve_verified_merge_projection_convergence_receipt,
     resume_verified_merge_projection_convergence,
     validate_verified_merge_projection_observation,
@@ -165,6 +166,7 @@ def _authenticate_unique_authority(
     repository: str,
     authority: Mapping[str, object],
     snapshot: Mapping[str, object],
+    pr_contract: Mapping[str, object],
 ) -> dict[str, object] | None:
     pull = snapshot.get("pull_request")
     if not isinstance(pull, Mapping):
@@ -182,9 +184,17 @@ def _authenticate_unique_authority(
         for comment in comments
     )
     durable_convergence = resolve_verified_merge_projection_convergence_receipt(
-        comments, authority_receipt=authority
+        comments, authority_receipt=authority, pr_contract=pr_contract
     )
-    if trusted_convergence_attempt and durable_convergence is None:
+    # Historical receipts from earlier body edits are retained as audit
+    # evidence.  They must still authenticate against the authority, but only
+    # a receipt for this exact post-edit contract can shortcut the quorum.
+    if (
+        trusted_convergence_attempt
+        and not projection_convergence_receipts_authenticate_authority(
+            comments, authority_receipt=authority
+        )
+    ):
         raise ValueError("trusted convergence receipt is malformed or conflicting")
     result = resume_verified_merge_projection_convergence(
         comments,
@@ -533,7 +543,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         projection_identity_sha256: str | None = None
         authority_authenticated = False
         durable_convergence: dict[str, object] | None = None
-        stale_durable_convergence = False
         next_read_at = time.monotonic()
         while len(empty_observations) < 2:
             remaining = deadline - time.monotonic()
@@ -553,14 +562,13 @@ def main(argv: Sequence[str] | None = None) -> int:
                     repository=args.repository,
                     authority=authority,
                     snapshot=snapshot,
+                    pr_contract=pr_contract,
                 )
                 if durable_candidate is not None:
                     if _durable_convergence_matches_pr_contract(
                         durable_candidate, pr_contract
                     ):
                         durable_convergence = durable_candidate
-                    else:
-                        stale_durable_convergence = True
                 authority_authenticated = True
             admitted = validate_verified_merge_projection_observation(
                 authority_receipt=authority,
@@ -604,14 +612,13 @@ def main(argv: Sequence[str] | None = None) -> int:
             repository=args.repository,
             authority=authority,
             snapshot=final_observation,
+            pr_contract=pr_contract,
         )
         if final_durable_candidate is not None:
             if _durable_convergence_matches_pr_contract(
                 final_durable_candidate, pr_contract
             ):
                 durable_convergence = final_durable_candidate
-            else:
-                stale_durable_convergence = True
         _authenticate_pr_contract(
             args.gh_bin,
             repository=args.repository,
@@ -634,10 +641,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         ):
             raise ValueError("final closing projection is stale or drifted")
         if durable_convergence is None:
-            if stale_durable_convergence:
-                raise ValueError(
-                    "durable convergence receipt is stale for current pr-contract"
-                )
             convergence = build_verified_merge_projection_convergence(
                 authority_receipt=authority,
                 pr_contract=pr_contract,
@@ -659,6 +662,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 repository=args.repository,
                 authority=authority,
                 snapshot=final_observation,
+                pr_contract=pr_contract,
             )
             if durable_convergence != convergence.get("convergence_receipt"):
                 raise ValueError("durable convergence receipt readback mismatched")
