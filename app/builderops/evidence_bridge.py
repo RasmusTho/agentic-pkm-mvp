@@ -55,7 +55,10 @@ def build_evidence_bridge_report(evidence: Mapping[str, Any]) -> dict[str, Any]:
         allowed_kinds=UNKNOWN_EVIDENCE_KINDS,
         require_source_refs=False,
     )
-    evidence_ids = {item["id"] for item in [*observed, *unknown]}
+    evidence_items = [*observed, *unknown]
+    evidence_ids = {item["id"] for item in evidence_items}
+    if len(evidence_ids) != len(evidence_items):
+        raise EvidenceBridgeError("duplicate evidence id across observed and unknown buckets")
     candidate = _normalize_candidates(
         evidence.get("candidate", evidence.get("candidates", [])),
         evidence_ids=evidence_ids,
@@ -151,9 +154,9 @@ def _normalize_candidates(
             f"candidate[{index}].upstream_artifact",
         )
         unknown_for_retro = bool(item.get("unknown_for_retro", False))
-        if not upstream_artifact and not unknown_for_retro:
+        if not upstream_artifact and (not unknown_for_retro or route != "discard"):
             raise EvidenceBridgeError(
-                f"candidate[{index}] requires upstream_artifact or unknown_for_retro"
+                f"candidate[{index}] requires upstream_artifact unless it is an unknown-for-retro discard"
             )
         raw_ids = item.get("evidence_ids")
         if not isinstance(raw_ids, list) or not raw_ids:

@@ -127,13 +127,17 @@ def _required_string(value: Any, field: str) -> str:
 
 def _receipt_body(patterns: list[dict[str, Any]]) -> str:
     routes = ", ".join(
-        f"{item['id']}={item['route']}:{item['terminal_outcome']}"
+        f"{item['id']}={item['route']}"
+        for item in patterns
+    )
+    terminal_outcomes = ", ".join(
+        f"{item['id']}={item['terminal_outcome']}"
         for item in patterns
     )
     return (
         "Repeated-pattern routing observe-only report: "
         f"patterns={len(patterns)}"
-        + (f"; routes: {routes}." if routes else ".")
+        + (f"; routes: {routes}; terminal_outcomes: {terminal_outcomes}." if routes else ".")
     )
 
 

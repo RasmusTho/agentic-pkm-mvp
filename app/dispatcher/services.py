@@ -5,6 +5,7 @@ Thin service layer for mutations not covered by queue or leases modules.
 
 from __future__ import annotations
 
+import json
 import uuid
 from datetime import datetime, timezone
 
@@ -80,6 +81,8 @@ def move_task(
             "use complete instead"
         )
     previous_status = task.status
+    if next_status == "review" and task.lease_id is not None:
+        return _handoff_leased_task_to_review(store, task_id, actor, note)
     task.status = next_status
     if next_status != "blocked":
         task.blocked_reason = None
@@ -103,6 +106,108 @@ def move_task(
     ))
 
     return task
+
+
+def _handoff_leased_task_to_review(
+    store: SqliteStore,
+    task_id: str,
+    actor: str,
+    note: str | None,
+) -> TaskRecord:
+    """Atomically release an owned lease while moving its task to review."""
+
+    now = _utc_now()
+    with store._connect() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        task = conn.execute(
+            "SELECT * FROM dispatcher_tasks WHERE task_id = ?", (task_id,)
+        ).fetchone()
+        if task is None:
+            raise ValueError(f"Task {task_id} not found")
+        lease_id = task["lease_id"]
+        if lease_id is None:
+            raise ValueError(f"Task {task_id} has no active lease for review handoff")
+        lease = conn.execute(
+            "SELECT * FROM dispatcher_leases WHERE lease_id = ?", (lease_id,)
+        ).fetchone()
+        if lease is None or lease["released_at"] is not None:
+            raise ValueError(f"Task {task_id} has no active lease for review handoff")
+        if lease["holder"] != actor:
+            raise ValueError(
+                f"Cannot move task {task_id} to review: lease {lease_id} is held by {lease['holder']}, not {actor}"
+            )
+
+        released = conn.execute(
+            """
+            UPDATE dispatcher_leases
+            SET released_at = ?, release_reason = 'review_handoff'
+            WHERE lease_id = ? AND released_at IS NULL
+            """,
+            (now, lease_id),
+        )
+        if released.rowcount != 1:
+            raise ValueError(f"Cannot move task {task_id} to review: lease changed concurrently")
+
+        moved = conn.execute(
+            """
+            UPDATE dispatcher_tasks
+            SET status = 'review', blocked_reason = NULL, lease_id = NULL,
+                claimed_by = NULL, last_heartbeat_at = NULL, lease_expires_at = NULL,
+                updated_at = ?
+            WHERE task_id = ? AND lease_id = ?
+            """,
+            (now, task_id, lease_id),
+        )
+        if moved.rowcount != 1:
+            raise ValueError(f"Cannot move task {task_id} to review: task changed concurrently")
+
+        release_event = EventRecord(
+            event_id=_make_event_id(),
+            timestamp=now,
+            task_id=task_id,
+            event_type="task.released",
+            actor=actor,
+            lease_id=lease_id,
+            payload={"reason": "review_handoff"},
+        )
+        move_payload: dict[str, str] = {"from_status": task["status"], "to_status": "review"}
+        if note is not None:
+            move_payload["note"] = note
+        move_event = EventRecord(
+            event_id=_make_event_id(),
+            timestamp=now,
+            task_id=task_id,
+            event_type="task.moved",
+            actor=actor,
+            payload=move_payload,
+        )
+        for event in (release_event, move_event):
+            conn.execute(
+                """
+                INSERT INTO dispatcher_events (
+                    event_id, timestamp, task_id, event_type, actor, lease_id, payload
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    event.event_id,
+                    event.timestamp,
+                    event.task_id,
+                    event.event_type,
+                    event.actor,
+                    event.lease_id,
+                    json.dumps(event.payload, sort_keys=True, ensure_ascii=False)
+                    if event.payload is not None
+                    else None,
+                ),
+            )
+        conn.commit()
+
+    if store._event_writer is not None:
+        store._event_writer.append(release_event)
+        store._event_writer.append(move_event)
+    moved_task = store.get_task(task_id)
+    assert moved_task is not None
+    return moved_task
 
 
 def link_pr(
