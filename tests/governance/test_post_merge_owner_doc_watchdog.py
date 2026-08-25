@@ -724,6 +724,35 @@ def test_watchdog_rejects_invalid_same_authority_phase_beside_current_chain() ->
         authority, phase="merged", merge_commit_sha=merge_sha
     )
 
+    invalid_repository = _phase_comment(
+        authority,
+        phase="prepared",
+        merge_commit_sha=None,
+        phase_kwargs=replacement_kwargs,
+    )
+    invalid_repository_payload = _receipt_payload(invalid_repository)
+    invalid_repository_payload["repository"] = "foreign/example"
+    invalid_repository["body"] = (
+        "verified issue-set merge phase:\n```json\n"
+        + json.dumps(
+            invalid_repository_payload, separators=(",", ":"), sort_keys=True
+        )
+        + "\n```"
+    )
+    invalid_run_id = _phase_comment(
+        authority,
+        phase="prepared",
+        merge_commit_sha=None,
+        phase_kwargs=replacement_kwargs,
+    )
+    invalid_run_id_payload = _receipt_payload(invalid_run_id)
+    invalid_run_id_payload["run_id"] = "forged-run"
+    invalid_run_id["body"] = (
+        "verified issue-set merge phase:\n```json\n"
+        + json.dumps(invalid_run_id_payload, separators=(",", ":"), sort_keys=True)
+        + "\n```"
+    )
+
     for invalid_phase, convergences in (
         (invalid_unknown, []),
         (invalid_null, []),
@@ -732,6 +761,8 @@ def test_watchdog_rejects_invalid_same_authority_phase_beside_current_chain() ->
         (invalid_phase, []),
         (invalid_contract, []),
         (discontinuous, [stale_convergence]),
+        (invalid_repository, []),
+        (invalid_run_id, []),
     ):
         assert _node(
             "selectWatchdogAuthority(inputs[0])",
@@ -775,10 +806,26 @@ def test_watchdog_rejects_absent_forged_or_digest_mismatched_convergence() -> No
         + "\n```"
     )
 
+    duplicate_convergence_marker = dict(convergence)
+    duplicate_convergence_body = duplicate_convergence_marker["body"]
+    assert isinstance(duplicate_convergence_body, str)
+    duplicate_convergence_marker["body"] = (
+        duplicate_convergence_body
+        + "\nverified merge closing projection convergence:"
+    )
+    duplicate_phase_marker = dict(prepared)
+    duplicate_phase_body = duplicate_phase_marker["body"]
+    assert isinstance(duplicate_phase_body, str)
+    duplicate_phase_marker["body"] = (
+        duplicate_phase_body + "\nverified issue-set merge phase:"
+    )
+
     cases = (
         [authority, prepared, merged],
         [authority, forged_convergence, prepared, merged],
         [authority, convergence, mismatched_prepared, merged],
+        [authority, duplicate_convergence_marker, prepared, merged],
+        [authority, convergence, duplicate_phase_marker, merged],
     )
     for comments in cases:
         selected = _node(
