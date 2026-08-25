@@ -1891,8 +1891,15 @@ def resolve_verified_merge_phase(
     convergence_by_digest: dict[str, Mapping[str, object]] = {}
     for receipt in durable_convergence_receipts:
         receipt_digest = receipt.get("receipt_sha256")
-        if isinstance(receipt_digest, str):
-            convergence_by_digest[receipt_digest] = receipt
+        if (
+            not isinstance(receipt_digest, str)
+            or receipt_digest in convergence_by_digest
+        ):
+            # An ambiguous comment POST must not be silently coalesced into
+            # one usable authority chain.  The watchdog applies the same
+            # multiplicity rule after merge.
+            return None
+        convergence_by_digest[receipt_digest] = receipt
     active_convergence_digest: str | None = None
     if current_body_edit is not None:
         matching_receipts = [
