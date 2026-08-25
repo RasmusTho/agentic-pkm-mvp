@@ -1058,6 +1058,61 @@ def test_current_phase_ledger_rejects_null_or_discontinuous_projection_digest() 
         is None
     )
 
+    for field, forged in (
+        ("repository", "foreign/example"),
+        ("run_id", "forged-run"),
+        ("pr_number", 4999),
+        ("head_sha", "f" * 40),
+    ):
+        mismatched_identity = copy.deepcopy(prepared)
+        mismatched_identity[field] = forged
+        assert (
+            resolve_verified_merge_phase(
+                [
+                    durable_convergence_comment,
+                    comment(mismatched_identity),
+                    comment(merged),
+                ],
+                authority_receipt=authority,
+                pr=merged_pr,
+            )
+            is None
+        )
+
+    duplicate_convergence_marker = dict(durable_convergence_comment)
+    duplicate_convergence_body = duplicate_convergence_marker["body"]
+    assert isinstance(duplicate_convergence_body, str)
+    duplicate_convergence_marker["body"] = (
+        duplicate_convergence_body
+        + "\nverified merge closing projection convergence:"
+    )
+    duplicate_phase_marker = comment(prepared)
+    duplicate_phase_body = duplicate_phase_marker["body"]
+    assert isinstance(duplicate_phase_body, str)
+    duplicate_phase_marker["body"] = (
+        duplicate_phase_body + "\nverified issue-set merge phase:"
+    )
+    for malformed_comment in (
+        duplicate_convergence_marker,
+        duplicate_phase_marker,
+    ):
+        assert (
+            resolve_verified_merge_phase(
+                [
+                    malformed_comment
+                    if malformed_comment is duplicate_convergence_marker
+                    else durable_convergence_comment,
+                    malformed_comment
+                    if malformed_comment is duplicate_phase_marker
+                    else comment(prepared),
+                    comment(merged),
+                ],
+                authority_receipt=authority,
+                pr=merged_pr,
+            )
+            is None
+        )
+
 
 def test_explicit_legacy_phase_field_set_remains_continuous() -> None:
     plan = prepare_verified_merge(

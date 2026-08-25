@@ -359,6 +359,19 @@ def _comment_receipts(
     return [receipt for receipt, _ in _comment_receipt_entries(comments, marker)]
 
 
+def _trusted_marker_occurrences(
+    comments: Sequence[Mapping[str, object]], marker: str
+) -> int:
+    """Count every trusted durable-receipt attempt, not just its comment."""
+
+    return sum(
+        cast(str, comment["body"]).count(marker)
+        for comment in comments
+        if comment.get("author_association") in _TRUSTED_AUTHOR_ASSOCIATIONS
+        and isinstance(comment.get("body"), str)
+    )
+
+
 def _comment_authenticates_legacy_authority(
     comment: Mapping[str, object], authority_receipt: Mapping[str, object]
 ) -> bool:
@@ -1576,12 +1589,15 @@ def _authenticated_projection_convergence_receipts(
         and VERIFIED_MERGE_PROJECTION_CONVERGENCE_MARKER
         in cast(str, comment["body"])
     ]
-    if not trusted_attempts:
+    marker_attempts = _trusted_marker_occurrences(
+        comments, VERIFIED_MERGE_PROJECTION_CONVERGENCE_MARKER
+    )
+    if marker_attempts == 0:
         return []
     entries = _comment_receipt_entries(
         trusted_attempts, VERIFIED_MERGE_PROJECTION_CONVERGENCE_MARKER
     )
-    if len(entries) != len(trusted_attempts):
+    if len(entries) != marker_attempts:
         return None
     allow_legacy_terminal_lf = _comments_authenticate_legacy_authority(
         comments, authority_receipt
@@ -1924,15 +1940,11 @@ def resolve_verified_merge_phase(
         )
 
     invalid_current_projection_phase = False
-    phase_attempts = [
-        comment
-        for comment in comments
-        if comment.get("author_association") in _TRUSTED_AUTHOR_ASSOCIATIONS
-        and isinstance(comment.get("body"), str)
-        and VERIFIED_MERGE_PHASE_MARKER in cast(str, comment["body"])
-    ]
+    phase_attempts = _trusted_marker_occurrences(
+        comments, VERIFIED_MERGE_PHASE_MARKER
+    )
     phase_receipts = _comment_receipts(comments, VERIFIED_MERGE_PHASE_MARKER)
-    if len(phase_receipts) != len(phase_attempts):
+    if len(phase_receipts) != phase_attempts:
         return None
     for candidate in phase_receipts:
         phase = candidate.get("phase")
@@ -1941,9 +1953,6 @@ def resolve_verified_merge_phase(
         legacy_schema = candidate_fields == _LEGACY_PHASE_RECEIPT_FIELDS
         same_authority_identity = (
             candidate.get("authority_sha256") == authority_digest
-            and candidate.get("pr_number")
-            == authority_receipt.get("pr_number")
-            and candidate.get("head_sha") == authority_receipt.get("head_sha")
         )
         matching_identity = (
             same_authority_identity
@@ -2035,6 +2044,10 @@ def resolve_verified_merge_phase(
             continue
         if (
             candidate.get("body_sha256") != expected_digest
+            or candidate.get("repository") != authority_receipt.get("repository")
+            or candidate.get("pr_number") != authority_receipt.get("pr_number")
+            or candidate.get("head_sha") != authority_receipt.get("head_sha")
+            or candidate.get("run_id") != authority_receipt.get("run_id")
             or (reconciled_phase and list(closed) != expected_closing)
             or (not reconciled_phase and (closed or reopened))
             or bool(set(closed) & set(reopened))

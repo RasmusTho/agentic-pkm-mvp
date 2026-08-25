@@ -404,7 +404,11 @@ jobs:
               );
               if (attempts.length === 0) return new Map();
               const receipts = commentReceipts(attempts, CONVERGENCE_MARKER);
-              if (receipts.length !== attempts.length ||
+              const markerAttempts = attempts.reduce(
+                (count, comment) => count + comment.body.split(CONVERGENCE_MARKER).length - 1,
+                0
+              );
+              if (receipts.length !== markerAttempts ||
                   receipts.some(receipt => !validConvergenceReceipt(receipt, authorityReceipt))) {
                 return null;
               }
@@ -431,7 +435,11 @@ jobs:
                 typeof comment.body === "string" && comment.body.includes(PHASE_MARKER)
               );
               const phaseReceipts = commentReceipts(phaseAttempts, PHASE_MARKER);
-              if (phaseReceipts.length !== phaseAttempts.length) return null;
+              const phaseMarkerAttempts = phaseAttempts.reduce(
+                (count, comment) => count + comment.body.split(PHASE_MARKER).length - 1,
+                0
+              );
+              if (phaseReceipts.length !== phaseMarkerAttempts) return null;
               let invalidCurrentProjectionPhase = false;
               for (const receipt of phaseReceipts) {
                 const phase = receipt.phase;
@@ -451,10 +459,7 @@ jobs:
                 const finalObservationDigest = convergenceReceipt === undefined || convergenceReceipt === null
                   ? null
                   : canonicalSha256(convergenceReceipt.final_projection_observation);
-                const sameAuthorityIdentity =
-                  receipt.authority_sha256 === authorityDigest &&
-                  receipt.pr_number === authorityReceipt.pr_number &&
-                  receipt.head_sha === authorityReceipt.head_sha;
+                const sameAuthorityIdentity = receipt.authority_sha256 === authorityDigest;
                 const matchingIdentity =
                   sameAuthorityIdentity && phaseIndex >= 0 &&
                   receipt.contract === "verified_issue_set_merge_phase.v1";
@@ -474,6 +479,10 @@ jobs:
                       phaseFinalObservationDigest !== finalObservationDigest
                     )) ||
                     (phase !== "prepared" && phaseFinalObservationDigest !== null)
+                    || receipt.repository !== authorityReceipt.repository
+                    || receipt.pr_number !== authorityReceipt.pr_number
+                    || receipt.head_sha !== authorityReceipt.head_sha
+                    || receipt.run_id !== authorityReceipt.run_id
                     || receipt.body_sha256 !== expectedDigest ||
                     !isSortedIssueArray(closed) || !isSortedIssueArray(reopened) ||
                     closed.some(number => reopened.includes(number)) ||
