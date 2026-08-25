@@ -94,4 +94,17 @@ def test_prod_deploy_preflight_rejects_missing_wildcard_or_ambient_bind(
     deploy_script = (REPO_ROOT / "scripts" / "deploy_channel.sh").read_text(
         encoding="utf-8"
     )
+    full_start = (REPO_ROOT / "scripts" / "start_full_system.sh").read_text(
+        encoding="utf-8"
+    )
+    makefile = (REPO_ROOT / "Makefile").read_text(encoding="utf-8")
     assert "prod_devui_gateway_preflight.py" in deploy_script
+    assert "prod_devui_gateway_preflight.py" in full_start
+    assert full_start.index("prod_devui_gateway_preflight.py") < full_start.index(
+        "compose_up()"
+    )
+    prod_up = makefile[makefile.index("prod-up:") : makefile.index("prod-down:")]
+    assert "prod_devui_gateway_preflight.py" in prod_up
+    assert prod_up.index("prod_devui_gateway_preflight.py") < prod_up.index(
+        "$(COMPOSE_PROD) up"
+    )

@@ -1110,6 +1110,25 @@ run_docker_compose() {
   fi
 }
 
+# All production producers must validate the committed Companion publication
+# before this generic launcher can invoke Compose. `make prod-start-full`
+# reaches it through the Midgård wrapper, and a direct prod/explicit-prod-
+# compose invocation is also a supported operational path.
+_pkm_prod_devui_gateway_selected=0
+case ":${COMPOSE_FILE:-}:" in
+  *":docker-compose.prod.yml:"*) _pkm_prod_devui_gateway_selected=1 ;;
+esac
+_pkm_prod_gateway_channel="${PKM_ENVIRONMENT:-${ENVIRONMENT:-${CHANNEL:-${PKM_CHANNEL:-}}}}"
+_pkm_prod_gateway_channel="$(printf '%s' "$_pkm_prod_gateway_channel" | tr '[:upper:]' '[:lower:]' | xargs 2>/dev/null || printf '%s' "$_pkm_prod_gateway_channel")"
+if [ "$_pkm_prod_gateway_channel" = "prod" ] || [ "${COMPOSE_PROJECT_NAME:-}" = "pkm-prod" ]; then
+  _pkm_prod_devui_gateway_selected=1
+fi
+if [ "$_pkm_prod_devui_gateway_selected" -eq 1 ]; then
+  "${PYTHON:-python3}" "$ROOT/scripts/prod_devui_gateway_preflight.py" \
+    "$ROOT/docker-compose.prod.yml" || exit $?
+fi
+unset _pkm_prod_devui_gateway_selected _pkm_prod_gateway_channel
+
 ensure_prod_instance_state_volume() {
   if [ "${COMPOSE_PROJECT_NAME:-}" != "pkm-prod" ]; then
     return 0

@@ -70,8 +70,9 @@ The goal is to keep docs-only and governance/skill PRs cheap while preserving di
 - The #4841 production devUI transport is a security-boundary change. Its focused contract set is
   `tests/ops/test_prod_devui_gateway_config.py`,
   `tests/companion_ui/test_devui_gateway_admission.py`, and `tests/api/test_devui_api.py`, plus
-  the production-launcher target when a producer changes. Merge evidence requires exact-head CI;
-  stale checks from a prior branch head do not satisfy this transport contract.
+  every production-producer target when a producer changes (`deploy`, `prod-up`, `prod-start-full`,
+  and `prod-ui`). Merge evidence requires exact-head CI; stale checks from a prior branch head do
+  not satisfy this transport contract.
 - Combined devUI shell recovery #4836 has an explicit pre-merge exception to that post-merge
   browser default: after publishing the candidate ref, an operator must dispatch
   `.github/workflows/browser-runtime.yml` against that exact ref (for example,
