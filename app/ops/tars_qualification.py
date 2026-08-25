@@ -25,7 +25,9 @@ MAX_EVIDENCE_AGE = timedelta(hours=24)
 _ROOT = Path(__file__).resolve().parents[2]
 _SECRET_KEY = re.compile(r"(?:api[_-]?key|authorization|credential|password|private[_-]?key|secret|token)", re.I)
 _SECRET_VALUE = re.compile(r"(?:bearer\s+|gh[pousr]_[A-Za-z0-9_]|pve[ta]=|-----BEGIN [A-Z ]+PRIVATE KEY-----)", re.I)
-_OPAQUE_CREDENTIAL_KEYS = frozenset({"database_url", "dsn", "passwd", "session_cookie"})
+_OPAQUE_CREDENTIAL_KEYS = frozenset(
+    {"connection_string", "database_url", "dsn", "passwd", "session_cookie"}
+)
 _SECRET_REFERENCE = re.compile(
     r"^(?:keychain:(?://)?[A-Za-z0-9][A-Za-z0-9._/-]*|\$\{SECRET:[A-Za-z0-9][A-Za-z0-9._/-]*\})$"
 )
