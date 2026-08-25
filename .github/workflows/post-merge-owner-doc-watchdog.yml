@@ -354,11 +354,12 @@ jobs:
                   canonicalJson(contract.body_edit) !== canonicalJson(receipt.body_edit)) return false;
               const editAt = canonicalUtcInstant(receipt.body_edit?.edited_at);
               const createdAt = canonicalUtcInstant(contract.created_at);
+              const startedAt = canonicalUtcInstant(contract.started_at);
               const completedAt = canonicalUtcInstant(contract.completed_at);
               const observedTimes = observations.map(row => canonicalUtcInstant(row?.observed_at));
-              if (editAt === null || createdAt === null || completedAt === null ||
+              if (editAt === null || createdAt === null || startedAt === null || completedAt === null ||
                   observedTimes.some(value => value === null) || editAt > createdAt ||
-                  createdAt > completedAt || completedAt > observedTimes[0] ||
+                  createdAt > startedAt || startedAt > completedAt || completedAt > observedTimes[0] ||
                   observedTimes[1] - observedTimes[0] < policy.minimum_backoff_seconds * 1000) return false;
               for (const row of observations) {
                 if (!hasExactFields(row, CONVERGENCE_OBSERVATION_FIELDS) ||

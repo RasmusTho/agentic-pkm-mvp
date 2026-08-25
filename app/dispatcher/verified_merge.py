@@ -2038,6 +2038,22 @@ def resolve_verified_merge_phase(
     if invalid_current_projection_phase:
         return None
 
+    for phases in valid_by_chain.values():
+        occupied = [bool(phases[phase]) for phase in _PHASES]
+        first = next(
+            (index for index, phase_present in enumerate(occupied) if phase_present),
+            None,
+        )
+        if first is None:
+            continue
+        last = len(occupied) - 1 - occupied[::-1].index(True)
+        if first != 0 or any(
+            not phase_present for phase_present in occupied[first : last + 1]
+        ):
+            # Match watchdog post-merge selection: a current-schema phase
+            # chain with a missing predecessor is not harmless audit history.
+            return None
+
     def resolve_chain(
         valid_by_phase: Mapping[str, Sequence[Mapping[str, object]]],
     ) -> dict[str, object] | None:
