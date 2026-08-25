@@ -41,7 +41,7 @@ labels:
   lane:
     - lane:governance
   interpretation:
-    agent:ready: strictly validated queue-eligible work; Project Status is optional projection
+    agent:ready: strictly validated queue-eligible work; Project Status is optional projection, never a pickup, claim, blocked-state, or review-handoff gate
     agent:blocked: blocked by dependency or setup; normally non-active backlog work
     agent:needs-human: blocked on human decision or missing authority; normally non-active backlog work
     state:known-defect: rolling confirmed-defect registry container; Backlog, no agent-state label, never pickup-eligible
@@ -164,7 +164,7 @@ rules:
   docs_authoring_prs_must_be_docs_only: true
   governance_lane_prs_may_skip_issue_reference: true
   governance_lane_prs_must_be_limited_to_repo_governance_surfaces: true
-  agents_only_pick: strictly validated label:agent:ready; Project Status is optional projection
+  agents_only_pick: strictly validated label:agent:ready; Project Status is optional projection, never a pickup, claim, blocked-state, or review-handoff gate
   agents_must_follow_issue_constraints: true
   agents_must_satisfy_acceptance: true
   no_free_form_tasks: true

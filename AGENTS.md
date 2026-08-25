@@ -532,4 +532,5 @@ The dispatcher is an optional collision guard for issue pickup, not lifecycle au
   GitHub-label-only fallback.
 - Heartbeat, complete, block, release, fallback receipts, TTL, and recovery semantics are owned by
   `.codex/skills/issue-to-code/SKILL.md` and `docs/AGENT_ISSUE_DISPATCHER.md`.
-- Project Status is not part of claim and never gates pickup.
+- Project Status is an optional projection, not part of the authoritative Issue/PR lifecycle,
+  claim, blocked-state, or review-handoff flow, and never gates pickup.
