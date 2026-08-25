@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from app.builderops.devui_discovery import compose_discovery_projection
+import pytest
+
+from app.builderops.devui_discovery import DiscoveryContractError, compose_discovery_projection
 
 
 NOW = "2026-08-25T12:00:00+00:00"
@@ -127,3 +129,24 @@ def test_discovery_navigation_is_source_bound_and_read_only() -> None:
     assert result["items"] is not source_items
     source_items[0]["limitations"].append("mutation after composition")
     assert "mutation after composition" not in result["items"][0]["limitations"]
+
+
+def test_working_proposals_cannot_claim_normative_authority_without_promotion() -> None:
+    item = _item()
+    item["authority_class"] = "normative"
+
+    with pytest.raises(DiscoveryContractError, match="cannot claim normative authority"):
+        compose_discovery_projection(composition=_composition(), items=[item])
+
+
+def test_discovery_rejects_malformed_or_refusal_less_provider_envelopes() -> None:
+    malformed = _composition()
+    malformed["providers"] = {"work": "not a provider envelope"}
+    with pytest.raises(DiscoveryContractError, match="must be an object"):
+        compose_discovery_projection(composition=malformed, items=[])
+
+    refused = _composition()
+    refused["providers"]["work"]["status"] = "refused"
+    refused["providers"]["work"]["refusal"] = None
+    with pytest.raises(DiscoveryContractError, match="lacks typed refusal evidence"):
+        compose_discovery_projection(composition=refused, items=[])

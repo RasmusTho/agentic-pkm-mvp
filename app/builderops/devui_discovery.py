@@ -199,7 +199,54 @@ def _item(value: Any, *, index: int) -> dict[str, Any]:
 
     if item["source_ref"]["source_type"] == "builder_vault" and item["authority_class"] != "non-normative":
         raise DiscoveryContractError("Builder Vault items must remain non-normative")
+    if (
+        item["source_role"] == "working" or item["artifact_class"] == "proposal"
+    ) and item["authority_class"] == "normative":
+        raise DiscoveryContractError(
+            "working material and proposals cannot claim normative authority"
+        )
     return item
+
+
+def _validated_composition(value: Mapping[str, Any]) -> dict[str, Any]:
+    """Validate the public composition envelope before deriving any claim."""
+
+    envelope = _mapping(value, label="composition")
+    _keys(
+        envelope,
+        allowed={"contract_version", "authority", "captured_at", "providers"},
+        required={"contract_version", "authority", "captured_at", "providers"},
+        label="composition",
+    )
+    if envelope["contract_version"] != "devui.composition.v1" or envelope["authority"] != "projection_only":
+        raise DiscoveryContractError("composition must be the existing projection-only devUI envelope")
+    envelope["captured_at"] = _timestamp(envelope["captured_at"], label="composition.captured_at")
+    providers = _mapping(envelope["providers"], label="composition.providers")
+    for name, value in providers.items():
+        _string(name, label="composition provider name")
+        provider = _mapping(value, label=f"composition.providers.{name}")
+        _keys(
+            provider,
+            allowed={"provider", "status", "authority", "captured_at", "snapshot", "completeness", "refusal", "payload"},
+            required={"provider", "status", "authority", "captured_at", "snapshot", "completeness"},
+            label=f"composition.providers.{name}",
+        )
+        _string(provider["provider"], label=f"composition.providers.{name}.provider")
+        if provider["status"] not in {"available", "refused"}:
+            raise DiscoveryContractError(f"composition.providers.{name}.status is unsupported")
+        if provider["captured_at"] is not None:
+            _timestamp(provider["captured_at"], label=f"composition.providers.{name}.captured_at")
+        if provider["status"] == "available":
+            if provider["authority"] is None or provider["completeness"] is None:
+                raise DiscoveryContractError(f"composition.providers.{name} available provider lacks authority evidence")
+            if provider["snapshot"] is None and provider["captured_at"] is None:
+                raise DiscoveryContractError(f"composition.providers.{name} available provider lacks a snapshot")
+            if provider.get("refusal") is not None:
+                raise DiscoveryContractError(f"composition.providers.{name} available provider cannot carry refusal evidence")
+        elif provider["authority"] is None or provider.get("refusal") is None:
+            raise DiscoveryContractError(f"composition.providers.{name} refused provider lacks typed refusal evidence")
+    envelope["providers"] = providers
+    return envelope
 
 
 def compose_discovery_projection(*, composition: Mapping[str, Any], items: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
@@ -209,12 +256,8 @@ def compose_discovery_projection(*, composition: Mapping[str, Any], items: Seque
     no provider payload is copied or elevated into a discovery authority.
     """
 
-    envelope = _mapping(composition, label="composition")
-    if envelope.get("contract_version") != "devui.composition.v1" or envelope.get("authority") != "projection_only":
-        raise DiscoveryContractError("composition must be the existing projection-only devUI envelope")
-    captured_at = _timestamp(envelope.get("captured_at"), label="composition.captured_at")
-    if not isinstance(envelope.get("providers"), Mapping):
-        raise DiscoveryContractError("composition.providers must be an object")
+    envelope = _validated_composition(composition)
+    captured_at = envelope["captured_at"]
     if isinstance(items, (str, bytes)) or not isinstance(items, Sequence):
         raise DiscoveryContractError("items must be a list")
 

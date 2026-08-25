@@ -31,6 +31,10 @@ Concept anchors: layering, portability, archive exposure, trust semantics, event
   no source I/O, persistence, mutation, task/session operation, inferred correlation, or browser
   classification. Producer enrichment, a local Overview route, and every visual or command surface
   remain undelivered.
+- The pure `devui.discovery-projection.v1` composer derives detached discovery items from the
+  existing composition envelope and caller-declared source records. It preserves authority,
+  provenance, lifecycle, source-state limitations, and source-bound read-only navigation; it adds
+  no source I/O, registry, UI, task state, Builder Vault authority, or promotion action (#4985).
 
 Roadmap reset note: `docs/plans/MAJOR_ROADMAP_RESET_2026_06_04.md` is the accepted strategic reset
 input for sequencing, not a runtime-promotion document. This status file remains the current-state
