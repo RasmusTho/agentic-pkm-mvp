@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import subprocess
 from collections.abc import Mapping
 from pathlib import Path
 
@@ -1224,6 +1225,55 @@ def test_projection_convergence_cli_failure_stdout_redacts_restoration(
     output = json.loads(output_path.read_text(encoding="utf-8"))
     assert output["restoration"]["restore_body"] == _canonical_body()
     assert json.loads(capsys.readouterr().out) == {"status": "failed_closed"}
+
+
+def test_projection_convergence_cli_fails_closed_on_bounded_gh_timeout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    authority, _, pr_contract, _ = _projection_fixture()
+    authority_path = tmp_path / "authority.json"
+    pr_contract_path = tmp_path / "pr-contract.json"
+    output_path = tmp_path / "convergence.json"
+    authority_path.write_text(json.dumps(authority), encoding="utf-8")
+    pr_contract_path.write_text(json.dumps(pr_contract), encoding="utf-8")
+    observed_timeouts: list[float | None] = []
+
+    def stalled_gh(*args: object, **kwargs: object) -> object:
+        timeout = kwargs.get("timeout")
+        assert isinstance(timeout, float)
+        observed_timeouts.append(timeout)
+        raise subprocess.TimeoutExpired("gh", timeout)
+
+    monkeypatch.setattr(await_projection.subprocess, "run", stalled_gh)
+
+    result = await_projection.main(
+        [
+            "--authority-json",
+            str(authority_path),
+            "--pr-contract-json",
+            str(pr_contract_path),
+            "--repository",
+            REPOSITORY,
+            "--pr-number",
+            "3822",
+            "--minimum-backoff-seconds",
+            "1",
+            "--final-backoff-seconds",
+            "1",
+            "--timeout-seconds",
+            "5",
+            "--output-json",
+            str(output_path),
+        ]
+    )
+
+    assert result == 3
+    assert observed_timeouts and 0 < observed_timeouts[0] <= 5
+    assert json.loads(output_path.read_text(encoding="utf-8")) == {
+        "failure": "failed_convergence",
+        "restoration_required": True,
+        "status": "failed_closed",
+    }
 
 
 def test_projection_convergence_cli_rebuilds_after_body_edit_aba(
