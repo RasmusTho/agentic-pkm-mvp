@@ -30,6 +30,7 @@ from app.dispatcher.verified_merge import (
     prepare_verified_merge,
 )
 from tests.dispatcher.verified_merge_projection_helpers import (
+    projection_convergence_comment,
     projection_phase_kwargs,
 )
 from tests.dispatcher.builderops_verification_fakes import FakeBuilderOpsClient
@@ -1362,17 +1363,21 @@ def test_live_adapter_authenticates_exact_prepared_merge_window(
         **original_pr,
         "body": plan["neutralized_body"],
     }
+    convergence_kwargs = projection_phase_kwargs(
+        authority_receipt, prepared_pr
+    )
     phase = build_verified_merge_phase(
         authority_receipt=authority_receipt,
         phase="prepared",
         pr=prepared_pr,
-        **projection_phase_kwargs(authority_receipt, prepared_pr),
+        **convergence_kwargs,
     )
     comments = [
         {
             "author_association": "COLLABORATOR",
             "body": plan["authority_receipt_comment"],
         },
+        projection_convergence_comment(convergence_kwargs),
         {
             "author_association": "COLLABORATOR",
             "body": phase["phase_receipt_comment"],

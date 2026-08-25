@@ -134,6 +134,7 @@ _PROJECTION_CONVERGENCE_RECEIPT_FIELDS: Final = frozenset(
         "body_edit",
         "contract",
         "default_branch_sha",
+        "final_projection_observation",
         "head_sha",
         "head_ref",
         "neutralized_body_sha256",
@@ -1312,6 +1313,7 @@ def build_verified_merge_projection_convergence(
     authority_comment: Mapping[str, object] | None = None,
     pr_contract: Mapping[str, object],
     observations: Sequence[Mapping[str, object]],
+    final_projection_observation: Mapping[str, object],
     minimum_backoff_seconds: int,
 ) -> dict[str, object]:
     """Bind two empty GitHub closing projections to post-edit PR-contract proof."""
@@ -1367,6 +1369,7 @@ def build_verified_merge_projection_convergence(
         ),
         "contract": VERIFIED_MERGE_PROJECTION_CONVERGENCE_CONTRACT,
         "default_branch_sha": receipt_observations[0]["default_branch_sha"],
+        "final_projection_observation": dict(final_projection_observation),
         "head_sha": authority_receipt["head_sha"],
         "head_ref": receipt_observations[0]["head_ref"],
         "neutralized_body_sha256": authority_receipt[
@@ -1386,6 +1389,13 @@ def build_verified_merge_projection_convergence(
         "run_id": authority_receipt["run_id"],
         "title": receipt_observations[0]["title"],
     }
+    if not _final_projection_observation_matches(
+        final_projection_observation,
+        authority_receipt=authority_receipt,
+        convergence_receipt=receipt,
+        allow_legacy_terminal_lf=allow_legacy_terminal_lf,
+    ):
+        raise ValueError("verified merge projection convergence is malformed")
     receipt["receipt_sha256"] = _canonical_digest(receipt)
     receipt_json = json.dumps(receipt, sort_keys=True, separators=(",", ":"))
     return {
@@ -1401,6 +1411,7 @@ def _projection_convergence_matches_authority(
     receipt: object,
     *,
     authority_receipt: Mapping[str, object],
+    allow_legacy_terminal_lf: bool = False,
 ) -> bool:
     if not isinstance(receipt, Mapping) or set(receipt) != (
         _PROJECTION_CONVERGENCE_RECEIPT_FIELDS
@@ -1535,7 +1546,48 @@ def _projection_convergence_matches_authority(
             is None
         ):
             return False
+    if not _final_projection_observation_matches(
+        receipt.get("final_projection_observation"),
+        authority_receipt=authority_receipt,
+        convergence_receipt=receipt,
+        allow_legacy_terminal_lf=allow_legacy_terminal_lf,
+    ):
+        return False
     return True
+
+
+def resolve_verified_merge_projection_convergence_receipt(
+    comments: Sequence[Mapping[str, object]],
+    *,
+    authority_receipt: Mapping[str, object],
+) -> dict[str, object] | None:
+    """Resolve exactly one trusted, content-authenticated convergence receipt."""
+
+    trusted_attempts = [
+        comment
+        for comment in comments
+        if comment.get("author_association") in _TRUSTED_AUTHOR_ASSOCIATIONS
+        and isinstance(comment.get("body"), str)
+        and VERIFIED_MERGE_PROJECTION_CONVERGENCE_MARKER
+        in cast(str, comment["body"])
+    ]
+    if len(trusted_attempts) != 1:
+        return None
+    entries = _comment_receipt_entries(
+        trusted_attempts, VERIFIED_MERGE_PROJECTION_CONVERGENCE_MARKER
+    )
+    if len(entries) != 1:
+        return None
+    receipt, _comment = entries[0]
+    if not _projection_convergence_matches_authority(
+        receipt,
+        authority_receipt=authority_receipt,
+        allow_legacy_terminal_lf=_comments_authenticate_legacy_authority(
+            comments, authority_receipt
+        ),
+    ):
+        return None
+    return dict(receipt)
 
 
 def _final_projection_observation_matches(
@@ -1631,6 +1683,7 @@ def build_verified_merge_phase(
         if not _projection_convergence_matches_authority(
             projection_convergence_receipt,
             authority_receipt=authority_receipt,
+            allow_legacy_terminal_lf=allow_legacy_terminal_lf,
         ) or not _final_projection_observation_matches(
             final_projection_observation,
             authority_receipt=authority_receipt,
@@ -1652,6 +1705,7 @@ def build_verified_merge_phase(
         if not _projection_convergence_matches_authority(
             projection_convergence_receipt,
             authority_receipt=authority_receipt,
+            allow_legacy_terminal_lf=allow_legacy_terminal_lf,
         ):
             raise ValueError("verified merge projection convergence is malformed")
         projection_convergence_sha256 = cast(
@@ -1754,6 +1808,14 @@ def resolve_verified_merge_phase(
     valid_by_phase: dict[str, list[dict[str, object]]] = {
         phase: [] for phase in _PHASES
     }
+    durable_convergence = resolve_verified_merge_projection_convergence_receipt(
+        comments, authority_receipt=authority_receipt
+    )
+    durable_convergence_digest = (
+        durable_convergence.get("receipt_sha256")
+        if durable_convergence is not None
+        else None
+    )
     invalid_current_projection_phase = False
     for candidate in _comment_receipts(comments, VERIFIED_MERGE_PHASE_MARKER):
         phase = candidate.get("phase")
@@ -1778,6 +1840,7 @@ def resolve_verified_merge_phase(
         if current_schema and (
             not isinstance(convergence_digest, str)
             or _DIGEST_PATTERN.fullmatch(convergence_digest) is None
+            or convergence_digest != durable_convergence_digest
             or (
                 phase == "prepared"
                 and (

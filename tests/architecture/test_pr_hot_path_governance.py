@@ -171,8 +171,10 @@ def test_verified_merge_uses_authenticated_closing_projection_convergence() -> N
 
     for fragment in (
         "--projection-convergence-json",
+        "--comments-json",
         "--final-projection-observation-json",
         "phase requires projection convergence",
+        "one authenticated durable projection convergence",
         "prepared phase requires projection convergence and final observation",
     ):
         assert fragment in phase_cli, fragment

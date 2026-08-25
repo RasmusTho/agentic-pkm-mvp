@@ -463,7 +463,11 @@ same exact head back to the ordinary verified-merge sequence below.
    authority/body/edit/default-branch identity into
    `verified-merge-closing-projection-convergence.v1`. Then run
    `scripts/await_verified_merge_projection_convergence.py`: require at least two empty admissible reads separated by bounded backoff
-   and one fresh final empty read. A later non-empty read, API or
+   and one fresh final empty read, then require the helper to post exactly one collaborator-authored,
+   content-addressed convergence receipt containing the quorum and final observation. Re-read the
+   bounded PR comments and authenticate that exact receipt before continuing. A retry after a crash
+   between the comment write and `prepared` must reuse the one valid same-head receipt and must not
+   post a duplicate. A later non-empty read, API or
    rate-limit ambiguity, pagination, head/body/title/main/edit drift, authority conflict, or timeout
    fails closed; restore only the authority-authenticated canonical body and perform no phase,
    merge, Issue, dispatcher, or lifecycle effect. Never reuse the pre-edit green `pr-contract`
@@ -471,12 +475,15 @@ same exact head back to the ordinary verified-merge sequence below.
 4. use `scripts/build_verified_issue_set_merge_phase.py` to post an authenticated
    `verified_issue_set_merge_phase.v1` `prepared` receipt bound to the durable authority receipt and
    exact convergence receipt plus the fresh final projection snapshot through
-   `--projection-convergence-json` and `--final-projection-observation-json`; `prepared` refuses
+   `--projection-convergence-json`, `--final-projection-observation-json`, and the complete bounded
+   PR comment readback through `--comments-json`; `prepared` refuses
    missing, forged, stale, cross-head, cross-run, or body-mismatched convergence proof. For the
    pre-#4010 legacy exception, also pass the complete trusted
    authority comment through `--authority-comment-json`; the receipt payload alone does not prove
    cutoff provenance. Require a single continuous prepared/merged/reconciled/restored
-   phase ledger; duplicate identical receipts are idempotent, while missing, stale, forged, or
+   phase ledger. Every current-schema phase consumer resolves the one trusted durable convergence
+   comment, recomputes its quorum/final-observation proof, and requires its digest; duplicate
+   convergence comments and missing, stale, forged, or
    conflicting receipts fail closed. Pass the same authenticated convergence JSON to every later
    phase build so `merged`, `reconciled`, and `restored` preserve the digest already bound by
    `prepared`; the CLI refuses to construct a new phase without it

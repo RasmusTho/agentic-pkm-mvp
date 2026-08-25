@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""Read-only bounded wait for verified-merge closing-projection convergence.
+"""Bounded wait and write-once receipt for closing-projection convergence.
 
-The command performs no GitHub mutation. It admits exactly two empty,
-same-identity GraphQL snapshots after an authenticated post-edit ``pr-contract``
-success, then captures one fresh final snapshot for prepared-phase creation.
-Any API ambiguity, drift, regression, or timeout fails closed.
+The command admits exactly two empty, same-identity GraphQL snapshots after an
+authenticated post-edit ``pr-contract`` success, posts exactly one trusted
+content-addressed convergence receipt, then captures one fresh final snapshot
+for prepared-phase creation. A retry after the comment write reuses that exact
+durable receipt. Any API ambiguity, drift, regression, or timeout fails closed.
 """
 
 from __future__ import annotations
@@ -23,6 +24,7 @@ from app.dispatcher.verified_merge import (
     VERIFIED_MERGE_PROJECTION_CONVERGENCE_MARKER,
     build_verified_merge_projection_convergence,
     plan_projection_convergence_failure_restoration,
+    resolve_verified_merge_projection_convergence_receipt,
     resume_verified_merge_projection_convergence,
     validate_verified_merge_projection_observation,
 )
@@ -163,7 +165,7 @@ def _authenticate_unique_authority(
     repository: str,
     authority: Mapping[str, object],
     snapshot: Mapping[str, object],
-) -> None:
+) -> dict[str, object] | None:
     pull = snapshot.get("pull_request")
     if not isinstance(pull, Mapping):
         raise ValueError("GitHub pull request snapshot is incomplete")
@@ -172,13 +174,18 @@ def _authenticate_unique_authority(
         repository=repository,
         pr_number=cast(int, authority.get("pr_number")),
     )
-    if any(
-        isinstance(comment.get("body"), str)
+    trusted_convergence_attempt = any(
+        comment.get("author_association") in {"OWNER", "MEMBER", "COLLABORATOR"}
+        and isinstance(comment.get("body"), str)
         and VERIFIED_MERGE_PROJECTION_CONVERGENCE_MARKER
         in cast(str, comment["body"])
         for comment in comments
-    ):
-        raise ValueError("a convergence receipt already exists for this attempt")
+    )
+    durable_convergence = resolve_verified_merge_projection_convergence_receipt(
+        comments, authority_receipt=authority
+    )
+    if trusted_convergence_attempt and durable_convergence is None:
+        raise ValueError("trusted convergence receipt is malformed or conflicting")
     result = resume_verified_merge_projection_convergence(
         comments,
         pr={
@@ -199,6 +206,34 @@ def _authenticate_unique_authority(
     )
     if result is None or result.get("authority_receipt") != authority:
         raise ValueError("unique trusted verified-merge authority is unavailable")
+    return durable_convergence
+
+
+def _post_convergence_receipt(
+    gh_bin: str,
+    *,
+    repository: str,
+    pr_number: int,
+    comment_body: str,
+) -> dict[str, object]:
+    comment = _run_json(
+        [
+            gh_bin,
+            "api",
+            "--method",
+            "POST",
+            f"repos/{repository}/issues/{pr_number}/comments",
+            "-f",
+            f"body={comment_body}",
+        ]
+    )
+    if (
+        comment.get("author_association")
+        not in {"OWNER", "MEMBER", "COLLABORATOR"}
+        or comment.get("body") != comment_body
+    ):
+        raise ValueError("GitHub did not authenticate the convergence receipt comment")
+    return comment
 
 
 def _authenticate_pr_contract(
@@ -481,6 +516,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         empty_observations: list[dict[str, object]] = []
         projection_identity_sha256: str | None = None
         authority_authenticated = False
+        durable_convergence: dict[str, object] | None = None
         next_read_at = time.monotonic()
         while len(empty_observations) < 2:
             remaining = deadline - time.monotonic()
@@ -495,7 +531,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 pr_number=args.pr_number,
             )
             if not authority_authenticated:
-                _authenticate_unique_authority(
+                durable_convergence = _authenticate_unique_authority(
                     args.gh_bin,
                     repository=args.repository,
                     authority=authority,
@@ -516,6 +552,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                     raise ValueError("closing projection identity drifted")
                 projection_identity_sha256 = identity
                 empty_observations.append(snapshot)
+                if durable_convergence is not None:
+                    break
                 next_read_at = (
                     time.monotonic() + args.minimum_backoff_seconds
                 )
@@ -528,18 +566,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                 next_read_at = (
                     time.monotonic() + args.minimum_backoff_seconds
                 )
-        convergence = build_verified_merge_projection_convergence(
-            authority_receipt=authority,
-            pr_contract=pr_contract,
-            observations=empty_observations,
-            minimum_backoff_seconds=args.minimum_backoff_seconds,
-        )
         remaining = deadline - time.monotonic()
         if remaining < args.final_backoff_seconds:
             raise TimeoutError
         time.sleep(args.final_backoff_seconds)
-        # A separate final read is consumed by prepared-phase construction; it
-        # is not folded into the two-observation convergence authority.
+        # The final read is included in the durable receipt so crash recovery
+        # can authenticate and recompute the complete convergence proof.
         final_observation = _snapshot(
             args.gh_bin, repository=args.repository, pr_number=args.pr_number
         )
@@ -570,9 +602,44 @@ def main(argv: Sequence[str] | None = None) -> int:
             or final_observed_at <= quorum_observed_at
         ):
             raise ValueError("final closing projection is stale or drifted")
+        if durable_convergence is None:
+            convergence = build_verified_merge_projection_convergence(
+                authority_receipt=authority,
+                pr_contract=pr_contract,
+                observations=empty_observations,
+                final_projection_observation=final_observation,
+                minimum_backoff_seconds=args.minimum_backoff_seconds,
+            )
+            receipt_comment = convergence.get("convergence_receipt_comment")
+            if not isinstance(receipt_comment, str):
+                raise ValueError("convergence receipt comment is malformed")
+            _post_convergence_receipt(
+                args.gh_bin,
+                repository=args.repository,
+                pr_number=args.pr_number,
+                comment_body=receipt_comment,
+            )
+            durable_convergence = _authenticate_unique_authority(
+                args.gh_bin,
+                repository=args.repository,
+                authority=authority,
+                snapshot=final_observation,
+            )
+            if durable_convergence != convergence.get("convergence_receipt"):
+                raise ValueError("durable convergence receipt readback mismatched")
+        else:
+            convergence = {
+                "convergence_receipt": durable_convergence,
+                "convergence_receipt_comment": None,
+            }
+        durable_final_observation = durable_convergence.get(
+            "final_projection_observation"
+        )
+        if not isinstance(durable_final_observation, Mapping):
+            raise ValueError("durable final projection observation is malformed")
         success_payload: dict[str, object] = {
             **convergence,
-            "final_projection_observation": final_observation,
+            "final_projection_observation": dict(durable_final_observation),
             "status": "converged",
         }
         _write(args.output_json, success_payload)

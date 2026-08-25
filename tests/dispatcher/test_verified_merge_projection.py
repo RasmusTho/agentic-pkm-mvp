@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+from collections.abc import Mapping
 from pathlib import Path
 
 import pytest
@@ -175,6 +176,9 @@ def test_projection_convergence_requires_post_edit_pr_contract_and_empty_quorum(
         authority_receipt=authority,
         pr_contract=post_edit_pr_contract,
         observations=[first, second],
+        final_projection_observation=_observation(
+            neutralized_body, observed_at="2026-08-12T05:00:07Z"
+        ),
         minimum_backoff_seconds=1,
     )
 
@@ -210,6 +214,9 @@ def test_projection_convergence_allows_same_second_edit_and_workflow_creation() 
                 neutralized_body, observed_at="2026-08-12T05:00:06Z"
             ),
         ],
+        final_projection_observation=_observation(
+            neutralized_body, observed_at="2026-08-12T05:00:07Z"
+        ),
         minimum_backoff_seconds=1,
     )
 
@@ -226,7 +233,10 @@ def test_projection_convergence_allows_same_second_edit_and_workflow_creation() 
         ),
     )
     resolved = verified_merge.resolve_verified_merge_phase(
-        [_trusted_comment(str(prepared["phase_receipt_comment"]))],
+        [
+            _trusted_convergence_comment(result["convergence_receipt"]),
+            _trusted_comment(str(prepared["phase_receipt_comment"])),
+        ],
         authority_receipt=authority,
         pr=neutralized_pr,
     )
@@ -345,6 +355,9 @@ def test_projection_convergence_rejects_regression_drift_and_ambiguous_reads() -
                 authority_receipt=authority,
                 pr_contract=pr_contract,
                 observations=[admitted_first, rejected_second],
+                final_projection_observation=_observation(
+                    neutralized_body, observed_at="2026-08-12T05:00:07Z"
+                ),
                 minimum_backoff_seconds=1,
             )
 
@@ -364,6 +377,9 @@ def test_projection_convergence_rejects_regression_drift_and_ambiguous_reads() -
                 authority_receipt=authority,
                 pr_contract=stale_contract,
                 observations=[first, second],
+                final_projection_observation=_observation(
+                    neutralized_body, observed_at="2026-08-12T05:00:07Z"
+                ),
                 minimum_backoff_seconds=1,
             )
 
@@ -428,6 +444,9 @@ def _projection_fixture() -> tuple[
                 neutralized_body, observed_at="2026-08-12T05:00:06Z"
             ),
         ],
+        final_projection_observation=_observation(
+            neutralized_body, observed_at="2026-08-12T05:00:07Z"
+        ),
         minimum_backoff_seconds=1,
     )["convergence_receipt"]
     assert isinstance(convergence, dict)
@@ -516,6 +535,83 @@ def _trusted_comment(body: str) -> dict[str, object]:
         "created_at": "2026-08-12T05:00:00Z",
         "updated_at": "2026-08-12T05:00:00Z",
     }
+
+
+def _trusted_convergence_comment(
+    convergence: Mapping[str, object],
+    *,
+    association: str = "OWNER",
+) -> dict[str, object]:
+    return {
+        "author_association": association,
+        "body": (
+            "verified merge closing projection convergence:\n```json\n"
+            + json.dumps(convergence, sort_keys=True, separators=(",", ":"))
+            + "\n```"
+        ),
+        "created_at": "2026-08-12T05:00:06Z",
+        "updated_at": "2026-08-12T05:00:06Z",
+    }
+
+
+def test_phase_recovery_requires_authenticated_durable_convergence_receipt() -> None:
+    authority, neutralized_body, _, convergence = _projection_fixture()
+    neutralized_pr = {**_canonical_pr(), "body": neutralized_body}
+    prepared = verified_merge.build_verified_merge_phase(
+        authority_receipt=authority,
+        phase="prepared",
+        pr=neutralized_pr,
+        projection_convergence_receipt=convergence,
+        final_projection_observation=_observation(
+            neutralized_body, observed_at="2026-08-12T05:00:07Z"
+        ),
+    )["phase_receipt"]
+    prepared_comment = _trusted_comment(
+        "verified issue-set merge phase:\n```json\n"
+        + json.dumps(prepared, sort_keys=True, separators=(",", ":"))
+        + "\n```"
+    )
+
+    assert verified_merge.resolve_verified_merge_phase(
+        [prepared_comment],
+        authority_receipt=authority,
+        pr=neutralized_pr,
+    ) is None
+
+    untrusted = _trusted_convergence_comment(convergence, association="NONE")
+    assert verified_merge.resolve_verified_merge_phase(
+        [untrusted, prepared_comment],
+        authority_receipt=authority,
+        pr=neutralized_pr,
+    ) is None
+
+    forged = copy.deepcopy(convergence)
+    forged["observations"][0]["closing_issues"] = [3820]  # type: ignore[index]
+    forged_comment = _trusted_convergence_comment(forged)
+    assert verified_merge.resolve_verified_merge_phase(
+        [forged_comment, prepared_comment],
+        authority_receipt=authority,
+        pr=neutralized_pr,
+    ) is None
+
+    mismatched = copy.deepcopy(prepared)
+    mismatched["projection_convergence_sha256"] = "f" * 64
+    mismatched_comment = _trusted_comment(
+        "verified issue-set merge phase:\n```json\n"
+        + json.dumps(mismatched, sort_keys=True, separators=(",", ":"))
+        + "\n```"
+    )
+    durable_comment = _trusted_convergence_comment(convergence)
+    assert verified_merge.resolve_verified_merge_phase(
+        [durable_comment, mismatched_comment],
+        authority_receipt=authority,
+        pr=neutralized_pr,
+    ) is None
+    assert verified_merge.resolve_verified_merge_phase(
+        [durable_comment, prepared_comment],
+        authority_receipt=authority,
+        pr=neutralized_pr,
+    ) == prepared
 
 
 def test_restored_unique_authority_resumes_without_duplicate_receipt() -> None:
@@ -623,7 +719,7 @@ def test_projection_timeout_restores_body_without_delivery_effects() -> None:
         )
 
 
-def test_projection_convergence_cli_is_bounded_and_read_only() -> None:
+def test_projection_convergence_cli_is_bounded_and_posts_only_its_receipt() -> None:
     source = Path(await_projection.__file__).read_text(encoding="utf-8")
 
     assert "time.sleep" in source
@@ -631,13 +727,14 @@ def test_projection_convergence_cli_is_bounded_and_read_only() -> None:
     assert "filter=latest" in source
     assert "_authenticate_unique_authority" in source
     assert "_authenticate_pr_contract" in source
+    assert "_post_convergence_receipt" in source
+    assert '"POST"' in source
     assert "minimum-backoff-seconds\", type=int, default=60" in source
     for forbidden in (
         "gh pr edit",
         "gh pr merge",
         "gh issue close",
         "gh issue reopen",
-        "gh api --method POST",
         "gh api --method PATCH",
         "gh api --method DELETE",
     ):
@@ -740,7 +837,9 @@ def test_pr_contract_authentication_rejects_missing_or_duplicate_requested_id(
 def test_projection_convergence_cli_orders_quorum_and_final_read(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    authority, neutralized_body, pr_contract, _ = _projection_fixture()
+    authority, neutralized_body, pr_contract, durable_convergence = (
+        _projection_fixture()
+    )
     authority_path = tmp_path / "authority.json"
     pr_contract_path = tmp_path / "pr-contract.json"
     output_path = tmp_path / "convergence.json"
@@ -757,8 +856,20 @@ def test_projection_convergence_cli_orders_quorum_and_final_read(
     def authenticate_contract(*args: object, **kwargs: object) -> None:
         events.append("pr-contract")
 
-    def authenticate_authority(*args: object, **kwargs: object) -> None:
+    authority_reads = [None, None, durable_convergence]
+
+    def authenticate_authority(
+        *args: object, **kwargs: object
+    ) -> dict[str, object] | None:
         events.append("authority")
+        return authority_reads.pop(0)
+
+    def post_receipt(*args: object, **kwargs: object) -> dict[str, object]:
+        events.append("post")
+        return {
+            "author_association": "OWNER",
+            "body": kwargs["comment_body"],
+        }
 
     def snapshot(*args: object, **kwargs: object) -> dict[str, object]:
         events.append("snapshot")
@@ -773,6 +884,9 @@ def test_projection_convergence_cli_orders_quorum_and_final_read(
     )
     monkeypatch.setattr(
         await_projection, "_authenticate_unique_authority", authenticate_authority
+    )
+    monkeypatch.setattr(
+        await_projection, "_post_convergence_receipt", post_receipt
     )
     monkeypatch.setattr(await_projection, "_snapshot", snapshot)
     monkeypatch.setattr(await_projection.time, "monotonic", lambda: clock[0])
@@ -811,6 +925,8 @@ def test_projection_convergence_cli_orders_quorum_and_final_read(
         "snapshot",
         "authority",
         "pr-contract",
+        "post",
+        "authority",
     ]
     output = json.loads(output_path.read_text(encoding="utf-8"))
     assert output["status"] == "converged"
@@ -818,3 +934,92 @@ def test_projection_convergence_cli_orders_quorum_and_final_read(
     assert output["final_projection_observation"]["observed_at"] == (
         "2026-08-12T05:00:07Z"
     )
+    assert authority_reads == []
+
+
+def test_projection_convergence_cli_reuses_post_comment_crash_receipt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    authority, neutralized_body, pr_contract, durable_convergence = (
+        _projection_fixture()
+    )
+    authority_path = tmp_path / "authority.json"
+    pr_contract_path = tmp_path / "pr-contract.json"
+    output_path = tmp_path / "convergence.json"
+    authority_path.write_text(json.dumps(authority), encoding="utf-8")
+    pr_contract_path.write_text(json.dumps(pr_contract), encoding="utf-8")
+    snapshots = [
+        _observation(neutralized_body, observed_at="2026-08-12T05:00:07Z"),
+        _observation(neutralized_body, observed_at="2026-08-12T05:00:08Z"),
+    ]
+    clock = [0.0]
+    events: list[str] = []
+
+    monkeypatch.setattr(
+        await_projection,
+        "_authenticate_pr_contract",
+        lambda *args, **kwargs: events.append("pr-contract"),
+    )
+
+    def authenticate_authority(
+        *args: object, **kwargs: object
+    ) -> dict[str, object]:
+        events.append("authority")
+        return durable_convergence
+
+    monkeypatch.setattr(
+        await_projection, "_authenticate_unique_authority", authenticate_authority
+    )
+    monkeypatch.setattr(
+        await_projection,
+        "_post_convergence_receipt",
+        lambda *args, **kwargs: pytest.fail("durable receipt must not be duplicated"),
+    )
+    monkeypatch.setattr(
+        await_projection,
+        "_snapshot",
+        lambda *args, **kwargs: (events.append("snapshot"), snapshots.pop(0))[1],
+    )
+    monkeypatch.setattr(await_projection.time, "monotonic", lambda: clock[0])
+
+    def sleep(seconds: float) -> None:
+        events.append(f"sleep:{seconds:g}")
+        clock[0] += seconds
+
+    monkeypatch.setattr(await_projection.time, "sleep", sleep)
+
+    result = await_projection.main(
+        [
+            "--authority-json",
+            str(authority_path),
+            "--pr-contract-json",
+            str(pr_contract_path),
+            "--repository",
+            REPOSITORY,
+            "--pr-number",
+            "3822",
+            "--minimum-backoff-seconds",
+            "1",
+            "--final-backoff-seconds",
+            "1",
+            "--timeout-seconds",
+            "5",
+            "--output-json",
+            str(output_path),
+        ]
+    )
+
+    assert result == 0
+    assert snapshots == []
+    assert events == [
+        "pr-contract",
+        "snapshot",
+        "authority",
+        "sleep:1",
+        "snapshot",
+        "authority",
+        "pr-contract",
+    ]
+    output = json.loads(output_path.read_text(encoding="utf-8"))
+    assert output["convergence_receipt"] == durable_convergence
+    assert output["convergence_receipt_comment"] is None
