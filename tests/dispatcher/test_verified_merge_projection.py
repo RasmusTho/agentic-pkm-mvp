@@ -1276,6 +1276,71 @@ def test_projection_convergence_cli_fails_closed_on_bounded_gh_timeout(
     }
 
 
+def test_projection_convergence_timeout_uses_separate_restoration_deadline(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    authority, neutralized_body, pr_contract, _ = _projection_fixture()
+    authority_path = tmp_path / "authority.json"
+    pr_contract_path = tmp_path / "pr-contract.json"
+    canonical_body_path = tmp_path / "canonical-body.md"
+    output_path = tmp_path / "convergence.json"
+    authority_path.write_text(json.dumps(authority), encoding="utf-8")
+    pr_contract_path.write_text(json.dumps(pr_contract), encoding="utf-8")
+    canonical_body_path.write_text(_canonical_body(), encoding="utf-8")
+    clock = [0.0]
+
+    def consume_convergence_deadline(*args: object, **kwargs: object) -> None:
+        clock[0] = 5.0
+        raise subprocess.TimeoutExpired("gh", 5)
+
+    def restoration_snapshot(*args: object, **kwargs: object) -> dict[str, object]:
+        assert await_projection._SUBPROCESS_DEADLINE == (
+            clock[0] + await_projection._RESTORATION_SUBPROCESS_TIMEOUT_SECONDS
+        )
+        return {
+            "pull_request": {
+                "number": 3822,
+                "state": "OPEN",
+                "head_sha": HEAD,
+                "body": neutralized_body,
+            }
+        }
+
+    monkeypatch.setattr(
+        await_projection, "_authenticate_pr_contract", consume_convergence_deadline
+    )
+    monkeypatch.setattr(await_projection, "_snapshot", restoration_snapshot)
+    monkeypatch.setattr(await_projection.time, "monotonic", lambda: clock[0])
+
+    result = await_projection.main(
+        [
+            "--authority-json",
+            str(authority_path),
+            "--pr-contract-json",
+            str(pr_contract_path),
+            "--repository",
+            REPOSITORY,
+            "--pr-number",
+            "3822",
+            "--minimum-backoff-seconds",
+            "1",
+            "--final-backoff-seconds",
+            "1",
+            "--timeout-seconds",
+            "5",
+            "--canonical-body-file",
+            str(canonical_body_path),
+            "--output-json",
+            str(output_path),
+        ]
+    )
+
+    assert result == 3
+    output = json.loads(output_path.read_text(encoding="utf-8"))
+    assert output["restoration"]["restore_body"] == _canonical_body()
+    assert await_projection._SUBPROCESS_DEADLINE is None
+
+
 def test_projection_convergence_cli_rebuilds_after_body_edit_aba(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
