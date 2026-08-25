@@ -70,19 +70,20 @@ def move_task(
     note: str | None = None,
 ) -> TaskRecord:
     """Move a task to a lifecycle status. Emits task.moved event."""
+    next_status = canonical_status(status)
+    if next_status == "review":
+        return _move_task_to_review(store, task_id, actor, note, allow_handoff=True)
+
     task = store.get_task(task_id)
     if task is None:
         raise ValueError(f"Task {task_id} not found")
 
-    next_status = canonical_status(status)
     if next_status == "completed" and task.lease_id is not None:
         raise ValueError(
             f"Cannot move task {task_id} to completed while lease {task.lease_id} is active; "
             "use complete instead"
         )
     previous_status = task.status
-    if next_status == "review" and task.lease_id is not None:
-        return _handoff_leased_task_to_review(store, task_id, actor, note)
     task.status = next_status
     if next_status != "blocked":
         task.blocked_reason = None
@@ -108,13 +109,34 @@ def move_task(
     return task
 
 
-def _handoff_leased_task_to_review(
+def move_unclaimed_task_to_review(
+    store: SqliteStore,
+    task_id: str,
+    actor: str,
+    note: str | None = None,
+) -> TaskRecord:
+    """Move only an unclaimed task to Review under the dispatcher write lock.
+
+    This is the Signboard boundary: a projection client has no agent identity
+    authority and therefore never performs the claimed-holder handoff.
+    """
+    return _move_task_to_review(store, task_id, actor, note, allow_handoff=False)
+
+
+def _move_task_to_review(
     store: SqliteStore,
     task_id: str,
     actor: str,
     note: str | None,
+    *,
+    allow_handoff: bool,
 ) -> TaskRecord:
-    """Atomically release an owned lease while moving its task to review."""
+    """Atomically decide and persist the complete Review transition.
+
+    The task state is intentionally not inspected before ``BEGIN IMMEDIATE``:
+    otherwise a claim that arrives between a read and a generic upsert can be
+    silently overwritten by a stale Review move.
+    """
 
     now = _utc_now()
     with store._connect() as conn:
@@ -125,51 +147,63 @@ def _handoff_leased_task_to_review(
         if task is None:
             raise ValueError(f"Task {task_id} not found")
         lease_id = task["lease_id"]
+        release_event: EventRecord | None = None
         if lease_id is None:
-            raise ValueError(f"Task {task_id} has no active lease for review handoff")
-        lease = conn.execute(
-            "SELECT * FROM dispatcher_leases WHERE lease_id = ?", (lease_id,)
-        ).fetchone()
-        if lease is None or lease["released_at"] is not None:
-            raise ValueError(f"Task {task_id} has no active lease for review handoff")
-        if lease["holder"] != actor:
-            raise ValueError(
-                f"Cannot move task {task_id} to review: lease {lease_id} is held by {lease['holder']}, not {actor}"
+            moved = conn.execute(
+                """
+                UPDATE dispatcher_tasks
+                SET status = 'review', blocked_reason = NULL, updated_at = ?
+                WHERE task_id = ? AND lease_id IS NULL
+                """,
+                (now, task_id),
             )
+        else:
+            if not allow_handoff:
+                raise ValueError(
+                    "claimed task Review handoff requires the dispatcher lease holder path"
+                )
+            lease = conn.execute(
+                "SELECT * FROM dispatcher_leases WHERE lease_id = ?", (lease_id,)
+            ).fetchone()
+            if lease is None or lease["released_at"] is not None:
+                raise ValueError(f"Task {task_id} has no active lease for review handoff")
+            if lease["holder"] != actor:
+                raise ValueError(
+                    f"Cannot move task {task_id} to review: lease {lease_id} is held by {lease['holder']}, not {actor}"
+                )
 
-        released = conn.execute(
-            """
-            UPDATE dispatcher_leases
-            SET released_at = ?, release_reason = 'review_handoff'
-            WHERE lease_id = ? AND released_at IS NULL
-            """,
-            (now, lease_id),
-        )
-        if released.rowcount != 1:
-            raise ValueError(f"Cannot move task {task_id} to review: lease changed concurrently")
+            released = conn.execute(
+                """
+                UPDATE dispatcher_leases
+                SET released_at = ?, release_reason = 'review_handoff'
+                WHERE lease_id = ? AND released_at IS NULL
+                """,
+                (now, lease_id),
+            )
+            if released.rowcount != 1:
+                raise ValueError(f"Cannot move task {task_id} to review: lease changed concurrently")
 
-        moved = conn.execute(
-            """
-            UPDATE dispatcher_tasks
-            SET status = 'review', blocked_reason = NULL, lease_id = NULL,
-                claimed_by = NULL, last_heartbeat_at = NULL, lease_expires_at = NULL,
-                updated_at = ?
-            WHERE task_id = ? AND lease_id = ?
-            """,
-            (now, task_id, lease_id),
-        )
+            moved = conn.execute(
+                """
+                UPDATE dispatcher_tasks
+                SET status = 'review', blocked_reason = NULL, lease_id = NULL,
+                    claimed_by = NULL, last_heartbeat_at = NULL, lease_expires_at = NULL,
+                    updated_at = ?
+                WHERE task_id = ? AND lease_id = ?
+                """,
+                (now, task_id, lease_id),
+            )
+            release_event = EventRecord(
+                event_id=_make_event_id(),
+                timestamp=now,
+                task_id=task_id,
+                event_type="task.released",
+                actor=actor,
+                lease_id=lease_id,
+                payload={"reason": "review_handoff"},
+            )
         if moved.rowcount != 1:
             raise ValueError(f"Cannot move task {task_id} to review: task changed concurrently")
-
-        release_event = EventRecord(
-            event_id=_make_event_id(),
-            timestamp=now,
-            task_id=task_id,
-            event_type="task.released",
-            actor=actor,
-            lease_id=lease_id,
-            payload={"reason": "review_handoff"},
-        )
         move_payload: dict[str, str] = {"from_status": task["status"], "to_status": "review"}
         if note is not None:
             move_payload["note"] = note
@@ -181,7 +215,8 @@ def _handoff_leased_task_to_review(
             actor=actor,
             payload=move_payload,
         )
-        for event in (release_event, move_event):
+        events = (move_event,) if release_event is None else (release_event, move_event)
+        for event in events:
             conn.execute(
                 """
                 INSERT INTO dispatcher_events (
@@ -203,7 +238,8 @@ def _handoff_leased_task_to_review(
         conn.commit()
 
     if store._event_writer is not None:
-        store._event_writer.append(release_event)
+        if release_event is not None:
+            store._event_writer.append(release_event)
         store._event_writer.append(move_event)
     moved_task = store.get_task(task_id)
     assert moved_task is not None

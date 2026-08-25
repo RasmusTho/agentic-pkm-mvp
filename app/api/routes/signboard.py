@@ -24,7 +24,7 @@ from app.dispatcher.config import load_paths
 from app.dispatcher.events import JsonlEventWriter
 from app.dispatcher.models import TaskRecord
 from app.dispatcher.queue import block, complete
-from app.dispatcher.services import move_task
+from app.dispatcher.services import move_task, move_unclaimed_task_to_review
 from app.dispatcher.signboard import STATUS_COLUMNS, canonical_status, column_for_status
 from app.dispatcher.store import SqliteStore
 
@@ -155,7 +155,11 @@ def move_card(task_id: str, request: MoveRequest) -> dict[str, Any]:
                 store, task_id, next_status, request.actor, request.note
             )
         else:
-            task = move_task(store, task_id, next_status, request.actor, request.note)
+            task = (
+                move_unclaimed_task_to_review(store, task_id, request.actor, request.note)
+                if next_status == "review"
+                else move_task(store, task_id, next_status, request.actor, request.note)
+            )
     except ValueError as exc:
         status_code = 404 if "not found" in str(exc).lower() else 409
         raise HTTPException(status_code=status_code, detail=str(exc)) from exc
