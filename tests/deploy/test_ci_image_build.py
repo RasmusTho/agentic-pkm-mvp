@@ -37,7 +37,7 @@ def test_ci_builds_sha_tagged_image() -> None:
     assert "context: ." in workflow
     assert "file: Dockerfile" in workflow
     assert "tags: ${{ steps.build-identity.outputs.image }}" in workflow
-    assert "if: github.event_name == 'pull_request'" in workflow
+    assert "if: github.event_name != 'push' || github.ref != 'refs/heads/main'" in workflow
     assert "platforms: linux/amd64" in workflow
     assert "Publish the exact restore-proved BuilderOps images" in workflow
     assert 'docker push "${{ steps.images.outputs.control_plane }}"' in workflow
@@ -62,7 +62,7 @@ def test_built_image_version_reports_build_sha(monkeypatch) -> None:
     assert "get_runtime_version" in workflow
     assert 'version["git_sha"] == os.environ["VCS_REF"]' in workflow
     assert 'version["built_at"] == os.environ["BUILT_AT"]' in workflow
-    assert "if: github.event_name == 'pull_request'" in workflow
+    assert "if: github.event_name != 'push' || github.ref != 'refs/heads/main'" in workflow
     assert "if: github.event_name == 'push' && github.ref == 'refs/heads/main'" in workflow
     assert "docker buildx imagetools inspect" in workflow
     assert 'manifest_json="$(mktemp)"' in workflow
@@ -84,7 +84,7 @@ def test_single_image_artifact_per_commit() -> None:
 
     assert "strategy:" not in product_image_job
     assert product_image_job.count("uses: docker/build-push-action@") == 2
-    assert product_image_job.count("if: github.event_name == 'pull_request'") == 3
+    assert product_image_job.count("if: github.event_name != 'push' || github.ref != 'refs/heads/main'") == 3
     assert (
         product_image_job.count("if: github.event_name == 'push' && github.ref == 'refs/heads/main'")
         >= 1
