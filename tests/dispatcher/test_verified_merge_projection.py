@@ -1061,3 +1061,184 @@ def test_projection_convergence_cli_reuses_post_comment_crash_receipt(
     output = json.loads(output_path.read_text(encoding="utf-8"))
     assert output["convergence_receipt"] == durable_convergence
     assert output["convergence_receipt_comment"] is None
+
+
+def test_projection_convergence_cli_failure_stdout_redacts_restoration(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    authority, neutralized_body, pr_contract, _ = _projection_fixture()
+    authority_path = tmp_path / "authority.json"
+    pr_contract_path = tmp_path / "pr-contract.json"
+    canonical_body_path = tmp_path / "canonical-body.md"
+    output_path = tmp_path / "convergence.json"
+    authority_path.write_text(json.dumps(authority), encoding="utf-8")
+    pr_contract_path.write_text(json.dumps(pr_contract), encoding="utf-8")
+    canonical_body_path.write_text(_canonical_body(), encoding="utf-8")
+
+    monkeypatch.setattr(
+        await_projection,
+        "_authenticate_pr_contract",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            ValueError("forced convergence failure")
+        ),
+    )
+    monkeypatch.setattr(
+        await_projection,
+        "_snapshot",
+        lambda *args, **kwargs: {
+            "pull_request": {
+                "number": 3822,
+                "state": "OPEN",
+                "head_sha": HEAD,
+                "body": neutralized_body,
+            }
+        },
+    )
+
+    result = await_projection.main(
+        [
+            "--authority-json",
+            str(authority_path),
+            "--pr-contract-json",
+            str(pr_contract_path),
+            "--repository",
+            REPOSITORY,
+            "--pr-number",
+            "3822",
+            "--canonical-body-file",
+            str(canonical_body_path),
+            "--output-json",
+            str(output_path),
+        ]
+    )
+
+    assert result == 3
+    output = json.loads(output_path.read_text(encoding="utf-8"))
+    assert output["restoration"]["restore_body"] == _canonical_body()
+    assert json.loads(capsys.readouterr().out) == {"status": "failed_closed"}
+
+
+def test_projection_convergence_cli_rejects_stale_receipt_after_body_edit_aba(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    authority, neutralized_body, old_pr_contract, durable_convergence = (
+        _projection_fixture()
+    )
+    current_pr_contract = copy.deepcopy(old_pr_contract)
+    current_body_edit = {
+        "node_id": "UCE_kwDOQEip6s4825_aba",
+        "edited_at": "2026-08-12T05:10:00Z",
+        "editor_login": "RasmusTho",
+        "editor_association": "OWNER",
+    }
+    current_pr_contract.update(
+        {
+            "created_at": "2026-08-12T05:10:01Z",
+            "started_at": "2026-08-12T05:10:02Z",
+            "completed_at": "2026-08-12T05:10:03Z",
+            "body_edit": current_body_edit,
+        }
+    )
+    authority_path = tmp_path / "authority.json"
+    pr_contract_path = tmp_path / "pr-contract.json"
+    output_path = tmp_path / "convergence.json"
+    authority_path.write_text(json.dumps(authority), encoding="utf-8")
+    pr_contract_path.write_text(
+        json.dumps(current_pr_contract), encoding="utf-8"
+    )
+
+    def current_observation(observed_at: str) -> dict[str, object]:
+        observation = _observation(
+            neutralized_body, observed_at=observed_at
+        )
+        pull_request = observation["pull_request"]
+        assert isinstance(pull_request, dict)
+        pull_request["last_edited_at"] = current_body_edit["edited_at"]
+        pull_request["latest_body_edit"] = dict(current_body_edit)
+        return observation
+
+    snapshots = [
+        current_observation("2026-08-12T05:10:04Z"),
+        current_observation("2026-08-12T05:10:06Z"),
+        current_observation("2026-08-12T05:10:07Z"),
+    ]
+    clock = [0.0]
+    events: list[str] = []
+    monkeypatch.setattr(
+        await_projection,
+        "_authenticate_pr_contract",
+        lambda *args, **kwargs: events.append("pr-contract"),
+    )
+    monkeypatch.setattr(
+        await_projection,
+        "_authenticate_unique_authority",
+        lambda *args, **kwargs: (
+            events.append("authority"),
+            durable_convergence,
+        )[1],
+    )
+    monkeypatch.setattr(
+        await_projection,
+        "_post_convergence_receipt",
+        lambda *args, **kwargs: pytest.fail(
+            "stale durable receipt must not be duplicated"
+        ),
+    )
+    monkeypatch.setattr(
+        await_projection,
+        "_snapshot",
+        lambda *args, **kwargs: (
+            events.append("snapshot"),
+            snapshots.pop(0),
+        )[1],
+    )
+    monkeypatch.setattr(await_projection.time, "monotonic", lambda: clock[0])
+
+    def sleep(seconds: float) -> None:
+        events.append(f"sleep:{seconds:g}")
+        clock[0] += seconds
+
+    monkeypatch.setattr(await_projection.time, "sleep", sleep)
+
+    result = await_projection.main(
+        [
+            "--authority-json",
+            str(authority_path),
+            "--pr-contract-json",
+            str(pr_contract_path),
+            "--repository",
+            REPOSITORY,
+            "--pr-number",
+            "3822",
+            "--minimum-backoff-seconds",
+            "1",
+            "--final-backoff-seconds",
+            "1",
+            "--timeout-seconds",
+            "5",
+            "--output-json",
+            str(output_path),
+        ]
+    )
+
+    assert result == 3
+    assert snapshots == []
+    assert events == [
+        "pr-contract",
+        "snapshot",
+        "authority",
+        "sleep:1",
+        "snapshot",
+        "sleep:1",
+        "snapshot",
+        "authority",
+        "pr-contract",
+    ]
+    output = json.loads(output_path.read_text(encoding="utf-8"))
+    assert output == {
+        "failure": "failed_convergence",
+        "restoration_required": True,
+        "status": "failed_closed",
+    }
