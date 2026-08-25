@@ -331,7 +331,10 @@ def _current_branch_has_open_pr(repository: str) -> bool:
         check=False,
     )
     if branch.returncode != 0 or not _nonempty_string(branch.stdout):
-        raise ReviewBeforeCiGateError("new-PR publication cannot determine the current branch")
+        raise ReviewBeforeCiGateError(
+            "publication requires explicit --publication-mode new or existing; "
+            "cannot determine the current branch"
+        )
     owner, _, _ = repository.partition("/")
     payload = _github_api(
         "repos/"
@@ -353,7 +356,8 @@ def _github_repository_from_origin() -> str | None:
     if remote.returncode != 0:
         return None
     match = re.fullmatch(
-        r"(?:git@github\.com:|https://github\.com/)([^/\s]+/[^/\s]+?)(?:\.git)?\s*",
+        r"(?:git@github\.com:|(?:https?|ssh|git)://(?:git@)?github\.com/)"
+        r"([^/\s]+/[^/\s]+?)(?:\.git)?\s*",
         remote.stdout,
     )
     return match.group(1) if match else None
@@ -651,6 +655,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         evidence = workflow_risk_evidence_from_git(
             Path.cwd(), base=args.workflow_risk_base, head=args.workflow_risk_head
         )
+        inferred_risks = list(evidence.risks)
+        if inferred_risks:
+            if not args.workflow_review_receipt:
+                raise WorkflowReviewRiskError(
+                    "actual workflow risk requires --workflow-review-receipt bound to this Git diff"
+                )
+            validate_workflow_review_receipt(
+                Path(args.workflow_review_receipt).read_text(encoding="utf-8"), evidence
+            )
         if args.publication_mode == "existing":
             if not args.pr_scope_revalidation:
                 raise ReviewBeforeCiGateError(
@@ -673,7 +686,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             repository
         ):
             raise ReviewBeforeCiGateError(
-                "open PR publication requires explicit --publication-mode existing"
+                "publication requires explicit --publication-mode existing"
             )
         if args.pr_scope_revalidation:
             if (
@@ -714,15 +727,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         ) or (args.github_repository is not None and args.publication_mode != "new"):
             raise ReviewBeforeCiGateError(
                 "PR scope revalidation evidence cannot be omitted; pass --pr-scope-revalidation"
-            )
-        inferred_risks = list(evidence.risks)
-        if inferred_risks:
-            if not args.workflow_review_receipt:
-                raise WorkflowReviewRiskError(
-                    "actual workflow risk requires --workflow-review-receipt bound to this Git diff"
-                )
-            validate_workflow_review_receipt(
-                Path(args.workflow_review_receipt).read_text(encoding="utf-8"), evidence
             )
         result = evaluate_review_before_ci_gate(
             lane=args.lane,

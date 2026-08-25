@@ -12,6 +12,7 @@ import pytest
 
 from scripts.review_before_ci_gate import (
     ReviewBeforeCiGateError,
+    _github_repository_from_origin,
     authenticated_pr_scope_revalidation_history,
     evaluate_review_before_ci_gate,
     validate_pr_scope_revalidation,
@@ -596,7 +597,27 @@ def test_open_pr_cannot_omit_publication_mode() -> None:
     )
 
     assert result.returncode == 2
-    assert "requires explicit --publication-mode existing" in result.stderr
+    assert "requires explicit --publication-mode" in result.stderr
+
+
+@pytest.mark.parametrize(
+    "origin",
+    (
+        "git@github.com:octo/repo.git",
+        "https://github.com/octo/repo.git",
+        "ssh://git@github.com/octo/repo.git",
+        "git://github.com/octo/repo.git",
+    ),
+)
+def test_github_origin_parser_authenticates_supported_transport_forms(
+    monkeypatch: pytest.MonkeyPatch, origin: str
+) -> None:
+    monkeypatch.setattr(
+        "scripts.review_before_ci_gate.subprocess.run",
+        lambda *args, **kwargs: subprocess.CompletedProcess(args[0], 0, f"{origin}\n", ""),
+    )
+
+    assert _github_repository_from_origin() == "octo/repo"
 
 
 def test_new_publication_mode_requires_repository_identity() -> None:
@@ -781,8 +802,8 @@ def test_cli_fails_until_review_gate_is_complete() -> None:
 
     assert blocked.returncode == 2
     assert allowed.returncode == 2
-    assert "requires explicit --publication-mode existing" in blocked.stderr
-    assert "requires explicit --publication-mode existing" in allowed.stderr
+    assert "requires explicit --publication-mode" in blocked.stderr
+    assert "requires explicit --publication-mode" in allowed.stderr
 
 
 def test_publish_pr_skill_runs_review_gate_before_push() -> None:
