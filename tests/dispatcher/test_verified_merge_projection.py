@@ -1306,6 +1306,15 @@ def test_phase_recovery_binds_same_second_aba_replacement_by_receipt_digest() ->
         )["convergence_receipt"]
     )
     neutralized_pr = {**_canonical_pr(), "body": neutralized_body}
+    stale_prepared = verified_merge.build_verified_merge_phase(
+        authority_receipt=authority,
+        phase="prepared",
+        pr=neutralized_pr,
+        projection_convergence_receipt=stale_convergence,
+        final_projection_observation=_observation(
+            neutralized_body, observed_at="2026-08-12T05:00:07Z"
+        ),
+    )
     prepared = verified_merge.build_verified_merge_phase(
         authority_receipt=authority,
         phase="prepared",
@@ -1314,12 +1323,21 @@ def test_phase_recovery_binds_same_second_aba_replacement_by_receipt_digest() ->
         final_projection_observation=current_observation("2026-08-12T05:00:07Z"),
     )
 
+    comments = [
+        _trusted_convergence_comment(stale_convergence),
+        _trusted_convergence_comment(replacement_convergence),
+        _trusted_comment(str(stale_prepared["phase_receipt_comment"])),
+        _trusted_comment(str(prepared["phase_receipt_comment"])),
+    ]
+
     assert verified_merge.resolve_verified_merge_phase(
-        [
-            _trusted_convergence_comment(stale_convergence),
-            _trusted_convergence_comment(replacement_convergence),
-            _trusted_comment(str(prepared["phase_receipt_comment"])),
-        ],
+        comments,
         authority_receipt=authority,
         pr=neutralized_pr,
+    ) is None
+    assert verified_merge.resolve_verified_merge_phase(
+        comments,
+        authority_receipt=authority,
+        pr=neutralized_pr,
+        current_body_edit=current_body_edit,
     ) == prepared["phase_receipt"]
