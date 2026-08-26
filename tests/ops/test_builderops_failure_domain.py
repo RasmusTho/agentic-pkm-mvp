@@ -2,8 +2,10 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 import importlib.util
+import os
 import plistlib
 from pathlib import Path
+import subprocess
 
 import pytest
 
@@ -63,6 +65,47 @@ def test_only_structural_recovery_misconfiguration_blocks_readiness() -> None:
     for state in ("healthy", "lagging", "stalled", "unknown"):
         assert RecoveryStatus(state=state, **common).readiness_blocking is False
     assert RecoveryStatus(state="misconfigured", **common).readiness_blocking is True
+
+
+def test_local_control_plane_wal_growth_or_archive_drift_is_loud(tmp_path: Path) -> None:
+    root = Path(__file__).resolve().parents[2]
+    guard = root / "scripts/builderops/local_wal_guard.sh"
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    for command, source in {
+        "psql": "#!/bin/sh\ncase \"$*\" in\n  *archive_mode*) printf '%s\\n' \"${FAKE_ARCHIVE_MODE:-off}\" ;;\n  *archive_command*) printf '%s\\n' \"${FAKE_ARCHIVE_COMMAND:-}\" ;;\nesac\n",
+        "du": "#!/bin/sh\nprintf '%s %s\\n' \"${FAKE_WAL_BYTES:-0}\" \"$3\"\n",
+        "df": "#!/bin/sh\nprintf 'Filesystem 1024-blocks Used Available Capacity Mounted on\\n/dev/test 100 10 90 %s%% /data\\n' \"${FAKE_DISK_USED_PERCENT:-10}\"\n",
+    }.items():
+        path = fake_bin / command
+        path.write_text(source, encoding="utf-8")
+        path.chmod(0o755)
+
+    env = {
+        **os.environ,
+        "PATH": f"{fake_bin}:{os.environ['PATH']}",
+        "PGDATA": str(tmp_path / "pgdata"),
+        "POSTGRES_USER": "builderops_owner",
+        "POSTGRES_DB": "builderops",
+        "BUILDEROPS_LOCAL_WAL_MAX_BYTES": "100",
+        "BUILDEROPS_LOCAL_DISK_MAX_USED_PERCENT": "85",
+    }
+    (tmp_path / "pgdata/pg_wal").mkdir(parents=True)
+
+    healthy = subprocess.run([str(guard)], env=env, text=True, capture_output=True, check=False)
+    assert healthy.returncode == 0
+
+    for drift in (
+        {"FAKE_ARCHIVE_MODE": "on"},
+        {"FAKE_ARCHIVE_COMMAND": "wal-g wal-push %p"},
+        {"FAKE_WAL_BYTES": "101"},
+        {"FAKE_DISK_USED_PERCENT": "85"},
+    ):
+        result = subprocess.run(
+            [str(guard)], env={**env, **drift}, text=True, capture_output=True, check=False
+        )
+        assert result.returncode != 0
+        assert "local BuilderOps" in result.stderr
 
 
 def test_wal_target_must_match_validated_recovery_identity(tmp_path: Path) -> None:

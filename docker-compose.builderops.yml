@@ -18,10 +18,6 @@ services:
       POSTGRES_DB: builderops
       POSTGRES_USER: builderops_owner
       POSTGRES_PASSWORD_FILE: /run/secrets/builderops_database_owner_password
-      WALG_S3_PREFIX: ${BUILDEROPS_WALG_S3_PREFIX:?Independent WAL archive target is required}
-      AWS_ACCESS_KEY_ID_FILE: /run/secrets/builderops_wal_access_key_id
-      AWS_SECRET_ACCESS_KEY_FILE: /run/secrets/builderops_wal_secret_access_key
-      WALG_LIBSODIUM_KEY_FILE: /run/secrets/builderops_wal_encryption_key
       BUILDEROPS_DATABASE_APP_PASSWORD_FILE: /run/secrets/builderops_database_app_password
     command:
       - postgres
@@ -30,21 +26,18 @@ services:
     volumes:
       - builderops-pgdata:/var/lib/postgresql/data
       - ./config/builderops/postgresql.conf:/etc/postgresql/builderops-postgresql.conf:ro
-      - ./scripts/builderops/wal_archive.sh:/app/scripts/builderops/wal_archive.sh:ro
+      - ./scripts/builderops/local_wal_guard.sh:/app/scripts/builderops/local_wal_guard.sh:ro
       - ./scripts/builderops/init_roles.sh:/docker-entrypoint-initdb.d/10-builderops-roles.sh:ro
     secrets:
       - builderops_database_owner_password
       - builderops_database_app_password
-      - builderops_wal_access_key_id
-      - builderops_wal_secret_access_key
-      - builderops_wal_encryption_key
-    networks: [builderops-internal, builderops-recovery-egress]
+    networks: [builderops-internal]
     healthcheck:
       # Probing 127.0.0.1 would pass even under the buggy listen_addresses=localhost
       # default, since loopback is reachable regardless. Probe the container's own
       # builderops-internal network address so migrate/api/worker only see healthy
       # once the server actually accepts connections from other containers.
-      test: ["CMD-SHELL", "pg_isready -h \"$(hostname -i)\" -U builderops_owner -d builderops"]
+      test: ["CMD-SHELL", "/app/scripts/builderops/local_wal_guard.sh && pg_isready -h \"$(hostname -i)\" -U builderops_owner -d builderops"]
       interval: 5s
       timeout: 3s
       retries: 30
@@ -107,43 +100,10 @@ services:
       timeout: 5s
       retries: 6
 
-  backup:
-    image: ${BUILDEROPS_POSTGRES_IMAGE_REPOSITORY:?BuilderOps PostgreSQL image repository is required}@${BUILDEROPS_POSTGRES_IMAGE_DIGEST:?BuilderOps PostgreSQL immutable image digest is required}
-    profiles: [ops]
-    entrypoint: ["/bin/bash", "/app/scripts/builderops/backup.sh"]
-    restart: "no"
-    environment:
-      PGDATA: /var/lib/postgresql/data
-      PGHOST: db
-      PGDATABASE: builderops
-      PGUSER: builderops_owner
-      PGPASSWORD_FILE: /run/secrets/builderops_database_owner_password
-      BUILDEROPS_BACKUP_RETAIN_FULL: ${BUILDEROPS_BACKUP_RETAIN_FULL:-14}
-      WALG_S3_PREFIX: ${BUILDEROPS_WALG_S3_PREFIX:?Independent WAL archive target is required}
-      AWS_ACCESS_KEY_ID_FILE: /run/secrets/builderops_wal_access_key_id
-      AWS_SECRET_ACCESS_KEY_FILE: /run/secrets/builderops_wal_secret_access_key
-      WALG_LIBSODIUM_KEY_FILE: /run/secrets/builderops_wal_encryption_key
-    volumes:
-      - builderops-pgdata:/var/lib/postgresql/data:ro
-      - ./scripts/builderops/backup.sh:/app/scripts/builderops/backup.sh:ro
-    secrets:
-      - builderops_database_owner_password
-      - builderops_wal_access_key_id
-      - builderops_wal_secret_access_key
-      - builderops_wal_encryption_key
-    networks: [builderops-internal, builderops-recovery-egress]
-    depends_on:
-      db:
-        condition: service_healthy
-
 networks:
   builderops-internal:
     name: builderops-control-plane-internal
     internal: true
-  # Only recovery producers receive outbound connectivity to the independent
-  # object store. API, migration, and worker traffic remains internal-only.
-  builderops-recovery-egress:
-    name: builderops-control-plane-recovery-egress
 
 volumes:
   builderops-pgdata:
@@ -167,9 +127,3 @@ secrets:
     file: ${BUILDEROPS_SECRET_ROOT:?BuilderOps host secret root is required}/recovery-target.json
   builderops_probe_token:
     file: ${BUILDEROPS_SECRET_ROOT:?BuilderOps host secret root is required}/probe-token
-  builderops_wal_access_key_id:
-    file: ${BUILDEROPS_SECRET_ROOT:?BuilderOps host secret root is required}/wal-access-key-id
-  builderops_wal_secret_access_key:
-    file: ${BUILDEROPS_SECRET_ROOT:?BuilderOps host secret root is required}/wal-secret-access-key
-  builderops_wal_encryption_key:
-    file: ${BUILDEROPS_SECRET_ROOT:?BuilderOps host secret root is required}/wal-encryption-key
