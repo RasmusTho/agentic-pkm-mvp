@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import base64
+import hashlib
+import hmac
 import json
 import threading
 from dataclasses import replace
@@ -10,7 +13,9 @@ import yaml
 
 from app.events.models import new_event
 from app.instance import mvr05_cutover as mvr05_cutover_module
+from app.instance import ownership_ledger as ownership_ledger_module
 from app.instance import runtime as runtime_module
+from app.instance.filesystem_identity import resolve_filesystem_root_identity
 from app.instance.local_operator_principal import (
     LocalOperatorPrincipalStore,
     PROVENANCE_FRESH_BOOTSTRAP,
@@ -20,7 +25,12 @@ from app.instance.mvr05_cutover import (
     Mvr05CutoverError,
     discover_db_producer_fence,
 )
-from app.instance.ownership_ledger import LedgerError, LedgerKeyError, OwnershipLedger
+from app.instance.ownership_ledger import (
+    LegacyOwner,
+    LedgerError,
+    LedgerKeyError,
+    OwnershipLedger,
+)
 from app.instance.vault_registry import VaultRegistration, VaultRegistryStore
 from app.services import outbox
 from tests.helpers.instance_storage_capability import STORAGE_MUTATION_CAPABILITY
@@ -249,20 +259,207 @@ def test_recover_missing_active_uses_authenticated_key_for_collision_check(tmp_p
     assert ledger.require_existing().leases["binding-recovered"] == recovered
 
 
-def test_v1_ledger_requires_explicit_scratch_rebootstrap(tmp_path) -> None:
+def _rewrite_ledger_as_authenticated_v1(ledger: OwnershipLedger, root: Path) -> bytes:
+    key_payload = json.loads(ledger.key_path.read_text(encoding="utf-8"))
+    secret = base64.b64decode(key_payload["secret"], validate=True)
+    legacy_ancestors: list[str] = []
+    for ancestor in root.resolve(strict=False).parents:
+        identity = resolve_filesystem_root_identity(ancestor)
+        material = (
+            f"inode:{identity.device}:{identity.inode}"
+            if identity.materialized
+            else f"path:{identity.canonical_path}"
+        )
+        legacy_ancestors.append(
+            hmac.new(secret, material.encode("utf-8"), hashlib.sha256).hexdigest()
+        )
+    payload = json.loads(ledger.path.read_text(encoding="utf-8"))
+    payload["schema"] = ownership_ledger_module.LEGACY_LEDGER_SCHEMA
+    payload["leases"]["binding-existing"]["ancestor_fingerprints"] = legacy_ancestors
+    before = (json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n").encode()
+    ledger.path.write_bytes(before)
+    ledger.path.chmod(0o600)
+    return before
+
+
+def test_existing_ancestor_fingerprints_converge_before_new_representation_is_required(
+    tmp_path,
+) -> None:
     ownership_root = tmp_path / "host-global"
     ownership_root.mkdir(mode=0o700)
+    root = tmp_path / "existing-vault"
+    root.mkdir()
     ledger = OwnershipLedger(ownership_root)
-    ledger.load()
-    payload = json.loads(ledger.path.read_text(encoding="utf-8"))
-    payload["schema"] = "agentic-pkm.host-ownership-ledger.v1"
-    ledger.path.write_text(json.dumps(payload), encoding="utf-8")
+    ledger.reserve(
+        channel_id="dev",
+        vault_binding_id="binding-existing",
+        root=root,
+        _capability=STORAGE_MUTATION_CAPABILITY,
+    )
+    original = ledger.activate(
+        "binding-existing",
+        _capability=STORAGE_MUTATION_CAPABILITY,
+    )
+    legacy_bytes = _rewrite_ledger_as_authenticated_v1(ledger, root)
+
+    migrated = ledger.require_registry_consistency(
+        channel_id="dev",
+        registrations={"binding-existing": root},
+        tombstones={},
+        transfer_lineage=(),
+        global_live_owners=(LegacyOwner("dev", "binding-existing", root),),
+    )
+
+    assert migrated.schema == ownership_ledger_module.LEDGER_SCHEMA
+    assert migrated.leases["binding-existing"].channel_id == original.channel_id
+    assert migrated.leases["binding-existing"].root_fingerprint == original.root_fingerprint
+    assert migrated.leases["binding-existing"].sealed_root == original.sealed_root
+    assert (
+        migrated.leases["binding-existing"].ancestor_fingerprints == original.ancestor_fingerprints
+    )
+    assert ledger.path.read_bytes() != legacy_bytes
+
+
+def test_malformed_or_unknown_ledger_state_refuses_without_reset(tmp_path) -> None:
+    def write_private_json(path: Path, payload: object) -> bytes:
+        path.write_text(json.dumps(payload), encoding="utf-8")
+        path.chmod(0o600)
+        return path.read_bytes()
+
+    def prepared_ledger(case: str) -> tuple[OwnershipLedger, bytes, bytes]:
+        ownership_root = tmp_path / case / "host-global"
+        ownership_root.mkdir(parents=True, mode=0o700)
+        root = tmp_path / case / "vault"
+        root.mkdir()
+        ledger = OwnershipLedger(ownership_root)
+        ledger.reserve(
+            channel_id="dev",
+            vault_binding_id="binding-existing",
+            root=root,
+            _capability=STORAGE_MUTATION_CAPABILITY,
+        )
+        ledger.activate(
+            "binding-existing",
+            _capability=STORAGE_MUTATION_CAPABILITY,
+        )
+        _rewrite_ledger_as_authenticated_v1(ledger, root)
+        return ledger, ledger.path.read_bytes(), ledger.key_path.read_bytes()
+
+    malformed, _, malformed_key = prepared_ledger("malformed")
+    malformed.path.write_bytes(b"{not-json\n")
+    malformed_before = malformed.path.read_bytes()
+    with pytest.raises(LedgerError, match="ownership ledger is invalid"):
+        malformed.require_existing()
+    assert malformed.path.read_bytes() == malformed_before
+    assert malformed.key_path.read_bytes() == malformed_key
+
+    unknown, unknown_before, unknown_key = prepared_ledger("unknown")
+    unknown_payload = json.loads(unknown_before)
+    unknown_payload["schema"] = "agentic-pkm.host-ownership-ledger.v999"
+    unknown.path.write_text(json.dumps(unknown_payload), encoding="utf-8")
+    unknown.path.chmod(0o600)
+    unknown_before = unknown.path.read_bytes()
+    with pytest.raises(LedgerError, match="ownership ledger is invalid"):
+        unknown.require_existing()
+    assert unknown.path.read_bytes() == unknown_before
+    assert unknown.key_path.read_bytes() == unknown_key
+
+    for case, field, value in (
+        ("boolean-generation", "generation", True),
+        ("string-bootstrap-marker", "legacy_bootstrap_complete", "false"),
+    ):
+        malformed_scalar, malformed_scalar_before, malformed_scalar_key = prepared_ledger(case)
+        malformed_scalar_payload = json.loads(malformed_scalar_before)
+        malformed_scalar_payload[field] = value
+        malformed_scalar_before = write_private_json(
+            malformed_scalar.path,
+            malformed_scalar_payload,
+        )
+        with pytest.raises(LedgerError, match="ownership ledger is invalid"):
+            malformed_scalar.require_existing()
+        assert malformed_scalar.path.read_bytes() == malformed_scalar_before
+        assert malformed_scalar.key_path.read_bytes() == malformed_scalar_key
+
+    malformed_key, malformed_key_ledger, malformed_key_before = prepared_ledger(
+        "malformed-key"
+    )
+    malformed_key_payload = json.loads(malformed_key_before)
+    malformed_key_payload["generation"] = True
+    malformed_key_before = write_private_json(
+        malformed_key.key_path,
+        malformed_key_payload,
+    )
+    with pytest.raises(LedgerKeyError, match="protected ownership key is invalid"):
+        malformed_key.require_existing()
+    assert malformed_key.path.read_bytes() == malformed_key_ledger
+    assert malformed_key.key_path.read_bytes() == malformed_key_before
+
+    malformed_journal, malformed_journal_ledger, malformed_journal_key = prepared_ledger(
+        "malformed-journal"
+    )
+    journal_payload = {
+        "schema": ownership_ledger_module.ROTATION_SCHEMA,
+        "key": json.loads(malformed_journal_key),
+        "ledger": json.loads(malformed_journal_ledger),
+    }
+    journal_payload["key"]["generation"] = True
+    journal_payload["ledger"]["generation"] = True
+    journal_before = write_private_json(
+        malformed_journal.rotation_path,
+        journal_payload,
+    )
+    with pytest.raises(LedgerKeyError, match="ownership key rotation journal is invalid"):
+        malformed_journal.require_existing()
+    assert malformed_journal.path.read_bytes() == malformed_journal_ledger
+    assert malformed_journal.key_path.read_bytes() == malformed_journal_key
+    assert malformed_journal.rotation_path.read_bytes() == journal_before
+
+    unknown_state, unknown_state_before, unknown_state_key = prepared_ledger("unknown-state")
+    unknown_state_payload = json.loads(unknown_state_before)
+    unknown_state_payload["leases"]["binding-existing"]["state"] = "foreign"
+    unknown_state.path.write_text(json.dumps(unknown_state_payload), encoding="utf-8")
+    unknown_state.path.chmod(0o600)
+    unknown_state_before = unknown_state.path.read_bytes()
+    with pytest.raises(
+        LedgerError,
+        match="legacy ownership ledger contains unauthenticated identity state",
+    ):
+        unknown_state.require_existing()
+    assert unknown_state.path.read_bytes() == unknown_state_before
+    assert unknown_state.key_path.read_bytes() == unknown_state_key
+
+    malformed_authority, malformed_authority_before, malformed_authority_key = prepared_ledger(
+        "malformed-authority"
+    )
+    malformed_authority_payload = json.loads(malformed_authority_before)
+    malformed_authority_payload["leases"]["binding-existing"]["channel_id"] = 7
+    malformed_authority.path.write_text(json.dumps(malformed_authority_payload), encoding="utf-8")
+    malformed_authority.path.chmod(0o600)
+    malformed_authority_before = malformed_authority.path.read_bytes()
+    with pytest.raises(
+        LedgerError,
+        match="legacy ownership ledger contains unauthenticated identity state",
+    ):
+        malformed_authority.require_existing()
+    assert malformed_authority.path.read_bytes() == malformed_authority_before
+    assert malformed_authority.key_path.read_bytes() == malformed_authority_key
+
+    unauthenticated, unauthenticated_before, unauthenticated_key = prepared_ledger(
+        "unauthenticated"
+    )
+    unauthenticated_payload = json.loads(unauthenticated_before)
+    unauthenticated_payload["leases"]["binding-existing"]["sealed_root"] = "tampered"
+    unauthenticated.path.write_text(json.dumps(unauthenticated_payload), encoding="utf-8")
+    unauthenticated.path.chmod(0o600)
+    unauthenticated_before = unauthenticated.path.read_bytes()
 
     with pytest.raises(
         LedgerError,
-        match="ownership ledger format v1 requires explicit scratch/rebootstrap reset",
+        match="legacy ownership ledger contains unauthenticated identity state",
     ):
-        ledger.require_existing()
+        unauthenticated.require_existing()
+    assert unauthenticated.path.read_bytes() == unauthenticated_before
+    assert unauthenticated.key_path.read_bytes() == unauthenticated_key
 
 
 @pytest.mark.parametrize("missing_artifact", ["ledger", "key"])

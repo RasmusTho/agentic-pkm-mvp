@@ -10,7 +10,7 @@ services:
   # The deployment fence validates drained legacy-owner roots from inside the
   # instance-state-init container. On Linux hosts the selected vault is an
   # absolute host path outside /Users and /Volumes, so expose that same path
-  # to the fence controller as well as to the runtime consumers.
+  # read-only to the fence controller and writable to the runtime consumers.
   instance-state-init:
     volumes:
       - type: bind
@@ -23,7 +23,7 @@ services:
       - type: bind
         source: ${DEPLOY_VAULT_CONTAINER_ROOT:?DEPLOY_VAULT_CONTAINER_ROOT must be set for a full-host vault binding}
         target: ${DEPLOY_VAULT_CONTAINER_ROOT:?DEPLOY_VAULT_CONTAINER_ROOT must be set for a full-host vault binding}
-        read_only: true
+        read_only: false
     environment:
       VAULT_ROOT: ${DEPLOY_VAULT_CONTAINER_ROOT:?DEPLOY_VAULT_CONTAINER_ROOT must be set for a full-host vault binding}
       VAULT_ROOT_DEV: ${DEPLOY_VAULT_CONTAINER_ROOT:?DEPLOY_VAULT_CONTAINER_ROOT must be set for a full-host vault binding}
@@ -35,7 +35,7 @@ services:
       - type: bind
         source: ${DEPLOY_VAULT_CONTAINER_ROOT:?DEPLOY_VAULT_CONTAINER_ROOT must be set for a full-host vault binding}
         target: ${DEPLOY_VAULT_CONTAINER_ROOT:?DEPLOY_VAULT_CONTAINER_ROOT must be set for a full-host vault binding}
-        read_only: true
+        read_only: false
     environment:
       VAULT_ROOT: ${DEPLOY_VAULT_CONTAINER_ROOT:?DEPLOY_VAULT_CONTAINER_ROOT must be set for a full-host vault binding}
       VAULT_ROOT_DEV: ${DEPLOY_VAULT_CONTAINER_ROOT:?DEPLOY_VAULT_CONTAINER_ROOT must be set for a full-host vault binding}
@@ -47,7 +47,7 @@ services:
       - type: bind
         source: ${DEPLOY_VAULT_CONTAINER_ROOT:?DEPLOY_VAULT_CONTAINER_ROOT must be set for a full-host vault binding}
         target: ${DEPLOY_VAULT_CONTAINER_ROOT:?DEPLOY_VAULT_CONTAINER_ROOT must be set for a full-host vault binding}
-        read_only: true
+        read_only: false
     environment:
       VAULT_ROOT: ${DEPLOY_VAULT_CONTAINER_ROOT:?DEPLOY_VAULT_CONTAINER_ROOT must be set for a full-host vault binding}
       VAULT_ROOT_DEV: ${DEPLOY_VAULT_CONTAINER_ROOT:?DEPLOY_VAULT_CONTAINER_ROOT must be set for a full-host vault binding}
