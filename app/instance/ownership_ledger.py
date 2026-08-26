@@ -29,6 +29,7 @@ LEGACY_LEDGER_SCHEMA = "agentic-pkm.host-ownership-ledger.v1"
 LEDGER_SCHEMA = "agentic-pkm.host-ownership-ledger.v2"
 KEY_SCHEMA = "agentic-pkm.host-ownership-key.v1"
 ROTATION_SCHEMA = "agentic-pkm.host-ownership-key-rotation.v1"
+LEGACY_PORTABLE_ROOTS = (Path("/Users"), Path("/Volumes"))
 
 
 class LedgerError(RuntimeError):
@@ -416,12 +417,34 @@ class OwnershipLedger:
         """Authenticate one channel registry and the complete host-global ledger."""
 
         self._assert_existing_artifacts()
-        with self._locked():
+        with self._locked(recover_rotation=False):
             key = self._load_or_create_key_locked(allow_create=False)
-            current = self._load_or_create_ledger_locked(key, allow_create=False)
+            current = self._load_or_create_ledger_locked(
+                key, allow_create=False, allow_legacy=True
+            )
+            needs_legacy_migration = current.schema == LEGACY_LEDGER_SCHEMA
+            if needs_legacy_migration and self.rotation_path.exists():
+                self._assert_legacy_rotation_journal_matches_locked(current, key)
             if current.transfer is not None:
                 raise LedgerError(
                     "registry/ledger consistency cannot commit an in-progress transfer"
+                )
+
+            if needs_legacy_migration:
+                self._authenticate_legacy_authority(
+                    current=current,
+                    key=key,
+                    channel_id=channel_id,
+                    registrations=registrations,
+                    tombstones=tombstones,
+                    transfer_lineage=transfer_lineage,
+                    global_live_owners=global_live_owners,
+                    require_materialized_roots=require_materialized_roots,
+                )
+                current = self._migrate_legacy_ledger(
+                    current,
+                    key,
+                    require_complete_legacy_chain=False,
                 )
 
             ledger_live_owners: set[tuple[str, str]] = set()
@@ -668,6 +691,10 @@ class OwnershipLedger:
                     raise LedgerError(
                         "registry/ledger consistency found an incompatible lineage fingerprint"
                     )
+            if needs_legacy_migration:
+                self._write_ledger_locked(current, key)
+                self.rotation_path.unlink(missing_ok=True)
+                _fsync_directory(self.root)
             return current
 
     def recover_or_require_active(
@@ -988,9 +1015,21 @@ class OwnershipLedger:
             raise LedgerCollisionError("legacy owner inventory must be complete and writers drained")
         with self._locked():
             key = self._load_or_create_key_locked()
-            current = self._load_or_create_ledger_locked(key)
+            current = self._load_or_create_ledger_locked(key, allow_legacy=True)
             if current.legacy_bootstrap_complete:
+                if current.schema == LEGACY_LEDGER_SCHEMA:
+                    raise LedgerError(
+                        "established legacy ownership ledger requires registry authority"
+                    )
                 return current
+            if (
+                current.schema == LEGACY_LEDGER_SCHEMA
+                and (current.leases or current.tombstones or current.transfer is not None
+                     or current.transfer_lineage)
+            ):
+                raise LedgerError(
+                    "legacy ownership ledger with existing authority requires registry authority"
+                )
             staged = current
             leases = dict(current.leases)
             for owner in owners:
@@ -1006,7 +1045,11 @@ class OwnershipLedger:
                 )
                 leases[candidate.vault_binding_id] = candidate
                 staged = self._replace(staged, leases=leases)
-            staged = self._replace(staged, legacy_bootstrap_complete=True)
+            staged = self._replace(
+                staged,
+                schema=LEDGER_SCHEMA,
+                legacy_bootstrap_complete=True,
+            )
             self._write_ledger_locked(staged, key)
             return staged
 
@@ -1345,10 +1388,7 @@ class OwnershipLedger:
         _assert_private_file(self.key_path)
         try:
             value = json.loads(self.key_path.read_text(encoding="utf-8"))
-            if value.get("schema") != KEY_SCHEMA:
-                raise ValueError
-            secret = base64.b64decode(value["secret"], validate=True)
-            key = _KeyMaterial(str(value["key_id"]), int(value["generation"]), secret)
+            key = self._parse_key_value(value)
         except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError) as exc:
             raise LedgerKeyError("protected ownership key is invalid") from exc
         if len(key.secret) != 32 or key.generation < 1:
@@ -1366,81 +1406,576 @@ class OwnershipLedger:
             "secret": base64.b64encode(key.secret).decode("ascii"),
         }
 
+    def _parse_key_value(self, value: Mapping[str, Any]) -> _KeyMaterial:
+        if not isinstance(value, dict):
+            raise ValueError
+        key_id = value["key_id"]
+        generation = value["generation"]
+        encoded_secret = value["secret"]
+        if (
+            value.get("schema") != KEY_SCHEMA
+            or not isinstance(key_id, str)
+            or not key_id.strip()
+            or isinstance(generation, bool)
+            or not isinstance(generation, int)
+            or generation < 1
+            or not isinstance(encoded_secret, str)
+        ):
+            raise ValueError
+        return _KeyMaterial(
+            key_id=key_id,
+            generation=generation,
+            secret=base64.b64decode(encoded_secret, validate=True),
+        )
+
     def _load_or_create_ledger_locked(
         self,
         key: _KeyMaterial,
         *,
         allow_create: bool = True,
+        allow_legacy: bool = False,
     ) -> LedgerSnapshot:
         if not self.path.exists():
             if not allow_create:
-                raise LedgerKeyError(
-                    "protected ownership key exists without its ownership ledger"
-                )
+                raise LedgerKeyError("protected ownership key exists without its ownership ledger")
             current = LedgerSnapshot(LEDGER_SCHEMA, key.generation, key.key_id)
             self._write_ledger_locked(current, key)
             return current
         _assert_private_file(self.path)
         try:
             value = json.loads(self.path.read_text(encoding="utf-8"))
-            schema = value.get("schema")
-            if schema == LEGACY_LEDGER_SCHEMA:
-                raise LedgerError(
-                    "ownership ledger format v1 requires explicit scratch/rebootstrap reset"
-                )
-            if schema != LEDGER_SCHEMA:
-                raise ValueError
-            leases = {
-                binding: OwnershipLease(
-                    **(raw | {"ancestor_fingerprints": tuple(raw["ancestor_fingerprints"])})
-                )
-                for binding, raw in value.get("leases", {}).items()
-            }
-            tombstones = {
-                binding: OwnershipLease(
-                    **(raw | {"ancestor_fingerprints": tuple(raw["ancestor_fingerprints"])})
-                )
-                for binding, raw in value.get("tombstones", {}).items()
-            }
-            transfer_raw = value.get("transfer")
-            transfer = (
-                None
-                if transfer_raw is None
-                else TransferReservation(
-                    **(
-                        transfer_raw
-                        | {"ancestor_fingerprints": tuple(transfer_raw["ancestor_fingerprints"])}
-                    )
-                )
-            )
-            transfer_lineage = tuple(
-                OwnershipTransferLineage(
-                    **(
-                        raw
-                        | {"ancestor_fingerprints": tuple(raw["ancestor_fingerprints"])}
-                    )
-                )
-                for raw in value.get("transfer_lineage", [])
-            )
-            current = LedgerSnapshot(
-                schema=LEDGER_SCHEMA,
-                generation=int(value["generation"]),
-                key_id=str(value["key_id"]),
-                leases=leases,
-                tombstones=tombstones,
-                transfer=transfer,
-                transfer_lineage=transfer_lineage,
-                legacy_bootstrap_complete=bool(value.get("legacy_bootstrap_complete", False)),
-            )
+            current = self._parse_ledger_value(value)
         except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError) as exc:
             raise LedgerError("ownership ledger is invalid") from exc
         if current.key_id != key.key_id or current.generation != key.generation:
             raise LedgerKeyError("ownership ledger/key generation mismatch")
+        if current.schema == LEGACY_LEDGER_SCHEMA and not allow_legacy:
+            raise LedgerError(
+                "legacy ownership ledger requires fenced registry authority"
+            )
         return current
+
+    def _parse_ledger_value(self, value: Mapping[str, Any]) -> LedgerSnapshot:
+        if not isinstance(value, dict):
+            raise ValueError
+        schema = value.get("schema")
+        generation = value["generation"]
+        key_id = value["key_id"]
+        legacy_bootstrap_complete = value.get("legacy_bootstrap_complete", False)
+        if (
+            schema not in {LEGACY_LEDGER_SCHEMA, LEDGER_SCHEMA}
+            or isinstance(generation, bool)
+            or not isinstance(generation, int)
+            or generation < 1
+            or not isinstance(key_id, str)
+            or not key_id.strip()
+            or not isinstance(legacy_bootstrap_complete, bool)
+        ):
+            raise ValueError
+        raw_leases = value.get("leases", {})
+        raw_tombstones = value.get("tombstones", {})
+        raw_lineage = value.get("transfer_lineage", [])
+        if (
+            not isinstance(raw_leases, dict)
+            or not isinstance(raw_tombstones, dict)
+            or not isinstance(raw_lineage, list)
+        ):
+            raise ValueError
+        leases = {
+            binding: self._parse_ownership_lease(raw, binding, {"pending", "active"})
+            for binding, raw in raw_leases.items()
+        }
+        tombstones = {
+            binding: self._parse_ownership_lease(raw, binding, {"retired"})
+            for binding, raw in raw_tombstones.items()
+        }
+        transfer_raw = value.get("transfer")
+        transfer = (
+            None
+            if transfer_raw is None
+            else self._parse_transfer_value(transfer_raw)
+        )
+        transfer_lineage = tuple(
+            self._parse_lineage_value(raw) for raw in raw_lineage
+        )
+        return LedgerSnapshot(
+            schema=schema,
+            generation=generation,
+            key_id=key_id,
+            leases=leases,
+            tombstones=tombstones,
+            transfer=transfer,
+            transfer_lineage=transfer_lineage,
+            legacy_bootstrap_complete=legacy_bootstrap_complete,
+        )
+
+    @staticmethod
+    def _parse_fingerprints(value: object) -> tuple[str, ...]:
+        if not isinstance(value, list) or any(
+            type(item) is not str
+            or len(item) != 64
+            or any(character not in "0123456789abcdef" for character in item)
+            for item in value
+        ):
+            raise ValueError
+        return tuple(value)
+
+    @classmethod
+    def _parse_ownership_lease(
+        cls,
+        value: object,
+        binding: object,
+        states: set[str],
+    ) -> OwnershipLease:
+        if not isinstance(value, dict) or type(binding) is not str:
+            raise ValueError
+        channel_id = value.get("channel_id")
+        vault_binding_id = value.get("vault_binding_id")
+        root_fingerprint = value.get("root_fingerprint")
+        sealed_root = value.get("sealed_root")
+        state = value.get("state")
+        if (
+            type(channel_id) is not str
+            or not channel_id.strip()
+            or type(vault_binding_id) is not str
+            or not vault_binding_id.strip()
+            or vault_binding_id != binding
+            or type(root_fingerprint) is not str
+            or type(sealed_root) is not str
+            or not sealed_root.strip()
+            or type(state) is not str
+            or state not in states
+        ):
+            raise ValueError
+        return OwnershipLease(
+            channel_id=channel_id,
+            vault_binding_id=vault_binding_id,
+            root_fingerprint=root_fingerprint,
+            ancestor_fingerprints=cls._parse_fingerprints(
+                value.get("ancestor_fingerprints")
+            ),
+            sealed_root=sealed_root,
+            state=state,
+        )
+
+    @classmethod
+    def _parse_transfer_value(cls, value: object) -> TransferReservation:
+        if not isinstance(value, dict):
+            raise ValueError
+        fields = (
+            "transfer_id",
+            "source_channel_id",
+            "source_binding_id",
+            "destination_channel_id",
+            "destination_binding_id",
+            "root_fingerprint",
+            "sealed_root",
+        )
+        if any(type(value.get(field)) is not str or not value[field].strip() for field in fields):
+            raise ValueError
+        return TransferReservation(
+            transfer_id=value["transfer_id"],
+            source_channel_id=value["source_channel_id"],
+            source_binding_id=value["source_binding_id"],
+            destination_channel_id=value["destination_channel_id"],
+            destination_binding_id=value["destination_binding_id"],
+            root_fingerprint=value["root_fingerprint"],
+            ancestor_fingerprints=cls._parse_fingerprints(
+                value.get("ancestor_fingerprints")
+            ),
+            sealed_root=value["sealed_root"],
+        )
+
+    @classmethod
+    def _parse_lineage_value(cls, value: object) -> OwnershipTransferLineage:
+        if not isinstance(value, dict):
+            raise ValueError
+        fields = (
+            "transfer_id",
+            "source_channel_id",
+            "source_binding_id",
+            "destination_channel_id",
+            "destination_binding_id",
+            "root_fingerprint",
+            "sealed_root",
+        )
+        if any(type(value.get(field)) is not str or not value[field].strip() for field in fields):
+            raise ValueError
+        return OwnershipTransferLineage(
+            transfer_id=value["transfer_id"],
+            source_channel_id=value["source_channel_id"],
+            source_binding_id=value["source_binding_id"],
+            destination_channel_id=value["destination_channel_id"],
+            destination_binding_id=value["destination_binding_id"],
+            root_fingerprint=value["root_fingerprint"],
+            ancestor_fingerprints=cls._parse_fingerprints(
+                value.get("ancestor_fingerprints")
+            ),
+            sealed_root=value["sealed_root"],
+        )
+
+    def _migrate_legacy_ledger(
+        self,
+        current: LedgerSnapshot,
+        key: _KeyMaterial,
+        *,
+        require_complete_legacy_chain: bool = True,
+    ) -> LedgerSnapshot:
+        """Converge authenticated v1 parent identities without replacing authority."""
+
+        def migrate_lease(lease: OwnershipLease) -> OwnershipLease:
+            return replace(
+                lease,
+                ancestor_fingerprints=self._migrated_legacy_ancestors(
+                    root_fingerprint=lease.root_fingerprint,
+                    ancestor_fingerprints=lease.ancestor_fingerprints,
+                    sealed_root=lease.sealed_root,
+                    key=key,
+                    require_complete_legacy_chain=require_complete_legacy_chain,
+                ),
+            )
+
+        def valid_identifier(value: object) -> bool:
+            return isinstance(value, str) and bool(value.strip())
+
+        try:
+            if current.schema != LEGACY_LEDGER_SCHEMA:
+                raise ValueError
+            if any(
+                not valid_identifier(binding)
+                or not valid_identifier(lease.channel_id)
+                or not valid_identifier(lease.vault_binding_id)
+                or binding != lease.vault_binding_id
+                or lease.state not in {"pending", "active"}
+                for binding, lease in current.leases.items()
+            ):
+                raise ValueError
+            if any(
+                not valid_identifier(binding)
+                or not valid_identifier(lease.channel_id)
+                or not valid_identifier(lease.vault_binding_id)
+                or binding != lease.vault_binding_id
+                or lease.state != "retired"
+                for binding, lease in current.tombstones.items()
+            ):
+                raise ValueError
+
+            leases = {binding: migrate_lease(lease) for binding, lease in current.leases.items()}
+            tombstones = {
+                binding: migrate_lease(lease) for binding, lease in current.tombstones.items()
+            }
+            transfer = current.transfer
+            if transfer is not None:
+                if (
+                    any(
+                        not valid_identifier(value)
+                        for value in (
+                            transfer.transfer_id,
+                            transfer.source_channel_id,
+                            transfer.source_binding_id,
+                            transfer.destination_channel_id,
+                            transfer.destination_binding_id,
+                        )
+                    )
+                    or transfer.source_channel_id == transfer.destination_channel_id
+                    or transfer.source_binding_id == transfer.destination_binding_id
+                ):
+                    raise ValueError
+                transfer = replace(
+                    transfer,
+                    ancestor_fingerprints=self._migrated_legacy_ancestors(
+                        root_fingerprint=transfer.root_fingerprint,
+                        ancestor_fingerprints=transfer.ancestor_fingerprints,
+                        sealed_root=transfer.sealed_root,
+                        key=key,
+                        require_complete_legacy_chain=require_complete_legacy_chain,
+                    ),
+                )
+
+            transfer_lineage: list[OwnershipTransferLineage] = []
+            lineage_ids: set[str] = set()
+            for item in current.transfer_lineage:
+                if (
+                    any(
+                        not valid_identifier(value)
+                        for value in (
+                            item.transfer_id,
+                            item.source_channel_id,
+                            item.source_binding_id,
+                            item.destination_channel_id,
+                            item.destination_binding_id,
+                        )
+                    )
+                    or item.transfer_id in lineage_ids
+                    or item.source_channel_id == item.destination_channel_id
+                    or item.source_binding_id == item.destination_binding_id
+                ):
+                    raise ValueError
+                lineage_ids.add(item.transfer_id)
+                transfer_lineage.append(
+                    replace(
+                        item,
+                        ancestor_fingerprints=self._migrated_legacy_ancestors(
+                            root_fingerprint=item.root_fingerprint,
+                            ancestor_fingerprints=item.ancestor_fingerprints,
+                            sealed_root=item.sealed_root,
+                            key=key,
+                            require_complete_legacy_chain=require_complete_legacy_chain,
+                        ),
+                    )
+                )
+        except (
+            FilesystemIdentityError,
+            LedgerError,
+            OSError,
+            TypeError,
+            UnicodeError,
+            ValueError,
+        ) as exc:
+            raise LedgerError(
+                "legacy ownership ledger contains unauthenticated identity state"
+            ) from exc
+
+        return replace(
+            current,
+            schema=LEDGER_SCHEMA,
+            leases=leases,
+            tombstones=tombstones,
+            transfer=transfer,
+            transfer_lineage=tuple(transfer_lineage),
+            legacy_bootstrap_complete=True,
+        )
+
+    def _migrated_legacy_ancestors(
+        self,
+        *,
+        root_fingerprint: str,
+        ancestor_fingerprints: Sequence[str],
+        sealed_root: str,
+        key: _KeyMaterial,
+        require_complete_legacy_chain: bool = True,
+    ) -> tuple[str, ...]:
+        fingerprints = (root_fingerprint, *ancestor_fingerprints)
+        if not fingerprints or any(
+            len(value) != 64 or any(character not in "0123456789abcdef" for character in value)
+            for value in fingerprints
+        ):
+            raise ValueError
+        root = Path(self._open_root(sealed_root, key))
+        if not root.is_absolute():
+            raise ValueError
+        resolved = root.resolve(strict=False)
+        if require_complete_legacy_chain and len(ancestor_fingerprints) != len(resolved.parents):
+            raise ValueError
+        # A fenced registry-consistency admission may be running in a
+        # different mount namespace from the writer that created v1.  The
+        # authenticated portable prefix is checked by
+        # _authenticate_legacy_authority; the remaining v1 ancestors are
+        # opaque compatibility data and must not be used to require the old
+        # namespace's parent count.
+        identity = resolve_filesystem_root_identity(resolved)
+        if not identity.materialized:
+            raise ValueError
+        primary, ancestors = _identity_material(resolved)
+        if not hmac.compare_digest(root_fingerprint, _fingerprint(primary, key.secret)):
+            raise ValueError
+        converged_fingerprints = tuple(
+            _fingerprint(item, key.secret) for item in ancestors
+        )
+        stored_fingerprints = tuple(ancestor_fingerprints)
+        if require_complete_legacy_chain:
+            legacy_fingerprints = tuple(
+                _fingerprint(item, key.secret)
+                for item in _legacy_ancestor_material(resolved)
+            )
+            if not any(
+                len(stored_fingerprints) == len(candidate)
+                and all(
+                    hmac.compare_digest(stored, expected)
+                    for stored, expected in zip(stored_fingerprints, candidate, strict=True)
+                )
+                for candidate in (legacy_fingerprints, converged_fingerprints)
+            ):
+                raise ValueError
+        return converged_fingerprints
+
+    def _legacy_ancestor_proof_matches(
+        self,
+        lease: OwnershipLease,
+        root: Path,
+        key: _KeyMaterial,
+    ) -> bool:
+        """Verify v1 ancestry without trusting a remounted container root."""
+
+        stored = tuple(lease.ancestor_fingerprints)
+        legacy = tuple(
+            _fingerprint(item, key.secret)
+            for item in _legacy_ancestor_material(root)
+        )
+        converged = tuple(
+            _fingerprint(item, key.secret)
+            for item in _identity_material(root)[1]
+        )
+        if any(
+            len(stored) == len(candidate)
+            and all(
+                hmac.compare_digest(left, right)
+                for left, right in zip(stored, candidate, strict=True)
+            )
+            for candidate in (legacy, converged)
+        ):
+            return True
+        portable = _portable_legacy_ancestor_material(root)
+        expected_portable = tuple(_fingerprint(item, key.secret) for item in portable)
+        return bool(expected_portable) and len(stored) >= len(expected_portable) and all(
+            hmac.compare_digest(left, right)
+            for left, right in zip(stored[: len(expected_portable)], expected_portable, strict=True)
+        )
+
+    def _authenticate_legacy_authority(
+        self,
+        *,
+        current: LedgerSnapshot,
+        key: _KeyMaterial,
+        channel_id: str,
+        registrations: Mapping[str, Path | None],
+        tombstones: Mapping[str, Path | None],
+        transfer_lineage: Sequence[Mapping[str, str]],
+        global_live_owners: Sequence[LegacyOwner],
+        require_materialized_roots: bool,
+    ) -> None:
+        """Authenticate v1 owner fields before cross-namespace migration."""
+
+        if not require_materialized_roots:
+            raise LedgerError(
+                "legacy ownership migration requires materialized owner authority"
+            )
+
+        live_authority = {
+            (owner.channel_id, owner.vault_binding_id): owner
+            for owner in global_live_owners
+        }
+        if len(live_authority) != len(global_live_owners):
+            raise LedgerError("legacy owner authority repeats a binding identity")
+
+        def root_matches(lease: OwnershipLease, root: Path | None) -> bool:
+            if root is None:
+                return False
+            expected_root = Path(root).expanduser().resolve(strict=False)
+            try:
+                sealed_root = Path(self._open_root(lease.sealed_root, key)).resolve(
+                    strict=False
+                )
+                expected = self._lease_for_root(
+                    channel_id=lease.channel_id,
+                    vault_binding_id=lease.vault_binding_id,
+                    root=expected_root,
+                    key=key,
+                    state=lease.state,
+                )
+            except (FilesystemIdentityError, LedgerError, OSError, ValueError):
+                return False
+            return (
+                sealed_root == expected_root
+                and hmac.compare_digest(lease.root_fingerprint, expected.root_fingerprint)
+                and self._legacy_ancestor_proof_matches(
+                    lease, expected_root, key
+                )
+            )
+
+        for binding_id, lease in current.leases.items():
+            owner = live_authority.get((lease.channel_id, lease.vault_binding_id))
+            if (
+                binding_id != lease.vault_binding_id
+                or lease.state != "active"
+                or owner is None
+                or not root_matches(lease, owner.root)
+            ):
+                raise LedgerError(
+                    "legacy ownership ledger owner fields are not registry-authenticated"
+                )
+
+        current_channel_tombstones = {
+            binding_id: root for binding_id, root in tombstones.items()
+        }
+        lineage_sources = {
+            (item["source_channel_id"], item["source_binding_id"]): item
+            for item in transfer_lineage
+            if item.get("destination_channel_id") == channel_id
+        }
+        if len(lineage_sources) != sum(
+            item.get("destination_channel_id") == channel_id for item in transfer_lineage
+        ):
+            raise LedgerError("legacy registry lineage repeats a source identity")
+
+        for binding_id, retired in current.tombstones.items():
+            expected_root = None
+            if retired.channel_id == channel_id:
+                expected_root = current_channel_tombstones.get(binding_id)
+            else:
+                lineage = lineage_sources.get((retired.channel_id, binding_id))
+                if lineage is not None:
+                    destination = current.leases.get(
+                        lineage["destination_binding_id"]
+                    ) or current.tombstones.get(lineage["destination_binding_id"])
+                    if destination is not None:
+                        expected_root = Path(
+                            self._open_root(destination.sealed_root, key)
+                        )
+            if (
+                binding_id != retired.vault_binding_id
+                or retired.state != "retired"
+                or not root_matches(retired, expected_root)
+            ):
+                raise LedgerError(
+                    "legacy ownership ledger tombstone fields are not registry-authenticated"
+                )
+
+        registered_lineage = {
+            (
+                item["ownership_transfer_id"],
+                item["source_channel_id"],
+                item["source_binding_id"],
+                item["destination_channel_id"],
+                item["destination_binding_id"],
+            )
+            for item in transfer_lineage
+            if item.get("destination_channel_id") == channel_id
+        }
+        ledger_lineage = {
+            (
+                item.transfer_id,
+                item.source_channel_id,
+                item.source_binding_id,
+                item.destination_channel_id,
+                item.destination_binding_id,
+            )
+            for item in current.transfer_lineage
+        }
+        if ledger_lineage != registered_lineage:
+            raise LedgerError(
+                "legacy ownership ledger lineage is not registry-authenticated"
+            )
+
+        for binding_id, root in registrations.items():
+            registered_lease = current.leases.get(binding_id)
+            if (
+                registered_lease is None
+                or registered_lease.channel_id != channel_id
+                or registered_lease.vault_binding_id != binding_id
+                or not root_matches(registered_lease, root)
+            ):
+                raise LedgerError(
+                    "legacy ownership ledger registration fields are not authenticated"
+                )
+
+
 
     def _write_ledger_locked(self, current: LedgerSnapshot, key: _KeyMaterial) -> None:
         if current.key_id != key.key_id or current.generation != key.generation:
             raise LedgerKeyError("cannot persist mixed ownership key generations")
+        if current.schema != LEDGER_SCHEMA:
+            raise LedgerError("cannot persist an unsupported ownership ledger schema")
         _atomic_private_json(self.path, self._ledger_value(current))
 
     def _ledger_value(self, current: LedgerSnapshot) -> dict[str, object]:
@@ -1469,21 +2004,51 @@ class OwnershipLedger:
             ledger = journal["ledger"]
             if not isinstance(key, dict) or not isinstance(ledger, dict):
                 raise ValueError
-            secret = base64.b64decode(key["secret"], validate=True)
+            key_material = self._parse_key_value(key)
+            current = self._parse_ledger_value(ledger)
             if (
-                key.get("schema") != KEY_SCHEMA
-                or ledger.get("schema") != LEDGER_SCHEMA
-                or key.get("key_id") != ledger.get("key_id")
-                or key.get("generation") != ledger.get("generation")
-                or len(secret) != 32
+                len(key_material.secret) != 32
+                or current.key_id != key_material.key_id
+                or current.generation != key_material.generation
             ):
                 raise ValueError
-        except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError) as exc:
+            key = self._key_value(key_material)
+            ledger = self._ledger_value(current)
+        except (
+            LedgerError,
+            OSError,
+            ValueError,
+            KeyError,
+            TypeError,
+            json.JSONDecodeError,
+        ) as exc:
             raise LedgerKeyError("ownership key rotation journal is invalid") from exc
+        if current.schema == LEGACY_LEDGER_SCHEMA:
+            raise LedgerKeyError(
+                "legacy ownership ledger requires fenced registry authority"
+            )
         _atomic_private_json(self.key_path, key)
         _atomic_private_json(self.path, ledger)
         self.rotation_path.unlink()
         _fsync_directory(self.root)
+
+    def _assert_legacy_rotation_journal_matches_locked(
+        self,
+        current: LedgerSnapshot,
+        key: _KeyMaterial,
+    ) -> None:
+        try:
+            journal = json.loads(self.rotation_path.read_text(encoding="utf-8"))
+            if journal.get("schema") != ROTATION_SCHEMA:
+                raise ValueError
+            journal_key = self._parse_key_value(journal["key"])
+            journal_ledger = self._parse_ledger_value(journal["ledger"])
+            if journal_key != key or journal_ledger != current:
+                raise ValueError
+        except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError) as exc:
+            raise LedgerKeyError(
+                "legacy ownership rotation journal is not fenced to the current ledger"
+            ) from exc
 
 
 def _identity_material(root: Path) -> tuple[str, tuple[str, ...]]:
@@ -1503,6 +2068,41 @@ def _identity_material(root: Path) -> tuple[str, tuple[str, ...]]:
         # vault itself remains inode-bound; its parent chain is path-bound.
         ancestors.append(f"path:{ancestor}")
     return primary, tuple(ancestors)
+
+
+def _legacy_ancestor_material(root: Path) -> tuple[str, ...]:
+    material: list[str] = []
+    for ancestor in Path(root).expanduser().resolve(strict=False).parents:
+        identity = resolve_filesystem_root_identity(ancestor)
+        material.append(
+            f"inode:{identity.device}:{identity.inode}"
+            if identity.materialized
+            else f"path:{identity.canonical_path}"
+        )
+    return tuple(material)
+
+
+def _portable_legacy_ancestor_material(root: Path) -> tuple[str, ...]:
+    """Return the v1 parent segment that survives a container remount."""
+
+    resolved = Path(root).expanduser().resolve(strict=False)
+    for portable_root in LEGACY_PORTABLE_ROOTS:
+        boundary = portable_root.expanduser().resolve(strict=False)
+        try:
+            resolved.relative_to(boundary)
+        except ValueError:
+            continue
+        material: list[str] = []
+        for ancestor in resolved.parents:
+            identity = resolve_filesystem_root_identity(ancestor)
+            material.append(
+                f"inode:{identity.device}:{identity.inode}"
+                if identity.materialized
+                else f"path:{identity.canonical_path}"
+            )
+            if ancestor == boundary:
+                return tuple(material)
+    return ()
 
 
 def _fingerprint(value: str, secret: bytes) -> str:

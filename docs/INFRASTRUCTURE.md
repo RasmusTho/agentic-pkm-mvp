@@ -51,9 +51,10 @@ API and worker share the same Python image built from the repo.
 ## Cross-container vault and scalar-rollback contract
 
 The full-host-vault overlay binds the selected host vault read-only into
-`instance-state-init`, `api`, `worker`, and `watcher`. The init container must
-see the same selected root as the runtime consumers so deployment admission can
-validate drained legacy-owner roots from inside its container namespace.
+`instance-state-init` and writable into `api`, `worker`, and `watcher`. The init
+container must see the same selected root as the runtime consumers so deployment
+admission can validate drained legacy-owner roots from inside its container
+namespace without granting that fence controller vault-write authority.
 
 The scalar-rollback overlay also exposes the repo-owned policy sources
 read-only to `instance-state-init` at:
@@ -69,15 +70,23 @@ the same vault remains verifiable across container bind mounts. Nested-root
 collision checks still compare authenticated sealed roots by resolved path when
 their persisted parent identities cannot be compared directly.
 
-### Scratch/rebootstrap boundary
+### Authenticated v1 convergence boundary
 
 The path-bound parent-chain identity is persisted under ledger schema v2. A
-schema-v1 ownership ledger is not migrated or silently interpreted under the
-new identity semantics; established v1 state fails closed with an explicit
-`scratch/rebootstrap reset` error. Rebootstrap is an operator-controlled
-replacement of the host-global ownership state after the external backup,
-writer-drain, and deployment-quiescence proofs are complete. This repository
-change does not perform that destructive reset.
+direct ledger load refuses an established schema-v1 ledger; only the fenced
+registry-consistency path may migrate it, after the registry and complete
+owner inventory authenticate every mutable owner field. That path verifies the
+materialized root and protected primary fingerprint, then accepts either the
+complete key-authenticated legacy or already-converged chain, or the
+key-authenticated portable ancestor segment that survives the `/Users` or
+`/Volumes` bind mount. The portable case deliberately treats only that stable
+segment as proof; it does not recreate or trust a container-local parent
+namespace. A mixed or merely hex-shaped chain without one of those proofs is
+not migration authority. Migration preserves authority, generations, root
+fingerprints, sealed roots, and transition history; it replaces only legacy
+ancestor fingerprints and the schema marker. Malformed, unknown, inaccessible,
+or unauthenticated state fails closed without rewriting or resetting the ledger
+or key.
 
 ## Feasibility: capacity-managed dev/test runtime
 

@@ -41,9 +41,51 @@ from tests.helpers.mvr01c_authority import (
     establish_authority_window,
     finish_authority_window,
 )
+from tests.deploy.test_deploy_channel_vault_overlays import (
+    _mount_is_read_only,
+    _mount_source,
+    _render_deploy_compose,
+    _services,
+    requires_docker,
+)
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
+@requires_docker
+def test_rendered_full_host_mount_policy_preserves_runtime_writes(tmp_path) -> None:
+    selected_root = Path("/Users/operator/selected-vault")
+    services = _services(
+        _render_deploy_compose(
+            tmp_path,
+            channel="dev",
+            explicit_vault=True,
+            selected_vault=selected_root,
+        )
+    )
+
+    for service_name in ("api", "worker", "watcher"):
+        service = services[service_name]
+        assert _mount_source(service, str(selected_root)) == str(selected_root)
+        assert not _mount_is_read_only(service, str(selected_root))
+
+
+@requires_docker
+def test_rendered_full_host_mount_policy_keeps_fence_read_only(tmp_path) -> None:
+    selected_root = Path("/Users/operator/selected-vault")
+    services = _services(
+        _render_deploy_compose(
+            tmp_path,
+            channel="dev",
+            explicit_vault=True,
+            selected_vault=selected_root,
+        )
+    )
+
+    fence = services["instance-state-init"]
+    assert _mount_source(fence, str(selected_root)) == str(selected_root)
+    assert _mount_is_read_only(fence, str(selected_root))
 
 
 def _runtime(tmp_path):
