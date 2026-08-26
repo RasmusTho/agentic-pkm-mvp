@@ -65,7 +65,6 @@ def test_every_issue_to_code_pickup_preserves_selected_repo() -> None:
     issue_to_code = (SKILLS / "issue-to-code" / "SKILL.md").read_text(encoding="utf-8")
 
     assert issue_to_code.count("scripts/issue_pickup_claim.sh") == 3
-    assert "scripts/issue_pickup_claim.sh --issue <N> --repo <owner/repo>" in issue_to_code
     assert (
         'scripts/issue_pickup_claim.sh --issue <N> --repo "$REPO" '
         "--agent <agent_id> --session <session_id>"

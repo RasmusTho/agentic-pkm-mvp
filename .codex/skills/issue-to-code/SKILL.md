@@ -215,7 +215,7 @@ The dispatcher is the preferred coordination layer, but availability is not clai
 pickup wrapper for both dispatcher-backed and degraded label-only pickup:
 
 ```bash
-scripts/issue_pickup_claim.sh --issue <N> --repo <owner/repo> --agent <agent_id> --session <session_id>
+scripts/issue_pickup_claim.sh --issue <N> --repo "$REPO" --agent <agent_id> --session <session_id>
 ```
 
 The wrapper runs workspace preflight and `dispatcher status`, derives the exact repo-qualified task id
