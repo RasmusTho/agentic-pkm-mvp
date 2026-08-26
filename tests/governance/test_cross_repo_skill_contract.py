@@ -59,3 +59,23 @@ def test_issue_to_code_fallback_preserves_selected_repo() -> None:
         '  --issue <N> \\\n'
         '  --repo "$REPO"'
     ) in fallback
+
+
+def test_every_issue_to_code_pickup_preserves_selected_repo() -> None:
+    issue_to_code = (SKILLS / "issue-to-code" / "SKILL.md").read_text(encoding="utf-8")
+
+    assert issue_to_code.count("scripts/issue_pickup_claim.sh") == 3
+    assert "scripts/issue_pickup_claim.sh --issue <N> --repo <owner/repo>" in issue_to_code
+    assert (
+        'scripts/issue_pickup_claim.sh --issue <N> --repo "$REPO" '
+        "--agent <agent_id> --session <session_id>"
+    ) in issue_to_code
+
+    fallback_start = issue_to_code.index("When dispatcher status selects degraded mode")
+    fallback_end = issue_to_code.index("Preserve the wrapper's receipt", fallback_start)
+    fallback = issue_to_code[fallback_start:fallback_end]
+    assert (
+        'scripts/issue_pickup_claim.sh \\\n'
+        '  --issue <N> \\\n'
+        '  --repo "$REPO"'
+    ) in fallback

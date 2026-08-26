@@ -414,7 +414,7 @@ When continuing through anchor drift:
 
 1. Select the Issue according to priority and readiness rules.
 2. Run mandatory pickup claim wrapper before any lifecycle mutation:
-   - `scripts/issue_pickup_claim.sh --issue <N> --agent <agent_id> --session <session_id>`
+   - `scripts/issue_pickup_claim.sh --issue <N> --repo "$REPO" --agent <agent_id> --session <session_id>`
    - This wrapper enforces workspace isolation preflight before removing `agent:ready`.
    - If preflight fails, stop and resolve branch/worktree collisions before claiming.
    - After a successful claim, register the dedicated checkout without switching the shared root:
