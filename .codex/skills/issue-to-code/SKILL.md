@@ -244,6 +244,7 @@ before removing `agent:ready`. Explicit fallback can be selected with:
 ```bash
 scripts/issue_pickup_claim.sh \
   --issue <N> \
+  --repo "$REPO" \
   --agent <agent_id> \
   --session <session_id> \
   --coordination-mode github-label-only-fallback \

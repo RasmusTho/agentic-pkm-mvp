@@ -30,6 +30,9 @@ Use maintenance skills instead of this lane when the work is a repair, audit, or
 ## Core rules
 
 - GitHub Issues are the canonical backlog task contract.
+- Set `REPO` to the explicitly intended `owner/repo` before any GitHub lifecycle command. A
+  checkout remote is only a convenience for deriving that value; delegated callers such as
+  `feature-breakdown` must retain their selected repository when invoking this skill.
 - Issue state and labels are the canonical backlog lifecycle. GitHub Project is an optional legacy
   projection and never gates Issue creation or readiness.
 - Before drafting an Issue, classify the work as Product/Runtime System, Builder System, or boundary
@@ -82,7 +85,7 @@ For every candidate doc item, determine exactly one state:
 7. If the candidate would only create bookkeeping churn, keep it out of the backlog and route it to the maintenance path instead.
 8. **Live duplicate re-check — immediately before creation.** The step 2–4 inspection is an analysis-time snapshot and goes stale: a concurrent session can file the same backlog between your inspection and your `gh issue create` (seen 2026-07-29: hub #4286 + children #4287–#4292 duplicated by #4298–#4304; mirrors `.codex/skills/publish-pr/SKILL.md :: Publication preflight — live open-PR overlap re-check`, whose precedent was PR #2757 duplicating #2755). Immediately before the first `gh issue create`, re-check live open issues via REST:
    ```bash
-   REPO=$(git remote get-url origin | sed -E 's#(git@github.com:|https://github.com/)##; s#\.git$##')
+   REPO=${REPO:-$(git remote get-url origin | sed -E 's#(git@github.com:|https://github.com/)##; s#\.git$##')}
    gh api "repos/$REPO/issues?state=open&per_page=100" --jq '.[] | select(.pull_request | not) | "\(.number)\t\(.title)"'
    ```
    Any open issue already covering the same source docs or capability => STOP: keep the earlier compliant set, comment new evidence there instead, and file only the non-overlapping delta. When filing a multi-issue set (hub + children), run the re-check once immediately before the first creation, then file the whole set without interleaving further analysis.

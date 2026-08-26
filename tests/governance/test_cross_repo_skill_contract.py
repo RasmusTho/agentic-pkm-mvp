@@ -37,3 +37,25 @@ def test_capture_learning_declares_cross_repo_path() -> None:
     assert "github_issue:${REPO}#<issue>" in capture_learning
     assert "repo_doc:${REPO}:<upstream-artifact-path>" in capture_learning
     assert "### Repository-qualified learning provenance" in store_contract
+
+
+def test_delegated_duplicate_check_preserves_selected_repo() -> None:
+    docs_to_issue = (SKILLS / "docs-to-issue" / "SKILL.md").read_text(encoding="utf-8")
+
+    assert "delegated callers such as" in docs_to_issue
+    assert "REPO=${REPO:-$(git remote get-url origin" in docs_to_issue
+    assert "REPO=$(git remote get-url origin" not in docs_to_issue
+    assert 'gh api "repos/$REPO/issues?state=open&per_page=100"' in docs_to_issue
+
+
+def test_issue_to_code_fallback_preserves_selected_repo() -> None:
+    issue_to_code = (SKILLS / "issue-to-code" / "SKILL.md").read_text(encoding="utf-8")
+    fallback_start = issue_to_code.index("When dispatcher status selects degraded mode")
+    fallback_end = issue_to_code.index("Preserve the wrapper's receipt", fallback_start)
+    fallback = issue_to_code[fallback_start:fallback_end]
+
+    assert (
+        'scripts/issue_pickup_claim.sh \\\n'
+        '  --issue <N> \\\n'
+        '  --repo "$REPO"'
+    ) in fallback

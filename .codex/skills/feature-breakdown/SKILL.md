@@ -13,6 +13,8 @@ Set `REPO` to the intended `owner/repo` before creating or updating GitHub issue
 directory may be maintained in the hub while implementation issues target a constituent repository;
 the repository named by the governing contract, not the current checkout, owns that lifecycle. Use
 `gh issue create --repo "$REPO"` (and the same explicit target for follow-up reads and edits).
+When delegating the live duplicate re-check to `docs-to-issue`, pass this selected `REPO` through;
+the delegated skill must not replace it with the current checkout's remote.
 
 Do not use this skill for:
 
