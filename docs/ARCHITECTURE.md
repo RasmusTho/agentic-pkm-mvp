@@ -155,15 +155,19 @@ deployment handoff, immutable artifact identity, and host isolation proofs exist
 
 The host-global ownership ledger is an additional deployment-boundary guard:
 ledger schema v2 stores the selected vault's primary filesystem identity and
-canonical parent-chain identities for cross-container verification. An
-authenticated persisted v1 ledger converges atomically on ordinary load: the
-application verifies each materialized primary identity and protected root
-locator, and requires the complete ancestor chain to match either the
-key-authenticated legacy representation visible in the fenced migration view or
-the already-converged path representation. It preserves ownership and
-transition authority and replaces only legacy ancestor fingerprints plus the
-schema marker. Malformed, unknown, inaccessible, mixed-representation, or
-unauthenticated state remains fail-closed and is never reset or rewritten.
+canonical parent-chain identities for cross-container verification. A direct
+load refuses an established persisted v1 ledger; the fenced registry-consistency
+path is the only migration authority. It authenticates the complete mutable
+owner record against the registry and owner inventory, verifies the materialized
+primary identity and protected root locator, and accepts either the complete
+key-authenticated legacy or already-converged ancestor chain or the
+key-authenticated portable segment under the `/Users` or `/Volumes` bind mount.
+The portable case does not require recreating a prior container's root
+namespace, and it does not treat the remaining container-local ancestors as
+proof. Migration preserves ownership and transition authority and replaces only
+legacy ancestor fingerprints plus the schema marker. Malformed, unknown,
+inaccessible, mixed-representation, or unauthenticated state remains
+fail-closed and is never reset or rewritten.
 
 ## Artifact surfaces (current reading, forward-line aligned)
 

@@ -588,7 +588,7 @@ class InstanceStateBackup:
             )
         except (LedgerError, OSError, RegistryError) as exc:
             raise InstanceStatePreflightError(
-                "backup registry/ledger capture failed"
+                "backup registry/ledger consistency capture failed"
             ) from exc
         final_export = self.layout.root / "legacy-final-export.md"
         final_checksum = self.layout.root / "legacy-final-export.md.sha256"

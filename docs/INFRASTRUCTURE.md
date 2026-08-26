@@ -72,14 +72,17 @@ their persisted parent identities cannot be compared directly.
 
 ### Authenticated v1 convergence boundary
 
-The path-bound parent-chain identity is persisted under ledger schema v2. On
-ordinary load, an established schema-v1 ledger is migrated atomically only when
-every stored identity has a valid protected root locator, a materialized root
-whose primary fingerprint matches the protected key, a complete ancestor chain,
-and a known lifecycle state. The complete chain must match either the
-key-authenticated legacy representation visible in the fenced migration view or
-the already-converged path representation; a mixed or merely hex-shaped chain
-is not migration authority. Migration preserves authority, generations, root
+The path-bound parent-chain identity is persisted under ledger schema v2. A
+direct ledger load refuses an established schema-v1 ledger; only the fenced
+registry-consistency path may migrate it, after the registry and complete
+owner inventory authenticate every mutable owner field. That path verifies the
+materialized root and protected primary fingerprint, then accepts either the
+complete key-authenticated legacy or already-converged chain, or the
+key-authenticated portable ancestor segment that survives the `/Users` or
+`/Volumes` bind mount. The portable case deliberately treats only that stable
+segment as proof; it does not recreate or trust a container-local parent
+namespace. A mixed or merely hex-shaped chain without one of those proofs is
+not migration authority. Migration preserves authority, generations, root
 fingerprints, sealed roots, and transition history; it replaces only legacy
 ancestor fingerprints and the schema marker. Malformed, unknown, inaccessible,
 or unauthenticated state fails closed without rewriting or resetting the ledger

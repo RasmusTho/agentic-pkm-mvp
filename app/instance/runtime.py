@@ -2867,9 +2867,6 @@ def _finish_instance_state_deployment_locked(
         store.snapshot_path.is_file() and store.snapshot_checksum_path.is_file()
     )
     had_populated_registry = has_registry_state and store.load().revision > 0
-    if had_populated_registry and restore_root is None:
-        ledger.require_existing()
-
     source = Path(legacy_path).expanduser().resolve(strict=False)
     final_fingerprint: str | None = None
     if source.is_file():
@@ -2899,23 +2896,48 @@ def _finish_instance_state_deployment_locked(
         store.load()
 
     registry = store.load()
+    if (
+        had_populated_registry
+        and restore_root is None
+        and (not ledger.path.is_file() or not ledger.key_path.is_file())
+    ):
+        # Do not let a populated registry recreate missing host-global
+        # authority. Established v1 ledgers still proceed below because both
+        # protected artifacts exist and are routed through fenced migration.
+        ledger.require_existing()
     try:
-        ledger_snapshot = ledger.require_existing()
+        established = ledger.require_existing()
     except LedgerError:
-        ledger_snapshot = None
-    if ledger_snapshot is None or not ledger_snapshot.legacy_bootstrap_complete:
+        established = None
+    if established is not None and established.legacy_bootstrap_complete:
+        ledger_snapshot = established
+    else:
         owners = _load_legacy_owner_inventory(
             inventory_path,
             registry=registry,
             channel=channel,
             quiescence_proof=quiescence_proof,
         )
-        ledger_snapshot = ledger.bootstrap_legacy_owners(
-            owners,
-            inventory_complete=True,
-            writers_drained=True,
-            _capability=_STORAGE_MUTATION_CAPABILITY,
-        )
+        try:
+            ledger_snapshot = backup._require_registry_ledger_consistency(
+                registry=registry,
+                ledger=ledger,
+                global_live_owners=tuple(owners),
+            )
+        except InstanceStatePreflightError:
+            ledger_snapshot = ledger.bootstrap_legacy_owners(
+                owners,
+                inventory_complete=True,
+                writers_drained=True,
+                _capability=_STORAGE_MUTATION_CAPABILITY,
+            )
+        if not ledger_snapshot.legacy_bootstrap_complete:
+            ledger_snapshot = ledger.bootstrap_legacy_owners(
+                owners,
+                inventory_complete=True,
+                writers_drained=True,
+                _capability=_STORAGE_MUTATION_CAPABILITY,
+            )
     if scalar_roll_forward_merged:
         ledger.require_scalar_rollback_ready(
             channel_id=channel,
