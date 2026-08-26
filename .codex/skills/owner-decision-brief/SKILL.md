@@ -1,11 +1,11 @@
 ---
 name: owner-decision-brief
-description: "Yggdrasil profile for owner escalations: use the portable decision-quality skill, preserve contractual operator gates and repo authority, and render one plain-language owner decision without creating another decision or task authority."
+description: "Yggdrasil profile for owner escalations: use the repo-local decision-quality skill, preserve contractual operator gates and repo authority, and render one plain-language owner decision without creating another decision or task authority."
 ---
 
 # Owner Decision Brief
 
-This is a thin Yggdrasil profile for the portable `decision-quality` skill. It applies whenever a
+This is a thin Yggdrasil profile for the repo-local `decision-quality` skill. It applies whenever a
 repository workflow is about to ask the owner for a decision: an `agent:needs-human` label, an
 operator acknowledgment, an inline question, or an open question in an Issue or PR.
 
@@ -16,9 +16,9 @@ the ask. Its seven-dimension diagnosis, weakest-link rule, decision ownership ga
 method, and post-decision activation handoff are the single authoritative decision method. This
 profile adds repository constraints only; it must not copy, abbreviate, or redefine that method.
 
-The dependency is registered in `.codex/skills/portable-skills.list` and provisioned through
-`scripts/install_skills.sh` from the portable skill source root. Successful provisioning is a
-precondition for environments that execute this profile.
+The method lives at `.codex/skills/decision-quality/SKILL.md` and `scripts/install_skills.sh`
+installs it together with the other repo-local skills for Claude environments. Successful
+provisioning is a precondition for environments that execute this profile.
 
 If `decision-quality` is unavailable, do not reconstruct a local substitute or send a free-form
 owner ask. Report the missing capability through the current workflow and keep only independently
@@ -51,8 +51,8 @@ record, and report the decision afterwards.
 
 ## Contract-dominance preflight
 
-Before creating an owner ask, adding `agent:needs-human`, or presenting options, apply the portable
-method's contract-dominance preflight, then delegate terminal routing to the canonical classifier:
+Before creating an owner ask, adding `agent:needs-human`, or presenting options, apply the
+repo-local method's contract-dominance preflight, then delegate terminal routing to the canonical classifier:
 
 1. Select the live contract that actually governs the work. For a governing Issue, read its current
    body, acceptance criteria, `Verify:` targets, and named owner authority. For Issue-free work,
@@ -130,5 +130,5 @@ Place the brief at the decision boundary: at the top of the chat or session summ
 Issue comment that adds `agent:needs-human`, or in the PR body/top-level comment when the PR is
 waiting on that decision. Never block unrelated reversible work while waiting.
 
-After the decision, use the portable skill's activation handoff and route any longer-lived execution
+After the decision, use the repo-local skill's activation handoff and route any longer-lived execution
 to the existing domain or delivery workflow. Do not track it here.

@@ -16,6 +16,7 @@ from pathlib import Path
 from scripts.lint_skills_consistency import run_lint
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+PORTABLE_TEST_SKILL = "external-test-skill"
 
 
 def _write_skill(skills_root: Path, name: str, body: str = "") -> None:
@@ -42,6 +43,26 @@ def _seed_tree(tmp_path: Path) -> Path:
     _write_skill(skills_root, "beta-skill")
     _write_readme(skills_root, ["alpha-skill", "beta-skill"])
     return tmp_path
+
+
+def _portable_install_repo(tmp_path: Path) -> Path:
+    """Create a minimal repo that exercises one registered portable dependency."""
+    root = tmp_path / "portable-install-repo"
+    scripts = root / "scripts"
+    scripts.mkdir(parents=True)
+    shutil.copy2(REPO_ROOT / "scripts" / "install_skills.sh", scripts)
+    shutil.copy2(REPO_ROOT / "scripts" / "lint_skills_consistency.py", scripts)
+    skills_root = root / ".codex" / "skills"
+    _write_skill(
+        skills_root,
+        "local-test-skill",
+        "\nLoad the portable " + chr(96) + PORTABLE_TEST_SKILL + chr(96) + " skill.\n",
+    )
+    _write_readme(skills_root, ["local-test-skill"])
+    (skills_root / "portable-skills.list").write_text(
+        f"{PORTABLE_TEST_SKILL}\n", encoding="utf-8"
+    )
+    return root
 
 
 def test_skills_consistency_lint_passes() -> None:
@@ -86,10 +107,11 @@ def test_portable_skill_registry_rejects_invalid_duplicate_and_local_names(
 
 
 def test_install_skills_provisions_registered_portable_dependency(tmp_path: Path) -> None:
+    install_root = _portable_install_repo(tmp_path)
     portable_root = tmp_path / "portable"
-    source_skill = portable_root / "decision-quality"
+    source_skill = portable_root / PORTABLE_TEST_SKILL
     source_skill.mkdir(parents=True)
-    source_text = "---\nname: decision-quality\ndescription: test\n---\n"
+    source_text = f"---\nname: {PORTABLE_TEST_SKILL}\ndescription: test\n---\n"
     (source_skill / "SKILL.md").write_text(source_text, encoding="utf-8")
     destination = tmp_path / "installed"
     env = os.environ | {
@@ -99,8 +121,25 @@ def test_install_skills_provisions_registered_portable_dependency(tmp_path: Path
 
     result = subprocess.run(
         ["bash", "scripts/install_skills.sh"],
-        cwd=REPO_ROOT,
+        cwd=install_root,
         env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert (destination / PORTABLE_TEST_SKILL / "SKILL.md").read_text(
+        encoding="utf-8"
+    ) == source_text
+
+
+def test_install_skills_provisions_repo_local_decision_quality(tmp_path: Path) -> None:
+    destination = tmp_path / "installed"
+    result = subprocess.run(
+        ["bash", "scripts/install_skills.sh"],
+        cwd=REPO_ROOT,
+        env=os.environ | {"CLAUDE_SKILLS_DIR": str(destination)},
         capture_output=True,
         text=True,
         check=False,
@@ -109,12 +148,15 @@ def test_install_skills_provisions_registered_portable_dependency(tmp_path: Path
     assert result.returncode == 0, result.stderr
     assert (destination / "decision-quality" / "SKILL.md").read_text(
         encoding="utf-8"
-    ) == source_text
+    ) == (REPO_ROOT / ".codex" / "skills" / "decision-quality" / "SKILL.md").read_text(
+        encoding="utf-8"
+    )
 
 
 def test_install_skills_fails_closed_when_portable_dependency_is_missing(
     tmp_path: Path,
 ) -> None:
+    install_root = _portable_install_repo(tmp_path)
     portable_root = tmp_path / "portable"
     portable_root.mkdir()
     env = os.environ | {
@@ -124,7 +166,7 @@ def test_install_skills_fails_closed_when_portable_dependency_is_missing(
 
     result = subprocess.run(
         ["bash", "scripts/install_skills.sh"],
-        cwd=REPO_ROOT,
+        cwd=install_root,
         env=env,
         capture_output=True,
         text=True,
@@ -132,19 +174,20 @@ def test_install_skills_fails_closed_when_portable_dependency_is_missing(
     )
 
     assert result.returncode != 0
-    assert "Registered portable skill is unavailable: decision-quality" in result.stderr
+    assert f"Registered portable skill is unavailable: {PORTABLE_TEST_SKILL}" in result.stderr
     assert not Path(env["CLAUDE_SKILLS_DIR"]).exists()
-    assert not (Path(env["CLAUDE_SKILLS_DIR"]) / "owner-decision-brief").exists()
+    assert not (Path(env["CLAUDE_SKILLS_DIR"]) / "local-test-skill").exists()
 
 
 def test_install_skills_fails_closed_when_portable_enumeration_fails(
     tmp_path: Path,
 ) -> None:
+    install_root = _portable_install_repo(tmp_path)
     portable_root = tmp_path / "portable"
-    source_skill = portable_root / "decision-quality"
+    source_skill = portable_root / PORTABLE_TEST_SKILL
     source_skill.mkdir(parents=True)
     (source_skill / "SKILL.md").write_text(
-        "---\nname: decision-quality\ndescription: test\n---\n", encoding="utf-8"
+        f"---\nname: {PORTABLE_TEST_SKILL}\ndescription: test\n---\n", encoding="utf-8"
     )
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
@@ -172,7 +215,7 @@ def test_install_skills_fails_closed_when_portable_enumeration_fails(
 
     result = subprocess.run(
         ["bash", "scripts/install_skills.sh"],
-        cwd=REPO_ROOT,
+        cwd=install_root,
         env=env,
         capture_output=True,
         text=True,
@@ -181,21 +224,22 @@ def test_install_skills_fails_closed_when_portable_enumeration_fails(
 
     assert result.returncode != 0
     assert "forced portable enumeration failure" in result.stderr
-    assert "Unable to enumerate source skill: decision-quality" in result.stderr
-    assert not (destination / "decision-quality").exists()
-    assert not (destination / "owner-decision-brief").exists()
+    assert f"Unable to enumerate source skill: {PORTABLE_TEST_SKILL}" in result.stderr
+    assert not (destination / PORTABLE_TEST_SKILL).exists()
+    assert not (destination / "local-test-skill").exists()
     assert "Skills installed to" not in result.stdout
 
 
 def test_install_skills_fails_closed_when_skill_disappears_before_enumeration(
     tmp_path: Path,
 ) -> None:
+    install_root = _portable_install_repo(tmp_path)
     portable_root = tmp_path / "portable"
-    source_skill = portable_root / "decision-quality"
+    source_skill = portable_root / PORTABLE_TEST_SKILL
     source_skill.mkdir(parents=True)
     skill_file = source_skill / "SKILL.md"
     skill_file.write_text(
-        "---\nname: decision-quality\ndescription: test\n---\n", encoding="utf-8"
+        f"---\nname: {PORTABLE_TEST_SKILL}\ndescription: test\n---\n", encoding="utf-8"
     )
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
@@ -223,7 +267,7 @@ def test_install_skills_fails_closed_when_skill_disappears_before_enumeration(
 
     result = subprocess.run(
         ["bash", "scripts/install_skills.sh"],
-        cwd=REPO_ROOT,
+        cwd=install_root,
         env=env,
         capture_output=True,
         text=True,
@@ -232,23 +276,24 @@ def test_install_skills_fails_closed_when_skill_disappears_before_enumeration(
 
     assert result.returncode != 0
     assert (source_skill / "SKILL.md.removed").exists()
-    assert "enumeration omitted required SKILL.md: decision-quality" in result.stderr
-    assert not (destination / "decision-quality").exists()
-    assert not (destination / "owner-decision-brief").exists()
+    assert f"enumeration omitted required SKILL.md: {PORTABLE_TEST_SKILL}" in result.stderr
+    assert not (destination / PORTABLE_TEST_SKILL).exists()
+    assert not (destination / "local-test-skill").exists()
     assert "Skills installed to" not in result.stdout
 
 
 def test_install_skills_rejects_directory_at_portable_contract_destination(
     tmp_path: Path,
 ) -> None:
+    install_root = _portable_install_repo(tmp_path)
     portable_root = tmp_path / "portable"
-    source_skill = portable_root / "decision-quality"
+    source_skill = portable_root / PORTABLE_TEST_SKILL
     source_skill.mkdir(parents=True)
     (source_skill / "SKILL.md").write_text(
-        "---\nname: decision-quality\ndescription: test\n---\n", encoding="utf-8"
+        f"---\nname: {PORTABLE_TEST_SKILL}\ndescription: test\n---\n", encoding="utf-8"
     )
     destination = tmp_path / "installed"
-    malformed_contract = destination / "decision-quality" / "SKILL.md"
+    malformed_contract = destination / PORTABLE_TEST_SKILL / "SKILL.md"
     malformed_contract.mkdir(parents=True)
     env = os.environ | {
         "CLAUDE_SKILLS_DIR": str(destination),
@@ -257,7 +302,7 @@ def test_install_skills_rejects_directory_at_portable_contract_destination(
 
     result = subprocess.run(
         ["bash", "scripts/install_skills.sh"],
-        cwd=REPO_ROOT,
+        cwd=install_root,
         env=env,
         capture_output=True,
         text=True,
@@ -265,9 +310,9 @@ def test_install_skills_rejects_directory_at_portable_contract_destination(
     )
 
     assert result.returncode != 0
-    assert "Portable skill destination has invalid SKILL.md: decision-quality" in result.stderr
+    assert f"Portable skill destination has invalid SKILL.md: {PORTABLE_TEST_SKILL}" in result.stderr
     assert not (malformed_contract / "SKILL.md").exists()
-    assert not (destination / "owner-decision-brief").exists()
+    assert not (destination / "local-test-skill").exists()
     assert "Skills installed to" not in result.stdout
 
 
