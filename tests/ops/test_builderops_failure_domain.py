@@ -70,6 +70,7 @@ def test_only_structural_recovery_misconfiguration_blocks_readiness() -> None:
 def test_local_control_plane_wal_growth_or_archive_drift_is_loud(tmp_path: Path) -> None:
     root = Path(__file__).resolve().parents[2]
     guard = root / "scripts/builderops/local_wal_guard.sh"
+    assert "wal_limit_bytes=\"${BUILDEROPS_LOCAL_WAL_MAX_BYTES:-2147483648}\"" in guard.read_text(encoding="utf-8")
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
     for command, source in {

@@ -60,12 +60,11 @@ services:
     environment:
       BUILDEROPS_DATABASE_URL_FILE: /run/secrets/builderops_database_url
       BUILDEROPS_CREDENTIAL_MANIFEST_FILE: /run/secrets/builderops_api_credentials
-      BUILDEROPS_RECOVERY_TARGET_FILE: /run/secrets/builderops_recovery_target
+      BUILDEROPS_LOCAL_DURABILITY_MODE: ${BUILDEROPS_LOCAL_DURABILITY_MODE:?Local BuilderOps durability mode is required}
       BUILDEROPS_PROBE_TOKEN_FILE: /run/secrets/builderops_probe_token
     secrets: !override
       - builderops_database_url
       - builderops_api_credentials
-      - builderops_recovery_target
       - builderops_probe_token
     ports:
       - "127.0.0.1:${BUILDEROPS_API_PORT:-18100}:8000"
@@ -123,7 +122,5 @@ secrets:
     file: ${BUILDEROPS_SECRET_ROOT:?BuilderOps host secret root is required}/api-credentials.json
   builderops_executor_credentials:
     file: ${BUILDEROPS_SECRET_ROOT:?BuilderOps host secret root is required}/executor-credentials.json
-  builderops_recovery_target:
-    file: ${BUILDEROPS_SECRET_ROOT:?BuilderOps host secret root is required}/recovery-target.json
   builderops_probe_token:
     file: ${BUILDEROPS_SECRET_ROOT:?BuilderOps host secret root is required}/probe-token

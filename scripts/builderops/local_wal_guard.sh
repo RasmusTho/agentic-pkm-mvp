@@ -5,7 +5,7 @@ set -euo pipefail
 # intentionally loud in Docker health status before WAL or the shared volume
 # can exhaust the host disk.
 pgdata="${PGDATA:-/var/lib/postgresql/data}"
-wal_limit_bytes="${BUILDEROPS_LOCAL_WAL_MAX_BYTES:-1073741824}"
+wal_limit_bytes="${BUILDEROPS_LOCAL_WAL_MAX_BYTES:-2147483648}"
 disk_limit_percent="${BUILDEROPS_LOCAL_DISK_MAX_USED_PERCENT:-85}"
 
 archive_mode="$(psql -U "${POSTGRES_USER:-postgres}" -d "${POSTGRES_DB:-postgres}" -Atqc 'SHOW archive_mode')"

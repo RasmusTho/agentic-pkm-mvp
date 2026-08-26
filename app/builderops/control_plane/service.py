@@ -580,6 +580,7 @@ def create_app(
             worker_heartbeat_file=os.getenv(
                 "BUILDEROPS_WORKER_HEARTBEAT_FILE", "/run/builderops/worker.json"
             ),
+            recovery_required=os.getenv("BUILDEROPS_LOCAL_DURABILITY_MODE") != "rebuildable",
         ),
         rate_limiter,
     )

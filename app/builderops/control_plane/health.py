@@ -26,6 +26,7 @@ class OperationalStatus:
     executor_heartbeat_state: str = "unknown"
     recovery_pipeline_state: str = "unknown"
     recovery_target_independent: bool = False
+    recovery_required: bool = True
     authority_threatening_outbox: bool = False
 
 
@@ -61,6 +62,7 @@ class FileOperationalStatusProvider:
             executor_heartbeat_state=str(raw.get("executor_heartbeat_state", "unknown")),
             recovery_pipeline_state=str(raw.get("recovery_pipeline_state", "unknown")),
             recovery_target_independent=bool(raw.get("recovery_target_independent", False)),
+            recovery_required=bool(raw.get("recovery_required", True)),
             authority_threatening_outbox=bool(raw.get("authority_threatening_outbox", False)),
         )
 
@@ -75,11 +77,13 @@ class LiveOperationalStatusProvider:
         recovery_target_file: str | Path,
         worker_heartbeat_file: str | Path,
         archive_lag_seconds: int = 900,
+        recovery_required: bool = True,
     ) -> None:
         self.store = store
         self.recovery_target_file = Path(recovery_target_file)
         self.worker_heartbeat_file = Path(worker_heartbeat_file)
         self.archive_lag_seconds = archive_lag_seconds
+        self.recovery_required = recovery_required
 
     def _recovery_target_independent(self) -> bool:
         try:
@@ -129,7 +133,11 @@ class LiveOperationalStatusProvider:
                 values = {}
         archived_at = values.get("last_archived_time")
         failed_at = values.get("last_failed_time")
-        if failed_at is not None and (archived_at is None or failed_at > archived_at):
+        if not self.recovery_required:
+            # The local control plane is explicitly rebuildable. It must never
+            # reinterpret intentionally disabled WAL archival as an outage.
+            recovery_state = "disabled"
+        elif failed_at is not None and (archived_at is None or failed_at > archived_at):
             recovery_state = "stalled"
         elif archived_at is None:
             recovery_state = "unknown"
@@ -143,7 +151,10 @@ class LiveOperationalStatusProvider:
             active_leases=int(values.get("active_leases") or 0),
             executor_heartbeat_state=self._worker_state(),
             recovery_pipeline_state=recovery_state,
-            recovery_target_independent=self._recovery_target_independent(),
+            recovery_target_independent=(
+                self._recovery_target_independent() if self.recovery_required else False
+            ),
+            recovery_required=self.recovery_required,
         )
 
 
@@ -182,11 +193,12 @@ class HealthService:
         expected_lineage = database["schema_version"] == SCHEMA_VERSION and bool(
             database["authority_epoch"] and database["authority_epoch"] > 0
         )
+        recovery_ready = not runtime.recovery_required or runtime.recovery_target_independent
         ready = bool(
             database["available"]
             and expected_lineage
             and not runtime.authority_threatening_outbox
-            and runtime.recovery_target_independent
+            and recovery_ready
         )
         rate_limit = (
             self.rate_limiter.status()
@@ -222,8 +234,8 @@ class HealthService:
             "recovery_pipeline": {
                 "state": runtime.recovery_pipeline_state,
                 "target_independent": runtime.recovery_target_independent,
-                "structural_ready": runtime.recovery_target_independent,
-                "alert": runtime.recovery_pipeline_state
+                "structural_ready": recovery_ready,
+                "alert": runtime.recovery_required and runtime.recovery_pipeline_state
                 in {"stalled", "lagging", "failed", "unknown", "misconfigured"},
                 # Lag/stall is intentionally observable but not an ack/readiness
                 # gate unless the recovery target is structurally co-resident.

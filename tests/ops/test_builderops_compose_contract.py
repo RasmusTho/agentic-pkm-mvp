@@ -69,7 +69,6 @@ def test_builderops_compose_is_lifecycle_isolated() -> None:
         "builderops_database_url",
         "builderops_api_credentials",
         "builderops_executor_credentials",
-        "builderops_recovery_target",
         "builderops_probe_token",
     } <= secret_names
     assert "API_KEY" not in text
@@ -89,6 +88,9 @@ def test_local_control_plane_disables_wal_archiving_without_recovery_egress() ->
     assert "WALG_S3_PREFIX" not in db["environment"]
     assert "builderops-recovery-egress" not in compose["networks"]
     assert all("wal_" not in secret for secret in compose["secrets"])
+    assert "builderops_recovery_target" not in compose["secrets"]
+    assert "BUILDEROPS_RECOVERY_TARGET_FILE" not in compose["services"]["api"]["environment"]
+    assert compose["services"]["api"]["environment"]["BUILDEROPS_LOCAL_DURABILITY_MODE"] == "${BUILDEROPS_LOCAL_DURABILITY_MODE:?Local BuilderOps durability mode is required}"
 
 
 def test_builderops_postgres_listens_on_the_internal_network() -> None:

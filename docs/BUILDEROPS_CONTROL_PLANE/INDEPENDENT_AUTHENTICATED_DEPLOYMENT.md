@@ -35,12 +35,14 @@ required before activation.
 The governed local `builderops-control-plane` Compose deployment is rebuildable Builder System
 operational state, not an independent durable knowledge or delivery authority. Its PostgreSQL
 configuration sets `archive_mode = off` with an empty `archive_command`; the local Compose project
-does not bind WAL archive credentials, a recovery-egress network, or a backup service. The retained
-WAL-G/archive and restore tooling belongs to the future independently authenticated deployment path
-and is not enabled by this local posture.
+does not bind WAL archive credentials, a recovery target, a recovery-egress network, or a backup
+service. Its release pin requires `BUILDEROPS_LOCAL_DURABILITY_MODE=rebuildable`: the API reports
+the recovery pipeline as deliberately disabled (not an outage), and the deploy wrapper rejects any
+mode that would require recovery egress. The retained WAL-G/archive and restore tooling belongs to
+the future independently authenticated deployment path and is not enabled by this local posture.
 
-The database health check fails loudly when archive settings drift, `pg_wal` exceeds its bounded
-local threshold, or the data volume reaches its bounded usage threshold. The existing host probe
+The database health check fails loudly when archive settings drift, `pg_wal` exceeds its 2 GiB
+bounded threshold, or the data volume reaches its bounded usage threshold. The existing host probe
 inspects that database health and sends its normal outage notification, while installation unloads
 the obsolete scheduled-backup agent. This containment prevents local WAL retention from exhausting
 shared disk; it does not provide, imply, or verify off-host backup, PITR, or restore capability.
