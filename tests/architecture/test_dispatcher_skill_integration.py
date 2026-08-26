@@ -92,7 +92,10 @@ def test_issue_pickup_receipt_requires_real_claim_evidence() -> None:
     skill = (repo_root / ".codex/skills/issue-to-code/SKILL.md").read_text()
     script = (repo_root / "scripts/issue_pickup_claim.sh").read_text()
 
-    assert "scripts/issue_pickup_claim.sh --issue <N> --agent <agent_id>" in skill
+    assert (
+        'scripts/issue_pickup_claim.sh --issue <N> --repo "$REPO" '
+        "--agent <agent_id>"
+    ) in skill
     assert "python -m app.dispatcher claim <task_id>" not in skill
     assert "lease_id=$RECEIPT_LEASE_ID" in script
     assert "holder=$RECEIPT_HOLDER" in script

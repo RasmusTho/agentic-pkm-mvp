@@ -215,7 +215,7 @@ The dispatcher is the preferred coordination layer, but availability is not clai
 pickup wrapper for both dispatcher-backed and degraded label-only pickup:
 
 ```bash
-scripts/issue_pickup_claim.sh --issue <N> --repo <owner/repo> --agent <agent_id> --session <session_id>
+scripts/issue_pickup_claim.sh --issue <N> --repo "$REPO" --agent <agent_id> --session <session_id>
 ```
 
 The wrapper runs workspace preflight and `dispatcher status`, derives the exact repo-qualified task id
@@ -414,7 +414,7 @@ When continuing through anchor drift:
 
 1. Select the Issue according to priority and readiness rules.
 2. Run mandatory pickup claim wrapper before any lifecycle mutation:
-   - `scripts/issue_pickup_claim.sh --issue <N> --agent <agent_id> --session <session_id>`
+   - `scripts/issue_pickup_claim.sh --issue <N> --repo "$REPO" --agent <agent_id> --session <session_id>`
    - This wrapper enforces workspace isolation preflight before removing `agent:ready`.
    - If preflight fails, stop and resolve branch/worktree collisions before claiming.
    - After a successful claim, register the dedicated checkout without switching the shared root:
