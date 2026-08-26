@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 import time
 import urllib.request
 from pathlib import Path
@@ -41,6 +42,30 @@ def _get(path: str, token: str) -> tuple[int, dict[str, object]]:
         return response.status, json.loads(response.read().decode())
 
 
+def _database_health_guard() -> bool:
+    context = os.environ.get("BUILDEROPS_DOCKER_CONTEXT", "").strip()
+    if not context:
+        raise RuntimeError("BuilderOps Docker context is unavailable")
+    result = subprocess.run(
+        [
+            "docker",
+            "--context",
+            context,
+            "inspect",
+            "--format",
+            "{{.State.Health.Status}}",
+            "builderops-control-plane-db-1",
+        ],
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=5,
+    )
+    if result.returncode != 0:
+        raise RuntimeError("BuilderOps database health inspection failed")
+    return result.stdout.strip() == "healthy"
+
+
 def run_probe(channel: NotificationChannel | None = None) -> bool:
     channel = channel or NtfyChannel()
     failures: list[str] = []
@@ -54,6 +79,8 @@ def run_probe(channel: NotificationChannel | None = None) -> bool:
         status, ready = _get("/readyz", token)
         if status != 200 or ready.get("ready") is not True:
             failures.append("readiness failed")
+        if not _database_health_guard():
+            failures.append("local database health guard is unhealthy")
         _, control_status = _get("/status", status_token)
         recovery = control_status.get("recovery_pipeline", {})
         if isinstance(recovery, dict) and recovery.get("alert") is True:

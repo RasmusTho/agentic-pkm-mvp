@@ -40,9 +40,10 @@ WAL-G/archive and restore tooling belongs to the future independently authentica
 and is not enabled by this local posture.
 
 The database health check fails loudly when archive settings drift, `pg_wal` exceeds its bounded
-local threshold, or the data volume reaches its bounded usage threshold. This containment prevents
-local WAL retention from exhausting shared disk; it does not provide, imply, or verify off-host
-backup, PITR, or restore capability.
+local threshold, or the data volume reaches its bounded usage threshold. The existing host probe
+inspects that database health and sends its normal outage notification, while installation unloads
+the obsolete scheduled-backup agent. This containment prevents local WAL retention from exhausting
+shared disk; it does not provide, imply, or verify off-host backup, PITR, or restore capability.
 
 ## Purpose
 

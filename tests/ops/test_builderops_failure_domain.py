@@ -128,25 +128,22 @@ def test_wal_target_must_match_validated_recovery_identity(tmp_path: Path) -> No
         load_recovery_target(target_file, expected_url="s3://other.invalid/builderops")
 
 
-def test_builderops_probe_and_backup_are_independently_scheduled() -> None:
+def test_builderops_probe_alerts_on_the_local_database_guard() -> None:
     root = Path(__file__).resolve().parents[2]
     unit_root = root / "ops/host-setup/mac-mini"
     with (unit_root / "com.yggdrasil.builderops-probe.plist").open("rb") as handle:
         probe = plistlib.load(handle)
-    with (unit_root / "com.yggdrasil.builderops-backup.plist").open("rb") as handle:
-        backup = plistlib.load(handle)
     assert probe["Label"] == "com.yggdrasil.builderops-probe"
     assert probe["StartInterval"] == 60
     assert probe["EnvironmentVariables"]["BUILDEROPS_PROBE_TOKEN_FILE"] == "__PROBE_TOKEN__"
     assert probe["EnvironmentVariables"]["BUILDEROPS_STATUS_TOKEN_FILE"] == "__STATUS_TOKEN__"
-    assert backup["Label"] == "com.yggdrasil.builderops-backup"
-    assert backup["StartInterval"] == 21600
+    assert probe["EnvironmentVariables"]["BUILDEROPS_DOCKER_CONTEXT"] == "__DOCKER_CONTEXT__"
 
-    wrapper = (root / "scripts/builderops/scheduled_backup.sh").read_text(encoding="utf-8")
     installer = (unit_root / "install_builderops_units.sh").read_text(encoding="utf-8")
-    assert "builderops_assert_failure_domain" in wrapper
-    assert "--profile ops run --rm --no-deps backup" in wrapper
-    assert "pkm-" not in wrapper
+    assert "com.yggdrasil.builderops-backup.plist" in installer
+    assert "launchctl load \"$backup_plist\"" not in installer
+    assert not (unit_root / "com.yggdrasil.builderops-backup.plist").exists()
+    assert not (root / "scripts/builderops/scheduled_backup.sh").exists()
     assert "com.yggdrasil.prod-probe" not in installer
 
 
@@ -177,6 +174,7 @@ def test_builderops_probe_uses_separate_health_and_status_credentials(
         return 200, {"recovery_pipeline": {"alert": False}}
 
     monkeypatch.setattr(probe, "_get", fake_get)
+    monkeypatch.setattr(probe, "_database_health_guard", lambda: True)
 
     assert probe.run_probe() is True
     assert calls == [("/readyz", "health-only"), ("/status", "status-only")]
@@ -208,6 +206,7 @@ def test_builderops_probe_consumes_the_service_recovery_alert_schema(
             else (200, {"recovery_pipeline": {"alert": True}})
         ),
     )
+    monkeypatch.setattr(probe, "_database_health_guard", lambda: True)
 
     class Channel:
         def __init__(self) -> None:
@@ -223,4 +222,42 @@ def test_builderops_probe_consumes_the_service_recovery_alert_schema(
             "BuilderOps control plane down",
             "backup/WAL recovery pipeline is stalled or lagging",
         )
+    ]
+
+
+def test_builderops_probe_notifies_when_the_local_database_guard_is_unhealthy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = Path(__file__).resolve().parents[2]
+    probe_path = root / "ops/host-setup/mac-mini/builderops_probe.py"
+    spec = importlib.util.spec_from_file_location("builderops_probe_guard_test", probe_path)
+    assert spec is not None and spec.loader is not None
+    probe = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(probe)
+
+    health_token = tmp_path / "health-token"
+    status_token = tmp_path / "status-token"
+    health_token.write_text("health-only\n", encoding="utf-8")
+    status_token.write_text("status-only\n", encoding="utf-8")
+    monkeypatch.setattr(probe, "TOKEN_FILE", health_token)
+    monkeypatch.setattr(probe, "STATUS_TOKEN_FILE", status_token)
+    monkeypatch.setattr(probe, "STATE_FILE", tmp_path / "probe-state.json")
+    monkeypatch.setattr(
+        probe,
+        "_get",
+        lambda path, _token: (200, {"ready": True, "recovery_pipeline": {"alert": False}}),
+    )
+    monkeypatch.setattr(probe, "_database_health_guard", lambda: False)
+
+    class Channel:
+        def __init__(self) -> None:
+            self.messages: list[tuple[str, str]] = []
+
+        def send(self, subject: str, body: str) -> None:
+            self.messages.append((subject, body))
+
+    channel = Channel()
+    assert probe.run_probe(channel) is False
+    assert channel.messages == [
+        ("BuilderOps control plane down", "local database health guard is unhealthy")
     ]
