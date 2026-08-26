@@ -259,9 +259,13 @@ def test_recover_missing_active_uses_authenticated_key_for_collision_check(tmp_p
     assert ledger.require_existing().leases["binding-recovered"] == recovered
 
 
-def _rewrite_ledger_as_authenticated_v1(ledger: OwnershipLedger, root: Path) -> bytes:
-    key_payload = json.loads(ledger.key_path.read_text(encoding="utf-8"))
-    secret = base64.b64decode(key_payload["secret"], validate=True)
+def _legacy_root_identity(root: Path, secret: bytes) -> tuple[str, list[str]]:
+    identity = resolve_filesystem_root_identity(root.resolve(strict=False))
+    primary = (
+        f"inode:{identity.device}:{identity.inode}"
+        if identity.materialized
+        else f"path:{identity.canonical_path}"
+    )
     legacy_ancestors: list[str] = []
     for ancestor in root.resolve(strict=False).parents:
         identity = resolve_filesystem_root_identity(ancestor)
@@ -273,9 +277,28 @@ def _rewrite_ledger_as_authenticated_v1(ledger: OwnershipLedger, root: Path) -> 
         legacy_ancestors.append(
             hmac.new(secret, material.encode("utf-8"), hashlib.sha256).hexdigest()
         )
+    return (
+        hmac.new(secret, primary.encode("utf-8"), hashlib.sha256).hexdigest(),
+        legacy_ancestors,
+    )
+
+
+def _rewrite_ledger_as_authenticated_v1(
+    ledger: OwnershipLedger,
+    *roots: Path,
+) -> bytes:
+    key_payload = json.loads(ledger.key_path.read_text(encoding="utf-8"))
+    secret = base64.b64decode(key_payload["secret"], validate=True)
+    ancestors_by_root = dict(_legacy_root_identity(root, secret) for root in roots)
     payload = json.loads(ledger.path.read_text(encoding="utf-8"))
     payload["schema"] = ownership_ledger_module.LEGACY_LEDGER_SCHEMA
-    payload["leases"]["binding-existing"]["ancestor_fingerprints"] = legacy_ancestors
+    identity_records = [*payload["leases"].values(), *payload["tombstones"].values()]
+    if payload["transfer"] is not None:
+        identity_records.append(payload["transfer"])
+    identity_records.extend(payload["transfer_lineage"])
+    for record in identity_records:
+        record["ancestor_fingerprints"] = ancestors_by_root[record["root_fingerprint"]]
+
     before = (json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n").encode()
     ledger.path.write_bytes(before)
     ledger.path.chmod(0o600)
@@ -318,6 +341,77 @@ def test_existing_ancestor_fingerprints_converge_before_new_representation_is_re
         migrated.leases["binding-existing"].ancestor_fingerprints == original.ancestor_fingerprints
     )
     assert ledger.path.read_bytes() != legacy_bytes
+
+
+def test_v1_schema_accepts_an_already_converged_ancestor_representation(tmp_path) -> None:
+    ownership_root = tmp_path / "host-global"
+    ownership_root.mkdir(mode=0o700)
+    root = tmp_path / "existing-vault"
+    root.mkdir()
+    ledger = OwnershipLedger(ownership_root)
+    ledger.reserve(
+        channel_id="dev",
+        vault_binding_id="binding-existing",
+        root=root,
+        _capability=STORAGE_MUTATION_CAPABILITY,
+    )
+    ledger.activate("binding-existing", _capability=STORAGE_MUTATION_CAPABILITY)
+    expected = ledger.require_existing()
+    payload = json.loads(ledger.path.read_text(encoding="utf-8"))
+    payload["schema"] = ownership_ledger_module.LEGACY_LEDGER_SCHEMA
+    ledger.path.write_text(json.dumps(payload), encoding="utf-8")
+    ledger.path.chmod(0o600)
+
+    assert ledger.require_existing() == expected
+
+
+def test_valid_v1_rotation_journal_recovers_all_authority_surfaces(tmp_path) -> None:
+    ownership_root = tmp_path / "host-global"
+    ownership_root.mkdir(mode=0o700)
+    roots = tuple(tmp_path / name for name in ("live", "transferred", "pending-transfer"))
+    for root in roots:
+        root.mkdir()
+    ledger = OwnershipLedger(ownership_root)
+    for channel_id, binding_id, root in (
+        ("dev", "binding-live", roots[0]),
+        ("test", "binding-source", roots[1]),
+        ("dev", "binding-pending-source", roots[2]),
+    ):
+        ledger.reserve(
+            channel_id=channel_id,
+            vault_binding_id=binding_id,
+            root=root,
+            _capability=STORAGE_MUTATION_CAPABILITY,
+        )
+        ledger.activate(binding_id, _capability=STORAGE_MUTATION_CAPABILITY)
+    ledger.begin_transfer(
+        source_binding_id="binding-source",
+        destination_channel_id="prod",
+        destination_binding_id="binding-destination",
+        _capability=STORAGE_MUTATION_CAPABILITY,
+    )
+    ledger.activate_transfer(_capability=STORAGE_MUTATION_CAPABILITY)
+    ledger.begin_transfer(
+        source_binding_id="binding-pending-source",
+        destination_channel_id="test",
+        destination_binding_id="binding-pending-destination",
+        _capability=STORAGE_MUTATION_CAPABILITY,
+    )
+    original = ledger.require_existing()
+    _rewrite_ledger_as_authenticated_v1(ledger, *roots)
+    journal_payload = {
+        "schema": ownership_ledger_module.ROTATION_SCHEMA,
+        "key": json.loads(ledger.key_path.read_text(encoding="utf-8")),
+        "ledger": json.loads(ledger.path.read_text(encoding="utf-8")),
+    }
+    ledger.rotation_path.write_text(json.dumps(journal_payload), encoding="utf-8")
+    ledger.rotation_path.chmod(0o600)
+
+    assert ledger.require_existing() == original
+    assert not ledger.rotation_path.exists()
+    assert json.loads(ledger.path.read_text(encoding="utf-8"))["schema"] == (
+        ownership_ledger_module.LEDGER_SCHEMA
+    )
 
 
 def test_malformed_or_unknown_ledger_state_refuses_without_reset(tmp_path) -> None:
@@ -366,6 +460,7 @@ def test_malformed_or_unknown_ledger_state_refuses_without_reset(tmp_path) -> No
 
     for case, field, value in (
         ("boolean-generation", "generation", True),
+        ("integer-key-id", "key_id", 7),
         ("string-bootstrap-marker", "legacy_bootstrap_complete", "false"),
     ):
         malformed_scalar, malformed_scalar_before, malformed_scalar_key = prepared_ledger(case)
@@ -380,19 +475,21 @@ def test_malformed_or_unknown_ledger_state_refuses_without_reset(tmp_path) -> No
         assert malformed_scalar.path.read_bytes() == malformed_scalar_before
         assert malformed_scalar.key_path.read_bytes() == malformed_scalar_key
 
-    malformed_key, malformed_key_ledger, malformed_key_before = prepared_ledger(
-        "malformed-key"
-    )
-    malformed_key_payload = json.loads(malformed_key_before)
-    malformed_key_payload["generation"] = True
-    malformed_key_before = write_private_json(
-        malformed_key.key_path,
-        malformed_key_payload,
-    )
-    with pytest.raises(LedgerKeyError, match="protected ownership key is invalid"):
-        malformed_key.require_existing()
-    assert malformed_key.path.read_bytes() == malformed_key_ledger
-    assert malformed_key.key_path.read_bytes() == malformed_key_before
+    for case, field, value in (
+        ("malformed-key-id", "key_id", 7),
+        ("malformed-key-generation", "generation", True),
+    ):
+        malformed_key, malformed_key_ledger, malformed_key_before = prepared_ledger(case)
+        malformed_key_payload = json.loads(malformed_key_before)
+        malformed_key_payload[field] = value
+        malformed_key_before = write_private_json(
+            malformed_key.key_path,
+            malformed_key_payload,
+        )
+        with pytest.raises(LedgerKeyError, match="protected ownership key is invalid"):
+            malformed_key.require_existing()
+        assert malformed_key.path.read_bytes() == malformed_key_ledger
+        assert malformed_key.key_path.read_bytes() == malformed_key_before
 
     malformed_journal, malformed_journal_ledger, malformed_journal_key = prepared_ledger(
         "malformed-journal"
@@ -443,6 +540,25 @@ def test_malformed_or_unknown_ledger_state_refuses_without_reset(tmp_path) -> No
         malformed_authority.require_existing()
     assert malformed_authority.path.read_bytes() == malformed_authority_before
     assert malformed_authority.key_path.read_bytes() == malformed_authority_key
+
+    tampered_ancestor, tampered_ancestor_before, tampered_ancestor_key = prepared_ledger(
+        "tampered-ancestor"
+    )
+    tampered_ancestor_payload = json.loads(tampered_ancestor_before)
+    tampered_ancestor_payload["leases"]["binding-existing"]["ancestor_fingerprints"][0] = (
+        "0" * 64
+    )
+    tampered_ancestor_before = write_private_json(
+        tampered_ancestor.path,
+        tampered_ancestor_payload,
+    )
+    with pytest.raises(
+        LedgerError,
+        match="legacy ownership ledger contains unauthenticated identity state",
+    ):
+        tampered_ancestor.require_existing()
+    assert tampered_ancestor.path.read_bytes() == tampered_ancestor_before
+    assert tampered_ancestor.key_path.read_bytes() == tampered_ancestor_key
 
     unauthenticated, unauthenticated_before, unauthenticated_key = prepared_ledger(
         "unauthenticated"

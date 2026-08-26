@@ -1345,10 +1345,7 @@ class OwnershipLedger:
         _assert_private_file(self.key_path)
         try:
             value = json.loads(self.key_path.read_text(encoding="utf-8"))
-            if value.get("schema") != KEY_SCHEMA:
-                raise ValueError
-            secret = base64.b64decode(value["secret"], validate=True)
-            key = _KeyMaterial(str(value["key_id"]), int(value["generation"]), secret)
+            key = self._parse_key_value(value)
         except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError) as exc:
             raise LedgerKeyError("protected ownership key is invalid") from exc
         if len(key.secret) != 32 or key.generation < 1:
@@ -1367,6 +1364,8 @@ class OwnershipLedger:
         }
 
     def _parse_key_value(self, value: Mapping[str, Any]) -> _KeyMaterial:
+        if not isinstance(value, dict):
+            raise ValueError
         key_id = value["key_id"]
         generation = value["generation"]
         encoded_secret = value["secret"]
@@ -1412,6 +1411,8 @@ class OwnershipLedger:
         return current
 
     def _parse_ledger_value(self, value: Mapping[str, Any]) -> LedgerSnapshot:
+        if not isinstance(value, dict):
+            raise ValueError
         schema = value.get("schema")
         generation = value["generation"]
         key_id = value["key_id"]
@@ -1618,7 +1619,24 @@ class OwnershipLedger:
         primary, ancestors = _identity_material(resolved)
         if not hmac.compare_digest(root_fingerprint, _fingerprint(primary, key.secret)):
             raise ValueError
-        return tuple(_fingerprint(item, key.secret) for item in ancestors)
+        converged_fingerprints = tuple(
+            _fingerprint(item, key.secret) for item in ancestors
+        )
+        legacy_fingerprints = tuple(
+            _fingerprint(item, key.secret)
+            for item in _legacy_ancestor_material(resolved)
+        )
+        stored_fingerprints = tuple(ancestor_fingerprints)
+        if not any(
+            len(stored_fingerprints) == len(candidate)
+            and all(
+                hmac.compare_digest(stored, expected)
+                for stored, expected in zip(stored_fingerprints, candidate, strict=True)
+            )
+            for candidate in (legacy_fingerprints, converged_fingerprints)
+        ):
+            raise ValueError
+        return converged_fingerprints
 
     def _write_ledger_locked(self, current: LedgerSnapshot, key: _KeyMaterial) -> None:
         if current.key_id != key.key_id or current.generation != key.generation:
@@ -1697,6 +1715,18 @@ def _identity_material(root: Path) -> tuple[str, tuple[str, ...]]:
         # vault itself remains inode-bound; its parent chain is path-bound.
         ancestors.append(f"path:{ancestor}")
     return primary, tuple(ancestors)
+
+
+def _legacy_ancestor_material(root: Path) -> tuple[str, ...]:
+    material: list[str] = []
+    for ancestor in Path(root).expanduser().resolve(strict=False).parents:
+        identity = resolve_filesystem_root_identity(ancestor)
+        material.append(
+            f"inode:{identity.device}:{identity.inode}"
+            if identity.materialized
+            else f"path:{identity.canonical_path}"
+        )
+    return tuple(material)
 
 
 def _fingerprint(value: str, secret: bytes) -> str:

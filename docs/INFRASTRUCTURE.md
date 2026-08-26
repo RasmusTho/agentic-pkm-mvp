@@ -76,11 +76,14 @@ The path-bound parent-chain identity is persisted under ledger schema v2. On
 ordinary load, an established schema-v1 ledger is migrated atomically only when
 every stored identity has a valid protected root locator, a materialized root
 whose primary fingerprint matches the protected key, a complete ancestor chain,
-and a known lifecycle state. Migration preserves authority, generations, root
-fingerprints, sealed roots, and transition history; it replaces only ancestor
-fingerprints and the schema marker. Malformed, unknown, inaccessible, or
-unauthenticated state fails closed without rewriting or resetting the ledger or
-key.
+and a known lifecycle state. The complete chain must match either the
+key-authenticated legacy representation visible in the fenced migration view or
+the already-converged path representation; a mixed or merely hex-shaped chain
+is not migration authority. Migration preserves authority, generations, root
+fingerprints, sealed roots, and transition history; it replaces only legacy
+ancestor fingerprints and the schema marker. Malformed, unknown, inaccessible,
+or unauthenticated state fails closed without rewriting or resetting the ledger
+or key.
 
 ## Feasibility: capacity-managed dev/test runtime
 

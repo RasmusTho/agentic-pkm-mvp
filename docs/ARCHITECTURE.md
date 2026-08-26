@@ -158,8 +158,11 @@ ledger schema v2 stores the selected vault's primary filesystem identity and
 canonical parent-chain identities for cross-container verification. An
 authenticated persisted v1 ledger converges atomically on ordinary load: the
 application verifies each materialized primary identity and protected root
-locator, preserves ownership and transition authority, and replaces only the
-ancestor fingerprints plus schema marker. Malformed, unknown, inaccessible, or
+locator, and requires the complete ancestor chain to match either the
+key-authenticated legacy representation visible in the fenced migration view or
+the already-converged path representation. It preserves ownership and
+transition authority and replaces only legacy ancestor fingerprints plus the
+schema marker. Malformed, unknown, inaccessible, mixed-representation, or
 unauthenticated state remains fail-closed and is never reset or rewritten.
 
 ## Artifact surfaces (current reading, forward-line aligned)
