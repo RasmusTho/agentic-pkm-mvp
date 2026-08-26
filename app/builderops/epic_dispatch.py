@@ -337,7 +337,6 @@ def build_dispatch_plan(
                     decision=decision,
                     context_pack_id=context_pack_id,
                     dispatch_slot=selected_count,
-                    run_state_constraints=run_state_constraints,
                     discovered_overlap_policy=discovered_overlap_policy,
                 )
                 context_packs.append(context_pack)
@@ -724,7 +723,6 @@ def _build_context_pack(
     decision: Mapping[str, Any],
     context_pack_id: str,
     dispatch_slot: int,
-    run_state_constraints: list[Any],
     discovered_overlap_policy: str,
 ) -> dict[str, Any]:
     pack = {

@@ -841,8 +841,9 @@ def _pretty_dumps(value: Any) -> str:
 
 @contextmanager
 def _locked_run_state(path: Path) -> Iterator[None]:
-    state_path = path.resolve(strict=False)
-    lock_path = path.with_name(f".{path.name}.lock")
+    state_path = _run_state_lock_identity(path)
+    lock_target = path.resolve(strict=False)
+    lock_path = lock_target.with_name(f".{lock_target.name}.lock")
     thread_lock = _thread_lock_for(lock_path)
     path.parent.mkdir(parents=True, exist_ok=True)
     with thread_lock:
@@ -869,11 +870,17 @@ def _active_run_state_locks() -> set[tuple[int, Path]]:
 
 
 def _assert_run_state_lock_held(path: Path) -> None:
-    active_lock = (os.getpid(), path.resolve(strict=False))
+    active_lock = (os.getpid(), _run_state_lock_identity(path))
     if active_lock not in _active_run_state_locks():
         raise EpicRunStateError(
             "run-state persistence requires the active lock for the exact state path"
         )
+
+
+def _run_state_lock_identity(path: Path) -> Path:
+    """Return the lexical state-path identity without collapsing symlinks."""
+
+    return Path(os.path.abspath(path))
 
 
 def _thread_lock_for(lock_path: Path) -> threading.Lock:

@@ -1060,6 +1060,17 @@ class _RunStateBindingResolver(ast.NodeVisitor):
                 if isinstance(value, str):
                     return value
                 return self._resolve_expression(value, value, seen)
+            if isinstance(scope, ast.Module):
+                late_bindings = [
+                    event for event in bindings if event[:2] > position
+                ]
+                if late_bindings:
+                    value = min(late_bindings, key=lambda event: event[:2])[2]
+                    if value == _UNKNOWN_BINDING:
+                        return None
+                    if isinstance(value, str):
+                        return value
+                    return self._resolve_expression(value, value, seen)
             if bindings and not isinstance(scope, ast.Module):
                 return None
             parent = self.parents.get(scope)
@@ -1169,6 +1180,12 @@ class Decoy:
         return state
 Decoy().save_epic_run_state({})
 """
+    late_bound_module_alias = """
+def deferred_writer():
+    state._save_epic_run_state_to_path({}, path=path, run_id='run')
+from app.builderops import epic_run_state as state
+deferred_writer()
+"""
 
     assert _run_state_writer_violations(
         direct_alias, source_label="direct_alias.py"
@@ -1182,6 +1199,9 @@ Decoy().save_epic_run_state({})
     assert _run_state_writer_violations(
         unrelated_method, source_label="unrelated_method.py"
     ) == []
+    assert _run_state_writer_violations(
+        late_bound_module_alias, source_label="late_bound_module_alias.py"
+    ) == ["late_bound_module_alias.py:3:raw-save"]
 
 
 def test_run_state_writer_census_rejects_deferred_private_calls_without_shadow_false_positives() -> None:
@@ -1249,6 +1269,12 @@ from app.builderops.epic_run_state import update_epic_run_state as mutate
 def local_update(mutate):
     mutate('run')
 """
+    late_bound_module_alias = """
+def deferred_update():
+    state.update_epic_run_state('run')
+from app.builderops import epic_run_state as state
+deferred_update()
+"""
 
     assert _run_state_update_owner_violations(
         unsafe_alias, source_label="unsafe_alias.py"
@@ -1265,6 +1291,9 @@ def local_update(mutate):
     assert _run_state_update_owner_violations(
         shadowed_alias, source_label="shadowed_alias.py"
     ) == []
+    assert _run_state_update_owner_violations(
+        late_bound_module_alias, source_label="late_bound_module_alias.py"
+    ) == ["late_bound_module_alias.py:3"]
 
 
 def test_run_owner_is_rechecked_inside_the_update_lock(
@@ -1394,6 +1423,26 @@ def test_private_writer_requires_active_lock_for_exact_state_path(
 
     assert load_epic_run_state("exact-lock-a", root=tmp_path) == state_a
     assert not path_b.exists()
+
+
+def test_private_writer_cannot_borrow_a_lock_through_a_symlinked_state_path(
+    tmp_path: Path,
+) -> None:
+    state = new_epic_run_state(3229, "symlink-lock-identity")
+    state_path = epic_run_state_path("symlink-lock-identity", root=tmp_path)
+    symlink_path = tmp_path / "symlink-lock-identity-alias.json"
+    symlink_path.symlink_to(state_path)
+
+    with epic_run_state_module._locked_run_state(symlink_path):
+        with pytest.raises(
+            EpicRunStateError, match="active lock for the exact state path"
+        ):
+            epic_run_state_module._save_epic_run_state_to_path(
+                state, path=state_path, run_id="symlink-lock-identity"
+            )
+
+    assert symlink_path.is_symlink()
+    assert not state_path.exists()
 
 
 def test_independent_or_ambiguous_expected_owner_mismatch_writes_nothing(
