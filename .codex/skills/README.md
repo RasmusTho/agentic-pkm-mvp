@@ -163,7 +163,9 @@ citation site. `_shared/READ_SCOPE.md` is the canonical protocol, including the 
 - `capture-learning`
   - micro-skill: create one BuilderOps `LearningSignal` when a builder-workflow plan divergence occurs; invoke on divergence, not on normal work; use `docs/learning-log.md` only as historical/compatibility fallback; never treat builder learning as runtime/user memory without Product System authority
 - `owner-decision-brief`
-  - thin Yggdrasil profile: invoke at the moment any workflow is about to ask the owner for a decision (`agent:needs-human`, an operator ask, an inline question); load the portable `decision-quality` skill as the single decision method, preserve contractual operator and local vault-binding gates, apply repo authority and no-parallel-store constraints, and render the resulting owner ask as one standalone plain-language brief
+  - thin Yggdrasil profile: invoke at the moment any workflow is about to ask the owner for a decision (`agent:needs-human`, an operator ask, an inline question); load the repo-local `decision-quality` skill as the single decision method, preserve contractual operator and local vault-binding gates, apply repo authority and no-parallel-store constraints, and render the resulting owner ask as one standalone plain-language brief
+- `decision-quality`
+  - universal decision method for human or authorized-agent choices; classifies agent action, access, acceptance observation, and genuine decisions before escalation, then uses context passes and weakest-link control
 - `learning-retrospective`
   - cadence-triggered: read BuilderOps `LearningSignal` records and the generated learning-summary projection, include historical `docs/learning-log.md` compatibility entries only when needed, cluster by upstream artifact, and propose concrete edits for human review; when explicitly requested, run autonomous maintenance by applying safe governance fixes, creating Issues for unresolved work, and recording a BuilderOps retrospective receipt
 - `learning-to-issue`
