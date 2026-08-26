@@ -64,11 +64,13 @@ def test_issue_to_code_fallback_preserves_selected_repo() -> None:
 def test_every_issue_to_code_pickup_preserves_selected_repo() -> None:
     issue_to_code = (SKILLS / "issue-to-code" / "SKILL.md").read_text(encoding="utf-8")
 
-    assert issue_to_code.count("scripts/issue_pickup_claim.sh") == 3
+    dispatcher_start = issue_to_code.index("#### Dispatcher Integration")
+    dispatcher_end = issue_to_code.index("The wrapper runs workspace preflight", dispatcher_start)
+    dispatcher = issue_to_code[dispatcher_start:dispatcher_end]
     assert (
         'scripts/issue_pickup_claim.sh --issue <N> --repo "$REPO" '
         "--agent <agent_id> --session <session_id>"
-    ) in issue_to_code
+    ) in dispatcher
 
     fallback_start = issue_to_code.index("When dispatcher status selects degraded mode")
     fallback_end = issue_to_code.index("Preserve the wrapper's receipt", fallback_start)
@@ -78,3 +80,11 @@ def test_every_issue_to_code_pickup_preserves_selected_repo() -> None:
         '  --issue <N> \\\n'
         '  --repo "$REPO"'
     ) in fallback
+
+    workflow_start = issue_to_code.index("## Implementation workflow")
+    workflow_end = issue_to_code.index("3. Run delivered-state preflight", workflow_start)
+    workflow = issue_to_code[workflow_start:workflow_end]
+    assert (
+        'scripts/issue_pickup_claim.sh --issue <N> --repo "$REPO" '
+        "--agent <agent_id> --session <session_id>"
+    ) in workflow
