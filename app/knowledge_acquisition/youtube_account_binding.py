@@ -242,30 +242,42 @@ def _bootstrap_pg(conn: Any) -> None:
         _assert_pg_schema(conn)
         return
     cur = conn.cursor()
-    cur.execute(
-        f"""
-        CREATE TABLE IF NOT EXISTS {_TABLE} (
-            account_binding_id TEXT PRIMARY KEY,
-            provider TEXT NOT NULL,
-            provider_channel_id TEXT NOT NULL,
-            display_label TEXT NOT NULL,
-            state TEXT NOT NULL,
-            reason_code TEXT,
-            scopes JSONB NOT NULL,
-            obtained_at TIMESTAMPTZ NOT NULL,
-            created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-            updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-            CONSTRAINT youtube_account_binding_state_chk CHECK (state IN ('connected', 'degraded')),
-            CONSTRAINT youtube_account_binding_connected_reason_chk CHECK (
-                state <> 'connected' OR reason_code IS NULL
-            )
-        )
-        """
+    table_groups = (
+        (
+            _TABLE,
+            (
+                f"""
+                CREATE TABLE {_TABLE} (
+                    account_binding_id TEXT PRIMARY KEY,
+                    provider TEXT NOT NULL,
+                    provider_channel_id TEXT NOT NULL,
+                    display_label TEXT NOT NULL,
+                    state TEXT NOT NULL,
+                    reason_code TEXT,
+                    scopes JSONB NOT NULL,
+                    obtained_at TIMESTAMPTZ NOT NULL,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                    CONSTRAINT youtube_account_binding_state_chk CHECK (state IN ('connected', 'degraded')),
+                    CONSTRAINT youtube_account_binding_connected_reason_chk CHECK (
+                        state <> 'connected' OR reason_code IS NULL
+                    )
+                )
+                """,
+                f"CREATE UNIQUE INDEX youtube_account_binding_channel_uq ON {_TABLE} "
+                "(provider, provider_channel_id)",
+            ),
+        ),
     )
-    cur.execute(
-        "CREATE UNIQUE INDEX IF NOT EXISTS youtube_account_binding_channel_uq "
-        f"ON {_TABLE} (provider, provider_channel_id)"
-    )
+    for table_name, statements in table_groups:
+        cur.execute("SELECT to_regclass(%s)", (table_name,))
+        row = cur.fetchone()
+        table_present = bool(row and row[0])
+        if table_present:
+            continue
+        for statement in statements:
+            cur.execute(statement)
+    _assert_pg_schema(conn)
 
 
 def _iso(value: Any) -> str | None:

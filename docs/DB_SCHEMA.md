@@ -114,18 +114,17 @@ Last verified against: app/stores/pg.py + app/alembic/versions/e6c4a2b8d1f3_mvr0
   against objects *attached to* a durable table (indexes, triggers, rules) as well as the table
   itself, because an index or trigger dropped and recreated against a migration-owned table is the
   same drop-and-re-add mechanism MVR-05A1 removed from `objects_pkey`.
-- **Forty-five attached-object statements across fourteen modules run without an existence probe,
-  and are recorded rather than fixed** (MVR-05A2, #4576).
-  `tests/architecture/durable_table_classification.py::RECORDED_ATTACHED_DDL_DEBT` pins them by
-  (module, verb, table) with a count. **It is a measurement, not a clean bill of health.** Six of
-  the fourteen modules issue a `DROP TRIGGER` / `CREATE TRIGGER` pair against a table whose trigger
-  a migration already owns — `app/heimdal/raw_read_gate.py`'s own docstring records that
-  `f1c7e2a9b4d6` installs an identical reject-mutation trigger. MVR-05A2's acceptance criteria ask
-  for the existence probe in exactly one place (`app/stores/pg.py`, delivered), so repairing the
-  rest and shrinking that mapping is owned by
-  [#4598](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4598). A statement that retires must
-  come off the pin; a statement that appears is in neither the pin nor the exclusion and fails the
-  guard.
+- **Runtime attached-object DDL debt is zero** (#4598). Every test-fixture autocreate group probes
+  its table with `to_regclass` and skips the complete attached-DDL group once that table exists;
+  create-on-demand is only for a genuinely absent fixture table. Alembic remains the sole owner of
+  durable indexes, triggers, and trigger functions. The six Heimdal append-only seams authenticate
+  the existing catalog shape read-only — exact table/trigger/function binding, origin-active
+  enablement, row-level `BEFORE UPDATE OR DELETE`, function attributes, and complete body — and fail
+  closed with migration guidance on drift. Runtime code never drops, recreates, installs, or repairs
+  those objects on an existing table. The raw-record trigger admits only its migration-owned,
+  session-local governed `DELETE` exception (with the matching tombstone); the current
+  deletion-receipt reconciliation body is likewise authenticated exactly. The zero-valued
+  `RECORDED_ATTACHED_DDL_DEBT` map is a regression tripwire.
 - **`app/db/sql/relations_init.sql` is deleted** (MVR-05A2, #4576). It declared a primary-key-less
   `relations` shape disagreeing with its Alembic owner
   (`202510241200_sot41_amg_core.py`) and had zero readers repo-wide; its absence and the absence of

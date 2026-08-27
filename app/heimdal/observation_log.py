@@ -168,6 +168,17 @@ def _assert_pg_schema(conn: Any) -> None:
     oid = row[0] if row else None
     if not oid:
         raise ObservationLogSchemaMissingError(f"Missing table '{_TABLE}'. {_MIGRATION_HINT}")
+    from app.heimdal.trigger_ownership import (
+        OBSERVATION_LOG_TRIGGER,
+        assert_migration_owned_reject_mutation_trigger,
+    )
+
+    assert_migration_owned_reject_mutation_trigger(
+        conn,
+        OBSERVATION_LOG_TRIGGER,
+        error_type=ObservationLogSchemaMissingError,
+        migration_hint=_MIGRATION_HINT,
+    )
 
 
 def _bootstrap_pg(conn: Any) -> None:
@@ -175,42 +186,47 @@ def _bootstrap_pg(conn: Any) -> None:
         _assert_pg_schema(conn)
         return
     cur = conn.cursor()
-    cur.execute("CREATE EXTENSION IF NOT EXISTS pgcrypto")
-    cur.execute(
-        f"""
-        CREATE TABLE IF NOT EXISTS {_TABLE} (
-            id uuid PRIMARY KEY,
-            topic text NOT NULL,
-            payload jsonb NOT NULL,
-            created_at timestamptz NOT NULL DEFAULT now(),
-            sequence bigserial NOT NULL
-        )
-        """
+    table_groups = (
+        (
+            _TABLE,
+            (
+                "CREATE EXTENSION IF NOT EXISTS pgcrypto",
+                f"""
+                CREATE TABLE {_TABLE} (
+                    id uuid PRIMARY KEY,
+                    topic text NOT NULL,
+                    payload jsonb NOT NULL,
+                    created_at timestamptz NOT NULL DEFAULT now(),
+                    sequence bigserial NOT NULL
+                )
+                """,
+                f"CREATE INDEX heimdal_observation_log_seq_idx ON {_TABLE} (sequence)",
+                f"CREATE INDEX heimdal_observation_log_topic_idx ON {_TABLE} (topic)",
+                """
+                CREATE OR REPLACE FUNCTION heimdal_observation_log_reject_mutation()
+                RETURNS trigger AS $$
+                BEGIN
+                    RAISE EXCEPTION 'heimdal_observation_log is append-only (HEIM-1): % is not permitted', TG_OP;
+                END;
+                $$ LANGUAGE plpgsql
+                """,
+                f"""
+                CREATE TRIGGER heimdal_observation_log_no_update
+                BEFORE UPDATE OR DELETE ON {_TABLE}
+                FOR EACH ROW EXECUTE FUNCTION heimdal_observation_log_reject_mutation()
+                """,
+            ),
+        ),
     )
-    cur.execute(f"CREATE INDEX IF NOT EXISTS heimdal_observation_log_seq_idx ON {_TABLE} (sequence)")
-    cur.execute(f"CREATE INDEX IF NOT EXISTS heimdal_observation_log_topic_idx ON {_TABLE} (topic)")
-    # Append-only enforcement at the DB level (HEIM-1): a trigger rejects any
-    # UPDATE/DELETE against the log table, independent of which role or code
-    # path issues the statement. This is defense in depth on top of "there is
-    # no update/delete method in this module's Python API".
-    cur.execute(
-        """
-        CREATE OR REPLACE FUNCTION heimdal_observation_log_reject_mutation()
-        RETURNS trigger AS $$
-        BEGIN
-            RAISE EXCEPTION 'heimdal_observation_log is append-only (HEIM-1): % is not permitted', TG_OP;
-        END;
-        $$ LANGUAGE plpgsql
-        """
-    )
-    cur.execute(f"DROP TRIGGER IF EXISTS heimdal_observation_log_no_update ON {_TABLE}")
-    cur.execute(
-        f"""
-        CREATE TRIGGER heimdal_observation_log_no_update
-        BEFORE UPDATE OR DELETE ON {_TABLE}
-        FOR EACH ROW EXECUTE FUNCTION heimdal_observation_log_reject_mutation()
-        """
-    )
+    for table_name, statements in table_groups:
+        cur.execute("SELECT to_regclass(%s)", (table_name,))
+        row = cur.fetchone()
+        table_present = bool(row and row[0])
+        if table_present:
+            continue
+        for statement in statements:
+            cur.execute(statement)
+    _assert_pg_schema(conn)
 
 
 class _PgObservationLog:

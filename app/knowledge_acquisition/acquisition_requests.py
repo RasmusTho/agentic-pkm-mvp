@@ -592,42 +592,52 @@ def _bootstrap_pg(conn: Any) -> None:
         _assert_pg_schema(conn)
         return
     cur = conn.cursor()
-    cur.execute(
-        f"""
-        CREATE TABLE IF NOT EXISTS {_TABLE} (
-            request_id TEXT PRIMARY KEY,
-            source_kind TEXT NOT NULL,
-            item_ref TEXT NOT NULL,
-            source_ref TEXT NOT NULL,
-            status TEXT NOT NULL DEFAULT 'pending',
-            priority TEXT NOT NULL DEFAULT 'normal',
-            requested_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-            completed_at TIMESTAMPTZ,
-            attempts INTEGER NOT NULL DEFAULT 0,
-            next_attempt_at TIMESTAMPTZ,
-            last_failure JSONB,
-            discovery_triggers JSONB NOT NULL DEFAULT '[]'::jsonb,
-            policy_snapshot JSONB NOT NULL DEFAULT '{{}}'::jsonb,
-            policy_version INTEGER NOT NULL DEFAULT 1,
-            trace_id TEXT,
-            content_identity TEXT,
-            artifact_path TEXT,
-            updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-            CONSTRAINT acquisition_requests_status_chk CHECK (
-                status IN ('pending', 'in_progress', 'completed', 'dead_lettered')
+    table_groups = (
+        (
+            _TABLE,
+            (
+                f"""
+                CREATE TABLE {_TABLE} (
+                    request_id TEXT PRIMARY KEY,
+                    source_kind TEXT NOT NULL,
+                    item_ref TEXT NOT NULL,
+                    source_ref TEXT NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'pending',
+                    priority TEXT NOT NULL DEFAULT 'normal',
+                    requested_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                    completed_at TIMESTAMPTZ,
+                    attempts INTEGER NOT NULL DEFAULT 0,
+                    next_attempt_at TIMESTAMPTZ,
+                    last_failure JSONB,
+                    discovery_triggers JSONB NOT NULL DEFAULT '[]'::jsonb,
+                    policy_snapshot JSONB NOT NULL DEFAULT '{{}}'::jsonb,
+                    policy_version INTEGER NOT NULL DEFAULT 1,
+                    trace_id TEXT,
+                    content_identity TEXT,
+                    artifact_path TEXT,
+                    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                    CONSTRAINT acquisition_requests_status_chk CHECK (
+                        status IN ('pending', 'in_progress', 'completed', 'dead_lettered')
+                    ),
+                    CONSTRAINT acquisition_requests_priority_chk CHECK (priority IN ('high', 'normal'))
+                )
+                """,
+                f"CREATE INDEX acquisition_requests_drain_idx ON {_TABLE} "
+                "(status, priority, requested_at)",
+                f"CREATE UNIQUE INDEX acquisition_requests_identity_uq ON {_TABLE} "
+                "(source_kind, item_ref, policy_version)",
             ),
-            CONSTRAINT acquisition_requests_priority_chk CHECK (priority IN ('high', 'normal'))
-        )
-        """
+        ),
     )
-    cur.execute(
-        f"CREATE INDEX IF NOT EXISTS acquisition_requests_drain_idx "
-        f"ON {_TABLE} (status, priority, requested_at)"
-    )
-    cur.execute(
-        f"CREATE UNIQUE INDEX IF NOT EXISTS acquisition_requests_identity_uq "
-        f"ON {_TABLE} (source_kind, item_ref, policy_version)"
-    )
+    for table_name, statements in table_groups:
+        cur.execute("SELECT to_regclass(%s)", (table_name,))
+        row = cur.fetchone()
+        table_present = bool(row and row[0])
+        if table_present:
+            continue
+        for statement in statements:
+            cur.execute(statement)
+    _assert_pg_schema(conn)
 
 
 def _iso_or_none(value: Any) -> str | None:
