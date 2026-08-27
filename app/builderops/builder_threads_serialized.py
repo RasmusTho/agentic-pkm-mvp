@@ -30,18 +30,30 @@ _SOURCE_REF = re.compile(
 )
 _CREDENTIAL_CONTENT = re.compile(
     r"(?im)(password|secret|credential|token|api[_-]?key|bearer\b|"
-    r"^aws_(?:access_key_id|secret_access_key)\s*=|"
-    r"^authorization:\s*(?:basic|bearer)\b|^-----begin (?:[a-z ]* )?private key-----|"
+    r"^[ \t]*aws_(?:access_key_id|secret_access_key)\s*=|"
+    r"^[ \t]*authorization:\s*(?:basic|bearer)\b|"
+    r"^[ \t]*-----begin (?:[a-z ]* )?private key-----|"
     r"\bAKIA[0-9A-Z]{16}\b|\bgithub_pat_[A-Za-z0-9_]{20,}|"
     r"\bsk-(?:proj-)?[A-Za-z0-9_-]{20,}\b)"
 )
 _CODE_OR_PATCH = re.compile(
-    r"(?im)^(?:diff --git |--- a/|\+\+\+ b/|@@ |```|"
-    r"\s*(?:def|class|function|const|let|var|import|from|package|func)\b|"
-    r"\s*console\.(?:log|error|warn)\s*\(|\s*git diff(?:\s|$)|"
-    r"\s*(?:print|return|throw|await|yield)\b\s*(?:\(|[a-z0-9_$'\"\[{])|"
-    r"\s*lambda\s+[^:\n]+:|\s*if\s+[^:\n]+:\s*$|"
-    r"\s*[a-z_$][a-z0-9_$]*\s*=\s*(?:\([^)]*\)|[a-z_$][a-z0-9_$]*)\s*=>)"
+    r"(?m)^[ \t]*(?:diff --git |--- a/|\+\+\+ b/|@@ |```|"
+    r"git diff(?:[ \t]|$)|"
+    r"async[ \t]+def[ \t]+[A-Za-z_][A-Za-z0-9_]*[ \t]*\(|"
+    r"(?:def|function)[ \t]+[A-Za-z_][A-Za-z0-9_]*[ \t]*\(|"
+    r"class[ \t]+[A-Za-z_][A-Za-z0-9_]*[ \t]*(?:\(|:)|"
+    r"(?:const|let|var)[ \t]+[A-Za-z_$][A-Za-z0-9_$]*[ \t]*=[ \t]*|"
+    r"from[ \t]+[A-Za-z0-9_.]+[ \t]+import(?:[ \t]|$)|"
+    r"import[ \t]+[A-Za-z0-9_.]+(?:$|,[ \t]*|[ \t]+as\b)|"
+    r"(?:package|func)[ \t]+[A-Za-z_][A-Za-z0-9_]*|"
+    r"print[ \t]*\(|"
+    r"(?:return|yield)\b[ \t]*(?:[0-9'\"(\[{])|"
+    r"throw(?:[ \t]+new[ \t]+[A-Za-z_$][A-Za-z0-9_$]*|[ \t]*\()|"
+    r"await[ \t]+(?:[A-Za-z_$][A-Za-z0-9_$]*[ \t]*\(|Promise\.)|"
+    r"lambda[ \t]+[^:\n]+:|"
+    r"if[ \t]+[^:\n]+:[ \t]*$|"
+    r"console\.(?:log|error|warn)[ \t]*\(|"
+    r"[A-Za-z_$][A-Za-z0-9_$]*[ \t]*=[ \t]*(?:\([^)]*\)|[A-Za-z_$][A-Za-z0-9_$]*)[ \t]*=>)"
 )
 _MAX_TEXT = 500
 _MAX_COMPONENTS = 64
@@ -747,7 +759,7 @@ def _classify_uri(candidate: str) -> Literal["valid", "terminal_private", "indet
     if not scheme:
         return "valid"
     if scheme in {"http", "https"}:
-        if not candidate.startswith(f"{scheme}://") or not parsed.netloc or "@" in parsed.netloc:
+        if not candidate.lower().startswith(f"{scheme}://") or not parsed.netloc or "@" in parsed.netloc:
             return "indeterminate"
         if not _valid_http_authority(parsed.netloc):
             return "indeterminate"

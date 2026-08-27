@@ -118,6 +118,75 @@ def test_http_and_recovery_reject_all_persisted_untrusted_fields(
     assert created.thread.thread_id
 
 
+@pytest.mark.parametrize(
+    ("request_id", "content"),
+    (
+        ("indented-authorization-5118", "https://example.test/%20authorization%3A%20basic%20dXNlcjpwYXNz"),
+        ("indented-aws-5118", "https://example.test/%20aws_access_key_id%3Dvalue"),
+    ),
+)
+def test_indented_decoded_http_credential_path_segments_never_persist_or_recover(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, request_id: str, content: str
+) -> None:
+    client, root = _http_client(tmp_path, monkeypatch)
+    entries = root / "builder-thread-entries"
+
+    with pytest.raises(BuilderThreadError, match="shared_non_sensitive"):
+        _create(client, request_id=request_id, content=content)
+    assert list(entries.glob("*.json")) == []
+
+    _create(client, request_id=f"recovery-{request_id}")
+    record = entries / f"recovery-{request_id}.json"
+    original_entries = {path.name: path.read_bytes() for path in entries.glob("*.json")}
+    payload = json.loads(record.read_text(encoding="utf-8"))
+    payload["command"]["content"] = content
+    from app.builderops.builder_threads_serialized import ThreadMutation, _command_digest
+
+    command = ThreadMutation(
+        request_id=payload["command"]["request_id"],
+        kind=payload["command"]["kind"],
+        actor=payload["command"]["actor"],
+        recipient=payload["command"]["recipient"],
+        subject=payload["command"]["subject"],
+        content=payload["command"]["content"],
+        source_refs=tuple(payload["command"]["source_refs"]),
+    )
+    payload["request_digest"] = _command_digest(command)
+    record.write_text(json.dumps(payload), encoding="utf-8")
+    tampered_entries = {path.name: path.read_bytes() for path in entries.glob("*.json")}
+    assert set(tampered_entries) == set(original_entries)
+
+    with pytest.raises(BuilderThreadError, match="external writer entry is invalid"):
+        SerializedThreadWriter(vault_id="builderops-mac-mini", state_root=root)
+    assert {path.name: path.read_bytes() for path in entries.glob("*.json")} == tampered_entries
+
+
+@pytest.mark.parametrize(
+    ("request_id", "content"),
+    (
+        ("uppercase-http-5118", "HTTPS://example.test/home/start"),
+        ("ordinary-let-prose-5118", "Let us discuss the boundary."),
+        ("ordinary-return-prose-5118", "Return value should remain ordinary prose."),
+        ("ordinary-return-identifier-5118", "https://example.test/return1"),
+        ("ordinary-uppercase-code-prose-5118", "ASYNC DEF foo( is ordinary prose here."),
+    ),
+)
+def test_valid_case_insensitive_http_and_ordinary_prose_persist_through_restart(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    request_id: str,
+    content: str,
+) -> None:
+    client, root = _http_client(tmp_path, monkeypatch)
+
+    accepted = _create(client, request_id=request_id, content=content)
+    assert accepted.replayed is False
+    assert len(list((root / "builder-thread-entries").glob("*.json"))) == 1
+
+    restarted = SerializedThreadWriter(vault_id="builderops-mac-mini", state_root=root)
+    assert restarted.accepted_mutation_count == 1
+
+
 def test_closed_persisted_record_and_root_identity_contract(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
