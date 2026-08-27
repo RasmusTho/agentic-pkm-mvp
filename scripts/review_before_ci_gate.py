@@ -252,6 +252,8 @@ def authenticated_pr_scope_revalidation_history(
         if (
             not isinstance(follow_up, Mapping)
             or follow_up.get("number") != follow_up_issue
+            or follow_up.get("state") != "open"
+            or "pull_request" in follow_up
             or not isinstance(follow_up.get("body"), str)
             or classify_issue_body(follow_up["body"], issue_number=follow_up_issue).readiness_classification
             != "ready_candidate"

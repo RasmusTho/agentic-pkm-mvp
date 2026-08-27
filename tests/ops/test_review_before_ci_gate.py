@@ -6,6 +6,7 @@ import re
 import shlex
 import subprocess
 import sys
+from types import SimpleNamespace
 from pathlib import Path
 
 import pytest
@@ -557,6 +558,7 @@ def test_split_revalidation_authenticates_a_bounded_follow_up_issue() -> None:
     responses, api = _live_pr_review_api()
     responses["repos/octo/repo/issues/4172"] = {
         "number": 4172,
+        "state": "open",
         "body": """## Context
 Bounded follow-up.
 ## Scope
@@ -622,6 +624,21 @@ Bounded follow-up.
             follow_up_issue_numbers=[4173],
             api=api,
         )
+    responses["repos/octo/repo/issues/4174"] = {
+        "number": 4174,
+        "state": "closed",
+        "pull_request": {"url": "https://api.github.example/pulls/4174"},
+        "body": responses["repos/octo/repo/issues/4172"]["body"],
+    }
+    with pytest.raises(ReviewBeforeCiGateError, match="bounded canonical contract"):
+        authenticated_pr_scope_revalidation_history(
+            repository="octo/repo",
+            pr_number=4029,
+            governing_issue=4028,
+            head_sha="a" * 40,
+            follow_up_issue_numbers=[4174],
+            api=api,
+        )
 
 
 def test_pr_scope_revalidation_rejects_foreign_or_stale_live_pr_evidence() -> None:
@@ -661,7 +678,13 @@ def test_existing_publication_mode_cannot_omit_pr_scope_revalidation() -> None:
     assert "requires authenticated PR scope revalidation" in result.stderr
 
 
-def test_open_pr_cannot_omit_publication_mode(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_open_pr_cannot_omit_publication_mode(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(
+        "scripts.review_before_ci_gate.workflow_risk_evidence_from_git",
+        lambda *args, **kwargs: SimpleNamespace(risks=[]),
+    )
     monkeypatch.setattr(
         "scripts.review_before_ci_gate._github_repository_from_origin", lambda: "octo/repo"
     )
@@ -679,6 +702,7 @@ def test_open_pr_cannot_omit_publication_mode(monkeypatch: pytest.MonkeyPatch) -
             "--review-gate-complete",
         ]
     ) == 2
+    assert "requires explicit --publication-mode" in capsys.readouterr().err
 
 
 @pytest.mark.parametrize(
