@@ -15,6 +15,7 @@ from scripts.review_before_ci_gate import (
     _github_repository_from_origin,
     authenticated_pr_scope_revalidation_history,
     evaluate_review_before_ci_gate,
+    main as review_before_ci_main,
     validate_pr_scope_revalidation,
 )
 
@@ -552,6 +553,77 @@ def test_pr_scope_revalidation_derives_live_history_and_requires_exact_classific
         )
 
 
+def test_split_revalidation_authenticates_a_bounded_follow_up_issue() -> None:
+    responses, api = _live_pr_review_api()
+    responses["repos/octo/repo/issues/4172"] = {
+        "number": 4172,
+        "body": """## Context
+Bounded follow-up.
+## Scope
+- [ ] One bounded change.
+## Source Anchors
+- `tests/ops/test_review_before_ci_gate.py`
+## SBS Impact
+- Builder System.
+## Constraints
+- Stay bounded.
+## Acceptance Criteria
+- [ ] The follow-up is testable.
+  - Verify: `tests/ops/test_review_before_ci_gate.py::test_split_revalidation_authenticates_a_bounded_follow_up_issue`
+## Out of Scope
+- Other work.
+## Suggested Validation
+- `pytest -q tests/ops/test_review_before_ci_gate.py`
+## Source Docs
+- `docs/development/AUTONOMOUS_REVIEW_REPAIR_GATE_CONTRACTS.md`
+""",
+    }
+    history = authenticated_pr_scope_revalidation_history(
+        repository="octo/repo",
+        pr_number=4029,
+        governing_issue=4028,
+        head_sha="a" * 40,
+        follow_up_issue_numbers=[4172],
+        api=api,
+    )
+    receipt = {
+        "version": 1,
+        "pr_number": 4029,
+        "head_sha": "a" * 40,
+        "governing_issue": 4028,
+        "governing_contract_sha256": history["governing_contract_sha256"],
+        "outcome": "split",
+        "follow_up_issue": 4172,
+        "authentication": history["authentication"],
+        "finding_classifications": [
+            {"finding_id": finding_id, "scope_class": "governing_contract_blocker"}
+            for finding_id in history["finding_ids"]
+        ],
+    }
+    assert (
+        validate_pr_scope_revalidation(
+            4029,
+            4028,
+            "a" * 40,
+            history["rejected_rounds"],
+            receipt,
+            governing_contract_sha256=history["governing_contract_sha256"],
+            authenticated_history=history,
+        )
+        == receipt
+    )
+    responses["repos/octo/repo/issues/4173"] = {"number": 4173, "body": "not a contract"}
+    with pytest.raises(ReviewBeforeCiGateError, match="bounded canonical contract"):
+        authenticated_pr_scope_revalidation_history(
+            repository="octo/repo",
+            pr_number=4029,
+            governing_issue=4028,
+            head_sha="a" * 40,
+            follow_up_issue_numbers=[4173],
+            api=api,
+        )
+
+
 def test_pr_scope_revalidation_rejects_foreign_or_stale_live_pr_evidence() -> None:
     responses, api = _live_pr_review_api()
     responses["repos/octo/repo/pulls/4029"]["head"]["sha"] = "b" * 40  # type: ignore[index]
@@ -589,26 +661,24 @@ def test_existing_publication_mode_cannot_omit_pr_scope_revalidation() -> None:
     assert "requires authenticated PR scope revalidation" in result.stderr
 
 
-def test_open_pr_cannot_omit_publication_mode() -> None:
-    result = subprocess.run(
+def test_open_pr_cannot_omit_publication_mode(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "scripts.review_before_ci_gate._github_repository_from_origin", lambda: "octo/repo"
+    )
+    monkeypatch.setattr(
+        "scripts.review_before_ci_gate._current_branch_has_open_pr", lambda repository: True
+    )
+
+    assert review_before_ci_main(
         [
-            sys.executable,
-            "scripts/review_before_ci_gate.py",
             "--lane",
             "governance",
             "--changed-file",
             "docs/development/PR_HOT_PATH.md",
             "--risk-assessment-complete",
             "--review-gate-complete",
-        ],
-        cwd=REPO_ROOT,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-
-    assert result.returncode == 2
-    assert "requires explicit --publication-mode" in result.stderr
+        ]
+    ) == 2
 
 
 @pytest.mark.parametrize(

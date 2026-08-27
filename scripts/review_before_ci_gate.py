@@ -18,6 +18,7 @@ if __package__ in {None, ""}:  # Supports direct ``python scripts/...`` invocati
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.dispatcher.verification_contract import resolve_issue_authority
+from scripts.validate_issue_readiness import classify_issue_body
 
 try:  # Supports both ``python scripts/...`` and package imports in tests.
     from scripts.workflow_review_risk import (
@@ -107,8 +108,9 @@ def validate_pr_scope_revalidation(
         raise ReviewBeforeCiGateError(
             "contract revalidation receipt outcome must be continue_unchanged, split, or expanded_contract"
         )
+    authenticated_follow_up_issues = _authenticated_follow_up_issue_ids(authenticated_history)
     if outcome == "split" and not _is_bounded_follow_up_issue(
-        receipt.get("follow_up_issue"), governing_issue
+        receipt.get("follow_up_issue"), governing_issue, authenticated_follow_up_issues
     ):
         raise ReviewBeforeCiGateError(
             "split requires a bounded follow-up Issue distinct from the governing Issue"
@@ -178,7 +180,7 @@ def validate_pr_scope_revalidation(
                 "continue_unchanged permits only governing-contract blockers and PR-introduced regressions"
             )
         if scope_class == "adjacent_pre_existing" and not _is_bounded_follow_up_issue(
-            finding.get("follow_up_issue"), governing_issue
+            finding.get("follow_up_issue"), governing_issue, authenticated_follow_up_issues
         ):
             raise ReviewBeforeCiGateError(
                 "adjacent/pre-existing findings require a bounded follow-up Issue"
@@ -200,6 +202,7 @@ def authenticated_pr_scope_revalidation_history(
     pr_number: int,
     governing_issue: int,
     head_sha: str,
+    follow_up_issue_numbers: Sequence[int] = (),
     api: Callable[[str, bool], object] | None = None,
 ) -> Mapping[str, object]:
     """Fetch and bind the complete live GitHub review history for one PR.
@@ -241,6 +244,22 @@ def authenticated_pr_scope_revalidation_history(
         raise ReviewBeforeCiGateError(
             "GitHub PR governing Issue identity is missing, foreign, or stale"
         )
+    bounded_follow_up_issues: list[int] = []
+    for follow_up_issue in sorted(set(follow_up_issue_numbers)):
+        if not _is_bounded_follow_up_issue(follow_up_issue, governing_issue):
+            raise ReviewBeforeCiGateError("follow-up Issue identity is invalid")
+        follow_up = github_api(f"repos/{repository}/issues/{follow_up_issue}", False)
+        if (
+            not isinstance(follow_up, Mapping)
+            or follow_up.get("number") != follow_up_issue
+            or not isinstance(follow_up.get("body"), str)
+            or classify_issue_body(follow_up["body"], issue_number=follow_up_issue).readiness_classification
+            != "ready_candidate"
+        ):
+            raise ReviewBeforeCiGateError(
+                "follow-up Issue must exist and carry a bounded canonical contract"
+            )
+        bounded_follow_up_issues.append(follow_up_issue)
     if (
         not isinstance(reviews, list)
         or not isinstance(inline_comments, list)
@@ -307,6 +326,7 @@ def authenticated_pr_scope_revalidation_history(
         "governing_contract_sha256": hashlib.sha256(
             _canonical_contract_body(issue["body"]).encode("utf-8")
         ).hexdigest(),
+        "bounded_follow_up_issues": bounded_follow_up_issues,
     }
 
 
@@ -380,6 +400,20 @@ def _nested_value(payload: Mapping[str, object], *keys: str) -> object:
             return None
         value = value.get(key)
     return value
+
+
+def _follow_up_issue_numbers(receipt: object) -> list[int]:
+    if not isinstance(receipt, Mapping):
+        return []
+    values = [receipt.get("follow_up_issue")]
+    classifications = receipt.get("finding_classifications")
+    if isinstance(classifications, list):
+        values.extend(
+            finding.get("follow_up_issue")
+            for finding in classifications
+            if isinstance(finding, Mapping) and finding.get("follow_up_issue") is not None
+        )
+    return [value for value in values if isinstance(value, int) and not isinstance(value, bool)]
 
 
 @dataclass(frozen=True)
@@ -625,12 +659,26 @@ def _nonempty_string(value: object) -> bool:
     return isinstance(value, str) and bool(value.strip())
 
 
-def _is_bounded_follow_up_issue(value: object, governing_issue: int) -> bool:
+def _authenticated_follow_up_issue_ids(
+    authenticated_history: Mapping[str, object] | None,
+) -> set[int] | None:
+    if authenticated_history is None:
+        return None
+    values = authenticated_history.get("bounded_follow_up_issues")
+    if not isinstance(values, list) or not all(isinstance(value, int) for value in values):
+        raise ReviewBeforeCiGateError("authenticated history is missing bounded follow-up Issue evidence")
+    return set(values)
+
+
+def _is_bounded_follow_up_issue(
+    value: object, governing_issue: int, authenticated_issue_ids: set[int] | None = None
+) -> bool:
     return (
         isinstance(value, int)
         and not isinstance(value, bool)
         and value > 0
         and value != governing_issue
+        and (authenticated_issue_ids is None or value in authenticated_issue_ids)
     )
 
 
@@ -712,16 +760,17 @@ def main(argv: Sequence[str] | None = None) -> int:
                 raise ReviewBeforeCiGateError(
                     "PR scope revalidation requires --github-repository, --pr-number, and --governing-issue"
                 )
+            receipt = (
+                json.loads(Path(args.contract_revalidation_receipt).read_text(encoding="utf-8"))
+                if args.contract_revalidation_receipt
+                else None
+            )
             history = authenticated_pr_scope_revalidation_history(
                 repository=args.github_repository,
                 pr_number=args.pr_number,
                 governing_issue=args.governing_issue,
                 head_sha=evidence.head_sha,
-            )
-            receipt = (
-                json.loads(Path(args.contract_revalidation_receipt).read_text(encoding="utf-8"))
-                if args.contract_revalidation_receipt
-                else None
+                follow_up_issue_numbers=_follow_up_issue_numbers(receipt),
             )
             validate_pr_scope_revalidation(
                 args.pr_number,
