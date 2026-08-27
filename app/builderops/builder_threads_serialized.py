@@ -29,7 +29,7 @@ _SOURCE_REF = re.compile(
     r"^(?:builderops|conversation|doc|git|github):[A-Za-z0-9._:/#@+-]{1,255}$"
 )
 _CREDENTIAL_CONTENT = re.compile(
-    r"(?im)(password|secret|credential|token|api[_-]?key|bearer\b|"
+    r"(?im)(password|secret|credential|token|api[_-]?key|bearer|"
     r"^[ \t]*aws_(?:access_key_id|secret_access_key)\s*=|"
     r"^[ \t]*authorization:\s*(?:basic|bearer)\b|"
     r"^[ \t]*-----begin (?:[a-z ]* )?private key-----|"

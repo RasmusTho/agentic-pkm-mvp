@@ -123,6 +123,8 @@ def test_http_and_recovery_reject_all_persisted_untrusted_fields(
     (
         ("indented-authorization-5118", "https://example.test/%20authorization%3A%20basic%20dXNlcjpwYXNz"),
         ("indented-aws-5118", "https://example.test/%20aws_access_key_id%3Dvalue"),
+        ("plain-substring-5118", "bearerValue"),
+        ("plain-uppercase-substring-5118", "BEARERvalue"),
     ),
 )
 def test_indented_decoded_http_credential_path_segments_never_persist_or_recover(
