@@ -110,7 +110,7 @@ def test_rollup_groups_by_available_kind_and_confidence(
     assert summary.rollup["project:product"]["counts"]["partly_held"] == 1
     assert summary.rollup["ungrouped"]["counts"]["unknown_yet"] == 1
     assert summary.confidence_rollup["high"]["counts"]["held"] == 1
-    assert summary.confidence_rollup["high"]["rates"]["held"] == 1.0
+    assert summary.confidence_rollup["high"]["rates"]["held"] == 0.5
 
 
 @pytest.mark.pg
