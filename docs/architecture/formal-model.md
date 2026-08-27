@@ -27,7 +27,7 @@ V  (vault, canonical plane — FD-V)
 
 P  (Postgres, derived-plus-canonical-logs plane — FD-P)
    P.objects      object rows (object_id; tombstone semantics ratified, D-2)
-   P.file_state   path → hash/mtime sync bookkeeping
+   P.file_state   (vault_binding_id, path) → hash/mtime sync bookkeeping
    P.vectors      store_vector_index (+ vector_index_meta identity singleton)
    P.relations    store_relations, store_relation_memberships
    P.outbox       the event log (topic, payload, delivered_at, attempts)
@@ -139,8 +139,8 @@ T-uuid-heal [system, many entry points incl. GET /companion/workspace]
 
 ```
 T-sync [watcher → INGEST_VAULT_CHANGED]  (app/services/vault_sync.py:334-512)
-  pre:  note readable ∧ hash changed vs P.file_state
-  post: P.objects upsert ∧ P.file_state upsert ∧ evt(ingest.object.*)
+  pre:  note readable ∧ hash changed vs P.file_state(vault_binding_id, path)
+  post: P.objects upsert ∧ P.file_state(vault_binding_id, path) upsert ∧ evt(ingest.object.*)
   ⚠ NOT atomic today (three statements, five commits) — KERNEL-01 (#2763) makes this one tx
 
 T-embed [worker → INDEX_EMBEDDING_REQUESTED]  (app/indexer/consumer.py:85-179)
@@ -149,7 +149,7 @@ T-embed [worker → INDEX_EMBEDDING_REQUESTED]  (app/indexer/consumer.py:85-179)
   post: P.vectors upsert (identity-stamped) ∧ evt(index.embedding.created | .failed)
 
 T-delete [human deletes note → watcher → delete_note → INGEST_OBJECT_DELETED]
-  post: P.file_state rows deleted ∧ P.objects.path←NULL (TOMBSTONE — ratified D-2)
+  post: binding-scoped P.file_state(vault_binding_id, path) row deleted ∧ P.objects.path←NULL (TOMBSTONE — ratified D-2)
         ∧ purge_vectors(P.vectors) [worker handler, app/workers/outbox_worker.py::handle_ingest_object_deleted — #2944]
   future (owner note, not scoped): event-triggered relevance decay lifecycle
         active → archived → forgotten (value lost at a triggering event, not TTL)
