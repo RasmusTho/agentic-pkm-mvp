@@ -811,10 +811,10 @@ def test_cli_fails_until_review_gate_is_complete() -> None:
         check=False,
     )
 
-    assert blocked.returncode == 2
-    assert allowed.returncode == 2
-    assert "requires explicit --publication-mode" in blocked.stderr
-    assert "requires explicit --publication-mode" in allowed.stderr
+    assert blocked.returncode == 1
+    assert json.loads(blocked.stdout)["may_handoff_to_ci"] is False
+    assert allowed.returncode == 0
+    assert json.loads(allowed.stdout)["may_handoff_to_ci"] is True
 
 
 def test_publish_pr_skill_runs_review_gate_before_push() -> None:
