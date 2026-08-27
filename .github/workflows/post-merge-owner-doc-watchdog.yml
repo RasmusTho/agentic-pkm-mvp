@@ -220,14 +220,18 @@ jobs:
             };
             const commentReceipts = (comments, marker) => {
               const escaped = marker.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-              const pattern = new RegExp(`${escaped}\\s*\`\`\`json\\s*([\\s\\S]*?)\\s*\`\`\``, "gm");
+              const pattern = new RegExp(
+                `${escaped}[\\t ]*\\r?\\n(?<fence>\`{3,})json[\\t ]*\\r?\\n` +
+                `(?<payload>[\\s\\S]*?)\\r?\\n\\k<fence>(?!\`)`,
+                "gm"
+              );
               const receipts = [];
               for (const comment of comments) {
                 if (!TRUSTED_ASSOCIATIONS.has(comment.author_association) || typeof comment.body !== "string") continue;
                 const matches = [...comment.body.matchAll(pattern)];
                 if (matches.length !== 1) continue;
                 let receipt;
-                try { receipt = JSON.parse(matches[0][1]); } catch { continue; }
+                try { receipt = JSON.parse(matches[0].groups.payload); } catch { continue; }
                 if (receipt !== null && typeof receipt === "object" && !Array.isArray(receipt)) {
                   receipts.push(receipt);
                 }

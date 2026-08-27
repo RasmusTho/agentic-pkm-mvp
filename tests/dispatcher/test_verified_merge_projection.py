@@ -54,7 +54,7 @@ def _canonical_body() -> str:
     )
 
 
-def _canonical_pr() -> dict[str, object]:
+def _canonical_pr(body: str | None = None) -> dict[str, object]:
     return {
         "number": 3822,
         "node_id": PR_NODE_ID,
@@ -63,7 +63,7 @@ def _canonical_pr() -> dict[str, object]:
         "merged_at": None,
         "draft": False,
         "title": "Fence verified-merge projection convergence",
-        "body": _canonical_body(),
+        "body": _canonical_body() if body is None else body,
         "head": {"sha": HEAD, "ref": "codex/projection-convergence"},
         "base": {"sha": BASE_SHA, "ref": "main"},
     }
@@ -242,6 +242,87 @@ def test_projection_convergence_allows_same_second_edit_and_workflow_creation() 
         pr=neutralized_pr,
     )
     assert resolved == prepared["phase_receipt"]
+
+
+def test_projection_convergence_receipt_fences_embedded_pr_body_backticks() -> None:
+    """A PR body fence must not terminate its durable receipt envelope."""
+
+    canonical_body = _canonical_body() + "```yaml\nexample: fenced\n```\n"
+    plan = verified_merge.prepare_verified_merge(
+        context=_context(),
+        pr=_canonical_pr(canonical_body),
+        live_closing_issues=[3820],
+        merge_readiness=_readiness(),
+    )
+    authority = plan["authority_receipt"]
+    assert isinstance(authority, dict)
+    neutralized_body = str(plan["neutralized_body"])
+    authority_digest = hashlib.sha256(
+        json.dumps(authority, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    pr_contract = {
+        "name": "pr-contract",
+        "workflow_run_id": 1,
+        "check_run_id": 2,
+        "check_suite_id": 3,
+        "event": "pull_request",
+        "head_sha": HEAD,
+        "head_ref": "codex/projection-convergence",
+        "base_ref": "main",
+        "status": "completed",
+        "conclusion": "success",
+        "created_at": "2026-08-12T05:00:01Z",
+        "started_at": "2026-08-12T05:00:02Z",
+        "completed_at": "2026-08-12T05:00:03Z",
+        "authority_sha256": authority_digest,
+        "neutralized_body_sha256": authority["neutralized_body_sha256"],
+        "repository": REPOSITORY,
+        "pr_number": 3822,
+        "pull_request_node_id": PR_NODE_ID,
+        "title": "Fence verified-merge projection convergence",
+        "default_branch": "main",
+        "default_branch_sha": BASE_SHA,
+        "body_edit": {
+            "node_id": EDIT_NODE_ID,
+            "edited_at": "2026-08-12T05:00:00Z",
+            "editor_login": "RasmusTho",
+            "editor_association": "OWNER",
+        },
+    }
+    final_observation = _observation(
+        neutralized_body, observed_at="2026-08-12T05:00:07Z"
+    )
+    result = verified_merge.build_verified_merge_projection_convergence(
+        authority_receipt=authority,
+        pr_contract=pr_contract,
+        observations=[
+            _observation(neutralized_body, observed_at="2026-08-12T05:00:04Z"),
+            _observation(neutralized_body, observed_at="2026-08-12T05:00:06Z"),
+        ],
+        final_projection_observation=final_observation,
+        minimum_backoff_seconds=1,
+    )
+    receipt = result["convergence_receipt"]
+    comment = result["convergence_receipt_comment"]
+    assert isinstance(receipt, dict)
+    assert isinstance(comment, str)
+    assert "````json\n" in comment
+
+    prepared = verified_merge.build_verified_merge_phase(
+        authority_receipt=authority,
+        phase="prepared",
+        pr=_canonical_pr(neutralized_body),
+        projection_convergence_receipt=receipt,
+        final_projection_observation=final_observation,
+    )
+    assert verified_merge.resolve_verified_merge_phase(
+        [
+            _trusted_convergence_comment(receipt, body=comment),
+            _trusted_comment(str(prepared["phase_receipt_comment"])),
+        ],
+        authority_receipt=authority,
+        pr=_canonical_pr(neutralized_body),
+    ) == prepared["phase_receipt"]
 
 
 def test_projection_convergence_rejects_regression_drift_and_ambiguous_reads() -> None:
@@ -542,10 +623,13 @@ def _trusted_convergence_comment(
     convergence: Mapping[str, object],
     *,
     association: str = "OWNER",
+    body: str | None = None,
 ) -> dict[str, object]:
     return {
         "author_association": association,
-        "body": (
+        "body": body
+        if body is not None
+        else (
             "verified merge closing projection convergence:\n```json\n"
             + json.dumps(convergence, sort_keys=True, separators=(",", ":"))
             + "\n```"

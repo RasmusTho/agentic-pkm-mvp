@@ -327,11 +327,28 @@ def _canonical_digest(value: Mapping[str, object]) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
+def _json_fence(payload: str) -> str:
+    """Return a Markdown fence that cannot occur in the JSON payload.
+
+    The durable projection receipt embeds the neutralized PR body. That body
+    may itself contain Markdown fences, so a fixed triple-backtick wrapper
+    would make a valid receipt unparsable during crash recovery.
+    """
+
+    longest_payload_run = max(
+        (len(match.group()) for match in re.finditer(r"`+", payload)),
+        default=0,
+    )
+    return "`" * max(3, longest_payload_run + 1)
+
+
 def _comment_receipt_entries(
     comments: Sequence[Mapping[str, object]], marker: str
 ) -> list[tuple[Mapping[str, object], Mapping[str, object]]]:
     pattern = re.compile(
-        re.escape(marker) + r"\s*```json\s*([\s\S]*?)\s*```",
+        re.escape(marker)
+        + r"[\t ]*\r?\n(?P<fence>`{3,})json[\t ]*\r?\n"
+        + r"(?P<payload>[\s\S]*?)\r?\n(?P=fence)(?!`)",
         re.MULTILINE,
     )
     receipts: list[tuple[Mapping[str, object], Mapping[str, object]]] = []
@@ -341,11 +358,11 @@ def _comment_receipt_entries(
         body = comment.get("body")
         if not isinstance(body, str):
             continue
-        matches = pattern.findall(body)
+        matches = list(pattern.finditer(body))
         if len(matches) != 1:
             continue
         try:
-            value = json.loads(matches[0])
+            value = json.loads(matches[0].group("payload"))
         except json.JSONDecodeError:
             continue
         if isinstance(value, Mapping):
@@ -1423,11 +1440,12 @@ def build_verified_merge_projection_convergence(
         raise ValueError("verified merge projection convergence is malformed")
     receipt["receipt_sha256"] = _canonical_digest(receipt)
     receipt_json = json.dumps(receipt, sort_keys=True, separators=(",", ":"))
+    fence = _json_fence(receipt_json)
     return {
         "convergence_receipt": receipt,
         "convergence_receipt_comment": (
             f"{VERIFIED_MERGE_PROJECTION_CONVERGENCE_MARKER}\n"
-            f"```json\n{receipt_json}\n```"
+            f"{fence}json\n{receipt_json}\n{fence}"
         ),
     }
 
