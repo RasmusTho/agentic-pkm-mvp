@@ -26,7 +26,7 @@ def test_builderops_compose_is_lifecycle_isolated() -> None:
     services = compose["services"]
 
     assert compose["name"] == "builderops-control-plane"
-    assert set(services) == {"db", "migrate", "api", "worker", "backup"}
+    assert set(services) == {"db", "migrate", "api", "worker"}
     assert "docker-compose.yaml" not in text
     assert "pkm-dev" not in text
     assert "pkm-test" not in text
@@ -41,7 +41,7 @@ def test_builderops_compose_is_lifecycle_isolated() -> None:
     assert db["volumes"] == [
         "builderops-pgdata:/var/lib/postgresql/data",
         "./config/builderops/postgresql.conf:/etc/postgresql/builderops-postgresql.conf:ro",
-        "./scripts/builderops/wal_archive.sh:/app/scripts/builderops/wal_archive.sh:ro",
+        "./scripts/builderops/local_wal_guard.sh:/app/scripts/builderops/local_wal_guard.sh:ro",
         "./scripts/builderops/init_roles.sh:/docker-entrypoint-initdb.d/10-builderops-roles.sh:ro",
     ]
     assert compose["volumes"]["builderops-pgdata"] == {
@@ -55,24 +55,10 @@ def test_builderops_compose_is_lifecycle_isolated() -> None:
         dependencies = services[name]["depends_on"]
         assert dependencies["db"]["condition"] == "service_healthy"
         assert dependencies["migrate"]["condition"] == "service_completed_successfully"
-    assert services["backup"]["profiles"] == ["ops"]
-    assert services["backup"]["restart"] == "no"
-    assert "builderops-pgdata:/var/lib/postgresql/data:ro" in services["backup"]["volumes"]
-    assert services["backup"]["environment"]["PGPASSWORD_FILE"].startswith("/run/secrets/")
-
     assert services["api"]["ports"] == ["127.0.0.1:${BUILDEROPS_API_PORT:-18100}:8000"]
     assert services["db"].get("ports") is None
     assert compose["networks"]["builderops-internal"]["internal"] is True
-    assert compose["networks"]["builderops-recovery-egress"].get("internal") is not True
-    assert services["db"]["networks"] == [
-        "builderops-internal",
-        "builderops-recovery-egress",
-    ]
-    assert services["backup"]["networks"] == [
-        "builderops-internal",
-        "builderops-recovery-egress",
-    ]
-    for name in ("migrate", "api", "worker"):
+    for name in ("db", "migrate", "api", "worker"):
         assert services[name]["networks"] == ["builderops-internal"]
 
     secret_names = set(compose["secrets"])
@@ -83,16 +69,28 @@ def test_builderops_compose_is_lifecycle_isolated() -> None:
         "builderops_database_url",
         "builderops_api_credentials",
         "builderops_executor_credentials",
-        "builderops_recovery_target",
         "builderops_probe_token",
-        "builderops_wal_access_key_id",
-        "builderops_wal_secret_access_key",
-        "builderops_wal_encryption_key",
     } <= secret_names
     assert "API_KEY" not in text
     assert "/Users:/Users" not in text
     assert "/Volumes:/Volumes" not in text
     assert "runtime/dispatcher" not in text
+
+
+def test_local_control_plane_disables_wal_archiving_without_recovery_egress() -> None:
+    compose = _compose()
+    db = compose["services"]["db"]
+    config = (ROOT / "config/builderops/postgresql.conf").read_text(encoding="utf-8")
+
+    assert "archive_mode = off" in config
+    assert "archive_command = ''" in config
+    assert "wal_archive.sh" not in str(db)
+    assert "WALG_S3_PREFIX" not in db["environment"]
+    assert "builderops-recovery-egress" not in compose["networks"]
+    assert all("wal_" not in secret for secret in compose["secrets"])
+    assert "builderops_recovery_target" not in compose["secrets"]
+    assert "BUILDEROPS_RECOVERY_TARGET_FILE" not in compose["services"]["api"]["environment"]
+    assert compose["services"]["api"]["environment"]["BUILDEROPS_LOCAL_DURABILITY_MODE"] == "${BUILDEROPS_LOCAL_DURABILITY_MODE:?Local BuilderOps durability mode is required}"
 
 
 def test_builderops_postgres_listens_on_the_internal_network() -> None:
@@ -106,6 +104,7 @@ def test_builderops_db_healthcheck_probes_the_container_network_address() -> Non
     test_cmd = compose["services"]["db"]["healthcheck"]["test"][-1]
     assert "127.0.0.1" not in test_cmd
     assert "hostname -i" in test_cmd
+    assert "local_wal_guard.sh" in test_cmd
     assert "pg_isready" in test_cmd
 
 

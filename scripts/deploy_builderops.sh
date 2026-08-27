@@ -23,9 +23,10 @@ read_pin() {
 
 write_pin() {
   local file="${1:?pin file required}" source_sha="${2:?source SHA required}" digest="${3:?digest required}" postgres_digest="${4:?postgres digest required}"
-  local repository postgres_repository tmp
+  local repository postgres_repository local_durability_mode tmp
   repository="$(read_pin "${PIN_FILE}" BUILDEROPS_IMAGE_REPOSITORY)"
   postgres_repository="$(read_pin "${PIN_FILE}" BUILDEROPS_POSTGRES_IMAGE_REPOSITORY)"
+  local_durability_mode="$(read_pin "${PIN_FILE}" BUILDEROPS_LOCAL_DURABILITY_MODE)"
   tmp="$(mktemp "${file}.tmp.XXXXXX")"
   {
     printf 'BUILDEROPS_IMAGE_REPOSITORY=%s\n' "${repository}"
@@ -35,6 +36,7 @@ write_pin() {
     printf 'BUILDEROPS_POSTGRES_IMAGE_DIGEST=%s\n' "${postgres_digest}"
     printf 'BUILDEROPS_DOCKER_CONTEXT=%s\n' "${BUILDEROPS_DOCKER_CONTEXT}"
     printf 'PRODUCT_DOCKER_CONTEXT=%s\n' "${PRODUCT_DOCKER_CONTEXT}"
+    printf 'BUILDEROPS_LOCAL_DURABILITY_MODE=%s\n' "${local_durability_mode}"
   } >"${tmp}"
   mv "${tmp}" "${file}"
 }
@@ -42,7 +44,15 @@ write_pin() {
 load_contexts() {
   BUILDEROPS_DOCKER_CONTEXT="${BUILDEROPS_DOCKER_CONTEXT:-$(read_pin "${PIN_FILE}" BUILDEROPS_DOCKER_CONTEXT)}"
   PRODUCT_DOCKER_CONTEXT="${PRODUCT_DOCKER_CONTEXT:-$(read_pin "${PIN_FILE}" PRODUCT_DOCKER_CONTEXT)}"
-  export BUILDEROPS_DOCKER_CONTEXT PRODUCT_DOCKER_CONTEXT
+  BUILDEROPS_LOCAL_DURABILITY_MODE="${BUILDEROPS_LOCAL_DURABILITY_MODE:-$(read_pin "${PIN_FILE}" BUILDEROPS_LOCAL_DURABILITY_MODE)}"
+  export BUILDEROPS_DOCKER_CONTEXT PRODUCT_DOCKER_CONTEXT BUILDEROPS_LOCAL_DURABILITY_MODE
+}
+
+assert_local_durability_posture() {
+  [ "${BUILDEROPS_LOCAL_DURABILITY_MODE}" = "rebuildable" ] || {
+    echo "local BuilderOps durability mode must be rebuildable; recovery egress is not configured" >&2
+    exit 2
+  }
 }
 
 validate_identity() {
@@ -178,7 +188,7 @@ esac
 
 validate_identity "${target_sha}" "${target_digest}" "${target_postgres_digest}"
 builderops_assert_failure_domain
-builderops_validate_recovery_target "${ROOT}"
+assert_local_durability_posture
 "${ROOT}/scripts/builderops/configure_tailnet_tls.sh" --preflight
 
 placeholder_digest="sha256:0000000000000000000000000000000000000000000000000000000000000000"

@@ -66,20 +66,6 @@ def _harness(tmp_path: Path) -> tuple[Path, dict[str, str], str, str, str]:
     token_file = tmp_path / "probe-token"
     token_file.write_text("probe-secret", encoding="utf-8")
     receipt_dir = tmp_path / "receipts"
-    secret_root = tmp_path / "secrets"
-    secret_root.mkdir()
-    (secret_root / "recovery-target.json").write_text(
-        json.dumps(
-            {
-                "url": "s3://offsite.example.invalid/builderops",
-                "primary_failure_domain": "builder-primary",
-                "recovery_failure_domain": "operator-offsite",
-                "encryption_key_ref": "kms:builderops-recovery",
-                "custody_ref": "operator:independent",
-            }
-        ),
-        encoding="utf-8",
-    )
     event_log = tmp_path / "events.log"
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
@@ -146,8 +132,6 @@ fi
             "BUILDEROPS_PROBE_TOKEN_FILE": str(token_file),
             "BUILDEROPS_RECEIPT_DIR": str(receipt_dir),
             "BUILDEROPS_HEALTH_TIMEOUT_SECONDS": "1",
-            "BUILDEROPS_SECRET_ROOT": str(secret_root),
-            "BUILDEROPS_WALG_S3_PREFIX": "s3://offsite.example.invalid/builderops",
             "BUILDEROPS_TEST_CANDIDATE_RECEIPT": str(candidate_receipt),
         }
     )
@@ -199,6 +183,7 @@ def test_deploy_and_rollback_receipts_bind_pin_schema_and_epoch(tmp_path: Path) 
     pin = (root / "config/deploy/builderops.env").read_text(encoding="utf-8")
     assert pin.count("BUILDEROPS_POSTGRES_IMAGE_REPOSITORY=") == 1
     assert pin.count("BUILDEROPS_POSTGRES_IMAGE_DIGEST=sha256:") == 1
+    assert pin.count("BUILDEROPS_LOCAL_DURABILITY_MODE=rebuildable") == 1
     assert "pg_restore" not in events
 
     rollback = subprocess.run(
@@ -216,6 +201,30 @@ def test_deploy_and_rollback_receipts_bind_pin_schema_and_epoch(tmp_path: Path) 
     assert rollback_receipt["action"] == "rollback"
     assert rollback_receipt["database_restore_performed"] is False
 
+
+def test_deploy_refuses_a_local_mode_that_would_require_recovery_egress(tmp_path: Path) -> None:
+    root, env, _source_sha, _digest, _postgres_digest = _harness(tmp_path)
+    env["BUILDEROPS_LOCAL_DURABILITY_MODE"] = "independent-recovery"
+
+    result = subprocess.run(
+        [
+            "bash",
+            "scripts/deploy_builderops.sh",
+            "deploy",
+            env["BUILDEROPS_TEST_CANDIDATE_RECEIPT"],
+        ],
+        cwd=root,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 2
+    assert "must be rebuildable" in result.stderr
+    events = Path(env["FAKE_EVENT_LOG"]).read_text(encoding="utf-8")
+    assert " pull " not in events
+    assert " up " not in events
 
 def test_failed_deploy_restores_canonical_pin_and_preserves_rollback_target(
     tmp_path: Path,

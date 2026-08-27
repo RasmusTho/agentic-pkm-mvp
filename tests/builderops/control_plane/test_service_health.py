@@ -217,6 +217,30 @@ def test_live_provider_validates_recovery_failure_domain_and_shared_worker_heart
     assert provider.snapshot().recovery_target_independent is False
 
 
+def test_local_rebuildable_posture_disables_recovery_alarm_and_readiness_gate(tmp_path: Path) -> None:
+    provider = LiveOperationalStatusProvider(
+        _Store(),  # type: ignore[arg-type]
+        recovery_target_file=tmp_path / "missing-target.json",
+        worker_heartbeat_file=tmp_path / "missing-worker.json",
+        recovery_required=False,
+    )
+    snapshot = provider.snapshot()
+    assert snapshot.recovery_pipeline_state == "disabled"
+    assert snapshot.recovery_target_independent is False
+    assert snapshot.recovery_required is False
+
+    health = HealthService(_Store(), _registry(tmp_path), provider)  # type: ignore[arg-type]
+    payload = health.status()
+    assert payload["ready"] is True
+    assert payload["recovery_pipeline"] == {
+        "state": "disabled",
+        "target_independent": False,
+        "structural_ready": True,
+        "alert": False,
+        "acknowledgement_gate": False,
+    }
+
+
 def test_worker_probe_requires_fresh_database_heartbeat(monkeypatch) -> None:
     class HeartbeatStore:
         heartbeat: dict[str, object] | None = {

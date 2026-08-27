@@ -22,6 +22,8 @@
     <string>__PROBE_TOKEN__</string>
     <key>BUILDEROPS_STATUS_TOKEN_FILE</key>
     <string>__STATUS_TOKEN__</string>
+    <key>BUILDEROPS_DOCKER_CONTEXT</key>
+    <string>__DOCKER_CONTEXT__</string>
     <key>BUILDEROPS_PROBE_STATE_FILE</key>
     <string>/Users/Shared/builderops/probe-state.json</string>
   </dict>
