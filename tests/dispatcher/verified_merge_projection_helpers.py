@@ -5,6 +5,7 @@ import json
 from collections.abc import Mapping
 
 from app.dispatcher.verified_merge import (
+    _json_fence,
     build_verified_merge_projection_convergence,
 )
 
@@ -120,11 +121,12 @@ def projection_convergence_comment(
     association: str = "COLLABORATOR",
 ) -> dict[str, object]:
     receipt = phase_kwargs["projection_convergence_receipt"]
+    payload = json.dumps(dict(receipt), sort_keys=True, separators=(",", ":"))
+    fence = _json_fence(payload)
     return {
         "author_association": association,
         "body": (
-            "verified merge closing projection convergence:\n```json\n"
-            + json.dumps(dict(receipt), sort_keys=True, separators=(",", ":"))
-            + "\n```"
+            "verified merge closing projection convergence:\n"
+            + f"{fence}json\n{payload}\n{fence}"
         ),
     }

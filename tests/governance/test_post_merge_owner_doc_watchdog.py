@@ -526,6 +526,49 @@ def test_watchdog_target_selection_recovers_raced_body_from_continuous_phase_cha
     }
 
 
+def test_watchdog_parses_dynamic_convergence_fence_for_embedded_pr_body_fence() -> None:
+    canonical_body = _body() + "```yaml\nexample: fenced\n```\n"
+    authority = _authority_comment(canonical_body)
+    neutralized = _neutralized_body(canonical_body)
+    phase_kwargs = projection_phase_kwargs(
+        _receipt_payload(authority), _pr(neutralized)
+    )
+    convergence = projection_convergence_comment(phase_kwargs)
+    convergence_body = convergence["body"]
+    assert isinstance(convergence_body, str)
+    assert "````json\n" in convergence_body
+    merge_sha = "c" * 40
+
+    assert _node(
+        "selectWatchdogAuthority(inputs[0])",
+        {
+            "comments": [
+                authority,
+                convergence,
+                _phase_comment(
+                    authority,
+                    phase="prepared",
+                    merge_commit_sha=None,
+                    phase_kwargs=phase_kwargs,
+                ),
+                _phase_comment(
+                    authority,
+                    phase="merged",
+                    merge_commit_sha=merge_sha,
+                    phase_kwargs=phase_kwargs,
+                ),
+            ],
+            "expectedRepository": REPOSITORY,
+            "linkedIssues": [4999],
+            "livePr": _merged_pr("Governing-Issue: #4999\n\nFixes #4999\n"),
+        },
+    ) == {
+        "closing_issues": [3820, 3823],
+        "governing_issue": 3821,
+        "mode": "durable_receipt",
+    }
+
+
 def test_watchdog_selects_the_only_delivered_replacement_receipt_chain() -> None:
     authority = _authority_comment()
     merge_sha = "c" * 40
