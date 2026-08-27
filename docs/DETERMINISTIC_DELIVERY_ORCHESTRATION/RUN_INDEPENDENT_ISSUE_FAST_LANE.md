@@ -25,7 +25,9 @@ Deliver useful coordination-cost reduction before the durable reducer and CKM br
   maximum-two-worker pilot budget before dispatch.
 - Updates `deliver-issue-set`, the autonomous runner prompt, and the existing dispatch/run-state
   helpers so workers receive one bounded issue and return one compact terminal receipt.
-- Forbids worker-to-worker messaging unless deterministic evidence invalidates independence.
+- Forbids worker-to-worker messaging. Discovered overlap raises `EpicDispatchError` and rejects the
+  whole explicit set before dispatch; it never partially admits or pauses issues. The coordinator
+  may recompute a later set from live authority.
 - Consumes the structured severity and known-defect contracts from PRs #4159 and #4161 when merged;
   it does not reimplement them.
 
@@ -51,12 +53,13 @@ coordinator. This slice removes that tax without waiting for new durability or C
 - [ ] Worker packs contain one Issue, one worktree/branch plan, exact verification targets, known
   constraints, and one terminal receipt schema without broad epic history.
   - Verify: `tests/builderops/test_epic_dispatch.py::test_fast_lane_context_pack_is_minimal_and_receipted`.
-- [ ] Skill and runner prompt prohibit routine worker-to-worker coordination and route discovered
-  overlap to a typed coordinator exception.
+- [ ] Skill and runner prompt prohibit routine worker-to-worker coordination. Discovered overlap
+  rejects the whole explicit set before dispatch without partially admitting or pausing issues; the
+  coordinator may recompute a later wave from live authority.
   - Verify: `tests/architecture/test_agent_skill_entrypoints.py::test_independent_fast_lane_has_no_routine_worker_coordination`.
 - [ ] Structured review routing blocks invalid/P0/P1 outcomes and defers valid P2 without a
   synchronous repair/re-review loop.
-  - Verify: `tests/ops/test_review_before_ci_gate.py::test_fast_lane_consumes_structured_severity_without_weakening_gates`.
+  - Verify: `tests/ops/test_review_before_ci_gate.py::test_review_severity_routing_blocks_only_p0_and_p1` and `tests/ops/test_review_before_ci_gate.py::test_protected_review_invariants_cannot_be_downgraded_to_p2`.
 - [ ] The dry-run and persisted run-state remain evidence-only and reconstructable from live
   authority.
   - Verify: `tests/builderops/test_epic_run_state.py::test_fast_lane_state_never_becomes_delivery_authority`.

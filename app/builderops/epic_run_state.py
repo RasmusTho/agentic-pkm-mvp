@@ -63,6 +63,7 @@ _UPDATE_FIELDS = (
 )
 _THREAD_LOCKS_GUARD = threading.Lock()
 _THREAD_LOCKS: dict[Path, threading.Lock] = {}
+_ACTIVE_RUN_STATE_LOCKS = threading.local()
 
 
 class EpicRunStateError(ValueError):
@@ -150,14 +151,13 @@ def create_epic_run_state(
     run_id: str,
     *,
     root: Path | str | None = None,
-    overwrite: bool = False,
     **updates: Any,
 ) -> dict[str, Any]:
     """Create or idempotently load a local epic run-state file."""
 
     path = epic_run_state_path(run_id, root=root)
     with _locked_run_state(path):
-        if path.exists() and not overwrite:
+        if path.exists():
             existing = deserialize_epic_run_state(path.read_text(encoding="utf-8"))
             expected_epic = _normalize_epic_issue_number(epic_issue_number)
             if existing["epic_issue_number"] != expected_epic:
@@ -167,11 +167,11 @@ def create_epic_run_state(
                 )
             if updates:
                 existing = apply_epic_run_update(existing, **updates)
-                save_epic_run_state(existing, root=root)
+                _save_epic_run_state_to_path(existing, path=path, run_id=run_id)
             return existing
 
         state = new_epic_run_state(epic_issue_number, run_id, **updates)
-        save_epic_run_state(state, root=root)
+        _save_epic_run_state_to_path(state, path=path, run_id=run_id)
         return state
 
 
@@ -208,11 +208,11 @@ def create_independent_issue_run_state(
                 )
             if updates:
                 existing = apply_epic_run_update(existing, **updates)
-                save_epic_run_state(existing, root=root)
+                _save_epic_run_state_to_path(existing, path=path, run_id=run_id)
             return existing
 
         state = new_independent_issue_run_state(issue_numbers, run_id, **updates)
-        save_epic_run_state(state, root=root)
+        _save_epic_run_state_to_path(state, path=path, run_id=run_id)
         return state
 
 
@@ -232,10 +232,42 @@ def save_epic_run_state(
     *,
     root: Path | str | None = None,
 ) -> Path:
-    """Persist a state envelope with deterministic JSON serialization."""
+    """Persist a state envelope under the same lock used by create and update."""
 
     normalized = normalize_epic_run_state(state)
     path = epic_run_state_path(normalized["run_id"], root=root)
+    with _locked_run_state(path):
+        if path.exists():
+            existing = deserialize_epic_run_state(path.read_text(encoding="utf-8"))
+            _assert_run_identity_unchanged(
+                normalized,
+                run_id=existing["run_id"],
+                owner=_run_owner(existing),
+            )
+        return _save_epic_run_state_to_path(
+            normalized,
+            path=path,
+            run_id=normalized["run_id"],
+        )
+
+
+def _save_epic_run_state_to_path(
+    state: Mapping[str, Any],
+    *,
+    path: Path,
+    run_id: str,
+) -> Path:
+    """Persist to the caller's already-authorized path without changing identity."""
+
+    _assert_run_state_lock_held(path)
+    normalized = normalize_epic_run_state(state)
+    normalized_run_id = validate_run_id(normalized["run_id"])
+    expected_run_id = validate_run_id(run_id)
+    if normalized_run_id != expected_run_id:
+        raise EpicRunStateError(
+            f"run-state update must not change run_id {expected_run_id!r} "
+            f"to {normalized_run_id!r}"
+        )
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp_path = path.with_name(f".{path.name}.{os.getpid()}.tmp")
     tmp_path.write_text(serialize_epic_run_state(normalized), encoding="utf-8")
@@ -248,19 +280,103 @@ def update_epic_run_state(
     *,
     root: Path | str | None = None,
     updater: Callable[[dict[str, Any]], Mapping[str, Any]] | None = None,
+    expected_epic_issue_number: int | None = None,
+    expected_independent_issue_numbers: list[int] | None = None,
     **updates: Any,
 ) -> dict[str, Any]:
     """Load, update, persist, and return a local epic run-state file."""
 
     path = epic_run_state_path(run_id, root=root)
+    expected_owner = _normalize_expected_run_owner(
+        expected_epic_issue_number=expected_epic_issue_number,
+        expected_independent_issue_numbers=expected_independent_issue_numbers,
+    )
     with _locked_run_state(path):
         state = deserialize_epic_run_state(path.read_text(encoding="utf-8"))
+        locked_owner = _run_owner(state)
+        _assert_expected_run_owner(state, run_id=run_id, expected_owner=expected_owner)
         if updater is not None:
             state = normalize_epic_run_state(updater(_json_clone(state)))
         if updates:
             state = apply_epic_run_update(state, **updates)
-        save_epic_run_state(state, root=root)
+        _assert_run_identity_unchanged(
+            state,
+            run_id=run_id,
+            owner=locked_owner,
+        )
+        _assert_expected_run_owner(state, run_id=run_id, expected_owner=expected_owner)
+        _save_epic_run_state_to_path(state, path=path, run_id=run_id)
         return state
+
+
+def _normalize_expected_run_owner(
+    *,
+    expected_epic_issue_number: int | None,
+    expected_independent_issue_numbers: list[int] | None,
+) -> tuple[int | None, list[int]] | None:
+    if (
+        expected_epic_issue_number is None
+        and expected_independent_issue_numbers is None
+    ):
+        return None
+    if (
+        expected_epic_issue_number is not None
+        and expected_independent_issue_numbers is not None
+    ):
+        raise EpicRunStateError(
+            "expected run owner must be an epic or independent issue set, not both"
+        )
+    if expected_epic_issue_number is not None:
+        return (_normalize_epic_issue_number(expected_epic_issue_number), [])
+    return (
+        None,
+        _normalize_independent_issue_numbers(expected_independent_issue_numbers),
+    )
+
+
+def _assert_expected_run_owner(
+    state: Mapping[str, Any],
+    *,
+    run_id: str,
+    expected_owner: tuple[int | None, list[int]] | None,
+) -> None:
+    if expected_owner is None:
+        return
+    actual_owner = (
+        state["epic_issue_number"],
+        state.get("independent_issue_numbers", []),
+    )
+    if actual_owner == expected_owner:
+        return
+    if actual_owner[0] is not None:
+        owner_description = f"epic {actual_owner[0]}"
+    else:
+        owner_description = f"independent issues {actual_owner[1]}"
+    raise EpicRunStateError(
+        f"run_id {run_id!r} already belongs to {owner_description}"
+    )
+
+
+def _run_owner(state: Mapping[str, Any]) -> tuple[int | None, list[int]]:
+    return (
+        state["epic_issue_number"],
+        list(state.get("independent_issue_numbers", [])),
+    )
+
+
+def _assert_run_identity_unchanged(
+    state: Mapping[str, Any],
+    *,
+    run_id: str,
+    owner: tuple[int | None, list[int]],
+) -> None:
+    if state["run_id"] != run_id:
+        raise EpicRunStateError(
+            f"run-state update must not change run_id {run_id!r} "
+            f"to {state['run_id']!r}"
+        )
+    if _run_owner(state) != owner:
+        raise EpicRunStateError("run-state update must not change run owner")
 
 
 def apply_epic_run_update(state: Mapping[str, Any], **updates: Any) -> dict[str, Any]:
@@ -725,18 +841,46 @@ def _pretty_dumps(value: Any) -> str:
 
 @contextmanager
 def _locked_run_state(path: Path) -> Iterator[None]:
-    lock_path = path.with_name(f".{path.name}.lock")
+    state_path = _run_state_lock_identity(path)
+    lock_target = path.resolve(strict=False)
+    lock_path = lock_target.with_name(f".{lock_target.name}.lock")
     thread_lock = _thread_lock_for(lock_path)
     path.parent.mkdir(parents=True, exist_ok=True)
     with thread_lock:
         with lock_path.open("a+", encoding="utf-8") as lock_file:
             if fcntl is not None:
                 fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+            active_locks = _active_run_state_locks()
+            active_lock = (os.getpid(), state_path)
+            active_locks.add(active_lock)
             try:
                 yield
             finally:
+                active_locks.remove(active_lock)
                 if fcntl is not None:
                     fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+
+
+def _active_run_state_locks() -> set[tuple[int, Path]]:
+    active_locks = getattr(_ACTIVE_RUN_STATE_LOCKS, "locks", None)
+    if active_locks is None:
+        active_locks = set()
+        _ACTIVE_RUN_STATE_LOCKS.locks = active_locks
+    return active_locks
+
+
+def _assert_run_state_lock_held(path: Path) -> None:
+    active_lock = (os.getpid(), _run_state_lock_identity(path))
+    if active_lock not in _active_run_state_locks():
+        raise EpicRunStateError(
+            "run-state persistence requires the active lock for the exact state path"
+        )
+
+
+def _run_state_lock_identity(path: Path) -> Path:
+    """Return the lexical state-path identity without collapsing symlinks."""
+
+    return Path(os.path.abspath(path))
 
 
 def _thread_lock_for(lock_path: Path) -> threading.Lock:

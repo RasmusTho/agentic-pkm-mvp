@@ -303,6 +303,11 @@ def build_dispatch_plan(
     selected_validation_resources: set[str] = set()
     selected_count = 0
     selected_helper_slots = 0
+    discovered_overlap_policy = (
+        "reject-whole-explicit-set-before-dispatch"
+        if independent_scope
+        else "typed-coordinator-exception"
+    )
 
     for index, candidate in enumerate(normalized_candidates):
         decision = _build_tcd_decision(candidate, runtimes, lease_issues)
@@ -332,6 +337,7 @@ def build_dispatch_plan(
                     decision=decision,
                     context_pack_id=context_pack_id,
                     dispatch_slot=selected_count,
+                    discovered_overlap_policy=discovered_overlap_policy,
                 )
                 context_packs.append(context_pack)
                 decision["context_cost_estimate"] = {
@@ -717,6 +723,7 @@ def _build_context_pack(
     decision: Mapping[str, Any],
     context_pack_id: str,
     dispatch_slot: int,
+    discovered_overlap_policy: str,
 ) -> dict[str, Any]:
     pack = {
         "schema_version": SCHEMA_VERSION,
@@ -750,7 +757,7 @@ def _build_context_pack(
         },
         "coordination": {
             "routine_worker_to_worker": "prohibited",
-            "discovered_overlap": "typed-coordinator-exception",
+            "discovered_overlap": discovered_overlap_policy,
             "coordinator_scope": "cross_issue_only",
             "worker_scope": "one_issue_end_to_end",
             "issue_local_helper_budget": candidate["issue_local_helper_budget"],
@@ -1015,6 +1022,9 @@ def _validate_independent_fast_lane_admission(
     by_number = {candidate["issue_number"]: candidate for candidate in candidates}
     if (
         len(candidates) != len(independent_issue_numbers)
+        # Defense-in-depth: scope normalization and the length/set checks make
+        # duplicate candidate numbers unreachable today. Keep this explicit so
+        # future admission refactors cannot silently collapse duplicates here.
         or len(by_number) != len(candidates)
         or set(by_number) != set(independent_issue_numbers)
     ):

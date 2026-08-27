@@ -1,13 +1,16 @@
 from __future__ import annotations
 
+import inspect
 import json
 import subprocess
 from pathlib import Path
 from typing import Mapping
 from unittest.mock import patch
 
+import pytest
 from click.testing import CliRunner
 
+from app.builderops import epic_dispatch as epic_dispatch_module
 from app.builderops.__main__ import _root as builderops_standalone_root
 from app.builderops.epic_dispatch import (
     CodexIssueSessionLauncher,
@@ -240,6 +243,32 @@ def test_codex_and_claude_use_same_minimal_context_pack_schema() -> None:
     assert baseline["context_pack_bytes_excluding_baseline"] == len(
         json.dumps(without_baseline, sort_keys=True, ensure_ascii=False).encode("utf-8")
     )
+
+
+def test_context_pack_overlap_policy_matches_dispatch_scope() -> None:
+    overlapping_candidates = [
+        _candidate(3001, risk="high", files=["app/shared.py"]),
+        _candidate(3002, risk="high", files=["app/shared.py"]),
+    ]
+    epic_plan = build_dispatch_plan(
+        epic_issue_number=3229,
+        run_id="run-epic-overlap-policy",
+        candidates=overlapping_candidates,
+    )
+
+    assert epic_plan["selected_count"] == 1
+    assert epic_plan["decisions"][1]["skip_reason"] == "likely-file-conflict"
+    assert epic_plan["context_packs"][0]["coordination"]["discovered_overlap"] == (
+        "typed-coordinator-exception"
+    )
+    with patch.object(epic_dispatch_module, "_build_context_pack") as build_pack:
+        with pytest.raises(EpicDispatchError, match="likely shared mutation surface"):
+            build_dispatch_plan(
+                independent_issue_numbers=[3001, 3002],
+                run_id="run-independent-overlap-policy",
+                candidates=overlapping_candidates,
+            )
+    build_pack.assert_not_called()
 
 
 def test_context_pack_carries_bounded_issue_local_helper_budget() -> None:
@@ -527,6 +556,12 @@ def test_fast_lane_rejects_non_independent_or_over_budget_sets() -> None:
         else:  # pragma: no cover
             raise AssertionError(f"expected {expected} rejection")
 
+    admission_source = inspect.getsource(
+        epic_dispatch_module._validate_independent_fast_lane_admission
+    )
+    assert "len(by_number) != len(candidates)" in admission_source
+    assert "defense-in-depth" in admission_source.lower()
+
 
 def test_fast_lane_context_pack_is_minimal_and_receipted() -> None:
     plan = build_dispatch_plan(
@@ -543,14 +578,14 @@ def test_fast_lane_context_pack_is_minimal_and_receipted() -> None:
     assert pack["return_schema"]["schema_name"] == "subagent_handoff_receipt"
     assert pack["coordination"] == {
         "routine_worker_to_worker": "prohibited",
-        "discovered_overlap": "typed-coordinator-exception",
+        "discovered_overlap": "reject-whole-explicit-set-before-dispatch",
         "coordinator_scope": "cross_issue_only",
         "worker_scope": "one_issue_end_to_end",
         "issue_local_helper_budget": 0,
         "issue_local_helper_rationale": None,
         "sole_writer": "issue_agent",
     }
-    assert "epic_history" not in json.dumps(pack)
+    assert {"child_queue", "dispatch_decisions", "compact_receipts"}.isdisjoint(pack)
 
 
 def test_dispatch_sessions_stops_at_the_first_nonterminal_worker_handoff() -> None:

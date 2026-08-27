@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import ast
+import json
+import os
 import subprocess
 import sys
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
-import json
 from pathlib import Path
 
 import pytest
@@ -476,6 +478,66 @@ def test_concurrent_updates_are_serialized(tmp_path: Path) -> None:
     assert final_state["validation_status"]["4111"] == {"pytest": "passed"}
 
 
+def test_update_cannot_retarget_the_locked_run_path(tmp_path: Path) -> None:
+    source_run_id = "run-identity-source"
+    target_run_id = "run-identity-target"
+    create_epic_run_state(
+        3229,
+        source_run_id,
+        root=tmp_path,
+        child_queue=[{"issue_number": 3247, "state": "source"}],
+    )
+    create_epic_run_state(
+        3230,
+        target_run_id,
+        root=tmp_path,
+        child_queue=[{"issue_number": 3250, "state": "target"}],
+    )
+    source_path = epic_run_state_path(source_run_id, root=tmp_path)
+    target_path = epic_run_state_path(target_run_id, root=tmp_path)
+    source_before = source_path.read_bytes()
+    target_before = target_path.read_bytes()
+
+    def retarget(state: dict[str, object]) -> dict[str, object]:
+        state["run_id"] = target_run_id
+        return state
+
+    with pytest.raises(EpicRunStateError, match="must not change run_id"):
+        update_epic_run_state(source_run_id, root=tmp_path, updater=retarget)
+
+    assert source_path.read_bytes() == source_before
+    assert target_path.read_bytes() == target_before
+
+
+def test_update_cannot_change_loaded_owner_without_an_expected_owner(
+    tmp_path: Path,
+) -> None:
+    epic_run_id = "run-identity-epic-owner"
+    independent_run_id = "run-identity-independent-owner"
+    create_epic_run_state(3229, epic_run_id, root=tmp_path)
+    create_independent_issue_run_state(
+        [4164, 4165], independent_run_id, root=tmp_path
+    )
+
+    def change_epic_owner(state: dict[str, object]) -> dict[str, object]:
+        state["epic_issue_number"] = 3230
+        return state
+
+    def change_independent_owner(state: dict[str, object]) -> dict[str, object]:
+        state["independent_issue_numbers"] = [4200]
+        return state
+
+    for run_id, updater in (
+        (epic_run_id, change_epic_owner),
+        (independent_run_id, change_independent_owner),
+    ):
+        path = epic_run_state_path(run_id, root=tmp_path)
+        before = path.read_bytes()
+        with pytest.raises(EpicRunStateError, match="must not change run owner"):
+            update_epic_run_state(run_id, root=tmp_path, updater=updater)
+        assert path.read_bytes() == before
+
+
 def test_dispatcher_status_is_recorded_as_local_snapshot() -> None:
     state = new_epic_run_state(3229, "run-dispatcher-status")
 
@@ -518,6 +580,35 @@ def test_create_rejects_epic_mismatch_for_existing_run(tmp_path: Path) -> None:
 
     with pytest.raises(EpicRunStateError, match="already belongs to epic 3229"):
         create_epic_run_state(3230, "run-owned", root=tmp_path)
+
+
+def test_create_has_no_overwrite_owner_transfer_escape_hatch(tmp_path: Path) -> None:
+    run_id = "run-owner-cannot-be-overwritten"
+    create_epic_run_state(
+        3229,
+        run_id,
+        root=tmp_path,
+        child_queue=[{"issue_number": 3247, "state": "queued"}],
+    )
+    path = epic_run_state_path(run_id, root=tmp_path)
+    before = path.read_bytes()
+
+    with pytest.raises(EpicRunStateError, match="already belongs to epic 3229"):
+        create_epic_run_state(3230, run_id, root=tmp_path, overwrite=True)
+
+    assert path.read_bytes() == before
+
+
+def test_public_save_cannot_transfer_existing_run_owner(tmp_path: Path) -> None:
+    run_id = "run-public-save-owner"
+    create_epic_run_state(3229, run_id, root=tmp_path)
+    path = epic_run_state_path(run_id, root=tmp_path)
+    before = path.read_bytes()
+
+    with pytest.raises(EpicRunStateError, match="must not change run owner"):
+        save_epic_run_state(new_epic_run_state(3230, run_id), root=tmp_path)
+
+    assert path.read_bytes() == before
 
 
 def test_apply_update_rejects_unknown_fields() -> None:
@@ -753,14 +844,641 @@ def test_cli_rejects_epic_mismatch_before_writing(tmp_path: Path) -> None:
 
 
 def test_fast_lane_state_never_becomes_delivery_authority(tmp_path: Path) -> None:
-    state = new_independent_issue_run_state([4164, 4165], "fast-lane-state")
-    assert state["epic_issue_number"] is None
-    assert state["independent_issue_numbers"] == [4164, 4165]
-    assert "parent_closure" not in state
-    assert "github_mutations" not in state
+    candidates_file = tmp_path / "candidates.json"
+    candidates = []
+    for issue_number, touched_file in ((4164, "app/a.py"), (4165, "app/b.py")):
+        candidates.append(
+            {
+                "issue_number": issue_number,
+                "title": f"independent child {issue_number}",
+                "url": f"https://example.test/issues/{issue_number}",
+                "state": "OPEN",
+                "labels": ["agent:ready", "type:task"],
+                "project_status": "Ready",
+                "risk": "high",
+                "expected_value": "medium",
+                "runtime_hint": None,
+                "likely_touched_files": [touched_file],
+                "validation_resources": [],
+                "owner_docs": ["docs/development/BUILDER_SUBAGENT_ROLES.md"],
+                "owner_doc_writeback_required": False,
+                "dependencies": [],
+                "dependencies_satisfied": False,
+                "dependencies_known": True,
+                "strict_ready": True,
+                "authority_ambiguous": False,
+                "has_migration": False,
+                "contract_surfaces": [],
+                "source_anchors": [f"#{issue_number}"],
+                "known_constraints": ["run-state remains evidence-only"],
+                "validation": ["pytest -q tests/builderops/test_epic_run_state.py"],
+                "issue_local_helper_budget": 0,
+                "issue_local_helper_rationale": None,
+            }
+        )
+    candidates_file.write_text(json.dumps({"candidates": candidates}), encoding="utf-8")
 
-    create_epic_run_state(3229, "separate-epic", root=tmp_path)
-    assert epic_run_state_path("separate-epic", root=tmp_path).exists()
+    result = _run_builderops(
+        [
+            "epic-run-state",
+            "dispatch-plan",
+            "--independent-issue",
+            "4164",
+            "--independent-issue",
+            "4165",
+            "--run-id",
+            "fast-lane-state",
+            "--root",
+            str(tmp_path),
+            "--candidates-file",
+            str(candidates_file),
+            "--json",
+        ]
+    )
+
+    assert result.exit_code == 0, result.output
+    plan = json.loads(result.output)
+    assert plan["scope"] == {
+        "kind": "independent_issue_set",
+        "issue_numbers": [4164, 4165],
+        "parent_closure": "prohibited-without-real-governed-parent",
+    }
+    assert plan["github_mutations"] == []
+    assert plan["agent_spawns"] == []
+    assert not epic_run_state_path("fast-lane-state", root=tmp_path).exists()
+
+
+_RUN_STATE_MODULE = "app.builderops.epic_run_state"
+_RUN_STATE_FUNCTIONS = frozenset(
+    {"_save_epic_run_state_to_path", "save_epic_run_state", "update_epic_run_state"}
+)
+_PRIVATE_WRITER_FUNCTIONS = frozenset(
+    {
+        "create_epic_run_state",
+        "create_independent_issue_run_state",
+        "save_epic_run_state",
+        "update_epic_run_state",
+    }
+)
+_UNKNOWN_BINDING = "unknown"
+
+
+class _RunStateBindingResolver(ast.NodeVisitor):
+    def __init__(self, tree: ast.Module, *, defining_module: bool) -> None:
+        self.parents: dict[ast.AST, ast.AST] = {
+            child: parent
+            for parent in ast.walk(tree)
+            for child in ast.iter_child_nodes(parent)
+        }
+        self.scopes: list[ast.AST] = [tree]
+        self.events: dict[ast.AST, dict[str, list[tuple[int, int, object]]]] = {
+            tree: {}
+        }
+        if defining_module:
+            for name in _RUN_STATE_FUNCTIONS:
+                self._bind(name, f"function:{name}", lineno=0, col_offset=0)
+        self.visit(tree)
+
+    def _bind(
+        self,
+        name: str,
+        value: object,
+        *,
+        lineno: int,
+        col_offset: int,
+    ) -> None:
+        self.events[self.scopes[-1]].setdefault(name, []).append(
+            (lineno, col_offset, value)
+        )
+
+    def _bind_target(self, target: ast.AST, value: object, node: ast.AST) -> None:
+        if isinstance(target, ast.Name):
+            self._bind(
+                target.id,
+                value,
+                lineno=getattr(node, "lineno", 0),
+                col_offset=getattr(node, "col_offset", 0),
+            )
+        elif isinstance(target, (ast.Tuple, ast.List)):
+            for item in target.elts:
+                self._bind_target(item, _UNKNOWN_BINDING, node)
+
+    def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
+        for alias in node.names:
+            binding: object = _UNKNOWN_BINDING
+            if node.module == _RUN_STATE_MODULE and alias.name in _RUN_STATE_FUNCTIONS:
+                binding = f"function:{alias.name}"
+            elif node.module == "app.builderops" and alias.name == "epic_run_state":
+                binding = f"module:{_RUN_STATE_MODULE}"
+            self._bind(
+                alias.asname or alias.name,
+                binding,
+                lineno=node.lineno,
+                col_offset=node.col_offset,
+            )
+
+    def visit_Import(self, node: ast.Import) -> None:
+        for alias in node.names:
+            bound_name = alias.asname or alias.name.split(".", 1)[0]
+            binding = (
+                f"module:{_RUN_STATE_MODULE}"
+                if alias.name == _RUN_STATE_MODULE and alias.asname
+                else _UNKNOWN_BINDING
+            )
+            self._bind(
+                bound_name,
+                binding,
+                lineno=node.lineno,
+                col_offset=node.col_offset,
+            )
+
+    def visit_Assign(self, node: ast.Assign) -> None:
+        for target in node.targets:
+            self._bind_target(target, node.value, node)
+        self.generic_visit(node.value)
+
+    def visit_AnnAssign(self, node: ast.AnnAssign) -> None:
+        self._bind_target(node.target, node.value or _UNKNOWN_BINDING, node)
+        if node.value is not None:
+            self.visit(node.value)
+
+    def _visit_nested_scope(
+        self, node: ast.FunctionDef | ast.AsyncFunctionDef | ast.Lambda
+    ) -> None:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            self._bind(
+                node.name,
+                _UNKNOWN_BINDING,
+                lineno=node.lineno,
+                col_offset=node.col_offset,
+            )
+        self.events[node] = {}
+        self.scopes.append(node)
+        arguments = (
+            *node.args.posonlyargs,
+            *node.args.args,
+            *node.args.kwonlyargs,
+        )
+        if node.args.vararg is not None:
+            arguments = (*arguments, node.args.vararg)
+        if node.args.kwarg is not None:
+            arguments = (*arguments, node.args.kwarg)
+        for argument in arguments:
+            self._bind(argument.arg, _UNKNOWN_BINDING, lineno=0, col_offset=0)
+        for statement in node.body if not isinstance(node, ast.Lambda) else [node.body]:
+            self.visit(statement)
+        self.scopes.pop()
+
+    visit_FunctionDef = _visit_nested_scope
+    visit_AsyncFunctionDef = _visit_nested_scope
+    visit_Lambda = _visit_nested_scope
+
+    def _scope(self, node: ast.AST) -> ast.AST:
+        current: ast.AST | None = node
+        while current is not None:
+            if current in self.events:
+                return current
+            current = self.parents.get(current)
+        raise AssertionError("AST node has no lexical scope")
+
+    def _resolve_name(
+        self, name: str, node: ast.AST, seen: set[tuple[ast.AST, str]]
+    ) -> str | None:
+        scope = self._scope(node)
+        while True:
+            key = (scope, name)
+            if key in seen:
+                return None
+            seen.add(key)
+            bindings = self.events[scope].get(name, [])
+            position = (getattr(node, "lineno", 0), getattr(node, "col_offset", 0))
+            prior = [event for event in bindings if event[:2] <= position]
+            if prior:
+                value = max(prior, key=lambda event: event[:2])[2]
+                if value == _UNKNOWN_BINDING:
+                    return None
+                if isinstance(value, str):
+                    return value
+                return self._resolve_expression(value, value, seen)
+            if isinstance(scope, ast.Module):
+                late_bindings = [
+                    event for event in bindings if event[:2] > position
+                ]
+                if late_bindings:
+                    value = min(late_bindings, key=lambda event: event[:2])[2]
+                    if value == _UNKNOWN_BINDING:
+                        return None
+                    if isinstance(value, str):
+                        return value
+                    return self._resolve_expression(value, value, seen)
+            if bindings and not isinstance(scope, ast.Module):
+                return None
+            parent = self.parents.get(scope)
+            if parent is None:
+                return None
+            scope = self._scope(parent)
+
+    def _resolve_expression(
+        self, expression: ast.AST, node: ast.AST, seen: set[tuple[ast.AST, str]]
+    ) -> str | None:
+        if isinstance(expression, ast.Name):
+            return self._resolve_name(expression.id, node, seen)
+        if isinstance(expression, ast.Attribute):
+            base = self._resolve_expression(expression.value, node, seen)
+            if base == f"module:{_RUN_STATE_MODULE}" and expression.attr in _RUN_STATE_FUNCTIONS:
+                return f"function:{expression.attr}"
+        return None
+
+    def resolve_call(self, call: ast.Call) -> str | None:
+        resolved = self._resolve_expression(call.func, call, set())
+        return resolved.removeprefix("function:") if resolved else None
+
+
+def _run_state_writer_violations(
+    source: str, *, source_label: str, defining_module: bool = False
+) -> list[str]:
+    tree = ast.parse(source, filename=source_label)
+    resolver = _RunStateBindingResolver(tree, defining_module=defining_module)
+    violations: list[str] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        function_name = resolver.resolve_call(node)
+        if function_name == "save_epic_run_state":
+            violations.append(f"{source_label}:{node.lineno}:public-save")
+            continue
+        if function_name != "_save_epic_run_state_to_path":
+            continue
+        ancestor = resolver.parents.get(node)
+        while ancestor is not None and not isinstance(
+            ancestor, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)
+        ):
+            ancestor = resolver.parents.get(ancestor)
+        if (
+            not defining_module
+            or not isinstance(ancestor, (ast.FunctionDef, ast.AsyncFunctionDef))
+            or ancestor.name not in _PRIVATE_WRITER_FUNCTIONS
+        ):
+            violations.append(f"{source_label}:{node.lineno}:raw-save")
+    return violations
+
+
+def _run_state_update_owner_violations(
+    source: str, *, source_label: str
+) -> list[str]:
+    tree = ast.parse(source, filename=source_label)
+    resolver = _RunStateBindingResolver(tree, defining_module=False)
+    violations: list[str] = []
+    for node in ast.walk(tree):
+        if (
+            not isinstance(node, ast.Call)
+            or resolver.resolve_call(node) != "update_epic_run_state"
+        ):
+            continue
+        keyword_names = {keyword.arg for keyword in node.keywords}
+        if not {
+            "expected_epic_issue_number",
+            "expected_independent_issue_numbers",
+        }.intersection(keyword_names):
+            violations.append(f"{source_label}:{node.lineno}")
+    return violations
+
+
+def test_no_unlocked_run_state_writer_in_app() -> None:
+    defining_module = REPO_ROOT / "app/builderops/epic_run_state.py"
+    violations: list[str] = []
+    for source_path in sorted((REPO_ROOT / "app").rglob("*.py")):
+        source_label = str(source_path.relative_to(REPO_ROOT))
+        violations.extend(
+            _run_state_writer_violations(
+                source_path.read_text(encoding="utf-8"),
+                source_label=source_label,
+                defining_module=source_path == defining_module,
+            )
+        )
+
+    assert violations == []
+
+
+def test_run_state_writer_census_resolves_import_aliases() -> None:
+    direct_alias = """
+from app.builderops.epic_run_state import save_epic_run_state as persist
+persist({})
+"""
+    module_alias = """
+from app.builderops import epic_run_state as run_state
+run_state._save_epic_run_state_to_path({}, path=path, run_id='run')
+"""
+    assigned_private_alias = """
+from app.builderops.epic_run_state import _save_epic_run_state_to_path as raw_save
+persist = raw_save
+persist({}, path=path, run_id='run')
+"""
+    unrelated_method = """
+class Decoy:
+    def save_epic_run_state(self, state):
+        return state
+Decoy().save_epic_run_state({})
+"""
+    late_bound_module_alias = """
+def deferred_writer():
+    state._save_epic_run_state_to_path({}, path=path, run_id='run')
+from app.builderops import epic_run_state as state
+deferred_writer()
+"""
+
+    assert _run_state_writer_violations(
+        direct_alias, source_label="direct_alias.py"
+    ) == ["direct_alias.py:3:public-save"]
+    assert _run_state_writer_violations(
+        module_alias, source_label="module_alias.py"
+    ) == ["module_alias.py:3:raw-save"]
+    assert _run_state_writer_violations(
+        assigned_private_alias, source_label="assigned_private_alias.py"
+    ) == ["assigned_private_alias.py:4:raw-save"]
+    assert _run_state_writer_violations(
+        unrelated_method, source_label="unrelated_method.py"
+    ) == []
+    assert _run_state_writer_violations(
+        late_bound_module_alias, source_label="late_bound_module_alias.py"
+    ) == ["late_bound_module_alias.py:3:raw-save"]
+
+
+def test_run_state_writer_census_rejects_deferred_private_calls_without_shadow_false_positives() -> None:
+    deferred_private_call = """
+def create_epic_run_state(path, state):
+    with _locked_run_state(path):
+        def deferred():
+            _save_epic_run_state_to_path(state, path=path, run_id='run')
+    deferred()
+"""
+    shadowed_import = """
+from app.builderops.epic_run_state import save_epic_run_state as persist
+def local_writer(persist):
+    persist({})
+"""
+
+    assert _run_state_writer_violations(
+        deferred_private_call,
+        source_label="epic_run_state.py",
+        defining_module=True,
+    ) == ["epic_run_state.py:5:raw-save"]
+    assert _run_state_writer_violations(
+        shadowed_import, source_label="shadowed_import.py"
+    ) == []
+
+
+def test_all_app_run_state_update_callers_supply_locked_owner_expectation() -> None:
+    defining_module = REPO_ROOT / "app/builderops/epic_run_state.py"
+    violations: list[str] = []
+    for source_path in sorted((REPO_ROOT / "app").rglob("*.py")):
+        if source_path == defining_module:
+            continue
+        source_label = str(source_path.relative_to(REPO_ROOT))
+        violations.extend(
+            _run_state_update_owner_violations(
+                source_path.read_text(encoding="utf-8"), source_label=source_label
+            )
+        )
+
+    assert violations == []
+
+
+def test_run_state_update_census_resolves_import_aliases() -> None:
+    unsafe_alias = """
+from app.builderops.epic_run_state import update_epic_run_state as mutate
+mutate('run', updates={})
+"""
+    safe_module_alias = """
+import app.builderops.epic_run_state as state
+state.update_epic_run_state('run', expected_epic_issue_number=3229)
+"""
+    unrelated_method = """
+class Decoy:
+    def update_epic_run_state(self, run_id):
+        return run_id
+Decoy().update_epic_run_state('run')
+"""
+    assigned_alias = """
+from app.builderops.epic_run_state import update_epic_run_state as update
+mutate = update
+mutate('run')
+"""
+    shadowed_alias = """
+from app.builderops.epic_run_state import update_epic_run_state as mutate
+def local_update(mutate):
+    mutate('run')
+"""
+    late_bound_module_alias = """
+def deferred_update():
+    state.update_epic_run_state('run')
+from app.builderops import epic_run_state as state
+deferred_update()
+"""
+
+    assert _run_state_update_owner_violations(
+        unsafe_alias, source_label="unsafe_alias.py"
+    ) == ["unsafe_alias.py:3"]
+    assert _run_state_update_owner_violations(
+        safe_module_alias, source_label="safe_module_alias.py"
+    ) == []
+    assert _run_state_update_owner_violations(
+        unrelated_method, source_label="unrelated_method.py"
+    ) == []
+    assert _run_state_update_owner_violations(
+        assigned_alias, source_label="assigned_alias.py"
+    ) == ["assigned_alias.py:4"]
+    assert _run_state_update_owner_violations(
+        shadowed_alias, source_label="shadowed_alias.py"
+    ) == []
+    assert _run_state_update_owner_violations(
+        late_bound_module_alias, source_label="late_bound_module_alias.py"
+    ) == ["late_bound_module_alias.py:3"]
+
+
+def test_run_owner_is_rechecked_inside_the_update_lock(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    run_id = "owner-recheck"
+    create_epic_run_state(
+        3229,
+        run_id,
+        root=tmp_path,
+        child_queue=[{"issue_number": 3247, "state": "queued"}],
+    )
+    monkeypatch.setattr(
+        builderops_cli,
+        "load_epic_run_state",
+        lambda *_args, **_kwargs: new_epic_run_state(3230, run_id),
+    )
+
+    result = _run_builderops(
+        [
+            "epic-run-state",
+            "record",
+            "--epic-issue-number",
+            "3230",
+            "--run-id",
+            run_id,
+            "--root",
+            str(tmp_path),
+            "--update-json",
+            json.dumps(
+                {"child_queue": [{"issue_number": 9999, "state": "must-not-write"}]}
+            ),
+            "--json",
+        ]
+    )
+
+    assert result.exit_code != 0
+    assert "already belongs to epic 3229" in result.output
+    persisted = load_epic_run_state(run_id, root=tmp_path)
+    assert persisted["epic_issue_number"] == 3229
+    assert persisted["child_queue"] == [{"issue_number": 3247, "state": "queued"}]
+
+
+def test_atomic_replace_failure_preserves_state_and_retry_succeeds(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    run_id = "replace-failure-retry"
+    create_epic_run_state(
+        3229,
+        run_id,
+        root=tmp_path,
+        child_queue=[{"issue_number": 3247, "state": "queued"}],
+    )
+    path = epic_run_state_path(run_id, root=tmp_path)
+    original_bytes = path.read_bytes()
+    original_replace = Path.replace
+    failed_once = False
+
+    def fail_first_state_replace(self: Path, target: Path | str) -> Path:
+        nonlocal failed_once
+        if Path(target) == path and not failed_once:
+            failed_once = True
+            raise OSError("injected atomic replace failure")
+        return original_replace(self, target)
+
+    monkeypatch.setattr(Path, "replace", fail_first_state_replace)
+
+    with pytest.raises(OSError, match="injected atomic replace failure"):
+        update_epic_run_state(
+            run_id,
+            root=tmp_path,
+            expected_epic_issue_number=3229,
+            child_queue=[{"issue_number": 3248, "state": "queued"}],
+        )
+
+    assert path.read_bytes() == original_bytes
+    temp_path = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    assert temp_path.exists()
+
+    updated = update_epic_run_state(
+        run_id,
+        root=tmp_path,
+        expected_epic_issue_number=3229,
+        child_queue=[{"issue_number": 3248, "state": "queued"}],
+    )
+
+    assert updated["child_queue"] == [
+        {"issue_number": 3247, "state": "queued"},
+        {"issue_number": 3248, "state": "queued"},
+    ]
+    assert load_epic_run_state(run_id, root=tmp_path) == updated
+    assert not temp_path.exists()
+
+
+def test_private_writer_requires_active_lock_for_exact_state_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    state_a = new_epic_run_state(3229, "exact-lock-a")
+    state_b = new_epic_run_state(3230, "exact-lock-b")
+    path_a = epic_run_state_path("exact-lock-a", root=tmp_path)
+    path_b = epic_run_state_path("exact-lock-b", root=tmp_path)
+
+    with pytest.raises(EpicRunStateError, match="active lock for the exact state path"):
+        epic_run_state_module._save_epic_run_state_to_path(
+            state_a, path=path_a, run_id="exact-lock-a"
+        )
+
+    with epic_run_state_module._locked_run_state(path_a):
+        with pytest.raises(
+            EpicRunStateError, match="active lock for the exact state path"
+        ):
+            epic_run_state_module._save_epic_run_state_to_path(
+                state_b, path=path_b, run_id="exact-lock-b"
+            )
+        epic_run_state_module._save_epic_run_state_to_path(
+            state_a, path=path_a, run_id="exact-lock-a"
+        )
+        current_pid = os.getpid()
+        monkeypatch.setattr(epic_run_state_module.os, "getpid", lambda: current_pid + 1)
+        with pytest.raises(
+            EpicRunStateError, match="active lock for the exact state path"
+        ):
+            epic_run_state_module._save_epic_run_state_to_path(
+                state_a, path=path_a, run_id="exact-lock-a"
+            )
+        monkeypatch.undo()
+
+    assert load_epic_run_state("exact-lock-a", root=tmp_path) == state_a
+    assert not path_b.exists()
+
+
+def test_private_writer_cannot_borrow_a_lock_through_a_symlinked_state_path(
+    tmp_path: Path,
+) -> None:
+    state = new_epic_run_state(3229, "symlink-lock-identity")
+    state_path = epic_run_state_path("symlink-lock-identity", root=tmp_path)
+    symlink_path = tmp_path / "symlink-lock-identity-alias.json"
+    symlink_path.symlink_to(state_path)
+
+    with epic_run_state_module._locked_run_state(symlink_path):
+        with pytest.raises(
+            EpicRunStateError, match="active lock for the exact state path"
+        ):
+            epic_run_state_module._save_epic_run_state_to_path(
+                state, path=state_path, run_id="symlink-lock-identity"
+            )
+
+    assert symlink_path.is_symlink()
+    assert not state_path.exists()
+
+
+def test_independent_or_ambiguous_expected_owner_mismatch_writes_nothing(
+    tmp_path: Path,
+) -> None:
+    run_id = "independent-owner-no-write"
+    create_independent_issue_run_state(
+        [4164, 4165],
+        run_id,
+        root=tmp_path,
+        child_queue=[{"issue_number": 4164, "state": "queued"}],
+    )
+    path = epic_run_state_path(run_id, root=tmp_path)
+    original_bytes = path.read_bytes()
+
+    with pytest.raises(EpicRunStateError, match="already belongs to independent issues"):
+        update_epic_run_state(
+            run_id,
+            root=tmp_path,
+            expected_independent_issue_numbers=[4164, 4200],
+            child_queue=[{"issue_number": 4200, "state": "must-not-write"}],
+        )
+    assert path.read_bytes() == original_bytes
+
+    with pytest.raises(
+        EpicRunStateError,
+        match="expected run owner must be an epic or independent issue set, not both",
+    ):
+        update_epic_run_state(
+            run_id,
+            root=tmp_path,
+            expected_epic_issue_number=3229,
+            expected_independent_issue_numbers=[4164, 4165],
+            child_queue=[{"issue_number": 4165, "state": "must-not-write"}],
+        )
+    assert path.read_bytes() == original_bytes
 
 
 def _record_run_state(
@@ -996,10 +1714,14 @@ def test_independent_run_state_creation_serializes_across_processes(
                 process.wait(timeout=5)
             assert not path.exists()
 
-            # The winner writes a different independent scope under the lock.
-            save_epic_run_state(
-                new_independent_issue_run_state([4164, 4165], run_id),
-                root=tmp_path,
+            # The winner writes a different independent scope while this test
+            # already holds the production lock; the public save wrapper would
+            # correctly try to acquire that same non-reentrant lock again.
+            path.write_text(
+                serialize_epic_run_state(
+                    new_independent_issue_run_state([4164, 4165], run_id)
+                ),
+                encoding="utf-8",
             )
         finally:
             fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
