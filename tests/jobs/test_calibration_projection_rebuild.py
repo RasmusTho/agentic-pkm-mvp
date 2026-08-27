@@ -96,15 +96,17 @@ def test_rollup_groups_by_available_kind_and_confidence(
     _write_decision(vault, product, project="product")
     _write_decision(vault, ungrouped)
     _append(vault, str(uuid.uuid4()), architecture, 0, "held")
+    _append(vault, str(uuid.uuid4()), architecture, 1, "did_not_hold")
     _append(vault, str(uuid.uuid4()), product, 0, "partly_held")
     _append(vault, str(uuid.uuid4()), ungrouped, 0, "unknown_yet")
 
     summary = rebuild_calibration_projection(vault)
     architecture_bucket = summary.rollup["area:architecture"]
-    assert architecture_bucket["total"] == 1
+    assert architecture_bucket["total"] == 2
     assert architecture_bucket["counts"]["held"] == 1
-    assert architecture_bucket["rates"]["held"] == 1.0
-    assert architecture_bucket["rates"]["did_not_hold"] == 0.0
+    assert architecture_bucket["counts"]["did_not_hold"] == 1
+    assert architecture_bucket["rates"]["held"] == 0.5
+    assert architecture_bucket["rates"]["did_not_hold"] == 0.5
     assert summary.rollup["project:product"]["counts"]["partly_held"] == 1
     assert summary.rollup["ungrouped"]["counts"]["unknown_yet"] == 1
     assert summary.confidence_rollup["high"]["counts"]["held"] == 1
