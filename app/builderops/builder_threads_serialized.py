@@ -376,41 +376,58 @@ class SerializedThreadWriter:
             raise BuilderThreadError("external writer root is not the pinned vault identity")
 
     def _restore_external_state(self) -> None:
-        self._threads = {}
-        self._request_digests = {}
-        self._request_results = {}
-        self._capture_index = {}
-        self._accepted_mutation_count = 0
-        records: list[tuple[int, ThreadMutation, str]] = []
-        for path in self._entries_root.glob("*.json"):
-            if path.is_symlink():
-                raise BuilderThreadError("external writer entry is unavailable")
-            try:
-                payload = json.loads(path.read_text(encoding="utf-8"))
-                sequence = payload["sequence"]
-                command = _command_from_record(payload, vault_id=self._vault_id)
-                if path.name != f"{command.request_id}.json":
-                    raise ValueError("invalid writer entry identity")
-                digest = payload["request_digest"]
-                if not isinstance(sequence, int) or isinstance(sequence, bool):
-                    raise ValueError("invalid writer sequence")
-                if not isinstance(digest, str) or digest != _command_digest(command):
-                    raise ValueError("invalid writer digest")
-                _validate_command(command)
-            except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
-                raise BuilderThreadError("external writer entry is invalid") from exc
-            records.append((sequence, command, digest))
-        if len(records) > _MAX_TOTAL_ENTRIES:
-            raise BuilderThreadError("external writer contribution bound exceeded")
-        for expected_sequence, (sequence, command, digest) in enumerate(
-            sorted(records, key=lambda record: record[0]), start=1
-        ):
-            if sequence != expected_sequence:
-                raise BuilderThreadError("external writer entry order conflicts")
-            if command.request_id in self._request_digests:
-                raise BuilderThreadError("external writer entry conflicts")
-            thread = self._create(command) if command.kind == "create" else self._append(command)
-            self._record(command, digest, thread)
+        previous_state = (
+            self._threads,
+            self._request_digests,
+            self._request_results,
+            self._capture_index,
+            self._accepted_mutation_count,
+        )
+        try:
+            self._threads = {}
+            self._request_digests = {}
+            self._request_results = {}
+            self._capture_index = {}
+            self._accepted_mutation_count = 0
+            records: list[tuple[int, ThreadMutation, str]] = []
+            for path in self._entries_root.glob("*.json"):
+                if path.is_symlink():
+                    raise BuilderThreadError("external writer entry is unavailable")
+                try:
+                    payload = json.loads(path.read_text(encoding="utf-8"))
+                    sequence = payload["sequence"]
+                    command = _command_from_record(payload, vault_id=self._vault_id)
+                    if path.name != f"{command.request_id}.json":
+                        raise ValueError("invalid writer entry identity")
+                    digest = payload["request_digest"]
+                    if not isinstance(sequence, int) or isinstance(sequence, bool):
+                        raise ValueError("invalid writer sequence")
+                    if not isinstance(digest, str) or digest != _command_digest(command):
+                        raise ValueError("invalid writer digest")
+                    _validate_command(command)
+                except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
+                    raise BuilderThreadError("external writer entry is invalid") from exc
+                records.append((sequence, command, digest))
+            if len(records) > _MAX_TOTAL_ENTRIES:
+                raise BuilderThreadError("external writer contribution bound exceeded")
+            for expected_sequence, (sequence, command, digest) in enumerate(
+                sorted(records, key=lambda record: record[0]), start=1
+            ):
+                if sequence != expected_sequence:
+                    raise BuilderThreadError("external writer entry order conflicts")
+                if command.request_id in self._request_digests:
+                    raise BuilderThreadError("external writer entry conflicts")
+                thread = self._create(command) if command.kind == "create" else self._append(command)
+                self._record(command, digest, thread)
+        except Exception:
+            (
+                self._threads,
+                self._request_digests,
+                self._request_results,
+                self._capture_index,
+                self._accepted_mutation_count,
+            ) = previous_state
+            raise
 
     def _persist(self, command: ThreadMutation, request_digest: str, *, sequence: int) -> None:
         path = self._entries_root / f"{command.request_id}.json"

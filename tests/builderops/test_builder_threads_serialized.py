@@ -583,6 +583,36 @@ def test_partial_artifact_is_quarantined_with_failure_signal(
     assert writer.read_thread(created.thread.thread_id) == created.thread
 
 
+def test_reload_failure_preserves_live_projection(tmp_path: Path) -> None:
+    writer = _writer(tmp_path)
+    client = BuilderThreadClient(
+        InProcessWriterEndpoint(writer, client_id="codex:desktop"), client_id="codex:desktop"
+    )
+    created = client.create(
+        request_id="reload-baseline-5031",
+        actor="codex:desktop",
+        recipient="claude:mac",
+        subject="Reload failure baseline",
+        content="Valid durable threads remain readable after a rejected reload.",
+        source_refs=("github:5031",),
+    )
+    entries = tmp_path / "external-builderops-vault" / "builder-thread-entries"
+    (entries / "malformed-final-5031.json").write_text('{"command":', encoding="utf-8")
+
+    with pytest.raises(BuilderThreadError, match="external writer entry is invalid"):
+        client.create(
+            request_id="reload-refusal-5031",
+            actor="codex:desktop",
+            recipient="claude:mac",
+            subject="Reload refusal",
+            content="The reload must reject malformed durable state.",
+            source_refs=("github:5031",),
+        )
+
+    assert client.read(created.thread.thread_id) == created.thread
+    assert client.inbox("claude:mac", limit=10).threads[0].thread_id == created.thread.thread_id
+
+
 def test_external_writer_restores_causal_order_not_request_id_order(tmp_path: Path) -> None:
     writer = _writer(tmp_path)
     first = BuilderThreadClient(
