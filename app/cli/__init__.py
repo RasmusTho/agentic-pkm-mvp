@@ -35,6 +35,7 @@ from app.cli.builderops import builderops as builderops_cli
 from app.cli.vault import vault as vault_cli
 from app.cli.ops import ops as ops_cli
 from app.cli.decisions import decisions as decisions_cli
+from app.cli.calibration import calibration as calibration_cli
 from app.cli.briefing import briefing_group
 from app.cli.journaling import journaling_group
 from app.cli.youtube_inbox_dev import youtube_inbox_dev
@@ -324,6 +325,7 @@ cli.add_command(builderops_cli, name="builderops")
 cli.add_command(vault_cli, name="vault")
 cli.add_command(ops_cli, name="ops")
 cli.add_command(decisions_cli, name="decisions")
+cli.add_command(calibration_cli, name="calibration")
 cli.add_command(youtube_inbox_dev)
 
 # ---------------------------------------------------------------------------
