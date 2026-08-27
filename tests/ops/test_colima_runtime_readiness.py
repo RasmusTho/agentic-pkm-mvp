@@ -256,8 +256,8 @@ def test_doctor_probe_never_starts_colima_or_overwrites_readiness_receipt(tmp_pa
         f"source '{COMPANION_STARTUP}'; "
         "COLIMA_RUNTIME_PROVIDER=colima AUTO_START_COLIMA=1 "
         f"COLIMA_RUNTIME_RECEIPT_PATH='{receipt}' "
-        "CUI_CHANNEL=dev CUI_DEFAULT_EXPECTED_VAULT_PATTERN=niflheim "
-        "CUI_DEFAULT_EXPECTED_VAULT_LABEL=Niflheim CUI_API_PORT=18001 CUI_UI_PORT=8111 "
+        "CUI_CHANNEL=dev CUI_DEFAULT_EXPECTED_VAULT_PATTERN=example-vault "
+        "CUI_DEFAULT_EXPECTED_VAULT_LABEL=ExampleVault CUI_API_PORT=18001 CUI_UI_PORT=8111 "
         "CUI_COMPOSE_FILES=docker-compose.yaml CUI_COMPOSE_PROJECT=pkm-dev "
         "CUI_SERVE_MODULE=companion_ui.workspace.serve_dev_page "
         "cui_run_doctor || true",
