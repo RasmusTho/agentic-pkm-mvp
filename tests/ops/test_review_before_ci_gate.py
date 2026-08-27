@@ -872,43 +872,32 @@ def test_direct_repair_cannot_omit_risk_assessment_to_reach_bypass() -> None:
         )
 
 
-def test_cli_fails_until_review_gate_is_complete() -> None:
-    blocked = subprocess.run(
-        [
-            sys.executable,
-            "scripts/review_before_ci_gate.py",
-            "--lane",
-            "governance",
-            "--changed-file",
-            "docs/development/PR_HOT_PATH.md",
-            "--risk-assessment-complete",
-        ],
-        cwd=REPO_ROOT,
-        capture_output=True,
-        text=True,
-        check=False,
+def test_cli_fails_until_review_gate_is_complete(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(
+        "scripts.review_before_ci_gate.workflow_risk_evidence_from_git",
+        lambda *args, **kwargs: SimpleNamespace(risks=[]),
     )
-    allowed = subprocess.run(
-        [
-            sys.executable,
-            "scripts/review_before_ci_gate.py",
-            "--lane",
-            "governance",
-            "--changed-file",
-            "docs/development/PR_HOT_PATH.md",
-            "--risk-assessment-complete",
-            "--review-gate-complete",
-        ],
-        cwd=REPO_ROOT,
-        capture_output=True,
-        text=True,
-        check=False,
+    monkeypatch.setattr(
+        "scripts.review_before_ci_gate._current_branch_has_open_pr", lambda repository: False
     )
+    arguments = [
+        "--lane",
+        "governance",
+        "--changed-file",
+        "docs/development/PR_HOT_PATH.md",
+        "--risk-assessment-complete",
+        "--publication-mode",
+        "new",
+        "--github-repository",
+        "octo/repo",
+    ]
 
-    assert blocked.returncode == 1
-    assert json.loads(blocked.stdout)["may_handoff_to_ci"] is False
-    assert allowed.returncode == 0
-    assert json.loads(allowed.stdout)["may_handoff_to_ci"] is True
+    assert review_before_ci_main(arguments) == 1
+    assert json.loads(capsys.readouterr().out)["may_handoff_to_ci"] is False
+    assert review_before_ci_main([*arguments, "--review-gate-complete"]) == 0
+    assert json.loads(capsys.readouterr().out)["may_handoff_to_ci"] is True
 
 
 def test_publish_pr_skill_runs_review_gate_before_push() -> None:
