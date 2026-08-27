@@ -30,25 +30,31 @@ owner decision, acceptance, browser-persistence, or runtime-write state.
 
 Parent: #4741
 
-After all prerequisites are receipted, verify on one exact deployed SHA and disposable test-only
-state that the owner can answer **What should I
+After all prerequisites are receipted, verify on one final post-merge `main` commit `M`—containing
+the accepted semantic patches from #4835 and #4836—and disposable test-only state that the owner can
+answer **What should I
 understand now?**, **Where is my authority actually needed?**, and **What is truly ready to try?**
 without opening standalone source UIs or creating a durable acceptance state.
 
 This is a future executable pilot contract, not evidence that the shell has been deployed or that a
-pilot has passed. The live URL and deployed SHA are intentionally absent until the #4747, #4748,
-and deployment receipts supply them.
+pilot has passed. At the current live checkpoint #4835 is open/in progress and #4836 is open/blocked,
+so `M`, a fresh #4748-at-`M` proof, and deployment/owner receipts do not yet exist. The live URL and
+deployed SHA remain intentionally absent until those receipts supply them.
 
 ## Scope
 
 - Run the five predefined owner scenarios against Demerzel production: Compose project `pkm-prod`,
   `PKM_ENVIRONMENT=prod`, and the Midgård prod vault. The current promotion ref is `main`; the
   `stable` ref is dormant. This task does not promote, deploy, restart, or change either ref.
-- Obtain the exact deployed URL and SHA only from the #4747/#4748/deployment receipts. Require that
-  SHA to agree across the current CI/review/deploy receipt, `/version`, `/api/health.version`, and
-  the authenticated gateway marker before the journey begins.
-- Use a disposable, test-only state matrix classified and approved before the pilot. It must not
-  rely on a local fixture or real owner/prod data.
+- Obtain the exact deployed URL and SHA only from receipts for final `M`, including the #4836
+  candidate, the exact-ref #4833 browser proof (closed through PR #4842), #4748, and deployment.
+  Require that SHA to agree across the current CI/review/deploy receipt, `/version`,
+  `/api/health.version`, and the authenticated gateway marker before the journey begins.
+- Consume #4835's value-free boolean-only production prerequisite receipt for repository binding and
+  coupled credential presence; it is evidence of prerequisites, not of provisioning or deployment.
+- Use a disposable, test-only state matrix classified and approved before the pilot. Optional
+  `pkm-test` participation is allowed only after its disposable classification is proven; the matrix
+  must never rely on an unclassified local fixture or real owner/prod data.
 - Record answers, evidence path, source conditions, reconstruction steps, Playwright trace,
   screenshots, checksums, manifest, and disposition in the final structured pilot ledger.
 - Return discovered defects/gaps to their owning blocked contract without implementing repairs.
@@ -102,17 +108,22 @@ promote, restart, or mutate production. Any defect, source-authority gap, design
 journey, identity mismatch, effect, error, storage use, or unauthorized write is returned to its
 owning blocked contract and blocks the pilot.
 
-Prerequisites are strict and serial: (1) #4748 delivery and exact browser/accessibility receipt;
-(2) this repaired source contract; (3) Demerzel authentication and access; (4) #4747's deployed
-route and server-supplied Focus selectors; (5) the receipt-sourced exact deployed SHA and URL; and
-(6) approved disposable-state classification. The pilot must not be claimed or made ready from this
-document alone.
+Prerequisites are strict and serial: (1) accepted #4835 and #4836 changes merged into final `M`;
+(2) #4833's closed exact-ref five-node browser-proof contract, exercised as a fresh #4748 proof at
+`M`; (3) this repaired source contract; (4) #4835's value-free boolean prerequisite receipt;
+(5) Demerzel authentication and access; (6) #4747's deployed route and server-supplied Focus
+selectors; (7) the receipt-sourced exact deployed SHA and URL; and (8) approved disposable-state
+classification. The pilot must not be claimed or made ready from this document alone.
 
 ## Acceptance Criteria
 
-- [ ] The pilot obtains its exact deployed URL and SHA from the #4747/#4748/deployment receipts and
-      proves equality across the current CI/review/deploy receipt, `/version`,
-      `/api/health.version`, and gateway marker before the journey.
+- [ ] The pilot binds to final post-merge `main` commit `M` containing #4835 and #4836, consumes a
+      fresh #4748 proof at `M` through #4833's exact-ref five-node contract, and proves equality
+      across the current CI/review/deploy receipt, `/version`, `/api/health.version`, and gateway
+      marker before the journey.
+  - Verify: runtime receipt: devui-stage-a-read-only-owner-pilot.v1
+- [ ] The ledger records #4835's boolean-only repository/credential prerequisite result without
+      exposing values, account identities, paths, or provisioning claims.
   - Verify: runtime receipt: devui-stage-a-read-only-owner-pilot.v1
 - [ ] For each zone, the final structured ledger records the exact answer, evidence path, source
       conditions, elapsed reconstruction steps, and pass/fail disposition.
@@ -127,9 +138,13 @@ document alone.
       preserving subject/evidence context; no standalone subsystem UI is required for the tested
       answers.
   - Verify: runtime receipt: devui-stage-a-read-only-owner-pilot.v1
-- [ ] The disposable test-only state matrix produces no effects, page or console errors, browser
-      persistence/storage, or unauthorized writes; traces, screenshots, checksums, and manifest
-      are durable and bound to the deployed identity.
+- [ ] The classified disposable test-only state matrix—using `pkm-test` only when its disposable
+      status is proven—produces no effects, page or console errors, browser persistence/storage, or
+      unauthorized writes; traces, screenshots, checksums, and manifest are durable and bound to the
+      deployed identity.
+  - Verify: runtime receipt: devui-stage-a-read-only-owner-pilot.v1
+- [ ] The owner separately acknowledges the concrete promotion-plan result and the later evidence
+      result; neither acknowledgement is inferred from merge, deployment, or the other acknowledgement.
   - Verify: runtime receipt: devui-stage-a-read-only-owner-pilot.v1
 - [ ] The owner explicitly acknowledges the bounded result; the pilot creates no tried/accepted/
       dismissed state, task, command, provider session, or product/runtime write receipt.
@@ -140,8 +155,9 @@ document alone.
 
 ## How to Verify (Pre-Merge)
 
-- Confirm every strict prerequisite, including #4748, the repaired source contract, Demerzel access,
-  #4747 selectors, the receipt-sourced URL/SHA, and disposable-state classification.
+- Confirm every strict prerequisite, including merged #4835/#4836 at `M`, fresh #4748-at-`M` proof via
+  #4833/#4842, the repaired source contract, #4835's boolean receipt, Demerzel access, #4747
+  selectors, the receipt-sourced URL/SHA, and disposable-state classification.
 - Run the five named pilot checks and the Overview → Focus → return Playwright journey.
 - Post the owner-acknowledged structured result and any blockers to the parent; do not repair them
   here. Only a PASS may trigger a separate current-state owner-doc writeback decision.
@@ -173,5 +189,7 @@ document alone.
 ## Related GitHub Issues
 
 Filed as blocked child [#4749](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4749) serially
-after #4748. It awaits the repaired contract, Demerzel prod access, #4747 selectors, #4748's exact
-browser/accessibility receipt, receipt-sourced deployed URL/SHA, and disposable-state classification.
+after #4748. It awaits final post-merge `M` containing #4835/#4836, a fresh #4748-at-`M` proof via
+#4833/#4842, the repaired contract, #4835's boolean prerequisite receipt, Demerzel prod access,
+#4747 selectors, receipt-sourced deployed URL/SHA, separate promotion/owner acknowledgements, and
+disposable-state classification.

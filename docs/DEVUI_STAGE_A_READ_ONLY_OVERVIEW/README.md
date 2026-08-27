@@ -1,16 +1,17 @@
 State: Accepted target-state breakdown with blocked validation parent #4741; ARO-01 is closed with
 its withdrawal recorded, ARO-03 is delivered as the direct-loopback local route, and ARO-04–08
-remain blocked; Focus-route prerequisite #4768 and source-owned Now producer #4834 are delivered.
+remain blocked. Recovery inputs #4833, #4834, #4838, and #4841 are closed, while #4835 remains
+open/in progress and #4836 remains open/blocked; no final `M` or downstream runtime receipt exists.
 Doc role: Capability specification and source-authorized task decomposition for the remaining read-only devUI Stage A Overview.
 Authority: `docs/DEVUI.md` owns owner experience and Overview semantics; `docs/plans/DEVUI_IMPLEMENTATION.md` owns Stage A order. This directory owns only the bounded delivery contracts and validation path.
 Owner: Builder System governance
 Temporal class: Strategic target state with an explicit delivered-input ledger
 Review cadence: Event-driven
 Source of truth: Owner documents own intended behavior; source systems and receipts own facts; GitHub, Git, CI, and merged code own delivery truth.
-Last reviewed: 2026-08-12
-Last verified against: `origin/main` `a4e79f77909f93e1a313d9f10907e6ed8aeb72a6`, live GitHub
-state for #4742–#4749, #4768, #4786, #4791, #4834, and #4838, and merged PRs #4751, #4771, #4772,
-#4789, and #4792.
+Last reviewed: 2026-08-28
+Last verified against: `origin/main` `0ccdb8613766a46fb3830227b2a1b3e45979e2d7`, live GitHub
+state for #4742–#4749, #4768, #4786, #4791, #4833–#4836, #4838, and #4841, and merged PRs #4751,
+#4771, #4772, #4789, #4792, #4842, and #4845.
 
 # devUI Stage A Read-Only Overview
 
@@ -25,7 +26,8 @@ visual steps. No current producer exposes the canonical source facts needed for 
 **Ready to try**. #4834 delivers source-owned **Now** candidates from the trusted Cockpit `working`
 payload only; the delivered local Focus route does not by itself authorize an Overview typed-
 navigation destination, and no local SoI destination exists. Connected visual implementation waits
-for stable #4834 **Now** fixtures plus the delivered #4768 Focus API fixtures and accepted governed
+for stable #4834 **Now** fixtures plus the delivered #4768 Focus API fixtures, the open #4835
+production repository/prerequisite work, the blocked #4836 connected shell, and accepted governed
 Yggdrasil evidence: exact constrained reuse provenance, or the live handoff required for any novel,
 mixed, or unknown delta.
 
@@ -40,10 +42,10 @@ page, asset, or visual destination.
 | `devui.composition.v1` | Per-request CKM/Cockpit envelope with independent provider state; #4834 reads its already-composed Cockpit `working` payload once | No current source owns an owner-question or readiness fact, so **Needs you** and **Ready to try** remain withdrawn and ARO-02 stays closed/superseded |
 | `devui-overview-view.v1` | Pure composer in `app/builderops/devui_overview.py`, including hostile cross-field validation and typed root-reference preservation | **Excluded from this breakdown; do not duplicate or reopen** |
 | Cockpit producer | #4834 maps only trusted, countable `working` items to source-ordered **Now** candidates with stable GitHub identity and separate Cockpit evidence | Owner-question facts remain separately source-owned or honestly withdrawn; `agent:needs-human`, delivery, and readiness are not admitted |
-| Delivery evidence | Delivery, merge, closure, and terminal verification facts exist independently | A source-owned, receipt-backed `ready_to_try` fact, or an honest withdrawal |
+| Delivery evidence | Delivery, merge, closure, and terminal verification facts exist independently; #4833/#4842 supplies the exact-ref browser workflow, but #4835 is open/in progress and #4836 is open/blocked | Final post-merge `main` commit `M` containing #4835/#4836, then fresh exact-SHA proof and deployment/owner receipts; a source-owned, receipt-backed `ready_to_try` fact, or an honest withdrawal |
 | API | Local-only GET `/api/devui/composition`, delivered direct-loopback Overview/Focus reads, and #4841's production Companion exact two-GET transport; no devUI mutation or page route | Typed navigation only after actual local destinations are governed |
 | Navigation | Composer validates typed root references | Resolvable local Focus and optional SoI destinations without joins |
-| Visual shell | No Overview browser shell | Accepted constrained-reuse or live-handoff evidence, read-only shell, browser/accessibility proof, owner pilot |
+| Visual shell | No accepted connected shell; #4836 remains open/blocked, while #4833/#4842 provides only the exact-ref proof workflow | Accepted constrained-reuse or live-handoff evidence, read-only shell, browser/accessibility proof at `M`, owner pilot |
 
 ## Authority-resolution gate
 
@@ -78,9 +80,9 @@ changes none of the withdrawal conclusions for **Needs you** or **Ready to try**
 | 3 | ARO-03 — Expose the Local Overview GET Route | Delivered #4744 and #4834 recovery | The route rebuilds the production composition once, derives only trusted Cockpit `working` inputs, and calls the delivered composer |
 | 4 | ARO-04 — Bind Typed Overview Navigation | `agent:blocked` | ARO-03 plus delivered #4768 local Focus route and an optional local SoI destination |
 | 5 | ARO-05 — Validate Connected Overview and Focus Yggdrasil Evidence #4746 | `agent:blocked` | Merged stable #4834 source-owned Now fixtures plus delivered #4768 Focus API fixtures, then either an independently reviewed `yggdrasil-constrained-reuse.v1` exact-reuse receipt or a passing live Yggdrasil Design Handoff Receipt for novel, mixed, or unknown scope |
-| 6 | ARO-06 — Render the Read-Only Overview Shell | `agent:blocked` | Accepted ARO-05 design evidence and merged ARO-03/04 |
-| 7 | ARO-07 — Prove Overview Browser and Accessibility States | `agent:blocked` | ARO-06 merged at an exact testable SHA |
-| 8 | ARO-08 — Run the Read-Only Owner Pilot | `agent:blocked` | #4748 receipt, repaired pilot contract, Demerzel prod access, #4747 selectors, receipt-sourced deployed URL/SHA, and disposable-state classification |
+| 6 | ARO-06 — Render the Read-Only Overview Shell | `agent:blocked` | Accepted ARO-05 design evidence and merged ARO-03/04; connected recovery #4836 remains open/blocked |
+| 7 | ARO-07 — Prove Overview Browser and Accessibility States | `agent:blocked` | Final `M` containing #4835/#4836, then exact-ref #4833/#4842 dispatch at `M` |
+| 8 | ARO-08 — Run the Read-Only Owner Pilot | `agent:blocked` | Fresh #4748-at-`M` receipt, repaired pilot contract, #4835 boolean prerequisite receipt, Demerzel prod access, #4747 selectors, receipt-sourced deployed URL/SHA, separate promotion/owner acknowledgements, and disposable-state classification |
 
 No task is `agent:ready` at filing. The parent is a blocked validation hub and never becomes a
 pickup issue.
@@ -130,6 +132,9 @@ pickup issue.
       proves the deployed SHA across CI/review/deploy receipt, `/version`, `/api/health.version`,
       and gateway marker, and records the disposable-state Overview → server-supplied Focus →
       return journey with zero effects/errors/storage/unauthorized writes and durable evidence.
+- [ ] The final pilot ledger binds #4835's value-free boolean prerequisite receipt, allows `pkm-test`
+      only after disposable classification, and keeps promotion-plan acknowledgement separate from
+      the later owner evidence acknowledgement.
 
 ## Relationship to GitHub issues
 
@@ -140,9 +145,12 @@ is superseded by that no-source decision, and ARO-03 / [#4744](https://github.co
 is delivered as the no-candidate local projection route; its contract and route-test selection were
 reconciled by merged PR #4789. ARO-04 through ARO-08 remain
 [#4745](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4745) through
-[#4749](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4749) (`agent:blocked`). ARO-08 is a
-future executable production pilot only: its actual URL/SHA must be sourced later from #4747,
-#4748, and deployment receipts, and it must not imply that deployment or owner validation happened.
+[#4749](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4749) (`agent:blocked`). Recovery Issue
+[#4833](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4833) is closed through merged PR #4842
+and supplies the exact-ref browser workflow, not a proof receipt. #4834, #4838, and #4841 are closed;
+#4835 remains open/in progress and #4836 remains open/blocked. ARO-08 is a future executable
+production pilot only: its actual URL/SHA must be sourced later from final `M`, #4748, and deployment
+receipts, and it must not imply that deployment or owner validation happened.
 The separate
 [Focus-route prerequisite #4768](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4768) is
 delivered by PR #4771. Connected handoff #4746 remains blocked until the delivered source-owned Now
