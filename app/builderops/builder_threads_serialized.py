@@ -8,6 +8,7 @@ no client filesystem API and deliberately never discovers a vault path.
 from __future__ import annotations
 
 import hashlib
+import ipaddress
 import json
 import os
 import re
@@ -16,6 +17,7 @@ import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal, Protocol, cast
+from urllib.parse import unquote, urlsplit
 
 
 PRIVACY_CLASS: Literal["shared_non_sensitive"] = "shared_non_sensitive"
@@ -24,9 +26,8 @@ _REQUEST_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 _SOURCE_REF = re.compile(
     r"^(?:builderops|conversation|doc|git|github):[A-Za-z0-9._:/#@+-]{1,255}$"
 )
-_PRIVATE_CONTENT = re.compile(
-    r"(?im)(password|secret|credential|token|api[_-]?key|bearer\s+|"
-    r"(?:~/.ssh|/(?:Users|home|private|root|etc|var|opt)/)|"
+_CREDENTIAL_CONTENT = re.compile(
+    r"(?im)(password|secret|credential|token|api[_-]?key|bearer\b|"
     r"^aws_(?:access_key_id|secret_access_key)\s*=|"
     r"^authorization:\s*(?:basic|bearer)\b|^-----begin [a-z ]+private key-----|"
     r"\bAKIA[0-9A-Z]{16}\b|\bgithub_pat_[A-Za-z0-9_]{20,}|"
@@ -41,6 +42,7 @@ _CODE_OR_PATCH = re.compile(
     r"\s*[a-z_$][a-z0-9_$]*\s*=\s*(?:\([^)]*\)|[a-z_$][a-z0-9_$]*)\s*=>)"
 )
 _MAX_TEXT = 500
+_MAX_COMPONENTS = 64
 _MAX_THREAD_ENTRIES = 32
 _MAX_TOTAL_ENTRIES = 100
 _ROOT_IDENTITY = "builder-thread-writer.json"
@@ -337,6 +339,17 @@ class SerializedThreadWriter:
             or not self._entries_root.is_dir()
         ):
             raise BuilderThreadError("external writer root is not the pinned vault identity")
+        try:
+            payload = _strict_json_loads(identity.read_text(encoding="utf-8"))
+        except (TypeError, ValueError, json.JSONDecodeError) as exc:
+            raise BuilderThreadError("external writer root is not the pinned vault identity") from exc
+        if (
+            not isinstance(payload, dict)
+            or set(payload) != {"schema", "vault_id"}
+            or payload.get("schema") != "builder-thread-writer.v1"
+            or payload.get("vault_id") != self._vault_id
+        ):
+            raise BuilderThreadError("external writer root is not the pinned vault identity")
 
     def _restore_external_state(self) -> None:
         self._threads = {}
@@ -349,7 +362,7 @@ class SerializedThreadWriter:
             if path.is_symlink():
                 raise BuilderThreadError("external writer entry is unavailable")
             try:
-                payload = json.loads(path.read_text(encoding="utf-8"))
+                payload = _strict_json_loads(path.read_text(encoding="utf-8"))
                 sequence = payload["sequence"]
                 command = _command_from_record(payload, vault_id=self._vault_id)
                 if path.name != f"{command.request_id}.json":
@@ -560,6 +573,7 @@ def _validate_command(command: ThreadMutation) -> None:
         raise BuilderThreadError("unsupported thread mutation")
     if not _REQUEST_ID.fullmatch(command.request_id):
         raise BuilderThreadError("request_id must be a filename-safe bounded identifier")
+    _validate_shared_text(command.request_id, field="request_id")
     _validate_identity(command.actor, field="actor")
     if command.kind == "create":
         if command.thread_id is not None:
@@ -586,20 +600,19 @@ def _validate_command(command: ThreadMutation) -> None:
 def _validate_identifier(value: str | None, *, field: str) -> None:
     if not isinstance(value, str) or not value or len(value) > 128:
         raise BuilderThreadError(f"{field} must be a bounded identifier")
+    _validate_shared_text(value, field=field)
 
 
 def _validate_identity(value: str | None, *, field: str) -> None:
     if not isinstance(value, str) or not _IDENTITY.fullmatch(value):
         raise BuilderThreadError(f"{field} must be a named identity")
+    _validate_shared_text(value, field=field)
 
 
 def _validate_text(value: str | None, *, field: str) -> None:
     if not isinstance(value, str) or not value.strip() or len(value) > _MAX_TEXT:
         raise BuilderThreadError(f"{field} must be bounded non-empty text")
-    if _PRIVATE_CONTENT.search(value):
-        raise BuilderThreadError(f"{field} is not shared_non_sensitive")
-    if _CODE_OR_PATCH.search(value):
-        raise BuilderThreadError(f"{field} is not shared_non_sensitive")
+    _validate_shared_text(value, field=field)
 
 
 def _validate_source_refs(source_refs: tuple[str, ...]) -> None:
@@ -608,8 +621,213 @@ def _validate_source_refs(source_refs: tuple[str, ...]) -> None:
     for source_ref in source_refs:
         if not isinstance(source_ref, str) or not _SOURCE_REF.fullmatch(source_ref):
             raise BuilderThreadError("source_ref must be typed bounded provenance")
-        if _PRIVATE_CONTENT.search(source_ref):
-            raise BuilderThreadError("source_ref is not shared_non_sensitive")
+        _validate_shared_text(source_ref, field="source_ref")
+
+
+def _validate_shared_text(value: str, *, field: str) -> None:
+    """Apply the closed structural privacy classifier without exposing input."""
+    if _classify_shared_text(value) != "valid":
+        raise BuilderThreadError(f"{field} is not shared_non_sensitive")
+
+
+def _classify_shared_text(value: str) -> Literal["valid", "terminal_private", "indeterminate"]:
+    """Classify bounded shared text with a URI-aware, fail-closed scanner.
+
+    URI parsing is deliberately separated from path scanning: only the parsed
+    path of a valid HTTP(S) URI is a resource path. Query, fragment, opaque,
+    filesystem, malformed, and ordinary text remain untrusted components.
+    """
+    if len(value) > _MAX_TEXT:
+        return "indeterminate"
+    forms = _decoded_forms(value)
+    if forms is None:
+        return "indeterminate"
+    if len(forms) > _MAX_COMPONENTS:
+        return "indeterminate"
+    for form in forms:
+        outcome = _classify_form(form)
+        if outcome != "valid":
+            return outcome
+    return "valid"
+
+
+def _decoded_forms(value: str) -> list[str] | None:
+    forms = [value]
+    current = value
+    for _ in range(2):
+        if not _has_valid_percent_escapes(current):
+            return None
+        decoded = unquote(current)
+        if decoded == current:
+            return forms
+        forms.append(decoded)
+        current = decoded
+    if not _has_valid_percent_escapes(current) or unquote(current) != current:
+        return None
+    return forms
+
+
+def _has_valid_percent_escapes(value: str) -> bool:
+    index = 0
+    while index < len(value):
+        if value[index] == "%":
+            if index + 2 >= len(value) or any(char not in "0123456789abcdefABCDEF" for char in value[index + 1:index + 3]):
+                return False
+            index += 3
+        else:
+            index += 1
+    return True
+
+
+def _classify_form(value: str) -> Literal["valid", "terminal_private", "indeterminate"]:
+    spans = _uri_spans(value)
+    remainder = list(value)
+    components = 0
+    for start, end in spans:
+        components += 1
+        if components > _MAX_COMPONENTS:
+            return "indeterminate"
+        outcome = _classify_uri(value[start:end])
+        if outcome != "valid":
+            return outcome
+        scheme = value[start:value.find(":", start)].lower()
+        if scheme in {"http", "https"}:
+            remainder[start:end] = " " * (end - start)
+    plain = "".join(remainder)
+    if _contains_credential_or_code(plain) or _contains_private_path(plain):
+        return "terminal_private"
+    return "valid"
+
+
+def _uri_spans(value: str) -> list[tuple[int, int]]:
+    """Return bounded lexical URI candidates without assigning them safety."""
+    spans: list[tuple[int, int]] = []
+    index = 0
+    terminators = set(" \t\r\n<>\"`}")
+    while index < len(value):
+        if not value[index].isalpha() or not _token_boundary(value, index):
+            index += 1
+            continue
+        cursor = index + 1
+        while cursor < len(value) and (value[cursor].isalnum() or value[cursor] in "+-."):
+            cursor += 1
+        if cursor >= len(value) or value[cursor] != ":":
+            index += 1
+            continue
+        # One-letter forms are overwhelmingly path/code punctuation; a Windows
+        # drive is handled by path scanning, not reinterpreted as a URI.
+        if cursor == index + 1:
+            index += 1
+            continue
+        end = cursor + 1
+        while end < len(value) and value[end] not in terminators:
+            end += 1
+        spans.append((index, end))
+        index = end
+    return spans
+
+
+def _token_boundary(value: str, index: int) -> bool:
+    return index == 0 or value[index - 1] not in "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_%+-."
+
+
+def _classify_uri(candidate: str) -> Literal["valid", "terminal_private", "indeterminate"]:
+    try:
+        parsed = urlsplit(candidate)
+    except ValueError:
+        return "indeterminate"
+    scheme = parsed.scheme.lower()
+    if not scheme:
+        return "valid"
+    if scheme in {"http", "https"}:
+        if not candidate.startswith(f"{scheme}://") or not parsed.netloc or "@" in parsed.netloc:
+            return "indeterminate"
+        if not _valid_http_authority(parsed.netloc):
+            return "indeterminate"
+        # The whole URI still receives credential/code recognition. Only its
+        # parsed path skips local-host-path recognition.
+        if _contains_credential_or_code(candidate):
+            return "terminal_private"
+        for component in (parsed.netloc, parsed.query, parsed.fragment):
+            if _contains_private_path(component):
+                return "terminal_private"
+        return "valid"
+    if scheme in {"file", "smb", "nfs", "ssh", "sftp"} and not (parsed.netloc or parsed.path):
+        return "indeterminate"
+    if _contains_credential_or_code(candidate) or _contains_private_path(candidate):
+        return "terminal_private"
+    return "valid"
+
+
+def _valid_http_authority(authority: str) -> bool:
+    try:
+        parsed = urlsplit(f"https://{authority}")
+        host = parsed.hostname
+        port = parsed.port
+    except ValueError:
+        return False
+    if not host or "@" in authority or port is not None and not 0 <= port <= 65535:
+        return False
+    if ":" in host:
+        try:
+            ipaddress.IPv6Address(host.split("%", 1)[0])
+        except ValueError:
+            return False
+        return "%" not in host or "%25" in authority
+    try:
+        ipaddress.IPv4Address(host)
+        return True
+    except ValueError:
+        pass
+    try:
+        encoded = host.encode("idna").decode("ascii")
+    except UnicodeError:
+        return False
+    if len(encoded) > 253:
+        return False
+    return all(
+        1 <= len(label) <= 63
+        and not label.startswith("-")
+        and not label.endswith("-")
+        and all(char.isascii() and (char.isalnum() or char == "-") for char in label)
+        for label in encoded.split(".")
+    )
+
+
+def _contains_credential_or_code(value: str) -> bool:
+    return bool(_CREDENTIAL_CONTENT.search(value) or _CODE_OR_PATCH.search(value))
+
+
+def _contains_private_path(value: str) -> bool:
+    """Recognise standalone POSIX, tilde, drive, rooted, and UNC path tokens."""
+    for index, char in enumerate(value):
+        if not _token_boundary(value, index):
+            continue
+        if char == "/":
+            return True
+        if char == "~":
+            cursor = index + 1
+            while cursor < len(value) and (value[cursor].isalnum() or value[cursor] in "_.-"):
+                cursor += 1
+            if cursor == len(value) or value[cursor] in "\\/ \t\r\n)]},;!?":
+                return True
+        if char == "\\":
+            return True
+        if char.isalpha() and index + 2 < len(value) and value[index + 1] == ":" and value[index + 2] in "\\/":
+            return True
+    return False
+
+
+def _strict_json_loads(value: str) -> Any:
+    def object_pairs(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+        result: dict[str, Any] = {}
+        for key, item in pairs:
+            if key in result:
+                raise ValueError("duplicate JSON key")
+            result[key] = item
+        return result
+
+    return json.loads(value, object_pairs_hook=object_pairs)
 
 
 def _capture_key(recipient: str, subject: str, source_refs: tuple[str, ...]) -> str:
@@ -653,12 +871,24 @@ def _command_record(command: ThreadMutation) -> dict[str, Any]:
 def _command_from_record(payload: Any, *, vault_id: str) -> ThreadMutation:
     if (
         not isinstance(payload, dict)
+        or set(payload) != {"command", "request_digest", "sequence", "schema", "vault_id"}
         or payload.get("schema") != "builder-thread-command.v1"
         or payload.get("vault_id") != vault_id
         or not isinstance(payload.get("command"), dict)
     ):
         raise ValueError("invalid writer command record")
     command = payload["command"]
+    if set(command) != {
+        "actor",
+        "content",
+        "kind",
+        "recipient",
+        "request_id",
+        "source_refs",
+        "subject",
+        "thread_id",
+    }:
+        raise ValueError("invalid writer command fields")
     kind = command.get("kind")
     source_refs = command.get("source_refs")
     if kind not in {"create", "reply", "close", "archive"} or not isinstance(source_refs, list):
