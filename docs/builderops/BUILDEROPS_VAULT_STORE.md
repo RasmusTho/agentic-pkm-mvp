@@ -261,8 +261,10 @@ It never creates SQLite files or provider credentials there.
 
 ### Builder Thread artifact exchange
 
-State: Implemented by the serialized-writer boundary in
-`app/builderops/builder_threads_serialized.py` (Issue #4708).
+State: Serialized-writer code exists from #4708, but its environment-backed
+production host is temporarily fail-closed by #5124. The structural classifier
+merged in #5122 did not pass fresh independent privacy-boundary review and is
+not accepted production evidence.
 
 Builder Threads are external BuilderOps Vault artifacts with one designated
 serialized writer service, initially operated on the Mac mini / BuilderOps host.
@@ -271,39 +273,28 @@ through that endpoint; they do not receive a shared artifact-tree mutation path.
 The repository `vault/` is a fixture, test-only and never a live Builder Thread
 target; the external BuilderOps Vault is separate.
 
-The writer accepts create, reply, close, and archive commands, all constrained to
-`shared_non_sensitive` material, named recipients where applicable, bounded
-content and provenance, endpoint-bound actor identities, and caller-retained
-request IDs. Its external root is
-explicitly initialized with the stable vault identity, then records one immutable,
-writer-sequenced command envelope per request so exact retries survive a writer
-restart; changed semantics under the same request ID fail closed. A thread is capped at 32 entries
-and the writer at 100 total contributions, keeping reads bounded. An unavailable
-writer returns a typed degraded failure and never enables direct client filesystem
-fallback.
+The strict boundary still permits only bounded `shared_non_sensitive` material,
+typed provenance, endpoint-bound actor identities, and named recipients. That
+invariant is intentionally stricter than ordinary application input validation:
+no secret, private host path, product code, patch, or unclassified persisted
+field may enter the shared artifact. It does not, however, require the rejected
+#5122 implementation shape or a bespoke parser for arbitrary mixed free text.
 
-Before persistence and again during recovery, the writer applies one structural
-`shared_non_sensitive` classifier to every caller-controlled or configured
-persisted value. It uses bounded decoding and URI components: only the parsed
-path of a syntactically valid HTTP(S) URL is treated as a public resource path;
-its authority, query, fragment, credentials, code/patch forms, filesystem URI
-data, malformed URI syntax, and standalone POSIX, tilde, Windows, or UNC paths
-are refused without echoing content. Root identities and command envelopes use
-closed key sets with duplicate-key rejection; recovery checks schema, vault
-identity, digest, sequence, command validity, and the same classifier before it
-reconstructs any thread state. A rejected command creates no final envelope or
-accepted count, and an unsafe final envelope fails closed before partial recovery.
+During containment, `BuilderThreadWriterHost.from_environment()` returns the
+existing typed writer-unavailable refusal before it initializes an external root,
+recovers envelopes, or exposes the HTTP host. No environment flag bypasses this
+guard. Direct construction of the serializer and host remains available only to
+focused tests; it is not an operator or client mutation path. Existing external
+artifacts are retained without migration or rewrite, and writer unavailability
+never enables direct client filesystem fallback.
 
-Each command envelope is written to a same-directory temporary pathname, then
-atomically published at its final JSON pathname only after the complete payload
-is written. Interrupted temporary writes are not committed state. Recovery reads
-only validated final envelopes in sequence order; a malformed legacy partial
-final envelope is retained and fails recovery closed rather than being replayed
-or silently discarded. A failed publication latches the existing typed
-writer-unavailable signal until a clean restart; an exact retry after a valid
-restart may then publish the command without duplicating an accepted mutation.
+A replacement privacy mechanism is separately governed. It must preserve the
+strict invariant, closed persisted schemas, content-free refusal, shared
+admission/recovery validation, and bounded work, but may reduce ambiguity by
+separating plain prose from typed resource fields and using standards-based
+parsing instead of expanding a handwritten general-purpose text grammar.
 
-This boundary is deliberately not a distributed filesystem protocol. It has no
+The intended boundary is deliberately not a distributed filesystem protocol. It has no
 vault-global claims, slot reservations, cross-device locks, fsync-based recovery,
 SQLite state, or iCloud convergence semantics. PR #4706 is superseded
 multi-writer evidence only; it is not merged or used as the operational contract.
