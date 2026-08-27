@@ -1,7 +1,8 @@
-State: Target-state recovery design for Issue #4846. Independent Sol/ultra
-review classified the candidate `materially_different` on 2026-08-27, so
-implementation Issue #5118 was created. This is not a claim about shipped
-writer behavior and does not authorize a PR #4813 mutation.
+State: Rejected target-state candidate retained as recovery evidence. Although
+the implementation from Issue #5118 merged in PR #5122, a fresh exact-head
+review found new P1 privacy-boundary and false-green acceptance failures. The
+production host is therefore fail-closed under #5124. This document is not the
+current implementation contract and does not authorize further point repair.
 
 # Builder Thread Structural Privacy Classifier Recovery
 
@@ -19,6 +20,23 @@ eligible to reach a persisted command envelope, as detailed below. Existing
 identity, request-id, and provenance grammar validation remains in place, but
 it is not evidence that a credential-like value cannot fit those grammars.
 Thread-state values are writer-derived and are not caller input.
+
+### Post-#5122 contract disposition
+
+The strict outcome remains reasonable: secrets, credentials, private host paths,
+product code, patches, untyped provenance, and unclassified persisted fields
+must never enter immutable shared BuilderOps artifacts. Admission and recovery
+must enforce the same closed schema, bounded work, and content-free refusal.
+
+The rejected mechanism prescription is not itself an invariant. In particular,
+future work is not required to extend a handwritten parser over arbitrary mixed
+prose, URI grammar, filesystem syntax, and every nested encoding merely to retain
+the strict privacy outcome. A replacement should first reduce the input problem:
+use closed command-specific schemas, keep ordinary prose deliberately narrow,
+place resources in typed fields parsed by maintained standards libraries, and
+generate row-explicit admission and recovery tests. The exact replacement is a
+separate governed decision and implementation slice; none of those options are
+claimed as shipped here.
 
 ### Persisted record and root-identity inventory
 

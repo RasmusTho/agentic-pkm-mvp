@@ -43,10 +43,12 @@ def _http_client(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, client_id: str = "codex:desktop"
 ) -> tuple[BuilderThreadClient, Path]:
     root = tmp_path / "external-vault"
-    monkeypatch.setenv("BUILDEROPS_THREAD_WRITER_ROOT", str(root))
-    monkeypatch.setenv("BUILDEROPS_THREAD_WRITER_VAULT_ID", "builderops-mac-mini")
+    initialize_external_writer_root(root, vault_id="builderops-mac-mini")
     host = BuilderThreadEndpointHost(
-        BuilderThreadWriterHost.from_environment(), client_tokens={client_id: "test-token"}
+        BuilderThreadWriterHost(
+            SerializedThreadWriter(vault_id="builderops-mac-mini", state_root=root)
+        ),
+        client_tokens={client_id: "test-token"},
     )
     endpoint = HttpWriterEndpoint(
         base_url="http://testserver",
@@ -260,10 +262,12 @@ def test_structural_privacy_http_lock_hides_provisional_state_and_rejects_stale_
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     root = tmp_path / "race-vault"
-    monkeypatch.setenv("BUILDEROPS_THREAD_WRITER_ROOT", str(root))
-    monkeypatch.setenv("BUILDEROPS_THREAD_WRITER_VAULT_ID", "builderops-mac-mini")
+    initialize_external_writer_root(root, vault_id="builderops-mac-mini")
     host = BuilderThreadEndpointHost(
-        BuilderThreadWriterHost.from_environment(), client_tokens={"codex:desktop": "test-token"}
+        BuilderThreadWriterHost(
+            SerializedThreadWriter(vault_id="builderops-mac-mini", state_root=root)
+        ),
+        client_tokens={"codex:desktop": "test-token"},
     )
     endpoint = HttpWriterEndpoint(
         base_url="http://testserver", client_id="codex:desktop", token="test-token", transport=_transport(host.app())

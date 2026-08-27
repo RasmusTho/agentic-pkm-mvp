@@ -458,15 +458,9 @@ class BuilderThreadWriterHost:
 
     @classmethod
     def from_environment(cls) -> BuilderThreadWriterHost:
-        root_value = os.getenv(_WRITER_ROOT_ENV, "").strip()
-        vault_id = os.getenv(_WRITER_VAULT_ID_ENV, "").strip()
-        if not root_value or not vault_id:
-            raise WriterHostConfigurationError(
-                f"{_WRITER_ROOT_ENV} and {_WRITER_VAULT_ID_ENV} are required on the writer host"
-            )
-        root = Path(root_value)
-        initialize_external_writer_root(root, vault_id=vault_id)
-        return cls(SerializedThreadWriter(vault_id=vault_id, state_root=root))
+        raise WriterUnavailableError(
+            "Builder Thread production writer is unavailable pending privacy-boundary replacement"
+        )
 
     def endpoint_for(self, client_id: str) -> BoundWriterEndpoint:
         return BoundWriterEndpoint(self._writer, client_id=client_id)

@@ -418,13 +418,19 @@ Companion docs:
   select(.name=="github-live")'`. Full path and rationale:
   `docs/BUILDEROPS_COCKPIT/GITHUB_LIVE_PLANE.md :: What makes that command answer fresh (#4484)`.
 
-### Builder Thread serialized writer (#4708)
+### Builder Thread serialized writer (#4708, #5124 containment)
 
 Builder Threads are Builder System operational context, not a Product/Runtime
-vault flow. The designated BuilderOps/Mac mini writer is the only mutation
-boundary for the external BuilderOps Vault. Start its loopback-only endpoint
-with `python -m app.builderops.builder_thread_endpoint`; Codex and Claude
-clients use `BuilderThreadClient.from_environment()` with
+vault flow. The intended designated BuilderOps/Mac mini writer is the only
+permitted mutation boundary for the external BuilderOps Vault. Its
+environment-backed production factory is temporarily fail-closed after the
+implementation merged in #5122 failed fresh independent privacy-boundary
+review. Do not start `python -m app.builderops.builder_thread_endpoint` until a
+separately governed replacement is accepted; it exits with a stable
+writer-unavailable refusal before root initialization or recovery. Direct
+writer construction is test-only, not an operator bypass.
+
+Codex and Claude clients retain the configured `BuilderThreadClient` contract with
 `BUILDEROPS_THREAD_ENDPOINT_URL`, `BUILDEROPS_THREAD_CLIENT_ID`, and
 `BUILDEROPS_THREAD_CLIENT_TOKEN`. The host separately configures the per-client
 token map in `BUILDEROPS_THREAD_WRITER_CLIENT_TOKENS_JSON`; it alone reads the
@@ -432,29 +438,14 @@ writer-root settings. Do not configure a client with a vault path or fall back
 to direct filesystem writes when that writer is unavailable. The repository
 `vault/` directory is a fixture and is never a live target.
 
-The operational boundary accepts only bounded `shared_non_sensitive` material,
-typed provenance, endpoint-bound actor identities, and named-recipient questions.
-The writer host explicitly initializes the external root with its pinned vault
-identity from `BUILDEROPS_THREAD_WRITER_ROOT` and
-`BUILDEROPS_THREAD_WRITER_VAULT_ID`, then retains immutable, writer-sequenced
-request envelopes there; a
-caller-retained request ID therefore supports an exact
-acknowledgement-loss retry across a writer restart, while changed semantics under
-the same ID fail closed. Thread reads are capped at 32 contributions and the
-writer retains at most 100 total contributions. Inbox and devUI views are
-read-only orientation projections. They do not grant Issue, PR, CI, merge,
-approval, promotion, or receipt authority. The detailed skill contract is
-`.codex/skills/_shared/BUILDER_THREAD_CONTRACT.md`; PR #4706 remains
-superseded multi-writer evidence and is not an operational dependency.
-
-Before a command is persisted, and again before a final envelope is reconstructed
-after restart, the writer applies the structural `shared_non_sensitive`
-classifier. It fail-closes on credentials, code or patch forms, standalone host
-paths, ambiguous filesystem URI forms, malformed URI authorities, and invalid
-persisted identity or envelope structure. Only a syntactically valid HTTP(S)
-resource path receives the narrow path exemption; query, fragment, and nested
-components remain classified. A refused command creates no final envelope or
-accepted count, and a rejected final envelope is not partially reconstructed.
+The strict `shared_non_sensitive` invariant remains authoritative, but #5118 and
+#5122 are not accepted proof that it is enforced. While containment is active,
+the production path writes and reconstructs no Builder Thread envelopes. Existing
+external artifacts are not migrated or rewritten. Inbox and devUI projections
+remain non-authoritative and cannot grant Issue, PR, CI, merge, approval,
+promotion, or receipt authority. The detailed skill contract is
+`.codex/skills/_shared/BUILDER_THREAD_CONTRACT.md`; PR #4706 remains superseded
+multi-writer evidence and is not an operational dependency.
 
 ### Karakeep managed source service (KMA-02)
 - `docker-compose.karakeep.yml` is the repo-owned deployment for the self-hosted Karakeep

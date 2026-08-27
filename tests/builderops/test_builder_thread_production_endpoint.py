@@ -11,7 +11,9 @@ from app.builderops.builder_threads_serialized import (
     BuilderThreadClient,
     BuilderThreadError,
     BuilderThreadWriterHost,
+    SerializedThreadWriter,
     WriterUnavailableError,
+    initialize_external_writer_root,
 )
 
 
@@ -26,14 +28,45 @@ def _transport(app: object) -> httpx.MockTransport:
 
 
 def _endpoint(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[HttpWriterEndpoint, BuilderThreadEndpointHost]:
-    monkeypatch.setenv("BUILDEROPS_THREAD_WRITER_ROOT", str(tmp_path / "external-vault"))
-    monkeypatch.setenv("BUILDEROPS_THREAD_WRITER_VAULT_ID", "builderops-mac-mini")
-    host = BuilderThreadEndpointHost(BuilderThreadWriterHost.from_environment(), client_tokens={"codex:desktop": "test-token"})
+    root = tmp_path / "external-vault"
+    initialize_external_writer_root(root, vault_id="builderops-mac-mini")
+    host = BuilderThreadEndpointHost(
+        BuilderThreadWriterHost(
+            SerializedThreadWriter(vault_id="builderops-mac-mini", state_root=root)
+        ),
+        client_tokens={"codex:desktop": "test-token"},
+    )
     monkeypatch.setenv("BUILDEROPS_THREAD_ENDPOINT_URL", "http://testserver")
     monkeypatch.setenv("BUILDEROPS_THREAD_CLIENT_ID", "codex:desktop")
     monkeypatch.setenv("BUILDEROPS_THREAD_CLIENT_TOKEN", "test-token")
     endpoint = HttpWriterEndpoint.from_environment(transport=_transport(host.app()))
     return endpoint, host
+
+
+def test_production_writer_host_fails_closed_before_root_initialization(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "external-vault"
+    monkeypatch.setenv("BUILDEROPS_THREAD_WRITER_ROOT", str(root))
+    monkeypatch.setenv("BUILDEROPS_THREAD_WRITER_VAULT_ID", "builderops-mac-mini")
+    monkeypatch.setenv(
+        "BUILDEROPS_THREAD_WRITER_CLIENT_TOKENS_JSON",
+        '{"codex:desktop": "test-token"}',
+    )
+
+    with pytest.raises(
+        WriterUnavailableError,
+        match="production writer is unavailable pending privacy-boundary replacement",
+    ):
+        BuilderThreadWriterHost.from_environment()
+    assert not root.exists()
+
+    with pytest.raises(
+        WriterUnavailableError,
+        match="production writer is unavailable pending privacy-boundary replacement",
+    ):
+        BuilderThreadEndpointHost.from_environment()
+    assert not root.exists()
 
 
 def test_sanctioned_client_reaches_serialized_writer(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

@@ -11,7 +11,6 @@ from app.builderops.builder_threads_serialized import (
     SerializedThreadWriter,
     ThreadMutation,
     WriterAcknowledgementLost,
-    WriterHostConfigurationError,
     WriterUnavailableError,
     initialize_external_writer_root,
 )
@@ -106,14 +105,12 @@ def test_serialized_writer_round_trip(tmp_path: Path) -> None:
     assert archived.thread.state == "archived"
 
 
-def test_writer_host_reads_external_configuration_and_issues_bound_capability(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_direct_writer_host_issues_bound_capability(tmp_path: Path) -> None:
     root = tmp_path / "host-owned-external-vault"
-    monkeypatch.setenv("BUILDEROPS_THREAD_WRITER_ROOT", str(root))
-    monkeypatch.setenv("BUILDEROPS_THREAD_WRITER_VAULT_ID", "builderops-mac-mini")
-
-    host = BuilderThreadWriterHost.from_environment()
+    initialize_external_writer_root(root, vault_id="builderops-mac-mini")
+    host = BuilderThreadWriterHost(
+        SerializedThreadWriter(vault_id="builderops-mac-mini", state_root=root)
+    )
     client = BuilderThreadClient(host.endpoint_for("codex:desktop"), client_id="codex:desktop")
     created = client.create(
         request_id="configured-host-4708",
@@ -125,9 +122,6 @@ def test_writer_host_reads_external_configuration_and_issues_bound_capability(
     )
 
     assert created.thread.vault_id == "builderops-mac-mini"
-    monkeypatch.delenv("BUILDEROPS_THREAD_WRITER_ROOT")
-    with pytest.raises(WriterHostConfigurationError, match="required on the writer host"):
-        BuilderThreadWriterHost.from_environment()
 
 
 def test_clients_cannot_bypass_serialized_writer(tmp_path: Path) -> None:
