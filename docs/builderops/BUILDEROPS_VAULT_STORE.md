@@ -282,6 +282,18 @@ and the writer at 100 total contributions, keeping reads bounded. An unavailable
 writer returns a typed degraded failure and never enables direct client filesystem
 fallback.
 
+Before persistence and again during recovery, the writer applies one structural
+`shared_non_sensitive` classifier to every caller-controlled or configured
+persisted value. It uses bounded decoding and URI components: only the parsed
+path of a syntactically valid HTTP(S) URL is treated as a public resource path;
+its authority, query, fragment, credentials, code/patch forms, filesystem URI
+data, malformed URI syntax, and standalone POSIX, tilde, Windows, or UNC paths
+are refused without echoing content. Root identities and command envelopes use
+closed key sets with duplicate-key rejection; recovery checks schema, vault
+identity, digest, sequence, command validity, and the same classifier before it
+reconstructs any thread state. A rejected command creates no final envelope or
+accepted count, and an unsafe final envelope fails closed before partial recovery.
+
 Each command envelope is written to a same-directory temporary pathname, then
 atomically published at its final JSON pathname only after the complete payload
 is written. Interrupted temporary writes are not committed state. Recovery reads

@@ -447,6 +447,15 @@ approval, promotion, or receipt authority. The detailed skill contract is
 `.codex/skills/_shared/BUILDER_THREAD_CONTRACT.md`; PR #4706 remains
 superseded multi-writer evidence and is not an operational dependency.
 
+Before a command is persisted, and again before a final envelope is reconstructed
+after restart, the writer applies the structural `shared_non_sensitive`
+classifier. It fail-closes on credentials, code or patch forms, standalone host
+paths, ambiguous filesystem URI forms, malformed URI authorities, and invalid
+persisted identity or envelope structure. Only a syntactically valid HTTP(S)
+resource path receives the narrow path exemption; query, fragment, and nested
+components remain classified. A refused command creates no final envelope or
+accepted count, and a rejected final envelope is not partially reconstructed.
+
 ### Karakeep managed source service (KMA-02)
 - `docker-compose.karakeep.yml` is the repo-owned deployment for the self-hosted Karakeep
   read-later source on the mac mini (Heimdal's external source dependency; ADR-0049 §1). It pins the
