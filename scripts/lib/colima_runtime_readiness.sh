@@ -160,14 +160,26 @@ colima_guest_wait_containerd() {
 }
 
 colima_guest_assert_persisted_inventory() {
-  local persisted expected
+  local persisted expected root
+  expected="${COLIMA_EXPECTED_PERSISTED_INVENTORY:-}"
+  case "$expected" in ''|*[!0-9]*) _colima_runtime_fail expected-inventory-count-not-configured; return 1;; esac
+  root="${COLIMA_PERSISTED_CONFIG_ROOT:-/var/lib/docker/containers}"
+  # Docker creates this directory on its first start. A reviewed fresh
+  # zero-inventory substrate must not be refused before it gets that chance.
+  # This exception is intentionally limited to guest preflight: a nonzero
+  # inventory still requires a readable root, and host assertions keep their
+  # explicit remote-probe behavior.
+  if [ "$expected" -eq 0 ] && [ ! -e "$root" ]; then
+    COLIMA_PERSISTED_INVENTORY_READY=true
+    export COLIMA_PERSISTED_INVENTORY_READY
+    _colima_runtime_receipt ready persisted-inventory-exact 0 0
+    return 0
+  fi
   persisted="$(_colima_runtime_persisted_count)" || {
     _colima_runtime_fail persisted-inventory-root-not-readable
     return 1
   }
   case "$persisted" in ''|*[!0-9]*) _colima_runtime_fail persisted-inventory-count-unreadable; return 1;; esac
-  expected="${COLIMA_EXPECTED_PERSISTED_INVENTORY:-}"
-  case "$expected" in ''|*[!0-9]*) _colima_runtime_fail expected-inventory-count-not-configured "$persisted"; return 1;; esac
   if [ "$persisted" -ne "$expected" ]; then
     _colima_runtime_fail persisted-inventory-mismatch "$persisted" ""
     return 1
@@ -204,7 +216,7 @@ _colima_runtime_persisted_count() {
     return 0
   fi
   if command -v "${COLIMA_BIN:-colima}" >/dev/null 2>&1; then
-    entries="$(_colima_runtime_bounded "${COLIMA_SSH_TIMEOUT_SECONDS:-30}" "${COLIMA_BIN:-colima}" ssh --profile "${COLIMA_PROFILE:-default}" -- sh -c "find '$root' -mindepth 1 -maxdepth 1 -type d -print 2>/dev/null")" || return 1
+    entries="$(_colima_runtime_bounded "${COLIMA_SSH_TIMEOUT_SECONDS:-30}" "${COLIMA_BIN:-colima}" ssh --profile "${COLIMA_PROFILE:-default}" -- sh -c "[ ! -e '$root' ] && exit 0; [ -d '$root' ] || exit 1; find '$root' -mindepth 1 -maxdepth 1 -type d -print 2>/dev/null")" || return 1
     count="$(printf '%s\n' "$entries" | awk 'NF {count++} END {print count + 0}')"
     printf '%s\n' "$count"
     return 0
@@ -257,6 +269,36 @@ _colima_runtime_load_profile() {
         ;;
     esac
   done < "$profile_file"
+}
+
+colima_runtime_probe_readonly() {
+  local profile="${COLIMA_PROFILE:-default}" colima_bin="${COLIMA_BIN:-colima}"
+  _colima_runtime_load_profile || {
+    printf 'ERROR: Colima runtime diagnostic refused (resource profile unreadable)\n' >&2
+    return 1
+  }
+  profile="${COLIMA_PROFILE:-$profile}"
+  if [ "${COLIMA_RUNTIME_PROVIDER:-}" != "colima" ]; then
+    return 0
+  fi
+  if ! command -v "$colima_bin" >/dev/null 2>&1; then
+    printf 'ERROR: Colima runtime diagnostic refused (colima command unavailable)\n' >&2
+    return 1
+  fi
+  DOCKER_CONTEXT="${COLIMA_DOCKER_CONTEXT:-colima}"
+  export DOCKER_CONTEXT COLIMA_PROFILE="$profile"
+  _colima_runtime_bounded "${COLIMA_STATUS_TIMEOUT_SECONDS:-30}" "$colima_bin" status --profile "$profile" --json >/dev/null 2>&1 || {
+    printf 'ERROR: Colima runtime diagnostic refused (colima not ready)\n' >&2
+    return 1
+  }
+  _colima_runtime_bounded "${COLIMA_DOCKER_COMMAND_TIMEOUT_SECONDS:-15}" docker context inspect "$DOCKER_CONTEXT" >/dev/null 2>&1 || {
+    printf 'ERROR: Colima runtime diagnostic refused (docker context not ready)\n' >&2
+    return 1
+  }
+  _colima_runtime_bounded "${COLIMA_DOCKER_COMMAND_TIMEOUT_SECONDS:-15}" docker info >/dev/null 2>&1 || {
+    printf 'ERROR: Colima runtime diagnostic refused (docker API not ready)\n' >&2
+    return 1
+  }
 }
 
 colima_runtime_bind_and_ready() {

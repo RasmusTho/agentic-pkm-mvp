@@ -8,6 +8,7 @@ import subprocess
 ROOT = Path(__file__).resolve().parents[2]
 HELPER = ROOT / "scripts/lib/colima_runtime_readiness.sh"
 SYSTEMD = ROOT / "ops/host-setup/mac-mini/systemd"
+COMPANION_STARTUP = ROOT / "scripts/lib/companion_ui_startup.sh"
 
 
 def _run_bash(script: str, *, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
@@ -146,6 +147,130 @@ def test_persisted_inventory_mismatch_fails_without_mutating_metadata(tmp_path: 
     assert "failure_reason" in receipt_text
     assert str(persisted) not in receipt_text
     assert not calls.exists()
+
+
+def test_guest_preflight_allows_missing_fresh_inventory_root_only_for_reviewed_zero(
+    tmp_path: Path,
+) -> None:
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    for name, body in {
+        "findmnt": (
+            "case \"$*\" in *SOURCE*) printf '/dev/persistent\\n';; "
+            "*UUID*) printf 'reviewed-uuid\\n';; "
+            "*FSTYPE*) printf 'ext4\\n';; esac\n"
+        ),
+        "mountpoint": "exit 0\n",
+        "df": "printf 'Filesystem 1024-blocks Used Available Capacity Mounted on\\n/dev/x 1 0 999999 0%% /\\n'\n",
+        "ctr": "exit 0\n",
+    }.items():
+        path = fake_bin / name
+        path.write_text(f"#!/bin/sh\n{body}", encoding="utf-8")
+        path.chmod(0o755)
+
+    persistent = tmp_path / "persistent"
+    docker_data = tmp_path / "docker"
+    containerd_data = tmp_path / "containerd"
+    for path in (persistent, docker_data, containerd_data):
+        path.mkdir()
+    missing_root = docker_data / "containers"
+    result = _run_bash(
+        f"COLIMA_PERSISTENT_DATA_PATH='{persistent}' "
+        f"COLIMA_DOCKER_DATA_PATH='{docker_data}' "
+        f"COLIMA_CONTAINERD_DATA_PATH='{containerd_data}' "
+        f"COLIMA_PERSISTED_CONFIG_ROOT='{missing_root}' "
+        "COLIMA_EXPECTED_PERSISTENT_SOURCE=/dev/persistent "
+        "COLIMA_EXPECTED_PERSISTENT_IDENTITY=UUID=reviewed-uuid "
+        "COLIMA_EXPECTED_PERSISTED_INVENTORY=0 "
+        "COLIMA_EXPECTED_PERSISTENT_FSTYPE=ext4 "
+        "COLIMA_MIN_FREE_BLOCKS=1 COLIMA_MIN_FREE_INODES=1 "
+        f"bash '{HELPER}' --docker-preflight",
+        env={"PATH": f"{fake_bin}:{os.environ['PATH']}"},
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert not missing_root.exists()
+
+    nonzero = _run_bash(
+        f"source '{HELPER}'; "
+        f"COLIMA_PERSISTED_CONFIG_ROOT='{missing_root}' "
+        "COLIMA_EXPECTED_PERSISTED_INVENTORY=1 "
+        "colima_guest_assert_persisted_inventory",
+        env={"PATH": f"{fake_bin}:{os.environ['PATH']}"},
+    )
+    assert nonzero.returncode != 0
+    assert "inventory root" in nonzero.stderr.lower()
+
+
+def test_host_inventory_assertion_allows_missing_remote_root_only_when_inventory_is_zero(
+    tmp_path: Path,
+) -> None:
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    calls = tmp_path / "calls.log"
+    missing_root = tmp_path / "not-created" / "containers"
+    for name, body in {
+        "colima": f"printf 'colima:%s\\n' \"$*\" >> '{calls}'\nexit 0\n",
+        "docker": f"printf 'docker:%s\\n' \"$*\" >> '{calls}'\nexit 0\n",
+    }.items():
+        path = fake_bin / name
+        path.write_text(f"#!/bin/sh\n{body}", encoding="utf-8")
+        path.chmod(0o755)
+
+    result = _run_bash(
+        f"source '{HELPER}'; "
+        f"COLIMA_PERSISTED_CONFIG_ROOT='{missing_root}' "
+        "COLIMA_EXPECTED_PERSISTED_INVENTORY=0 "
+        "COLIMA_DOCKER_CONTEXT=colima "
+        "colima_runtime_assert_inventory",
+        env={"PATH": f"{fake_bin}:{os.environ['PATH']}"},
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert not missing_root.exists()
+    assert calls.read_text(encoding="utf-8").splitlines()[0].startswith("colima:ssh --profile default")
+    assert "docker:context inspect colima" in calls.read_text(encoding="utf-8")
+    assert "docker:ps -aq" in calls.read_text(encoding="utf-8")
+
+
+def test_doctor_probe_never_starts_colima_or_overwrites_readiness_receipt(tmp_path: Path) -> None:
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    calls = tmp_path / "calls.log"
+    started = tmp_path / "started"
+    receipt = tmp_path / "receipt.json"
+    receipt.write_text("preserve-me\n", encoding="utf-8")
+    for name, body in {
+        "colima": (
+            f"printf 'colima:%s\\n' \"$*\" >> '{calls}'\n"
+            f"case \"$1\" in start) touch '{started}';; esac\n"
+        ),
+        "docker": f"printf 'docker:%s\\n' \"$*\" >> '{calls}'\nexit 0\n",
+        "curl": "exit 1\n",
+    }.items():
+        path = fake_bin / name
+        path.write_text(f"#!/bin/sh\n{body}", encoding="utf-8")
+        path.chmod(0o755)
+
+    result = _run_bash(
+        f"source '{COMPANION_STARTUP}'; "
+        "COLIMA_RUNTIME_PROVIDER=colima AUTO_START_COLIMA=1 "
+        f"COLIMA_RUNTIME_RECEIPT_PATH='{receipt}' "
+        "CUI_CHANNEL=dev CUI_DEFAULT_EXPECTED_VAULT_PATTERN=niflheim "
+        "CUI_DEFAULT_EXPECTED_VAULT_LABEL=Niflheim CUI_API_PORT=18001 CUI_UI_PORT=8111 "
+        "CUI_COMPOSE_FILES=docker-compose.yaml CUI_COMPOSE_PROJECT=pkm-dev "
+        "CUI_SERVE_MODULE=companion_ui.workspace.serve_dev_page "
+        "cui_run_doctor || true",
+        env={"PATH": f"{fake_bin}:{os.environ['PATH']}"},
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert not started.exists()
+    assert receipt.read_text(encoding="utf-8") == "preserve-me\n"
+    call_lines = calls.read_text(encoding="utf-8").splitlines()
+    assert "colima:start" not in call_lines
+    assert call_lines.count("colima:status --profile default --json") == 2
+    assert "docker:context inspect colima" in call_lines
 
 
 def test_mount_producer_creates_and_verifies_reviewed_mounts(tmp_path: Path) -> None:

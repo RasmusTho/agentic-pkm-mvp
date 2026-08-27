@@ -180,10 +180,15 @@ cui_guard_vault_name() {
 
 # ── docker / colima ───────────────────────────────────────────────────────────
 
-# Returns 0 if the Docker daemon is reachable.
+# Returns 0 if the Docker daemon is reachable. The --readonly mode uses only
+# the no-start/no-receipt diagnostic probe for doctor entrypoints.
 cui_docker_ok() {
   command -v docker >/dev/null 2>&1 || return 1
-  colima_runtime_bind_and_ready "$(cui_repo_root)" || return 1
+  if [ "${1:-}" = "--readonly" ]; then
+    colima_runtime_probe_readonly || return 1
+  else
+    colima_runtime_bind_and_ready "$(cui_repo_root)" || return 1
+  fi
   docker info >/dev/null 2>&1 || return 1
   return 0
 }
@@ -536,7 +541,7 @@ cui_run_doctor() {
   echo "  channel: PKM_ENVIRONMENT=${CUI_CHANNEL}  project=${CUI_COMPOSE_PROJECT}  db=${CUI_DB_LABEL:-derived}"
 
   # 1. Docker / Colima
-  if cui_docker_ok; then
+  if cui_docker_ok --readonly; then
     echo "  [ok]   docker/colima reachable"
   else
     echo "  [FAIL] docker/colima unavailable (start Docker Desktop or 'colima start')"
@@ -566,7 +571,7 @@ cui_run_doctor() {
   fi
 
   # 4. Vault mount (read-only; only if container running)
-  if cui_docker_ok; then
+  if cui_docker_ok --readonly; then
     if cui_verify_vault_mount >/dev/null 2>&1; then
       echo "  [ok]   api container sees /app/vault"
     else
