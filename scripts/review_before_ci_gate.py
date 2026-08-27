@@ -107,6 +107,12 @@ def validate_pr_scope_revalidation(
         raise ReviewBeforeCiGateError(
             "contract revalidation receipt outcome must be continue_unchanged, split, or expanded_contract"
         )
+    if outcome == "split" and not _is_bounded_follow_up_issue(
+        receipt.get("follow_up_issue"), governing_issue
+    ):
+        raise ReviewBeforeCiGateError(
+            "split requires a bounded follow-up Issue distinct from the governing Issue"
+        )
     expected_finding_ids: set[str] | None = None
     if authenticated_history is not None:
         expected_authentication = authenticated_history.get("authentication")
@@ -171,8 +177,8 @@ def validate_pr_scope_revalidation(
             raise ReviewBeforeCiGateError(
                 "continue_unchanged permits only governing-contract blockers and PR-introduced regressions"
             )
-        if scope_class == "adjacent_pre_existing" and not isinstance(
-            finding.get("follow_up_issue"), int
+        if scope_class == "adjacent_pre_existing" and not _is_bounded_follow_up_issue(
+            finding.get("follow_up_issue"), governing_issue
         ):
             raise ReviewBeforeCiGateError(
                 "adjacent/pre-existing findings require a bounded follow-up Issue"
@@ -617,6 +623,15 @@ def _clean_text(value: str | None) -> str | None:
 
 def _nonempty_string(value: object) -> bool:
     return isinstance(value, str) and bool(value.strip())
+
+
+def _is_bounded_follow_up_issue(value: object, governing_issue: int) -> bool:
+    return (
+        isinstance(value, int)
+        and not isinstance(value, bool)
+        and value > 0
+        and value != governing_issue
+    )
 
 
 def _is_sha256(value: object) -> bool:

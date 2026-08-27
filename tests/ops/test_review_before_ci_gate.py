@@ -370,6 +370,7 @@ def _scope_revalidation_receipt(
         "governing_issue": 4028,
         "governing_contract_sha256": "b" * 64,
         "outcome": outcome,
+        "follow_up_issue": 4172 if outcome == "split" else None,
         "authentication": {
             "source": "github-review",
             "actor": "independent-reviewer",
@@ -418,6 +419,16 @@ def test_pr_level_contract_revalidation_receipt_is_exact_and_authenticated() -> 
     with pytest.raises(ReviewBeforeCiGateError, match="authenticated"):
         validate_pr_scope_revalidation(
             4029, 4028, "a" * 40, [{"verdict": "rejected"}] * 2, unauthenticated
+        )
+
+
+def test_split_revalidation_requires_a_bounded_follow_up_issue() -> None:
+    receipt = _scope_revalidation_receipt(outcome="split")
+    receipt.pop("follow_up_issue")
+
+    with pytest.raises(ReviewBeforeCiGateError, match="split requires a bounded follow-up Issue"):
+        validate_pr_scope_revalidation(
+            4029, 4028, "a" * 40, [{"verdict": "rejected"}] * 2, receipt
         )
 
 

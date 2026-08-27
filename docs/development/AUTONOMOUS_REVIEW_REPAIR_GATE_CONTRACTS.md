@@ -408,8 +408,9 @@ foreign, stale, malformed, or partial evidence fails closed. Publication invokes
 with an explicit `new` or `existing` mode; `existing` requires the live PR identity and authenticated
 scope revalidation inputs, while `new` authenticates that the branch has no open PR and an omitted
 mode is rejected whenever the current branch already has an open PR. `continue_unchanged`
-permits only governing-contract blockers and PR-introduced regressions. `split` routes the affected
-work to a bounded follow-up Issue. `expanded_contract` requires an authenticated updated governing
+permits only governing-contract blockers and PR-introduced regressions. Every `split` receipt must
+name a positive, non-governing `follow_up_issue` that routes the affected work to a bounded follow-up
+Issue. `expanded_contract` requires an authenticated updated governing
 Issue and updated contract identity before repair continues.
 
 Classify every protected finding derived from each rejected round exactly once as one of:
