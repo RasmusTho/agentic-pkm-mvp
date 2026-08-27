@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import threading
 from pathlib import Path
 
 import httpx
@@ -98,7 +99,7 @@ def test_http_and_recovery_reject_all_persisted_untrusted_fields(
     created = _create(client, request_id="recovery-create-5118")
     record = entries / "recovery-create-5118.json"
     payload = json.loads(record.read_text(encoding="utf-8"))
-    payload["command"]["actor"] = "token:client"
+    payload["command"]["content"] = "-----BEGIN PRIVATE KEY-----"
     from app.builderops.builder_threads_serialized import ThreadMutation, _command_digest
 
     command = ThreadMutation(
@@ -159,13 +160,70 @@ def test_structural_privacy_adversarial_matrix(
     ).replayed is True
     restarted = SerializedThreadWriter(vault_id="builderops-mac-mini", state_root=root)
     assert restarted.accepted_mutation_count == 1
-    for value in (
+    assert _create(
+        client,
+        request_id="nested-url-5118",
+        subject="Nested URL boundary",
+        content="https://outer.test/start?next=https%3A%2F%2Finner.test%2Fhome",
+    ).replayed is False
+    for index, value in enumerate((
         "/tmp/host-only",
         "C:\\\\Users\\\\operator",
         "file:///private/host-only",
         "https://example.test/ok#%252Fprivate%252Fhost",
         "https://[invalid-zone%25?]/ok",
-    ):
+        "file:relative",
+        "smb:server",
+        "https://xn--a/tmp/host-only",
+        "https://xn--ls8h/private/host",
+        "https://example.test/aws_access_key_id%3Dvalue",
+        "https://example.test/return%201",
+        "-----BEGIN PRIVATE KEY-----",
+    )):
         with pytest.raises(BuilderThreadError, match="shared_non_sensitive"):
-            _create(client, request_id=f"refusal-{len(value)}-5118", content=value)
-    assert len(list((root / "builder-thread-entries").glob("*.json"))) == 1
+            _create(client, request_id=f"refusal-{index}-5118", content=value)
+    assert len(list((root / "builder-thread-entries").glob("*.json"))) == 2
+
+
+def test_structural_privacy_http_lock_hides_provisional_state_and_rejects_stale_transition(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "race-vault"
+    monkeypatch.setenv("BUILDEROPS_THREAD_WRITER_ROOT", str(root))
+    monkeypatch.setenv("BUILDEROPS_THREAD_WRITER_VAULT_ID", "builderops-mac-mini")
+    host = BuilderThreadEndpointHost(
+        BuilderThreadWriterHost.from_environment(), client_tokens={"codex:desktop": "test-token"}
+    )
+    endpoint = HttpWriterEndpoint(
+        base_url="http://testserver", client_id="codex:desktop", token="test-token", transport=_transport(host.app())
+    )
+    client = BuilderThreadClient(endpoint, client_id="codex:desktop")
+    writer = host._writer_host._writer
+    entered = threading.Event()
+    release = threading.Event()
+    mutation_done = threading.Event()
+    read_done = threading.Event()
+    original_persist = writer._persist
+
+    def paused_persist(*args: object, **kwargs: object) -> None:
+        entered.set()
+        assert release.wait(timeout=2)
+        original_persist(*args, **kwargs)
+
+    monkeypatch.setattr(writer, "_persist", paused_persist)
+    mutation = threading.Thread(target=lambda: (_create(client, request_id="race-create-5118"), mutation_done.set()))
+    mutation.start()
+    assert entered.wait(timeout=2)
+    thread_id = next(iter(writer._threads))
+    observed: list[object] = []
+    reader = threading.Thread(target=lambda: (observed.append(client.read(thread_id)), read_done.set()))
+    reader.start()
+    assert not read_done.wait(timeout=0.1)
+    release.set()
+    mutation.join(timeout=2)
+    reader.join(timeout=2)
+    assert mutation_done.is_set() and read_done.is_set() and observed
+    before = writer.accepted_mutation_count
+    with pytest.raises(BuilderThreadError, match="requires a reply"):
+        client.close(request_id="race-close-5118", thread_id=thread_id, actor="codex:desktop", reason="stale")
+    assert writer.accepted_mutation_count == before

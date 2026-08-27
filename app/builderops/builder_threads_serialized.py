@@ -9,10 +9,12 @@ from __future__ import annotations
 
 import hashlib
 import ipaddress
+import idna
 import json
 import os
 import re
 import threading
+import unicodedata
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
@@ -29,7 +31,7 @@ _SOURCE_REF = re.compile(
 _CREDENTIAL_CONTENT = re.compile(
     r"(?im)(password|secret|credential|token|api[_-]?key|bearer\b|"
     r"^aws_(?:access_key_id|secret_access_key)\s*=|"
-    r"^authorization:\s*(?:basic|bearer)\b|^-----begin [a-z ]+private key-----|"
+    r"^authorization:\s*(?:basic|bearer)\b|^-----begin (?:[a-z ]* )?private key-----|"
     r"\bAKIA[0-9A-Z]{16}\b|\bgithub_pat_[A-Za-z0-9_]{20,}|"
     r"\bsk-(?:proj-)?[A-Za-z0-9_-]{20,}\b)"
 )
@@ -37,7 +39,7 @@ _CODE_OR_PATCH = re.compile(
     r"(?im)^(?:diff --git |--- a/|\+\+\+ b/|@@ |```|"
     r"\s*(?:def|class|function|const|let|var|import|from|package|func)\b|"
     r"\s*console\.(?:log|error|warn)\s*\(|\s*git diff(?:\s|$)|"
-    r"\s*(?:print|return|throw|await|yield)\b\s*(?:\(|[a-z_$])|"
+    r"\s*(?:print|return|throw|await|yield)\b\s*(?:\(|[a-z0-9_$'\"\[{])|"
     r"\s*lambda\s+[^:\n]+:|\s*if\s+[^:\n]+:\s*$|"
     r"\s*[a-z_$][a-z0-9_$]*\s*=\s*(?:\([^)]*\)|[a-z_$][a-z0-9_$]*)\s*=>)"
 )
@@ -680,6 +682,11 @@ def _has_valid_percent_escapes(value: str) -> bool:
 
 
 def _classify_form(value: str) -> Literal["valid", "terminal_private", "indeterminate"]:
+    # Decoding may turn an encoded path segment into whitespace. Recognise
+    # credential/code forms at every segment boundary before lexical URI
+    # scanning terminates the candidate at that whitespace.
+    if _contains_credential_or_code(value.replace("/", "\n")):
+        return "terminal_private"
     spans = _uri_spans(value)
     remainder = list(value)
     components = 0
@@ -746,14 +753,18 @@ def _classify_uri(candidate: str) -> Literal["valid", "terminal_private", "indet
             return "indeterminate"
         # The whole URI still receives credential/code recognition. Only its
         # parsed path skips local-host-path recognition.
-        if _contains_credential_or_code(candidate):
+        if _contains_credential_or_code(candidate) or _contains_credential_or_code(
+            parsed.path.replace("/", "\n")
+        ):
             return "terminal_private"
         for component in (parsed.netloc, parsed.query, parsed.fragment):
-            if _contains_private_path(component):
-                return "terminal_private"
+            outcome = _classify_form(component)
+            if outcome != "valid":
+                return outcome
         return "valid"
-    if scheme in {"file", "smb", "nfs", "ssh", "sftp"} and not (parsed.netloc or parsed.path):
-        return "indeterminate"
+    if scheme in {"file", "smb", "nfs", "ssh", "sftp"}:
+        if not candidate.startswith(f"{scheme}://") or not parsed.netloc or not parsed.path:
+            return "indeterminate"
     if _contains_credential_or_code(candidate) or _contains_private_path(candidate):
         return "terminal_private"
     return "valid"
@@ -780,11 +791,21 @@ def _valid_http_authority(authority: str) -> bool:
     except ValueError:
         pass
     try:
-        encoded = host.encode("idna").decode("ascii")
-    except UnicodeError:
+        encoded = idna.encode(host, uts46=False, std3_rules=True).decode("ascii")
+    except idna.IDNAError:
         return False
     if len(encoded) > 253:
         return False
+    for label in encoded.split("."):
+        if label.lower().startswith("xn--"):
+            try:
+                decoded_label = idna.decode(label.encode("ascii"), uts46=False, std3_rules=True)
+                if idna.encode(decoded_label, uts46=False, std3_rules=True).decode("ascii").lower() != label.lower():
+                    return False
+            except idna.IDNAError:
+                return False
+            if any(unicodedata.category(char).startswith("C") for char in decoded_label):
+                return False
     return all(
         1 <= len(label) <= 63
         and not label.startswith("-")
