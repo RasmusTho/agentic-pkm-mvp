@@ -72,6 +72,10 @@ def migrated_scratch_db(monkeypatch: pytest.MonkeyPatch) -> Iterator[tuple[str, 
         with psycopg.connect(admin_dsn, autocommit=True) as conn:
             conn.execute(f'CREATE DATABASE "{database_name}"')
             conn.execute(f'CREATE ROLE "{role_name}" NOLOGIN')
+        # An early migration declares `embedding VECTOR` unconditionally, so
+        # every scratch database must install pgvector before Alembic runs.
+        with psycopg.connect(scratch_dsn, autocommit=True) as conn:
+            conn.execute("CREATE EXTENSION IF NOT EXISTS vector")
         monkeypatch.setenv("DATABASE_URL", scratch_dsn)
         monkeypatch.delenv("DB_DSN", raising=False)
         config = Config(str(REPO_ROOT / "alembic.ini"))
