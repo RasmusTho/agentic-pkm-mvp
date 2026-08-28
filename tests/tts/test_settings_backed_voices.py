@@ -112,6 +112,43 @@ def test_settings_explain_recovers_origin_from_compiled_generation(
     assert get_settings_ingestion_state().state == STATE_NO_VAULT
 
 
+def test_settings_explain_keeps_retained_origin_after_invalid_replacement(
+    monkeypatch, tmp_path
+) -> None:
+    """A fresh process keeps the published vault provenance during degradation."""
+    vault_root = tmp_path / "vault"
+    settings_dir = vault_root / "settings"
+    settings_dir.mkdir(parents=True)
+    source = settings_dir / "tts.md"
+    source.write_text(
+        "# TTS\n\n```yaml settings\nvoices:\n  sv: sv_SE-nst-medium\n```\n",
+        encoding="utf-8",
+    )
+    runtime_dir = tmp_path / "runtime" / "settings"
+    monkeypatch.setattr(compiler, "RUNTIME", runtime_dir)
+    monkeypatch.setattr(runtime, "RUNTIME", runtime_dir)
+    monkeypatch.setattr(runtime, "_CURRENT", None)
+    monkeypatch.setenv("VAULT_ROOT", str(vault_root))
+    monkeypatch.setenv("SETTINGS_RELOAD_SIGNAL_PATH", str(tmp_path / "reload.json"))
+    reset_settings_ingestion_state()
+
+    compiler.compile_all(vault_root=vault_root)
+
+    # The watcher has written an invalid replacement, but the last complete
+    # compiled generation remains the one the fresh process can serve.
+    source.write_text(
+        "# TTS\n\n```yaml settings\nfallback_policy: [unterminated\n```\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(runtime, "_CURRENT", None)
+    reset_settings_ingestion_state()
+
+    payload = build_settings_explain_payload()
+
+    assert payload["tts"]["voices"]["sv"]["origin"] == "vault-shared"
+    reset_settings_ingestion_state()
+
+
 def test_settings_explain_uses_compiled_tts_provenance_for_compatibility_and_last_valid(
     monkeypatch,
 ) -> None:

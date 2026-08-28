@@ -132,6 +132,12 @@ def _compiled_generation_tts_origin() -> str | None:
             return None
         sources = resolve_compiled_sources(source_dir.parent)
         tts_source = sources.get(Path("tts.md"))
+        # The published generation is the authority for the bundle currently
+        # being served.  A watcher may have replaced the source with malformed
+        # content after that generation was published; comparing against the
+        # now-invalid bytes would erase the retained generation's provenance.
+        # Source presence still distinguishes a removed vault source (defaults)
+        # from a retained vault generation whose replacement cannot compile.
         actual_tts = (
             hashlib.sha256(tts_source.read_bytes()).hexdigest()
             if tts_source is not None
@@ -139,9 +145,12 @@ def _compiled_generation_tts_origin() -> str | None:
         )
     except (OSError, TypeError, ValueError, KeyError):
         return None
-    if expected.get("tts.md") != actual_tts:
+    if expected.get("tts.md") is None or actual_tts is None:
         return None
-    return "vault-shared" if Path("tts.md") in sources else "registry default"
+    # A differing hash means the source changed after publication.  The
+    # selected compiled generation remains vault-authored until a successful
+    # replacement is published, so retain the vault provenance.
+    return "vault-shared"
 
 
 def get_compiled_generation_tts_origin() -> str | None:
