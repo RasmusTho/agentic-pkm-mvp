@@ -41,8 +41,10 @@ nor replaceable by it.
   against the published #4836 candidate ref and retain its exact candidate receipt as the required
   pre-merge gate.
 - After the accepted #4835 and #4836 changes merge, run the complete hostile source-state and
-  identity-continuity matrix at final `M`, and bind this #4748 receipt to both `M` and the distinct
-  authenticated candidate-proof receipt.
+  identity-continuity matrix at final `M`. The downstream
+  `devui-stage-a-read-only-owner-pilot.v1` ledger is the cross-run binding authority: it records
+  this final receipt together with the distinct authenticated candidate-proof receipt; the strict
+  browser receipt itself remains self-describing for the exact `M` run only.
 - Prove responsive, keyboard, screen-reader, print, JavaScript-off, and no-effect behavior.
 - Archive the bounded receipt/screenshots; route discovered defects to separate repair Issues.
 
