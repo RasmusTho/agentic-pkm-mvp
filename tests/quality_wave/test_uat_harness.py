@@ -95,6 +95,7 @@ def test_joined_watcher_safe_enablement_receipt(
         seed_result = seed_vault_test_notes(vault_root=vault_root, overwrite=True)
         assert seed_result.written >= 1
         watcher_settings = vault_root / "@Settings" / "watchers.md"
+        watcher_settings.parent.mkdir(parents=True, exist_ok=True)
         watcher_settings.write_text(
             "---\n"
             "auto_run:\n"
