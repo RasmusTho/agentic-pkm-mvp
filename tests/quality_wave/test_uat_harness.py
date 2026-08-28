@@ -12,6 +12,7 @@ If this test file is green, the Quality Wave "Done means" criteria are met:
 """
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -110,6 +111,19 @@ def test_joined_watcher_safe_enablement_receipt(
         )
 
         summary = run_vault_test_flow(vault_root=vault_root)
+        watcher_tick_log = tmp_path / mode / "watcher_tick.jsonl"
+        watcher_tick_log.write_text(
+            json.dumps(
+                {
+                    "timestamp": "2026-08-28T00:00:00Z",
+                    "panel_candidates": summary.watcher["panel_candidates"],
+                    "panel_skipped_policy": summary.watcher["panel_skipped_policy"],
+                    "panel_skipped_auto_exec": summary.watcher["panel_skipped_auto_exec"],
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
         settings = build_settings_explain_payload()["watcher_settings"]
         status = get_system_status().watcher_automation
 
