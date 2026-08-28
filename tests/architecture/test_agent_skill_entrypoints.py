@@ -212,33 +212,36 @@ def test_owner_decision_profile_delegates_classification_and_preserves_operator_
     assert "Contractual operator gates still fire exactly as their owning workflows define" in preflight
 
 
-def test_builder_thread_contract_is_executable_and_discoverable() -> None:
-    index = _read(".codex/skills/README.md")
-    contract = _read(".codex/skills/_shared/BUILDER_THREAD_CONTRACT.md")
-    thread_skill = _read(".codex/skills/builder-thread/SKILL.md")
-    inbox_skill = _read(".codex/skills/builder-inbox/SKILL.md")
-
-    assert "builder-thread" in index
-    assert "builder-inbox" in index
-    assert "serialized writer" in contract.lower()
-    assert "shared_non_sensitive" in contract
-    assert "named recipient" in contract.lower()
-    assert "builder-thread" in thread_skill
-    assert "builder-inbox" in inbox_skill
-    assert "read-only" in inbox_skill.lower()
-
-
-def test_builder_thread_hooks_are_non_authoritative() -> None:
-    contract = " ".join(
-        _read(".codex/skills/_shared/BUILDER_THREAD_CONTRACT.md").lower().split()
+def test_builder_thread_capability_is_retired() -> None:
+    removed_paths = (
+        "app/builderops/builder_threads_serialized.py",
+        "app/builderops/builder_thread_endpoint.py",
+        "tests/builderops/test_builder_threads_serialized.py",
+        "tests/builderops/test_builder_thread_privacy_classifier.py",
+        "tests/builderops/test_builder_thread_production_endpoint.py",
+        ".codex/skills/builder-thread/SKILL.md",
+        ".codex/skills/builder-inbox/SKILL.md",
+        ".codex/skills/_shared/BUILDER_THREAD_CONTRACT.md",
     )
-    store_doc = _read("docs/builderops/BUILDEROPS_VAULT_STORE.md").lower()
 
-    for authority in ("issue", "pr", "ci", "merge", "approval", "promotion", "receipt"):
-        assert f"{authority} authority" in contract
-    assert "devui" in contract
-    assert "external builderops vault" in store_doc
-    assert "repository `vault/` is a fixture" in store_doc
+    for rel_path in removed_paths:
+        assert not (REPO_ROOT / rel_path).exists(), f"retired path returned: {rel_path}"
+
+    index = _read(".codex/skills/README.md")
+    assert "`builder-thread`" not in index
+    assert "`builder-inbox`" not in index
+
+    inv_ef1_register = _read("docs/architecture/inv-ef1-register.json")
+    retired_inv_ef1_artifacts = (
+        ".codex/skills/_shared/BUILDER_THREAD_CONTRACT.md",
+        ".codex/skills/builder-inbox/SKILL.md",
+        ".codex/skills/builder-thread/SKILL.md",
+        "app/builderops/builder_threads_serialized.py",
+        "docs/builderops/BUILDEROPS_VAULT_STORE.md",
+        "tests/builderops/test_builder_threads_serialized.py",
+    )
+    for artifact in retired_inv_ef1_artifacts:
+        assert f'"artifact": "{artifact}"' not in inv_ef1_register
 
 
 def test_skill_readme_resume_work_summary_matches_recovery_order() -> None:

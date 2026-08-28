@@ -261,48 +261,21 @@ It never creates SQLite files or provider credentials there.
 
 ### Builder Thread artifact exchange
 
-State: Serialized-writer code exists from #4708, but its environment-backed
-production host is temporarily fail-closed by #5124. The structural classifier
-merged in #5122 did not pass fresh independent privacy-boundary review and is
-not accepted production evidence.
+State: Retired by the owner-contract amendment governed by #5128. There is no
+supported Builder Thread runtime, HTTP endpoint, client, inbox projection, or
+producer-facing skill.
 
-Builder Threads are external BuilderOps Vault artifacts with one designated
-serialized writer service, initially operated on the Mac mini / BuilderOps host.
-Codex and Claude clients submit attributed commands and read bounded projections
-through that endpoint; they do not receive a shared artifact-tree mutation path.
-The repository `vault/` is a fixture, test-only and never a live Builder Thread
-target; the external BuilderOps Vault is separate.
+Use the surface that already owns the material: GitHub Issues and PR comments
+for delivery questions and review discussion, repository docs for normative
+content, and typed BuilderOps records for builder-operational material. Those
+surfaces retain their existing attribution, notification, retention, and
+authority rules; retirement creates no replacement exchange.
 
-The strict boundary still permits only bounded `shared_non_sensitive` material,
-typed provenance, endpoint-bound actor identities, and named recipients. That
-invariant is intentionally stricter than ordinary application input validation:
-no secret, private host path, product code, patch, or unclassified persisted
-field may enter the shared artifact. It does not, however, require the rejected
-#5122 implementation shape or a bespoke parser for arbitrary mixed free text.
-
-During containment, `BuilderThreadWriterHost.from_environment()` returns the
-existing typed writer-unavailable refusal before it initializes an external root,
-recovers envelopes, or exposes the HTTP host. No environment flag bypasses this
-guard. Direct construction of the serializer and host remains available only to
-focused tests; it is not an operator or client mutation path. Existing external
-artifacts are retained without migration or rewrite, and writer unavailability
-never enables direct client filesystem fallback.
-
-A replacement privacy mechanism is separately governed. It must preserve the
-strict invariant, closed persisted schemas, content-free refusal, shared
-admission/recovery validation, and bounded work, but may reduce ambiguity by
-separating plain prose from typed resource fields and using standards-based
-parsing instead of expanding a handwritten general-purpose text grammar.
-
-The intended boundary is deliberately not a distributed filesystem protocol. It has no
-vault-global claims, slot reservations, cross-device locks, fsync-based recovery,
-SQLite state, or iCloud convergence semantics. PR #4706 is superseded
-multi-writer evidence only; it is not merged or used as the operational contract.
-
-Threads and their inbox/devUI projections are non-authoritative discussion
-context. They cannot gate or mutate Issue, PR, CI, merge, approval, promotion,
-or receipt authority. GitHub, Git, CI, review, merge, approvals, promotion gates,
-and receipts remain the authoritative delivery surfaces.
+Any retained Builder Thread v1 artifacts are inert historical data. This
+retirement does not read, inspect, parse, migrate, repair, project, log, archive,
+or delete their content, and it establishes no filesystem fallback or startup
+path. A future capability would require its own separately accepted authority
+and contract; historical audit or recovery documents cannot reactivate this one.
 
 `builderops vault init` creates `.builderops/claims/` in the shared vault for TTL-based advisory
 claim signals. Multiple agents may write claims for the same ticket. These files improve queue
