@@ -29,16 +29,20 @@ Produce the hostile-state browser and accessibility receipt required before owne
 
 Parent: #4741
 
-Produce the exact-SHA browser/accessibility receipt required before an owner pilot, against final
-post-merge `main` commit `M` containing the accepted #4835 and #4836 changes, without repairing
-application behavior outside the shell issue's bounded scope.
+Produce the post-merge exact-SHA browser/accessibility receipt required before an owner pilot,
+against final `main` commit `M` containing the accepted #4835 and #4836 changes, without repairing
+application behavior outside the shell issue's bounded scope. The required #4833 browser proof at
+the published #4836 candidate ref is a separate pre-merge gate; it is neither this later `M` proof
+nor replaceable by it.
 
 ## Scope
 
-- Run the complete hostile source-state and identity-continuity matrix at one exact SHA: final `M`.
-- Dispatch the closed #4833/#4842 exact-ref five-node browser-proof contract against `M`; the
-  workflow contract is delivered, but the candidate proof itself is not delivered until this run
-  produces the exact receipt.
+- Before #4836 merges, dispatch the closed #4833/#4842 exact-ref five-node browser-proof workflow
+  against the published #4836 candidate ref and retain its exact candidate receipt as the required
+  pre-merge gate.
+- After the accepted #4835 and #4836 changes merge, run the complete hostile source-state and
+  identity-continuity matrix at final `M`, and bind this #4748 receipt to both `M` and the distinct
+  authenticated candidate-proof receipt.
 - Prove responsive, keyboard, screen-reader, print, JavaScript-off, and no-effect behavior.
 - Archive the bounded receipt/screenshots; route discovered defects to separate repair Issues.
 
@@ -86,7 +90,8 @@ Static happy-path screenshots cannot prove source-state honesty or access to the
 This task adds or completes `tests/companion_ui/test_devui_overview_journeys.py` and archives only
 the receipt/screenshot evidence required by the parent. A discovered production defect is filed
 separately and blocks this proof; this validation task does not absorb its repair. No earlier #4747
-SHA, pre-merge subset, or unrelated post-merge run may substitute for `M`.
+SHA, pre-merge subset, or unrelated post-merge run may substitute for `M`; conversely, no `M` run
+may substitute for the required exact published #4836 candidate proof before that candidate merges.
 
 ## Acceptance Criteria
 
@@ -102,14 +107,17 @@ SHA, pre-merge subset, or unrelated post-merge run may substitute for `M`.
 - [ ] Hostile browser instrumentation proves no write request, credential, local/session storage,
       IndexedDB, service-worker cache, or browser classification.
   - Verify: `tests/companion_ui/test_devui_overview_journeys.py :: test_overview_browser_has_no_effect_or_reclassification`
-- [ ] Receipt names exact final `M`, the #4833/#4842 exact-ref dispatch, fixture versions, token
-      SHA-256, screenshots, accessibility results, failures, and unresolved visual questions.
+- [ ] Receipt names exact final `M`, the separately authenticated pre-merge #4833/#4842 #4836
+      candidate-proof receipt, fixture versions, token SHA-256, screenshots, accessibility results,
+      failures, and unresolved visual questions.
   - Verify: runtime receipt: devui-overview-browser-accessibility.v1
 
 ## How to Verify (Pre-Merge)
 
-- Dispatch the exact-ref browser workflow from #4833/#4842 against final `M`, then run the complete
-  Overview browser module and exact focused API/producer regression modules.
+- Before #4836 merge, dispatch the exact-ref browser workflow from #4833/#4842 against the published
+  #4836 candidate ref and authenticate its five-node artifact. After final `M` exists, run the
+  complete Overview browser module and exact focused API/producer regression modules at `M`, linking
+  the later #4748 receipt to that candidate artifact without conflating their roles.
 - Attach deterministic screenshot and accessibility artifacts to the exact-head receipt.
 - Run `git diff --check`.
 
@@ -138,6 +146,7 @@ SHA, pre-merge subset, or unrelated post-merge run may substitute for `M`.
 
 ## Related GitHub Issues
 
-Filed as blocked child [#4748](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4748) on the exact
-final post-merge `main` commit `M` containing #4835 and #4836, using the closed exact-ref
-#4833/#4842 browser workflow. #4747 remains open/blocked and cannot supply a substitute SHA.
+Filed as blocked child [#4748](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4748) after the
+required exact published #4836 candidate proof through the closed #4833/#4842 workflow and on final
+post-merge `main` commit `M` containing #4835 and #4836. The two receipts have distinct gates:
+neither substitutes for the other. #4747 remains open/blocked and cannot supply a substitute SHA.

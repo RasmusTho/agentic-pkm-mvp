@@ -42,10 +42,10 @@ page, asset, or visual destination.
 | `devui.composition.v1` | Per-request CKM/Cockpit envelope with independent provider state; #4834 reads its already-composed Cockpit `working` payload once | No current source owns an owner-question or readiness fact, so **Needs you** and **Ready to try** remain withdrawn and ARO-02 stays closed/superseded |
 | `devui-overview-view.v1` | Pure composer in `app/builderops/devui_overview.py`, including hostile cross-field validation and typed root-reference preservation | **Excluded from this breakdown; do not duplicate or reopen** |
 | Cockpit producer | #4834 maps only trusted, countable `working` items to source-ordered **Now** candidates with stable GitHub identity and separate Cockpit evidence | Owner-question facts remain separately source-owned or honestly withdrawn; `agent:needs-human`, delivery, and readiness are not admitted |
-| Delivery evidence | Delivery, merge, closure, and terminal verification facts exist independently; #4833/#4842 supplies the exact-ref browser workflow, but #4835 is open/in progress and #4836 is open/blocked | Final post-merge `main` commit `M` containing #4835/#4836, then fresh exact-SHA proof and deployment/owner receipts; a source-owned, receipt-backed `ready_to_try` fact, or an honest withdrawal |
+| Delivery evidence | Delivery, merge, closure, and terminal verification facts exist independently; #4833/#4842 supplies the exact-ref browser workflow, but its required pre-merge proof must run against the published #4836 candidate; #4835 is open/in progress and #4836 is open/blocked | Exact published #4836 candidate proof before merge, then final post-merge `main` commit `M` containing #4835/#4836, fresh #4748 exact-SHA proof at `M`, and deployment/owner receipts; a source-owned, receipt-backed `ready_to_try` fact, or an honest withdrawal |
 | API | Local-only GET `/api/devui/composition`, delivered direct-loopback Overview/Focus reads, and #4841's production Companion exact two-GET transport; no devUI mutation or page route | Typed navigation only after actual local destinations are governed |
 | Navigation | Composer validates typed root references | Resolvable local Focus and optional SoI destinations without joins |
-| Visual shell | No accepted connected shell; #4836 remains open/blocked, while #4833/#4842 provides only the exact-ref proof workflow | Accepted constrained-reuse or live-handoff evidence, read-only shell, browser/accessibility proof at `M`, owner pilot |
+| Visual shell | No accepted connected shell; #4836 remains open/blocked, while #4833/#4842 provides only the exact-ref proof workflow | Accepted constrained-reuse or live-handoff evidence, read-only shell, required #4836-candidate browser proof before merge, separate browser/accessibility proof at `M`, owner pilot |
 
 ## Authority-resolution gate
 
@@ -147,10 +147,12 @@ reconciled by merged PR #4789. ARO-04 through ARO-08 remain
 [#4745](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4745) through
 [#4749](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4749) (`agent:blocked`). Recovery Issue
 [#4833](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4833) is closed through merged PR #4842
-and supplies the exact-ref browser workflow, not a proof receipt. #4834, #4838, and #4841 are closed;
-#4835 remains open/in progress and #4836 remains open/blocked. ARO-08 is a future executable
-production pilot only: its actual URL/SHA must be sourced later from final `M`, #4748, and deployment
-receipts, and it must not imply that deployment or owner validation happened.
+and supplies the exact-ref browser workflow, not a proof receipt. Before #4836 merges, that workflow
+must produce the separately authenticated published-candidate proof; #4748 then produces its distinct
+later proof at final `M`. #4834, #4838, and #4841 are closed; #4835 remains open/in progress and #4836
+remains open/blocked. ARO-08 is a future executable production pilot only: its actual URL/SHA must be
+sourced later from the candidate proof, final `M`, #4748, and deployment receipts, and it must not
+imply that deployment or owner validation happened.
 The separate
 [Focus-route prerequisite #4768](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4768) is
 delivered by PR #4771. Connected handoff #4746 remains blocked until the delivered source-owned Now

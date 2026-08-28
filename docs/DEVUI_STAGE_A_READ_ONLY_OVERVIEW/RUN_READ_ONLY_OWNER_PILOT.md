@@ -46,8 +46,9 @@ deployed SHA remain intentionally absent until those receipts supply them.
 - Run the five predefined owner scenarios against Demerzel production: Compose project `pkm-prod`,
   `PKM_ENVIRONMENT=prod`, and the Midgård prod vault. The current promotion ref is `main`; the
   `stable` ref is dormant. This task does not promote, deploy, restart, or change either ref.
-- Obtain the exact deployed URL and SHA only from receipts for final `M`, including the #4836
-  candidate, the exact-ref #4833 browser proof (closed through PR #4842), #4748, and deployment.
+- Obtain the exact deployed URL and SHA only from receipts for final `M`, including the separately
+  authenticated pre-merge #4836 candidate proof through #4833/#4842, the later #4748 proof at `M`,
+  and deployment.
   Require that SHA to agree across the current CI/review/deploy receipt, `/version`,
   `/api/health.version`, and the authenticated gateway marker before the journey begins.
 - Consume #4835's value-free boolean-only production prerequisite receipt for repository binding and
@@ -108,19 +109,20 @@ promote, restart, or mutate production. Any defect, source-authority gap, design
 journey, identity mismatch, effect, error, storage use, or unauthorized write is returned to its
 owning blocked contract and blocks the pilot.
 
-Prerequisites are strict and serial: (1) accepted #4835 and #4836 changes merged into final `M`;
-(2) #4833's closed exact-ref five-node browser-proof contract, exercised as a fresh #4748 proof at
-`M`; (3) this repaired source contract; (4) #4835's value-free boolean prerequisite receipt;
-(5) Demerzel authentication and access; (6) #4747's deployed route and server-supplied Focus
-selectors; (7) the receipt-sourced exact deployed SHA and URL; and (8) approved disposable-state
+Prerequisites are strict and serial: (1) the #4833/#4842 exact-ref five-node workflow proves the
+published #4836 candidate before that candidate merges; (2) accepted #4835 and #4836 changes merge
+into final `M`; (3) fresh #4748 proof at `M` references, but does not replace, that candidate-proof
+receipt; (4) this repaired source contract; (5) #4835's value-free boolean prerequisite receipt;
+(6) Demerzel authentication and access; (7) #4747's deployed route and server-supplied Focus
+selectors; (8) the receipt-sourced exact deployed SHA and URL; and (9) approved disposable-state
 classification. The pilot must not be claimed or made ready from this document alone.
 
 ## Acceptance Criteria
 
-- [ ] The pilot binds to final post-merge `main` commit `M` containing #4835 and #4836, consumes a
-      fresh #4748 proof at `M` through #4833's exact-ref five-node contract, and proves equality
-      across the current CI/review/deploy receipt, `/version`, `/api/health.version`, and gateway
-      marker before the journey.
+- [ ] The pilot binds to final post-merge `main` commit `M` containing #4835 and #4836, consumes
+      both the separately authenticated pre-merge #4836 candidate proof and fresh #4748 proof at
+      `M`, and proves equality across the current CI/review/deploy receipt, `/version`,
+      `/api/health.version`, and gateway marker before the journey.
   - Verify: runtime receipt: devui-stage-a-read-only-owner-pilot.v1
 - [ ] The ledger records #4835's boolean-only repository/credential prerequisite result without
       exposing values, account identities, paths, or provisioning claims.
@@ -155,9 +157,10 @@ classification. The pilot must not be claimed or made ready from this document a
 
 ## How to Verify (Pre-Merge)
 
-- Confirm every strict prerequisite, including merged #4835/#4836 at `M`, fresh #4748-at-`M` proof via
-  #4833/#4842, the repaired source contract, #4835's boolean receipt, Demerzel access, #4747
-  selectors, the receipt-sourced URL/SHA, and disposable-state classification.
+- Confirm every strict prerequisite, including the pre-merge #4836 candidate proof via #4833/#4842,
+  merged #4835/#4836 at `M`, fresh #4748-at-`M` proof linked to that candidate artifact, the repaired
+  source contract, #4835's boolean receipt, Demerzel access, #4747 selectors, the receipt-sourced
+  URL/SHA, and disposable-state classification.
 - Run the five named pilot checks and the Overview → Focus → return Playwright journey.
 - Post the owner-acknowledged structured result and any blockers to the parent; do not repair them
   here. Only a PASS may trigger a separate current-state owner-doc writeback decision.
@@ -189,7 +192,8 @@ classification. The pilot must not be claimed or made ready from this document a
 ## Related GitHub Issues
 
 Filed as blocked child [#4749](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4749) serially
-after #4748. It awaits final post-merge `M` containing #4835/#4836, a fresh #4748-at-`M` proof via
-#4833/#4842, the repaired contract, #4835's boolean prerequisite receipt, Demerzel prod access,
-#4747 selectors, receipt-sourced deployed URL/SHA, separate promotion/owner acknowledgements, and
-disposable-state classification.
+after #4748. It awaits the pre-merge #4836 candidate proof via #4833/#4842, final post-merge `M`
+containing #4835/#4836, a fresh #4748-at-`M` proof linked to that candidate artifact, the repaired
+contract, #4835's boolean prerequisite receipt, Demerzel prod access, #4747 selectors, receipt-
+sourced deployed URL/SHA, separate promotion/owner acknowledgements, and disposable-state
+classification.
