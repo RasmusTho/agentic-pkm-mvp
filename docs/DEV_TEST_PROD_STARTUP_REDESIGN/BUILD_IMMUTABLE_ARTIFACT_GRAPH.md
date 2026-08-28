@@ -12,6 +12,9 @@ can_parallelize_with: []
 
 # Build Immutable Artifact Graph
 
+State: Implemented in the repository by #4915. The renderer is side-effect free and does not claim
+that a digest-addressed artifact has been published, deployed, or observed on a live channel.
+
 ## Purpose
 
 Implement K2, K3, and K9 for delivery artifacts without slowing local iteration.
@@ -22,7 +25,7 @@ Introduces exact image-index/platform digest identity plus source-SHA, Compose, 
 
 ## Concretely
 
-`channel-manifest render --channel prod --mode promotion --intent promotion` emits only digest-addressed images and selected mounts; `--channel dev --mode local-source --intent ordinary-boot` emits local SHA+dirty identity and `promotion_eligible=false`.
+`python -m app.release_channels.channel_manifest render --channel prod --mode promotion --intent promotion --manifest <path> --compose <path>` first validates the complete frozen ChannelManifest shape, including channel-bound Compose project, gateway identity, and secret references, then emits only digest-addressed images and the two channel-bound data mounts. The artifact-mode Compose input is deliberately narrow: it contains exactly the `api` and `database` service roles with their fixed field shapes, the API image equals the manifest platform digest, and its complete volume set is exactly the manifest's database and vault named volumes mounted once at their role-specific protected targets. Long mounts have exactly `type`, `source`, and `target`; short mounts have only the bounded two- or three-segment form. Host binds, additional services or named volumes, unknown mount fields/options, and other mount targets fail closed. Runtime command, environment, env-file, label, config, and credential seams are outside this artifact render and fail closed instead of being guessed or hashed; inline secret material is also rejected before output. `--channel dev --mode local-source --intent ordinary-boot` accepts the explicit source overlay unchanged, emits local SHA+dirty identity, and sets `promotion_eligible=false`; it does not require promotion-only identity extensions. Candidate admission is a separate deterministic function that re-renders against the independently supplied manifest and refuses every local-source or coherently tampered render.
 
 ## Why This Matters
 
@@ -35,7 +38,7 @@ An image label cannot prove what runs when a source bind overrides `/app`.
 
 ## How to Verify (Pre-Merge)
 
-Convert the strict-xfail call-site skeletons to real tests, then run their focused suite and Compose render fixtures.
+Run `pytest -q tests/runtime/test_startup_artifact_call_sites.py::test_promotion_render_is_digest_only tests/runtime/test_startup_artifact_call_sites.py::test_local_source_cannot_create_promotion_candidate`.
 
 ## Out of Scope
 

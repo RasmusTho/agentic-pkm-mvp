@@ -5,7 +5,7 @@ Doc role: Core SoT (deployment)
 Authority: Canonical deployment + environment-separation contract. `docs/ENVIRONMENTS.md` owns environment *selection* and *path scoping* (what data/config each channel touches); `docs/RELEASE_CHANNELS/README.md` owns *channel identity, per-channel DB isolation, promotion-plan contract, migration reversibility classification, and rollback semantics*. `docs/YGGDRASIL_PLATFORM_AND_OPERATIONS_SYSTEM/README.md` owns the target ecosystem boundary for the operational platform; it does not replace this current deployment contract. This document owns *how a deploy physically happens*: image build/promote, managed gateways, deploy/rollback runbook, health gates, and the proxy-trust topology. Operations, runbooks, and component docs should reference this document instead of restating deployment procedure.
 Temporal class: operational
 Review cadence: as deployment topology, build pipeline, or channel ports change
-Last reviewed: 2026-08-22
+Last reviewed: 2026-08-29
 Last live runtime verification: 2026-08-22 (new-host topology; no authoritative SSH/deploy path was available from this workstation)
 Last verified against: `docker-compose.yaml`, `docker-compose.{dev,test,prod}.yml`, `docker-compose.{full-host-vault,legacy-vault,test-vault}.yml`, `Makefile`, `Dockerfile`, `scripts/lib/companion_ui_startup.sh`, `scripts/lib/instance_ownership_host_state.sh`, `companion-ui/companion-app/companion_ui/workspace/serve_dev_page.py`, `serve_production_page.py`, `app/auth.py`, `app/version.py`, `app/api/routes/health_contract.py`, `app/activation/ask_synthesis.py`
 
@@ -251,6 +251,27 @@ verification of PR #3517.
 4. **Promotion = tag bump + recreate.** Promoting a commit to a channel means updating that channel's pin to the already-built SHA tag and recreating the channel's containers + gateway against it. **No rebuild at promotion time** — the artifact is identical to what was tested. This is the physical mechanism beneath the promotion-plan/`stable`-ref contract in `docs/RELEASE_CHANNELS/README.md`: that document decides *which* SHA is allowed to be promoted and what migration/rollback semantics apply; this document decides *how* the promotion is physically applied (bump pin → recreate → health-gate).
 
 **Identity invariant.** The image bytes for a given SHA are identical in `dev`, `test`, and `prod`. A channel never builds its own variant. Divergence between channels is expressed only through `.env.<env>` / compose env, mounted data (vault, DB volume), and ports.
+
+`app.release_channels.channel_manifest` now provides the side-effect-free STARTUP-02 render boundary
+for that identity. Promotion mode requires the manifest's exact image-index and platform digests,
+requires every rendered service image to use `repository@sha256:...`, and refuses build directives,
+source binds over `/app`, broad writable `/Users` or `/Volumes` mounts, and unresolved interpolation
+fallbacks. Before rendering, it validates the complete frozen manifest, including the channel-bound
+Compose project, gateway identity, and secret references. The render also requires exact database,
+vault, config, and migration identity bindings
+through the Compose `x-startup-identities` extension. Its promotion-mode graph contains only fixed
+`api` and `database` service roles and field shapes; its complete volume set is exactly the
+manifest's database and vault named volumes, mounted once on the role-specific protected targets
+with a bounded mount shape. Host binds, additional services or named volumes, unknown mount
+fields/options, other mount targets, runtime command, environment, env-file, label, config,
+credential, and inline-secret surfaces are refused before they can enter the Compose hash or
+output. Local-source mode accepts the explicit source overlay without promotion-only identity
+extensions, records source SHA plus dirty state, and is
+permanently `promotion_eligible=false`; its render cannot be admitted as a promotion candidate.
+Candidate admission revalidates the rendered Compose against an independently supplied manifest,
+so recomputing caller-controlled hashes cannot substitute another repository or resource binding.
+This renderer does not publish an image, move a pin, restart a channel, or prove that a live host
+runs the digest.
 
 **Supersedes the bind-mount.** Once a channel runs a pinned image, a `git checkout`/`git pull` in the host tree no longer changes that channel's running code — by design. Deploying new code to a channel means building a new image, pushing it, bumping the pin, and recreating. The "pull without restart serves stale code" failure mode disappears because there is no live code mount to go stale.
 
