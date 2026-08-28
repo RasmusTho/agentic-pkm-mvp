@@ -1020,6 +1020,13 @@ class InstanceStateBackup:
                     if str(Path(registration.path).expanduser().resolve(strict=False))
                     == normalized_root
                 ]
+                if not matches and skip_unadopted_owners:
+                    # A fresh channel volume may be verified before its
+                    # config-derived root has been adopted into the staged
+                    # registry.  Keep that candidate out of the consistency
+                    # set; the host-side inventory and later bootstrap still
+                    # govern whether it can claim ownership.
+                    continue
                 if len(matches) != 1:
                     raise InstanceStatePreflightError(
                         "canonical global live-owner inventory is invalid: "
