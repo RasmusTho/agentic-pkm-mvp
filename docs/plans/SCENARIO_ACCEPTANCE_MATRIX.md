@@ -102,6 +102,21 @@ The system should support low-friction capture with minimal upfront classificati
 - fragments, sources, and open loops must remain distinct possibilities,
 - and later clarification must be part of the model rather than a workaround.
 
+### Validation posture
+
+- current implementation posture: `partial` for bounded vault-first capture; the broader low-friction human outcome remains unclaimed
+- test posture: `non-blocking acceptance` moving toward `nightly`
+- observable signals:
+  - the user can capture incomplete material without choosing a final type first
+  - original text, context, and provenance survive the capture
+  - a later retrieval or clarification path can find the captured material
+  - no silent rewrite, unintended placement, or out-of-scope write occurs
+- minimum executable scenario:
+  - seed an isolated vault with an empty capture path and one unrelated note
+  - submit an incomplete thought through the supported capture surface
+  - assert that the original content is recoverable with provenance and an explicit standing
+  - assert that clarification remains possible and that no unrelated artifact was modified
+
 ## 2. Return after interruption and recover orientation
 
 ### Scenario
@@ -252,6 +267,20 @@ The system should support source-grounded interpretation, concept development, r
 - `maturity` and `review_state` must remain separable,
 - and promotion must remain a transition rather than a substitute for understanding.
 
+### Validation posture
+
+- current implementation posture: `partial`
+- test posture: `non-blocking acceptance` moving toward `nightly`
+- observable signals:
+  - a source remains linked to the interpretation that was derived from it
+  - uncertainty and review state remain visible rather than becoming settled truth silently
+  - the user can revisit the source and the evolving understanding together
+  - promotion, when available, is explicit and traceable
+- minimum executable scenario:
+  - seed a source artifact, an uncertain interpretation, and a later durable-note candidate
+  - run ingest, retrieval, and the supported source-to-understanding path
+  - assert bidirectional source/provenance visibility, preserved uncertainty, and no canonical promotion without review
+
 ## 4. Keep commitments trustworthy over time
 
 ### Scenario
@@ -347,6 +376,21 @@ The system should support gradual creative development, recombination, and retur
 - artifact development must not be reduced to knowledge maturation alone,
 - and exploratory standing must remain legitimate.
 
+### Validation posture
+
+- current implementation posture: `future`
+- test posture: `non-blocking acceptance`
+- observable signals:
+  - a fragment can be saved and revisited without forced classification as task or settled knowledge
+  - candidate edits remain visibly provisional and can be revised or dismissed
+  - exploratory relationships remain inspectable during iteration
+  - no creative material is silently promoted to canonical standing
+- minimum executable scenario:
+  - seed one fragment, one candidate development, and one intentionally unfinished relationship
+  - exercise the intended creative-work path when the capability is available
+  - assert draft/provisional standing, reversible revision or dismissal, and preservation of the original fragment
+  - keep this outside blocking gates until the active baseline explicitly claims the capability
+
 ## 6. Maintain a hobby or RPG world across time
 
 ### Scenario
@@ -385,6 +429,21 @@ The system should support long-running world continuity while preserving the dif
 - hobby/RPG structures must be treated as first-class legitimate use,
 - creative, reference, and project-like materials must coexist without collapsing,
 - and domain sensitivity matters.
+
+### Validation posture
+
+- current implementation posture: `future`
+- test posture: `non-blocking acceptance`
+- observable signals:
+  - settled lore, provisional ideas, and session preparation are distinguishable
+  - a later session can recover the relevant world context without reading raw operational traces
+  - preparation can reuse reference material without rewriting its standing
+  - attribution and continuity remain visible across sessions
+- minimum executable scenario:
+  - seed a small world with settled lore, a speculative fragment, a character relation, and a session-preparation item
+  - exercise retrieval/orientation across two simulated sessions
+  - assert that the result preserves canonical-versus-exploratory distinctions and supports resumption without flattening the world into generic notes
+  - keep this outside blocking gates until an implementation owner promotes the capability from future posture
 
 ## 7. Understand what the system did and whether to trust it
 
@@ -533,6 +592,21 @@ The system should support cross-domain continuity while protecting domain-sensit
 - domain-sensitive interpretation matters,
 - and the ontology must preserve plural modes of use rather than a single canonical workflow.
 
+### Validation posture
+
+- current implementation posture: `future`
+- test posture: `non-blocking acceptance`
+- observable signals:
+  - work, private, learning, creative, and hobby material remain legible as different modes
+  - intentional overlap is visible as overlap rather than accidental bleed-through
+  - commitments do not erase creative or exploratory material, and vice versa
+  - domain-specific review expectations remain understandable
+- minimum executable scenario:
+  - seed one pack each for work, private life, learning, creativity, and hobby/RPG, plus one explicitly shared artifact
+  - run a cross-domain retrieval and review path
+  - assert domain distinctions, explicit shared participation, and absence of unrequested cross-domain exposure
+  - keep this outside blocking gates until cross-domain support has a named implementation owner
+
 ## 9. Evolve the system without getting trapped by early decisions
 
 ### Scenario
@@ -571,6 +645,21 @@ The system should allow important capability areas to change or mature without b
 - human needs remain primary over current module layout,
 - artifacts remain more stable than supporting mechanisms,
 - and implementation modularity must remain downstream of user value.
+
+### Validation posture
+
+- current implementation posture: `future`
+- test posture: `non-blocking acceptance`
+- observable signals:
+  - a prior artifact remains readable after a supporting capability changes
+  - replacement or rebuild does not force migration of human meaning
+  - transitional states are explicit and usable
+  - capability boundaries remain replaceable without changing the human scenario contract
+- minimum executable scenario:
+  - seed a representative artifact and its derived index or projection
+  - replace or rebuild the derived support layer in an isolated environment
+  - assert artifact readability, preserved provenance, and explicit handling of any degraded transition state
+  - keep this outside blocking gates until a concrete evolution path is implemented
 
 ## 10. Work across devices while keeping local artifacts primary
 
@@ -612,6 +701,21 @@ Core continuity functions remain available on narrower devices.
 - continuity across devices matters more than strict uniformity,
 - and satellite-like participation is a legitimate mode rather than an edge case.
 
+### Validation posture
+
+- current implementation posture: `future`
+- test posture: `non-blocking acceptance`
+- observable signals:
+  - the same human-owned artifact remains understandable on a primary and a narrower device
+  - a device can work in a deliberately degraded or delayed mode
+  - synchronization status and divergence are visible rather than surprising
+  - no remote surface silently becomes the authority over local artifacts
+- minimum executable scenario:
+  - seed a local-first artifact and a reduced satellite-client view
+  - exercise read, bounded write, temporary offline/degraded, and later reconciliation paths
+  - assert continuity, explicit divergence handling, and local artifact primacy
+  - keep this outside blocking gates until the cross-device owner and environment are available
+
 ## 11. Preserve contextual integrity while allowing real overlap
 
 ### Scenario
@@ -652,6 +756,21 @@ The system should make separation the default where needed, preserve shared part
 - operational scope and explicit cross-scope allowance remain the narrower runtime/boundary layer,
 - and contextual integrity matters alongside exposure control.
 
+### Validation posture
+
+- current implementation posture: `future`
+- test posture: `non-blocking acceptance`
+- observable signals:
+  - context and role identity remain distinguishable during switching
+  - repeated overlap is represented by an explicit allowance or shared artifact
+  - unrequested cross-scope material is not surfaced or written
+  - the reason and scope of an allowance are inspectable and reversible
+- minimum executable scenario:
+  - seed separate work, private, and RPG contexts with one intentionally shared artifact
+  - run retrieval and bounded reuse both with and without the explicit allowance
+  - assert separation by default, visible shared participation when allowed, and no accidental bleed-through
+  - keep this outside blocking gates until the runtime permission and human-context model are implemented together
+
 ## 12. Keep central artifacts understandable if the system changes or dies
 
 ### Scenario
@@ -689,6 +808,21 @@ The system should preserve primary artifacts as directly intelligible long-lived
 - primary human artifacts remain ontologically prior to support structures,
 - mirrors, indexes, and metadata remain derivative,
 - and artifact longevity is a first-class product concern rather than a storage accident.
+
+### Validation posture
+
+- current implementation posture: `partial` for directly readable Markdown artifacts; broader survivability remains unclaimed
+- test posture: `non-blocking acceptance` moving toward `nightly`
+- observable signals:
+  - core artifacts remain readable and understandable without the current index or metadata
+  - loss of a derived support layer does not erase basic meaning or provenance
+  - a reviewer can distinguish primary artifact content from machine-derived structure
+  - the result is portable enough to inspect from a support-free location
+- minimum executable scenario:
+  - copy representative core artifacts to an isolated temporary root
+  - remove or omit index, cache, and runtime metadata
+  - inspect the artifacts with ordinary filesystem tools and assert readable content, links where promised, and preserved human meaning
+  - retain the result as a non-blocking durability receipt until the broader survivability contract is implemented
 
 ## Human-agent scenario inventory
 
@@ -760,6 +894,28 @@ promotion is an explicit human act through the trust/review path
 promotion; the promoted page's history remains traceable to its agent-workspace origin. Must not
 happen: promotion by location move alone; provenance stripped at promotion; agent output becoming
 canon because nobody objected.
+
+### Validation posture for direct filesystem participation
+
+These rows are direct-agent scenarios and are distinct from mediated human-agent rows. They share
+the same evidence discipline: a filesystem diff alone is not proof of trust, promotion, or
+mediation. Each row needs an isolated root, a declared boundary, attributable artifacts, and a
+receipt describing what was observed. Owner acceptance remains a separate human decision after
+the executable checks pass.
+
+| Rows | Current implementation posture | Test posture | Minimum executable scenario | Required proof layer |
+|---|---|---|---|---|
+| A-B: declared project and draft roots | `future` | `non-blocking acceptance` | Give an agent separate project and draft roots; request one bounded edit in each; assert Markdown-only changes, correct zone standing, attribution, and no write outside either root | filesystem diff + boundary/preflight receipt + owner UAT |
+| C: synthesis/index root | `future` | `non-blocking acceptance` | Seed two source pages and one declared synthesis root; generate one synthesis page; assert source-to-synthesis and synthesis-to-source links, navigability, and challengeable working standing | artifact/link assertions + provenance receipt + owner UAT |
+| D: observation and classification | `future` | `non-blocking acceptance` | Modify a file in a declared root outside mediated APPLY; run observation; assert ingestion, zone classification, and provenance projection without a mediation receipt or trust upgrade | ingest/classification receipt + negative authority assertions |
+| E: stale synthesis and recompilation proposal | `future` | `non-blocking acceptance` | Change a source under a synthesis page or advance the freshness signal; run detection; assert a recompilation proposal and preservation of human-touched material without auto-apply | drift/freshness evidence + proposal receipt + owner UAT |
+| F: contradictory outputs | `future` | `non-blocking acceptance` | Seed two attributed outputs with conflicting claims; run conflict detection; assert side-by-side preservation, visible attribution, and reversible human consolidation | conflict record + negative silent-merge assertion + owner UAT |
+| G: explicit human promotion | `future` | `release gate` when promotion ships | Seed agent-authored Markdown with source citations; invoke the explicit trust/review path; assert promotion is a human action, citations and origin history survive, and location alone cannot promote | trust delta + provenance/history receipt + owner acceptance |
+
+Direct filesystem participation does not receive a `baseline` claim merely because ordinary file
+writes work today. Until the corresponding boundary, standing, provenance, and promotion contract
+is implemented and exercised, these rows remain `future` and do not silently inflate coverage of
+the mediated human flows.
 
 ## Next use
 
