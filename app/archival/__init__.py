@@ -29,6 +29,16 @@ from app.archival.transition import (
     TransitionFailure,
     TransitionResult,
 )
+from app.archival.derived_disposition import (
+    DerivativeCandidate,
+    DerivativeDisposition,
+    DerivativeDispositionDoctor,
+    DerivativeDispositionResult,
+    DerivativeFinding,
+    DerivativeFindingCode,
+    OwnerAdmissionRoute,
+    RebuildRecipe,
+)
 
 __all__ = [
     "AccessAuthority",
@@ -56,4 +66,12 @@ __all__ = [
     "FaultStage",
     "TransitionFailure",
     "TransitionResult",
+    "DerivativeCandidate",
+    "DerivativeDisposition",
+    "DerivativeDispositionDoctor",
+    "DerivativeDispositionResult",
+    "DerivativeFinding",
+    "DerivativeFindingCode",
+    "OwnerAdmissionRoute",
+    "RebuildRecipe",
 ]

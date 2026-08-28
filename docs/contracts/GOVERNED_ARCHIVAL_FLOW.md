@@ -41,6 +41,21 @@ The common vocabulary deliberately carries class-specific terminal outcomes rath
 
 No profile inherits another profile's retention, revocation, or erasure authority.
 
+## Rebuildable derivative disposition
+
+DRI owns the disposition of embeddings, indexes, OCR, thumbnails, caches, and other derived
+rebuildable artifacts. A derivative MUST NOT be accepted as last-copy archive authority. It is
+`rebuildable_non_authoritative` only when an owner-native lookup resolves its authoritative source
+identity at the declared source generation and a read-only lookup confirms its rebuild
+recipe/version. Missing source identity, source generation, recipe/version, stale lineage,
+unavailable recipe, or a source-authority claim produces a typed refusal; none is inferred from a
+path, filename, scan, or archive representation.
+
+An explicitly non-rebuildable derivative is not admitted by this contract. The read-only DRI doctor
+returns an HKA or retained-source owner-admission route; the receiving owner performs any later
+reclassification and archival admission. The doctor retains no progress state and cannot write a
+receipt, mutate owner state, delete bytes, or change the candidate's classification.
+
 ## Adapter seam
 
 `ArchivalAdapter` is the single public protocol used by both the transition kernel and later owner-native adapters; the kernel has no second private adapter seam. The adapter provides enumerate and resolve; authorize read; atomically bind and read an operation journal; reserve and copy a representation; verify; durably receipt; activate; retire; complete; restore with exact receipt readback; cleanup with all-representation proof readback; and read-only doctor/reconcile. The protocol does not select a backend, allocate a database, authorize a caller itself, or move owner state into the kernel.
