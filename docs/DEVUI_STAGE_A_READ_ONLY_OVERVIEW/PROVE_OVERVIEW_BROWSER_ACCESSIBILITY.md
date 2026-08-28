@@ -65,7 +65,7 @@ Static happy-path screenshots cannot prove source-state honesty or access to the
 
 - `docs/DEVUI_STAGE_A_READ_ONLY_OVERVIEW/README.md :: Capability acceptance`
 - `docs/DEVUI_STAGE_A_READ_ONLY_OVERVIEW/RENDER_READ_ONLY_OVERVIEW_SHELL.md :: Acceptance Criteria`
-- `docs/DEVUI.md :: Stage A completion gate`
+- `docs/DEVUI.md :: Current state and target`
 
 ## SBS Impact
 
