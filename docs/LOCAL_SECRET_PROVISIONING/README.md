@@ -86,12 +86,17 @@ both are deliberate:
 
 - **The grant is per-consumer, not per-channel.** A consumer's channels and its secrets are separate
   flat lists, so `github.token` is declared on all three channels. It is inert wherever nothing is
-  provisioned and wherever no channel binds `COCKPIT_GITHUB_REPO` (today only `dev` does), so least
-  privilege holds in effect.
+  provisioned and wherever no channel binds `COCKPIT_GITHUB_REPO` (`dev` and `prod` bind it; `test`
+  does not), so least privilege holds in effect.
 - **The token inherits the layer's activation condition.** `deploy_channel_compose.sh` only wraps
   compose with this consumer's bootstrap when `heimdal.raw-store-key` resolves, so a host without
   that key materializes no layer and therefore receives no `GITHUB_TOKEN` either — provisioning the
   token alone is not sufficient on the governed deploy path.
+
+The committed repository binding is not deployment or credential-presence evidence. The read-only
+prod prerequisite reports separate booleans for `github.token` and the coupled
+`heimdal.raw-store-key`; it creates, changes, persists, or reveals neither value. Repository
+configuration therefore never substitutes for host provisioning or a deployed-host receipt.
 
 The v1 Keychain service is pinned to the stable non-secret namespace
 `yggdrasil.host-secrets`, and its account is derived by percent-encoding each

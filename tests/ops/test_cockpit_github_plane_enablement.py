@@ -15,8 +15,8 @@ This file asserts the committed side of that path:
    already-declared host-secret env layer, which is how a value reaches that
    container without a new secret mechanism or compose surface — and, since
    #4489, that the layer actually *delivers* it rather than only naming it; and
-3. the other channels stay unset, so the opt-in posture (and #4481's
-   opted-out-vs-broken distinction) still holds where nobody asked for it.
+3. channels without an explicit repository binding stay unset, preserving
+   #4481's opted-out-vs-broken distinction.
 """
 
 from __future__ import annotations
@@ -29,10 +29,7 @@ from app.release_channels.channel_isolation_preflight import _load_compose
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _BASE_COMPOSE = _REPO_ROOT / "docker-compose.yaml"
 _DEV_COMPOSE = _REPO_ROOT / "docker-compose.dev.yml"
-_OPTED_OUT_COMPOSE = (
-    _REPO_ROOT / "docker-compose.test.yml",
-    _REPO_ROOT / "docker-compose.prod.yml",
-)
+_OPTED_OUT_COMPOSE = (_REPO_ROOT / "docker-compose.test.yml",)
 
 _REPO_SLUG = "RasmusTho/agentic-pkm-mvp"
 _TOKEN_KEY = "GITHUB_TOKEN"
@@ -81,8 +78,8 @@ def test_api_service_receives_cockpit_repo_and_token_key() -> None:
     )
 
 
-def test_other_channels_stay_opted_out_of_the_live_plane() -> None:
-    """The plane stays opt-in: only the enabled channel binds the slug.
+def test_non_enabled_channels_stay_opted_out_of_the_live_plane() -> None:
+    """The plane stays opt-in: a non-enabled channel does not bind the slug.
 
     With `COCKPIT_GITHUB_REPO` unset a channel's behavior is byte-identical to
     the pre-#4484 refusal, and the source renders *not enabled* rather than
