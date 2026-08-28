@@ -1007,11 +1007,25 @@ class InstanceStateBackup:
                     "canonical global live-owner inventory is invalid: "
                     f"owners[{index}].root is missing or not absolute"
                 )
+            root = Path(raw_root).expanduser().resolve(strict=False)
             if not require_materialized_owner_roots and not binding_id:
-                raise InstanceStatePreflightError(
-                    "canonical global live-owner inventory is invalid: "
-                    f"owners[{index}].vault_binding_id is missing"
-                )
+                # Deployment-finish verifies a host-produced receipt in a
+                # mount-blind scratch namespace. Recover a binding only from
+                # one exact normalized path match in the staged registry;
+                # aliases and ambiguity remain fail-closed.
+                normalized_root = str(root)
+                matches = [
+                    registration.vault_binding_id
+                    for registration in registry.registrations.values()
+                    if str(Path(registration.path).expanduser().resolve(strict=False))
+                    == normalized_root
+                ]
+                if len(matches) != 1:
+                    raise InstanceStatePreflightError(
+                        "canonical global live-owner inventory is invalid: "
+                        f"owners[{index}].vault_binding_id is missing or path is ambiguous"
+                    )
+                binding_id = matches[0]
             # Owner-root materialization is not re-checked here (#4371): the
             # host-side inventory producer proved every root twice and the
             # receipt is digest-bound to the deployment lease, while this
@@ -1022,7 +1036,6 @@ class InstanceStateBackup:
             # was materialized — such an owner therefore resolves to no lease
             # and is handled by the unadopted-candidate rule in
             # resolve_live_owner_bindings below.
-            root = Path(raw_root).expanduser().resolve(strict=False)
             if (
                 require_materialized_owner_roots
                 and channel_id == self.layout.channel_id
