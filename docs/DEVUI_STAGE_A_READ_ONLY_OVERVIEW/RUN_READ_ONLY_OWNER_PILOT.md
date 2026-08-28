@@ -62,11 +62,14 @@ deployed SHA remain intentionally absent until those receipts supply them.
   records `candidate_browser_receipt_id`, `candidate_github_sha`,
   `candidate_five_node_artifact_digest`, `final_browser_receipt_id`, and `final_github_sha`.
   Each `*_browser_receipt_id` is a content-derived identifier in the form
-  `sha256:<64 lowercase hex>`: SHA-256 of the exact UTF-8 bytes of that run's canonical JSON
-  `devui-overview-browser-accessibility.v1` receipt (keys serialized in lexicographic order,
-  no trailing newline). The ledger stores the identifier alongside the unchanged receipt artifact;
-  recomputing the digest must reproduce it. This distinguishes reruns at the same GitHub SHA
-  without adding cross-run fields to either strict receipt.
+  `sha256:<64 lowercase hex>`. To compute it, parse the stored receipt as JSON (reject duplicate
+  object names, non-finite numbers, and any value outside the strict receipt schema), serialize the
+  resulting value with RFC 8785 JSON Canonicalization Scheme (JCS; recursively lexicographic
+  property ordering, JCS number/string escaping rules, compact output, UTF-8 encoding, and no
+  trailing newline), then hash those exact bytes with SHA-256. The ledger stores the identifier
+  alongside the unchanged receipt artifact; an independent recomputation must use the same JCS
+  procedure and reproduce it. This distinguishes reruns at the same GitHub SHA without adding
+  cross-run fields to either strict receipt.
   Those fields bind the two strict browser receipts without adding cross-run fields to either
   `devui-overview-browser-accessibility.v1` receipt.
 - Return discovered defects/gaps to their owning blocked contract without implementing repairs.
