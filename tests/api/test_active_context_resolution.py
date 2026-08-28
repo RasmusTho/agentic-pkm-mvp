@@ -67,6 +67,16 @@ def client() -> TestClient:
     return TestClient(app)
 
 
+@pytest.fixture(autouse=True)
+def reset_global_vault_manager(monkeypatch: pytest.MonkeyPatch):
+    """Keep this request-scoped API suite independent of VaultManager state."""
+
+    import app.vault.manager as vault_manager_module
+
+    monkeypatch.setattr(vault_manager_module, "_GLOBAL_MANAGER", None)
+    yield
+
+
 def _create(client: TestClient, binding_ids: list[str]) -> dict:
     response = client.post(SELECTION_URL, json={"vault_binding_ids": binding_ids})
     assert response.status_code == 201, response.text

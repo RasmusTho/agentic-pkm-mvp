@@ -53,6 +53,7 @@ from app.heimdal.consent_ledger import (
     list_active_grants,
     reset_memory_consent_ledger,
 )
+from app.heimdal.trigger_ownership import CONSENT_GRANT_TRIGGER
 
 pytestmark = pytest.mark.not_pg
 
@@ -179,12 +180,51 @@ class _RecordingCursor:
 
     def __init__(self) -> None:
         self.executed: list[tuple[str, tuple]] = []
+        self._last_query = ""
+        self._table_created = False
+        self._trigger_created = False
 
     def execute(self, sql: str, params: tuple | None = None) -> None:
+        self._last_query = sql
+        if "CREATE TABLE heimdal_consent_grant" in sql:
+            self._table_created = True
+        if "CREATE TRIGGER heimdal_consent_grant_no_update" in sql:
+            self._trigger_created = True
         self.executed.append((sql, params or ()))
 
-    def fetchone(self) -> None:
+    def fetchone(self) -> tuple[str] | None:
+        if "to_regclass" in self._last_query:
+            return ("heimdal_consent_grant",) if self._table_created else None
         return None
+
+    def fetchall(self) -> list[tuple[object, ...]]:
+        if "FROM pg_trigger" not in self._last_query or not self._trigger_created:
+            return []
+        return [
+            (
+                "public",
+                "heimdal_consent_grant",
+                "heimdal_consent_grant_no_update",
+                27,
+                "O",
+                "",
+                True,
+                True,
+                "heimdal_consent_grant_reject_mutation",
+                "f",
+                True,
+                0,
+                "",
+                "plpgsql",
+                "v",
+                False,
+                False,
+                False,
+                "u",
+                None,
+                CONSENT_GRANT_TRIGGER.body,
+            )
+        ]
 
     def seeded_identities(self) -> set[tuple[str, str, str]]:
         """`(grant_ref, basis, scope)` of every row this bootstrap INSERTed.
