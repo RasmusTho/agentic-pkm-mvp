@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 from pathlib import Path
 
 import pytest
@@ -111,6 +112,38 @@ class TestColdStartPrecondition:
     def test_store_starts_empty(self) -> None:
         object_store_module._MEMORY_STORE.clear()
         assert len(object_store_module._MEMORY_STORE) == 0
+
+
+def test_support_free_copied_root_remains_human_intelligible(tmp_path: Path) -> None:
+    """Scenario 12 non-blocking acceptance evidence for Markdown-only inspection."""
+    source_root = tmp_path / "source"
+    artifact_source = source_root / "artifacts"
+    artifact_source.mkdir(parents=True)
+    representative_artifacts = {
+        "evergreen-strategy.md": ("# Evergreen Strategy", "sustainable knowledge loop"),
+        "reflection-journal.md": ("# Reflection Journal", "LangGraph-based agents"),
+    }
+    for source_name in representative_artifacts:
+        shutil.copy2(GOLDEN_DIR / source_name.replace(".md", ".golden.md"), artifact_source / source_name)
+
+    # These derived/runtime artifacts deliberately remain outside the copied root.
+    (source_root / "index.json").write_text('{"derived": true}', encoding="utf-8")
+    (source_root / "cache").mkdir()
+    (source_root / "runtime-metadata.json").write_text('{"runtime": true}', encoding="utf-8")
+
+    support_free_root = tmp_path / "support-free-copy"
+    support_free_root.mkdir()
+    for artifact_name in representative_artifacts:
+        shutil.copy2(artifact_source / artifact_name, support_free_root / artifact_name)
+
+    assert sorted(path.name for path in support_free_root.iterdir()) == sorted(representative_artifacts)
+    assert not (support_free_root / "index.json").exists()
+    assert not (support_free_root / "cache").exists()
+    assert not (support_free_root / "runtime-metadata.json").exists()
+    for artifact_name, (heading, meaning) in representative_artifacts.items():
+        content = (support_free_root / artifact_name).read_text(encoding="utf-8")
+        assert heading in content
+        assert meaning in content
 
 
 class TestColdRebuildMatchesGolden:

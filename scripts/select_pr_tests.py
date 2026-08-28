@@ -905,6 +905,15 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
         ),
     ),
     (
+        # Quality Wave is the non-blocking acceptance surface for seeded and
+        # cold-rebuild scenarios. A direct edit to one of its tests must run
+        # the suite rather than fail closed as an unowned path before pytest
+        # can exercise the added evidence.
+        "quality_wave",
+        ("tests/quality_wave/",),
+        ("tests/quality_wave",),
+    ),
+    (
         "ops",
         ("app/ops/", "tests/ops/"),
         ("tests/ops",),

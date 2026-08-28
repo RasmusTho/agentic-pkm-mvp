@@ -173,6 +173,18 @@ def test_builder_system_architecture_fitness_test_has_ci_owner() -> None:
     assert path in selection.targets
 
 
+def test_quality_wave_tests_have_ci_owner() -> None:
+    path = "tests/quality_wave/test_cold_rebuild.py"
+
+    selection = select_tests([path])
+
+    assert selection.full_suite is False
+    assert selection.subsystems == ("quality_wave",)
+    assert selection.unowned_paths == ()
+    assert "tests/quality_wave" in selection.targets
+    assert path in selection.targets
+
+
 def test_proxmox_inventory_boundary_has_builder_system_ci_owner() -> None:
     selection = select_tests(["app/proxmox/inventory.py"])
 
