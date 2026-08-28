@@ -1,19 +1,18 @@
-State: Rejected target-state candidate retained as recovery evidence. Although
-the implementation from Issue #5118 merged in PR #5122, a fresh exact-head
-review found new P1 privacy-boundary and false-green acceptance failures. The
-production host is therefore fail-closed under #5124. This document is not the
-current implementation contract and does not authorize further point repair.
+State: Rejected recovery candidate retained as historical evidence. Builder
+Thread is retired under #5128; this document is not current implementation,
+startup, migration, or reactivation authority and does not authorize locating,
+reading, migrating, projecting, or deleting retained v1 artifacts.
 
 # Builder Thread Structural Privacy Classifier Recovery
 
 ## Purpose and authority
 
-The serialized Builder Thread writer accepts only `shared_non_sensitive`
-material. The existing Builder Thread contract remains the authority for that
-boundary; this document defines a candidate replacement for the exhausted
+This document records the former `shared_non_sensitive` classifier recovery
+candidate and its exhausted
 `builder-thread-privacy-admission/path-uri-classification` mechanism. It is
-Builder System design material, not Product/Runtime truth and not a new
-BuilderOps authority surface.
+Builder System historical design evidence, not Product/Runtime truth, not a
+current BuilderOps authority surface, and not permission to use the deleted
+runtime or inspect retained v1 artifacts.
 
 The candidate classifier applies to every caller-controlled value that is
 eligible to reach a persisted command envelope, as detailed below. Existing
@@ -378,16 +377,18 @@ Fresh Sol/ultra review checked that:
 3. records a clean `materially_different` result rather than
    `same_exhausted_key`/blocking.
 
-The clean result permits exactly one separately bounded implementation route:
-#5118. That Issue preserves the exhausted predecessor ledger and names its own
-production, recovery, and current-SHA review gates. It does not authorize a
-repair attempt on #4813, CI, merge, or closure from this design artifact.
+That clean result historically permitted the bounded #5118 implementation
+route. PR #5122 did not establish an acceptable privacy mechanism, the later
+exact-main audit selected retirement, and #5128 retired the capability without
+replacement. No implementation, CI, merge, recovery, or retained-content action
+is authorized from this design artifact.
 
 ## Traceability
 
 - Issue contract: #4846.
 - Exhausted predecessor and ledger: #4728, #4813, and #4728 comment 5261290728.
-- Existing boundary: `.codex/skills/_shared/BUILDER_THREAD_CONTRACT.md :: Capture, Privacy, And Read Bounds`.
-- Writer and recovery entrypoints: `app/builderops/builder_threads_serialized.py :: _validate_command / _validate_text / _restore_external_state / _persist`.
-- Store boundary: `docs/builderops/BUILDEROPS_VAULT_STORE.md :: Builder Thread artifact exchange`.
+- Former boundary deleted by #5128: `.codex/skills/_shared/BUILDER_THREAD_CONTRACT.md :: Capture, Privacy, And Read Bounds`.
+- Former writer and recovery entrypoints deleted by #5128: `app/builderops/builder_threads_serialized.py :: _validate_command / _validate_text / _restore_external_state / _persist`.
+- Current retirement owner: `docs/builderops/BUILDEROPS_VAULT_STORE.md :: Builder Thread artifact exchange`.
+- Current operational posture: `docs/OPERATIONS.md :: Builder Thread serialized writer`.
 - Repair identity policy: `docs/development/AUTONOMOUS_REVIEW_REPAIR_GATE_CONTRACTS.md :: Mechanism Convergence Gate`.

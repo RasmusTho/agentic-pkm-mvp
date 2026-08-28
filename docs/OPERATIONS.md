@@ -418,34 +418,18 @@ Companion docs:
   select(.name=="github-live")'`. Full path and rationale:
   `docs/BUILDEROPS_COCKPIT/GITHUB_LIVE_PLANE.md :: What makes that command answer fresh (#4484)`.
 
-### Builder Thread serialized writer (#4708, #5124 containment)
+### Builder Thread serialized writer
 
-Builder Threads are Builder System operational context, not a Product/Runtime
-vault flow. The intended designated BuilderOps/Mac mini writer is the only
-permitted mutation boundary for the external BuilderOps Vault. Its
-environment-backed production factory is temporarily fail-closed after the
-implementation merged in #5122 failed fresh independent privacy-boundary
-review. Do not start `python -m app.builderops.builder_thread_endpoint` until a
-separately governed replacement is accepted; it exits with a stable
-writer-unavailable refusal before root initialization or recovery. Direct
-writer construction is test-only, not an operator bypass.
+Builder Thread is retired under #5128. There is no service, endpoint, client,
+startup command, environment contract, inbox projection, or supported operator
+procedure to configure or run.
 
-Codex and Claude clients retain the configured `BuilderThreadClient` contract with
-`BUILDEROPS_THREAD_ENDPOINT_URL`, `BUILDEROPS_THREAD_CLIENT_ID`, and
-`BUILDEROPS_THREAD_CLIENT_TOKEN`. The host separately configures the per-client
-token map in `BUILDEROPS_THREAD_WRITER_CLIENT_TOKENS_JSON`; it alone reads the
-writer-root settings. Do not configure a client with a vault path or fall back
-to direct filesystem writes when that writer is unavailable. The repository
-`vault/` directory is a fixture and is never a live target.
-
-The strict `shared_non_sensitive` invariant remains authoritative, but #5118 and
-#5122 are not accepted proof that it is enforced. While containment is active,
-the production path writes and reconstructs no Builder Thread envelopes. Existing
-external artifacts are not migrated or rewritten. Inbox and devUI projections
-remain non-authoritative and cannot grant Issue, PR, CI, merge, approval,
-promotion, or receipt authority. The detailed skill contract is
-`.codex/skills/_shared/BUILDER_THREAD_CONTRACT.md`; PR #4706 remains superseded
-multi-writer evidence and is not an operational dependency.
+Route delivery questions and review discussion through GitHub Issues and PR
+comments, normative content through repository docs, and builder-operational
+material through typed BuilderOps records. Retained Builder Thread v1 artifacts
+remain inert: operations must not read, inspect, parse, migrate, repair, project,
+log, archive, or delete their content. Historical audit and recovery documents
+are evidence only and provide no reactivation or fallback authority.
 
 ### Karakeep managed source service (KMA-02)
 - `docker-compose.karakeep.yml` is the repo-owned deployment for the self-hosted Karakeep

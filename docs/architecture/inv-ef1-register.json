@@ -2235,48 +2235,6 @@
       "issue": "#2892"
     },
     {
-      "artifact": ".codex/skills/_shared/BUILDER_THREAD_CONTRACT.md",
-      "category": "iii",
-      "why_load_bearing": "The Builder Thread contract names the designated BuilderOps writer host while keeping its external vault location undiscoverable to clients.",
-      "disposition": "stay",
-      "issue": "#4708"
-    },
-    {
-      "artifact": ".codex/skills/builder-inbox/SKILL.md",
-      "category": "iii",
-      "why_load_bearing": "The read-only Builder Inbox skill identifies the designated BuilderOps writer host required by its governed endpoint boundary.",
-      "disposition": "stay",
-      "issue": "#4708"
-    },
-    {
-      "artifact": ".codex/skills/builder-thread/SKILL.md",
-      "category": "iii",
-      "why_load_bearing": "The Builder Thread skill identifies the designated BuilderOps writer host required by its governed mutation boundary.",
-      "disposition": "stay",
-      "issue": "#4708"
-    },
-    {
-      "artifact": "app/builderops/builder_threads_serialized.py",
-      "category": "iii",
-      "why_load_bearing": "The serialized writer module documents the designated BuilderOps writer host and rejects repository-vault use without exposing an external vault path.",
-      "disposition": "stay",
-      "issue": "#4708"
-    },
-    {
-      "artifact": "docs/builderops/BUILDEROPS_VAULT_STORE.md",
-      "category": "iii",
-      "why_load_bearing": "The BuilderOps Vault Store owner document records the designated host boundary for this external non-repository store.",
-      "disposition": "stay",
-      "issue": "#4708"
-    },
-    {
-      "artifact": "tests/builderops/test_builder_threads_serialized.py",
-      "category": "iii",
-      "why_load_bearing": "The serialized-writer tests retain the designated host identity only as a synthetic vault identifier for contract coverage.",
-      "disposition": "stay",
-      "issue": "#4708"
-    },
-    {
       "artifact": "docs/DEV_TEST_PROD_STARTUP_REDESIGN/README.md",
       "category": "iii",
       "why_load_bearing": "The startup redesign records the designated Ollama-only model host and the separate Linux runtime-host boundary.",
