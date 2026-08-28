@@ -20,7 +20,8 @@ def load_devui_candidate_asset(path: str) -> tuple[str, bytes] | None:
     if route is None:
         return None
     content_type, filename = route
-    return content_type, (_CANDIDATE_ROOT / filename).read_bytes()
+    with open(_CANDIDATE_ROOT / filename, "rb") as asset_file:
+        return content_type, asset_file.read()
 
 
 __all__ = ["load_devui_candidate_asset"]
