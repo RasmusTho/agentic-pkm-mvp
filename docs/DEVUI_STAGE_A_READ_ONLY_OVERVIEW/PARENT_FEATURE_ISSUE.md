@@ -100,7 +100,9 @@ APIs only; it supplies neither a page nor a visual destination.
       CI/review/deploy receipt, `/version`, `/api/health.version`, and gateway marker, then records
       the disposable-state Overview → server-supplied Focus → return Playwright journey with zero
       effects, errors, storage, or unauthorized writes and durable trace/screenshot/checksum/
-      manifest evidence plus owner acknowledgement.
+      manifest evidence plus owner acknowledgement. Its ledger alone binds the pre-merge #4836
+      candidate artifact and the distinct final-M #4748 artifact by recomputable evidence-artifact
+      digests; neither strict browser receipt carries a cross-run reference.
   - Verify: runtime receipt: devui-stage-a-read-only-owner-pilot.v1
 - [ ] Current-state owner docs change only after all capability receipts support the claim.
   - Verify: doc writeback at `docs/DEVUI.md :: Current state and target`

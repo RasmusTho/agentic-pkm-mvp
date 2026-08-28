@@ -108,6 +108,17 @@ route and server-supplied Focus selectors; (5) the receipt-sourced exact deploye
 (6) approved disposable-state classification. The pilot must not be claimed or made ready from this
 document alone.
 
+The final `devui-stage-a-read-only-owner-pilot.v1` ledger is the only cross-run binding authority.
+It records both the pre-merge #4836 candidate browser-evidence artifact and the separate #4748
+final-M browser-evidence artifact. For each artifact it records its exact tested Git SHA, its
+canonical archive manifest, and `evidence_artifact_sha256`: the SHA-256 of a canonical UTF-8 JSON
+object mapping every archived relative artifact path to that file's SHA-256, with keys sorted
+lexicographically and no trailing newline. The object includes the strict browser receipt, JUnit
+result, Playwright trace, and every screenshot, but not its own rendered manifest. Missing files,
+duplicate paths, a malformed digest, or a digest that does not recompute from the archived files
+fail the pilot closed. This identity distinguishes materially different reruns at one Git SHA
+without adding any cross-run field to `devui-overview-browser-accessibility.v1`.
+
 ## Acceptance Criteria
 
 - [ ] The pilot obtains its exact deployed URL and SHA from the #4747/#4748/deployment receipts and
@@ -116,6 +127,11 @@ document alone.
   - Verify: runtime receipt: devui-stage-a-read-only-owner-pilot.v1
 - [ ] For each zone, the final structured ledger records the exact answer, evidence path, source
       conditions, elapsed reconstruction steps, and pass/fail disposition.
+  - Verify: runtime receipt: devui-stage-a-read-only-owner-pilot.v1
+- [ ] The ledger alone binds the candidate-before-merge #4836 browser evidence and the distinct
+      final-M #4748 browser evidence. Each entry has a recomputable `evidence_artifact_sha256` and
+      fails closed when its archived artifact set is missing or mismatched; the strict #4748 receipt
+      does not reference the candidate receipt or artifact.
   - Verify: runtime receipt: devui-stage-a-read-only-owner-pilot.v1
 - [ ] The owner identifies every degraded/withdrawn state without reading it as empty, healthy,
       decided, delivered, or ready.

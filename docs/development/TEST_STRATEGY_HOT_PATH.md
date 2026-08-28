@@ -107,9 +107,15 @@ The goal is to keep docs-only and governance/skill PRs cheap while preserving di
   inventory, with every nodeid reporting passed URL assertions, network assertions, and status
   assertions plus an empty page errors list. The manifest records both required and executed nodeids
   plus per-node collected/executed/passed/skipped results and any JUnit-inventory error while hashing
-  the bound evidence. A later #4748 receipt may authenticate and reference this artifact only by its
-  exact SHA and exact nodeid inventory; the artifact does not by itself claim that downstream #4748
-  validation has run.
+  the bound evidence. This pre-merge #4836 candidate artifact must exist before M, but it is not a
+  field or prerequisite reference inside the later strict #4748 receipt. #4748 runs its own distinct
+  final-M browser proof and produces a separate self-describing
+  `devui-overview-browser-accessibility.v1` receipt/artifact at M. Only the downstream
+  `devui-stage-a-read-only-owner-pilot.v1` ledger may bind the candidate and final artifacts: it
+  records each exact tested SHA and an `evidence_artifact_sha256` derived from the canonical archived
+  artifact inventory, then fails closed on a missing or mismatched artifact/digest. Consequently,
+  ordinary unit CI, a local screenshot, a post-merge run, a matching Git SHA, or either strict
+  receipt alone cannot substitute for the required cross-run binding.
 
 ## Check Levels
 

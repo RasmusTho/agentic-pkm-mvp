@@ -37,6 +37,10 @@ application behavior outside the shell issue's bounded scope.
 - Run the complete hostile source-state and identity-continuity matrix at one exact SHA.
 - Prove responsive, keyboard, screen-reader, print, JavaScript-off, and no-effect behavior.
 - Archive the bounded receipt/screenshots; route discovered defects to separate repair Issues.
+- Keep `devui-overview-browser-accessibility.v1` self-describing for that one exact tested run. It
+  carries no candidate/final linkage and never references a different browser receipt or artifact.
+  The downstream `devui-stage-a-read-only-owner-pilot.v1` ledger, not this receipt, later binds the
+  pre-merge #4836 candidate artifact and the separate final-M #4748 artifact.
 
 ## What This Task Does
 
@@ -106,6 +110,8 @@ separately and blocks this proof; this validation task does not absorb its repai
 - Run the complete Overview browser module and exact focused API/producer regression modules.
 - Attach deterministic screenshot and accessibility artifacts to the exact-head receipt.
 - Run `git diff --check`.
+- Do not add a candidate-receipt reference to the #4748 receipt. If a future owner pilot uses this
+  evidence, it must bind this run's archived artifact through its own ledger contract.
 
 ## Suggested Validation
 
