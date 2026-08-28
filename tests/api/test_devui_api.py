@@ -759,7 +759,19 @@ def test_overview_get_uses_live_working_threads_without_injected_candidates(monk
                     "limitation": None,
                 }
             ],
-            "navigation_refs": [],
+            "navigation_refs": [
+                {
+                    "kind": "focus",
+                    "navigation_ref": {
+                        "source_type": "devui_focus_route",
+                        "source_id": "github:RasmusTho/agentic-pkm-mvp#4834",
+                        "locator": "/devui/focus?subject=github%3ARasmusTho%2Fagentic-pkm-mvp%234834",
+                        "version": "devui-focus-view.v1",
+                    },
+                    "status": "available",
+                    "limitation": None,
+                }
+            ],
             "limitations": [],
         }
     ]

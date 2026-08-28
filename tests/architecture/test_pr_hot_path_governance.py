@@ -72,6 +72,34 @@ def test_devui_gateway_admission_owner_docs_preserve_security_and_topology() -> 
         assert "#4836" in ledger
 
 
+def test_devui_gateway_shell_owner_docs_preserve_topology_and_dependency_truth() -> None:
+    devui = _read("docs/DEVUI.md")
+    stage = _read("docs/DEVUI_STAGE_A_READ_ONLY_OVERVIEW/README.md")
+    parent = _read("docs/DEVUI_STAGE_A_READ_ONLY_OVERVIEW/PARENT_FEATURE_ISSUE.md")
+    runtime = _read("companion-ui/docs/UI_RUNTIME_BOUNDARIES.md")
+    access = _read("companion-ui/docs/LOCAL_ACCESS_MODEL.md")
+    exposure = _read("companion-ui/docs/PRODUCTION_EXPOSURE_SECURITY_PROFILE.md")
+    deployment = _read("docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md")
+
+    combined = "\n".join((devui, stage, parent, runtime, access, exposure, deployment))
+    for fragment in (
+        "/devui/overview",
+        "/devui/focus?subject=...",
+        "yggdrasil-constrained-reuse.v1",
+        "#4746",
+        "#4833/#4842",
+        "exact two API GET",
+        "FastAPI presentation route",
+        "candidate",
+        "not delivered",
+    ):
+        assert fragment in combined, fragment
+
+    assert "companion-ui/companion-app/companion_ui/workspace/devui_candidate" in devui
+    assert "port `18000` remains direct API health/version diagnostics" in devui
+    assert "127.0.0.1:8113/devui/overview" in deployment
+
+
 def test_hot_path_doc_defers_escalation_and_names_direct_repair_contract() -> None:
     text = _read("docs/development/PR_HOT_PATH.md")
 

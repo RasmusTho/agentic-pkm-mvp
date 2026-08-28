@@ -57,7 +57,7 @@ claim; it is never treated as an empty, healthy, or deployed state.
 | Delivery evidence | Delivery, merge, closure, and terminal verification facts exist independently | A source-owned, receipt-backed `ready_to_try` fact, or an honest withdrawal |
 | API | Local-only GET `/api/devui/composition`, delivered direct-loopback Overview/Focus reads, and #4841's production Companion exact two-GET transport; no devUI mutation or page route | Typed navigation only after actual local destinations are governed |
 | Navigation | Composer validates typed root references | Resolvable local Focus and optional SoI destinations without joins |
-| Visual shell | No Overview browser shell | Accepted constrained-reuse or live-handoff evidence, read-only shell, browser/accessibility proof, owner pilot |
+| Visual shell | #4836 candidate packages the connected read-only shell and exact constrained-reuse manifest; it is not delivered or accepted | #4746 exact-candidate acceptance, #4833/#4842 exact-ref browser proof, merge, deployment receipt, owner pilot |
 
 ## Authority-resolution gate
 
@@ -167,6 +167,12 @@ stable breakdown and validation path.
 Production transport prerequisite [#4841](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4841)
 is consumed only by the source-authorized connected shell
 [#4836](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4836) and does not itself deliver that shell.
+The #4836 candidate subtree is
+`companion-ui/companion-app/companion_ui/workspace/devui_candidate`; its manifest binds the complete
+Git inventory, exact shipped Cockpit/token source objects, and closed transformations. Its
+Companion-owned page/assets repeat #4841 admission, preserve the exact two API GET allowlist, and
+carry no-store/CSP/no-egress/effect-free browser constraints. This ledger records candidate scope
+only; #4746 and #4833/#4842 remain the live pre-merge acceptance authorities.
 
 ## Delivery evidence
 

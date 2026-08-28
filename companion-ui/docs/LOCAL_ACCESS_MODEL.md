@@ -120,8 +120,11 @@ Companion vault routes:
   `resolve_auth_subject(request, None)`. An API key or arbitrary network peer cannot enter this
   read-only exception.
 - The exception is limited to exact GET `/api/devui/overview` and strict GET
-  `/api/devui/focus?subject=...`. It grants no wildcard, write, page, asset, CORS, or remote-browser
-  access. The later #4836 presentation must consume it without widening it.
+  `/api/devui/focus?subject=...`. It grants no wildcard, write, CORS, or remote-browser access.
+  #4841 itself grants no page or asset route. The #4836 candidate serves only the Companion-owned
+  `/devui/overview`, `/devui/focus?subject=...`, and committed `/devui/assets/*` presentation set
+  after the identical admission check; those document/asset routes do not enter the API proxy
+  allowlist. The browser follows one server-supplied Focus locator and performs no URL probing.
 
 ## Token or Session Auth Option
 

@@ -24,6 +24,10 @@ path produces one connected Overview → visual Focus → return journey through
 parent coordinates validation only; it is never ready work and claims no deployed or accepted UI.
 #4841 additionally delivers the narrow production Companion transport for the existing two read
 APIs only; it supplies neither a page nor a visual destination.
+The #4836 branch may publish a committed connected-shell candidate for those reads before its
+pre-merge gates. That candidate is not delivery: #4746 must accept its exact
+`yggdrasil-constrained-reuse.v1` inventory/source/transform binding and #4833/#4842 must prove the
+published exact ref in a browser before merge or child closure.
 
 ## Scope
 

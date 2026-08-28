@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>devUI Overview</title>
+  <link rel="stylesheet" href="/devui/assets/devui.css">
+</head>
+<body>
+  <main class="wrap" data-testid="overview-shell" data-server-state="loading" data-candidate-sha="" aria-labelledby="overview-heading">
+    <section class="claim" data-testid="devui-overview">
+      <div class="claim-top">
+        <div>
+          <p class="eyebrow">devUI · read-only projection · fresh on every visit</p>
+          <h1 id="overview-heading">Overview</h1>
+        </div>
+        <span class="mono load-state" data-testid="overview-load-state" data-state="loading" role="status" aria-live="polite">Reading the server projection…</span>
+      </div>
+      <p class="said">Situation, owner decisions, and results remain separate server-owned claims.</p>
+    </section>
+    <noscript>
+      <section class="void refuse" role="alert">
+        <p>This read-time projection needs JavaScript to fetch its server-owned claims.</p>
+        <p class="sub">No authority or source is changed.</p>
+      </section>
+    </noscript>
+    <section class="trust-frame" data-testid="overview-trust-frame" aria-labelledby="trust-heading">
+      <h2 id="trust-heading">Trust frame</h2>
+      <div data-testid="overview-trust-matrix"></div>
+    </section>
+    <div class="overview-grid">
+      <section class="band primary" aria-labelledby="now-heading">
+        <div class="band-head"><span class="band-no">1</span><h2 class="band-q" id="now-heading">Now</h2></div>
+        <div class="lane-cards" data-testid="overview-now"></div>
+      </section>
+      <div class="overview-rail">
+        <section class="band" aria-labelledby="needs-heading">
+          <div class="band-head"><span class="band-no">·</span><h2 class="band-q" id="needs-heading">Needs you</h2></div>
+          <div class="lane-cards" data-testid="overview-needs-you"></div>
+        </section>
+        <section class="band" aria-labelledby="ready-heading">
+          <div class="band-head"><span class="band-no">2</span><h2 class="band-q" id="ready-heading">Ready to try</h2></div>
+          <div class="lane-cards" data-testid="overview-ready-to-try"></div>
+        </section>
+      </div>
+    </div>
+    <section class="limitations" data-testid="overview-limitations" aria-labelledby="overview-limitations-heading">
+      <h2 id="overview-limitations-heading">Limitations</h2>
+      <ul></ul>
+    </section>
+  </main>
+  <script src="/devui/assets/overview.js" defer></script>
+</body>
+</html>

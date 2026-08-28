@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>devUI Focus</title>
+  <link rel="stylesheet" href="/devui/assets/devui.css">
+</head>
+<body>
+  <main class="wrap" data-testid="devui-focus" data-server-state="loading" data-candidate-sha="" aria-labelledby="focus-heading">
+    <section class="claim">
+      <div class="claim-top">
+        <div>
+          <p class="eyebrow">devUI · one governed subject · read-only</p>
+          <h1 id="focus-heading">Focus</h1>
+        </div>
+        <span class="mono load-state" data-testid="focus-load-state" data-state="loading" role="status" aria-live="polite">Reading the selected subject…</span>
+      </div>
+      <p class="said" data-testid="focus-subject" data-subject="">Selected subject</p>
+      <a class="btn btn-out" data-testid="overview-return" href="/devui/overview"><span class="k">back</span>Return to Overview</a>
+    </section>
+    <noscript><section class="void refuse" role="alert"><p>Focus needs JavaScript for its fresh read.</p><p class="sub">No source is changed.</p></section></noscript>
+    <div class="focus-grid">
+      <div>
+        <section class="surface" data-testid="focus-owner-intent" aria-labelledby="intent-heading"><h2 id="intent-heading">Owner intent</h2><div></div></section>
+        <section class="surface" data-testid="focus-governing-sources" aria-labelledby="governing-heading"><h2 id="governing-heading">Governing sources</h2><div></div></section>
+        <section class="surface" data-testid="focus-evidence" aria-labelledby="evidence-heading"><h2 id="evidence-heading">Evidence</h2><div></div></section>
+      </div>
+      <div>
+        <section class="surface" data-testid="focus-receipts" aria-labelledby="receipts-heading"><h2 id="receipts-heading">Receipts</h2><div></div></section>
+        <section class="surface" data-testid="focus-risks" aria-labelledby="risks-heading"><h2 id="risks-heading">Risks</h2><div></div></section>
+        <section class="surface" data-testid="focus-next-step" aria-labelledby="next-step-heading"><h2 id="next-step-heading">Next legal step</h2><div></div></section>
+        <section class="surface" data-testid="focus-execution" aria-labelledby="execution-heading"><h2 id="execution-heading">Execution observations</h2><div></div></section>
+        <section class="surface" data-testid="focus-conversation" aria-labelledby="conversation-heading"><h2 id="conversation-heading">Conversation Port</h2><div></div></section>
+        <section class="limitations" data-testid="focus-limitations" aria-labelledby="focus-limitations-heading"><h2 id="focus-limitations-heading">Limitations</h2><div></div></section>
+      </div>
+    </div>
+  </main>
+  <script src="/devui/assets/focus.js" defer></script>
+</body>
+</html>

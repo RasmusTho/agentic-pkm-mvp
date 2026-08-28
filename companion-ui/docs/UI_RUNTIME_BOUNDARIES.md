@@ -62,8 +62,14 @@
 - For those two reads, the UI server creates a fresh request from only
   `COMPANION_API_BASE_URL`, the exact path, and the validated query. It copies no inbound `Host`,
   API key, authorization, forwarding, Via, client-IP, or proxy header, and returns the upstream
-  status and JSON body unchanged. #4841 adds no FastAPI page/static route, packaged page/asset, or
-  browser fallback. Presentation #4836 consumes this transport later at the Companion origin.
+  status and JSON body unchanged. In the transport contract's compact wording, #4841 adds
+  no page/static route. It itself adds no FastAPI page/static route, packaged
+  page/asset, or browser fallback. The #4836 candidate adds only Companion-owned
+  `/devui/overview`, `/devui/focus?subject=...`, and `/devui/assets/*` presentation routes behind
+  the same gateway admission. It does not add a FastAPI presentation route or widen the exact two
+  API GETs. The complete candidate asset inventory is Git-tree-bound by its
+  `yggdrasil-constrained-reuse.v1` manifest and remains candidate—not delivered—until its live
+  pre-merge design and exact-ref browser gates pass.
 
 ## Control-action register
 

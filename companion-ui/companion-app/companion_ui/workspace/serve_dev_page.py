@@ -85,6 +85,7 @@ from companion_ui.workspace.calm_degraded import (
     lane_label,
 )
 from companion_ui.workspace.day_start_card import render_day_start_card_html
+from companion_ui.workspace.devui_candidate_assets import load_devui_candidate_asset
 from companion_ui.workspace.capture_modal import (
     capture_modal_markup,
     capture_modal_script,
@@ -16269,8 +16270,89 @@ def make_handler(
                 return
             self._send_json(status_code, data)
 
+        def _serve_devui_candidate(self, parsed) -> None:
+            """Serve the reviewed candidate behind the existing admission."""
+
+            if not self._devui_enabled:
+                self._send_json(
+                    404,
+                    {"error": "not_found", "message": "Unknown Companion UI route"},
+                )
+                return
+            if not self._devui_request_admitted():
+                self._send_json(
+                    403,
+                    {
+                        "error": "forbidden",
+                        "message": "devUI is available only through the local loopback gateway",
+                    },
+                )
+                return
+            if parsed.path == "/devui/overview" and parsed.query:
+                self._send_json(
+                    404,
+                    {"error": "not_found", "message": "Unknown Companion UI route"},
+                )
+                return
+            if parsed.path == "/devui/focus":
+                if re.search(r"%(?![0-9a-fA-F]{2})", parsed.query):
+                    pairs: list[tuple[str, str]] = []
+                else:
+                    try:
+                        pairs = parse_qsl(
+                            parsed.query,
+                            keep_blank_values=True,
+                            strict_parsing=True,
+                        )
+                    except ValueError:
+                        pairs = []
+                if (
+                    len(pairs) != 1
+                    or pairs[0][0] != "subject"
+                    or not pairs[0][1].strip()
+                ):
+                    self._send_json(
+                        400,
+                        {
+                            "error": "invalid_query",
+                            "message": "One subject query is required",
+                        },
+                    )
+                    return
+            elif parsed.query:
+                self._send_json(
+                    404,
+                    {"error": "not_found", "message": "Unknown Companion UI route"},
+                )
+                return
+            asset = load_devui_candidate_asset(parsed.path)
+            if asset is None:
+                self._send_json(
+                    404,
+                    {"error": "not_found", "message": "Unknown Companion UI route"},
+                )
+                return
+            content_type, body = asset
+            self.send_response(200)
+            self.send_header("Content-Type", content_type)
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Referrer-Policy", "no-referrer")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header(
+                "Content-Security-Policy",
+                "default-src 'none'; base-uri 'none'; connect-src 'self'; "
+                "font-src 'none'; form-action 'none'; frame-ancestors 'none'; "
+                "img-src 'self' data:; object-src 'none'; script-src 'self'; style-src 'self'",
+            )
+            self.end_headers()
+            self.wfile.write(body)
+
         def do_GET(self) -> None:
             parsed = urlparse(self.path)
+            if parsed.path == "/devui" or parsed.path.startswith("/devui/"):
+                self._serve_devui_candidate(parsed)
+                return
             if parsed.path == "/api/devui" or parsed.path.startswith("/api/devui/"):
                 self._proxy_devui_get(parsed)
                 return

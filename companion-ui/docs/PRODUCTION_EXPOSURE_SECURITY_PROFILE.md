@@ -89,7 +89,12 @@ the exact server-derived `trusted_companion_proxy` subject. Only GET `/api/devui
 strict GET `/api/devui/focus?subject=...` transit; API keys, writes, wildcards, CORS relaxation,
 LAN/Tailscale browser access, and arbitrary bridge peers do not. Port `8113` is the production
 Companion browser origin; port `18000` remains API health/version diagnostics only. #4841 ships no
-page or asset route; #4836 must consume this boundary unchanged before any browser page is claimed.
+page or asset route. The #4836 candidate consumes this boundary unchanged: its Companion-owned
+`/devui/overview`, `/devui/focus?subject=...`, and committed `/devui/assets/*` routes repeat the
+same admission check, while the API proxy remains the exact two GETs. Candidate documents and
+assets are `no-store`, use no external origin, and carry a fail-closed CSP with same-origin script,
+style, and connect only. This does not make the candidate delivered or accepted before #4746 and
+#4833/#4842 record their exact-candidate pre-merge receipts.
 
 ## CSRF, CORS, and session assumptions
 

@@ -119,8 +119,11 @@ Notes on the current model:
   fails before mutation if either half drifts. Noncanonical direct launches with missing or
   nonloopback declarations keep only the devUI routes closed while
   unrelated Companion health remains available. Port `18000` is direct API health/version
-  diagnostics, not a supported devUI browser origin; #4836's eventual canonical page is
-  `http://127.0.0.1:8113/devui/overview` only after its own deployment receipt.
+  diagnostics, not a supported devUI browser origin. The #4836 candidate's only canonical browser
+  entry is `http://127.0.0.1:8113/devui/overview`; its page, Focus, and committed asset routes run
+  in the Companion gateway and do not create a FastAPI presentation origin. It remains a candidate
+  until the #4746 design/provenance and #4833/#4842 exact-ref browser receipts pass, and it becomes
+  deployed truth only after its own deployment receipt.
 - A partial build-identity foundation already exists: #2602 bakes `VCS_REF`/`BUILT_AT` into the image (Dockerfile ARG/LABEL/ENV), `get_runtime_version()` in `app/version.py` reads them (falling back to `git rev-parse` for local dev), `/version` returns `{git_sha, built_at}`, and `/api/health` carries a top-level `version` field. **But the `test`/`prod` `/app` bind-mount overrides the baked code**, so today those channels run the host checkout, not the image — the SHA marker can disagree with what is actually executing until the bind-mount is retired.
 
 ### Multi-vault instance-state rollout boundary
