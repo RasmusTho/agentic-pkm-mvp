@@ -30,6 +30,11 @@ from app.release_channels.channel_manifest import (
 JOURNAL_VERSION = "ordinary-boot-journal.v1"
 _OPERATION_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}\Z")
 _DIGEST = re.compile(r"sha256:[0-9a-f]{64}\Z")
+_IMAGE_DIGEST = re.compile(
+    r"[A-Za-z0-9][A-Za-z0-9._-]*(?:/[A-Za-z0-9._-]+)+@sha256:[0-9a-f]{64}\Z"
+)
+_CHANNEL_IDENTITY = re.compile(r"prod-[A-Za-z0-9][A-Za-z0-9._-]*\Z")
+_MIGRATION_IDENTITY = re.compile(r"alembic:[A-Za-z0-9._-]+\Z")
 _OBSERVATION_FIELDS = {"status", "identity"}
 _JOURNAL_FIELDS = {
     "journal_version",
@@ -50,6 +55,7 @@ _DEPENDENCY_FIELDS = {
     "identity_matches",
 }
 _DEPENDENCY_NAMES = {"artifact", "config", "database", "gateway", "llm", "schema", "vault"}
+_BASE_DEPENDENCIES = {"artifact", "config", "database", "gateway", "schema", "vault"}
 
 
 class OrdinaryBootJournalError(RuntimeError):
@@ -353,7 +359,13 @@ def _validate_dependency_entry(
     name = value["name"]
     policy = value["policy"]
     classification = value["classification"]
-    if name not in _DEPENDENCY_NAMES or policy not in {"required", "degraded_ok"}:
+    if (
+        not isinstance(name, str)
+        or not isinstance(policy, str)
+        or not isinstance(classification, str)
+        or name not in _DEPENDENCY_NAMES
+        or policy not in {"required", "degraded_ok"}
+    ):
         raise OrdinaryBootJournalError(
             f"journal_corrupt:{path}:line_{line_number}:dependency_value"
         )
@@ -386,6 +398,19 @@ def _validate_dependency_entry(
             raise OrdinaryBootJournalError(
                 f"journal_corrupt:{path}:line_{line_number}:dependency_identity_mismatch"
             )
+        identity = value["expected_identity"]
+        identity_pattern = {
+            "artifact": _IMAGE_DIGEST,
+            "config": _DIGEST,
+            "database": _CHANNEL_IDENTITY,
+            "gateway": _CHANNEL_IDENTITY,
+            "schema": _MIGRATION_IDENTITY,
+            "vault": _CHANNEL_IDENTITY,
+        }.get(str(name))
+        if identity_pattern is None or identity_pattern.fullmatch(str(identity)) is None:
+            raise OrdinaryBootJournalError(
+                f"journal_corrupt:{path}:line_{line_number}:dependency_identity_contract"
+            )
     elif name != "llm":
         raise OrdinaryBootJournalError(
             f"journal_corrupt:{path}:line_{line_number}:dependency_identity_missing"
@@ -409,7 +434,7 @@ def _validate_journal_row(row: object, *, path: Path, line_number: int) -> dict[
         raise OrdinaryBootJournalError(
             f"journal_corrupt:{path}:line_{line_number}:invalid_operation"
         )
-    if row["channel"] not in {"prod", "unresolved"}:
+    if not isinstance(row["channel"], str) or row["channel"] not in {"prod", "unresolved"}:
         raise OrdinaryBootJournalError(
             f"journal_corrupt:{path}:line_{line_number}:invalid_channel"
         )
@@ -419,7 +444,7 @@ def _validate_journal_row(row: object, *, path: Path, line_number: int) -> dict[
         raise OrdinaryBootJournalError(
             f"journal_corrupt:{path}:line_{line_number}:invalid_manifest_identity"
         )
-    if phase not in {"PRE_MUTATION_FAILURE", "ORDINARY_BOOT_PASS"}:
+    if not isinstance(phase, str) or phase not in {"PRE_MUTATION_FAILURE", "ORDINARY_BOOT_PASS"}:
         raise OrdinaryBootJournalError(
             f"journal_corrupt:{path}:line_{line_number}:invalid_terminal_phase"
         )
@@ -451,6 +476,28 @@ def _validate_journal_row(row: object, *, path: Path, line_number: int) -> dict[
         raise OrdinaryBootJournalError(
             f"journal_corrupt:{path}:line_{line_number}:dependency_order_or_duplicate"
         )
+    dependency_names = set(names)
+    if dependencies:
+        if row["channel"] != "prod" or (
+            dependency_names != _BASE_DEPENDENCIES
+            and dependency_names != _BASE_DEPENDENCIES | {"llm"}
+        ):
+            raise OrdinaryBootJournalError(
+                f"journal_corrupt:{path}:line_{line_number}:dependency_set_invariant"
+            )
+        by_name = {str(entry["name"]): entry for entry in dependencies}
+        if any(by_name[name]["policy"] != "required" for name in _BASE_DEPENDENCIES):
+            raise OrdinaryBootJournalError(
+                f"journal_corrupt:{path}:line_{line_number}:dependency_policy_invariant"
+            )
+        llm = by_name.get("llm")
+        if llm is not None and llm["classification"] in {
+            "required_incompatible",
+            "degraded_incompatible",
+        }:
+            raise OrdinaryBootJournalError(
+                f"journal_corrupt:{path}:line_{line_number}:llm_classification_invariant"
+            )
     required_classes = {
         str(entry["classification"])
         for entry in dependencies

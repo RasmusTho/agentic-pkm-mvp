@@ -751,6 +751,21 @@ def test_ordinary_boot_partial_write_is_never_terminal_authority(
         lambda row: {key: value for key, value in row.items() if key != "reason_code"},
         lambda row: {**row, "writers_permitted": False},
         lambda row: {**row, "terminal_phase": "PASS"},
+        lambda row: {**row, "channel": "unresolved"},
+        lambda row: {**row, "dependencies": row["dependencies"][1:]},
+        lambda row: {
+            **row,
+            "dependencies": [
+                {
+                    **entry,
+                    "policy": "degraded_ok",
+                    "classification": "degraded_compatible",
+                }
+                if entry["name"] == "artifact"
+                else entry
+                for entry in row["dependencies"]
+            ],
+        },
     ],
 )
 def test_ordinary_boot_semantic_journal_corruption_blocks_new_authority(
