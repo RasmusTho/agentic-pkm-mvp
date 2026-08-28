@@ -90,10 +90,14 @@ def _load_manifest(repo_root: Path, *, revision: str | None) -> dict[str, Any]:
 
 
 def validate_devui_exact_reuse_candidate(
-    repo_root: Path, *, revision: str | None
+    repo_root: Path, *, revision: str
 ) -> dict[str, str]:
     """Validate inventory, Git objects, closed transforms, and browser safety."""
 
+    if not isinstance(revision, str) or not revision.strip():
+        raise DevuiCandidateProvenanceError(
+            "an explicit reviewed Git revision is required"
+        )
     manifest = _load_manifest(repo_root, revision=revision)
     source = manifest["source"]
     candidate = manifest["candidate"]
@@ -157,12 +161,11 @@ def validate_devui_exact_reuse_candidate(
     if not candidate_tokens.issubset(source_tokens):
         raise DevuiCandidateProvenanceError("candidate uses a token absent from the accepted source")
 
-    if revision is not None:
-        if _git(repo_root, "rev-parse", f"{revision}:{subtree}") != candidate["tree"]:
-            raise DevuiCandidateProvenanceError("revision does not contain the exact candidate tree")
-        for name, oid in inventory.items():
-            if _git(repo_root, "rev-parse", f"{revision}:{subtree}/{name}") != oid:
-                raise DevuiCandidateProvenanceError(f"revision candidate blob changed: {name}")
+    if _git(repo_root, "rev-parse", f"{revision}:{subtree}") != candidate["tree"]:
+        raise DevuiCandidateProvenanceError("revision does not contain the exact candidate tree")
+    for name, oid in inventory.items():
+        if _git(repo_root, "rev-parse", f"{revision}:{subtree}/{name}") != oid:
+            raise DevuiCandidateProvenanceError(f"revision candidate blob changed: {name}")
 
     return {
         "candidate_subtree": subtree,

@@ -47,3 +47,13 @@ def test_candidate_manifest_refuses_dirty_or_substituted_revision_evidence(
         match="working manifest differs from the reviewed revision",
     ):
         _load_manifest(tmp_path, revision="reviewed-sha")
+
+
+def test_candidate_validator_requires_explicit_review_revision() -> None:
+    with pytest.raises(
+        DevuiCandidateProvenanceError,
+        match="explicit reviewed Git revision is required",
+    ):
+        validate_devui_exact_reuse_candidate(
+            Path(__file__).resolve().parents[2], revision=None  # type: ignore[arg-type]
+        )
