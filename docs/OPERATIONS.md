@@ -5,9 +5,9 @@ Owner: Runtime / operator playbook
 Temporal class: operational
 Review cadence: event-driven
 Source of truth: mixed
-Last reviewed: 2026-08-22
+Last reviewed: 2026-08-29
 Last live runtime verification: 2026-08-22 (see `docs/ENVIRONMENTS.md`)
-Last verified against: docs/STATUS.md, docs/ARCHITECTURE.md, docs/ROADMAP.md, docs/HEALTH.md, docs/INFRASTRUCTURE.md, docs/ENVIRONMENTS.md, docs/OBSERVABILITY.md, docs/ASK_PROVENANCE_MANIFEST/README.md, docs/CONTEXTUAL_RELEVANCE_ENGINE/README.md, app/agent_memory/ask_provenance_manifest.py, app/relevance/now_surface.py, tests/agent_memory/test_ask_provenance_manifest.py, tests/relevance/test_vault_native_moments.py, Makefile, docker-compose.test.yml, docker-compose.legacy-vault.yml, docker-compose.test-vault.yml, scripts/start_full_system.sh, scripts/verify_runtime_stack.sh, merged PRs #1948/#1977/#2115/#2119/#2127/#2128/#2129/#2131/#2135/#2140/#2142, and current repo state on 2026-07-15
+Last verified against: docs/STATUS.md, docs/ARCHITECTURE.md, docs/ROADMAP.md, docs/HEALTH.md, docs/INFRASTRUCTURE.md, docs/ENVIRONMENTS.md, docs/OBSERVABILITY.md, docs/DEV_TEST_PROD_STARTUP_REDESIGN/README.md, docs/ASK_PROVENANCE_MANIFEST/README.md, docs/CONTEXTUAL_RELEVANCE_ENGINE/README.md, app/release_channels/ordinary_boot.py, app/agent_memory/ask_provenance_manifest.py, app/relevance/now_surface.py, tests/runtime/test_startup_artifact_call_sites.py, tests/agent_memory/test_ask_provenance_manifest.py, tests/relevance/test_vault_native_moments.py, Makefile, docker-compose.test.yml, docker-compose.legacy-vault.yml, docker-compose.test-vault.yml, scripts/start_full_system.sh, scripts/verify_runtime_stack.sh, merged PRs #1948/#1977/#2115/#2119/#2127/#2128/#2129/#2131/#2135/#2140/#2142, and current repo state on 2026-08-29
 # Operations Playbook
 
 Use this document as the operator-facing starting point for runtime operations.
@@ -75,6 +75,22 @@ backend fails loud (`STORE_BACKEND=memory` or a Postgres DSN is required).
   (preflight, smoke test, soak, rollback rehearsal, and receipt), use
   `docs/runbooks/PROD_GO_LIVE_ACCEPTANCE.md`. Treat release channels as an operator-governed
   capability with outstanding feature acceptance, not as a fully accepted baseline workflow.
+
+### Read-only ordinary-boot doctor (STARTUP-03)
+
+Run `python -m app.release_channels.ordinary_boot doctor --help` for the explicit manifest,
+Compose, observed-dependency, operation-id, and terminal-journal inputs. The doctor resolves one
+exact prod promotion-mode manifest and emits `ORDINARY_BOOT_PASS` only when every required
+dependency is compatible; a declared optional LLM may instead remain visibly
+`degraded_unavailable`. A missing or incompatible required dependency emits
+`PRE_MUTATION_FAILURE` with `writers_permitted=false`.
+
+The command writes only its terminal journal. It does not pull or build an image, migrate schema,
+change a pin, bootstrap BuilderOps, provision Ollama, ingest or index data, restructure a vault,
+activate a channel, or start a writer. An identical operation-id replay must reproduce the same
+result and re-establish file plus directory durability; changed replay input or corrupt journal
+state fails closed. This is compatibility evidence for a separate caller, not permission to skip
+the canonical prod startup, promotion, activation, or live-host acceptance workflows.
 
 ### Forward-only migration floor: `objects` binding key (MVR-05A1, #4560)
 
