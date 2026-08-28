@@ -73,10 +73,11 @@ test:
 		PYTEST_PLUGIN_ARGS="$$PYTEST_PLUGIN_ARGS -p anyio.pytest_plugin"; \
 	fi; \
 	export PYTEST_DISABLE_PLUGIN_AUTOLOAD=1; \
+	export PATH="$$(dirname "$(PYTHON)"):$${PATH}"; \
 	GIT_SHA="$$(git rev-parse --short HEAD)"; \
 	python3 scripts/run_with_host_lease.py --resource pytest-not-pg \
 		--execution-id "make-test:$$GIT_SHA:$$$$" --wait-seconds 900 -- \
-		$(PYTHON) -m pytest $$PYTEST_PLUGIN_ARGS -q -c /dev/null --import-mode=importlib
+		$(PYTHON) -m pytest $$PYTEST_PLUGIN_ARGS -q --import-mode=importlib
 
 eval:
 	$(PYTHON) -m app.eval.run

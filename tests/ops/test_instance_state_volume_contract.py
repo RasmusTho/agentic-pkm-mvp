@@ -3518,6 +3518,15 @@ def test_host_global_bind_source_resolves_identically_across_checkouts_and_chann
     resolved = []
     for checkout in (tmp_path / "checkout-a", tmp_path / "checkout-b"):
         checkout.mkdir()
+        env = {
+            **os.environ,
+            "HOME": str(home),
+            "XDG_STATE_HOME": "",
+        }
+        # The Makefile exports this as a host-global value. The resolver must
+        # still derive the path from the subprocess' HOME when no explicit
+        # value is supplied, so do not let the parent test runner pre-seed it.
+        env.pop("INSTANCE_OWNERSHIP_HOST_STATE_DIR", None)
         result = subprocess.run(
             [
                 "/bin/bash",
@@ -3525,7 +3534,7 @@ def test_host_global_bind_source_resolves_identically_across_checkouts_and_chann
                 f"source '{resolver}'; prepare_instance_ownership_host_state_dir; printf %s \"$INSTANCE_OWNERSHIP_HOST_STATE_DIR\"",
             ],
             cwd=checkout,
-            env={**os.environ, "HOME": str(home), "XDG_STATE_HOME": ""},
+            env=env,
             capture_output=True,
             text=True,
             check=False,

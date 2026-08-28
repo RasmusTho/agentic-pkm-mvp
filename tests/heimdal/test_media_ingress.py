@@ -1810,10 +1810,11 @@ def test_preflight_logs_the_remedy_matching_the_failing_precondition(
     def _unreadable(**_kwargs: Any):
         raise ConsentLedgerSchemaMissingError("Missing table 'heimdal_consent_grant'.")
 
-    monkeypatch.setattr(ingress_preflight, "resolve_active_grant", _unreadable)
-    ingress_preflight.reset_ingress_preflight()
-    with caplog.at_level(logging.ERROR, logger="app.heimdal.ingress_preflight"):
-        ingress_preflight.run_ingress_preflight()
+    with monkeypatch.context() as isolated_patch:
+        isolated_patch.setattr(ingress_preflight, "resolve_active_grant", _unreadable)
+        ingress_preflight.reset_ingress_preflight()
+        with caplog.at_level(logging.ERROR, logger="app.heimdal.ingress_preflight"):
+            ingress_preflight.run_ingress_preflight()
     unreadable_log = caplog.text
     assert "could not be read at all" in unreadable_log
     assert "c4f7a1b2d9e3" in unreadable_log, "must name the table-owning migration"
@@ -1821,7 +1822,6 @@ def test_preflight_logs_the_remedy_matching_the_failing_precondition(
 
     # 2. Readable ledger, no active grant -> point at *this* slice's migration
     #    and at re-granting.
-    monkeypatch.undo()
     caplog.clear()
     revoke_consent(grant_ref=MEDIA_CAPTURE_GRANT_REF, revoked_by="test-operator")
     ingress_preflight.reset_ingress_preflight()
