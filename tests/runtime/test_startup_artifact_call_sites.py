@@ -575,6 +575,28 @@ def test_ordinary_boot_dependency_policy(tmp_path: Path) -> None:
     assert classifications["schema"] == "required_unavailable"
     assert len(_journal_rows(journal_path)) == 2
 
+    incompatible_required = _compatible_dependencies(manifest)
+    incompatible_required["vault"] = {
+        "status": "available",
+        "identity": "prod-vault-wrong",
+    }
+    incompatible = run_ordinary_boot(
+        manifest,
+        _promotion_compose(),
+        incompatible_required,
+        operation_id="boot-required-incompatible",
+        journal_path=journal_path,
+    )
+    incompatible_classes = {
+        entry["name"]: entry["classification"]
+        for entry in incompatible["dependencies"]
+    }
+    assert incompatible["terminal_phase"] == "PRE_MUTATION_FAILURE"
+    assert incompatible["reason_code"] == "required_dependency_incompatible"
+    assert incompatible["writers_permitted"] is False
+    assert incompatible_classes["vault"] == "required_incompatible"
+    assert "prod-vault-wrong" not in journal_path.read_text(encoding="utf-8")
+
     changed_replay = _compatible_dependencies(manifest)
     changed_replay["vault"] = {"status": "unavailable"}
     with pytest.raises(OrdinaryBootJournalError, match="operation_conflict"):
@@ -585,7 +607,294 @@ def test_ordinary_boot_dependency_policy(tmp_path: Path) -> None:
             operation_id="boot-degraded",
             journal_path=journal_path,
         )
-    assert len(_journal_rows(journal_path)) == 2
+    assert len(_journal_rows(journal_path)) == 3
+
+    secret_manifest = _ordinary_boot_manifest()
+    secret_manifest["channel"] = "sk-private-channel"
+    invalid = run_ordinary_boot(
+        secret_manifest,
+        _promotion_compose(),
+        {},
+        operation_id="boot-invalid-resolution",
+        journal_path=journal_path,
+    )
+    assert invalid["channel"] == "unresolved"
+    assert invalid["terminal_phase"] == "PRE_MUTATION_FAILURE"
+    assert invalid["reason_code"].startswith("compatibility_resolution_failed:")
+    assert "sk-private-channel" not in journal_path.read_text(encoding="utf-8")
+
+
+def test_ordinary_boot_replay_reestablishes_file_and_directory_durability(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A cache-visible row is never replay authority until both fsync fences pass."""
+    from app.release_channels import ordinary_boot
+
+    manifest = _ordinary_boot_manifest()
+    journal_path = tmp_path / "ordinary-boot.jsonl"
+    real_fsync = ordinary_boot.os.fsync
+    fsync_calls = 0
+
+    def fail_first_fsync(descriptor: int) -> None:
+        nonlocal fsync_calls
+        fsync_calls += 1
+        if fsync_calls == 1:
+            raise OSError("injected file fsync failure")
+        real_fsync(descriptor)
+
+    monkeypatch.setattr(ordinary_boot.os, "fsync", fail_first_fsync)
+    with pytest.raises(OrdinaryBootJournalError, match="journal_io_failure"):
+        run_ordinary_boot(
+            manifest,
+            _promotion_compose(),
+            _compatible_dependencies(manifest),
+            operation_id="boot-fsync-recovery",
+            journal_path=journal_path,
+        )
+    monkeypatch.setattr(ordinary_boot.os, "fsync", real_fsync)
+
+    parent_fsync_calls = 0
+    real_parent_fsync = ordinary_boot._fsync_parent_directory
+
+    def record_parent_fsync(path: Path) -> None:
+        nonlocal parent_fsync_calls
+        parent_fsync_calls += 1
+        real_parent_fsync(path)
+
+    monkeypatch.setattr(ordinary_boot, "_fsync_parent_directory", record_parent_fsync)
+    replay = run_ordinary_boot(
+        manifest,
+        _promotion_compose(),
+        _compatible_dependencies(manifest),
+        operation_id="boot-fsync-recovery",
+        journal_path=journal_path,
+    )
+    assert replay["writers_permitted"] is True
+    assert parent_fsync_calls == 1
+    assert len(_journal_rows(journal_path)) == 1
+
+    directory_journal = tmp_path / "ordinary-boot-directory-fsync.jsonl"
+    directory_fsync_calls = 0
+
+    def fail_first_parent_fsync(path: Path) -> None:
+        nonlocal directory_fsync_calls
+        directory_fsync_calls += 1
+        if directory_fsync_calls == 1:
+            raise OSError("injected directory fsync failure")
+        real_parent_fsync(path)
+
+    monkeypatch.setattr(ordinary_boot, "_fsync_parent_directory", fail_first_parent_fsync)
+    with pytest.raises(OrdinaryBootJournalError, match="journal_io_failure"):
+        run_ordinary_boot(
+            manifest,
+            _promotion_compose(),
+            _compatible_dependencies(manifest),
+            operation_id="boot-directory-fsync-recovery",
+            journal_path=directory_journal,
+        )
+    recovered = run_ordinary_boot(
+        manifest,
+        _promotion_compose(),
+        _compatible_dependencies(manifest),
+        operation_id="boot-directory-fsync-recovery",
+        journal_path=directory_journal,
+    )
+    assert recovered["writers_permitted"] is True
+    assert directory_fsync_calls == 2
+    assert len(_journal_rows(directory_journal)) == 1
+
+
+def test_ordinary_boot_partial_write_is_never_terminal_authority(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A torn append stays indeterminate and can never replay as PASS."""
+    from app.release_channels import ordinary_boot
+
+    manifest = _ordinary_boot_manifest()
+    journal_path = tmp_path / "ordinary-boot.jsonl"
+    real_write = ordinary_boot.os.write
+    write_calls = 0
+
+    def tear_then_fail(descriptor: int, data: bytes) -> int:
+        nonlocal write_calls
+        write_calls += 1
+        if write_calls == 1:
+            return real_write(descriptor, data[: len(data) // 2])
+        raise OSError("injected torn journal write")
+
+    monkeypatch.setattr(ordinary_boot.os, "write", tear_then_fail)
+    with pytest.raises(OrdinaryBootJournalError, match="journal_io_failure"):
+        run_ordinary_boot(
+            manifest,
+            _promotion_compose(),
+            _compatible_dependencies(manifest),
+            operation_id="boot-torn-write",
+            journal_path=journal_path,
+        )
+    monkeypatch.setattr(ordinary_boot.os, "write", real_write)
+
+    with pytest.raises(OrdinaryBootJournalError, match="journal_corrupt"):
+        run_ordinary_boot(
+            manifest,
+            _promotion_compose(),
+            _compatible_dependencies(manifest),
+            operation_id="boot-torn-write",
+            journal_path=journal_path,
+        )
+
+
+@pytest.mark.parametrize(
+    "corrupt",
+    [
+        lambda row: {key: value for key, value in row.items() if key != "reason_code"},
+        lambda row: {**row, "writers_permitted": False},
+        lambda row: {**row, "terminal_phase": "PASS"},
+    ],
+)
+def test_ordinary_boot_semantic_journal_corruption_blocks_new_authority(
+    tmp_path: Path,
+    corrupt,
+) -> None:
+    manifest = _ordinary_boot_manifest()
+    journal_path = tmp_path / "ordinary-boot.jsonl"
+    result = run_ordinary_boot(
+        manifest,
+        _promotion_compose(),
+        _compatible_dependencies(manifest),
+        operation_id="boot-valid-before-corruption",
+        journal_path=journal_path,
+    )
+    journal_path.write_text(
+        json.dumps(corrupt(result), sort_keys=True, separators=(",", ":")) + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(OrdinaryBootJournalError, match="journal_corrupt"):
+        run_ordinary_boot(
+            manifest,
+            _promotion_compose(),
+            _compatible_dependencies(manifest),
+            operation_id="boot-after-corruption",
+            journal_path=journal_path,
+        )
+
+
+@pytest.mark.parametrize("damage", ["truncated", "duplicate"])
+def test_ordinary_boot_structural_journal_corruption_blocks_new_authority(
+    tmp_path: Path,
+    damage: str,
+) -> None:
+    manifest = _ordinary_boot_manifest()
+    journal_path = tmp_path / "ordinary-boot.jsonl"
+    run_ordinary_boot(
+        manifest,
+        _promotion_compose(),
+        _compatible_dependencies(manifest),
+        operation_id="boot-valid-structural",
+        journal_path=journal_path,
+    )
+    raw = journal_path.read_text(encoding="utf-8")
+    journal_path.write_text(
+        raw.rstrip("\n") if damage == "truncated" else raw + raw,
+        encoding="utf-8",
+    )
+
+    with pytest.raises(OrdinaryBootJournalError, match="journal_corrupt"):
+        run_ordinary_boot(
+            manifest,
+            _promotion_compose(),
+            _compatible_dependencies(manifest),
+            operation_id="boot-after-structural-corruption",
+            journal_path=journal_path,
+        )
+
+
+def _ordinary_boot_cli_command(
+    manifest_path: Path,
+    compose_path: Path,
+    dependencies_path: Path,
+    journal_path: Path,
+    operation_id: str,
+) -> list[str]:
+    return [
+        sys.executable,
+        "-m",
+        "app.release_channels.ordinary_boot",
+        "doctor",
+        "--manifest",
+        str(manifest_path),
+        "--compose",
+        str(compose_path),
+        "--dependencies",
+        str(dependencies_path),
+        "--operation-id",
+        operation_id,
+        "--journal",
+        str(journal_path),
+    ]
+
+
+def test_ordinary_boot_concurrent_callers_converge_or_conflict_once(tmp_path: Path) -> None:
+    """Process races produce one terminal row for an operation id, never two."""
+    manifest = _ordinary_boot_manifest()
+    compatible = _compatible_dependencies(manifest)
+    incompatible = _compatible_dependencies(manifest)
+    incompatible["schema"] = {"status": "unavailable"}
+    manifest_path = tmp_path / "manifest.json"
+    compose_path = tmp_path / "compose.json"
+    compatible_path = tmp_path / "compatible.json"
+    incompatible_path = tmp_path / "incompatible.json"
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    compose_path.write_text(json.dumps(_promotion_compose()), encoding="utf-8")
+    compatible_path.write_text(json.dumps(compatible), encoding="utf-8")
+    incompatible_path.write_text(json.dumps(incompatible), encoding="utf-8")
+
+    identical_journal = tmp_path / "identical.jsonl"
+    identical_commands = _ordinary_boot_cli_command(
+        manifest_path,
+        compose_path,
+        compatible_path,
+        identical_journal,
+        "boot-concurrent-identical",
+    )
+    identical_processes = [
+        subprocess.Popen(
+            identical_commands,
+            cwd=ROOT,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        for _ in range(2)
+    ]
+    identical_results = [process.communicate(timeout=10) for process in identical_processes]
+    assert [process.returncode for process in identical_processes] == [0, 0], identical_results
+    assert len(_journal_rows(identical_journal)) == 1
+
+    conflicting_journal = tmp_path / "conflicting.jsonl"
+    conflicting_processes = [
+        subprocess.Popen(
+            _ordinary_boot_cli_command(
+                manifest_path,
+                compose_path,
+                dependency_path,
+                conflicting_journal,
+                "boot-concurrent-conflicting",
+            ),
+            cwd=ROOT,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        for dependency_path in (compatible_path, incompatible_path)
+    ]
+    conflicting_results = [process.communicate(timeout=10) for process in conflicting_processes]
+    return_codes = {process.returncode for process in conflicting_processes}
+    assert 2 in return_codes and return_codes & {0, 3}, conflicting_results
+    assert sum("operation_conflict" in stderr for _, stderr in conflicting_results) == 1
+    assert len(_journal_rows(conflicting_journal)) == 1
 
 
 @pytest.mark.xfail(strict=True, reason="STARTUP-04 receipt-validator production call site is not implemented")

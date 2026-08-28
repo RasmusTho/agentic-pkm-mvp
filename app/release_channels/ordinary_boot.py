@@ -29,7 +29,27 @@ from app.release_channels.channel_manifest import (
 
 JOURNAL_VERSION = "ordinary-boot-journal.v1"
 _OPERATION_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}\Z")
+_DIGEST = re.compile(r"sha256:[0-9a-f]{64}\Z")
 _OBSERVATION_FIELDS = {"status", "identity"}
+_JOURNAL_FIELDS = {
+    "journal_version",
+    "operation_id",
+    "channel",
+    "manifest_identity",
+    "terminal_phase",
+    "reason_code",
+    "dependencies",
+    "writers_permitted",
+    "mutation_evidence",
+}
+_DEPENDENCY_FIELDS = {
+    "name",
+    "policy",
+    "classification",
+    "expected_identity",
+    "identity_matches",
+}
+_DEPENDENCY_NAMES = {"artifact", "config", "database", "gateway", "llm", "schema", "vault"}
 
 
 class OrdinaryBootJournalError(RuntimeError):
@@ -252,9 +272,9 @@ def _evaluate(
     operation_id: str,
 ) -> dict[str, object]:
     manifest_identity = _identity(manifest)
-    channel = manifest.get("channel") if isinstance(manifest.get("channel"), str) else "unresolved"
+    channel = "unresolved"
     try:
-        if channel != "prod" or manifest.get("mode") != "promotion":
+        if manifest.get("channel") != "prod" or manifest.get("mode") != "promotion":
             raise ArtifactRenderError(
                 "ordinary_boot_binding",
                 "ordinary boot is restricted to an exact prod promotion-mode manifest",
@@ -266,6 +286,7 @@ def _evaluate(
             mode="promotion",
             intent="ordinary-boot",
         )
+        channel = "prod"
         manifest_identity = str(
             _mapping(rendered.get("artifact_graph"), path="render.artifact_graph")[
                 "manifest_identity"
@@ -305,6 +326,163 @@ def _evaluate(
     )
 
 
+def _reject_duplicate_keys(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    value: dict[str, object] = {}
+    for key, child in pairs:
+        if key in value:
+            raise OrdinaryBootJournalError("journal_duplicate_key")
+        value[key] = child
+    return value
+
+
+def _validate_dependency_entry(
+    value: object,
+    *,
+    path: Path,
+    line_number: int,
+) -> dict[str, object]:
+    if not isinstance(value, dict) or not set(value).issubset(_DEPENDENCY_FIELDS):
+        raise OrdinaryBootJournalError(
+            f"journal_corrupt:{path}:line_{line_number}:dependency_shape"
+        )
+    required = {"name", "policy", "classification"}
+    if not required.issubset(value):
+        raise OrdinaryBootJournalError(
+            f"journal_corrupt:{path}:line_{line_number}:dependency_shape"
+        )
+    name = value["name"]
+    policy = value["policy"]
+    classification = value["classification"]
+    if name not in _DEPENDENCY_NAMES or policy not in {"required", "degraded_ok"}:
+        raise OrdinaryBootJournalError(
+            f"journal_corrupt:{path}:line_{line_number}:dependency_value"
+        )
+    allowed_classifications = (
+        {"required_compatible", "required_unavailable", "required_incompatible"}
+        if policy == "required"
+        else {"degraded_compatible", "degraded_unavailable", "degraded_incompatible"}
+    )
+    if classification not in allowed_classifications:
+        raise OrdinaryBootJournalError(
+            f"journal_corrupt:{path}:line_{line_number}:dependency_classification"
+        )
+    has_expected = "expected_identity" in value
+    has_match = "identity_matches" in value
+    if has_expected != has_match:
+        raise OrdinaryBootJournalError(
+            f"journal_corrupt:{path}:line_{line_number}:dependency_identity_shape"
+        )
+    if has_expected:
+        if not isinstance(value["expected_identity"], str) or not value["expected_identity"]:
+            raise OrdinaryBootJournalError(
+                f"journal_corrupt:{path}:line_{line_number}:dependency_identity_value"
+            )
+        if type(value["identity_matches"]) is not bool:
+            raise OrdinaryBootJournalError(
+                f"journal_corrupt:{path}:line_{line_number}:dependency_identity_value"
+            )
+        compatible = classification in {"required_compatible", "degraded_compatible"}
+        if value["identity_matches"] is not compatible:
+            raise OrdinaryBootJournalError(
+                f"journal_corrupt:{path}:line_{line_number}:dependency_identity_mismatch"
+            )
+    elif name != "llm":
+        raise OrdinaryBootJournalError(
+            f"journal_corrupt:{path}:line_{line_number}:dependency_identity_missing"
+        )
+    return value
+
+
+def _validate_journal_row(row: object, *, path: Path, line_number: int) -> dict[str, object]:
+    if not isinstance(row, dict) or set(row) != _JOURNAL_FIELDS:
+        raise OrdinaryBootJournalError(
+            f"journal_corrupt:{path}:line_{line_number}:invalid_shape"
+        )
+    operation_id = row["operation_id"]
+    phase = row["terminal_phase"]
+    reason = row["reason_code"]
+    if row["journal_version"] != JOURNAL_VERSION:
+        raise OrdinaryBootJournalError(
+            f"journal_corrupt:{path}:line_{line_number}:invalid_version"
+        )
+    if not isinstance(operation_id, str) or _OPERATION_ID.fullmatch(operation_id) is None:
+        raise OrdinaryBootJournalError(
+            f"journal_corrupt:{path}:line_{line_number}:invalid_operation"
+        )
+    if row["channel"] not in {"prod", "unresolved"}:
+        raise OrdinaryBootJournalError(
+            f"journal_corrupt:{path}:line_{line_number}:invalid_channel"
+        )
+    if not isinstance(row["manifest_identity"], str) or _DIGEST.fullmatch(
+        row["manifest_identity"]
+    ) is None:
+        raise OrdinaryBootJournalError(
+            f"journal_corrupt:{path}:line_{line_number}:invalid_manifest_identity"
+        )
+    if phase not in {"PRE_MUTATION_FAILURE", "ORDINARY_BOOT_PASS"}:
+        raise OrdinaryBootJournalError(
+            f"journal_corrupt:{path}:line_{line_number}:invalid_terminal_phase"
+        )
+    if not isinstance(reason, str) or not reason:
+        raise OrdinaryBootJournalError(
+            f"journal_corrupt:{path}:line_{line_number}:invalid_reason"
+        )
+    if type(row["writers_permitted"]) is not bool or row["writers_permitted"] is not (
+        phase == "ORDINARY_BOOT_PASS"
+    ):
+        raise OrdinaryBootJournalError(
+            f"journal_corrupt:{path}:line_{line_number}:writer_permission_mismatch"
+        )
+    if row["mutation_evidence"] is not False:
+        raise OrdinaryBootJournalError(
+            f"journal_corrupt:{path}:line_{line_number}:mutation_evidence_mismatch"
+        )
+    raw_dependencies = row["dependencies"]
+    if not isinstance(raw_dependencies, list):
+        raise OrdinaryBootJournalError(
+            f"journal_corrupt:{path}:line_{line_number}:dependencies_shape"
+        )
+    dependencies = [
+        _validate_dependency_entry(value, path=path, line_number=line_number)
+        for value in raw_dependencies
+    ]
+    names = [str(entry["name"]) for entry in dependencies]
+    if names != sorted(names) or len(names) != len(set(names)):
+        raise OrdinaryBootJournalError(
+            f"journal_corrupt:{path}:line_{line_number}:dependency_order_or_duplicate"
+        )
+    required_classes = {
+        str(entry["classification"])
+        for entry in dependencies
+        if entry["policy"] == "required"
+    }
+    if phase == "ORDINARY_BOOT_PASS":
+        if reason != "compatible" or not dependencies or required_classes != {"required_compatible"}:
+            raise OrdinaryBootJournalError(
+                f"journal_corrupt:{path}:line_{line_number}:pass_invariant"
+            )
+    elif reason.startswith("compatibility_resolution_failed:"):
+        if dependencies or row["channel"] not in {"prod", "unresolved"}:
+            raise OrdinaryBootJournalError(
+                f"journal_corrupt:{path}:line_{line_number}:resolution_failure_invariant"
+            )
+    elif reason == "required_dependency_unavailable":
+        if "required_unavailable" not in required_classes:
+            raise OrdinaryBootJournalError(
+                f"journal_corrupt:{path}:line_{line_number}:required_failure_invariant"
+            )
+    elif reason == "required_dependency_incompatible":
+        if "required_incompatible" not in required_classes:
+            raise OrdinaryBootJournalError(
+                f"journal_corrupt:{path}:line_{line_number}:required_failure_invariant"
+            )
+    else:
+        raise OrdinaryBootJournalError(
+            f"journal_corrupt:{path}:line_{line_number}:failure_reason_invariant"
+        )
+    return row
+
+
 def _decode_journal(data: bytes, *, path: Path) -> list[dict[str, object]]:
     if not data:
         return []
@@ -314,56 +492,79 @@ def _decode_journal(data: bytes, *, path: Path) -> list[dict[str, object]]:
     seen: set[str] = set()
     for line_number, raw_line in enumerate(data.splitlines(), start=1):
         try:
-            row = json.loads(raw_line)
-        except json.JSONDecodeError as exc:
+            row = json.loads(raw_line, object_pairs_hook=_reject_duplicate_keys)
+        except (json.JSONDecodeError, OrdinaryBootJournalError) as exc:
             raise OrdinaryBootJournalError(
                 f"journal_corrupt:{path}:line_{line_number}"
             ) from exc
-        if not isinstance(row, dict) or row.get("journal_version") != JOURNAL_VERSION:
+        if _canonical_bytes(row) != raw_line:
             raise OrdinaryBootJournalError(
-                f"journal_corrupt:{path}:line_{line_number}:invalid_shape"
+                f"journal_corrupt:{path}:line_{line_number}:noncanonical_record"
             )
-        operation_id = row.get("operation_id")
-        if not isinstance(operation_id, str) or operation_id in seen:
+        validated = _validate_journal_row(row, path=path, line_number=line_number)
+        operation_id = str(validated["operation_id"])
+        if operation_id in seen:
             raise OrdinaryBootJournalError(
-                f"journal_corrupt:{path}:line_{line_number}:duplicate_or_invalid_operation"
+                f"journal_corrupt:{path}:line_{line_number}:duplicate_operation"
             )
         seen.add(operation_id)
-        rows.append(row)
+        rows.append(validated)
     return rows
+
+
+def _fsync_parent_directory(path: Path) -> None:
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+    descriptor = os.open(path.parent, flags)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
 
 
 def _append_terminal_once(path: Path, result: Mapping[str, object]) -> dict[str, object]:
     if not path.parent.is_dir():
         raise OrdinaryBootJournalError(f"journal_parent_missing:{path.parent}")
+    validated_result = _validate_journal_row(dict(result), path=path, line_number=0)
     flags = os.O_RDWR | os.O_APPEND | os.O_CREAT
-    descriptor = os.open(path, flags, 0o600)
     try:
-        fcntl.flock(descriptor, fcntl.LOCK_EX)
-        os.lseek(descriptor, 0, os.SEEK_SET)
-        chunks: list[bytes] = []
-        while True:
-            chunk = os.read(descriptor, 65536)
-            if not chunk:
-                break
-            chunks.append(chunk)
-        rows = _decode_journal(b"".join(chunks), path=path)
-        operation_id = result["operation_id"]
-        for row in rows:
-            if row["operation_id"] != operation_id:
-                continue
-            if row != dict(result):
-                raise OrdinaryBootJournalError(
-                    f"operation_conflict:{operation_id}:terminal_result_changed"
-                )
-            return row
+        descriptor = os.open(path, flags, 0o600)
+    except OSError as exc:
+        raise OrdinaryBootJournalError(f"journal_io_failure:{path}") from exc
+    try:
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_EX)
+            os.lseek(descriptor, 0, os.SEEK_SET)
+            chunks: list[bytes] = []
+            while True:
+                chunk = os.read(descriptor, 65536)
+                if not chunk:
+                    break
+                chunks.append(chunk)
+            rows = _decode_journal(b"".join(chunks), path=path)
+            operation_id = validated_result["operation_id"]
+            for row in rows:
+                if row["operation_id"] != operation_id:
+                    continue
+                if row != validated_result:
+                    raise OrdinaryBootJournalError(
+                        f"operation_conflict:{operation_id}:terminal_result_changed"
+                    )
+                os.fsync(descriptor)
+                _fsync_parent_directory(path)
+                return row
 
-        encoded = _canonical_bytes(result) + b"\n"
-        offset = 0
-        while offset < len(encoded):
-            offset += os.write(descriptor, encoded[offset:])
-        os.fsync(descriptor)
-        return dict(result)
+            encoded = _canonical_bytes(validated_result) + b"\n"
+            offset = 0
+            while offset < len(encoded):
+                written = os.write(descriptor, encoded[offset:])
+                if written <= 0:
+                    raise OSError("journal write made no progress")
+                offset += written
+            os.fsync(descriptor)
+            _fsync_parent_directory(path)
+            return dict(validated_result)
+        except OSError as exc:
+            raise OrdinaryBootJournalError(f"journal_io_failure:{path}") from exc
     finally:
         try:
             fcntl.flock(descriptor, fcntl.LOCK_UN)
