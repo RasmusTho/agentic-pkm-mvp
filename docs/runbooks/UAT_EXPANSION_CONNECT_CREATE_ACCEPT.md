@@ -32,8 +32,8 @@ The doctor must exit zero and report exactly `ollama/bge-m3:latest/1024/normaliz
 ```bash
 export RUN_EXPANSION_CONNECT_CREATE_ACCEPT_UAT=1
 export UAT_EXPANSION_RUN_ID="$(date +%Y%m%dT%H%M%S)"
-export UAT_EXPANSION_SOURCE_PATHS='Test/source-a.md,Test/source-b.md'
-export UAT_EXPANSION_CONNECT_QUERY='shared subject from those two notes'
+export UAT_EXPANSION_SOURCE_PATHS='Test/AgenticPKM-UAT/Note_1.md,Test/AgenticPKM-UAT/Note_2.md'
+export UAT_EXPANSION_CONNECT_QUERY='golden vault'
 python -m pytest -q tests/uat/test_expansion_connect_create_accept_test_channel.py \
   -k 'not checked_checkbox'
 ```

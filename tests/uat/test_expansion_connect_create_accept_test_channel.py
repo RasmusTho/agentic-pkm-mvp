@@ -33,6 +33,28 @@ EXPECTED_IDENTITY = {
     "normalize": True,
 }
 
+pytestmark = pytest.mark.uat_integrated_runtime
+
+_TEST_CHANNEL_ENV_KEYS = (
+    "PKM_ENVIRONMENT",
+    "PKM_CHANNEL",
+    "DATABASE_URL",
+    "DB_DSN",
+    "STORE_BACKEND",
+    "INDEX_OUTBOX_PATH",
+    "LLM_FORCE_PROVIDER",
+    "LLM_FORCE_MODEL",
+    "LLM_PROVIDER_ENFORCE",
+    "LLM_PROVIDER",
+    "LLM_CHAT_MODEL",
+    "LLM_EMBED_MODEL",
+)
+# Capture only channel/runtime selectors before the root autouse fixture replaces
+# ordinary tests' DB and LLM settings.  VAULT_ROOT is intentionally absent: the
+# root conftest removes it at collection time, and this UAT derives it solely
+# from VAULT_ROOT_TEST below.
+_TEST_CHANNEL_ENV = {name: os.getenv(name) for name in _TEST_CHANNEL_ENV_KEYS}
+
 
 def _enabled(name: str) -> bool:
     return os.getenv(name, "").strip().lower() in {"1", "true", "yes", "on"}
@@ -54,6 +76,22 @@ def _json(path: Path) -> dict[str, Any]:
 def _write_json(path: Path, value: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def _test_channel_subprocess_env(vault_root: Path) -> dict[str, str]:
+    """Bind subprocesses to the already-proven test vault, never an operator vault."""
+    environment = os.environ.copy()
+    environment["VAULT_ROOT"] = str(vault_root)
+    environment["VAULT_ROOT_TEST"] = str(vault_root)
+    return environment
+
+
+def _restore_test_channel_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    for name, value in _TEST_CHANNEL_ENV.items():
+        if value is None:
+            monkeypatch.delenv(name, raising=False)
+        else:
+            monkeypatch.setenv(name, value)
 
 
 def _outside_ai_blocks(text: str) -> str:
@@ -92,24 +130,32 @@ class UatContext:
         _write_json(self.receipt_path, receipt)
 
 
-@pytest.fixture(scope="module")
-def uat_context() -> UatContext:
+@pytest.fixture
+def uat_context(monkeypatch: pytest.MonkeyPatch) -> UatContext:
     if not _enabled(RUN_ENV):
         pytest.skip(f"opt-in no-mock UAT; set {RUN_ENV}=1 after test-channel bootstrap")
 
-    vault_root = Path(_required_env("VAULT_ROOT")).expanduser().resolve()
+    _restore_test_channel_env(monkeypatch)
     test_root = Path(_required_env("VAULT_ROOT_TEST")).expanduser().resolve()
-    assert vault_root == test_root, "VAULT_ROOT must be exactly the selected test vault"
     assert os.getenv("PKM_ENVIRONMENT") == "test"
     assert os.getenv("PKM_CHANNEL") == "test"
     assert "app_test" in (os.getenv("DATABASE_URL") or os.getenv("DB_DSN") or "")
-    assert vault_root.is_dir() and vault_root.name != "", "test vault must exist"
+    assert test_root.is_dir() and test_root.name != "", "test vault must exist"
+
+    # The root conftest deliberately removes VAULT_ROOT before every test to
+    # protect the operator vault.  Rebind it only here, after that autouse
+    # sanitization, from the independently required test-scoped selector.
+    # The production APIs below still receive vault_root explicitly.
+    monkeypatch.setenv("VAULT_ROOT", str(test_root))
+    vault_root = test_root
+    subprocess_env = _test_channel_subprocess_env(vault_root)
 
     preflight = subprocess.run(
         [sys.executable, "-m", "app.cli", "ops", "channel-preflight", "--channel", "test", "--context", "host"],
         check=False,
         capture_output=True,
         text=True,
+        env=subprocess_env,
     )
     assert preflight.returncode == 0, preflight.stdout + preflight.stderr
 
@@ -150,12 +196,33 @@ def uat_context() -> UatContext:
     )
 
 
+def test_test_channel_subprocess_env_binds_vault_root_to_test_root(tmp_path: Path) -> None:
+    test_root = tmp_path / "vault-test"
+    environment = _test_channel_subprocess_env(test_root)
+
+    assert environment["VAULT_ROOT"] == str(test_root)
+    assert environment["VAULT_ROOT_TEST"] == str(test_root)
+
+
+def test_test_channel_env_restore_survives_root_sanitization(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setitem(_TEST_CHANNEL_ENV, "DATABASE_URL", "postgresql://app:app@127.0.0.1:15434/app_test")
+    monkeypatch.setitem(_TEST_CHANNEL_ENV, "STORE_BACKEND", "postgres")
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.setenv("STORE_BACKEND", "memory")
+
+    _restore_test_channel_env(monkeypatch)
+
+    assert os.environ["DATABASE_URL"].endswith("/app_test")
+    assert os.environ["STORE_BACKEND"] == "postgres"
+
+
 def test_test_channel_identity_and_doctor_are_strict(uat_context: UatContext) -> None:
     doctor = subprocess.run(
         [sys.executable, "-m", "app.cli", "index", "doctor", "--strict", "--json"],
         check=False,
         capture_output=True,
         text=True,
+        env=_test_channel_subprocess_env(uat_context.vault_root),
     )
     assert doctor.returncode == 0, doctor.stdout + doctor.stderr
     report = json.loads(doctor.stdout)
