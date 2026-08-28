@@ -1,9 +1,9 @@
 # Builder Thread Privacy Boundary Redesign
 
-State: Advisory architecture/process audit snapshot (2026-08-28). Non-normative and subordinate to
-`docs/DOCS_INDEX.md`, current BuilderOps owner contracts, implementation evidence, and live GitHub
-state. This audit authorizes no production re-enable, owner-contract change, feature breakdown,
-Issue, migration, or rewrite of retained Builder Thread artifacts.
+State: Historical advisory architecture/process audit snapshot (2026-08-28). Its retirement
+recommendation was promoted to #5128; current truth lives in `docs/DOCS_INDEX.md` and the BuilderOps
+Vault and Operations owner sections, not in this audit. It authorizes no reactivation, replacement,
+artifact inspection, migration, or implementation.
 
 Doc role: Reference (audit snapshot)
 
