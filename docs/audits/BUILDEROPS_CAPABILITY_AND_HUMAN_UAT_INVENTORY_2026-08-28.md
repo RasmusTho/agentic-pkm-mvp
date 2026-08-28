@@ -1,4 +1,4 @@
-State: Advisory capability and acceptance inventory snapshot, 2026-08-28. Repository baseline: `origin/main` at `3d50abaae0ab5c2d3d3642f070b55cf5acbcb7e`.
+State: Advisory capability and acceptance inventory snapshot, 2026-08-28. Repository baseline: `origin/main` at `48e540d0c96cbecc5fb83fb3efc24c01a7062992`.
 Doc role: Reference (point-in-time inventory and reporting plan)
 Authority: Current-state claims remain owned by `docs/STATUS.md`, `docs/ARCHITECTURE.md`, capability specifications, contracts, GitHub Issues, Git, CI, and acceptance receipts. This audit creates no runtime, lifecycle, or owner-acceptance authority.
 Owner: Builder System governance
@@ -113,12 +113,12 @@ mean that the corresponding runtime, composed proof, or human acceptance exists.
 | 5 | Develop a creative fragment without premature closure | Defined; `future`; non-blocking acceptance; minimum scenario exists | Candidate/draft lifecycle + human review | Covered as future scenario; no shipped claim |
 | 6 | Maintain a hobby or RPG world across time | Defined; `future`; non-blocking acceptance; minimum scenario exists | Context/scope separation + domain UAT | Covered as future scenario; no shipped claim |
 | 7 | Understand what the system did and whether to trust it | Defined; `partial`; release gate for baseline actions, otherwise non-blocking; minimum scenario exists | Governed action/receipt + browser/readability proof | Covered at scenario-definition level; composed proof remains incomplete |
-| 7A | Decide whether watcher automation is safe to enable | Defined; `baseline`; release gate; minimum scenario exists | Settings/status/write-guard operator proof | Covered at scenario-definition level; #5145 owns the joined receipt gap |
+| 7A | Decide whether watcher automation is safe to enable | Defined; `baseline`; release gate; minimum scenario exists | Settings/status/write-guard operator proof | Slice verified by #5145 / PR #5148; composed capability and owner acceptance remain unsupported |
 | 8 | Use the system across multiple domains without losing meaning | Defined; `future`; non-blocking acceptance; minimum scenario exists | Context/sphere separation + cross-scope UAT | Covered as future scenario; no shipped claim |
 | 9 | Evolve the system without early lock-in | Defined; `future`; non-blocking acceptance; minimum scenario exists | Capability contract/replacement and migration proof | Covered as future scenario; no shipped claim |
 | 10 | Work across devices while keeping local artifacts primary | Defined; `future`; non-blocking acceptance; minimum scenario exists | Device/client contract + local-first recovery proof | Covered as future scenario; likely cross-repo owner still required |
 | 11 | Preserve contextual integrity with real overlap | Defined; `future`; non-blocking acceptance; minimum scenario exists | Scope/sphere identity and isolation tests | Covered as future scenario; no shipped claim |
-| 12 | Keep central artifacts understandable if the system changes or dies | Defined; `partial`; non-blocking acceptance → nightly; minimum scenario exists | Artifact portability/readability + rebuild/restore proof | Covered at scenario-definition level; #5144 owns the support-free receipt gap |
+| 12 | Keep central artifacts understandable if the system changes or dies | Defined; `partial`; non-blocking acceptance → nightly; minimum scenario exists | Artifact portability/readability + rebuild/restore proof | Slice verified by #5144 / PR #5147; composed capability and owner acceptance remain unsupported |
 
 ### Direct human-agent scenarios
 
@@ -163,6 +163,17 @@ smallest missing composed or human-acceptance proof.
 | E Recompilation | `AGENT-FLOWS` compilation and temporal validity; future | No direct scenario proof; CKM staleness is BuilderOps-only | No matching row-specific Issue | Real source/time drift detection, proposal-not-auto-apply over touched content, fresh recompilation, and restart/rebuild proof |
 | F Contradictions | `AGENT-FLOWS` contradiction triage; future | Read-only contradiction primitive and citation/triage tests | #3543 closed | Two attributed outputs side by side, no silent merge, and explicit reversible human consolidation |
 | G Promotion | `AGENT-FLOWS` plus trust-semantics boundary; future | Generic promotion/activation tests, not direct-agent origin proof | #2980, #4826 adjacent | Explicit human trust-delta promotion preserving citations/origin history; location move alone must not promote authority |
+
+### Exact receipts for the first bounded validation slices
+
+The original read-only mapping identified #5144 and #5145 as unresolved gaps. Both slices have
+since been delivered on the exact heads below. These receipts upgrade only `slice_verified`; they
+do not upgrade `capability_validated`, `ready_to_try`, `owner_tried`, or `owner_accepted`.
+
+| Slice | Exact implementation receipt | Verification receipt | Remaining authority gap |
+| --- | --- | --- | --- |
+| Row 12 support-free survivability | #5144 / PR #5147; implementation head `9e72564fead3430a5ecdd15e4f3a97dd444ac911`; merge `7c2e357b8da73767f512079b3857d0b821927b7c` | Cold-rebuild suite: 11 passed; selector suite: 99 passed; required CI green | No composed survivability/UAT walkthrough or owner observation/acceptance |
+| Row 7A watcher safe enablement | #5145 / PR #5148; implementation head `bffae72f03854cbc9b5b6a08e6421243168dabfc`; merge `c3e4ca1888655f5b818e7280bf4078385dd890df` | Exact-head Unit tests (not pg) and smoke green; required CI green | No owner enablement decision or separate composed capability acceptance |
 
 ### Coverage-to-framework mapping
 
@@ -211,7 +222,7 @@ the primary proof is API/PostgreSQL/concurrency/recovery/cutover evidence.
 | CKM-governed delivery initiation and receipt projection | #4169 under #4163 | Open and blocked | Treat as BuilderOps delivery bridge; require exact request/preview/receipt and no lifecycle mutation. |
 | Independent BuilderOps control plane | #3788 | Open and blocked | Require API/PostgreSQL, migration, concurrency, recovery and cutover receipts; not a browser-only feature. |
 | Temporal-intention authority | #4375 | Open and blocked | Preserve opaque-first and single-writer boundary; do not treat target spec as shipped runtime. |
-| Human-need scenario execution | `docs/plans/HUMAN_NEED_UAT_STRATEGY.md`, scenario matrix, existing UAT tests | Mixed baseline/partial/future | Add or advance scenario-specific UAT only under the owning capability Issue; #5144 and #5145 are the first bounded validation slices; avoid a catch-all epic. |
+| Human-need scenario execution | `docs/plans/HUMAN_NEED_UAT_STRATEGY.md`, scenario matrix, existing UAT tests | Mixed baseline/partial/future | #5144 and #5145 are the first two slice-verified validation receipts; advance composed scenario/UAT only under the owning capability Issue; avoid a catch-all epic. |
 
 ## 8. Reporting template for a capability or parent Issue
 
@@ -253,8 +264,9 @@ information at read time, but GitHub/CI/receipts and the authorized owner path r
   with their own authority and recovery evidence and must not be reported as one delivered
   “capability layer”.
 - #5144 and #5145 are bounded validation Issues created after the audit mapping found no existing
-  owner; they do not authorize a runtime capability claim, owner-doc promotion, `ready_to_try`,
-  `owner_tried`, or `owner_accepted` status.
+  owner. Their exact PR/merge/test receipts now prove two slices only; they do not authorize a
+  runtime capability claim, owner-doc promotion, `ready_to_try`, `owner_tried`, or `owner_accepted`
+  status.
 
 ## Sources
 
