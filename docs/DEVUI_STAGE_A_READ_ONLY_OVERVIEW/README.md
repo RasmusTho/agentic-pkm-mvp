@@ -154,6 +154,18 @@ Production transport prerequisite [#4841](https://github.com/RasmusTho/agentic-p
 is consumed only by the source-authorized connected shell
 [#4836](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4836) and does not itself deliver that shell.
 
+## Delivery evidence
+
+The browser-evidence sequence is serial: the exact-ref #4836 candidate artifact is produced before
+merge; the later #4748 proof runs at final M and produces a separate
+`devui-overview-browser-accessibility.v1` receipt/artifact. Each strict receipt is self-describing
+only for its own run and has no cross-run candidate/final reference. If ARO-08 later becomes
+executable, its `devui-stage-a-read-only-owner-pilot.v1` ledger is the sole binding authority for
+both artifacts. It records each tested SHA and a recomputable `evidence_artifact_sha256` over the
+canonical archived artifact inventory, so materially different reruns at the same SHA remain
+distinct and any missing or mismatched artifact fails closed. This does not claim that #4836, #4748,
+or the owner pilot has run.
+
 ## Governing and supporting sources
 
 - `docs/DEVUI.md :: DEVUI-OVERVIEW-BOUNDARY — server-declared read model`
