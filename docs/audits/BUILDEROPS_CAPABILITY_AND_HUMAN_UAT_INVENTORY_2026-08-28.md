@@ -133,6 +133,36 @@ rows above and must not be counted twice.
 | F | Contradictory agent outputs | Two attributed outputs, side-by-side conflict projection, explicit reversible consolidation decision | Covered at scenario-definition level; contract/tests remain future |
 | G | Human promotion into canonical knowledge | Explicit promotion action, citation preservation, origin trace, governed receipt, owner acceptance observation | Covered at scenario-definition level; governed promotion and owner acceptance remain future |
 
+### Read-only evidence mapping at `a710f325`
+
+The following mapping was independently inspected against the exact baseline above. It is a
+reporting receipt, not a claim that the gaps are resolved; tests were not rerun during this
+mapping pass. “Existing proof” names evidence that already exists, while “remaining gap” names the
+smallest missing composed or human-acceptance proof.
+
+| Row | Best existing owner / implementation posture | Existing proof | Existing Issue / parent | Remaining validation gap |
+| --- | --- | --- | --- | --- |
+| 1 Capture | `SYSTEM_ENTRY_POINT`, `HEIMDAL_CAPTURE_CLIENT`; partial | Capture API/writer and Companion capture-modal tests | #3026, #3191; bifrost#21 | Real incomplete capture → later retrieval/clarification in an isolated vault, with standing/provenance and unrelated-write negative proof |
+| 2 Orientation | `FINDING_AND_REORIENTING`, Context Bundles; partial | Orientation/context-bundle/API/UI tests; opt-in human UAT is non-strict `xfail` | #392 and #1559 closed | Real ingest/index plus visible active/waiting/background distinctions and explanatory restart usefulness |
+| 2A Archive | Governed Archival Flow, Knowledge Acquisition; partial | Retained-source adapter and in-memory archive UAT | #5062 and #5069; #5066 closed | Real external PDF/email/file ingest → retrieval/preview/citation, with no warm-note materialization |
+| 3 Source understanding | Knowledge Acquisition and source-understanding seams; partial | Source-understanding, acquisition, and compilation unit/contract tests | #2980, #4826 | User path from source → uncertain interpretation → revisit → explicit durable promotion with bidirectional provenance |
+| 4 Commitments | Commitment-as-First-Class / Commitment Surfacing; future scenario | Read-side commitment/domain/persistence/receipt/API/UI tests | #646, #688, #1960 closed | Composed review, renegotiation, deferral, and waiting-state UAT that restores trust |
+| 5 Creative | Creative Process Contract; future | No row-specific executable proof | No matching executable Issue found | Fragment/candidate/unfinished relation with provisional standing, revisit/recombination, reversible revision, and no canonical promotion |
+| 6 RPG world | Creative Process and contextualization contracts; future | Anti-confusion evaluation only | #2551 adjacent/closed | Two-session UAT preserving canonical/provisional/exploratory lore, reusable preparation, attribution, and return orientation |
+| 7 Trust action | Interaction Surfaces & Authority / trust semantics; partial | WriteGuard/receipt tests, quality-wave harness, Cockpit browser journeys | #4741, #4748, #4749; DDO #4163; control plane #3788; TIA #4375 | One real full-stack human-visible action/receipt/correction observation; BuilderOps exact-SHA Overview journey and owner pilot remain separate |
+| 7A Watcher enablement | Safe-enablement flow; baseline | Settings/status/watcher/allowlist tests and quality-wave harness | #232 closed | One joined emit-only + armed receipt proving settings/status agreement, allowlist provenance, write guard, and skip reasons |
+| 8 Multiple domains | User Needs and Scope/Sphere/Situated Identity; future | Context-dimension threading and anti-contamination tests | #645 and #2551 closed | Cross-domain UAT across work/private/learning/creative/RPG packs with explicit shared participation and no unrequested exposure |
+| 9 Evolution | Capability Contract Model; future product scenario | CKM query/assessment/projection tests | #3138 and #3775 closed | Replacement/rebuild UAT proving artifacts, meaning, provenance, and degraded transitional use survive |
+| 10 Devices | Instance, Device & Replica Contract; future | Sync tests and bounded capture/live-meeting channel receipts | #3026, #3191; bifrost#21 | General primary/satellite continuity, offline divergence, eventual reconciliation, remote-authority negative proof, and physical-device UAT |
+| 11 Context integrity | Scope/Sphere/Situated Identity and CrossScopeFlow; future | Scope/context tests and anti-contamination eval; invariant boundary is expected-failure | #2539, #645, #2551 closed | Overlap UAT proving default separation, shared participation, explicit reusable allowance, reason/provenance, and reversibility |
+| 12 Survivability | Artifact Contract; partial | Cold-rebuild and quality-wave rebuild tests | #2345 closed | Support-free copied-root inspection proving human intelligibility after runtime/index loss |
+| A-B Direct roots | `AGENT-FLOWS` direct filesystem mode; future | No row-specific boundary/UAT proof | No matching row-specific Issue | Declared project/draft roots, Markdown-only edits, standing, attribution, aging/promotion boundaries, and zero out-of-root writes |
+| C Direct synthesis | `AGENT-FLOWS` compilation obligations; future | Mediated compilation tests only | #2980, #4826 adjacent | Declared synthesis-root run with bidirectional citations, navigability, challengeable standing, and source preservation |
+| D Observation | `AGENT-FLOWS` observation/classification boundary; future | Generic watcher/ingest only | No matching row-specific Issue | External write → ingest/index → zone/provenance receipt, without mediation claim or silent trust upgrade |
+| E Recompilation | `AGENT-FLOWS` compilation and temporal validity; future | No direct scenario proof; CKM staleness is BuilderOps-only | No matching row-specific Issue | Real source/time drift detection, proposal-not-auto-apply over touched content, fresh recompilation, and restart/rebuild proof |
+| F Contradictions | `AGENT-FLOWS` contradiction triage; future | Read-only contradiction primitive and citation/triage tests | #3543 closed | Two attributed outputs side by side, no silent merge, and explicit reversible human consolidation |
+| G Promotion | `AGENT-FLOWS` plus trust-semantics boundary; future | Generic promotion/activation tests, not direct-agent origin proof | #2980, #4826 adjacent | Explicit human trust-delta promotion preserving citations/origin history; location move alone must not promote authority |
+
 ### Coverage-to-framework mapping
 
 The gaps above should be filled by existing frames, in this order:
