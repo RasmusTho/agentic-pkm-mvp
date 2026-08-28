@@ -1,4 +1,4 @@
-State: Advisory capability and acceptance inventory snapshot, 2026-08-28. Repository baseline: `origin/main` at `a252490dc57ad3e45bb6687d6d9b928d7b0b56aa`.
+State: Advisory capability and acceptance inventory snapshot, 2026-08-28. Repository baseline: `origin/main` at `a710f3253356171cb07b55b18556daa0599e3dcc`.
 Doc role: Reference (point-in-time inventory and reporting plan)
 Authority: Current-state claims remain owned by `docs/STATUS.md`, `docs/ARCHITECTURE.md`, capability specifications, contracts, GitHub Issues, Git, CI, and acceptance receipts. This audit creates no runtime, lifecycle, or owner-acceptance authority.
 Owner: Builder System governance
@@ -95,41 +95,43 @@ row has all of the following, or an explicit `unsupported`/`N/A` reason:
 6. a GitHub/spec owner for executable gaps; and
 7. a separate owner-tried/owner-accepted receipt path.
 
-The audit below records coverage of the scenario definition itself. A missing executable scenario
-is a coverage gap even when the capability has a detailed prose contract or a related unit test.
+The audit below records coverage of the scenario definition itself separately from implementation
+and acceptance coverage. The scenario-definition pass is complete after PR #5141: every row now
+has a posture, test posture, observable signals, and a minimum executable scenario. This does not
+mean that the corresponding runtime, composed proof, or human acceptance exists.
 
 ### Human-facing scenarios
 
 | Scenario matrix row | Scenario/prose | Executable scenario + test posture | Primary proof frame | Coverage disposition |
 | --- | --- | --- | --- | --- |
-| 1 | Capture a fleeting thought | No explicit validation posture or minimum executable scenario in the matrix | Capture contract + isolated vault/system UAT | Gap: add bounded scenario and owner route |
+| 1 | Capture a fleeting thought | Defined; `partial`; non-blocking acceptance → nightly; minimum scenario exists | Capture contract + isolated vault/system UAT | Covered at scenario-definition level; broader low-friction outcome remains partial |
 | 2 | Return after interruption and recover orientation | Defined; `partial`; non-blocking acceptance → nightly; minimum scenario exists | Retrieval/context bundle + human-need UAT | Covered at scenario-definition level; implementation remains partial |
 | 2A | Use archive material without forcing it into notes | Defined; `partial`; non-blocking acceptance → nightly; minimum scenario exists | Archive/acquisition integration + provenance UAT | Covered at scenario-definition level; broader connector coverage remains open |
-| 3 | Move from source material to durable understanding | No explicit validation posture or minimum executable scenario in the matrix | Source lineage + promotion/review tests | Gap: add scenario and acceptance path |
+| 3 | Move from source material to durable understanding | Defined; `partial`; non-blocking acceptance → nightly; minimum scenario exists | Source lineage + promotion/review tests | Covered at scenario-definition level; composed understanding remains partial |
 | 4 | Keep commitments trustworthy over time | Defined; `future`; non-blocking acceptance; minimum scenario exists | Commitment/state transition + human review | Covered as future scenario; no shipped claim |
-| 5 | Develop a creative fragment without premature closure | No explicit validation posture or minimum executable scenario in the matrix | Candidate/draft lifecycle + human review | Gap: add scenario and acceptance path |
-| 6 | Maintain a hobby or RPG world across time | No explicit validation posture or minimum executable scenario in the matrix | Context/scope separation + domain UAT | Gap: add scenario and acceptance path |
+| 5 | Develop a creative fragment without premature closure | Defined; `future`; non-blocking acceptance; minimum scenario exists | Candidate/draft lifecycle + human review | Covered as future scenario; no shipped claim |
+| 6 | Maintain a hobby or RPG world across time | Defined; `future`; non-blocking acceptance; minimum scenario exists | Context/scope separation + domain UAT | Covered as future scenario; no shipped claim |
 | 7 | Understand what the system did and whether to trust it | Defined; `partial`; release gate for baseline actions, otherwise non-blocking; minimum scenario exists | Governed action/receipt + browser/readability proof | Covered at scenario-definition level; composed proof remains incomplete |
 | 7A | Decide whether watcher automation is safe to enable | Defined; `baseline`; release gate; minimum scenario exists | Settings/status/write-guard operator proof | Covered and release-gated for the bounded baseline |
-| 8 | Use the system across multiple domains without losing meaning | No explicit validation posture or minimum executable scenario in the matrix | Context/sphere separation + cross-scope UAT | Gap: add scenario and acceptance path |
-| 9 | Evolve the system without early lock-in | No explicit validation posture or minimum executable scenario in the matrix | Capability contract/replacement and migration proof | Gap: add scenario and acceptance path |
-| 10 | Work across devices while keeping local artifacts primary | No explicit validation posture or minimum executable scenario in the matrix | Device/client contract + local-first recovery proof | Gap: add scenario and owner route; likely cross-repo |
-| 11 | Preserve contextual integrity with real overlap | No explicit validation posture or minimum executable scenario in the matrix | Scope/sphere identity and isolation tests | Gap: add scenario and acceptance path |
-| 12 | Keep central artifacts understandable if the system changes or dies | No explicit validation posture or minimum executable scenario in the matrix | Artifact portability/readability + rebuild/restore proof | Gap: add scenario and acceptance path |
+| 8 | Use the system across multiple domains without losing meaning | Defined; `future`; non-blocking acceptance; minimum scenario exists | Context/sphere separation + cross-scope UAT | Covered as future scenario; no shipped claim |
+| 9 | Evolve the system without early lock-in | Defined; `future`; non-blocking acceptance; minimum scenario exists | Capability contract/replacement and migration proof | Covered as future scenario; no shipped claim |
+| 10 | Work across devices while keeping local artifacts primary | Defined; `future`; non-blocking acceptance; minimum scenario exists | Device/client contract + local-first recovery proof | Covered as future scenario; likely cross-repo owner still required |
+| 11 | Preserve contextual integrity with real overlap | Defined; `future`; non-blocking acceptance; minimum scenario exists | Scope/sphere identity and isolation tests | Covered as future scenario; no shipped claim |
+| 12 | Keep central artifacts understandable if the system changes or dies | Defined; `partial`; non-blocking acceptance → nightly; minimum scenario exists | Artifact portability/readability + rebuild/restore proof | Covered at scenario-definition level; broader survivability remains partial |
 
 ### Direct human-agent scenarios
 
-Rows A–G have a defined need, acceptance signal, and failure posture, but the matrix explicitly
-marks them `future` and does not give each row a test posture or minimum executable scenario.
-They therefore require a separate direct-filesystem validation track; mediated-agent scenarios reuse
-the human rows above and must not be counted twice.
+Rows A–G have a defined need, acceptance signal, failure posture, test posture, and minimum
+executable scenario after PR #5141. The matrix explicitly marks them `future`, so they still
+require a separate direct-filesystem validation track; mediated-agent scenarios reuse the human
+rows above and must not be counted twice.
 
 | Rows | Capability surface | Minimum proof that must be added before implementation can be claimed | Coverage disposition |
 | --- | --- | --- | --- |
-| A–C | Declared project/draft/synthesis roots | Disposable roots, plain-Markdown output, provenance/standing checks, no out-of-root writes, and human review/promotion observation | Gap: scenario-specific contract and tests absent from the matrix |
-| D–E | Observation/classification and stale synthesis | External-agent file-change fixture, classification projection, staleness signal, proposal-not-apply assertion, restart/rebuild check | Gap: scenario-specific contract and tests absent from the matrix |
-| F | Contradictory agent outputs | Two attributed outputs, side-by-side conflict projection, explicit reversible consolidation decision | Gap: scenario-specific contract and tests absent from the matrix |
-| G | Human promotion into canonical knowledge | Explicit promotion action, citation preservation, origin trace, governed receipt, owner acceptance observation | Gap: scenario-specific contract and tests absent from the matrix |
+| A–C | Declared project/draft/synthesis roots | Disposable roots, plain-Markdown output, provenance/standing checks, no out-of-root writes, and human review/promotion observation | Covered at scenario-definition level; contract/tests remain future |
+| D–E | Observation/classification and stale synthesis | External-agent file-change fixture, classification projection, staleness signal, proposal-not-apply assertion, restart/rebuild check | Covered at scenario-definition level; contract/tests remain future |
+| F | Contradictory agent outputs | Two attributed outputs, side-by-side conflict projection, explicit reversible consolidation decision | Covered at scenario-definition level; contract/tests remain future |
+| G | Human promotion into canonical knowledge | Explicit promotion action, citation preservation, origin trace, governed receipt, owner acceptance observation | Covered at scenario-definition level; governed promotion and owner acceptance remain future |
 
 ### Coverage-to-framework mapping
 
@@ -146,11 +148,11 @@ The gaps above should be filled by existing frames, in this order:
 | Human UAT and acceptance | `HUMAN_NEED_UAT_STRATEGY.md`, parent Issue evidence, owner receipt | Cannot be inferred from CI, merge, deployment, or screenshot |
 | Delivery truth | Issue → PR → exact SHA → CI/review → merge → receipt workflow | Separate from product acceptance |
 
-The first implementation action after this audit is therefore not to create a new ledger. It is to
-materialize the missing scenario-level validation contracts in the owning capability specs, then
-route only executable gaps through `docs-to-issue` or `feature-breakdown`. Existing Issues remain
-the owners where they already cover the gap; a new Issue is justified only after the live duplicate
-check proves that no owner exists.
+The scenario-level validation contracts are now materialized in the owning plan surface by PR
+#5141. The next action is to reconcile each row against its capability specification, current
+implementation, executable proof, and human-acceptance owner. Route only executable gaps through
+`docs-to-issue` or `feature-breakdown`; existing Issues remain the owners where they already cover
+the gap, and a new Issue is justified only after a live duplicate check proves that no owner exists.
 
 ## 6. Test strategy by evidence class
 
@@ -214,6 +216,8 @@ information at read time, but GitHub/CI/receipts and the authorized owner path r
   concrete dependency gap, not permission to create a duplicate Issue.
 - The two current human-need UAT `xfail` cases should remain non-blocking until their capabilities
   are claimed in current-state owner docs.
+- Scenario-definition coverage is now complete for all fourteen human-facing rows and direct-agent
+  rows A–G; implementation, composed validation, and owner-trial coverage are still incomplete.
 - BCP/TIA, DDO and Episode work remain distinct high-risk/target-state tracks. They must be tested
   with their own authority and recovery evidence and must not be reported as one delivered
   “capability layer”.
