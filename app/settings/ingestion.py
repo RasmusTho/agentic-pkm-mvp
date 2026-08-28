@@ -20,8 +20,10 @@ Scope boundary: binding settings-source resolution to the *selected* vault path
 
 from __future__ import annotations
 
+import hashlib
+import json
 import threading
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -29,6 +31,7 @@ from typing import Any
 from app.config.environment import active_environment
 from app.config.paths import VaultRootMisconfiguredError, resolve_optional_vault_root
 from app.settings import compiler
+from app.settings import runtime
 from app.settings.locations import (
     CANONICAL_SETTINGS_DIR_NAME,
     canonical_settings_root,
@@ -59,9 +62,21 @@ class SettingsIngestionState:
     source: str  # "vault" | "defaults"
     loaded_at: str | None = None
     error: str | None = None
+    # This is compiled-generation metadata, not a new user setting.  It keeps
+    # explain output bound to the same selected source that produced the active
+    # (or retained last-valid) bundle.
+    tts_origin: str = "registry default"
 
     def to_payload(self) -> dict[str, Any]:
-        return asdict(self)
+        # The reload signal deliberately carries only cross-process invalidation
+        # state.  Source provenance stays process-local with the generation it
+        # describes, so a fresh process cannot claim another process's bundle.
+        return {
+            "state": self.state,
+            "source": self.source,
+            "loaded_at": self.loaded_at,
+            "error": self.error,
+        }
 
 
 # Boot default: nothing ingested yet. Truthful "no_vault" on defaults until the
@@ -93,6 +108,56 @@ def _selected_settings_source_dir() -> Path | None:
     return canonical_settings_root(vault_root)
 
 
+def _compiled_generation_tts_origin() -> str | None:
+    """Recover TTS provenance for a fresh process reading a compiled bundle.
+
+    ``settings explain`` may run without this process having performed ingestion.
+    The runtime projection proves that a compiled generation is available; the
+    selected source map identifies whether that generation included ``tts.md``.
+    This keeps provenance tied to the selected settings spine rather than to a
+    repository-relative path probe.
+    """
+    source_dir = _selected_settings_source_dir()
+    manifest_path = runtime.RUNTIME / "sources.json"
+    if (
+        source_dir is None
+        or not (runtime.RUNTIME / "tts.yaml").is_file()
+        or not manifest_path.is_file()
+    ):
+        return None
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        expected = manifest["sources"]
+        if manifest.get("version") != 1 or not isinstance(expected, dict):
+            return None
+        sources = resolve_compiled_sources(source_dir.parent)
+        tts_source = sources.get(Path("tts.md"))
+        # The published generation is the authority for the bundle currently
+        # being served.  A watcher may have replaced the source with malformed
+        # content after that generation was published; comparing against the
+        # now-invalid bytes would erase the retained generation's provenance.
+        # Source presence still distinguishes a removed vault source (defaults)
+        # from a retained vault generation whose replacement cannot compile.
+        actual_tts = (
+            hashlib.sha256(tts_source.read_bytes()).hexdigest()
+            if tts_source is not None
+            else None
+        )
+    except (OSError, TypeError, ValueError, KeyError):
+        return None
+    if expected.get("tts.md") is None or actual_tts is None:
+        return None
+    # A differing hash means the source changed after publication.  The
+    # selected compiled generation remains vault-authored until a successful
+    # replacement is published, so retain the vault provenance.
+    return "vault-shared"
+
+
+def get_compiled_generation_tts_origin() -> str | None:
+    """Return provenance only when the published generation matches its sources."""
+    return _compiled_generation_tts_origin()
+
+
 def get_settings_ingestion_state() -> SettingsIngestionState:
     # A watcher reload runs in a different container.  Its signal carries
     # error evidence, but not this process's in-memory bundle history: a fresh
@@ -107,6 +172,7 @@ def get_settings_ingestion_state() -> SettingsIngestionState:
                 source="vault",
                 loaded_at=prior.loaded_at,
                 error=signal.error,
+                tts_origin=prior.tts_origin,
             )
         )
     with _STATE_LOCK:
@@ -191,9 +257,16 @@ def ingest_settings(
         # one) so ingestion never depends on the global subscription still being
         # registered to actually take effect.
         if selected_root is not None:
+            compiled_sources = resolve_compiled_sources(selected_root)
             compiler.compile_all(auto_heal=False, vault_root=selected_root)
+            tts_origin = (
+                "vault-shared"
+                if Path("tts.md") in compiled_sources
+                else "registry default"
+            )
         else:
             compiler.compile_all(auto_heal=False, vault_dir=sources_dir)
+            tts_origin = "vault-shared" if (sources_dir / "tts.md").exists() else "registry default"
         reload_settings_bundle()
     except Exception as exc:
         if had_valid:
@@ -202,6 +275,7 @@ def ingest_settings(
                 source="vault",
                 loaded_at=prior.loaded_at,
                 error=str(exc),
+                tts_origin=prior.tts_origin,
             )
         else:
             # No last-valid bundle to fall back to: boot on defaults, but say so
@@ -217,7 +291,12 @@ def ingest_settings(
             publish_reload_signal(**degraded.to_payload())
         return degraded
 
-    result = SettingsIngestionState(state=STATE_OK, source="vault", loaded_at=_now_iso())
+    result = SettingsIngestionState(
+        state=STATE_OK,
+        source="vault",
+        loaded_at=_now_iso(),
+        tts_origin=tts_origin,
+    )
     _set_state(result)
     if publish_signal:
         publish_reload_signal(**result.to_payload())
@@ -232,5 +311,6 @@ __all__ = [
     "STATE_NO_VAULT",
     "ingest_settings",
     "get_settings_ingestion_state",
+    "get_compiled_generation_tts_origin",
     "reset_settings_ingestion_state",
 ]

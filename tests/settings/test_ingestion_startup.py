@@ -23,6 +23,7 @@ from app.settings.ingestion import (
     ingest_settings,
     reset_settings_ingestion_state,
 )
+from app.settings.reload_signal import publish_reload_signal
 from app.watcher.settings_delta import handle_settings_source_delta
 from app.watcher.state import WatcherState
 import app.watcher.registry as registry
@@ -166,6 +167,52 @@ def test_invalid_settings_degrade_loud(sandbox_sources: Path) -> None:
     assert state.error
     # Last-valid bundle is preserved — NOT reset to the code default.
     assert runtime.get_settings_bundle().global_.log_level == "DEBUG"
+
+
+def test_tts_provenance_follows_compatibility_source_and_retained_last_valid(
+    sandbox_sources: Path,
+) -> None:
+    """The selected legacy-compatible source, not a repo path, owns TTS explain."""
+    source = sandbox_sources / "tts.md"
+    source.write_text(
+        "# TTS\n\n```yaml settings\nvoices:\n  sv: sv_SE-nst-medium\n```\n",
+        encoding="utf-8",
+    )
+
+    assert ingest_settings(reason="compat_tts_source").tts_origin == "vault-shared"
+
+    source.write_text(
+        "# TTS\n\n```yaml settings\nfallback_policy: unsupported\n```\n",
+        encoding="utf-8",
+    )
+    state = ingest_settings(reason="invalid_tts_source")
+
+    assert state.state == STATE_DEGRADED
+    assert state.tts_origin == "vault-shared"
+
+
+def test_tts_provenance_survives_a_cross_process_degraded_signal(
+    sandbox_sources: Path,
+) -> None:
+    source = sandbox_sources / "tts.md"
+    source.write_text(
+        "# TTS\n\n```yaml settings\nvoices:\n  sv: sv_SE-nst-medium\n```\n",
+        encoding="utf-8",
+    )
+    loaded = ingest_settings(reason="valid_tts_generation")
+    assert loaded.tts_origin == "vault-shared"
+
+    publish_reload_signal(
+        state=STATE_DEGRADED,
+        source="vault",
+        loaded_at=loaded.loaded_at,
+        error="invalid replacement generation",
+    )
+
+    state = get_settings_ingestion_state()
+
+    assert state.state == STATE_DEGRADED
+    assert state.tts_origin == "vault-shared"
 
 
 def test_late_specialized_validation_keeps_prior_projection_for_fresh_process(
