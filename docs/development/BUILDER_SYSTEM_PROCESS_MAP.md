@@ -5,7 +5,7 @@ Owner: Builder System governance
 Temporal class: operational
 Review cadence: event-driven
 Source of truth: observed repo files and read-only GitHub command output cited inline
-Last reviewed: 2026-08-15
+Last reviewed: 2026-08-29
 
 # Builder System Process Map
 
@@ -550,6 +550,30 @@ The supporting implementation inventory spans these non-hierarchical concerns:
    contaminating Product/Runtime memory [docs/architecture/SBS_OPERATING_MODEL.md:194-261],
    [docs/development/DELIVERY_FEEDBACK_LOOP.md:1-220].
 9. Exception layer: `agent:needs-human`, blocker receipts, release operator acknowledgements, and Human Exception packets stop autonomous continuation when authority is missing; CI/review/merge gates remain non-waivable [`.codex/skills/_shared/LABEL_TAXONOMY.md`:18-27], [docs/architecture/SBS_OPERATING_MODEL.md §12].
+
+### devUI projection of the nine process layers
+
+devUI reduces reconstruction cost by projecting these layers through Overview, one stable-subject
+Focus, its contextual Command/Receipt region, and the separate Builder System Control sibling lens.
+The projection does not copy process state or authority into devUI; every fact retains its source
+owner, freshness, limitation, and next legal workflow step.
+
+| Process layer | Overview / Focus representation | Command/Receipt representation | Builder System Control representation | Existing authority and next legal step |
+| --- | --- | --- | --- | --- |
+| **Intent** | Why-now orientation plus exact need/outcome/constraints for the stable subject; absent and superseded intent stays explicit. | Current source-bound disposition or preview; source change invalidates the preview and affected proof. | Coverage of source-owned intent and missing/superseded links. | Owner docs, ADRs, decisions, and Issue context; discovery/docs/Issue route. |
+| **Docs/spec authority** | Governing source, role, owner, lifecycle, freshness, and subordinate references. | Existing docs/design promotion and PR route only. | Governance-document map and authority gaps. | Repo owner docs/ADRs; docs governance/authoring or a source-anchored Issue. |
+| **Contract/backlog** | Bounded Issue scope, dependencies, readiness, exclusions, and `Verify:` ledger. | Existing claim/delivery workflow and receipt only. | Contract coverage and malformed/missing contracts, never a parallel backlog. | GitHub Issue plus contract validator; readiness repair, claim, or deferral. |
+| **Routing/claim** | Owner-language continuation, lease, collision, or system block; technical detail stays deeper. | Only lifecycle transitions admitted by the owning workflow. | Versioned adapters, bounded capabilities, route coverage, and deviations. | Dispatcher lease plus GitHub labels/receipts; `issue-to-code` or the named route. |
+| **Execution** | Explicitly correlated work/run observations subordinate to the selected subject. | Authenticated legal control and existing effect/receipt contract. | Capability and observed-route orientation; sessions remain provenance. | Git/worktree, DDO, BuilderOps, and workflow receipts; existing reducer/workflow step. |
+| **Verification/evidence** | Exact AC/`Verify:` proof, SHA, CI/review, freshness, refusals, and limitations. | Terminal proof or repair/re-review/merge outcome, never inferred completion. | Assurance coverage and source-correlated deviations without invented severity. | Tests, CI, review, Git/GitHub, receipts; repair, re-review, merge, or block. |
+| **Closure/spec feedback** | Separate merged, delivered, available, **Ready to try**, tried, accepted, owner-doc, and parent-validation facts. | Closure/writeback receipt returned to the same subject. | Delivery-route closure and transition-debt coverage. | GitHub/dispatcher/parent/post-merge owners; close or return feedback to its source. |
+| **Learning/improvement** | Source-linked divergence or improvement affecting the subject, not a generic score. | Existing LearningSignal, retrospective, promotion, Issue, or discard route. | Learning/TCD coverage and undispositioned signals. | BuilderOps learning and governed repo writeback; capture and disposition. |
+| **Human Exception** | **Needs you** only with a named authority category; technical uncertainty stays a system block. | One exact decision brief/choice and the owning workflow's receipt. | Exception coverage and unresolved authority gaps, not an owner inbox. | Owner-decision or operator-gate contract; answer, remain safely blocked, or resume. |
+
+Cross-root links are typed navigation only. Focus keeps one Issue/capability identity through its
+read-only evidence and contextual receipt; Builder System Control replaces it with the explicit
+`builder_system` identity. Returning restores the prior subject without importing a control-lens
+classification, correlation, command, or source state.
 
 ### Authority-crossing rule for research and design
 
@@ -1414,6 +1438,7 @@ Where to store/post:
 | hook layer | Local safety/token reduction | `.claude` search | no hooks | branch/root/prod mistakes | SessionStart/PreToolUse hooks that call existing scripts |
 | incomplete required-check coverage on `main` | Platform guardrails do not yet enforce every Builder System gate | `gh api main protection`, governance setup, verification skill | `Unit tests (not pg)` is protected; other applicable gates remain skill-enforced | unsafe automation if skill gates are bypassed | reconcile required checks with the proportional delivery contract before widening merge automation |
 | auto-merge policy | Closure automation | repo settings | disabled | unclear authority | document eligibility after branch protection |
+| unified Builder owner journey and governed visual evidence | Reduce reconstruction across all nine process layers without merging authority | `docs/DEVUI.md`, BSC/FCP/Stage-A specs, live #4693/#4695/#4697/#4741/#4746/#4980 | Delivered nonvisual providers/composers plus separate diagnostic surfaces and normalized interaction architecture | Subsystem switching, unstable context, misleading command/read separation, or fabricated visual acceptance | Keep existing Issue ownership separate; consume closed #4980 as the process-health subtrack; run the live Yggdrasil gate for the `mixed` #4982 scope, then implement only through later bounded Issues |
 
 ## 16. Mermaid Diagrams Required
 
