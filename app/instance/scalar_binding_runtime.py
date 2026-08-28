@@ -18,6 +18,7 @@ from app.instance.filesystem_identity import (
 )
 from app.instance.ownership_ledger import OwnershipLedger
 from app.instance.vault_registry import (
+    REGISTRY_AUTHORITY_DORMANT,
     REGISTRY_AUTHORITY_ACTIVE,
     RegistryError,
     RegistrySnapshot,
@@ -168,6 +169,14 @@ def resolve_scalar_binding_runtime(
 
     registry = VaultRegistryStore(Path(registry_raw).expanduser().resolve(strict=True))
     snapshot = registry.load()
+    if snapshot.authority == REGISTRY_AUTHORITY_DORMANT:
+        # MVR-01B deliberately keeps the registry non-authoritative.  The
+        # legacy scalar app-local store remains the runtime source of truth
+        # until the explicit MVR-01C cutover installs the rollback floor and
+        # activates binding-keyed producers.  Returning the compatibility
+        # posture here is distinct from an invalid active registry, which must
+        # still fail closed below.
+        return None
     if snapshot.authority != REGISTRY_AUTHORITY_ACTIVE:
         raise RegistryError("binding runtime requires active registry authority")
     root = _configured_root(vault_root)
