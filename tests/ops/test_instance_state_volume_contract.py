@@ -5012,6 +5012,36 @@ def test_staged_backup_preserves_adopted_active_lease_across_mount_namespace(
     assert dev_registration.vault_binding_id in prod.ledger.load().leases
 
 
+def test_staged_backup_binds_materialized_owner_after_root_leaves_scratch_view(
+    tmp_path,
+) -> None:
+    """A proof-bound owner path may be absent from verifier scratch state."""
+
+    layout = InstanceStateLayout.for_channel(tmp_path / "prod-state", "prod")
+    runtime = InstanceRegistryRuntime.for_paths(layout, tmp_path / "host-global")
+    vault_root = tmp_path / "vault"
+    vault_root.mkdir()
+    registration = runtime.bootstrap_env_binding(
+        vault_root=vault_root,
+        watcher_vault_path=vault_root,
+    )
+    payloads = runtime.ledger.capture_backup_artifacts(
+        capture_registry_artifacts=runtime.registry.capture_backup_artifacts,
+    )
+    shutil.rmtree(vault_root)
+
+    staged_ledger, owners = InstanceStateBackup(
+        layout, runtime.ledger
+    )._verify_staged_backup(
+        payloads=payloads,
+        owner_payload={"owners": [{"channel_id": "prod", "root": str(vault_root)}]},
+        require_materialized_owner_roots=False,
+    )
+
+    assert staged_ledger.leases[registration.vault_binding_id].state == "active"
+    assert owners[0].vault_binding_id == registration.vault_binding_id
+
+
 def test_staged_backup_rejects_ambiguous_adopted_lease_identity(
     tmp_path, monkeypatch
 ) -> None:

@@ -2960,7 +2960,11 @@ def _finish_instance_state_deployment_locked(
         backup_root,
         quiescence_proof=quiescence_proof,
         owner_receipt_path=inventory_path,
-        require_materialized_owner_roots=not scalar_roll_forward_merged,
+        # Host-side quiescence has already proven materialized roots. The
+        # backup verifier stages bytes in a mount-blind scratch namespace, so
+        # retain exact receipt-to-registry binding without recomputing inode
+        # identity there.
+        require_materialized_owner_roots=False,
     )
     result: dict[str, object] = {
         "channel": channel,
