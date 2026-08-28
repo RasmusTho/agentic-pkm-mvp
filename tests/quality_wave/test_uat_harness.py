@@ -102,6 +102,9 @@ def test_joined_watcher_safe_enablement_receipt(
             "  auto_exec_default: false\n"
             "  allowed_actions:\n"
             "    - promote.evergreen\n"
+            "paths:\n"
+            f"  watcher_tick_log: {tmp_path / mode / 'watcher_tick.jsonl'}\n"
+            f"  watcher_run_log: {tmp_path / mode / 'watcher_run.jsonl'}\n"
             "---\n",
             encoding="utf-8",
         )
