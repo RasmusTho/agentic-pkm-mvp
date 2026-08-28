@@ -1,5 +1,6 @@
-State: Active capability specification. P1's manifest contract and P2's immutable artifact renderer
-are implemented in the repository; P3–P6 remain unimplemented. This does not claim a running remote
+State: Active capability specification. P1's manifest contract, P2's immutable artifact renderer,
+and P3's read-only ordinary-boot doctor are implemented in the repository; P4–P6 remain
+unimplemented. This does not claim a running remote
 deployment model or a live immutable channel identity.
 Current-state note (2026-08-22): the live topology is now intended to be a dedicated Ollama host plus
 Linux/Tailscale `ygg-dev` / `ygg-test` / `ygg-prod` runtime hosts. The redesign contract is not yet
@@ -24,7 +25,7 @@ P0 is deliberately not a child task: the live Colima persistent-substrate recove
 
 1. [Freeze Channel Manifest And Operation Contract](FREEZE_CHANNEL_MANIFEST_AND_OPERATION_CONTRACT.md) — P1, implemented by #4914
 2. [Build Immutable Artifact Graph](BUILD_IMMUTABLE_ARTIFACT_GRAPH.md) — P2, implemented by #4915
-3. [Implement Read-Only Ordinary Boot](IMPLEMENT_READ_ONLY_ORDINARY_BOOT.md) — P3
+3. [Implement Read-Only Ordinary Boot](IMPLEMENT_READ_ONLY_ORDINARY_BOOT.md) — P3, implemented by #4916
 4. [Prove Promotion-Test Receipts](PROVE_PROMOTION_TEST_RECEIPTS.md) — P4
 5. [Execute Topology-Only Prod Cutover](EXECUTE_TOPOLOGY_ONLY_PROD_CUTOVER.md) — P5, operator-gated
 6. [Retire Legacy Startup Paths](RETIRE_LEGACY_STARTUP_PATHS.md) — P6, post-soak
@@ -141,7 +142,7 @@ as well as padding and standard-Base64 characters.
 
 ## Verification and acceptance
 
-P1 is proven by the static contract test and fixture in `tests/architecture/test_startup_redesign_contract.py`. P2 is proven through the side-effect-free production renderer in `app/release_channels/channel_manifest.py` and its runtime call-site tests. P3–P4 retain strict-xfail call-site skeletons until their production entrypoints exist; an XPASS is a failure and requires converting the skeleton into a real runtime-path proof. P5 requires a live-host acceptance receipt; P6 requires soak and drill receipts. No local-source result is promotion evidence.
+P1 is proven by the static contract test and fixture in `tests/architecture/test_startup_redesign_contract.py`. P2 is proven through the side-effect-free production renderer in `app/release_channels/channel_manifest.py` and its runtime call-site tests. P3 is proven through the read-only resolver and exactly-once terminal journal in `app/release_channels/ordinary_boot.py` plus the production call-site tests. P4 retains strict-xfail call-site skeletons until its production entrypoints exist; an XPASS is a failure and requires converting the skeleton into a real runtime-path proof. P3 does not activate a channel or replace the current canonical prod startup command. P5 requires a live-host acceptance receipt; P6 requires soak and drill receipts. No local-source result is promotion evidence.
 
 ## Relationship to existing work
 

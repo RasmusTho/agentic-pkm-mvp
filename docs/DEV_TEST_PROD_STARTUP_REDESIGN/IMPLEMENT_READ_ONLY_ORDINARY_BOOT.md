@@ -10,6 +10,10 @@ depends_on: [FREEZE_CHANNEL_MANIFEST_AND_OPERATION_CONTRACT.md, BUILD_IMMUTABLE_
 can_parallelize_with: []
 ---
 
+State: Implemented in the repository by Issue #4916. The delivered surface is the read-only
+resolver/doctor and terminal journal; it does not activate a channel, run migration, or replace the
+current canonical prod startup command.
+
 # Implement Read-Only Ordinary Boot
 
 ## Purpose
@@ -22,7 +26,19 @@ Adds a deterministic resolver/doctor and terminal journal. Ordinary boot neither
 
 ## Concretely
 
-`channel-doctor prod ordinary-boot` reports the resolved digest/config/vault/schema identities and a single terminal classification; it exits before writers when required compatibility is absent.
+`python -m app.release_channels.ordinary_boot doctor` reports the resolved
+digest/config/vault/schema identities and a single terminal classification; it exits before writers
+when required compatibility is absent. A separate caller may act only when the result says
+`writers_permitted=true`; this doctor does not expose a writer-start hook.
+
+The dependency input is an already-observed JSON mapping keyed by `artifact`, `config`, `database`,
+`gateway`, `schema`, `vault`, and (when declared) `llm`. Each entry carries
+`status=available|unavailable`; identity-bearing required dependencies also carry their observed
+`identity`. Policy is derived from the exact manifest, never supplied by the observation: identity,
+schema, vault, database, gateway, and config are `required`; `llm_policy=declared-optional` maps only
+the LLM dependency to `degraded_ok`. Missing observations classify as unavailable, unknown
+dependencies fail closed, and raw mismatched observed identity values are not copied into the
+terminal journal.
 
 ## Why This Matters
 

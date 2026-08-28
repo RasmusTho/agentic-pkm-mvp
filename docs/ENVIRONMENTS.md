@@ -357,6 +357,15 @@ Environment separation MUST be explicit across the following surfaces.
 
 **Operational consequence**: production incidents, unsafe drift, or blocked write conditions should route through health/write-guard/operator workflows rather than ad hoc override behavior.
 
+The STARTUP-03 compatibility surface is available as
+`python -m app.release_channels.ordinary_boot doctor`. It resolves one exact prod
+`ChannelManifest`, classifies required versus `degraded_ok` dependencies, and appends exactly one
+terminal result for an operation id. The doctor has no build, pull, migration, pin, bootstrap,
+provisioning, ingest, index, vault-restructure, activation, or writer-start hook. Its
+`writers_permitted=true` result is read-only admission evidence for a separate caller; it is not a
+deployment, promotion receipt, live-host acceptance receipt, or replacement for the current
+canonical prod startup command.
+
 <a id="prod-ollama-topology"></a>
 
 ### Ollama topology
