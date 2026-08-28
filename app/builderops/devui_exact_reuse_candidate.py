@@ -275,7 +275,12 @@ def validate_devui_exact_reuse_candidate(
     source_texts = _immutable_source_texts(repo_root, source)
 
     transforms = manifest.get("transform_allowlist")
-    if set(transforms or []) != _ALLOWED_TRANSFORMS or len(transforms) != len(_ALLOWED_TRANSFORMS):
+    if (
+        not isinstance(transforms, list)
+        or not all(isinstance(transform, str) for transform in transforms)
+        or set(transforms) != _ALLOWED_TRANSFORMS
+        or len(transforms) != len(_ALLOWED_TRANSFORMS)
+    ):
         raise DevuiCandidateProvenanceError("transform allowlist is not the closed #4836 set")
     candidate_texts = {
         name: (candidate_root / name).read_text(encoding="utf-8")
