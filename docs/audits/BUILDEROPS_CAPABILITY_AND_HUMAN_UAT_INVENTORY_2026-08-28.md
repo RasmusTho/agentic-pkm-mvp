@@ -1,4 +1,4 @@
-State: Advisory capability and acceptance inventory snapshot, 2026-08-28. Repository baseline: `origin/main` at `a710f3253356171cb07b55b18556daa0599e3dcc`.
+State: Advisory capability and acceptance inventory snapshot, 2026-08-28. Repository baseline: `origin/main` at `3d50abaae0ab5c2d3d3642f070b55cf5acbcb7e`.
 Doc role: Reference (point-in-time inventory and reporting plan)
 Authority: Current-state claims remain owned by `docs/STATUS.md`, `docs/ARCHITECTURE.md`, capability specifications, contracts, GitHub Issues, Git, CI, and acceptance receipts. This audit creates no runtime, lifecycle, or owner-acceptance authority.
 Owner: Builder System governance
@@ -23,9 +23,10 @@ acceptance. The join must preserve independent facts and must not turn a merge, 
 SHA, or `agent:ready` label into owner acceptance.
 
 This snapshot therefore records the existing inventory, the correct test method for each evidence
-class, and the existing Issue that owns each material gap. No new Issue is created here: the live
-backlog already owns the relevant bounded work, and creating a parallel capability-evidence epic
-would duplicate #4710, #4741, #4748, #4749, #4826, #4169, #3788, or #4375.
+class, and the existing Issue that owns each material gap. The initial audit deliberately created
+no Issue; after the scenario-definition and evidence-mapping passes, two bounded gaps with no
+existing owner were promoted into #5144 and #5145. A parallel capability-evidence epic would still
+duplicate #4710, #4741, #4748, #4749, #4826, #4169, #3788, or #4375.
 
 ## 2. Existing inventory and how it fits
 
@@ -112,12 +113,12 @@ mean that the corresponding runtime, composed proof, or human acceptance exists.
 | 5 | Develop a creative fragment without premature closure | Defined; `future`; non-blocking acceptance; minimum scenario exists | Candidate/draft lifecycle + human review | Covered as future scenario; no shipped claim |
 | 6 | Maintain a hobby or RPG world across time | Defined; `future`; non-blocking acceptance; minimum scenario exists | Context/scope separation + domain UAT | Covered as future scenario; no shipped claim |
 | 7 | Understand what the system did and whether to trust it | Defined; `partial`; release gate for baseline actions, otherwise non-blocking; minimum scenario exists | Governed action/receipt + browser/readability proof | Covered at scenario-definition level; composed proof remains incomplete |
-| 7A | Decide whether watcher automation is safe to enable | Defined; `baseline`; release gate; minimum scenario exists | Settings/status/write-guard operator proof | Covered and release-gated for the bounded baseline |
+| 7A | Decide whether watcher automation is safe to enable | Defined; `baseline`; release gate; minimum scenario exists | Settings/status/write-guard operator proof | Covered at scenario-definition level; #5145 owns the joined receipt gap |
 | 8 | Use the system across multiple domains without losing meaning | Defined; `future`; non-blocking acceptance; minimum scenario exists | Context/sphere separation + cross-scope UAT | Covered as future scenario; no shipped claim |
 | 9 | Evolve the system without early lock-in | Defined; `future`; non-blocking acceptance; minimum scenario exists | Capability contract/replacement and migration proof | Covered as future scenario; no shipped claim |
 | 10 | Work across devices while keeping local artifacts primary | Defined; `future`; non-blocking acceptance; minimum scenario exists | Device/client contract + local-first recovery proof | Covered as future scenario; likely cross-repo owner still required |
 | 11 | Preserve contextual integrity with real overlap | Defined; `future`; non-blocking acceptance; minimum scenario exists | Scope/sphere identity and isolation tests | Covered as future scenario; no shipped claim |
-| 12 | Keep central artifacts understandable if the system changes or dies | Defined; `partial`; non-blocking acceptance → nightly; minimum scenario exists | Artifact portability/readability + rebuild/restore proof | Covered at scenario-definition level; broader survivability remains partial |
+| 12 | Keep central artifacts understandable if the system changes or dies | Defined; `partial`; non-blocking acceptance → nightly; minimum scenario exists | Artifact portability/readability + rebuild/restore proof | Covered at scenario-definition level; #5144 owns the support-free receipt gap |
 
 ### Direct human-agent scenarios
 
@@ -150,12 +151,12 @@ smallest missing composed or human-acceptance proof.
 | 5 Creative | Creative Process Contract; future | No row-specific executable proof | No matching executable Issue found | Fragment/candidate/unfinished relation with provisional standing, revisit/recombination, reversible revision, and no canonical promotion |
 | 6 RPG world | Creative Process and contextualization contracts; future | Anti-confusion evaluation only | #2551 adjacent/closed | Two-session UAT preserving canonical/provisional/exploratory lore, reusable preparation, attribution, and return orientation |
 | 7 Trust action | Interaction Surfaces & Authority / trust semantics; partial | WriteGuard/receipt tests, quality-wave harness, Cockpit browser journeys | #4741, #4748, #4749; DDO #4163; control plane #3788; TIA #4375 | One real full-stack human-visible action/receipt/correction observation; BuilderOps exact-SHA Overview journey and owner pilot remain separate |
-| 7A Watcher enablement | Safe-enablement flow; baseline | Settings/status/watcher/allowlist tests and quality-wave harness | #232 closed | One joined emit-only + armed receipt proving settings/status agreement, allowlist provenance, write guard, and skip reasons |
+| 7A Watcher enablement | Safe-enablement flow; baseline | Settings/status/watcher/allowlist tests and quality-wave harness | #232 closed; validation slice #5145 | One joined emit-only + armed receipt proving settings/status agreement, allowlist provenance, write guard, and skip reasons |
 | 8 Multiple domains | User Needs and Scope/Sphere/Situated Identity; future | Context-dimension threading and anti-contamination tests | #645 and #2551 closed | Cross-domain UAT across work/private/learning/creative/RPG packs with explicit shared participation and no unrequested exposure |
 | 9 Evolution | Capability Contract Model; future product scenario | CKM query/assessment/projection tests | #3138 and #3775 closed | Replacement/rebuild UAT proving artifacts, meaning, provenance, and degraded transitional use survive |
 | 10 Devices | Instance, Device & Replica Contract; future | Sync tests and bounded capture/live-meeting channel receipts | #3026, #3191; cross-repo client issue | General primary/satellite continuity, offline divergence, eventual reconciliation, remote-authority negative proof, and physical-device UAT |
 | 11 Context integrity | Scope/Sphere/Situated Identity and CrossScopeFlow; future | Scope/context tests and anti-contamination eval; invariant boundary is expected-failure | #2539, #645, #2551 closed | Overlap UAT proving default separation, shared participation, explicit reusable allowance, reason/provenance, and reversibility |
-| 12 Survivability | Artifact Contract; partial | Cold-rebuild and quality-wave rebuild tests | #2345 closed | Support-free copied-root inspection proving human intelligibility after runtime/index loss |
+| 12 Survivability | Artifact Contract; partial | Cold-rebuild and quality-wave rebuild tests | #2345 closed; validation slice #5144 | Support-free copied-root inspection proving human intelligibility after runtime/index loss |
 | A-B Direct roots | `AGENT-FLOWS` direct filesystem mode; future | No row-specific boundary/UAT proof | No matching row-specific Issue | Declared project/draft roots, Markdown-only edits, standing, attribution, aging/promotion boundaries, and zero out-of-root writes |
 | C Direct synthesis | `AGENT-FLOWS` compilation obligations; future | Mediated compilation tests only | #2980, #4826 adjacent | Declared synthesis-root run with bidirectional citations, navigability, challengeable standing, and source preservation |
 | D Observation | `AGENT-FLOWS` observation/classification boundary; future | Generic watcher/ingest only | No matching row-specific Issue | External write → ingest/index → zone/provenance receipt, without mediation claim or silent trust upgrade |
@@ -210,7 +211,7 @@ the primary proof is API/PostgreSQL/concurrency/recovery/cutover evidence.
 | CKM-governed delivery initiation and receipt projection | #4169 under #4163 | Open and blocked | Treat as BuilderOps delivery bridge; require exact request/preview/receipt and no lifecycle mutation. |
 | Independent BuilderOps control plane | #3788 | Open and blocked | Require API/PostgreSQL, migration, concurrency, recovery and cutover receipts; not a browser-only feature. |
 | Temporal-intention authority | #4375 | Open and blocked | Preserve opaque-first and single-writer boundary; do not treat target spec as shipped runtime. |
-| Human-need scenario execution | `docs/plans/HUMAN_NEED_UAT_STRATEGY.md`, scenario matrix, existing UAT tests | Mixed baseline/partial/future | Add or advance scenario-specific UAT only under the owning capability Issue; avoid a catch-all epic. |
+| Human-need scenario execution | `docs/plans/HUMAN_NEED_UAT_STRATEGY.md`, scenario matrix, existing UAT tests | Mixed baseline/partial/future | Add or advance scenario-specific UAT only under the owning capability Issue; #5144 and #5145 are the first bounded validation slices; avoid a catch-all epic. |
 
 ## 8. Reporting template for a capability or parent Issue
 
@@ -251,8 +252,9 @@ information at read time, but GitHub/CI/receipts and the authorized owner path r
 - BCP/TIA, DDO and Episode work remain distinct high-risk/target-state tracks. They must be tested
   with their own authority and recovery evidence and must not be reported as one delivered
   “capability layer”.
-- No new Issue, runtime change, owner-doc promotion, `ready-to-try`, `owner-tried`, or
-  `owner-accepted` claim is authorized by this audit.
+- #5144 and #5145 are bounded validation Issues created after the audit mapping found no existing
+  owner; they do not authorize a runtime capability claim, owner-doc promotion, `ready_to_try`,
+  `owner_tried`, or `owner_accepted` status.
 
 ## Sources
 
