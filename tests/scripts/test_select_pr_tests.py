@@ -504,6 +504,24 @@ def test_reasoning_expansion_paths_select_owned_cognition_coverage() -> None:
     assert "tests/invariants" in selection.targets
 
 
+def test_expansion_uat_paths_are_owned() -> None:
+    selection = select_tests(
+        [
+            "tests/uat/test_expansion_connect_create_accept_test_channel.py",
+            "docs/runbooks/UAT_EXPANSION_CONNECT_CREATE_ACCEPT.md",
+            "docs/DOCS_INDEX.md",
+        ]
+    )
+
+    assert selection.full_suite is False
+    assert selection.subsystems == ("reasoning_expansion",)
+    assert selection.unowned_paths == ()
+    assert "tests/reasoning" in selection.targets
+    assert "tests/expansion" in selection.targets
+    assert "tests/invariants" in selection.targets
+    assert "tests/uat/test_expansion_connect_create_accept_test_channel.py" in selection.targets
+
+
 def test_curation_adapter_change_selects_curation_coverage() -> None:
     selection = select_tests(
         [

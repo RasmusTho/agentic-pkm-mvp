@@ -714,7 +714,13 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
             "app/expansion/",
             "tests/reasoning/",
             "tests/expansion/",
+            # The no-mock Connect → Create → Accept runner is an Expansion
+            # contract surface.  Keep this exact UAT path owned by the same
+            # focused cognition coverage; the generic tests/uat/ directory
+            # remains deliberately unmapped for unrelated runtime UATs.
+            "tests/uat/test_expansion_connect_create_accept_test_channel.py",
             "docs/MIMER_CAPABILITY_HARDENING/",
+            "docs/runbooks/UAT_EXPANSION_CONNECT_CREATE_ACCEPT.md",
         ),
         ("tests/reasoning", "tests/expansion", "tests/invariants"),
     ),
