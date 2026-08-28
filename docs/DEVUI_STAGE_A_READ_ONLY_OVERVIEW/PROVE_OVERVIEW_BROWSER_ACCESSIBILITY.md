@@ -107,17 +107,23 @@ may substitute for the required exact published #4836 candidate proof before tha
 - [ ] Hostile browser instrumentation proves no write request, credential, local/session storage,
       IndexedDB, service-worker cache, or browser classification.
   - Verify: `tests/companion_ui/test_devui_overview_journeys.py :: test_overview_browser_has_no_effect_or_reclassification`
-- [ ] Receipt names exact final `M`, the separately authenticated pre-merge #4833/#4842 #4836
-      candidate-proof receipt, fixture versions, token SHA-256, screenshots, accessibility results,
-      failures, and unresolved visual questions.
+- [ ] Each exact-head browser run emits the existing strict
+      `devui-overview-browser-accessibility.v1` receipt: its `github_sha`, fixture versions,
+      token SHA-256, screenshots, accessibility results, failures, and unresolved visual questions
+      describe that run only. The pre-merge #4833/#4842 receipt for the published #4836 candidate
+      and the later #4748 receipt at final `M` remain separate objects. Their only cross-run
+      binding is the downstream `devui-stage-a-read-only-owner-pilot.v1` ledger, which records
+      the candidate receipt ID/SHA/five-node artifact digest and the final receipt ID/SHA; no
+      `devui-overview-browser-accessibility.v1` receipt carries another run's values.
   - Verify: runtime receipt: devui-overview-browser-accessibility.v1
 
 ## How to Verify (Pre-Merge)
 
 - Before #4836 merge, dispatch the exact-ref browser workflow from #4833/#4842 against the published
   #4836 candidate ref and authenticate its five-node artifact. After final `M` exists, run the
-  complete Overview browser module and exact focused API/producer regression modules at `M`, linking
-  the later #4748 receipt to that candidate artifact without conflating their roles.
+  complete Overview browser module and exact focused API/producer regression modules at `M`. The
+  later `devui-stage-a-read-only-owner-pilot.v1` ledger records the two receipt identities and
+  SHAs as its explicit cross-run binding; do not extend either strict browser receipt to do so.
 - Attach deterministic screenshot and accessibility artifacts to the exact-head receipt.
 - Run `git diff --check`.
 

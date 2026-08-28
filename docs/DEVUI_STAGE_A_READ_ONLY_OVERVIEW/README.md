@@ -81,7 +81,7 @@ changes none of the withdrawal conclusions for **Needs you** or **Ready to try**
 | 4 | ARO-04 — Bind Typed Overview Navigation | `agent:blocked` | ARO-03 plus delivered #4768 local Focus route and an optional local SoI destination |
 | 5 | ARO-05 — Validate Connected Overview and Focus Yggdrasil Evidence #4746 | `agent:blocked` | Merged stable #4834 source-owned Now fixtures plus delivered #4768 Focus API fixtures, then either an independently reviewed `yggdrasil-constrained-reuse.v1` exact-reuse receipt or a passing live Yggdrasil Design Handoff Receipt for novel, mixed, or unknown scope |
 | 6 | ARO-06 — Render the Read-Only Overview Shell | `agent:blocked` | Accepted ARO-05 design evidence and merged ARO-03/04; connected recovery #4836 remains open/blocked |
-| 7 | ARO-07 — Prove Overview Browser and Accessibility States | `agent:blocked` | Final `M` containing #4835/#4836, then exact-ref #4833/#4842 dispatch at `M` |
+| 7 | ARO-07 — Prove Overview Browser and Accessibility States | `agent:blocked` | Publish the #4836 candidate, dispatch exact-ref #4833/#4842 against that candidate before merge, then prove final `M` containing #4835/#4836 |
 | 8 | ARO-08 — Run the Read-Only Owner Pilot | `agent:blocked` | Fresh #4748-at-`M` receipt, repaired pilot contract, #4835 boolean prerequisite receipt, Demerzel prod access, #4747 selectors, receipt-sourced deployed URL/SHA, separate promotion/owner acknowledgements, and disposable-state classification |
 
 No task is `agent:ready` at filing. The parent is a blocked validation hub and never becomes a

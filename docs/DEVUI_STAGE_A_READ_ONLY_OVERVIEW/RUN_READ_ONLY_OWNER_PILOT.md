@@ -58,6 +58,11 @@ deployed SHA remain intentionally absent until those receipts supply them.
   must never rely on an unclassified local fixture or real owner/prod data.
 - Record answers, evidence path, source conditions, reconstruction steps, Playwright trace,
   screenshots, checksums, manifest, and disposition in the final structured pilot ledger.
+  That `devui-stage-a-read-only-owner-pilot.v1` ledger is the downstream cross-run binding: it
+  records `candidate_browser_receipt_id`, `candidate_github_sha`,
+  `candidate_five_node_artifact_digest`, `final_browser_receipt_id`, and `final_github_sha`.
+  Those fields bind the two strict browser receipts without adding cross-run fields to either
+  `devui-overview-browser-accessibility.v1` receipt.
 - Return discovered defects/gaps to their owning blocked contract without implementing repairs.
 
 ## What This Task Does
@@ -121,8 +126,10 @@ classification. The pilot must not be claimed or made ready from this document a
 
 - [ ] The pilot binds to final post-merge `main` commit `M` containing #4835 and #4836, consumes
       both the separately authenticated pre-merge #4836 candidate proof and fresh #4748 proof at
-      `M`, and proves equality across the current CI/review/deploy receipt, `/version`,
-      `/api/health.version`, and gateway marker before the journey.
+      `M`, and records their candidate receipt ID/SHA/five-node artifact digest and final receipt
+      ID/SHA in the structured pilot ledger. It also proves equality across the current
+      CI/review/deploy receipt, `/version`, `/api/health.version`, and gateway marker before the
+      journey.
   - Verify: runtime receipt: devui-stage-a-read-only-owner-pilot.v1
 - [ ] The ledger records #4835's boolean-only repository/credential prerequisite result without
       exposing values, account identities, paths, or provisioning claims.
