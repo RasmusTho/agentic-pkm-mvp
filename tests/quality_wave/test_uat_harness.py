@@ -12,6 +12,7 @@ If this test file is green, the Quality Wave "Done means" criteria are met:
 """
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -21,6 +22,8 @@ from app.cli.uat import (
     run_vault_test_flow,
     seed_vault_test_notes,
 )
+from app.cli.settings_explain import build_settings_explain_payload
+from app.observability.status_service import get_system_status
 from app.promotion.consumer import reset_promotion_dedup_store
 from app import objects as object_store_module
 from app.testing.runtime_contract import failing_check_names
@@ -72,6 +75,79 @@ def _seed_and_run(
         assert_expectations=assert_expectations,
         assert_mode=assert_mode,
     )
+
+
+def test_joined_watcher_safe_enablement_receipt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The seeded pack exposes a coherent safe-enablement receipt in both modes."""
+    for mode, raw_value in (("emit-only", "0"), ("auto-exec", "1")):
+        object_store_module._MEMORY_STORE.clear()
+        reset_promotion_dedup_store()
+        _setup_env(monkeypatch, tmp_path / mode)
+
+        vault_root = tmp_path / mode / "vault"
+        vault_root.mkdir(parents=True)
+        monkeypatch.setenv("VAULT_ROOT", str(vault_root))
+        monkeypatch.setenv("WATCHER_AUTO_EXEC", raw_value)
+        monkeypatch.setenv("WATCHER_TICK_LOG_PATH", str(tmp_path / mode / "watcher_tick.jsonl"))
+        monkeypatch.setenv("WATCHER_RUN_LOG_PATH", str(tmp_path / mode / "watcher_run.jsonl"))
+
+        seed_result = seed_vault_test_notes(vault_root=vault_root, overwrite=True)
+        assert seed_result.written >= 1
+        watcher_settings = vault_root / "settings" / "watchers.md"
+        watcher_settings.parent.mkdir(parents=True, exist_ok=True)
+        watcher_settings.write_text(
+            "---\n"
+            "auto_run:\n"
+            "  auto_exec_default: false\n"
+            "  allowed_actions:\n"
+            "    - promote.evergreen\n"
+            "paths:\n"
+            f"  watcher_tick_log: {tmp_path / mode / 'watcher_tick.jsonl'}\n"
+            f"  watcher_run_log: {tmp_path / mode / 'watcher_run.jsonl'}\n"
+            "---\n",
+            encoding="utf-8",
+        )
+
+        summary = run_vault_test_flow(vault_root=vault_root)
+        watcher_tick_log = tmp_path / mode / "watcher_tick.jsonl"
+        watcher_tick_log.write_text(
+            json.dumps(
+                {
+                    "timestamp": "2026-08-28T00:00:00Z",
+                    "panel_candidates": summary.watcher["panel_candidates"],
+                    "panel_skipped_policy": summary.watcher["panel_skipped_policy"],
+                    "panel_skipped_auto_exec": summary.watcher["panel_skipped_auto_exec"],
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        settings = build_settings_explain_payload()["watcher_settings"]
+        status = get_system_status().watcher_automation
+
+        assert status is not None
+        assert settings["auto_exec"]["mode"] == mode
+        assert status.mode == mode
+        assert status.auto_exec_enabled is (mode == "auto-exec")
+        assert settings["allowlist"]["allowed_actions"] == ["promote.evergreen"]
+        assert settings["allowlist"]["invalid_actions"] == []
+        assert status.allowed_actions == settings["allowlist"]["allowed_actions"]
+        assert settings["source"]["path"] == str(watcher_settings)
+        assert status.source_path == settings["source"]["path"]
+        assert status.source_sha256 == settings["source"]["sha256"]
+        assert status.writes_allowed is settings["write_guard"]["writes_allowed"]
+        assert status.write_guard_mode == settings["write_guard"]["mode"]
+        assert int(summary.watcher["panel_skipped_policy"] or 0) >= 1
+        assert status.last_tick_panel_skipped_policy >= 1
+
+        if mode == "emit-only":
+            assert int(summary.watcher["panel_skipped_auto_exec"] or 0) >= 1
+            assert status.last_tick_panel_skipped_auto_exec >= 1
+        else:
+            assert int(summary.watcher["panel_promotions"] or 0) >= 1
+            assert status.last_tick_panel_skipped_auto_exec == 0
 
 
 # ---------------------------------------------------------------------------
