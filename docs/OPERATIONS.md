@@ -88,8 +88,8 @@ dependency is compatible; a declared optional LLM may instead remain visibly
 The command writes only its terminal journal. It does not pull or build an image, migrate schema,
 change a pin, bootstrap BuilderOps, provision Ollama, ingest or index data, restructure a vault,
 activate a channel, or start a writer. An identical operation-id replay must reproduce the same
-result and re-establish file plus directory durability; changed replay input or corrupt journal
-state fails closed. This is compatibility evidence for a separate caller, not permission to skip
+result and re-establish file plus directory durability; a changed derived terminal result or corrupt
+journal state fails closed. This is compatibility evidence for a separate caller, not permission to skip
 the canonical prod startup, promotion, activation, or live-host acceptance workflows.
 
 ### Forward-only migration floor: `objects` binding key (MVR-05A1, #4560)
