@@ -27,6 +27,7 @@ pytestmark = pytest.mark.browser_runtime
 
 SUBJECT = "github:RasmusTho/agentic-pkm-mvp#4836"
 FOCUS_PATH = "/devui/focus?subject=github%3ARasmusTho%2Fagentic-pkm-mvp%234836"
+RUNTIME_SHA = "a" * 40
 
 
 def _source(source_id: str) -> dict[str, str]:
@@ -170,6 +171,7 @@ def _serve(*, focus_status: int = 200) -> Iterator[tuple[str, _Client]]:
         api_base_url="http://127.0.0.1:18000",
         production_profile=True,
         devui_external_bind_host="127.0.0.1",
+        runtime_git_sha=RUNTIME_SHA,
     )
     server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
     thread = Thread(target=server.serve_forever, daemon=True)
@@ -207,6 +209,15 @@ def _browser(base_url: str):
 def test_real_gateway_overview_focus_return_journey_preserves_subject_context_and_sha() -> None:
     with _serve() as (base_url, client):
         playwright, browser, context, page, external = _browser(base_url)
+        document_shas: list[str] = []
+        page.on(
+            "response",
+            lambda response: document_shas.append(
+                response.headers.get("x-pkm-runtime-git-sha", "")
+            )
+            if response.request.resource_type == "document"
+            else None,
+        )
         try:
             page.goto(base_url + "/devui/overview")
             page.wait_for_selector('[data-testid="overview-load-state"][data-state="loaded"]')
@@ -217,7 +228,7 @@ def test_real_gateway_overview_focus_return_journey_preserves_subject_context_an
             assert page.locator('[data-testid="focus-subject"]').get_attribute("data-subject") == SUBJECT
             page.locator('[data-testid="overview-return"]').click()
             page.wait_for_selector('[data-testid="overview-load-state"][data-state="loaded"]')
-            assert page.locator('[data-testid="overview-shell"]').get_attribute("data-candidate-sha")
+            assert document_shas == [RUNTIME_SHA, RUNTIME_SHA, RUNTIME_SHA]
             assert client.calls == [
                 ("/api/devui/overview", {}),
                 ("/api/devui/focus", {"subject": SUBJECT}),

@@ -13,13 +13,13 @@
   },
   "candidate": {
     "subtree": "companion-ui/companion-app/companion_ui/workspace/devui_candidate",
-    "tree": "e4a560c0500cab1afa8f66d45995ef6b4703f336",
+    "tree": "3cfbbce69b064aca8370ec7eb23c24877be6a9d2",
     "inventory": {
       "devui.css": "0398dfd8b6bd593491e2e81173521e9f6519ffe8",
-      "focus.html": "6e953010d1175e0ff379e9037817152081482eef",
-      "focus.js": "7f1a2ee2161b8de14ab9ee5908090ec0faae4f07",
-      "overview.html": "50b7c38a8d21f3deb1c1f765a0ae5ad0835ac993",
-      "overview.js": "acf42701eee664fe03d831de65fa4fbd7412d973"
+      "focus.html": "0bc461c6105f069702f4d4187b2c08f86e2661d8",
+      "focus.js": "21946448a21f416653f8e08a393e17c6afff624f",
+      "overview.html": "9b9ff9f58e6fb92b13396d234578eb8aa2c3adf7",
+      "overview.js": "a627c30b5af7ff0469c045d57428a7cb40ec068d"
     }
   },
   "transform_allowlist": [
@@ -55,7 +55,7 @@
     }
   ],
   "safety": {
-    "network_gets": ["/api/devui/overview", "/api/devui/focus?subject=<exact-subject>", "/devui/assets/provenance.json"],
+    "network_gets": ["/api/devui/overview", "/api/devui/focus?subject=<exact-subject>"],
     "durable_state": [],
     "mutating_methods": [],
     "external_origins": []

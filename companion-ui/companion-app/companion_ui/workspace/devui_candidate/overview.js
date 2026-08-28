@@ -90,16 +90,11 @@ function renderLimitations(items) {
   items.forEach((item) => text(list, "li", typeof item === "string" ? item : JSON.stringify(item)));
 }
 
-Promise.all([
-  fetch("/api/devui/overview", {method: "GET", cache: "no-store"}),
-  fetch("/devui/assets/provenance.json", {method: "GET", cache: "no-store"}),
-]).then(async ([response, provenanceResponse]) => {
-  if (!response.ok || !provenanceResponse.ok) throw new Error(`Overview read failed (${response.status}).`);
+fetch("/api/devui/overview", {method: "GET", cache: "no-store"}).then(async (response) => {
+  if (!response.ok) throw new Error(`Overview read failed (${response.status}).`);
   const payload = await response.json();
-  const provenance = await provenanceResponse.json();
   const shell = document.querySelector('[data-testid="overview-shell"]');
   shell.dataset.serverState = String(payload.state || "unclassified");
-  shell.dataset.candidateSha = String(provenance.candidate_tree || "");
   const trust = document.querySelector('[data-testid="overview-trust-matrix"]');
   matrix(trust, payload.trust_frame || {});
   rows(trust, payload.trust_frame || {});

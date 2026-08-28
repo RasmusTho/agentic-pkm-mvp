@@ -63,6 +63,7 @@ def test_devui_pages_consume_gateway_admission_without_transport_widening() -> N
         assert status == 200
         assert headers["Cache-Control"] == "no-store"
         assert headers["X-Content-Type-Options"] == "nosniff"
+        assert headers["X-PKM-Runtime-Git-SHA"] == "unknown"
         assert body
     assert overview[1]["Content-Security-Policy"] == (
         "default-src 'none'; base-uri 'none'; connect-src 'self'; "

@@ -42,17 +42,21 @@ class DevuiCandidateProvenanceError(ValueError):
     """The exact #4836 candidate is not bound to its reviewed source."""
 
 
-def _git(repo_root: Path, *args: str) -> str:
+def _git_bytes(repo_root: Path, *args: str) -> bytes:
     result = subprocess.run(
         ["git", *args],
         cwd=repo_root,
         capture_output=True,
         check=False,
-        text=True,
     )
     if result.returncode != 0:
-        raise DevuiCandidateProvenanceError(result.stderr.strip() or "git object read failed")
-    return result.stdout.strip()
+        detail = result.stderr.decode("utf-8", errors="replace").strip()
+        raise DevuiCandidateProvenanceError(detail or "git object read failed")
+    return result.stdout
+
+
+def _git(repo_root: Path, *args: str) -> str:
+    return _git_bytes(repo_root, *args).decode("utf-8").strip()
 
 
 def _blob_oid(path: Path) -> str:
@@ -70,8 +74,16 @@ def _tree_oid(inventory: dict[str, str]) -> str:
     return hashlib.sha1(header + payload).hexdigest()  # noqa: S324 - Git SHA-1 object identity
 
 
-def _load_manifest(repo_root: Path) -> dict[str, Any]:
-    value = json.loads((repo_root / _MANIFEST).read_text(encoding="utf-8"))
+def _load_manifest(repo_root: Path, *, revision: str | None) -> dict[str, Any]:
+    worktree_bytes = (repo_root / _MANIFEST).read_bytes()
+    manifest_bytes = worktree_bytes
+    if revision is not None:
+        manifest_bytes = _git_bytes(repo_root, "show", f"{revision}:{_MANIFEST.as_posix()}")
+        if worktree_bytes != manifest_bytes:
+            raise DevuiCandidateProvenanceError(
+                "working manifest differs from the reviewed revision"
+            )
+    value = json.loads(manifest_bytes.decode("utf-8"))
     if value.get("schema") != "yggdrasil-constrained-reuse.v1" or value.get("issue") != 4836:
         raise DevuiCandidateProvenanceError("unexpected candidate provenance identity")
     return value
@@ -82,7 +94,7 @@ def validate_devui_exact_reuse_candidate(
 ) -> dict[str, str]:
     """Validate inventory, Git objects, closed transforms, and browser safety."""
 
-    manifest = _load_manifest(repo_root)
+    manifest = _load_manifest(repo_root, revision=revision)
     source = manifest["source"]
     candidate = manifest["candidate"]
     subtree = candidate["subtree"]

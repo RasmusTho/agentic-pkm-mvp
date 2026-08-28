@@ -43,17 +43,12 @@ const focusRead = subject
   ? fetch(`/api/devui/focus?subject=${encodeURIComponent(subject)}`, {method: "GET", cache: "no-store"})
   : Promise.reject(new Error("One governed subject is required."));
 
-Promise.all([
-  focusRead,
-  fetch("/devui/assets/provenance.json", {method: "GET", cache: "no-store"}),
-]).then(async ([response, provenanceResponse]) => {
-  if (!response.ok || !provenanceResponse.ok) throw new Error(`Focus read failed for ${subject} (${response.status}).`);
+focusRead.then(async (response) => {
+  if (!response.ok) throw new Error(`Focus read failed for ${subject} (${response.status}).`);
   const payload = await response.json();
-  const provenance = await provenanceResponse.json();
   if (!payload.subject || payload.subject.stable_id !== subject) throw new Error(`Focus response did not match ${subject}.`);
   const shell = document.querySelector('[data-testid="devui-focus"]');
   shell.dataset.serverState = String(payload.state || "unclassified");
-  shell.dataset.candidateSha = String(provenance.candidate_tree || "");
   subjectNode.textContent = payload.subject.title || subject;
   render("focus-owner-intent", payload.owner_intent);
   render("focus-governing-sources", payload.governing_sources);
