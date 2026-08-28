@@ -1,16 +1,18 @@
-State: Target-state implementation plan (2026-08-09). The read-only `devui.composition.v1` seam,
-pure `focus-view.v1` composer, nonvisual external context-pack/export composer, and bounded SoI
-Evidence View v0 proof and the pure server-declared Overview composer are delivered. Producer
-enrichment for owner and ready classification is the next nonvisual work. The Focus UI, provider conversation runtime, Builder System
-Control lens, visual shell, and general authority-bearing stages remain targets. Existing GitHub
-Issues remain executable backlog truth.
+State: Target-state implementation plan (reviewed 2026-08-29). The read-only
+`devui.composition.v1` seam, discovery projection, pure `focus-view.v1` composer, nonvisual external
+context-pack/export composer, bounded SoI Evidence View v0 proof, server-declared Overview composer,
+admitted Overview/Focus GET routes, bounded source-owned **Now** adapter, and BSC-01..03 nonvisual
+composers are delivered inputs. The unified shell/navigation, Focus UI, provider conversation
+runtime, Builder System Control lens, live Yggdrasil design receipt, visual/accessibility proof,
+owner pilot, and general authority-bearing stages remain targets. Existing GitHub Issues remain
+executable backlog truth.
 Doc role: Builder System implementation and sequencing plan
 Authority: Owns the proposed dependency order for realizing `docs/DEVUI.md`. Subordinate to accepted ADRs, DDO and BuilderOps control-plane specifications, live Issue contracts, and current-state owner docs.
 Owner: Builder System governance
 Temporal class: planning
 Review cadence: event-driven after each phase or dependency change
 Source of truth: `docs/DEVUI.md` owns the accepted owner functions; accepted ADRs, linked capability specs, and live GitHub remain binding for mechanisms and delivery truth
-Last reviewed: 2026-08-10
+Last reviewed: 2026-08-29
 
 # devUI implementation plan
 
@@ -91,7 +93,8 @@ it. See `docs/audits/BUILDER_SYSTEM_INTENT_EVIDENCE_GOVERNANCE_2026-08-10.md`.
 | External conversation | `conversation-context-pack.v1` and explicit external adapter boundary | Nonvisual pack/export/disposition composer delivered by PR #4704; provider opening, embedded runtime, and session integration not delivered |
 | Product/Runtime SoI evidence | bounded SoI Evidence View v0 composer and manifest | Read-only proof delivered by PR #4711; optional Overview reference retains explicit denominator and claim horizons |
 | First narrow command | Existing artifact-first `start-model-inquiry` skill and receipt | Workflow delivered; devUI preview/Start/Hold adapter not delivered |
-| Builder System Control | Owner docs, process map, skill contracts, bounded capability declarations, source-owned intent/decision/evidence joins, BuilderOps/live evidence | Separate read-lens target; not delivered |
+| Builder System Control | Owner docs, process map, skill contracts, bounded capability declarations, source-owned intent/decision/evidence joins, BuilderOps/live evidence | BSC-01 through BSC-03 nonvisual composers are delivered partial inputs; the separate lens, route/UI, design acceptance, commands, and owner proof are not delivered |
+| Process-health orientation | Evidence-bound process-health contract owned by #4980 and the BSC spec | Docs model delivered by closed #4980; metrics collection, runtime/API, and visual presentation remain outside this unified-journey slice |
 | Proposal/preview | `DeliveryRequest.v1`, `DeliveryPreview.v1`, pure plan compiler | DDO-06 target; compiler seam delivered |
 | Lawful transitions | DDO reducer and versioned lifecycle commands | Pure reducer delivered; durable binding is DDO-05 target |
 | Worker | `WorkerRuntimePort` and context/invocation/result contracts | Seam delivered; durable correlation/reattach target |
@@ -99,7 +102,10 @@ it. See `docs/audits/BUILDER_SYSTEM_INTENT_EVIDENCE_GOVERNANCE_2026-08-10.md`.
 | Live status | `DeliveryRunView.v1` | Specified target, not delivered |
 | Delivery truth | GitHub/dispatcher/Git/CI/review/merge/closure | Existing authority |
 | Results | `DeliveryReceipt.v2` and attempt-terminal evidence | Receipt seam delivered; complete attempt terminality target |
-| Visual base | Yggdrasil Design System and tested Cockpit patterns | Reusable sources; new handoff required |
+| Unified owner shell and navigation | Existing Overview and Focus GET routes plus typed-root contracts | No owner shell, asset route, Overview-to-Focus navigation, stable browser subject context, or BSC root is delivered |
+| Interaction and receipt return | Existing Focus, command-preview, workflow, and receipt contracts | Normalized target interaction architecture exists; authenticated command admission, live run controls, receipt return in one shell, and browser proof are not delivered |
+| Visual/accessibility base | Yggdrasil Design System and tested Cockpit patterns | The unified journey is `mixed`; live system selection/token parity and `yggdrasil-design-handoff.v1` remain required, so no visual acceptance is claimed |
+| Owner pilot | Existing #4741 Stage A validation chain | #4746 design evidence, downstream shell/browser proof, and owner pilot remain separate blocked acceptance work; this plan does not unblock them |
 
 ## Three delivery stages
 

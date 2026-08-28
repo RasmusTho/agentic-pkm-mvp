@@ -12,9 +12,9 @@ Review cadence: Event-driven
 Source of truth: This document owns the owner experience. Accepted ADRs and linked capability
 specifications own the mechanisms; live GitHub, CI, dispatcher, and receipt evidence owns delivery
 truth.
-Last reviewed: 2026-08-12
-Last verified against: `origin/main` `a4e79f77909f93e1a313d9f10907e6ed8aeb72a6`, live GitHub state
-for #4746, #4768, #4834, and #4838, the merged withdrawal receipt in PR #4751, the admitted local
+Last reviewed: 2026-08-29
+Last verified against: `origin/main` `a5df4ffa30150ac76ac96ae9ab88c4e96ffab4d4`, live GitHub state
+for #4693, #4695, #4697, #4741, #4746, #4980, and #4982, the merged withdrawal receipt in PR #4751, the admitted local
 Focus route in PR #4771, the admitted direct-loopback Overview route in PR #4772, the ARO-03
 contract and route-test-selection recovery in PR #4789, and the `Via`-transit admission repair in
 PR #4792; ADR-0057,
@@ -409,6 +409,31 @@ Capabilities, work, evidence, and receipts are lenses within these views, not ad
 modes. Moving from overview to focus to command and receipt preserves the selected item,
 goal, scope, evidence, and owner-facing state.
 
+### Nine-layer Builder System experience map
+
+The complete Builder System remains visible through one owner journey without becoming one
+lifecycle or source model. Each row names where the layer is encountered, where its evidence is
+inspected, where a legal consequence may be proposed or receipted, and which existing source still
+owns the fact. Builder System Control is a navigation-only sibling root: it may orient across every
+layer, but it never inherits the selected Focus subject or joins its authority.
+
+| Process layer | Overview | Focus | Contextual Command/Receipt | Builder System Control | Source owner and next legal step |
+| --- | --- | --- | --- | --- | --- |
+| **Intent** | Shows why a source-owned subject matters now, or that intent is absent/unlinked. | Keeps the exact need, outcome, constraints, and governing reference with the stable subject. | May preview a disposition only from current source bytes; changed intent withdraws the preview and affected proof. | Shows intent coverage and missing/superseded links across the Builder System. | Owner docs, ADRs, explicit decisions, and Issue context own intent; continue through the applicable discovery, docs, or Issue route. |
+| **Docs/spec authority** | Exposes the governing source and freshness as orientation, not copied authority. | Reveals normative, target, proposal, and historical roles with exact source links. | Routes proposed authority changes through the existing docs/design promotion and PR boundary. | Orients over document role, owner, lifecycle, freshness, and explicit gaps. | Repo owner docs and accepted ADRs own the claim; continue through docs governance, authoring, or a source-anchored Issue. |
+| **Contract/backlog** | Shows bounded work and honest ready/blocked state without making Project state authoritative. | Presents the Issue contract, exclusions, dependencies, and `Verify:` ledger for one subject. | Starts only an existing governed pickup/delivery route and returns its receipt. | Shows contract coverage and malformed or missing contracts without becoming a backlog. | GitHub Issues and canonical validators own executable scope; readiness repair, claim, or explicit deferral is next. |
+| **Routing/claim** | Shows that work can continue, is leased, or is collision-blocked in owner language. | Exposes exact claim and branch/worktree evidence only under deeper detail. | Offers only transitions admitted by the owning dispatcher/workflow and returns readback. | Shows adapter/capability coverage and route deviations from declared policy. | Dispatcher leases plus GitHub labels and receipts own coordination; `issue-to-code` or the owning workflow decides next. |
+| **Execution** | Shows active work, safe continuation, or a typed system stop without making agents navigation. | Keeps worktree, worker, run, and provider observations subordinate to the selected subject and explicit correlation. | Presents legal controls only through the authenticated action boundary; every effect returns existing workflow evidence. | Shows bounded execution capabilities and observed routes, never provider sessions as work identity. | Git/worktree, DDO, BuilderOps, and workflow receipts own execution; the existing reducer/workflow transition is next. |
+| **Verification/evidence** | Separates fresh, partial, stale, refused, and unknown proof from completion. | Preserves AC-to-`Verify:` evidence, exact SHA, CI/review state, freshness, and limitations. | Returns the terminal receipt into the same subject context; no success is inferred from a partial signal. | Shows assurance coverage and explicitly correlated deviations without inventing severity. | Tests, CI, review, GitHub/Git readback, and receipts own proof; repair, re-review, merge, or remain blocked. |
+| **Closure/spec feedback** | Distinguishes merged, delivered, available, **Ready to try**, tried, and accepted. | Shows closure attribution, owner-doc outcome, supersession, and remaining feature validation. | Returns merge/closure and post-merge writeback receipts before another governed step. | Shows whether routes closed their Issue, docs, and transition-debt loops. | GitHub closure, dispatcher completion, parent validation, and post-merge receipts own closure; unresolved feedback returns to its source. |
+| **Learning/improvement** | Surfaces only bounded, source-linked improvement signals affecting the current picture. | Shows divergence, evidence, disposition, and owning upstream artifact. | Routes through existing LearningSignal, retrospective, promotion, Issue, or discard paths; never runtime/user memory. | Orients over learning and TCD coverage, missing dispositions, and reevaluation evidence. | BuilderOps learning records and governed repo writeback own Builder learning; capture and disposition is next. |
+| **Human Exception** | Uses **Needs you** only for a named owner-authority category; technical uncertainty stays in **Now**. | Presents one stable decision brief with evidence, options, consequences, safe default, and affected scope. | Binds only the exact authorized choice and returns the owning workflow's receipt; no answer preserves the safe block. | Shows exception coverage and unresolved authority gaps without creating an owner inbox. | The owner-decision or operator-gate contract owns the decision; answer, remain blocked, or resume the existing workflow. |
+
+Cross-links preserve a typed return target (root, stable subject identity, and information depth) but
+never carry provider payloads, classifications, command eligibility, or source state between roots.
+Overview and Focus remain read-only until the separately authenticated command region admits an
+exact proposal; a receipt returns to the same subject instead of creating a receipt product.
+
 ### DEVUI-OVERVIEW-BOUNDARY — server-declared read model
 
 The first usable devUI increment is a server-declared, read-only Overview projection. It is a pure
@@ -657,6 +682,52 @@ visually distinct from authority-bearing actions.
 The candidate narrow-layout behavior stacks the same regions and keeps the same names, item
 identity, information depth, and evidence order. Narrow mode must not collapse into a technically
 different product or require a horizontal delivery graph.
+
+### Governed unified-journey interaction handoff
+
+This section is the normalized interaction/architecture handoff for the unified Builder owner
+journey. It is target-state guidance promoted through Issue #4982 and the normal repo PR path; it is
+not a generated visual, a shipped route, or owner acceptance. The complete scope is classified
+`mixed`: it reuses existing Cockpit trust/evidence patterns while adding unified-root navigation,
+stable subject context, and cross-lens return behavior. Because the live Yggdrasil Design System
+selection and token-parity gate has not been executed in this delivery, no
+`yggdrasil-design-handoff.v1` receipt is claimed and no visual implementation is authorized.
+
+The interaction contract is:
+
+1. **Enter through Overview.** The trust frame and three zones show server-declared source states.
+   Selecting an item opens Focus; selecting Builder System Control changes to the separate
+   `builder_system` root rather than opening a Focus tab.
+2. **Preserve stable subject context.** Overview -> Focus -> deeper evidence -> contextual
+   Command/Receipt retains one source-owned subject, goal, scope, owner-facing state, and typed
+   return reference. Entering Builder System Control replaces that identity; returning restores it
+   without importing control-lens claims.
+3. **Disclose one evidence frame progressively.** Glance, Understand, Verify, and Inspect reveal
+   more of the same evidence in a stable order. Narrow mode, 200% zoom, print, export, and
+   JavaScript-off presentation preserve labels, state, evidence order, and source links; no mode
+   may replace proof with a score or hide a material limitation.
+4. **Separate reading from authority.** Navigation, source links, evidence expansion, and external
+   Conversation Port export are read-only regions. A structurally and semantically distinct
+   contextual command region may show no legal action, an exact preview, lawful live controls, or
+   the terminal receipt. Buttons never classify authority in the browser.
+5. **Return the receipt to the subject.** The terminal receipt replaces command/run content in the
+   same region and leads with outcome, how to try it, missing proof, and limitations. Exact-SHA,
+   CI, review, and closure evidence remains under Verify/Inspect; merge, availability,
+   **Ready to try**, trial, and acceptance remain separate facts.
+6. **Degrade by source, not by whole-screen failure.** Fresh, measured-empty, stale, unavailable,
+   unread, unsupported, refused, unlinked, missing, conflicting, and not-assessed states retain
+   source identity, freshness, affected claim, limitation, and next legal step. An affected region
+   is withdrawn or read-only while unrelated healthy regions remain usable. Loading, empty,
+   partial, blocked, and ambiguous-command states never look like success.
+7. **Keep accessibility and device posture equivalent.** Desktop and narrow layouts preserve
+   landmarks, heading order, keyboard order, focus restoration, screen-reader names, non-color
+   state cues, minimum target sizes, and no focus trap. Print/export includes selected identity,
+   timestamp, source state, limitations, and evidence links while omitting interactive controls.
+
+The applicable future design run must bind these behaviors to the live **Yggdrasil Design System**,
+prove token parity, cover desktop, narrow, 200% zoom, keyboard, screen reader, print,
+JavaScript-off, empty, degraded, blocked, and uncertain states, and return the governed receipt.
+Until then this handoff may guide nonvisual contracts and fixtures only.
 
 ## Current state and target
 
