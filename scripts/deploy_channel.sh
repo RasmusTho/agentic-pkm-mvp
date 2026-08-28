@@ -211,10 +211,178 @@ acquire_channel_mutation_lock
 current_sha="$(read_pin "${pin_file}" 2>/dev/null || true)"
 target_sha="$(resolve_target_sha "${target_sha}")"
 scalar_rollback=0
-if [ "${action}" = "rollback" ] && \
-  ! git -C "${ROOT}" cat-file -e "${target_sha}:app/instance/mvr05_cutover.py" 2>/dev/null; then
-  scalar_rollback=1
-fi
+
+target_attests_settings_rebind_runtime() {
+  local sha="${1:?sha required}"
+  local capability_payload=""
+  capability_payload="$(
+    git -C "${ROOT}" show \
+      "${sha}:app/instance/settings_rebind_runtime_capability.json" 2>/dev/null
+  )" || return 1
+  SETTINGS_REBIND_CAPABILITY_PAYLOAD="${capability_payload}" "${PYTHON}" - <<'PY'
+import json
+import os
+
+value = json.loads(os.environ["SETTINGS_REBIND_CAPABILITY_PAYLOAD"])
+expected = {
+    "schema": "agentic-pkm.runtime-capability-attestation.v1",
+    "capability": "settings-rebind-runtime-floor",
+    "revision": 1,
+    "preserves": [
+        "settings_rebind.v1",
+        "minimum_settings_rebind_runtime=1",
+    ],
+    "rollbackPosture": "reject-incompatible-writer",
+}
+if value != expected:
+    raise SystemExit("settings rebind runtime capability attestation is invalid")
+PY
+}
+
+settings_rebind_floor_capability_state() {
+  local sha="${1:?sha required}"
+  local inspection_rc=0 runtime_payload="" tree_paths=""
+  local has_module=0 has_runtime=0 path=""
+  # This is deliberately broader than the exact compatibility attestation.
+  # Historical SETTINGS-05A candidates could commit the durable floor before
+  # the attestation file existed, and abandoned module-only candidates are
+  # likewise ambiguous after host-receipt loss. Either runtime surface means
+  # absence cannot prove the channel is still pre-floor. A successful tree
+  # inspection is required to prove absence; transport/object/read failures
+  # are an unknown state, never a pre-floor result.
+  if tree_paths="$(
+    git -C "${ROOT}" ls-tree -r --name-only "${sha}" -- \
+      app/instance/settings_rebind.py app/instance/runtime.py 2>/dev/null
+  )"; then
+    :
+  else
+    inspection_rc=$?
+    return "${inspection_rc}"
+  fi
+  while IFS= read -r path; do
+    case "${path}" in
+      app/instance/settings_rebind.py) has_module=1 ;;
+      app/instance/runtime.py) has_runtime=1 ;;
+    esac
+  done <<< "${tree_paths}"
+  if [ "${has_module}" = "1" ]; then
+    printf '%s\n' floor-capable
+    return 0
+  fi
+  if [ "${has_runtime}" = "1" ]; then
+    if runtime_payload="$(
+      git -C "${ROOT}" show "${sha}:app/instance/runtime.py" 2>/dev/null
+    )"; then
+      :
+    else
+      inspection_rc=$?
+      return "${inspection_rc}"
+    fi
+    case "${runtime_payload}" in
+      *settings-rebind-install-dormant*)
+        printf '%s\n' floor-capable
+        return 0
+        ;;
+    esac
+  fi
+  printf '%s\n' pre-floor
+}
+
+read_settings_rebind_floor_phase() {
+  local receipt_path
+  receipt_path="${INSTANCE_OWNERSHIP_HOST_STATE_DIR}/settings-rebind-runtime-floor-${channel}.json"
+  [ -e "${receipt_path}" ] || return 1
+  "${PYTHON}" - "${receipt_path}" "${channel}" <<'PY'
+import json
+import os
+import stat
+import sys
+
+path, channel = sys.argv[1:]
+metadata = os.lstat(path)
+if (
+    not stat.S_ISREG(metadata.st_mode)
+    or metadata.st_uid != os.geteuid()
+    or stat.S_IMODE(metadata.st_mode) != 0o600
+):
+    raise SystemExit("settings rebind runtime floor receipt is not private")
+with open(path, encoding="utf-8") as handle:
+    value = json.load(handle)
+expected = {
+    "schema",
+    "channel",
+    "phase",
+    "minimum_settings_rebind_runtime",
+}
+if (
+    not isinstance(value, dict)
+    or set(value) != expected
+    or value.get("schema") != "agentic-pkm.settings-rebind-runtime-floor.v1"
+    or value.get("channel") != channel
+    or value.get("phase") not in {"pending", "installed"}
+    or value.get("minimum_settings_rebind_runtime") != "1"
+):
+    raise SystemExit("settings rebind runtime floor receipt is invalid")
+print(value["phase"])
+PY
+}
+
+classify_rollback_runtime() {
+  local floor_phase=""
+  local receipt_path=""
+  local current_floor_state="pre-floor" inspection_rc=0 target_floor_state=""
+  [ "${action}" = "rollback" ] || return 0
+  receipt_path="${INSTANCE_OWNERSHIP_HOST_STATE_DIR}/settings-rebind-runtime-floor-${channel}.json"
+  if [ -e "${receipt_path}" ]; then
+    floor_phase="$(read_settings_rebind_floor_phase)" || return $?
+  fi
+  if target_attests_settings_rebind_runtime "${target_sha}"; then
+    return 0
+  fi
+  if [ -n "${floor_phase}" ]; then
+    if [ "${floor_phase}" = "pending" ]; then
+      echo "rollback blocked: settings rebind floor installation is pending; use a compatible roll-forward image" >&2
+      return 78
+    fi
+    scalar_rollback=1
+    return 0
+  fi
+  # Any current or target image with the module/installer may already have
+  # committed the registry floor, including historical images from before the
+  # exact compatibility attestation existed. Losing its host receipt cannot
+  # authorize an older writer: absence is ambiguous, not proof of pre-floor
+  # state. The MVR-05 compatibility fallback below is reserved for channels
+  # whose current and target images demonstrably both predate SETTINGS-05A.
+  if target_floor_state="$(
+    settings_rebind_floor_capability_state "${target_sha}"
+  )"; then
+    :
+  else
+    inspection_rc=$?
+    echo "rollback blocked: settings rebind floor capability inspection failed for target ${target_sha}" >&2
+    return "${inspection_rc}"
+  fi
+  if [ -n "${current_sha}" ]; then
+    if current_floor_state="$(
+      settings_rebind_floor_capability_state "${current_sha}"
+    )"; then
+      :
+    else
+      inspection_rc=$?
+      echo "rollback blocked: settings rebind floor capability inspection failed for current ${current_sha}" >&2
+      return "${inspection_rc}"
+    fi
+  fi
+  if [ "${target_floor_state}" = "floor-capable" ] || \
+    [ "${current_floor_state}" = "floor-capable" ]; then
+    echo "rollback blocked: settings rebind runtime floor receipt is absent for an incompatible target; use a compatible roll-forward image" >&2
+    return 78
+  fi
+  if ! git -C "${ROOT}" cat-file -e \
+    "${target_sha}:app/instance/mvr05_cutover.py" 2>/dev/null; then
+    scalar_rollback=1
+  fi
+}
 
 prepare_scalar_rollback_environment() {
   if [ -z "${current_sha}" ]; then
@@ -675,6 +843,7 @@ apply_changed_migrations() {
 
 rollback_failed_startup() {
   local reason="$1" original_status="$2" forward_only_count="0"
+  local current_floor_state="" inspection_rc=0 target_floor_state=""
   if [ "${scalar_rollback}" = "1" ]; then
     echo "${reason} (status ${original_status}); retaining the current guard pin and scalar rollback target for a fail-closed retry" >&2
     return 0
@@ -697,6 +866,44 @@ rollback_failed_startup() {
       echo "${reason} (status ${original_status}); forward-only migration execution started and its commit state is ambiguous; the target pin is retained until unchanged database revision is proven or a compatible forward fix is applied" >&2
     fi
     return 0
+  fi
+  if [ -n "${current_sha}" ] && \
+    ! target_attests_settings_rebind_runtime "${current_sha}"; then
+    local settings_rebind_floor_phase="" settings_rebind_receipt_path=""
+    if current_floor_state="$(
+      settings_rebind_floor_capability_state "${current_sha}"
+    )"; then
+      :
+    else
+      inspection_rc=$?
+      echo "${reason} (status ${original_status}); settings rebind floor capability inspection failed for the previous pin (status ${inspection_rc}), retaining the target pin" >&2
+      return 0
+    fi
+    if target_floor_state="$(
+      settings_rebind_floor_capability_state "${target_sha}"
+    )"; then
+      :
+    else
+      inspection_rc=$?
+      echo "${reason} (status ${original_status}); settings rebind floor capability inspection failed for the target (status ${inspection_rc}), retaining the target pin" >&2
+      return 0
+    fi
+    if [ "${current_floor_state}" = "pre-floor" ] && \
+      [ "${target_floor_state}" = "pre-floor" ]; then
+      :
+    else
+      settings_rebind_receipt_path="${INSTANCE_OWNERSHIP_HOST_STATE_DIR}/settings-rebind-runtime-floor-${channel}.json"
+      if [ ! -e "${settings_rebind_receipt_path}" ]; then
+        echo "${reason} (status ${original_status}); settings rebind floor receipt is absent, retaining the compatible target pin instead of restarting an older writer" >&2
+        return 0
+      fi
+      settings_rebind_floor_phase="$(read_settings_rebind_floor_phase)" || {
+        echo "${reason} (status ${original_status}); settings rebind floor receipt is invalid, retaining the compatible target pin" >&2
+        return 0
+      }
+      echo "${reason} (status ${original_status}); settings rebind floor is ${settings_rebind_floor_phase}, retaining the compatible target pin instead of restarting an older writer" >&2
+      return 0
+    fi
   fi
   if [ -n "${current_sha}" ]; then
     echo "${reason} (status ${original_status}); attempting rollback to previous pin" >&2
@@ -1094,11 +1301,12 @@ if [ "${action}" = "deploy" ] && [ "${channel}" = "prod" ]; then
     "${ROOT}/docker-compose.prod.yml" || exit $?
 fi
 
+prepare_instance_ownership_host_state_dir
+classify_rollback_runtime || exit $?
+
 if [ "${scalar_rollback}" = "1" ]; then
   prepare_scalar_rollback_environment || exit $?
 fi
-
-prepare_instance_ownership_host_state_dir
 
 if [ "${action}" = "rollback" ]; then
   INSTANCE_STATE_LEGACY_ROLLBACK=1

@@ -1,0 +1,10 @@
+{
+  "capability": "settings-rebind-runtime-floor",
+  "preserves": [
+    "settings_rebind.v1",
+    "minimum_settings_rebind_runtime=1"
+  ],
+  "revision": 1,
+  "rollbackPosture": "reject-incompatible-writer",
+  "schema": "agentic-pkm.runtime-capability-attestation.v1"
+}

@@ -163,7 +163,7 @@ def _fake_compose_harness(tmp_path: Path, extra_env: dict[str, str]) -> tuple[su
     _install_writer_inventory_fixture(fake_bin, event_log)
 
     ownership_root = tmp_path / "instance-ownership"
-    ownership_root.mkdir()
+    ownership_root.mkdir(mode=0o700)
 
     harness = tmp_path / "harness.sh"
     _write_executable(
@@ -268,7 +268,7 @@ def test_producer_fails_closed_on_empty_inventory(tmp_path: Path) -> None:
         quiescence_inventory_content="",
     )
     ownership_root_empty = tmp_path_empty / "instance-ownership"
-    ownership_root_empty.mkdir()
+    ownership_root_empty.mkdir(mode=0o700)
     harness = tmp_path_empty / "harness.sh"
     _write_executable(
         harness,

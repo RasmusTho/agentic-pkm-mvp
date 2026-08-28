@@ -2005,6 +2005,7 @@ def test_real_deployment_wrapper_produces_owner_inventory_before_mutation_window
     python = fake_bin / "python3"
     python.write_text(
         "#!/usr/bin/env bash\n"
+        'if [ "${1:-}" = - ]; then exec "$REAL_PYTHON" "$@"; fi\n'
         'printf \'python:%s\\n\' "$*" >> "$EVENT_LOG"\n'
         'case " $* " in\n'
         "  *' produce-legacy-owners '*)\n"
@@ -2033,8 +2034,10 @@ def test_real_deployment_wrapper_produces_owner_inventory_before_mutation_window
         "      shift\n"
         "    done\n"
         "    exit 2 ;;\n"
+        "  *settings-rebind-runtime-floor-*)\n"
+        "    printf '{\"schema\":\"fixture\"}\\n' > \"$2\"; chmod 0600 \"$2\"; exit 0 ;;\n"
         "esac\n"
-        "exit 2\n",
+        'exec "$REAL_PYTHON" "$@"\n',
         encoding="utf-8",
     )
     python.chmod(0o755)
@@ -2053,7 +2056,7 @@ def test_real_deployment_wrapper_produces_owner_inventory_before_mutation_window
     )
     harness.chmod(0o755)
     ownership_root = tmp_path / "instance-ownership"
-    ownership_root.mkdir()
+    ownership_root.mkdir(mode=0o700)
     result = subprocess.run(
         ["bash", str(harness)],
         env={
@@ -2061,6 +2064,7 @@ def test_real_deployment_wrapper_produces_owner_inventory_before_mutation_window
             "EVENT_LOG": str(event_log),
             "PATH": f"{fake_bin}:{os.environ['PATH']}",
             "INSTANCE_OWNERSHIP_HOST_STATE_DIR": str(ownership_root),
+            "REAL_PYTHON": sys.executable,
         },
         capture_output=True,
         text=True,
@@ -2091,6 +2095,7 @@ def test_real_deployment_wrapper_mounts_selected_root_at_cutover_alias(
     python = fake_bin / "python3"
     python.write_text(
         "#!/usr/bin/env bash\n"
+        'if [ "${1:-}" = - ]; then exec "$REAL_PYTHON" "$@"; fi\n'
         'printf \'python:%s\\n\' "$*" >> "$EVENT_LOG"\n'
         'case " $* " in\n'
         "  *' produce-legacy-owners '*)\n"
@@ -2120,7 +2125,7 @@ def test_real_deployment_wrapper_mounts_selected_root_at_cutover_alias(
         "    done\n"
         "    exit 2 ;;\n"
         "esac\n"
-        "exit 2\n",
+        'exec "$REAL_PYTHON" "$@"\n',
         encoding="utf-8",
     )
     python.chmod(0o755)
@@ -2140,7 +2145,7 @@ def test_real_deployment_wrapper_mounts_selected_root_at_cutover_alias(
     harness.chmod(0o755)
     selected_root = "/srv/operator/vault"
     ownership_root = tmp_path / "instance-ownership"
-    ownership_root.mkdir()
+    ownership_root.mkdir(mode=0o700)
     result = subprocess.run(
         ["bash", str(harness)],
         env={
@@ -2150,6 +2155,7 @@ def test_real_deployment_wrapper_mounts_selected_root_at_cutover_alias(
             "MVR01C_ROLLBACK_VAULT_BINDING_ID": "binding-selected",
             "MVR01C_ROLLBACK_VAULT_ROOT": selected_root,
             "INSTANCE_OWNERSHIP_HOST_STATE_DIR": str(ownership_root),
+            "REAL_PYTHON": sys.executable,
         },
         capture_output=True,
         text=True,

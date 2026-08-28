@@ -589,6 +589,19 @@ def _seed_previous_pin(root: Path, previous_sha: str, *, channel: str = "dev") -
     return pin_path
 
 
+def _commit_prefloor_successor(root: Path, label: str) -> str:
+    """Create a readable second pre-SETTINGS-05A ref for rollback fixtures."""
+
+    subprocess.run(
+        ["git", "commit", "--allow-empty", "-qm", f"fixture {label}"],
+        cwd=root,
+        check=True,
+    )
+    return subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=root, text=True
+    ).strip()
+
+
 def _run_rollback(
     root: Path, env: dict[str, str], sha: str, *, channel: str = "dev"
 ) -> subprocess.CompletedProcess[str]:
@@ -605,8 +618,9 @@ def _run_rollback(
 def test_postdeploy_smoke_failure_rolls_back_previous_pin_and_services(
     tmp_path: Path,
 ) -> None:
-    root, env, sha = _deploy_harness(tmp_path)
-    previous_sha = "1" * 40
+    root, env, previous_sha = _deploy_harness(tmp_path)
+    sha = _commit_prefloor_successor(root, "postdeploy-smoke target")
+    env["FAKE_SHA"] = sha
     pin_path = _seed_previous_pin(root, previous_sha)
     env["FAKE_POSTDEPLOY_SMOKE"] = "fail"
     env["FAKE_POSTDEPLOY_SMOKE_RC"] = "73"
@@ -686,8 +700,9 @@ def test_every_postmutation_gate_has_fail_closed_terminal_handling(
     diagnostic: str,
     expected_recreate_attempts: int,
 ) -> None:
-    root, env, sha = _deploy_harness(tmp_path)
-    previous_sha = "2" * 40
+    root, env, previous_sha = _deploy_harness(tmp_path)
+    sha = _commit_prefloor_successor(root, "postmutation-gate target")
+    env["FAKE_SHA"] = sha
     pin_path = _seed_previous_pin(root, previous_sha)
     env[failure_env] = failure_value
 
@@ -706,8 +721,7 @@ def test_every_postmutation_gate_has_fail_closed_terminal_handling(
 def test_failed_postmutation_gate_preserves_forward_only_rollback_limitations(
     tmp_path: Path,
 ) -> None:
-    root, env, sha = _deploy_harness(tmp_path)
-    previous_sha = "3" * 40
+    root, env, previous_sha = _deploy_harness(tmp_path)
     pin_path = _seed_previous_pin(root, previous_sha)
     migration = root / "app/alembic/versions/999_forward_only.py"
     migration.write_text('reversibility = "forward-only"\n', encoding="utf-8")
@@ -730,7 +744,7 @@ def test_failed_manual_rollback_retains_the_known_good_rollback_target(
     tmp_path: Path,
 ) -> None:
     root, env, rollback_sha = _deploy_harness(tmp_path)
-    pre_rollback_sha = "4" * 40
+    pre_rollback_sha = _commit_prefloor_successor(root, "pre-manual-rollback pin")
     pin_path = _seed_previous_pin(root, pre_rollback_sha)
     env["FAKE_POSTDEPLOY_SMOKE"] = "fail"
 
@@ -747,7 +761,7 @@ def test_failed_manual_rollback_retains_the_known_good_rollback_target(
 
 def test_manual_rollback_never_runs_target_forward_migration_authority(tmp_path: Path) -> None:
     root, env, rollback_sha = _deploy_harness(tmp_path)
-    pre_rollback_sha = "7" * 40
+    pre_rollback_sha = _commit_prefloor_successor(root, "migration-free rollback pin")
     pin_path = _seed_previous_pin(root, pre_rollback_sha)
     migration = root / "app/alembic/versions/reversible_current_only.py"
     migration.write_text(
@@ -776,7 +790,7 @@ def test_prod_rollback_ensures_external_volume_without_instance_state_authority(
     tmp_path: Path,
 ) -> None:
     root, env, rollback_sha = _deploy_harness(tmp_path)
-    pre_rollback_sha = "8" * 40
+    pre_rollback_sha = _commit_prefloor_successor(root, "prod rollback pin")
     pin_path = _seed_previous_pin(root, pre_rollback_sha, channel="prod")
 
     result = _run_rollback(root, env, rollback_sha, channel="prod")
@@ -797,7 +811,7 @@ def test_failed_manual_rollback_before_recreate_restores_pre_rollback_state(
     tmp_path: Path,
 ) -> None:
     root, env, rollback_sha = _deploy_harness(tmp_path)
-    pre_rollback_sha = "6" * 40
+    pre_rollback_sha = _commit_prefloor_successor(root, "failed rollback pin")
     pin_path = _seed_previous_pin(root, pre_rollback_sha)
     env["FAKE_DOCKER_FAIL_MATCH"] = " pull "
 
@@ -814,8 +828,9 @@ def test_failed_manual_rollback_before_recreate_restores_pre_rollback_state(
 def test_prod_promotion_receipt_failure_does_not_publish_latest_receipt(
     tmp_path: Path,
 ) -> None:
-    root, env, sha = _deploy_harness(tmp_path)
-    previous_sha = "5" * 40
+    root, env, previous_sha = _deploy_harness(tmp_path)
+    sha = _commit_prefloor_successor(root, "prod receipt target")
+    env["FAKE_SHA"] = sha
     pin_path = _seed_previous_pin(root, previous_sha, channel="prod")
     _configure_prod_retry_preflight(root, env, tmp_path, rows=[])
     env["FAKE_PROMOTION_RECEIPT_COPY"] = "fail"
