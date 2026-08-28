@@ -235,3 +235,9 @@ Resolution note (2026-05-06): verified `app/orchestrator/v2_runtime.py` now cont
 **Compatibility fallback:** BuilderOps LearningSignal write unavailable: implicit host-stable store selection was refused because the required same-user/same-host cutover acknowledgement or explicit BuilderOps state path is absent.
 
 --- retro 2026-08-03: processed 3/3 compatibility fallback entries ---
+
+## 2026-08-28 — #5145 (quality-wave watcher fixture seam)
+**Source:** capture-learning after issue-to-code / CI
+**Diverged:** The plan described a joined watcher safe-enablement receipt, but CI exposed three missing production-seam fixture assumptions before the test could validate behavior: the settings parent directory, configured tick/run receipt paths, and the canonical watcher settings path.
+**Upstream artifact:** `docs/TESTING.md :: Quality Wave acceptance harness / watcher-runtime convergence tests`
+**Compatibility fallback:** BuilderOps LearningSignal write unavailable: local CLI import failed because the pinned `lingua` dependency is unavailable; convert this entry to a `LearningSignal` when the acknowledged BuilderOps store is reachable.
