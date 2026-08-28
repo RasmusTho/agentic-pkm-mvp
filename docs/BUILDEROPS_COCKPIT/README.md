@@ -76,7 +76,9 @@ DDO-06. One experience therefore does not make this registry a control plane.
   `state` is unchanged in either case: an unconfigured plane still owns no countable facts. Since
   #4484 that unset state is a per-channel choice rather than the only reachable state: the runtime
   image ships the `gh` transport the plane reads through, and `docker-compose.dev.yml :: api`
-  commits the repo slug for the dev channel (18001) while `test`/`prod` stay unset. See
+  and `docker-compose.prod.yml :: api` commit `RasmusTho/agentic-pkm-mvp` for dev (18001) and prod;
+  `test` stays unset. The prod repository binding is committed non-secret configuration, not
+  credential-presence or deployment evidence. See
   `GITHUB_LIVE_PLANE.md :: What makes that command answer fresh (#4484)` for the full path,
   including the host-supplied `GITHUB_TOKEN` that rides the `api` consumer's existing host-secret
   env layer.

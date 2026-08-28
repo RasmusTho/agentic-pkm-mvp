@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import subprocess
+import sys
 
 import pytest
 
@@ -77,7 +79,7 @@ def test_focus_credential_preflight_failures_are_value_account_and_path_free(
         monkeypatch.setattr(
             preflight,
             "_load_prod_repository_binding",
-            lambda: "somebody/incorrect-repository",
+            lambda: "/Users/operator/private/repository-binding",
         )
     elif failure == "undeclared":
         real_contract = load_host_secret_contract()
@@ -115,14 +117,44 @@ def test_focus_credential_preflight_failures_are_value_account_and_path_free(
     assert "Keychain" not in rendered
 
 
+def test_documented_preflight_entrypoint_bootstraps_repo_and_redacts_import_failures() -> None:
+    script = _REPO_ROOT / "scripts/check_prod_devui_focus_prerequisites.py"
+    result = subprocess.run(
+        [sys.executable, "-S", str(script)],
+        cwd=_REPO_ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode != 0
+    assert result.stdout.count("\n") == 1
+    assert json.loads(result.stdout) == {
+        "repository": None,
+        "github_token_present": False,
+        "heimdal_raw_store_key_present": False,
+    }
+    rendered = result.stdout + result.stderr
+    assert "Traceback" not in rendered
+    assert str(_REPO_ROOT) not in rendered
+
+
 def test_prod_focus_repo_binding_is_owner_documented_without_delivery_claim() -> None:
-    docs = (
+    owner_docs = (
+        _REPO_ROOT / "docs/BUILDEROPS_COCKPIT/README.md",
+        _REPO_ROOT / "docs/BUILDEROPS_COCKPIT/DESIGN_DECISIONS.md",
+    )
+    source_docs = (
         _REPO_ROOT / "docs/BUILDEROPS_COCKPIT/GITHUB_LIVE_PLANE.md",
         _REPO_ROOT / "docs/LOCAL_SECRET_PROVISIONING/README.md",
         _REPO_ROOT / "docs/OPERATIONS.md",
     )
     marker = "committed repository binding is not deployment or credential-presence evidence"
-    for path in docs:
+    for path in owner_docs:
+        text = path.read_text(encoding="utf-8")
+        assert _REPO in text
+        assert "credential-presence or deployment evidence" in text, path
+    for path in source_docs:
         text = path.read_text(encoding="utf-8")
         assert _REPO in text
         assert "heimdal.raw-store-key" in text

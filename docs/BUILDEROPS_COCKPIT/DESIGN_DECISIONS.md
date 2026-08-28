@@ -143,8 +143,10 @@ host today, not an edge case.
 
 > Status since #4484: the "no repo-committed deployment config sets it anywhere" half of this
 > finding no longer holds — the runtime image ships the `gh` transport and `docker-compose.dev.yml`
-> commits the slug for the dev channel, so the unset state is now a per-channel choice (`test` and
-> `prod` keep it). EXT-8 is unaffected and more load-bearing for it: distinguishing opted-out from
+> plus `docker-compose.prod.yml` commit `RasmusTho/agentic-pkm-mvp` for dev and prod, so the unset state is now a
+> per-channel choice (`test` keeps it). The prod binding is committed non-secret configuration, not
+> credential-presence or deployment evidence. EXT-8 is unaffected and more load-bearing for it:
+> distinguishing opted-out from
 > broken is what lets an enabled channel's real failure read as a failure. See
 > `GITHUB_LIVE_PLANE.md :: What makes that command answer fresh (#4484)`.
 

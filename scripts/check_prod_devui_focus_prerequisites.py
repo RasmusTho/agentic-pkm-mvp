@@ -6,14 +6,14 @@ from __future__ import annotations
 import json
 from pathlib import Path
 import sys
-from typing import Any
-
-from app.ops.host_secret_bootstrap import _security_keychain_lookup
-from app.ops.host_secret_contract import HostSecretContract, load_host_secret_contract
-from app.release_channels.channel_isolation_preflight import _load_compose
-
+from typing import TYPE_CHECKING, Any
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+
+if TYPE_CHECKING:
+    from app.ops.host_secret_contract import HostSecretContract
 _EXPECTED_REPOSITORY = "RasmusTho/agentic-pkm-mvp"
 _CHANNEL = "prod"
 _CONSUMER = "heimdal-api-ingress"
@@ -23,12 +23,30 @@ _CREDENTIALS = (
 )
 
 
+def _load_compose(path: Path) -> dict[str, Any]:
+    from app.release_channels.channel_isolation_preflight import _load_compose as loader
+
+    return loader(path)
+
+
+def load_host_secret_contract(path: Path) -> "HostSecretContract":
+    from app.ops.host_secret_contract import load_host_secret_contract as loader
+
+    return loader(path)
+
+
+def _security_keychain_lookup(service: str, account: str) -> str:
+    from app.ops.host_secret_bootstrap import _security_keychain_lookup as lookup
+
+    return lookup(service, account)
+
+
 def _load_prod_repository_binding() -> object:
     compose = _load_compose(_REPO_ROOT / "docker-compose.prod.yml")
     return compose["services"]["api"]["environment"].get("COCKPIT_GITHUB_REPO")
 
 
-def _lookup_present(contract: HostSecretContract, logical_id: str) -> bool:
+def _lookup_present(contract: "HostSecretContract", logical_id: str) -> bool:
     account = contract.keychain_account(
         channel=_CHANNEL,
         consumer=_CONSUMER,
@@ -59,11 +77,11 @@ def main() -> int:
         _emit(payload)
         return 1
 
-    payload["repository"] = repository if isinstance(repository, str) else None
     if repository != _EXPECTED_REPOSITORY:
         print("repository: unexpected binding", file=sys.stderr)
         _emit(payload)
         return 1
+    payload["repository"] = _EXPECTED_REPOSITORY
 
     try:
         contract = load_host_secret_contract(
