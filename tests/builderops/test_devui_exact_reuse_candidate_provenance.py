@@ -142,6 +142,31 @@ def test_candidate_binding_refuses_forged_candidate_anchor() -> None:
         )
 
 
+def test_candidate_binding_refuses_anchor_not_shared_with_immutable_source() -> None:
+    repo_root = Path(__file__).resolve().parents[2]
+    manifest = _load_manifest(repo_root, revision=None)
+    forged = copy.deepcopy(manifest)
+    forged["bindings"][0]["shared_patterns"]["overview.html"] = [
+        'class="band primary"'
+    ]
+    candidate_root = repo_root / forged["candidate"]["subtree"]
+
+    with pytest.raises(
+        DevuiCandidateProvenanceError,
+        match="shared binding anchor is not present on both sides",
+    ):
+        _validate_bindings(
+            forged,
+            inventory=forged["candidate"]["inventory"],
+            source_texts=_immutable_source_texts(repo_root, forged["source"]),
+            candidate_texts={
+                path.name: path.read_text(encoding="utf-8")
+                for path in candidate_root.iterdir()
+                if path.is_file()
+            },
+        )
+
+
 def test_candidate_browser_safety_refuses_extra_fetch_or_mutation_primitive() -> None:
     repo_root = Path(__file__).resolve().parents[2]
     manifest = _load_manifest(repo_root, revision=None)

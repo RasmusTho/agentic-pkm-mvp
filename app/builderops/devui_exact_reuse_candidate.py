@@ -138,9 +138,14 @@ def _validate_bindings(
                 )
         candidate_files = binding.get("candidate_files", [])
         candidate_patterns = binding.get("candidate_patterns")
+        shared_patterns = binding.get("shared_patterns")
         if not isinstance(candidate_patterns, dict) or set(candidate_patterns) != set(candidate_files):
             raise DevuiCandidateProvenanceError(
                 "binding must cover every named candidate file with exact anchors"
+            )
+        if not isinstance(shared_patterns, dict) or set(shared_patterns) != set(candidate_files):
+            raise DevuiCandidateProvenanceError(
+                "binding must cover every candidate file with shared source anchors"
             )
         for candidate_file in candidate_files:
             if candidate_file not in candidate_texts:
@@ -160,6 +165,21 @@ def _validate_bindings(
                 ):
                     raise DevuiCandidateProvenanceError(
                         f"binding anchor is absent from candidate: {candidate_file}"
+                    )
+            common_anchors = shared_patterns[candidate_file]
+            if not isinstance(common_anchors, list) or not common_anchors:
+                raise DevuiCandidateProvenanceError(
+                    "binding requires shared source-to-candidate anchors"
+                )
+            for anchor in common_anchors:
+                if (
+                    not isinstance(anchor, str)
+                    or not anchor
+                    or anchor not in source_texts[source_path]
+                    or anchor not in candidate_texts[candidate_file]
+                ):
+                    raise DevuiCandidateProvenanceError(
+                        f"shared binding anchor is not present on both sides: {candidate_file}"
                     )
         bound_files.update(candidate_files)
     if bound_files != set(inventory):

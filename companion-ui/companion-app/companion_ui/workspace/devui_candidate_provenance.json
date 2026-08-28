@@ -37,6 +37,10 @@
         "overview.html": ["class=\"claim\"", "class=\"band primary\"", "class=\"void refuse\""],
         "focus.html": ["class=\"claim\"", "class=\"btn btn-out\"", "class=\"void refuse\""]
       },
+      "shared_patterns": {
+        "overview.html": ["class=\"claim\"", "class=\"void refuse\""],
+        "focus.html": ["class=\"claim\"", "class=\"btn btn-out\"", "class=\"void refuse\""]
+      },
       "transforms": ["content_binding", "layout_reflow"]
     },
     {
@@ -44,6 +48,9 @@
       "source_path": "app/web/static/cockpit.css",
       "source_patterns": [".claim{", ".band{", ".card{", ".body{", ".rungs{", ".btn-out{", ".void.refuse{"],
       "candidate_patterns": {
+        "devui.css": [".claim{", ".band{", ".card{", ".body{", ".rungs{", ".btn-out{", ".void.refuse{"]
+      },
+      "shared_patterns": {
         "devui.css": [".claim{", ".band{", ".card{", ".body{", ".rungs{", ".btn-out{", ".void.refuse{"]
       },
       "transforms": ["layout_reflow"]
@@ -55,6 +62,9 @@
       "candidate_patterns": {
         "devui.css": ["--bg-base:", "--font-ui:", "--space-4:", "--radius-sm:"]
       },
+      "shared_patterns": {
+        "devui.css": ["--bg-base:", "--font-ui:", "--space-4:", "--radius-sm:"]
+      },
       "transforms": ["local_system_font_no_egress_normalization"]
     },
     {
@@ -64,6 +74,10 @@
       "candidate_patterns": {
         "overview.js": ["function text(parent, tag, value, className) {", "node.textContent =", "function verifiedFocusHref(item) {", "fetch(\"/api/devui/overview\", {method: \"GET\", cache: \"no-store\"})"],
         "focus.js": ["function text(parent, tag, value, className) {", "node.textContent =", "fetch(`/api/devui/focus?subject=${encodeURIComponent(subject)}`, {method: \"GET\", cache: \"no-store\"})"]
+      },
+      "shared_patterns": {
+        "overview.js": ["document.createElement(", "textContent =", "fetch(", "\"no-store\""],
+        "focus.js": ["document.createElement(", "textContent =", "fetch(", "\"no-store\""]
       },
       "transforms": ["content_binding", "interaction_binding"]
     }
