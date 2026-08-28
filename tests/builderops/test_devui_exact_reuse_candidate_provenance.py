@@ -1,12 +1,16 @@
 from __future__ import annotations
 
+import copy
 from pathlib import Path
 
 import pytest
 
 from app.builderops.devui_exact_reuse_candidate import (
     DevuiCandidateProvenanceError,
+    _immutable_source_texts,
     _load_manifest,
+    _validate_bindings,
+    _validate_candidate_tokens,
     validate_devui_exact_reuse_candidate,
 )
 
@@ -56,4 +60,36 @@ def test_candidate_validator_requires_explicit_review_revision() -> None:
     ):
         validate_devui_exact_reuse_candidate(
             Path(__file__).resolve().parents[2], revision=None  # type: ignore[arg-type]
+        )
+
+
+def test_candidate_binding_refuses_anchor_absent_from_immutable_source() -> None:
+    repo_root = Path(__file__).resolve().parents[2]
+    manifest = _load_manifest(repo_root, revision="HEAD")
+    forged = copy.deepcopy(manifest)
+    forged["bindings"][0]["source_patterns"].append("forged-post-source-anchor")
+
+    with pytest.raises(
+        DevuiCandidateProvenanceError,
+        match="binding anchor is absent from immutable source",
+    ):
+        _validate_bindings(
+            forged,
+            inventory=forged["candidate"]["inventory"],
+            source_texts=_immutable_source_texts(repo_root, forged["source"]),
+        )
+
+
+def test_candidate_tokens_refuse_declaration_added_after_source_commit() -> None:
+    repo_root = Path(__file__).resolve().parents[2]
+    manifest = _load_manifest(repo_root, revision="HEAD")
+    source_texts = _immutable_source_texts(repo_root, manifest["source"])
+
+    with pytest.raises(
+        DevuiCandidateProvenanceError,
+        match="token absent from the immutable accepted source",
+    ):
+        _validate_candidate_tokens(
+            candidate_text="color:var(--post-source-token)",
+            token_source=source_texts["app/web/static/colors_and_type.css"],
         )

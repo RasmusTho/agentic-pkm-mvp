@@ -59,10 +59,13 @@ def _git(repo_root: Path, *args: str) -> str:
     return _git_bytes(repo_root, *args).decode("utf-8").strip()
 
 
-def _blob_oid(path: Path) -> str:
-    payload = path.read_bytes()
+def _blob_oid_bytes(payload: bytes) -> str:
     header = f"blob {len(payload)}\0".encode("ascii")
     return hashlib.sha1(header + payload).hexdigest()  # noqa: S324 - Git SHA-1 object identity
+
+
+def _blob_oid(path: Path) -> str:
+    return _blob_oid_bytes(path.read_bytes())
 
 
 def _tree_oid(inventory: dict[str, str]) -> str:
@@ -87,6 +90,56 @@ def _load_manifest(repo_root: Path, *, revision: str | None) -> dict[str, Any]:
     if value.get("schema") != "yggdrasil-constrained-reuse.v1" or value.get("issue") != 4836:
         raise DevuiCandidateProvenanceError("unexpected candidate provenance identity")
     return value
+
+
+def _immutable_source_texts(
+    repo_root: Path, source: dict[str, Any]
+) -> dict[str, str]:
+    texts: dict[str, str] = {}
+    for path, expected_oid in source["objects"].items():
+        payload = _git_bytes(repo_root, "show", f"{source['commit']}:{path}")
+        if _blob_oid_bytes(payload) != expected_oid:
+            raise DevuiCandidateProvenanceError(
+                f"reviewed source object changed: {path}"
+            )
+        texts[path] = payload.decode("utf-8")
+    return texts
+
+
+def _validate_bindings(
+    manifest: dict[str, Any],
+    *,
+    inventory: dict[str, str],
+    source_texts: dict[str, str],
+) -> None:
+    source = manifest["source"]
+    bound_files: set[str] = set()
+    for binding in manifest.get("bindings", []):
+        source_path = binding.get("source_path")
+        if source_path not in source["objects"] or source_path not in source_texts:
+            raise DevuiCandidateProvenanceError("binding names an unverified source")
+        if not set(binding.get("transforms", [])).issubset(_ALLOWED_TRANSFORMS):
+            raise DevuiCandidateProvenanceError("binding uses an unreviewed transform")
+        patterns = binding.get("source_patterns")
+        if not isinstance(patterns, list) or not patterns:
+            raise DevuiCandidateProvenanceError("binding requires exact source anchors")
+        for pattern in patterns:
+            if not isinstance(pattern, str) or not pattern or pattern not in source_texts[source_path]:
+                raise DevuiCandidateProvenanceError(
+                    f"binding anchor is absent from immutable source: {source_path}"
+                )
+        bound_files.update(binding.get("candidate_files", []))
+    if bound_files != set(inventory):
+        raise DevuiCandidateProvenanceError("every candidate file must have a source binding")
+
+
+def _validate_candidate_tokens(*, candidate_text: str, token_source: str) -> None:
+    source_tokens = set(re.findall(r"(--[a-z0-9-]+)\s*:", token_source))
+    candidate_tokens = set(re.findall(r"var\((--[a-z0-9-]+)\)", candidate_text))
+    if not candidate_tokens.issubset(source_tokens):
+        raise DevuiCandidateProvenanceError(
+            "candidate uses a token absent from the immutable accepted source"
+        )
 
 
 def validate_devui_exact_reuse_candidate(
@@ -122,22 +175,16 @@ def validate_devui_exact_reuse_candidate(
         raise DevuiCandidateProvenanceError("reviewed source commit is unavailable")
     if _git(repo_root, "rev-parse", f"{source['commit']}:app/web/static") != source["tree"]:
         raise DevuiCandidateProvenanceError("reviewed source tree changed")
-    for path, oid in source["objects"].items():
-        if _git(repo_root, "rev-parse", f"{source['commit']}:{path}") != oid:
-            raise DevuiCandidateProvenanceError(f"reviewed source object changed: {path}")
+    source_texts = _immutable_source_texts(repo_root, source)
 
     transforms = manifest.get("transform_allowlist")
     if set(transforms or []) != _ALLOWED_TRANSFORMS or len(transforms) != len(_ALLOWED_TRANSFORMS):
         raise DevuiCandidateProvenanceError("transform allowlist is not the closed #4836 set")
-    bound_files: set[str] = set()
-    for binding in manifest.get("bindings", []):
-        if binding.get("source_path") not in source["objects"]:
-            raise DevuiCandidateProvenanceError("binding names an unverified source")
-        if not set(binding.get("transforms", [])).issubset(_ALLOWED_TRANSFORMS):
-            raise DevuiCandidateProvenanceError("binding uses an unreviewed transform")
-        bound_files.update(binding.get("candidate_files", []))
-    if bound_files != set(inventory):
-        raise DevuiCandidateProvenanceError("every candidate file must have a source binding")
+    _validate_bindings(
+        manifest,
+        inventory=inventory,
+        source_texts=source_texts,
+    )
 
     texts = {
         name: (candidate_root / name).read_text(encoding="utf-8")
@@ -155,11 +202,10 @@ def validate_devui_exact_reuse_candidate(
     if combined.count("fetch(`/api/devui/focus?subject=${encodeURIComponent(subject)}`") != 1:
         raise DevuiCandidateProvenanceError("Focus must perform exactly one subject-bound API read")
 
-    token_source = (repo_root / "app/web/static/colors_and_type.css").read_text(encoding="utf-8")
-    source_tokens = set(re.findall(r"(--[a-z0-9-]+)\s*:", token_source))
-    candidate_tokens = set(re.findall(r"var\((--[a-z0-9-]+)\)", combined))
-    if not candidate_tokens.issubset(source_tokens):
-        raise DevuiCandidateProvenanceError("candidate uses a token absent from the accepted source")
+    _validate_candidate_tokens(
+        candidate_text=combined,
+        token_source=source_texts["app/web/static/colors_and_type.css"],
+    )
 
     if _git(repo_root, "rev-parse", f"{revision}:{subtree}") != candidate["tree"]:
         raise DevuiCandidateProvenanceError("revision does not contain the exact candidate tree")

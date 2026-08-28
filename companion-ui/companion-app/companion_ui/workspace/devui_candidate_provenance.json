@@ -32,25 +32,25 @@
     {
       "candidate_files": ["overview.html", "focus.html"],
       "source_path": "app/web/static/cockpit.html",
-      "source_patterns": ["claim", "band", "card", "void refuse", "btn btn-out"],
+      "source_patterns": ["<section class=\"claim\" id=\"claim\">", "<section class=\"void refuse\">", "<span class=\"btn btn-out\""],
       "transforms": ["content_binding", "layout_reflow"]
     },
     {
       "candidate_files": ["devui.css"],
       "source_path": "app/web/static/cockpit.css",
-      "source_patterns": [".claim", ".band", ".card", ".body", ".rungs", ".btn.btn-out", ".void.refuse"],
+      "source_patterns": [".claim{", ".band{", ".card{", ".body{", ".rungs{", ".btn-out{", ".void.refuse{"],
       "transforms": ["layout_reflow"]
     },
     {
       "candidate_files": ["devui.css"],
       "source_path": "app/web/static/colors_and_type.css",
-      "source_patterns": ["accepted token declarations"],
+      "source_patterns": ["--bg-base:", "--font-ui:", "--space-4:", "--radius-sm:"],
       "transforms": ["local_system_font_no_egress_normalization"]
     },
     {
       "candidate_files": ["overview.js", "focus.js"],
       "source_path": "app/web/static/cockpit.js",
-      "source_patterns": ["read-time GET", "source text rendering", "read-only navigation"],
+      "source_patterns": ["function esc(value) {", "function cardMarkup(item) {", "function bandMarkup(band) {", "fetch(\"/api/cockpit/registry\", { cache: \"no-store\" })"],
       "transforms": ["content_binding", "interaction_binding"]
     }
   ],
