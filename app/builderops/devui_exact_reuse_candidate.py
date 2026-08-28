@@ -31,6 +31,13 @@ _PROHIBITED_BROWSER_CAPABILITIES = (
     "serviceWorker",
     "WebSocket",
     "EventSource",
+    "XMLHttpRequest",
+    "sendBeacon",
+    "window.open",
+    ".assign(",
+    ".replace(",
+    "import(",
+    "eval(",
     'method: "POST"',
     'method: "PUT"',
     'method: "PATCH"',
@@ -111,6 +118,7 @@ def _validate_bindings(
     *,
     inventory: dict[str, str],
     source_texts: dict[str, str],
+    candidate_texts: dict[str, str],
 ) -> None:
     source = manifest["source"]
     bound_files: set[str] = set()
@@ -128,7 +136,32 @@ def _validate_bindings(
                 raise DevuiCandidateProvenanceError(
                     f"binding anchor is absent from immutable source: {source_path}"
                 )
-        bound_files.update(binding.get("candidate_files", []))
+        candidate_files = binding.get("candidate_files", [])
+        candidate_patterns = binding.get("candidate_patterns")
+        if not isinstance(candidate_patterns, dict) or set(candidate_patterns) != set(candidate_files):
+            raise DevuiCandidateProvenanceError(
+                "binding must cover every named candidate file with exact anchors"
+            )
+        for candidate_file in candidate_files:
+            if candidate_file not in candidate_texts:
+                raise DevuiCandidateProvenanceError(
+                    "binding names a candidate outside the verified inventory"
+                )
+            anchors = candidate_patterns[candidate_file]
+            if not isinstance(anchors, list) or not anchors:
+                raise DevuiCandidateProvenanceError(
+                    "binding requires exact candidate anchors"
+                )
+            for anchor in anchors:
+                if (
+                    not isinstance(anchor, str)
+                    or not anchor
+                    or anchor not in candidate_texts[candidate_file]
+                ):
+                    raise DevuiCandidateProvenanceError(
+                        f"binding anchor is absent from candidate: {candidate_file}"
+                    )
+        bound_files.update(candidate_files)
     if bound_files != set(inventory):
         raise DevuiCandidateProvenanceError("every candidate file must have a source binding")
 
@@ -142,16 +175,60 @@ def _validate_candidate_tokens(*, candidate_text: str, token_source: str) -> Non
         )
 
 
+def _validate_browser_safety(candidate_texts: dict[str, str]) -> str:
+    combined = "\n".join(candidate_texts.values())
+    if re.search(r"(?:https?:)?//", combined, flags=re.IGNORECASE):
+        raise DevuiCandidateProvenanceError(
+            "candidate contains an external or scheme-relative URL"
+        )
+    if re.search(
+        r"@import|url\s*\(", candidate_texts["devui.css"], flags=re.IGNORECASE
+    ):
+        raise DevuiCandidateProvenanceError(
+            "candidate CSS can leave the committed asset set"
+        )
+    if any(capability in combined for capability in _PROHIBITED_BROWSER_CAPABILITIES):
+        raise DevuiCandidateProvenanceError(
+            "candidate contains stateful, mutating, or unreviewed browser capability"
+        )
+    if len(re.findall(r"\bfetch\s*\(", combined)) != 2:
+        raise DevuiCandidateProvenanceError(
+            "candidate must contain exactly the two reviewed API reads"
+        )
+    if combined.count(
+        'fetch("/api/devui/overview", {method: "GET", cache: "no-store"})'
+    ) != 1:
+        raise DevuiCandidateProvenanceError(
+            "Overview must perform exactly one fixed GET API read"
+        )
+    if combined.count(
+        'fetch(`/api/devui/focus?subject=${encodeURIComponent(subject)}`, {method: "GET", cache: "no-store"})'
+    ) != 1:
+        raise DevuiCandidateProvenanceError(
+            "Focus must perform exactly one subject-bound GET API read"
+        )
+    if combined.count('href="/devui/overview"') != 1:
+        raise DevuiCandidateProvenanceError(
+            "candidate must contain exactly one literal Overview return"
+        )
+    return combined
+
+
 def validate_devui_exact_reuse_candidate(
     repo_root: Path, *, revision: str
 ) -> dict[str, str]:
     """Validate inventory, Git objects, closed transforms, and browser safety."""
 
-    if not isinstance(revision, str) or not revision.strip():
+    if not isinstance(revision, str) or re.fullmatch(r"[0-9a-f]{40}", revision) is None:
         raise DevuiCandidateProvenanceError(
-            "an explicit reviewed Git revision is required"
+            "an explicit canonical reviewed commit SHA is required"
         )
-    manifest = _load_manifest(repo_root, revision=revision)
+    reviewed_commit = _git(repo_root, "rev-parse", f"{revision}^{{commit}}")
+    if reviewed_commit != revision:
+        raise DevuiCandidateProvenanceError(
+            "reviewed revision did not resolve to the supplied commit SHA"
+        )
+    manifest = _load_manifest(repo_root, revision=reviewed_commit)
     source = manifest["source"]
     candidate = manifest["candidate"]
     subtree = candidate["subtree"]
@@ -180,37 +257,28 @@ def validate_devui_exact_reuse_candidate(
     transforms = manifest.get("transform_allowlist")
     if set(transforms or []) != _ALLOWED_TRANSFORMS or len(transforms) != len(_ALLOWED_TRANSFORMS):
         raise DevuiCandidateProvenanceError("transform allowlist is not the closed #4836 set")
+    candidate_texts = {
+        name: (candidate_root / name).read_text(encoding="utf-8")
+        for name in actual_names
+    }
     _validate_bindings(
         manifest,
         inventory=inventory,
         source_texts=source_texts,
+        candidate_texts=candidate_texts,
     )
 
-    texts = {
-        name: (candidate_root / name).read_text(encoding="utf-8")
-        for name in actual_names
-    }
-    combined = "\n".join(texts.values())
-    if re.search(r"(?:https?:)?//", combined, flags=re.IGNORECASE):
-        raise DevuiCandidateProvenanceError("candidate contains an external or scheme-relative URL")
-    if re.search(r"@import|url\s*\(", texts["devui.css"], flags=re.IGNORECASE):
-        raise DevuiCandidateProvenanceError("candidate CSS can leave the committed asset set")
-    if any(capability in combined for capability in _PROHIBITED_BROWSER_CAPABILITIES):
-        raise DevuiCandidateProvenanceError("candidate contains stateful or mutating browser capability")
-    if combined.count('fetch("/api/devui/overview"') != 1:
-        raise DevuiCandidateProvenanceError("Overview must perform exactly one fixed API read")
-    if combined.count("fetch(`/api/devui/focus?subject=${encodeURIComponent(subject)}`") != 1:
-        raise DevuiCandidateProvenanceError("Focus must perform exactly one subject-bound API read")
+    combined = _validate_browser_safety(candidate_texts)
 
     _validate_candidate_tokens(
         candidate_text=combined,
         token_source=source_texts["app/web/static/colors_and_type.css"],
     )
 
-    if _git(repo_root, "rev-parse", f"{revision}:{subtree}") != candidate["tree"]:
+    if _git(repo_root, "rev-parse", f"{reviewed_commit}:{subtree}") != candidate["tree"]:
         raise DevuiCandidateProvenanceError("revision does not contain the exact candidate tree")
     for name, oid in inventory.items():
-        if _git(repo_root, "rev-parse", f"{revision}:{subtree}/{name}") != oid:
+        if _git(repo_root, "rev-parse", f"{reviewed_commit}:{subtree}/{name}") != oid:
             raise DevuiCandidateProvenanceError(f"revision candidate blob changed: {name}")
 
     return {
