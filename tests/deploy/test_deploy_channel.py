@@ -20,8 +20,6 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 _MACOS_MALLOC_STACK_LOGGING_PREFIX = "MallocStackLogging"
 _DEPLOY_READINESS_TIMEOUT_SECONDS = 30
 _DEPLOY_CLEANUP_TIMEOUT_SECONDS = 5
-_PREFLOOR_MAIN_SHA = "a5df4ffa30150ac76ac96ae9ab88c4e96ffab4d4"
-_PREATTESTATION_FLOOR_SHA = "5c30e8cb034fead9b5776a3754e7fe97778488cc"
 
 
 def _without_macos_malloc_stack_logging(
@@ -561,24 +559,17 @@ def _settings_rebind_unsafe_and_safe_heads(root: Path) -> tuple[str, str]:
     return unsafe_sha, safe_sha
 
 
-def _historical_prefloor_and_preattestation_floor_heads(
+def _prefloor_and_preattestation_floor_heads(
     root: Path,
 ) -> tuple[str, str]:
-    """Materialize the real a5df -> 5c30 runtime transition in the harness."""
-
-    def historical_blob(sha: str, path: str) -> str:
-        return subprocess.check_output(
-            ["git", "show", f"{sha}:{path}"],
-            cwd=REPO_ROOT,
-            text=True,
-        )
+    """Materialize a self-contained pre-floor -> pre-attestation transition."""
 
     runtime_path = root / "app/instance/runtime.py"
     module_path = root / "app/instance/settings_rebind.py"
     capability_path = root / "app/instance/settings_rebind_runtime_capability.json"
 
     runtime_path.write_text(
-        historical_blob(_PREFLOOR_MAIN_SHA, "app/instance/runtime.py"),
+        "# Runtime before the dormant settings-rebind installer.\n",
         encoding="utf-8",
     )
     module_path.unlink(missing_ok=True)
@@ -589,7 +580,7 @@ def _historical_prefloor_and_preattestation_floor_heads(
         check=True,
     )
     subprocess.run(
-        ["git", "commit", "-qm", f"fixture pre-floor {_PREFLOOR_MAIN_SHA[:8]}"],
+        ["git", "commit", "-qm", "fixture pre-floor runtime"],
         cwd=root,
         check=True,
     )
@@ -598,14 +589,11 @@ def _historical_prefloor_and_preattestation_floor_heads(
     ).strip()
 
     runtime_path.write_text(
-        historical_blob(_PREATTESTATION_FLOOR_SHA, "app/instance/runtime.py"),
+        "# Runtime with settings-rebind-install-dormant support.\n",
         encoding="utf-8",
     )
     module_path.write_text(
-        historical_blob(
-            _PREATTESTATION_FLOOR_SHA,
-            "app/instance/settings_rebind.py",
-        ),
+        "# Dormant settings-rebind module before capability attestation.\n",
         encoding="utf-8",
     )
     capability_path.unlink(missing_ok=True)
@@ -619,7 +607,7 @@ def _historical_prefloor_and_preattestation_floor_heads(
             "git",
             "commit",
             "-qm",
-            f"fixture pre-attestation floor {_PREATTESTATION_FLOOR_SHA[:8]}",
+            "fixture pre-attestation floor runtime",
         ],
         cwd=root,
         check=True,
@@ -740,11 +728,11 @@ def test_absent_settings_floor_receipt_blocks_module_only_predecessor(
     assert not Path(env["FAKE_DEPLOY_EVENT_LOG"]).exists()
 
 
-def test_absent_receipt_blocks_real_preattestation_floor_to_prefloor_rollback(
+def test_absent_receipt_blocks_preattestation_floor_to_prefloor_rollback(
     tmp_path: Path,
 ) -> None:
     root, env, _ = _deploy_harness(tmp_path)
-    prefloor_sha, floor_sha = _historical_prefloor_and_preattestation_floor_heads(
+    prefloor_sha, floor_sha = _prefloor_and_preattestation_floor_heads(
         root
     )
     (root / "config/deploy/dev.env").write_text(
@@ -760,11 +748,11 @@ def test_absent_receipt_blocks_real_preattestation_floor_to_prefloor_rollback(
     assert not Path(env["FAKE_DEPLOY_EVENT_LOG"]).exists()
 
 
-def test_floor_capability_inspection_failure_blocks_manual_historical_rollback(
+def test_floor_capability_inspection_failure_blocks_manual_transition_rollback(
     tmp_path: Path,
 ) -> None:
     root, env, _ = _deploy_harness(tmp_path)
-    prefloor_sha, floor_sha = _historical_prefloor_and_preattestation_floor_heads(
+    prefloor_sha, floor_sha = _prefloor_and_preattestation_floor_heads(
         root
     )
     (root / "config/deploy/dev.env").write_text(
@@ -1609,11 +1597,11 @@ def test_missing_settings_floor_receipt_never_auto_restarts_module_only_predeces
     assert strict_recreates == []
 
 
-def test_missing_receipt_never_auto_rolls_real_floor_candidate_back_to_prefloor(
+def test_missing_receipt_never_auto_rolls_floor_candidate_back_to_prefloor(
     tmp_path: Path,
 ) -> None:
     root, env, _ = _deploy_harness(tmp_path)
-    previous_sha, sha = _historical_prefloor_and_preattestation_floor_heads(root)
+    previous_sha, sha = _prefloor_and_preattestation_floor_heads(root)
     env["FAKE_SHA"] = sha
     pin_path = root / "config/deploy/dev.env"
     pin_path.write_text(
@@ -1642,11 +1630,11 @@ def test_missing_receipt_never_auto_rolls_real_floor_candidate_back_to_prefloor(
     )
 
 
-def test_floor_capability_inspection_failure_retains_historical_deploy_candidate(
+def test_floor_capability_inspection_failure_retains_deploy_candidate(
     tmp_path: Path,
 ) -> None:
     root, env, _ = _deploy_harness(tmp_path)
-    previous_sha, sha = _historical_prefloor_and_preattestation_floor_heads(root)
+    previous_sha, sha = _prefloor_and_preattestation_floor_heads(root)
     env["FAKE_SHA"] = sha
     pin_path = root / "config/deploy/dev.env"
     pin_path.write_text(
