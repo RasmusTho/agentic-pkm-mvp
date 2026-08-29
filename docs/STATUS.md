@@ -5,8 +5,11 @@ Owner: Runtime / current-state SoT
 Temporal class: operational
 Review cadence: weekly
 Source of truth: mixed
-Last reviewed: 2026-08-22
+Last reviewed: 2026-08-29
 Last live runtime verification: 2026-08-22 (new-host topology; see `docs/ENVIRONMENTS.md`)
+Last verified against (SQ-04 candidate): PR #5174, `app/standing_questions/evidence_matching.py`,
+`app/standing_questions/answer_refresh.py`, and focused Standing Questions tests on 2026-08-29;
+live test-channel and owner-UAT evidence remain absent.
 Last verified against: docs/ARCHITECTURE.md, docs/ROADMAP.md, docs/DOCS_INDEX.md, docs/OPERATIONS.md, docs/HUMAN-FLOWS.md, docs/CONTEXTUAL_RELEVANCE_ENGINE/README.md, docs/CONCEPTS/MOMENT_ARTIFACT_CONTRACT.md, docs/CONCEPTS/RELEVANCE_EVALUATOR_CONTRACT.md, docs/CONCEPTS/REACHOUT_AND_SCARCITY_GATE_CONTRACT.md, docs/CONCEPTS/AGENT_MEMORY_AND_KNOWLEDGE_CONTRACT.md, docs/plans/CONTEXTUAL_RELEVANCE_ENGINE.md, docs/CKM_COCKPIT_DIRECTION_B/README.md, docs/BUILDEROPS_CONTROL_PLANE/DEMERZEL_REVIEW_MERGE_ORCHESTRATION.md, app/agent_memory/provisional_recall.py, app/agents/ask/graph.py, app/relevance/evaluator.py, app/relevance/materialization.py, app/relevance/attention_loop.py, app/relevance/now_surface.py, app/instance/filesystem_identity.py, app/instance/vault_registry.py, app/dispatcher/verification_api.py, app/dispatcher/verification_runtime.py, scripts/select_pr_tests.py, companion-ui/companion-app/companion_ui/workspace/now_surface.py, tests/agent_memory/test_provisional_memory_recall.py, tests/agent_memory/test_provisional_memory_call_sites.py, tests/relevance/test_vault_native_moments.py, tests/relevance/test_attention_loop_runtime.py, merged PRs #1948/#1977/#2092/#2097/#2098/#2115/#2119/#2127/#2128/#2129/#2131/#2133/#2135/#2137/#2140/#2142/#2636/#2642/#2643/#2645/#2656/#2678/#2686/#2689/#2692/#3730/#4224/#4244/#4420/#4424, issue #3720, PRs #3743/#4416, closed parent issue #4080, live issue #3603, and current repo state at `origin/main` `f0bafe6e79f3cc1a087b2c2fcbe40450c8302da2` on 2026-07-30
 
 ### Live environment baseline (2026-08-22)
@@ -40,6 +43,11 @@ Roadmap reset note: `docs/plans/MAJOR_ROADMAP_RESET_2026_06_04.md` is the accept
 input for sequencing, not a runtime-promotion document. This status file remains the current-state
 owner doc. Capabilities should be read as shipped only when code plus tests or operator evidence are
 present and any owner-doc promotion gate has been satisfied.
+
+Standing Questions validation line (2026-08-29): the SQ-04 candidate delivery in PR #5174 adds
+the evidence-delta answer-refresh path and the explicit SQ-03 match-then-refresh composition, with
+focused contract coverage. It remains a review candidate: live test-channel capability validation,
+Companion review-surface validation, and owner acceptance are not claimed here.
 
 Target SBS status note: `docs/SYSTEM_BREAKDOWN_STRUCTURE.md` is adopted as target-state architecture for long-horizon subsystem boundaries and change-impact reasoning. It is not fully implemented. Current implementation may contain transition debt tracked through `docs/architecture/SBS_TRANSITION_DEBT.md`; operationalization is tracked through `docs/architecture/SBS_OPERATIONALIZATION_PLAN.md`, `docs/ROADMAP.md`, tracking issue #2337, and delivery issue set #2355. Current shipped behavior remains owned by this file and `docs/ARCHITECTURE.md`.
 
