@@ -946,6 +946,7 @@ def test_ordinary_boot_rejects_secret_pattern_operation_ids_without_echo(
         ("manifest", "non_finite", "compatibility_resolution_failed:manifest_invalid_shape"),
         ("manifest", "huge_integer", "compatibility_resolution_failed:manifest_invalid_shape"),
         ("manifest", "parser_huge_integer", "compatibility_resolution_failed:manifest_unreadable"),
+        ("manifest", "duplicate_key", "compatibility_resolution_failed:manifest_unreadable"),
         ("compose", "missing", "compatibility_resolution_failed:compose_unreadable"),
         ("compose", "malformed", "compatibility_resolution_failed:compose_unreadable"),
         ("compose", "invalid_utf8", "compatibility_resolution_failed:compose_unreadable"),
@@ -955,6 +956,7 @@ def test_ordinary_boot_rejects_secret_pattern_operation_ids_without_echo(
         ("compose", "non_finite", "compatibility_resolution_failed:compose_invalid_shape"),
         ("compose", "huge_integer", "compatibility_resolution_failed:compose_invalid_shape"),
         ("compose", "parser_huge_integer", "compatibility_resolution_failed:compose_unreadable"),
+        ("compose", "duplicate_key", "compatibility_resolution_failed:compose_unreadable"),
         (
             "dependencies",
             "missing",
@@ -983,6 +985,11 @@ def test_ordinary_boot_rejects_secret_pattern_operation_ids_without_echo(
         (
             "dependencies",
             "parser_huge_integer",
+            "compatibility_resolution_failed:dependencies_unreadable",
+        ),
+        (
+            "dependencies",
+            "duplicate_key",
             "compatibility_resolution_failed:dependencies_unreadable",
         ),
     ],
@@ -1030,6 +1037,17 @@ def test_ordinary_boot_cli_input_failure_writes_one_terminal_result(
             damaged_path.write_text(f"value: {digits}\n", encoding="utf-8")
         else:
             damaged_path.write_text(f'{{"value": {digits}}}', encoding="utf-8")
+    elif damage == "duplicate_key":
+        if input_name == "compose":
+            damaged_path.write_text(
+                "services:\n  app: {}\n  app: {}\n",
+                encoding="utf-8",
+            )
+        else:
+            damaged_path.write_text(
+                '{"value": "first", "value": "second"}',
+                encoding="utf-8",
+            )
     elif input_name == "compose":
         damaged_path.write_text("value: .nan\n", encoding="utf-8")
     else:

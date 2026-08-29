@@ -73,6 +73,47 @@ class _OrdinaryBootInputError(RuntimeError):
         super().__init__(code)
 
 
+class _UniqueKeySafeLoader(yaml.SafeLoader):
+    def construct_mapping(
+        self,
+        node: yaml.nodes.MappingNode,
+        deep: bool = False,
+    ) -> dict[object, object]:
+        self.flatten_mapping(node)
+        mapping: dict[object, object] = {}
+        for key_node, value_node in node.value:
+            key = self.construct_object(key_node, deep=deep)
+            try:
+                duplicate = key in mapping
+            except TypeError as exc:
+                raise yaml.constructor.ConstructorError(
+                    "while constructing a mapping",
+                    node.start_mark,
+                    "found an unhashable key",
+                    key_node.start_mark,
+                ) from exc
+            if duplicate:
+                raise yaml.constructor.ConstructorError(
+                    "while constructing a mapping",
+                    node.start_mark,
+                    "found a duplicate key",
+                    key_node.start_mark,
+                )
+            mapping[key] = self.construct_object(value_node, deep=deep)
+        return mapping
+
+
+def _reject_duplicate_input_keys(
+    pairs: list[tuple[str, object]],
+) -> dict[str, object]:
+    value: dict[str, object] = {}
+    for key, child in pairs:
+        if key in value:
+            raise ValueError("duplicate input key")
+        value[key] = child
+    return value
+
+
 @dataclass(frozen=True)
 class _Dependency:
     name: str
@@ -824,7 +865,10 @@ def run_ordinary_boot(
 
 def _read_json_mapping(path: Path, *, label: str) -> Mapping[str, Any]:
     try:
-        value = json.loads(path.read_text(encoding="utf-8"))
+        value = json.loads(
+            path.read_text(encoding="utf-8"),
+            object_pairs_hook=_reject_duplicate_input_keys,
+        )
     except (
         OSError,
         UnicodeDecodeError,
@@ -841,7 +885,11 @@ def _read_json_mapping(path: Path, *, label: str) -> Mapping[str, Any]:
 
 def _read_compose_mapping(path: Path) -> Mapping[str, Any]:
     try:
-        value = yaml.safe_load(path.read_text(encoding="utf-8"))
+        loader = _UniqueKeySafeLoader(path.read_text(encoding="utf-8"))
+        try:
+            value = loader.get_single_data()
+        finally:
+            loader.dispose()
     except (OSError, UnicodeDecodeError, yaml.YAMLError, RecursionError, ValueError) as exc:
         raise _OrdinaryBootInputError("compose_unreadable") from exc
     if not isinstance(value, Mapping) or not all(isinstance(key, str) for key in value):
