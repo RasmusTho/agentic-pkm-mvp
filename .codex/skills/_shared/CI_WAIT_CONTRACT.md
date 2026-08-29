@@ -34,13 +34,16 @@ drains GraphQL to zero and stalls every other agent's reads — a recurring, sys
 6. **Use the shared helper, preferably through the blessed script.** Do not hand-roll CI or Codex
    wait loops; `scripts/await_pr_checks.sh` delegates shared backoff/verdict behavior to
    `app.dispatcher.poll_backoff`.
-7. **Dedupe check-runs by latest record per name before classifying.** GitHub keeps every check-run
-   record for a head SHA, so a re-run after a body/config fix leaves both the stale failed record
-   and the newer successful one for the same check name on one SHA (observed on PR #2915 and
-   #2924's `pr-contract` check). `scripts/await_pr_checks.sh` keeps only the latest record per
-   check-run name (ranked by `started_at`, falling back to run id) before green/red classification;
-   `epic-run-state lifecycle-plan` reuses that shared latest-record selector for terminal dry-runs.
-   A genuinely failed latest record still fails closed.
+7. **Dedupe check-runs by authoritative replacement per name before classifying.** GitHub keeps
+   every check-run record for a head SHA, so a re-run after a body/config fix leaves both the stale
+   failed record and the newer successful one for the same check name on one SHA (observed on PR
+   #2915 and #2924's `pr-contract` check). `scripts/await_pr_checks.sh` keeps the latest
+   non-skipped record per check-run name (ranked by `started_at`, falling back to run id); it falls
+   back to the latest skipped record only when that name has no execution. A skipped duplicate from
+   an inapplicable event therefore cannot hide a running or failed required execution, while a
+   later executed success still replaces an earlier failure. `epic-run-state lifecycle-plan` reuses
+   that shared selector for terminal dry-runs. A genuinely failed retained record still fails
+   closed.
 8. **A dirty PR schedules no pull_request workflows — absence of a required check is never
    success.** (#4605, LearningSignal `lrn_20260729154323_f134857a`, seen on PR #4354.) When a PR
    is `mergeable_state=dirty`, GitHub cannot compute `refs/pull/<n>/merge`, so the repo's

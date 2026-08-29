@@ -144,12 +144,20 @@ sleep "$INITIAL_WAIT"
 # for the same check NAME on the same SHA. Classifying on the raw list fails closed on a check that
 # has already gone green on its latest run (observed live on PR #2915 and #2924: `pr-contract`
 # failure+success on one SHA). Before pending/conclusion classification, keep only the LATEST
-# record per check-run `name` — ranked by `started_at` (fallback `id` on a tie/missing timestamp) —
-# and classify off that deduped set only. A genuinely failed LATEST record still fails closed.
+# record per check-run `name` — ranked by `started_at` (fallback `id` on a tie/missing timestamp).
+# A later `skipped` record is not an executed replacement: when a name has any non-skipped record,
+# retain its latest non-skipped record instead. This keeps a required running or failed execution
+# authoritative while preserving the normal failure-to-success rerun replacement. Classify only off
+# that deduped set. A genuinely failed retained record still fails closed.
 DEDUPE_LATEST_PER_NAME='
   [.check_runs[]]
   | group_by(.name)
-  | map(sort_by([(.started_at // ""), .id]) | last)
+  | map(
+      sort_by([(.started_at // ""), .id])
+      | . as $runs
+      | ($runs | map(select(.conclusion != "skipped"))) as $executed
+      | if ($executed | length) > 0 then $executed[-1] else $runs[-1] end
+    )
 '
 
 # Fetch check-runs once per iteration into a single guarded response, then derive BOTH the
