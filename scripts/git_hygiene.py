@@ -10,6 +10,7 @@ import hashlib
 import datetime as dt
 import json
 import math
+import os
 import re
 import subprocess
 import time
@@ -428,14 +429,14 @@ def _targeted_remote_candidate(
     """
     required = {
         "repository", "source_ref", "source_sha", "archive_ref", "owner", "successor",
-        "retention_class", "review_at", "discard",
+        "retention_class", "review_at", "discard", "authority",
     }
     if not required <= set(candidate) or candidate.get("repository") != repository:
         raise ValueError("candidate_identity_incomplete_or_wrong_repository")
     source_ref = candidate["source_ref"]
     archive_ref = candidate["archive_ref"]
     source_sha = candidate["source_sha"]
-    if not all(isinstance(value, str) and value.strip() for value in (source_ref, archive_ref, source_sha, candidate["owner"], candidate["successor"], candidate["review_at"])):
+    if not all(isinstance(value, str) and value.strip() for value in (source_ref, archive_ref, source_sha, candidate["owner"], candidate["successor"], candidate["review_at"])) or not re.fullmatch(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ", candidate["review_at"]):
         raise ValueError("candidate_identity_malformed")
     if not re.fullmatch(r"[0-9a-f]{40}", source_sha):
         raise ValueError("candidate_source_sha_malformed")
@@ -453,7 +454,44 @@ def _targeted_remote_candidate(
     discard = candidate["discard"]
     if not isinstance(discard, Mapping) or discard.get("state") != "retain" or discard.get("receipt") is not None:
         raise ValueError("candidate_discard_state_not_explicit_retain")
+    authority = candidate["authority"]
+    if not isinstance(authority, Mapping) or authority.get("repository") != repository or authority.get("lease_conflicts") or authority.get("lifecycle_conflicts"):
+        raise ValueError("candidate_destructive_authority_invalid")
+    protected_heads = authority.get("protected_pr_heads")
+    if not isinstance(protected_heads, Mapping) or not {"4728", "4813"} <= set(protected_heads):
+        raise ValueError("candidate_protected_pr_authority_missing")
+    if source_sha in set(protected_heads.values()):
+        raise ValueError("candidate_source_is_live_protected_pr_head")
     return {key: candidate.get(key) for key in sorted(required | {"governing_issue", "no_issue_lane"})}
+
+
+def _canonical_origin(cwd: Path) -> str:
+    result = run_git_result(["remote", "get-url", "origin"], cwd)
+    if result.returncode != 0:
+        raise RuntimeError("canonical_origin_unavailable")
+    raw = result.stdout.strip().removesuffix(".git")
+    match = re.fullmatch(r"(?:https://github\.com/|git@github\.com:)([^/]+/[^/]+)", raw)
+    if not match:
+        raise RuntimeError("canonical_origin_invalid")
+    return match.group(1)
+
+
+def _write_receipt(path: Path, receipt: Mapping[str, Any]) -> None:
+    """Durably replace one receipt; completed is monotonic at the caller."""
+    payload = (json.dumps(receipt, sort_keys=True) + "\n").encode()
+    temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    try:
+        os.write(fd, payload)
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+    os.replace(temporary, path)
+    directory_fd = os.open(path.parent, os.O_RDONLY)
+    try:
+        os.fsync(directory_fd)
+    finally:
+        os.close(directory_fd)
 
 
 def targeted_remote_cleanup(
@@ -471,53 +509,68 @@ def targeted_remote_cleanup(
     """
     if not 1 <= len(candidates) <= 5:
         return {"ok": False, "completed": [], "error": "candidate_batch_size_invalid"}
+    if _canonical_origin(cwd) != repository:
+        return {"ok": False, "completed": [], "error": "canonical_origin_mismatch"}
     receipt_dir.mkdir(parents=True, exist_ok=True)
     completed: list[dict[str, Any]] = []
-    for raw in candidates:
-        try:
+    validated: list[tuple[dict[str, Any], str]] = []
+    try:
+        for raw in candidates:
             candidate = _targeted_remote_candidate(raw, repository, cwd)
             identity = json.dumps(candidate, sort_keys=True, separators=(",", ":"))
-            receipt_id = hashlib.sha256(identity.encode()).hexdigest()
+            validated.append((candidate, hashlib.sha256(identity.encode()).hexdigest()))
+        archive_owners = {candidate["archive_ref"]: receipt_id for candidate, receipt_id in validated}
+        if len(archive_owners) != len(validated):
+            raise ValueError("candidate_archive_namespace_collision")
+    except (ValueError, RuntimeError) as exc:
+        return {"ok": False, "completed": [], "error": str(exc)}
+    for candidate, receipt_id in validated:
+        try:
             receipt_path = receipt_dir / f"{receipt_id}.json"
+            lock_path = receipt_dir / f"{receipt_id}.lock"
+            try:
+                lock_fd = os.open(lock_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            except FileExistsError:
+                raise RuntimeError("receipt_ownership_busy")
             receipt = {"version": 1, "identity": candidate, "receipt_id": receipt_id, "state": "prepared"}
-            if receipt_path.exists():
-                existing = json.loads(receipt_path.read_text(encoding="utf-8"))
-                if existing.get("identity") != candidate or existing.get("receipt_id") != receipt_id or existing.get("state") not in {"prepared", "completed"}:
-                    raise RuntimeError("receipt_identity_or_state_conflict")
-                receipt = existing
-            source_sha = _remote_ref_sha(cwd, candidate["source_ref"])
-            archive_sha = _remote_ref_sha(cwd, candidate["archive_ref"])
-            if receipt["state"] == "completed":
-                if source_sha is not None or archive_sha != candidate["source_sha"]:
-                    raise RuntimeError("completed_receipt_live_state_conflict")
-                completed.append({"receipt": str(receipt_path), "state": "completed", **candidate})
-                continue
-            if archive_sha is None:
-                if source_sha != candidate["source_sha"]:
-                    raise RuntimeError("source_identity_drift_before_archive")
-                pushed = run_git_result(["push", "--no-verify", "origin", f"{source_sha}:{candidate['archive_ref']}"], cwd)
-                if pushed.returncode != 0:
-                    raise RuntimeError("archive_push_failed")
+            try:
+                if receipt_path.exists():
+                    existing = json.loads(receipt_path.read_text(encoding="utf-8"))
+                    if existing.get("identity") != candidate or existing.get("receipt_id") != receipt_id or existing.get("state") not in {"prepared", "completed"}:
+                        raise RuntimeError("receipt_identity_or_state_conflict")
+                    receipt = existing
+                source_sha = _remote_ref_sha(cwd, candidate["source_ref"])
                 archive_sha = _remote_ref_sha(cwd, candidate["archive_ref"])
-            if archive_sha != candidate["source_sha"]:
-                raise RuntimeError("archive_sha_mismatch")
-            # The durable prepared record exists before the irreversible command.
-            receipt_path.write_text(json.dumps(receipt, sort_keys=True) + "\n", encoding="utf-8")
-            if source_sha is None:
-                raise RuntimeError("prepared_receipt_source_absent_ambiguous")
-            if source_sha != candidate["source_sha"]:
-                raise RuntimeError("source_identity_drift_before_delete")
-            deleted = run_git_result([
-                "push", "--no-verify", f"--force-with-lease={candidate['source_ref']}:{source_sha}",
-                "origin", f":{candidate['source_ref']}",
-            ], cwd)
-            if deleted.returncode != 0:
-                raise RuntimeError("source_cas_delete_failed")
-            if _remote_ref_sha(cwd, candidate["source_ref"]) is not None or _remote_ref_sha(cwd, candidate["archive_ref"]) != candidate["source_sha"]:
-                raise RuntimeError("post_delete_readback_failed")
-            receipt["state"] = "completed"
-            receipt_path.write_text(json.dumps(receipt, sort_keys=True) + "\n", encoding="utf-8")
-            completed.append({"receipt": str(receipt_path), "state": "completed", **candidate})
+                if receipt["state"] == "completed":
+                    if source_sha is not None or archive_sha != candidate["source_sha"]:
+                        raise RuntimeError("completed_receipt_live_state_conflict")
+                    completed.append({"receipt": str(receipt_path), "state": "completed", **candidate})
+                    continue
+                if archive_sha is None:
+                    if source_sha != candidate["source_sha"]:
+                        raise RuntimeError("source_identity_drift_before_archive")
+                    pushed = run_git_result(["push", "--no-verify", "origin", f"{source_sha}:{candidate['archive_ref']}"], cwd)
+                    if pushed.returncode != 0:
+                        raise RuntimeError("archive_push_failed")
+                    archive_sha = _remote_ref_sha(cwd, candidate["archive_ref"])
+                if archive_sha != candidate["source_sha"]:
+                    raise RuntimeError("archive_sha_mismatch")
+                _write_receipt(receipt_path, receipt)
+                if source_sha is None:
+                    raise RuntimeError("prepared_receipt_source_absent_ambiguous")
+                if source_sha != candidate["source_sha"]:
+                    raise RuntimeError("source_identity_drift_before_delete")
+                deleted = run_git_result(["push", "--no-verify", f"--force-with-lease={candidate['source_ref']}:{source_sha}", "origin", f":{candidate['source_ref']}"], cwd)
+                if deleted.returncode != 0:
+                    raise RuntimeError("source_cas_delete_failed")
+                if _remote_ref_sha(cwd, candidate["source_ref"]) is not None or _remote_ref_sha(cwd, candidate["archive_ref"]) != candidate["source_sha"]:
+                    raise RuntimeError("post_delete_readback_failed")
+                receipt["state"] = "completed"
+                _write_receipt(receipt_path, receipt)
+                completed.append({"receipt": str(receipt_path), "state": "completed", **candidate})
+            finally:
+                os.close(lock_fd)
+                lock_path.unlink(missing_ok=True)
         except (OSError, ValueError, RuntimeError, json.JSONDecodeError) as exc:
             return {"ok": False, "completed": completed, "error": str(exc)}
     return {"ok": True, "completed": completed}

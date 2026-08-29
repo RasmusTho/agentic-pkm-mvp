@@ -43,6 +43,12 @@ receipt only after source absence and exact archive-SHA readback; a retry is val
 only when the same identity receipt and both live refs agree. Any drift stops the
 batch before later candidates are touched.
 
+The entrypoint canonicalises `origin` to the caller's repository identity and requires
+fresh candidate authority with empty lifecycle/lease conflicts plus the live protected
+heads for PR #4728 and #4813. Receipt ownership is exclusive per identity digest;
+prepared and completed transitions use write+fsync, atomic replace, and directory fsync.
+Batch archive refs are preflighted for collisions before any remote side effect.
+
 Archive refs are retained by default. `review_at` is only a review trigger for
 `safety_archive` and `quarantine`; elapsed time never authorizes archive deletion,
 and a missing or non-explicit discard receipt remains a retain decision.

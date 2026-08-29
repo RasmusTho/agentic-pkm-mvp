@@ -24,6 +24,7 @@ def _targeted_candidate(**overrides):
         "retention_class": "safety_archive",
         "review_at": "2030-02-01T00:00:00Z",
         "discard": {"state": "retain", "receipt": None},
+        "authority": {"repository": "RasmusTho/agentic-pkm-mvp", "lease_conflicts": [], "lifecycle_conflicts": [], "protected_pr_heads": {"4728": "c" * 40, "4813": "d" * 40}},
     }
     candidate.update(overrides)
     return candidate
@@ -32,6 +33,8 @@ def _targeted_candidate(**overrides):
 def _remote_cleanup_transport(refs, commands, *, advance_before_delete=False):
     def fake(args: list[str], _cwd: Path):
         commands.append(args)
+        if args == ["remote", "get-url", "origin"]:
+            return subprocess.CompletedProcess(["git", *args], 0, "https://github.com/RasmusTho/agentic-pkm-mvp.git\n", "")
         if args[:2] == ["check-ref-format", args[1]]:
             return subprocess.CompletedProcess(["git", *args], 0, "", "")
         if args[:2] == ["ls-remote", "--exit-code"]:
@@ -123,6 +126,40 @@ def test_archive_review_trigger_never_authorizes_archive_delete(tmp_path, monkey
     assert report["error"] == "prepared_receipt_source_absent_ambiguous"
     assert candidate["archive_ref"] in {candidate["archive_ref"]}
     assert not any(command[-1] == f":{candidate['archive_ref']}" for command in commands if command[0] == "push")
+
+
+def test_targeted_remote_cleanup_rejects_wrong_origin_without_push(tmp_path, monkeypatch) -> None:
+    candidate = _targeted_candidate()
+    commands: list[list[str]] = []
+    transport = _remote_cleanup_transport({}, commands)
+    def wrong_origin(args, cwd):
+        if args == ["remote", "get-url", "origin"]:
+            return subprocess.CompletedProcess(["git", *args], 0, "https://github.com/other/repo.git\n", "")
+        return transport(args, cwd)
+    monkeypatch.setattr(git_hygiene, "run_git_result", wrong_origin)
+    report = git_hygiene.targeted_remote_cleanup(tmp_path, repository=candidate["repository"], candidates=[candidate], receipt_dir=tmp_path / "receipts")
+    assert report["error"] == "canonical_origin_mismatch"
+    assert not any(command[0] == "push" for command in commands)
+
+
+def test_targeted_remote_cleanup_protects_live_pr_heads_without_push(tmp_path, monkeypatch) -> None:
+    candidate = _targeted_candidate()
+    candidate["authority"]["protected_pr_heads"]["4728"] = candidate["source_sha"]
+    commands: list[list[str]] = []
+    monkeypatch.setattr(git_hygiene, "run_git_result", _remote_cleanup_transport({}, commands))
+    report = git_hygiene.targeted_remote_cleanup(tmp_path, repository=candidate["repository"], candidates=[candidate], receipt_dir=tmp_path / "receipts")
+    assert report["error"] == "candidate_source_is_live_protected_pr_head"
+    assert not any(command[0] == "push" for command in commands)
+
+
+def test_targeted_remote_cleanup_preflights_archive_collisions_without_push(tmp_path, monkeypatch) -> None:
+    first = _targeted_candidate()
+    second = _targeted_candidate(source_ref="refs/heads/other")
+    commands: list[list[str]] = []
+    monkeypatch.setattr(git_hygiene, "run_git_result", _remote_cleanup_transport({}, commands))
+    report = git_hygiene.targeted_remote_cleanup(tmp_path, repository=first["repository"], candidates=[first, second], receipt_dir=tmp_path / "receipts")
+    assert report["error"] == "candidate_archive_namespace_collision"
+    assert not any(command[0] == "push" for command in commands)
 
 
 def _allow_lifecycle_authority(_targets):
