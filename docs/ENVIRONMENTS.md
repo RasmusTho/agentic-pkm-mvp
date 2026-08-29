@@ -369,8 +369,10 @@ canonical prod startup command.
 The STARTUP-04 receipt surface is available as `python -m
 app.release_channels.promotion_receipt`. Its promotion-test writer persists one signed,
 content-addressed PASS/FAIL terminal receipt outside resettable test roots and consumes migration
-classification through the existing release-channel reversibility module. Candidate identity,
-runner checks, and the exact migration set are bound before signing. Its prod command is a
+classification through the existing release-channel reversibility module. It requires an
+independently provisioned issuer trust root and never enrolls its caller's key. Candidate identity,
+runner checks, and the complete baseline-to-candidate migration delta derived from immutable Git
+objects are bound before signing. Its prod command is a
 pre-activation validator only: it rejects missing, stale, revoked, non-PASS, untrusted, or
 identity-mismatched evidence and has no activation, deployment, migration, restart, or bypass hook.
 Repository availability is not a live promotion-test or prod-activation receipt.

@@ -105,7 +105,11 @@ unpadded URL-safe Base64, and `issuer_signature` is exactly 64 raw Ed25519 signa
 as `ed25519:v1:<unpadded-base64url>`. `issuer_key_id` selects the trusted public key. Registry
 fields are outside the receipt digest. The registry also has exactly `trusted_keys`, an independent
 `issuer_key_id` → `public_key` mapping; admission resolves the key only from that mapping and
-requires the entry key material to match it. Registry lookup failure is a hard admission failure.
+requires the entry key material to match it. That trust-root mapping must be provisioned by an
+independent operator-controlled producer before promotion-test verification. The receipt writer
+never creates the registry or enrolls a caller-supplied key; a missing registry, absent key, or key
+mismatch fails before it reserves an attempt or publishes terminal evidence. Registry lookup
+failure is a hard admission failure.
 Prod admission requires `outcome=PASS`, matching expected
 identities from an independently supplied prod-admission manifest and `test_identity` from the
 versioned promotion-test policy, current time at or after `issued_at` and before `fresh_until`, a valid trusted
@@ -143,12 +147,14 @@ as well as padding and standard-Base64 characters.
 The P4 writer stores receipts under an explicitly configured non-resettable promotion-test store,
 never under `tmp-test/` or `vault-test/`. It derives artifact/config/schema identity from a validated
 P2 promotion-test candidate, matches that against an independently supplied prod-admission context,
-and requires the runner report to bind the same candidate, identity, check results, and exact
-migration-file set. It holds one store lock and first durability-fences an immutable attempt
-reservation. It then writes and durability-fences the content-addressed receipt and one immutable
-canonical attempt binding. Only after both terminal records revalidate does it publish the issued
-entry in the store's durability-fenced `registry.json`. The generated registry is therefore the authority input consumed by
-`prepare_prod_activation`; an absent, changed, or revoked entry fails closed. A later PASS/FAIL,
+including that context's exact Git migration-baseline identity, and requires the runner report to
+bind the same candidate, identity, and check results. Under the store lock it first verifies the
+independently provisioned trust registry and then durability-fences an immutable attempt
+reservation. It writes and durability-fences the content-addressed receipt and one immutable
+canonical attempt binding. Only after both terminal records revalidate does it add the issued entry
+to the pre-existing durability-fenced `registry.json`; it never changes `trusted_keys`. That
+registry is the authority input consumed by `prepare_prod_activation`; an absent, changed, or
+revoked entry fails closed. A later PASS/FAIL,
 timestamp, identity, candidate, or
 migration-set change for the same `pt-<id>` attempt is rejected. A crash after receipt persistence
 but before the attempt binding leaves an immutable reserved orphan; only an identical retry can
@@ -157,8 +163,10 @@ leaves terminal evidence that remains inadmissible to prod until an identical re
 matching issued entry; a revoked or conflicting entry is never repaired away. Immutable
 records use a same-directory fsynced temp hard link, remove that temp name before the final
 directory fence, and recover only a same-owner temp that is the exact published inode after a
-crash in that unlink/fence gap. Every migration is opened once without symlink traversal;
-the same captured bytes feed both the migration-set digest and
+crash in that unlink/fence gap. The complete migration delta is derived, not accepted from the
+caller: the writer diffs the independently supplied baseline commit against the candidate's exact
+source commit under `app/alembic/versions`, then materializes each target file from those immutable
+Git objects. The same object bytes feed both the migration-set digest and
 `app.release_channels.reversibility.check_migration_snapshots`. The attempt journal records the six
 boolean check outcomes and that existing classifier's receipt. The promotion
 receipt itself retains the closed semantic field set above. Migration marker rules remain owned by

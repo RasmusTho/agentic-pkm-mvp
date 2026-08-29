@@ -27,8 +27,11 @@ Runs one exact digest against the declared prod-compatible baseline; records mig
 ## Concretely
 
 `python -m app.release_channels.promotion_receipt promotion-test-verify ...` validates a P2 render
-against its ChannelManifest, binds the runner report and migration set to that exact candidate, and
-emits one durable terminal receipt for an exact attempt. `python -m app.release_channels.promotion_receipt
+against its ChannelManifest, verifies an independently provisioned issuer trust root, derives the
+complete migration delta from the prod-admission baseline and candidate Git objects, binds the
+runner report and classified delta to that exact candidate, and emits one durable terminal receipt
+for an exact attempt. The writer may add an issued receipt entry to the existing registry but never
+creates that registry or enrolls a caller-supplied trusted key. `python -m app.release_channels.promotion_receipt
 validate-prod-activation ...` accepts only a current, unrevoked PASS whose
 artifact/config/test/vault/schema identities match. The second command only returns admission
 evidence with state `validated_not_activated`; it performs no activation. P5 owns the future

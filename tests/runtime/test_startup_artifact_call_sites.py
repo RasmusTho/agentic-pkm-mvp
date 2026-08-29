@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import ast
 import json
@@ -71,6 +72,11 @@ def test_startup_04_runtime_call_sites_are_not_deferred() -> None:
 
 ROOT = Path(__file__).resolve().parents[2]
 MANIFEST_FIXTURE = ROOT / "tests" / "fixtures" / "startup_redesign" / "channel_manifest.valid.json"
+PROMOTION_SOURCE_SHA = subprocess.check_output(
+    ["git", "rev-parse", "HEAD"],
+    cwd=ROOT,
+    text=True,
+).strip()
 DIGEST = "sha256:" + "b" * 64
 
 
@@ -1421,18 +1427,23 @@ def _promotion_check_results() -> dict[str, bool]:
     }
 
 
-def _promotion_admission_context() -> dict[str, str]:
-    return json.loads(
+def _promotion_admission_context(
+    *,
+    migration_baseline_sha: str = PROMOTION_SOURCE_SHA,
+) -> dict[str, str]:
+    context = json.loads(
         (
             ROOT
             / "tests/fixtures/startup_redesign/promotion_admission_context.valid.json"
         ).read_text()
     )
+    context["migration_baseline_identity"] = f"git:{migration_baseline_sha}"
+    return context
 
 
 def _promotion_test_candidate_inputs(
     *,
-    source_sha: str = "0123456789abcdef0123456789abcdef01234567",
+    source_sha: str = PROMOTION_SOURCE_SHA,
 ) -> tuple[dict[str, object], dict[str, object]]:
     manifest = json.loads(MANIFEST_FIXTURE.read_text(encoding="utf-8"))
     context = _promotion_admission_context()
@@ -1464,23 +1475,164 @@ def _promotion_test_candidate_inputs(
 
 
 def _promotion_check_report(
-    migration_paths: tuple[Path, ...] = (),
     *,
     check_results: dict[str, bool] | None = None,
+    source_repo: Path = ROOT,
+    migration_baseline_sha: str = PROMOTION_SOURCE_SHA,
+    source_sha: str = PROMOTION_SOURCE_SHA,
 ) -> dict[str, object]:
-    rendered, manifest = _promotion_test_candidate_inputs()
+    rendered, manifest = _promotion_test_candidate_inputs(source_sha=source_sha)
     return build_promotion_test_check_report(
         rendered=rendered,
         channel_manifest=manifest,
-        prod_admission_context=_promotion_admission_context(),
+        prod_admission_context=_promotion_admission_context(
+            migration_baseline_sha=migration_baseline_sha
+        ),
         check_results=check_results or _promotion_check_results(),
-        migration_paths=migration_paths,
+        source_repo=source_repo,
     )
+
+
+def _seed_promotion_registry(store: Path, public_key: bytes) -> None:
+    store.mkdir(parents=True, exist_ok=True)
+    registry = {
+        "registry_version": "promotion-receipt-registry.v1",
+        "trusted_keys": {
+            "promotion-test-issuer-key-v1": base64.urlsafe_b64encode(public_key)
+            .decode("ascii")
+            .rstrip("=")
+        },
+        "entries": {},
+    }
+    registry_path = store / "registry.json"
+    registry_path.write_text(
+        json.dumps(registry, sort_keys=True, separators=(",", ":")),
+        encoding="utf-8",
+    )
+    registry_path.chmod(0o600)
+
+
+def _promotion_migration_git_delta(
+    tmp_path: Path,
+    *,
+    content: str,
+) -> tuple[Path, str, str]:
+    repo = tmp_path / "source-repo"
+    repo.mkdir(parents=True)
+    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "user.name", "Receipt Test"], cwd=repo, check=True)
+    subprocess.run(
+        ["git", "config", "user.email", "receipt-test@example.invalid"],
+        cwd=repo,
+        check=True,
+    )
+    (repo / "README.md").write_text("baseline\n", encoding="utf-8")
+    subprocess.run(["git", "add", "README.md"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-qm", "baseline"], cwd=repo, check=True)
+    baseline = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo, text=True).strip()
+    migrations = repo / "app" / "alembic" / "versions"
+    migrations.mkdir(parents=True)
+    (migrations / "receipt_delta.py").write_text(content, encoding="utf-8")
+    subprocess.run(["git", "add", "app/alembic/versions/receipt_delta.py"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-qm", "add migration"], cwd=repo, check=True)
+    target = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo, text=True).strip()
+    return repo, baseline, target
+
+
+def test_promotion_test_refuses_self_enrolled_registry_trust(tmp_path: Path) -> None:
+    private_key, public_key = _promotion_test_signing_material()
+    rendered, manifest = _promotion_test_candidate_inputs()
+    store = tmp_path / "ops" / "test-promotions"
+
+    with pytest.raises(PromotionReceiptError) as exc_info:
+        write_promotion_test_terminal_receipt(
+            attempt_id="pt-" + "a" * 32,
+            rendered=rendered,
+            channel_manifest=manifest,
+            prod_admission_context=_promotion_admission_context(),
+            check_report=_promotion_check_report(),
+            source_repo=ROOT,
+            issued_at=datetime(2026, 8, 16, tzinfo=timezone.utc),
+            fresh_until=datetime(2026, 8, 17, tzinfo=timezone.utc),
+            issuer_id="promotion-test-issuer",
+            issuer_key_id="promotion-test-issuer-key-v1",
+            signer=private_key.sign,
+            issuer_public_key=public_key,
+            receipt_store=store,
+            resettable_roots=(tmp_path / "tmp-test", tmp_path / "vault-test"),
+        )
+    assert exc_info.value.code == "registry_missing"
+    assert list((store / "reservations").glob("*.json")) == []
+    assert list((store / "receipts").glob("*.json")) == []
+    assert list((store / "attempts").glob("*.json")) == []
+
+
+def test_promotion_test_rejects_untrusted_signer_before_terminal_publication(
+    tmp_path: Path,
+) -> None:
+    _, trusted_public_key = _promotion_test_signing_material()
+    untrusted_private_key = Ed25519PrivateKey.generate()
+    untrusted_public_key = untrusted_private_key.public_key().public_bytes(
+        encoding=serialization.Encoding.Raw,
+        format=serialization.PublicFormat.Raw,
+    )
+    rendered, manifest = _promotion_test_candidate_inputs()
+    store = tmp_path / "ops" / "test-promotions"
+    _seed_promotion_registry(store, trusted_public_key)
+
+    with pytest.raises(PromotionReceiptError) as exc_info:
+        write_promotion_test_terminal_receipt(
+            attempt_id="pt-" + "b" * 32,
+            rendered=rendered,
+            channel_manifest=manifest,
+            prod_admission_context=_promotion_admission_context(),
+            check_report=_promotion_check_report(),
+            source_repo=ROOT,
+            issued_at=datetime(2026, 8, 16, tzinfo=timezone.utc),
+            fresh_until=datetime(2026, 8, 17, tzinfo=timezone.utc),
+            issuer_id="promotion-test-issuer",
+            issuer_key_id="promotion-test-issuer-key-v1",
+            signer=untrusted_private_key.sign,
+            issuer_public_key=untrusted_public_key,
+            receipt_store=store,
+            resettable_roots=(tmp_path / "tmp-test", tmp_path / "vault-test"),
+        )
+    assert exc_info.value.code == "registry_key_conflict"
+    registry = json.loads((store / "registry.json").read_text(encoding="utf-8"))
+    assert registry["entries"] == {}
+    assert list((store / "reservations").glob("*.json")) == []
+    assert list((store / "receipts").glob("*.json")) == []
+    assert list((store / "attempts").glob("*.json")) == []
+
+
+def test_promotion_test_derives_complete_migration_delta_from_candidate_git(
+    tmp_path: Path,
+) -> None:
+    repo, baseline, target = _promotion_migration_git_delta(
+        tmp_path,
+        content='reversibility = "reversible"\n',
+    )
+    rendered, manifest = _promotion_test_candidate_inputs(source_sha=target)
+
+    report = build_promotion_test_check_report(
+        rendered=rendered,
+        channel_manifest=manifest,
+        prod_admission_context=_promotion_admission_context(
+            migration_baseline_sha=baseline
+        ),
+        check_results=_promotion_check_results(),
+        source_repo=repo,
+    )
+    assert report["migration_set_identity"] != _promotion_check_report()[
+        "migration_set_identity"
+    ]
+    assert report["migration_baseline_identity"] == f"git:{baseline}"
 
 
 def test_promotion_test_writes_one_durable_terminal_receipt(tmp_path: Path) -> None:
     private_key, public_key = _promotion_test_signing_material()
     store = tmp_path / "ops" / "test-promotions"
+    _seed_promotion_registry(store, public_key)
     resettable_roots = (tmp_path / "tmp-test", tmp_path / "vault-test")
     rendered, manifest = _promotion_test_candidate_inputs()
     common = {
@@ -1495,7 +1647,7 @@ def test_promotion_test_writes_one_durable_terminal_receipt(tmp_path: Path) -> N
         "issuer_public_key": public_key,
         "receipt_store": store,
         "resettable_roots": resettable_roots,
-        "migration_paths": (),
+        "source_repo": ROOT,
     }
 
     passed = write_promotion_test_terminal_receipt(
@@ -1539,12 +1691,29 @@ def test_promotion_test_writes_one_durable_terminal_receipt(tmp_path: Path) -> N
         "classification_decisions": [],
     }
 
-    unclassified_migration = tmp_path / "unclassified_migration.py"
-    unclassified_migration.write_text("revision = 'unclassified'\n", encoding="utf-8")
+    migration_repo, migration_baseline, migration_target = _promotion_migration_git_delta(
+        tmp_path / "unclassified",
+        content="revision = 'unclassified'\n",
+    )
+    failed_rendered, failed_manifest = _promotion_test_candidate_inputs(
+        source_sha=migration_target
+    )
     failed = write_promotion_test_terminal_receipt(
         attempt_id="pt-" + "2" * 32,
-        check_report=_promotion_check_report((unclassified_migration,)),
-        **dict(common, migration_paths=(unclassified_migration,)),
+        check_report=_promotion_check_report(
+            source_repo=migration_repo,
+            migration_baseline_sha=migration_baseline,
+            source_sha=migration_target,
+        ),
+        **dict(
+            common,
+            rendered=failed_rendered,
+            channel_manifest=failed_manifest,
+            source_repo=migration_repo,
+            prod_admission_context=_promotion_admission_context(
+                migration_baseline_sha=migration_baseline
+            ),
+        ),
     )
     assert failed["outcome"] == "FAIL"
     assert len(list((store / "receipts").glob("*.json"))) == 2
@@ -1571,6 +1740,7 @@ def test_promotion_test_writes_one_durable_terminal_receipt(tmp_path: Path) -> N
 def test_promotion_test_terminal_receipt_race_has_one_winner(tmp_path: Path) -> None:
     private_key, public_key = _promotion_test_signing_material()
     store = tmp_path / "ops" / "test-promotions"
+    _seed_promotion_registry(store, public_key)
     rendered, manifest = _promotion_test_candidate_inputs()
     common = {
         "attempt_id": "pt-" + "4" * 32,
@@ -1585,15 +1755,15 @@ def test_promotion_test_terminal_receipt_race_has_one_winner(tmp_path: Path) -> 
         "issuer_public_key": public_key,
         "receipt_store": store,
         "resettable_roots": (tmp_path / "tmp-test", tmp_path / "vault-test"),
+        "source_repo": ROOT,
     }
-    unclassified_migration = tmp_path / "unclassified_migration.py"
-    unclassified_migration.write_text("revision = 'unclassified'\n", encoding="utf-8")
 
-    def write(migration_paths: tuple[Path, ...]) -> tuple[str, str]:
+    def write(smoke_ok: bool) -> tuple[str, str]:
+        checks = _promotion_check_results()
+        checks["smoke"] = smoke_ok
         try:
             receipt = write_promotion_test_terminal_receipt(
-                check_report=_promotion_check_report(migration_paths),
-                migration_paths=migration_paths,
+                check_report=_promotion_check_report(check_results=checks),
                 **common,
             )
         except PromotionReceiptError as exc:
@@ -1601,7 +1771,7 @@ def test_promotion_test_terminal_receipt_race_has_one_winner(tmp_path: Path) -> 
         return "ok", str(receipt["outcome"])
 
     with ThreadPoolExecutor(max_workers=2) as executor:
-        results = list(executor.map(write, ((), (unclassified_migration,))))
+        results = list(executor.map(write, (True, False)))
 
     assert sorted(result[0] for result in results) == ["error", "ok"]
     assert ("error", "attempt_conflict") in results
@@ -1612,6 +1782,7 @@ def test_promotion_test_terminal_receipt_race_has_one_winner(tmp_path: Path) -> 
 def test_promotion_test_receipt_recovery_and_secret_boundary(tmp_path: Path) -> None:
     private_key, public_key = _promotion_test_signing_material()
     store = tmp_path / "ops" / "test-promotions"
+    _seed_promotion_registry(store, public_key)
     rendered, manifest = _promotion_test_candidate_inputs()
     common = {
         "attempt_id": "pt-" + "5" * 32,
@@ -1627,7 +1798,7 @@ def test_promotion_test_receipt_recovery_and_secret_boundary(tmp_path: Path) -> 
         "issuer_public_key": public_key,
         "receipt_store": store,
         "resettable_roots": (tmp_path / "tmp-test", tmp_path / "vault-test"),
-        "migration_paths": (),
+        "source_repo": ROOT,
     }
     receipt = write_promotion_test_terminal_receipt(**common)
     pointer = next((store / "attempts").glob("*.json"))
@@ -1661,12 +1832,13 @@ def test_promotion_test_reservation_blocks_changed_orphan_recovery(
     private_key, public_key = _promotion_test_signing_material()
     rendered, manifest = _promotion_test_candidate_inputs()
     store = tmp_path / "ops" / "test-promotions"
+    _seed_promotion_registry(store, public_key)
     common = {
         "attempt_id": "pt-" + "7" * 32,
         "rendered": rendered,
         "channel_manifest": manifest,
         "prod_admission_context": _promotion_admission_context(),
-        "migration_paths": (),
+        "source_repo": ROOT,
         "issued_at": datetime(2026, 8, 16, tzinfo=timezone.utc),
         "fresh_until": datetime(2026, 8, 17, tzinfo=timezone.utc),
         "issuer_id": "promotion-test-issuer",
@@ -1733,9 +1905,16 @@ def test_promotion_test_rejects_stale_candidate_and_migration_reports(
 ) -> None:
     private_key, public_key = _promotion_test_signing_material()
     rendered_a, manifest_a = _promotion_test_candidate_inputs()
-    rendered_b, manifest_b = _promotion_test_candidate_inputs(source_sha="f" * 40)
-    migration = tmp_path / "classified.py"
-    migration.write_text('reversibility = "reversible"\n', encoding="utf-8")
+    previous_source_sha = subprocess.check_output(
+        ["git", "rev-parse", "HEAD^"],
+        cwd=ROOT,
+        text=True,
+    ).strip()
+    rendered_b, manifest_b = _promotion_test_candidate_inputs(
+        source_sha=previous_source_sha
+    )
+    store = tmp_path / "ops" / "test-promotions"
+    _seed_promotion_registry(store, public_key)
     common = {
         "attempt_id": "pt-" + "8" * 32,
         "prod_admission_context": _promotion_admission_context(),
@@ -1745,8 +1924,9 @@ def test_promotion_test_rejects_stale_candidate_and_migration_reports(
         "issuer_key_id": "promotion-test-issuer-key-v1",
         "signer": private_key.sign,
         "issuer_public_key": public_key,
-        "receipt_store": tmp_path / "ops" / "test-promotions",
+        "receipt_store": store,
         "resettable_roots": (tmp_path / "tmp-test", tmp_path / "vault-test"),
+        "source_repo": ROOT,
     }
     report_a = _promotion_check_report()
     with pytest.raises(PromotionReceiptError) as exc_info:
@@ -1754,7 +1934,6 @@ def test_promotion_test_rejects_stale_candidate_and_migration_reports(
             rendered=rendered_b,
             channel_manifest=manifest_b,
             check_report=report_a,
-            migration_paths=(),
             **common,
         )
     assert exc_info.value.code == "check_report_candidate_mismatch"
@@ -1763,33 +1942,42 @@ def test_promotion_test_rejects_stale_candidate_and_migration_reports(
             rendered=rendered_a,
             channel_manifest=manifest_a,
             check_report=report_a,
-            migration_paths=(migration,),
-            **common,
+            **dict(
+                common,
+                prod_admission_context=_promotion_admission_context(
+                    migration_baseline_sha=previous_source_sha
+                ),
+            ),
         )
     assert exc_info.value.code == "check_report_migration_mismatch"
-    assert not common["receipt_store"].exists()
+    assert not (store / "receipts").exists()
 
     first = write_promotion_test_terminal_receipt(
         rendered=rendered_a,
         channel_manifest=manifest_a,
         check_report=report_a,
-        migration_paths=(),
         **common,
     )
     report_b = build_promotion_test_check_report(
         rendered=rendered_b,
         channel_manifest=manifest_b,
-        prod_admission_context=_promotion_admission_context(),
+        prod_admission_context=_promotion_admission_context(
+            migration_baseline_sha=previous_source_sha
+        ),
         check_results=_promotion_check_results(),
-        migration_paths=(),
+        source_repo=ROOT,
     )
     with pytest.raises(PromotionReceiptError) as exc_info:
         write_promotion_test_terminal_receipt(
             rendered=rendered_b,
             channel_manifest=manifest_b,
             check_report=report_b,
-            migration_paths=(),
-            **common,
+            **dict(
+                common,
+                prod_admission_context=_promotion_admission_context(
+                    migration_baseline_sha=previous_source_sha
+                ),
+            ),
         )
     assert exc_info.value.code == "attempt_conflict"
     assert len(list((common["receipt_store"] / "receipts").glob("*.json"))) == 1
@@ -1803,34 +1991,42 @@ def test_promotion_test_classifies_same_migration_snapshot_used_for_identity(
     from app.release_channels import promotion_receipt
 
     private_key, public_key = _promotion_test_signing_material()
-    rendered, manifest = _promotion_test_candidate_inputs()
-    migration = tmp_path / "classified.py"
-    migration.write_text('reversibility = "reversible"\n', encoding="utf-8")
-    report = _promotion_check_report((migration,))
+    repo, baseline, target = _promotion_migration_git_delta(
+        tmp_path,
+        content='reversibility = "reversible"\n',
+    )
+    rendered, manifest = _promotion_test_candidate_inputs(source_sha=target)
+    report = _promotion_check_report(
+        source_repo=repo,
+        migration_baseline_sha=baseline,
+        source_sha=target,
+    )
+    migration = repo / "app" / "alembic" / "versions" / "receipt_delta.py"
     real_check = promotion_receipt.check_migration_snapshots
 
-    def aba_while_classifying(snapshots):
+    def mutate_worktree_while_classifying(snapshots):
         migration.write_text(
             'reversibility = "forward-only"\n',
             encoding="utf-8",
         )
-        result = real_check(snapshots)
-        migration.write_text('reversibility = "reversible"\n', encoding="utf-8")
-        return result
+        return real_check(snapshots)
 
     monkeypatch.setattr(
         promotion_receipt,
         "check_migration_snapshots",
-        aba_while_classifying,
+        mutate_worktree_while_classifying,
     )
     store = tmp_path / "ops" / "test-promotions"
+    _seed_promotion_registry(store, public_key)
     receipt = write_promotion_test_terminal_receipt(
         attempt_id="pt-" + "b" * 32,
         rendered=rendered,
         channel_manifest=manifest,
-        prod_admission_context=_promotion_admission_context(),
+        prod_admission_context=_promotion_admission_context(
+            migration_baseline_sha=baseline
+        ),
         check_report=report,
-        migration_paths=(migration,),
+        source_repo=repo,
         issued_at=datetime(2026, 8, 16, tzinfo=timezone.utc),
         fresh_until=datetime(2026, 8, 17, tzinfo=timezone.utc),
         issuer_id="promotion-test-issuer",
@@ -1842,49 +2038,9 @@ def test_promotion_test_classifies_same_migration_snapshot_used_for_identity(
     )
     attempt = json.loads(next((store / "attempts").glob("*.json")).read_text())
     assert receipt["outcome"] == "PASS"
-    assert attempt["migration_classification"]["reversible"] == ["classified.py"]
+    assert attempt["migration_classification"]["reversible"] == ["receipt_delta.py"]
     assert attempt["migration_classification"]["forward_only"] == []
-    assert migration.read_text(encoding="utf-8") == 'reversibility = "reversible"\n'
-
-    symlink = tmp_path / "symlinked.py"
-    target = tmp_path / "target.py"
-    target.write_text('reversibility = "reversible"\n', encoding="utf-8")
-    symlink.symlink_to(target)
-    with pytest.raises(PromotionReceiptError) as exc_info:
-        build_promotion_test_check_report(
-            rendered=rendered,
-            channel_manifest=manifest,
-            prod_admission_context=_promotion_admission_context(),
-            check_results=_promotion_check_results(),
-            migration_paths=(symlink,),
-        )
-    assert exc_info.value.code == "migration_paths_invalid"
-
-    replaced = tmp_path / "replaced.py"
-    moved = tmp_path / "opened-inode.py"
-    replaced.write_text('reversibility = "reversible"\n', encoding="utf-8")
-    real_read = promotion_receipt.os.read
-    swapped = False
-
-    def replace_named_path(descriptor: int, size: int) -> bytes:
-        nonlocal swapped
-        data = real_read(descriptor, size)
-        if data and not swapped:
-            swapped = True
-            replaced.replace(moved)
-            replaced.write_text('reversibility = "forward-only"\n', encoding="utf-8")
-        return data
-
-    monkeypatch.setattr(promotion_receipt.os, "read", replace_named_path)
-    with pytest.raises(PromotionReceiptError) as exc_info:
-        build_promotion_test_check_report(
-            rendered=rendered,
-            channel_manifest=manifest,
-            prod_admission_context=_promotion_admission_context(),
-            check_results=_promotion_check_results(),
-            migration_paths=(replaced,),
-        )
-    assert exc_info.value.code == "migration_paths_invalid"
+    assert migration.read_text(encoding="utf-8") == 'reversibility = "forward-only"\n'
 
 
 def test_promotion_test_attempt_publication_never_overwrites_racing_path(
@@ -1896,6 +2052,7 @@ def test_promotion_test_attempt_publication_never_overwrites_racing_path(
     private_key, public_key = _promotion_test_signing_material()
     rendered, manifest = _promotion_test_candidate_inputs()
     store = tmp_path / "ops" / "test-promotions"
+    _seed_promotion_registry(store, public_key)
     real_install = promotion_receipt._install_immutable_record
 
     def install_with_racing_path(path: Path, data: bytes, *, code: str) -> None:
@@ -1915,7 +2072,7 @@ def test_promotion_test_attempt_publication_never_overwrites_racing_path(
             channel_manifest=manifest,
             prod_admission_context=_promotion_admission_context(),
             check_report=_promotion_check_report(),
-            migration_paths=(),
+            source_repo=ROOT,
             issued_at=datetime(2026, 8, 16, tzinfo=timezone.utc),
             fresh_until=datetime(2026, 8, 17, tzinfo=timezone.utc),
             issuer_id="promotion-test-issuer",
@@ -1930,7 +2087,7 @@ def test_promotion_test_attempt_publication_never_overwrites_racing_path(
     assert len(list((store / "receipts").glob("*.json"))) == 1
 
 
-def test_promotion_test_fences_fresh_store_parent_directories(
+def test_promotion_test_fences_preprovisioned_store_and_child_directories(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1939,6 +2096,7 @@ def test_promotion_test_fences_fresh_store_parent_directories(
     private_key, public_key = _promotion_test_signing_material()
     rendered, manifest = _promotion_test_candidate_inputs()
     store = tmp_path / "ops" / "test-promotions"
+    _seed_promotion_registry(store, public_key)
     real_fsync = promotion_receipt._fsync_directory
     fenced: list[Path] = []
 
@@ -1953,7 +2111,7 @@ def test_promotion_test_fences_fresh_store_parent_directories(
         channel_manifest=manifest,
         prod_admission_context=_promotion_admission_context(),
         check_report=_promotion_check_report(),
-        migration_paths=(),
+        source_repo=ROOT,
         issued_at=datetime(2026, 8, 16, tzinfo=timezone.utc),
         fresh_until=datetime(2026, 8, 17, tzinfo=timezone.utc),
         issuer_id="promotion-test-issuer",
@@ -1963,14 +2121,13 @@ def test_promotion_test_fences_fresh_store_parent_directories(
         receipt_store=store,
         resettable_roots=(tmp_path / "tmp-test", tmp_path / "vault-test"),
     )
-    assert tmp_path in fenced
-    assert tmp_path / "ops" in fenced
     assert store in fenced
 
     failed_store = tmp_path / "failed-ops" / "test-promotions"
+    _seed_promotion_registry(failed_store, public_key)
 
     def fail_store_parent_fsync(path: Path) -> None:
-        if path == failed_store.parent:
+        if path == failed_store:
             raise OSError("injected parent durability failure")
         real_fsync(path)
 
@@ -1986,7 +2143,7 @@ def test_promotion_test_fences_fresh_store_parent_directories(
             channel_manifest=manifest,
             prod_admission_context=_promotion_admission_context(),
             check_report=_promotion_check_report(),
-            migration_paths=(),
+            source_repo=ROOT,
             issued_at=datetime(2026, 8, 16, tzinfo=timezone.utc),
             fresh_until=datetime(2026, 8, 17, tzinfo=timezone.utc),
             issuer_id="promotion-test-issuer",
@@ -1997,20 +2154,15 @@ def test_promotion_test_fences_fresh_store_parent_directories(
             resettable_roots=(tmp_path / "tmp-test", tmp_path / "vault-test"),
         )
     assert exc_info.value.code == "receipt_store_unavailable"
-    assert not (failed_store / "receipts").exists()
+    assert list((failed_store / "receipts").glob("*.json")) == []
 
 
 @pytest.mark.parametrize(
     ("target_kind", "target_occurrence"),
     [
-        ("ops-parent", 1),
-        ("store-parent", 1),
         ("store", 1),
         ("store", 2),
         ("store", 3),
-        ("store", 4),
-        ("store", 5),
-        ("store", 6),
         ("reservations", 1),
         ("receipts", 1),
         ("attempts", 1),
@@ -2027,9 +2179,8 @@ def test_promotion_test_retry_refences_every_uncertain_directory_entry(
     private_key, public_key = _promotion_test_signing_material()
     rendered, manifest = _promotion_test_candidate_inputs()
     store = tmp_path / "ops" / "test-promotions"
+    _seed_promotion_registry(store, public_key)
     targets = {
-        "ops-parent": tmp_path,
-        "store-parent": store.parent,
         "store": store,
         "reservations": store / "reservations",
         "receipts": store / "receipts",
@@ -2053,7 +2204,7 @@ def test_promotion_test_retry_refences_every_uncertain_directory_entry(
         "channel_manifest": manifest,
         "prod_admission_context": _promotion_admission_context(),
         "check_report": _promotion_check_report(),
-        "migration_paths": (),
+        "source_repo": ROOT,
         "issued_at": datetime(2026, 8, 16, tzinfo=timezone.utc),
         "fresh_until": datetime(2026, 8, 17, tzinfo=timezone.utc),
         "issuer_id": "promotion-test-issuer",
@@ -2082,7 +2233,7 @@ def test_promotion_test_retry_refences_every_uncertain_directory_entry(
     assert len(list((store / "attempts").glob("*.json"))) == 1
 
 
-@pytest.mark.parametrize("crash_target", ["reservations", "receipts", "registry", "attempts"])
+@pytest.mark.parametrize("crash_target", ["reservations", "receipts", "attempts"])
 def test_promotion_test_recovers_linked_temp_before_terminal_success(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -2096,7 +2247,8 @@ def test_promotion_test_recovers_linked_temp_before_terminal_success(
     private_key, public_key = _promotion_test_signing_material()
     rendered, manifest = _promotion_test_candidate_inputs()
     store = tmp_path / "ops" / "test-promotions"
-    target_parent = store if crash_target == "registry" else store / crash_target
+    _seed_promotion_registry(store, public_key)
+    target_parent = store / crash_target
     real_unlink = promotion_receipt._unlink_temp
 
     def lose_power_before_unlink(path: Path) -> None:
@@ -2110,7 +2262,7 @@ def test_promotion_test_recovers_linked_temp_before_terminal_success(
         "channel_manifest": manifest,
         "prod_admission_context": _promotion_admission_context(),
         "check_report": _promotion_check_report(),
-        "migration_paths": (),
+        "source_repo": ROOT,
         "issued_at": datetime(2026, 8, 16, tzinfo=timezone.utc),
         "fresh_until": datetime(2026, 8, 17, tzinfo=timezone.utc),
         "issuer_id": "promotion-test-issuer",
@@ -2149,13 +2301,14 @@ def test_promotion_test_retry_never_reissues_a_revoked_receipt(tmp_path: Path) -
     private_key, public_key = _promotion_test_signing_material()
     rendered, manifest = _promotion_test_candidate_inputs()
     store = tmp_path / "ops" / "test-promotions"
+    _seed_promotion_registry(store, public_key)
     common = {
         "attempt_id": "pt-" + "f" * 32,
         "rendered": rendered,
         "channel_manifest": manifest,
         "prod_admission_context": _promotion_admission_context(),
         "check_report": _promotion_check_report(),
-        "migration_paths": (),
+        "source_repo": ROOT,
         "issued_at": datetime(2026, 8, 16, tzinfo=timezone.utc),
         "fresh_until": datetime(2026, 8, 17, tzinfo=timezone.utc),
         "issuer_id": "promotion-test-issuer",
@@ -2205,6 +2358,7 @@ def test_promotion_test_never_issues_registry_authority_before_terminal_binding(
     private_key, public_key = _promotion_test_signing_material()
     rendered, manifest = _promotion_test_candidate_inputs()
     store = tmp_path / "ops" / "test-promotions"
+    _seed_promotion_registry(store, public_key)
     real_install = promotion_receipt._install_immutable_record
 
     def lose_power_before_attempt_binding(
@@ -2229,7 +2383,7 @@ def test_promotion_test_never_issues_registry_authority_before_terminal_binding(
             channel_manifest=manifest,
             prod_admission_context=_promotion_admission_context(),
             check_report=_promotion_check_report(),
-            migration_paths=(),
+            source_repo=ROOT,
             issued_at=datetime(2026, 8, 16, tzinfo=timezone.utc),
             fresh_until=datetime(2026, 8, 17, tzinfo=timezone.utc),
             issuer_id="promotion-test-issuer",
@@ -2242,18 +2396,19 @@ def test_promotion_test_never_issues_registry_authority_before_terminal_binding(
 
     assert len(list((store / "receipts").glob("*.json"))) == 1
     assert list((store / "attempts").glob("*.json")) == []
-    assert not (store / "registry.json").exists()
+    registry = json.loads((store / "registry.json").read_text(encoding="utf-8"))
+    assert registry["entries"] == {}
     receipt = json.loads(
         next((store / "receipts").glob("*.json")).read_text(encoding="utf-8")
     )
     with pytest.raises(PromotionReceiptError) as exc_info:
         prepare_prod_activation(
             receipt,
-            None,
+            registry,
             _promotion_admission_context(),
             now=datetime(2026, 8, 16, 12, tzinfo=timezone.utc),
         )
-    assert exc_info.value.code == "registry_missing"
+    assert exc_info.value.code == "receipt_unregistered"
 
 
 def test_promotion_test_terminal_binding_stays_inadmissible_until_registry_issue(
@@ -2268,6 +2423,7 @@ def test_promotion_test_terminal_binding_stays_inadmissible_until_registry_issue
     private_key, public_key = _promotion_test_signing_material()
     rendered, manifest = _promotion_test_candidate_inputs()
     store = tmp_path / "ops" / "test-promotions"
+    _seed_promotion_registry(store, public_key)
     real_publish = promotion_receipt._publish_registry_entry
     common = {
         "attempt_id": "pt-" + "3" * 32,
@@ -2275,7 +2431,7 @@ def test_promotion_test_terminal_binding_stays_inadmissible_until_registry_issue
         "channel_manifest": manifest,
         "prod_admission_context": _promotion_admission_context(),
         "check_report": _promotion_check_report(),
-        "migration_paths": (),
+        "source_repo": ROOT,
         "issued_at": datetime(2026, 8, 16, tzinfo=timezone.utc),
         "fresh_until": datetime(2026, 8, 17, tzinfo=timezone.utc),
         "issuer_id": "promotion-test-issuer",
@@ -2304,18 +2460,19 @@ def test_promotion_test_terminal_binding_stays_inadmissible_until_registry_issue
 
     assert len(list((store / "receipts").glob("*.json"))) == 1
     assert len(list((store / "attempts").glob("*.json"))) == 1
-    assert not (store / "registry.json").exists()
+    registry = json.loads((store / "registry.json").read_text(encoding="utf-8"))
+    assert registry["entries"] == {}
     receipt = json.loads(
         next((store / "receipts").glob("*.json")).read_text(encoding="utf-8")
     )
     with pytest.raises(PromotionReceiptError) as exc_info:
         prepare_prod_activation(
             receipt,
-            None,
+            registry,
             _promotion_admission_context(),
             now=datetime(2026, 8, 16, 12, tzinfo=timezone.utc),
         )
-    assert exc_info.value.code == "registry_missing"
+    assert exc_info.value.code == "receipt_unregistered"
 
     monkeypatch.setattr(
         promotion_receipt,

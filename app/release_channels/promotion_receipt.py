@@ -18,6 +18,7 @@ import json
 import os
 import re
 import stat
+import subprocess
 import sys
 import uuid
 from collections.abc import Callable, Mapping, Sequence
@@ -72,6 +73,7 @@ _IDENTITY_FIELDS = {
     "vault_identity",
     "schema_identity",
 }
+_ADMISSION_CONTEXT_FIELDS = _IDENTITY_FIELDS | {"migration_baseline_identity"}
 _REGISTRY_FIELDS = {"registry_version", "trusted_keys", "entries"}
 _REGISTRY_ENTRY_FIELDS = {
     "issuer_id",
@@ -104,8 +106,13 @@ _REPORT_FIELDS = {
     "identity",
     "check_results",
     "migration_set_identity",
+    "migration_baseline_identity",
 }
 _DIGEST = re.compile(r"sha256:[0-9a-f]{64}\Z")
+_SOURCE_SHA = re.compile(r"[0-9a-f]{40}\Z")
+_MIGRATION_GIT_PATH = re.compile(
+    r"app/alembic/versions/[A-Za-z0-9][A-Za-z0-9_.-]*\.py\Z"
+)
 _ATTEMPT_ID = re.compile(r"pt-[0-9a-f]{32}\Z")
 _TEST_IDENTITY = re.compile(r"promotion-test:[0-9]{8}\Z")
 _VAULT_IDENTITY = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*\Z")
@@ -201,6 +208,23 @@ def _validate_identity(value: object) -> dict[str, str]:
     return {field: str(identity[field]) for field in sorted(_IDENTITY_FIELDS)}
 
 
+def _validate_admission_context(value: object) -> tuple[dict[str, str], str]:
+    context = _mapping(value, code="identity_invalid")
+    if set(context) != _ADMISSION_CONTEXT_FIELDS:
+        raise PromotionReceiptError("identity_invalid")
+    identity = _validate_identity(
+        {field: context[field] for field in _IDENTITY_FIELDS}
+    )
+    baseline_identity = context.get("migration_baseline_identity")
+    if (
+        not isinstance(baseline_identity, str)
+        or not baseline_identity.startswith("git:")
+        or _SOURCE_SHA.fullmatch(baseline_identity.removeprefix("git:")) is None
+    ):
+        raise PromotionReceiptError("identity_invalid")
+    return identity, baseline_identity.removeprefix("git:")
+
+
 def _validate_checks(value: object) -> dict[str, bool]:
     checks = _mapping(value, code="check_results_invalid")
     if set(checks) != set(_OBSERVED_CHECKS) or any(
@@ -210,39 +234,100 @@ def _validate_checks(value: object) -> dict[str, bool]:
     return {name: bool(checks[name]) for name in _OBSERVED_CHECKS}
 
 
-def _capture_migration_snapshots(paths: Sequence[Path]) -> tuple[tuple[str, bytes], ...]:
-    snapshots: list[tuple[str, bytes]] = []
-    names: set[str] = set()
-    for path in paths:
-        if path.name in names or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*\.py", path.name) is None:
-            raise PromotionReceiptError("migration_paths_invalid")
-        descriptor = -1
+def _run_git(repo: Path, *args: str, code: str) -> bytes:
+    try:
+        completed = subprocess.run(
+            ["git", "-C", str(repo), *args],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            check=False,
+            timeout=30,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise PromotionReceiptError(code) from exc
+    if completed.returncode != 0:
+        raise PromotionReceiptError(code)
+    return completed.stdout
+
+
+def _capture_candidate_migration_snapshots(
+    *,
+    source_repo: Path,
+    baseline_sha: str,
+    target_sha: str,
+) -> tuple[tuple[str, bytes], ...]:
+    if (
+        not source_repo.is_absolute()
+        or _SOURCE_SHA.fullmatch(baseline_sha) is None
+        or _SOURCE_SHA.fullmatch(target_sha) is None
+    ):
+        raise PromotionReceiptError("migration_delta_invalid")
+    try:
+        repo = source_repo.resolve(strict=True)
+        repo_info = repo.stat()
+    except OSError as exc:
+        raise PromotionReceiptError("migration_delta_unavailable") from exc
+    if not stat.S_ISDIR(repo_info.st_mode) or repo_info.st_uid != os.geteuid():
+        raise PromotionReceiptError("migration_delta_unavailable")
+    try:
+        top_level = _run_git(
+            repo,
+            "rev-parse",
+            "--show-toplevel",
+            code="migration_delta_unavailable",
+        ).decode("utf-8").strip()
+        if Path(top_level).resolve(strict=True) != repo:
+            raise PromotionReceiptError("migration_delta_unavailable")
+    except (OSError, UnicodeDecodeError) as exc:
+        raise PromotionReceiptError("migration_delta_unavailable") from exc
+    for sha in (baseline_sha, target_sha):
         try:
-            descriptor = os.open(
-                path,
-                os.O_RDONLY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0),
-            )
-            info = os.fstat(descriptor)
-            chunks: list[bytes] = []
-            while True:
-                chunk = os.read(descriptor, 64 * 1024)
-                if not chunk:
-                    break
-                chunks.append(chunk)
-            named_info = path.stat(follow_symlinks=False)
-        except OSError as exc:
-            raise PromotionReceiptError("migration_paths_invalid") from exc
-        finally:
-            if descriptor >= 0:
-                os.close(descriptor)
-        if (
-            not stat.S_ISREG(info.st_mode)
-            or info.st_nlink != 1
-            or (named_info.st_dev, named_info.st_ino) != (info.st_dev, info.st_ino)
-        ):
-            raise PromotionReceiptError("migration_paths_invalid")
-        names.add(path.name)
-        snapshots.append((path.name, b"".join(chunks)))
+            resolved = _run_git(
+                repo,
+                "rev-parse",
+                "--verify",
+                f"{sha}^{{commit}}",
+                code="migration_delta_unavailable",
+            ).decode("ascii").strip()
+        except UnicodeDecodeError as exc:
+            raise PromotionReceiptError("migration_delta_unavailable") from exc
+        if resolved != sha:
+            raise PromotionReceiptError("migration_delta_invalid")
+    _run_git(
+        repo,
+        "merge-base",
+        "--is-ancestor",
+        baseline_sha,
+        target_sha,
+        code="migration_delta_invalid",
+    )
+    raw_paths = _run_git(
+        repo,
+        "diff",
+        "--name-only",
+        "-z",
+        f"{baseline_sha}..{target_sha}",
+        "--",
+        "app/alembic/versions",
+        code="migration_delta_unavailable",
+    )
+    try:
+        paths = sorted(path.decode("utf-8") for path in raw_paths.split(b"\0") if path)
+    except UnicodeDecodeError as exc:
+        raise PromotionReceiptError("migration_delta_invalid") from exc
+    if len(set(paths)) != len(paths) or any(
+        _MIGRATION_GIT_PATH.fullmatch(path) is None for path in paths
+    ):
+        raise PromotionReceiptError("migration_delta_invalid")
+    snapshots: list[tuple[str, bytes]] = []
+    for path in paths:
+        content = _run_git(
+            repo,
+            "show",
+            f"{target_sha}:{path}",
+            code="migration_delta_invalid",
+        )
+        snapshots.append((Path(path).name, content))
     return tuple(snapshots)
 
 
@@ -256,20 +341,12 @@ def _migration_set_identity(snapshots: Sequence[tuple[str, bytes]]) -> str:
     ).hexdigest()
 
 
-def _validate_migration_paths(value: object) -> tuple[Path, ...]:
-    if not isinstance(value, Sequence) or isinstance(value, (str, bytes)) or any(
-        not isinstance(path, Path) for path in value
-    ):
-        raise PromotionReceiptError("migration_paths_invalid")
-    return tuple(value)
-
-
 def _derive_candidate_identity(
     *,
     rendered: Mapping[str, object],
     channel_manifest: Mapping[str, object],
     prod_admission_context: Mapping[str, str],
-) -> tuple[dict[str, object], dict[str, str]]:
+) -> tuple[dict[str, object], dict[str, str], str]:
     try:
         candidate = create_promotion_candidate(rendered, channel_manifest)
     except ArtifactRenderError as exc:
@@ -282,7 +359,9 @@ def _derive_candidate_identity(
     schema_identity = graph.get("migration_identity")
     if not isinstance(image_index, str) or "@" not in image_index:
         raise PromotionReceiptError("candidate_invalid")
-    candidate_bound_identity = _validate_identity(prod_admission_context)
+    candidate_bound_identity, migration_baseline_sha = _validate_admission_context(
+        prod_admission_context
+    )
     for field, expected in (
         ("artifact_digest", image_index.rsplit("@", 1)[1]),
         ("config_identity", config_identity),
@@ -290,7 +369,7 @@ def _derive_candidate_identity(
     ):
         if candidate_bound_identity[field] != expected:
             raise PromotionReceiptError("candidate_identity_mismatch")
-    return candidate, candidate_bound_identity
+    return candidate, candidate_bound_identity, migration_baseline_sha
 
 
 def build_promotion_test_check_report(
@@ -299,15 +378,22 @@ def build_promotion_test_check_report(
     channel_manifest: Mapping[str, object],
     prod_admission_context: Mapping[str, str],
     check_results: Mapping[str, bool],
-    migration_paths: Sequence[Path],
+    source_repo: Path,
 ) -> dict[str, object]:
     """Bind runner observations to one immutable candidate and migration set."""
-    validated_paths = _validate_migration_paths(migration_paths)
-    migration_snapshots = _capture_migration_snapshots(validated_paths)
-    candidate, identity = _derive_candidate_identity(
+    candidate, identity, migration_baseline_sha = _derive_candidate_identity(
         rendered=rendered,
         channel_manifest=channel_manifest,
         prod_admission_context=prod_admission_context,
+    )
+    graph = _mapping(candidate.get("artifact_graph"), code="candidate_invalid")
+    source_identity = graph.get("source_identity")
+    if not isinstance(source_identity, str) or not source_identity.startswith("git:"):
+        raise PromotionReceiptError("candidate_invalid")
+    migration_snapshots = _capture_candidate_migration_snapshots(
+        source_repo=source_repo,
+        baseline_sha=migration_baseline_sha,
+        target_sha=source_identity.removeprefix("git:"),
     )
     return {
         "report_version": REPORT_VERSION,
@@ -315,6 +401,7 @@ def build_promotion_test_check_report(
         "identity": identity,
         "check_results": _validate_checks(check_results),
         "migration_set_identity": _migration_set_identity(migration_snapshots),
+        "migration_baseline_identity": f"git:{migration_baseline_sha}",
     }
 
 
@@ -324,9 +411,18 @@ def _bind_promotion_test_report(
     channel_manifest: Mapping[str, object],
     prod_admission_context: Mapping[str, str],
     check_report: Mapping[str, object],
-    migration_snapshots: Sequence[tuple[str, bytes]],
-) -> tuple[dict[str, str], dict[str, bool], dict[str, object]]:
-    candidate, candidate_bound_identity = _derive_candidate_identity(
+    source_repo: Path,
+) -> tuple[
+    dict[str, str],
+    dict[str, bool],
+    dict[str, object],
+    tuple[tuple[str, bytes], ...],
+]:
+    (
+        candidate,
+        candidate_bound_identity,
+        migration_baseline_sha,
+    ) = _derive_candidate_identity(
         rendered=rendered,
         channel_manifest=channel_manifest,
         prod_admission_context=prod_admission_context,
@@ -341,6 +437,17 @@ def _bind_promotion_test_report(
     report_identity = _validate_identity(report.get("identity"))
     if report_identity != candidate_bound_identity:
         raise PromotionReceiptError("check_report_identity_mismatch")
+    graph = _mapping(candidate.get("artifact_graph"), code="candidate_invalid")
+    source_identity = graph.get("source_identity")
+    if not isinstance(source_identity, str) or not source_identity.startswith("git:"):
+        raise PromotionReceiptError("candidate_invalid")
+    migration_snapshots = _capture_candidate_migration_snapshots(
+        source_repo=source_repo,
+        baseline_sha=migration_baseline_sha,
+        target_sha=source_identity.removeprefix("git:"),
+    )
+    if report.get("migration_baseline_identity") != f"git:{migration_baseline_sha}":
+        raise PromotionReceiptError("check_report_migration_mismatch")
     migration_set_identity = report.get("migration_set_identity")
     if migration_set_identity != _migration_set_identity(migration_snapshots):
         raise PromotionReceiptError("check_report_migration_mismatch")
@@ -351,8 +458,9 @@ def _bind_promotion_test_report(
         "identity": report_identity,
         "check_results": validated_checks,
         "migration_set_identity": migration_set_identity,
+        "migration_baseline_identity": f"git:{migration_baseline_sha}",
     }
-    return candidate_bound_identity, validated_checks, validated_report
+    return candidate_bound_identity, validated_checks, validated_report, migration_snapshots
 
 
 def _receipt_unsigned_payload(receipt: Mapping[str, object]) -> bytes:
@@ -694,6 +802,26 @@ def _validate_registry_update_shape(registry: Mapping[str, object]) -> None:
         )
 
 
+def _load_trusted_registry(
+    path: Path,
+    *,
+    issuer_key_id: str,
+    issuer_public_key: bytes,
+) -> dict[str, object]:
+    if not path.exists():
+        raise PromotionReceiptError("registry_missing")
+    _recover_linked_temp(path, code="registry_corrupt")
+    existing = _read_canonical_file(path, code="registry_corrupt")
+    _validate_registry_update_shape(existing)
+    trusted_keys = _mapping(existing["trusted_keys"], code="registry_corrupt")
+    current_key = trusted_keys.get(issuer_key_id)
+    if current_key is None:
+        raise PromotionReceiptError("issuer_untrusted")
+    if current_key != _canonical_b64url(issuer_public_key):
+        raise PromotionReceiptError("registry_key_conflict")
+    return existing
+
+
 def _publish_registry_entry(
     path: Path,
     *,
@@ -710,29 +838,15 @@ def _publish_registry_entry(
         "issuer_signature": receipt["issuer_signature"],
         "status": "issued",
     }
-    if not path.exists():
-        initial: dict[str, object] = {
-            "registry_version": REGISTRY_VERSION,
-            "trusted_keys": {issuer_key_id: public_key},
-            "entries": {receipt_id: entry},
-        }
-        _install_immutable_record(
-            path,
-            _canonical_bytes(initial),
-            code="registry_conflict",
-        )
-        return initial
-
-    _recover_linked_temp(path, code="registry_corrupt")
-    existing = _read_canonical_file(path, code="registry_corrupt")
-    _validate_registry_update_shape(existing)
+    existing = _load_trusted_registry(
+        path,
+        issuer_key_id=issuer_key_id,
+        issuer_public_key=issuer_public_key,
+    )
     trusted_keys = dict(
         _mapping(existing["trusted_keys"], code="registry_corrupt")
     )
     entries = dict(_mapping(existing["entries"], code="registry_corrupt"))
-    current_key = trusted_keys.get(issuer_key_id)
-    if current_key is not None and current_key != public_key:
-        raise PromotionReceiptError("registry_key_conflict")
     current_entry = entries.get(receipt_id)
     if current_entry is not None:
         if current_entry != entry:
@@ -743,7 +857,6 @@ def _publish_registry_entry(
             raise PromotionReceiptError("receipt_store_io_failure") from exc
         return existing
 
-    trusted_keys[issuer_key_id] = public_key
     entries[receipt_id] = entry
     updated: dict[str, object] = {
         "registry_version": REGISTRY_VERSION,
@@ -779,7 +892,7 @@ def write_promotion_test_terminal_receipt(
     channel_manifest: Mapping[str, object],
     prod_admission_context: Mapping[str, str],
     check_report: Mapping[str, object],
-    migration_paths: Sequence[Path],
+    source_repo: Path,
     issued_at: datetime,
     fresh_until: datetime,
     issuer_id: str,
@@ -797,14 +910,17 @@ def write_promotion_test_terminal_receipt(
     """
     if not isinstance(attempt_id, str) or _ATTEMPT_ID.fullmatch(attempt_id) is None:
         raise PromotionReceiptError("attempt_id_invalid")
-    validated_paths = _validate_migration_paths(migration_paths)
-    migration_snapshots = _capture_migration_snapshots(validated_paths)
-    validated_identity, validated_checks, validated_report = _bind_promotion_test_report(
+    (
+        validated_identity,
+        validated_checks,
+        validated_report,
+        migration_snapshots,
+    ) = _bind_promotion_test_report(
         rendered=rendered,
         channel_manifest=channel_manifest,
         prod_admission_context=prod_admission_context,
         check_report=check_report,
-        migration_snapshots=migration_snapshots,
+        source_repo=source_repo,
     )
     try:
         migration_classification: dict[str, object] = check_migration_snapshots(
@@ -869,6 +985,11 @@ def write_promotion_test_terminal_receipt(
             raise PromotionReceiptError("unsafe_receipt_store")
         fcntl.flock(lock_descriptor, fcntl.LOCK_EX)
         _fence_receipt_store(store)
+        _load_trusted_registry(
+            registry_path,
+            issuer_key_id=issuer_key_id,
+            issuer_public_key=issuer_public_key,
+        )
         _install_immutable_record(
             reservation_path,
             reservation_bytes,
@@ -923,7 +1044,7 @@ def _validate_receipt(
         raise PromotionReceiptError("receipt_missing")
     receipt_mapping = _mapping(receipt, code="receipt_invalid")
     registry_mapping = _mapping(registry, code="registry_missing")
-    identity = _validate_identity(expected_identity)
+    identity, _ = _validate_admission_context(expected_identity)
     if set(receipt_mapping) != _RECEIPT_FIELDS:
         raise PromotionReceiptError("receipt_invalid")
     if set(registry_mapping) != _REGISTRY_FIELDS:
@@ -1124,7 +1245,6 @@ def _parser() -> argparse.ArgumentParser:
     write.add_argument("--manifest", type=Path, required=True)
     write.add_argument("--admission-context", type=Path, required=True)
     write.add_argument("--checks", type=Path, required=True)
-    write.add_argument("--migration", type=Path, action="append", default=[])
     write.add_argument("--receipt-store", type=Path, required=True)
     write.add_argument("--issuer-id", required=True)
     write.add_argument("--issuer-key-id", required=True)
@@ -1158,7 +1278,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     code="identity_unavailable",
                 ),
                 check_report=_read_json(args.checks, code="checks_unavailable"),
-                migration_paths=tuple(args.migration),
+                source_repo=repo_root,
                 issued_at=_parse_timestamp(args.issued_at, code="issued_at_invalid"),
                 fresh_until=_parse_timestamp(args.fresh_until, code="fresh_until_invalid"),
                 issuer_id=args.issuer_id,
