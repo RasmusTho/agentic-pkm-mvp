@@ -34,6 +34,21 @@ COMPONENT_IDS = (
     "product_runtime",
 )
 
+OWNER_BY_COMPONENT = {
+    "devui_projection": "owner:dev_ui",
+    "builderops_control_plane": "owner:builderops",
+    "builderops_cockpit": "owner:builderops_cockpit",
+    "dispatcher_signboard": "owner:dispatcher_signboard",
+    "ddo": "owner:ddo",
+    "ckm_kvasir": "owner:ckm_kvasir",
+    "focus_conversation_port": "owner:focus_conversation_port",
+    "soi_evidence": "owner:product_runtime",
+    "github_git_ci_delivery": "owner:github_git_ci",
+    "model_service": "owner:model_access_substrate",
+    "tars_proxmox_control": "owner:tars_proxmox",
+    "product_runtime": "owner:product_runtime",
+}
+
 COMPONENT_EXPECTATIONS = {
     "devui_projection": ("VM-102 resident (target)", "`gap`"),
     "builderops_control_plane": ("VM-102 resident (target)", "`gap`"),
@@ -130,7 +145,7 @@ def _inventory_evidence() -> dict[str, object]:
                     "explicit external dependency": "external_dependency",
                     "intentionally non-runtime": "intentionally_non_runtime",
                 }[COMPONENT_EXPECTATIONS[component_id][0]],
-                "owner": f"owner:{component_id}",
+                "owner": OWNER_BY_COMPONENT[component_id],
                 **{
                     field: f"{reconciliation_state}:{code}"
                     for field, code in evidence_code_by_field.items()
@@ -331,6 +346,18 @@ def test_component_inventory_rejects_malformed_and_secret_bearing_evidence() -> 
     with pytest.raises(InventoryValidationError):
         build_component_inventory_receipt(unclassified_credential)
 
+    opaque_owner = _inventory_evidence()
+    opaque_owner["components"][0]["owner"] = f"owner:{'a' * 48}"
+    with pytest.raises(InventoryValidationError):
+        build_component_inventory_receipt(opaque_owner)
+
+    cleartext_reference = _inventory_evidence()
+    unsafe_ref = f"repo:docs/{'b' * 48}"
+    cleartext_reference["source_refs"].append(unsafe_ref)
+    cleartext_reference["components"][0]["evidence_refs"].append(unsafe_ref)
+    with pytest.raises(InventoryValidationError):
+        build_component_inventory_receipt(cleartext_reference)
+
     receipt = build_component_inventory_receipt(_inventory_evidence())
     tampered_digest = copy.deepcopy(receipt)
     tampered_digest["component_inventory_digest"] = "0" * 64
@@ -396,6 +423,19 @@ def test_component_inventory_preserves_gaps_and_refuses_false_claims() -> None:
     )
     assert list(Draft202012Validator(schema).iter_errors(schema_contradiction))
 
+    for forbidden_code in (
+        "activation_proven",
+        "auth_succeeded",
+        "deployment_proven",
+        "health_proven",
+        "qualification_proven",
+        "residency_proven",
+    ):
+        contradictory_code = _inventory_evidence()
+        contradictory_code["gaps"][0]["code"] = forbidden_code
+        with pytest.raises(InventoryValidationError):
+            build_component_inventory_receipt(contradictory_code)
+
     false_claim = _inventory_evidence()
     false_claim["claims"]["deployment_proven"] = True
     with pytest.raises(InventoryValidationError):
@@ -435,18 +475,26 @@ def test_component_inventory_cli_consumes_only_operator_evidence(tmp_path: Path)
     assert absent.returncode == 2
     assert absent.stdout == ""
 
-    raw_secret = "ghp_not-a-real-token"
-    secret_path = tmp_path / "secret-evidence.json"
-    secret_evidence = _inventory_evidence()
-    secret_evidence["components"][0]["source_identity"] = f"gap: {raw_secret}"
-    secret_path.write_text(json.dumps(secret_evidence), encoding="utf-8")
-    refused = subprocess.run(
-        [sys.executable, "-m", "app.ops.devsystem_vm102_component_inventory", "--evidence", str(secret_path)],
-        cwd=ROOT,
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    assert refused.returncode == 2
-    assert raw_secret not in refused.stdout
-    assert raw_secret not in refused.stderr
+    for case, raw_secret, field, value in (
+        (
+            "modern-token",
+            "github_pat_11AA22BB33CC44DD55EE66FF77GG88HH99",
+            "source_identity",
+            "gap:github_pat_11AA22BB33CC44DD55EE66FF77GG88HH99",
+        ),
+        ("opaque-owner", "a" * 48, "owner", f"owner:{'a' * 48}"),
+    ):
+        secret_path = tmp_path / f"{case}-evidence.json"
+        secret_evidence = _inventory_evidence()
+        secret_evidence["components"][0][field] = value
+        secret_path.write_text(json.dumps(secret_evidence), encoding="utf-8")
+        refused = subprocess.run(
+            [sys.executable, "-m", "app.ops.devsystem_vm102_component_inventory", "--evidence", str(secret_path)],
+            cwd=ROOT,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        assert refused.returncode == 2
+        assert raw_secret not in refused.stdout
+        assert raw_secret not in refused.stderr

@@ -35,28 +35,29 @@
       "type": "array",
       "minItems": 1,
       "uniqueItems": true,
-      "items": {
-        "type": "string",
-        "pattern": "^(repo:(app|config|docs|scripts|tests)/[A-Za-z0-9][A-Za-z0-9._/#-]*|github:(issue|pr):[1-9][0-9]*|github:commit:[a-f0-9]{40,64}|receipt:[a-z][a-z0-9_.-]*:[a-f0-9]{64}|operator:sha256:[a-f0-9]{64})$"
-      }
+      "items": {"$ref": "#/$defs/source_ref"},
+      "allOf": [
+        {"contains": {"const": "repo:docs/BUILDEROPS_CONTROL_PLANE/README.md#complete-dev-system-vm-102-topology-contract"}},
+        {"contains": {"const": "github:issue:5194"}}
+      ]
     },
     "components": {
       "type": "array",
       "minItems": 12,
       "maxItems": 12,
       "prefixItems": [
-        {"$ref": "#/$defs/vm102_gap_component", "properties": {"component_id": {"const": "devui_projection"}}},
-        {"$ref": "#/$defs/vm102_gap_component", "properties": {"component_id": {"const": "builderops_control_plane"}}},
-        {"$ref": "#/$defs/vm102_gap_component", "properties": {"component_id": {"const": "builderops_cockpit"}}},
-        {"$ref": "#/$defs/vm102_gap_component", "properties": {"component_id": {"const": "dispatcher_signboard"}}},
-        {"$ref": "#/$defs/vm102_gap_component", "properties": {"component_id": {"const": "ddo"}}},
-        {"$ref": "#/$defs/vm102_gap_component", "properties": {"component_id": {"const": "ckm_kvasir"}}},
-        {"$ref": "#/$defs/vm102_gap_component", "properties": {"component_id": {"const": "focus_conversation_port"}}},
-        {"$ref": "#/$defs/external_gap_component", "properties": {"component_id": {"const": "soi_evidence"}}},
-        {"$ref": "#/$defs/external_component", "properties": {"component_id": {"const": "github_git_ci_delivery"}}},
-        {"$ref": "#/$defs/external_gap_component", "properties": {"component_id": {"const": "model_service"}}},
-        {"$ref": "#/$defs/external_gap_component", "properties": {"component_id": {"const": "tars_proxmox_control"}}},
-        {"$ref": "#/$defs/excluded_component", "properties": {"component_id": {"const": "product_runtime"}}}
+        {"$ref": "#/$defs/vm102_gap_component", "properties": {"component_id": {"const": "devui_projection"}, "owner": {"const": "owner:dev_ui"}}},
+        {"$ref": "#/$defs/vm102_gap_component", "properties": {"component_id": {"const": "builderops_control_plane"}, "owner": {"const": "owner:builderops"}}},
+        {"$ref": "#/$defs/vm102_gap_component", "properties": {"component_id": {"const": "builderops_cockpit"}, "owner": {"const": "owner:builderops_cockpit"}}},
+        {"$ref": "#/$defs/vm102_gap_component", "properties": {"component_id": {"const": "dispatcher_signboard"}, "owner": {"const": "owner:dispatcher_signboard"}}},
+        {"$ref": "#/$defs/vm102_gap_component", "properties": {"component_id": {"const": "ddo"}, "owner": {"const": "owner:ddo"}}},
+        {"$ref": "#/$defs/vm102_gap_component", "properties": {"component_id": {"const": "ckm_kvasir"}, "owner": {"const": "owner:ckm_kvasir"}}},
+        {"$ref": "#/$defs/vm102_gap_component", "properties": {"component_id": {"const": "focus_conversation_port"}, "owner": {"const": "owner:focus_conversation_port"}}},
+        {"$ref": "#/$defs/external_gap_component", "properties": {"component_id": {"const": "soi_evidence"}, "owner": {"const": "owner:product_runtime"}}},
+        {"$ref": "#/$defs/external_component", "properties": {"component_id": {"const": "github_git_ci_delivery"}, "owner": {"const": "owner:github_git_ci"}}},
+        {"$ref": "#/$defs/external_gap_component", "properties": {"component_id": {"const": "model_service"}, "owner": {"const": "owner:model_access_substrate"}}},
+        {"$ref": "#/$defs/external_gap_component", "properties": {"component_id": {"const": "tars_proxmox_control"}, "owner": {"const": "owner:tars_proxmox"}}},
+        {"$ref": "#/$defs/excluded_component", "properties": {"component_id": {"const": "product_runtime"}, "owner": {"const": "owner:product_runtime"}}}
       ],
       "items": false
     },
@@ -149,6 +150,17 @@
   },
   "$defs": {
     "digest": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "source_ref": {
+      "type": "string",
+      "anyOf": [
+        {"const": "repo:docs/BUILDEROPS_CONTROL_PLANE/README.md#complete-dev-system-vm-102-topology-contract"},
+        {"const": "github:issue:5194"},
+        {"pattern": "^github:pr:[1-9][0-9]*$"},
+        {"pattern": "^github:commit:[a-f0-9]{40,64}$"},
+        {"pattern": "^receipt:[a-z][a-z0-9_.-]*:[a-f0-9]{64}$"},
+        {"pattern": "^operator:sha256:[a-f0-9]{64}$"}
+      ]
+    },
     "component": {
       "type": "object",
       "additionalProperties": false,
@@ -174,7 +186,19 @@
             "intentionally_non_runtime"
           ]
         },
-        "owner": {"type": "string", "pattern": "^owner:[a-z0-9][a-z0-9._-]*$"},
+        "owner": {"enum": [
+          "owner:dev_ui",
+          "owner:builderops",
+          "owner:builderops_cockpit",
+          "owner:dispatcher_signboard",
+          "owner:ddo",
+          "owner:ckm_kvasir",
+          "owner:focus_conversation_port",
+          "owner:product_runtime",
+          "owner:github_git_ci",
+          "owner:model_access_substrate",
+          "owner:tars_proxmox"
+        ]},
         "service_or_project": {"type": "string", "minLength": 1, "maxLength": 2048},
         "source_identity": {"type": "string", "minLength": 1, "maxLength": 2048},
         "ingress_auth": {"type": "string", "minLength": 1, "maxLength": 2048},
@@ -186,10 +210,7 @@
           "type": "array",
           "minItems": 1,
           "uniqueItems": true,
-          "items": {
-            "type": "string",
-            "pattern": "^(repo:(app|config|docs|scripts|tests)/[A-Za-z0-9][A-Za-z0-9._/#-]*|github:(issue|pr):[1-9][0-9]*|github:commit:[a-f0-9]{40,64}|receipt:[a-z][a-z0-9_.-]*:[a-f0-9]{64}|operator:sha256:[a-f0-9]{64})$"
-          }
+          "items": {"$ref": "#/$defs/source_ref"}
         }
       },
       "allOf": [
@@ -302,7 +323,7 @@
           "tars_proxmox_control",
           "product_runtime"
         ]},
-        "code": {"type": "string", "pattern": "^[a-z0-9]+(?:_[a-z0-9]+)*$"},
+        "code": {"enum": ["runtime_evidence_missing", "runtime_evidence_unknown"]},
         "detail": {"const": "runtime evidence is not supplied by this inventory"}
       }
     }

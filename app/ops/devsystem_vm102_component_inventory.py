@@ -66,6 +66,20 @@ _PLACEMENT_BY_COMPONENT: Final[dict[str, str]] = {
     "tars_proxmox_control": "external_dependency",
     "product_runtime": "intentionally_non_runtime",
 }
+_OWNER_BY_COMPONENT: Final[dict[str, str]] = {
+    "devui_projection": "owner:dev_ui",
+    "builderops_control_plane": "owner:builderops",
+    "builderops_cockpit": "owner:builderops_cockpit",
+    "dispatcher_signboard": "owner:dispatcher_signboard",
+    "ddo": "owner:ddo",
+    "ckm_kvasir": "owner:ckm_kvasir",
+    "focus_conversation_port": "owner:focus_conversation_port",
+    "soi_evidence": "owner:product_runtime",
+    "github_git_ci_delivery": "owner:github_git_ci",
+    "model_service": "owner:model_access_substrate",
+    "tars_proxmox_control": "owner:tars_proxmox",
+    "product_runtime": "owner:product_runtime",
+}
 _ALLOWED_STATES_BY_COMPONENT: Final[dict[str, frozenset[str]]] = {
     component_id: frozenset({"gap", "unknown"}) for component_id in COMPONENT_IDS
 }
@@ -126,14 +140,26 @@ _CLAIMS: Final[dict[str, bool]] = {
 }
 _SOURCE_REF = re.compile(
     r"^(?:"
-    r"repo:(?:app|config|docs|scripts|tests)/[A-Za-z0-9][A-Za-z0-9._/#-]*|"
-    r"github:(?:issue|pr):[1-9][0-9]*|"
+    r"repo:docs/BUILDEROPS_CONTROL_PLANE/README\.md"
+    r"#complete-dev-system-vm-102-topology-contract|"
+    r"github:issue:5194|"
+    r"github:pr:[1-9][0-9]*|"
     r"github:commit:[a-f0-9]{40,64}|"
     r"receipt:[a-z][a-z0-9_.-]*:[a-f0-9]{64}|"
     r"operator:sha256:[a-f0-9]{64}"
     r")$"
 )
-_OWNER = re.compile(r"^owner:[a-z0-9][a-z0-9._-]*$")
+_REQUIRED_SOURCE_REFS: Final[frozenset[str]] = frozenset(
+    {
+        "repo:docs/BUILDEROPS_CONTROL_PLANE/README.md"
+        "#complete-dev-system-vm-102-topology-contract",
+        "github:issue:5194",
+    }
+)
+_GAP_CODE_BY_STATE: Final[dict[str, str]] = {
+    "gap": "runtime_evidence_missing",
+    "unknown": "runtime_evidence_unknown",
+}
 _OBSERVED_AT = re.compile(
     r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$"
 )
@@ -217,6 +243,8 @@ def _validate_source_refs(source_refs: Any) -> list[str]:
         raise InventoryValidationError("source_refs contain an invalid reference")
     if len(source_refs) != len(set(source_refs)):
         raise InventoryValidationError("source_refs must be unique")
+    if not _REQUIRED_SOURCE_REFS.issubset(source_refs):
+        raise InventoryValidationError("source_refs must retain the normative anchors")
     return sorted(source_refs)
 
 
@@ -245,10 +273,7 @@ def _canonical_components(components: Any, source_refs: list[str]) -> list[dict[
         state = row.get("reconciliation_state")
         if state not in _ALLOWED_STATES_BY_COMPONENT[component_id]:
             raise InventoryValidationError("component reconciliation state is invalid")
-        if (
-            not isinstance(row.get("owner"), str)
-            or _OWNER.fullmatch(row["owner"]) is None
-        ):
+        if row.get("owner") != _OWNER_BY_COMPONENT[component_id]:
             raise InventoryValidationError("component owner reference is invalid")
         for field in _EVIDENCE_FIELDS:
             value = row.get(field)
@@ -289,7 +314,6 @@ def _canonical_gaps(gaps: Any, components: list[dict[str, Any]]) -> list[dict[st
             not isinstance(component_id, str)
             or component_id not in COMPONENT_IDS
             or not isinstance(code, str)
-            or re.fullmatch(r"[a-z0-9]+(?:_[a-z0-9]+)*", code) is None
             or detail != "runtime evidence is not supplied by this inventory"
         ):
             raise InventoryValidationError("gap row is invalid")
@@ -307,6 +331,14 @@ def _canonical_gaps(gaps: Any, components: list[dict[str, Any]]) -> list[dict[st
     }
     if set(gap_rows) != required_gap_ids:
         raise InventoryValidationError("gaps must exactly cover gap and unknown components")
+    state_by_component = {
+        row["component_id"]: row["reconciliation_state"] for row in components
+    }
+    if any(
+        gap["code"] != _GAP_CODE_BY_STATE[state_by_component[component_id]]
+        for component_id, gap in gap_rows.items()
+    ):
+        raise InventoryValidationError("gap code must be a closed non-claim value")
     return [gap_rows[component_id] for component_id in COMPONENT_IDS if component_id in gap_rows]
 
 
