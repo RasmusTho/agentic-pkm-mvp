@@ -15,6 +15,7 @@ import os
 import re
 import sqlite3
 import subprocess
+import sys
 import tempfile
 import time
 import unicodedata
@@ -23,6 +24,12 @@ from contextlib import AbstractContextManager, contextmanager
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, TypeGuard
+
+if __package__ in {None, ""}:  # Supports direct ``python scripts/...`` invocation.
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from app.dispatcher.verification_contract import resolve_issue_authority
+from scripts.review_before_ci_gate import _issue_free_pr_contract_lane
 
 
 DEFAULT_PROTECTED_BRANCHES = {"main", "master", "develop", "dev", "stable"}
@@ -458,6 +465,13 @@ class PullAuthority:
 
 
 @dataclass(frozen=True)
+class PullContractIdentity:
+    governing_issue: int | None
+    no_issue_lane: str | None
+    pr_body_sha256: str
+
+
+@dataclass(frozen=True)
 class ProtectedTarget:
     number: int
     kind: str
@@ -502,6 +516,7 @@ class CandidateIdentity:
     retention_class: str
     review_at: str
     discard: dict[str, object]
+    authenticated_contract: PullContractIdentity
 
 
 @dataclass(frozen=True)
@@ -540,6 +555,13 @@ _CANDIDATE_KEYS = frozenset(
     }
 )
 _SLUG = re.compile(r"[a-z0-9](?:[a-z0-9._-]{0,62}[a-z0-9])?")
+_NO_ISSUE_LANES = frozenset({"docs-authoring", "governance", "direct-repair"})
+_NONTERMINAL_DISPATCHER_STATUSES = frozenset(
+    {"ready", "review", "claimed", "in_progress", "blocked", "released"}
+)
+_TERMINAL_DISPATCHER_STATUSES = frozenset(
+    {"completed", "delivered", "cancelled", "superseded"}
+)
 
 
 def _positive_int(value: object) -> TypeGuard[int]:
@@ -642,7 +664,7 @@ def _pull_from_payload(
 
 def _read_candidate_pr(
     identity: RepositoryIdentity, candidate: Candidate, *, cwd: Path
-) -> PullAuthority:
+) -> PullContractIdentity:
     payload = _github_get(
         cwd, f"repos/{identity.full_name}/pulls/{candidate.pull_request}"
     )
@@ -652,7 +674,39 @@ def _read_candidate_pr(
         or authority.source_sha != candidate.source_sha
     ):
         raise RuntimeError("candidate_pull_head_drift")
-    return authority
+    body = payload.get("body")
+    if not isinstance(body, str):
+        raise RuntimeError("candidate_pr_contract_invalid")
+    issue_authority = resolve_issue_authority(body)
+    if issue_authority is not None:
+        if (
+            candidate.governing_issue != issue_authority.governing_issue
+            or candidate.no_issue_lane is not None
+        ):
+            raise RuntimeError("candidate_pr_contract_mismatch")
+        return PullContractIdentity(
+            governing_issue=issue_authority.governing_issue,
+            no_issue_lane=None,
+            pr_body_sha256=_sha256_pr_body(body),
+        )
+    lane = _issue_free_pr_contract_lane(body)
+    if (
+        lane is None
+        or candidate.governing_issue is not None
+        or candidate.no_issue_lane != lane
+    ):
+        raise RuntimeError("candidate_pr_contract_mismatch")
+    return PullContractIdentity(
+        governing_issue=None,
+        no_issue_lane=lane,
+        pr_body_sha256=_sha256_pr_body(body),
+    )
+
+
+def _sha256_pr_body(body: str) -> str:
+    """Bind receipts to the exact live PR-body bytes returned by GitHub."""
+
+    return hashlib.sha256(body.encode("utf-8")).hexdigest()
 
 
 def _read_protected_targets(
@@ -748,11 +802,14 @@ def _resource_flock(lock_path: Path) -> Iterator[None]:
 
 
 def _candidate_identity(
-    identity: RepositoryIdentity, candidate: Candidate
+    identity: RepositoryIdentity,
+    candidate: Candidate,
+    authenticated_contract: PullContractIdentity,
 ) -> CandidateIdentity:
     return CandidateIdentity(
         repository_id=identity.database_id,
         **asdict(candidate),
+        authenticated_contract=authenticated_contract,
     )
 
 
@@ -878,7 +935,11 @@ def _validate_candidate(
     issue = raw.get("governing_issue")
     lane = raw.get("no_issue_lane")
     issue_valid = _positive_int(issue)
-    lane_valid = isinstance(lane, str) and bool(_SLUG.fullmatch(lane))
+    if lane is not None and (
+        not isinstance(lane, str) or lane not in _NO_ISSUE_LANES
+    ):
+        raise ValueError("candidate_no_issue_lane_invalid")
+    lane_valid = lane is not None
     pull_request = raw.get("pull_request")
     source_ref = raw.get("source_ref")
     source_sha = raw.get("source_sha")
@@ -1268,24 +1329,34 @@ def _dispatcher_conflicts(
         ):
             continue
         status = task.get("status")
-        if not isinstance(status, str) or not status:
-            raise RuntimeError("dispatcher_task_identity_ambiguous")
-        active_task = status in {"claimed", "in_progress"}
+        if not isinstance(status, str) or (
+            status not in _NONTERMINAL_DISPATCHER_STATUSES
+            and status not in _TERMINAL_DISPATCHER_STATUSES
+        ):
+            raise RuntimeError("dispatcher_task_status_ambiguous")
+        nonterminal = status in _NONTERMINAL_DISPATCHER_STATUSES
         lease_id = task_lease_id
         if lease_id is None:
-            if active_task:
-                raise RuntimeError("dispatcher_referenced_lease_missing")
+            if task.get("lease_expires_at") is not None:
+                raise RuntimeError("dispatcher_task_lease_disagreement")
+            if nonterminal:
+                conflicts.add("nonterminal_dispatcher_task")
             continue
         if not isinstance(lease_id, str) or not lease_id:
             raise RuntimeError("dispatcher_task_identity_ambiguous")
         lease = leases.get(lease_id)
         if lease is None:
             raise RuntimeError("dispatcher_referenced_lease_missing")
+        resource = lease.get("resource")
+        if not isinstance(resource, str) or not resource:
+            raise RuntimeError("dispatcher_lease_identity_ambiguous")
         live = _dispatcher_live_lease(lease, now=now)
-        if task.get("lease_expires_at") != lease.get("expires_at") or active_task != live:
+        if task.get("lease_expires_at") != lease.get("expires_at"):
             raise RuntimeError("dispatcher_task_lease_disagreement")
         if live:
             conflicts.add("live_dispatcher_claim")
+        elif nonterminal:
+            conflicts.add("nonterminal_dispatcher_task")
     return conflicts
 
 
@@ -1331,13 +1402,16 @@ def _fresh_candidate_authority(
     requested_repository: str,
     expected_repository: RepositoryIdentity,
     candidate: Candidate,
+    expected_contract: PullContractIdentity,
 ) -> RepositoryIdentity:
     identity = _resolve_repository_identity(cwd, requested_repository)
     if identity != expected_repository:
         raise RuntimeError("repository_identity_changed")
     protected = _read_protected_targets(identity, cwd=cwd)
     _validate_protected_candidate(candidate, protected)
-    _read_candidate_pr(identity, candidate, cwd=cwd)
+    contract = _read_candidate_pr(identity, candidate, cwd=cwd)
+    if contract != expected_contract:
+        raise RuntimeError("candidate_pr_contract_changed")
     lifecycle = _read_lifecycle_authority(cwd, candidate)
     if _lifecycle_conflicts(cwd, candidate, lifecycle):
         raise RuntimeError("candidate_lifecycle_conflict")
@@ -1363,6 +1437,7 @@ def _preflight_candidate(
     requested_repository: str,
     identity: RepositoryIdentity,
     candidate: Candidate,
+    expected: CandidateIdentity,
     common_dir: Path,
 ) -> None:
     _fresh_candidate_authority(
@@ -1370,8 +1445,8 @@ def _preflight_candidate(
         requested_repository=requested_repository,
         expected_repository=identity,
         candidate=candidate,
+        expected_contract=expected.authenticated_contract,
     )
-    expected = _candidate_identity(identity, candidate)
     paths = _receipt_paths(
         common_dir,
         _receipt_resource_key(identity.database_id, candidate.source_ref),
@@ -1407,23 +1482,27 @@ def targeted_remote_cleanup(
         validated = [_validate_candidate(raw, identity, cwd) for raw in candidates]
         if len({candidate.source_ref for candidate in validated}) != len(validated):
             raise ValueError("candidate_resource_collision")
+        expected_identities: list[CandidateIdentity] = []
         for candidate in validated:
             _validate_protected_candidate(candidate, protected)
-            _read_candidate_pr(identity, candidate, cwd=cwd)
+            contract = _read_candidate_pr(identity, candidate, cwd=cwd)
+            expected_identities.append(
+                _candidate_identity(identity, candidate, contract)
+            )
         common_dir = _git_common_dir(cwd)
-        for candidate in validated:
+        for candidate, expected in zip(validated, expected_identities, strict=True):
             _preflight_candidate(
                 cwd,
                 requested_repository=repository,
                 identity=identity,
                 candidate=candidate,
+                expected=expected,
                 common_dir=common_dir,
             )
     except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as exc:
         return {"ok": False, "completed": completed, "error": str(exc)}
 
-    for candidate in validated:
-        expected = _candidate_identity(identity, candidate)
+    for candidate, expected in zip(validated, expected_identities, strict=True):
         resource_key = _receipt_resource_key(identity.database_id, candidate.source_ref)
         paths = _receipt_paths(common_dir, resource_key)
         try:
@@ -1436,6 +1515,7 @@ def targeted_remote_cleanup(
                     requested_repository=repository,
                     expected_repository=identity,
                     candidate=candidate,
+                    expected_contract=expected.authenticated_contract,
                 )
                 source = _remote_ref_sha(cwd, boundary.push_url, candidate.source_ref)
                 archive = _remote_ref_sha(cwd, boundary.push_url, candidate.archive_ref)
@@ -1481,6 +1561,7 @@ def targeted_remote_cleanup(
                     requested_repository=repository,
                     expected_repository=identity,
                     candidate=candidate,
+                    expected_contract=expected.authenticated_contract,
                 )
                 source = _remote_ref_sha(cwd, boundary.push_url, candidate.source_ref)
                 archive = _remote_ref_sha(cwd, boundary.push_url, candidate.archive_ref)

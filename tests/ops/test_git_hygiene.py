@@ -16,6 +16,7 @@ GENERATION = "a" * 32
 REPOSITORY_ID = 1234
 PUSH_URL = "git@github.com:RasmusTho/agentic-pkm-mvp.git"
 FETCH_URL = "https://github.com/RasmusTho/agentic-pkm-mvp.git"
+STANDARD_PR_BODY = "Governing-Issue: #5170\n\nFixes #5170\n"
 
 
 def _targeted_candidate(**overrides):
@@ -39,6 +40,19 @@ def _targeted_candidate(**overrides):
             REPOSITORY_ID, candidate["source_ref"], candidate["source_sha"]
         )
     return candidate
+
+
+def _authenticated_contract(candidate) -> git_hygiene.PullContractIdentity:
+    lane = candidate.no_issue_lane if isinstance(candidate, git_hygiene.Candidate) else candidate["no_issue_lane"]
+    issue = candidate.governing_issue if isinstance(candidate, git_hygiene.Candidate) else candidate["governing_issue"]
+    body = STANDARD_PR_BODY
+    if lane is not None:
+        body = (
+            "## Change Lane\n"
+            f"- [x] {'Governance' if lane == 'governance' else 'Docs authoring'} lane\n\n"
+            "Final-Review-Rounds: 0\n"
+        )
+    return git_hygiene.PullContractIdentity(issue, lane, git_hygiene._sha256_pr_body(body))
 
 
 def _remote_cleanup_transport(refs, commands, *, advance_before_delete=False):
@@ -89,9 +103,7 @@ def _install_remote_cleanup_authority(monkeypatch, tmp_path, refs, commands):
     monkeypatch.setattr(
         git_hygiene,
         "_read_candidate_pr",
-        lambda _identity, candidate, **_kwargs: git_hygiene.PullAuthority(
-            candidate.pull_request, candidate.source_ref, candidate.source_sha
-        ),
+        lambda _identity, candidate, **_kwargs: _authenticated_contract(candidate),
     )
     monkeypatch.setattr(
         git_hygiene, "_read_lifecycle_authority", lambda _cwd, _candidate: {}
@@ -151,6 +163,13 @@ def test_targeted_remote_cleanup_receipt_precedes_delete_and_completes_after_rea
     receipt = json.loads(next(receipts.glob("*.json")).read_text(encoding="utf-8"))
     assert receipt["state"] == "completed"
     assert receipt["identity"]["owner"] == "builder-ops"
+    assert receipt["identity"]["authenticated_contract"] == {
+        "governing_issue": 5170,
+        "no_issue_lane": None,
+        "pr_body_sha256": git_hygiene._sha256_pr_body(
+            STANDARD_PR_BODY
+        ),
+    }
     assert candidate["source_ref"] not in refs
 
 
@@ -276,6 +295,7 @@ def _closed_pull_payload(
     repo_id=REPOSITORY_ID,
     ref="closed-unmerged",
     sha="a" * 40,
+    body=STANDARD_PR_BODY,
 ):
     return {
         "number": number,
@@ -283,6 +303,7 @@ def _closed_pull_payload(
         "merged": merged,
         "merged_at": merged_at,
         "head": {"repo": {"id": repo_id}, "ref": ref, "sha": sha},
+        "body": body,
     }
 
 
@@ -296,9 +317,7 @@ def test_targeted_remote_cleanup_requires_live_closed_unmerged_exact_pr(tmp_path
     def read_pr(_identity, value, **_kwargs):
         nonlocal reads
         reads += 1
-        return git_hygiene.PullAuthority(
-            value.pull_request, value.source_ref, value.source_sha
-        )
+        return _authenticated_contract(value)
 
     monkeypatch.setattr(git_hygiene, "_read_candidate_pr", read_pr)
     report = git_hygiene.targeted_remote_cleanup(
@@ -327,6 +346,114 @@ def test_targeted_remote_cleanup_rejects_open_merged_forked_or_drifted_pr(
     monkeypatch.setattr(git_hygiene, "_github_get", lambda *_: payload)
     with pytest.raises(RuntimeError):
         git_hygiene._read_candidate_pr(identity, candidate, cwd=tmp_path)
+
+
+# Regression for https://github.com/RasmusTho/agentic-pkm-mvp/pull/5172#discussion_r3886294181
+@pytest.mark.parametrize(
+    "candidate",
+    [
+        _targeted_candidate(governing_issue=9999),
+        _targeted_candidate(governing_issue=None, no_issue_lane="governance"),
+    ],
+)
+def test_targeted_remote_cleanup_authenticates_live_pr_governing_issue(
+    tmp_path, monkeypatch, candidate
+) -> None:
+    identity = git_hygiene.RepositoryIdentity(
+        REPOSITORY_ID, candidate["repository"], FETCH_URL, PUSH_URL
+    )
+    monkeypatch.setattr(
+        git_hygiene,
+        "_github_get",
+        lambda *_: _closed_pull_payload(body="Governing-Issue: #5170\n\nFixes #5170\n"),
+    )
+
+    with pytest.raises(RuntimeError, match="candidate_pr_contract_mismatch"):
+        git_hygiene._read_candidate_pr(
+            identity, git_hygiene.Candidate(**candidate), cwd=tmp_path
+        )
+
+
+def test_targeted_remote_cleanup_authenticates_canonical_issue_free_lane(
+    tmp_path, monkeypatch
+) -> None:
+    identity = git_hygiene.RepositoryIdentity(
+        REPOSITORY_ID, "RasmusTho/agentic-pkm-mvp", FETCH_URL, PUSH_URL
+    )
+    body = (
+        "## Change Lane\n"
+        "- [ ] Docs authoring lane\n"
+        "- [x] Governance lane\n\n"
+        "Final-Review-Rounds: 0\n"
+    )
+    monkeypatch.setattr(
+        git_hygiene, "_github_get", lambda *_: _closed_pull_payload(body=body)
+    )
+    candidate = git_hygiene.Candidate(
+        **_targeted_candidate(governing_issue=None, no_issue_lane="governance")
+    )
+
+    contract = git_hygiene._read_candidate_pr(identity, candidate, cwd=tmp_path)
+
+    assert contract.governing_issue is None
+    assert contract.no_issue_lane == "governance"
+    assert contract.pr_body_sha256 == git_hygiene._sha256_pr_body(body)
+
+
+def test_targeted_remote_cleanup_rejects_issue_free_lane_mismatch(
+    tmp_path, monkeypatch
+) -> None:
+    identity = git_hygiene.RepositoryIdentity(
+        REPOSITORY_ID, "RasmusTho/agentic-pkm-mvp", FETCH_URL, PUSH_URL
+    )
+    body = (
+        "## Change Lane\n"
+        "- [ ] Docs authoring lane\n"
+        "- [x] Governance lane\n\n"
+        "Final-Review-Rounds: 0\n"
+    )
+    monkeypatch.setattr(
+        git_hygiene, "_github_get", lambda *_: _closed_pull_payload(body=body)
+    )
+    candidate = git_hygiene.Candidate(
+        **_targeted_candidate(governing_issue=None, no_issue_lane="docs-authoring")
+    )
+
+    with pytest.raises(RuntimeError, match="candidate_pr_contract_mismatch"):
+        git_hygiene._read_candidate_pr(identity, candidate, cwd=tmp_path)
+
+
+@pytest.mark.parametrize(
+    ("body", "candidate"),
+    [
+        (
+            "Governing-Issue: #5170\nGoverning-Issue: #5170\nFixes #5170\n",
+            _targeted_candidate(),
+        ),
+        ("Governing-Issue: #5170\n", _targeted_candidate()),
+        (
+            "## Change Lane\n"
+            "- [x] Docs authoring lane\n"
+            "- [x] Governance lane\n\n"
+            "Final-Review-Rounds: 0\n",
+            _targeted_candidate(governing_issue=None, no_issue_lane="governance"),
+        ),
+    ],
+)
+def test_targeted_remote_cleanup_rejects_malformed_or_ambiguous_pr_contract(
+    tmp_path, monkeypatch, body, candidate
+) -> None:
+    identity = git_hygiene.RepositoryIdentity(
+        REPOSITORY_ID, candidate["repository"], FETCH_URL, PUSH_URL
+    )
+    monkeypatch.setattr(
+        git_hygiene, "_github_get", lambda *_: _closed_pull_payload(body=body)
+    )
+
+    with pytest.raises(RuntimeError, match="candidate_pr_contract_mismatch"):
+        git_hygiene._read_candidate_pr(
+            identity, git_hygiene.Candidate(**candidate), cwd=tmp_path
+        )
 
 
 def test_targeted_remote_cleanup_treats_4728_as_protected_non_pull_issue(
@@ -488,6 +615,41 @@ def test_targeted_remote_cleanup_rereads_dispatcher_leases_at_both_boundaries(
     )
     assert report["ok"] is True
     assert reads == 3
+
+
+def test_targeted_remote_cleanup_pr_contract_drift_before_delete_preserves_source(
+    tmp_path, monkeypatch
+) -> None:
+    candidate = _targeted_candidate()
+    refs = {candidate["source_ref"]: candidate["source_sha"]}
+    commands: list[list[str]] = []
+    _install_remote_cleanup_authority(monkeypatch, tmp_path, refs, commands)
+    original = _authenticated_contract(git_hygiene.Candidate(**candidate))
+    changed = git_hygiene.PullContractIdentity(
+        governing_issue=original.governing_issue,
+        no_issue_lane=original.no_issue_lane,
+        pr_body_sha256="f" * 64,
+    )
+    reads = 0
+
+    def read_pr(_identity, _candidate, **_kwargs):
+        nonlocal reads
+        reads += 1
+        return changed if reads >= 4 else original
+
+    monkeypatch.setattr(git_hygiene, "_read_candidate_pr", read_pr)
+    report = git_hygiene.targeted_remote_cleanup(
+        tmp_path, repository=candidate["repository"], candidates=[candidate]
+    )
+
+    assert report["error"] == "candidate_pr_contract_changed"
+    assert refs[candidate["source_ref"]] == candidate["source_sha"]
+    assert refs[candidate["archive_ref"]] == candidate["source_sha"]
+    assert not any(
+        command[-1] == f":{candidate['source_ref']}"
+        for command in commands
+        if command[0] == "push"
+    )
 
 
 def test_targeted_remote_cleanup_new_lease_after_archive_preserves_source(
@@ -669,7 +831,9 @@ def test_targeted_remote_cleanup_prepared_absence_recovers_to_completed(
     commands: list[list[str]] = []
     identity = _install_remote_cleanup_authority(monkeypatch, tmp_path, refs, commands)
     candidate = git_hygiene.Candidate(**candidate_data)
-    expected = git_hygiene._candidate_identity(identity, candidate)
+    expected = git_hygiene._candidate_identity(
+        identity, candidate, _authenticated_contract(candidate)
+    )
     key = git_hygiene._receipt_resource_key(REPOSITORY_ID, candidate.source_ref)
     paths = git_hygiene._receipt_paths(tmp_path / "common", key)
     git_hygiene._replace_receipt(
@@ -688,7 +852,9 @@ def test_targeted_remote_cleanup_atomic_transition_orders_fsync_replace_dirsync(
 ) -> None:
     candidate = git_hygiene.Candidate(**_targeted_candidate())
     identity = git_hygiene.RepositoryIdentity(REPOSITORY_ID, candidate.repository, FETCH_URL, PUSH_URL)
-    expected = git_hygiene._candidate_identity(identity, candidate)
+    expected = git_hygiene._candidate_identity(
+        identity, candidate, _authenticated_contract(candidate)
+    )
     key = git_hygiene._receipt_resource_key(REPOSITORY_ID, candidate.source_ref)
     paths = git_hygiene._receipt_paths(tmp_path, key)
     events = []
@@ -712,7 +878,9 @@ def test_targeted_remote_cleanup_receipt_schema_is_exact_and_monotonic(tmp_path)
     repository = git_hygiene.RepositoryIdentity(
         REPOSITORY_ID, candidate.repository, FETCH_URL, PUSH_URL
     )
-    identity = git_hygiene._candidate_identity(repository, candidate)
+    identity = git_hygiene._candidate_identity(
+        repository, candidate, _authenticated_contract(candidate)
+    )
     key = git_hygiene._receipt_resource_key(REPOSITORY_ID, candidate.source_ref)
     paths = git_hygiene._receipt_paths(tmp_path, key)
     prepared = git_hygiene.Receipt(
@@ -927,6 +1095,265 @@ def test_targeted_remote_cleanup_detects_orphan_live_issue_lease_only_when_relev
     assert git_hygiene._dispatcher_conflicts(candidate, {}, snapshot) == {
         "live_dispatcher_claim"
     }
+
+
+# Regression for https://github.com/RasmusTho/agentic-pkm-mvp/pull/5172#discussion_r3886294181
+def test_targeted_remote_cleanup_cannot_omit_leased_live_pr_governing_issue(
+    tmp_path, monkeypatch
+) -> None:
+    from app.dispatcher.models import LeaseRecord
+    from app.dispatcher.store import SqliteStore
+
+    database = tmp_path / "dispatcher.sqlite3"
+    monkeypatch.setattr(
+        git_hygiene, "_canonical_dispatcher_db_path", lambda _cwd: database
+    )
+    store = SqliteStore(database)
+    store.initialize()
+    store.upsert_lease(
+        LeaseRecord(
+            lease_id="actual-governing-issue",
+            resource="issue:5170",
+            holder="other-agent",
+            ttl_seconds=60,
+            acquired_at="2026-08-29T00:00:00+00:00",
+            expires_at="2099-01-01T00:00:00+00:00",
+        )
+    )
+    candidate = git_hygiene.Candidate(
+        **_targeted_candidate(governing_issue=None, no_issue_lane="governance")
+    )
+    identity = git_hygiene.RepositoryIdentity(
+        REPOSITORY_ID, candidate.repository, FETCH_URL, PUSH_URL
+    )
+    monkeypatch.setattr(
+        git_hygiene,
+        "_github_get",
+        lambda *_: _closed_pull_payload(body="Governing-Issue: #5170\n\nFixes #5170\n"),
+    )
+
+    with pytest.raises(RuntimeError, match="candidate_pr_contract_mismatch"):
+        git_hygiene._read_candidate_pr(identity, candidate, cwd=tmp_path)
+
+    snapshot = git_hygiene._read_dispatcher_authority(
+        tmp_path, "RasmusTho/agentic-pkm-mvp"
+    )
+    authenticated = git_hygiene.Candidate(**_targeted_candidate())
+    assert git_hygiene._dispatcher_conflicts(authenticated, {}, snapshot) == {
+        "live_dispatcher_claim"
+    }
+
+
+# Regression for https://github.com/RasmusTho/agentic-pkm-mvp/pull/5172#discussion_r3886294191
+@pytest.mark.parametrize("status", ("ready", "review", "blocked"))
+def test_targeted_remote_cleanup_blocks_relevant_resumable_task_without_lease(
+    tmp_path, monkeypatch, status
+) -> None:
+    from app.dispatcher.models import TaskRecord
+    from app.dispatcher.store import SqliteStore
+
+    database = tmp_path / "dispatcher.sqlite3"
+    monkeypatch.setattr(
+        git_hygiene, "_canonical_dispatcher_db_path", lambda _cwd: database
+    )
+    store = SqliteStore(database)
+    store.initialize()
+    store.upsert_task(
+        TaskRecord(
+            task_id=f"candidate-{status}",
+            issue_number=5170,
+            title="candidate retained work",
+            status=status,
+            priority="high",
+            source_anchor_refs=[],
+            created_at="2026-08-29T00:00:00+00:00",
+            updated_at="2026-08-29T00:00:00+00:00",
+            repo="RasmusTho/agentic-pkm-mvp",
+            linked_pr="6000",
+        )
+    )
+
+    snapshot = git_hygiene._read_dispatcher_authority(
+        tmp_path, "RasmusTho/agentic-pkm-mvp"
+    )
+    candidate = git_hygiene.Candidate(**_targeted_candidate())
+    assert git_hygiene._dispatcher_conflicts(candidate, {}, snapshot) == {
+        "nonterminal_dispatcher_task"
+    }
+
+
+@pytest.mark.parametrize("status", ("ready", "review", "claimed", "in_progress"))
+def test_targeted_remote_cleanup_blocks_resumable_task_with_released_lease(
+    tmp_path, monkeypatch, status
+) -> None:
+    from app.dispatcher.models import LeaseRecord, TaskRecord
+    from app.dispatcher.store import SqliteStore
+
+    database = tmp_path / "dispatcher.sqlite3"
+    monkeypatch.setattr(
+        git_hygiene, "_canonical_dispatcher_db_path", lambda _cwd: database
+    )
+    store = SqliteStore(database)
+    store.initialize()
+    expires = "2026-08-29T00:01:00+00:00"
+    store.upsert_lease(
+        LeaseRecord(
+            lease_id=f"released-{status}",
+            resource="issue:5170",
+            holder="prior-agent",
+            ttl_seconds=60,
+            acquired_at="2026-08-29T00:00:00+00:00",
+            expires_at=expires,
+            released_at="2026-08-29T00:00:30+00:00",
+            release_reason="review" if status == "review" else "manual",
+        )
+    )
+    store.upsert_task(
+        TaskRecord(
+            task_id=f"candidate-released-{status}",
+            issue_number=5170,
+            title="candidate retained work",
+            status=status,
+            priority="high",
+            source_anchor_refs=[],
+            created_at="2026-08-29T00:00:00+00:00",
+            updated_at="2026-08-29T00:00:30+00:00",
+            repo="RasmusTho/agentic-pkm-mvp",
+            claimed_by=None,
+            lease_id=f"released-{status}",
+            lease_expires_at=expires,
+            linked_pr="6000",
+        )
+    )
+
+    snapshot = git_hygiene._read_dispatcher_authority(
+        tmp_path, "RasmusTho/agentic-pkm-mvp"
+    )
+    candidate = git_hygiene.Candidate(**_targeted_candidate())
+    assert git_hygiene._dispatcher_conflicts(candidate, {}, snapshot) == {
+        "nonterminal_dispatcher_task"
+    }
+
+
+def test_targeted_remote_cleanup_blocks_review_task_with_expired_lease(
+    tmp_path, monkeypatch
+) -> None:
+    from app.dispatcher.models import LeaseRecord, TaskRecord
+    from app.dispatcher.store import SqliteStore
+
+    database = tmp_path / "dispatcher.sqlite3"
+    monkeypatch.setattr(
+        git_hygiene, "_canonical_dispatcher_db_path", lambda _cwd: database
+    )
+    store = SqliteStore(database)
+    store.initialize()
+    expires = "2020-01-01T00:01:00+00:00"
+    store.upsert_lease(
+        LeaseRecord(
+            lease_id="expired-review",
+            resource="issue:5170",
+            holder="prior-agent",
+            ttl_seconds=60,
+            acquired_at="2020-01-01T00:00:00+00:00",
+            expires_at=expires,
+        )
+    )
+    store.upsert_task(
+        TaskRecord(
+            task_id="candidate-expired-review",
+            issue_number=5170,
+            title="candidate retained review",
+            status="review",
+            priority="high",
+            source_anchor_refs=[],
+            created_at="2020-01-01T00:00:00+00:00",
+            updated_at="2020-01-01T00:01:00+00:00",
+            repo="RasmusTho/agentic-pkm-mvp",
+            lease_id="expired-review",
+            lease_expires_at=expires,
+            linked_pr="6000",
+        )
+    )
+
+    snapshot = git_hygiene._read_dispatcher_authority(
+        tmp_path, "RasmusTho/agentic-pkm-mvp"
+    )
+    candidate = git_hygiene.Candidate(**_targeted_candidate())
+    assert git_hygiene._dispatcher_conflicts(candidate, {}, snapshot) == {
+        "nonterminal_dispatcher_task"
+    }
+
+
+@pytest.mark.parametrize(
+    "status", ("completed", "delivered", "cancelled", "superseded")
+)
+def test_targeted_remote_cleanup_allows_only_positive_terminal_task_states(
+    tmp_path, monkeypatch, status
+) -> None:
+    from app.dispatcher.models import TaskRecord
+    from app.dispatcher.store import SqliteStore
+
+    database = tmp_path / "dispatcher.sqlite3"
+    monkeypatch.setattr(
+        git_hygiene, "_canonical_dispatcher_db_path", lambda _cwd: database
+    )
+    store = SqliteStore(database)
+    store.initialize()
+    store.upsert_task(
+        TaskRecord(
+            task_id=f"candidate-terminal-{status}",
+            issue_number=5170,
+            title="candidate terminal work",
+            status=status,
+            priority="high",
+            source_anchor_refs=[],
+            created_at="2026-08-29T00:00:00+00:00",
+            updated_at="2026-08-29T00:00:30+00:00",
+            repo="RasmusTho/agentic-pkm-mvp",
+            linked_pr="6000",
+        )
+    )
+
+    snapshot = git_hygiene._read_dispatcher_authority(
+        tmp_path, "RasmusTho/agentic-pkm-mvp"
+    )
+    candidate = git_hygiene.Candidate(**_targeted_candidate())
+    assert git_hygiene._dispatcher_conflicts(candidate, {}, snapshot) == set()
+
+
+def test_targeted_remote_cleanup_rejects_unknown_relevant_task_state(
+    tmp_path, monkeypatch
+) -> None:
+    from app.dispatcher.models import TaskRecord
+    from app.dispatcher.store import SqliteStore
+
+    database = tmp_path / "dispatcher.sqlite3"
+    monkeypatch.setattr(
+        git_hygiene, "_canonical_dispatcher_db_path", lambda _cwd: database
+    )
+    store = SqliteStore(database)
+    store.initialize()
+    store.upsert_task(
+        TaskRecord(
+            task_id="candidate-legacy-done",
+            issue_number=5170,
+            title="ambiguous candidate history",
+            status="done",
+            priority="high",
+            source_anchor_refs=[],
+            created_at="2026-08-29T00:00:00+00:00",
+            updated_at="2026-08-29T00:00:30+00:00",
+            repo="RasmusTho/agentic-pkm-mvp",
+            linked_pr="6000",
+        )
+    )
+
+    snapshot = git_hygiene._read_dispatcher_authority(
+        tmp_path, "RasmusTho/agentic-pkm-mvp"
+    )
+    candidate = git_hygiene.Candidate(**_targeted_candidate())
+    with pytest.raises(RuntimeError, match="dispatcher_task_status_ambiguous"):
+        git_hygiene._dispatcher_conflicts(candidate, {}, snapshot)
 
 
 def test_targeted_remote_cleanup_scopes_dispatcher_disagreement_to_candidate(
@@ -1279,6 +1706,16 @@ def test_targeted_remote_cleanup_crash_matrix(tmp_path, monkeypatch, crash_point
         (lambda value: value.update({"pull_request": True}), "candidate_pull_request_invalid"),
         (lambda value: value.update({"governing_issue": True}), "candidate_issue_identity_ambiguous"),
         (lambda value: value.update({"no_issue_lane": "governance"}), "candidate_issue_identity_ambiguous"),
+        (
+            lambda value: value.update(
+                {"governing_issue": None, "no_issue_lane": "arbitrary"}
+            ),
+            "candidate_no_issue_lane_invalid",
+        ),
+        (
+            lambda value: value.update({"no_issue_lane": "arbitrary"}),
+            "candidate_no_issue_lane_invalid",
+        ),
         (lambda value: value.update({"owner": "Bad Owner"}), "candidate_owner_invalid"),
         (lambda value: value.update({"successor": "issue:0"}), "candidate_successor_invalid"),
         (lambda value: value.update({"review_at": "2030-02-30T00:00:00Z"}), "candidate_review_at_invalid"),
@@ -1399,9 +1836,7 @@ def test_targeted_remote_cleanup_real_bare_remote_cas(tmp_path, monkeypatch) -> 
     monkeypatch.setattr(
         git_hygiene,
         "_read_candidate_pr",
-        lambda _identity, value, **_kwargs: git_hygiene.PullAuthority(
-            value.pull_request, value.source_ref, value.source_sha
-        ),
+        lambda _identity, value, **_kwargs: _authenticated_contract(value),
     )
     monkeypatch.setattr(
         git_hygiene, "_read_lifecycle_authority", lambda _cwd, _candidate: {}

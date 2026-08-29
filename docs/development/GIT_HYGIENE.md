@@ -49,7 +49,14 @@ GitHub SSH push forms may differ, but both must identify that REST repository. T
 captured literal push URL—not the mutable remote name—is passed to every `ls-remote`
 and `push`; the fetch URL is used to obtain the exact source object. Every candidate PR
 must freshly be closed, unmerged, same-repository, and at the named full head ref and
-SHA. Protected target `#4728` is resolved as a closed Issue and must not be fabricated
+SHA. The candidate's Issue/no-Issue routing fields are not authority: the live PR body
+is parsed with the same canonical governance classifier used by publication and
+verification. An issue-backed candidate must match the body's unique positive
+`Governing-Issue`; an issue-free candidate must match exactly one authenticated
+`docs-authoring`, `governance`, or `direct-repair` lane. Missing, malformed, duplicate,
+ambiguous, or mismatched contract identity refuses cleanup, and its exact PR-body digest
+plus resolved Issue/lane identity is part of the durable receipt identity. Protected
+target `#4728` is resolved as a closed Issue and must not be fabricated
 as a pull head; `#4813` is resolved as a closed-unmerged pull request and protects its
 number, full head ref, and head SHA. Lookup, kind, repository, or shape ambiguity is a
 batch-wide refusal.
@@ -80,7 +87,13 @@ identity-ambiguous or relevant malformed rows, missing relevant referenced lease
 relevant released/current-task disagreement, changed census, or any live relevant task
 or orphan resource claim fails closed. Candidate resources include canonical
 `issue:<positive governing_issue>` identities, so an orphan Issue lease protects the
-source even without a task row. Narrow legacy blank-repository history is ignored only
+source even without a task row. Relevant `ready`, `review`, `claimed`, `in_progress`,
+`blocked`, or `released` task state preserves the source even after its pickup lease is
+released or expires, because that state can still represent retained or resumable work.
+Only positively terminal `completed`, `delivered`, `cancelled`, or `superseded` tasks may
+become nonconflicting after their task/lease/resource consistency checks pass; every
+unknown or legacy status remains ambiguous and fails closed. Narrow legacy
+blank-repository history is ignored only
 when it has the current terminal `completed`/`blocked` or sync-meta shape, has no
 candidate Issue/PR/ref/branch/path resource, and has no live or unreleased lease. A
 blank row that is live, unreleased, relevant, malformed beyond that bounded legacy
