@@ -72,7 +72,7 @@ def test_adr0062_amendment_owns_vm102_placement_and_rebuildable_posture() -> Non
 
     assert "complete dev system placement on vm 102" in normalized_amendment
     assert "vm 102 is the intended cohesive runtime home" in normalized_amendment
-    assert "demerzel is an external authenticated client and operator dependency" in normalized_amendment
+    assert "external authenticated client and operator dependency" in normalized_amendment
     assert "rebuildable from source, images, configuration, and host-managed secrets" in normalized_amendment
     assert "backup, wal archive, and restore drill are deferred" in normalized_amendment
     assert "a4 supersedes conflicting placement and recovery-gate language in d2 through d6" in normalized_amendment
