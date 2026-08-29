@@ -8,6 +8,7 @@ import subprocess
 import sys
 
 import pytest
+from jsonschema import Draft202012Validator
 
 from app.ops.devsystem_vm102_component_inventory import (
     InventoryValidationError,
@@ -103,6 +104,24 @@ def _inventory_evidence() -> dict[str, object]:
     for component_id in COMPONENT_IDS:
         _, documented_state = COMPONENT_EXPECTATIONS[component_id]
         reconciliation_state = documented_state.strip("`")
+        evidence_code_by_field = {
+            "service_or_project": "service_or_project_not_proven",
+            "source_identity": "source_identity_not_proven",
+            "ingress_auth": "ingress_auth_not_proven",
+            "health_version": "health_version_not_proven",
+            "deployment_lifecycle": "deployment_lifecycle_not_proven",
+            "migration_rollback": "migration_rollback_not_proven",
+        }
+        if reconciliation_state == "external":
+            evidence_code_by_field = {
+                field: code.replace("_not_proven", "_external_dependency")
+                for field, code in evidence_code_by_field.items()
+            }
+        elif reconciliation_state == "excluded":
+            evidence_code_by_field = {
+                field: code.replace("_not_proven", "_not_applicable")
+                for field, code in evidence_code_by_field.items()
+            }
         components.append(
             {
                 "component_id": component_id,
@@ -112,24 +131,10 @@ def _inventory_evidence() -> dict[str, object]:
                     "intentionally non-runtime": "intentionally_non_runtime",
                 }[COMPONENT_EXPECTATIONS[component_id][0]],
                 "owner": f"owner:{component_id}",
-                "service_or_project": (
-                    f"{reconciliation_state}: operator-supplied service or project evidence"
-                ),
-                "source_identity": (
-                    f"{reconciliation_state}: operator-supplied source or image evidence"
-                ),
-                "ingress_auth": (
-                    f"{reconciliation_state}: operator-supplied ingress and auth posture"
-                ),
-                "health_version": (
-                    f"{reconciliation_state}: operator-supplied health and version evidence"
-                ),
-                "deployment_lifecycle": (
-                    f"{reconciliation_state}: operator-supplied deployment and lifecycle evidence"
-                ),
-                "migration_rollback": (
-                    f"{reconciliation_state}: operator-supplied migration and rollback evidence"
-                ),
+                **{
+                    field: f"{reconciliation_state}:{code}"
+                    for field, code in evidence_code_by_field.items()
+                },
                 "reconciliation_state": reconciliation_state,
                 "evidence_refs": [source_ref],
             }
@@ -313,6 +318,19 @@ def test_component_inventory_rejects_malformed_and_secret_bearing_evidence() -> 
     with pytest.raises(InventoryValidationError):
         build_component_inventory_receipt(secret)
 
+    modern_token = "github_pat_11AA22BB33CC44DD55EE66FF77GG88HH99"
+    opaque_auth = _inventory_evidence()
+    opaque_auth["components"][0]["ingress_auth"] = f"gap:{modern_token}"
+    with pytest.raises(InventoryValidationError):
+        build_component_inventory_receipt(opaque_auth)
+
+    unclassified_credential = _inventory_evidence()
+    unclassified_credential["components"][0]["ingress_auth"] = (
+        "gap:opaque_credential_material_11aa22bb33cc"
+    )
+    with pytest.raises(InventoryValidationError):
+        build_component_inventory_receipt(unclassified_credential)
+
     receipt = build_component_inventory_receipt(_inventory_evidence())
     tampered_digest = copy.deepcopy(receipt)
     tampered_digest["component_inventory_digest"] = "0" * 64
@@ -357,6 +375,26 @@ def test_component_inventory_preserves_gaps_and_refuses_false_claims() -> None:
     hidden_gap["components"][0]["deployment_lifecycle"] = "deployed and active"
     with pytest.raises(InventoryValidationError):
         build_component_inventory_receipt(hidden_gap)
+
+    for field, contradiction in (
+        ("deployment_lifecycle", "gap:deployed_and_active_on_vm102"),
+        ("health_version", "gap:healthy_at_exact_version_abc123"),
+        ("ingress_auth", "gap:authenticated_ingress_is_ready"),
+        ("service_or_project", "gap:resident_and_qualified_on_vm102"),
+    ):
+        contradictory_gap = _inventory_evidence()
+        contradictory_gap["components"][0][field] = contradiction
+        with pytest.raises(InventoryValidationError):
+            build_component_inventory_receipt(contradictory_gap)
+
+    schema = json.loads(
+        _read("config/platform/devsystem_vm102_component_inventory.v1.schema.json")
+    )
+    schema_contradiction = build_component_inventory_receipt(_inventory_evidence())
+    schema_contradiction["components"][0]["health_version"] = (
+        "gap:healthy_at_exact_version_abc123"
+    )
+    assert list(Draft202012Validator(schema).iter_errors(schema_contradiction))
 
     false_claim = _inventory_evidence()
     false_claim["claims"]["deployment_proven"] = True

@@ -37,7 +37,7 @@
       "uniqueItems": true,
       "items": {
         "type": "string",
-        "pattern": "^(repo|github|receipt|operator):[A-Za-z0-9][A-Za-z0-9._/#:-]*$"
+        "pattern": "^(repo:(app|config|docs|scripts|tests)/[A-Za-z0-9][A-Za-z0-9._/#-]*|github:(issue|pr):[1-9][0-9]*|github:commit:[a-f0-9]{40,64}|receipt:[a-z][a-z0-9_.-]*:[a-f0-9]{64}|operator:sha256:[a-f0-9]{64})$"
       }
     },
     "components": {
@@ -69,8 +69,18 @@
     "refusals": {
       "type": "array",
       "minItems": 6,
+      "maxItems": 6,
       "uniqueItems": true,
-      "items": {"type": "string", "pattern": "^[a-z0-9]+(?:_[a-z0-9]+)*$"},
+      "items": {
+        "enum": [
+          "activation_not_proven",
+          "deployment_not_proven",
+          "health_not_proven",
+          "qualification_not_proven",
+          "residency_not_proven",
+          "rollback_not_proven"
+        ]
+      },
       "allOf": [
         {"contains": {"const": "activation_not_proven"}},
         {"contains": {"const": "deployment_not_proven"}},
@@ -164,7 +174,7 @@
             "intentionally_non_runtime"
           ]
         },
-        "owner": {"type": "string", "minLength": 1, "maxLength": 512},
+        "owner": {"type": "string", "pattern": "^owner:[a-z0-9][a-z0-9._-]*$"},
         "service_or_project": {"type": "string", "minLength": 1, "maxLength": 2048},
         "source_identity": {"type": "string", "minLength": 1, "maxLength": 2048},
         "ingress_auth": {"type": "string", "minLength": 1, "maxLength": 2048},
@@ -178,10 +188,56 @@
           "uniqueItems": true,
           "items": {
             "type": "string",
-            "pattern": "^(repo|github|receipt|operator):[A-Za-z0-9][A-Za-z0-9._/#:-]*$"
+            "pattern": "^(repo:(app|config|docs|scripts|tests)/[A-Za-z0-9][A-Za-z0-9._/#-]*|github:(issue|pr):[1-9][0-9]*|github:commit:[a-f0-9]{40,64}|receipt:[a-z][a-z0-9_.-]*:[a-f0-9]{64}|operator:sha256:[a-f0-9]{64})$"
           }
         }
-      }
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"reconciliation_state": {"const": "gap"}}},
+          "then": {"properties": {
+            "service_or_project": {"const": "gap:service_or_project_not_proven"},
+            "source_identity": {"const": "gap:source_identity_not_proven"},
+            "ingress_auth": {"const": "gap:ingress_auth_not_proven"},
+            "health_version": {"const": "gap:health_version_not_proven"},
+            "deployment_lifecycle": {"const": "gap:deployment_lifecycle_not_proven"},
+            "migration_rollback": {"const": "gap:migration_rollback_not_proven"}
+          }}
+        },
+        {
+          "if": {"properties": {"reconciliation_state": {"const": "unknown"}}},
+          "then": {"properties": {
+            "service_or_project": {"const": "unknown:service_or_project_not_proven"},
+            "source_identity": {"const": "unknown:source_identity_not_proven"},
+            "ingress_auth": {"const": "unknown:ingress_auth_not_proven"},
+            "health_version": {"const": "unknown:health_version_not_proven"},
+            "deployment_lifecycle": {"const": "unknown:deployment_lifecycle_not_proven"},
+            "migration_rollback": {"const": "unknown:migration_rollback_not_proven"}
+          }}
+        },
+        {
+          "if": {"properties": {"reconciliation_state": {"const": "external"}}},
+          "then": {"properties": {
+            "service_or_project": {"const": "external:service_or_project_external_dependency"},
+            "source_identity": {"const": "external:source_identity_external_dependency"},
+            "ingress_auth": {"const": "external:ingress_auth_external_dependency"},
+            "health_version": {"const": "external:health_version_external_dependency"},
+            "deployment_lifecycle": {"const": "external:deployment_lifecycle_external_dependency"},
+            "migration_rollback": {"const": "external:migration_rollback_external_dependency"}
+          }}
+        },
+        {
+          "if": {"properties": {"reconciliation_state": {"const": "excluded"}}},
+          "then": {"properties": {
+            "service_or_project": {"const": "excluded:service_or_project_not_applicable"},
+            "source_identity": {"const": "excluded:source_identity_not_applicable"},
+            "ingress_auth": {"const": "excluded:ingress_auth_not_applicable"},
+            "health_version": {"const": "excluded:health_version_not_applicable"},
+            "deployment_lifecycle": {"const": "excluded:deployment_lifecycle_not_applicable"},
+            "migration_rollback": {"const": "excluded:migration_rollback_not_applicable"}
+          }}
+        }
+      ]
     },
     "vm102_gap_component": {
       "allOf": [
@@ -247,7 +303,7 @@
           "product_runtime"
         ]},
         "code": {"type": "string", "pattern": "^[a-z0-9]+(?:_[a-z0-9]+)*$"},
-        "detail": {"type": "string", "minLength": 1, "maxLength": 2048}
+        "detail": {"const": "runtime evidence is not supplied by this inventory"}
       }
     }
   }

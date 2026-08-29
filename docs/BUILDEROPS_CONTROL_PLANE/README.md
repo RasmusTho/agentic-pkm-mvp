@@ -126,6 +126,8 @@ and its [pure producer/validator](../../app/ops/devsystem_vm102_component_invent
 `python -m app.ops.devsystem_vm102_component_inventory --evidence <operator-supplied.json>` entrypoint
 uses caller-supplied JSON only; it performs no host inspection and cannot emit residency,
 qualification, activation, deployment, health, or rollback proof.
+Its component evidence fields use schema-closed non-claim codes rather than free-form prose, so a
+gap cannot carry a credential or contradict the receipt's required refusals.
 
 `devsystem_vm102_deploy.v1` has an explicit rollback-baseline state:
 

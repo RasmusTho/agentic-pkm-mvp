@@ -83,6 +83,14 @@ _EVIDENCE_FIELDS: Final[tuple[str, ...]] = (
     "deployment_lifecycle",
     "migration_rollback",
 )
+_EVIDENCE_CODE_BY_STATE: Final[dict[str, dict[str, str]]] = {
+    "gap": {field: f"{field}_not_proven" for field in _EVIDENCE_FIELDS},
+    "unknown": {field: f"{field}_not_proven" for field in _EVIDENCE_FIELDS},
+    "external": {
+        field: f"{field}_external_dependency" for field in _EVIDENCE_FIELDS
+    },
+    "excluded": {field: f"{field}_not_applicable" for field in _EVIDENCE_FIELDS},
+}
 _EVIDENCE_KEYS: Final[frozenset[str]] = frozenset(
     {
         "receipt_type",
@@ -117,8 +125,15 @@ _CLAIMS: Final[dict[str, bool]] = {
     "rollback_proven": False,
 }
 _SOURCE_REF = re.compile(
-    r"^(?:repo|github|receipt|operator):[A-Za-z0-9][A-Za-z0-9._/#:-]*$"
+    r"^(?:"
+    r"repo:(?:app|config|docs|scripts|tests)/[A-Za-z0-9][A-Za-z0-9._/#-]*|"
+    r"github:(?:issue|pr):[1-9][0-9]*|"
+    r"github:commit:[a-f0-9]{40,64}|"
+    r"receipt:[a-z][a-z0-9_.-]*:[a-f0-9]{64}|"
+    r"operator:sha256:[a-f0-9]{64}"
+    r")$"
 )
+_OWNER = re.compile(r"^owner:[a-z0-9][a-z0-9._-]*$")
 _OBSERVED_AT = re.compile(
     r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$"
 )
@@ -129,7 +144,9 @@ _SECRET_KEY = re.compile(
 _SECRET_VALUE = re.compile(
     r"(?:"
     r"bearer\s+|"
+    r"github_pat_[A-Za-z0-9_]+|"
     r"gh[pousr]_[A-Za-z0-9_]+|"
+    r"(?:glpat-|xox[baprs]-|sk-)[A-Za-z0-9_-]{16,}|"
     r"pve[ta]=|"
     r"-----BEGIN [A-Z ]+PRIVATE KEY-----|"
     r"[A-Za-z][A-Za-z0-9+.-]*://[^\s@]+@|"
@@ -228,13 +245,17 @@ def _canonical_components(components: Any, source_refs: list[str]) -> list[dict[
         state = row.get("reconciliation_state")
         if state not in _ALLOWED_STATES_BY_COMPONENT[component_id]:
             raise InventoryValidationError("component reconciliation state is invalid")
-        if not isinstance(row.get("owner"), str) or not row["owner"].strip():
-            raise InventoryValidationError("component owner is required")
+        if (
+            not isinstance(row.get("owner"), str)
+            or _OWNER.fullmatch(row["owner"]) is None
+        ):
+            raise InventoryValidationError("component owner reference is invalid")
         for field in _EVIDENCE_FIELDS:
             value = row.get(field)
-            if not isinstance(value, str) or not value.startswith(f"{state}:"):
+            expected_value = f"{state}:{_EVIDENCE_CODE_BY_STATE[state][field]}"
+            if value != expected_value:
                 raise InventoryValidationError(
-                    "component evidence must preserve its reconciliation state"
+                    "component evidence must use a closed non-claim value"
                 )
         evidence_refs = row.get("evidence_refs")
         if (
@@ -269,8 +290,7 @@ def _canonical_gaps(gaps: Any, components: list[dict[str, Any]]) -> list[dict[st
             or component_id not in COMPONENT_IDS
             or not isinstance(code, str)
             or re.fullmatch(r"[a-z0-9]+(?:_[a-z0-9]+)*", code) is None
-            or not isinstance(detail, str)
-            or not detail.strip()
+            or detail != "runtime evidence is not supplied by this inventory"
         ):
             raise InventoryValidationError("gap row is invalid")
         if component_id in gap_rows:
@@ -299,7 +319,7 @@ def _canonical_refusals(refusals: Any) -> list[str]:
             for refusal in refusals
         )
         or len(refusals) != len(set(refusals))
-        or not _REQUIRED_REFUSALS.issubset(refusals)
+        or set(refusals) != _REQUIRED_REFUSALS
     ):
         raise InventoryValidationError("refusals must retain all non-claim gates")
     return sorted(refusals)
