@@ -22,6 +22,9 @@ or human acceptance.
   blocked and hashless legacy evidence is rejected until an explicit backfill binds historical bytes.
 - Watcher delivery is retryable: exception and structured-blocked refresh outcomes preserve the source
   observation instead of advancing the snapshot as if the capability succeeded.
+- Receipt event IDs are globally unique across event types; conflicting duplicates fail closed.
+- A standing-answer edit detected after the Question pointer write triggers a guarded rollback of the
+  pointer and refresh timestamp, preserving fail-closed semantics for the external-file race.
 
 ## States and transitions
 
@@ -97,7 +100,7 @@ historical evidence claim. No SQ-04 writer changes the standing answer or human-
 | Contradiction basis is exact or unknown | `test_invalid_contradiction_basis_degrades_to_unknown`, `test_refresh_marks_contradiction` | Passed |
 | Human fields remain protected | QuestionStore CAS and human-field tests | Passed |
 | Evidence entries carry content identity | `test_relevant_artifact_attaches_irrelevant_does_not` | Passed |
-| Focused SQ/Create regression set | Standing Questions, Create lifecycle, and QuestionStore tests | `146 passed` |
+| Focused SQ/Create regression set | Standing Questions, Create lifecycle, and QuestionStore tests | `148 passed` |
 | Matcher CAS conflict is observable and non-clobbering | `test_match_write_conflict_does_not_clobber_question` | Passed |
 | Deterministic replay preserves draft bytes and receipt payload | `test_refresh_replay_reuses_draft_and_receipt_bytes` | Passed |
 | Matcher CAS conflict remains watcher-retryable | `test_watcher_retries_standing_questions_matching_conflict_before_advancing_snapshot` | Passed locally; CI proof is pending for the current head |
@@ -112,6 +115,8 @@ historical evidence claim. No SQ-04 writer changes the standing answer or human-
 | Matcher uses scope from the fresh CAS baseline | `test_match_uses_fresh_scope_baseline` | Passed |
 | Question raw-byte version changes refresh generation | `test_question_raw_byte_version_changes_refresh_generation` | Passed |
 | Snapshot retry restoration precedes persistence | `test_watcher_retry_snapshot_is_restored_before_persist_crash` | Passed in CI environment; local watcher collection is dependency-gated |
+| Event IDs cannot collide across event types | `test_emit_receipt_rejects_event_id_collision_across_event_types` | Passed |
+| Standing-answer edit after Question write rolls back stale candidate | `test_standing_answer_edit_between_final_check_and_cas_rolls_back_candidate` | Passed |
 
 The full not-PostgreSQL suite was not a valid local proof at packet creation: the host-global
 `pytest-not-pg` lease was unavailable and the local watcher collection also lacked the declared
@@ -134,6 +139,7 @@ where the finding was observed; a later head invalidates the earlier clean/uncle
 | `efe48163d` | Fresh review found source content hashes were still derived from newline-normalized text, so CRLF↔LF mutations could retain identity. | Raw bytes now travel separately from cognition text through matcher, watcher, refresh, and Create fingerprints; exact-byte regressions were added. |
 | `c360e8096` | Fresh review found standing-answer fingerprints and the pre-CAS race check still used newline-normalized text. | Standing-answer reads now retain raw bytes, generation fingerprints hash them, and the final race check compares exact bytes with a newline-only regression. |
 | `e9602573d` | Fresh review found conflicting duplicate receipts, stale matcher scope, missing Question raw-byte generation binding, and snapshot persistence before retry restoration. | Duplicate receipt payloads now fail closed; matcher scope and refresh generation use fresh exact baselines; watcher scans without persisting until retry restoration is applied. |
+| `f9508f065` | Fresh review found event IDs were only checked within one event type and that standing-answer validation had a final check-to-write race. | Event IDs are checked globally; a changed standing answer after pointer write triggers a versioned compensating rollback before the refresh is reported drafted. |
 
 The first row is sourced from GitHub review comments whose `original_commit_id` is
 `0d032250274b54eb62c50e50e436077fb032401a`; the later rows are local independent review receipts
