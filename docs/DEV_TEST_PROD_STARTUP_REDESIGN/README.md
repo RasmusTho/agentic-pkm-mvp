@@ -141,18 +141,22 @@ unpadded URL-safe value must be byte-for-byte identical, which rejects nonzero t
 as well as padding and standard-Base64 characters.
 
 The P4 writer stores receipts under an explicitly configured non-resettable promotion-test store,
-never under `tmp-test/` or `vault-test/`. It holds one store lock, writes and durability-fences the
-content-addressed receipt before publishing one canonical attempt binding, and rejects a later
-PASS/FAIL conflict for the same `pt-<id>` attempt. A crash after receipt persistence but before the
-attempt binding leaves only an orphaned immutable receipt; retry reuses it and publishes the single
-binding. The attempt journal records the six boolean check outcomes and the existing
+never under `tmp-test/` or `vault-test/`. It derives artifact/config/schema identity from a validated
+P2 promotion-test candidate, matches that against an independently supplied prod-admission context,
+and requires the runner report to bind the same candidate, identity, check results, and exact
+migration-file set. It holds one store lock and first durability-fences an immutable attempt
+reservation. It then writes and durability-fences the content-addressed receipt before publishing
+one immutable canonical attempt binding. A later PASS/FAIL, timestamp, identity, candidate, or
+migration-set change for the same `pt-<id>` attempt is rejected. A crash after receipt persistence
+but before the attempt binding leaves an immutable reserved orphan; only an identical retry can
+reuse it and publish the single binding. The attempt journal records the six boolean check outcomes and the existing
 `app.release_channels.reversibility.check_all_migrations` classification receipt. The promotion
 receipt itself retains the closed semantic field set above. Migration marker rules remain owned by
 the release-channel reversibility contract and are not reimplemented by P4.
 
 ## Verification and acceptance
 
-P1 is proven by the static contract test and fixture in `tests/architecture/test_startup_redesign_contract.py`. P2 is proven through the side-effect-free production renderer in `app/release_channels/channel_manifest.py` and its runtime call-site tests. P3 is proven through the read-only resolver and exactly-once terminal journal in `app/release_channels/ordinary_boot.py` plus the production call-site tests. P4 is proven through `app/release_channels/promotion_receipt.py`: the promotion-test entrypoint writes one signed PASS/FAIL receipt plus its terminal attempt journal, and the prod pre-activation entrypoint accepts only an exact, current, issued, non-revoked PASS. The entrypoint returns admission evidence only; it cannot activate, deploy, migrate, restart, or bypass a channel. P3 does not activate a channel or replace the current canonical prod startup command. P5 requires a live-host acceptance receipt; P6 requires soak and drill receipts. No local-source result is promotion evidence.
+P1 is proven by the static contract test and fixture in `tests/architecture/test_startup_redesign_contract.py`. P2 is proven through the side-effect-free production renderer in `app/release_channels/channel_manifest.py` and its runtime call-site tests. P3 is proven through the read-only resolver and exactly-once terminal journal in `app/release_channels/ordinary_boot.py` plus the production call-site tests. P4 is proven through `app/release_channels/promotion_receipt.py`: the promotion-test entrypoint binds runner observations to one validated candidate and writes one signed PASS/FAIL receipt plus its terminal attempt journal. The `prepare_prod_activation` boundary invokes the prod validator and accepts only an exact, current, issued, non-revoked PASS. It returns `validated_not_activated` admission evidence only; it cannot activate, deploy, migrate, restart, or bypass a channel. P5 must consume this boundary immediately before its separately governed activation. P3 does not activate a channel or replace the current canonical prod startup command. P5 requires a live-host acceptance receipt; P6 requires soak and drill receipts. No local-source result is promotion evidence.
 
 ## Relationship to existing work
 

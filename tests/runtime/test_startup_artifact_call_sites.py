@@ -29,7 +29,8 @@ from app.release_channels.ordinary_boot import (
 )
 from app.release_channels.promotion_receipt import (
     PromotionReceiptError,
-    authorize_prod_activation,
+    build_promotion_test_check_report,
+    prepare_prod_activation,
     write_promotion_test_terminal_receipt,
 )
 
@@ -39,8 +40,32 @@ SKELETON = Path(__file__).read_text()
 
 def test_startup_04_runtime_call_sites_are_not_deferred() -> None:
     """P4 replaces both strict-xfail skeletons with production-path proof."""
-    assert "@pytest.mark.xfail(strict=True" not in SKELETON
-    assert "raise NotImplementedError" not in SKELETON
+    tree = ast.parse(SKELETON)
+    strict_xfails = [
+        decorator
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        for decorator in node.decorator_list
+        if isinstance(decorator, ast.Call)
+        and isinstance(decorator.func, ast.Attribute)
+        and decorator.func.attr == "xfail"
+        and any(
+            keyword.arg == "strict"
+            and isinstance(keyword.value, ast.Constant)
+            and keyword.value.value is True
+            for keyword in decorator.keywords
+        )
+    ]
+    not_implemented_raises = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Raise)
+        and isinstance(node.exc, ast.Call)
+        and isinstance(node.exc.func, ast.Name)
+        and node.exc.func.id == "NotImplementedError"
+    ]
+    assert strict_xfails == []
+    assert not_implemented_raises == []
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -1302,7 +1327,9 @@ def test_ordinary_boot_concurrent_callers_converge_or_conflict_once(tmp_path: Pa
     assert len(_journal_rows(conflicting_journal)) == 1
 
 
-def test_prod_receipt_validator_is_invoked_before_activation() -> None:
+def test_prod_receipt_validator_is_invoked_before_activation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     receipt = json.loads(
         (ROOT / "tests/fixtures/startup_redesign/promotion_receipt.valid.json").read_text()
     )
@@ -1320,14 +1347,30 @@ def test_prod_receipt_validator_is_invoked_before_activation() -> None:
     )
     now = datetime(2026, 8, 16, 12, tzinfo=timezone.utc)
 
-    authorization = authorize_prod_activation(
+    from app.release_channels import promotion_receipt
+
+    calls: list[str] = []
+    real_validator = promotion_receipt.authorize_prod_activation
+
+    def observed_validator(*args, **kwargs):
+        calls.append("validate")
+        return real_validator(*args, **kwargs)
+
+    monkeypatch.setattr(
+        promotion_receipt,
+        "authorize_prod_activation",
+        observed_validator,
+    )
+    authorization = prepare_prod_activation(
         receipt,
         registry,
         context,
         now=now,
     )
+    assert calls == ["validate"]
     assert authorization == {
         "activation_permitted": True,
+        "activation_state": "validated_not_activated",
         "receipt_id": receipt["receipt_id"],
     }
 
@@ -1349,7 +1392,7 @@ def test_prod_receipt_validator_is_invoked_before_activation() -> None:
 
     for candidate, candidate_registry, candidate_context, candidate_now, code in rejected:
         with pytest.raises(PromotionReceiptError) as exc_info:
-            authorize_prod_activation(
+            prepare_prod_activation(
                 candidate,
                 candidate_registry,
                 candidate_context,
@@ -1386,12 +1429,63 @@ def _promotion_admission_context() -> dict[str, str]:
     )
 
 
+def _promotion_test_candidate_inputs(
+    *,
+    source_sha: str = "0123456789abcdef0123456789abcdef01234567",
+) -> tuple[dict[str, object], dict[str, object]]:
+    manifest = json.loads(MANIFEST_FIXTURE.read_text(encoding="utf-8"))
+    context = _promotion_admission_context()
+    manifest["artifact"]["source_sha"] = source_sha
+    manifest["identities"]["config"] = context["config_identity"]
+    manifest["identities"]["migration"] = context["schema_identity"]
+    compose = _promotion_compose()
+    compose["x-startup-identities"] = dict(manifest["identities"])
+    compose["services"]["api"]["volumes"][0]["source"] = manifest["identities"][
+        "vault"
+    ]
+    compose["services"]["database"]["volumes"][0]["source"] = manifest[
+        "identities"
+    ]["database"]
+    compose["volumes"][manifest["identities"]["vault"]] = compose["volumes"].pop(
+        "prod-vault-v1"
+    )
+    compose["volumes"][manifest["identities"]["database"]] = compose["volumes"].pop(
+        "prod-db-v1"
+    )
+    rendered = render_channel_manifest(
+        manifest,
+        compose,
+        channel="promotion-test",
+        mode="promotion",
+        intent="promotion",
+    )
+    return rendered, manifest
+
+
+def _promotion_check_report(
+    migration_paths: tuple[Path, ...] = (),
+    *,
+    check_results: dict[str, bool] | None = None,
+) -> dict[str, object]:
+    rendered, manifest = _promotion_test_candidate_inputs()
+    return build_promotion_test_check_report(
+        rendered=rendered,
+        channel_manifest=manifest,
+        prod_admission_context=_promotion_admission_context(),
+        check_results=check_results or _promotion_check_results(),
+        migration_paths=migration_paths,
+    )
+
+
 def test_promotion_test_writes_one_durable_terminal_receipt(tmp_path: Path) -> None:
     private_key, public_key = _promotion_test_signing_material()
     store = tmp_path / "ops" / "test-promotions"
     resettable_roots = (tmp_path / "tmp-test", tmp_path / "vault-test")
+    rendered, manifest = _promotion_test_candidate_inputs()
     common = {
-        "identity": _promotion_admission_context(),
+        "rendered": rendered,
+        "channel_manifest": manifest,
+        "prod_admission_context": _promotion_admission_context(),
         "issued_at": datetime(2026, 8, 16, tzinfo=timezone.utc),
         "fresh_until": datetime(2026, 8, 17, tzinfo=timezone.utc),
         "issuer_id": "promotion-test-issuer",
@@ -1405,13 +1499,13 @@ def test_promotion_test_writes_one_durable_terminal_receipt(tmp_path: Path) -> N
 
     passed = write_promotion_test_terminal_receipt(
         attempt_id="pt-" + "1" * 32,
-        check_results=_promotion_check_results(),
+        check_report=_promotion_check_report(),
         **common,
     )
     assert passed["outcome"] == "PASS"
     assert write_promotion_test_terminal_receipt(
         attempt_id="pt-" + "1" * 32,
-        check_results=_promotion_check_results(),
+        check_report=_promotion_check_report(),
         **common,
     ) == passed
     assert len(list((store / "receipts").glob("*.json"))) == 1
@@ -1436,7 +1530,7 @@ def test_promotion_test_writes_one_durable_terminal_receipt(tmp_path: Path) -> N
     unclassified_migration.write_text("revision = 'unclassified'\n", encoding="utf-8")
     failed = write_promotion_test_terminal_receipt(
         attempt_id="pt-" + "2" * 32,
-        check_results=_promotion_check_results(),
+        check_report=_promotion_check_report((unclassified_migration,)),
         **dict(common, migration_paths=(unclassified_migration,)),
     )
     assert failed["outcome"] == "FAIL"
@@ -1453,7 +1547,7 @@ def test_promotion_test_writes_one_durable_terminal_receipt(tmp_path: Path) -> N
     with pytest.raises(PromotionReceiptError) as exc_info:
         write_promotion_test_terminal_receipt(
             attempt_id="pt-" + "3" * 32,
-            check_results=_promotion_check_results(),
+            check_report=_promotion_check_report(),
             **dict(common, receipt_store=tmp_path / "tmp-test" / "receipts"),
         )
     assert exc_info.value.code == "resettable_receipt_store"
@@ -1462,9 +1556,12 @@ def test_promotion_test_writes_one_durable_terminal_receipt(tmp_path: Path) -> N
 def test_promotion_test_terminal_receipt_race_has_one_winner(tmp_path: Path) -> None:
     private_key, public_key = _promotion_test_signing_material()
     store = tmp_path / "ops" / "test-promotions"
+    rendered, manifest = _promotion_test_candidate_inputs()
     common = {
         "attempt_id": "pt-" + "4" * 32,
-        "identity": _promotion_admission_context(),
+        "rendered": rendered,
+        "channel_manifest": manifest,
+        "prod_admission_context": _promotion_admission_context(),
         "issued_at": datetime(2026, 8, 16, tzinfo=timezone.utc),
         "fresh_until": datetime(2026, 8, 17, tzinfo=timezone.utc),
         "issuer_id": "promotion-test-issuer",
@@ -1480,7 +1577,7 @@ def test_promotion_test_terminal_receipt_race_has_one_winner(tmp_path: Path) -> 
     def write(migration_paths: tuple[Path, ...]) -> tuple[str, str]:
         try:
             receipt = write_promotion_test_terminal_receipt(
-                check_results=_promotion_check_results(),
+                check_report=_promotion_check_report(migration_paths),
                 migration_paths=migration_paths,
                 **common,
             )
@@ -1500,10 +1597,13 @@ def test_promotion_test_terminal_receipt_race_has_one_winner(tmp_path: Path) -> 
 def test_promotion_test_receipt_recovery_and_secret_boundary(tmp_path: Path) -> None:
     private_key, public_key = _promotion_test_signing_material()
     store = tmp_path / "ops" / "test-promotions"
+    rendered, manifest = _promotion_test_candidate_inputs()
     common = {
         "attempt_id": "pt-" + "5" * 32,
-        "identity": _promotion_admission_context(),
-        "check_results": _promotion_check_results(),
+        "rendered": rendered,
+        "channel_manifest": manifest,
+        "prod_admission_context": _promotion_admission_context(),
+        "check_report": _promotion_check_report(),
         "issued_at": datetime(2026, 8, 16, tzinfo=timezone.utc),
         "fresh_until": datetime(2026, 8, 17, tzinfo=timezone.utc),
         "issuer_id": "promotion-test-issuer",
@@ -1528,6 +1628,314 @@ def test_promotion_test_receipt_recovery_and_secret_boundary(tmp_path: Path) -> 
     )
     with pytest.raises(PromotionReceiptError) as exc_info:
         write_promotion_test_terminal_receipt(
-            **dict(common, attempt_id="pt-" + "6" * 32, identity=secret_bearing)
+            **dict(
+                common,
+                attempt_id="pt-" + "6" * 32,
+                prod_admission_context=secret_bearing,
+            )
         )
     assert exc_info.value.code == "identity_invalid"
+
+
+def test_promotion_test_reservation_blocks_changed_orphan_recovery(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.release_channels import promotion_receipt
+
+    private_key, public_key = _promotion_test_signing_material()
+    rendered, manifest = _promotion_test_candidate_inputs()
+    store = tmp_path / "ops" / "test-promotions"
+    common = {
+        "attempt_id": "pt-" + "7" * 32,
+        "rendered": rendered,
+        "channel_manifest": manifest,
+        "prod_admission_context": _promotion_admission_context(),
+        "migration_paths": (),
+        "issued_at": datetime(2026, 8, 16, tzinfo=timezone.utc),
+        "fresh_until": datetime(2026, 8, 17, tzinfo=timezone.utc),
+        "issuer_id": "promotion-test-issuer",
+        "issuer_key_id": "promotion-test-issuer-key-v1",
+        "signer": private_key.sign,
+        "issuer_public_key": public_key,
+        "receipt_store": store,
+        "resettable_roots": (tmp_path / "tmp-test", tmp_path / "vault-test"),
+    }
+    real_install = promotion_receipt._install_content_addressed
+
+    def crash_after_receipt(path: Path, data: bytes) -> None:
+        real_install(path, data)
+        raise PromotionReceiptError("injected_post_receipt_crash")
+
+    monkeypatch.setattr(
+        promotion_receipt,
+        "_install_content_addressed",
+        crash_after_receipt,
+    )
+    with pytest.raises(PromotionReceiptError) as exc_info:
+        write_promotion_test_terminal_receipt(
+            check_report=_promotion_check_report(),
+            **common,
+        )
+    assert exc_info.value.code == "injected_post_receipt_crash"
+    assert len(list((store / "reservations").glob("*.json"))) == 1
+    assert len(list((store / "receipts").glob("*.json"))) == 1
+    assert list((store / "attempts").glob("*.json")) == []
+
+    monkeypatch.setattr(
+        promotion_receipt,
+        "_install_content_addressed",
+        real_install,
+    )
+    changed_checks = _promotion_check_results()
+    changed_checks["smoke"] = False
+    with pytest.raises(PromotionReceiptError) as exc_info:
+        write_promotion_test_terminal_receipt(
+            check_report=_promotion_check_report(check_results=changed_checks),
+            **common,
+        )
+    assert exc_info.value.code == "attempt_conflict"
+    with pytest.raises(PromotionReceiptError) as exc_info:
+        write_promotion_test_terminal_receipt(
+            check_report=_promotion_check_report(),
+            **dict(
+                common,
+                issued_at=datetime(2026, 8, 16, 0, 0, 1, tzinfo=timezone.utc),
+            ),
+        )
+    assert exc_info.value.code == "attempt_conflict"
+    recovered = write_promotion_test_terminal_receipt(
+        check_report=_promotion_check_report(),
+        **common,
+    )
+    assert recovered["outcome"] == "PASS"
+    assert len(list((store / "receipts").glob("*.json"))) == 1
+    assert len(list((store / "attempts").glob("*.json"))) == 1
+
+
+def test_promotion_test_rejects_stale_candidate_and_migration_reports(
+    tmp_path: Path,
+) -> None:
+    private_key, public_key = _promotion_test_signing_material()
+    rendered_a, manifest_a = _promotion_test_candidate_inputs()
+    rendered_b, manifest_b = _promotion_test_candidate_inputs(source_sha="f" * 40)
+    migration = tmp_path / "classified.py"
+    migration.write_text('reversibility = "reversible"\n', encoding="utf-8")
+    common = {
+        "attempt_id": "pt-" + "8" * 32,
+        "prod_admission_context": _promotion_admission_context(),
+        "issued_at": datetime(2026, 8, 16, tzinfo=timezone.utc),
+        "fresh_until": datetime(2026, 8, 17, tzinfo=timezone.utc),
+        "issuer_id": "promotion-test-issuer",
+        "issuer_key_id": "promotion-test-issuer-key-v1",
+        "signer": private_key.sign,
+        "issuer_public_key": public_key,
+        "receipt_store": tmp_path / "ops" / "test-promotions",
+        "resettable_roots": (tmp_path / "tmp-test", tmp_path / "vault-test"),
+    }
+    report_a = _promotion_check_report()
+    with pytest.raises(PromotionReceiptError) as exc_info:
+        write_promotion_test_terminal_receipt(
+            rendered=rendered_b,
+            channel_manifest=manifest_b,
+            check_report=report_a,
+            migration_paths=(),
+            **common,
+        )
+    assert exc_info.value.code == "check_report_candidate_mismatch"
+    with pytest.raises(PromotionReceiptError) as exc_info:
+        write_promotion_test_terminal_receipt(
+            rendered=rendered_a,
+            channel_manifest=manifest_a,
+            check_report=report_a,
+            migration_paths=(migration,),
+            **common,
+        )
+    assert exc_info.value.code == "check_report_migration_mismatch"
+    assert not common["receipt_store"].exists()
+
+    first = write_promotion_test_terminal_receipt(
+        rendered=rendered_a,
+        channel_manifest=manifest_a,
+        check_report=report_a,
+        migration_paths=(),
+        **common,
+    )
+    report_b = build_promotion_test_check_report(
+        rendered=rendered_b,
+        channel_manifest=manifest_b,
+        prod_admission_context=_promotion_admission_context(),
+        check_results=_promotion_check_results(),
+        migration_paths=(),
+    )
+    with pytest.raises(PromotionReceiptError) as exc_info:
+        write_promotion_test_terminal_receipt(
+            rendered=rendered_b,
+            channel_manifest=manifest_b,
+            check_report=report_b,
+            migration_paths=(),
+            **common,
+        )
+    assert exc_info.value.code == "attempt_conflict"
+    assert len(list((common["receipt_store"] / "receipts").glob("*.json"))) == 1
+    assert first["outcome"] == "PASS"
+
+
+def test_promotion_test_detects_migration_change_during_classification(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.release_channels import promotion_receipt
+
+    private_key, public_key = _promotion_test_signing_material()
+    rendered, manifest = _promotion_test_candidate_inputs()
+    migration = tmp_path / "classified.py"
+    migration.write_text('reversibility = "reversible"\n', encoding="utf-8")
+    report = _promotion_check_report((migration,))
+    real_check = promotion_receipt.check_all_migrations
+
+    def mutate_after_classification(paths):
+        result = real_check(paths)
+        migration.write_text(
+            'reversibility = "forward-only"\n',
+            encoding="utf-8",
+        )
+        return result
+
+    monkeypatch.setattr(
+        promotion_receipt,
+        "check_all_migrations",
+        mutate_after_classification,
+    )
+    with pytest.raises(PromotionReceiptError) as exc_info:
+        write_promotion_test_terminal_receipt(
+            attempt_id="pt-" + "b" * 32,
+            rendered=rendered,
+            channel_manifest=manifest,
+            prod_admission_context=_promotion_admission_context(),
+            check_report=report,
+            migration_paths=(migration,),
+            issued_at=datetime(2026, 8, 16, tzinfo=timezone.utc),
+            fresh_until=datetime(2026, 8, 17, tzinfo=timezone.utc),
+            issuer_id="promotion-test-issuer",
+            issuer_key_id="promotion-test-issuer-key-v1",
+            signer=private_key.sign,
+            issuer_public_key=public_key,
+            receipt_store=tmp_path / "ops" / "test-promotions",
+            resettable_roots=(tmp_path / "tmp-test", tmp_path / "vault-test"),
+        )
+    assert exc_info.value.code == "migration_set_changed"
+    assert not (tmp_path / "ops" / "test-promotions").exists()
+
+
+def test_promotion_test_attempt_publication_never_overwrites_racing_path(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.release_channels import promotion_receipt
+
+    private_key, public_key = _promotion_test_signing_material()
+    rendered, manifest = _promotion_test_candidate_inputs()
+    store = tmp_path / "ops" / "test-promotions"
+    real_install = promotion_receipt._install_immutable_record
+
+    def install_with_racing_path(path: Path, data: bytes, *, code: str) -> None:
+        if path.parent.name == "attempts":
+            path.write_bytes(b"{}")
+        real_install(path, data, code=code)
+
+    monkeypatch.setattr(
+        promotion_receipt,
+        "_install_immutable_record",
+        install_with_racing_path,
+    )
+    with pytest.raises(PromotionReceiptError) as exc_info:
+        write_promotion_test_terminal_receipt(
+            attempt_id="pt-" + "9" * 32,
+            rendered=rendered,
+            channel_manifest=manifest,
+            prod_admission_context=_promotion_admission_context(),
+            check_report=_promotion_check_report(),
+            migration_paths=(),
+            issued_at=datetime(2026, 8, 16, tzinfo=timezone.utc),
+            fresh_until=datetime(2026, 8, 17, tzinfo=timezone.utc),
+            issuer_id="promotion-test-issuer",
+            issuer_key_id="promotion-test-issuer-key-v1",
+            signer=private_key.sign,
+            issuer_public_key=public_key,
+            receipt_store=store,
+            resettable_roots=(tmp_path / "tmp-test", tmp_path / "vault-test"),
+        )
+    assert exc_info.value.code == "attempt_conflict"
+    assert next((store / "attempts").glob("*.json")).read_bytes() == b"{}"
+    assert len(list((store / "receipts").glob("*.json"))) == 1
+
+
+def test_promotion_test_fences_fresh_store_parent_directories(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.release_channels import promotion_receipt
+
+    private_key, public_key = _promotion_test_signing_material()
+    rendered, manifest = _promotion_test_candidate_inputs()
+    store = tmp_path / "ops" / "test-promotions"
+    real_fsync = promotion_receipt._fsync_directory
+    fenced: list[Path] = []
+
+    def observed_fsync(path: Path) -> None:
+        fenced.append(path)
+        real_fsync(path)
+
+    monkeypatch.setattr(promotion_receipt, "_fsync_directory", observed_fsync)
+    write_promotion_test_terminal_receipt(
+        attempt_id="pt-" + "a" * 32,
+        rendered=rendered,
+        channel_manifest=manifest,
+        prod_admission_context=_promotion_admission_context(),
+        check_report=_promotion_check_report(),
+        migration_paths=(),
+        issued_at=datetime(2026, 8, 16, tzinfo=timezone.utc),
+        fresh_until=datetime(2026, 8, 17, tzinfo=timezone.utc),
+        issuer_id="promotion-test-issuer",
+        issuer_key_id="promotion-test-issuer-key-v1",
+        signer=private_key.sign,
+        issuer_public_key=public_key,
+        receipt_store=store,
+        resettable_roots=(tmp_path / "tmp-test", tmp_path / "vault-test"),
+    )
+    assert tmp_path in fenced
+    assert tmp_path / "ops" in fenced
+    assert store in fenced
+
+    failed_store = tmp_path / "failed-ops" / "test-promotions"
+
+    def fail_store_parent_fsync(path: Path) -> None:
+        if path == failed_store.parent:
+            raise OSError("injected parent durability failure")
+        real_fsync(path)
+
+    monkeypatch.setattr(
+        promotion_receipt,
+        "_fsync_directory",
+        fail_store_parent_fsync,
+    )
+    with pytest.raises(PromotionReceiptError) as exc_info:
+        write_promotion_test_terminal_receipt(
+            attempt_id="pt-" + "c" * 32,
+            rendered=rendered,
+            channel_manifest=manifest,
+            prod_admission_context=_promotion_admission_context(),
+            check_report=_promotion_check_report(),
+            migration_paths=(),
+            issued_at=datetime(2026, 8, 16, tzinfo=timezone.utc),
+            fresh_until=datetime(2026, 8, 17, tzinfo=timezone.utc),
+            issuer_id="promotion-test-issuer",
+            issuer_key_id="promotion-test-issuer-key-v1",
+            signer=private_key.sign,
+            issuer_public_key=public_key,
+            receipt_store=failed_store,
+            resettable_roots=(tmp_path / "tmp-test", tmp_path / "vault-test"),
+        )
+    assert exc_info.value.code == "receipt_store_unavailable"
+    assert not (failed_store / "receipts").exists()

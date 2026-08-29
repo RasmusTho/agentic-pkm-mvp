@@ -66,7 +66,9 @@ Once the prod baseline is stable, the promotion workflow (prepare â†’ execute â†
 - CI/UAT-as-test for the test channel: `.github/workflows/harness-selfverify.yml` still runs the
   harness (IR-v1 UAT, channel preflight, bootstrap smoke, fault injection) and writes **no**
   promotion-test receipt. STARTUP-04 now provides the repository writer and prod admission
-  validator, with durable local output under the ignored `ops/test-promotions/` store when invoked,
+  validator. The writer binds a validated immutable candidate, runner check report, and exact
+  migration set before producing durable local output under the ignored `ops/test-promotions/`
+  store when invoked,
   but no live test-channel run or receipt is fabricated by that implementation. The current
   test-channel gate is therefore still **harness self-verification only**; CI/UAT cannot substitute
   for a live test run until an authorized runner invokes the writer for the exact candidate and

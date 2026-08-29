@@ -32,6 +32,10 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import (
     Ed25519PublicKey,
 )
 
+from app.release_channels.channel_manifest import (
+    ArtifactRenderError,
+    create_promotion_candidate,
+)
 from app.release_channels.reversibility import (
     MigrationMarkerError,
     check_all_migrations,
@@ -41,6 +45,8 @@ from app.release_channels.reversibility import (
 RECEIPT_VERSION = "promotion-receipt.v1"
 REGISTRY_VERSION = "promotion-receipt-registry.v1"
 ATTEMPT_VERSION = "promotion-test-attempt.v1"
+RESERVATION_VERSION = "promotion-test-reservation.v1"
+REPORT_VERSION = "promotion-test-check-report.v1"
 REQUIRED_CHECKS = ("migration", "readiness", "schema", "smoke", "ui", "version")
 _OBSERVED_CHECKS = REQUIRED_CHECKS[1:]
 _RECEIPT_FIELDS = {
@@ -77,11 +83,27 @@ _REGISTRY_ENTRY_FIELDS = {
 _ATTEMPT_FIELDS = {
     "attempt_version",
     "attempt_id",
+    "candidate_identity",
+    "check_report_identity",
     "receipt_id",
     "outcome",
     "identity",
     "check_results",
     "migration_classification",
+}
+_RESERVATION_FIELDS = {
+    "reservation_version",
+    "attempt_id",
+    "receipt_id",
+    "outcome",
+    "intent_digest",
+}
+_REPORT_FIELDS = {
+    "report_version",
+    "candidate_identity",
+    "identity",
+    "check_results",
+    "migration_set_identity",
 }
 _DIGEST = re.compile(r"sha256:[0-9a-f]{64}\Z")
 _ATTEMPT_ID = re.compile(r"pt-[0-9a-f]{32}\Z")
@@ -188,6 +210,121 @@ def _validate_checks(value: object) -> dict[str, bool]:
     return {name: bool(checks[name]) for name in _OBSERVED_CHECKS}
 
 
+def _migration_set_identity(paths: Sequence[Path]) -> str:
+    records: list[dict[str, str]] = []
+    names: set[str] = set()
+    for path in paths:
+        if path.name in names or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*\.py", path.name) is None:
+            raise PromotionReceiptError("migration_paths_invalid")
+        names.add(path.name)
+        try:
+            digest = hashlib.sha256(path.read_bytes()).hexdigest()
+        except OSError as exc:
+            raise PromotionReceiptError("migration_paths_invalid") from exc
+        records.append({"migration": path.name, "digest": f"sha256:{digest}"})
+    return "sha256:" + hashlib.sha256(
+        _canonical_bytes(sorted(records, key=lambda record: record["migration"]))
+    ).hexdigest()
+
+
+def _validate_migration_paths(value: object) -> tuple[Path, ...]:
+    if not isinstance(value, Sequence) or isinstance(value, (str, bytes)) or any(
+        not isinstance(path, Path) for path in value
+    ):
+        raise PromotionReceiptError("migration_paths_invalid")
+    return tuple(value)
+
+
+def _derive_candidate_identity(
+    *,
+    rendered: Mapping[str, object],
+    channel_manifest: Mapping[str, object],
+    prod_admission_context: Mapping[str, str],
+) -> tuple[dict[str, object], dict[str, str]]:
+    try:
+        candidate = create_promotion_candidate(rendered, channel_manifest)
+    except ArtifactRenderError as exc:
+        raise PromotionReceiptError("candidate_invalid") from exc
+    if candidate.get("channel") != "promotion-test":
+        raise PromotionReceiptError("candidate_invalid")
+    graph = _mapping(candidate.get("artifact_graph"), code="candidate_invalid")
+    image_index = graph.get("image_index")
+    config_identity = graph.get("config_identity")
+    schema_identity = graph.get("migration_identity")
+    if not isinstance(image_index, str) or "@" not in image_index:
+        raise PromotionReceiptError("candidate_invalid")
+    candidate_bound_identity = _validate_identity(prod_admission_context)
+    for field, expected in (
+        ("artifact_digest", image_index.rsplit("@", 1)[1]),
+        ("config_identity", config_identity),
+        ("schema_identity", schema_identity),
+    ):
+        if candidate_bound_identity[field] != expected:
+            raise PromotionReceiptError("candidate_identity_mismatch")
+    return candidate, candidate_bound_identity
+
+
+def build_promotion_test_check_report(
+    *,
+    rendered: Mapping[str, object],
+    channel_manifest: Mapping[str, object],
+    prod_admission_context: Mapping[str, str],
+    check_results: Mapping[str, bool],
+    migration_paths: Sequence[Path],
+) -> dict[str, object]:
+    """Bind runner observations to one immutable candidate and migration set."""
+    validated_paths = _validate_migration_paths(migration_paths)
+    candidate, identity = _derive_candidate_identity(
+        rendered=rendered,
+        channel_manifest=channel_manifest,
+        prod_admission_context=prod_admission_context,
+    )
+    return {
+        "report_version": REPORT_VERSION,
+        "candidate_identity": candidate["candidate_identity"],
+        "identity": identity,
+        "check_results": _validate_checks(check_results),
+        "migration_set_identity": _migration_set_identity(validated_paths),
+    }
+
+
+def _bind_promotion_test_report(
+    *,
+    rendered: Mapping[str, object],
+    channel_manifest: Mapping[str, object],
+    prod_admission_context: Mapping[str, str],
+    check_report: Mapping[str, object],
+    migration_paths: Sequence[Path],
+) -> tuple[dict[str, str], dict[str, bool], dict[str, object]]:
+    candidate, candidate_bound_identity = _derive_candidate_identity(
+        rendered=rendered,
+        channel_manifest=channel_manifest,
+        prod_admission_context=prod_admission_context,
+    )
+
+    report = _mapping(check_report, code="check_report_invalid")
+    if set(report) != _REPORT_FIELDS or report.get("report_version") != REPORT_VERSION:
+        raise PromotionReceiptError("check_report_invalid")
+    candidate_identity = report.get("candidate_identity")
+    if candidate_identity != candidate.get("candidate_identity"):
+        raise PromotionReceiptError("check_report_candidate_mismatch")
+    report_identity = _validate_identity(report.get("identity"))
+    if report_identity != candidate_bound_identity:
+        raise PromotionReceiptError("check_report_identity_mismatch")
+    migration_set_identity = report.get("migration_set_identity")
+    if migration_set_identity != _migration_set_identity(migration_paths):
+        raise PromotionReceiptError("check_report_migration_mismatch")
+    validated_checks = _validate_checks(report.get("check_results"))
+    validated_report: dict[str, object] = {
+        "report_version": REPORT_VERSION,
+        "candidate_identity": candidate_identity,
+        "identity": report_identity,
+        "check_results": validated_checks,
+        "migration_set_identity": migration_set_identity,
+    }
+    return candidate_bound_identity, validated_checks, validated_report
+
+
 def _receipt_unsigned_payload(receipt: Mapping[str, object]) -> bytes:
     return _canonical_bytes(
         {
@@ -264,7 +401,31 @@ def _validate_private_directory(path: Path) -> None:
         raise PromotionReceiptError("unsafe_receipt_store")
 
 
-def _prepare_store(receipt_store: Path, resettable_roots: Sequence[Path]) -> tuple[Path, Path, Path]:
+def _durable_mkdir(path: Path) -> None:
+    if path.exists():
+        return
+    missing: list[Path] = []
+    cursor = path
+    while not cursor.exists():
+        missing.append(cursor)
+        cursor = cursor.parent
+    for directory in reversed(missing):
+        try:
+            directory.mkdir(mode=0o700)
+        except FileExistsError:
+            pass
+        except OSError as exc:
+            raise PromotionReceiptError("receipt_store_unavailable") from exc
+        try:
+            _fsync_directory(directory.parent)
+        except OSError as exc:
+            raise PromotionReceiptError("receipt_store_unavailable") from exc
+
+
+def _prepare_store(
+    receipt_store: Path,
+    resettable_roots: Sequence[Path],
+) -> tuple[Path, Path, Path, Path]:
     if not isinstance(receipt_store, Path) or not receipt_store.is_absolute():
         raise PromotionReceiptError("receipt_store_must_be_absolute")
     requested = Path(os.path.abspath(receipt_store))
@@ -278,18 +439,23 @@ def _prepare_store(receipt_store: Path, resettable_roots: Sequence[Path]) -> tup
         if resolved_store == resolved_root or resolved_root in resolved_store.parents:
             raise PromotionReceiptError("resettable_receipt_store")
     try:
-        receipt_store.mkdir(mode=0o700, parents=True, exist_ok=True)
+        _durable_mkdir(receipt_store)
+        if receipt_store.resolve(strict=True) != receipt_store:
+            raise PromotionReceiptError("unsafe_receipt_store")
+        _validate_private_directory(receipt_store)
         receipts = receipt_store / "receipts"
         attempts = receipt_store / "attempts"
-        receipts.mkdir(mode=0o700, exist_ok=True)
-        attempts.mkdir(mode=0o700, exist_ok=True)
+        reservations = receipt_store / "reservations"
+        _durable_mkdir(receipts)
+        _durable_mkdir(attempts)
+        _durable_mkdir(reservations)
     except OSError as exc:
         raise PromotionReceiptError("receipt_store_unavailable") from exc
-    for directory in (receipt_store, receipts, attempts):
+    for directory in (receipt_store, receipts, attempts, reservations):
         if directory.resolve(strict=True) != directory:
             raise PromotionReceiptError("unsafe_receipt_store")
         _validate_private_directory(directory)
-    return receipt_store, receipts, attempts
+    return receipt_store, receipts, attempts, reservations
 
 
 def _write_all(descriptor: int, data: bytes) -> None:
@@ -325,16 +491,32 @@ def _fsync_directory(path: Path) -> None:
 
 
 def _read_canonical_file(path: Path, *, code: str) -> dict[str, object]:
+    descriptor = -1
     try:
-        info = path.stat(follow_symlinks=False)
-        data = path.read_bytes()
+        descriptor = os.open(
+            path,
+            os.O_RDONLY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0),
+        )
+        info = os.fstat(descriptor)
+        chunks: list[bytes] = []
+        while True:
+            chunk = os.read(descriptor, 64 * 1024)
+            if not chunk:
+                break
+            chunks.append(chunk)
+        data = b"".join(chunks)
+        named_info = path.stat(follow_symlinks=False)
         value = json.loads(data, object_pairs_hook=_reject_duplicate_keys)
     except (OSError, json.JSONDecodeError, PromotionReceiptError) as exc:
         raise PromotionReceiptError(code) from exc
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
     if (
         not stat.S_ISREG(info.st_mode)
         or info.st_uid != os.geteuid()
         or info.st_nlink != 1
+        or (named_info.st_dev, named_info.st_ino) != (info.st_dev, info.st_ino)
         or _canonical_bytes(value) != data
         or not isinstance(value, dict)
     ):
@@ -361,10 +543,18 @@ def _install_content_addressed(path: Path, data: bytes) -> None:
         temp.unlink(missing_ok=True)
 
 
-def _replace_pointer(path: Path, data: bytes) -> None:
+def _install_immutable_record(path: Path, data: bytes, *, code: str) -> None:
+    if path.exists():
+        if _read_canonical_file(path, code=code) != json.loads(data):
+            raise PromotionReceiptError(code)
+        return
     temp = _write_temp(path, data)
     try:
-        os.replace(temp, path)
+        try:
+            os.link(temp, path, follow_symlinks=False)
+        except FileExistsError:
+            if _read_canonical_file(path, code=code) != json.loads(data):
+                raise PromotionReceiptError(code)
         _fsync_directory(path.parent)
     except OSError as exc:
         raise PromotionReceiptError("receipt_store_io_failure") from exc
@@ -384,8 +574,10 @@ def _reject_duplicate_keys(pairs: list[tuple[str, object]]) -> dict[str, object]
 def write_promotion_test_terminal_receipt(
     *,
     attempt_id: str,
-    identity: Mapping[str, str],
-    check_results: Mapping[str, bool],
+    rendered: Mapping[str, object],
+    channel_manifest: Mapping[str, object],
+    prod_admission_context: Mapping[str, str],
+    check_report: Mapping[str, object],
     migration_paths: Sequence[Path],
     issued_at: datetime,
     fresh_until: datetime,
@@ -404,21 +596,26 @@ def write_promotion_test_terminal_receipt(
     """
     if not isinstance(attempt_id, str) or _ATTEMPT_ID.fullmatch(attempt_id) is None:
         raise PromotionReceiptError("attempt_id_invalid")
-    validated_identity = _validate_identity(identity)
-    validated_checks = _validate_checks(check_results)
-    if not isinstance(migration_paths, Sequence) or isinstance(
-        migration_paths,
-        (str, bytes),
-    ) or any(not isinstance(path, Path) for path in migration_paths):
-        raise PromotionReceiptError("migration_paths_invalid")
+    validated_paths = _validate_migration_paths(migration_paths)
+    validated_identity, validated_checks, validated_report = _bind_promotion_test_report(
+        rendered=rendered,
+        channel_manifest=channel_manifest,
+        prod_admission_context=prod_admission_context,
+        check_report=check_report,
+        migration_paths=validated_paths,
+    )
     try:
         migration_classification: dict[str, object] = check_all_migrations(
-            migration_paths
+            validated_paths
         )
         migration_ok = True
     except (MigrationMarkerError, OSError, UnicodeError):
         migration_classification = {"status": "invalid"}
         migration_ok = False
+    if validated_report["migration_set_identity"] != _migration_set_identity(
+        validated_paths
+    ):
+        raise PromotionReceiptError("migration_set_changed")
     terminal_checks = {"migration": migration_ok, **validated_checks}
     outcome = "PASS" if all(terminal_checks.values()) else "FAIL"
     receipt = _build_receipt(
@@ -431,13 +628,19 @@ def write_promotion_test_terminal_receipt(
         signer=signer,
         issuer_public_key=issuer_public_key,
     )
-    store, receipts, attempts = _prepare_store(receipt_store, resettable_roots)
+    store, receipts, attempts, reservations = _prepare_store(
+        receipt_store,
+        resettable_roots,
+    )
     receipt_id = str(receipt["receipt_id"])
     receipt_path = receipts / f"{receipt_id.removeprefix('sha256:')}.json"
     attempt_path = attempts / f"{attempt_id}.json"
     attempt = {
         "attempt_version": ATTEMPT_VERSION,
         "attempt_id": attempt_id,
+        "candidate_identity": validated_report["candidate_identity"],
+        "check_report_identity": "sha256:"
+        + hashlib.sha256(_canonical_bytes(validated_report)).hexdigest(),
         "receipt_id": receipt_id,
         "outcome": outcome,
         "identity": validated_identity,
@@ -446,6 +649,15 @@ def write_promotion_test_terminal_receipt(
     }
     receipt_bytes = _canonical_bytes(receipt)
     attempt_bytes = _canonical_bytes(attempt)
+    reservation = {
+        "reservation_version": RESERVATION_VERSION,
+        "attempt_id": attempt_id,
+        "receipt_id": receipt_id,
+        "outcome": outcome,
+        "intent_digest": "sha256:" + hashlib.sha256(attempt_bytes).hexdigest(),
+    }
+    reservation_path = reservations / f"{attempt_id}.json"
+    reservation_bytes = _canonical_bytes(reservation)
     lock_path = store / ".writer.lock"
     lock_flags = os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
     try:
@@ -457,6 +669,23 @@ def write_promotion_test_terminal_receipt(
         if not stat.S_ISREG(lock_info.st_mode) or lock_info.st_nlink != 1:
             raise PromotionReceiptError("unsafe_receipt_store")
         fcntl.flock(lock_descriptor, fcntl.LOCK_EX)
+        _fsync_directory(store)
+        if reservation_path.exists():
+            existing_reservation = _read_canonical_file(
+                reservation_path,
+                code="attempt_conflict",
+            )
+            if (
+                set(existing_reservation) != _RESERVATION_FIELDS
+                or existing_reservation != reservation
+            ):
+                raise PromotionReceiptError("attempt_conflict")
+        else:
+            _install_immutable_record(
+                reservation_path,
+                reservation_bytes,
+                code="attempt_conflict",
+            )
         if attempt_path.exists():
             existing_attempt = _read_canonical_file(
                 attempt_path,
@@ -472,7 +701,11 @@ def write_promotion_test_terminal_receipt(
                 raise PromotionReceiptError("receipt_store_corrupt")
             return receipt
         _install_content_addressed(receipt_path, receipt_bytes)
-        _replace_pointer(attempt_path, attempt_bytes)
+        _install_immutable_record(
+            attempt_path,
+            attempt_bytes,
+            code="attempt_conflict",
+        )
         _fsync_directory(store)
         return receipt
     finally:
@@ -597,23 +830,84 @@ def authorize_prod_activation(
     }
 
 
+def prepare_prod_activation(
+    receipt: object,
+    registry: object,
+    prod_admission_context: object,
+    *,
+    now: datetime,
+) -> dict[str, object]:
+    """Production pre-activation boundary, intentionally without side effects.
+
+    STARTUP-04 ends here: every future topology activation must consume this
+    entrypoint immediately before its separately governed side effect.  The
+    returned record is evidence that validation ran; this function cannot
+    deploy or activate a channel itself.
+    """
+    authorization = authorize_prod_activation(
+        receipt,
+        registry,
+        prod_admission_context,
+        now=now,
+    )
+    return {
+        **authorization,
+        "activation_state": "validated_not_activated",
+    }
+
+
 def _read_json(path: Path, *, code: str) -> Mapping[str, Any]:
+    descriptor = -1
     try:
-        value = json.loads(path.read_bytes(), object_pairs_hook=_reject_duplicate_keys)
+        descriptor = os.open(
+            path,
+            os.O_RDONLY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0),
+        )
+        info = os.fstat(descriptor)
+        chunks: list[bytes] = []
+        while True:
+            chunk = os.read(descriptor, 64 * 1024)
+            if not chunk:
+                break
+            chunks.append(chunk)
+        named_info = path.stat(follow_symlinks=False)
+        if (
+            not stat.S_ISREG(info.st_mode)
+            or info.st_nlink != 1
+            or (named_info.st_dev, named_info.st_ino) != (info.st_dev, info.st_ino)
+        ):
+            raise PromotionReceiptError(code)
+        value = json.loads(b"".join(chunks), object_pairs_hook=_reject_duplicate_keys)
     except (OSError, json.JSONDecodeError, PromotionReceiptError) as exc:
         raise PromotionReceiptError(code) from exc
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
     return _mapping(value, code=code)
 
 
 def _read_private_key(path: Path) -> Ed25519PrivateKey:
+    descriptor = -1
     try:
-        info = path.stat(follow_symlinks=False)
-        encoded = path.read_text(encoding="ascii").strip()
-    except OSError as exc:
+        descriptor = os.open(
+            path,
+            os.O_RDONLY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0),
+        )
+        info = os.fstat(descriptor)
+        encoded_bytes = os.read(descriptor, 257)
+        named_info = path.stat(follow_symlinks=False)
+        encoded = encoded_bytes.decode("ascii").strip()
+    except (OSError, UnicodeError) as exc:
         raise PromotionReceiptError("issuer_private_key_unavailable") from exc
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
     if (
         not stat.S_ISREG(info.st_mode)
         or info.st_uid != os.geteuid()
+        or info.st_nlink != 1
+        or len(encoded_bytes) > 256
+        or (named_info.st_dev, named_info.st_ino) != (info.st_dev, info.st_ino)
         or info.st_mode & (stat.S_IRWXG | stat.S_IRWXO)
     ):
         raise PromotionReceiptError("issuer_private_key_permissions")
@@ -629,6 +923,8 @@ def _parser() -> argparse.ArgumentParser:
     commands = parser.add_subparsers(dest="command", required=True)
     write = commands.add_parser("promotion-test-verify")
     write.add_argument("--attempt-id", required=True)
+    write.add_argument("--rendered", type=Path, required=True)
+    write.add_argument("--manifest", type=Path, required=True)
     write.add_argument("--admission-context", type=Path, required=True)
     write.add_argument("--checks", type=Path, required=True)
     write.add_argument("--migration", type=Path, action="append", default=[])
@@ -658,8 +954,13 @@ def main(argv: Sequence[str] | None = None) -> int:
             repo_root = Path(__file__).resolve().parents[2]
             result = write_promotion_test_terminal_receipt(
                 attempt_id=args.attempt_id,
-                identity=_read_json(args.admission_context, code="identity_unavailable"),
-                check_results=_read_json(args.checks, code="checks_unavailable"),
+                rendered=_read_json(args.rendered, code="candidate_unavailable"),
+                channel_manifest=_read_json(args.manifest, code="manifest_unavailable"),
+                prod_admission_context=_read_json(
+                    args.admission_context,
+                    code="identity_unavailable",
+                ),
+                check_report=_read_json(args.checks, code="checks_unavailable"),
                 migration_paths=tuple(args.migration),
                 issued_at=_parse_timestamp(args.issued_at, code="issued_at_invalid"),
                 fresh_until=_parse_timestamp(args.fresh_until, code="fresh_until_invalid"),
@@ -671,7 +972,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 resettable_roots=(repo_root / "tmp-test", repo_root / "vault-test"),
             )
         else:
-            result = authorize_prod_activation(
+            result = prepare_prod_activation(
                 _read_json(args.receipt, code="receipt_missing"),
                 _read_json(args.registry, code="registry_missing"),
                 _read_json(args.admission_context, code="identity_unavailable"),
@@ -692,5 +993,7 @@ __all__ = [
     "PromotionReceiptError",
     "REQUIRED_CHECKS",
     "authorize_prod_activation",
+    "build_promotion_test_check_report",
+    "prepare_prod_activation",
     "write_promotion_test_terminal_receipt",
 ]
