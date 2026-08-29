@@ -31,7 +31,11 @@ digest/config/vault/schema identities and a single terminal classification; it e
 when required compatibility is absent. A separate caller may act only when the result says
 `writers_permitted=true`; this doctor does not expose a writer-start hook.
 
-The dependency input is an already-observed JSON mapping keyed by `artifact`, `config`, `database`,
+The manifest and dependency inputs are JSON mappings; Compose uses the canonical YAML model (JSON
+remains valid YAML). A syntactically complete invocation with a valid operation handle and journal
+target records one deterministic `PRE_MUTATION_FAILURE` when any of those three inputs is missing,
+unreadable, malformed, or not a mapping. The dependency input is an already-observed mapping keyed
+by `artifact`, `config`, `database`,
 `gateway`, `schema`, `vault`, and (when declared) `llm`. Each entry carries
 `status=available|unavailable`; identity-bearing required dependencies also carry their observed
 `identity`. Policy is derived from the exact manifest, never supplied by the observation: identity,

@@ -23,6 +23,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+import yaml
+
 from app.release_channels.channel_manifest import (
     ArtifactRenderError,
     render_channel_manifest,
@@ -62,6 +64,12 @@ _BASE_DEPENDENCIES = {"artifact", "config", "database", "gateway", "schema", "va
 
 class OrdinaryBootJournalError(RuntimeError):
     """The exactly-one terminal journal could not be preserved."""
+
+
+class _OrdinaryBootInputError(RuntimeError):
+    def __init__(self, code: str) -> None:
+        self.code = code
+        super().__init__(code)
 
 
 @dataclass(frozen=True)
@@ -742,14 +750,66 @@ def run_ordinary_boot(
     return _append_terminal_once(journal_path, result)
 
 
-def _read_mapping(path: Path, *, label: str) -> Mapping[str, Any]:
+def _read_json_mapping(path: Path, *, label: str) -> Mapping[str, Any]:
     try:
         value = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
-        raise OrdinaryBootJournalError(f"{label}_unreadable") from exc
+        raise _OrdinaryBootInputError(f"{label}_unreadable") from exc
     if not isinstance(value, Mapping) or not all(isinstance(key, str) for key in value):
-        raise OrdinaryBootJournalError(f"{label}_invalid_shape")
+        raise _OrdinaryBootInputError(f"{label}_invalid_shape")
     return value
+
+
+def _read_compose_mapping(path: Path) -> Mapping[str, Any]:
+    try:
+        value = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except (OSError, yaml.YAMLError) as exc:
+        raise _OrdinaryBootInputError("compose_unreadable") from exc
+    if not isinstance(value, Mapping) or not all(isinstance(key, str) for key in value):
+        raise _OrdinaryBootInputError("compose_invalid_shape")
+    return value
+
+
+def _run_ordinary_boot_from_paths(
+    *,
+    manifest_path: Path,
+    compose_path: Path,
+    dependencies_path: Path,
+    operation_id: str,
+    journal_path: Path,
+) -> dict[str, object]:
+    if not _operation_id_is_safe(operation_id):
+        raise OrdinaryBootJournalError("invalid_operation_id")
+    fallback_manifest_identity = _identity(
+        {"ordinary_boot_input": "manifest_unavailable"}
+    )
+    manifest: Mapping[str, Any] | None = None
+    try:
+        manifest = _read_json_mapping(manifest_path, label="manifest")
+        compose = _read_compose_mapping(compose_path)
+        dependencies = _read_json_mapping(dependencies_path, label="dependencies")
+    except _OrdinaryBootInputError as exc:
+        manifest_identity = (
+            _identity(manifest) if manifest is not None else fallback_manifest_identity
+        )
+        return _append_terminal_once(
+            journal_path,
+            _terminal_result(
+                operation_id=operation_id,
+                channel="unresolved",
+                manifest_identity=manifest_identity,
+                terminal_phase="PRE_MUTATION_FAILURE",
+                reason_code=f"compatibility_resolution_failed:{exc.code}",
+                dependencies=(),
+            ),
+        )
+    return run_ordinary_boot(
+        manifest,
+        compose,
+        dependencies,
+        operation_id=operation_id,
+        journal_path=journal_path,
+    )
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -770,10 +830,10 @@ def _parser() -> argparse.ArgumentParser:
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     try:
-        result = run_ordinary_boot(
-            _read_mapping(args.manifest, label="manifest"),
-            _read_mapping(args.compose, label="compose"),
-            _read_mapping(args.dependencies, label="dependencies"),
+        result = _run_ordinary_boot_from_paths(
+            manifest_path=args.manifest,
+            compose_path=args.compose,
+            dependencies_path=args.dependencies,
             operation_id=args.operation_id,
             journal_path=args.journal,
         )

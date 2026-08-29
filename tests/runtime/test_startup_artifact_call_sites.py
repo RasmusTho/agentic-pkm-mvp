@@ -938,6 +938,106 @@ def test_ordinary_boot_rejects_secret_pattern_operation_ids_without_echo(
 
 
 @pytest.mark.parametrize(
+    ("input_name", "damage", "reason_code"),
+    [
+        ("manifest", "missing", "compatibility_resolution_failed:manifest_unreadable"),
+        ("manifest", "malformed", "compatibility_resolution_failed:manifest_unreadable"),
+        ("compose", "missing", "compatibility_resolution_failed:compose_unreadable"),
+        ("compose", "malformed", "compatibility_resolution_failed:compose_unreadable"),
+        (
+            "dependencies",
+            "missing",
+            "compatibility_resolution_failed:dependencies_unreadable",
+        ),
+        (
+            "dependencies",
+            "malformed",
+            "compatibility_resolution_failed:dependencies_unreadable",
+        ),
+    ],
+)
+def test_ordinary_boot_cli_input_failure_writes_one_terminal_result(
+    tmp_path: Path,
+    input_name: str,
+    damage: str,
+    reason_code: str,
+) -> None:
+    manifest = _ordinary_boot_manifest()
+    manifest_path = tmp_path / "manifest.json"
+    compose_path = tmp_path / "compose.yaml"
+    dependencies_path = tmp_path / "dependencies.json"
+    paths = {
+        "manifest": manifest_path,
+        "compose": compose_path,
+        "dependencies": dependencies_path,
+    }
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    compose_path.write_text(yaml.safe_dump(_promotion_compose()), encoding="utf-8")
+    dependencies_path.write_text(
+        json.dumps(_compatible_dependencies(manifest)),
+        encoding="utf-8",
+    )
+    damaged_path = paths[input_name]
+    if damage == "missing":
+        damaged_path.unlink()
+    else:
+        damaged_path.write_text(":\n - [", encoding="utf-8")
+
+    operation_id = _ordinary_boot_operation_id(f"{input_name}-{damage}")
+    journal_path = tmp_path / "ordinary-boot.jsonl"
+    command = _ordinary_boot_cli_command(
+        manifest_path,
+        compose_path,
+        dependencies_path,
+        journal_path,
+        operation_id,
+    )
+    first = subprocess.run(command, cwd=ROOT, capture_output=True, text=True)
+    assert first.returncode == 3, first.stderr
+    assert first.stderr == ""
+    result = json.loads(first.stdout)
+    assert result["terminal_phase"] == "PRE_MUTATION_FAILURE"
+    assert result["reason_code"] == reason_code
+    assert result["writers_permitted"] is False
+    assert _journal_rows(journal_path) == [result]
+
+    replay = subprocess.run(command, cwd=ROOT, capture_output=True, text=True)
+    assert replay.returncode == 3, replay.stderr
+    assert json.loads(replay.stdout) == result
+    assert _journal_rows(journal_path) == [result]
+
+
+def test_ordinary_boot_cli_accepts_canonical_yaml_compose(tmp_path: Path) -> None:
+    manifest = _ordinary_boot_manifest()
+    manifest_path = tmp_path / "manifest.json"
+    compose_path = tmp_path / "compose.yaml"
+    dependencies_path = tmp_path / "dependencies.json"
+    journal_path = tmp_path / "ordinary-boot.jsonl"
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    compose_path.write_text(yaml.safe_dump(_promotion_compose()), encoding="utf-8")
+    dependencies_path.write_text(
+        json.dumps(_compatible_dependencies(manifest)),
+        encoding="utf-8",
+    )
+    proc = subprocess.run(
+        _ordinary_boot_cli_command(
+            manifest_path,
+            compose_path,
+            dependencies_path,
+            journal_path,
+            _ordinary_boot_operation_id("yaml-compose"),
+        ),
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+    )
+    assert proc.returncode == 0, proc.stderr
+    result = json.loads(proc.stdout)
+    assert result["terminal_phase"] == "ORDINARY_BOOT_PASS"
+    assert _journal_rows(journal_path) == [result]
+
+
+@pytest.mark.parametrize(
     "corrupt",
     [
         lambda row: {key: value for key, value in row.items() if key != "reason_code"},

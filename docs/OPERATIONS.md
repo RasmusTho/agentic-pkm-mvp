@@ -83,7 +83,10 @@ Compose, observed-dependency, operation-id, and terminal-journal inputs. The doc
 exact prod promotion-mode manifest and emits `ORDINARY_BOOT_PASS` only when every required
 dependency is compatible; a declared optional LLM may instead remain visibly
 `degraded_unavailable`. A missing or incompatible required dependency emits
-`PRE_MUTATION_FAILURE` with `writers_permitted=false`.
+`PRE_MUTATION_FAILURE` with `writers_permitted=false`. Manifest and dependency snapshots are JSON;
+Compose is read through the canonical YAML model (JSON is also accepted). With a valid operation
+handle and journal target, a missing, malformed, or unreadable input still emits exactly one durable
+`PRE_MUTATION_FAILURE` rather than returning without a terminal row.
 
 The command writes only its terminal journal. It does not pull or build an image, migrate schema,
 change a pin, bootstrap BuilderOps, provision Ollama, ingest or index data, restructure a vault,
