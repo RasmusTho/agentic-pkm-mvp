@@ -208,7 +208,9 @@ def _read_tail_records(path: Path | None = None) -> list[dict[str, Any]]:
 
     target = (path or default_outbox_path()).expanduser()
     try:
-        return read_jsonl_outbox_records(target, max_bytes=_HEALTH_TAIL_BYTES)
+        return read_jsonl_outbox_records(
+            target, max_bytes=_HEALTH_TAIL_BYTES, read_only=True
+        )
     except Exception:
         # Intentional swallow: an unreadable outbox tail degrades to "no recent
         # records" for health purposes, but the I/O failure is logged (#3894).

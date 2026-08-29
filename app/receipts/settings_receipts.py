@@ -222,7 +222,7 @@ def _read_durable_jsonl_records(
         resolved = Path(outbox_path).expanduser()
     if not resolved.exists() or not resolved.is_file():
         return None
-    return read_jsonl_outbox_records(resolved)
+    return read_jsonl_outbox_records(resolved, read_only=True)
 
 
 __all__ = [

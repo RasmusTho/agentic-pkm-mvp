@@ -12,7 +12,7 @@ def default_outbox_path() -> Path:
 
 
 def read_jsonl(path: Path) -> list[dict[str, Any]]:
-    return read_jsonl_outbox_records(path)
+    return read_jsonl_outbox_records(path, read_only=True)
 
 
 def read_outbox(path: Path | None = None) -> list[dict[str, Any]]:

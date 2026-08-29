@@ -154,7 +154,7 @@ def _read_jsonl_outbox_records(*, outbox_path: Path | None) -> list[dict[str, An
     resolved = _resolve_jsonl_outbox_path(outbox_path)
     if resolved is None or not resolved.exists() or not resolved.is_file():
         return None
-    return read_jsonl_outbox_records(resolved)
+    return read_jsonl_outbox_records(resolved, read_only=True)
 
 
 def _resolve_jsonl_outbox_path(outbox_path: Path | None) -> Path | None:

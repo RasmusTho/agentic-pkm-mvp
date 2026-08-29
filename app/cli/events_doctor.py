@@ -4,15 +4,20 @@ import os
 from pathlib import Path
 from typing import Any, List
 
-from app.services.outbox import read_jsonl_outbox_records
+from app.services.outbox import JsonlOutboxCorruptionError, read_jsonl_outbox_records
 
 import click
 
 DEFAULT_OUTBOX = Path(os.environ.get("INDEX_OUTBOX_PATH", "./tmp/index-outbox.jsonl")).expanduser()
+_EVENTS_DOCTOR_TAIL_BYTES = 8 * 1024 * 1024
 
 
-def _load_records(path: Path) -> List[dict[str, Any]]:
-    return read_jsonl_outbox_records(path)
+def _load_records(path: Path, *, full_history: bool = False) -> List[dict[str, Any]]:
+    return read_jsonl_outbox_records(
+        path,
+        max_bytes=None if full_history else _EVENTS_DOCTOR_TAIL_BYTES,
+        read_only=True,
+    )
 
 
 def _trace_id_for_record(rec: dict[str, Any]) -> str:
@@ -23,12 +28,16 @@ def _trace_id_for_record(rec: dict[str, Any]) -> str:
 @click.command(name="events-doctor", help="Render a simple trace story from the index outbox JSONL.")
 @click.option("--path", "path", type=click.Path(path_type=Path), default=None, help="Outbox JSONL path (defaults to INDEX_OUTBOX_PATH)")
 @click.option("--trace-id", "trace_id", default=None, help="Trace ID to render (defaults to latest trace in file)")
-def events_doctor(path: Path | None, trace_id: str | None) -> None:
+@click.option("--full-history", is_flag=True, help="Read the complete outbox instead of the bounded tail")
+def events_doctor(path: Path | None, trace_id: str | None, full_history: bool) -> None:
     resolved = path.expanduser() if path is not None else DEFAULT_OUTBOX
     if not resolved.exists():
         raise click.ClickException(f"Outbox path not found: {resolved}")
 
-    records = _load_records(resolved)
+    try:
+        records = _load_records(resolved, full_history=full_history)
+    except JsonlOutboxCorruptionError as exc:
+        raise click.ClickException("Configured event outbox is unreadable") from exc
     if not records:
         click.echo("No events found.")
         return
