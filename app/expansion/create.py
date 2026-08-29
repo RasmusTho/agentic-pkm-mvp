@@ -79,13 +79,16 @@ ADR, mirroring ``app.expansion.connect``'s and
 """
 from __future__ import annotations
 
-import json
+import fcntl
 import hashlib
+import json
+import os
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from enum import Enum
 from pathlib import Path
-from typing import Any, Callable, Mapping, Sequence
+from typing import Any, Callable, Iterator, Mapping, Sequence
 from uuid import uuid4
 
 from app.activation.gate import (
@@ -98,7 +101,11 @@ from app.activation.gate import (
 from app.knowledge_compilation.proposal_builders import ProposalContext, build_compilation_draft
 from app.knowledge_compilation.runtime_artifacts import CompilationDraft, ContextAuthorityLimits, SourceRef
 from app.reasoning.multi import run_multi_note_reasoning
-from app.services.outbox import append_jsonl_outbox_event, jsonl_outbox_append_lock
+from app.services.outbox import (
+    append_jsonl_outbox_event,
+    jsonl_outbox_append_lock,
+    read_jsonl_outbox_records,
+)
 from app.write_guard import DEFAULT_WRITE_GUARD, WriteGuard
 from scripts.yaml_roundtrip import load_frontmatter
 
@@ -556,19 +563,12 @@ def _draft_note_text(
     return dump_frontmatter(frontmatter, body) + checkbox_block
 
 
-def _existing_receipt(outbox_path: Path, event: str, event_id: str) -> dict[str, Any] | None:
-    if not outbox_path.exists():
-        return None
-    try:
-        lines = outbox_path.read_text(encoding="utf-8").splitlines()
-    except OSError:
-        return None
+def _existing_receipt(
+    outbox_path: Path, event: str, event_id: str, *, _lock_held: bool = False
+) -> dict[str, Any] | None:
+    records = read_jsonl_outbox_records(outbox_path, _lock_held=_lock_held)
     first_match: dict[str, Any] | None = None
-    for line in lines:
-        try:
-            record = json.loads(line)
-        except (TypeError, ValueError):
-            continue
+    for record in records:
         if record.get("event_id") != event_id:
             continue
         if record.get("event") != event:
@@ -658,9 +658,22 @@ def _draft_integrity_path(draft_path: Path) -> Path:
     return draft_path.with_suffix(draft_path.suffix + ".integrity.json")
 
 
-def _atomic_write_bytes(path: Path, content: bytes) -> None:
-    import os
+@contextmanager
+def _draft_publication_lock(draft_path: Path) -> Iterator[Path]:
+    """Serialize deterministic draft, integrity, and receipt publication."""
 
+    canonical_path = draft_path.expanduser().resolve(strict=False)
+    canonical_path.parent.mkdir(parents=True, exist_ok=True)
+    lock_path = canonical_path.with_name(f".{canonical_path.name}.publication.lock")
+    with lock_path.open("a", encoding="utf-8") as handle:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        try:
+            yield canonical_path
+        finally:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
+def _atomic_write_bytes(path: Path, content: bytes) -> None:
     temporary = path.with_name(f".{path.name}.{uuid4().hex}.tmp")
     try:
         with temporary.open("wb") as handle:
@@ -668,6 +681,11 @@ def _atomic_write_bytes(path: Path, content: bytes) -> None:
             handle.flush()
             os.fsync(handle.fileno())
         os.replace(temporary, path)
+        directory_fd = os.open(str(path.parent), os.O_RDONLY)
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
     finally:
         temporary.unlink(missing_ok=True)
 
@@ -719,7 +737,7 @@ def _emit_receipt(
                 raise CreateIdempotencyConflictError(
                     f"deterministic Create draft changed before receipt: {draft_path}"
                 )
-        existing = _existing_receipt(outbox_path, event, event_id)
+        existing = _existing_receipt(outbox_path, event, event_id, _lock_held=True)
         if existing is not None:
             if existing.get("payload") != payload:
                 raise CreateIdempotencyConflictError(
@@ -905,52 +923,53 @@ def run_create_pass(
         frontmatter=frontmatter, body=draft.body or "", draft_id=draft.artifact_id
     )
     draft_path = drafts_dir / f"{draft.artifact_id}.md"
-    draft_needs_write = not (draft_id is not None and draft_path.exists())
-    if not draft_needs_write:
-        replay = _replay_draft_metadata(
-            draft_path,
-            request_fingerprint=request_fingerprint or "",
-            draft_id=draft.artifact_id,
-        )
-        if replay is None:
-            raise CreateIdempotencyConflictError(
-                f"deterministic Create draft disappeared during replay: {draft_path}"
+    with _draft_publication_lock(draft_path):
+        draft_needs_write = not (draft_id is not None and draft_path.exists())
+        if not draft_needs_write:
+            replay = _replay_draft_metadata(
+                draft_path,
+                request_fingerprint=request_fingerprint or "",
+                draft_id=draft.artifact_id,
             )
-        draft_sha256 = replay[1]
-    else:
-        draft_sha256 = hashlib.sha256(note_text.encode("utf-8")).hexdigest()
-    if draft_needs_write:
-        # Publish the expected identity first. If the process dies before the
-        # atomic draft replace, the next deterministic retry sees no draft and
-        # safely rebuilds it; it never accepts a draft without its expected
-        # bytes or rewrites an already-validated replay artifact.
-        _write_draft_integrity(
-            draft_path,
-            draft_id=draft.artifact_id,
-            request_fingerprint=request_fingerprint,
-            draft_sha256=draft_sha256,
-        )
-        _atomic_write_bytes(draft_path, note_text.encode("utf-8"))
+            if replay is None:
+                raise CreateIdempotencyConflictError(
+                    f"deterministic Create draft disappeared during replay: {draft_path}"
+                )
+            draft_sha256 = replay[1]
+        else:
+            draft_sha256 = hashlib.sha256(note_text.encode("utf-8")).hexdigest()
+        if draft_needs_write:
+            # Publish the expected identity first. If the process dies before the
+            # atomic draft replace, the next deterministic retry sees no draft and
+            # safely rebuilds it; it never accepts a draft without its expected
+            # bytes or rewrites an already-validated replay artifact.
+            _write_draft_integrity(
+                draft_path,
+                draft_id=draft.artifact_id,
+                request_fingerprint=request_fingerprint,
+                draft_sha256=draft_sha256,
+            )
+            _atomic_write_bytes(draft_path, note_text.encode("utf-8"))
 
-    receipt_id = _emit_receipt(
-        CREATE_PROPOSED_EVENT,
-        {
-            "draft_id": draft.artifact_id,
-            "kind": request.kind.value,
-            "sources": [s.object_id for s in request.sources],
-            "cognition_metadata": cognition_metadata,
-            "draft_path": str(draft_path.relative_to(vault_root)),
-            "language": language,
-            "language_rule": language_rule,
-            "request_fingerprint": request_fingerprint,
-            "draft_sha256": draft_sha256,
-        },
-        outbox_path=outbox_path,
-        trace_id=request.trace_id,
-        event_id=receipt_id,
-        draft_path=draft_path,
-        expected_draft_sha256=draft_sha256,
-    )
+        receipt_id = _emit_receipt(
+            CREATE_PROPOSED_EVENT,
+            {
+                "draft_id": draft.artifact_id,
+                "kind": request.kind.value,
+                "sources": [s.object_id for s in request.sources],
+                "cognition_metadata": cognition_metadata,
+                "draft_path": str(draft_path.relative_to(vault_root)),
+                "language": language,
+                "language_rule": language_rule,
+                "request_fingerprint": request_fingerprint,
+                "draft_sha256": draft_sha256,
+            },
+            outbox_path=outbox_path,
+            trace_id=request.trace_id,
+            event_id=receipt_id,
+            draft_path=draft_path,
+            expected_draft_sha256=draft_sha256,
+        )
 
     return CreatePassReport(
         activatable=True,

@@ -19,6 +19,7 @@ Covers every behavioral Acceptance Criterion from the issue:
 """
 from __future__ import annotations
 
+import hashlib
 import json
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
@@ -39,9 +40,11 @@ from app.expansion.create import (
 )
 from app.expansion import create as create_module
 from app.services.outbox import (
+    JsonlOutboxCorruptionError,
     JsonlOutboxEventIdConflictError,
     append_jsonl_outbox_event,
 )
+from app.index.outbox import append_jsonl as append_legacy_index_jsonl
 from app.write_guard import WriteGuard
 from app.reasoning.schema import ReasoningOutput
 
@@ -426,6 +429,135 @@ def test_public_jsonl_writer_rejects_existing_event_id_collision(tmp_path: Path)
         )
 
     assert len(_outbox_records(outbox_path)) == 1
+
+
+def test_legacy_jsonl_writer_uses_global_event_id_seam(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    outbox_path = tmp_path / "outbox.jsonl"
+    monkeypatch.setenv("INDEX_OUTBOX_PATH", str(outbox_path))
+    create_module._emit_receipt(
+        "expansion.create.proposed",
+        {"value": "first"},
+        outbox_path=outbox_path,
+        trace_id="trace-first",
+        event_id="same-event-id",
+    )
+
+    with pytest.raises(JsonlOutboxEventIdConflictError, match="event_id"):
+        append_legacy_index_jsonl(
+            {
+                "object_id": "obj-1",
+                "kind": "note",
+                "payload": {"value": "second"},
+                "event_id": "same-event-id",
+            }
+        )
+
+    assert len(_outbox_records(outbox_path)) == 1
+
+
+def test_jsonl_append_fails_closed_when_existing_outbox_cannot_be_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    outbox_path = tmp_path / "outbox.jsonl"
+    outbox_path.write_text(
+        json.dumps({"event": "existing", "event_id": "existing-id"}) + "\n",
+        encoding="utf-8",
+    )
+    original_read_bytes = Path.read_bytes
+
+    def unreadable(path: Path) -> bytes:
+        if path == outbox_path:
+            raise OSError("simulated read failure")
+        return original_read_bytes(path)
+
+    monkeypatch.setattr(Path, "read_bytes", unreadable)
+    with pytest.raises(JsonlOutboxCorruptionError, match="cannot be inspected"):
+        append_jsonl_outbox_event(
+            outbox_path,
+            {
+                "event": "new.event",
+                "event_id": "new-id",
+                "payload": {},
+            },
+        )
+    assert outbox_path.read_text(encoding="utf-8").count("existing-id") == 1
+
+
+def test_jsonl_append_repairs_complete_unterminated_record(tmp_path: Path) -> None:
+    outbox_path = tmp_path / "outbox.jsonl"
+    first = {"event": "first", "event_id": "first-id"}
+    outbox_path.write_bytes(json.dumps(first).encode("utf-8"))
+
+    append_jsonl_outbox_event(
+        outbox_path,
+        {"event": "second", "event_id": "second-id", "payload": {}},
+    )
+
+    records = _outbox_records(outbox_path)
+    assert [record["event_id"] for record in records] == ["first-id", "second-id"]
+    assert b"}{" not in outbox_path.read_bytes()
+    assert outbox_path.read_bytes().endswith(b"\n")
+
+
+def test_jsonl_event_id_identity_is_shared_across_real_path_and_symlink(
+    tmp_path: Path,
+) -> None:
+    outbox_path = tmp_path / "outbox.jsonl"
+    alias_dir = tmp_path / "alias"
+    alias_dir.symlink_to(tmp_path, target_is_directory=True)
+    alias_path = alias_dir / "outbox.jsonl"
+    record = {"event": "same", "event_id": "alias-id", "payload": {"x": 1}}
+
+    assert append_jsonl_outbox_event(alias_path, record) is True
+    assert append_jsonl_outbox_event(outbox_path, record) is True
+    assert len(_outbox_records(outbox_path)) == 1
+
+    with pytest.raises(JsonlOutboxEventIdConflictError):
+        append_jsonl_outbox_event(
+            outbox_path,
+            {"event": "same", "event_id": "alias-id", "payload": {"x": 2}},
+        )
+
+
+def test_concurrent_deterministic_create_publication_converges(
+    tmp_path: Path,
+) -> None:
+    vault_root = tmp_path / "vault"
+    vault_root.mkdir()
+    outbox_path = tmp_path / "outbox.jsonl"
+    request = CreateRequest(
+        kind=OutputKind.ANSWER_NOTE,
+        title="Concurrent answer",
+        question="What is the boundary?",
+        sources=(_source("obj-a", "Evidence text.", "Evidence text."),),
+    )
+
+    def create() -> CreatePassReport:
+        return run_create_pass(
+            request,
+            vault_root=vault_root,
+            outbox_path=outbox_path,
+            write_guard=_allow_all_guard(),
+            draft_id="concurrent-draft",
+            receipt_id="concurrent-receipt",
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        reports = list(pool.map(lambda _unused: create(), (1, 2)))
+
+    assert [report.receipt_id for report in reports] == [
+        "concurrent-receipt",
+        "concurrent-receipt",
+    ]
+    records = _outbox_records(outbox_path)
+    assert len(records) == 1
+    draft_path = vault_root / reports[0].draft_path
+    integrity_path = draft_path.with_suffix(draft_path.suffix + ".integrity.json")
+    draft_sha256 = hashlib.sha256(draft_path.read_bytes()).hexdigest()
+    assert json.loads(integrity_path.read_text(encoding="utf-8"))["draft_sha256"] == draft_sha256
+    assert records[0]["payload"]["draft_sha256"] == draft_sha256
 
 
 def test_crash_between_integrity_and_draft_write_remains_replayable(

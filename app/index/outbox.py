@@ -4,10 +4,7 @@ import os
 from pathlib import Path
 from typing import Any, Dict
 
-try:
-    import orjson as _json
-except ModuleNotFoundError:  # pragma: no cover - fallback for environments without orjson
-    import json as _json  # type: ignore
+from app.services.outbox import append_jsonl_record
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_OUTBOX_PATH = Path(
@@ -18,11 +15,6 @@ os.environ.setdefault("INDEX_OUTBOX_PATH", str(DEFAULT_OUTBOX_PATH))
 
 def _current_outbox_path() -> Path:
     return Path(os.environ.get("INDEX_OUTBOX_PATH", str(DEFAULT_OUTBOX_PATH))).expanduser()
-
-
-def _ensure_dir(path: Path) -> None:
-    if not path.parent.exists():
-        path.parent.mkdir(parents=True, exist_ok=True)
 
 
 def append_jsonl(obj: Dict[str, Any]) -> None:
@@ -40,13 +32,7 @@ def append_jsonl(obj: Dict[str, Any]) -> None:
         if field not in obj:
             raise ValueError(f"index-outbox entry missing '{field}'")
     path = _current_outbox_path()
-    _ensure_dir(path)
-    dumped = _json.dumps(obj)
-    line = dumped.decode("utf-8") if isinstance(dumped, (bytes, bytearray)) else dumped
-    with path.open("a", encoding="utf-8") as fh:
-        fh.write(line)
-        if not line.endswith("\n"):
-            fh.write("\n")
+    append_jsonl_record(path, obj)
 
 
 __all__ = ["append_jsonl", "DEFAULT_OUTBOX_PATH"]
