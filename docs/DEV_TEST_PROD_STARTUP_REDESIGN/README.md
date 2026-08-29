@@ -146,10 +146,16 @@ P2 promotion-test candidate, matches that against an independently supplied prod
 and requires the runner report to bind the same candidate, identity, check results, and exact
 migration-file set. It holds one store lock and first durability-fences an immutable attempt
 reservation. It then writes and durability-fences the content-addressed receipt before publishing
-one immutable canonical attempt binding. A later PASS/FAIL, timestamp, identity, candidate, or
+its issued entry in the store's durability-fenced `registry.json`, then publishes one immutable
+canonical attempt binding. The generated registry is therefore the authority input consumed by
+`prepare_prod_activation`; an absent, changed, or revoked entry fails closed. A later PASS/FAIL,
+timestamp, identity, candidate, or
 migration-set change for the same `pt-<id>` attempt is rejected. A crash after receipt persistence
 but before the attempt binding leaves an immutable reserved orphan; only an identical retry can
-reuse it and publish the single binding. Every migration is opened once without symlink traversal;
+reuse it, repair a matching issued registry entry, and publish the single binding. Immutable
+records use a same-directory fsynced temp hard link, remove that temp name before the final
+directory fence, and recover only a same-owner temp that is the exact published inode after a
+crash in that unlink/fence gap. Every migration is opened once without symlink traversal;
 the same captured bytes feed both the migration-set digest and
 `app.release_channels.reversibility.check_migration_snapshots`. The attempt journal records the six
 boolean check outcomes and that existing classifier's receipt. The promotion
