@@ -13,7 +13,7 @@ from typing import Any
 
 import pytest
 
-from app.expansion.create import SourceInput
+from app.expansion.create import CreateIdempotencyConflictError, SourceInput
 from app.knowledge.errors import KnowledgeWriteConflict
 from app.standing_questions import answer_refresh as refresh_module
 from app.standing_questions.answer_refresh import refresh_answers_on_evidence_delta
@@ -820,3 +820,34 @@ def test_refresh_replay_reuses_draft_and_receipt_bytes(tmp_path: Path) -> None:
     proposal_after = [r for r in records_after if r["event"] == "expansion.create.proposed"]
     assert proposal_after == proposal_before
     assert (vault / proposal_after[0]["payload"]["draft_path"]).read_bytes() == draft_before
+
+
+def test_refresh_replay_rejects_receipt_payload_collision(tmp_path: Path) -> None:
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    outbox = tmp_path / "outbox.jsonl"
+    store, note = _question(vault)
+    evidence = _evidence("vault://notes/a.md", "outbox://evidence/1", "first evidence", 10)
+    store.update_system_fields(note["question_id"], {"evidence": [evidence]})
+    sources = {"outbox://evidence/1": _source("outbox://evidence/1", evidence["quoted_span"])}
+    original = store.update_system_fields_if_unchanged
+
+    def conflict(*_args: Any, **_kwargs: Any) -> Any:
+        raise KnowledgeWriteConflict("simulated crash after proposal receipt")
+
+    store.update_system_fields_if_unchanged = conflict  # type: ignore[method-assign]
+    refresh_answers_on_evidence_delta(
+        vault_root=vault, outbox_path=outbox, evidence_sources=sources,
+        store=store, write_guard=_guard(), now=_dt(12)
+    )
+    records = _records(outbox)
+    proposal = next(record for record in records if record["event"] == "expansion.create.proposed")
+    proposal["payload"]["kind"] = "create.digest"
+    outbox.write_text("\n".join(json.dumps(record) for record in records) + "\n", encoding="utf-8")
+    store.update_system_fields_if_unchanged = original  # type: ignore[method-assign]
+
+    with pytest.raises(CreateIdempotencyConflictError, match="receipt payload"):
+        refresh_answers_on_evidence_delta(
+            vault_root=vault, outbox_path=outbox, evidence_sources=sources,
+            store=store, write_guard=_guard(), now=_dt(13)
+        )

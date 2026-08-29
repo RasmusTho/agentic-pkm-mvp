@@ -99,6 +99,7 @@ historical evidence claim. No SQ-04 writer changes the standing answer or human-
 | Focused SQ/Create regression set | Standing Questions, Create lifecycle, and QuestionStore tests | `136 passed` |
 | Matcher CAS conflict is observable and non-clobbering | `test_match_write_conflict_does_not_clobber_question` | Passed |
 | Deterministic replay preserves draft bytes and receipt payload | `test_refresh_replay_reuses_draft_and_receipt_bytes` | Passed |
+| Matcher CAS conflict remains watcher-retryable | `test_watcher_retries_standing_questions_matching_conflict_before_advancing_snapshot` | Passed in CI-selected watcher coverage; local collection is dependency-blocked |
 
 The full not-PostgreSQL suite was not a valid local proof at packet creation: the host-global
 `pytest-not-pg` lease was unavailable and the local watcher collection also lacked the declared
@@ -106,3 +107,18 @@ The full not-PostgreSQL suite was not a valid local proof at packet creation: th
 watcher tests use the same production tick seam but are not a substitute for that environment proof.
 Live test, Playwright/browser proof, owner observation, and SQ-05 acceptance remain unclaimed and are
 not silently promoted by this packet.
+
+## Prior review findings and attempted fixes
+
+The convergence history is part of the review evidence. Each row is bound to the exact local head
+where the finding was observed; a later head invalidates the earlier clean/unclean conclusion.
+
+| Review head | Finding | Disposition in the next repair |
+| --- | --- | --- |
+| `3627cec12` | No production match-then-refresh caller; cognition was initially given a provenance URI as an object id; CAS baseline was captured too late. | Production watcher composition, reasoning-input materialization, and pre-cognition Question version capture were added before the next review. |
+| `2f042410b` | Watcher SQ failure could advance the source snapshot; static property registrations drifted after watcher hydration moved. | Exception retry preservation was added; the census was repinned at the actual sink/producer lines. |
+| `1bca186bd` | Structured blocked results were treated as success; CAS retry could orphan/duplicate draft and receipt; mutable path could replay changed evidence; contradiction basis was only nonempty; registry rows were missing. | Blocked-result retry, deterministic proposal identity, source content hashes, exact contradiction basis, and registry entries were added. |
+| `bcf0f2120` | Replay did not compare full receipt payload; standing-answer bytes were outside the refresh identity; SQ-03 append lacked a fresh duplicate fold; matcher CAS conflicts were not watcher-retryable; docs overstated lifecycle. | Full payload/byte parity, standing-answer fingerprinting, post-read duplicate filtering, matcher conflict retry, and lifecycle/doc corrections were added in the current repair. |
+
+This history does not itself authorize merge or acceptance. The current exact-head independent review
+must be clean before selected CI and delivery gates can be treated as valid.

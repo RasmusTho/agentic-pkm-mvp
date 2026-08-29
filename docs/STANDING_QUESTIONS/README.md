@@ -176,7 +176,7 @@ Resolution Engine — not a pre-code gate.
 
 ## Relationship to GitHub issues
 
-**Filed 2026-07-07.** Parent feature issue: **#3325** (Backlog, `agent:blocked` live validation hub; see [PARENT_FEATURE_ISSUE.md](PARENT_FEATURE_ISSUE.md)). All five children were filed `agent:blocked`: SQ-01 → **#3329** (the dependency-free head — flips to `agent:ready` once this spec PR merges to `main`); SQ-02 → **#3328** and SQ-03 → **#3326** (both stay `agent:blocked` until SQ-01/#3329 merges); SQ-04 → **#3327** (stays `agent:blocked` until SQ-01/#3329 and SQ-03/#3326 merge, **and** the external Create-engine prerequisite EXP-3 lands); SQ-05 → **#3330** (stays `agent:blocked` until SQ-01/#3329, SQ-02/#3328, SQ-03/#3326, and SQ-04/#3327 all merge). The spec is the source of truth; issues track pickup state.
+**Filed 2026-07-07.** Parent feature issue: **#3325** (open, `agent:blocked` validation hub; see [PARENT_FEATURE_ISSUE.md](PARENT_FEATURE_ISSUE.md)). At filing, all five children were `agent:blocked`; current GitHub lifecycle is SQ-01 **#3329 closed**, SQ-02 **#3328 closed**, SQ-03 **#3326 closed**, SQ-04 **#3327 open / `agent:in-progress` under PR #5174**, and SQ-05 **#3330 open / `agent:blocked`** pending SQ-04 plus its review-surface prerequisites. The spec is the source of truth; issues track pickup state.
 
 ## Open research carried (not blocking)
 

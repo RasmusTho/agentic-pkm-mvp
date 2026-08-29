@@ -303,6 +303,74 @@ def test_watcher_retries_blocked_standing_questions_before_advancing_snapshot(
     assert "Inbox/blocked.md" in load_snapshot(snapshot_path)
 
 
+def test_watcher_retries_standing_questions_matching_conflict_before_advancing_snapshot(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """A matcher CAS conflict is a delivery failure, not an acknowledged observation."""
+    vault = tmp_path / "vault"
+    evidence = vault / "Inbox" / "conflict.md"
+    evidence.parent.mkdir(parents=True)
+    evidence.write_text("---\nscope: work\n---\n\nconflicted once\n", encoding="utf-8")
+    snapshot_path = vault / ".state.json"
+    outbox = tmp_path / "events.jsonl"
+    attempts: list[int] = []
+    monkeypatch.setattr(
+        "app.watcher.vault_watcher.run_vault_alpha_ingest_paths",
+        lambda *_args, **_kwargs: SimpleNamespace(ingested=1, errors=0),
+    )
+
+    def standing_tick(**_kwargs):
+        attempts.append(1)
+        if len(attempts) == 1:
+            return SimpleNamespace(
+                matching=SimpleNamespace(attached=0, write_conflict=1),
+                refresh=SimpleNamespace(
+                    refresh_candidates=(), drafted=(), deferred_pending_review=(), blocked=()
+                ),
+            )
+        return SimpleNamespace(
+            matching=SimpleNamespace(attached=1, write_conflict=0),
+            refresh=SimpleNamespace(
+                refresh_candidates=("sq-conflict",),
+                drafted=("sq-conflict",),
+                deferred_pending_review=(),
+                blocked=(),
+            ),
+        )
+
+    monkeypatch.setattr(
+        "app.standing_questions.evidence_matching.run_standing_questions_tick",
+        standing_tick,
+    )
+
+    first_summary, _ = run_watcher_tick(
+        vault_root=vault,
+        snapshot_path=snapshot_path,
+        skip_panel=True,
+        emit_only=False,
+        dry_run=False,
+        max_notes=10,
+        force=False,
+        outbox_path=outbox,
+    )
+    assert first_summary["standing_questions_matching_write_conflicts"] == 1
+    assert "Inbox/conflict.md" not in load_snapshot(snapshot_path)
+
+    second_summary, _ = run_watcher_tick(
+        vault_root=vault,
+        snapshot_path=snapshot_path,
+        skip_panel=True,
+        emit_only=False,
+        dry_run=False,
+        max_notes=10,
+        force=False,
+        outbox_path=outbox,
+    )
+    assert len(attempts) == 2
+    assert second_summary["standing_questions_drafted"] == 1
+    assert "Inbox/conflict.md" in load_snapshot(snapshot_path)
+
+
 def test_run_watcher_tick_uses_watcher_settings_default_when_env_unset(tmp_path: Path, monkeypatch) -> None:
     vault = tmp_path / "vault"
     inbox = vault / "Inbox"

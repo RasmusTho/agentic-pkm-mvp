@@ -968,6 +968,9 @@ def run_watcher_tick(
                     outbox_path=resolved_outbox,
                 )
                 summary["standing_questions_matching_attached"] = standing_tick.matching.attached
+                summary["standing_questions_matching_write_conflicts"] = getattr(
+                    standing_tick.matching, "write_conflict", 0
+                )
                 summary["standing_questions_refresh_candidates"] = len(
                     standing_tick.refresh.refresh_candidates
                 )
@@ -978,6 +981,8 @@ def run_watcher_tick(
                 blocked_refreshes = tuple(getattr(standing_tick.refresh, "blocked", ()))
                 summary["standing_questions_blocked"] = len(blocked_refreshes)
                 if blocked_refreshes:
+                    standing_questions_retry_paths = list(result.changed)
+                if summary["standing_questions_matching_write_conflicts"]:
                     standing_questions_retry_paths = list(result.changed)
             except Exception as exc:  # pragma: no cover - runtime degradation is surfaced
                 summary["errors"] += 1

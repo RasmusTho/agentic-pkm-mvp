@@ -711,13 +711,25 @@ def run_create_pass(
             raise CreateIdempotencyConflictError(
                 f"deterministic Create receipt has no draft: {replay_draft_path}"
             )
+        replay_payload: dict[str, Any] | None = None
+        if replay is not None and receipt_id is not None:
+            replay_frontmatter = replay[0]
+            proposed_by = replay_frontmatter.get("proposed_by", {})
+            replay_payload = {
+                "draft_id": draft_id,
+                "kind": request.kind.value,
+                "sources": replay_frontmatter.get("sources", []),
+                "cognition_metadata": proposed_by.get("cognition", {}),
+                "draft_path": str(replay_draft_path.relative_to(resolved_vault_root)),
+                "language": replay_frontmatter.get("language"),
+                "language_rule": replay_frontmatter.get("language_rule"),
+                "request_fingerprint": request_fingerprint,
+                "draft_sha256": replay[1],
+            }
         if replay is not None and existing_receipt is not None:
-            payload = existing_receipt.get("payload", {})
-            if payload.get("draft_sha256") != replay[1] or payload.get(
-                "request_fingerprint"
-            ) != request_fingerprint:
+            if existing_receipt.get("payload") != replay_payload:
                 raise CreateIdempotencyConflictError(
-                    f"deterministic Create replay receipt does not match draft: {replay_draft_path}"
+                    f"deterministic Create replay receipt payload does not match draft: {replay_draft_path}"
                 )
             return CreatePassReport(
                 activatable=True,
@@ -727,20 +739,7 @@ def run_create_pass(
                 kind=request.kind,
             )
         if replay is not None and receipt_id is not None:
-            replay_frontmatter = replay[0]
-            proposed_by = replay_frontmatter.get("proposed_by", {})
-            cognition_metadata = proposed_by.get("cognition", {})
-            replay_payload = {
-                "draft_id": draft_id,
-                "kind": request.kind.value,
-                "sources": replay_frontmatter.get("sources", []),
-                "cognition_metadata": cognition_metadata,
-                "draft_path": str(replay_draft_path.relative_to(resolved_vault_root)),
-                "language": replay_frontmatter.get("language"),
-                "language_rule": replay_frontmatter.get("language_rule"),
-                "request_fingerprint": request_fingerprint,
-                "draft_sha256": replay[1],
-            }
+            assert replay_payload is not None
             _emit_receipt(
                 CREATE_PROPOSED_EVENT,
                 replay_payload,

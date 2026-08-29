@@ -427,12 +427,26 @@ def match_evidence_to_open_questions(
         if current["status"] != "open":
             counters.bump("excluded_non_open")
             continue
+        current_bases = _existing_bases(current)
+        append_entries = [
+            entry
+            for entry in new_entries
+            if (
+                entry["artifact_ref"],
+                entry["content_hash"],
+                entry["quoted_span"],
+            ) not in current_bases
+        ]
+        if len(append_entries) != len(new_entries):
+            counters.bump("duplicate_basis", len(new_entries) - len(append_entries))
+        if not append_entries:
+            continue
         try:
             question_store.update_system_fields_if_unchanged(
                 question_id,
                 current,
                 {
-                    "evidence": [*current["evidence"], *new_entries],
+                    "evidence": [*current["evidence"], *append_entries],
                     "last_matched_at": _utc_now(),
                 },
                 expected_version=current_version,
@@ -443,7 +457,7 @@ def match_evidence_to_open_questions(
             # whole note from a stale read.
             counters.bump("write_conflict")
             continue
-        counters.bump("attached", len(new_entries))
+        counters.bump("attached", len(append_entries))
 
     return counters.summary()
 

@@ -118,12 +118,24 @@ def _refresh_attempt_ids(
     question_id: str,
     last_refreshed_at: str | None,
     evidence: Sequence[Mapping[str, Any]],
+    *,
+    standing_answer_referenced: bool,
+    standing_answer: str | None,
 ) -> tuple[str, str, str]:
-    """Return stable draft/receipt ids for one exact unconsumed evidence generation."""
+    """Return stable ids for one exact evidence + standing-answer generation."""
     generation = last_refreshed_at or "never"
-    evidence_bytes = json.dumps(list(evidence), sort_keys=True, separators=(",", ":"))
+    material = {
+        "question_id": question_id,
+        "generation": generation,
+        "evidence": list(evidence),
+        "standing_answer_referenced": standing_answer_referenced,
+        "standing_answer_sha256": (
+            _content_hash(standing_answer) if standing_answer is not None else None
+        ),
+    }
+    evidence_bytes = json.dumps(material, sort_keys=True, separators=(",", ":"))
     key = hashlib.sha256(
-        f"{question_id}\x1f{generation}\x1f{evidence_bytes}".encode("utf-8")
+        evidence_bytes.encode("utf-8")
     ).hexdigest()
     return (
         key,
@@ -491,13 +503,15 @@ def refresh_answers_on_evidence_delta(
                     question=current["text"],
                     trace_id=trace_id,
                 )
+                standing_answer_referenced, standing_answer = _read_standing_answer(
+                    resolved_root, current
+                )
                 refresh_key, draft_id, receipt_id = _refresh_attempt_ids(
                     question_id,
                     current.get("last_refreshed_at"),
                     current.get("evidence", []),
-                )
-                standing_answer_referenced, standing_answer = _read_standing_answer(
-                    resolved_root, current
+                    standing_answer_referenced=standing_answer_referenced,
+                    standing_answer=standing_answer,
                 )
                 report: CreatePassReport = run_create_pass(
                     request,
