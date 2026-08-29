@@ -59,7 +59,8 @@ RISK_SURFACES = {
 }
 PR_SCOPE_REVALIDATION_OUTCOMES = frozenset({"continue_unchanged", "split", "expanded_contract"})
 PROTECTED_REVIEW_FINDING = re.compile(
-    r"(?im)^\s*(?:[-*]\s*)?P[01]\s+(?:blocker|finding|violation|regression)\b"
+    r"(?im)^\s*(?:[-*]\s*)?(?:\[P[01]\]|\*\*P[01]\*\*|P[01]\s*[:—-]"
+    r"|P[01]\s+(?:badge|blocker|finding|violation|regression)\b)"
 )
 REVIEW_CONTRACT_DIGEST = re.compile(
     r"(?im)^Governing-Contract-SHA256:\s*([0-9a-f]{64})\s*$"
@@ -299,10 +300,14 @@ def authenticated_pr_scope_revalidation_history(
         raise ReviewBeforeCiGateError("GitHub evidence does not identify the requested PR and Issue")
     base_repo = _nested_value(pr, "base", "repo", "full_name")
     live_head = _nested_value(pr, "head", "sha")
-    if base_repo != repository or live_head != head_sha:
+    if base_repo != repository or not isinstance(live_head, str) or not re.fullmatch(
+        r"[0-9a-f]{40}", live_head
+    ):
         raise ReviewBeforeCiGateError(
-            "GitHub PR evidence is foreign or stale for the current repository/head"
+            "GitHub PR evidence is foreign or has no exact live head"
         )
+    if not re.fullmatch(r"[0-9a-f]{40}", head_sha):
+        raise ReviewBeforeCiGateError("local publication candidate has no exact head")
     if not isinstance(issue.get("body"), str):
         raise ReviewBeforeCiGateError("GitHub governing Issue body is unavailable for contract binding")
     if not isinstance(pr.get("body"), str):
@@ -427,7 +432,9 @@ def authenticated_pr_scope_revalidation_history(
         if association not in TRUSTED_RECEIPT_ASSOCIATIONS or not _nonempty_string(author):
             continue
         try:
-            parsed_receipt = json.loads(body[len(REVALIDATION_RECEIPT_MARKER) :].strip())
+            parsed_receipt = _load_json_without_duplicate_keys(
+                body[len(REVALIDATION_RECEIPT_MARKER) :].strip()
+            )
         except json.JSONDecodeError as exc:
             raise ReviewBeforeCiGateError("durable GitHub revalidation receipt is malformed") from exc
         if not isinstance(parsed_receipt, Mapping):
@@ -481,6 +488,8 @@ def authenticated_pr_scope_revalidation_history(
             "repository": repository,
             "pr_number": pr_number,
             "head_sha": head_sha,
+            "candidate_head_sha": head_sha,
+            "live_pr_head_sha": live_head,
             "rejected_round_ids": [round_["round_id"] for round_ in rejected_rounds],
             "finding_ids": finding_ids,
             "review_history_sha256": review_history_sha256,
@@ -490,6 +499,8 @@ def authenticated_pr_scope_revalidation_history(
         ).hexdigest(),
         "bounded_follow_up_issues": bounded_follow_up_issues,
         "bounded_follow_up_routes": bounded_follow_up_routes,
+        "candidate_head_sha": head_sha,
+        "live_pr_head_sha": live_head,
     }
 
 
@@ -562,6 +573,30 @@ def _canonical_json(value: object) -> str:
 
 def _sha256_text(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def _load_json_without_duplicate_keys(value: str) -> object:
+    def reject_duplicates(pairs: list[tuple[str, object]]) -> dict[str, object]:
+        result: dict[str, object] = {}
+        for key, item in pairs:
+            if key in result:
+                raise ReviewBeforeCiGateError(f"durable receipt has duplicate JSON key: {key}")
+            result[key] = item
+        return result
+
+    return json.loads(value, object_pairs_hook=reject_duplicates)
+
+
+def _git_is_ancestor(ancestor_sha: object, candidate_sha: object) -> bool:
+    if not isinstance(ancestor_sha, str) or not isinstance(candidate_sha, str):
+        return False
+    completed = subprocess.run(
+        ["git", "merge-base", "--is-ancestor", ancestor_sha, candidate_sha],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return completed.returncode == 0
 
 
 def _nested_value(payload: Mapping[str, object], *keys: str) -> object:
@@ -955,7 +990,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                     "PR scope revalidation requires --github-repository, --pr-number, and --governing-issue"
                 )
             receipt = (
-                json.loads(Path(args.contract_revalidation_receipt).read_text(encoding="utf-8"))
+                _load_json_without_duplicate_keys(
+                    Path(args.contract_revalidation_receipt).read_text(encoding="utf-8")
+                )
                 if args.contract_revalidation_receipt
                 else None
             )
@@ -966,6 +1003,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                 head_sha=evidence.head_sha,
                 follow_up_issue_numbers=_follow_up_issue_numbers(receipt),
             )
+            if not _git_is_ancestor(history["live_pr_head_sha"], evidence.head_sha):
+                raise ReviewBeforeCiGateError(
+                    "local publication candidate does not descend from the authenticated live PR head"
+                )
             validate_pr_scope_revalidation(
                 args.pr_number,
                 args.governing_issue,

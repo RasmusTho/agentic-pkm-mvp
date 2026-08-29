@@ -671,8 +671,8 @@ Routed-Finding: review:11
 
 def test_pr_scope_revalidation_rejects_foreign_or_stale_live_pr_evidence() -> None:
     responses, api = _live_pr_review_api()
-    responses["repos/octo/repo/pulls/4029"]["head"]["sha"] = "b" * 40  # type: ignore[index]
-    with pytest.raises(ReviewBeforeCiGateError, match="foreign or stale"):
+    responses["repos/octo/repo/pulls/4029"]["base"]["repo"]["full_name"] = "foreign/repo"  # type: ignore[index]
+    with pytest.raises(ReviewBeforeCiGateError, match="foreign"):
         authenticated_pr_scope_revalidation_history(
             repository="octo/repo",
             pr_number=4029,
@@ -1054,6 +1054,72 @@ def test_review_finding_content_is_bound_into_authenticated_history() -> None:
     )
 
     assert before["authentication"] != after["authentication"]
+
+
+def test_bracketed_and_colon_protected_findings_are_content_bound() -> None:
+    responses, api = _live_pr_review_api()
+    comments = responses["repos/octo/repo/pulls/4029/comments?per_page=100"]
+    assert isinstance(comments, list)
+    comments[0]["body"] = "[P1] authority semantics v1"
+    comments[1]["body"] = "P0: data boundary v1"
+    before = authenticated_pr_scope_revalidation_history(
+        repository="octo/repo",
+        pr_number=4029,
+        governing_issue=4028,
+        head_sha="a" * 40,
+        api=api,
+    )
+    comments[0]["body"] = "[P1] authority semantics v2"
+    after = authenticated_pr_scope_revalidation_history(
+        repository="octo/repo",
+        pr_number=4029,
+        governing_issue=4028,
+        head_sha="a" * 40,
+        api=api,
+    )
+
+    assert {"comment:101", "comment:102"} <= set(before["finding_ids"])
+    assert before["authentication"] != after["authentication"]
+
+
+def test_pre_push_candidate_is_distinct_from_live_pr_head() -> None:
+    responses, api = _live_pr_review_api(head_sha="b" * 40)
+    history = authenticated_pr_scope_revalidation_history(
+        repository="octo/repo",
+        pr_number=4029,
+        governing_issue=4028,
+        head_sha="a" * 40,
+        api=api,
+    )
+
+    assert history["candidate_head_sha"] == "a" * 40
+    assert history["live_pr_head_sha"] == "b" * 40
+    assert history["authentication"]["candidate_head_sha"] == "a" * 40
+    assert history["authentication"]["live_pr_head_sha"] == "b" * 40
+
+
+def test_duplicate_key_durable_receipt_is_rejected() -> None:
+    responses, api = _live_pr_review_api()
+    comments = responses["repos/octo/repo/issues/4029/comments?per_page=100"]
+    assert isinstance(comments, list)
+    comments.append(
+        {
+            "id": 299,
+            "body": "<!-- pr-scope-revalidation-receipt:v1 -->\n"
+            + '{"outcome":"split","outcome":"continue_unchanged"}',
+            "user": {"login": "repository-owner"},
+            "author_association": "OWNER",
+        }
+    )
+
+    with pytest.raises(ReviewBeforeCiGateError, match="duplicate JSON key"):
+        authenticated_pr_scope_revalidation_history(
+            repository="octo/repo",
+            pr_number=4029,
+            governing_issue=4028,
+            head_sha="a" * 40,
+            api=api,
+        )
 
 
 def test_publication_repository_must_match_authenticated_origin(
