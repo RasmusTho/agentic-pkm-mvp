@@ -442,6 +442,9 @@ def _targeted_remote_candidate(
         raise ValueError("candidate_source_sha_malformed")
     if (not source_ref.startswith("refs/heads/") or source_ref in {f"refs/heads/{name}" for name in DEFAULT_PROTECTED_BRANCHES} or not archive_ref.startswith("refs/archive/git-hygiene/")):
         raise ValueError("candidate_ref_protected_or_invalid")
+    expected_archive = _targeted_archive_ref(repository, source_ref, source_sha)
+    if archive_ref != expected_archive:
+        raise ValueError("candidate_archive_ref_not_identity_derived")
     for ref in (source_ref, archive_ref):
         if run_git_result(["check-ref-format", ref], cwd).returncode != 0:
             raise ValueError("candidate_ref_malformed")
@@ -463,6 +466,11 @@ def _targeted_remote_candidate(
     if source_sha in set(protected_heads.values()):
         raise ValueError("candidate_source_is_live_protected_pr_head")
     return {key: candidate.get(key) for key in sorted(required | {"governing_issue", "no_issue_lane"})}
+
+
+def _targeted_archive_ref(repository: str, source_ref: str, source_sha: str) -> str:
+    seed = f"{repository}\0{source_ref}\0{source_sha}".encode()
+    return f"refs/archive/git-hygiene/identity/{hashlib.sha256(seed).hexdigest()}"
 
 
 def _canonical_origin(cwd: Path) -> str:
@@ -500,6 +508,7 @@ def targeted_remote_cleanup(
     repository: str,
     candidates: list[Mapping[str, Any]],
     receipt_dir: Path,
+    receipt_writer: Callable[[Path, Mapping[str, Any]], None] = _write_receipt,
 ) -> dict[str, Any]:
     """Archive then CAS-delete no more than five explicitly bound remote refs.
 
@@ -555,9 +564,14 @@ def targeted_remote_cleanup(
                     archive_sha = _remote_ref_sha(cwd, candidate["archive_ref"])
                 if archive_sha != candidate["source_sha"]:
                     raise RuntimeError("archive_sha_mismatch")
-                _write_receipt(receipt_path, receipt)
+                receipt_writer(receipt_path, receipt)
                 if source_sha is None:
-                    raise RuntimeError("prepared_receipt_source_absent_ambiguous")
+                    # A durable matching prepared record plus exact archive and
+                    # source absence is the only crash-recovery completion path.
+                    receipt["state"] = "completed"
+                    receipt_writer(receipt_path, receipt)
+                    completed.append({"receipt": str(receipt_path), "state": "completed", **candidate})
+                    continue
                 if source_sha != candidate["source_sha"]:
                     raise RuntimeError("source_identity_drift_before_delete")
                 deleted = run_git_result(["push", "--no-verify", f"--force-with-lease={candidate['source_ref']}:{source_sha}", "origin", f":{candidate['source_ref']}"], cwd)
@@ -566,7 +580,7 @@ def targeted_remote_cleanup(
                 if _remote_ref_sha(cwd, candidate["source_ref"]) is not None or _remote_ref_sha(cwd, candidate["archive_ref"]) != candidate["source_sha"]:
                     raise RuntimeError("post_delete_readback_failed")
                 receipt["state"] = "completed"
-                _write_receipt(receipt_path, receipt)
+                receipt_writer(receipt_path, receipt)
                 completed.append({"receipt": str(receipt_path), "state": "completed", **candidate})
             finally:
                 os.close(lock_fd)

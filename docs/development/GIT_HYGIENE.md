@@ -48,6 +48,10 @@ fresh candidate authority with empty lifecycle/lease conflicts plus the live pro
 heads for PR #4728 and #4813. Receipt ownership is exclusive per identity digest;
 prepared and completed transitions use write+fsync, atomic replace, and directory fsync.
 Batch archive refs are preflighted for collisions before any remote side effect.
+The archive ref is deterministically derived from repository, full source ref, and
+frozen source SHA; callers cannot alias another candidate's archive namespace. A
+durable prepared receipt plus source absence and exact archive readback is the sole
+crash-recovery completion path, and cannot regress a completed receipt.
 
 Archive refs are retained by default. `review_at` is only a review trigger for
 `safety_archive` and `quarantine`; elapsed time never authorizes archive deletion,
