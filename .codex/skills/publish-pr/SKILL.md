@@ -245,8 +245,9 @@ repeat finding in one mechanism, do not set `--review-gate-complete` again until
 circuit breaker in `verification-and-closure` has produced and reviewed a new convergence packet.
 
 Every publication invocation must set `PR_PUBLICATION_MODE` to `new` or `existing`; an omitted or other value fails before the gate runs. Apply `docs/development/AUTONOMOUS_REVIEW_REPAIR_GATE_CONTRACTS.md :: PR-Level Scope Revalidation Gate` through this shared gate before another expensive proof or push. A `new` publication authenticates that its branch has no open PR; an `existing` publication requires `--pr-scope-revalidation --github-repository <owner/repo> --pr-number <N> --governing-issue <N>` and, when two rejected rounds exist, `--contract-revalidation-receipt <path>`. Before push, the gate authenticates the still-live PR head separately and proves it is a strict Git ancestor of the local candidate head, so the required ordering does not assume the candidate is already published. The gate requires that local receipt to match a durable trusted-author PR comment, derives formal independent `CHANGES_REQUESTED` rounds and their protected finding contents itself, and authenticates expansion against the live Issue digest plus every prior round/head/digest; never pass caller-authored history, URL, actor, digest, or partial finding list as authority.
-Existing publication also derives the unique open PR whose head repository and ref match the current
-local branch; a supplied closed, foreign, or different-branch PR number is not history authority.
+Existing publication also derives the unique open PR whose base repository/ref match the requested
+publication base and whose head repository/ref match the current local branch; a supplied closed,
+foreign, retargeted, or different-branch PR number is not history authority.
 Each counted rejected review must contain exactly one canonical `Governing-Contract-SHA256` marker.
 
 For any implementation, governance, or direct-repair lane with a declared high-risk surface, the

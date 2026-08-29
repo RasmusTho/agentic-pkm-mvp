@@ -402,8 +402,8 @@ such a rejected review cannot create or reset a round. Each counted round binds 
 head, reviewer, review-body digest, protected inline-finding digests, and the
 single canonical `Governing-Contract-SHA256` recorded in that review; zero or multiple markers fail
 closed. Protected inline findings use a line-leading P0/P1 severity token, with ordinary Markdown
-heading, list, bold, bracketed, and `Severity:` wrappers accepted. Severity-like prose elsewhere is
-not a finding.
+heading, ordered/unordered list, bold, bracketed, and `Severity:` wrappers accepted. Severity-like
+prose elsewhere is not a finding.
 
 An authenticated receipt bound to the current PR number, head SHA, governing Issue, and a canonical
 SHA-256 governing-contract identity must select exactly one outcome: `continue_unchanged`, `split`,
@@ -419,8 +419,9 @@ repository/base identity, exact candidate and live heads, contract digest, rejec
 protected finding IDs, and the content digest of that rejected-review history. Caller-supplied history, actors, URLs,
 labels, or finding subsets are never evidence. Omitted,
 foreign, stale, malformed, or partial evidence fails closed. Publication invokes the executable gate
-with an explicit `new` or `existing` mode; `existing` derives a unique open PR whose head repository
-and ref match the authenticated current branch, then requires the supplied PR identity and scope
+with an explicit `new` or `existing` mode; `existing` derives a unique open PR whose base repository
+and ref match the publication base and whose head repository and ref match the authenticated current
+branch, then requires the supplied PR identity and scope
 revalidation inputs to match it. `new` authenticates that the branch has no open PR and an omitted
 mode is rejected whenever the current branch already has an open PR. Before an existing PR is
 updated, the local candidate must strictly descend from (and therefore differ from) the authenticated

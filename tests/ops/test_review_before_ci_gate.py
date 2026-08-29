@@ -474,7 +474,7 @@ def _live_pr_review_api(
                 "ref": "codex/issue-4028",
                 "repo": {"full_name": repository},
             },
-            "base": {"repo": {"full_name": repository}},
+            "base": {"ref": "main", "repo": {"full_name": repository}},
             "user": {"login": "implementation-author"},
             "body": "Governing-Issue: #4028\n\nFixes #4028\n",
         },
@@ -715,6 +715,36 @@ def test_pr_scope_revalidation_rejects_closed_or_foreign_head_pr() -> None:
             api=api,
         )
 
+
+def test_pr_scope_revalidation_binds_expected_base_ref() -> None:
+    responses, api = _live_pr_review_api()
+    pr = responses["repos/octo/repo/pulls/4029"]
+    assert isinstance(pr, dict)
+    pr["base"]["ref"] = "stable"
+
+    with pytest.raises(ReviewBeforeCiGateError, match="base ref"):
+        authenticated_pr_scope_revalidation_history(
+            repository="octo/repo",
+            pr_number=4029,
+            governing_issue=4028,
+            head_sha="a" * 40,
+            expected_base_ref="main",
+            expected_head_ref="codex/issue-4028",
+            api=api,
+        )
+
+    pr["base"]["ref"] = "main"
+    history = authenticated_pr_scope_revalidation_history(
+        repository="octo/repo",
+        pr_number=4029,
+        governing_issue=4028,
+        head_sha="a" * 40,
+        expected_base_ref="main",
+        expected_head_ref="codex/issue-4028",
+        api=api,
+    )
+    assert history["authentication"]["base_ref"] == "main"
+
     pr["state"] = "open"
     pr["head"]["repo"]["full_name"] = "foreign/repo"
     with pytest.raises(ReviewBeforeCiGateError, match="current branch"):
@@ -805,7 +835,7 @@ def test_existing_publication_must_match_unique_open_pr_for_current_branch(
     )
     monkeypatch.setattr(
         "scripts.review_before_ci_gate._current_branch_open_pr",
-        lambda repository: {
+        lambda repository, expected_base_ref=None: {
             "number": 4999,
             "head": {"ref": "codex/issue-4028", "repo": {"full_name": repository}},
         },
@@ -1255,6 +1285,8 @@ def test_bracketed_and_colon_protected_findings_are_content_bound() -> None:
         "**Severity: P1** authority semantics",
         "### [P1] authority semantics",
         "- Severity: **P1** authority semantics",
+        "1. P1: authority semantics",
+        "2) **Severity: P0** authority semantics",
     ),
 )
 def test_ordinary_protected_severity_forms_are_content_bound(finding: str) -> None:
