@@ -128,15 +128,22 @@ deliveries precisely because production initiation stays fail-closed until C.
 
 - [ ] **SETTINGS-05B:** The separately deployed production watcher loop consumes a prepared dormant
       revision, finishes the captured A tick, retains durable A event observation through commit,
-      acknowledges only after its pre-commit scan, and applies no candidate-root effect.
+      acknowledges only after a complete healthy pre-commit scan of A, and applies no candidate-root
+      effect. A kill switch, missing/unhealthy scope, backoff, error, rate limit, or retained unemitted
+      observation fails loud without acknowledgement.
   - Verify: `tests/integration/test_watcher_cross_process_rebind.py::test_production_watcher_reconciler_quiesces_old_binding_without_picker_activation`
 - [ ] **SETTINGS-05B:** The production watcher reconciler brackets commit with old-root scans, drains
       and receipts the A buffer before B, and fault injection at acknowledge/commit/drain/resume
-      converges after restart without stranded A work or premature B work.
+      converges after restart without stranded A work or premature B work. Watcher receipts are bound
+      to the desired revision so a completed revision cannot block the next monotonic revision and a
+      stale current-revision receipt still fails closed. A durable `drained` receipt remains
+      non-terminal until any resumed A scan is merged and receipted before `completed`.
   - Verify: `tests/integration/test_watcher_cross_process_rebind.py::test_dormant_reconciler_failure_matrix_preserves_old_root_observation`
 - [ ] **SETTINGS-05B:** An intentionally absent/disabled production watcher records and reconciles
       durable `no_lifecycle`; missing, invalid, and failed lifecycle states remain loud, while the
-      production picker initiation path is still capability-sealed.
+      production picker initiation path is still capability-sealed. Disabled/no-vault reconciliation
+      is selected before active-watcher binding validation, so the legitimate no-prior-binding posture
+      can record `no_lifecycle` without inventing A or requiring both binding IDs.
   - Verify: `tests/integration/test_watcher_cross_process_rebind.py::test_dormant_no_lifecycle_reconciles_without_unsealing_picker`
 
 - [ ] **SETTINGS-05C:** Production choose/open closes and drains compatibility-mutation ingress,

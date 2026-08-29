@@ -32,7 +32,7 @@ if TYPE_CHECKING:
 
 
 SETTINGS_REBIND_WATCHER_SCHEMA = "settings_rebind_watcher.v1"
-SETTINGS_REBIND_WATCHER_FILENAME = "settings-rebind-watcher.json"
+SETTINGS_REBIND_WATCHER_FILENAME_TEMPLATE = "settings-rebind-watcher-r{revision}.json"
 _STAGES = {"acknowledged", "drained", "completed"}
 
 
@@ -72,6 +72,16 @@ def _mtime(value: object) -> float:
     if not isinstance(value, (int, float)) or isinstance(value, bool):
         raise RegistryError("settings rebind watcher observation mtime is invalid")
     return float(value)
+
+
+def settings_rebind_watcher_receipt_path(
+    state_dir: Path,
+    desired_revision: int,
+) -> Path:
+    revision = _revision(desired_revision)
+    return state_dir / SETTINGS_REBIND_WATCHER_FILENAME_TEMPLATE.format(
+        revision=revision
+    )
 
 
 @dataclass(frozen=True)
@@ -320,10 +330,10 @@ class RebindCycle:
 
 
 class DormantSettingsRebindReconciler:
-    def __init__(self, *, registry_path: Path, receipt_path: Path) -> None:
+    def __init__(self, *, registry_path: Path, state_dir: Path) -> None:
         self._registry = VaultRegistryStore(registry_path)
         self._store = SettingsRebindStore(self._registry)
-        self.receipt_path = receipt_path
+        self.state_dir = state_dir
 
     @classmethod
     def from_config(
@@ -335,7 +345,7 @@ class DormantSettingsRebindReconciler:
             return None
         return cls(
             registry_path=Path(registry_value).expanduser(),
-            receipt_path=cfg.state_dir / SETTINGS_REBIND_WATCHER_FILENAME,
+            state_dir=cfg.state_dir,
         )
 
     def begin_cycle(self, cfg: RegistryConfig) -> RebindCycle:
@@ -347,7 +357,6 @@ class DormantSettingsRebindReconciler:
             return RebindCycle(record=record, mode="dormant", receipt=None)
         if record.phase == "no_lifecycle":
             return RebindCycle(record=record, mode="no_lifecycle", receipt=None)
-        self._validate_record_bindings(record)
         if not cfg.enable:
             if record.phase != "prepared":
                 raise RegistryError(
@@ -361,6 +370,7 @@ class DormantSettingsRebindReconciler:
                 mode="no_lifecycle",
                 receipt=None,
             )
+        self._validate_record_bindings(record)
         self._validate_old_root(snapshot, record, cfg)
         receipt = self._load_matching_receipt(record)
         if record.phase == "prepared":
@@ -417,7 +427,7 @@ class DormantSettingsRebindReconciler:
                 drain_receipt=None,
                 resume_ready_at=None,
             )
-            _write_receipt(self.receipt_path, receipt)
+            _write_receipt(self._receipt_path(cycle.record), receipt)
             return receipt
 
         assert cycle.receipt is not None
@@ -425,13 +435,24 @@ class DormantSettingsRebindReconciler:
             return cycle.receipt
         if cycle.receipt.stage == "drained":
             self._assert_authority_unchanged(cycle)
+            resumed = replace(
+                cycle.receipt,
+                buffer=self._merge_buffer(cycle.receipt.buffer, observations),
+                drain_receipt=RebindScanReceipt(
+                    scan_kind="post_commit",
+                    desired_revision=cycle.record.desired_revision,
+                    observed_at=_now_iso(),
+                    watcher_ticks=watcher_ticks,
+                ),
+            )
+            _write_receipt(self._receipt_path(cycle.record), resumed)
             _rebind_fault_point("resume")
             completed = replace(
-                cycle.receipt,
+                resumed,
                 stage="completed",
                 resume_ready_at=_now_iso(),
             )
-            _write_receipt(self.receipt_path, completed)
+            _write_receipt(self._receipt_path(cycle.record), completed)
             return completed
         self._assert_authority_unchanged(cycle)
         _rebind_fault_point("drain")
@@ -446,23 +467,30 @@ class DormantSettingsRebindReconciler:
                 watcher_ticks=watcher_ticks,
             ),
         )
-        _write_receipt(self.receipt_path, drained)
+        _write_receipt(self._receipt_path(cycle.record), drained)
         _rebind_fault_point("resume")
         completed = replace(
             drained,
             stage="completed",
             resume_ready_at=_now_iso(),
         )
-        _write_receipt(self.receipt_path, completed)
+        _write_receipt(self._receipt_path(cycle.record), completed)
         return completed
+
+    def _receipt_path(self, record: SettingsRebindRecord) -> Path:
+        return settings_rebind_watcher_receipt_path(
+            self.state_dir,
+            record.desired_revision,
+        )
 
     def _load_matching_receipt(
         self,
         record: SettingsRebindRecord,
     ) -> SettingsRebindWatcherReceipt | None:
-        if not self.receipt_path.exists():
+        receipt_path = self._receipt_path(record)
+        if not receipt_path.exists():
             return None
-        receipt = load_settings_rebind_watcher_receipt(self.receipt_path)
+        receipt = load_settings_rebind_watcher_receipt(receipt_path)
         expected_prior = self._required_binding(record.prior_binding_id, name="prior")
         expected_candidate = self._required_binding(
             record.candidate_binding_id, name="candidate"
@@ -525,6 +553,10 @@ class DormantSettingsRebindReconciler:
         for name, summary in summaries.items():
             if name in {"briefing", "journal_review"}:
                 continue
+            if bool(summary.get("kill_switch")):
+                raise RegistryError(
+                    f"settings rebind watcher scan was paused by the kill switch for {name}"
+                )
             if bool(summary.get("backoff_active")) or int(
                 summary.get("errors_in_tick", 0)
             ):
@@ -538,6 +570,12 @@ class DormantSettingsRebindReconciler:
             if int(summary.get("rebind_unemitted_observations", 0)):
                 raise RegistryError(
                     f"settings rebind watcher retained unemitted observations for {name}"
+                )
+            scope_status = summary.get("scope_status")
+            if scope_status != "ok":
+                raise RegistryError(
+                    "settings rebind watcher scan did not complete a healthy scope "
+                    f"for {name}: {scope_status or 'missing'}"
                 )
 
     @staticmethod
@@ -624,4 +662,5 @@ __all__ = [
     "DormantSettingsRebindReconciler",
     "SettingsRebindWatcherReceipt",
     "load_settings_rebind_watcher_receipt",
+    "settings_rebind_watcher_receipt_path",
 ]
