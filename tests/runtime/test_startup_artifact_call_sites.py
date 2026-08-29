@@ -879,11 +879,11 @@ def test_ordinary_boot_rejects_secret_pattern_operation_ids_without_echo(
         encoding="utf-8",
     )
     secret_operation_ids = (
-        "sk-private-token",
-        "ghp_0123456789abcdefghijklmnopqrstuvwxyz",
-        "github_pat_0123456789abcdefghijklmnopqrstuvwxyz",
-        "AKIA0123456789ABCDEF",
-        "eyJhbGciOiJIUzI1NiJ9.payload.signature",
+        "".join(("s", "k-", "private-token")),
+        "".join(("g", "hp_", "0123456789abcdefghijklmnopqrstuvwxyz")),
+        "".join(("github_", "pat_", "0123456789abcdefghijklmnopqrstuvwxyz")),
+        "".join(("AK", "IA", "0123456789ABCDEF")),
+        "".join(("eyJ", "hbGciOiJIUzI1NiJ9", ".payload.signature")),
     )
     for index, secret_operation_id in enumerate(secret_operation_ids):
         journal_path = tmp_path / f"secret-id-{index}.jsonl"
