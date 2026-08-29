@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -83,24 +84,41 @@ def test_local_wal_guard_accepts_postgresql_disabled_archive_mode(tmp_path: Path
 def test_local_wal_guard_refuses_enabled_or_unexpected_archive_configuration(
     tmp_path: Path,
 ) -> None:
-    enabled = _run_local_wal_guard(tmp_path / "enabled", archive_mode="on")
+    for archive_mode in ("on", "always", "unknown"):
+        enabled = _run_local_wal_guard(
+            tmp_path / archive_mode, archive_mode=archive_mode
+        )
+
+        assert enabled.returncode == 70
+        assert "archive drift" in enabled.stderr
     unexpected = _run_local_wal_guard(
         tmp_path / "unexpected", archive_mode="off", archive_command="wal-g wal-push %p"
     )
 
-    assert enabled.returncode == 70
-    assert "archive drift" in enabled.stderr
     assert unexpected.returncode == 70
     assert "archive_command=set" in unexpected.stderr
+
+
+def _slot_wal_keep_size_assignments(config: str) -> list[str]:
+    return re.findall(
+        r"^\s*max_slot_wal_keep_size\s*=\s*['\"]?([^\s'#]+)['\"]?\s*(?:#.*)?$",
+        config,
+        flags=re.MULTILINE,
+    )
 
 
 def test_postgres_wal_limits_are_pinned() -> None:
     config = (ROOT / "config/builderops/postgresql.conf").read_text(encoding="utf-8")
 
     assert "max_wal_size = '2GB'" in config
-    assert "max_slot_wal_keep_size = '2GB'" in config
-    assert "max_slot_wal_keep_size = '1GB'" not in config
-    assert "max_slot_wal_keep_size = '0'" not in config
+    assert _slot_wal_keep_size_assignments(config) == ["2GB"]
+    for drifted_value in ("1GB", "0", "3GB"):
+        assert _slot_wal_keep_size_assignments(
+            config.replace("max_slot_wal_keep_size = '2GB'", f"max_slot_wal_keep_size = '{drifted_value}'")
+        ) != ["2GB"]
+    assert _slot_wal_keep_size_assignments(
+        config + "\nmax_slot_wal_keep_size = '3GB'\n"
+    ) != ["2GB"]
 
 
 def test_tars_profile_is_setup_specific_and_probe_truthful() -> None:
