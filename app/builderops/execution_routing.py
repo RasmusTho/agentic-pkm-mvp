@@ -83,8 +83,6 @@ ReasoningEffort: TypeAlias = Literal[
     "high",
     "xhigh",
 ]
-
-
 def _parse_utc(value: str) -> datetime:
     return datetime.strptime(value, "%Y-%m-%dT%H:%M:%SZ")
 
@@ -201,6 +199,8 @@ class ExecutionRouteDecision(CanonicalDeliveryContract):
             "selected_capability": self.selected_capability,
             "transition_kind": self.transition_kind,
             "transition_reason": self.transition_reason,
+            "allocation_observation_id": self.allocation_observation_id,
+            "allocation_observation_hash": self.allocation_observation_hash,
         }
         expected_decision_id = (
             "execution-route-decision:"
@@ -276,6 +276,14 @@ class ExecutionAttemptObservation(CanonicalDeliveryContract):
         )
         if (triggering_fields[0] is None) != (triggering_fields[1] is None):
             raise ValueError("triggering attempt identity and hash must travel together")
+        if self.mode == "shadow" and (
+            self.outcome != "not_invoked"
+            or self.transition_kind != "none"
+            or self.transition_reason != "shadow_route_not_invoked"
+        ):
+            raise ValueError(
+                "shadow attempts are non-invoked observations and cannot transition"
+            )
         if self.transition_kind == "capacity_fallback":
             if self.actual_capability != "luna":
                 raise ValueError("capacity fallback target must be luna")
@@ -292,22 +300,33 @@ class ExecutionAttemptObservation(CanonicalDeliveryContract):
                     "capacity fallback must reference a prior attempt and increment identity"
                 )
         elif self.transition_kind == "capability_escalation":
-            if (
-                self.triggering_attempt_id is None
-                or self.actual_capability == self.requested_capability
-                or self.transition_reason != "capability_insufficient"
-            ):
-                raise ValueError(
-                    "capability escalation must bind an insufficient prior attempt"
-                )
+            raise ValueError(
+                "capability escalation is not authorized by the Phase 1 contract"
+            )
         elif self.triggering_attempt_id is not None:
             raise ValueError("only a transition may reference a triggering attempt")
         elif self.actual_capability != self.requested_capability:
             raise ValueError(
                 "an attempt without a transition must use the selected capability"
             )
+        elif self.mode != "shadow" and self.transition_reason != "initial_route":
+            raise ValueError("an initial attempt must use the initial_route reason")
         if self.transition_kind == "capability_escalation" and self.mode == "shadow":
             raise ValueError("Phase 1 shadow observations cannot authorize escalation")
+        identity_payload = {
+            "route_decision_hash": self.route_decision_hash,
+            "attempt_number": self.attempt_number,
+            "actual_capability": self.actual_capability,
+            "provider": self.provider,
+            "model": self.model,
+            "reasoning_effort": self.reasoning_effort,
+            "transition_kind": self.transition_kind,
+            "triggering_attempt_id": self.triggering_attempt_id,
+            "triggering_attempt_hash": self.triggering_attempt_hash,
+        }
+        expected_attempt_id = f"execution-attempt:{canonical_hash(identity_payload)}"
+        if self.attempt_id != expected_attempt_id:
+            raise ValueError("attempt identity must bind the canonical carrier inputs")
         return self
 
 
@@ -349,6 +368,12 @@ def resolve_bounded_fast_route(
         "selected_capability": selected,
         "transition_kind": transition,
         "transition_reason": reason,
+        "allocation_observation_id": (
+            observation.observation_id if observation is not None else None
+        ),
+        "allocation_observation_hash": (
+            observation.content_hash if observation is not None else None
+        ),
     }
     return ExecutionRouteDecision(
         decision_id=f"execution-route-decision:{canonical_hash(decision_payload)}",
@@ -370,6 +395,17 @@ def resolve_bounded_fast_route(
         authority_hash=request.authority_hash,
         verification_profile_hash=request.verification_profile_hash,
     )
+
+
+def validate_route_decision(
+    request: ExecutionRouteRequest,
+    decision: ExecutionRouteDecision,
+) -> None:
+    """Replay the pure resolver and require an exact request-bound decision."""
+
+    expected = resolve_bounded_fast_route(request)
+    if decision != expected:
+        raise ValueError("route decision must exactly replay from its bound request")
 
 
 def resolve_execution_target(
@@ -403,6 +439,7 @@ def resolve_execution_target(
 
 def create_execution_attempt(
     *,
+    request: ExecutionRouteRequest,
     decision: ExecutionRouteDecision,
     target: ResolvedExecutionTarget,
     attempt_number: int,
@@ -420,6 +457,8 @@ def create_execution_attempt(
     triggering_attempt: ExecutionAttemptObservation | None = None,
 ) -> ExecutionAttemptObservation:
     """Create a distinct attempt identity without changing semantic worker hashes."""
+
+    validate_route_decision(request, decision)
 
     if triggering_attempt is not None and (
         triggering_attempt.context_pack_hash != decision.context_pack_hash
@@ -440,22 +479,17 @@ def create_execution_attempt(
             or triggering_attempt.route_lineage_id != decision.route_lineage_id
             or triggering_attempt.actual_capability != "spark"
             or triggering_attempt.outcome != "allocation_unavailable"
+            or triggering_attempt.mode == "shadow"
+            or mode != triggering_attempt.mode
             or attempt_number != triggering_attempt.attempt_number + 1
         ):
             raise ValueError(
                 "capacity fallback must bind the immediately prior unavailable Spark attempt"
             )
     elif transition_kind == "capability_escalation":
-        if (
-            triggering_attempt is None
-            or triggering_attempt.route_decision_hash != decision.content_hash
-            or triggering_attempt.route_lineage_id != decision.route_lineage_id
-            or triggering_attempt.outcome != "failed"
-            or attempt_number != triggering_attempt.attempt_number + 1
-        ):
-            raise ValueError(
-                "capability escalation must bind the immediately prior failed attempt"
-            )
+        raise ValueError(
+            "capability escalation is not authorized by the Phase 1 contract"
+        )
     elif triggering_attempt is not None:
         raise ValueError("an initial or shadow attempt cannot bind a triggering attempt")
 
@@ -518,4 +552,5 @@ __all__ = [
     "create_execution_attempt",
     "resolve_bounded_fast_route",
     "resolve_execution_target",
+    "validate_route_decision",
 ]

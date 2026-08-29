@@ -18,6 +18,7 @@ from app.builderops.epic_dispatch import (
     IssueSessionLaunchError,
     build_dispatch_plan,
     dispatch_issue_sessions,
+    frozen_dispatch_plan_hash,
 )
 from app.builderops.epic_run_state import (
     apply_epic_run_update,
@@ -652,10 +653,114 @@ def test_dispatch_sessions_rejects_invalid_plan_before_launch() -> None:
     unsupported_runtime["context_packs"][0]["runtime"]["runtime"] = "claude"
     invalid_plans.append(unsupported_runtime)
 
+    routed_candidate = _candidate(
+        5502,
+        risk="low",
+        files=["app/a.py"],
+        preferred_path="subagent",
+    )
+    routed_candidate["execution_routing"] = {
+        "mode": "shadow",
+        "work_class": "bounded_fast",
+        "ambiguity": "low",
+        "protected_surface": False,
+        "decision_at": "2026-08-29T15:00:00Z",
+    }
+    tampered_context = build_dispatch_plan(
+        independent_issue_numbers=[5502],
+        run_id="tampered-routing-context",
+        candidates=[routed_candidate],
+    )
+    preserved_plan_hash = frozen_dispatch_plan_hash(tampered_context)
+    valid_routed_launcher = _RecordingSessionLauncher(
+        [
+            {
+                "session_id": "session-5502",
+                "worker_receipt": _worker_receipt(5502),
+            }
+        ]
+    )
+    with pytest.raises(EpicDispatchError, match="independently preserved plan hash"):
+        dispatch_issue_sessions(
+            tampered_context,
+            _RecordingSessionLauncher([]),
+        )
+
+    stripped_routing = json.loads(json.dumps(tampered_context))
+    del stripped_routing["decisions"][0]["execution_routing"]
+    with pytest.raises(EpicDispatchError, match="independently preserved plan hash"):
+        dispatch_issue_sessions(
+            stripped_routing,
+            _RecordingSessionLauncher([]),
+        )
+    with pytest.raises(EpicDispatchError, match="exactly mirror"):
+        dispatch_issue_sessions(
+            stripped_routing,
+            _RecordingSessionLauncher([]),
+            expected_plan_hash=frozen_dispatch_plan_hash(stripped_routing),
+        )
+
+    valid_routed_receipt = dispatch_issue_sessions(
+        tampered_context,
+        valid_routed_launcher,
+        expected_plan_hash=preserved_plan_hash,
+    )
+    assert valid_routed_receipt["sessions"][0]["status"] == "handoff"
+
+    rewritten_frozen_plan = json.loads(json.dumps(tampered_context))
+    rewritten_frozen_plan["context_packs"][0]["issue_contract"]["title"] = (
+        "coherently rewritten authority"
+    )
+    with pytest.raises(EpicDispatchError, match="independently preserved hash"):
+        dispatch_issue_sessions(
+            rewritten_frozen_plan,
+            _RecordingSessionLauncher([]),
+            expected_plan_hash=preserved_plan_hash,
+        )
+
+    wrong_routing_issue = json.loads(json.dumps(tampered_context))
+    wrong_routing_issue["decisions"][0]["execution_routing"]["route_request"][
+        "issue_number"
+    ] = 9999
+    invalid_plans.append(wrong_routing_issue)
+
+    forged_target = json.loads(json.dumps(tampered_context))
+    forged_target["decisions"][0]["execution_routing"]["proposed_target"][
+        "model"
+    ] = "evil-model"
+    invalid_plans.append(forged_target)
+
+    forged_comparison = json.loads(json.dumps(tampered_context))
+    forged_comparison["decisions"][0]["execution_routing"]["shadow_comparison"][
+        "proposed_capability"
+    ] = "sol"
+    invalid_plans.append(forged_comparison)
+
+    forged_incumbent = json.loads(json.dumps(tampered_context))
+    forged_incumbent["decisions"][0]["execution_routing"]["route_request"][
+        "shadow_against_capability"
+    ] = "sol"
+    invalid_plans.append(forged_incumbent)
+
+    tampered_context["context_packs"][0]["known_constraints"].append(
+        "post-plan mutation"
+    )
+    invalid_plans.append(tampered_context)
+
     for plan in invalid_plans:
         launcher = _RecordingSessionLauncher([])
+        contains_routing = any(
+            "execution_routing" in decision
+            for decision in plan.get("decisions", [])
+        )
         try:
-            dispatch_issue_sessions(plan, launcher)
+            dispatch_issue_sessions(
+                plan,
+                launcher,
+                expected_plan_hash=(
+                    frozen_dispatch_plan_hash(plan) if contains_routing else None
+                ),
+            )
         except EpicDispatchError:
             pass
         else:  # pragma: no cover - assertion keeps validation fail closed.
@@ -1007,3 +1112,70 @@ def test_dispatch_sessions_cli_emits_receipt_without_github_mutations(
     assert receipt["sessions"][0]["session_id"] == "session-5901"
     assert receipt["github_mutations"] == []
     assert receipt["coordinator_claims"] == []
+
+
+def test_dispatch_sessions_cli_requires_external_hash_for_routed_plan(
+    tmp_path: Path,
+) -> None:
+    candidate = _candidate(
+        5902,
+        risk="low",
+        files=["app/a.py"],
+        preferred_path="subagent",
+    )
+    candidate["execution_routing"] = {
+        "mode": "shadow",
+        "work_class": "bounded_fast",
+        "ambiguity": "low",
+        "protected_surface": False,
+        "decision_at": "2026-08-29T15:00:00Z",
+    }
+    plan = build_dispatch_plan(
+        independent_issue_numbers=[5902],
+        run_id="cli-routed-sessions",
+        candidates=[candidate],
+    )
+    plan_file = tmp_path / "routed-plan.json"
+    plan_file.write_text(json.dumps(plan), encoding="utf-8")
+    launcher = _RecordingSessionLauncher(
+        [
+            {
+                "session_id": "session-5902",
+                "worker_receipt": _worker_receipt(5902),
+            }
+        ]
+    )
+
+    with patch(
+        "app.builderops.cli.CodexIssueSessionLauncher",
+        return_value=launcher,
+    ):
+        missing_hash = _run_builderops(
+            [
+                "epic-run-state",
+                "dispatch-sessions",
+                "--plan-file",
+                str(plan_file),
+                "--repo-root",
+                str(tmp_path),
+                "--json",
+            ]
+        )
+        accepted = _run_builderops(
+            [
+                "epic-run-state",
+                "dispatch-sessions",
+                "--plan-file",
+                str(plan_file),
+                "--repo-root",
+                str(tmp_path),
+                "--expected-plan-hash",
+                frozen_dispatch_plan_hash(plan),
+                "--json",
+            ]
+        )
+
+    assert missing_hash.exit_code != 0
+    assert "independently preserved plan hash" in missing_hash.output
+    assert accepted.exit_code == 0, accepted.output
+    assert json.loads(accepted.output)["sessions"][0]["status"] == "handoff"

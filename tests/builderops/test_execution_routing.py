@@ -3,6 +3,7 @@ from __future__ import annotations
 from pydantic import ValidationError
 import pytest
 
+from app.builderops.delivery_orchestration_contracts import canonical_hash
 from app.builderops.execution_routing import (
     AllocationObservation,
     ExecutionRouteRequest,
@@ -39,6 +40,8 @@ def _target(capability: str) -> ResolvedExecutionTarget:
     model = {
         "spark": "gpt-5.3-codex-spark",
         "luna": "gpt-5.6-luna",
+        "terra": "gpt-5.6-terra",
+        "sol": "gpt-5.6-sol",
     }[capability]
     return ResolvedExecutionTarget(
         capability=capability,
@@ -133,6 +136,40 @@ def test_route_decision_deserialization_cannot_fabricate_spark_authority() -> No
     ):
         type(missing).model_validate(fabricated_spark)
 
+    coherent_forgery = missing.model_dump(mode="json")
+    coherent_forgery.update(
+        selected_capability="spark",
+        transition_kind="none",
+        transition_reason="fresh_bonus_available",
+        allocation_observation_id="forged-observation",
+        allocation_observation_hash="d" * 64,
+    )
+    coherent_forgery["decision_id"] = (
+        "execution-route-decision:"
+        + canonical_hash(
+            {
+                "request_hash": coherent_forgery["request_hash"],
+                "selected_capability": "spark",
+                "transition_kind": "none",
+                "transition_reason": "fresh_bonus_available",
+                "allocation_observation_id": "forged-observation",
+                "allocation_observation_hash": "d" * 64,
+            }
+        )
+    )
+    forged_decision = type(missing).model_validate(coherent_forgery)
+    with pytest.raises(ValueError, match="exactly replay from its bound request"):
+        create_execution_attempt(
+            request=_request(),
+            decision=forged_decision,
+            target=_target("spark"),
+            attempt_number=1,
+            mode="shadow",
+            outcome="not_invoked",
+            observed_at="2026-08-29T15:00:00Z",
+            transition_reason="shadow_route_not_invoked",
+        )
+
     fresh = AllocationObservation(
         observation_id="spark-observation-fresh",
         capability="spark",
@@ -172,10 +209,10 @@ def test_fallback_preserves_semantic_hashes_and_changes_attempt_identity() -> No
         source_kind="operator",
         source_ref="operator-observation:codex-spark-bonus",
     )
-    decision = resolve_bounded_fast_route(
-        _request(allocation_observation=observation)
-    )
+    request = _request(allocation_observation=observation)
+    decision = resolve_bounded_fast_route(request)
     first = create_execution_attempt(
+        request=request,
         decision=decision,
         target=_target("spark"),
         attempt_number=1,
@@ -184,6 +221,7 @@ def test_fallback_preserves_semantic_hashes_and_changes_attempt_identity() -> No
         observed_at="2026-08-29T15:00:01Z",
     )
     fallback = create_execution_attempt(
+        request=request,
         decision=decision,
         target=_target("luna"),
         attempt_number=2,
@@ -210,14 +248,13 @@ def test_fallback_preserves_semantic_hashes_and_changes_attempt_identity() -> No
         "authority_hash",
         "verification_profile_hash",
     ):
-        mismatched_payload = first.model_dump(mode="json")
-        mismatched_payload[field] = "d" * 64
-        mismatched_trigger = type(first).model_validate(mismatched_payload)
+        mismatched_trigger = first.model_copy(update={field: "d" * 64})
         with pytest.raises(
             ValueError,
             match="semantic hashes must match the route decision",
         ):
             create_execution_attempt(
+                request=request,
                 decision=decision,
                 target=_target("luna"),
                 attempt_number=2,
@@ -231,6 +268,7 @@ def test_fallback_preserves_semantic_hashes_and_changes_attempt_identity() -> No
 
     with pytest.raises(ValueError, match="fallback target must be luna"):
         create_execution_attempt(
+            request=request,
             decision=decision,
             target=_target("spark"),
             attempt_number=2,
@@ -244,6 +282,7 @@ def test_fallback_preserves_semantic_hashes_and_changes_attempt_identity() -> No
 
     with pytest.raises(ValidationError):
         create_execution_attempt(
+            request=request,
             decision=decision,
             target=_target("spark"),
             attempt_number=1,
@@ -251,4 +290,43 @@ def test_fallback_preserves_semantic_hashes_and_changes_attempt_identity() -> No
             outcome="not_invoked",
             observed_at="2026-08-29T15:00:01Z",
             transition_reason="misspelled_reason",  # type: ignore[arg-type]
+        )
+
+
+def test_shadow_evidence_cannot_trigger_fallback_or_fake_escalation() -> None:
+    request = _request()
+    decision = resolve_bounded_fast_route(request)
+    with pytest.raises(ValidationError, match="shadow attempts are non-invoked"):
+        create_execution_attempt(
+            request=request,
+            decision=decision,
+            target=_target("luna"),
+            attempt_number=1,
+            mode="shadow",
+            outcome="allocation_unavailable",
+            observed_at="2026-08-29T15:00:01Z",
+            transition_reason="shadow_route_not_invoked",
+        )
+
+    first = create_execution_attempt(
+        request=request,
+        decision=decision,
+        target=_target("luna"),
+        attempt_number=1,
+        mode="canary",
+        outcome="failed",
+        observed_at="2026-08-29T15:00:01Z",
+    )
+    with pytest.raises(ValueError, match="not authorized by the Phase 1 contract"):
+        create_execution_attempt(
+            request=request,
+            decision=decision,
+            target=_target("spark"),
+            attempt_number=2,
+            mode="canary",
+            outcome="started",
+            observed_at="2026-08-29T15:00:02Z",
+            transition_kind="capability_escalation",
+            transition_reason="capability_insufficient",
+            triggering_attempt=first,
         )

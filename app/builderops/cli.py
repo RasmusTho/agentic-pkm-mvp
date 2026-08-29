@@ -2451,16 +2451,28 @@ def dispatch_plan(
     default=Path.cwd,
     show_default="current directory",
 )
+@click.option(
+    "--expected-plan-hash",
+    help=(
+        "Independently preserved canonical plan SHA-256; required when the plan "
+        "contains execution_routing evidence."
+    ),
+)
 @click.option("--json", "as_json", is_flag=True)
 def dispatch_sessions(
     plan_file: Path,
     repo_root: Path,
+    expected_plan_hash: str | None,
     as_json: bool,
 ) -> None:
     plan = _load_json_object_file(plan_file, field="plan-file")
     try:
         launcher = CodexIssueSessionLauncher(repo_root=repo_root)
-        receipt = dispatch_issue_sessions(plan, launcher)
+        receipt = dispatch_issue_sessions(
+            plan,
+            launcher,
+            expected_plan_hash=expected_plan_hash,
+        )
     except EpicDispatchError as exc:
         raise click.ClickException(str(exc)) from exc
     _emit(receipt, as_json)

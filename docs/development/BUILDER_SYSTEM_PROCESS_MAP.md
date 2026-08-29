@@ -942,6 +942,14 @@ may be indexed by evidence-only epic run-state. The incumbent launch still runs,
 now resolves that incumbent tier through the same declared configuration rather than a hard-coded
 model table.
 
+Before a shadow-routed frozen plan can reach `dispatch-sessions`, its canonical plan hash must be
+observed and preserved outside the plan JSON and supplied as `--expected-plan-hash`. Dispatch then
+checks that independent freeze root before replaying request -> pure route decision -> configured
+target -> canonical shadow attempt against the frozen Issue, incumbent runtime, context, authority,
+and verification hashes. Missing or changed freeze evidence refuses the routed launch; a consumer
+must never recompute the expected value from the persisted plan at dispatch time. Non-routed
+general delivery keeps its existing compatibility path.
+
 Fallback/canary attempt contracts preserve the exact context-pack, authority, and verification
 hashes while deriving a new attempt identity and binding the triggering attempt. A Spark capacity
 failure may therefore produce one typed Luna fallback without being misreported as a capability

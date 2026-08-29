@@ -163,6 +163,11 @@ Delivery rules:
   worker context pack and do not change the incumbent launch, Verify targets, claim/lifecycle
   authority, verification depth, or merge/closure path. Skills never infer quota state or encode
   provider/model identifiers; the canonical resolver and declared model census own those seams.
+  Before persisting or handing off a shadow-routed plan, compute its canonical
+  `frozen_dispatch_plan_hash`, preserve that value outside the plan JSON, and supply it to
+  `dispatch-sessions --expected-plan-hash`. Never recompute the expected hash from the persisted
+  plan at dispatch time; the separate earlier observation is the freeze root that rejects coherent
+  rewrites while leaving non-routed general delivery compatible.
 - When coordinating claim, review-handoff, or terminal projection decisions, use the dry-run
   lifecycle planner before issuing live mutations:
   `python3 -m app.builderops builderops epic-run-state lifecycle-plan --transition <claim|review|done> --issue-file <file> [--pr-file <file>] --json`.
