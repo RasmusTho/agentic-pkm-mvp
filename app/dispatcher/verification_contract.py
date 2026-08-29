@@ -121,7 +121,8 @@ BUILDEROPS_ROUTING_PLACEHOLDER_PATTERN = re.compile(r"^<.*>$")
 # controls and U+0085 as whitespace; JS's `\s` does not. ECMAScript instead
 # treats U+FEFF as whitespace while Python does not. BuilderOps patterns are
 # intentionally source-aligned with the hosted JS, so their dedicated
-# canonicalizer maps the Python-only set to NUL and U+FEFF to ASCII space.
+# canonicalizer maps the Python-only set to NUL and U+FEFF to NBSP. NBSP is
+# whitespace in both engines but cannot synthesize ASCII-space literal syntax.
 # The Final-Review-Rounds twin uses explicit `[ \t]`, so it only needs the
 # pre-existing line/C0 canonicalization and must not receive the U+FEFF map.
 _C0_INFORMATION_SEPARATORS = "\x1c\x1d\x1e\x1f"
@@ -155,13 +156,14 @@ def _canonicalize_pr_contract_line_terminators(text: str) -> str:
 def _canonicalize_ecmascript_whitespace_for_python(text: str) -> str:
     r"""Make Python ``\s``/``strip`` agree with ECMAScript for BuilderOps parsing.
 
-    NUL cannot occur in a GitHub PR body and is whitespace in neither engine,
-    while ASCII space is whitespace and trimmed by both engines.
+    NUL cannot occur in a GitHub PR body and is whitespace in neither engine.
+    NBSP is whitespace and trimmed by both engines, while remaining distinct
+    from literal ASCII spaces in lane names and section headings.
     """
     text = _canonicalize_pr_contract_line_terminators(text)
     for whitespace in _PYTHON_ONLY_WHITESPACE:
         text = text.replace(whitespace, "\x00")
-    return text.replace("\ufeff", " ")
+    return text.replace("\ufeff", "\xa0")
 
 
 @dataclass(frozen=True)

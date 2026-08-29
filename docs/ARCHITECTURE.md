@@ -790,6 +790,11 @@ Guardrails for builder agents:
 - Project Status is a rebuildable projection and does not gate pickup.
 - Issue/PR state is authoritative throughout implementation and review; the optional Project
   automation may mirror open/draft/non-draft state.
+- Existing-PR publication revalidates live contract and rejected-review authority before push;
+  issue-backed work binds its governing Issue, issue-free docs/governance/direct-repair binds one
+  hosted-parser-equivalent PR-body lane, and the candidate must contain the canonical base. The
+  detailed fail-closed contract is owned by
+  `docs/development/AUTONOMOUS_REVIEW_REPAIR_GATE_CONTRACTS.md :: PR-Level Scope Revalidation Gate`.
 - Closed or delivered work must not retain `agent:*` labels.
 - Agents only pick Issues with a strictly validated `agent:ready` label and no conflicting dispatcher claim.
 - Agents must stay within the linked Issue scope.

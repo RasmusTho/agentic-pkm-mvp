@@ -1216,6 +1216,29 @@ def test_issue_free_builderops_routing_matches_ecmascript_whitespace(
             invocation()
 
 
+def test_issue_free_direct_repair_rejects_feff_in_builderops_literal_heading() -> None:
+    responses, api = _live_pr_review_api()
+    responses.pop("repos/octo/repo/issues/4028")
+    pr = responses["repos/octo/repo/pulls/4029"]
+    assert isinstance(pr, dict)
+    pr["body"] = (
+        "## Direct Repair\nType: governance\nReason: bounded repair\n"
+        "Validation: focused tests\nIssue required: no\n\n"
+        "Final-Review-Rounds: 1\n\n##\ufeffBuilderOps Routing\n"
+        "- Records/projections/receipts: none\n- Reason: routed\n"
+    )
+
+    with pytest.raises(ReviewBeforeCiGateError, match="issue-free PR body"):
+        authenticated_pr_scope_revalidation_history(
+            repository="octo/repo",
+            pr_number=4029,
+            governing_issue=None,
+            head_sha="a" * 40,
+            expected_lane="direct-repair",
+            api=api,
+        )
+
+
 def test_current_branch_rejects_ambiguous_open_prs(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
