@@ -55,7 +55,7 @@ def test_status_counts_watcher_runs(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.delenv("DATABASE_URL", raising=False)
     monkeypatch.delenv("DB_DSN", raising=False)
     monkeypatch.setenv("STORE_BACKEND", "memory")
-    status_service.INDEX_OUTBOX_PATH = str(outbox)
+    monkeypatch.setattr(status_service, "INDEX_OUTBOX_PATH", str(outbox))
 
     client = TestClient(app)
     resp = client.get("/api/status")
@@ -83,7 +83,7 @@ def test_status_counts_align_with_events(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.delenv("DATABASE_URL", raising=False)
     monkeypatch.delenv("DB_DSN", raising=False)
     monkeypatch.setenv("STORE_BACKEND", "memory")
-    status_service.INDEX_OUTBOX_PATH = str(outbox)
+    monkeypatch.setattr(status_service, "INDEX_OUTBOX_PATH", str(outbox))
 
     client = TestClient(app)
     resp = client.get("/api/status")

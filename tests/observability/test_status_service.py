@@ -62,7 +62,7 @@ def test_get_system_status_includes_ingest_and_ask_metrics(monkeypatch, tmp_path
     monkeypatch.setenv("VAULT_ROOT", str(tmp_path / "vault"))
     monkeypatch.setenv("PANEL_ACTIONS_PATH", str(panel_actions))
     monkeypatch.setenv("INDEX_OUTBOX_PATH", str(outbox_path))
-    status_service.INDEX_OUTBOX_PATH = outbox_path
+    monkeypatch.setattr(status_service, "INDEX_OUTBOX_PATH", outbox_path)
     store = get_object_store()
     store.put(uuid4(), kind="note", source_ref="vault/path", payload={"title": "Vault note", "origin": "vault"})
     store.put(
