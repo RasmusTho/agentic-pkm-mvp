@@ -54,6 +54,15 @@ as a pull head; `#4813` is resolved as a closed-unmerged pull request and protec
 number, full head ref, and head SHA. Lookup, kind, repository, or shape ambiguity is a
 batch-wide refusal.
 
+Every Git operation that derives repository, lifecycle, dispatcher, receipt-store, or
+remote transport authority starts from the explicit `cwd` with ambient repository
+redirection removed. In particular, `GIT_DIR`, `GIT_WORK_TREE`, `GIT_COMMON_DIR`,
+alternate object/index/namespace paths, and related discovery context cannot redirect
+cleanup from repository A into repository B. Intentional Git configuration and
+transport configuration remain available; only local repository-context selectors are
+sanitized. The already-captured literal fetch and push URLs remain the network targets
+for the destructive sequence.
+
 Lifecycle authority comes from the generation-bound registry under its kernel lock.
 Candidate branch, live candidate path, and prior-binding records receive complete
 semantic and live-generation validation; an unrelated record with sufficient branch
@@ -69,8 +78,14 @@ task. Candidate Issue, PR, ref, branch, and lifecycle path identity is classifie
 an unrelated expired task/lease disagreement is evaluated. Missing canonical state,
 identity-ambiguous or relevant malformed rows, missing relevant referenced leases,
 relevant released/current-task disagreement, changed census, or any live relevant task
-or orphan resource claim fails closed. These short snapshots never hold lifecycle or
-SQLite locks across REST or Git network I/O.
+or orphan resource claim fails closed. Candidate resources include canonical
+`issue:<positive governing_issue>` identities, so an orphan Issue lease protects the
+source even without a task row. Narrow legacy blank-repository history is ignored only
+when it has the current terminal `completed`/`blocked` or sync-meta shape, has no
+candidate Issue/PR/ref/branch/path resource, and has no live or unreleased lease. A
+blank row that is live, unreleased, relevant, malformed beyond that bounded legacy
+shape, or otherwise cannot prove irrelevance remains fail-closed. These short snapshots
+never hold lifecycle or SQLite locks across REST or Git network I/O.
 
 Receipts live under the repository Git common directory at
 `git-hygiene/targeted-remote-cleanup/v1/`, keyed by
