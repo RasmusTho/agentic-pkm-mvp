@@ -6,19 +6,22 @@ Git hygiene checks and cleanup for multi-agent repo workflows.
 from __future__ import annotations
 
 import argparse
-import hashlib
 import datetime as dt
+import fcntl
+import hashlib
 import json
 import math
 import os
 import re
 import subprocess
+import tempfile
 import time
 import unicodedata
-from collections.abc import Callable
-from contextlib import AbstractContextManager
+from collections.abc import Callable, Iterator, Mapping, Sequence
+from contextlib import AbstractContextManager, contextmanager
+from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, Mapping, TypeGuard
+from typing import Any, TypeGuard
 
 
 DEFAULT_PROTECTED_BRANCHES = {"main", "master", "develop", "dev", "stable"}
@@ -400,192 +403,884 @@ def _utc_stamp(now: float | None = None) -> str:
     return value.strftime("%Y%m%dT%H%M%SZ")
 
 
-def _archive_ref(branch: str, now: float | None = None) -> str:
+def _dated_archive_ref(branch: str, now: float | None = None) -> str:
     safe_branch = branch.replace("/", "-")
     return f"refs/archive/git-hygiene/{_utc_stamp(now)}/{safe_branch}"
 
 
-def _remote_ref_sha(cwd: Path, ref: str) -> str | None:
+@dataclass(frozen=True)
+class RepositoryIdentity:
+    database_id: int
+    full_name: str
+    fetch_url: str
+    push_url: str
+
+
+@dataclass(frozen=True)
+class PullAuthority:
+    number: int
+    source_ref: str
+    source_sha: str
+
+
+@dataclass(frozen=True)
+class ProtectedTarget:
+    number: int
+    kind: str
+
+
+@dataclass(frozen=True)
+class ProtectedAuthority:
+    issue_number: int
+    pull_number: int
+    pull_ref: str
+    pull_sha: str
+
+
+@dataclass(frozen=True)
+class Candidate:
+    repository: str
+    pull_request: int
+    source_ref: str
+    source_sha: str
+    archive_ref: str
+    owner: str
+    governing_issue: int | None
+    no_issue_lane: str | None
+    successor: str
+    retention_class: str
+    review_at: str
+    discard: dict[str, object]
+
+
+@dataclass(frozen=True)
+class CandidateIdentity:
+    repository_id: int
+    repository: str
+    pull_request: int
+    source_ref: str
+    source_sha: str
+    archive_ref: str
+    owner: str
+    governing_issue: int | None
+    no_issue_lane: str | None
+    successor: str
+    retention_class: str
+    review_at: str
+    discard: dict[str, object]
+
+
+@dataclass(frozen=True)
+class ReceiptPaths:
+    lock: Path
+    receipt: Path
+
+
+@dataclass(frozen=True)
+class Receipt:
+    schema: str
+    resource_key: str
+    state: str
+    identity: CandidateIdentity
+
+
+PROTECTED_GITHUB_TARGETS = (
+    ProtectedTarget(number=4728, kind="issue"),
+    ProtectedTarget(number=4813, kind="pull"),
+)
+RECEIPT_SCHEMA = "git-hygiene.targeted-remote-cleanup-receipt.v1"
+_CANDIDATE_KEYS = frozenset(
+    {
+        "repository",
+        "pull_request",
+        "source_ref",
+        "source_sha",
+        "archive_ref",
+        "owner",
+        "governing_issue",
+        "no_issue_lane",
+        "successor",
+        "retention_class",
+        "review_at",
+        "discard",
+    }
+)
+_SLUG = re.compile(r"[a-z0-9](?:[a-z0-9._-]{0,62}[a-z0-9])?")
+
+
+def _positive_int(value: object) -> TypeGuard[int]:
+    return isinstance(value, int) and not isinstance(value, bool) and value > 0
+
+
+def _json_without_duplicates(raw: str) -> object:
+    def pairs(values: list[tuple[str, object]]) -> dict[str, object]:
+        result: dict[str, object] = {}
+        for key, value in values:
+            if key in result:
+                raise ValueError("duplicate_json_key")
+            result[key] = value
+        return result
+
+    return json.loads(raw, object_pairs_hook=pairs)
+
+
+def _github_get(cwd: Path, endpoint: str) -> Mapping[str, object]:
+    result = run_command(["gh", "api", "--method", "GET", endpoint], cwd)
+    if result.returncode != 0:
+        raise RuntimeError(f"github_get_failed:{endpoint}")
+    try:
+        payload = _json_without_duplicates(result.stdout)
+    except (json.JSONDecodeError, ValueError) as exc:
+        raise RuntimeError(f"github_response_invalid:{endpoint}") from exc
+    if not isinstance(payload, Mapping):
+        raise RuntimeError(f"github_response_invalid:{endpoint}")
+    return payload
+
+
+def _github_repo_from_url(raw: str) -> str:
+    value = raw.strip().removesuffix(".git")
+    match = re.fullmatch(
+        r"(?:https://github\.com/|git@github\.com:|ssh://git@github\.com/)([^/\s]+/[^/\s]+)",
+        value,
+    )
+    if not match:
+        raise RuntimeError("origin_repository_url_invalid")
+    return match.group(1)
+
+
+def _one_remote_url(cwd: Path, args: list[str], error: str) -> str:
+    result = run_git_result(args, cwd)
+    values = [line.strip() for line in result.stdout.splitlines() if line.strip()]
+    if result.returncode != 0 or len(values) != 1:
+        raise RuntimeError(error)
+    return values[0]
+
+
+def _resolve_repository_identity(cwd: Path, requested: str) -> RepositoryIdentity:
+    if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", requested):
+        raise RuntimeError("requested_repository_invalid")
+    payload = _github_get(cwd, f"repos/{requested}")
+    database_id = payload.get("id")
+    full_name = payload.get("full_name")
+    if not _positive_int(database_id) or not isinstance(full_name, str):
+        raise RuntimeError("repository_identity_invalid")
+    fetch_url = _one_remote_url(
+        cwd,
+        ["remote", "get-url", "--all", "origin"],
+        "origin_fetch_url_ambiguous",
+    )
+    push_url = _one_remote_url(
+        cwd,
+        ["remote", "get-url", "--push", "--all", "origin"],
+        "origin_push_url_ambiguous",
+    )
+    canonical = full_name.casefold()
+    if (
+        _github_repo_from_url(fetch_url).casefold() != canonical
+        or _github_repo_from_url(push_url).casefold() != canonical
+    ):
+        raise RuntimeError("origin_repository_mismatch")
+    return RepositoryIdentity(database_id, full_name, fetch_url, push_url)
+
+
+def _pull_from_payload(
+    identity: RepositoryIdentity, payload: Mapping[str, object], number: int
+) -> PullAuthority:
+    head = payload.get("head")
+    head_repo = head.get("repo") if isinstance(head, Mapping) else None
+    head_ref = head.get("ref") if isinstance(head, Mapping) else None
+    head_sha = head.get("sha") if isinstance(head, Mapping) else None
+    if (
+        payload.get("number") != number
+        or payload.get("state") != "closed"
+        or payload.get("merged") is not False
+        or payload.get("merged_at") is not None
+        or not isinstance(head_repo, Mapping)
+        or head_repo.get("id") != identity.database_id
+        or not isinstance(head_ref, str)
+        or not head_ref
+        or not isinstance(head_sha, str)
+        or not re.fullmatch(r"[0-9a-f]{40}", head_sha)
+    ):
+        raise RuntimeError(f"pull_authority_invalid:{number}")
+    return PullAuthority(number, f"refs/heads/{head_ref}", head_sha)
+
+
+def _read_candidate_pr(
+    identity: RepositoryIdentity, candidate: Candidate, *, cwd: Path
+) -> PullAuthority:
+    payload = _github_get(
+        cwd, f"repos/{identity.full_name}/pulls/{candidate.pull_request}"
+    )
+    authority = _pull_from_payload(identity, payload, candidate.pull_request)
+    if (
+        authority.source_ref != candidate.source_ref
+        or authority.source_sha != candidate.source_sha
+    ):
+        raise RuntimeError("candidate_pull_head_drift")
+    return authority
+
+
+def _read_protected_targets(
+    identity: RepositoryIdentity, *, cwd: Path
+) -> ProtectedAuthority:
+    issue_target, pull_target = PROTECTED_GITHUB_TARGETS
+    if issue_target.kind != "issue" or pull_target.kind != "pull":
+        raise RuntimeError("protected_target_configuration_invalid")
+    issue = _github_get(
+        cwd, f"repos/{identity.full_name}/issues/{issue_target.number}"
+    )
+    if (
+        issue.get("number") != issue_target.number
+        or issue.get("state") != "closed"
+        or "pull_request" in issue
+        or issue.get("repository_url")
+        != f"https://api.github.com/repos/{identity.full_name}"
+    ):
+        raise RuntimeError("protected_target_4728_kind_or_identity_invalid")
+    pull = _pull_from_payload(
+        identity,
+        _github_get(
+            cwd, f"repos/{identity.full_name}/pulls/{pull_target.number}"
+        ),
+        pull_target.number,
+    )
+    return ProtectedAuthority(
+        issue_target.number, pull_target.number, pull.source_ref, pull.source_sha
+    )
+
+
+def _receipt_resource_key(repo_id: int, source_ref: str) -> str:
+    seed = b"v1\0" + str(repo_id).encode() + b"\0" + source_ref.encode()
+    return hashlib.sha256(seed).hexdigest()
+
+
+def _archive_ref(repo_id: int, source_ref: str, source_sha: str) -> str:
+    seed = str(repo_id).encode() + b"\0" + source_ref.encode() + b"\0" + source_sha.encode()
+    return f"refs/archive/git-hygiene/v1/{hashlib.sha256(seed).hexdigest()}"
+
+
+def _git_common_dir(cwd: Path) -> Path:
+    result = run_git_result(["rev-parse", "--git-common-dir"], cwd)
+    if result.returncode != 0 or not result.stdout.strip():
+        raise RuntimeError("git_common_dir_unavailable")
+    path = Path(result.stdout.strip())
+    if not path.is_absolute():
+        path = cwd / path
+    return path.resolve(strict=False)
+
+
+def _ensure_plain_directory(path: Path) -> None:
+    path.mkdir(parents=True, exist_ok=True)
+    if path.is_symlink() or not path.is_dir():
+        raise RuntimeError("receipt_store_path_invalid")
+
+
+def _receipt_paths(common_dir: Path, resource_key: str) -> ReceiptPaths:
+    if not re.fullmatch(r"[0-9a-f]{64}", resource_key):
+        raise RuntimeError("receipt_resource_key_invalid")
+    hygiene = common_dir / "git-hygiene"
+    cleanup = hygiene / "targeted-remote-cleanup"
+    root = cleanup / "v1"
+    locks = root / "locks"
+    receipts = root / "receipts"
+    for directory in (hygiene, cleanup, root, locks, receipts):
+        _ensure_plain_directory(directory)
+    return ReceiptPaths(
+        lock=locks / f"{resource_key}.lock",
+        receipt=receipts / f"{resource_key}.json",
+    )
+
+
+@contextmanager
+def _resource_flock(lock_path: Path) -> Iterator[None]:
+    flags = os.O_RDWR | os.O_CREAT
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    try:
+        descriptor = os.open(lock_path, flags, 0o600)
+    except OSError as exc:
+        raise RuntimeError("candidate_resource_lock_invalid") from exc
+    os.fchmod(descriptor, 0o600)
+    with os.fdopen(descriptor, "a+b", closefd=True) as handle:
+        try:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            raise RuntimeError("candidate_resource_busy") from exc
+        try:
+            yield
+        finally:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
+def _candidate_identity(
+    identity: RepositoryIdentity, candidate: Candidate
+) -> CandidateIdentity:
+    return CandidateIdentity(
+        repository_id=identity.database_id,
+        **asdict(candidate),
+    )
+
+
+def _receipt_payload(receipt: Receipt) -> dict[str, object]:
+    return {
+        "schema": receipt.schema,
+        "resource_key": receipt.resource_key,
+        "identity_digest": _identity_digest(receipt.identity),
+        "state": receipt.state,
+        "identity": asdict(receipt.identity),
+    }
+
+
+def _identity_digest(identity: CandidateIdentity) -> str:
+    payload = json.dumps(
+        asdict(identity), sort_keys=True, separators=(",", ":")
+    ).encode()
+    return hashlib.sha256(payload).hexdigest()
+
+
+def _read_receipt(
+    path: Path, *, expected: CandidateIdentity
+) -> Receipt | None:
+    if path.is_symlink():
+        raise RuntimeError("receipt_path_invalid")
+    if not path.exists():
+        return None
+    if not path.is_file():
+        raise RuntimeError("receipt_path_invalid")
+    try:
+        payload = _json_without_duplicates(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, ValueError) as exc:
+        raise RuntimeError("receipt_json_invalid") from exc
+    if not isinstance(payload, Mapping) or set(payload) != {
+        "schema",
+        "resource_key",
+        "identity_digest",
+        "state",
+        "identity",
+    }:
+        raise RuntimeError("receipt_schema_invalid")
+    identity_payload = payload.get("identity")
+    if (
+        payload.get("schema") != RECEIPT_SCHEMA
+        or payload.get("state") not in {"prepared", "completed"}
+        or payload.get("identity_digest") != _identity_digest(expected)
+        or not isinstance(identity_payload, Mapping)
+        or set(identity_payload) != set(asdict(expected))
+        or dict(identity_payload) != asdict(expected)
+    ):
+        raise RuntimeError("receipt_identity_or_state_conflict")
+    resource_key = _receipt_resource_key(expected.repository_id, expected.source_ref)
+    if payload.get("resource_key") != resource_key:
+        raise RuntimeError("receipt_resource_key_invalid")
+    return Receipt(
+        schema=RECEIPT_SCHEMA,
+        resource_key=resource_key,
+        state=str(payload["state"]),
+        identity=expected,
+    )
+
+
+def _crash_hook(_point: str) -> None:
+    """Private deterministic crash-injection seam for focused tests."""
+
+
+def _replace_receipt(path: Path, receipt: Receipt) -> None:
+    existing = _read_receipt(path, expected=receipt.identity)
+    if existing is not None and existing.state == "completed" and receipt.state != "completed":
+        raise RuntimeError("receipt_state_regression")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary_name = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.")
+    temporary = Path(temporary_name)
+    phase = receipt.state
+    try:
+        os.fchmod(descriptor, 0o600)
+        with os.fdopen(descriptor, "wb", closefd=True) as handle:
+            payload = (
+                json.dumps(
+                    _receipt_payload(receipt),
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+                + "\n"
+            ).encode()
+            if handle.write(payload) != len(payload):
+                raise OSError("receipt_write_incomplete")
+            handle.flush()
+            _crash_hook(f"before_{phase}_temp_fsync")
+            os.fsync(handle.fileno())
+            _crash_hook(f"after_{phase}_temp_fsync")
+        _crash_hook(f"before_{phase}_replace")
+        os.replace(temporary, path)
+        _crash_hook(f"after_{phase}_replace")
+        directory_fd = os.open(path.parent, os.O_RDONLY)
+        try:
+            _crash_hook(f"before_{phase}_dir_fsync")
+            os.fsync(directory_fd)
+            _crash_hook(f"after_{phase}_dir_fsync")
+        finally:
+            os.close(directory_fd)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def _canonical_utc(value: object) -> bool:
+    if not isinstance(value, str) or not re.fullmatch(
+        r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z", value
+    ):
+        return False
+    try:
+        parsed = dt.datetime.strptime(value, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=dt.UTC)
+    except ValueError:
+        return False
+    return parsed.strftime("%Y-%m-%dT%H:%M:%SZ") == value
+
+
+def _validate_candidate(
+    raw: Mapping[str, object], identity: RepositoryIdentity, cwd: Path
+) -> Candidate:
+    if set(raw) != _CANDIDATE_KEYS:
+        raise ValueError("candidate_schema_invalid")
+    issue = raw.get("governing_issue")
+    lane = raw.get("no_issue_lane")
+    issue_valid = _positive_int(issue)
+    lane_valid = isinstance(lane, str) and bool(_SLUG.fullmatch(lane))
+    pull_request = raw.get("pull_request")
+    source_ref = raw.get("source_ref")
+    source_sha = raw.get("source_sha")
+    owner = raw.get("owner")
+    successor = raw.get("successor")
+    discard = raw.get("discard")
+    if raw.get("repository") != identity.full_name:
+        raise ValueError("candidate_repository_invalid")
+    if not _positive_int(pull_request):
+        raise ValueError("candidate_pull_request_invalid")
+    if issue_valid == lane_valid:
+        raise ValueError("candidate_issue_identity_ambiguous")
+    if not isinstance(source_ref, str) or not source_ref.startswith("refs/heads/"):
+        raise ValueError("candidate_source_ref_invalid")
+    if source_ref in {f"refs/heads/{name}" for name in DEFAULT_PROTECTED_BRANCHES}:
+        raise ValueError("candidate_source_ref_protected")
+    if run_git_result(["check-ref-format", source_ref], cwd).returncode != 0:
+        raise ValueError("candidate_source_ref_invalid")
+    if not isinstance(source_sha, str) or not re.fullmatch(r"[0-9a-f]{40}", source_sha):
+        raise ValueError("candidate_source_sha_invalid")
+    if not isinstance(owner, str) or not _SLUG.fullmatch(owner):
+        raise ValueError("candidate_owner_invalid")
+    if not isinstance(successor, str) or not (
+        successor == "none" or re.fullmatch(r"issue:[1-9][0-9]*", successor)
+    ):
+        raise ValueError("candidate_successor_invalid")
+    if raw.get("retention_class") not in {"safety_archive", "quarantine"}:
+        raise ValueError("candidate_retention_invalid")
+    if not _canonical_utc(raw.get("review_at")):
+        raise ValueError("candidate_review_at_invalid")
+    if (
+        not isinstance(discard, Mapping)
+        or set(discard) != {"state", "receipt"}
+        or discard.get("state") != "retain"
+        or discard.get("receipt") is not None
+    ):
+        raise ValueError("candidate_discard_invalid")
+    archive_ref = raw.get("archive_ref")
+    if archive_ref != _archive_ref(identity.database_id, source_ref, source_sha):
+        raise ValueError("candidate_archive_ref_invalid")
+    return Candidate(
+        repository=identity.full_name,
+        pull_request=pull_request,
+        source_ref=source_ref,
+        source_sha=source_sha,
+        archive_ref=str(archive_ref),
+        owner=owner,
+        governing_issue=issue if issue_valid else None,
+        no_issue_lane=lane if lane_valid else None,
+        successor=successor,
+        retention_class=str(raw["retention_class"]),
+        review_at=str(raw["review_at"]),
+        discard={"state": "retain", "receipt": None},
+    )
+
+
+def _validate_protected_candidate(
+    candidate: Candidate, protected: ProtectedAuthority
+) -> None:
+    if candidate.pull_request in {protected.issue_number, protected.pull_number}:
+        raise RuntimeError("candidate_uses_protected_number")
+    if candidate.governing_issue == protected.issue_number:
+        raise RuntimeError("candidate_uses_protected_number")
+    if (
+        candidate.source_ref == protected.pull_ref
+        or candidate.source_sha == protected.pull_sha
+    ):
+        raise RuntimeError("candidate_uses_protected_pull_head")
+
+
+def _read_lifecycle_authority(cwd: Path) -> dict[str, dict[str, object]]:
+    from scripts import agent_worktree
+
+    return agent_worktree.load_lifecycle_authority(cwd)
+
+
+def _lifecycle_conflicts(
+    cwd: Path,
+    candidate: Candidate,
+    records: Mapping[str, Mapping[str, object]],
+) -> set[str]:
+    branch = candidate.source_ref.removeprefix("refs/heads/")
+    entries = _parse_worktrees(run_git(["worktree", "list", "--porcelain"], cwd))
+    conflicts = {
+        "live_worktree"
+        for entry in entries
+        if entry.get("branch", "").removeprefix("refs/heads/") == branch
+    }
+    for record in records.values():
+        if record.get("branch") == branch and record.get("status") != "removed":
+            conflicts.add("lifecycle_binding")
+        prior = record.get("prior_bindings")
+        if isinstance(prior, list) and any(
+            isinstance(item, Mapping) and item.get("branch") == branch
+            for item in prior
+        ):
+            conflicts.add("lifecycle_prior_binding")
+    return conflicts
+
+
+def _parse_dispatcher_time(value: object) -> dt.datetime:
+    if not isinstance(value, str):
+        raise RuntimeError("dispatcher_expiry_invalid")
+    try:
+        parsed = dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise RuntimeError("dispatcher_expiry_invalid") from exc
+    if parsed.tzinfo is None:
+        raise RuntimeError("dispatcher_expiry_invalid")
+    return parsed.astimezone(dt.UTC)
+
+
+def _dispatcher_snapshot(cwd: Path, repository: str) -> list[dict[str, object]]:
+    from app.dispatcher.config import load_paths
+    from app.dispatcher.store import SqliteStore
+
+    paths = load_paths(cwd=cwd)
+    if not paths.db_path.is_file():
+        raise RuntimeError("dispatcher_database_missing")
+    store = SqliteStore(paths.db_path)
+    snapshot: list[dict[str, object]] = []
+    for listed in store.list_tasks(repo=repository):
+        task = store.get_task(listed.task_id)
+        if task is None or task.to_dict() != listed.to_dict():
+            raise RuntimeError("dispatcher_task_readback_changed")
+        active_task = task.status in {"claimed", "in_progress"}
+        lease = None
+        if task.lease_id is not None:
+            lease_record = store.get_lease(task.lease_id)
+            if lease_record is None:
+                raise RuntimeError("dispatcher_referenced_lease_missing")
+            lease = lease_record.to_dict()
+            expiry = _parse_dispatcher_time(lease_record.expires_at)
+            if lease_record.released_at is not None:
+                _parse_dispatcher_time(lease_record.released_at)
+            reread = store.get_lease(task.lease_id)
+            if reread is None or reread.to_dict() != lease:
+                raise RuntimeError("dispatcher_lease_readback_changed")
+            if (
+                task.lease_expires_at != lease_record.expires_at
+                or active_task != (lease_record.released_at is None and expiry > dt.datetime.now(dt.UTC))
+            ):
+                raise RuntimeError("dispatcher_task_lease_disagreement")
+        elif active_task:
+            raise RuntimeError("dispatcher_referenced_lease_missing")
+        snapshot.append({"task": task.to_dict(), "lease": lease})
+    snapshot.sort(key=lambda item: str(item["task"]))
+    return snapshot
+
+
+def _read_dispatcher_authority(cwd: Path, repository: str) -> list[dict[str, object]]:
+    first = _dispatcher_snapshot(cwd, repository)
+    second = _dispatcher_snapshot(cwd, repository)
+    if first != second:
+        raise RuntimeError("dispatcher_authority_changed")
+    return first
+
+
+def _dispatcher_conflicts(
+    candidate: Candidate,
+    lifecycle: Mapping[str, Mapping[str, object]],
+    snapshot: Sequence[Mapping[str, object]],
+) -> set[str]:
+    branch = candidate.source_ref.removeprefix("refs/heads/")
+    resources = {
+        candidate.source_ref,
+        branch,
+        f"branch:{branch}",
+        f"ref:{candidate.source_ref}",
+        f"pull:{candidate.pull_request}",
+    }
+    for path, record in lifecycle.items():
+        prior = record.get("prior_bindings")
+        if record.get("branch") == branch or (
+            isinstance(prior, list)
+            and any(
+                isinstance(item, Mapping) and item.get("branch") == branch
+                for item in prior
+            )
+        ):
+            resources.add(f"worktree:{path}")
+            if isinstance(record.get("path"), str):
+                resources.add(f"worktree:{record['path']}")
+    now = dt.datetime.now(dt.UTC)
+    conflicts: set[str] = set()
+    for item in snapshot:
+        task = item.get("task")
+        lease = item.get("lease")
+        if not isinstance(task, Mapping) or not isinstance(lease, Mapping):
+            continue
+        live = lease.get("released_at") is None and _parse_dispatcher_time(
+            lease.get("expires_at")
+        ) > now
+        if not live:
+            continue
+        linked_pr = task.get("linked_pr")
+        relevant = (
+            task.get("issue_number") == candidate.governing_issue
+            or str(linked_pr or "").removeprefix("#") == str(candidate.pull_request)
+            or lease.get("resource") in resources
+        )
+        if relevant:
+            conflicts.add("live_dispatcher_claim")
+    return conflicts
+
+
+def _remote_ref_sha(cwd: Path, push_url: str, ref: str) -> str | None:
     """Return one exact remote ref value, or ``None`` only when it is absent."""
-    result = run_git_result(["ls-remote", "--exit-code", "origin", ref], cwd)
+    result = run_git_result(["ls-remote", "--exit-code", push_url, ref], cwd)
     if result.returncode == 2:
         return None
     if result.returncode != 0:
         raise RuntimeError(f"remote_ref_read_failed:{ref}")
     rows = [line.split() for line in result.stdout.splitlines() if line.strip()]
-    if len(rows) != 1 or len(rows[0]) < 2 or rows[0][1] != ref:
+    if len(rows) != 1 or len(rows[0]) != 2 or rows[0][1] != ref:
         raise RuntimeError(f"remote_ref_read_ambiguous:{ref}")
-    return rows[0][0]
+    sha = rows[0][0]
+    if not re.fullmatch(r"[0-9a-f]{40}", sha):
+        raise RuntimeError(f"remote_ref_read_invalid:{ref}")
+    return sha
 
 
-def _targeted_remote_candidate(
-    candidate: Mapping[str, Any], repository: str, cwd: Path
-) -> dict[str, Any]:
-    """Validate and canonicalise one deletion authority record.
+def _fetch_source_object(
+    cwd: Path, identity: RepositoryIdentity, candidate: Candidate
+) -> None:
+    fetched = run_git_result(
+        [
+            "fetch",
+            "--no-tags",
+            "--no-write-fetch-head",
+            identity.fetch_url,
+            candidate.source_ref,
+        ],
+        cwd,
+    )
+    if fetched.returncode != 0:
+        raise RuntimeError("source_object_fetch_failed")
+    present = run_git_result(["cat-file", "-e", f"{candidate.source_sha}^{{commit}}"], cwd)
+    if present.returncode != 0:
+        raise RuntimeError("source_object_fetch_mismatch")
 
-    This deliberately does not infer identity from a janitor report: the caller
-    supplies a bounded, reviewable disposition record and every field is part of
-    the receipt digest used for retries.
-    """
-    required = {
-        "repository", "source_ref", "source_sha", "archive_ref", "owner", "successor",
-        "retention_class", "review_at", "discard", "authority",
+
+def _fresh_candidate_authority(
+    cwd: Path,
+    *,
+    requested_repository: str,
+    expected_repository: RepositoryIdentity,
+    candidate: Candidate,
+) -> RepositoryIdentity:
+    identity = _resolve_repository_identity(cwd, requested_repository)
+    if identity != expected_repository:
+        raise RuntimeError("repository_identity_changed")
+    protected = _read_protected_targets(identity, cwd=cwd)
+    _validate_protected_candidate(candidate, protected)
+    _read_candidate_pr(identity, candidate, cwd=cwd)
+    lifecycle = _read_lifecycle_authority(cwd)
+    if _lifecycle_conflicts(cwd, candidate, lifecycle):
+        raise RuntimeError("candidate_lifecycle_conflict")
+    dispatcher = _read_dispatcher_authority(cwd, identity.full_name)
+    if _dispatcher_conflicts(candidate, lifecycle, dispatcher):
+        raise RuntimeError("candidate_dispatcher_conflict")
+    return identity
+
+
+def _receipt_result(candidate: Candidate, paths: ReceiptPaths) -> dict[str, object]:
+    return {
+        "receipt": str(paths.receipt),
+        "state": "completed",
+        **asdict(candidate),
     }
-    if not required <= set(candidate) or candidate.get("repository") != repository:
-        raise ValueError("candidate_identity_incomplete_or_wrong_repository")
-    source_ref = candidate["source_ref"]
-    archive_ref = candidate["archive_ref"]
-    source_sha = candidate["source_sha"]
-    if not all(isinstance(value, str) and value.strip() for value in (source_ref, archive_ref, source_sha, candidate["owner"], candidate["successor"], candidate["review_at"])) or not re.fullmatch(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ", candidate["review_at"]):
-        raise ValueError("candidate_identity_malformed")
-    if not re.fullmatch(r"[0-9a-f]{40}", source_sha):
-        raise ValueError("candidate_source_sha_malformed")
-    if (not source_ref.startswith("refs/heads/") or source_ref in {f"refs/heads/{name}" for name in DEFAULT_PROTECTED_BRANCHES} or not archive_ref.startswith("refs/archive/git-hygiene/")):
-        raise ValueError("candidate_ref_protected_or_invalid")
-    expected_archive = _targeted_archive_ref(repository, source_ref, source_sha)
-    if archive_ref != expected_archive:
-        raise ValueError("candidate_archive_ref_not_identity_derived")
-    for ref in (source_ref, archive_ref):
-        if run_git_result(["check-ref-format", ref], cwd).returncode != 0:
-            raise ValueError("candidate_ref_malformed")
-    issue = candidate.get("governing_issue")
-    no_issue_lane = candidate.get("no_issue_lane")
-    if (isinstance(issue, int)) == (isinstance(no_issue_lane, str) and bool(no_issue_lane.strip())):
-        raise ValueError("candidate_issue_identity_ambiguous")
-    if candidate["retention_class"] not in {"safety_archive", "quarantine"}:
-        raise ValueError("candidate_retention_invalid")
-    discard = candidate["discard"]
-    if not isinstance(discard, Mapping) or discard.get("state") != "retain" or discard.get("receipt") is not None:
-        raise ValueError("candidate_discard_state_not_explicit_retain")
-    authority = candidate["authority"]
-    if not isinstance(authority, Mapping) or authority.get("repository") != repository or authority.get("lease_conflicts") or authority.get("lifecycle_conflicts"):
-        raise ValueError("candidate_destructive_authority_invalid")
-    protected_heads = authority.get("protected_pr_heads")
-    if not isinstance(protected_heads, Mapping) or not {"4728", "4813"} <= set(protected_heads):
-        raise ValueError("candidate_protected_pr_authority_missing")
-    if source_sha in set(protected_heads.values()):
-        raise ValueError("candidate_source_is_live_protected_pr_head")
-    return {key: candidate.get(key) for key in sorted(required | {"governing_issue", "no_issue_lane"})}
 
 
-def _targeted_archive_ref(repository: str, source_ref: str, source_sha: str) -> str:
-    seed = f"{repository}\0{source_ref}\0{source_sha}".encode()
-    return f"refs/archive/git-hygiene/identity/{hashlib.sha256(seed).hexdigest()}"
-
-
-def _canonical_origin(cwd: Path) -> str:
-    result = run_git_result(["remote", "get-url", "origin"], cwd)
-    if result.returncode != 0:
-        raise RuntimeError("canonical_origin_unavailable")
-    raw = result.stdout.strip().removesuffix(".git")
-    match = re.fullmatch(r"(?:https://github\.com/|git@github\.com:)([^/]+/[^/]+)", raw)
-    if not match:
-        raise RuntimeError("canonical_origin_invalid")
-    return match.group(1)
-
-
-def _write_receipt(path: Path, receipt: Mapping[str, Any]) -> None:
-    """Durably replace one receipt; completed is monotonic at the caller."""
-    payload = (json.dumps(receipt, sort_keys=True) + "\n").encode()
-    temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
-    fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    try:
-        os.write(fd, payload)
-        os.fsync(fd)
-    finally:
-        os.close(fd)
-    os.replace(temporary, path)
-    directory_fd = os.open(path.parent, os.O_RDONLY)
-    try:
-        os.fsync(directory_fd)
-    finally:
-        os.close(directory_fd)
+def _preflight_candidate(
+    cwd: Path,
+    *,
+    requested_repository: str,
+    identity: RepositoryIdentity,
+    candidate: Candidate,
+    common_dir: Path,
+) -> None:
+    _fresh_candidate_authority(
+        cwd,
+        requested_repository=requested_repository,
+        expected_repository=identity,
+        candidate=candidate,
+    )
+    expected = _candidate_identity(identity, candidate)
+    paths = _receipt_paths(
+        common_dir,
+        _receipt_resource_key(identity.database_id, candidate.source_ref),
+    )
+    receipt = _read_receipt(paths.receipt, expected=expected)
+    source = _remote_ref_sha(cwd, identity.push_url, candidate.source_ref)
+    archive = _remote_ref_sha(cwd, identity.push_url, candidate.archive_ref)
+    if receipt is None and source is None:
+        raise RuntimeError("source_absent_without_prepared_receipt")
+    if receipt is not None and receipt.state == "completed":
+        if source is not None or archive != candidate.source_sha:
+            raise RuntimeError("completed_receipt_live_state_conflict")
+        return
+    if source not in {None, candidate.source_sha}:
+        raise RuntimeError("source_identity_drift")
+    if archive not in {None, candidate.source_sha}:
+        raise RuntimeError("archive_sha_mismatch")
 
 
 def targeted_remote_cleanup(
     cwd: Path,
     *,
     repository: str,
-    candidates: list[Mapping[str, Any]],
-    receipt_dir: Path,
-    receipt_writer: Callable[[Path, Mapping[str, Any]], None] = _write_receipt,
-) -> dict[str, Any]:
-    """Archive then CAS-delete no more than five explicitly bound remote refs.
-
-    The function is intentionally not wired into broad ``janitor --apply``.
-    It is the only production entrypoint for this targeted mechanism; callers
-    must separately establish lifecycle/lease/GitHub authority before invoking it.
-    """
+    candidates: Sequence[Mapping[str, object]],
+) -> dict[str, object]:
+    """Archive then CAS-delete a bounded set of exact closed-unmerged PR heads."""
+    completed: list[dict[str, object]] = []
     if not 1 <= len(candidates) <= 5:
-        return {"ok": False, "completed": [], "error": "candidate_batch_size_invalid"}
-    if _canonical_origin(cwd) != repository:
-        return {"ok": False, "completed": [], "error": "canonical_origin_mismatch"}
-    receipt_dir.mkdir(parents=True, exist_ok=True)
-    completed: list[dict[str, Any]] = []
-    validated: list[tuple[dict[str, Any], str]] = []
+        return {"ok": False, "completed": completed, "error": "candidate_batch_size_invalid"}
     try:
-        for raw in candidates:
-            candidate = _targeted_remote_candidate(raw, repository, cwd)
-            identity = json.dumps(candidate, sort_keys=True, separators=(",", ":"))
-            validated.append((candidate, hashlib.sha256(identity.encode()).hexdigest()))
-        archive_owners = {candidate["archive_ref"]: receipt_id for candidate, receipt_id in validated}
-        if len(archive_owners) != len(validated):
-            raise ValueError("candidate_archive_namespace_collision")
-    except (ValueError, RuntimeError) as exc:
-        return {"ok": False, "completed": [], "error": str(exc)}
-    for candidate, receipt_id in validated:
+        identity = _resolve_repository_identity(cwd, repository)
+        protected = _read_protected_targets(identity, cwd=cwd)
+        validated = [_validate_candidate(raw, identity, cwd) for raw in candidates]
+        if len({candidate.source_ref for candidate in validated}) != len(validated):
+            raise ValueError("candidate_resource_collision")
+        for candidate in validated:
+            _validate_protected_candidate(candidate, protected)
+            _read_candidate_pr(identity, candidate, cwd=cwd)
+        common_dir = _git_common_dir(cwd)
+        for candidate in validated:
+            _preflight_candidate(
+                cwd,
+                requested_repository=repository,
+                identity=identity,
+                candidate=candidate,
+                common_dir=common_dir,
+            )
+    except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as exc:
+        return {"ok": False, "completed": completed, "error": str(exc)}
+
+    for candidate in validated:
+        expected = _candidate_identity(identity, candidate)
+        resource_key = _receipt_resource_key(identity.database_id, candidate.source_ref)
+        paths = _receipt_paths(common_dir, resource_key)
         try:
-            receipt_path = receipt_dir / f"{receipt_id}.json"
-            lock_path = receipt_dir / f"{receipt_id}.lock"
-            try:
-                lock_fd = os.open(lock_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-            except FileExistsError:
-                raise RuntimeError("receipt_ownership_busy")
-            receipt = {"version": 1, "identity": candidate, "receipt_id": receipt_id, "state": "prepared"}
-            try:
-                if receipt_path.exists():
-                    existing = json.loads(receipt_path.read_text(encoding="utf-8"))
-                    if existing.get("identity") != candidate or existing.get("receipt_id") != receipt_id or existing.get("state") not in {"prepared", "completed"}:
-                        raise RuntimeError("receipt_identity_or_state_conflict")
-                    receipt = existing
-                source_sha = _remote_ref_sha(cwd, candidate["source_ref"])
-                archive_sha = _remote_ref_sha(cwd, candidate["archive_ref"])
-                if receipt["state"] == "completed":
-                    if source_sha is not None or archive_sha != candidate["source_sha"]:
+            with _resource_flock(paths.lock):
+                # This read must precede observing source absence. Only a
+                # prepared record loaded here can authorize crash recovery.
+                loaded = _read_receipt(paths.receipt, expected=expected)
+                boundary = _fresh_candidate_authority(
+                    cwd,
+                    requested_repository=repository,
+                    expected_repository=identity,
+                    candidate=candidate,
+                )
+                source = _remote_ref_sha(cwd, boundary.push_url, candidate.source_ref)
+                archive = _remote_ref_sha(cwd, boundary.push_url, candidate.archive_ref)
+                if loaded is not None and loaded.state == "completed":
+                    if source is not None or archive != candidate.source_sha:
                         raise RuntimeError("completed_receipt_live_state_conflict")
-                    completed.append({"receipt": str(receipt_path), "state": "completed", **candidate})
+                    completed.append(_receipt_result(candidate, paths))
                     continue
-                if archive_sha is None:
-                    if source_sha != candidate["source_sha"]:
+                if loaded is None and source is None:
+                    raise RuntimeError("source_absent_without_prepared_receipt")
+                if archive is None:
+                    if source != candidate.source_sha:
                         raise RuntimeError("source_identity_drift_before_archive")
-                    pushed = run_git_result(["push", "--no-verify", "origin", f"{source_sha}:{candidate['archive_ref']}"], cwd)
+                    _fetch_source_object(cwd, boundary, candidate)
+                    _crash_hook("before_archive_push")
+                    pushed = run_git_result(
+                        [
+                            "push",
+                            "--no-verify",
+                            f"--force-with-lease={candidate.archive_ref}:",
+                            boundary.push_url,
+                            f"{candidate.source_sha}:{candidate.archive_ref}",
+                        ],
+                        cwd,
+                    )
                     if pushed.returncode != 0:
-                        raise RuntimeError("archive_push_failed")
-                    archive_sha = _remote_ref_sha(cwd, candidate["archive_ref"])
-                if archive_sha != candidate["source_sha"]:
+                        raise RuntimeError("archive_expected_absence_cas_failed")
+                    _crash_hook("after_archive_push")
+                    _crash_hook("before_archive_readback")
+                    archive = _remote_ref_sha(cwd, boundary.push_url, candidate.archive_ref)
+                    _crash_hook("after_archive_readback")
+                if archive != candidate.source_sha:
                     raise RuntimeError("archive_sha_mismatch")
-                receipt_writer(receipt_path, receipt)
-                if source_sha is None:
-                    # A durable matching prepared record plus exact archive and
-                    # source absence is the only crash-recovery completion path.
-                    receipt["state"] = "completed"
-                    receipt_writer(receipt_path, receipt)
-                    completed.append({"receipt": str(receipt_path), "state": "completed", **candidate})
+                prepared = Receipt(RECEIPT_SCHEMA, resource_key, "prepared", expected)
+                if loaded is None:
+                    _replace_receipt(paths.receipt, prepared)
+                    loaded = prepared
+                elif loaded.state != "prepared":
+                    raise RuntimeError("receipt_identity_or_state_conflict")
+
+                boundary = _fresh_candidate_authority(
+                    cwd,
+                    requested_repository=repository,
+                    expected_repository=identity,
+                    candidate=candidate,
+                )
+                source = _remote_ref_sha(cwd, boundary.push_url, candidate.source_ref)
+                archive = _remote_ref_sha(cwd, boundary.push_url, candidate.archive_ref)
+                if archive != candidate.source_sha:
+                    raise RuntimeError("archive_sha_mismatch_before_delete")
+                if source is None:
+                    _replace_receipt(
+                        paths.receipt,
+                        Receipt(RECEIPT_SCHEMA, resource_key, "completed", expected),
+                    )
+                    completed.append(_receipt_result(candidate, paths))
                     continue
-                if source_sha != candidate["source_sha"]:
+                if source != candidate.source_sha:
                     raise RuntimeError("source_identity_drift_before_delete")
-                deleted = run_git_result(["push", "--no-verify", f"--force-with-lease={candidate['source_ref']}:{source_sha}", "origin", f":{candidate['source_ref']}"], cwd)
+                _crash_hook("before_source_cas_acceptance")
+                deleted = run_git_result(
+                    [
+                        "push",
+                        "--no-verify",
+                        f"--force-with-lease={candidate.source_ref}:{candidate.source_sha}",
+                        boundary.push_url,
+                        f":{candidate.source_ref}",
+                    ],
+                    cwd,
+                )
                 if deleted.returncode != 0:
                     raise RuntimeError("source_cas_delete_failed")
-                if _remote_ref_sha(cwd, candidate["source_ref"]) is not None or _remote_ref_sha(cwd, candidate["archive_ref"]) != candidate["source_sha"]:
+                _crash_hook("after_source_cas_acceptance")
+                _crash_hook("before_post_delete_readback")
+                source = _remote_ref_sha(cwd, boundary.push_url, candidate.source_ref)
+                archive = _remote_ref_sha(cwd, boundary.push_url, candidate.archive_ref)
+                _crash_hook("after_post_delete_readback")
+                if source is not None or archive != candidate.source_sha:
                     raise RuntimeError("post_delete_readback_failed")
-                receipt["state"] = "completed"
-                receipt_writer(receipt_path, receipt)
-                completed.append({"receipt": str(receipt_path), "state": "completed", **candidate})
-            finally:
-                os.close(lock_fd)
-                lock_path.unlink(missing_ok=True)
-        except (OSError, ValueError, RuntimeError, json.JSONDecodeError) as exc:
+                _replace_receipt(
+                    paths.receipt,
+                    Receipt(RECEIPT_SCHEMA, resource_key, "completed", expected),
+                )
+                completed.append(_receipt_result(candidate, paths))
+        except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as exc:
             return {"ok": False, "completed": completed, "error": str(exc)}
     return {"ok": True, "completed": completed}
 
@@ -1130,7 +1825,7 @@ def build_janitor_plan(
             continue
         candidate = {"branch": branch}
         if needs_rescue:
-            candidate["rescue_ref"] = _archive_ref(branch, now=now)
+            candidate["rescue_ref"] = _dated_archive_ref(branch, now=now)
             rescue_remote_branches.append(candidate)
         else:
             remote_branches.append(candidate)

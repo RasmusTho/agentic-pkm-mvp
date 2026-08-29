@@ -35,23 +35,53 @@ or missing worktree is never evidence that cleanup is authorized.
 Remote branch disposition is not a broad-janitor action. The bounded
 `targeted_remote_cleanup` production entrypoint accepts at most five caller-supplied
 candidates and requires each to bind the repository, fully qualified source ref,
-frozen source SHA, archive ref, owner, governing Issue (or explicit no-Issue lane),
-successor, retention class, review trigger, and explicit retain/discard state. It
-publishes and reads back the archive at the frozen SHA, writes a durable `prepared`
-receipt, and only then uses an expected-old-SHA remote CAS delete. It completes the
-receipt only after source absence and exact archive-SHA readback; a retry is valid
-only when the same identity receipt and both live refs agree. Any drift stops the
+closed-unmerged pull request, frozen source SHA, archive ref, owner, governing Issue
+(or explicit no-Issue lane), successor, retention class, review trigger, and explicit
+retain state. Candidate input has one exact schema; disposition metadata is never
+mutation authority. The entrypoint obtains repository, pull-request, protected-target,
+lifecycle-registry, and dispatcher authority itself and rereads all of it immediately
+before archive publication and immediately before source deletion. Any drift stops the
 batch before later candidates are touched.
 
-The entrypoint canonicalises `origin` to the caller's repository identity and requires
-fresh candidate authority with empty lifecycle/lease conflicts plus the live protected
-heads for PR #4728 and #4813. Receipt ownership is exclusive per identity digest;
-prepared and completed transitions use write+fsync, atomic replace, and directory fsync.
-Batch archive refs are preflighted for collisions before any remote side effect.
-The archive ref is deterministically derived from repository, full source ref, and
-frozen source SHA; callers cannot alias another candidate's archive namespace. A
-durable prepared receipt plus source absence and exact archive readback is the sole
-crash-recovery completion path, and cannot regress a completed receipt.
+Repository identity is the live GitHub REST repository ID and canonical full name plus
+exactly one effective `origin` fetch URL and one effective push URL. HTTPS fetch and
+GitHub SSH push forms may differ, but both must identify that REST repository. The
+captured literal push URL—not the mutable remote name—is passed to every `ls-remote`
+and `push`; the fetch URL is used to obtain the exact source object. Every candidate PR
+must freshly be closed, unmerged, same-repository, and at the named full head ref and
+SHA. Protected target `#4728` is resolved as a closed Issue and must not be fabricated
+as a pull head; `#4813` is resolved as a closed-unmerged pull request and protects its
+number, full head ref, and head SHA. Lookup, kind, repository, or shape ambiguity is a
+batch-wide refusal.
+
+Lifecycle authority comes from the generation-bound registry under its kernel lock;
+missing, corrupt, malformed, mismatched, locked, dirty/unavailable, live, or prior-path
+binding evidence preserves the source. Dispatcher authority comes from optimistic
+read/readback of the configured SQLite task and lease APIs. Missing state, missing
+referenced leases, malformed expiry, released/current-task disagreement, changed
+readback, or a live Issue/PR/ref/path claim fails closed. These short snapshots never
+hold lifecycle or SQLite locks across REST or Git network I/O.
+
+Receipts live under the repository Git common directory at
+`git-hygiene/targeted-remote-cleanup/v1/`, keyed by
+`sha256("v1\\0" + repository-id + "\\0" + full-source-ref)`. The resource key
+deliberately excludes disposition and SHA so a rebinding attempt collides with and is
+rejected by the existing record. Persistent per-resource files use non-blocking kernel
+`flock`; filenames are never unlinked as ownership signals. Prepared and completed
+receipts reject symlinks, duplicate JSON keys, unknown fields, wrong identity or
+resource key, invalid states, and completed-to-prepared regression. Every transition
+uses a mode-0600 temporary file, complete write and file `fsync`, atomic replace, then
+directory `fsync`.
+
+The archive ref is deterministically derived from repository ID, full source ref, and
+frozen source SHA. Archive creation uses an expected-absence remote CAS, reads the exact
+SHA back, and durably records `prepared` before source deletion. Source deletion uses a
+fully qualified expected-old-SHA CAS and must be followed by source-absence plus
+exact-archive readback before `completed` is durable. A missing receipt plus an already
+absent source is never adoptable: only a matching `prepared` receipt loaded from disk
+before observing absence authorizes crash recovery. A completed receipt is monotonic
+and idempotent only while the same live ref facts still agree. This slice never deletes
+an archive ref.
 
 Archive refs are retained by default. `review_at` is only a review trigger for
 `safety_archive` and `quarantine`; elapsed time never authorizes archive deletion,
