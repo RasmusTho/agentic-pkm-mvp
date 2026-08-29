@@ -188,6 +188,25 @@ def test_desired_issue_status_preserves_explicit_review_override() -> None:
     assert desired_issue_status({**issue, "state": "CLOSED"}, "Review") == "Done"
 
 
+def test_reconcile_issue_terminal_truth_precedes_explicit_status(monkeypatch) -> None:
+    monkeypatch.setattr(
+        reconcile_project_status,
+        "get_issue",
+        lambda *_args: {"number": 1, "state": "CLOSED", "labels": [], "url": "https://example.test/1"},
+    )
+    monkeypatch.setattr(
+        reconcile_project_status,
+        "list_project_items",
+        lambda *_args: [{"id": "issue-1", "content": {"type": "Issue", "number": 1}, "status": "Review"}],
+    )
+    calls = []
+    monkeypatch.setattr(reconcile_project_status, "set_project_status", lambda *args: calls.append(args))
+    args = reconcile_project_status.argparse.Namespace(repo="owner/repo", issue=1, status="Review", dry_run=False)
+
+    assert reconcile_project_status.reconcile_issue(args, "owner", {"id": "project", "number": 1, "title": "P"}, "field", {"Done": "done"}) == 0
+    assert calls == [("owner", "project", "issue-1", "field", "done", False)]
+
+
 def test_get_issue_fetches_parent_projection_evidence(monkeypatch) -> None:
     commands = []
 

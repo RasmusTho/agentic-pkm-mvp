@@ -622,8 +622,11 @@ def reconcile_issue(
         print(f"skip issue #{args.issue}: {exc}")
         return 0
     item = find_item_by_number(items, "Issue", args.issue)
-    desired = args.status or desired_issue_status(
-        issue, item.get("status") if item is not None else None
+    current_status = item.get("status") if item is not None else None
+    desired = (
+        desired_issue_status(issue, current_status)
+        if issue.get("state") == "CLOSED"
+        else args.status or desired_issue_status(issue, current_status)
     )
     if not desired:
         print(f"skip issue #{args.issue}: no derived status")
