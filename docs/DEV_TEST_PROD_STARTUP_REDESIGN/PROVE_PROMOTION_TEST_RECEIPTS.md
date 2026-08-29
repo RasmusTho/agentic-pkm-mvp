@@ -26,11 +26,13 @@ Runs one exact digest against the declared prod-compatible baseline; records mig
 
 ## Concretely
 
-`python -m app.release_channels.promotion_receipt promotion-test-verify ...` emits one durable
-terminal receipt for an exact attempt. `python -m app.release_channels.promotion_receipt
+`python -m app.release_channels.promotion_receipt promotion-test-verify ...` validates a P2 render
+against its ChannelManifest, binds the runner report and migration set to that exact candidate, and
+emits one durable terminal receipt for an exact attempt. `python -m app.release_channels.promotion_receipt
 validate-prod-activation ...` accepts only a current, unrevoked PASS whose
 artifact/config/test/vault/schema identities match. The second command only returns admission
-evidence; it performs no activation.
+evidence with state `validated_not_activated`; it performs no activation. P5 owns the future
+side-effecting caller and must invoke this boundary immediately before activation.
 
 ## Why This Matters
 
