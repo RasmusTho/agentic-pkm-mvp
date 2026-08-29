@@ -1,18 +1,28 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import re
 import shlex
 import subprocess
 import sys
+from types import SimpleNamespace
 from pathlib import Path
+from typing import Mapping
 
 import pytest
 
 from scripts.review_before_ci_gate import (
     ReviewBeforeCiGateError,
+    _current_branch_open_pr,
+    _git_allows_pr_update,
+    _git_is_strict_ancestor,
+    _github_repository_from_origin,
+    authenticated_pr_scope_revalidation_history,
     evaluate_review_before_ci_gate,
+    main as review_before_ci_main,
+    validate_pr_scope_revalidation,
 )
 
 
@@ -20,9 +30,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 PUBLISH_PR_SKILL = REPO_ROOT / ".codex/skills/publish-pr/SKILL.md"
 ISSUE_TO_CODE_SKILL = REPO_ROOT / ".codex/skills/issue-to-code/SKILL.md"
 VERIFICATION_SKILL = REPO_ROOT / ".codex/skills/verification-and-closure/SKILL.md"
-REVIEW_REPAIR_CONTRACT = (
-    REPO_ROOT / "docs/development/AUTONOMOUS_REVIEW_REPAIR_GATE_CONTRACTS.md"
-)
+REVIEW_REPAIR_CONTRACT = REPO_ROOT / "docs/development/AUTONOMOUS_REVIEW_REPAIR_GATE_CONTRACTS.md"
 DEV_WORKFLOW = REPO_ROOT / "docs/development/DEV_WORKFLOW.md"
 PROCESS_MAP = REPO_ROOT / "docs/development/BUILDER_SYSTEM_PROCESS_MAP.md"
 DISPATCHER_CONTRACT = REPO_ROOT / "docs/AGENT_ISSUE_DISPATCHER.md"
@@ -72,9 +80,7 @@ def test_rejects_stale_workflow_review_receipt(tmp_path: Path) -> None:
         ),
         encoding="utf-8",
     )
-    workflow.write_text(
-        "name: check\n'on': {push: {}, pull_request: {}}\n", encoding="utf-8"
-    )
+    workflow.write_text("name: check\n'on': {push: {}, pull_request: {}}\n", encoding="utf-8")
     subprocess.run(["git", "commit", "-am", "stale receipt", "-q"], cwd=repo, check=True)
 
     result = subprocess.run(
@@ -289,7 +295,9 @@ def test_high_risk_implementation_requires_convergence_review_before_expensive_g
     assert "risk:auth" in gate.matched_surfaces
     assert "risk:credential-durability" in gate.matched_surfaces
     assert any("convergence packet" in check for check in gate.required_local_checks)
-    assert any("before selected expensive validation" in check for check in gate.required_local_checks)
+    assert any(
+        "before selected expensive validation" in check for check in gate.required_local_checks
+    )
 
 
 def test_stateful_fallback_requires_executable_boundary_matrix_before_handoff() -> None:
@@ -314,7 +322,10 @@ def test_stateful_fallback_requires_executable_boundary_matrix_before_handoff() 
     assert blocked.status == "required"
     assert blocked.may_handoff_to_ci is False
     assert blocked.stateful_fallback_matrix_complete is False
-    assert any("executable stateful fallback boundary matrix" in check for check in blocked.required_local_checks)
+    assert any(
+        "executable stateful fallback boundary matrix" in check
+        for check in blocked.required_local_checks
+    )
     assert complete.status == "satisfied"
     assert complete.may_handoff_to_ci is True
     assert complete.stateful_fallback_matrix_complete is True
@@ -356,9 +367,1699 @@ def test_standard_implementation_keeps_existing_hot_path() -> None:
     assert gate.may_handoff_to_ci is True
 
 
+def _scope_revalidation_receipt(
+    *, head_sha: str = "a" * 40, outcome: str = "continue_unchanged"
+) -> dict[str, object]:
+    return {
+        "version": 1,
+        "pr_number": 4029,
+        "head_sha": head_sha,
+        "governing_issue": 4028,
+        "governing_contract_sha256": "b" * 64,
+        "outcome": outcome,
+        "follow_up_issue": 4172 if outcome == "split" else None,
+        "authentication": {
+            "source": "github-review",
+            "actor": "independent-reviewer",
+            "receipt_url": "https://github.example/receipt/1",
+        },
+        "finding_classifications": [
+            {
+                "finding_id": "f-1",
+                "scope_class": "adjacent_pre_existing" if outcome == "split" else "governing_contract_blocker",
+                **({"follow_up_issue": 4172} if outcome == "split" else {}),
+            }
+        ],
+    }
+
+
+def test_pr_level_rejection_circuit_breaker_ignores_mechanism_id_changes() -> None:
+    history = [
+        {"verdict": "rejected", "mechanism_id": "oauth.pending"},
+        {"verdict": "rejected", "mechanism_id": "oauth.recovery"},
+    ]
+    with pytest.raises(ReviewBeforeCiGateError, match="contract revalidation receipt"):
+        validate_pr_scope_revalidation(4029, 4028, "a" * 40, history, None)
+    assert (
+        validate_pr_scope_revalidation(
+            4029, 4028, "a" * 40, history, _scope_revalidation_receipt()
+        )["outcome"]
+        == "continue_unchanged"
+    )
+
+
+def test_pr_level_contract_revalidation_receipt_is_exact_and_authenticated() -> None:
+    receipt = _scope_revalidation_receipt(outcome="split")
+    assert (
+        validate_pr_scope_revalidation(4029, 4028, "a" * 40, [{"verdict": "rejected"}] * 2, receipt)
+        == receipt
+    )
+    for field, value in (
+        ("head_sha", "c" * 40),
+        ("governing_issue", 9999),
+        ("governing_contract_sha256", "not-a-digest"),
+    ):
+        invalid = dict(receipt)
+        invalid[field] = value
+        with pytest.raises(ReviewBeforeCiGateError):
+            validate_pr_scope_revalidation(
+                4029, 4028, "a" * 40, [{"verdict": "rejected"}] * 2, invalid
+            )
+    unauthenticated = dict(receipt)
+    unauthenticated["authentication"] = {"source": "local", "actor": "", "receipt_url": ""}
+    with pytest.raises(ReviewBeforeCiGateError, match="authenticated"):
+        validate_pr_scope_revalidation(
+            4029, 4028, "a" * 40, [{"verdict": "rejected"}] * 2, unauthenticated
+        )
+
+
+def test_split_revalidation_requires_a_bounded_follow_up_issue() -> None:
+    receipt = _scope_revalidation_receipt(outcome="split")
+    receipt.pop("follow_up_issue")
+
+    with pytest.raises(ReviewBeforeCiGateError, match="split requires a bounded follow-up Issue"):
+        validate_pr_scope_revalidation(
+            4029, 4028, "a" * 40, [{"verdict": "rejected"}] * 2, receipt
+        )
+
+
+def test_adjacent_findings_require_follow_up_issue_not_same_pr_scope() -> None:
+    receipt = _scope_revalidation_receipt(outcome="split")
+    receipt["finding_classifications"] = [
+        {"finding_id": "f-1", "scope_class": "adjacent_pre_existing", "follow_up_issue": 4172}
+    ]
+    assert (
+        validate_pr_scope_revalidation(4029, 4028, "a" * 40, [{"verdict": "rejected"}] * 2, receipt)
+        == receipt
+    )
+    missing_follow_up = dict(receipt)
+    missing_follow_up["finding_classifications"] = [
+        {"finding_id": "f-1", "scope_class": "adjacent_pre_existing"}
+    ]
+    with pytest.raises(ReviewBeforeCiGateError, match="follow-up Issue"):
+        validate_pr_scope_revalidation(
+            4029, 4028, "a" * 40, [{"verdict": "rejected"}] * 2, missing_follow_up
+        )
+
+
+def _live_pr_review_api(
+    *, head_sha: str = "a" * 40, repository: str = "octo/repo"
+) -> tuple[dict[str, object], callable]:
+    contract_digest = hashlib.sha256(b"## Contract\nLive body\n").hexdigest()
+    responses: dict[str, object] = {
+        f"repos/{repository}/pulls/4029": {
+            "number": 4029,
+            "state": "open",
+            "head": {
+                "sha": head_sha,
+                "ref": "codex/issue-4028",
+                "repo": {"full_name": repository},
+            },
+            "base": {"ref": "main", "repo": {"full_name": repository}},
+            "user": {"login": "implementation-author"},
+            "body": "Governing-Issue: #4028\n\nFixes #4028\n",
+        },
+        f"repos/{repository}/issues/4028": {"number": 4028, "body": "## Contract\nLive body\n"},
+        f"repos/{repository}/pulls/4029/reviews?per_page=100": [
+            {
+                "id": 11,
+                "state": "CHANGES_REQUESTED",
+                "body": f"P1 finding: contract gap\nGoverning-Contract-SHA256: {contract_digest}",
+                "commit_id": head_sha,
+                "user": {"login": "reviewer-one"},
+            },
+            {
+                "id": 12,
+                "state": "CHANGES_REQUESTED",
+                "body": f"P0 blocker: authority gap\nGoverning-Contract-SHA256: {contract_digest}",
+                "commit_id": head_sha,
+                "user": {"login": "reviewer-two"},
+            },
+            {
+                "id": 13,
+                "state": "APPROVED",
+                "body": "APPROVED: prior P1 repaired",
+                "commit_id": head_sha,
+                "user": {"login": "reviewer-three"},
+            },
+        ],
+        f"repos/{repository}/pulls/4029/comments?per_page=100": [
+            {"id": 101, "pull_request_review_id": 11, "body": "P1 blocker"},
+            {"id": 102, "pull_request_review_id": 12, "body": "P0 blocker"},
+            {"id": 103, "pull_request_review_id": 12, "body": "P2 observation"},
+        ],
+        f"repos/{repository}/issues/4029/comments?per_page=100": [
+            {"id": 201, "body": "P0 finding repaired on the next head"},
+            {"id": 202, "body": "P2 conversation observation"},
+        ],
+    }
+
+    def api(path: str, paginate: bool) -> object:
+        assert paginate is path.endswith(("reviews?per_page=100", "comments?per_page=100"))
+        return responses[path]
+
+    return responses, api
+
+
+def test_pr_scope_revalidation_derives_live_history_and_requires_exact_classification() -> None:
+    responses, api = _live_pr_review_api()
+    history = authenticated_pr_scope_revalidation_history(
+        repository="octo/repo",
+        pr_number=4029,
+        governing_issue=4028,
+        head_sha="a" * 40,
+        api=api,
+    )
+    assert history["finding_ids"] == [
+        "comment:101",
+        "comment:102",
+        "review:11",
+        "review:12",
+    ]
+    receipt = {
+        "version": 1,
+        "pr_number": 4029,
+        "head_sha": "a" * 40,
+        "governing_issue": 4028,
+        "governing_contract_sha256": history["governing_contract_sha256"],
+        "outcome": "continue_unchanged",
+        "authentication": history["authentication"],
+        "finding_classifications": [
+            {"finding_id": "comment:101", "scope_class": "governing_contract_blocker"},
+            {"finding_id": "comment:102", "scope_class": "pr_introduced_regression"},
+            {"finding_id": "review:11", "scope_class": "governing_contract_blocker"},
+            {"finding_id": "review:12", "scope_class": "pr_introduced_regression"},
+        ],
+    }
+    history = _attach_durable_receipt(responses, api, receipt)
+    assert (
+        validate_pr_scope_revalidation(
+            4029,
+            4028,
+            "a" * 40,
+            history["rejected_rounds"],
+            receipt,
+            governing_contract_sha256=history["governing_contract_sha256"],
+            authenticated_history=history,
+        )
+        == receipt
+    )
+    partial = dict(receipt)
+    partial["finding_classifications"] = receipt["finding_classifications"][:1]
+    with pytest.raises(ReviewBeforeCiGateError, match="durable GitHub receipt"):
+        validate_pr_scope_revalidation(
+            4029,
+            4028,
+            "a" * 40,
+            history["rejected_rounds"],
+            partial,
+            governing_contract_sha256=history["governing_contract_sha256"],
+            authenticated_history=history,
+        )
+    stale = dict(receipt)
+    stale["authentication"] = {**history["authentication"], "head_sha": "b" * 40}
+    with pytest.raises(ReviewBeforeCiGateError, match="foreign, or stale"):
+        validate_pr_scope_revalidation(
+            4029,
+            4028,
+            "a" * 40,
+            history["rejected_rounds"],
+            stale,
+            governing_contract_sha256=history["governing_contract_sha256"],
+            authenticated_history=history,
+        )
+
+
+def test_split_revalidation_authenticates_a_bounded_follow_up_issue() -> None:
+    responses, api = _live_pr_review_api()
+    responses["repos/octo/repo/issues/4172"] = {
+        "number": 4172,
+        "state": "open",
+        "body": """## Context
+Bounded follow-up.
+## Scope
+- [ ] One bounded change.
+## Source Anchors
+- `tests/ops/test_review_before_ci_gate.py`
+## SBS Impact
+- Builder System.
+## Constraints
+- Stay bounded.
+Source-Governing-Issue: #4028
+Source-PR: #4029
+Routed-Finding: review:11
+## Acceptance Criteria
+- [ ] The follow-up is testable.
+  - Verify: `tests/ops/test_review_before_ci_gate.py::test_split_revalidation_authenticates_a_bounded_follow_up_issue`
+## Out of Scope
+- Other work.
+## Suggested Validation
+- `pytest -q tests/ops/test_review_before_ci_gate.py`
+## Source Docs
+- `docs/development/AUTONOMOUS_REVIEW_REPAIR_GATE_CONTRACTS.md`
+""",
+    }
+    history = authenticated_pr_scope_revalidation_history(
+        repository="octo/repo",
+        pr_number=4029,
+        governing_issue=4028,
+        head_sha="a" * 40,
+        follow_up_issue_numbers=[4172],
+        api=api,
+    )
+    receipt = {
+        "version": 1,
+        "pr_number": 4029,
+        "head_sha": "a" * 40,
+        "governing_issue": 4028,
+        "governing_contract_sha256": history["governing_contract_sha256"],
+        "outcome": "split",
+        "follow_up_issue": 4172,
+        "authentication": history["authentication"],
+        "finding_classifications": [
+            {
+                "finding_id": finding_id,
+                "scope_class": (
+                    "adjacent_pre_existing" if finding_id == "review:11" else "governing_contract_blocker"
+                ),
+                **({"follow_up_issue": 4172} if finding_id == "review:11" else {}),
+            }
+            for finding_id in history["finding_ids"]
+        ],
+    }
+    history = _attach_durable_receipt(responses, api, receipt, follow_up_issue_numbers=[4172])
+    assert (
+        validate_pr_scope_revalidation(
+            4029,
+            4028,
+            "a" * 40,
+            history["rejected_rounds"],
+            receipt,
+            governing_contract_sha256=history["governing_contract_sha256"],
+            authenticated_history=history,
+        )
+        == receipt
+    )
+    responses["repos/octo/repo/issues/4173"] = {"number": 4173, "body": "not a contract"}
+    with pytest.raises(ReviewBeforeCiGateError, match="bounded canonical contract"):
+        authenticated_pr_scope_revalidation_history(
+            repository="octo/repo",
+            pr_number=4029,
+            governing_issue=4028,
+            head_sha="a" * 40,
+            follow_up_issue_numbers=[4173],
+            api=api,
+        )
+    responses["repos/octo/repo/issues/4174"] = {
+        "number": 4174,
+        "state": "closed",
+        "pull_request": {"url": "https://api.github.example/pulls/4174"},
+        "body": responses["repos/octo/repo/issues/4172"]["body"],
+    }
+    with pytest.raises(ReviewBeforeCiGateError, match="bounded canonical contract"):
+        authenticated_pr_scope_revalidation_history(
+            repository="octo/repo",
+            pr_number=4029,
+            governing_issue=4028,
+            head_sha="a" * 40,
+            follow_up_issue_numbers=[4174],
+            api=api,
+        )
+
+
+def test_pr_scope_revalidation_rejects_foreign_or_stale_live_pr_evidence() -> None:
+    responses, api = _live_pr_review_api()
+    responses["repos/octo/repo/pulls/4029"]["base"]["repo"]["full_name"] = "foreign/repo"  # type: ignore[index]
+    with pytest.raises(ReviewBeforeCiGateError, match="foreign"):
+        authenticated_pr_scope_revalidation_history(
+            repository="octo/repo",
+            pr_number=4029,
+            governing_issue=4028,
+            head_sha="a" * 40,
+            api=api,
+        )
+
+
+def test_pr_scope_revalidation_rejects_closed_or_foreign_head_pr() -> None:
+    responses, api = _live_pr_review_api()
+    pr = responses["repos/octo/repo/pulls/4029"]
+    assert isinstance(pr, dict)
+    pr["state"] = "closed"
+
+    with pytest.raises(ReviewBeforeCiGateError, match="open PR"):
+        authenticated_pr_scope_revalidation_history(
+            repository="octo/repo",
+            pr_number=4029,
+            governing_issue=4028,
+            head_sha="a" * 40,
+            expected_head_ref="codex/issue-4028",
+            api=api,
+        )
+
+
+def test_pr_scope_revalidation_binds_expected_base_ref() -> None:
+    responses, api = _live_pr_review_api()
+    pr = responses["repos/octo/repo/pulls/4029"]
+    assert isinstance(pr, dict)
+    pr["base"]["ref"] = "stable"
+
+    with pytest.raises(ReviewBeforeCiGateError, match="base ref"):
+        authenticated_pr_scope_revalidation_history(
+            repository="octo/repo",
+            pr_number=4029,
+            governing_issue=4028,
+            head_sha="a" * 40,
+            expected_base_ref="main",
+            expected_head_ref="codex/issue-4028",
+            api=api,
+        )
+
+    pr["base"]["ref"] = "main"
+    history = authenticated_pr_scope_revalidation_history(
+        repository="octo/repo",
+        pr_number=4029,
+        governing_issue=4028,
+        head_sha="a" * 40,
+        expected_base_ref="main",
+        expected_head_ref="codex/issue-4028",
+        expected_lane="docs-authoring",
+        api=api,
+    )
+    assert history["authentication"]["base_ref"] == "main"
+
+    pr["state"] = "open"
+    pr["head"]["repo"]["full_name"] = "foreign/repo"
+    with pytest.raises(ReviewBeforeCiGateError, match="current branch"):
+        authenticated_pr_scope_revalidation_history(
+            repository="octo/repo",
+            pr_number=4029,
+            governing_issue=4028,
+            head_sha="a" * 40,
+            expected_head_ref="codex/issue-4028",
+            api=api,
+        )
+
+    pr["head"]["repo"]["full_name"] = "octo/repo"
+    pr["head"]["ref"] = "foreign-branch"
+    with pytest.raises(ReviewBeforeCiGateError, match="current branch"):
+        authenticated_pr_scope_revalidation_history(
+            repository="octo/repo",
+            pr_number=4029,
+            governing_issue=4028,
+            head_sha="a" * 40,
+            expected_head_ref="codex/issue-4028",
+            api=api,
+        )
+
+
+@pytest.mark.parametrize("extra_digest", (None, "same", "conflicting"))
+def test_rejected_round_requires_exactly_one_governing_contract_digest(
+    extra_digest: str | None,
+) -> None:
+    responses, api = _live_pr_review_api()
+    reviews = responses["repos/octo/repo/pulls/4029/reviews?per_page=100"]
+    assert isinstance(reviews, list)
+    if extra_digest is None:
+        reviews[0]["body"] = re.sub(
+            r"\nGoverning-Contract-SHA256: [0-9a-f]{64}", "", reviews[0]["body"]
+        )
+    else:
+        digest = (
+            re.search(r"[0-9a-f]{64}", reviews[0]["body"]).group(0)
+            if extra_digest == "same"
+            else "d" * 64
+        )
+        reviews[0]["body"] += "\nGoverning-Contract-SHA256: " + digest
+
+    with pytest.raises(ReviewBeforeCiGateError, match="exactly one governing contract"):
+        authenticated_pr_scope_revalidation_history(
+            repository="octo/repo",
+            pr_number=4029,
+            governing_issue=4028,
+            head_sha="a" * 40,
+            api=api,
+        )
+
+
+def test_single_legacy_rejected_round_does_not_require_lineage_marker() -> None:
+    responses, api = _live_pr_review_api()
+    reviews = responses["repos/octo/repo/pulls/4029/reviews?per_page=100"]
+    assert isinstance(reviews, list)
+    reviews[:] = reviews[:1]
+    reviews[0]["body"] = "P1 legacy finding without contract lineage"
+    comments = responses["repos/octo/repo/pulls/4029/comments?per_page=100"]
+    assert isinstance(comments, list)
+    comments[:] = [comment for comment in comments if comment["pull_request_review_id"] == 11]
+
+    history = authenticated_pr_scope_revalidation_history(
+        repository="octo/repo",
+        pr_number=4029,
+        governing_issue=4028,
+        head_sha="a" * 40,
+        api=api,
+    )
+
+    assert len(history["rejected_rounds"]) == 1
+    assert history["rejected_round_contracts"][0]["governing_contract_sha256"] is None
+
+
+def test_existing_publication_mode_cannot_omit_pr_scope_revalidation() -> None:
+    result = subprocess.run(
+        [
+            sys.executable,
+            "scripts/review_before_ci_gate.py",
+            "--lane",
+            "governance",
+            "--changed-file",
+            "docs/development/PR_HOT_PATH.md",
+            "--risk-assessment-complete",
+            "--review-gate-complete",
+            "--publication-mode",
+            "existing",
+        ],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 2
+    assert "requires authenticated PR scope revalidation" in result.stderr
+
+
+def test_existing_publication_must_match_unique_open_pr_for_current_branch(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(
+        "scripts.review_before_ci_gate.workflow_risk_evidence_from_git",
+        lambda *args, **kwargs: SimpleNamespace(risks=[], head_sha="b" * 40),
+    )
+    monkeypatch.setattr(
+        "scripts.review_before_ci_gate._github_repository_from_origin", lambda: "octo/repo"
+    )
+    monkeypatch.setattr(
+        "scripts.review_before_ci_gate._current_branch_open_pr",
+        lambda repository, expected_base_ref=None: {
+            "number": 4999,
+            "head": {"ref": "codex/issue-4028", "repo": {"full_name": repository}},
+        },
+    )
+
+    assert review_before_ci_main(
+        [
+            "--lane",
+            "governance",
+            "--changed-file",
+            "scripts/review_before_ci_gate.py",
+            "--risk-assessment-complete",
+            "--risk-surface",
+            "state-machine",
+            "--review-gate-complete",
+            "--publication-mode",
+            "existing",
+            "--pr-scope-revalidation",
+            "--github-repository",
+            "octo/repo",
+            "--pr-number",
+            "4029",
+            "--governing-issue",
+            "4028",
+        ]
+    ) == 2
+    assert "unique open PR for the current branch" in capsys.readouterr().err
+
+
+def test_issue_free_existing_pr_uses_pr_body_as_contract_authority() -> None:
+    responses, api = _live_pr_review_api()
+    responses.pop("repos/octo/repo/issues/4028")
+    pr = responses["repos/octo/repo/pulls/4029"]
+    assert isinstance(pr, dict)
+    pr["body"] = """## Change Lane
+- [x] Docs authoring lane
+- [ ] Governance lane
+
+Final-Review-Rounds: 1
+
+## Summary
+- Bounded docs change.
+
+## BuilderOps Routing
+- Records/projections/receipts: none
+- Reason: No BuilderOps material was routed.
+"""
+
+    history = authenticated_pr_scope_revalidation_history(
+        repository="octo/repo",
+        pr_number=4029,
+        governing_issue=None,
+        head_sha="a" * 40,
+        expected_base_ref="main",
+        expected_head_ref="codex/issue-4028",
+        expected_lane="docs-authoring",
+        api=api,
+    )
+
+    assert history["governing_issue"] is None
+    assert history["contract_source"] == "pr-body"
+    assert history["contract_lane"] == "docs-authoring"
+
+
+def test_issue_free_existing_publication_does_not_require_governing_issue(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    candidate_head = "b" * 40
+    captured: dict[str, object] = {}
+    monkeypatch.setattr(
+        "scripts.review_before_ci_gate.workflow_risk_evidence_from_git",
+        lambda *args, **kwargs: SimpleNamespace(risks=[], head_sha=candidate_head),
+    )
+    monkeypatch.setattr(
+        "scripts.review_before_ci_gate._github_repository_from_origin", lambda: "octo/repo"
+    )
+    monkeypatch.setattr(
+        "scripts.review_before_ci_gate._current_branch_open_pr",
+        lambda repository, expected_base_ref=None: {
+            "number": 4029,
+            "head": {"ref": "codex/docs", "repo": {"full_name": repository}},
+        },
+    )
+
+    def history(**kwargs: object) -> Mapping[str, object]:
+        captured.update(kwargs)
+        return {
+            "live_pr_head_sha": "a" * 40,
+            "rejected_rounds": [],
+            "governing_contract_sha256": "c" * 64,
+        }
+
+    monkeypatch.setattr(
+        "scripts.review_before_ci_gate.authenticated_pr_scope_revalidation_history",
+        history,
+    )
+    monkeypatch.setattr(
+        "scripts.review_before_ci_gate._git_allows_pr_update", lambda *args: True
+    )
+
+    assert review_before_ci_main(
+        [
+            "--lane",
+            "governance",
+            "--changed-file",
+            "docs/development/PR_HOT_PATH.md",
+            "--risk-assessment-complete",
+            "--review-gate-complete",
+            "--publication-mode",
+            "existing",
+            "--pr-scope-revalidation",
+            "--github-repository",
+            "octo/repo",
+            "--pr-number",
+            "4029",
+        ]
+    ) == 0
+    assert captured["governing_issue"] is None
+    assert captured["expected_lane"] == "governance"
+
+
 @pytest.mark.parametrize(
-    "lane", ["implmentation", "docs", "code", "maintenance", "promotion"]
+    "authority_violation",
+    (
+        "\nFixes #99\n",
+        "\n- [x] Governance lane\n",
+        "\nGoverning-Issue: #99\n",
+        "\nVerified-Closing-Issues: #99\n",
+        "\n## Direct Repair\nType: governance\nReason: incomplete\n",
+    ),
 )
+def test_issue_free_contract_rejects_ambiguous_or_issue_backed_authority(
+    authority_violation: str,
+) -> None:
+    responses, api = _live_pr_review_api()
+    responses.pop("repos/octo/repo/issues/4028")
+    pr = responses["repos/octo/repo/pulls/4029"]
+    assert isinstance(pr, dict)
+    pr["body"] = f"""## Change Lane
+- [x] Docs authoring lane
+- [ ] Governance lane
+
+Final-Review-Rounds: 1
+
+## BuilderOps Routing
+- Records/projections/receipts: none
+- Reason: No BuilderOps material was routed.
+{authority_violation}"""
+
+    with pytest.raises(ReviewBeforeCiGateError, match="issue-free PR body"):
+        authenticated_pr_scope_revalidation_history(
+            repository="octo/repo",
+            pr_number=4029,
+            governing_issue=None,
+            head_sha="a" * 40,
+            expected_lane="docs-authoring",
+            api=api,
+        )
+
+
+@pytest.mark.parametrize("separator", ("\r", "\u2028", "\u2029"))
+def test_issue_free_contract_rejects_unsupported_line_separators(separator: str) -> None:
+    responses, api = _live_pr_review_api()
+    responses.pop("repos/octo/repo/issues/4028")
+    pr = responses["repos/octo/repo/pulls/4029"]
+    assert isinstance(pr, dict)
+    pr["body"] = separator.join(
+        (
+            "## Change Lane",
+            "- [x] Docs authoring lane",
+            "Final-Review-Rounds: 1",
+            "## BuilderOps Routing",
+            "- Records/projections/receipts: none",
+            "- Reason: No BuilderOps material was routed.",
+        )
+    )
+
+    with pytest.raises(ReviewBeforeCiGateError, match="issue-free PR body"):
+        authenticated_pr_scope_revalidation_history(
+            repository="octo/repo",
+            pr_number=4029,
+            governing_issue=None,
+            head_sha="a" * 40,
+            expected_lane="docs-authoring",
+            api=api,
+        )
+
+
+def test_issue_free_contract_must_match_invocation_lane() -> None:
+    responses, api = _live_pr_review_api()
+    responses.pop("repos/octo/repo/issues/4028")
+    pr = responses["repos/octo/repo/pulls/4029"]
+    assert isinstance(pr, dict)
+    pr["body"] = """## Change Lane
+- [x] Docs authoring lane
+
+Final-Review-Rounds: 1
+
+## BuilderOps Routing
+- Records/projections/receipts: none
+- Reason: No BuilderOps material was routed.
+"""
+
+    with pytest.raises(ReviewBeforeCiGateError, match="publication lane"):
+        authenticated_pr_scope_revalidation_history(
+            repository="octo/repo",
+            pr_number=4029,
+            governing_issue=None,
+            head_sha="a" * 40,
+            expected_lane="implementation",
+            api=api,
+        )
+
+
+@pytest.mark.parametrize(
+    ("lane", "expected_lane"),
+    (
+        ("    - [x] Docs authoring lane", "docs-authoring"),
+        ("-\x1c[x]\x1cDocs authoring lane", "docs-authoring"),
+        ("-\x85[x]\x85Docs authoring lane", "docs-authoring"),
+        (
+            "## Direct Repair\n"
+            "Type:\x1cgovernance\n"
+            "Reason: bounded repair\n"
+            "Validation: focused tests\n"
+            "Issue required: no",
+            "direct-repair",
+        ),
+        (
+            "## Direct Repair\n"
+            "Type:\x85governance\n"
+            "Reason: bounded repair\n"
+            "Validation: focused tests\n"
+            "Issue required: no",
+            "direct-repair",
+        ),
+    ),
+)
+def test_issue_free_contract_matches_hosted_lane_whitespace_grammar(
+    lane: str, expected_lane: str
+) -> None:
+    responses, api = _live_pr_review_api()
+    responses.pop("repos/octo/repo/issues/4028")
+    pr = responses["repos/octo/repo/pulls/4029"]
+    assert isinstance(pr, dict)
+    pr["body"] = f"""## Change Lane
+{lane}
+
+Final-Review-Rounds: 1
+
+## BuilderOps Routing
+- Records/projections/receipts: none
+- Reason: No BuilderOps material was routed.
+"""
+
+    with pytest.raises(ReviewBeforeCiGateError, match="issue-free PR body"):
+        authenticated_pr_scope_revalidation_history(
+            repository="octo/repo",
+            pr_number=4029,
+            governing_issue=None,
+            head_sha="a" * 40,
+            expected_lane=expected_lane,
+            api=api,
+        )
+
+
+@pytest.mark.parametrize(
+    ("contract_body", "expected_lane"),
+    (
+        (
+            "## Change Lane\n"
+            "-\ufeff[x]\ufeffDocs authoring lane\n\n"
+            "Final-Review-Rounds: 1\n",
+            "docs-authoring",
+        ),
+        (
+            "## Direct Repair\n"
+            "Type:\ufeffgovernance\n"
+            "Reason:\ufeffbounded repair\n"
+            "Validation:\ufefffocused tests\n"
+            "Issue required:\ufeffno\n\n"
+            "Final-Review-Rounds: 1\n\n"
+            "## BuilderOps Routing\n"
+            "- Records/projections/receipts: none\n"
+            "- Reason: No BuilderOps material was routed.\n",
+            "direct-repair",
+        ),
+    ),
+)
+def test_issue_free_contract_accepts_ecmascript_only_whitespace(
+    contract_body: str, expected_lane: str
+) -> None:
+    responses, api = _live_pr_review_api()
+    responses.pop("repos/octo/repo/issues/4028")
+    pr = responses["repos/octo/repo/pulls/4029"]
+    assert isinstance(pr, dict)
+    pr["body"] = contract_body
+
+    history = authenticated_pr_scope_revalidation_history(
+        repository="octo/repo",
+        pr_number=4029,
+        governing_issue=None,
+        head_sha="a" * 40,
+        expected_lane=expected_lane,
+        api=api,
+    )
+
+    assert history["contract_lane"] == expected_lane
+
+
+@pytest.mark.parametrize(
+    ("routing_lines", "accepted"),
+    (
+        (
+            "\ufeff-\ufeffRecords/projections/receipts: none\n"
+            "\ufeff-\ufeffReason: routed",
+            True,
+        ),
+        (
+            "\x85-\x85Records/projections/receipts: none\n"
+            "\x85-\x85Reason: routed",
+            False,
+        ),
+        ("- Records/projections/receipts: \ufeff\n- Reason: \ufeff", False),
+        ("- Records/projections/receipts: \x85\n- Reason: \x85", True),
+    ),
+)
+def test_issue_free_builderops_routing_matches_ecmascript_whitespace(
+    routing_lines: str, accepted: bool
+) -> None:
+    responses, api = _live_pr_review_api()
+    responses.pop("repos/octo/repo/issues/4028")
+    pr = responses["repos/octo/repo/pulls/4029"]
+    assert isinstance(pr, dict)
+    pr["body"] = (
+        "## Change Lane\n- [x] Docs authoring lane\n\n"
+        "Final-Review-Rounds: 1\n\n## BuilderOps Routing\n"
+        f"{routing_lines}\n"
+    )
+
+    def invocation() -> Mapping[str, object]:
+        return authenticated_pr_scope_revalidation_history(
+            repository="octo/repo",
+            pr_number=4029,
+            governing_issue=None,
+            head_sha="a" * 40,
+            expected_lane="docs-authoring",
+            api=api,
+        )
+    if accepted:
+        assert invocation()["contract_lane"] == "docs-authoring"
+    else:
+        with pytest.raises(ReviewBeforeCiGateError, match="issue-free PR body"):
+            invocation()
+
+
+def test_issue_free_direct_repair_rejects_feff_in_builderops_literal_heading() -> None:
+    responses, api = _live_pr_review_api()
+    responses.pop("repos/octo/repo/issues/4028")
+    pr = responses["repos/octo/repo/pulls/4029"]
+    assert isinstance(pr, dict)
+    pr["body"] = (
+        "## Direct Repair\nType: governance\nReason: bounded repair\n"
+        "Validation: focused tests\nIssue required: no\n\n"
+        "Final-Review-Rounds: 1\n\n##\ufeffBuilderOps Routing\n"
+        "- Records/projections/receipts: none\n- Reason: routed\n"
+    )
+
+    with pytest.raises(ReviewBeforeCiGateError, match="issue-free PR body"):
+        authenticated_pr_scope_revalidation_history(
+            repository="octo/repo",
+            pr_number=4029,
+            governing_issue=None,
+            head_sha="a" * 40,
+            expected_lane="direct-repair",
+            api=api,
+        )
+
+
+@pytest.mark.parametrize(
+    "direct_repair_contract",
+    (
+        "Prose ## Direct Repair\nType: governance\nReason: bounded\n"
+        "Validation: tests\nIssue required: no",
+        "    ## Direct Repair\nType: governance\nReason: bounded\n"
+        "Validation: tests\nIssue required: no",
+        "### Direct Repair\nType: governance\nReason: bounded\n"
+        "Validation: tests\nIssue required: no",
+        "> ## Direct Repair\nType: governance\nReason: bounded\n"
+        "Validation: tests\nIssue required: no",
+        "`## Direct Repair`\nType: governance\nReason: bounded\n"
+        "Validation: tests\nIssue required: no",
+        "## Direct Repair\nType: governance\nReason: bounded\n"
+        "Validation: tests\nIssue required: no\n\n"
+        "## Direct Repair\nType: governance\nReason: second\n"
+        "Validation: tests\nIssue required: no",
+        "## Direct Repair\nType: governance\nType: docs\nReason: bounded\n"
+        "Validation: tests\nIssue required: no",
+        "## Direct Repair\nType: governance\nType: invalid\nReason: bounded\n"
+        "Validation: tests\nIssue required: no",
+        "## Direct Repair\nType: governance\n    Type: docs\nReason: bounded\n"
+        "Validation: tests\nIssue required: no",
+        "## Direct Repair\nType: governance\nReason: bounded\nReason: duplicate\n"
+        "Validation: tests\nIssue required: no",
+        "## Direct Repair\nType: governance\nReason: bounded\nReason:\n"
+        "Validation: tests\nIssue required: no",
+        "## Direct Repair\nType: governance\nReason: bounded\n"
+        "Validation: tests\nValidation: duplicate\nIssue required: no",
+        "## Direct Repair\nType: governance\nReason: bounded\n"
+        "Validation: tests\n    Validation:\nIssue required: no",
+        "## Direct Repair\nType: governance\nReason: bounded\n"
+        "Validation: tests\nIssue required: no\nIssue required: no",
+        "## Direct Repair\nType: governance\nReason: bounded\n"
+        "Validation: tests\nIssue required: no\nIssue required: yes",
+    ),
+)
+def test_issue_free_direct_repair_requires_one_canonical_section_and_fields(
+    direct_repair_contract: str,
+) -> None:
+    responses, api = _live_pr_review_api()
+    responses.pop("repos/octo/repo/issues/4028")
+    pr = responses["repos/octo/repo/pulls/4029"]
+    assert isinstance(pr, dict)
+    pr["body"] = (
+        f"{direct_repair_contract}\n\nFinal-Review-Rounds: 1\n\n"
+        "## BuilderOps Routing\n- Records/projections/receipts: none\n"
+        "- Reason: routed\n"
+    )
+
+    with pytest.raises(ReviewBeforeCiGateError, match="issue-free PR body"):
+        authenticated_pr_scope_revalidation_history(
+            repository="octo/repo",
+            pr_number=4029,
+            governing_issue=None,
+            head_sha="a" * 40,
+            expected_lane="direct-repair",
+            api=api,
+        )
+
+
+def test_current_branch_rejects_ambiguous_open_prs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "scripts.review_before_ci_gate.subprocess.run",
+        lambda *args, **kwargs: subprocess.CompletedProcess(
+            args[0], 0, "codex/issue-4028\n", ""
+        ),
+    )
+    open_pr = {
+        "number": 4029,
+        "state": "open",
+        "base": {"repo": {"full_name": "octo/repo"}},
+        "head": {
+            "ref": "codex/issue-4028",
+            "repo": {"full_name": "octo/repo"},
+        },
+    }
+    monkeypatch.setattr(
+        "scripts.review_before_ci_gate._github_api",
+        lambda path, paginate: [open_pr, {**open_pr, "number": 4030}],
+    )
+
+    with pytest.raises(ReviewBeforeCiGateError, match="unique open PR"):
+        _current_branch_open_pr("octo/repo")
+
+
+def test_open_pr_cannot_omit_publication_mode(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(
+        "scripts.review_before_ci_gate.workflow_risk_evidence_from_git",
+        lambda *args, **kwargs: SimpleNamespace(risks=[]),
+    )
+    monkeypatch.setattr(
+        "scripts.review_before_ci_gate._github_repository_from_origin", lambda: "octo/repo"
+    )
+    monkeypatch.setattr(
+        "scripts.review_before_ci_gate._current_branch_has_open_pr", lambda repository: True
+    )
+
+    assert review_before_ci_main(
+        [
+            "--lane",
+            "governance",
+            "--changed-file",
+            "docs/development/PR_HOT_PATH.md",
+            "--risk-assessment-complete",
+            "--review-gate-complete",
+        ]
+    ) == 2
+    assert "requires explicit --publication-mode" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    "origin",
+    (
+        "git@github.com:octo/repo.git",
+        "https://github.com/octo/repo.git",
+        "ssh://git@github.com/octo/repo.git",
+        "git://github.com/octo/repo.git",
+    ),
+)
+def test_github_origin_parser_authenticates_supported_transport_forms(
+    monkeypatch: pytest.MonkeyPatch, origin: str
+) -> None:
+    monkeypatch.setattr(
+        "scripts.review_before_ci_gate.subprocess.run",
+        lambda *args, **kwargs: subprocess.CompletedProcess(args[0], 0, f"{origin}\n", ""),
+    )
+
+    assert _github_repository_from_origin() == "octo/repo"
+
+
+def test_new_publication_mode_requires_repository_identity() -> None:
+    result = subprocess.run(
+        [
+            sys.executable,
+            "scripts/review_before_ci_gate.py",
+            "--lane",
+            "governance",
+            "--changed-file",
+            "docs/development/PR_HOT_PATH.md",
+            "--risk-assessment-complete",
+            "--review-gate-complete",
+            "--publication-mode",
+            "new",
+        ],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 2
+    assert "requires GitHub repository identity" in result.stderr
+
+
+def test_pr_scope_revalidation_rejects_unbound_governing_issue_or_review() -> None:
+    responses, api = _live_pr_review_api()
+    responses["repos/octo/repo/pulls/4029"]["body"] = "Governing-Issue: #9999\n\nFixes #9999\n"  # type: ignore[index]
+    with pytest.raises(ReviewBeforeCiGateError, match="governing Issue identity"):
+        authenticated_pr_scope_revalidation_history(
+            repository="octo/repo",
+            pr_number=4029,
+            governing_issue=4028,
+            head_sha="a" * 40,
+            api=api,
+        )
+
+
+def test_follow_up_issue_requires_durable_source_and_finding_routing() -> None:
+    responses, api = _live_pr_review_api()
+    responses["repos/octo/repo/issues/4172"] = {
+        "number": 4172,
+        "state": "open",
+        "body": """## Context
+Generic issue.
+## Scope
+- [ ] A task.
+## Source Anchors
+- `tests/ops/test_review_before_ci_gate.py`
+## SBS Impact
+- Builder System.
+## Constraints
+- Stay bounded.
+## Acceptance Criteria
+- [ ] Testable.
+  - Verify: `tests/ops/test_review_before_ci_gate.py::test_follow_up_issue_requires_durable_source_and_finding_routing`
+## Out of Scope
+- Other work.
+## Suggested Validation
+- `pytest -q tests/ops/test_review_before_ci_gate.py`
+## Source Docs
+- `docs/development/AUTONOMOUS_REVIEW_REPAIR_GATE_CONTRACTS.md`
+""",
+    }
+
+    with pytest.raises(ReviewBeforeCiGateError, match="durable source PR/finding routing"):
+        authenticated_pr_scope_revalidation_history(
+            repository="octo/repo",
+            pr_number=4029,
+            governing_issue=4028,
+            head_sha="a" * 40,
+            follow_up_issue_numbers=[4172],
+            api=api,
+        )
+
+
+def test_live_history_closing_snapshot_rejects_mid_fetch_mutation() -> None:
+    responses, _ = _live_pr_review_api()
+    calls: dict[str, int] = {}
+
+    def racing_api(path: str, paginate: bool) -> object:
+        del paginate
+        calls[path] = calls.get(path, 0) + 1
+        payload = responses[path]
+        if path == "repos/octo/repo/pulls/4029/comments?per_page=100" and calls[path] == 2:
+            assert isinstance(payload, list)
+            return [*payload, {"id": 999, "pull_request_review_id": 11, "body": "P1 blocker"}]
+        return payload
+
+    with pytest.raises(ReviewBeforeCiGateError, match="changed during authenticated snapshot"):
+        authenticated_pr_scope_revalidation_history(
+            repository="octo/repo",
+            pr_number=4029,
+            governing_issue=4028,
+            head_sha="a" * 40,
+            api=racing_api,
+        )
+
+    responses, api = _live_pr_review_api()
+    responses["repos/octo/repo/pulls/4029/comments?per_page=100"] = [  # type: ignore[index]
+        {"id": 101, "pull_request_review_id": 999, "body": "P1 blocker"}
+    ]
+    with pytest.raises(ReviewBeforeCiGateError, match="unknown review"):
+        authenticated_pr_scope_revalidation_history(
+            repository="octo/repo",
+            pr_number=4029,
+            governing_issue=4028,
+            head_sha="a" * 40,
+            api=api,
+        )
+
+
+def _attach_durable_receipt(
+    responses: dict[str, object],
+    api: callable,
+    receipt: dict[str, object],
+    *,
+    follow_up_issue_numbers: list[int] | None = None,
+) -> Mapping[str, object]:
+    comments = responses["repos/octo/repo/issues/4029/comments?per_page=100"]
+    assert isinstance(comments, list)
+    comments.append(
+        {
+            "id": 299,
+            "body": "<!-- pr-scope-revalidation-receipt:v1 -->\n"
+            + json.dumps(receipt, sort_keys=True),
+            "user": {"login": "repository-owner"},
+            "author_association": "OWNER",
+        }
+    )
+    return authenticated_pr_scope_revalidation_history(
+        repository="octo/repo",
+        pr_number=4029,
+        governing_issue=4028,
+        head_sha="a" * 40,
+        follow_up_issue_numbers=follow_up_issue_numbers or [],
+        api=api,
+    )
+
+
+def test_approved_and_repair_prose_do_not_create_rejected_rounds() -> None:
+    responses, api = _live_pr_review_api()
+    reviews = responses["repos/octo/repo/pulls/4029/reviews?per_page=100"]
+    assert isinstance(reviews, list)
+    reviews[:] = [review for review in reviews if review["id"] == 13]
+    responses["repos/octo/repo/pulls/4029/comments?per_page=100"] = []
+
+    history = authenticated_pr_scope_revalidation_history(
+        repository="octo/repo",
+        pr_number=4029,
+        governing_issue=4028,
+        head_sha="a" * 40,
+        api=api,
+    )
+
+    assert history["rejected_rounds"] == []
+    assert history["finding_ids"] == []
+
+
+def test_rejected_round_requires_independent_review_author() -> None:
+    responses, api = _live_pr_review_api()
+    reviews = responses["repos/octo/repo/pulls/4029/reviews?per_page=100"]
+    assert isinstance(reviews, list)
+    reviews[0]["user"] = {"login": "implementation-author"}
+
+    history = authenticated_pr_scope_revalidation_history(
+        repository="octo/repo",
+        pr_number=4029,
+        governing_issue=4028,
+        head_sha="a" * 40,
+        api=api,
+    )
+
+    assert [round_["round_id"] for round_ in history["rejected_rounds"]] == ["review:12"]
+
+
+def test_expanded_contract_rejects_arbitrary_digest_and_requires_live_lineage() -> None:
+    responses, api = _live_pr_review_api()
+    prior_digest = "c" * 64
+    reviews = responses["repos/octo/repo/pulls/4029/reviews?per_page=100"]
+    assert isinstance(reviews, list)
+    for review in reviews[:2]:
+        review["body"] = re.sub(
+            r"Governing-Contract-SHA256: [0-9a-f]{64}",
+            f"Governing-Contract-SHA256: {prior_digest}",
+            review["body"],
+        )
+    history = authenticated_pr_scope_revalidation_history(
+        repository="octo/repo",
+        pr_number=4029,
+        governing_issue=4028,
+        head_sha="a" * 40,
+        api=api,
+    )
+    receipt = {
+        "version": 1,
+        "pr_number": 4029,
+        "head_sha": "a" * 40,
+        "governing_issue": 4028,
+        "governing_contract_sha256": history["governing_contract_sha256"],
+        "outcome": "expanded_contract",
+        "expanded_issue": 4028,
+        "expanded_contract_sha256": "d" * 64,
+        "expanded_from_rounds": history["rejected_round_contracts"],
+        "authentication": history["authentication"],
+        "finding_classifications": [
+            {"finding_id": finding_id, "scope_class": "security_authority_scope_expansion"}
+            for finding_id in history["finding_ids"]
+        ],
+    }
+    history = _attach_durable_receipt(responses, api, receipt)
+    with pytest.raises(ReviewBeforeCiGateError, match="live governing Issue contract"):
+        validate_pr_scope_revalidation(
+            4029,
+            4028,
+            "a" * 40,
+            history["rejected_rounds"],
+            receipt,
+            governing_contract_sha256=history["governing_contract_sha256"],
+            authenticated_history=history,
+        )
+
+    receipt["expanded_contract_sha256"] = history["governing_contract_sha256"]
+    responses["repos/octo/repo/issues/4029/comments?per_page=100"].pop()
+    history = _attach_durable_receipt(responses, api, receipt)
+    assert validate_pr_scope_revalidation(
+        4029,
+        4028,
+        "a" * 40,
+        history["rejected_rounds"],
+        receipt,
+        governing_contract_sha256=history["governing_contract_sha256"],
+        authenticated_history=history,
+    ) == receipt
+
+
+def test_local_receipt_copy_must_match_durable_github_receipt() -> None:
+    responses, api = _live_pr_review_api()
+    history = authenticated_pr_scope_revalidation_history(
+        repository="octo/repo",
+        pr_number=4029,
+        governing_issue=4028,
+        head_sha="a" * 40,
+        api=api,
+    )
+    receipt = {
+        "version": 1,
+        "pr_number": 4029,
+        "head_sha": "a" * 40,
+        "governing_issue": 4028,
+        "governing_contract_sha256": history["governing_contract_sha256"],
+        "outcome": "continue_unchanged",
+        "authentication": history["authentication"],
+        "finding_classifications": [
+            {"finding_id": finding_id, "scope_class": "governing_contract_blocker"}
+            for finding_id in history["finding_ids"]
+        ],
+    }
+    with pytest.raises(ReviewBeforeCiGateError, match="durable GitHub receipt"):
+        validate_pr_scope_revalidation(
+            4029,
+            4028,
+            "a" * 40,
+            history["rejected_rounds"],
+            receipt,
+            governing_contract_sha256=history["governing_contract_sha256"],
+            authenticated_history=history,
+        )
+
+    history = _attach_durable_receipt(responses, api, receipt)
+    assert validate_pr_scope_revalidation(
+        4029,
+        4028,
+        "a" * 40,
+        history["rejected_rounds"],
+        receipt,
+        governing_contract_sha256=history["governing_contract_sha256"],
+        authenticated_history=history,
+    ) == receipt
+
+
+def test_review_finding_content_is_bound_into_authenticated_history() -> None:
+    responses, api = _live_pr_review_api()
+    before = authenticated_pr_scope_revalidation_history(
+        repository="octo/repo",
+        pr_number=4029,
+        governing_issue=4028,
+        head_sha="a" * 40,
+        api=api,
+    )
+    comments = responses["repos/octo/repo/pulls/4029/comments?per_page=100"]
+    assert isinstance(comments, list)
+    comments[0]["body"] = "P1 blocker with materially changed semantics"
+    after = authenticated_pr_scope_revalidation_history(
+        repository="octo/repo",
+        pr_number=4029,
+        governing_issue=4028,
+        head_sha="a" * 40,
+        api=api,
+    )
+
+    assert before["authentication"] != after["authentication"]
+
+
+def test_bracketed_and_colon_protected_findings_are_content_bound() -> None:
+    responses, api = _live_pr_review_api()
+    comments = responses["repos/octo/repo/pulls/4029/comments?per_page=100"]
+    assert isinstance(comments, list)
+    comments[0]["body"] = "[P1] authority semantics v1"
+    comments[1]["body"] = "P0: data boundary v1"
+    before = authenticated_pr_scope_revalidation_history(
+        repository="octo/repo",
+        pr_number=4029,
+        governing_issue=4028,
+        head_sha="a" * 40,
+        api=api,
+    )
+    comments[0]["body"] = "[P1] authority semantics v2"
+    after = authenticated_pr_scope_revalidation_history(
+        repository="octo/repo",
+        pr_number=4029,
+        governing_issue=4028,
+        head_sha="a" * 40,
+        api=api,
+    )
+
+    assert {"comment:101", "comment:102"} <= set(before["finding_ids"])
+    assert before["authentication"] != after["authentication"]
+
+    comments[0]["body"] = "- **P1: authority semantics v3**"
+    bold = authenticated_pr_scope_revalidation_history(
+        repository="octo/repo",
+        pr_number=4029,
+        governing_issue=4028,
+        head_sha="a" * 40,
+        api=api,
+    )
+    assert "comment:101" in bold["finding_ids"]
+
+
+@pytest.mark.parametrize(
+    "finding",
+    (
+        "Severity: P1 — authority semantics",
+        "**Severity: P1** authority semantics",
+        "### [P1] authority semantics",
+        "- Severity: **P1** authority semantics",
+        "1. P1: authority semantics",
+        "2) **Severity: P0** authority semantics",
+    ),
+)
+def test_ordinary_protected_severity_forms_are_content_bound(finding: str) -> None:
+    responses, api = _live_pr_review_api()
+    comments = responses["repos/octo/repo/pulls/4029/comments?per_page=100"]
+    assert isinstance(comments, list)
+    comments[0]["body"] = f"{finding} v1"
+    before = authenticated_pr_scope_revalidation_history(
+        repository="octo/repo",
+        pr_number=4029,
+        governing_issue=4028,
+        head_sha="a" * 40,
+        api=api,
+    )
+
+    comments[0]["body"] = f"{finding} v2"
+    after = authenticated_pr_scope_revalidation_history(
+        repository="octo/repo",
+        pr_number=4029,
+        governing_issue=4028,
+        head_sha="a" * 40,
+        api=api,
+    )
+
+    assert "comment:101" in before["finding_ids"]
+    assert before["authentication"] != after["authentication"]
+
+
+def test_pre_push_candidate_is_distinct_from_live_pr_head() -> None:
+    responses, api = _live_pr_review_api(head_sha="b" * 40)
+    history = authenticated_pr_scope_revalidation_history(
+        repository="octo/repo",
+        pr_number=4029,
+        governing_issue=4028,
+        head_sha="a" * 40,
+        api=api,
+    )
+
+    assert history["candidate_head_sha"] == "a" * 40
+    assert history["live_pr_head_sha"] == "b" * 40
+    assert history["authentication"]["candidate_head_sha"] == "a" * 40
+    assert history["authentication"]["live_pr_head_sha"] == "b" * 40
+
+
+def test_pre_push_candidate_must_strictly_descend_from_live_pr_head() -> None:
+    head_sha = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=REPO_ROOT, text=True
+    ).strip()
+    parent_sha = subprocess.check_output(
+        ["git", "rev-parse", "HEAD^"], cwd=REPO_ROOT, text=True
+    ).strip()
+
+    assert not _git_is_strict_ancestor(head_sha, head_sha)
+    assert _git_is_strict_ancestor(parent_sha, head_sha)
+
+
+def test_pre_push_accepts_byte_identical_rebased_candidate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    for command in (
+        ["git", "init", "-q"],
+        ["git", "config", "user.email", "test@example.invalid"],
+        ["git", "config", "user.name", "test"],
+    ):
+        subprocess.run(command, cwd=repo, check=True)
+    (repo / "base.txt").write_text("base\n", encoding="utf-8")
+    subprocess.run(["git", "add", "."], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-qm", "base"], cwd=repo, check=True)
+    base = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo, text=True).strip()
+
+    (repo / "feature.txt").write_text("same delivery patch\n", encoding="utf-8")
+    subprocess.run(["git", "add", "."], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-qm", "live delivery"], cwd=repo, check=True)
+    live = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo, text=True).strip()
+
+    subprocess.run(["git", "checkout", "-qb", "canonical-main", base], cwd=repo, check=True)
+    (repo / "main.txt").write_text("current canonical base\n", encoding="utf-8")
+    subprocess.run(["git", "add", "."], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-qm", "advance main"], cwd=repo, check=True)
+    canonical_base = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=repo, text=True
+    ).strip()
+
+    subprocess.run(["git", "checkout", "-qb", "stale-sibling", base], cwd=repo, check=True)
+    (repo / "feature.txt").write_text("same delivery patch\n", encoding="utf-8")
+    subprocess.run(["git", "add", "."], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-qm", "stale sibling delivery"], cwd=repo, check=True)
+    stale_candidate = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=repo, text=True
+    ).strip()
+    monkeypatch.chdir(repo)
+    assert not _git_is_strict_ancestor(canonical_base, stale_candidate)
+    assert not _git_allows_pr_update(live, stale_candidate, canonical_base)
+
+    subprocess.run(
+        ["git", "checkout", "-qb", "rebased", canonical_base], cwd=repo, check=True
+    )
+    (repo / "feature.txt").write_text("same delivery patch\n", encoding="utf-8")
+    subprocess.run(["git", "add", "."], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-qm", "rebased delivery"], cwd=repo, check=True)
+    candidate = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=repo, text=True
+    ).strip()
+    assert _git_is_strict_ancestor(canonical_base, candidate)
+    assert not _git_is_strict_ancestor(live, candidate)
+    assert _git_allows_pr_update(live, candidate, canonical_base)
+
+    (repo / "feature.txt").write_text("different delivery patch\n", encoding="utf-8")
+    subprocess.run(["git", "add", "."], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-qm", "divergent delivery"], cwd=repo, check=True)
+    divergent = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=repo, text=True
+    ).strip()
+    assert not _git_allows_pr_update(live, divergent, canonical_base)
+
+
+def test_duplicate_key_durable_receipt_is_rejected() -> None:
+    responses, api = _live_pr_review_api()
+    comments = responses["repos/octo/repo/issues/4029/comments?per_page=100"]
+    assert isinstance(comments, list)
+    comments.append(
+        {
+            "id": 299,
+            "body": "<!-- pr-scope-revalidation-receipt:v1 -->\n"
+            + '{"outcome":"split","outcome":"continue_unchanged"}',
+            "user": {"login": "repository-owner"},
+            "author_association": "OWNER",
+        }
+    )
+
+    with pytest.raises(ReviewBeforeCiGateError, match="duplicate JSON key"):
+        authenticated_pr_scope_revalidation_history(
+            repository="octo/repo",
+            pr_number=4029,
+            governing_issue=4028,
+            head_sha="a" * 40,
+            api=api,
+        )
+
+
+def test_conflicting_durable_receipts_for_same_candidate_fail_closed() -> None:
+    responses, api = _live_pr_review_api()
+    history = authenticated_pr_scope_revalidation_history(
+        repository="octo/repo",
+        pr_number=4029,
+        governing_issue=4028,
+        head_sha="a" * 40,
+        api=api,
+    )
+    receipt = {
+        "version": 1,
+        "pr_number": 4029,
+        "head_sha": "a" * 40,
+        "governing_issue": 4028,
+        "governing_contract_sha256": history["governing_contract_sha256"],
+        "outcome": "continue_unchanged",
+        "authentication": history["authentication"],
+        "finding_classifications": [
+            {"finding_id": finding_id, "scope_class": "governing_contract_blocker"}
+            for finding_id in history["finding_ids"]
+        ],
+    }
+    conflicting = {
+        **receipt,
+        "finding_classifications": [
+            {"finding_id": finding_id, "scope_class": "pr_introduced_regression"}
+            for finding_id in history["finding_ids"]
+        ],
+    }
+    comments = responses["repos/octo/repo/issues/4029/comments?per_page=100"]
+    assert isinstance(comments, list)
+    for comment_id, durable_receipt in ((299, receipt), (300, conflicting)):
+        comments.append(
+            {
+                "id": comment_id,
+                "body": "<!-- pr-scope-revalidation-receipt:v1 -->\n"
+                + json.dumps(durable_receipt, sort_keys=True),
+                "user": {"login": "repository-owner"},
+                "author_association": "OWNER",
+            }
+        )
+    history = authenticated_pr_scope_revalidation_history(
+        repository="octo/repo",
+        pr_number=4029,
+        governing_issue=4028,
+        head_sha="a" * 40,
+        api=api,
+    )
+
+    with pytest.raises(ReviewBeforeCiGateError, match="conflicting durable GitHub receipts"):
+        validate_pr_scope_revalidation(
+            4029,
+            4028,
+            "a" * 40,
+            history["rejected_rounds"],
+            receipt,
+            governing_contract_sha256=history["governing_contract_sha256"],
+            authenticated_history=history,
+        )
+
+
+def test_split_requires_at_least_one_classified_routed_finding() -> None:
+    receipt = _scope_revalidation_receipt(outcome="split")
+    receipt["finding_classifications"] = [
+        {"finding_id": "f-1", "scope_class": "governing_contract_blocker"}
+    ]
+
+    with pytest.raises(ReviewBeforeCiGateError, match="split requires at least one"):
+        validate_pr_scope_revalidation(
+            4029, 4028, "a" * 40, [{"verdict": "rejected"}] * 2, receipt
+        )
+
+
+def test_publication_repository_must_match_authenticated_origin(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(
+        "scripts.review_before_ci_gate.workflow_risk_evidence_from_git",
+        lambda *args, **kwargs: SimpleNamespace(risks=[], head_sha="a" * 40),
+    )
+    monkeypatch.setattr(
+        "scripts.review_before_ci_gate._github_repository_from_origin", lambda: "octo/repo"
+    )
+
+    assert review_before_ci_main(
+        [
+            "--lane",
+            "governance",
+            "--changed-file",
+            "docs/development/PR_HOT_PATH.md",
+            "--risk-assessment-complete",
+            "--review-gate-complete",
+            "--publication-mode",
+            "new",
+            "--github-repository",
+            "foreign/repo",
+        ]
+    ) == 2
+    assert "does not match authenticated origin" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    "selector_override",
+    (
+        ["--workflow-risk-head", "HEAD^"],
+        ["--workflow-risk-base", "origin/stable"],
+    ),
+)
+def test_publication_rejects_caller_selected_head_or_base(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    selector_override: list[str],
+) -> None:
+    monkeypatch.setattr(
+        "scripts.review_before_ci_gate.workflow_risk_evidence_from_git",
+        lambda *args, **kwargs: SimpleNamespace(risks=[], head_sha="a" * 40),
+    )
+    monkeypatch.setattr(
+        "scripts.review_before_ci_gate._github_repository_from_origin", lambda: "octo/repo"
+    )
+    monkeypatch.setattr(
+        "scripts.review_before_ci_gate._current_branch_has_open_pr", lambda repository: False
+    )
+
+    assert review_before_ci_main(
+        [
+            "--lane",
+            "governance",
+            "--changed-file",
+            "scripts/review_before_ci_gate.py",
+            "--risk-assessment-complete",
+            "--risk-surface",
+            "state-machine",
+            "--review-gate-complete",
+            "--publication-mode",
+            "new",
+            "--github-repository",
+            "octo/repo",
+            *selector_override,
+        ]
+    ) == 2
+    assert "canonical origin/main...HEAD" in capsys.readouterr().err
+
+
+def test_scope_revalidation_cannot_issue_modeless_publication_authority(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(
+        "scripts.review_before_ci_gate.workflow_risk_evidence_from_git",
+        lambda *args, **kwargs: SimpleNamespace(risks=[], head_sha="a" * 40),
+    )
+    monkeypatch.setattr(
+        "scripts.review_before_ci_gate._github_repository_from_origin", lambda: "octo/repo"
+    )
+    monkeypatch.setattr(
+        "scripts.review_before_ci_gate._current_branch_has_open_pr", lambda repository: False
+    )
+    monkeypatch.setattr(
+        "scripts.review_before_ci_gate.authenticated_pr_scope_revalidation_history",
+        lambda **kwargs: {"live_pr_head_sha": "b" * 40},
+    )
+    monkeypatch.setattr(
+        "scripts.review_before_ci_gate._git_is_strict_ancestor", lambda *args: True
+    )
+    monkeypatch.setattr(
+        "scripts.review_before_ci_gate.validate_pr_scope_revalidation",
+        lambda *args, **kwargs: None,
+    )
+
+    assert review_before_ci_main(
+        [
+            "--lane",
+            "governance",
+            "--changed-file",
+            "scripts/review_before_ci_gate.py",
+            "--risk-assessment-complete",
+            "--risk-surface",
+            "state-machine",
+            "--review-gate-complete",
+            "--pr-scope-revalidation",
+            "--github-repository",
+            "octo/repo",
+            "--pr-number",
+            "4029",
+            "--governing-issue",
+            "4028",
+            "--workflow-risk-base",
+            "origin/stable",
+            "--workflow-risk-head",
+            "HEAD^",
+        ]
+    ) == 2
+    assert "only valid with --publication-mode existing" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("lane", ["implmentation", "docs", "code", "maintenance", "promotion"])
 def test_unknown_lane_is_rejected_instead_of_failing_open(lane: str) -> None:
     with pytest.raises(ReviewBeforeCiGateError, match=f"unknown lane: {lane}"):
         evaluate_review_before_ci_gate(
@@ -398,7 +2099,9 @@ def test_bypass_requires_explicit_reason() -> None:
     assert required.bypass_reason is None
     assert bypassed.status == "bypassed"
     assert bypassed.may_handoff_to_ci is True
-    assert bypassed.bypass_reason == "Emergency wording repair; receipt will name skipped local gate."
+    assert (
+        bypassed.bypass_reason == "Emergency wording repair; receipt will name skipped local gate."
+    )
     assert bypassed.preserves_ci_authority is True
 
 
@@ -453,43 +2156,35 @@ def test_direct_repair_cannot_omit_risk_assessment_to_reach_bypass() -> None:
         )
 
 
-def test_cli_fails_until_review_gate_is_complete() -> None:
-    blocked = subprocess.run(
-        [
-            sys.executable,
-            "scripts/review_before_ci_gate.py",
-            "--lane",
-            "governance",
-            "--changed-file",
-            "docs/development/PR_HOT_PATH.md",
-            "--risk-assessment-complete",
-        ],
-        cwd=REPO_ROOT,
-        capture_output=True,
-        text=True,
-        check=False,
+def test_cli_fails_until_review_gate_is_complete(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(
+        "scripts.review_before_ci_gate.workflow_risk_evidence_from_git",
+        lambda *args, **kwargs: SimpleNamespace(risks=[]),
     )
-    allowed = subprocess.run(
-        [
-            sys.executable,
-            "scripts/review_before_ci_gate.py",
-            "--lane",
-            "governance",
-            "--changed-file",
-            "docs/development/PR_HOT_PATH.md",
-            "--risk-assessment-complete",
-            "--review-gate-complete",
-        ],
-        cwd=REPO_ROOT,
-        capture_output=True,
-        text=True,
-        check=False,
+    monkeypatch.setattr(
+        "scripts.review_before_ci_gate._current_branch_has_open_pr", lambda repository: False
     )
+    monkeypatch.setattr(
+        "scripts.review_before_ci_gate._github_repository_from_origin", lambda: "octo/repo"
+    )
+    arguments = [
+        "--lane",
+        "governance",
+        "--changed-file",
+        "docs/development/PR_HOT_PATH.md",
+        "--risk-assessment-complete",
+        "--publication-mode",
+        "new",
+        "--github-repository",
+        "octo/repo",
+    ]
 
-    assert blocked.returncode == 1
-    assert json.loads(blocked.stdout)["may_handoff_to_ci"] is False
-    assert allowed.returncode == 0
-    assert json.loads(allowed.stdout)["may_handoff_to_ci"] is True
+    assert review_before_ci_main(arguments) == 1
+    assert json.loads(capsys.readouterr().out)["may_handoff_to_ci"] is False
+    assert review_before_ci_main([*arguments, "--review-gate-complete"]) == 0
+    assert json.loads(capsys.readouterr().out)["may_handoff_to_ci"] is True
 
 
 def test_publish_pr_skill_runs_review_gate_before_push() -> None:
@@ -542,8 +2237,7 @@ def test_one_final_review_round_governs_every_full_path() -> None:
     normalized_process_map = " ".join(process_map.split())
     assert (
         "Full-path review repair loop: re-run after every substantive P0/P1 fix and stop after "
-        "one clean independent round on the repaired current head SHA"
-        in normalized_process_map
+        "one clean independent round on the repaired current head SHA" in normalized_process_map
     )
     assert "Light-path PRs do not enter this loop" in process_map
     assert "two clean rounds for high-risk surfaces" not in process_map
@@ -573,10 +2267,14 @@ def test_review_severity_routing_blocks_only_p0_and_p1() -> None:
 
 def test_fast_lane_consumes_structured_severity_without_weakening_gates() -> None:
     skill = (REPO_ROOT / ".codex/skills/deliver-issue-set/SKILL.md").read_text(encoding="utf-8")
-    runner = (REPO_ROOT / "companion-ui/prompts/codex/deliver-epic-autonomous-runner.md").read_text(encoding="utf-8")
+    runner = (REPO_ROOT / "companion-ui/prompts/codex/deliver-epic-autonomous-runner.md").read_text(
+        encoding="utf-8"
+    )
     for surface in (skill, runner):
         assert "AUTONOMOUS_REVIEW_REPAIR_GATE_CONTRACTS.md" in surface
-        assert ".codex/skills/bug-to-issue/SKILL.md" in surface or "known-defect contracts" in surface
+        assert (
+            ".codex/skills/bug-to-issue/SKILL.md" in surface or "known-defect contracts" in surface
+        )
         assert "P2" in surface
         assert "P0/P1" in surface
 
@@ -691,8 +2389,7 @@ def test_pr_hot_path_requires_explicit_risk_classification_before_bypass() -> No
     assert "--risk-assessment-complete" in hot_path
     assert "A declared high-risk surface is never bypassable" in hot_path
     assert (
-        "`lane`: `docs-authoring` | `implementation` | `governance` | "
-        "`direct-repair`"
+        "`lane`: `docs-authoring` | `implementation` | `governance` | `direct-repair`"
     ) in hot_path
     assert "Promotion is not a PR hot-path lane" in hot_path
 
@@ -712,15 +2409,9 @@ def test_validation_scope_defaults_to_affected_subsystem_across_owner_docs() -> 
 def test_host_global_full_suite_uses_atomic_wrapper_in_canonical_workflow() -> None:
     agents = AGENTS.read_text(encoding="utf-8")
     workflow = DEV_WORKFLOW.read_text(encoding="utf-8")
-    template = (REPO_ROOT / ".github/pull_request_template.md").read_text(
-        encoding="utf-8"
-    )
-    runtime_chain = (REPO_ROOT / "scripts/verify_runtime_chain.sh").read_text(
-        encoding="utf-8"
-    )
-    py312_smoke = (REPO_ROOT / "scripts/py312_smoke_test.sh").read_text(
-        encoding="utf-8"
-    )
+    template = (REPO_ROOT / ".github/pull_request_template.md").read_text(encoding="utf-8")
+    runtime_chain = (REPO_ROOT / "scripts/verify_runtime_chain.sh").read_text(encoding="utf-8")
+    py312_smoke = (REPO_ROOT / "scripts/py312_smoke_test.sh").read_text(encoding="utf-8")
     makefile = (REPO_ROOT / "Makefile").read_text(encoding="utf-8")
     verify_promotion = (REPO_ROOT / ".codex/skills/verify-promotion/SKILL.md").read_text(
         encoding="utf-8"
@@ -770,9 +2461,9 @@ def test_owner_docs_do_not_prescribe_bare_repo_wide_not_pg_suites() -> None:
     )
 
     for owner_doc in owner_docs:
-        assert _bare_repo_wide_not_pg_commands(
-            owner_doc.read_text(encoding="utf-8")
-        ) == [], owner_doc
+        assert _bare_repo_wide_not_pg_commands(owner_doc.read_text(encoding="utf-8")) == [], (
+            owner_doc
+        )
 
 
 @pytest.mark.parametrize(
@@ -801,8 +2492,7 @@ def test_owner_docs_do_not_prescribe_bare_repo_wide_not_pg_suites() -> None:
         'pytest -q tests/foo/../.. -m "not pg"',
         "python3 scripts/run_with_host_lease.py --resource other "
         "--execution-id pytest-not-pg -- pytest -m 'not pg'",
-        "pytest -m 'not pg' and a targeted example "
-        "`pytest tests/chat -m 'not pg'`",
+        "pytest -m 'not pg' and a targeted example `pytest tests/chat -m 'not pg'`",
         "python3 scripts/run_with_host_lease.py --resource pytest-not-pg "
         "--resource other -- pytest -q -m 'not pg'",
         "python3 scripts/run_with_host_lease.py --resource other "
@@ -823,15 +2513,19 @@ def test_bare_repo_wide_not_pg_classifier_rejects_bypasses(command: str) -> None
 
 
 def test_bare_repo_wide_not_pg_classifier_allows_targeted_or_leased() -> None:
-    assert _bare_repo_wide_not_pg_commands(
-        'pytest tests/chat -q -m "not pg"'
-    ) == []
-    assert _bare_repo_wide_not_pg_commands(
-        "python3 scripts/run_with_host_lease.py --resource pytest-not-pg -- "
-        'pytest -q -m "not pg"'
-    ) == []
-    assert _bare_repo_wide_not_pg_commands(
-        "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 "
-        "scripts/run_with_host_lease.py --resource=pytest-not-pg -- "
-        'pytest -q -m "not pg"'
-    ) == []
+    assert _bare_repo_wide_not_pg_commands('pytest tests/chat -q -m "not pg"') == []
+    assert (
+        _bare_repo_wide_not_pg_commands(
+            "python3 scripts/run_with_host_lease.py --resource pytest-not-pg -- "
+            'pytest -q -m "not pg"'
+        )
+        == []
+    )
+    assert (
+        _bare_repo_wide_not_pg_commands(
+            "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 "
+            "scripts/run_with_host_lease.py --resource=pytest-not-pg -- "
+            'pytest -q -m "not pg"'
+        )
+        == []
+    )

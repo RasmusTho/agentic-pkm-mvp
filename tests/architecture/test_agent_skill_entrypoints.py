@@ -516,3 +516,16 @@ def test_model_inquiry_subscription_route_is_distinct_from_provider_api_mechanis
         "docs/CKM_DESIGN_AGENT_INTEGRATION/REGISTER_DESIGN_AGENT_ADAPTERS.md",
     ):
         assert withdrawn_gate not in _read(doc_path)
+
+
+def test_pr_scope_circuit_breaker_is_shared_across_delivery_skills() -> None:
+    canonical = "PR-Level Scope Revalidation Gate"
+    for path in (
+        ".codex/skills/issue-to-code/SKILL.md",
+        ".codex/skills/publish-pr/SKILL.md",
+        ".codex/skills/verification-and-closure/SKILL.md",
+    ):
+        assert canonical in _read(path)
+    assert "## PR-Level Scope Revalidation Gate" in _read(
+        "docs/development/AUTONOMOUS_REVIEW_REPAIR_GATE_CONTRACTS.md"
+    )

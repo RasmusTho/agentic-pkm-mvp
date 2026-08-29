@@ -5,8 +5,8 @@ Owner: Builder System governance
 Temporal class: strategic
 Review cadence: event-driven
 Source of truth: mixed
-Last reviewed: 2026-08-12
-Last verified against: 2026-08-12 current main, issue #3211, issue #3224, issue #3225, issue #3814, `docs/development/BUILDER_SYSTEM_PROCESS_MAP.md`, `.codex/skills/issue-to-code/SKILL.md`, `.codex/skills/publish-pr/SKILL.md`, `.codex/skills/verification-and-closure/SKILL.md`, `.codex/skills/bug-to-issue/SKILL.md`, `.codex/skills/pr-integration/SKILL.md`, `.codex/skills/_shared/CI_WAIT_CONTRACT.md`
+Last reviewed: 2026-08-29
+Last verified against: 2026-08-29 current main, issue #3211, issue #3224, issue #3225, issue #3814, issue #4028, `docs/development/BUILDER_SYSTEM_PROCESS_MAP.md`, `.codex/skills/issue-to-code/SKILL.md`, `.codex/skills/publish-pr/SKILL.md`, `.codex/skills/verification-and-closure/SKILL.md`, `.codex/skills/bug-to-issue/SKILL.md`, `.codex/skills/pr-integration/SKILL.md`, `.codex/skills/_shared/CI_WAIT_CONTRACT.md`
 
 # Autonomous Review and Repair Gate Contracts
 
@@ -389,6 +389,88 @@ final independent review gate are never carried forward.
 Record the triggering review round, mechanism key, packet location or concise receipt, reviewer
 capability, verdict, and the expensive validation/CI cycles avoided or repeated. This is delivery evidence, not
 a new owner-doc authority surface.
+
+## PR-Level Scope Revalidation Gate
+
+After two rejected independent review rounds on one PR, the production review/publication gate
+fails closed before another expensive proof or publication cycle. This count is PR-level: changing a
+mechanism identifier, reviewer, model, branch, or head SHA does not reset it. The gate composes with
+and does not replace the existing per-mechanism repair accounting or the Mechanism Convergence Gate.
+Only a formal GitHub `CHANGES_REQUESTED` review by an author other than the PR author creates a
+rejected round. Approval text, repair/status conversation, severity-like prose, and comments outside
+such a rejected review cannot create or reset a round. Each counted round binds its exact reviewed
+head, reviewer, review-body digest, protected inline-finding digests, and the canonical
+`Governing-Contract-SHA256` recorded in that review. Before the two-round threshold, one legacy
+rejected review may omit the marker because scope revalidation is not yet active; a marker that is
+present must still be unique. Once two rejected rounds exist, every counted round requires exactly
+one marker, so incomplete lineage fails closed. Protected inline findings use a line-leading P0/P1 severity token, with ordinary Markdown
+heading, ordered/unordered list, bold, bracketed, and `Severity:` wrappers accepted. Severity-like
+prose elsewhere is not a finding.
+
+An authenticated receipt bound to the current PR number, head SHA, contract authority, and a canonical
+SHA-256 contract identity must select exactly one outcome: `continue_unchanged`, `split`,
+or `expanded_contract`. The local JSON is only a canonical working copy: the same receipt object must
+exist in a PR conversation comment beginning `<!-- pr-scope-revalidation-receipt:v1 -->`, authored
+by a GitHub `OWNER`, `MEMBER`, or `COLLABORATOR`; duplicate JSON keys are malformed and fail closed.
+Distinct trusted receipts for the same PR/candidate/Issue identity are conflicting authority and fail
+closed; byte-identical duplicates are idempotent.
+The executable gate
+fetches the current PR, complete paginated review summaries, inline review comments, PR conversation,
+and, for issue-backed work, the governing Issue itself. Issue-free docs, governance, and direct-repair
+PRs instead authenticate one complete lane/direct-repair contract in the live PR body, require its
+canonical classification to match the publication invocation lane, and reject ordinary or
+neutralized Issue authority plus unsupported line separators and indented lane markers. A Direct
+Repair contract has exactly one unindented `## Direct Repair` heading and exactly one canonical
+full-line occurrence of each required field; malformed, duplicate, or conflicting blocks and fields
+fail closed. Lane and Direct Repair classification use the explicit ECMAScript whitespace set: Python-only C0/U+0085
+forms are not whitespace, while hosted-valid U+FEFF is. The shared BuilderOps section twin applies
+the same mapping to bullet spacing and JavaScript `trim()`-equivalent concrete values. They may continue unchanged or split after revalidation,
+but scope expansion first requires promotion to an authenticated governing Issue. The gate binds the
+repository/base identity, exact candidate and live heads, contract digest, rejected-round IDs,
+protected finding IDs, and the content digest of that rejected-review history. Caller-supplied history, actors, URLs,
+labels, or finding subsets are never evidence. Omitted,
+foreign, stale, malformed, or partial evidence fails closed. The executable gate issues publication
+authority only against the canonical `origin/main...HEAD` selectors; workflow-risk analysis may use
+alternate selectors only when it is not issuing publication authority. Publication invokes the gate
+with an explicit `new` or `existing` mode, and scope revalidation is valid only in `existing` mode.
+`existing` derives a unique open PR whose base repository
+and ref match the publication base and whose head repository and ref match the authenticated current
+branch, then requires the supplied PR identity and scope
+revalidation inputs to match it. `new` authenticates that the branch has no open PR and an omitted
+mode is rejected whenever the current branch already has an open PR. Before an existing PR is
+updated, the local candidate must either strictly descend from the authenticated live PR head or be
+a rebased candidate with the same stable patch identity and changed-path blob identities relative to
+the canonical publication base. The candidate must contain the current canonical publication base
+before either proof can authorize it, and must still differ from the live head. `continue_unchanged`
+permits only governing-contract blockers and PR-introduced regressions. Every `split` receipt must
+name a positive, non-governing `follow_up_issue`; the executable gate fetches it and requires an
+existing, bounded canonical Issue contract before it routes affected work there. `expanded_contract`
+requires the current live governing-Issue digest to differ from at least one rejected round and an
+exact `expanded_from_rounds` lineage entry (round, reviewed head, prior contract digest) for every
+authenticated rejected round before repair continues. An arbitrary well-formed digest is rejected.
+The bounded follow-up contract must durably name its source governing Issue and PR plus each routed
+finding (`Source-Governing-Issue`, `Source-PR`, and `Routed-Finding` markers); generic ready-Issue
+shape is insufficient, and `split` requires at least one classified adjacent/pre-existing finding
+whose follow-up identity matches that route. The evaluator closes its snapshot by re-reading every PR, Issue, review,
+comment, and follow-up payload used for authority and fails if any changed during collection.
+For an existing PR before push, the receipt binds the local candidate head separately from the
+authenticated live PR head; Git ancestry or the byte-identical rebase proof must bind the candidate
+to that live delivery.
+This permits the gate to run before publication without treating the necessarily unpushed candidate
+as if it were already the live PR head.
+
+Classify every protected finding derived from each rejected round exactly once as one of:
+
+- `governing_contract_blocker`;
+- `pr_introduced_regression`;
+- `security_authority_scope_expansion`; or
+- `adjacent_pre_existing`.
+
+An `adjacent_pre_existing` finding must name a bounded follow-up Issue and cannot expand the current
+PR. A `security_authority_scope_expansion` finding requires `expanded_contract`; no receipt may use a
+new mechanism name, reviewer identity, or head change to evade this rule. The executable evaluator
+is `scripts/review_before_ci_gate.py`; `issue-to-code`, `publish-pr`, and
+`verification-and-closure` route here rather than duplicating its rules.
 
 ## Review Repair Loop
 

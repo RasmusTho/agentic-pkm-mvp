@@ -357,6 +357,7 @@ finding and does not re-trigger review.
   loop only while each round records measurable progress: a finding closes or narrows, the failure
   mechanism changes with evidence, validation coverage improves, or diagnostic uncertainty is
   reduced. A fresh finding alone is not progress if it repeats the same unresolved mechanism.
+- After two formal independent `CHANGES_REQUESTED` review rounds, apply `docs/development/AUTONOMOUS_REVIEW_REPAIR_GATE_CONTRACTS.md :: PR-Level Scope Revalidation Gate` through the shared production gate before another expensive proof, publication, or repair cycle. Every publication declares `--publication-mode new|existing`; for an existing PR, invoke it with `--pr-scope-revalidation --github-repository <owner/repo> --pr-number <N>` and add `--governing-issue <N>` for issue-backed work. Issue-free docs/governance/direct-repair work binds its authenticated live PR-body contract and requires that contract's canonical classification to match the invocation lane. The gate must re-fetch content-bound live GitHub review/finding evidence and match the local receipt to a durable trusted-author PR comment rather than trust caller-supplied review history or classification coverage.
 - Repeated findings or a round without measurable progress are **capability-escalation and bounded
   replan triggers**, not automatic stop counters. Select the next capability through `AGENTS.md ::
   Total Cost of Development` and current platform configuration, start a fresh repair context when

@@ -196,6 +196,8 @@ receipt preserves ordering evidence only; it does not replace hosted current-hea
 ```bash
 PR_LANE="<implementation|docs-authoring|governance|direct-repair>"
 TCD_RISK_SURFACES="<space-separated applicable surfaces, or empty>"
+PR_PUBLICATION_MODE="<new|existing>"
+PR_GITHUB_REPOSITORY="<owner/repository>"
 if [ "$PR_LANE" = "implementation" ] || [ "$PR_LANE" = "docs-authoring" ] || [ "$PR_LANE" = "governance" ] || [ "$PR_LANE" = "direct-repair" ]; then
   # Portable read loop, not `mapfile`/`readarray` (bash 4+ only) — macOS ships bash 3.2.
   review_gate_args=(--lane "$PR_LANE" --review-gate-complete)
@@ -208,6 +210,32 @@ if [ "$PR_LANE" = "implementation" ] || [ "$PR_LANE" = "docs-authoring" ] || [ "
   for risk_surface in $TCD_RISK_SURFACES; do
     review_gate_args+=(--risk-surface "$risk_surface")
   done
+  case "$PR_PUBLICATION_MODE" in
+    new)
+      : "${PR_GITHUB_REPOSITORY:?new PR publication requires owner/repository}"
+      review_gate_args+=(--publication-mode new --github-repository "$PR_GITHUB_REPOSITORY")
+      ;;
+    existing)
+      : "${PR_GITHUB_REPOSITORY:?existing PR publication requires owner/repository}"
+      : "${PR_NUMBER:?existing PR publication requires PR_NUMBER}"
+      review_gate_args+=(
+        --publication-mode existing
+        --pr-scope-revalidation
+        --github-repository "$PR_GITHUB_REPOSITORY"
+        --pr-number "$PR_NUMBER"
+      )
+      if [ -n "${GOVERNING_ISSUE:-}" ]; then
+        review_gate_args+=(--governing-issue "$GOVERNING_ISSUE")
+      fi
+      if [ -n "${CONTRACT_REVALIDATION_RECEIPT:-}" ]; then
+        review_gate_args+=(--contract-revalidation-receipt "$CONTRACT_REVALIDATION_RECEIPT")
+      fi
+      ;;
+    *)
+      echo "PR_PUBLICATION_MODE must be new or existing" >&2
+      exit 2
+      ;;
+  esac
   python3 scripts/review_before_ci_gate.py "${review_gate_args[@]}" || exit 1
 fi
 ```
@@ -216,6 +244,18 @@ Allowed risk-surface values are: auth, security, data, migration, concurrency, e
 credential-durability, and state-machine. After a multi-blocker or adjacent
 repeat finding in one mechanism, do not set `--review-gate-complete` again until the low-convergence
 circuit breaker in `verification-and-closure` has produced and reviewed a new convergence packet.
+
+Every publication invocation must set `PR_PUBLICATION_MODE` to `new` or `existing`; an omitted or other value fails before the gate runs. Apply `docs/development/AUTONOMOUS_REVIEW_REPAIR_GATE_CONTRACTS.md :: PR-Level Scope Revalidation Gate` through this shared gate before another expensive proof or push. A `new` publication authenticates that its branch has no open PR; an `existing` publication requires `--pr-scope-revalidation --github-repository <owner/repo> --pr-number <N>`, plus `--governing-issue <N>` for issue-backed work and, when two rejected rounds exist, `--contract-revalidation-receipt <path>`. Issue-free docs, governance, and direct-repair work instead binds one complete authenticated live PR-body contract whose canonical classification must match `PR_LANE`; mixed ordinary/neutralized Issue authority, unsupported line separators, and hosted-invalid indented lane markers fail closed. Its lane, Direct Repair, and BuilderOps-section parsing uses the explicit ECMAScript whitespace set, rejecting Python-only C0/U+0085 whitespace substitutions while accepting and trimming hosted-valid U+FEFF exactly like JavaScript. Expansion requires promotion to a governing Issue. Before push, the gate authenticates the still-live PR head separately, first proves that the candidate contains canonical `origin/main`, then proves that it either strictly descends from the live head or is a byte-identical rebase with the same stable patch and changed-path blob identities. The required ordering therefore does not assume the candidate is already published. The gate requires that local receipt to match a durable trusted-author PR comment, derives formal independent `CHANGES_REQUESTED` rounds and their protected finding contents itself, and authenticates expansion against the live Issue digest plus every prior round/head/digest; never pass caller-authored history, URL, actor, digest, or partial finding list as authority.
+Existing publication also derives the unique open PR whose base repository/ref match the requested
+publication base and whose head repository/ref match the current local branch; a supplied closed,
+foreign, retargeted, or different-branch PR number is not history authority.
+Before the two-round threshold, a single legacy rejected review may omit its lineage marker. At and
+after the threshold, each counted rejected review must contain exactly one canonical
+`Governing-Contract-SHA256` marker.
+Publication authority is always evaluated at canonical `origin/main...HEAD`; the workflow-risk
+selector overrides are analysis-only and fail closed whenever `--publication-mode` is present.
+`--pr-scope-revalidation` is publication authority and is valid only with
+`--publication-mode existing`; it cannot be invoked as a mode-less analysis path.
 
 For any implementation, governance, or direct-repair lane with a declared high-risk surface, the
 executable order is mandatory and fail-closed:
@@ -384,7 +424,10 @@ EOF
 
 `Type:` must be exactly one of `docs`, `governance`, or `code` (`docs/development/PR_HOT_PATH.md ::
 Direct Repair`). No lane checkbox and no `Governing-Issue`/closing-keyword line are needed when this
-block is complete — the gate accepts the `## Direct Repair` block as the standalone contract.
+block is complete — the gate accepts the `## Direct Repair` block as the standalone contract. The
+heading must be an exact unindented level-two heading, the body must contain exactly one such block,
+and each required field must occur exactly once as a canonical full line; malformed, duplicate, or
+conflicting blocks and fields fail closed.
 
 **Update Existing PR:**
 ```bash
@@ -401,7 +444,7 @@ Pre-push PR-body contract gate:
     approved multi-Issue PR may reference an open governing parent and close delivered children
   - docs lane: `- [x] Docs authoring lane`
   - governance lane: `- [x] Governance lane`
-  - direct repair: a complete `## Direct Repair` block with `Type:`, `Reason:`, `Validation:`, and `Issue required: no`
+  - direct repair: exactly one canonical unindented `## Direct Repair` block with exactly one full-line `Type:`, `Reason:`, `Validation:`, and `Issue required: no`
 - If none is present, stop and repair the PR body before publication.
 - Verify exactly one `Final-Review-Rounds: 0`, `1`, or `2` line is present — every lane requires
   it, including direct repair; `0` declares the light delivery path per

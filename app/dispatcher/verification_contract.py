@@ -118,12 +118,15 @@ BUILDEROPS_ROUTING_PLACEHOLDER_PATTERN = re.compile(r"^<.*>$")
 
 
 # Python's Unicode-mode `\s` treats these four C0 "information separator"
-# controls as whitespace; JS's `\s` does not (issue #4341). Map them to NUL,
-# a byte that satisfies neither language's `\s` and cannot otherwise appear
-# in a GitHub PR body, so `TIER1_LANE_PATTERN`'s untouched `\s` (kept
-# byte-identical to the workflow's JS literal for Check 10) stops accepting
-# separators the JS gate rejects.
+# controls and U+0085 as whitespace; JS's `\s` does not. ECMAScript instead
+# treats U+FEFF as whitespace while Python does not. BuilderOps patterns are
+# intentionally source-aligned with the hosted JS, so their dedicated
+# canonicalizer maps the Python-only set to NUL and U+FEFF to NBSP. NBSP is
+# whitespace in both engines but cannot synthesize ASCII-space literal syntax.
+# The Final-Review-Rounds twin uses explicit `[ \t]`, so it only needs the
+# pre-existing line/C0 canonicalization and must not receive the U+FEFF map.
 _C0_INFORMATION_SEPARATORS = "\x1c\x1d\x1e\x1f"
+_PYTHON_ONLY_WHITESPACE = _C0_INFORMATION_SEPARATORS + "\x85"
 
 
 def _canonicalize_pr_contract_line_terminators(text: str) -> str:
@@ -148,6 +151,19 @@ def _canonicalize_pr_contract_line_terminators(text: str) -> str:
     for separator in _C0_INFORMATION_SEPARATORS:
         text = text.replace(separator, "\x00")
     return text
+
+
+def _canonicalize_ecmascript_whitespace_for_python(text: str) -> str:
+    r"""Make Python ``\s``/``strip`` agree with ECMAScript for BuilderOps parsing.
+
+    NUL cannot occur in a GitHub PR body and is whitespace in neither engine.
+    NBSP is whitespace and trimmed by both engines, while remaining distinct
+    from literal ASCII spaces in lane names and section headings.
+    """
+    text = _canonicalize_pr_contract_line_terminators(text)
+    for whitespace in _PYTHON_ONLY_WHITESPACE:
+        text = text.replace(whitespace, "\x00")
+    return text.replace("\ufeff", "\xa0")
 
 
 @dataclass(frozen=True)
@@ -186,7 +202,9 @@ def resolve_builderops_routing_status(
     body: object, *, has_issue_authority: bool
 ) -> BuilderOpsRoutingStatus:
     """Twin of the `pr-contract` gate's `## BuilderOps Routing` filled-vs-stub check."""
-    text = _canonicalize_pr_contract_line_terminators(body if isinstance(body, str) else "")
+    text = _canonicalize_ecmascript_whitespace_for_python(
+        body if isinstance(body, str) else ""
+    )
     is_tier1_lane = TIER1_LANE_PATTERN.search(text) is not None
     section_match = BUILDEROPS_ROUTING_SECTION_PATTERN.search(text)
     section = section_match.group(0) if section_match else ""

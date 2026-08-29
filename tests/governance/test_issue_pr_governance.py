@@ -117,6 +117,34 @@ def test_builderops_routing_stub_detection_matches_workflow_js() -> None:
         # Tier 1 lane the way a real space is.
         ("- [x]\x1cGovernance lane\n", False),
         ("-\x1f[x]\x1fDocs authoring lane\n", False),
+        (
+            "- [x] Docs authoring lane\n## BuilderOps Routing\n"
+            "\ufeff-\ufeffRecords/projections/receipts: none\n"
+            "\ufeff-\ufeffReason: routed\n",
+            False,
+        ),
+        (
+            "- [x] Docs authoring lane\n## BuilderOps Routing\n"
+            "\x85-\x85Records/projections/receipts: none\n"
+            "\x85-\x85Reason: routed\n",
+            False,
+        ),
+        (
+            "- [x] Docs authoring lane\n## BuilderOps Routing\n"
+            "- Records/projections/receipts: \ufeff\n- Reason: \ufeff\n",
+            False,
+        ),
+        (
+            "- [x] Docs authoring lane\n## BuilderOps Routing\n"
+            "- Records/projections/receipts: \x85\n- Reason: \x85\n",
+            False,
+        ),
+        ("- [x] Docs\ufeffauthoring lane\n", False),
+        (
+            "- [x] Docs authoring lane\n##\ufeffBuilderOps Routing\n"
+            "- Records/projections/receipts: none\n- Reason: routed\n",
+            False,
+        ),
         # \r-terminated / CRLF lane declarations must still be recognized
         # (line-terminator canonicalization, not the whitespace-class fix).
         ("- [x] Governance lane\r\n", False),
