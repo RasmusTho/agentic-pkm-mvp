@@ -58,7 +58,7 @@ assert_local_durability_posture() {
 validate_identity() {
   [[ "${1}" =~ ^[0-9a-f]{40}$ ]] || { echo "source SHA must be 40 lowercase hex characters" >&2; exit 2; }
   [[ "${2}" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "image pin must be an immutable sha256 digest" >&2; exit 2; }
-  [[ "${3}" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "PostgreSQL/WAL-G image pin must be an immutable sha256 digest" >&2; exit 2; }
+  [[ "${3}" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "PostgreSQL image pin must be an immutable sha256 digest" >&2; exit 2; }
 }
 
 load_attested_candidate_pair() {
@@ -83,17 +83,17 @@ expected = {
     "workflow": ".github/workflows/app-image-build.yml",
     "event_name": "push",
     "source_ref": "refs/heads/main",
-    "restore_gate": "encrypted-full-backup-plus-archived-wal",
+    "durability_posture": "rebuildable",
     "platform": "linux/amd64",
 }
 if not isinstance(payload, dict) or any(payload.get(key) != value for key, value in expected.items()):
     raise SystemExit("candidate pair receipt has invalid trusted provenance")
 source_sha = payload.get("source_sha")
 control = payload.get("control_plane_image_digest")
-postgres = payload.get("postgres_walg_image_digest")
+postgres = payload.get("postgres_image_digest")
 if not isinstance(source_sha, str) or re.fullmatch(r"[0-9a-f]{40}", source_sha) is None:
     raise SystemExit("candidate pair receipt has invalid source SHA")
-for name, value in (("control-plane", control), ("PostgreSQL/WAL-G", postgres)):
+for name, value in (("control-plane", control), ("PostgreSQL", postgres)):
     if not isinstance(value, str) or re.fullmatch(r"sha256:[0-9a-f]{64}", value) is None:
         raise SystemExit(f"candidate pair receipt has invalid {name} digest")
 print(source_sha, control, postgres, sep="\t")
@@ -150,13 +150,20 @@ payload = {
     "engine_id": os.environ["ENGINE_ID"],
     "source_sha": os.environ["SOURCE_SHA"],
     "image_digest": os.environ["IMAGE_DIGEST"],
-    "postgres_walg_image_digest": os.environ["POSTGRES_IMAGE_DIGEST"],
+    "postgres_image_digest": os.environ["POSTGRES_IMAGE_DIGEST"],
     "previous_image_digest": os.environ["PREVIOUS_DIGEST"],
-    "previous_postgres_walg_image_digest": os.environ["PREVIOUS_POSTGRES_DIGEST"],
+    "previous_postgres_image_digest": os.environ["PREVIOUS_POSTGRES_DIGEST"],
     "schema_version": ready["database"]["schema_version"],
     "authority_epoch": ready["database"]["authority_epoch"],
+    "private_ingress": "tailscale-serve-https-loopback-no-funnel",
+    "readiness_authentication": "scoped-bearer-over-loopback",
+    "migration_completed": True,
+    "authority_fencing_required": True,
+    "dual_writer": "forbidden",
+    "external_effect_reconciliation_required": True,
+    "rollback_data_rewind": "forbidden",
     "recorded_at": os.environ["RECORDED_AT"],
-    "database_restore_performed": False,
+    "database_rebuild_required": False,
 }
 path = Path(sys.argv[1])
 path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")

@@ -62,6 +62,20 @@ TARGET="$target" HTTPS_PORT="$https_port" python3 -c '
 import json, os, sys
 status = json.load(sys.stdin)
 encoded = json.dumps(status, sort_keys=True)
+
+def active_funnel(value):
+    if isinstance(value, dict):
+        for key, child in value.items():
+            if "funnel" in str(key).lower() and child not in (False, None, "", [], {}):
+                return True
+            if active_funnel(child):
+                return True
+    elif isinstance(value, list):
+        return any(active_funnel(child) for child in value)
+    return False
+
+if active_funnel(status):
+    raise SystemExit("public Funnel exposure is forbidden for BuilderOps")
 if os.environ["TARGET"] not in encoded or os.environ["HTTPS_PORT"] not in encoded:
     raise SystemExit("tailscale HTTPS serve mapping was not installed")
 ' <<<"$serve_status"

@@ -21,8 +21,8 @@ network, WAL archive credential, recovery target, backup service, or recovery se
 
 This posture is deliberately not a backup, point-in-time recovery, or restore claim. The local WAL
 guard refuses archive drift, WAL growth above 2 GiB, and excessive data-volume use; PostgreSQL also
-pins `max_slot_wal_keep_size` to 2 GiB. The retained WAL-G/restore tooling belongs only to the
-separate independent-recovery path and must not be enabled by a local rebuildable deployment.
+pins `max_slot_wal_keep_size` to 2 GiB. No backup/restore tooling is enabled by a local rebuildable
+deployment; any future capability requires a separately governed contract.
 
 The deployment wrapper preserves the previous source and image pins as rollback material and records
 both current and previous immutable image identities. A rollback changes the selected release but

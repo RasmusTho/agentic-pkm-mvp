@@ -11,7 +11,6 @@ from typing import Any, Protocol
 from app.builderops.control_plane.auth import CredentialRateLimiter, CredentialRegistry
 from app.builderops.control_plane.migrations import SCHEMA_VERSION
 from app.builderops.control_plane.models import StorePort
-from app.builderops.control_plane.recovery import RecoveryConfigurationError, load_recovery_target
 
 
 @dataclass(frozen=True)
@@ -24,9 +23,7 @@ class OperationalStatus:
     rate_limit_enabled: bool = True
     rate_limit_rejections_total: int = 0
     executor_heartbeat_state: str = "unknown"
-    recovery_pipeline_state: str = "unknown"
-    recovery_target_independent: bool = False
-    recovery_required: bool = True
+    durability_posture: str = "rebuildable"
     authority_threatening_outbox: bool = False
 
 
@@ -60,37 +57,22 @@ class FileOperationalStatusProvider:
             rate_limit_enabled=bool(raw.get("rate_limit_enabled", True)),
             rate_limit_rejections_total=max(0, int(raw.get("rate_limit_rejections_total", 0))),
             executor_heartbeat_state=str(raw.get("executor_heartbeat_state", "unknown")),
-            recovery_pipeline_state=str(raw.get("recovery_pipeline_state", "unknown")),
-            recovery_target_independent=bool(raw.get("recovery_target_independent", False)),
-            recovery_required=bool(raw.get("recovery_required", True)),
+            durability_posture="rebuildable",
             authority_threatening_outbox=bool(raw.get("authority_threatening_outbox", False)),
         )
 
 
 class LiveOperationalStatusProvider:
-    """Project live database, worker, and recovery state through a secret-safe allowlist."""
+    """Project live database and worker state through a secret-safe allowlist."""
 
     def __init__(
         self,
         store: StorePort,
         *,
-        recovery_target_file: str | Path,
         worker_heartbeat_file: str | Path,
-        archive_lag_seconds: int = 900,
-        recovery_required: bool = True,
     ) -> None:
         self.store = store
-        self.recovery_target_file = Path(recovery_target_file)
         self.worker_heartbeat_file = Path(worker_heartbeat_file)
-        self.archive_lag_seconds = archive_lag_seconds
-        self.recovery_required = recovery_required
-
-    def _recovery_target_independent(self) -> bool:
-        try:
-            load_recovery_target(self.recovery_target_file)
-        except RecoveryConfigurationError:
-            return False
-        return True
 
     def _worker_state(self) -> str:
         heartbeat_reader = getattr(self.store, "service_heartbeat", None)
@@ -123,38 +105,18 @@ class LiveOperationalStatusProvider:
                         "FROM builderops_outbox WHERE status IN ('pending','claimed')) AS oldest_age, "
                         "(SELECT count(*) FROM builderops_dead_letters) AS dead_letters, "
                         "(SELECT count(*) FROM builderops_leases WHERE expires_at > clock_timestamp()) "
-                        "AS active_leases, "
-                        "archiver.archived_count, archiver.failed_count, "
-                        "archiver.last_archived_time, archiver.last_failed_time "
-                        "FROM pg_stat_archiver AS archiver"
+                        "AS active_leases"
                     ).fetchone()
                     values = dict(row or {})
             except Exception:
                 values = {}
-        archived_at = values.get("last_archived_time")
-        failed_at = values.get("last_failed_time")
-        if not self.recovery_required:
-            # The local control plane is explicitly rebuildable. It must never
-            # reinterpret intentionally disabled WAL archival as an outage.
-            recovery_state = "disabled"
-        elif failed_at is not None and (archived_at is None or failed_at > archived_at):
-            recovery_state = "stalled"
-        elif archived_at is None:
-            recovery_state = "unknown"
-        else:
-            age = (datetime.now(timezone.utc) - archived_at.astimezone(timezone.utc)).total_seconds()
-            recovery_state = "lagging" if age > self.archive_lag_seconds else "healthy"
         return OperationalStatus(
             outbox_pending=int(values.get("outbox_pending") or 0),
             outbox_oldest_age_seconds=float(values.get("oldest_age") or 0),
             dead_letters=int(values.get("dead_letters") or 0),
             active_leases=int(values.get("active_leases") or 0),
             executor_heartbeat_state=self._worker_state(),
-            recovery_pipeline_state=recovery_state,
-            recovery_target_independent=(
-                self._recovery_target_independent() if self.recovery_required else False
-            ),
-            recovery_required=self.recovery_required,
+            durability_posture="rebuildable",
         )
 
 
@@ -193,12 +155,10 @@ class HealthService:
         expected_lineage = database["schema_version"] == SCHEMA_VERSION and bool(
             database["authority_epoch"] and database["authority_epoch"] > 0
         )
-        recovery_ready = not runtime.recovery_required or runtime.recovery_target_independent
         ready = bool(
             database["available"]
             and expected_lineage
             and not runtime.authority_threatening_outbox
-            and recovery_ready
         )
         rate_limit = (
             self.rate_limiter.status()
@@ -231,15 +191,10 @@ class HealthService:
             "auth": self.credentials.status(),
             "rate_limit": rate_limit,
             "executor_heartbeat": {"state": runtime.executor_heartbeat_state},
-            "recovery_pipeline": {
-                "state": runtime.recovery_pipeline_state,
-                "target_independent": runtime.recovery_target_independent,
-                "structural_ready": recovery_ready,
-                "alert": runtime.recovery_required and runtime.recovery_pipeline_state
-                in {"stalled", "lagging", "failed", "unknown", "misconfigured"},
-                # Lag/stall is intentionally observable but not an ack/readiness
-                # gate unless the recovery target is structurally co-resident.
-                "acknowledgement_gate": False,
+            "durability": {
+                "posture": runtime.durability_posture,
+                "database_rebuild_required": False,
+                "backup_restore_deferred": True,
             },
         }
 

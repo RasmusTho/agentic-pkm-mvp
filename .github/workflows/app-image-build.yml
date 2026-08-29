@@ -226,7 +226,7 @@ jobs:
             VCS_REF=${{ github.sha }}
             BUILT_AT=${{ env.BUILT_AT }}
 
-      - name: Build BuilderOps PostgreSQL plus WAL-G candidate image
+      - name: Build BuilderOps PostgreSQL candidate image
         if: github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
         uses: docker/build-push-action@v6
         with:
@@ -245,19 +245,10 @@ jobs:
           docker run --rm --entrypoint python \
             "${{ steps.images.outputs.control_plane }}" \
             -c 'from app.builderops.control_plane.service import production_app; assert callable(production_app)'
-          docker run --rm --entrypoint wal-g \
+          docker run --rm --entrypoint postgres \
             "${{ steps.images.outputs.postgres }}" --version
 
-      - name: Prove encrypted full-backup plus archived-WAL restore
-        if: github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
-        shell: bash
-        run: |
-          set -euo pipefail
-          scripts/builderops/real_restore_selftest.sh \
-            "${{ steps.images.outputs.control_plane }}" \
-            "${{ steps.images.outputs.postgres }}"
-
-      - name: Publish the exact restore-proved BuilderOps images
+      - name: Publish the exact rebuildable BuilderOps images
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         shell: bash
         run: |
@@ -265,7 +256,7 @@ jobs:
           docker push "${{ steps.images.outputs.control_plane }}"
           docker push "${{ steps.images.outputs.postgres }}"
 
-      - name: Write the restore-proved candidate pair receipt
+      - name: Write the rebuildable candidate pair receipt
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         shell: bash
         run: |
@@ -276,9 +267,9 @@ jobs:
             --output builderops-candidate-pair.json \
             --source-sha "${GITHUB_SHA}" \
             --control-plane-digest "${control_digest#*@}" \
-            --postgres-walg-digest "${postgres_digest#*@}"
+            --postgres-digest "${postgres_digest#*@}"
 
-      - name: Upload the restore-proved candidate pair receipt
+      - name: Upload the rebuildable candidate pair receipt
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: actions/upload-artifact@v4
         with:
@@ -296,12 +287,12 @@ jobs:
       id-token: write
       attestations: write
     steps:
-      - name: Download the restore-proved candidate pair receipt
+      - name: Download the rebuildable candidate pair receipt
         uses: actions/download-artifact@v4
         with:
           name: builderops-candidate-pair-${{ github.sha }}
 
-      - name: Attest the restore-proved candidate pair receipt
+      - name: Attest the rebuildable candidate pair receipt
         uses: actions/attest-build-provenance@v2
         with:
           subject-path: builderops-candidate-pair.json

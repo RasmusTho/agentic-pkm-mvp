@@ -179,7 +179,6 @@ def _harness(tmp_path: Path) -> tuple[Path, dict[str, str], str, str, str]:
         "scripts/builderops/configure_tailnet_tls.sh",
         "config/deploy/builderops.env",
         "docker-compose.builderops.yml",
-        "app/builderops/control_plane/recovery.py",
     ):
         destination = root / relative
         destination.parent.mkdir(parents=True, exist_ok=True)
@@ -212,8 +211,8 @@ def _harness(tmp_path: Path) -> tuple[Path, dict[str, str], str, str, str]:
                 "source_ref": "refs/heads/main",
                 "source_sha": source_sha,
                 "control_plane_image_digest": digest,
-                "postgres_walg_image_digest": postgres_digest,
-                "restore_gate": "encrypted-full-backup-plus-archived-wal",
+                "postgres_image_digest": postgres_digest,
+                "durability_posture": "rebuildable",
                 "platform": "linux/amd64",
             }
         ),
@@ -271,7 +270,7 @@ printf 'tailscale %s\n' "$*" >> "$FAKE_EVENT_LOG"
 if [ "${1:-}" = status ]; then
   printf '{"BackendState":"Running"}\n'
 elif [ "${1:-}" = serve ] && [ "${2:-}" = status ]; then
-  if [ "${FAKE_FUNNEL_ACTIVE:-0}" = 1 ]; then
+  if [ "${FAKE_FUNNEL_ACTIVE:-0}" = 1 ] || { [ "${FAKE_FUNNEL_AFTER_SERVE:-0}" = 1 ] && grep -q 'tailscale serve --bg' "$FAKE_EVENT_LOG"; }; then
     printf '{"AllowFunnel":{"443":true}}\n'
   else
     printf '{"AllowFunnel":false,"TCP":{"443":{"HTTPS":true}},"Web":{"builder.ts.net:443":{"Handlers":{"/":{"Proxy":"http://127.0.0.1:18100"}}}}}\n'
@@ -318,10 +317,17 @@ def test_deploy_and_rollback_receipts_bind_pin_schema_and_epoch(tmp_path: Path) 
     assert receipt["engine_id"] == "builder-engine"
     assert receipt["source_sha"] == source_sha
     assert receipt["image_digest"] == digest
-    assert receipt["postgres_walg_image_digest"] == postgres_digest
+    assert receipt["postgres_image_digest"] == postgres_digest
     assert receipt["schema_version"] == 7
     assert receipt["authority_epoch"] == 3
-    assert receipt["database_restore_performed"] is False
+    assert receipt["private_ingress"] == "tailscale-serve-https-loopback-no-funnel"
+    assert receipt["readiness_authentication"] == "scoped-bearer-over-loopback"
+    assert receipt["migration_completed"] is True
+    assert receipt["authority_fencing_required"] is True
+    assert receipt["dual_writer"] == "forbidden"
+    assert receipt["external_effect_reconciliation_required"] is True
+    assert receipt["rollback_data_rewind"] == "forbidden"
+    assert receipt["database_rebuild_required"] is False
 
     events = Path(env["FAKE_EVENT_LOG"]).read_text(encoding="utf-8")
     assert "probe-secret" not in events
@@ -355,7 +361,8 @@ def test_deploy_and_rollback_receipts_bind_pin_schema_and_epoch(tmp_path: Path) 
         (Path(env["BUILDEROPS_RECEIPT_DIR"]) / "latest.json").read_text()
     )
     assert rollback_receipt["action"] == "rollback"
-    assert rollback_receipt["database_restore_performed"] is False
+    assert rollback_receipt["database_rebuild_required"] is False
+    assert rollback_receipt["rollback_data_rewind"] == "forbidden"
 
 
 def test_deploy_refuses_a_local_mode_that_would_require_recovery_egress(tmp_path: Path) -> None:
@@ -486,6 +493,32 @@ def test_active_funnel_is_rejected_before_serve_mutation(tmp_path: Path) -> None
     assert "tailscale serve --bg" not in events
     assert " pull " not in events
     assert " up " not in events
+
+
+def test_funnel_appearing_after_serve_fails_without_a_receipt(tmp_path: Path) -> None:
+    root, env, _source_sha, _digest, _postgres_digest = _harness(tmp_path)
+    env["FAKE_FUNNEL_AFTER_SERVE"] = "1"
+
+    result = subprocess.run(
+        [
+            "bash",
+            "scripts/deploy_builderops.sh",
+            "deploy",
+            env["BUILDEROPS_TEST_CANDIDATE_RECEIPT"],
+        ],
+        cwd=root,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode != 0
+    assert "public Funnel exposure is forbidden" in result.stderr
+    events = Path(env["FAKE_EVENT_LOG"]).read_text(encoding="utf-8")
+    assert events.count("tailscale serve status --json") >= 2
+    assert "tailscale serve --bg" in events
+    assert not (Path(env["BUILDEROPS_RECEIPT_DIR"]) / "latest.json").exists()
 
 
 def test_candidate_pair_receipt_provenance_is_strict_before_docker(tmp_path: Path) -> None:

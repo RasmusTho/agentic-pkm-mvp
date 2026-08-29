@@ -93,6 +93,22 @@ def test_local_control_plane_disables_wal_archiving_without_recovery_egress() ->
     assert compose["services"]["api"]["environment"]["BUILDEROPS_LOCAL_DURABILITY_MODE"] == "${BUILDEROPS_LOCAL_DURABILITY_MODE:?Local BuilderOps durability mode is required}"
 
 
+def test_rebuildable_candidate_path_has_no_backup_or_restore_gate() -> None:
+    dockerfile = (ROOT / "Dockerfile.builderops-postgres").read_text(encoding="utf-8")
+    workflow = (ROOT / ".github/workflows/app-image-build.yml").read_text(encoding="utf-8")
+    receipt_writer = (ROOT / "scripts/builderops/write_candidate_pair_receipt.py").read_text(
+        encoding="utf-8"
+    )
+
+    assert "wal-g" not in dockerfile.lower()
+    assert "restore" not in workflow.lower()
+    assert "backup" not in workflow.lower()
+    assert '"durability_posture": "rebuildable"' in receipt_writer
+    assert "restore_gate" not in receipt_writer
+    for script_name in ("backup.sh", "restore_drill.sh", "wal_archive.sh", "real_restore_selftest.sh"):
+        assert not (ROOT / "scripts/builderops" / script_name).exists()
+
+
 def test_builderops_postgres_listens_on_the_internal_network() -> None:
     conf = (ROOT / "config/builderops/postgresql.conf").read_text(encoding="utf-8")
     assert "listen_addresses = '*'" in conf
@@ -124,22 +140,18 @@ def test_builderops_image_has_a_dedicated_non_root_entrypoint() -> None:
     assert "PASSWORD %L" in roles
 
 
-def test_builderops_postgres_pin_has_an_exact_restore_checked_image_producer() -> None:
+def test_builderops_postgres_pin_has_a_rebuildable_candidate_producer() -> None:
     dockerfile = (ROOT / "Dockerfile.builderops-postgres").read_text(encoding="utf-8")
     workflow = (ROOT / ".github/workflows/app-image-build.yml").read_text(encoding="utf-8")
 
     assert "FROM postgres:16-bookworm" in dockerfile
-    assert "WAL_G_VERSION=v3.0.8" in dockerfile
-    assert "sha256sum -c" in dockerfile
-    assert "wal-g-pg-20.04-amd64" not in dockerfile
-    assert "wal_g_arch=amd64" in dockerfile
-    assert "wal_g_arch=aarch64" in dockerfile
+    assert 'org.opencontainers.image.durability="rebuildable"' in dockerfile
+    assert "wal-g" not in dockerfile.lower()
     assert "Dockerfile.builderops-postgres" in workflow
     assert "builderops-postgres:${GITHUB_SHA}" in workflow
     assert "platforms: linux/amd64" in workflow
-    assert "Prove encrypted full-backup plus archived-WAL restore" in workflow
-    assert "Publish the exact restore-proved BuilderOps images" in workflow
-    publish = workflow.split("Publish the exact restore-proved BuilderOps images", maxsplit=1)[1]
+    assert "Publish the exact rebuildable BuilderOps images" in workflow
+    publish = workflow.split("Publish the exact rebuildable BuilderOps images", maxsplit=1)[1]
     assert "docker build" not in publish
     assert 'docker push "${{ steps.images.outputs.postgres }}"' in publish
-    assert "docker run --rm --entrypoint wal-g" in workflow
+    assert "wal-g" not in workflow.lower()

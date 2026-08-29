@@ -553,10 +553,7 @@ def _is_builderops_dsn_consumer(item: object) -> bool:
     try:
         resolved.relative_to(ROOT / "tests" / "builderops" / "control_plane")
     except ValueError:
-        return (
-            resolved == ROOT / "tests" / "ops" / "test_builderops_backup_restore.py"
-            and "recovery_store" in getattr(item, "fixturenames", ())
-        )
+        return False
     return True
 
 

@@ -67,8 +67,8 @@ def test_product_and_builderops_start_stop_independently(tmp_path: Path) -> None
     assert "-p builderops-control-plane" in lib_text
     assert "docker-compose.builderops.yml" in lib_text
     assert "docker-compose.yaml" not in lib_text
-    assert "builderops_validate_recovery_target" in lib_text
-    assert "builderops_validate_recovery_target" not in deploy_text
+    assert "builderops_validate_recovery_target" not in lib_text
+    assert "recovery target" not in deploy_text.lower()
     assert "assert_local_durability_posture" in deploy_text
     assert "scripts/deploy_channel.sh" not in deploy_text
     assert "COMPOSE_PROJECT_NAME=pkm-" not in deploy_text
