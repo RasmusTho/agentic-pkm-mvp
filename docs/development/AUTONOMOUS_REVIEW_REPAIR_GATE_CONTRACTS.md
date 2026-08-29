@@ -411,14 +411,16 @@ Distinct trusted receipts for the same PR/candidate/Issue identity are conflicti
 closed; byte-identical duplicates are idempotent.
 The executable gate
 fetches the current PR, complete paginated review summaries, inline review comments, PR conversation,
-and governing Issue itself; it binds the
-repository/base identity, exact head, contract digest, rejected-round IDs, and protected finding IDs.
-including the content digest of that rejected-review history. Caller-supplied history, actors, URLs,
+and governing Issue itself. It binds the
+repository/base identity, exact candidate and live heads, contract digest, rejected-round IDs,
+protected finding IDs, and the content digest of that rejected-review history. Caller-supplied history, actors, URLs,
 labels, or finding subsets are never evidence. Omitted,
 foreign, stale, malformed, or partial evidence fails closed. Publication invokes the executable gate
 with an explicit `new` or `existing` mode; `existing` requires the live PR identity and authenticated
 scope revalidation inputs, while `new` authenticates that the branch has no open PR and an omitted
-mode is rejected whenever the current branch already has an open PR. `continue_unchanged`
+mode is rejected whenever the current branch already has an open PR. Before an existing PR is
+updated, the local candidate must strictly descend from (and therefore differ from) the authenticated
+live PR head. `continue_unchanged`
 permits only governing-contract blockers and PR-introduced regressions. Every `split` receipt must
 name a positive, non-governing `follow_up_issue`; the executable gate fetches it and requires an
 existing, bounded canonical Issue contract before it routes affected work there. `expanded_contract`

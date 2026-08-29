@@ -616,8 +616,10 @@ def _load_json_without_duplicate_keys(value: str) -> object:
     return json.loads(value, object_pairs_hook=reject_duplicates)
 
 
-def _git_is_ancestor(ancestor_sha: object, candidate_sha: object) -> bool:
+def _git_is_strict_ancestor(ancestor_sha: object, candidate_sha: object) -> bool:
     if not isinstance(ancestor_sha, str) or not isinstance(candidate_sha, str):
+        return False
+    if ancestor_sha == candidate_sha:
         return False
     completed = subprocess.run(
         ["git", "merge-base", "--is-ancestor", ancestor_sha, candidate_sha],
@@ -1032,9 +1034,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                 head_sha=evidence.head_sha,
                 follow_up_issue_numbers=_follow_up_issue_numbers(receipt),
             )
-            if not _git_is_ancestor(history["live_pr_head_sha"], evidence.head_sha):
+            if not _git_is_strict_ancestor(history["live_pr_head_sha"], evidence.head_sha):
                 raise ReviewBeforeCiGateError(
-                    "local publication candidate does not descend from the authenticated live PR head"
+                    "local publication candidate does not strictly descend from the authenticated live PR head"
                 )
             validate_pr_scope_revalidation(
                 args.pr_number,

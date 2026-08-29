@@ -15,6 +15,7 @@ import pytest
 
 from scripts.review_before_ci_gate import (
     ReviewBeforeCiGateError,
+    _git_is_strict_ancestor,
     _github_repository_from_origin,
     authenticated_pr_scope_revalidation_history,
     evaluate_review_before_ci_gate,
@@ -1116,6 +1117,18 @@ def test_pre_push_candidate_is_distinct_from_live_pr_head() -> None:
     assert history["live_pr_head_sha"] == "b" * 40
     assert history["authentication"]["candidate_head_sha"] == "a" * 40
     assert history["authentication"]["live_pr_head_sha"] == "b" * 40
+
+
+def test_pre_push_candidate_must_strictly_descend_from_live_pr_head() -> None:
+    head_sha = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=REPO_ROOT, text=True
+    ).strip()
+    parent_sha = subprocess.check_output(
+        ["git", "rev-parse", "HEAD^"], cwd=REPO_ROOT, text=True
+    ).strip()
+
+    assert not _git_is_strict_ancestor(head_sha, head_sha)
+    assert _git_is_strict_ancestor(parent_sha, head_sha)
 
 
 def test_duplicate_key_durable_receipt_is_rejected() -> None:
