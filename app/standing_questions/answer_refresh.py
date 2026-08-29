@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import logging
 import fcntl
+import hashlib
 import os
 import stat
 import threading
@@ -20,6 +21,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from uuid import NAMESPACE_URL, uuid5
 
 from app.components.llm.constrained import (
     CompletionFn,
@@ -105,6 +107,23 @@ def _iso(value: datetime) -> str:
     if value.tzinfo is None:
         value = value.replace(tzinfo=timezone.utc)
     return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _content_hash(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def _refresh_attempt_ids(
+    question_id: str, last_refreshed_at: str | None
+) -> tuple[str, str, str]:
+    """Return stable draft/receipt ids for one unconsumed refresh generation."""
+    generation = last_refreshed_at or "never"
+    key = hashlib.sha256(f"{question_id}\x1f{generation}".encode("utf-8")).hexdigest()
+    return (
+        key,
+        uuid5(NAMESPACE_URL, f"agentic-pkm:standing-question-refresh:draft:{key}").hex,
+        uuid5(NAMESPACE_URL, f"agentic-pkm:standing-question-refresh:receipt:{key}").hex,
+    )
 
 
 def _parse_timestamp(value: str) -> datetime:
@@ -246,17 +265,40 @@ def _source_inputs(
     for entry in evidence:
         provenance_ref = str(entry["provenance_ref"])
         artifact_ref = str(entry["artifact_ref"])
-        source = evidence_sources.get(provenance_ref) or evidence_sources.get(artifact_ref)
+        expected_hash = entry.get("content_hash")
+        content_ref = (
+            f"content://sha256/{expected_hash}"
+            if isinstance(expected_hash, str) and expected_hash
+            else None
+        )
+        source = (
+            evidence_sources.get(content_ref) if content_ref is not None else None
+        ) or evidence_sources.get(provenance_ref) or evidence_sources.get(artifact_ref)
         if source is None:
             raise UnresolvableCitationError(
                 f"evidence provenance {provenance_ref!r} was not resolved by the caller"
             )
+        expected_hash = entry.get("content_hash")
+        if isinstance(expected_hash, str) and expected_hash:
+            actual_hash = _content_hash(source.text)
+            if actual_hash != expected_hash:
+                raise UnresolvableCitationError(
+                    f"evidence content changed for {provenance_ref!r}; refusing historical replay"
+                )
         selected.append((entry, source))
 
     try:
         materialized = materialize_reasoning_inputs(
             [
-                ReasoningSourceInput(source_id=str(entry["provenance_ref"]), text=source.text)
+                ReasoningSourceInput(
+                    source_id=(
+                        f"content://sha256/{entry['content_hash']}"
+                        if isinstance(entry.get("content_hash"), str)
+                        and entry["content_hash"]
+                        else str(entry["provenance_ref"])
+                    ),
+                    text=source.text,
+                )
                 for entry, source in selected
             ],
             namespace_key=f"standing-question:{vault_root}:{question_id}",
@@ -353,6 +395,17 @@ def _contradiction_metadata(
         }
     contradicts = bool(payload["contradicts_standing_answer"])
     basis = payload.get("contradiction_basis")
+    if contradicts:
+        basis_text = basis.strip() if isinstance(basis, str) else ""
+        if not basis_text or (
+            basis_text not in standing_answer and basis_text not in (draft.body or "")
+        ):
+            return {
+                "contradiction": "unknown",
+                "contradicts_standing_answer": "unknown",
+                "contradiction_basis": None,
+            }
+        basis = basis_text
     return {
         "contradicts_standing_answer": contradicts,
         "contradiction": contradicts,
@@ -428,6 +481,9 @@ def refresh_answers_on_evidence_delta(
                     question=current["text"],
                     trace_id=trace_id,
                 )
+                refresh_key, draft_id, receipt_id = _refresh_attempt_ids(
+                    question_id, current.get("last_refreshed_at")
+                )
                 standing_answer_referenced, standing_answer = _read_standing_answer(
                     resolved_root, current
                 )
@@ -450,7 +506,11 @@ def refresh_answers_on_evidence_delta(
                             for source in sources
                             if source.provenance_ref is not None
                         ],
+                        "question_id": question_id,
+                        "refresh_key": refresh_key,
                     },
+                    draft_id=draft_id,
+                    receipt_id=receipt_id,
                 )
             except UnresolvableCitationError:
                 blocked.append(question_id)

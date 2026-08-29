@@ -25,7 +25,8 @@
           "matched_at": {"type": "string", "format": "date-time"},
           "confidence_class": {"type": "string"},
           "provenance_ref": {"type": "string"},
-          "quoted_span": {"type": "string"}
+          "quoted_span": {"type": "string"},
+          "content_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
         }
       }
     },

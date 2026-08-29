@@ -130,6 +130,7 @@ def test_relevant_artifact_attaches_irrelevant_does_not(tmp_path: Path) -> None:
     assert len(evidence) == 1
     entry = evidence[0]
     assert entry["artifact_ref"] == relevant_ref
+    assert entry["content_hash"] == hashlib.sha256(RELEVANT_BODY.encode("utf-8")).hexdigest()
     assert entry["source_stream"] == "ingest.vault.changed"
     assert entry["provenance_ref"] == f"outbox://ingest.vault.changed/{relevant_ref}"
     assert entry["confidence_class"] == ConfidenceClass.HIGH.value

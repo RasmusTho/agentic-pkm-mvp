@@ -49,7 +49,9 @@ gate on top of an LLM's semantic judgment.
    entry to the Question note's system-owned `evidence` list (via the SQ-01 guarded seam,
    action `standing_questions.append_evidence`) — `artifact_ref`, `source_stream`, `matched_at`,
    `confidence_class`, `provenance_ref`, `quoted_span` (verbatim, never paraphrased — mirrors
-   `CitationChecker` discipline). The candidate/capture/note the evidence came from is read-only
+   `CitationChecker` discipline), and `content_hash` (SHA-256 of the exact bytes judged). The
+   content hash binds later refreshes to the immutable observation that was matched; a path whose
+   bytes changed is blocked rather than silently replayed as historical evidence. The candidate/capture/note the evidence came from is read-only
    throughout; no frontmatter, no body, no metadata bundle on the artifact side is ever mutated by this
    task. This is the one deliberate asymmetry against the Episode Resolution Engine's `episode_ref`
    pattern (ERE-05 stamps the *artifact's* bundle) — here only the question side gains state.
@@ -65,7 +67,7 @@ $ python -m app.cli questions match-evidence --json
 {"evaluated_pairs": 14, "attached": 2, "below_threshold": 5, "excluded_cross_scope": 1}
 $ python -m app.cli questions show sq-... --json
 {"evidence": [{"artifact_ref": "vault://notes/...", "source_stream": "vault.activity",
-  "confidence_class": "high", "quoted_span": "...", "matched_at": "..."}]}
+  "confidence_class": "high", "quoted_span": "...", "content_hash": "...", "matched_at": "..."}]}
 ```
 
 ## Why This Matters
@@ -104,6 +106,10 @@ untrustworthy) or a real match is silently missed with no legible reason.
 - [ ] AC7: matching only ever evaluates `open` questions — a fixture `answered`/`closed` question
       receives no new evidence entries even against a clearly matching artifact. Verify:
       `tests/standing_questions/test_evidence_matching.py::test_matching_skips_non_open_questions`
+- [ ] AC8: every newly attached evidence entry carries the SHA-256 of the exact judged bytes, and a
+      later refresh blocks when the same provenance path resolves to changed bytes. Verify:
+      `tests/standing_questions/test_evidence_matching.py::test_relevant_artifact_attaches_irrelevant_does_not` and
+      `tests/standing_questions/test_answer_refresh.py::test_changed_source_bytes_cannot_replay_historical_evidence`
 
 ## How to Verify (Pre-Merge)
 

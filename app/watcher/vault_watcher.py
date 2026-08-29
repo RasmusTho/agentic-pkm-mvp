@@ -84,6 +84,7 @@ def _standing_question_tick_inputs(
     sources: dict[str, SourceInput] = {}
 
     def add_source(artifact_ref: str, provenance_ref: str, text: str, note_path: str) -> None:
+        content_hash = hashlib.sha256(text.encode("utf-8")).hexdigest()
         source = SourceInput(
             object_id=provenance_ref,
             note_path=note_path,
@@ -92,6 +93,7 @@ def _standing_question_tick_inputs(
         )
         sources[provenance_ref] = source
         sources[artifact_ref] = source
+        sources[f"content://sha256/{content_hash}"] = source
 
     for path in changed_paths:
         try:
@@ -116,6 +118,7 @@ def _standing_question_tick_inputs(
                 scope=scope,
                 provenance_ref=provenance_ref,
                 content=text,
+                content_hash=hashlib.sha256(text.encode("utf-8")).hexdigest(),
             )
         )
         add_source(artifact_ref, provenance_ref, text, relative.as_posix())
@@ -972,6 +975,9 @@ def run_watcher_tick(
                 summary["standing_questions_deferred"] = len(
                     standing_tick.refresh.deferred_pending_review
                 )
+                summary["standing_questions_blocked"] = len(standing_tick.refresh.blocked)
+                if standing_tick.refresh.blocked:
+                    standing_questions_retry_paths = list(result.changed)
             except Exception as exc:  # pragma: no cover - runtime degradation is surfaced
                 summary["errors"] += 1
                 summary["standing_questions_tick_error"] = str(exc)

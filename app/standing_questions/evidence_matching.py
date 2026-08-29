@@ -34,6 +34,7 @@ callers:
 
 from __future__ import annotations
 
+import hashlib
 import logging
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
@@ -152,6 +153,7 @@ class CandidateArtifact:
     scope: str
     provenance_ref: str
     content: str | None = None
+    content_hash: str | None = None
 
 
 @dataclass(frozen=True)
@@ -261,6 +263,10 @@ def _resolve_content(vault_root: Path, candidate: CandidateArtifact) -> str | No
     return path.read_text(encoding="utf-8")
 
 
+def _content_hash(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
 def _build_user_prompt(question_text: str, artifact_text: str) -> str:
     """Fence the completion: the model sees the question and the artifact, nothing else.
 
@@ -315,9 +321,14 @@ def judge_association(
     )
 
 
-def _existing_bases(note: dict[str, Any]) -> set[tuple[str, str]]:
+def _existing_bases(note: dict[str, Any]) -> set[tuple[str, str, str]]:
     return {
-        (entry["artifact_ref"], entry["quoted_span"]) for entry in note.get("evidence", [])
+        (
+            entry["artifact_ref"],
+            str(entry.get("content_hash") or ""),
+            entry["quoted_span"],
+        )
+        for entry in note.get("evidence", [])
     }
 
 
@@ -355,6 +366,10 @@ def match_evidence_to_open_questions(
             if artifact_text is None:
                 counters.bump("unresolved_artifact")
                 continue
+            content_hash = _content_hash(artifact_text)
+            if candidate.content_hash is not None and candidate.content_hash != content_hash:
+                counters.bump("unresolved_artifact")
+                continue
 
             counters.bump("evaluated_pairs")
             association = judge_association(
@@ -380,12 +395,12 @@ def match_evidence_to_open_questions(
             if not span.strip() or span not in artifact_text:
                 counters.bump("unverifiable_span")
                 continue
-            basis = (candidate.artifact_ref, span)
+            basis = (candidate.artifact_ref, content_hash, span)
             # Idempotency fold key is (question_id, artifact_ref) narrowed by the
             # quoted basis: re-ticking never duplicates an identical-basis entry,
             # while a later pass carrying a materially different span still may add
             # one.
-            if basis in seen_bases:
+            if basis in seen_bases or (candidate.artifact_ref, "", span) in seen_bases:
                 counters.bump("duplicate_basis")
                 continue
             seen_bases.add(basis)
@@ -397,6 +412,7 @@ def match_evidence_to_open_questions(
                     "confidence_class": association.confidence_class.value,
                     "provenance_ref": candidate.provenance_ref,
                     "quoted_span": span,
+                    "content_hash": content_hash,
                 }
             )
 

@@ -51,7 +51,9 @@ to the draft, and the pending-review-not-clobbered discipline.
 3. **Draft assembly (reusing EXP-3)**: context assembly through the retrieval capability seam at
    cited-proposal admissibility tier (scope prefilter + evidence-role clamp intact, same-scope only —
    consistent with SQ-03's discipline), sources = the question's evidence-log entries (their
-   `provenance_ref`s resolved, never re-fetched). The already-resolved source text is materialized
+   `provenance_ref`s resolved, never re-fetched). Each entry's `content_hash` must match the exact
+   bytes supplied by the caller; a path/provenance match with changed bytes is blocked as an
+   unresolvable historical observation. The already-resolved source text is materialized
    through the existing rebuildable reasoning-input adapter when the Create cognition substrate needs
    a UUID/object-store identity; the evidence-log provenance refs remain explicitly recorded in the
    draft frontmatter. Cognition then runs through the Create engine's existing
@@ -75,7 +77,9 @@ to the draft, and the pending-review-not-clobbered discipline.
    is not silently lost from future evaluation.
    The Question byte-version snapshot is captured before Create drafting and is used for the final
    conditional update, so any human or runtime edit during cognition blocks publication of the stale
-   candidate.
+   candidate. Draft and proposed-receipt ids are deterministic for the unconsumed
+   `last_refreshed_at` generation, so a crash or CAS retry reuses one logical proposal instead of
+   creating an orphan duplicate.
 
 ## Concretely
 
@@ -130,6 +134,15 @@ standing question rather than re-asking ASK cold every time.
 - [ ] AC9: a watcher-triggered refresh failure remains replayable on the next unchanged tick and
       advances the watcher snapshot only after the composition succeeds. Verify:
       `tests/watcher/test_vault_watcher_core.py::test_watcher_retries_standing_questions_failure_before_advancing_snapshot`
+- [ ] AC10: a structured blocked refresh result remains replayable on the next unchanged tick.
+      Verify:
+      `tests/watcher/test_vault_watcher_core.py::test_watcher_retries_blocked_standing_questions_before_advancing_snapshot`
+- [ ] AC11: a CAS conflict followed by retry converges to one staged draft and one proposed receipt
+      for the refresh generation. Verify:
+      `tests/standing_questions/test_answer_refresh.py::test_refresh_cas_snapshot_is_taken_before_drafting`
+- [ ] AC12: a contradiction marked `true` carries an exact quote from the standing answer or
+      candidate body; an ungrounded basis degrades to `unknown`. Verify:
+      `tests/standing_questions/test_answer_refresh.py::test_invalid_contradiction_basis_degrades_to_unknown`
 
 ## How to Verify (Pre-Merge)
 

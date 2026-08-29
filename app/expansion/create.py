@@ -79,6 +79,7 @@ ADR, mirroring ``app.expansion.connect``'s and
 """
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from enum import Enum
@@ -536,8 +537,34 @@ def _draft_note_text(
     return dump_frontmatter(frontmatter, body) + checkbox_block
 
 
-def _emit_receipt(event: str, payload: dict[str, Any], *, outbox_path: Path, trace_id: str | None) -> str:
-    event_id = uuid4().hex
+def _receipt_already_emitted(outbox_path: Path, event: str, event_id: str) -> bool:
+    if not outbox_path.exists():
+        return False
+    try:
+        lines = outbox_path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return False
+    for line in lines:
+        try:
+            record = json.loads(line)
+        except (TypeError, ValueError):
+            continue
+        if record.get("event") == event and record.get("event_id") == event_id:
+            return True
+    return False
+
+
+def _emit_receipt(
+    event: str,
+    payload: dict[str, Any],
+    *,
+    outbox_path: Path,
+    trace_id: str | None,
+    event_id: str | None = None,
+) -> str:
+    event_id = event_id or uuid4().hex
+    if _receipt_already_emitted(outbox_path, event, event_id):
+        return event_id
     record = {
         "event": event,
         "event_id": event_id,
@@ -559,6 +586,8 @@ def run_create_pass(
     staleness_days: int = DEFAULT_STALENESS_DAYS,
     now: datetime | None = None,
     draft_frontmatter_enricher: Callable[[CompilationDraft], Mapping[str, Any]] | None = None,
+    draft_id: str | None = None,
+    receipt_id: str | None = None,
 ) -> CreatePassReport:
     """Run one Create pass end to end: activation gate -> cognition ->
     CompilationDraft -> citation validation -> staging write -> receipt.
@@ -614,6 +643,8 @@ def run_create_pass(
         trace_ref=request.trace_id,
     )
     draft: CompilationDraft = build_compilation_draft(context, title=request.title)
+    if draft_id is not None:
+        draft = draft.model_copy(update={"artifact_id": draft_id})
 
     write_guard.assert_writes_allowed(CREATE_STAGING_WRITE_ACTION)
 
@@ -655,6 +686,7 @@ def run_create_pass(
         },
         outbox_path=outbox_path,
         trace_id=request.trace_id,
+        event_id=receipt_id,
     )
 
     return CreatePassReport(

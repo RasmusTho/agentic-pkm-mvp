@@ -1570,7 +1570,7 @@ STORE_PAYLOAD_SINK_CLASSIFICATION: dict[tuple[str, int], str] = {
         "store_objects; a new-note branch has no prior row and no binding (unbound correct via the "
         "build_indexed_unit_payload choke at index time)."
     ),
-    ("app/watcher/vault_watcher.py", 328): (
+    ("app/watcher/vault_watcher.py", 331): (
         "preserves_existing_payload: _hydrate_store_with_markdown updates raw_text on "
         "dict(obj.payload); save_object -> store_objects; episode_ref preserved."
     ),

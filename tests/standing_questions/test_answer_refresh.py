@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -227,7 +228,7 @@ def test_contradiction_surfaced_not_silently_rewritten(tmp_path: Path) -> None:
         return json.dumps(
             {
                 "contradicts_standing_answer": True,
-                "contradiction_basis": "The evidence says test, not production.",
+                "contradiction_basis": "the test channel is isolated",
             }
         )
 
@@ -249,7 +250,71 @@ def test_contradiction_surfaced_not_silently_rewritten(tmp_path: Path) -> None:
     )
     assert frontmatter["contradicts_standing_answer"] is True
     assert frontmatter["contradiction"] is True
-    assert frontmatter["contradiction_basis"] == "The evidence says test, not production."
+    assert frontmatter["contradiction_basis"] == "the test channel is isolated"
+
+
+def test_invalid_contradiction_basis_degrades_to_unknown(tmp_path: Path) -> None:
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    answer = vault / "answers/current.md"
+    answer.parent.mkdir()
+    answer.write_text("The supported boundary is production.", encoding="utf-8")
+    store, note = _question(vault, standing_answer_ref="vault://answers/current.md")
+    evidence = _evidence(
+        "vault://notes/evidence.md", "outbox://evidence/1", "the test channel is isolated", 10
+    )
+    store.update_system_fields(note["question_id"], {"evidence": [evidence]})
+
+    def invalid_basis(**_kwargs: Any) -> str:
+        return json.dumps(
+            {
+                "contradicts_standing_answer": True,
+                "contradiction_basis": "the evidence is broadly different",
+            }
+        )
+
+    refresh_answers_on_evidence_delta(
+        vault_root=vault,
+        outbox_path=tmp_path / "outbox.jsonl",
+        evidence_sources={
+            "outbox://evidence/1": _source("outbox://evidence/1", evidence["quoted_span"])
+        },
+        store=store,
+        contradiction_complete=invalid_basis,
+        write_guard=_guard(),
+        now=_dt(12),
+    )
+    refreshed = store.read_question(note["question_id"])
+    frontmatter, _body = load_frontmatter(
+        (vault / refreshed["candidate_answer_ref"][len("vault://") :]).read_text(encoding="utf-8")
+    )
+    assert frontmatter["contradiction"] == "unknown"
+    assert frontmatter["contradiction_basis"] is None
+
+
+def test_changed_source_bytes_cannot_replay_historical_evidence(tmp_path: Path) -> None:
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    store, note = _question(vault)
+    evidence = _evidence(
+        "vault://notes/evidence.md", "outbox://evidence/1", "original evidence", 10
+    )
+    evidence["content_hash"] = hashlib.sha256(b"original evidence").hexdigest()
+    store.update_system_fields(note["question_id"], {"evidence": [evidence]})
+
+    summary = refresh_answers_on_evidence_delta(
+        vault_root=vault,
+        outbox_path=tmp_path / "outbox.jsonl",
+        evidence_sources={
+            "outbox://evidence/1": _source("outbox://evidence/1", "edited evidence")
+        },
+        store=store,
+        write_guard=_guard(),
+        now=_dt(12),
+    )
+
+    assert summary.blocked == (note["question_id"],)
+    assert store.read_question(note["question_id"])["candidate_answer_ref"] is None
 
 
 def test_degraded_contradiction_judgment_lands_unknown_not_false(tmp_path: Path) -> None:
@@ -669,12 +734,16 @@ def test_refresh_cas_snapshot_is_taken_before_drafting(
         "outbox://evidence/2": _source("outbox://evidence/2", second["quoted_span"]),
     }
     original = refresh_module.run_create_pass
+    mutated = False
 
     def create_then_mutate(*args: Any, **kwargs: Any) -> Any:
-        current = store.read_question(note["question_id"])
-        store.update_system_fields(
-            note["question_id"], {"evidence": [*current["evidence"], second]}
-        )
+        nonlocal mutated
+        if not mutated:
+            current = store.read_question(note["question_id"])
+            store.update_system_fields(
+                note["question_id"], {"evidence": [*current["evidence"], second]}
+            )
+            mutated = True
         return original(*args, **kwargs)
 
     monkeypatch.setattr(refresh_module, "run_create_pass", create_then_mutate)
@@ -692,3 +761,17 @@ def test_refresh_cas_snapshot_is_taken_before_drafting(
     final = store.read_question(note["question_id"])
     assert final["candidate_answer_ref"] is None
     assert final["last_refreshed_at"] is None
+
+    retry = refresh_answers_on_evidence_delta(
+        vault_root=vault,
+        outbox_path=outbox,
+        evidence_sources=sources,
+        store=store,
+        write_guard=_guard(),
+        now=_dt(13),
+    )
+    assert retry.drafted == (note["question_id"],)
+    final = store.read_question(note["question_id"])
+    candidate_path = vault / final["candidate_answer_ref"][len("vault://") :]
+    assert len(list(candidate_path.parent.glob("*.md"))) == 1
+    assert len([r for r in _records(outbox) if r["event"] == "expansion.create.proposed"]) == 1

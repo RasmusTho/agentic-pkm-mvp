@@ -750,6 +750,58 @@ retrievable; a blind ingester says so).
   `test_declined_contradiction_suppressed`), `tests/curation/test_semantic_never_autowrites.py`.
 - **Related issues:** #2999 (G2-4), #2980 (parent).
 
+## Standing Questions invariants
+
+These rows are the executable registry for the SQ-04 cross-task invariants. They remain subordinate
+to the Standing Questions capability contracts; the registry makes the named obligations and their
+current runtime probes discoverable without claiming that SQ-05's review/acceptance surface exists.
+
+### standing_questions_pending_review_not_clobbered
+
+- **Purpose:** A pending candidate answer is never silently replaced by a later evidence-delta refresh,
+  and a retry after a stale Question write converges on one logical staged proposal.
+- **Protected principle:** INV-SQ-D — pending review is never clobbered; INV-SQ-A — Question notes
+  remain human-terminal.
+- **Affected boundaries:** HKA, CAO/Create, GOV/guarded QuestionStore write seam, EBF/watcher.
+- **Required fixture / data:** An open Question with a pending staged candidate, a changed evidence
+  log, a controlled QuestionStore CAS conflict, and a watcher snapshot.
+- **Expected failure mode:** A second draft is emitted, a stale draft is published, or a blocked/failed
+  refresh advances the watcher cursor and loses the retry.
+- **Current enforcement:** `runtime_test` — the refresh derives pending state, serializes the
+  question-local operation, snapshots exact bytes before cognition, uses deterministic draft/receipt
+  identities per refresh generation, and the watcher preserves changed paths for both exception and
+  structured-blocked outcomes.
+- **Runtime test path:** `tests/standing_questions/test_answer_refresh.py::test_pending_review_not_clobbered_by_new_delta`,
+  `tests/standing_questions/test_answer_refresh.py::test_refresh_cas_snapshot_is_taken_before_drafting`,
+  `tests/watcher/test_vault_watcher_core.py::test_watcher_retries_standing_questions_failure_before_advancing_snapshot`,
+  `tests/watcher/test_vault_watcher_core.py::test_watcher_retries_blocked_standing_questions_before_advancing_snapshot`.
+- **Related docs / contracts / ADRs:** [REFRESH_ANSWER_ON_EVIDENCE_DELTA](../STANDING_QUESTIONS/REFRESH_ANSWER_ON_EVIDENCE_DELTA.md);
+  [Standing Questions README](../STANDING_QUESTIONS/README.md).
+- **Related issues:** #3327 (SQ-04), #3325 (validation hub).
+
+### standing_questions_contradiction_is_grounded
+
+- **Purpose:** A contradiction marker is either grounded by an exact quote from the standing answer
+  or candidate, or remains explicitly `unknown`; invalid model prose can never assert a contradiction.
+- **Protected principle:** INV-SQ-E — contradiction is surfaced, never silently resolved; the
+  structured-UNKNOWN correctness pattern.
+- **Affected boundaries:** CAO constrained cognition, HKA candidate staging, GOV human review, SIP
+  provenance/evidence identity.
+- **Required fixture / data:** A standing answer, a candidate draft, schema-constrained model output,
+  and exact source content hashes for the evidence inputs.
+- **Expected failure mode:** A paraphrase, invented basis, or stale path-backed source is persisted as
+  a contradiction claim, or a changed source is replayed as historical evidence.
+- **Current enforcement:** `runtime_test` — contradiction basis is checked against the supplied texts,
+  evidence inputs are bound to SHA-256 content identity, and changed bytes degrade to blocked rather
+  than silently replaying an old observation.
+- **Runtime test path:** `tests/standing_questions/test_answer_refresh.py::test_invalid_contradiction_basis_degrades_to_unknown`,
+  `tests/standing_questions/test_answer_refresh.py::test_changed_source_bytes_cannot_replay_historical_evidence`,
+  `tests/standing_questions/test_answer_refresh.py::test_refresh_marks_contradiction`.
+- **Related docs / contracts / ADRs:** [REFRESH_ANSWER_ON_EVIDENCE_DELTA](../STANDING_QUESTIONS/REFRESH_ANSWER_ON_EVIDENCE_DELTA.md);
+  [MATCH_EVIDENCE_TO_OPEN_QUESTIONS](../STANDING_QUESTIONS/MATCH_EVIDENCE_TO_OPEN_QUESTIONS.md);
+  [structured UNKNOWN](../RUNTIME_CORRECTNESS_KERNEL/STRUCTURED_INTENT_OUTPUT_WITH_UNKNOWN.md).
+- **Related issues:** #3327 (SQ-04), #3325 (validation hub).
+
 ## Schema-batch deferred invariants
 
 ### mirrors_declare_and_check_drift
