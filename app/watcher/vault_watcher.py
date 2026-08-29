@@ -32,7 +32,11 @@ from app.ingest.vault_alpha import run_vault_alpha_ingest_paths
 from app.knowledge.errors import KnowledgeWriteConflict
 from app.knowledge.write_ops import read_note_text_with_version
 from app.knowledge.write_ops import write_note_from_absolute
-from app.services.outbox import insert_object_and_outbox, self_owned_write_would_skip
+from app.services.outbox import (
+    append_jsonl_record,
+    insert_object_and_outbox,
+    self_owned_write_would_skip,
+)
 from app.services.vault_sync import delete_note
 from app.watcher.registry import db_outbox_required
 from app.settings.panel_actions import PanelActionMapping, load_panel_action_mappings
@@ -344,15 +348,13 @@ def _hydrate_store_with_markdown(note_uuid: str, note_path: Path) -> None:
 def _write_outbox_events(outbox_path: Path | None, events: Iterable) -> int:
     if outbox_path is None:
         return 0
-    outbox_path.parent.mkdir(parents=True, exist_ok=True)
     written = 0
-    with outbox_path.open("a", encoding="utf-8") as handle:
-        for event in events:
-            payload = event.model_dump(mode="json") if hasattr(event, "model_dump") else None
-            if payload is None:
-                continue
-            handle.write(json.dumps(payload, ensure_ascii=False) + "\n")
-            written += 1
+    for event in events:
+        payload = event.model_dump(mode="json") if hasattr(event, "model_dump") else None
+        if payload is None:
+            continue
+        append_jsonl_record(outbox_path, payload, require_event_id=True)
+        written += 1
     return written
 
 

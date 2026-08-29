@@ -26,6 +26,7 @@ from app.settings.locations import CANONICAL_SETTINGS_DIR_NAME, LEGACY_COMPILED_
 from app.watcher.state import WatcherState
 from app.vault.manager import iter_vault_markdown_files
 from app.vault.paths import resolve_vault_system_dir_rel_or_default
+from app.services.outbox import append_jsonl_record
 
 _WATCHER_LOG = logging.getLogger(__name__)
 
@@ -96,10 +97,7 @@ def _emit_scan_event(*, outbox_path: Path, vault_root: Path, rel_path: Path, mti
             "hash": content_hash,
         },
     }
-    outbox_path.parent.mkdir(parents=True, exist_ok=True)
-    with outbox_path.open("a", encoding="utf-8") as handle:
-        handle.write(json.dumps(event, ensure_ascii=False))
-        handle.write("\n")
+    append_jsonl_record(outbox_path, event, require_event_id=True)
     return trace_id
 
 

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import logging
 import os
 from pathlib import Path
@@ -13,6 +12,7 @@ from app.events.schema import make_outbox_event
 from app.llm.embeddings import EMBED_MODEL
 from app.services.outbox import (
     EVENT_ID_FINGERPRINT,
+    append_jsonl_record,
     derive_idempotency_key,
     payload_fingerprint,
     write_outbox_event,
@@ -126,9 +126,7 @@ def _coerce_uuid(value: object) -> str:
 
 
 def _append_record(record: Dict[str, Any]) -> None:
-    INDEX_OUTBOX_PATH.parent.mkdir(parents=True, exist_ok=True)
-    with INDEX_OUTBOX_PATH.open("a", encoding="utf-8") as fh:
-        fh.write(json.dumps(record, ensure_ascii=False) + "\n")
+    append_jsonl_record(get_index_outbox_path(), record, require_event_id=True)
 
 
 def _append_record_best_effort(record: Dict[str, Any], *, event_name: str) -> None:

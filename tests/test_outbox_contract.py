@@ -1,11 +1,15 @@
 import json
 from datetime import datetime, timezone
+from pathlib import Path
+
+import pytest
 
 from app.events.panel import NoteRef, PanelInfo, PanelIntentExecutedEvent, PanelIntentExecutedPayload
 from app.events.models import new_event
 from app.events.schema import OutboxEvent
 from app.events.types import INGEST_OBJECT_CREATED
 from app.services.outbox import (
+    JsonlOutboxEventIdConflictError,
     append_jsonl_outbox_event,
     coerce_outbox_event,
     derive_binding_scoped_idempotency_key,
@@ -13,6 +17,8 @@ from app.services.outbox import (
     serialize_outbox_record,
     write_outbox_event,
 )
+from app.outbox import events as index_outbox_events
+from app.watcher import watcher as watcher_module
 
 
 class FakeConn:
@@ -185,3 +191,53 @@ def test_append_jsonl_outbox_event_omits_context_dimensions_when_absent(tmp_path
     assert "context_dimensions" not in records[0], (
         f"JSONL record must not include context_dimensions when absent, got: {records[0].get('context_dimensions')!r}"
     )
+
+
+def test_index_audit_writer_uses_shared_event_id_seam(
+    tmp_path, monkeypatch
+) -> None:
+    outbox_path = tmp_path / "index-outbox.jsonl"
+    monkeypatch.setenv("INDEX_OUTBOX_PATH", str(outbox_path))
+    index_outbox_events.reset_audit_emission_dedup_store()
+    record = {"event": "index.test", "event_id": "shared-id", "payload": {"x": 1}}
+
+    index_outbox_events._append_record(record)
+
+    with pytest.raises(JsonlOutboxEventIdConflictError):
+        index_outbox_events._append_record(
+            {"event": "index.test", "event_id": "shared-id", "payload": {"x": 2}}
+        )
+
+    assert len(outbox_path.read_text(encoding="utf-8").splitlines()) == 1
+
+
+def test_watcher_scan_writer_uses_shared_event_id_seam(
+    tmp_path, monkeypatch
+) -> None:
+    class FixedUUID:
+        hex = "shared-scan-id"
+
+    monkeypatch.setattr(watcher_module, "uuid4", lambda: FixedUUID())
+    monkeypatch.setattr(
+        watcher_module,
+        "_now_iso_from_timestamp",
+        lambda _value: "2026-08-29T12:00:00Z",
+    )
+    outbox_path = tmp_path / "watcher-outbox.jsonl"
+
+    watcher_module._emit_scan_event(
+        outbox_path=outbox_path,
+        vault_root=tmp_path / "vault",
+        rel_path=Path("note.md"),
+        mtime=1.0,
+        content_hash="hash",
+    )
+
+    with pytest.raises(JsonlOutboxEventIdConflictError):
+        watcher_module._emit_scan_event(
+            outbox_path=outbox_path,
+            vault_root=tmp_path / "vault",
+            rel_path=Path("note.md"),
+            mtime=1.0,
+            content_hash="different-hash",
+        )

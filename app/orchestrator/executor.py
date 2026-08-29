@@ -23,6 +23,7 @@ AgentHandler = Callable[[AgentRequest], AgentResponse]
 from app.policy.enforce import assert_tool_allowed, is_policy_enforced
 from app.quality import timeout_wrapper
 from app.outbox.events import INDEX_OUTBOX_PATH
+from app.services.outbox import append_jsonl_record
 from app.objects import ObjectStore
 from app.events.schema import OutboxEvent
 
@@ -47,16 +48,14 @@ def _resolve_outbox_path() -> Path:
 
 
 def _write_outbox_events(outbox_path: Path, events: Iterable[Any]) -> None:
-    outbox_path.parent.mkdir(parents=True, exist_ok=True)
-    with outbox_path.open("a", encoding="utf-8") as handle:
-        for event in events:
-            if hasattr(event, "model_dump"):
-                payload = event.model_dump(mode="json")
-            elif isinstance(event, dict):
-                payload = dict(event)
-            else:
-                continue
-            handle.write(json.dumps(payload, ensure_ascii=False) + "\n")
+    for event in events:
+        if hasattr(event, "model_dump"):
+            payload = event.model_dump(mode="json")
+        elif isinstance(event, dict):
+            payload = dict(event)
+        else:
+            continue
+        append_jsonl_record(outbox_path, payload, require_event_id=True)
 
 
 class StepExecutionError(Exception):
