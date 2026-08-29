@@ -36,7 +36,10 @@ to the draft, and the pending-review-not-clobbered discipline.
    refresh-scheduling loses nothing — the next tick re-derives the delta from the log itself).
    The shipped composition entrypoint is
    `app.standing_questions.evidence_matching.run_standing_questions_tick`: it runs SQ-03 and then
-   this refresh in that order, so a matching tick cannot return before the delta is evaluated.
+   this refresh in that order, so a matching tick cannot return before the delta is evaluated. The
+   existing vault-ingest caller `app.watcher.vault_watcher.run_watcher_tick` supplies changed,
+   explicitly scoped notes and invokes that composition after ingest; it does not guess a scope or
+   add a new acquisition path.
 2. **Pending-review guard (INV-SQ-D, the seam this task exists to walk)**: before drafting, the
    refresh checks `candidate_answer_ref` — if a prior candidate-answer draft is still pending (not yet
    accepted, dismissed, or expired), the refresh **defers**: evidence keeps accruing in the log, no
