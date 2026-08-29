@@ -14,6 +14,7 @@ import errno
 import fcntl
 import hashlib
 import json
+import math
 import os
 import re
 import stat
@@ -106,6 +107,48 @@ def _mapping(value: object, *, path: str) -> Mapping[str, Any]:
     if not isinstance(value, Mapping) or not all(isinstance(key, str) for key in value):
         raise ArtifactRenderError("invalid_shape", f"{path} must be a string-keyed mapping")
     return value
+
+
+def _validate_input_tree(
+    value: object,
+    *,
+    label: str,
+    depth: int = 0,
+    active: set[int] | None = None,
+) -> None:
+    if depth > 64:
+        raise _OrdinaryBootInputError(f"{label}_invalid_shape")
+    if value is None or isinstance(value, (str, bool, int)):
+        return
+    if isinstance(value, float):
+        if math.isfinite(value):
+            return
+        raise _OrdinaryBootInputError(f"{label}_invalid_shape")
+    if not isinstance(value, (Mapping, list)):
+        raise _OrdinaryBootInputError(f"{label}_invalid_shape")
+
+    active_ids = active if active is not None else set()
+    identity = id(value)
+    if identity in active_ids:
+        raise _OrdinaryBootInputError(f"{label}_invalid_shape")
+    active_ids.add(identity)
+    try:
+        children: Sequence[object]
+        if isinstance(value, Mapping):
+            if not all(isinstance(key, str) for key in value):
+                raise _OrdinaryBootInputError(f"{label}_invalid_shape")
+            children = list(value.values())
+        else:
+            children = value
+        for child in children:
+            _validate_input_tree(
+                child,
+                label=label,
+                depth=depth + 1,
+                active=active_ids,
+            )
+    finally:
+        active_ids.remove(identity)
 
 
 def _required_string(mapping: Mapping[str, Any], key: str, *, path: str) -> str:
@@ -753,20 +796,22 @@ def run_ordinary_boot(
 def _read_json_mapping(path: Path, *, label: str) -> Mapping[str, Any]:
     try:
         value = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError, RecursionError) as exc:
         raise _OrdinaryBootInputError(f"{label}_unreadable") from exc
     if not isinstance(value, Mapping) or not all(isinstance(key, str) for key in value):
         raise _OrdinaryBootInputError(f"{label}_invalid_shape")
+    _validate_input_tree(value, label=label)
     return value
 
 
 def _read_compose_mapping(path: Path) -> Mapping[str, Any]:
     try:
         value = yaml.safe_load(path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, yaml.YAMLError) as exc:
+    except (OSError, UnicodeDecodeError, yaml.YAMLError, RecursionError) as exc:
         raise _OrdinaryBootInputError("compose_unreadable") from exc
     if not isinstance(value, Mapping) or not all(isinstance(key, str) for key in value):
         raise _OrdinaryBootInputError("compose_invalid_shape")
+    _validate_input_tree(value, label="compose")
     return value
 
 
