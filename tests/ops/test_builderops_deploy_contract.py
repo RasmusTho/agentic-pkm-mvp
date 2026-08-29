@@ -392,6 +392,38 @@ def test_deploy_preflight_accepts_root_0400_app_secret(tmp_path: Path) -> None:
     assert "up -d db" in events
 
 
+def test_deploy_preflight_refuses_nonprivate_app_secret_before_pull_or_db_up(
+    tmp_path: Path,
+) -> None:
+    for fixture_name, metadata in (
+        ("non_root_owner", "1000:600"),
+        ("group_readable", "0:640"),
+    ):
+        root, env, _source_sha, _digest, _postgres_digest = _harness(
+            tmp_path / fixture_name
+        )
+        env["FAKE_SECRET_STAT"] = metadata
+
+        result = subprocess.run(
+            [
+                "bash",
+                "scripts/deploy_builderops.sh",
+                "deploy",
+                env["BUILDEROPS_TEST_CANDIDATE_RECEIPT"],
+            ],
+            cwd=root,
+            env=env,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+
+        assert result.returncode != 0, result.stdout + result.stderr
+        events = Path(env["FAKE_EVENT_LOG"]).read_text(encoding="utf-8")
+        assert " pull " not in events
+        assert " up " not in events
+
+
 def test_deploy_refuses_a_local_mode_that_would_require_recovery_egress(tmp_path: Path) -> None:
     root, env, _source_sha, _digest, _postgres_digest = _harness(tmp_path)
     env["BUILDEROPS_LOCAL_DURABILITY_MODE"] = "independent-recovery"
