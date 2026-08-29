@@ -479,6 +479,25 @@ def jsonl_outbox_append_lock(outbox_path: Path) -> Iterator[Path]:
             fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
 
+@contextmanager
+def _jsonl_outbox_read_lock(outbox_path: Path) -> Iterator[Path]:
+    """Use an existing append lock without creating or changing filesystem state."""
+
+    canonical_path = _canonical_jsonl_outbox_path(outbox_path)
+    lock_path = canonical_path.with_name(f".{canonical_path.name}.append.lock")
+    try:
+        handle = lock_path.open("r", encoding="utf-8")
+    except FileNotFoundError:
+        yield canonical_path
+        return
+    try:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_SH)
+        yield canonical_path
+    finally:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        handle.close()
+
+
 def _append_jsonl_outbox_event_unlocked(
     outbox_path: Path, record: dict[str, Any]
 ) -> None:
@@ -498,7 +517,10 @@ def _append_jsonl_outbox_event_unlocked(
 
 
 def _read_jsonl_records_unlocked(
-    outbox_path: Path, *, max_bytes: int | None = None
+    outbox_path: Path,
+    *,
+    max_bytes: int | None = None,
+    repair_final_delimiter: bool = True,
 ) -> list[dict[str, Any]]:
     """Read and safely repair one final complete unterminated record."""
 
@@ -549,7 +571,7 @@ def _read_jsonl_records_unlocked(
             )
         records.append(existing)
 
-    if not raw.endswith(b"\n"):
+    if repair_final_delimiter and not raw.endswith(b"\n"):
         try:
             with outbox_path.open("ab") as handle:
                 handle.write(b"\n")
@@ -563,14 +585,25 @@ def _read_jsonl_records_unlocked(
 
 
 def read_jsonl_outbox_records(
-    outbox_path: Path, *, _lock_held: bool = False, max_bytes: int | None = None
+    outbox_path: Path,
+    *,
+    _lock_held: bool = False,
+    max_bytes: int | None = None,
+    read_only: bool = False,
 ) -> list[dict[str, Any]]:
-    """Read JSONL records under the same lock used by appenders."""
+    """Read JSONL records under the append lock or a non-mutating read-only view."""
 
     if _lock_held:
         return _read_jsonl_records_unlocked(
             _canonical_jsonl_outbox_path(outbox_path), max_bytes=max_bytes
         )
+    if read_only:
+        with _jsonl_outbox_read_lock(outbox_path) as canonical_path:
+            return _read_jsonl_records_unlocked(
+                canonical_path,
+                max_bytes=max_bytes,
+                repair_final_delimiter=False,
+            )
     with jsonl_outbox_append_lock(outbox_path) as canonical_path:
         return _read_jsonl_records_unlocked(canonical_path, max_bytes=max_bytes)
 

@@ -127,6 +127,19 @@ def test_status_outbox_consumers_fail_closed_on_malformed_tail(tmp_path: Path) -
     assert _read_last_json_record(path) is None
 
 
+def test_status_outbox_reads_do_not_mutate_unterminated_tail_or_create_lock(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "outbox.jsonl"
+    raw = json.dumps({"event": "panel.intent.executed"}).encode("utf-8")
+    path.write_bytes(raw)
+    lock_path = path.with_name(f".{path.name}.append.lock")
+
+    assert _read_last_json_record(path) == {"event": "panel.intent.executed"}
+    assert path.read_bytes() == raw
+    assert not lock_path.exists()
+
+
 def test_delivery_sla_does_not_read_entire_file(tmp_path: Path) -> None:
     path = tmp_path / "outbox.jsonl"
     payload = json.dumps({"event": "orchestrator.step.error", "timestamp": "2024-01-01T00:00:00Z"})

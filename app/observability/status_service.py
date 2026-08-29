@@ -82,7 +82,7 @@ def _iter_tail_records(path: Path, max_bytes: int = _STATUS_TAIL_BYTES) -> list[
     from app.services.outbox import read_jsonl_outbox_records
 
     try:
-        return read_jsonl_outbox_records(path, max_bytes=max_bytes)
+        return read_jsonl_outbox_records(path, max_bytes=max_bytes, read_only=True)
     except Exception:
         return []
 
