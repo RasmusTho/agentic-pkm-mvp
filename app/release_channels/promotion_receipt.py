@@ -417,23 +417,29 @@ def _verified_commit(
         object_type="commit",
     )
     headers = content.partition(b"\n\n")[0].splitlines()
-    tree_ids: list[str] = []
+    if not headers or not headers[0].startswith(b"tree "):
+        raise PromotionReceiptError("migration_delta_invalid")
     parent_ids: list[str] = []
     try:
-        for line in headers:
-            if line.startswith(b"tree "):
-                tree_ids.append(line.removeprefix(b"tree ").decode("ascii"))
-            elif line.startswith(b"parent "):
-                parent_ids.append(line.removeprefix(b"parent ").decode("ascii"))
+        tree_id = headers[0].removeprefix(b"tree ").decode("ascii")
+        cursor = 1
+        while cursor < len(headers) and headers[cursor].startswith(b"parent "):
+            parent_ids.append(
+                headers[cursor].removeprefix(b"parent ").decode("ascii")
+            )
+            cursor += 1
     except UnicodeDecodeError as exc:
         raise PromotionReceiptError("migration_delta_invalid") from exc
     if (
-        len(tree_ids) != 1
-        or _SOURCE_SHA.fullmatch(tree_ids[0]) is None
+        _SOURCE_SHA.fullmatch(tree_id) is None
         or any(_SOURCE_SHA.fullmatch(parent) is None for parent in parent_ids)
+        or any(
+            line.startswith(b"tree ") or line.startswith(b"parent ")
+            for line in headers[cursor:]
+        )
     ):
         raise PromotionReceiptError("migration_delta_invalid")
-    return tree_ids[0], tuple(parent_ids)
+    return tree_id, tuple(parent_ids)
 
 
 def _verified_ancestry_trees(
