@@ -82,6 +82,7 @@ from __future__ import annotations
 import fcntl
 import hashlib
 import json
+import logging
 import os
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -108,6 +109,8 @@ from app.services.outbox import (
 )
 from app.write_guard import DEFAULT_WRITE_GUARD, WriteGuard
 from scripts.yaml_roundtrip import load_frontmatter
+
+_LOGGER = logging.getLogger(__name__)
 
 # --- output kinds (closed enum; no default) ---------------------------------
 
@@ -584,15 +587,56 @@ def _existing_receipt(
     return first_match
 
 
-def _draft_was_expired(outbox_path: Path, draft_id: str) -> bool:
-    """Return whether the durable expiry ledger explains a missing draft."""
+def _draft_was_expired(
+    outbox_path: Path, draft_id: str, proposal_receipt_id: str
+) -> bool:
+    """Return whether the matching proposal generation was explicitly expired."""
 
     return any(
         record.get("event") == CREATE_EXPIRED_EVENT
         and isinstance(record.get("payload"), dict)
         and record["payload"].get("draft_id") == draft_id
+        and record["payload"].get("proposal_receipt_id") == proposal_receipt_id
         for record in read_jsonl_outbox_records(outbox_path)
     )
+
+
+def _proposal_receipt_id_for_draft(
+    outbox_path: Path, draft_id: str, draft_sha256: str
+) -> str | None:
+    for record in read_jsonl_outbox_records(outbox_path):
+        payload = record.get("payload")
+        if (
+            record.get("event") == CREATE_PROPOSED_EVENT
+            and isinstance(payload, dict)
+            and payload.get("draft_id") == draft_id
+            and payload.get("draft_sha256") == draft_sha256
+        ):
+            event_id = record.get("event_id")
+            return event_id if isinstance(event_id, str) else None
+    return None
+
+
+def _existing_expiry_receipt_id(
+    outbox_path: Path,
+    *,
+    draft_id: str,
+    draft_sha256: str,
+    proposal_receipt_id: str | None,
+) -> str | None:
+    for record in read_jsonl_outbox_records(outbox_path):
+        payload = record.get("payload")
+        if not (
+            record.get("event") == CREATE_EXPIRED_EVENT
+            and isinstance(payload, dict)
+            and payload.get("draft_id") == draft_id
+            and payload.get("draft_sha256") == draft_sha256
+            and payload.get("proposal_receipt_id") == proposal_receipt_id
+        ):
+            continue
+        event_id = record.get("event_id")
+        return event_id if isinstance(event_id, str) else ""
+    return None
 
 
 def _request_fingerprint(request: CreateRequest) -> str:
@@ -837,7 +881,9 @@ def run_create_pass(
                 else None
             )
             if existing_receipt is not None and replay is None:
-                if _draft_was_expired(outbox_path, draft_id or ""):
+                if _draft_was_expired(
+                    outbox_path, draft_id or "", receipt_id or ""
+                ):
                     # Expiry deliberately removed the old bytes. Rebuild the
                     # proposal with a fresh receipt identity rather than
                     # pretending the new draft is byte-identical to history.
@@ -1145,6 +1191,51 @@ def sweep_expired_drafts(
 
             draft_id = str(frontmatter.get("uuid") or locked_path.stem)
             try:
+                draft_sha256 = hashlib.sha256(locked_path.read_bytes()).hexdigest()
+            except OSError:
+                continue
+            proposal_receipt_id = _proposal_receipt_id_for_draft(
+                outbox_path, draft_id, draft_sha256
+            )
+            expiry_payload = {
+                "draft_id": draft_id,
+                "draft_path": str(locked_path.relative_to(vault_root)),
+                "draft_sha256": draft_sha256,
+                "proposal_receipt_id": proposal_receipt_id,
+                "expired_at": _iso(now),
+            }
+            try:
+                receipt_id = _existing_expiry_receipt_id(
+                    outbox_path,
+                    draft_id=draft_id,
+                    draft_sha256=draft_sha256,
+                    proposal_receipt_id=proposal_receipt_id,
+                )
+                if receipt_id is None:
+                    _emit_receipt(
+                        CREATE_EXPIRED_EVENT,
+                        expiry_payload,
+                        outbox_path=outbox_path,
+                        trace_id=None,
+                    )
+                    receipt_id = _existing_expiry_receipt_id(
+                        outbox_path,
+                        draft_id=draft_id,
+                        draft_sha256=draft_sha256,
+                        proposal_receipt_id=proposal_receipt_id,
+                    )
+                if not receipt_id:
+                    raise RuntimeError("Create draft expiry receipt was not durable")
+            except Exception:
+                # Keep the draft intact when its audit receipt cannot be
+                # published; a later sweep can retry safely.
+                _LOGGER.warning(
+                    "Create draft expiry receipt failed; preserving draft: %s",
+                    locked_path,
+                    exc_info=True,
+                )
+                continue
+            try:
                 locked_path.unlink()
             except OSError:
                 continue
@@ -1155,16 +1246,6 @@ def sweep_expired_drafts(
                 # is harmless and can be cleaned by the next maintenance pass.
                 pass
             expired.append(draft_id)
-            receipt_id = _emit_receipt(
-                CREATE_EXPIRED_EVENT,
-                {
-                    "draft_id": draft_id,
-                    "draft_path": str(locked_path.relative_to(vault_root)),
-                    "expired_at": _iso(now),
-                },
-                outbox_path=outbox_path,
-                trace_id=None,
-            )
             receipt_ids.append(receipt_id)
 
     return ExpirySweepReport(expired=tuple(expired), receipt_ids=tuple(receipt_ids))

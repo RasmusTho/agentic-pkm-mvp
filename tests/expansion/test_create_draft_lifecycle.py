@@ -388,6 +388,44 @@ def test_expired_draft_receipt_can_be_replayed_after_expiry(
     assert (vault_root / replay.draft_path).exists()
 
 
+def test_expiry_receipt_failure_preserves_draft_for_retry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    vault_root = tmp_path / "vault"
+    vault_root.mkdir()
+    outbox_path = tmp_path / "outbox.jsonl"
+    expired_at = datetime.now(timezone.utc) - timedelta(days=30)
+    report = run_create_pass(
+        CreateRequest(
+            kind=OutputKind.OVERVIEW,
+            title="Receipt failure",
+            sources=(_source("obj-a", "Evidence text.", "Evidence text."),),
+        ),
+        vault_root=vault_root,
+        outbox_path=outbox_path,
+        write_guard=_allow_all_guard(),
+        staleness_days=14,
+        now=expired_at,
+    )
+    draft_path = vault_root / report.draft_path
+    original_emit = create_module._emit_receipt
+
+    def fail_expiry(event: str, *args, **kwargs):
+        if event == create_module.CREATE_EXPIRED_EVENT:
+            raise RuntimeError("simulated expiry receipt outage")
+        return original_emit(event, *args, **kwargs)
+
+    monkeypatch.setattr(create_module, "_emit_receipt", fail_expiry)
+    sweep = sweep_expired_drafts(
+        vault_root=vault_root,
+        outbox_path=outbox_path,
+        now=datetime.now(timezone.utc),
+    )
+
+    assert sweep.expired == ()
+    assert draft_path.exists()
+
+
 def test_expiry_sweep_never_removes_a_checked_draft(tmp_path: Path) -> None:
     """A checked (accepted) draft is EXP-4's concern; the sweep must never
     remove it even if it is past its staleness window."""

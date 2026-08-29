@@ -157,6 +157,12 @@ def _standing_question_tick_inputs(
                 source_path = (vault_root / relative).resolve()
                 if not source_path.is_relative_to(vault_root) or not source_path.is_file():
                     continue
+                source_relative = source_path.relative_to(vault_root)
+                if source_relative.parts and source_relative.parts[0] == "questions":
+                    # Persisted evidence is replayed through this source map
+                    # too; reapply the same canonical exclusion as changed
+                    # paths so old self-references cannot return.
+                    continue
                 raw_bytes = source_path.read_bytes()
                 text = raw_bytes.decode("utf-8")
             except (OSError, UnicodeError, ValueError, RuntimeError):

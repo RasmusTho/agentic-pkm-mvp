@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from typing import Any
 
 from app.outbox.events import INDEX_OUTBOX_PATH
+from app.services.outbox import read_jsonl_outbox_records
 
 
 def default_outbox_path() -> Path:
@@ -12,20 +12,7 @@ def default_outbox_path() -> Path:
 
 
 def read_jsonl(path: Path) -> list[dict[str, Any]]:
-    if not path.exists():
-        return []
-    rows: list[dict[str, Any]] = []
-    for ln in path.read_text(encoding="utf-8").splitlines():
-        ln = ln.strip()
-        if not ln:
-            continue
-        try:
-            obj = json.loads(ln)
-        except Exception:
-            continue
-        if isinstance(obj, dict):
-            rows.append(obj)
-    return rows
+    return read_jsonl_outbox_records(path)
 
 
 def read_outbox(path: Path | None = None) -> list[dict[str, Any]]:

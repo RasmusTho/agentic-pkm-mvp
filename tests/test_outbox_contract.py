@@ -91,6 +91,41 @@ def test_write_outbox_event_accepts_panel_event_source_models():
     assert attempts == 0
 
 
+def test_configured_jsonl_consumers_preserve_unicode_line_separators(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app.events.outbox import read_jsonl
+    from app.receipts.outbox_sources import read_receipt_source_records
+    from app.settings.migration import _transaction_receipt_is_durable
+    from app.promotion.consumer import consume_promotion_intents
+
+    outbox_path = tmp_path / "outbox.jsonl"
+    record = {
+        "event": "settings.write.receipt",
+        "event_id": "unicode-consumer-id",
+        "payload": {
+            "key": "settings.label",
+            "timestamp": "2026-08-29T00:00:00Z",
+            "text": "before\u2028after\u2029end",
+        },
+    }
+    outbox_path.write_text(json.dumps(record, ensure_ascii=False) + "\n", encoding="utf-8")
+    monkeypatch.setenv("INDEX_OUTBOX_PATH", str(outbox_path))
+
+    assert read_jsonl(outbox_path)[0]["payload"]["text"] == "before\u2028after\u2029end"
+    assert read_receipt_source_records(outbox_path=outbox_path)[0]["event_id"] == (
+        "unicode-consumer-id"
+    )
+    assert _transaction_receipt_is_durable(
+        {"receipt_key": "settings.label", "receipt_timestamp": "2026-08-29T00:00:00Z"}
+    )
+    cursor_path = tmp_path / "cursor.json"
+    assert consume_promotion_intents(
+        outbox_path=outbox_path, cursor_path=cursor_path
+    )["intents_seen"] == 0
+    assert json.loads(cursor_path.read_text(encoding="utf-8"))["line_index"] == 1
+
+
 def test_coerce_outbox_event_uses_typed_payload_not_full_event_envelope(tmp_path):
     event = PanelIntentExecutedEvent(
         payload=PanelIntentExecutedPayload(

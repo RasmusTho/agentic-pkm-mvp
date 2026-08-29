@@ -285,12 +285,17 @@ def _content_hash(raw_bytes: bytes) -> str:
     return hashlib.sha256(raw_bytes).hexdigest()
 
 
-def _is_question_note_ref(artifact_ref: str) -> bool:
+def _is_question_note_ref(vault_root: Path, artifact_ref: str) -> bool:
     """Return whether a vault artifact ref points at a Question source note."""
 
     if not artifact_ref.startswith(VAULT_REF_PREFIX):
         return False
     relative = Path(artifact_ref[len(VAULT_REF_PREFIX) :])
+    resolved = (vault_root / relative).resolve()
+    try:
+        relative = resolved.relative_to(vault_root)
+    except ValueError:
+        return False
     return bool(relative.parts) and relative.parts[0] == "questions"
 
 
@@ -394,7 +399,7 @@ def match_evidence_to_open_questions(
             # Question notes are the target of this matcher, never evidence
             # for it. Keep this exclusion before content resolution and model
             # judgment so a changed Question cannot self-seed its evidence log.
-            if _is_question_note_ref(candidate.artifact_ref):
+            if _is_question_note_ref(resolved_root, candidate.artifact_ref):
                 counters.bump("excluded_question_note")
                 continue
             # Scope first, before any content is resolved: a cross-scope artifact's

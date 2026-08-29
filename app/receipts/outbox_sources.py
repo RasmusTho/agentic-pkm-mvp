@@ -149,21 +149,12 @@ def _db_outbox_configured() -> bool:
 
 
 def _read_jsonl_outbox_records(*, outbox_path: Path | None) -> list[dict[str, Any]] | None:
+    from app.services.outbox import read_jsonl_outbox_records
+
     resolved = _resolve_jsonl_outbox_path(outbox_path)
     if resolved is None or not resolved.exists() or not resolved.is_file():
         return None
-    records: list[dict[str, Any]] = []
-    for line in resolved.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            parsed = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if isinstance(parsed, dict):
-            records.append(parsed)
-    return records
+    return read_jsonl_outbox_records(resolved)
 
 
 def _resolve_jsonl_outbox_path(outbox_path: Path | None) -> Path | None:

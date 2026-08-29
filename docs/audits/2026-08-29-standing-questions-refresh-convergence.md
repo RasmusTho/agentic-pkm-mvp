@@ -37,11 +37,16 @@ or human acceptance.
   replayable.
 - Deterministic replay and expiry take the same draft-scoped lock. An expiry receipt explains a
   deliberately removed proposal; a later retry rebuilds the draft under a fresh proposal receipt
-  identity rather than treating changed replacement bytes as the old receipt.
+  identity rather than treating changed replacement bytes as the old receipt. The expiry receipt is
+  published before deletion and is bound to the proposal receipt id plus draft hash, so a failed
+  receipt write preserves the draft and an old expiry cannot authorize a later generation.
 - JSONL parsing treats only the byte `0x0A` as the record delimiter, so valid Unicode line-separator
   characters remain inside a JSON string and do not wedge the configured outbox.
 - Question notes are excluded as evidence sources both at the watcher adapter and matcher core;
-  a Question edit cannot self-seed its own evidence log or answer refresh.
+  canonical path resolution is applied to direct, traversal, and persisted evidence refs, so a
+  Question edit cannot self-seed its own evidence log or answer refresh.
+- Configured JSONL consumers use the shared strict reader; promotion cursors advance by validated
+  records rather than silently skipping malformed or Unicode-containing records.
 - JSONL receipt read/check/append is serialized per canonical index-outbox path, so the event-id
   invariant is atomic across independent writers, event types, and path aliases.
 - The configured index-outbox writer census includes settings receipts, worker latency summaries,
@@ -130,7 +135,7 @@ historical evidence claim. No SQ-04 writer changes the standing answer or human-
 | Contradiction basis is exact or unknown | `test_contradiction_surfaced_not_silently_rewritten`, `test_invalid_contradiction_basis_degrades_to_unknown` | Passed |
 | Human fields remain protected | QuestionStore CAS and human-field tests | Passed |
 | Evidence entries carry content identity | `test_relevant_artifact_attaches_irrelevant_does_not` | Passed |
-| Focused SQ/Create regression set | Standing Questions, evidence matching, Create lifecycle, QuestionStore, and JSONL outbox contract tests | `226 passed`, 4 PG projection tests skipped because no scratch database was configured |
+| Focused SQ/Create regression set | Standing Questions, evidence matching, Create lifecycle, QuestionStore, and JSONL outbox contract tests | `229 passed`, 4 PG projection tests skipped because no scratch database was configured |
 | Matcher CAS conflict is observable and non-clobbering | `test_match_write_conflict_does_not_clobber_question` | Passed |
 | Deterministic replay preserves draft bytes and receipt payload | `test_refresh_replay_reuses_draft_and_receipt_bytes` | Passed |
 | Matcher CAS conflict remains watcher-retryable | `test_watcher_retries_standing_questions_matching_conflict_before_advancing_snapshot` | Passed locally; CI proof is pending for the current head |
@@ -163,6 +168,9 @@ historical evidence claim. No SQ-04 writer changes the standing answer or human-
 | Valid Unicode JSONL line-separator characters remain one record | `test_jsonl_append_preserves_unicode_line_separator_characters` | Passed |
 | Expired proposal is rebuilt with a fresh receipt identity | `test_expired_draft_receipt_can_be_replayed_after_expiry` | Passed |
 | Question note cannot become its own evidence | `test_question_note_cannot_become_its_own_evidence` | Passed |
+| Traversal alias cannot bypass Question-note exclusion | `test_question_note_path_traversal_cannot_bypass_self_exclusion` | Passed |
+| Expiry receipt failure preserves the draft for retry | `test_expiry_receipt_failure_preserves_draft_for_retry` | Passed |
+| Configured JSONL consumers preserve Unicode line-separator characters | `test_configured_jsonl_consumers_preserve_unicode_line_separators` | Passed |
 | Draft mutation after staging cannot be accepted by deterministic replay | `test_refresh_replay_reuses_draft_and_receipt_bytes` | Passed |
 | Crash between integrity record and draft replace remains replayable | `test_crash_between_integrity_and_draft_write_remains_replayable` | Passed |
 | Rollback converges after a competing Question CAS conflict | `test_standing_answer_drift_rollback_retries_after_question_conflict` | Passed |
@@ -199,6 +207,7 @@ where the finding was observed; a later head invalidates the earlier clean/uncle
 | `d320aef5a13cab9372e7081dd0bb004fd79d41a6` | Fresh exact-head Sol census found the settings once-only lock was still lexical-path based, so real-path and symlink writers could both pass the operation check and append duplicate operation receipts. | This repair canonicalizes the settings receipt path before deriving both the once-only lock and readback path, with a regression asserting alias lock identity. The durable parent-fsync/readback behavior remains intact. |
 | `4482d74624c3b8906a9c24331d851231fbb2b7e7` | Fresh exact-head review found settings receipt readback still used a local parser that skipped malformed lines; a valid receipt followed by corrupt JSONL could therefore be accepted and bypass the strict shared reader. | Readback now uses `read_jsonl_outbox_records`, so unreadable or malformed tails fail closed. The regression appends a malformed tail after a valid receipt and proves both readback and once-only retry reject the corrupted sink. |
 | `6ea11278ac8997e8d4d390dfa022fdb76ccadd23` | Fresh exact-head Sol review found valid Unicode U+2028 could wedge JSONL parsing; draft replay and expiry could race or leave an expired proposal receipt stranded; and the watcher/matcher admitted a Question note as its own evidence. | JSONL now splits only on the byte newline delimiter; replay and expiry share the draft lock, and an expiry receipt causes a retry to rebuild with a fresh proposal identity; Question-note sources are excluded at both production adapter and matcher boundaries. Focused regressions cover all three repairs. |
+| `3c04dc3883c34b5e28eff978496b43b6c99034dd` | Fresh exact-head Sol review found four configured JSONL consumers still used `splitlines()`; expiry authorization matched only draft id and deleted before receipt publication; and Question-note exclusion was bypassable by traversal and persisted source rebuilds. | All configured consumers now use the strict shared reader; expiry receipts precede deletion and bind proposal receipt id plus draft hash, with receipt failure preserving the draft; canonical Question-source exclusion is reapplied to traversal and persisted refs. Focused regressions cover each finding. |
 
 The first row is sourced from GitHub review comments whose `original_commit_id` is
 `0d032250274b54eb62c50e50e436077fb032401a`; the later rows are local independent review receipts
