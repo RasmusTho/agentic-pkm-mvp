@@ -531,6 +531,64 @@ def test_targeted_remote_cleanup_uses_git_common_dir_store_across_worktrees(tmp_
     assert git_hygiene._git_common_dir(repo) == git_hygiene._git_common_dir(worktree)
 
 
+def test_targeted_remote_cleanup_sanitizes_explicit_cwd_repository_context(
+    tmp_path, monkeypatch
+) -> None:
+    from scripts import agent_worktree
+
+    repo_a = tmp_path / "repo-a"
+    repo_b = tmp_path / "repo-b"
+    for repo, remote in (
+        (repo_a, "https://github.com/Owner/repo-a.git"),
+        (repo_b, "https://github.com/Owner/repo-b.git"),
+    ):
+        subprocess.run(["git", "init", str(repo)], check=True, capture_output=True)
+        subprocess.run(
+            ["git", "-C", str(repo), "remote", "add", "origin", remote], check=True
+        )
+    registry_a = repo_a / ".git" / "agent-worktrees.json"
+    registry_a.write_text(
+        json.dumps({"schema": agent_worktree.REGISTRY_SCHEMA, "worktrees": {}}),
+        encoding="utf-8",
+    )
+    (repo_b / ".git" / "agent-worktrees.json").write_text(
+        "not-json", encoding="utf-8"
+    )
+
+    monkeypatch.setenv("GIT_DIR", str(repo_b / ".git"))
+    monkeypatch.setenv("GIT_WORK_TREE", str(repo_b))
+    monkeypatch.setenv("GIT_COMMON_DIR", str(repo_b / ".git"))
+    monkeypatch.setenv("GIT_INDEX_FILE", str(repo_b / ".git" / "index"))
+    monkeypatch.setenv("GIT_CONFIG_COUNT", "1")
+    monkeypatch.setenv("GIT_CONFIG_KEY_0", "test.marker")
+    monkeypatch.setenv("GIT_CONFIG_VALUE_0", "preserved")
+    monkeypatch.setattr(
+        git_hygiene,
+        "_github_get",
+        lambda _cwd, _endpoint: {"id": 101, "full_name": "Owner/repo-a"},
+    )
+
+    sanitized = git_hygiene._sanitized_git_environment()
+    assert "GIT_DIR" not in sanitized
+    assert "GIT_WORK_TREE" not in sanitized
+    assert "GIT_COMMON_DIR" not in sanitized
+    assert "GIT_INDEX_FILE" not in sanitized
+    assert sanitized["GIT_CONFIG_COUNT"] == "1"
+    assert git_hygiene.run_git(["config", "--get", "test.marker"], repo_a) == "preserved"
+
+    identity = git_hygiene._resolve_repository_identity(repo_a, "Owner/repo-a")
+    assert identity.fetch_url == "https://github.com/Owner/repo-a.git"
+    assert identity.push_url == "https://github.com/Owner/repo-a.git"
+    assert git_hygiene._git_common_dir(repo_a) == (repo_a / ".git").resolve()
+    assert agent_worktree._default_registry_path(repo_a) == registry_a.resolve()
+    assert agent_worktree.load_lifecycle_authority(
+        repo_a, candidate_branch="codex/no-such-branch"
+    ) == {}
+    assert git_hygiene._canonical_dispatcher_db_path(repo_a) == (
+        repo_a / "runtime" / "dispatcher" / "dispatcher.sqlite3"
+    ).resolve()
+
+
 def test_targeted_remote_cleanup_resource_key_rejects_disposition_rebinding(
     tmp_path, monkeypatch
 ) -> None:
@@ -825,6 +883,52 @@ def test_targeted_remote_cleanup_detects_orphan_live_branch_lease(
     }
 
 
+def test_targeted_remote_cleanup_detects_orphan_live_issue_lease_only_when_relevant(
+    tmp_path, monkeypatch
+) -> None:
+    from app.dispatcher.models import LeaseRecord
+    from app.dispatcher.store import SqliteStore
+
+    database = tmp_path / "dispatcher.sqlite3"
+    monkeypatch.setattr(
+        git_hygiene, "_canonical_dispatcher_db_path", lambda _cwd: database
+    )
+    store = SqliteStore(database)
+    store.initialize()
+    store.upsert_lease(
+        LeaseRecord(
+            lease_id="unrelated-issue",
+            resource="issue:9999",
+            holder="other-agent",
+            ttl_seconds=60,
+            acquired_at="2026-08-29T00:00:00+00:00",
+            expires_at="2099-01-01T00:00:00+00:00",
+        )
+    )
+    candidate = git_hygiene.Candidate(**_targeted_candidate())
+    snapshot = git_hygiene._read_dispatcher_authority(
+        tmp_path, "RasmusTho/agentic-pkm-mvp"
+    )
+    assert git_hygiene._dispatcher_conflicts(candidate, {}, snapshot) == set()
+
+    store.upsert_lease(
+        LeaseRecord(
+            lease_id="candidate-issue",
+            resource="issue:5170",
+            holder="other-agent",
+            ttl_seconds=60,
+            acquired_at="2026-08-29T00:00:00+00:00",
+            expires_at="2099-01-01T00:00:00+00:00",
+        )
+    )
+    snapshot = git_hygiene._read_dispatcher_authority(
+        tmp_path, "RasmusTho/agentic-pkm-mvp"
+    )
+    assert git_hygiene._dispatcher_conflicts(candidate, {}, snapshot) == {
+        "live_dispatcher_claim"
+    }
+
+
 def test_targeted_remote_cleanup_scopes_dispatcher_disagreement_to_candidate(
     tmp_path, monkeypatch
 ) -> None:
@@ -911,6 +1015,178 @@ def test_targeted_remote_cleanup_rejects_live_ambiguous_orphan_lease(
     )
     candidate = git_hygiene.Candidate(**_targeted_candidate())
     with pytest.raises(RuntimeError, match="lease_identity_ambiguous"):
+        git_hygiene._dispatcher_conflicts(candidate, {}, snapshot)
+
+
+def test_targeted_remote_cleanup_ignores_current_store_shaped_blank_repo_history(
+    tmp_path, monkeypatch
+) -> None:
+    from app.dispatcher.models import TaskRecord
+    from app.dispatcher.store import SqliteStore
+
+    database = tmp_path / "dispatcher.sqlite3"
+    monkeypatch.setattr(
+        git_hygiene, "_canonical_dispatcher_db_path", lambda _cwd: database
+    )
+    store = SqliteStore(database)
+    store.initialize()
+    store.upsert_task(
+        TaskRecord(
+            task_id="_sync_meta_github",
+            issue_number=0,
+            title="GitHub sync metadata",
+            status="_meta",
+            priority="low",
+            source_anchor_refs=[],
+            created_at="2026-07-01T00:00:00+00:00",
+            updated_at="2026-07-11T00:00:00+00:00",
+            repo="",
+        )
+    )
+    for offset in range(35):
+        issue = 3000 + offset
+        store.upsert_task(
+            TaskRecord(
+                task_id=f"github-issue-{issue}",
+                issue_number=issue,
+                title=f"Legacy issue {issue}",
+                status="blocked" if offset >= 33 else "completed",
+                priority="low",
+                source_anchor_refs=[f"github:issue:{issue}"],
+                created_at="2026-07-01T00:00:00+00:00",
+                updated_at="2026-07-11T00:00:00+00:00",
+                repo="",
+                blocked_reason="legacy no-repo row" if offset >= 33 else None,
+            )
+        )
+
+    snapshot = git_hygiene._read_dispatcher_authority(
+        tmp_path, "RasmusTho/agentic-pkm-mvp"
+    )
+    assert sum(item["kind"] == "task" for item in snapshot) == 36
+    candidate = git_hygiene.Candidate(**_targeted_candidate())
+    assert git_hygiene._dispatcher_conflicts(candidate, {}, snapshot) == set()
+
+
+def test_targeted_remote_cleanup_ignores_blank_repo_unrelated_branch_history(
+    tmp_path, monkeypatch
+) -> None:
+    from app.dispatcher.models import TaskRecord
+    from app.dispatcher.store import SqliteStore
+
+    database = tmp_path / "dispatcher.sqlite3"
+    monkeypatch.setattr(
+        git_hygiene, "_canonical_dispatcher_db_path", lambda _cwd: database
+    )
+    store = SqliteStore(database)
+    store.initialize()
+    store.upsert_task(
+        TaskRecord(
+            task_id="github-issue-4000",
+            issue_number=4000,
+            title="unrelated branch history",
+            status="completed",
+            priority="low",
+            source_anchor_refs=["branch:unrelated-closed-branch"],
+            created_at="2026-07-01T00:00:00+00:00",
+            updated_at="2026-07-11T00:00:00+00:00",
+            repo="",
+        )
+    )
+    snapshot = git_hygiene._read_dispatcher_authority(
+        tmp_path, "RasmusTho/agentic-pkm-mvp"
+    )
+    candidate = git_hygiene.Candidate(**_targeted_candidate())
+    assert git_hygiene._dispatcher_conflicts(candidate, {}, snapshot) == set()
+
+
+@pytest.mark.parametrize(
+    ("issue", "status", "linked_pr", "anchors", "repository"),
+    [
+        (5170, "completed", None, ["github:issue:5170"], ""),
+        (4000, "completed", "6000", ["github:issue:4000"], ""),
+        (4000, "completed", None, ["branch:closed-unmerged"], ""),
+        (4000, "claimed", None, ["github:issue:4000"], ""),
+        (4000, "completed", None, ["github:issue:4000"], " "),
+    ],
+)
+def test_targeted_remote_cleanup_rejects_adversarial_blank_repo_history(
+    tmp_path, monkeypatch, issue, status, linked_pr, anchors, repository
+) -> None:
+    from app.dispatcher.models import TaskRecord
+    from app.dispatcher.store import SqliteStore
+
+    database = tmp_path / "dispatcher.sqlite3"
+    monkeypatch.setattr(
+        git_hygiene, "_canonical_dispatcher_db_path", lambda _cwd: database
+    )
+    store = SqliteStore(database)
+    store.initialize()
+    store.upsert_task(
+        TaskRecord(
+            task_id=f"github-issue-{issue}",
+            issue_number=issue,
+            title="adversarial legacy row",
+            status=status,
+            priority="high",
+            source_anchor_refs=anchors,
+            created_at="2026-07-01T00:00:00+00:00",
+            updated_at="2026-07-11T00:00:00+00:00",
+            repo=repository,
+            linked_pr=linked_pr,
+        )
+    )
+    snapshot = git_hygiene._read_dispatcher_authority(
+        tmp_path, "RasmusTho/agentic-pkm-mvp"
+    )
+    candidate = git_hygiene.Candidate(**_targeted_candidate())
+    with pytest.raises(RuntimeError, match="task_identity_ambiguous"):
+        git_hygiene._dispatcher_conflicts(candidate, {}, snapshot)
+
+
+def test_targeted_remote_cleanup_rejects_blank_repo_unreleased_lease(
+    tmp_path, monkeypatch
+) -> None:
+    from app.dispatcher.models import LeaseRecord, TaskRecord
+    from app.dispatcher.store import SqliteStore
+
+    database = tmp_path / "dispatcher.sqlite3"
+    monkeypatch.setattr(
+        git_hygiene, "_canonical_dispatcher_db_path", lambda _cwd: database
+    )
+    store = SqliteStore(database)
+    store.initialize()
+    expires = "2026-08-01T00:01:00+00:00"
+    store.upsert_lease(
+        LeaseRecord(
+            lease_id="expired-but-unreleased",
+            resource="issue:4000",
+            holder="old-agent",
+            ttl_seconds=60,
+            acquired_at="2026-08-01T00:00:00+00:00",
+            expires_at=expires,
+        )
+    )
+    store.upsert_task(
+        TaskRecord(
+            task_id="github-issue-4000",
+            issue_number=4000,
+            title="legacy unreleased row",
+            status="completed",
+            priority="low",
+            source_anchor_refs=["github:issue:4000"],
+            created_at="2026-07-01T00:00:00+00:00",
+            updated_at="2026-07-11T00:00:00+00:00",
+            repo="",
+            lease_id="expired-but-unreleased",
+            lease_expires_at=expires,
+        )
+    )
+    snapshot = git_hygiene._read_dispatcher_authority(
+        tmp_path, "RasmusTho/agentic-pkm-mvp"
+    )
+    candidate = git_hygiene.Candidate(**_targeted_candidate())
+    with pytest.raises(RuntimeError, match="task_identity_ambiguous"):
         git_hygiene._dispatcher_conflicts(candidate, {}, snapshot)
 
 
@@ -1048,6 +1324,8 @@ def test_targeted_remote_cleanup_batch_conflict_prevents_all_git_writes(
 def test_targeted_remote_cleanup_real_bare_remote_cas(tmp_path, monkeypatch) -> None:
     remote = tmp_path / "remote.git"
     repo = tmp_path / "repo"
+    redirect_remote = tmp_path / "redirect-remote.git"
+    redirect_repo = tmp_path / "redirect-repo"
     subprocess.run(["git", "init", "--bare", str(remote)], check=True, capture_output=True)
     subprocess.run(["git", "init", str(repo)], check=True, capture_output=True)
     subprocess.run(["git", "-C", str(repo), "config", "user.email", "test@example.com"], check=True)
@@ -1058,6 +1336,51 @@ def test_targeted_remote_cleanup_real_bare_remote_cas(tmp_path, monkeypatch) -> 
     sha = subprocess.run(["git", "-C", str(repo), "rev-parse", "HEAD"], check=True, capture_output=True, text=True).stdout.strip()
     subprocess.run(["git", "-C", str(repo), "remote", "add", "origin", str(remote)], check=True)
     subprocess.run(["git", "-C", str(repo), "push", "origin", "HEAD:refs/heads/closed-unmerged"], check=True, capture_output=True)
+    subprocess.run(
+        ["git", "init", "--bare", str(redirect_remote)],
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "init", str(redirect_repo)], check=True, capture_output=True
+    )
+    subprocess.run(
+        ["git", "-C", str(redirect_repo), "config", "user.email", "test@example.com"],
+        check=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(redirect_repo), "config", "user.name", "Test"],
+        check=True,
+    )
+    (redirect_repo / "b").write_text("b", encoding="utf-8")
+    subprocess.run(["git", "-C", str(redirect_repo), "add", "b"], check=True)
+    subprocess.run(
+        ["git", "-C", str(redirect_repo), "commit", "-m", "redirect"],
+        check=True,
+        capture_output=True,
+    )
+    redirect_sha = subprocess.run(
+        ["git", "-C", str(redirect_repo), "rev-parse", "HEAD"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    subprocess.run(
+        ["git", "-C", str(redirect_repo), "remote", "add", "origin", str(redirect_remote)],
+        check=True,
+    )
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(redirect_repo),
+            "push",
+            "origin",
+            "HEAD:refs/heads/closed-unmerged",
+        ],
+        check=True,
+        capture_output=True,
+    )
     identity = git_hygiene.RepositoryIdentity(
         REPOSITORY_ID, "RasmusTho/agentic-pkm-mvp", str(remote), str(remote)
     )
@@ -1085,12 +1408,32 @@ def test_targeted_remote_cleanup_real_bare_remote_cas(tmp_path, monkeypatch) -> 
     )
     monkeypatch.setattr(git_hygiene, "_lifecycle_conflicts", lambda *_: set())
     monkeypatch.setattr(git_hygiene, "_read_dispatcher_authority", lambda *_: [])
+    monkeypatch.setenv("GIT_DIR", str(redirect_repo / ".git"))
+    monkeypatch.setenv("GIT_WORK_TREE", str(redirect_repo))
+    monkeypatch.setenv("GIT_COMMON_DIR", str(redirect_repo / ".git"))
+    monkeypatch.setenv("GIT_OBJECT_DIRECTORY", str(redirect_repo / ".git" / "objects"))
     report = git_hygiene.targeted_remote_cleanup(
         repo, repository=candidate["repository"], candidates=[candidate]
     )
     assert report["ok"] is True
     assert git_hygiene._remote_ref_sha(repo, str(remote), candidate["source_ref"]) is None
     assert git_hygiene._remote_ref_sha(repo, str(remote), candidate["archive_ref"]) == sha
+    assert (
+        git_hygiene._remote_ref_sha(
+            redirect_repo, str(redirect_remote), candidate["source_ref"]
+        )
+        == redirect_sha
+    )
+    assert (
+        git_hygiene._remote_ref_sha(
+            redirect_repo, str(redirect_remote), candidate["archive_ref"]
+        )
+        is None
+    )
+    assert (repo / ".git" / "git-hygiene" / "targeted-remote-cleanup").is_dir()
+    assert not (
+        redirect_repo / ".git" / "git-hygiene" / "targeted-remote-cleanup"
+    ).exists()
 
 
 def _allow_lifecycle_authority(_targets):

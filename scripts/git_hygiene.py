@@ -32,6 +32,35 @@ IN_PROGRESS_MARKERS = {
     "CHERRY_PICK_HEAD": "cherry-pick",
     "REVERT_HEAD": "revert",
 }
+_GIT_LOCAL_CONTEXT_ENV_KEYS = frozenset(
+    {
+        "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+        "GIT_CEILING_DIRECTORIES",
+        "GIT_COMMON_DIR",
+        "GIT_DIR",
+        "GIT_DISCOVERY_ACROSS_FILESYSTEM",
+        "GIT_GRAFT_FILE",
+        "GIT_INDEX_FILE",
+        "GIT_INTERNAL_SUPER_PREFIX",
+        "GIT_NAMESPACE",
+        "GIT_OBJECT_DIRECTORY",
+        "GIT_PREFIX",
+        "GIT_QUARANTINE_PATH",
+        "GIT_REPLACE_REF_BASE",
+        "GIT_SHALLOW_FILE",
+        "GIT_WORK_TREE",
+    }
+)
+
+
+def _sanitized_git_environment() -> dict[str, str]:
+    """Preserve Git configuration while removing ambient repository redirects."""
+
+    return {
+        key: value
+        for key, value in os.environ.items()
+        if key not in _GIT_LOCAL_CONTEXT_ENV_KEYS
+    }
 
 
 def run_git(args: list[str], cwd: Path) -> str:
@@ -41,6 +70,7 @@ def run_git(args: list[str], cwd: Path) -> str:
         check=True,
         capture_output=True,
         text=True,
+        env=_sanitized_git_environment(),
     )
     return result.stdout.strip()
 
@@ -52,6 +82,7 @@ def run_git_result(args: list[str], cwd: Path) -> subprocess.CompletedProcess[st
         check=False,
         capture_output=True,
         text=True,
+        env=_sanitized_git_environment(),
     )
 
 
@@ -218,6 +249,7 @@ def in_shared_root(cwd: str | None = None) -> bool:
             check=False,
             capture_output=True,
             text=True,
+            env=_sanitized_git_environment(),
         )
         common_dir_result = subprocess.run(
             ["git", "rev-parse", "--git-common-dir"],
@@ -225,6 +257,7 @@ def in_shared_root(cwd: str | None = None) -> bool:
             check=False,
             capture_output=True,
             text=True,
+            env=_sanitized_git_environment(),
         )
     except Exception:  # noqa: BLE001
         return False
@@ -966,9 +999,11 @@ def _parse_dispatcher_time(value: object) -> dt.datetime:
 def _canonical_dispatcher_db_path(cwd: Path) -> Path:
     """Return the repo-common production dispatcher DB without env overrides."""
 
-    from app.dispatcher.config import load_paths
-
-    return load_paths(env={}, cwd=cwd).db_path.resolve(strict=False)
+    entries = _parse_worktrees(run_git(["worktree", "list", "--porcelain"], cwd))
+    if not entries or not isinstance(entries[0].get("worktree"), str):
+        raise RuntimeError("dispatcher_repository_root_unavailable")
+    repository_root = Path(entries[0]["worktree"]).resolve(strict=False)
+    return repository_root / "runtime" / "dispatcher" / "dispatcher.sqlite3"
 
 
 def _dispatcher_snapshot(cwd: Path, repository: str) -> list[dict[str, object]]:
@@ -1022,7 +1057,15 @@ def _candidate_dispatcher_resources(
         f"branch:{branch}",
         f"ref:{candidate.source_ref}",
         f"pull:{candidate.pull_request}",
+        f"github:pull:{candidate.pull_request}",
     }
+    if candidate.governing_issue is not None:
+        resources.update(
+            {
+                f"issue:{candidate.governing_issue}",
+                f"github:issue:{candidate.governing_issue}",
+            }
+        )
     for path, record in lifecycle.items():
         prior = record.get("prior_bindings")
         if record.get("branch") == branch or (
@@ -1054,6 +1097,93 @@ def _dispatcher_linked_pr(value: object) -> int | None:
     return int(value.removeprefix("#"))
 
 
+def _dispatcher_source_anchors(value: object) -> set[str]:
+    if not isinstance(value, str):
+        raise RuntimeError("dispatcher_task_identity_ambiguous")
+    try:
+        anchors = json.loads(value)
+    except (json.JSONDecodeError, TypeError) as exc:
+        raise RuntimeError("dispatcher_task_identity_ambiguous") from exc
+    if not isinstance(anchors, list) or any(
+        not isinstance(anchor, str) or not anchor for anchor in anchors
+    ):
+        raise RuntimeError("dispatcher_task_identity_ambiguous")
+    return set(anchors)
+
+
+def _legacy_dispatcher_anchor_valid(anchor: str) -> bool:
+    return bool(
+        re.fullmatch(r"(?:github:)?(?:issue|pull):[1-9][0-9]*", anchor)
+        or re.fullmatch(r"branch:[^\s]+", anchor)
+        or re.fullmatch(r"(?:ref:)?refs/heads/[^\s]+", anchor)
+        or re.fullmatch(r"worktree:/[^\x00]+", anchor)
+    )
+
+
+def _legacy_blank_dispatcher_task_irrelevant(
+    task: Mapping[str, object],
+    *,
+    candidate: Candidate,
+    lease: Mapping[str, object] | None,
+    resources: set[str],
+) -> bool:
+    """Prove one current-store-shaped blank-repository history row irrelevant."""
+
+    task_id = task.get("task_id")
+    status = task.get("status")
+    issue = task.get("issue_number")
+    linked_pr = _dispatcher_linked_pr(task.get("linked_pr"))
+    anchors = _dispatcher_source_anchors(task.get("source_anchor_refs"))
+    if not isinstance(task_id, str) or not task_id:
+        raise RuntimeError("dispatcher_task_identity_ambiguous")
+    if status == "_meta":
+        if (
+            not task_id.startswith("_sync_meta_")
+            or issue != 0
+            or linked_pr is not None
+            or anchors
+        ):
+            raise RuntimeError("dispatcher_task_identity_ambiguous")
+    elif status in {"completed", "blocked"}:
+        if (
+            not isinstance(issue, int)
+            or isinstance(issue, bool)
+            or issue < 1
+            or task_id != f"github-issue-{issue}"
+            or any(not _legacy_dispatcher_anchor_valid(anchor) for anchor in anchors)
+        ):
+            raise RuntimeError("dispatcher_task_identity_ambiguous")
+    else:
+        raise RuntimeError("dispatcher_task_identity_ambiguous")
+
+    relevant = (
+        issue == candidate.governing_issue
+        or linked_pr == candidate.pull_request
+        or bool(anchors & resources)
+        or (lease is not None and lease.get("resource") in resources)
+    )
+    if relevant:
+        raise RuntimeError("dispatcher_task_identity_ambiguous")
+
+    lease_id = task.get("lease_id")
+    if lease_id is None:
+        if task.get("lease_expires_at") is not None:
+            raise RuntimeError("dispatcher_task_identity_ambiguous")
+        return True
+    if not isinstance(lease_id, str) or not lease_id or lease is None:
+        raise RuntimeError("dispatcher_task_identity_ambiguous")
+    resource = lease.get("resource")
+    if not isinstance(resource, str) or not resource:
+        raise RuntimeError("dispatcher_lease_identity_ambiguous")
+    if lease.get("released_at") is None:
+        raise RuntimeError("dispatcher_task_identity_ambiguous")
+    _parse_dispatcher_time(lease.get("expires_at"))
+    _parse_dispatcher_time(lease.get("released_at"))
+    if task.get("lease_expires_at") != lease.get("expires_at"):
+        raise RuntimeError("dispatcher_task_lease_disagreement")
+    return True
+
+
 def _dispatcher_task_relevant(
     task: Mapping[str, object],
     *,
@@ -1063,9 +1193,16 @@ def _dispatcher_task_relevant(
     resources: set[str],
 ) -> bool:
     task_repository = task.get("repo")
-    if (
-        not isinstance(task_repository, str)
-        or not re.fullmatch(r"[^/\s]+/[^/\s]+", task_repository)
+    if task_repository == "":
+        _legacy_blank_dispatcher_task_irrelevant(
+            task,
+            candidate=candidate,
+            lease=lease,
+            resources=resources,
+        )
+        return False
+    if not isinstance(task_repository, str) or not re.fullmatch(
+        r"[^/\s]+/[^/\s]+", task_repository
     ):
         raise RuntimeError("dispatcher_task_identity_ambiguous")
     if task_repository.casefold() != repository.casefold():
@@ -1074,9 +1211,11 @@ def _dispatcher_task_relevant(
     if not isinstance(issue, int) or isinstance(issue, bool) or issue < 1:
         raise RuntimeError("dispatcher_task_identity_ambiguous")
     linked_pr = _dispatcher_linked_pr(task.get("linked_pr"))
+    anchors = _dispatcher_source_anchors(task.get("source_anchor_refs"))
     return (
         issue == candidate.governing_issue
         or linked_pr == candidate.pull_request
+        or bool(anchors & resources)
         or (lease is not None and lease.get("resource") in resources)
     )
 
