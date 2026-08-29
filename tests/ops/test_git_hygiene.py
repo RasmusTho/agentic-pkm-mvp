@@ -937,7 +937,7 @@ def test_targeted_remote_cleanup_reads_real_dispatcher_task_and_lease(
     expires = "2099-01-01T00:00:00+00:00"
     lease = LeaseRecord(
         lease_id="lease-1",
-        resource="branch:closed-unmerged",
+        resource="issue:5170",
         holder="other-agent",
         ttl_seconds=60,
         acquired_at="2026-08-29T00:00:00+00:00",
@@ -1145,7 +1145,7 @@ def test_targeted_remote_cleanup_cannot_omit_leased_live_pr_governing_issue(
 
 
 # Regression for https://github.com/RasmusTho/agentic-pkm-mvp/pull/5172#discussion_r3886294191
-@pytest.mark.parametrize("status", ("ready", "review", "blocked"))
+@pytest.mark.parametrize("status", ("backlog", "ready", "review", "blocked"))
 def test_targeted_remote_cleanup_blocks_relevant_resumable_task_without_lease(
     tmp_path, monkeypatch, status
 ) -> None:
@@ -1284,10 +1284,88 @@ def test_targeted_remote_cleanup_blocks_review_task_with_expired_lease(
     }
 
 
+def test_targeted_remote_cleanup_allows_canonical_completed_without_live_lease(
+    tmp_path, monkeypatch
+) -> None:
+    from app.dispatcher.models import TaskRecord
+    from app.dispatcher.store import SqliteStore
+
+    database = tmp_path / "dispatcher.sqlite3"
+    monkeypatch.setattr(
+        git_hygiene, "_canonical_dispatcher_db_path", lambda _cwd: database
+    )
+    store = SqliteStore(database)
+    store.initialize()
+    store.upsert_task(
+        TaskRecord(
+            task_id="candidate-terminal-completed",
+            issue_number=5170,
+            title="candidate terminal work",
+            status="completed",
+            priority="high",
+            source_anchor_refs=[],
+            created_at="2026-08-29T00:00:00+00:00",
+            updated_at="2026-08-29T00:00:30+00:00",
+            repo="RasmusTho/agentic-pkm-mvp",
+            lease_expires_at="2026-08-29T00:01:00+00:00",
+            linked_pr="6000",
+        )
+    )
+
+    snapshot = git_hygiene._read_dispatcher_authority(
+        tmp_path, "RasmusTho/agentic-pkm-mvp"
+    )
+    candidate = git_hygiene.Candidate(**_targeted_candidate())
+    assert git_hygiene._dispatcher_conflicts(candidate, {}, snapshot) == set()
+
+
+def test_targeted_remote_cleanup_accepts_real_claim_then_complete_transition(
+    tmp_path, monkeypatch
+) -> None:
+    from app.dispatcher.leases import claim
+    from app.dispatcher.models import TaskRecord
+    from app.dispatcher.queue import complete
+    from app.dispatcher.store import SqliteStore
+
+    database = tmp_path / "dispatcher.sqlite3"
+    monkeypatch.setattr(
+        git_hygiene, "_canonical_dispatcher_db_path", lambda _cwd: database
+    )
+    store = SqliteStore(database)
+    store.initialize()
+    store.upsert_task(
+        TaskRecord(
+            task_id="github-issue-5170",
+            issue_number=5170,
+            title="candidate producer transition",
+            status="ready",
+            priority="high",
+            source_anchor_refs=[],
+            created_at="2026-08-29T00:00:00+00:00",
+            updated_at="2026-08-29T00:00:00+00:00",
+            repo="RasmusTho/agentic-pkm-mvp",
+            linked_pr="6000",
+        )
+    )
+
+    claimed, lease = claim(store, "github-issue-5170", "producer-agent")
+    assert claimed.status == "claimed"
+    completed = complete(store, "github-issue-5170", "producer-agent")
+    assert completed.status == "completed"
+    assert completed.lease_id is None
+    assert completed.lease_expires_at == lease.expires_at
+
+    snapshot = git_hygiene._read_dispatcher_authority(
+        tmp_path, "RasmusTho/agentic-pkm-mvp"
+    )
+    candidate = git_hygiene.Candidate(**_targeted_candidate())
+    assert git_hygiene._dispatcher_conflicts(candidate, {}, snapshot) == set()
+
+
 @pytest.mark.parametrize(
-    "status", ("completed", "delivered", "cancelled", "superseded")
+    "status", ("done", "delivered", "cancelled", "superseded", "released", "unknown")
 )
-def test_targeted_remote_cleanup_allows_only_positive_terminal_task_states(
+def test_targeted_remote_cleanup_rejects_unknown_relevant_task_state(
     tmp_path, monkeypatch, status
 ) -> None:
     from app.dispatcher.models import TaskRecord
@@ -1301,9 +1379,9 @@ def test_targeted_remote_cleanup_allows_only_positive_terminal_task_states(
     store.initialize()
     store.upsert_task(
         TaskRecord(
-            task_id=f"candidate-terminal-{status}",
+            task_id=f"candidate-invalid-{status}",
             issue_number=5170,
-            title="candidate terminal work",
+            title="ambiguous candidate history",
             status=status,
             priority="high",
             source_anchor_refs=[],
@@ -1318,13 +1396,14 @@ def test_targeted_remote_cleanup_allows_only_positive_terminal_task_states(
         tmp_path, "RasmusTho/agentic-pkm-mvp"
     )
     candidate = git_hygiene.Candidate(**_targeted_candidate())
-    assert git_hygiene._dispatcher_conflicts(candidate, {}, snapshot) == set()
+    with pytest.raises(RuntimeError, match="dispatcher_task_status_ambiguous"):
+        git_hygiene._dispatcher_conflicts(candidate, {}, snapshot)
 
 
-def test_targeted_remote_cleanup_rejects_unknown_relevant_task_state(
+def test_targeted_remote_cleanup_rejects_referenced_released_wrong_issue_lease(
     tmp_path, monkeypatch
 ) -> None:
-    from app.dispatcher.models import TaskRecord
+    from app.dispatcher.models import LeaseRecord, TaskRecord
     from app.dispatcher.store import SqliteStore
 
     database = tmp_path / "dispatcher.sqlite3"
@@ -1333,17 +1412,32 @@ def test_targeted_remote_cleanup_rejects_unknown_relevant_task_state(
     )
     store = SqliteStore(database)
     store.initialize()
+    expires = "2026-08-29T00:01:00+00:00"
+    store.upsert_lease(
+        LeaseRecord(
+            lease_id="released-wrong-issue",
+            resource="issue:9999",
+            holder="prior-agent",
+            ttl_seconds=60,
+            acquired_at="2026-08-29T00:00:00+00:00",
+            expires_at=expires,
+            released_at="2026-08-29T00:00:30+00:00",
+            release_reason="completed",
+        )
+    )
     store.upsert_task(
         TaskRecord(
-            task_id="candidate-legacy-done",
+            task_id="candidate-wrong-issue-lease",
             issue_number=5170,
-            title="ambiguous candidate history",
-            status="done",
+            title="candidate terminal work",
+            status="completed",
             priority="high",
             source_anchor_refs=[],
             created_at="2026-08-29T00:00:00+00:00",
             updated_at="2026-08-29T00:00:30+00:00",
             repo="RasmusTho/agentic-pkm-mvp",
+            lease_id="released-wrong-issue",
+            lease_expires_at=expires,
             linked_pr="6000",
         )
     )
@@ -1352,7 +1446,7 @@ def test_targeted_remote_cleanup_rejects_unknown_relevant_task_state(
         tmp_path, "RasmusTho/agentic-pkm-mvp"
     )
     candidate = git_hygiene.Candidate(**_targeted_candidate())
-    with pytest.raises(RuntimeError, match="dispatcher_task_status_ambiguous"):
+    with pytest.raises(RuntimeError, match="dispatcher_task_lease_resource_mismatch"):
         git_hygiene._dispatcher_conflicts(candidate, {}, snapshot)
 
 

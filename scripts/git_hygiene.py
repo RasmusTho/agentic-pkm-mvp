@@ -29,6 +29,7 @@ if __package__ in {None, ""}:  # Supports direct ``python scripts/...`` invocati
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.dispatcher.verification_contract import resolve_issue_authority
+from app.dispatcher.signboard import VALID_STATUSES as DISPATCHER_VALID_STATUSES
 from scripts.review_before_ci_gate import _issue_free_pr_contract_lane
 
 
@@ -556,11 +557,11 @@ _CANDIDATE_KEYS = frozenset(
 )
 _SLUG = re.compile(r"[a-z0-9](?:[a-z0-9._-]{0,62}[a-z0-9])?")
 _NO_ISSUE_LANES = frozenset({"docs-authoring", "governance", "direct-repair"})
-_NONTERMINAL_DISPATCHER_STATUSES = frozenset(
-    {"ready", "review", "claimed", "in_progress", "blocked", "released"}
-)
-_TERMINAL_DISPATCHER_STATUSES = frozenset(
-    {"completed", "delivered", "cancelled", "superseded"}
+_TERMINAL_DISPATCHER_STATUSES = frozenset({"completed"})
+if not _TERMINAL_DISPATCHER_STATUSES <= DISPATCHER_VALID_STATUSES:
+    raise RuntimeError("dispatcher_terminal_status_not_canonical")
+_NONTERMINAL_DISPATCHER_STATUSES = (
+    DISPATCHER_VALID_STATUSES - _TERMINAL_DISPATCHER_STATUSES
 )
 
 
@@ -1294,6 +1295,7 @@ def _dispatcher_conflicts(
     conflicts: set[str] = set()
     tasks: list[Mapping[str, object]] = []
     leases: dict[str, Mapping[str, object]] = {}
+    lease_references: dict[str, list[Mapping[str, object]]] = {}
     for item in snapshot:
         kind = item.get("kind")
         record = item.get("record")
@@ -1301,6 +1303,9 @@ def _dispatcher_conflicts(
             raise RuntimeError("dispatcher_census_invalid")
         if kind == "task":
             tasks.append(record)
+            referenced_lease = record.get("lease_id")
+            if isinstance(referenced_lease, str) and referenced_lease:
+                lease_references.setdefault(referenced_lease, []).append(record)
             continue
         lease_id = record.get("lease_id")
         if not isinstance(lease_id, str) or not lease_id or lease_id in leases:
@@ -1337,7 +1342,15 @@ def _dispatcher_conflicts(
         nonterminal = status in _NONTERMINAL_DISPATCHER_STATUSES
         lease_id = task_lease_id
         if lease_id is None:
-            if task.get("lease_expires_at") is not None:
+            historical_expiry = task.get("lease_expires_at")
+            if nonterminal and historical_expiry is not None:
+                raise RuntimeError("dispatcher_task_lease_disagreement")
+            if historical_expiry is not None:
+                _parse_dispatcher_time(historical_expiry)
+            if not nonterminal and (
+                task.get("claimed_by") is not None
+                or task.get("last_heartbeat_at") is not None
+            ):
                 raise RuntimeError("dispatcher_task_lease_disagreement")
             if nonterminal:
                 conflicts.add("nonterminal_dispatcher_task")
@@ -1347,10 +1360,23 @@ def _dispatcher_conflicts(
         lease = leases.get(lease_id)
         if lease is None:
             raise RuntimeError("dispatcher_referenced_lease_missing")
+        if len(lease_references.get(lease_id, ())) != 1:
+            raise RuntimeError("dispatcher_task_lease_disagreement")
         resource = lease.get("resource")
         if not isinstance(resource, str) or not resource:
             raise RuntimeError("dispatcher_lease_identity_ambiguous")
+        issue = task.get("issue_number")
+        if resource != f"issue:{issue}":
+            raise RuntimeError("dispatcher_task_lease_resource_mismatch")
+        holder = lease.get("holder")
+        if not isinstance(holder, str) or not holder:
+            raise RuntimeError("dispatcher_lease_identity_ambiguous")
         live = _dispatcher_live_lease(lease, now=now)
+        claimed_by = task.get("claimed_by")
+        if claimed_by is not None and claimed_by != holder:
+            raise RuntimeError("dispatcher_task_lease_disagreement")
+        if live and claimed_by != holder:
+            raise RuntimeError("dispatcher_task_lease_disagreement")
         if task.get("lease_expires_at") != lease.get("expires_at"):
             raise RuntimeError("dispatcher_task_lease_disagreement")
         if live:

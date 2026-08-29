@@ -84,15 +84,20 @@ snapshot exhaustively reads every task and every lease, including orphan leases 
 task. Candidate Issue, PR, ref, branch, and lifecycle path identity is classified before
 an unrelated expired task/lease disagreement is evaluated. Missing canonical state,
 identity-ambiguous or relevant malformed rows, missing relevant referenced leases,
-relevant released/current-task disagreement, changed census, or any live relevant task
+relevant task/lease/resource disagreement, changed census, or any live relevant task
 or orphan resource claim fails closed. Candidate resources include canonical
 `issue:<positive governing_issue>` identities, so an orphan Issue lease protects the
 source even without a task row. Relevant `ready`, `review`, `claimed`, `in_progress`,
-`blocked`, or `released` task state preserves the source even after its pickup lease is
-released or expires, because that state can still represent retained or resumable work.
-Only positively terminal `completed`, `delivered`, `cancelled`, or `superseded` tasks may
-become nonconflicting after their task/lease/resource consistency checks pass; every
-unknown or legacy status remains ambiguous and fails closed. Narrow legacy
+`blocked`, or `backlog` task state preserves the source even after its pickup lease is
+released or expires, because that canonical state can still represent retained or
+resumable work. The dispatcher producer's only positively terminal stored status is
+`completed`; every unknown or legacy raw status remains ambiguous and fails closed. A
+task-referenced lease must exist, be uniquely referenced, carry the canonical
+`issue:<task.issue_number>` resource, agree with the task's holder and expiry, and be
+positively released or expired before a terminal row can become nonconflicting. The
+canonical claim-then-complete transition clears `lease_id` but intentionally retains
+the historical `lease_expires_at`; that exact shape is accepted only after the exhaustive
+census proves there is no relevant live task or orphan resource lease. Narrow legacy
 blank-repository history is ignored only
 when it has the current terminal `completed`/`blocked` or sync-meta shape, has no
 candidate Issue/PR/ref/branch/path resource, and has no live or unreleased lease. A
