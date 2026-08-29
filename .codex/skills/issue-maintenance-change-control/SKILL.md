@@ -84,7 +84,7 @@ conditional path (`Issue maintenance -> Agent`), not the hot path.
 
 - Open implementation Issues should normally carry exactly one truthful agent-state label.
 - Active implementation work should not remain `Ready`.
-- Closed Issues must not retain `agent:ready`, `agent:blocked`, or `agent:needs-human`.
+- Closed Issues must not retain any `agent:*` label, including `agent:in-progress`.
 - If repo reality satisfies the Issue, its Issue/PR state and labels must reflect that.
 - When Project repair is explicitly included, reconcile its projection after authoritative
   Issue/PR correction; missing Project cards are not lifecycle failures outside that scope.

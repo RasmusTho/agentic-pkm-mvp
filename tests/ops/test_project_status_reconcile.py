@@ -242,6 +242,8 @@ def test_canonical_maintenance_surfaces_document_split_lane_precedence() -> None
         assert "Blocked" in content
         assert "explicit open-Issue `Review`" in content
     assert maintenance_skill.count("--remove-label agent:in-progress") >= 8
+    issue_to_code = Path(".codex/skills/issue-to-code/SKILL.md").read_text(encoding="utf-8")
+    assert "--add-label agent:blocked --remove-label agent:ready --remove-label agent:needs-human --remove-label agent:in-progress" in issue_to_code
 
 
 def test_canonical_label_taxonomy_declares_projection_inputs() -> None:

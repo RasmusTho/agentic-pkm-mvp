@@ -282,7 +282,7 @@ If work becomes blocked before or during implementation:
 
 1. **Add blocker label:**
    ```bash
-   gh issue edit #<N> --repo "$REPO" --add-label agent:blocked --remove-label agent:ready
+   gh issue edit #<N> --repo "$REPO" --add-label agent:blocked --remove-label agent:ready --remove-label agent:needs-human --remove-label agent:in-progress
    ```
 
 2. **Add a blocking comment to the Issue with the explicit reason and next unblock condition.**
