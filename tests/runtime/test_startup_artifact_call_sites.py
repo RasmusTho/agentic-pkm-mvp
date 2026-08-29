@@ -1798,6 +1798,43 @@ def _promotion_migration_git_delta(
     return repo, baseline, target
 
 
+def test_promotion_test_rejects_symlink_migration_tree_entries(tmp_path: Path) -> None:
+    repo, baseline, _ = _promotion_migration_git_delta(
+        tmp_path,
+        content='reversibility = "reversible"\n',
+    )
+    migration = repo / "app" / "alembic" / "versions" / "receipt_delta.py"
+    migration.unlink()
+    payload = repo / "forward_only_payload.py"
+    payload.write_text('reversibility = "forward-only"\n', encoding="utf-8")
+    migration.symlink_to("../../../forward_only_payload.py")
+    subprocess.run(
+        ["git", "add", "app/alembic/versions/receipt_delta.py", "forward_only_payload.py"],
+        cwd=repo,
+        check=True,
+    )
+    subprocess.run(["git", "commit", "-qm", "replace migration with symlink"], cwd=repo, check=True)
+    target = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"],
+        cwd=repo,
+        text=True,
+    ).strip()
+    rendered, manifest = _promotion_test_candidate_inputs(source_sha=target)
+
+    with pytest.raises(PromotionReceiptError) as exc_info:
+        build_promotion_test_check_report(
+            rendered=rendered,
+            channel_manifest=manifest,
+            prod_admission_context=_promotion_admission_context(
+                migration_baseline_sha=baseline
+            ),
+            check_results=_promotion_check_results(),
+            source_repo=repo,
+        )
+
+    assert exc_info.value.code == "migration_delta_invalid"
+
+
 def test_promotion_test_refuses_self_enrolled_registry_trust(tmp_path: Path) -> None:
     private_key, public_key = _promotion_test_signing_material()
     rendered, manifest = _promotion_test_candidate_inputs()

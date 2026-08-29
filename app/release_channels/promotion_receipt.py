@@ -438,10 +438,41 @@ def _capture_candidate_migration_snapshots(
         raise PromotionReceiptError("migration_delta_invalid")
     snapshots: list[tuple[str, bytes]] = []
     for path in paths:
+        raw_entry = _run_git(
+            repo,
+            "ls-tree",
+            "-z",
+            "--full-tree",
+            target_sha,
+            "--",
+            path,
+            code="migration_delta_invalid",
+        )
+        records = [record for record in raw_entry.split(b"\0") if record]
+        if len(records) != 1 or b"\t" not in records[0]:
+            raise PromotionReceiptError("migration_delta_invalid")
+        metadata, raw_path = records[0].split(b"\t", 1)
+        fields = metadata.split(b" ")
+        try:
+            entry_path = raw_path.decode("utf-8")
+            mode = fields[0].decode("ascii")
+            object_type = fields[1].decode("ascii")
+            object_id = fields[2].decode("ascii")
+        except (IndexError, UnicodeDecodeError) as exc:
+            raise PromotionReceiptError("migration_delta_invalid") from exc
+        if (
+            len(fields) != 3
+            or entry_path != path
+            or mode not in {"100644", "100755"}
+            or object_type != "blob"
+            or _SOURCE_SHA.fullmatch(object_id) is None
+        ):
+            raise PromotionReceiptError("migration_delta_invalid")
         content = _run_git(
             repo,
-            "show",
-            f"{target_sha}:{path}",
+            "cat-file",
+            "blob",
+            object_id,
             code="migration_delta_invalid",
         )
         snapshots.append((Path(path).name, content))
