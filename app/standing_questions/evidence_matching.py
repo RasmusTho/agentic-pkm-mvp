@@ -35,7 +35,7 @@ callers:
 from __future__ import annotations
 
 import logging
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
@@ -48,11 +48,14 @@ from app.components.llm.constrained import (
     constrained_completion,
     register_schema,
 )
+from app.expansion.create import SourceInput
+from app.standing_questions.answer_refresh import AnswerRefreshSummary
 from app.standing_questions.projection import (
     QuestionsDirectoryMissingError,
     iter_question_notes,
 )
 from app.standing_questions.question_store import QuestionStore
+from app.write_guard import DEFAULT_WRITE_GUARD, WriteGuard
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -185,6 +188,14 @@ class MatchTickSummary:
     excluded_cross_scope: int = 0
     excluded_non_open: int = 0
     unresolved_artifact: int = 0
+
+
+@dataclass(frozen=True)
+class StandingQuestionsTickSummary:
+    """The observable result of one match-then-refresh production tick."""
+
+    matching: MatchTickSummary
+    refresh: AnswerRefreshSummary
 
 
 @dataclass
@@ -410,6 +421,52 @@ def match_evidence_to_open_questions(
     return counters.summary()
 
 
+def run_standing_questions_tick(
+    *,
+    vault_root: Path | str,
+    candidates: Iterable[CandidateArtifact],
+    evidence_sources: Mapping[str, SourceInput],
+    outbox_path: Path,
+    store: QuestionStore | None = None,
+    complete: CompletionFn | None = None,
+    contradiction_complete: CompletionFn | None = None,
+    write_guard: WriteGuard = DEFAULT_WRITE_GUARD,
+    now: datetime | None = None,
+    trace_id: str | None = None,
+) -> StandingQuestionsTickSummary:
+    """Run the production Standing Questions composition in dependency order.
+
+    SQ-03 attaches evidence first; SQ-04 then derives its delta from the
+    question note written by that match pass. ``evidence_sources`` is a
+    read-side map assembled by the existing ingest consumer, so refresh does
+    not fetch provenance refs or create a second acquisition path.
+    """
+
+    # Keep the refresh import local: the two slices are allowed to evolve
+    # independently, while this function is the explicit composition seam.
+    from app.standing_questions.answer_refresh import refresh_answers_on_evidence_delta
+
+    candidate_list = list(candidates)
+    matching = match_evidence_to_open_questions(
+        vault_root=vault_root,
+        candidates=candidate_list,
+        store=store,
+        complete=complete,
+        trace_id=trace_id,
+    )
+    refresh = refresh_answers_on_evidence_delta(
+        vault_root=vault_root,
+        outbox_path=outbox_path,
+        evidence_sources=evidence_sources,
+        store=store,
+        contradiction_complete=contradiction_complete,
+        write_guard=write_guard,
+        now=now,
+        trace_id=trace_id,
+    )
+    return StandingQuestionsTickSummary(matching=matching, refresh=refresh)
+
+
 __all__ = [
     "CONFIDENCE_CLASS_RANK",
     "EVIDENCE_ASSOCIATION_SCHEMA_REF",
@@ -418,7 +475,9 @@ __all__ = [
     "ConfidenceClass",
     "EvidenceAssociation",
     "MatchTickSummary",
+    "StandingQuestionsTickSummary",
     "judge_association",
     "match_evidence_to_open_questions",
+    "run_standing_questions_tick",
     "VAULT_REF_PREFIX",
 ]

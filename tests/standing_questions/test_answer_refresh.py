@@ -15,6 +15,10 @@ import pytest
 from app.expansion.create import SourceInput
 from app.standing_questions import answer_refresh as refresh_module
 from app.standing_questions.answer_refresh import refresh_answers_on_evidence_delta
+from app.standing_questions.evidence_matching import (
+    CandidateArtifact,
+    run_standing_questions_tick,
+)
 from app.standing_questions.question_store import QuestionStore
 from app.write_guard import WriteGuard
 from scripts.yaml_roundtrip import load_frontmatter
@@ -107,7 +111,10 @@ def test_delta_threshold_triggers_one_draft(tmp_path: Path) -> None:
     assert refreshed["last_refreshed_at"] == "2026-08-29T12:00:00Z"
     draft = vault / refreshed["candidate_answer_ref"][len("vault://") :]
     frontmatter, body = load_frontmatter(draft.read_text(encoding="utf-8"))
-    assert frontmatter["sources"] == ["outbox://evidence/1"]
+    assert len(frontmatter["sources"]) == 1
+    assert frontmatter["sources"][0] != "outbox://evidence/1"
+    assert frontmatter["provenance_refs"] == ["outbox://evidence/1"]
+    assert frontmatter["proposed_by"]["cognition"]["outcome"] != "missing_input"
     assert frontmatter["authority_state"] == "proposal"
     assert evidence["quoted_span"] in body
 
@@ -594,3 +601,94 @@ def test_refresh_path_never_writes_status(tmp_path: Path) -> None:
     assert updates
     assert all("status" not in fields and "standing_answer_ref" not in fields for fields in updates)
     assert store.read_question(note["question_id"])["status"] == "open"
+
+
+def test_standing_questions_tick_matches_then_refreshes(tmp_path: Path) -> None:
+    """The production composition must not return after SQ-03 alone."""
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    outbox = tmp_path / "outbox.jsonl"
+    store, note = _question(vault)
+    candidate = CandidateArtifact(
+        artifact_ref="vault://notes/evidence.md",
+        source_stream="ingest.vault.changed",
+        scope="work",
+        provenance_ref="outbox://evidence/1",
+        content="the test channel is isolated",
+    )
+
+    def match_and_refresh_completion(
+        *, system: str, user: str, trace_id: str | None = None, max_tokens: int | None = None
+    ) -> str:
+        if "Return only JSON matching the supplied schema" in system:
+            return json.dumps(
+                {
+                    "contradicts_standing_answer": False,
+                    "contradiction_basis": None,
+                }
+            )
+        return json.dumps(
+            {
+                "related": True,
+                "confidence_class": "high",
+                "supporting_span": "the test channel is isolated",
+            }
+        )
+
+    result = run_standing_questions_tick(
+        vault_root=vault,
+        candidates=[candidate],
+        evidence_sources={
+            "outbox://evidence/1": _source("outbox://evidence/1", candidate.content or "")
+        },
+        outbox_path=outbox,
+        store=store,
+        complete=match_and_refresh_completion,
+        write_guard=_guard(),
+        now=_dt(12),
+    )
+
+    assert result.matching.attached == 1
+    assert result.refresh.drafted == (note["question_id"],)
+    assert store.read_question(note["question_id"])["candidate_answer_ref"]
+
+
+def test_refresh_cas_snapshot_is_taken_before_drafting(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A Question edit while cognition runs must invalidate publication."""
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    outbox = tmp_path / "outbox.jsonl"
+    store, note = _question(vault)
+    first = _evidence("vault://notes/a.md", "outbox://evidence/1", "first evidence", 10)
+    second = _evidence("vault://notes/b.md", "outbox://evidence/2", "second evidence", 11)
+    store.update_system_fields(note["question_id"], {"evidence": [first]})
+    sources = {
+        "outbox://evidence/1": _source("outbox://evidence/1", first["quoted_span"]),
+        "outbox://evidence/2": _source("outbox://evidence/2", second["quoted_span"]),
+    }
+    original = refresh_module.run_create_pass
+
+    def create_then_mutate(*args: Any, **kwargs: Any) -> Any:
+        current = store.read_question(note["question_id"])
+        store.update_system_fields(
+            note["question_id"], {"evidence": [*current["evidence"], second]}
+        )
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(refresh_module, "run_create_pass", create_then_mutate)
+    result = refresh_answers_on_evidence_delta(
+        vault_root=vault,
+        outbox_path=outbox,
+        evidence_sources=sources,
+        store=store,
+        write_guard=_guard(),
+        now=_dt(12),
+    )
+
+    assert result.drafted == ()
+    assert result.blocked == (note["question_id"],)
+    final = store.read_question(note["question_id"])
+    assert final["candidate_answer_ref"] is None
+    assert final["last_refreshed_at"] is None

@@ -35,6 +35,7 @@ seam and `CompilationDraft`:
 | Guarded knowledge-write seam (`app/knowledge/write_ops.py::guard.assert_writes_allowed`), `WriteReceipt` | every Question-note and evidence-log write (SQ-01/03/04) |
 | Note-store + rebuildable-projection pattern (`docs/EPISODE_RESOLUTION_ENGINE/EPISODE_NOTE_STORE_AND_PROJECTION.md`, `app/jobs/decisions_projection.py` precedent) | SQ-01's persistence substrate, copied structurally |
 | Schema-constrained LLM completion with explicit `UNKNOWN` (`app/components/llm/constrained.py::constrained_completion`, `docs/RUNTIME_CORRECTNESS_KERNEL/STRUCTURED_INTENT_OUTPUT_WITH_UNKNOWN.md`) | SQ-02's capture-intent classification and SQ-03's evidence-association judgment — the repo's standing pattern for "LLM cognition, deterministic gate" |
+| Existing SQ-03 matcher plus `run_standing_questions_tick` composition (`app/standing_questions/evidence_matching.py`) | The production ordering: attach evidence first, then derive and run SQ-04 refresh from the updated Question note |
 | Create engine (`docs/MIMER_CAPABILITY_HARDENING/EXPANSION_CONNECT_AND_CREATE.md` §2, `create.answer_note` kind, `CompilationDraft`, staging, citation validation, in-draft `AI-åtgärder` acceptance checkbox) | SQ-04's candidate-answer drafting, given a new trigger (evidence-delta) instead of explicit-ask |
 | Declined-proposal ledger (`EXPANSION_CONNECT_AND_CREATE.md` §3) | SQ-05's dismiss path — a dismissed candidate answer is a decline, not a deletion |
 | Panel `AI-åtgärder` checkbox + Companion UI read-mode checkbox-projection acceleration (`docs/PANEL_AGENT.md`) | SQ-05's visual accept/dismiss — a UI click projects the same governed checkbox semantics, never a parallel authority store |
@@ -42,10 +43,10 @@ seam and `CompilationDraft`:
 
 **External, cross-capability dependency (named once, load-bearing):** SQ-04 reuses the delivered
 Create engine (EXP-3, `docs/MIMER_CAPABILITY_HARDENING/EXPANSION_CONNECT_AND_CREATE.md`, #2996).
-The SQ-04 implementation owns only the evidence-delta trigger, contradiction surfacing, and
-pending-review discipline; it does not duplicate Create's synthesis, staging, citation, or expiry
-contract. The remaining end-to-end capability gap is SQ-05's governed review surface and owner/UAT
-acceptance.
+The SQ-04 implementation owns the evidence-delta trigger, the production match-then-refresh
+composition, contradiction surfacing, and pending-review discipline; it does not duplicate Create's
+synthesis, staging, citation, or expiry contract. The remaining end-to-end capability gap is SQ-05's
+governed review surface and owner/UAT acceptance.
 
 ## Implementation tasks (execution order)
 

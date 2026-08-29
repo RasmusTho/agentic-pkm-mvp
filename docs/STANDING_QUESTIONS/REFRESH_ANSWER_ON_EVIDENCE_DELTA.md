@@ -34,6 +34,9 @@ to the draft, and the pending-review-not-clobbered discipline.
    constant — see README), a refresh is scheduled. Threshold crossing is evaluated on the current
    evidence log state, never on a separately stored counter (so a crash between evidence-attach and
    refresh-scheduling loses nothing — the next tick re-derives the delta from the log itself).
+   The shipped composition entrypoint is
+   `app.standing_questions.evidence_matching.run_standing_questions_tick`: it runs SQ-03 and then
+   this refresh in that order, so a matching tick cannot return before the delta is evaluated.
 2. **Pending-review guard (INV-SQ-D, the seam this task exists to walk)**: before drafting, the
    refresh checks `candidate_answer_ref` — if a prior candidate-answer draft is still pending (not yet
    accepted, dismissed, or expired), the refresh **defers**: evidence keeps accruing in the log, no
@@ -43,7 +46,10 @@ to the draft, and the pending-review-not-clobbered discipline.
 3. **Draft assembly (reusing EXP-3)**: context assembly through the retrieval capability seam at
    cited-proposal admissibility tier (scope prefilter + evidence-role clamp intact, same-scope only —
    consistent with SQ-03's discipline), sources = the question's evidence-log entries (their
-   `provenance_ref`s resolved, never re-fetched); cognition run through the Create engine's existing
+   `provenance_ref`s resolved, never re-fetched). The already-resolved source text is materialized
+   through the existing rebuildable reasoning-input adapter when the Create cognition substrate needs
+   a UUID/object-store identity; the evidence-log provenance refs remain explicitly recorded in the
+   draft frontmatter. Cognition then runs through the Create engine's existing
    `create.answer_note` path; citation validation (every cited source resolves, quoted spans verbatim)
    blocks the draft loudly on any unresolvable citation — never silently pruned.
 4. **Contradiction flag (this task's schema extension to the Create draft frontmatter)**: the drafting
@@ -62,6 +68,9 @@ to the draft, and the pending-review-not-clobbered discipline.
 6. **`last_refreshed_at` update**: only on successful draft materialization (staging write receipted)
    — a failed/blocked draft attempt does not advance `last_refreshed_at`, so the delta that triggered it
    is not silently lost from future evaluation.
+   The Question byte-version snapshot is captured before Create drafting and is used for the final
+   conditional update, so any human or runtime edit during cognition blocks publication of the stale
+   candidate.
 
 ## Concretely
 

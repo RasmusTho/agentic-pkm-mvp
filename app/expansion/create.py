@@ -191,6 +191,10 @@ class SourceInput:
     quoted_spans: tuple[str, ...] = field(default_factory=tuple)
     language: str | None = None
     review_state: str | None = None
+    # Optional evidence-log identity. ``object_id`` remains the identity used
+    # by cognition and citation resolution; callers may retain an upstream
+    # provenance reference without using a URI as an object-store id.
+    provenance_ref: str | None = None
 
 
 @dataclass(frozen=True)
@@ -491,7 +495,7 @@ def _draft_frontmatter(
     created_at: datetime,
     staleness_days: int,
 ) -> dict[str, Any]:
-    return {
+    frontmatter = {
         "uuid": draft_id,
         "kind": "draft",
         "derived_by": "synthesis",
@@ -505,6 +509,14 @@ def _draft_frontmatter(
         "created": _iso(created_at),
         "expires": _iso(created_at + timedelta(days=staleness_days)),
     }
+    provenance_refs = [
+        source.provenance_ref
+        for source in sources
+        if source.provenance_ref is not None
+    ]
+    if provenance_refs:
+        frontmatter["provenance_refs"] = provenance_refs
+    return frontmatter
 
 
 def _draft_note_text(

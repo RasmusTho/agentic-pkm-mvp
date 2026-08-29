@@ -37,6 +37,7 @@ from app.expansion.create import (
 )
 from app.knowledge.errors import KnowledgeWriteConflict
 from app.knowledge_compilation.runtime_artifacts import CompilationDraft
+from app.reasoning.multi import ReasoningSourceInput, materialize_reasoning_inputs
 from app.standing_questions.projection import (
     QuestionsDirectoryMissingError,
     iter_question_notes,
@@ -228,16 +229,20 @@ def _pending_candidate(vault_root: Path, note: Mapping[str, Any], *, now: dateti
 def _source_inputs(
     evidence: Sequence[Mapping[str, Any]],
     evidence_sources: Mapping[str, SourceInput],
+    *,
+    vault_root: Path,
+    question_id: str,
 ) -> tuple[SourceInput, ...]:
     """Build Create inputs from caller-resolved sources without fetching them.
 
-    The primary lookup key is each evidence entry's ``provenance_ref``.  The
-    artifact-ref fallback keeps the seam usable by existing matching callers,
-    while the resulting Create ``object_id`` remains the provenance ref so the
-    draft's SourceRefs name the evidence-log provenance explicitly.
+    The primary lookup key is each evidence entry's ``provenance_ref``. The
+    artifact-ref fallback keeps the seam usable by existing matching callers.
+    The supplied text is materialized through the existing rebuildable reasoning
+    adapter, because Create's cognition contract is UUID/object-store based;
+    the evidence-log provenance remains attached separately.
     """
 
-    sources: list[SourceInput] = []
+    selected: list[tuple[Mapping[str, Any], SourceInput]] = []
     for entry in evidence:
         provenance_ref = str(entry["provenance_ref"])
         artifact_ref = str(entry["artifact_ref"])
@@ -246,14 +251,36 @@ def _source_inputs(
             raise UnresolvableCitationError(
                 f"evidence provenance {provenance_ref!r} was not resolved by the caller"
             )
+        selected.append((entry, source))
+
+    try:
+        materialized = materialize_reasoning_inputs(
+            [
+                ReasoningSourceInput(source_id=str(entry["provenance_ref"]), text=source.text)
+                for entry, source in selected
+            ],
+            namespace_key=f"standing-question:{vault_root}:{question_id}",
+        )
+    except Exception as exc:
+        raise UnresolvableCitationError(
+            "evidence sources could not be materialized for cognition"
+        ) from exc
+    if len(materialized) != len(selected):
+        raise UnresolvableCitationError(
+            "one or more evidence sources could not be materialized for cognition"
+        )
+
+    sources: list[SourceInput] = []
+    for (entry, source), reasoning_input in zip(selected, materialized, strict=True):
         sources.append(
             SourceInput(
-                object_id=provenance_ref,
-                note_path=source.note_path or artifact_ref,
+                object_id=reasoning_input.object_id,
+                note_path=source.note_path or str(entry["artifact_ref"]),
                 text=source.text,
                 quoted_spans=(str(entry["quoted_span"]),),
                 language=source.language,
                 review_state=source.review_state,
+                provenance_ref=str(entry["provenance_ref"]),
             )
         )
     return tuple(sources)
@@ -373,7 +400,8 @@ def refresh_answers_on_evidence_delta(
             # Re-read inside the per-question lock. The initial projection is
             # only discovery; eligibility and all state transitions use fresh
             # vault truth.
-            current = question_store.read_question(question_id)
+            initial, observed_version = question_store.read_question_with_version(question_id)
+            current = initial
             if current["status"] != "open":
                 continue
             delta = _evidence_delta(current)
@@ -387,7 +415,12 @@ def refresh_answers_on_evidence_delta(
                 # The delta decides whether to refresh; the candidate answer is
                 # synthesized over the complete current evidence log so a refresh
                 # never drops context that was present in an earlier candidate.
-                sources = _source_inputs(current["evidence"], evidence_sources)
+                sources = _source_inputs(
+                    current["evidence"],
+                    evidence_sources,
+                    vault_root=resolved_root,
+                    question_id=question_id,
+                )
                 request = CreateRequest(
                     kind=OutputKind.ANSWER_NOTE,
                     title=f"Answer: {current['text']}",
@@ -404,13 +437,20 @@ def refresh_answers_on_evidence_delta(
                     outbox_path=outbox_path,
                     write_guard=write_guard,
                     now=tick_now,
-                    draft_frontmatter_enricher=lambda draft: _contradiction_metadata(
-                        draft,
-                        standing_answer_referenced=standing_answer_referenced,
-                        standing_answer=standing_answer,
-                        complete=contradiction_complete,
-                        trace_id=trace_id,
-                    ),
+                    draft_frontmatter_enricher=lambda draft: {
+                        **_contradiction_metadata(
+                            draft,
+                            standing_answer_referenced=standing_answer_referenced,
+                            standing_answer=standing_answer,
+                            complete=contradiction_complete,
+                            trace_id=trace_id,
+                        ),
+                        "evidence_provenance_refs": [
+                            source.provenance_ref
+                            for source in sources
+                            if source.provenance_ref is not None
+                        ],
+                    },
                 )
             except UnresolvableCitationError:
                 blocked.append(question_id)
@@ -422,17 +462,17 @@ def refresh_answers_on_evidence_delta(
             # Re-read immediately before the guarded system update. This preserves
             # the pending-review and terminal-status race guarantees on the Question
             # seam; no human-owned field is ever supplied here.
-            current, observed_version = question_store.read_question_with_version(question_id)
-            if current["status"] != "open":
+            latest, _latest_version = question_store.read_question_with_version(question_id)
+            if latest["status"] != "open":
                 blocked.append(question_id)
                 continue
-            if _pending_candidate(resolved_root, current, now=tick_now):
+            if _pending_candidate(resolved_root, latest, now=tick_now):
                 deferred.append(question_id)
                 continue
             try:
                 question_store.update_system_fields_if_unchanged(
                     question_id,
-                    current,
+                    initial,
                     {
                         "candidate_answer_ref": f"vault://{report.draft_path}",
                         "last_refreshed_at": _iso(tick_now),
