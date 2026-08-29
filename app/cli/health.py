@@ -104,9 +104,12 @@ def _check_dead_letters() -> Dict[str, Any]:
             f"dead-letter signal unavailable ({_exception_kind(exc)})",
             data={"skipped": True},
         )
-    ok = snap["dead_letter_status"] != "warn"
-    if ok:
+    status = snap["dead_letter_status"]
+    ok = status == "pass"
+    if status == "pass":
         detail = "no dead-lettered outbox events above threshold"
+    elif status == "unknown":
+        detail = "dead-letter signal unavailable; outbox tail could not be read safely"
     else:
         detail = (
             f"dead-letter breach: {snap['dead_lettered_count']} dead-lettered event(s), "

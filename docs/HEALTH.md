@@ -32,7 +32,7 @@ python -m app.cli health status --json
 - `catch_up_progress` reports how the worker interprets its active queue (DB outbox when `STORE_BACKEND=pg`), while the JSONL audit log (`INDEX_OUTBOX_PATH`) is used for lag/idle detection.
 - The worker heartbeat file (`$WORKER_HEARTBEAT_PATH`) is the signal the Docker healthcheck verifies; the contract observes the latest heartbeat timestamp too.
 
-- `catch_up_progress` now leans on `outbox_recent_age_s`, which is computed from the newest timestamp in the JSONL log. `catch_up` therefore means the worker has not seen new events within the configured thresholds rather than being stuck on the oldest record.
+- `catch_up_progress` now leans on `outbox_recent_age_s`, which is computed from the newest timestamp in the JSONL log. `catch_up` therefore means the worker has not seen new events within the configured thresholds rather than being stuck on the oldest record. If the bounded tail is malformed or indeterminate, the age and progress fields are `null`/unknown rather than zero.
 - When the newest outbox event age exceeds `outbox_degrade_oldest_age_s` for the configured sample count, the contract transitions to `degraded` with reason `outbox idle ...` and suggests running `events-doctor`.
 - Runtime processing is driven by the DB outbox; `INDEX_OUTBOX_PATH` remains the append-only audit log. Clearing the JSONL file only affects audit/diagnostics and does not reset the DB queue.
 - There is no `health explain` command in this release; use `python -m app.cli health status --json` (plus the health incident log) to understand why a state transition occurred.
@@ -43,9 +43,9 @@ The contract snapshot surfaces the dead-letter queue state (KERNEL-12 / #2774, a
 
 | Snapshot field | Meaning | Source |
 | --- | --- | --- |
-| `dead_lettered_count` | Number of `outbox.event.dead_lettered` audit records — outbox rows the worker dropped after exhausting its dispatch-attempt budget. | DB outbox (`topic = 'outbox.event.dead_lettered'`) when `STORE_BACKEND=pg`; otherwise the JSONL audit-log tail. |
-| `oldest_undelivered_age_seconds` | Age of the oldest DB outbox row still pending delivery (`delivered_at is null`); `0.0` when the queue is empty. | DB outbox only. On the file/memory path this is always `0.0` — the JSONL log is an audit sink with no delivery tracking. |
-| `dead_letter_status` | `pass` or `warn`; `warn` when either threshold below is breached. | Computed from the two fields against `HealthThresholds`. |
+| `dead_lettered_count` | Number of `outbox.event.dead_lettered` audit records — outbox rows the worker dropped after exhausting its dispatch-attempt budget; `null` when the source cannot be read safely. | DB outbox (`topic = 'outbox.event.dead_lettered'`) when `STORE_BACKEND=pg`; otherwise the JSONL audit-log tail. |
+| `oldest_undelivered_age_seconds` | Age of the oldest DB outbox row still pending delivery (`delivered_at is null`); `0.0` when the queue is empty and `null` when the source is unavailable. | DB outbox only. On the file/memory path this is always `0.0` when readable — the JSONL log is an audit sink with no delivery tracking. |
+| `dead_letter_status` | `pass`, `warn`, or `unknown`; `warn` when either threshold below is breached and `unknown` when the source cannot be read safely. | Computed from the two fields against `HealthThresholds`. |
 
 Thresholds (configurable in the vault `health.md` `thresholds:` block, same as the outbox-age thresholds; both keys are optional and default when absent):
 
@@ -57,6 +57,7 @@ Thresholds (configurable in the vault `health.md` `thresholds:` block, same as t
 Posture — **alerting signal only, read-only, no auto-repair**:
 
 - A breach sets `dead_letter_status: warn` and appends an inspection hint to `suggested_actions`, and the CLI dependency check (`python -m app.cli health --json`, key `checks.dead_letters`) reports `ok: false` with the same fields.
+- A malformed or indeterminate JSONL audit tail sets the dead-letter fields to `null` and `dead_letter_status: unknown`; it is never treated as an empty/pass result. Inspect the outbox with `python -m app.cli events-doctor --path $INDEX_OUTBOX_PATH`.
 - A breach does **not** block vault writes: dead-letter breach is not in `WRITE_BLOCKED_STATES` (`writes_allowed` stays `true`). Dead-letters are downstream-processing failures; capture is the product and stays available while processing is repaired.
 - `checks.dead_letters` is a non-required check: it never flips the aggregate `/api/health` `ok`/`required_ok` booleans, so a full dead-letter queue cannot restart containers.
 - Re-driving or clearing dead-lettered rows is an explicit operator/agent action; no health surface mutates the outbox.

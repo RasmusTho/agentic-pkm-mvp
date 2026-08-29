@@ -141,13 +141,20 @@ def _dead_letter_stats_db(resolution: StoreBackendResolution | None = None) -> d
         return None
 
 
-def _dead_letter_stats_from_records(records: Iterable[dict[str, Any]]) -> dict[str, Any]:
+def _dead_letter_stats_from_records(
+    records: Iterable[dict[str, Any]] | None,
+) -> dict[str, Any]:
     """File-based fallback: count dead-letter audit records in the JSONL tail.
 
     The JSONL log is an append-only audit sink with no delivery tracking, so
     ``oldest_undelivered_age_seconds`` is 0.0 on this path — the DB outbox is
     the only delivery queue (the memory backend has none).
     """
+    if records is None:
+        return {
+            "dead_lettered_count": None,
+            "oldest_undelivered_age_seconds": None,
+        }
     count = 0
     for rec in records:
         if event_name(rec) == _DEAD_LETTER_EVENT:
@@ -162,6 +169,11 @@ def _dead_letter_status(stats: dict[str, Any], thresholds: HealthThresholds) -> 
     ``WRITE_BLOCKED_STATES`` — dead-letters are downstream-processing failures
     and must not block the human's ability to capture notes.
     """
+    if (
+        stats.get("dead_lettered_count") is None
+        or stats.get("oldest_undelivered_age_seconds") is None
+    ):
+        return "unknown"
     warn_count = max(int(thresholds.dead_lettered_warn), 1)
     if int(stats.get("dead_lettered_count") or 0) >= warn_count:
         return "warn"
@@ -202,8 +214,8 @@ def dead_letter_snapshot(*, thresholds: HealthThresholds | None = None) -> dict[
     }
 
 
-def _read_tail_records(path: Path | None = None) -> list[dict[str, Any]]:
-    """Read at most _HEALTH_TAIL_BYTES from the end of the outbox; return parsed records."""
+def _read_tail_records(path: Path | None = None) -> list[dict[str, Any]] | None:
+    """Read a bounded outbox tail; return None when the tail is unavailable."""
     from app.services.outbox import read_jsonl_outbox_records
 
     target = (path or default_outbox_path()).expanduser()
@@ -212,10 +224,10 @@ def _read_tail_records(path: Path | None = None) -> list[dict[str, Any]]:
             target, max_bytes=_HEALTH_TAIL_BYTES, read_only=True
         )
     except Exception:
-        # Intentional swallow: an unreadable outbox tail degrades to "no recent
-        # records" for health purposes, but the I/O failure is logged (#3894).
+        # Intentional swallow: health must remain available, but an unreadable
+        # outbox tail is unknown rather than an empty/healthy observation.
         logger.warning("Outbox tail read failed for %s", target, exc_info=True)
-        return []
+        return None
 
 WRITE_BLOCKED_STATES = {"safe_mode", "unhealthy"}
 INCIDENT_STATES = {"degraded", "unhealthy", "safe_mode"}
@@ -470,10 +482,10 @@ class HealthContract:
         # "genuinely empty".
         object_count, store_count_error = self._count_objects()
         latest_ts = self._latest_timestamp(records)
-        age = self._compute_age(latest_ts, now)
+        age = self._compute_age(latest_ts, now) if records is not None else None
         state, reason, since_ts, transitioned, transition_history, sample_applied = (
             self.state_machine.update_with_transition(
-                age,
+                age if age is not None else 0.0,
                 settings_result.settings.thresholds,
                 now=now,
                 sample_sequence=sample_sequence,
@@ -628,7 +640,11 @@ class HealthContract:
         # the DB is known down. _read_tail_records is file-based and fail-soft.
         outbox_count = _count_outbox_lines_from_file(outbox_path)
         records = _read_tail_records(outbox_path)
-        age = self._compute_age(self._latest_timestamp(records), now)
+        age = (
+            self._compute_age(self._latest_timestamp(records), now)
+            if records is not None
+            else None
+        )
         # Do NOT count objects here: the pg object store's connect() has no bounded
         # timeout, so on a known-down DB it could block for seconds. Report 0.
         object_count = 0
@@ -794,9 +810,11 @@ class HealthContract:
             return None
         return f"postgres unreachable: {detail}"
 
-    def _latest_timestamp(self, records: Iterable[dict[str, Any]]) -> datetime | None:
+    def _latest_timestamp(
+        self, records: Iterable[dict[str, Any]] | None
+    ) -> datetime | None:
         latest: datetime | None = None
-        for rec in records:
+        for rec in records or []:
             value = normalize_timestamp(rec)
             ts = self._parse_timestamp(value)
             if ts is None:
@@ -832,7 +850,9 @@ class HealthContract:
             return "warn"
         return "pass"
 
-    def _events_status(self, records: Iterable[dict[str, Any]]) -> str:
+    def _events_status(self, records: Iterable[dict[str, Any]] | None) -> str:
+        if records is None:
+            return "unknown"
         rows = list(records)
         if not rows:
             return "warn"
@@ -841,7 +861,11 @@ class HealthContract:
             return "pass"
         return "warn"
 
-    def _count_errors(self, records: Iterable[dict[str, Any]], now: datetime) -> int | None:
+    def _count_errors(
+        self, records: Iterable[dict[str, Any]] | None, now: datetime
+    ) -> int | None:
+        if records is None:
+            return None
         cutoff = now - timedelta(minutes=10)
         errors = 0
         seen = False
@@ -860,10 +884,10 @@ class HealthContract:
     def _catch_up_progress(
         self,
         outbox_count: int | None,
-        outbox_recent_age_s: float,
+        outbox_recent_age_s: float | None,
         thresholds: HealthThresholds,
     ) -> dict[str, Any] | None:
-        if outbox_count is None:
+        if outbox_count is None or outbox_recent_age_s is None:
             return None
         if outbox_count <= 0:
             mode = "idle"
@@ -881,7 +905,7 @@ class HealthContract:
 
     def _suggested_actions(
         self,
-        age: float,
+        age: float | None,
         index_status: str,
         writes_allowed: bool,
         *,
@@ -889,7 +913,7 @@ class HealthContract:
         store_count_error: str | None = None,
     ) -> list[str]:
         actions: list[str] = []
-        if age > 0:
+        if age is None or age > 0:
             actions.append("python -m app.cli events-doctor --path $INDEX_OUTBOX_PATH")
         if index_status in {"warn", "fail"}:
             actions.append("python -m app.cli index doctor --json")
@@ -917,7 +941,7 @@ class HealthContract:
         since_ts: str,
         settings_result: Any,
         outbox_count: int | None,
-        outbox_recent_age_s: float,
+        outbox_recent_age_s: float | None,
         index_status: str,
         events_status: str,
         writes_allowed: bool,

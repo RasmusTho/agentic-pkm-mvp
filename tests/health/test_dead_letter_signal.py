@@ -17,6 +17,7 @@ assert detection only; no repair/re-drive path exists or is exercised.
 
 from __future__ import annotations
 
+import json
 from datetime import datetime, timezone
 from pathlib import Path
 from textwrap import dedent
@@ -25,10 +26,12 @@ import pytest
 
 from app.health_contract import (
     DEFAULT_CONTRACT,
+    _HEALTH_TAIL_BYTES,
     WRITE_BLOCKED_STATES,
     HealthContract,
     HealthStateMachine,
     _count_outbox_lines_from_file,
+    dead_letter_snapshot,
     reset_state_machine,
 )
 from app.settings.health_settings import HealthThresholds, load_health_settings
@@ -98,6 +101,48 @@ def test_file_outbox_count_fails_closed_on_malformed_jsonl(tmp_path: Path) -> No
     outbox_path.write_bytes(b'{"event":"valid"}\n{')
 
     assert _count_outbox_lines_from_file(outbox_path) is None
+
+
+def test_corrupt_outbox_snapshot_is_unknown_not_empty(isolated_outbox: Path) -> None:
+    isolated_outbox.write_bytes(b'{"event":"valid"}\n{')
+
+    snapshot = _fresh_contract().evaluate()
+    cli_snapshot = dead_letter_snapshot()
+    from app.cli.health import _check_dead_letters
+
+    cli_check = _check_dead_letters()
+
+    assert snapshot["outbox_count"] is None
+    assert snapshot["outbox_recent_age_s"] is None
+    assert snapshot["bootstrap_state"] == "unknown"
+    assert snapshot["events_doctor_status"] == "unknown"
+    assert snapshot["errors_last_10m"] is None
+    assert snapshot["dead_lettered_count"] is None
+    assert snapshot["oldest_undelivered_age_seconds"] is None
+    assert snapshot["dead_letter_status"] == "unknown"
+    assert cli_snapshot["dead_lettered_count"] is None
+    assert cli_snapshot["dead_letter_status"] == "unknown"
+    assert cli_check["ok"] is False
+    assert cli_check["data"]["dead_letter_status"] == "unknown"
+
+
+def test_oversized_corrupt_outbox_snapshot_is_unknown(isolated_outbox: Path) -> None:
+    isolated_outbox.write_text(
+        json.dumps(
+            {
+                "event": "outbox.event.dead_lettered",
+                "payload": "x" * (_HEALTH_TAIL_BYTES + 1_024),
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    snapshot = _fresh_contract().evaluate()
+
+    assert snapshot["outbox_count"] is None
+    assert snapshot["events_doctor_status"] == "unknown"
+    assert snapshot["dead_lettered_count"] is None
+    assert snapshot["dead_letter_status"] == "unknown"
 
 
 # ---------------------------------------------------------------------------
