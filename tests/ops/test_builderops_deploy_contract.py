@@ -374,6 +374,24 @@ def test_deploy_and_rollback_receipts_bind_pin_schema_and_epoch(tmp_path: Path) 
     assert rollback_receipt["rollback_data_rewind"] == "forbidden"
 
 
+def test_deploy_preflight_accepts_root_0400_app_secret(tmp_path: Path) -> None:
+    root, env, _source_sha, _digest, _postgres_digest = _harness(tmp_path)
+    env["FAKE_SECRET_STAT"] = "0:400"
+
+    result = subprocess.run(
+        ["bash", "scripts/deploy_builderops.sh", "deploy", env["BUILDEROPS_TEST_CANDIDATE_RECEIPT"]],
+        cwd=root,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    events = Path(env["FAKE_EVENT_LOG"]).read_text(encoding="utf-8")
+    assert "up -d db" in events
+
+
 def test_deploy_refuses_a_local_mode_that_would_require_recovery_egress(tmp_path: Path) -> None:
     root, env, _source_sha, _digest, _postgres_digest = _harness(tmp_path)
     env["BUILDEROPS_LOCAL_DURABILITY_MODE"] = "independent-recovery"

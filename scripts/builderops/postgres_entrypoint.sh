@@ -16,10 +16,13 @@ stage_app_password() {
     echo "BuilderOps app-role source secret file is unavailable" >&2
     exit 78
   fi
-  if [[ "$(stat -c '%u:%a' "$source_secret")" != "0:600" ]]; then
-    echo "BuilderOps app-role source secret metadata is not root-only" >&2
-    exit 78
-  fi
+  case "$(stat -c '%u:%a' "$source_secret")" in
+    0:400|0:600) ;;
+    *)
+      echo "BuilderOps app-role source secret metadata is not root-only" >&2
+      exit 78
+      ;;
+  esac
   if [[ "$staged_secret" != "$staged_directory/app-password" ]] || ! awk \
     -v target="$staged_directory" '$2 == target && $3 == "tmpfs" { found = 1 } END { exit !found }' \
     /proc/mounts; then

@@ -178,7 +178,7 @@ def test_builderops_init_stages_only_app_password_for_postgres() -> None:
     assert "PG_VERSION" in entrypoint
     assert 'staged_directory="/run/builderops-init"' in entrypoint
     assert "stat -c '%u:%a'" in entrypoint
-    assert '"0:600"' in entrypoint
+    assert "0:400|0:600" in entrypoint
     assert "/proc/mounts" in entrypoint
     assert '"tmpfs"' in entrypoint
     assert "install -m 0400 -o postgres -g postgres" in entrypoint
@@ -247,6 +247,13 @@ def test_builderops_init_secret_staging_refuses_bad_inputs_and_cleans_up(tmp_pat
     missing = _run_staging_function(missing_copy, env)
     assert missing.returncode == 78
     assert not event_log.exists()
+
+    owner_read_only_source = env | {"TEST_SECRET_STAT": "0:400"}
+    owner_read_only = _run_staging_function(entrypoint_copy, owner_read_only_source)
+    assert owner_read_only.returncode == 0, owner_read_only.stderr
+    assert event_log.exists()
+
+    event_log.unlink()
 
     non_root_source = env | {"TEST_SECRET_STAT": "1000:600"}
     non_root = _run_staging_function(entrypoint_copy, non_root_source)
