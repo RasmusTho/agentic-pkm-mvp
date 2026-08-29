@@ -20,6 +20,21 @@ COMPONENT_IDS = (
     "product_runtime",
 )
 
+COMPONENT_EXPECTATIONS = {
+    "devui_projection": ("VM-102 resident (target)", "`gap`"),
+    "builderops_control_plane": ("VM-102 resident (target)", "`gap`"),
+    "builderops_cockpit": ("VM-102 resident (target)", "`gap`"),
+    "dispatcher_signboard": ("VM-102 resident (target)", "`gap`"),
+    "ddo": ("VM-102 resident (target)", "`gap`"),
+    "ckm_kvasir": ("VM-102 resident (target)", "`gap`"),
+    "focus_conversation_port": ("VM-102 resident (target)", "`gap`"),
+    "soi_evidence": ("explicit external dependency", "`gap`"),
+    "github_git_ci_delivery": ("explicit external dependency", "`external`"),
+    "model_service": ("explicit external dependency", "`gap`"),
+    "tars_proxmox_control": ("explicit external dependency", "`gap`"),
+    "product_runtime": ("intentionally non-runtime", "`excluded`"),
+}
+
 RECEIPTS = (
     "devsystem_vm102_component_inventory.v1",
     "builderops_vm_rebuild_activation.v1",
@@ -78,6 +93,10 @@ def test_complete_vm102_topology_keeps_known_components_and_gaps_visible() -> No
     assert "`gap` is a required state" in normalized_topology
     for component_id in COMPONENT_IDS:
         assert f"`{component_id}`" in normalized_topology
+    for component_id, (placement_class, state) in COMPONENT_EXPECTATIONS.items():
+        row = next(line for line in topology.splitlines() if f"`{component_id}`" in line)
+        assert placement_class in row
+        assert state in row
     assert "runtime evidence remains an explicit `gap` until a bound receipt proves it" in normalized_topology.lower()
 
 
@@ -106,6 +125,28 @@ def test_vm102_receipt_contract_names_exact_identity_and_no_secret_gate() -> Non
     assert "`no_compatible_baseline`" in receipt_contract
     assert "all-zero source, image, or configuration placeholders are invalid" in normalized_receipt_contract
     assert "a later successful deployment establishes a runnable baseline" in normalized_receipt_contract
+
+
+def test_vm102_receipt_owner_enforces_dependency_order_and_conditional_rollback() -> None:
+    contract = _read("docs/BUILDEROPS_CONTROL_PLANE/README.md")
+    ordering = contract.split("### Normative receipt dependency order", 1)[1].split(
+        "| Receipt | Required proof | Does not prove by itself |", 1
+    )[0]
+
+    inventory = ordering.index("`devsystem_vm102_component_inventory.v1`")
+    activation = ordering.index("`builderops_vm_rebuild_activation.v1`")
+    qualification = ordering.index("`devui_vm102_runtime_qualification.v1`")
+    deploy = ordering.index("`devsystem_vm102_deploy.v1`")
+    health = ordering.index("`devsystem_vm102_health.v1`")
+    pilot = ordering.index("`devui-stage-a-read-only-owner-pilot.v1`")
+    rollback = ordering.index("`devsystem_vm102_rollback.v1`")
+
+    assert inventory < activation < deploy < health < pilot
+    assert inventory < qualification < deploy
+    assert rollback > deploy
+    assert "conditional side path" in ordering
+    assert "rollback_baseline_state: available" in ordering
+    assert "no_baseline" in ordering
 
 
 def test_receipt_consumers_link_to_single_normative_owner() -> None:

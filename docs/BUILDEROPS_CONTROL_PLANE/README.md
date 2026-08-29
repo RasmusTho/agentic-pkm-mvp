@@ -83,6 +83,27 @@ deployment and health receipts additionally bind the exact candidate SHA, image 
 configuration fingerprint. `tars_host_qualification.v1` is only the repository-side candidate
 policy receipt and cannot substitute for live qualification.
 
+### Normative receipt dependency order
+
+The required successful-deployment path is ordered by evidence dependency, not merely by receipt
+appearance:
+
+1. `devsystem_vm102_component_inventory.v1` records the complete topology and every unresolved gap.
+2. `builderops_vm_rebuild_activation.v1` and `devui_vm102_runtime_qualification.v1` each depend on
+   that inventory. They may run in parallel, but both must pass before deployment.
+3. `devsystem_vm102_deploy.v1` depends on both qualification receipts and binds the exact candidate,
+   migration result, configuration, inventory digest, and rollback-baseline state.
+4. `devsystem_vm102_health.v1` depends on the completed deployment and binds post-deploy identity,
+   readiness, ingress/auth, topology, and read-only smoke to that deployed candidate.
+5. `devui-stage-a-read-only-owner-pilot.v1` depends on the health receipt plus #4748 exact-SHA
+   browser evidence; it is not deployment or health proof.
+
+`devsystem_vm102_rollback.v1` is a conditional side path after a deployment attempt, not a required
+step in the successful-deployment path. It is admitted only when
+`rollback_baseline_state: available` names a complete compatible identity and restored health/smoke
+passes. `rollback_baseline_state: no_baseline` refuses rollback until a later successful deployment
+establishes that runnable baseline.
+
 | Receipt | Required proof | Does not prove by itself |
 | --- | --- | --- |
 | `devsystem_vm102_component_inventory.v1` | All inventory rows, placement class, owner, service/project, source/image, ingress/auth, health/version, deployment/lifecycle, migration/rollback fields, observed-at, and inventory digest; gaps are explicit | Residency or deployment |
