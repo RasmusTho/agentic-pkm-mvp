@@ -419,8 +419,9 @@ fetches the current PR, complete paginated review summaries, inline review comme
 and, for issue-backed work, the governing Issue itself. Issue-free docs, governance, and direct-repair
 PRs instead authenticate one complete lane/direct-repair contract in the live PR body, require its
 canonical classification to match the publication invocation lane, and reject ordinary or
-neutralized Issue authority plus unsupported line separators, C0 whitespace controls, and indented
-lane markers that hosted `pr-contract` does not recognize. They may continue unchanged or split after revalidation,
+neutralized Issue authority plus unsupported line separators and indented lane markers. Lane and
+Direct Repair classification use the explicit ECMAScript whitespace set: Python-only C0/U+0085
+forms are not whitespace, while hosted-valid U+FEFF is. They may continue unchanged or split after revalidation,
 but scope expansion first requires promotion to an authenticated governing Issue. The gate binds the
 repository/base identity, exact candidate and live heads, contract digest, rejected-round IDs,
 protected finding IDs, and the content digest of that rejected-review history. Caller-supplied history, actors, URLs,

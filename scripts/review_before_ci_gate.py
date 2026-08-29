@@ -76,24 +76,44 @@ REVIEW_CONTRACT_MARKER = re.compile(
 )
 REVALIDATION_RECEIPT_MARKER = "<!-- pr-scope-revalidation-receipt:v1 -->"
 TRUSTED_RECEIPT_ASSOCIATIONS = frozenset({"OWNER", "MEMBER", "COLLABORATOR"})
+ECMASCRIPT_WHITESPACE = (
+    r"[ \t\n\x0b\x0c\r\xa0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000\ufeff]"
+)
+ECMASCRIPT_NON_WHITESPACE = (
+    r"[^ \t\n\x0b\x0c\r\xa0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000\ufeff]"
+)
 ISSUE_FREE_LANE = re.compile(
-    r"^\-\s+\[x\]\s+(Docs authoring|Governance) lane\b",
+    rf"^\-{ECMASCRIPT_WHITESPACE}+\[x\]{ECMASCRIPT_WHITESPACE}+"
+    r"(Docs authoring|Governance) lane\b",
     re.IGNORECASE | re.MULTILINE,
 )
 DIRECT_REPAIR_SECTION = re.compile(
-    r"(?ims)^## Direct Repair\s*$.*?(?=^##\s|\Z)"
+    rf"## Direct Repair.*?(?=\n##{ECMASCRIPT_WHITESPACE}|\n---)"
+    r"|## Direct Repair.*",
+    re.IGNORECASE | re.DOTALL,
 )
-DIRECT_REPAIR_TYPE = re.compile(r"(?im)^Type:\s*(?:docs|governance|code)\s*$")
-DIRECT_REPAIR_REASON = re.compile(r"(?im)^Reason:\s*\S.*$")
-DIRECT_REPAIR_VALIDATION = re.compile(r"(?im)^Validation:\s*\S.*$")
-DIRECT_REPAIR_ISSUE = re.compile(r"(?im)^Issue required:\s*no\b")
+DIRECT_REPAIR_TYPE = re.compile(
+    rf"^Type:{ECMASCRIPT_WHITESPACE}*(?:docs|governance|code)"
+    rf"{ECMASCRIPT_WHITESPACE}*(?:\n|$)",
+    re.IGNORECASE | re.MULTILINE,
+)
+DIRECT_REPAIR_REASON = re.compile(
+    rf"^Reason:{ECMASCRIPT_WHITESPACE}*{ECMASCRIPT_NON_WHITESPACE}",
+    re.IGNORECASE | re.MULTILINE,
+)
+DIRECT_REPAIR_VALIDATION = re.compile(
+    rf"^Validation:{ECMASCRIPT_WHITESPACE}*{ECMASCRIPT_NON_WHITESPACE}",
+    re.IGNORECASE | re.MULTILINE,
+)
+DIRECT_REPAIR_ISSUE = re.compile(
+    rf"^Issue required:{ECMASCRIPT_WHITESPACE}*no\b",
+    re.IGNORECASE | re.MULTILINE,
+)
 GOVERNING_ISSUE_ATTEMPT = re.compile(r"(?im)^\s*Governing-Issue\s*:")
 NEUTRALIZED_CLOSING_ATTEMPT = re.compile(
     r"(?im)^[ \t]*Verified-Closing-Issues[ \t]*:"
 )
-UNSUPPORTED_CONTRACT_LINE_SEPARATOR = re.compile(
-    r"\r(?!\n)|[\x1c-\x1f\u2028\u2029]"
-)
+UNSUPPORTED_CONTRACT_LINE_SEPARATOR = re.compile(r"\r(?!\n)|[\u2028\u2029]")
 
 
 class ReviewBeforeCiGateError(ValueError):
@@ -768,7 +788,8 @@ def _issue_free_pr_contract_lane(body: object) -> str | None:
         or NEUTRALIZED_CLOSING_ATTEMPT.search(body)
     ):
         return None
-    direct_repair = DIRECT_REPAIR_SECTION.search(body)
+    canonical_body = body.replace("\r\n", "\n")
+    direct_repair = DIRECT_REPAIR_SECTION.search(canonical_body)
     has_direct_repair_contract = bool(
         direct_repair
         and DIRECT_REPAIR_TYPE.search(direct_repair.group(0))
@@ -778,14 +799,16 @@ def _issue_free_pr_contract_lane(body: object) -> str | None:
     )
     if direct_repair and not has_direct_repair_contract:
         return None
-    lane_matches = ISSUE_FREE_LANE.findall(body)
+    lane_matches = ISSUE_FREE_LANE.findall(canonical_body)
     classifiers = len(lane_matches) + has_direct_repair_contract
+    builderops = resolve_builderops_routing_status(
+        canonical_body, has_issue_authority=False
+    )
+    tier1_without_section = bool(lane_matches) and not builderops.has_section
     if (
         classifiers != 1
-        or not resolve_pr_contract_final_review_rounds(body).satisfied
-        or not resolve_builderops_routing_status(
-            body, has_issue_authority=False
-        ).satisfied
+        or not resolve_pr_contract_final_review_rounds(canonical_body).satisfied
+        or not (builderops.has_builderops_routing or tier1_without_section)
     ):
         return None
     if has_direct_repair_contract:

@@ -1079,9 +1079,18 @@ Final-Review-Rounds: 1
     (
         ("    - [x] Docs authoring lane", "docs-authoring"),
         ("-\x1c[x]\x1cDocs authoring lane", "docs-authoring"),
+        ("-\x85[x]\x85Docs authoring lane", "docs-authoring"),
         (
             "## Direct Repair\n"
             "Type:\x1cgovernance\n"
+            "Reason: bounded repair\n"
+            "Validation: focused tests\n"
+            "Issue required: no",
+            "direct-repair",
+        ),
+        (
+            "## Direct Repair\n"
+            "Type:\x85governance\n"
             "Reason: bounded repair\n"
             "Validation: focused tests\n"
             "Issue required: no",
@@ -1115,6 +1124,50 @@ Final-Review-Rounds: 1
             expected_lane=expected_lane,
             api=api,
         )
+
+
+@pytest.mark.parametrize(
+    ("contract_body", "expected_lane"),
+    (
+        (
+            "## Change Lane\n"
+            "-\ufeff[x]\ufeffDocs authoring lane\n\n"
+            "Final-Review-Rounds: 1\n",
+            "docs-authoring",
+        ),
+        (
+            "## Direct Repair\n"
+            "Type:\ufeffgovernance\n"
+            "Reason:\ufeffbounded repair\n"
+            "Validation:\ufefffocused tests\n"
+            "Issue required:\ufeffno\n\n"
+            "Final-Review-Rounds: 1\n\n"
+            "## BuilderOps Routing\n"
+            "- Records/projections/receipts: none\n"
+            "- Reason: No BuilderOps material was routed.\n",
+            "direct-repair",
+        ),
+    ),
+)
+def test_issue_free_contract_accepts_ecmascript_only_whitespace(
+    contract_body: str, expected_lane: str
+) -> None:
+    responses, api = _live_pr_review_api()
+    responses.pop("repos/octo/repo/issues/4028")
+    pr = responses["repos/octo/repo/pulls/4029"]
+    assert isinstance(pr, dict)
+    pr["body"] = contract_body
+
+    history = authenticated_pr_scope_revalidation_history(
+        repository="octo/repo",
+        pr_number=4029,
+        governing_issue=None,
+        head_sha="a" * 40,
+        expected_lane=expected_lane,
+        api=api,
+    )
+
+    assert history["contract_lane"] == expected_lane
 
 
 def test_current_branch_rejects_ambiguous_open_prs(
