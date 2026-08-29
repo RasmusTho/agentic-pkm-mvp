@@ -202,7 +202,7 @@ If an Issue is closed (already delivered):
 
 1. **Remove all agent labels:**
    ```bash
-   gh issue edit #<N> --repo "$REPO" --remove-label agent:ready --remove-label agent:blocked --remove-label agent:needs-human
+   gh issue edit #<N> --repo "$REPO" --remove-label agent:ready --remove-label agent:blocked --remove-label agent:needs-human --remove-label agent:in-progress
    ```
 
 2. **Verify authoritative state:**
@@ -229,7 +229,7 @@ If an open issue is no longer the truthful backlog item because an equivalent sl
 3. **Re-check terminal truth and strip lingering agent labels if needed:**
    ```bash
    gh issue view #<N> --repo "$REPO" --json state,labels
-   gh issue edit #<N> --repo "$REPO" --remove-label agent:ready --remove-label agent:blocked --remove-label agent:needs-human
+   gh issue edit #<N> --repo "$REPO" --remove-label agent:ready --remove-label agent:blocked --remove-label agent:needs-human --remove-label agent:in-progress
    gh issue view #<N> --repo "$REPO" --json state,labels
    ```
 
@@ -241,7 +241,7 @@ If an open implementation Issue is malformed, stale, or no longer safely executa
 
 1. **Add needs-human label:**
    ```bash
-   gh issue edit #<N> --repo "$REPO" --add-label agent:needs-human --remove-label agent:ready --remove-label agent:blocked
+   gh issue edit #<N> --repo "$REPO" --add-label agent:needs-human --remove-label agent:ready --remove-label agent:blocked --remove-label agent:in-progress
    ```
 
 2. **Post comment with the required action.**
@@ -269,7 +269,7 @@ Parent feature issues are validation hubs, not direct pickup issues. Unless expl
 
 1. **Keep them non-active:**
    ```bash
-   gh issue edit #<PARENT> --repo "$REPO" --add-label agent:blocked --remove-label agent:ready --remove-label agent:needs-human
+   gh issue edit #<PARENT> --repo "$REPO" --add-label agent:blocked --remove-label agent:ready --remove-label agent:needs-human --remove-label agent:in-progress
    ```
 
 2. **Use them to track child slice delivery** in comments and body updates, including validation receipts posted by each delivered child
@@ -412,11 +412,11 @@ Use this when the user asks for a maintenance run across everything not done.
    - **Execute label corrections** from established issue/PR truth before any Project reconciliation:
      ```bash
      # Example: set to ready if criteria are concrete
-     gh issue edit #<N> --repo "$REPO" --add-label agent:ready --remove-label agent:blocked --remove-label agent:needs-human
+     gh issue edit #<N> --repo "$REPO" --add-label agent:ready --remove-label agent:blocked --remove-label agent:needs-human --remove-label agent:in-progress
      # OR: set to needs-human if ambiguous or boundary move
-     gh issue edit #<N> --repo "$REPO" --add-label agent:needs-human --remove-label agent:ready --remove-label agent:blocked
+     gh issue edit #<N> --repo "$REPO" --add-label agent:needs-human --remove-label agent:ready --remove-label agent:blocked --remove-label agent:in-progress
      # OR: set to blocked if external dependency exists
-     gh issue edit #<N> --repo "$REPO" --add-label agent:blocked --remove-label agent:ready --remove-label agent:needs-human
+     gh issue edit #<N> --repo "$REPO" --add-label agent:blocked --remove-label agent:ready --remove-label agent:needs-human --remove-label agent:in-progress
      ```
      - Add `agent:ready` only if Scope/Constraints/Acceptance Criteria are concrete and no ambiguity remains.
      - Do not add or preserve `agent:ready` when any AC lacks a resolvable `Verify:` marker.
@@ -440,7 +440,7 @@ Use this when the user asks for a maintenance run across everything not done.
      ```
    - Remove all agent labels from closed duplicate:
      ```bash
-     gh issue edit #<DUPLICATE> --repo "$REPO" --remove-label agent:ready --remove-label agent:blocked --remove-label agent:needs-human
+     gh issue edit #<DUPLICATE> --repo "$REPO" --remove-label agent:ready --remove-label agent:blocked --remove-label agent:needs-human --remove-label agent:in-progress
      ```
 
 6. **When Project repair is in scope, reconcile terminal work stuck in non-terminal status**:

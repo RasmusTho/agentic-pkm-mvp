@@ -241,6 +241,7 @@ def test_canonical_maintenance_surfaces_document_split_lane_precedence() -> None
         assert "Needs Human" in content
         assert "Blocked" in content
         assert "explicit open-Issue `Review`" in content
+    assert maintenance_skill.count("--remove-label agent:in-progress") >= 8
 
 
 def test_canonical_label_taxonomy_declares_projection_inputs() -> None:
