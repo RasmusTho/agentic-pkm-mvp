@@ -421,7 +421,8 @@ labels, or finding subsets are never evidence. Omitted,
 foreign, stale, malformed, or partial evidence fails closed. The executable gate issues publication
 authority only against the canonical `origin/main...HEAD` selectors; workflow-risk analysis may use
 alternate selectors only when it is not issuing publication authority. Publication invokes the gate
-with an explicit `new` or `existing` mode; `existing` derives a unique open PR whose base repository
+with an explicit `new` or `existing` mode, and scope revalidation is valid only in `existing` mode.
+`existing` derives a unique open PR whose base repository
 and ref match the publication base and whose head repository and ref match the authenticated current
 branch, then requires the supplied PR identity and scope
 revalidation inputs to match it. `new` authenticates that the branch has no open PR and an omitted

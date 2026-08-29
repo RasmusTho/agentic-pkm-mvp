@@ -251,6 +251,8 @@ foreign, retargeted, or different-branch PR number is not history authority.
 Each counted rejected review must contain exactly one canonical `Governing-Contract-SHA256` marker.
 Publication authority is always evaluated at canonical `origin/main...HEAD`; the workflow-risk
 selector overrides are analysis-only and fail closed whenever `--publication-mode` is present.
+`--pr-scope-revalidation` is publication authority and is valid only with
+`--publication-mode existing`; it cannot be invoked as a mode-less analysis path.
 
 For any implementation, governance, or direct-repair lane with a declared high-risk surface, the
 executable order is mandatory and fail-closed:

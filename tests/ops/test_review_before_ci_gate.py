@@ -1511,6 +1511,57 @@ def test_publication_rejects_caller_selected_head_or_base(
     assert "canonical origin/main...HEAD" in capsys.readouterr().err
 
 
+def test_scope_revalidation_cannot_issue_modeless_publication_authority(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(
+        "scripts.review_before_ci_gate.workflow_risk_evidence_from_git",
+        lambda *args, **kwargs: SimpleNamespace(risks=[], head_sha="a" * 40),
+    )
+    monkeypatch.setattr(
+        "scripts.review_before_ci_gate._github_repository_from_origin", lambda: "octo/repo"
+    )
+    monkeypatch.setattr(
+        "scripts.review_before_ci_gate._current_branch_has_open_pr", lambda repository: False
+    )
+    monkeypatch.setattr(
+        "scripts.review_before_ci_gate.authenticated_pr_scope_revalidation_history",
+        lambda **kwargs: {"live_pr_head_sha": "b" * 40},
+    )
+    monkeypatch.setattr(
+        "scripts.review_before_ci_gate._git_is_strict_ancestor", lambda *args: True
+    )
+    monkeypatch.setattr(
+        "scripts.review_before_ci_gate.validate_pr_scope_revalidation",
+        lambda *args, **kwargs: None,
+    )
+
+    assert review_before_ci_main(
+        [
+            "--lane",
+            "governance",
+            "--changed-file",
+            "scripts/review_before_ci_gate.py",
+            "--risk-assessment-complete",
+            "--risk-surface",
+            "state-machine",
+            "--review-gate-complete",
+            "--pr-scope-revalidation",
+            "--github-repository",
+            "octo/repo",
+            "--pr-number",
+            "4029",
+            "--governing-issue",
+            "4028",
+            "--workflow-risk-base",
+            "origin/stable",
+            "--workflow-risk-head",
+            "HEAD^",
+        ]
+    ) == 2
+    assert "only valid with --publication-mode existing" in capsys.readouterr().err
+
+
 @pytest.mark.parametrize("lane", ["implmentation", "docs", "code", "maintenance", "promotion"])
 def test_unknown_lane_is_rejected_instead_of_failing_open(lane: str) -> None:
     with pytest.raises(ReviewBeforeCiGateError, match=f"unknown lane: {lane}"):
