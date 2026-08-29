@@ -62,8 +62,8 @@ Status meanings:
 - `Blocked`: an open non-parent Issue labeled `agent:blocked`
 - `Needs Human`: an open non-parent Issue labeled `agent:needs-human`
 - `Ready`: bounded, testable, unblocked work that is eligible for pickup and labeled `agent:ready`
-- `In Progress`: active implementation issue state; on PR items this covers draft PRs and open non-draft PRs without a requested review
-- `Review`: explicit review-handoff state for PR/project items, entered when review is requested — not a default for open PRs (see the lifecycle truth matrix in `.codex/skills/issue-maintenance-change-control/SKILL.md`)
+- `In Progress`: active implementation Issue state; on PR items this covers open draft PRs
+- `Review`: the Project state for open non-draft PRs, whether or not review was explicitly requested (see `.codex/skills/_shared/LIFECYCLE_TRUTH_MATRIX.md`)
 - `Done`: merged or otherwise fully delivered work; the Issue is closed and no `agent:*` labels remain
 
 Agent-label meanings:

@@ -36,8 +36,13 @@ def test_open_non_draft_pr_without_review_request_matches_documented_status() ->
     matrix = Path(".codex/skills/_shared/LIFECYCLE_TRUTH_MATRIX.md").read_text(
         encoding="utf-8"
     )
+    setup = Path("docs/development/GITHUB_GOVERNANCE_SETUP.md").read_text(
+        encoding="utf-8"
+    )
 
     assert "| PR | OPEN + non-draft, no review requested | `Review` |" in matrix
+    assert "- `In Progress`: active implementation Issue state; on PR items this covers open draft PRs" in setup
+    assert "- `Review`: the Project state for open non-draft PRs, whether or not review was explicitly requested" in setup
     assert (
         desired_pr_status({"state": "OPEN", "isDraft": False, "mergedAt": None}, None)
         == "Review"
