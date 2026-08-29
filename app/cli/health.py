@@ -12,6 +12,7 @@ import httpx
 from app.api.v6_seams import check_v6_seams
 from app.components.llm.fabric import describe_default_route_policies, describe_default_routes
 from app.services.companion_diagnostics import companion_diagnostics_summary
+from app.events.outbox import default_outbox_path
 from app.config.environment import active_environment
 from app.eval.llm_client import DEFAULT_MODE as DEFAULT_EVAL_MODE
 from app.knowledge.errors import KnowledgeConfigError
@@ -119,14 +120,24 @@ def _check_dead_letters() -> Dict[str, Any]:
 
 
 def _check_outbox_path() -> Dict[str, Any]:
-    path = Path(os.environ.get("INDEX_OUTBOX_PATH", "./tmp/index-outbox.jsonl")).expanduser()
-    try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        with path.open("a", encoding="utf-8"):
-            ...
-        return _result(True, f"Skrivåtkomst bekräftad: {path}")
-    except Exception as exc:
-        return _result(False, f"Kan inte skriva till index-outbox path ({_exception_kind(exc)})")
+    path = default_outbox_path()
+    if not path.exists():
+        return _result(
+            False,
+            f"Index-outbox path saknas: {path}",
+            data={"path": str(path), "status": "missing"},
+        )
+    if not path.is_file() or not os.access(path, os.R_OK | os.W_OK):
+        return _result(
+            False,
+            f"Index-outbox path är inte läs-/skrivbar: {path}",
+            data={"path": str(path), "status": "unavailable"},
+        )
+    return _result(
+        True,
+        f"Index-outbox path är läs-/skrivbar: {path}",
+        data={"path": str(path), "status": "ready"},
+    )
 
 
 def _check_ollama() -> Dict[str, Any]:
