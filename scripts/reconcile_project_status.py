@@ -28,6 +28,16 @@ from scripts.validate_issue_readiness import classify_issue_body
 
 GOVERNANCE_PATH = Path(".github/github-governance.yml")
 DEFAULT_PROJECT_NAME = "Agent Delivery Control Plane"
+PROJECT_STATUS_VALUES = (
+    "Backlog",
+    "Epic / Parent",
+    "Blocked",
+    "Needs Human",
+    "Ready",
+    "In Progress",
+    "Review",
+    "Done",
+)
 SCAN_WATERMARK_PATH = REPO_ROOT / "runtime" / "dispatcher" / "project_status_reconcile_scan_watermark.json"
 PROJECT_ITEM_LIST_INITIAL_LIMIT = 200
 PROJECT_ITEM_SCAN_PAGE_SIZE = 100
@@ -464,7 +474,7 @@ def get_issue(repo: str, number: int) -> dict[str, Any]:
             "--repo",
             repo,
             "--json",
-            "number,state,labels,url,title,body",
+            "number,state,labels,url,title,body,subIssues",
         )
     )
 
@@ -497,29 +507,49 @@ def issue_ready_validation_failure(issue: dict[str, Any]) -> str | None:
     )
 
 
-def desired_issue_status(issue: dict[str, Any]) -> str | None:
+def _has_epic_or_parent_evidence(issue: dict[str, Any]) -> bool:
+    if {"type:epic", "type:feature"} & _issue_label_names(issue):
+        return True
+    return bool((issue.get("subIssues") or {}).get("totalCount"))
+
+
+def desired_issue_status(
+    issue: dict[str, Any], current_status: str | None = None
+) -> str | None:
     if issue.get("state") == "CLOSED":
         return "Done"
+    if current_status == "Review":
+        # Existing Issue Review cards are explicit operator projections, not
+        # inferred PR links that reconciliation may overwrite.
+        return "Review"
     label_names = _issue_label_names(issue)
+    if "state:known-defect" in label_names:
+        return "Backlog"
+    if _has_epic_or_parent_evidence(issue):
+        return "Epic / Parent"
+    if "agent:needs-human" in label_names:
+        return "Needs Human"
+    if "agent:blocked" in label_names:
+        return "Blocked"
     if "agent:ready" in label_names:
         if issue_ready_validation_failure(issue) is not None:
             return "Backlog"
         return "Ready"
-    if {"agent:blocked", "agent:needs-human"} & label_names:
-        return "Backlog"
+    if "agent:in-progress" in label_names:
+        return "In Progress"
     return None
 
 
 def desired_pr_status(pr: dict[str, Any], explicit_status: str | None) -> str | None:
-    if explicit_status:
-        return explicit_status
     if pr.get("mergedAt"):
         return "Done"
+    if pr.get("state") == "CLOSED":
+        # Terminal PR truth outranks a caller's stale targeted-status request.
+        return "Done"
+    if explicit_status:
+        return explicit_status
     if pr.get("state") == "OPEN":
         return "In Progress" if pr.get("isDraft") else "Review"
-    if pr.get("state") == "CLOSED":
-        # Closed PR cards are terminal Project artifacts and must not remain blank.
-        return "Done"
     return None
 
 
@@ -578,7 +608,7 @@ def reconcile_issue(
     label_names = _issue_label_names(issue)
     invalid_ready_failure = (
         issue_ready_validation_failure(issue)
-        if "agent:ready" in label_names
+        if issue.get("state") != "CLOSED" and "agent:ready" in label_names
         else None
     )
     if args.status == "Ready" and invalid_ready_failure is not None:
@@ -586,16 +616,21 @@ def reconcile_issue(
         return 1
     if args.status is None and invalid_ready_failure is not None:
         print(f"invalid issue #{args.issue}: {invalid_ready_failure}")
-    desired = args.status or desired_issue_status(issue)
-    if not desired:
-        print(f"skip issue #{args.issue}: no derived status")
-        return 0
     try:
         items = list_project_items(owner, project["number"])
     except ProjectItemListDeferred as exc:
         print(f"skip issue #{args.issue}: {exc}")
         return 0
     item = find_item_by_number(items, "Issue", args.issue)
+    current_status = item.get("status") if item is not None else None
+    desired = (
+        desired_issue_status(issue, current_status)
+        if issue.get("state") == "CLOSED"
+        else args.status or desired_issue_status(issue, current_status)
+    )
+    if not desired:
+        print(f"skip issue #{args.issue}: no derived status")
+        return 0
     if item is None:
         print(f'add issue #{args.issue} to project "{project["title"]}"')
         if not args.dry_run:
@@ -710,7 +745,7 @@ def reconcile_scan(
         if kind == "Issue":
             issue = get_issue(repo, number)
             label_names = _issue_label_names(issue)
-            desired = desired_issue_status(issue)
+            desired = desired_issue_status(issue, current)
             if "agent:ready" in label_names:
                 failure = issue_ready_validation_failure(issue)
                 if failure is not None:
@@ -753,7 +788,7 @@ def main() -> int:
     parser.add_argument("--issue", type=int, help="Issue number to reconcile")
     parser.add_argument("--pr", type=int, help="Pull request number to reconcile")
     parser.add_argument("--scan", action="store_true", help="Reconcile all existing project items")
-    parser.add_argument("--status", choices=["Backlog", "Ready", "In Progress", "Review", "Done"])
+    parser.add_argument("--status", choices=PROJECT_STATUS_VALUES)
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
 

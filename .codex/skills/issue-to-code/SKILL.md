@@ -145,7 +145,7 @@ Treat every canonical Issue contract section (`.codex/skills/_shared/ISSUE_CONTR
 - GitHub Project `Agent Delivery Control Plane` is an optional legacy lifecycle projection.
 - Project Status is an optional projection; its repair is a cold-path maintenance concern and is
   not part of selection, pickup, claim, blocked-state, or review-handoff flow.
-- Do not leave actively worked Issues labeled `agent:ready`.
+- Successful pickup atomically replaces all `agent:*` state labels with exactly `agent:in-progress`, while preserving non-agent labels.
 - Do not leave blocked Issues in `In Progress`.
 - Do not use `Review` only because a PR exists; keep work `In Progress` until review handoff is explicit.
 - Treat dispatcher lease acquisition plus removal of `agent:ready` as the fast claim handshake.
@@ -223,7 +223,8 @@ The wrapper runs workspace preflight and `dispatcher status`, derives the exact 
 override), and does not substitute a candidate returned by `dispatcher next`. When the
 dispatcher is available, it executes `dispatcher claim` for that exact task and verifies the returned
 task id, issue number, status, owner, lease id, lease resource, holder, expiry, and unreleased state
-before removing `agent:ready`. Database or singleton existence alone never produces a
+before atomically replacing all `agent:*` state labels with exactly `agent:in-progress`. The replacement preserves
+non-agent labels (including `type:*`, `prio:*`, and `lane:*`). Database or singleton existence alone never produces a
 dispatcher-backed pickup receipt.
 
 Rescue-stash notes, stale local pickup plans, and prior-session handoffs are
@@ -239,7 +240,7 @@ contains `task_id`, `lease_id`, `holder`, and `evidence=verified-dispatcher-leas
 
 When dispatcher status selects degraded mode, the same wrapper posts a durable claimant-intent
 comment containing agent, session, branch, worktree, `coordination_mode`, and `fallback_reason`
-before removing `agent:ready`. Explicit fallback can be selected with:
+before the same atomic `agent:*` → exactly `agent:in-progress` transition. Explicit fallback can be selected with:
 
 ```bash
 scripts/issue_pickup_claim.sh \
@@ -282,7 +283,7 @@ If work becomes blocked before or during implementation:
 
 1. **Add blocker label:**
    ```bash
-   gh issue edit #<N> --repo "$REPO" --add-label agent:blocked --remove-label agent:ready
+   gh issue edit #<N> --repo "$REPO" --add-label agent:blocked --remove-label agent:ready --remove-label agent:needs-human --remove-label agent:in-progress
    ```
 
 2. **Add a blocking comment to the Issue with the explicit reason and next unblock condition.**
@@ -310,7 +311,7 @@ the authority. Project automation may mirror that state; manual Project repair b
 
 | When | Authoritative Issue state | Authoritative PR state |
 |------|---------------------------|------------------------|
-| Start work | open, `agent:ready` removed | — |
+| Start work | open, exactly `agent:in-progress` (atomically replacing `agent:*`) | — |
 | Blocked mid-work | open, `agent:blocked` | — |
 | Open draft PR | open, active claim retained | draft |
 | Request review | open, active claim retained | non-draft / review requested |
@@ -416,7 +417,7 @@ When continuing through anchor drift:
 1. Select the Issue according to priority and readiness rules.
 2. Run mandatory pickup claim wrapper before any lifecycle mutation:
    - `scripts/issue_pickup_claim.sh --issue <N> --repo "$REPO" --agent <agent_id> --session <session_id>`
-   - This wrapper enforces workspace isolation preflight before removing `agent:ready`.
+   - This wrapper enforces workspace isolation preflight before atomically replacing `agent:*` labels with exactly `agent:in-progress`.
    - If preflight fails, stop and resolve branch/worktree collisions before claiming.
    - After a successful claim, register the dedicated checkout without switching the shared root:
      `python3 scripts/agent_worktree.py --cwd <repo-or-worktree> register --worktree <absolute-worktree> --owner <session_id>`.

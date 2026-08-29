@@ -36,8 +36,13 @@ def test_open_non_draft_pr_without_review_request_matches_documented_status() ->
     matrix = Path(".codex/skills/_shared/LIFECYCLE_TRUTH_MATRIX.md").read_text(
         encoding="utf-8"
     )
+    setup = Path("docs/development/GITHUB_GOVERNANCE_SETUP.md").read_text(
+        encoding="utf-8"
+    )
 
     assert "| PR | OPEN + non-draft, no review requested | `Review` |" in matrix
+    assert "- `In Progress`: active implementation Issue state; on PR items this covers open draft PRs" in setup
+    assert "- `Review`: the Project state for open non-draft PRs, whether or not review was explicitly requested" in setup
     assert (
         desired_pr_status({"state": "OPEN", "isDraft": False, "mergedAt": None}, None)
         == "Review"
@@ -56,10 +61,20 @@ def test_desired_pr_status_closed_unmerged_pr_is_done() -> None:
     assert desired_pr_status({"state": "CLOSED", "mergedAt": None}, None) == "Done"
 
 
-def test_desired_pr_status_explicit_status_wins() -> None:
+def test_desired_pr_status_explicit_status_applies_to_open_pr() -> None:
     assert (
-        desired_pr_status({"state": "CLOSED", "mergedAt": None}, "Review")
+        desired_pr_status({"state": "OPEN", "isDraft": True, "mergedAt": None}, "Review")
         == "Review"
+    )
+
+
+def test_desired_pr_status_terminal_truth_precedes_explicit_status() -> None:
+    assert desired_pr_status({"state": "CLOSED", "mergedAt": None}, "Review") == "Done"
+    assert (
+        desired_pr_status(
+            {"state": "CLOSED", "mergedAt": "2026-08-29T16:00:00Z"}, "Review"
+        )
+        == "Done"
     )
 
 
@@ -87,6 +102,168 @@ def test_desired_issue_status_requires_ready_candidate_body() -> None:
 
     assert desired_issue_status(valid_issue) == "Ready"
     assert desired_issue_status(invalid_issue) == "Backlog"
+
+
+def test_desired_issue_status_splits_non_active_backlog_lanes() -> None:
+    assert desired_issue_status({"state": "OPEN", "labels": [{"name": "agent:needs-human"}]}) == "Needs Human"
+    assert desired_issue_status({"state": "OPEN", "labels": [{"name": "agent:blocked"}]}) == "Blocked"
+    assert desired_issue_status({"state": "OPEN", "labels": [{"name": "agent:in-progress"}]}) == "In Progress"
+    assert desired_issue_status({"state": "OPEN", "labels": []}) is None
+
+
+def test_successful_pickup_label_transition_projects_in_progress() -> None:
+    assert desired_issue_status(
+        {"state": "OPEN", "labels": [{"name": "agent:in-progress"}]}
+    ) == "In Progress"
+
+
+def test_desired_issue_status_projects_known_defect_registry_to_backlog() -> None:
+    issue = {"state": "OPEN", "labels": [{"name": "state:known-defect"}]}
+
+    assert desired_issue_status(issue) == "Backlog"
+    assert desired_issue_status(issue, "Review") == "Review"
+
+
+def test_scan_projects_known_defect_registry_to_backlog(monkeypatch, tmp_path) -> None:
+    watermark_path = tmp_path / "project_status_reconcile_scan_watermark.json"
+    monkeypatch.setattr(reconcile_project_status, "SCAN_WATERMARK_PATH", watermark_path)
+    monkeypatch.setattr(
+        reconcile_project_status,
+        "list_project_items_for_scan",
+        lambda *_args: [
+            {
+                "id": "known-defect-item",
+                "content": {
+                    "type": "Issue",
+                    "number": 4172,
+                    "updatedAt": "2026-08-29T15:00:00Z",
+                },
+                "status": "Needs Human",
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        reconcile_project_status,
+        "get_issue",
+        lambda *_args: {
+            "number": 4172,
+            "state": "OPEN",
+            "labels": [{"name": "state:known-defect"}],
+            "url": "https://github.com/RasmusTho/agentic-pkm-mvp/issues/4172",
+            "body": "",
+        },
+    )
+    status_calls = []
+    monkeypatch.setattr(
+        reconcile_project_status, "set_project_status", lambda *args: status_calls.append(args)
+    )
+    monkeypatch.setattr(
+        reconcile_project_status,
+        "_scan_started_at",
+        lambda: datetime(2026, 8, 29, 16, 0, tzinfo=timezone.utc),
+    )
+
+    args = reconcile_project_status.argparse.Namespace(
+        repo="RasmusTho/agentic-pkm-mvp", dry_run=False, status=None
+    )
+    project = {"id": "project-1", "number": 1, "title": "Agent Delivery Control Plane"}
+
+    assert (
+        reconcile_project_status.reconcile_scan(
+            args, "RasmusTho", project, "field-id", {"Backlog": "backlog-id"}
+        )
+        == 0
+    )
+    assert status_calls == [
+        ("RasmusTho", "project-1", "known-defect-item", "field-id", "backlog-id", False)
+    ]
+
+
+def test_epic_parent_projection_precedes_blocker_projection() -> None:
+    assert desired_issue_status(
+        {"state": "OPEN", "labels": [{"name": "type:epic"}, {"name": "agent:blocked"}]}
+    ) == "Epic / Parent"
+    assert desired_issue_status(
+        {"state": "OPEN", "labels": [{"name": "agent:needs-human"}], "subIssues": {"totalCount": 1}}
+    ) == "Epic / Parent"
+
+
+def test_desired_issue_status_preserves_explicit_review_override() -> None:
+    issue = {"state": "OPEN", "labels": [{"name": "agent:blocked"}]}
+    assert desired_issue_status(issue, "Review") == "Review"
+    assert desired_issue_status({**issue, "state": "CLOSED"}, "Review") == "Done"
+
+
+def test_reconcile_issue_terminal_truth_precedes_explicit_status(monkeypatch) -> None:
+    monkeypatch.setattr(
+        reconcile_project_status,
+        "get_issue",
+        lambda *_args: {"number": 1, "state": "CLOSED", "labels": [{"name": "agent:ready"}], "url": "https://example.test/1", "body": ""},
+    )
+    monkeypatch.setattr(
+        reconcile_project_status,
+        "list_project_items",
+        lambda *_args: [{"id": "issue-1", "content": {"type": "Issue", "number": 1}, "status": "Review"}],
+    )
+    calls = []
+    monkeypatch.setattr(reconcile_project_status, "set_project_status", lambda *args: calls.append(args))
+    args = reconcile_project_status.argparse.Namespace(repo="owner/repo", issue=1, status="Ready", dry_run=False)
+
+    assert reconcile_project_status.reconcile_issue(args, "owner", {"id": "project", "number": 1, "title": "P"}, "field", {"Done": "done"}) == 0
+    assert calls == [("owner", "project", "issue-1", "field", "done", False)]
+
+
+def test_get_issue_fetches_parent_projection_evidence(monkeypatch) -> None:
+    commands = []
+
+    def fake_run_gh(*args: str) -> str:
+        commands.append(args)
+        return reconcile_project_status.json.dumps({"number": 5177, "subIssues": {"totalCount": 1}})
+
+    monkeypatch.setattr(reconcile_project_status, "run_gh", fake_run_gh)
+
+    assert reconcile_project_status.get_issue("RasmusTho/agentic-pkm-mvp", 5177)["subIssues"]["totalCount"] == 1
+    assert commands == [
+        ("issue", "view", "5177", "--repo", "RasmusTho/agentic-pkm-mvp", "--json", "number,state,labels,url,title,body,subIssues")
+    ]
+
+
+def test_reconcile_cli_accepts_split_backlog_statuses() -> None:
+    assert set(reconcile_project_status.PROJECT_STATUS_VALUES) == {
+        "Backlog", "Epic / Parent", "Blocked", "Needs Human", "Ready", "In Progress", "Review", "Done"
+    }
+
+
+def test_canonical_maintenance_surfaces_document_split_lane_precedence() -> None:
+    maintenance_skill = Path(
+        ".codex/skills/issue-maintenance-change-control/SKILL.md"
+    ).read_text(encoding="utf-8")
+    label_taxonomy = Path(".codex/skills/_shared/LABEL_TAXONOMY.md").read_text(
+        encoding="utf-8"
+    )
+
+    for content in (maintenance_skill, label_taxonomy):
+        assert "Epic / Parent" in content
+        assert "Needs Human" in content
+        assert "Blocked" in content
+        assert "explicit open-Issue `Review`" in content
+    assert maintenance_skill.count("--remove-label agent:in-progress") >= 8
+    issue_to_code = Path(".codex/skills/issue-to-code/SKILL.md").read_text(encoding="utf-8")
+    assert "--add-label agent:blocked --remove-label agent:ready --remove-label agent:needs-human --remove-label agent:in-progress" in issue_to_code
+
+
+def test_canonical_label_taxonomy_declares_projection_inputs() -> None:
+    governance = yaml.safe_load(
+        Path(".github/github-governance.yml").read_text(encoding="utf-8")
+    )
+    taxonomy = Path(".codex/skills/_shared/LABEL_TAXONOMY.md").read_text(
+        encoding="utf-8"
+    )
+
+    assert {"type:epic", "type:feature"} <= set(governance["labels"]["type"])
+    assert "agent:in-progress" in governance["labels"]["agent"]
+    for label in ("type:epic", "type:feature", "agent:in-progress"):
+        assert f"| `{label}`" in taxonomy
 
 
 def test_pr_stage_change_workflow_subscribes_to_closed_event() -> None:
