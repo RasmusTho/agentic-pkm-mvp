@@ -13,7 +13,12 @@ from app.outbox.events import INDEX_OUTBOX_PATH
 from app.services.note_update import apply_promotion_frontmatter
 from app.components.concurrency import EventDedupStore
 from app.objects import DomainObject, ObjectStore
-from app.services.outbox import derive_idempotency_key, payload_fingerprint, write_outbox_event
+from app.services.outbox import (
+    append_jsonl_record,
+    derive_idempotency_key,
+    payload_fingerprint,
+    write_outbox_event,
+)
 
 
 def _read_outbox(path: Path, start: int = 0) -> Iterable[dict]:
@@ -24,10 +29,8 @@ def _read_outbox(path: Path, start: int = 0) -> Iterable[dict]:
 
 
 def _write_outbox(path: Path, events: Iterable[OutboxEvent]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("a", encoding="utf-8") as handle:
-        for ev in events:
-            handle.write(json.dumps(ev.model_dump(mode="json"), ensure_ascii=False) + "\n")
+    for ev in events:
+        append_jsonl_record(path, ev.model_dump(mode="json"), require_event_id=True)
 
 
 def _resolve_cursor_path(outbox_path: Path, cursor_path: Path | None, snapshot_path: Path | None) -> Path | None:

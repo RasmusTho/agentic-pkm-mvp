@@ -1641,10 +1641,9 @@ def handle_panel_scan_requested(
                     payload=latency_payload,
                 )
                 outbox_path_obj = _outbox_audit_path()
-                outbox_path_obj.parent.mkdir(parents=True, exist_ok=True)
-                with outbox_path_obj.open("a", encoding="utf-8") as f:
-                    f.write(latency_event.model_dump_json())
-                    f.write("\n")
+                append_jsonl_outbox_event(
+                    outbox_path_obj, latency_event, default_source="worker"
+                )
                 logger.info(
                     "latency summary emitted trace_id=%s note_uuid=%s end_to_end_ms=%s",
                     trace_id,

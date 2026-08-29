@@ -483,10 +483,18 @@ def _append_jsonl_outbox_event_unlocked(
     outbox_path: Path, record: dict[str, Any]
 ) -> None:
     data = (json.dumps(record, ensure_ascii=False) + "\n").encode("utf-8")
-    with outbox_path.open("ab") as handle:
-        handle.write(data)
-        handle.flush()
-        os.fsync(handle.fileno())
+    descriptor = os.open(
+        outbox_path,
+        os.O_APPEND | os.O_CREAT | os.O_WRONLY,
+        0o600,
+    )
+    try:
+        written = os.write(descriptor, data)
+        if written != len(data):
+            raise OSError("partial JSONL outbox append")
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
 
 
 def _read_jsonl_records_unlocked(outbox_path: Path) -> list[dict[str, Any]]:
