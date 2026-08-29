@@ -541,15 +541,15 @@ def desired_issue_status(
 
 
 def desired_pr_status(pr: dict[str, Any], explicit_status: str | None) -> str | None:
-    if explicit_status:
-        return explicit_status
     if pr.get("mergedAt"):
         return "Done"
+    if pr.get("state") == "CLOSED":
+        # Terminal PR truth outranks a caller's stale targeted-status request.
+        return "Done"
+    if explicit_status:
+        return explicit_status
     if pr.get("state") == "OPEN":
         return "In Progress" if pr.get("isDraft") else "Review"
-    if pr.get("state") == "CLOSED":
-        # Closed PR cards are terminal Project artifacts and must not remain blank.
-        return "Done"
     return None
 
 

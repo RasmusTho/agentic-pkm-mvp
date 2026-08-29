@@ -61,10 +61,20 @@ def test_desired_pr_status_closed_unmerged_pr_is_done() -> None:
     assert desired_pr_status({"state": "CLOSED", "mergedAt": None}, None) == "Done"
 
 
-def test_desired_pr_status_explicit_status_wins() -> None:
+def test_desired_pr_status_explicit_status_applies_to_open_pr() -> None:
     assert (
-        desired_pr_status({"state": "CLOSED", "mergedAt": None}, "Review")
+        desired_pr_status({"state": "OPEN", "isDraft": True, "mergedAt": None}, "Review")
         == "Review"
+    )
+
+
+def test_desired_pr_status_terminal_truth_precedes_explicit_status() -> None:
+    assert desired_pr_status({"state": "CLOSED", "mergedAt": None}, "Review") == "Done"
+    assert (
+        desired_pr_status(
+            {"state": "CLOSED", "mergedAt": "2026-08-29T16:00:00Z"}, "Review"
+        )
+        == "Done"
     )
 
 
