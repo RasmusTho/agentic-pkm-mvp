@@ -394,27 +394,22 @@ def _read_worker_heartbeat() -> dict | None:
 
 
 def _count_outbox_events(path: Path) -> tuple[int | None, bool]:
-    """Return a bounded ``(count, truncated)`` line count for the outbox file.
+    """Return a bounded, strictly parsed ``(count, truncated)`` outbox view."""
+    from app.services.outbox import read_jsonl_outbox_records
 
-    The scan stops at ``_STATUS_MAX_OUTBOX_LINES`` so a multi-hundred-MB file
-    never blocks the status request path. When the cap is hit, ``truncated``
-    is ``True`` and the count reflects only the scanned prefix — callers must
-    treat the true total as unknown (e.g. omit derived lag estimates) to
-    avoid masking real backlog (see #1206 review feedback).
-    """
     try:
-        with path.open("r", encoding="utf-8") as handle:
-            count = 0
-            for line in handle:
-                if line.strip():
-                    count += 1
-                    if count >= _STATUS_MAX_OUTBOX_LINES:
-                        return count, True
-            return count, False
+        size = path.stat().st_size
+        records = read_jsonl_outbox_records(
+            path,
+            max_bytes=_STATUS_TAIL_BYTES,
+            read_only=True,
+        )
     except FileNotFoundError:
         return 0, False
     except Exception:
         return None, False
+    truncated = size > _STATUS_TAIL_BYTES or len(records) >= _STATUS_MAX_OUTBOX_LINES
+    return min(len(records), _STATUS_MAX_OUTBOX_LINES), truncated
 
 
 def _get_outbox_lag() -> OutboxLagStatus:

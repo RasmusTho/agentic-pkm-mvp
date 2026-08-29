@@ -58,6 +58,16 @@ def test_count_outbox_events_under_cap(tmp_path: Path) -> None:
     assert truncated is False
 
 
+def test_count_outbox_events_fails_closed_on_malformed_record(tmp_path: Path) -> None:
+    path = tmp_path / "outbox.jsonl"
+    path.write_bytes(b'{"event":"valid"}\n{')
+
+    count, truncated = _count_outbox_events(path)
+
+    assert count is None
+    assert truncated is False
+
+
 def test_outbox_lag_hides_pending_when_truncated(tmp_path: Path, monkeypatch) -> None:
     """Regression for #1209 review: capped counts must not yield wrong pending=0."""
     import json as _json
