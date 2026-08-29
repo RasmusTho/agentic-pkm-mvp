@@ -137,8 +137,8 @@ Provider and model identifiers stay out of policy inputs and skills. The executi
    to a capability tier, then late-bind tier to provider/model configuration.
 5. **Fallback versus escalation:** fallback is capacity-driven within an adequate work class;
    escalation is evidence-driven capability increase. Record both on the attempt lineage.
-6. **Context preservation:** extend the hash-bound DDO worker pack with route/attempt refs; never
-   copy the epic or transcript.
+6. **Context preservation:** keep the hash-bound DDO worker pack stable; bind route/attempt refs in
+   a new invocation/attempt identity outside the pack, and never copy the epic or transcript.
 7. **Verification invariance:** the route references but cannot mutate the verification profile;
    verification independently re-reads live current-head authority.
 
