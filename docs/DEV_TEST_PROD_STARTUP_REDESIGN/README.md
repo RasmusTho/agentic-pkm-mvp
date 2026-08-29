@@ -180,8 +180,8 @@ records use a same-directory fsynced temp hard link, remove that temp name befor
 directory fence, and recover only a same-owner temp that is the exact published inode after a
 crash in that unlink/fence gap. The complete migration delta is derived, not accepted from the
 caller: the writer fetches the fixed canonical repository's authoritative current promotion ref
-(`refs/heads/main`) through a root-owned system Git executable, with caller Git/certificate
-configuration removed and from a non-repository working directory, then diffs that
+(`refs/heads/main`) through a root-owned system Git executable, with a minimal allowlisted child
+environment and from the verified root-owned non-repository `/` working directory, then diffs that
 baseline commit against the candidate's exact
 source commit under `app/alembic/versions`, then materializes each target file from those immutable
 Git objects. The same object bytes feed both the migration-set digest and

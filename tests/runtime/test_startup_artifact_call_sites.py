@@ -1539,16 +1539,27 @@ def test_authoritative_baseline_fetch_is_fresh_and_ignores_git_config(
     assert promotion_receipt._fetch_authoritative_prod_baseline() == baselines[1]
     assert len(calls) == 2
     for environment, authority_cwd in calls:
+        assert set(environment) == {
+            "GIT_CONFIG_GLOBAL",
+            "GIT_CONFIG_NOSYSTEM",
+            "GIT_CONFIG_SYSTEM",
+            "GIT_NO_REPLACE_OBJECTS",
+            "GIT_TERMINAL_PROMPT",
+            "LANG",
+            "LC_ALL",
+            "PATH",
+        }
         assert "GIT_CONFIG_COUNT" not in environment
         assert environment["GIT_CONFIG_NOSYSTEM"] == "1"
         assert environment["GIT_CONFIG_GLOBAL"] == os.devnull
         assert environment["GIT_CONFIG_SYSTEM"] == os.devnull
         assert environment["GIT_NO_REPLACE_OBJECTS"] == "1"
+        assert authority_cwd == "/"
         assert not (Path(authority_cwd) / ".git").exists()
 
 
 @pytest.mark.authoritative_prod_baseline_transport
-def test_authoritative_baseline_ignores_caller_repo_local_url_rewrites(
+def test_authoritative_baseline_ignores_caller_repo_and_tmpdir_url_rewrites(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1599,6 +1610,9 @@ def test_authoritative_baseline_ignores_caller_repo_local_url_rewrites(
     )
     monkeypatch.chdir(caller_repo)
     monkeypatch.setattr(promotion_receipt, "PROD_REPOSITORY_URL", canonical_url)
+    monkeypatch.setenv("TMPDIR", str(caller_repo))
+    monkeypatch.setenv("LD_PRELOAD", str(tmp_path / "caller.so"))
+    monkeypatch.setenv("DYLD_INSERT_LIBRARIES", str(tmp_path / "caller.dylib"))
     monkeypatch.setenv("GIT_CONFIG_COUNT", "1")
     monkeypatch.setenv("GIT_CONFIG_KEY_0", f"url.{attacker_url}.insteadOf")
     monkeypatch.setenv("GIT_CONFIG_VALUE_0", canonical_url)

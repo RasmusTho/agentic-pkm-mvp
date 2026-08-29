@@ -21,7 +21,6 @@ import re
 import stat
 import subprocess
 import sys
-import tempfile
 import uuid
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from datetime import datetime, timezone
@@ -243,29 +242,17 @@ def _validate_checks(value: object) -> dict[str, bool]:
 
 
 def _git_environment() -> dict[str, str]:
-    """Run Git without caller-controlled config, refs, or object overlays."""
-    certificate_overrides = {
-        "CURL_CA_BUNDLE",
-        "REQUESTS_CA_BUNDLE",
-        "SSL_CERT_DIR",
-        "SSL_CERT_FILE",
+    """Run Git with only the environment required by the trusted boundary."""
+    return {
+        "GIT_CONFIG_NOSYSTEM": "1",
+        "GIT_CONFIG_GLOBAL": os.devnull,
+        "GIT_CONFIG_SYSTEM": os.devnull,
+        "GIT_NO_REPLACE_OBJECTS": "1",
+        "GIT_TERMINAL_PROMPT": "0",
+        "LANG": "C",
+        "LC_ALL": "C",
+        "PATH": "/usr/bin:/bin",
     }
-    environment = {
-        key: value
-        for key, value in os.environ.items()
-        if not key.startswith("GIT_") and key.upper() not in certificate_overrides
-    }
-    environment.update(
-        {
-            "GIT_CONFIG_NOSYSTEM": "1",
-            "GIT_CONFIG_GLOBAL": os.devnull,
-            "GIT_CONFIG_SYSTEM": os.devnull,
-            "GIT_NO_REPLACE_OBJECTS": "1",
-            "GIT_TERMINAL_PROMPT": "0",
-            "PATH": "/usr/bin:/bin",
-        }
-    )
-    return environment
 
 
 def _trusted_git_executable() -> str:
@@ -282,6 +269,24 @@ def _trusted_git_executable() -> str:
         ):
             return str(candidate)
     raise PromotionReceiptError("git_unavailable")
+
+
+def _trusted_git_authority_cwd() -> str:
+    authority_cwd = Path("/")
+    try:
+        info = authority_cwd.stat()
+        git_marker = authority_cwd / ".git"
+        if (
+            not stat.S_ISDIR(info.st_mode)
+            or info.st_uid != 0
+            or info.st_mode & (stat.S_IWGRP | stat.S_IWOTH)
+            or git_marker.exists()
+            or git_marker.is_symlink()
+        ):
+            raise PromotionReceiptError("git_authority_unavailable")
+    except OSError as exc:
+        raise PromotionReceiptError("git_authority_unavailable") from exc
+    return str(authority_cwd)
 
 
 def _run_git(repo: Path, *args: str, code: str) -> bytes:
@@ -342,22 +347,21 @@ def _resolve_authoritative_prod_baseline(source_repo: Path) -> str:
 def _fetch_authoritative_prod_baseline() -> str:
     environment = _git_environment()
     try:
-        with tempfile.TemporaryDirectory(prefix="promotion-baseline-") as authority_cwd:
-            completed = subprocess.run(
-                [
-                    _trusted_git_executable(),
-                    "ls-remote",
-                    "--refs",
-                    PROD_REPOSITORY_URL,
-                    PROD_PROMOTION_REF,
-                ],
-                cwd=authority_cwd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.DEVNULL,
-                check=False,
-                timeout=30,
-                env=environment,
-            )
+        completed = subprocess.run(
+            [
+                _trusted_git_executable(),
+                "ls-remote",
+                "--refs",
+                PROD_REPOSITORY_URL,
+                PROD_PROMOTION_REF,
+            ],
+            cwd=_trusted_git_authority_cwd(),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            check=False,
+            timeout=30,
+            env=environment,
+        )
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise PromotionReceiptError("migration_baseline_unavailable") from exc
     if completed.returncode != 0:
