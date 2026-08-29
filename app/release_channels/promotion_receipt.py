@@ -12,8 +12,8 @@ from __future__ import annotations
 import argparse
 import base64
 import binascii
+from contextlib import contextmanager
 import fcntl
-import functools
 import hashlib
 import json
 import os
@@ -22,7 +22,7 @@ import stat
 import subprocess
 import sys
 import uuid
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -240,7 +240,25 @@ def _validate_checks(value: object) -> dict[str, bool]:
     return {name: bool(checks[name]) for name in _OBSERVED_CHECKS}
 
 
+def _git_environment() -> dict[str, str]:
+    """Run Git without caller-controlled config, refs, or object overlays."""
+    environment = {
+        key: value for key, value in os.environ.items() if not key.startswith("GIT_")
+    }
+    environment.update(
+        {
+            "GIT_CONFIG_NOSYSTEM": "1",
+            "GIT_CONFIG_GLOBAL": os.devnull,
+            "GIT_CONFIG_SYSTEM": os.devnull,
+            "GIT_NO_REPLACE_OBJECTS": "1",
+            "GIT_TERMINAL_PROMPT": "0",
+        }
+    )
+    return environment
+
+
 def _run_git(repo: Path, *args: str, code: str) -> bytes:
+    environment = _git_environment()
     try:
         completed = subprocess.run(
             ["git", "-C", str(repo), *args],
@@ -248,6 +266,7 @@ def _run_git(repo: Path, *args: str, code: str) -> bytes:
             stderr=subprocess.DEVNULL,
             check=False,
             timeout=30,
+            env=environment,
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise PromotionReceiptError(code) from exc
@@ -293,8 +312,8 @@ def _resolve_authoritative_prod_baseline(source_repo: Path) -> str:
     return baseline
 
 
-@functools.lru_cache(maxsize=1)
 def _fetch_authoritative_prod_baseline() -> str:
+    environment = _git_environment()
     try:
         completed = subprocess.run(
             ["git", "ls-remote", "--refs", PROD_REPOSITORY_URL, PROD_PROMOTION_REF],
@@ -302,6 +321,7 @@ def _fetch_authoritative_prod_baseline() -> str:
             stderr=subprocess.DEVNULL,
             check=False,
             timeout=30,
+            env=environment,
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise PromotionReceiptError("migration_baseline_unavailable") from exc
@@ -906,6 +926,39 @@ def _load_trusted_registry(
     return existing
 
 
+@contextmanager
+def _receipt_store_writer_lock(store: Path) -> Iterator[None]:
+    lock_path = store / ".writer.lock"
+    lock_flags = os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
+    try:
+        lock_descriptor = os.open(lock_path, lock_flags, 0o600)
+    except OSError as exc:
+        raise PromotionReceiptError("receipt_store_io_failure") from exc
+    try:
+        lock_info = os.fstat(lock_descriptor)
+        if not stat.S_ISREG(lock_info.st_mode) or lock_info.st_nlink != 1:
+            raise PromotionReceiptError("unsafe_receipt_store")
+        fcntl.flock(lock_descriptor, fcntl.LOCK_EX)
+        _fence_receipt_store(store)
+        yield
+    finally:
+        try:
+            fcntl.flock(lock_descriptor, fcntl.LOCK_UN)
+        finally:
+            os.close(lock_descriptor)
+
+
+def _replace_registry(path: Path, updated: Mapping[str, object]) -> None:
+    temp = _write_temp(path, _canonical_bytes(updated))
+    try:
+        os.replace(temp, path)
+        _fsync_directory(path.parent)
+    except OSError as exc:
+        raise PromotionReceiptError("receipt_store_io_failure") from exc
+    finally:
+        _unlink_temp(temp)
+
+
 def _publish_registry_entry(
     path: Path,
     *,
@@ -947,17 +1000,54 @@ def _publish_registry_entry(
         "trusted_keys": trusted_keys,
         "entries": entries,
     }
-    temp = _write_temp(path, _canonical_bytes(updated))
     try:
         if _read_canonical_file(path, code="registry_conflict") != existing:
             raise PromotionReceiptError("registry_conflict")
-        os.replace(temp, path)
-        _fsync_directory(path.parent)
+        _replace_registry(path, updated)
     except OSError as exc:
         raise PromotionReceiptError("receipt_store_io_failure") from exc
-    finally:
-        _unlink_temp(temp)
     return updated
+
+
+def revoke_promotion_test_receipt(
+    *,
+    receipt_id: str,
+    issuer_key_id: str,
+    issuer_public_key: bytes,
+    receipt_store: Path,
+    resettable_roots: Sequence[Path],
+) -> dict[str, object]:
+    """Revoke one issued receipt through the serialized registry writer."""
+    if _DIGEST.fullmatch(receipt_id) is None:
+        raise PromotionReceiptError("receipt_identity_invalid")
+    store, _, _, _ = _prepare_store(receipt_store, resettable_roots)
+    registry_path = store / "registry.json"
+    with _receipt_store_writer_lock(store):
+        existing = _load_trusted_registry(
+            registry_path,
+            issuer_key_id=issuer_key_id,
+            issuer_public_key=issuer_public_key,
+        )
+        entries = dict(_mapping(existing["entries"], code="registry_corrupt"))
+        raw_entry = entries.get(receipt_id)
+        if raw_entry is None:
+            raise PromotionReceiptError("receipt_unregistered")
+        entry = dict(_mapping(raw_entry, code="registry_corrupt"))
+        if entry["status"] == "revoked":
+            return existing
+        if entry["status"] != "issued":
+            raise PromotionReceiptError("registry_entry_invalid")
+        entry["status"] = "revoked"
+        entries[receipt_id] = entry
+        updated: dict[str, object] = {
+            "registry_version": REGISTRY_VERSION,
+            "trusted_keys": dict(
+                _mapping(existing["trusted_keys"], code="registry_corrupt")
+            ),
+            "entries": entries,
+        }
+        _replace_registry(registry_path, updated)
+        return updated
 
 
 def _reject_duplicate_keys(pairs: list[tuple[str, object]]) -> dict[str, object]:
@@ -1057,18 +1147,7 @@ def write_promotion_test_terminal_receipt(
     }
     reservation_path = reservations / f"{attempt_id}.json"
     reservation_bytes = _canonical_bytes(reservation)
-    lock_path = store / ".writer.lock"
-    lock_flags = os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
-    try:
-        lock_descriptor = os.open(lock_path, lock_flags, 0o600)
-    except OSError as exc:
-        raise PromotionReceiptError("receipt_store_io_failure") from exc
-    try:
-        lock_info = os.fstat(lock_descriptor)
-        if not stat.S_ISREG(lock_info.st_mode) or lock_info.st_nlink != 1:
-            raise PromotionReceiptError("unsafe_receipt_store")
-        fcntl.flock(lock_descriptor, fcntl.LOCK_EX)
-        _fence_receipt_store(store)
+    with _receipt_store_writer_lock(store):
         _load_trusted_registry(
             registry_path,
             issuer_key_id=issuer_key_id,
@@ -1110,11 +1189,6 @@ def write_promotion_test_terminal_receipt(
         )
         _fence_receipt_store(store)
         return receipt
-    finally:
-        try:
-            fcntl.flock(lock_descriptor, fcntl.LOCK_UN)
-        finally:
-            os.close(lock_descriptor)
 
 
 def _validate_receipt(
@@ -1448,5 +1522,6 @@ __all__ = [
     "authorize_prod_activation",
     "build_promotion_test_check_report",
     "prepare_prod_activation",
+    "revoke_promotion_test_receipt",
     "write_promotion_test_terminal_receipt",
 ]

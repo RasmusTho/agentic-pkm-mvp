@@ -34,6 +34,7 @@ from app.release_channels.promotion_receipt import (
     PromotionReceiptError,
     build_promotion_test_check_report,
     prepare_prod_activation,
+    revoke_promotion_test_receipt,
     write_promotion_test_terminal_receipt,
 )
 
@@ -78,11 +79,28 @@ PROMOTION_SOURCE_SHA = subprocess.check_output(
     cwd=ROOT,
     text=True,
 ).strip()
-PROMOTION_BASELINE_SHA = subprocess.check_output(
-    ["git", "rev-parse", "origin/main"],
-    cwd=ROOT,
-    text=True,
-).strip()
+PROMOTION_BASELINE_SHA = json.loads(
+    (
+        ROOT
+        / "tests/fixtures/startup_redesign/promotion_admission_context.valid.json"
+    ).read_text(encoding="utf-8")
+)["migration_baseline_identity"].removeprefix("git:")
+
+
+@pytest.fixture(autouse=True)
+def _pin_promotion_baseline(
+    request: pytest.FixtureRequest,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    if request.node.get_closest_marker("live_prod_baseline") is not None:
+        return
+    from app.release_channels import promotion_receipt
+
+    monkeypatch.setattr(
+        promotion_receipt,
+        "_fetch_authoritative_prod_baseline",
+        lambda: PROMOTION_BASELINE_SHA,
+    )
 DIGEST = "sha256:" + "b" * 64
 
 
@@ -1494,6 +1512,40 @@ def test_validate_prod_activation_cli_resolves_repo_root(
     assert json.loads(capsys.readouterr().out)["activation_state"] == "validated_not_activated"
 
 
+@pytest.mark.live_prod_baseline
+def test_authoritative_baseline_fetch_is_fresh_and_ignores_git_config(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.release_channels import promotion_receipt
+
+    baselines = ["a" * 40, "b" * 40]
+    calls: list[dict[str, str]] = []
+
+    def fake_run(command, **kwargs):
+        calls.append(kwargs["env"])
+        return subprocess.CompletedProcess(
+            command,
+            0,
+            stdout=(baselines[len(calls) - 1] + "\trefs/heads/main\n").encode(),
+            stderr=b"",
+        )
+
+    monkeypatch.setattr(promotion_receipt.subprocess, "run", fake_run)
+    monkeypatch.setenv("GIT_CONFIG_COUNT", "1")
+    monkeypatch.setenv("GIT_CONFIG_KEY_0", "url.evil.insteadOf")
+    monkeypatch.setenv("GIT_CONFIG_VALUE_0", PROD_REPOSITORY_URL)
+
+    assert promotion_receipt._fetch_authoritative_prod_baseline() == baselines[0]
+    assert promotion_receipt._fetch_authoritative_prod_baseline() == baselines[1]
+    assert len(calls) == 2
+    for environment in calls:
+        assert "GIT_CONFIG_COUNT" not in environment
+        assert environment["GIT_CONFIG_NOSYSTEM"] == "1"
+        assert environment["GIT_CONFIG_GLOBAL"] == os.devnull
+        assert environment["GIT_CONFIG_SYSTEM"] == os.devnull
+        assert environment["GIT_NO_REPLACE_OBJECTS"] == "1"
+
+
 def _promotion_test_signing_material() -> tuple[Ed25519PrivateKey, bytes]:
     private_key = Ed25519PrivateKey.from_private_bytes(bytes(range(32, 64)))
     public_key = private_key.public_key().public_bytes(
@@ -1618,13 +1670,13 @@ def _promotion_migration_git_delta(
             "-q",
             "--no-tags",
             "origin",
-            "refs/heads/main:refs/remotes/origin/main",
+            "refs/heads/main",
         ],
         cwd=repo,
         check=True,
     )
     subprocess.run(
-        ["git", "checkout", "-q", "--detach", "origin/main"],
+        ["git", "checkout", "-q", "--detach", PROMOTION_BASELINE_SHA],
         cwd=repo,
         check=True,
     )
@@ -1635,7 +1687,7 @@ def _promotion_migration_git_delta(
         check=True,
     )
     baseline = subprocess.check_output(
-        ["git", "rev-parse", "origin/main"],
+        ["git", "rev-parse", PROMOTION_BASELINE_SHA],
         cwd=repo,
         text=True,
     ).strip()
@@ -2462,15 +2514,12 @@ def test_promotion_test_retry_never_reissues_a_revoked_receipt(tmp_path: Path) -
     }
     receipt = write_promotion_test_terminal_receipt(**common)
     registry_path = store / "registry.json"
-    registry = json.loads(registry_path.read_text(encoding="utf-8"))
-    registry["entries"][receipt["receipt_id"]]["status"] = "revoked"
-    registry_path.write_bytes(
-        json.dumps(
-            registry,
-            ensure_ascii=False,
-            sort_keys=True,
-            separators=(",", ":"),
-        ).encode("utf-8")
+    revoke_promotion_test_receipt(
+        receipt_id=receipt["receipt_id"],
+        issuer_key_id=common["issuer_key_id"],
+        issuer_public_key=public_key,
+        receipt_store=store,
+        resettable_roots=common["resettable_roots"],
     )
 
     with pytest.raises(PromotionReceiptError) as exc_info:
@@ -2488,6 +2537,56 @@ def test_promotion_test_retry_never_reissues_a_revoked_receipt(tmp_path: Path) -
             now=datetime(2026, 8, 16, 12, tzinfo=timezone.utc),
         )
     assert exc_info.value.code == "receipt_revoked"
+
+
+def test_promotion_registry_serializes_issue_and_revocation_updates(
+    tmp_path: Path,
+) -> None:
+    private_key, public_key = _promotion_test_signing_material()
+    rendered, manifest = _promotion_test_candidate_inputs()
+    store = tmp_path / "ops" / "test-promotions"
+    _seed_promotion_registry(store, public_key)
+    common = {
+        "attempt_id": "pt-" + "a" * 32,
+        "rendered": rendered,
+        "channel_manifest": manifest,
+        "prod_admission_context": _promotion_admission_context(),
+        "check_report": _promotion_check_report(),
+        "source_repo": ROOT,
+        "issued_at": datetime(2026, 8, 16, tzinfo=timezone.utc),
+        "fresh_until": datetime(2026, 8, 17, tzinfo=timezone.utc),
+        "issuer_id": "promotion-test-issuer",
+        "issuer_key_id": "promotion-test-issuer-key-v1",
+        "signer": private_key.sign,
+        "issuer_public_key": public_key,
+        "receipt_store": store,
+        "resettable_roots": (tmp_path / "tmp-test", tmp_path / "vault-test"),
+    }
+    first = write_promotion_test_terminal_receipt(**common)
+    second_common = dict(
+        common,
+        attempt_id="pt-" + "b" * 32,
+        fresh_until=datetime(2026, 8, 18, tzinfo=timezone.utc),
+    )
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        revoke_future = executor.submit(
+            revoke_promotion_test_receipt,
+            receipt_id=first["receipt_id"],
+            issuer_key_id=common["issuer_key_id"],
+            issuer_public_key=public_key,
+            receipt_store=store,
+            resettable_roots=common["resettable_roots"],
+        )
+        issue_future = executor.submit(
+            write_promotion_test_terminal_receipt,
+            **second_common,
+        )
+        revoke_future.result()
+        second = issue_future.result()
+
+    registry = json.loads((store / "registry.json").read_text(encoding="utf-8"))
+    assert registry["entries"][first["receipt_id"]]["status"] == "revoked"
+    assert registry["entries"][second["receipt_id"]]["status"] == "issued"
 
 
 def test_promotion_test_never_issues_registry_authority_before_terminal_binding(
