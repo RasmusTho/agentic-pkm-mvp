@@ -8,11 +8,15 @@ import json
 import os
 import subprocess
 import sys
+from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timezone
 
 from pathlib import Path
 
 import pytest
 import yaml
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from app.release_channels.channel_manifest import (
     ArtifactRenderError,
@@ -23,16 +27,20 @@ from app.release_channels.ordinary_boot import (
     OrdinaryBootJournalError,
     run_ordinary_boot,
 )
+from app.release_channels.promotion_receipt import (
+    PromotionReceiptError,
+    authorize_prod_activation,
+    write_promotion_test_terminal_receipt,
+)
 
 
 SKELETON = Path(__file__).read_text()
 
 
-def test_future_runtime_call_sites_are_explicitly_deferred() -> None:
-    """P1 proves deferral posture; later slices must replace these skeletons."""
-    assert SKELETON.count("\n@pytest.mark.xfail(strict=True") == 2
-    assert SKELETON.count("\n    raise NotImplementedError") == 2
-    assert "production call-site proof" in SKELETON
+def test_startup_04_runtime_call_sites_are_not_deferred() -> None:
+    """P4 replaces both strict-xfail skeletons with production-path proof."""
+    assert "@pytest.mark.xfail(strict=True" not in SKELETON
+    assert "raise NotImplementedError" not in SKELETON
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -1294,11 +1302,232 @@ def test_ordinary_boot_concurrent_callers_converge_or_conflict_once(tmp_path: Pa
     assert len(_journal_rows(conflicting_journal)) == 1
 
 
-@pytest.mark.xfail(strict=True, reason="STARTUP-04 receipt-validator production call site is not implemented")
 def test_prod_receipt_validator_is_invoked_before_activation() -> None:
-    raise NotImplementedError
+    receipt = json.loads(
+        (ROOT / "tests/fixtures/startup_redesign/promotion_receipt.valid.json").read_text()
+    )
+    registry = json.loads(
+        (
+            ROOT
+            / "tests/fixtures/startup_redesign/promotion_receipt_registry.valid.json"
+        ).read_text()
+    )
+    context = json.loads(
+        (
+            ROOT
+            / "tests/fixtures/startup_redesign/promotion_admission_context.valid.json"
+        ).read_text()
+    )
+    now = datetime(2026, 8, 16, 12, tzinfo=timezone.utc)
+
+    authorization = authorize_prod_activation(
+        receipt,
+        registry,
+        context,
+        now=now,
+    )
+    assert authorization == {
+        "activation_permitted": True,
+        "receipt_id": receipt["receipt_id"],
+    }
+
+    rejected: list[tuple[object, object, object, datetime, str]] = [
+        (None, registry, context, now, "receipt_missing"),
+        (
+            receipt,
+            registry,
+            context,
+            datetime(2026, 8, 17, tzinfo=timezone.utc),
+            "receipt_stale",
+        ),
+    ]
+    revoked = json.loads(json.dumps(registry))
+    revoked["entries"][receipt["receipt_id"]]["status"] = "revoked"
+    rejected.append((receipt, revoked, context, now, "receipt_revoked"))
+    mismatched = dict(context, config_identity="sha256:" + "c" * 64)
+    rejected.append((receipt, registry, mismatched, now, "identity_mismatch"))
+
+    for candidate, candidate_registry, candidate_context, candidate_now, code in rejected:
+        with pytest.raises(PromotionReceiptError) as exc_info:
+            authorize_prod_activation(
+                candidate,
+                candidate_registry,
+                candidate_context,
+                now=candidate_now,
+            )
+        assert exc_info.value.code == code
 
 
-@pytest.mark.xfail(strict=True, reason="STARTUP-04 promotion-test receipt writer call site is not implemented")
-def test_promotion_test_writes_one_durable_terminal_receipt() -> None:
-    raise NotImplementedError
+def _promotion_test_signing_material() -> tuple[Ed25519PrivateKey, bytes]:
+    private_key = Ed25519PrivateKey.from_private_bytes(bytes(range(32, 64)))
+    public_key = private_key.public_key().public_bytes(
+        encoding=serialization.Encoding.Raw,
+        format=serialization.PublicFormat.Raw,
+    )
+    return private_key, public_key
+
+
+def _promotion_check_results() -> dict[str, bool]:
+    return {
+        "readiness": True,
+        "schema": True,
+        "smoke": True,
+        "ui": True,
+        "version": True,
+    }
+
+
+def _promotion_admission_context() -> dict[str, str]:
+    return json.loads(
+        (
+            ROOT
+            / "tests/fixtures/startup_redesign/promotion_admission_context.valid.json"
+        ).read_text()
+    )
+
+
+def test_promotion_test_writes_one_durable_terminal_receipt(tmp_path: Path) -> None:
+    private_key, public_key = _promotion_test_signing_material()
+    store = tmp_path / "ops" / "test-promotions"
+    resettable_roots = (tmp_path / "tmp-test", tmp_path / "vault-test")
+    common = {
+        "identity": _promotion_admission_context(),
+        "issued_at": datetime(2026, 8, 16, tzinfo=timezone.utc),
+        "fresh_until": datetime(2026, 8, 17, tzinfo=timezone.utc),
+        "issuer_id": "promotion-test-issuer",
+        "issuer_key_id": "promotion-test-issuer-key-v1",
+        "signer": private_key.sign,
+        "issuer_public_key": public_key,
+        "receipt_store": store,
+        "resettable_roots": resettable_roots,
+        "migration_paths": (),
+    }
+
+    passed = write_promotion_test_terminal_receipt(
+        attempt_id="pt-" + "1" * 32,
+        check_results=_promotion_check_results(),
+        **common,
+    )
+    assert passed["outcome"] == "PASS"
+    assert write_promotion_test_terminal_receipt(
+        attempt_id="pt-" + "1" * 32,
+        check_results=_promotion_check_results(),
+        **common,
+    ) == passed
+    assert len(list((store / "receipts").glob("*.json"))) == 1
+    assert len(list((store / "attempts").glob("*.json"))) == 1
+    pass_attempt = json.loads(
+        (store / "attempts" / f"pt-{'1' * 32}.json").read_text(encoding="utf-8")
+    )
+    assert pass_attempt["receipt_id"] == passed["receipt_id"]
+    assert pass_attempt["outcome"] == "PASS"
+    assert pass_attempt["check_results"] == {
+        "migration": True,
+        **_promotion_check_results(),
+    }
+    assert pass_attempt["migration_classification"] == {
+        "migrations_checked": 0,
+        "reversible": [],
+        "forward_only": [],
+        "classification_decisions": [],
+    }
+
+    unclassified_migration = tmp_path / "unclassified_migration.py"
+    unclassified_migration.write_text("revision = 'unclassified'\n", encoding="utf-8")
+    failed = write_promotion_test_terminal_receipt(
+        attempt_id="pt-" + "2" * 32,
+        check_results=_promotion_check_results(),
+        **dict(common, migration_paths=(unclassified_migration,)),
+    )
+    assert failed["outcome"] == "FAIL"
+    assert len(list((store / "receipts").glob("*.json"))) == 2
+    assert len(list((store / "attempts").glob("*.json"))) == 2
+    fail_attempt = json.loads(
+        (store / "attempts" / f"pt-{'2' * 32}.json").read_text(encoding="utf-8")
+    )
+    assert fail_attempt["receipt_id"] == failed["receipt_id"]
+    assert fail_attempt["outcome"] == "FAIL"
+    assert fail_attempt["check_results"]["migration"] is False
+    assert fail_attempt["migration_classification"] == {"status": "invalid"}
+
+    with pytest.raises(PromotionReceiptError) as exc_info:
+        write_promotion_test_terminal_receipt(
+            attempt_id="pt-" + "3" * 32,
+            check_results=_promotion_check_results(),
+            **dict(common, receipt_store=tmp_path / "tmp-test" / "receipts"),
+        )
+    assert exc_info.value.code == "resettable_receipt_store"
+
+
+def test_promotion_test_terminal_receipt_race_has_one_winner(tmp_path: Path) -> None:
+    private_key, public_key = _promotion_test_signing_material()
+    store = tmp_path / "ops" / "test-promotions"
+    common = {
+        "attempt_id": "pt-" + "4" * 32,
+        "identity": _promotion_admission_context(),
+        "issued_at": datetime(2026, 8, 16, tzinfo=timezone.utc),
+        "fresh_until": datetime(2026, 8, 17, tzinfo=timezone.utc),
+        "issuer_id": "promotion-test-issuer",
+        "issuer_key_id": "promotion-test-issuer-key-v1",
+        "signer": private_key.sign,
+        "issuer_public_key": public_key,
+        "receipt_store": store,
+        "resettable_roots": (tmp_path / "tmp-test", tmp_path / "vault-test"),
+    }
+    unclassified_migration = tmp_path / "unclassified_migration.py"
+    unclassified_migration.write_text("revision = 'unclassified'\n", encoding="utf-8")
+
+    def write(migration_paths: tuple[Path, ...]) -> tuple[str, str]:
+        try:
+            receipt = write_promotion_test_terminal_receipt(
+                check_results=_promotion_check_results(),
+                migration_paths=migration_paths,
+                **common,
+            )
+        except PromotionReceiptError as exc:
+            return "error", exc.code
+        return "ok", str(receipt["outcome"])
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = list(executor.map(write, ((), (unclassified_migration,))))
+
+    assert sorted(result[0] for result in results) == ["error", "ok"]
+    assert ("error", "attempt_conflict") in results
+    assert len(list((store / "receipts").glob("*.json"))) == 1
+    assert len(list((store / "attempts").glob("*.json"))) == 1
+
+
+def test_promotion_test_receipt_recovery_and_secret_boundary(tmp_path: Path) -> None:
+    private_key, public_key = _promotion_test_signing_material()
+    store = tmp_path / "ops" / "test-promotions"
+    common = {
+        "attempt_id": "pt-" + "5" * 32,
+        "identity": _promotion_admission_context(),
+        "check_results": _promotion_check_results(),
+        "issued_at": datetime(2026, 8, 16, tzinfo=timezone.utc),
+        "fresh_until": datetime(2026, 8, 17, tzinfo=timezone.utc),
+        "issuer_id": "promotion-test-issuer",
+        "issuer_key_id": "promotion-test-issuer-key-v1",
+        "signer": private_key.sign,
+        "issuer_public_key": public_key,
+        "receipt_store": store,
+        "resettable_roots": (tmp_path / "tmp-test", tmp_path / "vault-test"),
+        "migration_paths": (),
+    }
+    receipt = write_promotion_test_terminal_receipt(**common)
+    pointer = next((store / "attempts").glob("*.json"))
+    pointer.unlink()
+
+    assert write_promotion_test_terminal_receipt(**common) == receipt
+    assert len(list((store / "receipts").glob("*.json"))) == 1
+    assert len(list((store / "attempts").glob("*.json"))) == 1
+
+    secret_bearing = dict(
+        _promotion_admission_context(),
+        vault_identity="postgresql://admin:hunter2@prod/app",
+    )
+    with pytest.raises(PromotionReceiptError) as exc_info:
+        write_promotion_test_terminal_receipt(
+            **dict(common, attempt_id="pt-" + "6" * 32, identity=secret_bearing)
+        )
+    assert exc_info.value.code == "identity_invalid"

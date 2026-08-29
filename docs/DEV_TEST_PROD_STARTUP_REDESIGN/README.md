@@ -1,6 +1,6 @@
 State: Active capability specification. P1's manifest contract, P2's immutable artifact renderer,
-and P3's read-only ordinary-boot doctor are implemented in the repository; P4–P6 remain
-unimplemented. This does not claim a running remote
+P3's read-only ordinary-boot doctor, and P4's durable promotion-test receipt writer and prod
+admission validator are implemented in the repository; P5–P6 remain unimplemented. This does not claim a running remote
 deployment model or a live immutable channel identity.
 Current-state note (2026-08-22): the live topology is now intended to be a dedicated Ollama host plus
 Linux/Tailscale `ygg-dev` / `ygg-test` / `ygg-prod` runtime hosts. The redesign contract is not yet
@@ -26,7 +26,7 @@ P0 is deliberately not a child task: the live Colima persistent-substrate recove
 1. [Freeze Channel Manifest And Operation Contract](FREEZE_CHANNEL_MANIFEST_AND_OPERATION_CONTRACT.md) — P1, implemented by #4914
 2. [Build Immutable Artifact Graph](BUILD_IMMUTABLE_ARTIFACT_GRAPH.md) — P2, implemented by #4915
 3. [Implement Read-Only Ordinary Boot](IMPLEMENT_READ_ONLY_ORDINARY_BOOT.md) — P3, implemented by #4916
-4. [Prove Promotion-Test Receipts](PROVE_PROMOTION_TEST_RECEIPTS.md) — P4
+4. [Prove Promotion-Test Receipts](PROVE_PROMOTION_TEST_RECEIPTS.md) — P4, implemented by #4917
 5. [Execute Topology-Only Prod Cutover](EXECUTE_TOPOLOGY_ONLY_PROD_CUTOVER.md) — P5, operator-gated
 6. [Retire Legacy Startup Paths](RETIRE_LEGACY_STARTUP_PATHS.md) — P6, post-soak
 
@@ -140,9 +140,19 @@ re-encoded before use; the re-encoded
 unpadded URL-safe value must be byte-for-byte identical, which rejects nonzero terminal pad bits
 as well as padding and standard-Base64 characters.
 
+The P4 writer stores receipts under an explicitly configured non-resettable promotion-test store,
+never under `tmp-test/` or `vault-test/`. It holds one store lock, writes and durability-fences the
+content-addressed receipt before publishing one canonical attempt binding, and rejects a later
+PASS/FAIL conflict for the same `pt-<id>` attempt. A crash after receipt persistence but before the
+attempt binding leaves only an orphaned immutable receipt; retry reuses it and publishes the single
+binding. The attempt journal records the six boolean check outcomes and the existing
+`app.release_channels.reversibility.check_all_migrations` classification receipt. The promotion
+receipt itself retains the closed semantic field set above. Migration marker rules remain owned by
+the release-channel reversibility contract and are not reimplemented by P4.
+
 ## Verification and acceptance
 
-P1 is proven by the static contract test and fixture in `tests/architecture/test_startup_redesign_contract.py`. P2 is proven through the side-effect-free production renderer in `app/release_channels/channel_manifest.py` and its runtime call-site tests. P3 is proven through the read-only resolver and exactly-once terminal journal in `app/release_channels/ordinary_boot.py` plus the production call-site tests. P4 retains strict-xfail call-site skeletons until its production entrypoints exist; an XPASS is a failure and requires converting the skeleton into a real runtime-path proof. P3 does not activate a channel or replace the current canonical prod startup command. P5 requires a live-host acceptance receipt; P6 requires soak and drill receipts. No local-source result is promotion evidence.
+P1 is proven by the static contract test and fixture in `tests/architecture/test_startup_redesign_contract.py`. P2 is proven through the side-effect-free production renderer in `app/release_channels/channel_manifest.py` and its runtime call-site tests. P3 is proven through the read-only resolver and exactly-once terminal journal in `app/release_channels/ordinary_boot.py` plus the production call-site tests. P4 is proven through `app/release_channels/promotion_receipt.py`: the promotion-test entrypoint writes one signed PASS/FAIL receipt plus its terminal attempt journal, and the prod pre-activation entrypoint accepts only an exact, current, issued, non-revoked PASS. The entrypoint returns admission evidence only; it cannot activate, deploy, migrate, restart, or bypass a channel. P3 does not activate a channel or replace the current canonical prod startup command. P5 requires a live-host acceptance receipt; P6 requires soak and drill receipts. No local-source result is promotion evidence.
 
 ## Relationship to existing work
 

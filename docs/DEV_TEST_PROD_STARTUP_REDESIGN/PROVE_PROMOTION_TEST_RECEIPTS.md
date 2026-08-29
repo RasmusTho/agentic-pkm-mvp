@@ -10,6 +10,10 @@ depends_on: [FREEZE_CHANNEL_MANIFEST_AND_OPERATION_CONTRACT.md, BUILD_IMMUTABLE_
 can_parallelize_with: []
 ---
 
+State: Implemented in the repository by issue #4917. This state covers the receipt writer and
+prod admission validator only; no promotion-test run, prod promotion, activation, or owner
+acceptance is claimed.
+
 # Prove Promotion-Test Receipts
 
 ## Purpose
@@ -22,7 +26,11 @@ Runs one exact digest against the declared prod-compatible baseline; records mig
 
 ## Concretely
 
-`promotion-test verify --digest <digest>` emits one receipt. `promotion-receipt validate --channel prod --digest <digest>` accepts only a current, unrevoked PASS whose config/test/vault/schema identities match.
+`python -m app.release_channels.promotion_receipt promotion-test-verify ...` emits one durable
+terminal receipt for an exact attempt. `python -m app.release_channels.promotion_receipt
+validate-prod-activation ...` accepts only a current, unrevoked PASS whose
+artifact/config/test/vault/schema identities match. The second command only returns admission
+evidence; it performs no activation.
 
 ## Why This Matters
 
@@ -30,8 +38,8 @@ A healthy local test does not authorize a different prod artifact or configurati
 
 ## Acceptance Criteria
 
-- [ ] Receipt validation rejects each missing, stale, revoked, digest/config/test/schema mismatch. Verify: `tests/runtime/test_startup_artifact_call_sites.py::test_prod_receipt_validator_is_invoked_before_activation`.
-- [ ] PASS and FAIL are both durable terminal evidence outside resettable test volumes. Verify: `tests/runtime/test_startup_artifact_call_sites.py::test_promotion_test_writes_one_durable_terminal_receipt`.
+- [x] Receipt validation rejects each missing, stale, revoked, digest/config/test/schema mismatch. Verify: `tests/runtime/test_startup_artifact_call_sites.py::test_prod_receipt_validator_is_invoked_before_activation`.
+- [x] PASS and FAIL are both durable terminal evidence outside resettable test volumes. Verify: `tests/runtime/test_startup_artifact_call_sites.py::test_promotion_test_writes_one_durable_terminal_receipt`.
 
 ## How to Verify (Pre-Merge)
 
