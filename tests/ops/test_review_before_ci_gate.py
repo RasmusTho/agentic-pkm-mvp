@@ -593,6 +593,9 @@ Bounded follow-up.
 - Builder System.
 ## Constraints
 - Stay bounded.
+Source-Governing-Issue: #4028
+Source-PR: #4029
+Routed-Finding: review:11
 ## Acceptance Criteria
 - [ ] The follow-up is testable.
   - Verify: `tests/ops/test_review_before_ci_gate.py::test_split_revalidation_authenticates_a_bounded_follow_up_issue`
@@ -784,6 +787,67 @@ def test_pr_scope_revalidation_rejects_unbound_governing_issue_or_review() -> No
             governing_issue=4028,
             head_sha="a" * 40,
             api=api,
+        )
+
+
+def test_follow_up_issue_requires_durable_source_and_finding_routing() -> None:
+    responses, api = _live_pr_review_api()
+    responses["repos/octo/repo/issues/4172"] = {
+        "number": 4172,
+        "state": "open",
+        "body": """## Context
+Generic issue.
+## Scope
+- [ ] A task.
+## Source Anchors
+- `tests/ops/test_review_before_ci_gate.py`
+## SBS Impact
+- Builder System.
+## Constraints
+- Stay bounded.
+## Acceptance Criteria
+- [ ] Testable.
+  - Verify: `tests/ops/test_review_before_ci_gate.py::test_follow_up_issue_requires_durable_source_and_finding_routing`
+## Out of Scope
+- Other work.
+## Suggested Validation
+- `pytest -q tests/ops/test_review_before_ci_gate.py`
+## Source Docs
+- `docs/development/AUTONOMOUS_REVIEW_REPAIR_GATE_CONTRACTS.md`
+""",
+    }
+
+    with pytest.raises(ReviewBeforeCiGateError, match="durable source PR/finding routing"):
+        authenticated_pr_scope_revalidation_history(
+            repository="octo/repo",
+            pr_number=4029,
+            governing_issue=4028,
+            head_sha="a" * 40,
+            follow_up_issue_numbers=[4172],
+            api=api,
+        )
+
+
+def test_live_history_closing_snapshot_rejects_mid_fetch_mutation() -> None:
+    responses, _ = _live_pr_review_api()
+    calls: dict[str, int] = {}
+
+    def racing_api(path: str, paginate: bool) -> object:
+        del paginate
+        calls[path] = calls.get(path, 0) + 1
+        payload = responses[path]
+        if path == "repos/octo/repo/pulls/4029/comments?per_page=100" and calls[path] == 2:
+            assert isinstance(payload, list)
+            return [*payload, {"id": 999, "pull_request_review_id": 11, "body": "P1 blocker"}]
+        return payload
+
+    with pytest.raises(ReviewBeforeCiGateError, match="changed during authenticated snapshot"):
+        authenticated_pr_scope_revalidation_history(
+            repository="octo/repo",
+            pr_number=4029,
+            governing_issue=4028,
+            head_sha="a" * 40,
+            api=racing_api,
         )
 
     responses, api = _live_pr_review_api()

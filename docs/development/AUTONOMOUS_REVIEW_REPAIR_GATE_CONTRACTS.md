@@ -422,6 +422,10 @@ existing, bounded canonical Issue contract before it routes affected work there.
 requires the current live governing-Issue digest to differ from at least one rejected round and an
 exact `expanded_from_rounds` lineage entry (round, reviewed head, prior contract digest) for every
 authenticated rejected round before repair continues. An arbitrary well-formed digest is rejected.
+The bounded follow-up contract must durably name its source governing Issue and PR plus each routed
+finding (`Source-Governing-Issue`, `Source-PR`, and `Routed-Finding` markers); generic ready-Issue
+shape is insufficient. The evaluator closes its snapshot by re-reading every PR, Issue, review,
+comment, and follow-up payload used for authority and fails if any changed during collection.
 
 Classify every protected finding derived from each rejected round exactly once as one of:
 

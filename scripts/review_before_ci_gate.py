@@ -116,6 +116,7 @@ def validate_pr_scope_revalidation(
             "contract revalidation receipt outcome must be continue_unchanged, split, or expanded_contract"
         )
     authenticated_follow_up_issues = _authenticated_follow_up_issue_ids(authenticated_history)
+    authenticated_follow_up_routes = _authenticated_follow_up_issue_routes(authenticated_history)
     if outcome == "split" and not _is_bounded_follow_up_issue(
         receipt.get("follow_up_issue"), governing_issue, authenticated_follow_up_issues
     ):
@@ -232,6 +233,15 @@ def validate_pr_scope_revalidation(
             raise ReviewBeforeCiGateError(
                 "adjacent/pre-existing findings require a bounded follow-up Issue"
             )
+        if (
+            scope_class == "adjacent_pre_existing"
+            and authenticated_follow_up_routes is not None
+            and finding_id
+            not in authenticated_follow_up_routes.get(finding.get("follow_up_issue"), set())
+        ):
+            raise ReviewBeforeCiGateError(
+                "adjacent/pre-existing finding is not durably routed by its follow-up Issue"
+            )
         if scope_class == "security_authority_scope_expansion" and outcome != "expanded_contract":
             raise ReviewBeforeCiGateError(
                 "security/authority findings require authenticated expanded_contract scope"
@@ -272,6 +282,17 @@ def authenticated_pr_scope_revalidation_history(
     conversation_comments = github_api(
         f"repos/{repository}/issues/{pr_number}/comments?per_page=100", True
     )
+    snapshot_requests: list[tuple[str, bool, object]] = [
+        (f"repos/{repository}/pulls/{pr_number}", False, pr),
+        (f"repos/{repository}/issues/{governing_issue}", False, issue),
+        (f"repos/{repository}/pulls/{pr_number}/reviews?per_page=100", True, reviews),
+        (f"repos/{repository}/pulls/{pr_number}/comments?per_page=100", True, inline_comments),
+        (
+            f"repos/{repository}/issues/{pr_number}/comments?per_page=100",
+            True,
+            conversation_comments,
+        ),
+    ]
     if not isinstance(pr, Mapping) or not isinstance(issue, Mapping):
         raise ReviewBeforeCiGateError("GitHub PR or governing Issue response is malformed")
     if pr.get("number") != pr_number or issue.get("number") != governing_issue:
@@ -292,6 +313,7 @@ def authenticated_pr_scope_revalidation_history(
             "GitHub PR governing Issue identity is missing, foreign, or stale"
         )
     bounded_follow_up_issues: list[int] = []
+    bounded_follow_up_routes: dict[int, list[str]] = {}
     for follow_up_issue in sorted(set(follow_up_issue_numbers)):
         if not _is_bounded_follow_up_issue(follow_up_issue, governing_issue):
             raise ReviewBeforeCiGateError("follow-up Issue identity is invalid")
@@ -308,7 +330,27 @@ def authenticated_pr_scope_revalidation_history(
             raise ReviewBeforeCiGateError(
                 "follow-up Issue must exist and carry a bounded canonical contract"
             )
+        follow_up_body = follow_up["body"]
+        source_issue = re.search(r"(?im)^Source-Governing-Issue:\s*#(\d+)\s*$", follow_up_body)
+        source_pr = re.search(r"(?im)^Source-PR:\s*#(\d+)\s*$", follow_up_body)
+        routed_findings = sorted(
+            set(re.findall(r"(?im)^Routed-Finding:\s*([^\s]+)\s*$", follow_up_body))
+        )
+        if (
+            source_issue is None
+            or int(source_issue.group(1)) != governing_issue
+            or source_pr is None
+            or int(source_pr.group(1)) != pr_number
+            or not routed_findings
+        ):
+            raise ReviewBeforeCiGateError(
+                "follow-up Issue requires durable source PR/finding routing"
+            )
         bounded_follow_up_issues.append(follow_up_issue)
+        bounded_follow_up_routes[follow_up_issue] = routed_findings
+        snapshot_requests.append(
+            (f"repos/{repository}/issues/{follow_up_issue}", False, follow_up)
+        )
     if (
         not isinstance(reviews, list)
         or not isinstance(inline_comments, list)
@@ -407,6 +449,14 @@ def authenticated_pr_scope_revalidation_history(
     finding_ids = sorted(
         finding_id for finding_set in finding_ids_by_round.values() for finding_id in finding_set
     )
+    if any(
+        routed_finding not in finding_ids
+        for routed_findings in bounded_follow_up_routes.values()
+        for routed_finding in routed_findings
+    ):
+        raise ReviewBeforeCiGateError(
+            "follow-up Issue routes a finding outside the authenticated rejected history"
+        )
     rejected_round_contracts = [
         {
             "round_id": round_["round_id"],
@@ -416,6 +466,11 @@ def authenticated_pr_scope_revalidation_history(
         for round_ in rejected_rounds
     ]
     review_history_sha256 = _sha256_text(_canonical_json(rejected_rounds))
+    for path, paginate, initial_payload in snapshot_requests:
+        if _canonical_json(github_api(path, paginate)) != _canonical_json(initial_payload):
+            raise ReviewBeforeCiGateError(
+                "GitHub review authority changed during authenticated snapshot"
+            )
     return {
         "rejected_rounds": rejected_rounds,
         "finding_ids": finding_ids,
@@ -434,6 +489,7 @@ def authenticated_pr_scope_revalidation_history(
             _canonical_contract_body(issue["body"]).encode("utf-8")
         ).hexdigest(),
         "bounded_follow_up_issues": bounded_follow_up_issues,
+        "bounded_follow_up_routes": bounded_follow_up_routes,
     }
 
 
@@ -783,6 +839,26 @@ def _authenticated_follow_up_issue_ids(
     if not isinstance(values, list) or not all(isinstance(value, int) for value in values):
         raise ReviewBeforeCiGateError("authenticated history is missing bounded follow-up Issue evidence")
     return set(values)
+
+
+def _authenticated_follow_up_issue_routes(
+    authenticated_history: Mapping[str, object] | None,
+) -> dict[int, set[str]] | None:
+    if authenticated_history is None:
+        return None
+    values = authenticated_history.get("bounded_follow_up_routes")
+    if not isinstance(values, Mapping):
+        raise ReviewBeforeCiGateError("authenticated history is missing follow-up routing evidence")
+    routes: dict[int, set[str]] = {}
+    for issue_number, finding_ids in values.items():
+        if (
+            not isinstance(issue_number, int)
+            or not isinstance(finding_ids, list)
+            or not all(_nonempty_string(finding_id) for finding_id in finding_ids)
+        ):
+            raise ReviewBeforeCiGateError("authenticated follow-up routing evidence is malformed")
+        routes[issue_number] = set(finding_ids)
+    return routes
 
 
 def _is_bounded_follow_up_issue(
