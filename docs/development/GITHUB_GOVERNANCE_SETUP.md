@@ -13,6 +13,27 @@ Owner contract:
   - `.github/workflows/project-status-reconcile.yml`
 - Platform-side pieces are now applied for labels, Project fields, required views, lifecycle automation, and branch protection. Required status checks (`smoke`, `smoke-docker`, `pr-contract`) were added to `stable` on 2026-05-10 (issue #844, PR #853).
 
+## token-isolation
+
+The optional Project board workflows use the GitHub App **Agentic PKM Board Automation** when its
+two Actions secrets are configured:
+
+- `PROJECT_APP_ID` — the numeric GitHub App ID.
+- `PROJECT_APP_PRIVATE_KEY` — the complete PEM private-key contents, including the begin/end lines.
+
+The three workflows generate a short-lived installation token with the App's granted
+`repository-projects: write`, `issues: read`, and `pull-requests: read` permissions, then pass it to
+the board projection script as `GH_TOKEN`. The private key is never stored in the repository. If
+either secret is absent, token creation is skipped and the workflow passes `secrets.GITHUB_TOKEN`
+instead; the board script therefore keeps its existing graceful no-op behavior when a usable
+Project credential is unavailable. `PROJECT_TOKEN` is not used.
+
+| Token / identity | Workload | Authority boundary |
+| --- | --- | --- |
+| `PROJECT_APP_ID` + `PROJECT_APP_PRIVATE_KEY` → App installation token | `project-status-reconcile.yml`, `project-pr-opened.yml`, `project-pr-stage-change.yml` | Board projection writes and their issue/PR reads; isolated App quota |
+| `GITHUB_TOKEN` | Ordinary repository-owned Actions governance and the documented fallback for the optional board workflows | Per-workflow repository token; not the preferred board identity |
+| Interactive `gh` authentication | Claude/Codex agent issue, PR, and delivery operations | Separate human/agent identity and quota from the board App |
+
 ## Exact label set
 
 Keep only these labels for the delivery control plane taxonomy:
