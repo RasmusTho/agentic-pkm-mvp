@@ -944,6 +944,8 @@ def test_ordinary_boot_rejects_secret_pattern_operation_ids_without_echo(
         ("manifest", "malformed", "compatibility_resolution_failed:manifest_unreadable"),
         ("manifest", "invalid_utf8", "compatibility_resolution_failed:manifest_unreadable"),
         ("manifest", "non_finite", "compatibility_resolution_failed:manifest_invalid_shape"),
+        ("manifest", "huge_integer", "compatibility_resolution_failed:manifest_invalid_shape"),
+        ("manifest", "parser_huge_integer", "compatibility_resolution_failed:manifest_unreadable"),
         ("compose", "missing", "compatibility_resolution_failed:compose_unreadable"),
         ("compose", "malformed", "compatibility_resolution_failed:compose_unreadable"),
         ("compose", "invalid_utf8", "compatibility_resolution_failed:compose_unreadable"),
@@ -951,6 +953,8 @@ def test_ordinary_boot_rejects_secret_pattern_operation_ids_without_echo(
         ("compose", "timestamp", "compatibility_resolution_failed:compose_invalid_shape"),
         ("compose", "non_string_key", "compatibility_resolution_failed:compose_invalid_shape"),
         ("compose", "non_finite", "compatibility_resolution_failed:compose_invalid_shape"),
+        ("compose", "huge_integer", "compatibility_resolution_failed:compose_invalid_shape"),
+        ("compose", "parser_huge_integer", "compatibility_resolution_failed:compose_unreadable"),
         (
             "dependencies",
             "missing",
@@ -970,6 +974,16 @@ def test_ordinary_boot_rejects_secret_pattern_operation_ids_without_echo(
             "dependencies",
             "non_finite",
             "compatibility_resolution_failed:dependencies_invalid_shape",
+        ),
+        (
+            "dependencies",
+            "huge_integer",
+            "compatibility_resolution_failed:dependencies_invalid_shape",
+        ),
+        (
+            "dependencies",
+            "parser_huge_integer",
+            "compatibility_resolution_failed:dependencies_unreadable",
         ),
     ],
 )
@@ -1010,6 +1024,12 @@ def test_ordinary_boot_cli_input_failure_writes_one_terminal_result(
         damaged_path.write_text("created: 2026-08-29\n", encoding="utf-8")
     elif damage == "non_string_key":
         damaged_path.write_text("services:\n  1: value\n", encoding="utf-8")
+    elif damage in {"huge_integer", "parser_huge_integer"}:
+        digits = "9" * (1500 if damage == "huge_integer" else 5000)
+        if input_name == "compose":
+            damaged_path.write_text(f"value: {digits}\n", encoding="utf-8")
+        else:
+            damaged_path.write_text(f'{{"value": {digits}}}', encoding="utf-8")
     elif input_name == "compose":
         damaged_path.write_text("value: .nan\n", encoding="utf-8")
     else:
@@ -1066,6 +1086,24 @@ def test_ordinary_boot_cli_accepts_canonical_yaml_compose(tmp_path: Path) -> Non
     assert proc.returncode == 0, proc.stderr
     result = json.loads(proc.stdout)
     assert result["terminal_phase"] == "ORDINARY_BOOT_PASS"
+    assert _journal_rows(journal_path) == [result]
+
+
+def test_ordinary_boot_in_memory_recursive_input_is_terminal(tmp_path: Path) -> None:
+    manifest = _ordinary_boot_manifest()
+    recursive_compose: dict[str, object] = {}
+    recursive_compose["self"] = recursive_compose
+    journal_path = tmp_path / "recursive-input.jsonl"
+    result = run_ordinary_boot(
+        manifest,
+        recursive_compose,
+        _compatible_dependencies(manifest),
+        operation_id=_ordinary_boot_operation_id("recursive-in-memory"),
+        journal_path=journal_path,
+    )
+    assert result["terminal_phase"] == "PRE_MUTATION_FAILURE"
+    assert result["reason_code"] == "compatibility_resolution_failed:compose_invalid_shape"
+    assert result["writers_permitted"] is False
     assert _journal_rows(journal_path) == [result]
 
 

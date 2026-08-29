@@ -88,7 +88,7 @@ def _canonical_bytes(value: object) -> bytes:
             sort_keys=True,
             separators=(",", ":"),
         ).encode("utf-8")
-    except (TypeError, ValueError) as exc:
+    except (TypeError, ValueError, RecursionError) as exc:
         raise ArtifactRenderError(
             "invalid_shape",
             "ordinary-boot input must contain only JSON-compatible values",
@@ -118,8 +118,12 @@ def _validate_input_tree(
 ) -> None:
     if depth > 64:
         raise _OrdinaryBootInputError(f"{label}_invalid_shape")
-    if value is None or isinstance(value, (str, bool, int)):
+    if value is None or isinstance(value, (str, bool)):
         return
+    if isinstance(value, int):
+        if value.bit_length() <= 4096:
+            return
+        raise _OrdinaryBootInputError(f"{label}_invalid_shape")
     if isinstance(value, float):
         if math.isfinite(value):
             return
@@ -334,9 +338,10 @@ def _evaluate(
     *,
     operation_id: str,
 ) -> dict[str, object]:
-    manifest_identity = _identity(manifest)
+    manifest_identity = _identity({"ordinary_boot_input": "manifest_invalid"})
     channel = "unresolved"
     try:
+        manifest_identity = _identity(manifest)
         if manifest.get("channel") != "prod" or manifest.get("mode") != "promotion":
             raise ArtifactRenderError(
                 "ordinary_boot_binding",
@@ -784,19 +789,49 @@ def run_ordinary_boot(
         raise OrdinaryBootJournalError("invalid_operation_id")
     if not isinstance(journal_path, Path):
         raise OrdinaryBootJournalError("journal_path_must_be_path")
-    result = _evaluate(
-        _mapping(manifest, path="manifest"),
-        _mapping(compose, path="compose"),
-        _mapping(observed_dependencies, path="observed_dependencies"),
-        operation_id=operation_id,
-    )
+    manifest_mapping: Mapping[str, Any] | None = None
+    manifest_identity = _identity({"ordinary_boot_input": "manifest_invalid"})
+    try:
+        manifest_mapping = _mapping(manifest, path="manifest")
+        _validate_input_tree(manifest_mapping, label="manifest")
+        manifest_identity = _identity(manifest_mapping)
+        compose_mapping = _mapping(compose, path="compose")
+        _validate_input_tree(compose_mapping, label="compose")
+        dependencies_mapping = _mapping(
+            observed_dependencies,
+            path="observed_dependencies",
+        )
+        _validate_input_tree(dependencies_mapping, label="dependencies")
+    except (ArtifactRenderError, _OrdinaryBootInputError) as exc:
+        code = exc.code if isinstance(exc, ArtifactRenderError) else str(exc)
+        result = _terminal_result(
+            operation_id=operation_id,
+            channel="unresolved",
+            manifest_identity=manifest_identity,
+            terminal_phase="PRE_MUTATION_FAILURE",
+            reason_code=f"compatibility_resolution_failed:{code}",
+            dependencies=(),
+        )
+    else:
+        result = _evaluate(
+            manifest_mapping,
+            compose_mapping,
+            dependencies_mapping,
+            operation_id=operation_id,
+        )
     return _append_terminal_once(journal_path, result)
 
 
 def _read_json_mapping(path: Path, *, label: str) -> Mapping[str, Any]:
     try:
         value = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError, RecursionError) as exc:
+    except (
+        OSError,
+        UnicodeDecodeError,
+        json.JSONDecodeError,
+        RecursionError,
+        ValueError,
+    ) as exc:
         raise _OrdinaryBootInputError(f"{label}_unreadable") from exc
     if not isinstance(value, Mapping) or not all(isinstance(key, str) for key in value):
         raise _OrdinaryBootInputError(f"{label}_invalid_shape")
@@ -807,7 +842,7 @@ def _read_json_mapping(path: Path, *, label: str) -> Mapping[str, Any]:
 def _read_compose_mapping(path: Path) -> Mapping[str, Any]:
     try:
         value = yaml.safe_load(path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, yaml.YAMLError, RecursionError) as exc:
+    except (OSError, UnicodeDecodeError, yaml.YAMLError, RecursionError, ValueError) as exc:
         raise _OrdinaryBootInputError("compose_unreadable") from exc
     if not isinstance(value, Mapping) or not all(isinstance(key, str) for key in value):
         raise _OrdinaryBootInputError("compose_invalid_shape")
