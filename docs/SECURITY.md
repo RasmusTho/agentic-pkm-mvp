@@ -163,14 +163,13 @@ BuilderOps independent control-plane contract (#3790):
   their bounded canonical forms. Credential IDs and verifier fingerprints are unique, and malformed
   manifest metadata fails closed before status is rendered. Credential-like spelling variants such
   as `APIKey` and credential-shaped values embedded in ordinary text remain denied.
-- Candidate control-plane and PostgreSQL/WAL-G images must pass a real encrypted backup plus
-  archived-WAL restore gate. The gate uses independent recovery-key material, binds verification to
-  the restored PostgreSQL data directory, validates the recovery fence, and scans recovery material
-  and restored state for raw credentials. Main CI then emits and GitHub-attests one candidate-pair
-  receipt binding the source SHA to both exact `linux/amd64` digests; deployment rejects independent
-  digest arguments or an unattested/mismatched receipt. Verification enforces the certificate's
-  `refs/heads/main` source ref and exact receipt source SHA. Only the push-only successor job receives
-  OIDC/attestation permissions, never the pull-request image job.
+- Candidate control-plane and PostgreSQL images are rebuildable operational state, not a backup or
+  restore capability. Main CI emits and GitHub-attests one candidate-pair receipt binding the source
+  SHA to both exact `linux/amd64` digests; deployment rejects independent digest arguments or an
+  unattested/mismatched receipt. Verification enforces the certificate's `refs/heads/main` source ref
+  and exact receipt source SHA. Backup/restore and recovery-egress tooling are deferred and are not
+  candidate-attestation, deployment, readiness, or rollout gates. Only the push-only successor job
+  receives OIDC/attestation permissions, never the pull-request image job.
 
 Remaining gaps:
 - ensure all externally exposed routers apply auth consistently

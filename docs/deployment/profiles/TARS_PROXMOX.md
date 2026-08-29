@@ -67,4 +67,4 @@ This profile inherits, without redefining:
 - TARS candidate policy from `docs/BUILDEROPS_CONTROL_PLANE/README.md`.
 
 A fresh qualification result, a passing repository test, or this profile never proves a live host
-mutation, backup/restore result, network reachability, or authority cutover.
+mutation, deferred durability capability, network reachability, or authority cutover.

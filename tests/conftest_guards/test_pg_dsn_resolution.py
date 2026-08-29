@@ -39,9 +39,9 @@ SCRATCH_FACTORY_TARGET = "tests/migrations/test_store_schema_parity.py"
 # live in a collection hook.
 IMPORT_TIME_PROBE_TARGET = "tests/stores/test_capabilities_matrix.py"
 
-BUILDEROPS_RECOVERY_TARGET = (
-    "tests/ops/test_builderops_backup_restore.py"
-    "::test_recovered_epoch_fences_leases_and_executor_until_reconciliation"
+BUILDEROPS_POSTGRES_TARGET = (
+    "tests/builderops/control_plane/test_postgres_leases.py"
+    "::test_stale_fencing_token_cannot_mutate_after_reassignment"
 )
 
 LATE_CONNECTION_PROBES = [
@@ -445,26 +445,25 @@ def test_builderops_dsn_counts_as_configured_for_pg_collection(
     test_config.pytest_collection_modifyitems(None, [item])
     assert item.markers == []
 
-    recovery = Item(
-        REPO_ROOT / "tests/ops/test_builderops_backup_restore.py",
-        fixturenames=("recovery_store",),
+    control_plane = Item(
+        REPO_ROOT / "tests/builderops/control_plane/test_postgres_leases.py"
     )
-    test_config.pytest_collection_modifyitems(None, [recovery])
-    assert recovery.markers == []
+    test_config.pytest_collection_modifyitems(None, [control_plane])
+    assert control_plane.markers == []
 
     unrelated = Item(REPO_ROOT / SCRATCH_FACTORY_TARGET)
     test_config.pytest_collection_modifyitems(None, [unrelated])
     assert len(unrelated.markers) == 1
 
-    same_module_nonconsumer = Item(REPO_ROOT / "tests/ops/test_builderops_backup_restore.py")
-    test_config.pytest_collection_modifyitems(None, [same_module_nonconsumer])
-    assert len(same_module_nonconsumer.markers) == 1
+    unrelated_ops_item = Item(REPO_ROOT / "tests/ops/test_builderops_deploy_contract.py")
+    test_config.pytest_collection_modifyitems(None, [unrelated_ops_item])
+    assert len(unrelated_ops_item.markers) == 1
 
 
-def test_builderops_dsn_authorizes_the_real_recovery_consumer(spy_log: Path) -> None:
+def test_builderops_dsn_authorizes_a_real_control_plane_consumer(spy_log: Path) -> None:
     builderops_dsn = "postgresql://app:app@127.0.0.1:15434/builderops_test"
     result, attempts = _run_pytest(
-        [BUILDEROPS_RECOVERY_TARGET],
+        [BUILDEROPS_POSTGRES_TARGET],
         dsn=None,
         spy_log=spy_log,
         env_overrides={"BUILDEROPS_DATABASE_URL": builderops_dsn},

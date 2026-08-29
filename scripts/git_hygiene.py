@@ -7,16 +7,30 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import fcntl
+import hashlib
 import json
 import math
+import os
 import re
+import sqlite3
 import subprocess
+import sys
+import tempfile
 import time
 import unicodedata
-from collections.abc import Callable
-from contextlib import AbstractContextManager
+from collections.abc import Callable, Iterator, Mapping, Sequence
+from contextlib import AbstractContextManager, contextmanager
+from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, Mapping, TypeGuard
+from typing import Any, TypeGuard
+
+if __package__ in {None, ""}:  # Supports direct ``python scripts/...`` invocation.
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from app.dispatcher.verification_contract import resolve_issue_authority
+from app.dispatcher.signboard import VALID_STATUSES as DISPATCHER_VALID_STATUSES
+from scripts.review_before_ci_gate import _issue_free_pr_contract_lane
 
 
 DEFAULT_PROTECTED_BRANCHES = {"main", "master", "develop", "dev", "stable"}
@@ -26,6 +40,95 @@ IN_PROGRESS_MARKERS = {
     "CHERRY_PICK_HEAD": "cherry-pick",
     "REVERT_HEAD": "revert",
 }
+_GIT_LOCAL_CONTEXT_ENV_KEYS = frozenset(
+    {
+        "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+        "GIT_CEILING_DIRECTORIES",
+        "GIT_COMMON_DIR",
+        "GIT_DIR",
+        "GIT_DISCOVERY_ACROSS_FILESYSTEM",
+        "GIT_GRAFT_FILE",
+        "GIT_INDEX_FILE",
+        "GIT_INTERNAL_SUPER_PREFIX",
+        "GIT_NAMESPACE",
+        "GIT_OBJECT_DIRECTORY",
+        "GIT_PREFIX",
+        "GIT_QUARANTINE_PATH",
+        "GIT_REPLACE_REF_BASE",
+        "GIT_SHALLOW_FILE",
+        "GIT_WORK_TREE",
+    }
+)
+_GITHUB_AUTHORITY_REDIRECT_ENV_KEYS = frozenset(
+    {
+        "GH_CONFIG_DIR",
+        "GH_HOST",
+        "GH_HTTP_UNIX_SOCKET",
+        "GH_REPO",
+        "GITHUB_API_URL",
+        "GITHUB_GRAPHQL_URL",
+        "GITHUB_SERVER_URL",
+        "XDG_CONFIG_HOME",
+    }
+)
+_GITHUB_AUTH_ENV_KEYS = frozenset(
+    {"GH_ENTERPRISE_TOKEN", "GH_TOKEN", "GITHUB_ENTERPRISE_TOKEN", "GITHUB_TOKEN"}
+)
+
+
+def _sanitized_git_environment() -> dict[str, str]:
+    """Preserve Git configuration while removing ambient repository redirects."""
+
+    return {
+        key: value
+        for key, value in os.environ.items()
+        if key not in _GIT_LOCAL_CONTEXT_ENV_KEYS
+    }
+
+
+def _github_auth_token() -> str | None:
+    """Resolve only github.com authentication without using config as endpoint authority."""
+
+    for key in ("GH_TOKEN", "GITHUB_TOKEN"):
+        token = os.environ.get(key)
+        if token:
+            return token
+    lookup_env = {
+        key: value
+        for key, value in os.environ.items()
+        if key
+        not in (
+            _GITHUB_AUTH_ENV_KEYS
+            | (_GITHUB_AUTHORITY_REDIRECT_ENV_KEYS - {"GH_CONFIG_DIR", "XDG_CONFIG_HOME"})
+        )
+    }
+    result = subprocess.run(
+        ["gh", "auth", "token", "--hostname", "github.com"],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=lookup_env,
+    )
+    if result.returncode != 0:
+        return None
+    token = result.stdout.strip()
+    if not token or any(character.isspace() for character in token):
+        return None
+    return token
+
+
+def _sanitized_github_environment(config_dir: Path, token: str | None) -> dict[str, str]:
+    """Use one empty private config and only github.com authentication."""
+
+    environment = {
+        key: value
+        for key, value in os.environ.items()
+        if key not in _GITHUB_AUTHORITY_REDIRECT_ENV_KEYS | _GITHUB_AUTH_ENV_KEYS
+    }
+    environment["GH_CONFIG_DIR"] = str(config_dir)
+    if token is not None:
+        environment["GH_TOKEN"] = token
+    return environment
 
 
 def run_git(args: list[str], cwd: Path) -> str:
@@ -35,6 +138,7 @@ def run_git(args: list[str], cwd: Path) -> str:
         check=True,
         capture_output=True,
         text=True,
+        env=_sanitized_git_environment(),
     )
     return result.stdout.strip()
 
@@ -46,6 +150,7 @@ def run_git_result(args: list[str], cwd: Path) -> subprocess.CompletedProcess[st
         check=False,
         capture_output=True,
         text=True,
+        env=_sanitized_git_environment(),
     )
 
 
@@ -212,6 +317,7 @@ def in_shared_root(cwd: str | None = None) -> bool:
             check=False,
             capture_output=True,
             text=True,
+            env=_sanitized_git_environment(),
         )
         common_dir_result = subprocess.run(
             ["git", "rev-parse", "--git-common-dir"],
@@ -219,6 +325,7 @@ def in_shared_root(cwd: str | None = None) -> bool:
             check=False,
             capture_output=True,
             text=True,
+            env=_sanitized_git_environment(),
         )
     except Exception:  # noqa: BLE001
         return False
@@ -398,9 +505,1659 @@ def _utc_stamp(now: float | None = None) -> str:
     return value.strftime("%Y%m%dT%H%M%SZ")
 
 
-def _archive_ref(branch: str, now: float | None = None) -> str:
+def _dated_archive_ref(branch: str, now: float | None = None) -> str:
     safe_branch = branch.replace("/", "-")
     return f"refs/archive/git-hygiene/{_utc_stamp(now)}/{safe_branch}"
+
+
+@dataclass(frozen=True)
+class RepositoryIdentity:
+    database_id: int
+    full_name: str
+    fetch_url: str
+    push_url: str
+
+
+@dataclass(frozen=True)
+class PullAuthority:
+    number: int
+    source_ref: str
+    source_sha: str
+
+
+@dataclass(frozen=True)
+class PullContractIdentity:
+    governing_issue: int | None
+    no_issue_lane: str | None
+    pr_body_sha256: str
+
+
+@dataclass(frozen=True)
+class ProtectedTarget:
+    number: int
+    kind: str
+
+
+@dataclass(frozen=True)
+class ProtectedAuthority:
+    issue_number: int
+    pull_number: int
+    pull_ref: str
+    pull_sha: str
+
+
+@dataclass(frozen=True)
+class Candidate:
+    repository: str
+    pull_request: int
+    source_ref: str
+    source_sha: str
+    archive_ref: str
+    owner: str
+    governing_issue: int | None
+    no_issue_lane: str | None
+    successor: str
+    retention_class: str
+    review_at: str
+    discard: dict[str, object]
+
+
+@dataclass(frozen=True)
+class CandidateIdentity:
+    repository_id: int
+    repository: str
+    pull_request: int
+    source_ref: str
+    source_sha: str
+    archive_ref: str
+    owner: str
+    governing_issue: int | None
+    no_issue_lane: str | None
+    successor: str
+    retention_class: str
+    review_at: str
+    discard: dict[str, object]
+    authenticated_contract: PullContractIdentity
+
+
+@dataclass(frozen=True)
+class ReceiptPaths:
+    lock: Path
+    receipt: Path
+
+
+@dataclass(frozen=True)
+class Receipt:
+    schema: str
+    resource_key: str
+    state: str
+    identity: CandidateIdentity
+
+
+PROTECTED_GITHUB_TARGETS = (
+    ProtectedTarget(number=4728, kind="issue"),
+    ProtectedTarget(number=4813, kind="pull"),
+)
+RECEIPT_SCHEMA = "git-hygiene.targeted-remote-cleanup-receipt.v1"
+_CANDIDATE_KEYS = frozenset(
+    {
+        "repository",
+        "pull_request",
+        "source_ref",
+        "source_sha",
+        "archive_ref",
+        "owner",
+        "governing_issue",
+        "no_issue_lane",
+        "successor",
+        "retention_class",
+        "review_at",
+        "discard",
+    }
+)
+_SLUG = re.compile(r"[a-z0-9](?:[a-z0-9._-]{0,62}[a-z0-9])?")
+_NO_ISSUE_LANES = frozenset({"docs-authoring", "governance", "direct-repair"})
+_TERMINAL_DISPATCHER_STATUSES = frozenset({"completed"})
+if not _TERMINAL_DISPATCHER_STATUSES <= DISPATCHER_VALID_STATUSES:
+    raise RuntimeError("dispatcher_terminal_status_not_canonical")
+_NONTERMINAL_DISPATCHER_STATUSES = (
+    DISPATCHER_VALID_STATUSES - _TERMINAL_DISPATCHER_STATUSES
+)
+
+
+def _positive_int(value: object) -> TypeGuard[int]:
+    return isinstance(value, int) and not isinstance(value, bool) and value > 0
+
+
+def _json_without_duplicates(raw: str) -> object:
+    def pairs(values: list[tuple[str, object]]) -> dict[str, object]:
+        result: dict[str, object] = {}
+        for key, value in values:
+            if key in result:
+                raise ValueError("duplicate_json_key")
+            result[key] = value
+        return result
+
+    return json.loads(raw, object_pairs_hook=pairs)
+
+
+def _github_get(cwd: Path, endpoint: str) -> Mapping[str, object]:
+    token = _github_auth_token()
+    with tempfile.TemporaryDirectory(prefix="git-hygiene-gh-") as raw_config_dir:
+        config_dir = Path(raw_config_dir)
+        config_dir.chmod(0o700)
+        result = subprocess.run(
+            ["gh", "api", "--hostname", "github.com", "--method", "GET", endpoint],
+            cwd=cwd,
+            check=False,
+            capture_output=True,
+            text=True,
+            env=_sanitized_github_environment(config_dir, token),
+        )
+    if result.returncode != 0:
+        raise RuntimeError(f"github_get_failed:{endpoint}")
+    try:
+        payload = _json_without_duplicates(result.stdout)
+    except (json.JSONDecodeError, ValueError) as exc:
+        raise RuntimeError(f"github_response_invalid:{endpoint}") from exc
+    if not isinstance(payload, Mapping):
+        raise RuntimeError(f"github_response_invalid:{endpoint}")
+    return payload
+
+
+def _github_repo_from_url(raw: str) -> str:
+    value = raw.strip().removesuffix(".git")
+    match = re.fullmatch(
+        r"(?:https://github\.com/|git@github\.com:|ssh://git@github\.com/)([^/\s]+/[^/\s]+)",
+        value,
+    )
+    if not match:
+        raise RuntimeError("origin_repository_url_invalid")
+    return match.group(1)
+
+
+def _one_remote_url(cwd: Path, args: list[str], error: str) -> str:
+    result = run_git_result(args, cwd)
+    values = [line.strip() for line in result.stdout.splitlines() if line.strip()]
+    if result.returncode != 0 or len(values) != 1:
+        raise RuntimeError(error)
+    return values[0]
+
+
+def _resolve_repository_identity(cwd: Path, requested: str) -> RepositoryIdentity:
+    if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", requested):
+        raise RuntimeError("requested_repository_invalid")
+    payload = _github_get(cwd, f"repos/{requested}")
+    database_id = payload.get("id")
+    full_name = payload.get("full_name")
+    if not _positive_int(database_id) or not isinstance(full_name, str):
+        raise RuntimeError("repository_identity_invalid")
+    fetch_url = _one_remote_url(
+        cwd,
+        ["remote", "get-url", "--all", "origin"],
+        "origin_fetch_url_ambiguous",
+    )
+    push_url = _one_remote_url(
+        cwd,
+        ["remote", "get-url", "--push", "--all", "origin"],
+        "origin_push_url_ambiguous",
+    )
+    canonical = full_name.casefold()
+    if (
+        _github_repo_from_url(fetch_url).casefold() != canonical
+        or _github_repo_from_url(push_url).casefold() != canonical
+    ):
+        raise RuntimeError("origin_repository_mismatch")
+    return RepositoryIdentity(database_id, full_name, fetch_url, push_url)
+
+
+def _pull_from_payload(
+    identity: RepositoryIdentity, payload: Mapping[str, object], number: int
+) -> PullAuthority:
+    head = payload.get("head")
+    head_repo = head.get("repo") if isinstance(head, Mapping) else None
+    head_ref = head.get("ref") if isinstance(head, Mapping) else None
+    head_sha = head.get("sha") if isinstance(head, Mapping) else None
+    if (
+        payload.get("number") != number
+        or payload.get("state") != "closed"
+        or payload.get("merged") is not False
+        or payload.get("merged_at") is not None
+        or not isinstance(head_repo, Mapping)
+        or head_repo.get("id") != identity.database_id
+        or not isinstance(head_ref, str)
+        or not head_ref
+        or not isinstance(head_sha, str)
+        or not re.fullmatch(r"[0-9a-f]{40}", head_sha)
+    ):
+        raise RuntimeError(f"pull_authority_invalid:{number}")
+    return PullAuthority(number, f"refs/heads/{head_ref}", head_sha)
+
+
+def _read_candidate_pr(
+    identity: RepositoryIdentity, candidate: Candidate, *, cwd: Path
+) -> PullContractIdentity:
+    payload = _github_get(
+        cwd, f"repos/{identity.full_name}/pulls/{candidate.pull_request}"
+    )
+    authority = _pull_from_payload(identity, payload, candidate.pull_request)
+    if (
+        authority.source_ref != candidate.source_ref
+        or authority.source_sha != candidate.source_sha
+    ):
+        raise RuntimeError("candidate_pull_head_drift")
+    body = payload.get("body")
+    if not isinstance(body, str):
+        raise RuntimeError("candidate_pr_contract_invalid")
+    issue_authority = resolve_issue_authority(body)
+    if issue_authority is not None:
+        if (
+            candidate.governing_issue != issue_authority.governing_issue
+            or candidate.no_issue_lane is not None
+        ):
+            raise RuntimeError("candidate_pr_contract_mismatch")
+        return PullContractIdentity(
+            governing_issue=issue_authority.governing_issue,
+            no_issue_lane=None,
+            pr_body_sha256=_sha256_pr_body(body),
+        )
+    lane = _issue_free_pr_contract_lane(body)
+    if (
+        lane is None
+        or candidate.governing_issue is not None
+        or candidate.no_issue_lane != lane
+    ):
+        raise RuntimeError("candidate_pr_contract_mismatch")
+    return PullContractIdentity(
+        governing_issue=None,
+        no_issue_lane=lane,
+        pr_body_sha256=_sha256_pr_body(body),
+    )
+
+
+def _sha256_pr_body(body: str) -> str:
+    """Bind receipts to the exact live PR-body bytes returned by GitHub."""
+
+    return hashlib.sha256(body.encode("utf-8")).hexdigest()
+
+
+def _read_protected_targets(
+    identity: RepositoryIdentity, *, cwd: Path
+) -> ProtectedAuthority:
+    issue_target, pull_target = PROTECTED_GITHUB_TARGETS
+    if issue_target.kind != "issue" or pull_target.kind != "pull":
+        raise RuntimeError("protected_target_configuration_invalid")
+    issue = _github_get(
+        cwd, f"repos/{identity.full_name}/issues/{issue_target.number}"
+    )
+    if (
+        issue.get("number") != issue_target.number
+        or issue.get("state") != "closed"
+        or "pull_request" in issue
+        or issue.get("repository_url")
+        != f"https://api.github.com/repos/{identity.full_name}"
+    ):
+        raise RuntimeError("protected_target_4728_kind_or_identity_invalid")
+    pull = _pull_from_payload(
+        identity,
+        _github_get(
+            cwd, f"repos/{identity.full_name}/pulls/{pull_target.number}"
+        ),
+        pull_target.number,
+    )
+    return ProtectedAuthority(
+        issue_target.number, pull_target.number, pull.source_ref, pull.source_sha
+    )
+
+
+def _receipt_resource_key(repo_id: int, source_ref: str) -> str:
+    seed = b"v1\0" + str(repo_id).encode() + b"\0" + source_ref.encode()
+    return hashlib.sha256(seed).hexdigest()
+
+
+def _archive_ref(repo_id: int, source_ref: str, source_sha: str) -> str:
+    seed = str(repo_id).encode() + b"\0" + source_ref.encode() + b"\0" + source_sha.encode()
+    return f"refs/archive/git-hygiene/v1/{hashlib.sha256(seed).hexdigest()}"
+
+
+def _git_common_dir(cwd: Path) -> Path:
+    result = run_git_result(["rev-parse", "--git-common-dir"], cwd)
+    if result.returncode != 0 or not result.stdout.strip():
+        raise RuntimeError("git_common_dir_unavailable")
+    path = Path(result.stdout.strip())
+    if not path.is_absolute():
+        path = cwd / path
+    return path.resolve(strict=False)
+
+
+def _ensure_plain_directory(path: Path) -> None:
+    path.mkdir(parents=True, exist_ok=True)
+    if path.is_symlink() or not path.is_dir():
+        raise RuntimeError("receipt_store_path_invalid")
+
+
+def _receipt_paths(common_dir: Path, resource_key: str) -> ReceiptPaths:
+    if not re.fullmatch(r"[0-9a-f]{64}", resource_key):
+        raise RuntimeError("receipt_resource_key_invalid")
+    hygiene = common_dir / "git-hygiene"
+    cleanup = hygiene / "targeted-remote-cleanup"
+    root = cleanup / "v1"
+    locks = root / "locks"
+    receipts = root / "receipts"
+    for directory in (hygiene, cleanup, root, locks, receipts):
+        _ensure_plain_directory(directory)
+    return ReceiptPaths(
+        lock=locks / f"{resource_key}.lock",
+        receipt=receipts / f"{resource_key}.json",
+    )
+
+
+@contextmanager
+def _resource_flock(lock_path: Path) -> Iterator[None]:
+    flags = os.O_RDWR | os.O_CREAT
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    try:
+        descriptor = os.open(lock_path, flags, 0o600)
+    except OSError as exc:
+        raise RuntimeError("candidate_resource_lock_invalid") from exc
+    os.fchmod(descriptor, 0o600)
+    with os.fdopen(descriptor, "a+b", closefd=True) as handle:
+        try:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            raise RuntimeError("candidate_resource_busy") from exc
+        try:
+            yield
+        finally:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
+def _candidate_identity(
+    identity: RepositoryIdentity,
+    candidate: Candidate,
+    authenticated_contract: PullContractIdentity,
+) -> CandidateIdentity:
+    return CandidateIdentity(
+        repository_id=identity.database_id,
+        **asdict(candidate),
+        authenticated_contract=authenticated_contract,
+    )
+
+
+def _receipt_payload(receipt: Receipt) -> dict[str, object]:
+    return {
+        "schema": receipt.schema,
+        "resource_key": receipt.resource_key,
+        "identity_digest": _identity_digest(receipt.identity),
+        "state": receipt.state,
+        "identity": asdict(receipt.identity),
+    }
+
+
+def _identity_digest(identity: CandidateIdentity) -> str:
+    payload = json.dumps(
+        asdict(identity), sort_keys=True, separators=(",", ":")
+    ).encode()
+    return hashlib.sha256(payload).hexdigest()
+
+
+def _read_receipt(
+    path: Path, *, expected: CandidateIdentity
+) -> Receipt | None:
+    receipt = _read_candidate_bound_receipt(path, expected=expected)
+    if receipt is not None and receipt.identity != expected:
+        raise RuntimeError("receipt_identity_or_state_conflict")
+    return receipt
+
+
+def _read_candidate_bound_receipt(
+    path: Path, *, expected: CandidateIdentity
+) -> Receipt | None:
+    """Read one receipt bound to the candidate, allowing contract-drift recovery."""
+
+    if path.is_symlink():
+        raise RuntimeError("receipt_path_invalid")
+    if not path.exists():
+        return None
+    if not path.is_file():
+        raise RuntimeError("receipt_path_invalid")
+    try:
+        payload = _json_without_duplicates(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, ValueError) as exc:
+        raise RuntimeError("receipt_json_invalid") from exc
+    if not isinstance(payload, Mapping) or set(payload) != {
+        "schema",
+        "resource_key",
+        "identity_digest",
+        "state",
+        "identity",
+    }:
+        raise RuntimeError("receipt_schema_invalid")
+    identity_payload = payload.get("identity")
+    expected_payload = asdict(expected)
+    if (
+        payload.get("schema") != RECEIPT_SCHEMA
+        or payload.get("state") not in {"prepared", "compensated", "completed"}
+        or not isinstance(identity_payload, Mapping)
+        or set(identity_payload) != set(expected_payload)
+    ):
+        raise RuntimeError("receipt_identity_or_state_conflict")
+    for key, value in expected_payload.items():
+        if key != "authenticated_contract" and identity_payload.get(key) != value:
+            raise RuntimeError("receipt_identity_or_state_conflict")
+    contract_payload = identity_payload.get("authenticated_contract")
+    if not isinstance(contract_payload, Mapping) or set(contract_payload) != {
+        "governing_issue",
+        "no_issue_lane",
+        "pr_body_sha256",
+    }:
+        raise RuntimeError("receipt_identity_or_state_conflict")
+    issue = contract_payload.get("governing_issue")
+    lane = contract_payload.get("no_issue_lane")
+    digest = contract_payload.get("pr_body_sha256")
+    if (
+        (_positive_int(issue) == (lane is not None))
+        or (lane is not None and lane not in _NO_ISSUE_LANES)
+        or not isinstance(digest, str)
+        or not re.fullmatch(r"[0-9a-f]{64}", digest)
+    ):
+        raise RuntimeError("receipt_identity_or_state_conflict")
+    stored_identity = CandidateIdentity(
+        **{
+            **{key: value for key, value in expected_payload.items() if key != "authenticated_contract"},
+            "authenticated_contract": PullContractIdentity(
+                governing_issue=issue if _positive_int(issue) else None,
+                no_issue_lane=str(lane) if lane is not None else None,
+                pr_body_sha256=digest,
+            ),
+        }
+    )
+    if payload.get("identity_digest") != _identity_digest(stored_identity):
+        raise RuntimeError("receipt_identity_or_state_conflict")
+    resource_key = _receipt_resource_key(
+        stored_identity.repository_id, stored_identity.source_ref
+    )
+    if payload.get("resource_key") != resource_key:
+        raise RuntimeError("receipt_resource_key_invalid")
+    return Receipt(
+        schema=RECEIPT_SCHEMA,
+        resource_key=resource_key,
+        state=str(payload["state"]),
+        identity=stored_identity,
+    )
+
+
+def _crash_hook(_point: str) -> None:
+    """Private deterministic crash-injection seam for focused tests."""
+
+
+def _replace_receipt(path: Path, receipt: Receipt) -> None:
+    existing = _read_receipt(path, expected=receipt.identity)
+    if existing is not None and existing.state == "completed" and receipt.state != "completed":
+        raise RuntimeError("receipt_state_regression")
+    if existing is not None and existing.state == "compensated" and receipt.state == "prepared":
+        raise RuntimeError("receipt_state_regression")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary_name = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.")
+    temporary = Path(temporary_name)
+    phase = receipt.state
+    try:
+        os.fchmod(descriptor, 0o600)
+        with os.fdopen(descriptor, "wb", closefd=True) as handle:
+            payload = (
+                json.dumps(
+                    _receipt_payload(receipt),
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+                + "\n"
+            ).encode()
+            if handle.write(payload) != len(payload):
+                raise OSError("receipt_write_incomplete")
+            handle.flush()
+            _crash_hook(f"before_{phase}_temp_fsync")
+            os.fsync(handle.fileno())
+            _crash_hook(f"after_{phase}_temp_fsync")
+        _crash_hook(f"before_{phase}_replace")
+        os.replace(temporary, path)
+        _crash_hook(f"after_{phase}_replace")
+        directory_fd = os.open(path.parent, os.O_RDONLY)
+        try:
+            _crash_hook(f"before_{phase}_dir_fsync")
+            os.fsync(directory_fd)
+            _crash_hook(f"after_{phase}_dir_fsync")
+        finally:
+            os.close(directory_fd)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def _canonical_utc(value: object) -> bool:
+    if not isinstance(value, str) or not re.fullmatch(
+        r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z", value
+    ):
+        return False
+    try:
+        parsed = dt.datetime.strptime(value, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=dt.UTC)
+    except ValueError:
+        return False
+    return parsed.strftime("%Y-%m-%dT%H:%M:%SZ") == value
+
+
+def _validate_candidate(
+    raw: Mapping[str, object], identity: RepositoryIdentity, cwd: Path
+) -> Candidate:
+    if set(raw) != _CANDIDATE_KEYS:
+        raise ValueError("candidate_schema_invalid")
+    issue = raw.get("governing_issue")
+    lane = raw.get("no_issue_lane")
+    issue_valid = _positive_int(issue)
+    if lane is not None and (
+        not isinstance(lane, str) or lane not in _NO_ISSUE_LANES
+    ):
+        raise ValueError("candidate_no_issue_lane_invalid")
+    lane_valid = lane is not None
+    pull_request = raw.get("pull_request")
+    source_ref = raw.get("source_ref")
+    source_sha = raw.get("source_sha")
+    owner = raw.get("owner")
+    successor = raw.get("successor")
+    discard = raw.get("discard")
+    if raw.get("repository") != identity.full_name:
+        raise ValueError("candidate_repository_invalid")
+    if not _positive_int(pull_request):
+        raise ValueError("candidate_pull_request_invalid")
+    if issue_valid == lane_valid:
+        raise ValueError("candidate_issue_identity_ambiguous")
+    if not isinstance(source_ref, str) or not source_ref.startswith("refs/heads/"):
+        raise ValueError("candidate_source_ref_invalid")
+    if source_ref in {f"refs/heads/{name}" for name in DEFAULT_PROTECTED_BRANCHES}:
+        raise ValueError("candidate_source_ref_protected")
+    if run_git_result(["check-ref-format", source_ref], cwd).returncode != 0:
+        raise ValueError("candidate_source_ref_invalid")
+    if not isinstance(source_sha, str) or not re.fullmatch(r"[0-9a-f]{40}", source_sha):
+        raise ValueError("candidate_source_sha_invalid")
+    if not isinstance(owner, str) or not _SLUG.fullmatch(owner):
+        raise ValueError("candidate_owner_invalid")
+    if not isinstance(successor, str) or not (
+        successor == "none" or re.fullmatch(r"issue:[1-9][0-9]*", successor)
+    ):
+        raise ValueError("candidate_successor_invalid")
+    if raw.get("retention_class") not in {"safety_archive", "quarantine"}:
+        raise ValueError("candidate_retention_invalid")
+    if not _canonical_utc(raw.get("review_at")):
+        raise ValueError("candidate_review_at_invalid")
+    if (
+        not isinstance(discard, Mapping)
+        or set(discard) != {"state", "receipt"}
+        or discard.get("state") != "retain"
+        or discard.get("receipt") is not None
+    ):
+        raise ValueError("candidate_discard_invalid")
+    archive_ref = raw.get("archive_ref")
+    if archive_ref != _archive_ref(identity.database_id, source_ref, source_sha):
+        raise ValueError("candidate_archive_ref_invalid")
+    return Candidate(
+        repository=identity.full_name,
+        pull_request=pull_request,
+        source_ref=source_ref,
+        source_sha=source_sha,
+        archive_ref=str(archive_ref),
+        owner=owner,
+        governing_issue=issue if issue_valid else None,
+        no_issue_lane=lane if lane_valid else None,
+        successor=successor,
+        retention_class=str(raw["retention_class"]),
+        review_at=str(raw["review_at"]),
+        discard={"state": "retain", "receipt": None},
+    )
+
+
+def _validate_protected_candidate(
+    candidate: Candidate, protected: ProtectedAuthority
+) -> None:
+    if candidate.pull_request in {protected.issue_number, protected.pull_number}:
+        raise RuntimeError("candidate_uses_protected_number")
+    if candidate.governing_issue == protected.issue_number:
+        raise RuntimeError("candidate_uses_protected_number")
+    if (
+        candidate.source_ref == protected.pull_ref
+        or candidate.source_sha == protected.pull_sha
+    ):
+        raise RuntimeError("candidate_uses_protected_pull_head")
+
+
+def _read_lifecycle_authority(
+    cwd: Path, candidate: Candidate
+) -> dict[str, dict[str, object]]:
+    from scripts import agent_worktree
+
+    return agent_worktree.load_lifecycle_authority(
+        cwd,
+        candidate_branch=candidate.source_ref.removeprefix("refs/heads/"),
+    )
+
+
+def _lifecycle_conflicts(
+    cwd: Path,
+    candidate: Candidate,
+    records: Mapping[str, Mapping[str, object]],
+) -> set[str]:
+    branch = candidate.source_ref.removeprefix("refs/heads/")
+    entries = _parse_worktrees(run_git(["worktree", "list", "--porcelain"], cwd))
+    conflicts = {
+        "live_worktree"
+        for entry in entries
+        if entry.get("branch", "").removeprefix("refs/heads/") == branch
+    }
+    for record in records.values():
+        if record.get("branch") == branch and record.get("status") != "removed":
+            conflicts.add("lifecycle_binding")
+        prior = record.get("prior_bindings")
+        if isinstance(prior, list) and any(
+            isinstance(item, Mapping) and item.get("branch") == branch
+            for item in prior
+        ):
+            conflicts.add("lifecycle_prior_binding")
+    return conflicts
+
+
+def _parse_dispatcher_time(value: object) -> dt.datetime:
+    if not isinstance(value, str):
+        raise RuntimeError("dispatcher_expiry_invalid")
+    try:
+        parsed = dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise RuntimeError("dispatcher_expiry_invalid") from exc
+    if parsed.tzinfo is None:
+        raise RuntimeError("dispatcher_expiry_invalid")
+    return parsed.astimezone(dt.UTC)
+
+
+def _canonical_dispatcher_db_path(cwd: Path) -> Path:
+    """Return the repo-common production dispatcher DB without env overrides."""
+
+    entries = _parse_worktrees(run_git(["worktree", "list", "--porcelain"], cwd))
+    if not entries or not isinstance(entries[0].get("worktree"), str):
+        raise RuntimeError("dispatcher_repository_root_unavailable")
+    repository_root = Path(entries[0]["worktree"]).resolve(strict=False)
+    return repository_root / "runtime" / "dispatcher" / "dispatcher.sqlite3"
+
+
+def _dispatcher_snapshot(cwd: Path, repository: str) -> list[dict[str, object]]:
+    database = _canonical_dispatcher_db_path(cwd)
+    if not database.is_file() or database.is_symlink():
+        raise RuntimeError("dispatcher_database_missing")
+    del repository  # Repository relevance is evaluated only after the full census.
+    try:
+        connection = sqlite3.connect(f"{database.as_uri()}?mode=ro", uri=True)
+        connection.row_factory = sqlite3.Row
+        with connection:
+            snapshot = _dispatcher_snapshot_from_connection(connection)
+    except sqlite3.Error as exc:
+        raise RuntimeError("dispatcher_database_invalid") from exc
+    finally:
+        if "connection" in locals():
+            connection.close()
+    return snapshot
+
+
+def _dispatcher_snapshot_from_connection(
+    connection: sqlite3.Connection,
+) -> list[dict[str, object]]:
+    tasks = [
+        dict(row)
+        for row in connection.execute(
+            "SELECT * FROM dispatcher_tasks ORDER BY task_id"
+        ).fetchall()
+    ]
+    leases = [
+        dict(row)
+        for row in connection.execute(
+            "SELECT * FROM dispatcher_leases ORDER BY lease_id"
+        ).fetchall()
+    ]
+    return [
+        {"kind": "task", "record": task} for task in tasks
+    ] + [{"kind": "lease", "record": lease} for lease in leases]
+
+
+def _read_dispatcher_authority(cwd: Path, repository: str) -> list[dict[str, object]]:
+    first = _dispatcher_snapshot(cwd, repository)
+    second = _dispatcher_snapshot(cwd, repository)
+    if first != second:
+        raise RuntimeError("dispatcher_authority_changed")
+    return first
+
+
+@contextmanager
+def _dispatcher_authority_write_fence(cwd: Path) -> Iterator[sqlite3.Connection]:
+    """Reserve the canonical dispatcher writer through one final source CAS."""
+
+    database = _canonical_dispatcher_db_path(cwd)
+    if not database.is_file() or database.is_symlink():
+        raise RuntimeError("dispatcher_database_missing")
+    connection: sqlite3.Connection | None = None
+    try:
+        connection = sqlite3.connect(
+            f"{database.as_uri()}?mode=rw",
+            uri=True,
+            timeout=30,
+        )
+        connection.row_factory = sqlite3.Row
+        connection.execute("PRAGMA foreign_keys = ON")
+        connection.execute("BEGIN IMMEDIATE")
+        yield connection
+    except sqlite3.Error as exc:
+        raise RuntimeError("dispatcher_write_fence_failed") from exc
+    finally:
+        if connection is not None:
+            connection.rollback()
+            connection.close()
+
+
+@contextmanager
+def _final_authority_fence(
+    cwd: Path,
+    candidate: Candidate,
+) -> Iterator[
+    tuple[
+        Callable[[], dict[str, dict[str, object]]],
+        Callable[[], list[dict[str, object]]],
+    ]
+]:
+    """Fence dispatcher then lifecycle writers in the canonical deadlock-safe order."""
+
+    from scripts import agent_worktree
+
+    with _dispatcher_authority_write_fence(cwd) as connection:
+        with agent_worktree.locked_lifecycle_authority(
+            cwd,
+            candidate_branch=candidate.source_ref.removeprefix("refs/heads/"),
+        ) as lifecycle_reader:
+            yield lifecycle_reader, lambda: _dispatcher_snapshot_from_connection(
+                connection
+            )
+
+
+def _candidate_dispatcher_resources(
+    candidate: Candidate,
+    lifecycle: Mapping[str, Mapping[str, object]],
+) -> set[str]:
+    branch = candidate.source_ref.removeprefix("refs/heads/")
+    resources = {
+        candidate.source_ref,
+        branch,
+        f"branch:{branch}",
+        f"ref:{candidate.source_ref}",
+        f"pull:{candidate.pull_request}",
+        f"github:pull:{candidate.pull_request}",
+    }
+    if candidate.governing_issue is not None:
+        resources.update(
+            {
+                f"issue:{candidate.governing_issue}",
+                f"github:issue:{candidate.governing_issue}",
+            }
+        )
+    for path, record in lifecycle.items():
+        prior = record.get("prior_bindings")
+        if record.get("branch") == branch or (
+            isinstance(prior, list)
+            and any(
+                isinstance(item, Mapping) and item.get("branch") == branch
+                for item in prior
+            )
+        ):
+            resources.add(f"worktree:{path}")
+            if isinstance(record.get("path"), str):
+                resources.add(f"worktree:{record['path']}")
+    return resources
+
+
+def _dispatcher_live_lease(lease: Mapping[str, object], *, now: dt.datetime) -> bool:
+    released = lease.get("released_at")
+    if released is not None:
+        _parse_dispatcher_time(released)
+        return False
+    return _parse_dispatcher_time(lease.get("expires_at")) > now
+
+
+def _dispatcher_linked_pr(value: object) -> int | None:
+    if value is None:
+        return None
+    if not isinstance(value, str) or not re.fullmatch(r"#?[1-9][0-9]*", value):
+        raise RuntimeError("dispatcher_task_identity_ambiguous")
+    return int(value.removeprefix("#"))
+
+
+def _dispatcher_source_anchors(value: object) -> set[str]:
+    if not isinstance(value, str):
+        raise RuntimeError("dispatcher_task_identity_ambiguous")
+    try:
+        anchors = json.loads(value)
+    except (json.JSONDecodeError, TypeError) as exc:
+        raise RuntimeError("dispatcher_task_identity_ambiguous") from exc
+    if not isinstance(anchors, list) or any(
+        not isinstance(anchor, str) or not anchor for anchor in anchors
+    ):
+        raise RuntimeError("dispatcher_task_identity_ambiguous")
+    return set(anchors)
+
+
+def _legacy_dispatcher_anchor_valid(anchor: str) -> bool:
+    return bool(
+        re.fullmatch(r"(?:github:)?(?:issue|pull):[1-9][0-9]*", anchor)
+        or re.fullmatch(r"branch:[^\s]+", anchor)
+        or re.fullmatch(r"(?:ref:)?refs/heads/[^\s]+", anchor)
+        or re.fullmatch(r"worktree:/[^\x00]+", anchor)
+    )
+
+
+def _legacy_blank_dispatcher_task_irrelevant(
+    task: Mapping[str, object],
+    *,
+    candidate: Candidate,
+    lease: Mapping[str, object] | None,
+    lease_reference_count: int,
+    now: dt.datetime,
+    resources: set[str],
+) -> bool:
+    """Prove one current-store-shaped blank-repository history row irrelevant."""
+
+    task_id = task.get("task_id")
+    status = task.get("status")
+    issue = task.get("issue_number")
+    linked_pr = _dispatcher_linked_pr(task.get("linked_pr"))
+    anchors = _dispatcher_source_anchors(task.get("source_anchor_refs"))
+    if not isinstance(task_id, str) or not task_id:
+        raise RuntimeError("dispatcher_task_identity_ambiguous")
+    if status == "_meta":
+        if (
+            not task_id.startswith("_sync_meta_")
+            or issue != 0
+            or linked_pr is not None
+            or anchors
+        ):
+            raise RuntimeError("dispatcher_task_identity_ambiguous")
+    elif status in {"completed", "blocked"}:
+        if (
+            not isinstance(issue, int)
+            or isinstance(issue, bool)
+            or issue < 1
+            or task_id != f"github-issue-{issue}"
+            or any(not _legacy_dispatcher_anchor_valid(anchor) for anchor in anchors)
+        ):
+            raise RuntimeError("dispatcher_task_identity_ambiguous")
+    else:
+        raise RuntimeError("dispatcher_task_identity_ambiguous")
+
+    relevant = (
+        issue == candidate.governing_issue
+        or linked_pr == candidate.pull_request
+        or bool(anchors & resources)
+        or (lease is not None and lease.get("resource") in resources)
+    )
+    if relevant:
+        raise RuntimeError("dispatcher_task_identity_ambiguous")
+
+    live = _validate_dispatcher_task_lease_relationship(
+        task,
+        lease,
+        lease_reference_count=lease_reference_count,
+        now=now,
+    )
+    if live:
+        raise RuntimeError("dispatcher_task_identity_ambiguous")
+    return True
+
+
+def _validate_dispatcher_task_lease_relationship(
+    task: Mapping[str, object],
+    lease: Mapping[str, object] | None,
+    *,
+    lease_reference_count: int,
+    now: dt.datetime,
+) -> bool | None:
+    """Validate one task's canonical lease relationship and return liveness."""
+
+    status = task.get("status")
+    lease_id = task.get("lease_id")
+    if lease_id is None:
+        historical_expiry = task.get("lease_expires_at")
+        if status == "completed":
+            if historical_expiry is not None:
+                _parse_dispatcher_time(historical_expiry)
+            if task.get("claimed_by") is not None or task.get("last_heartbeat_at") is not None:
+                raise RuntimeError("dispatcher_task_lease_disagreement")
+        elif (
+            historical_expiry is not None
+            or task.get("claimed_by") is not None
+            or task.get("last_heartbeat_at") is not None
+        ):
+            raise RuntimeError("dispatcher_task_lease_disagreement")
+        return None
+    if not isinstance(lease_id, str) or not lease_id:
+        raise RuntimeError("dispatcher_task_identity_ambiguous")
+    if lease is None:
+        raise RuntimeError("dispatcher_referenced_lease_missing")
+    if lease_reference_count != 1:
+        raise RuntimeError("dispatcher_task_lease_disagreement")
+    resource = lease.get("resource")
+    issue = task.get("issue_number")
+    if not isinstance(resource, str) or not resource:
+        raise RuntimeError("dispatcher_lease_identity_ambiguous")
+    if resource != f"issue:{issue}":
+        raise RuntimeError("dispatcher_task_lease_resource_mismatch")
+    holder = lease.get("holder")
+    if not isinstance(holder, str) or not holder:
+        raise RuntimeError("dispatcher_lease_identity_ambiguous")
+    claimed_by = task.get("claimed_by")
+    if not isinstance(claimed_by, str) or not claimed_by or claimed_by != holder:
+        raise RuntimeError("dispatcher_task_lease_disagreement")
+    if status == "completed":
+        raise RuntimeError("dispatcher_task_lease_disagreement")
+    if task.get("lease_expires_at") != lease.get("expires_at"):
+        raise RuntimeError("dispatcher_task_lease_disagreement")
+    return _dispatcher_live_lease(lease, now=now)
+
+
+def _dispatcher_task_relevant(
+    task: Mapping[str, object],
+    *,
+    repository: str,
+    candidate: Candidate,
+    lease: Mapping[str, object] | None,
+    lease_reference_count: int,
+    now: dt.datetime,
+    resources: set[str],
+) -> bool:
+    task_repository = task.get("repo")
+    if task_repository == "":
+        _legacy_blank_dispatcher_task_irrelevant(
+            task,
+            candidate=candidate,
+            lease=lease,
+            lease_reference_count=lease_reference_count,
+            now=now,
+            resources=resources,
+        )
+        return False
+    if not isinstance(task_repository, str) or not re.fullmatch(
+        r"[^/\s]+/[^/\s]+", task_repository
+    ):
+        raise RuntimeError("dispatcher_task_identity_ambiguous")
+    if task_repository.casefold() != repository.casefold():
+        return False
+    issue = task.get("issue_number")
+    if not isinstance(issue, int) or isinstance(issue, bool) or issue < 1:
+        raise RuntimeError("dispatcher_task_identity_ambiguous")
+    linked_pr = _dispatcher_linked_pr(task.get("linked_pr"))
+    anchors = _dispatcher_source_anchors(task.get("source_anchor_refs"))
+    return (
+        issue == candidate.governing_issue
+        or linked_pr == candidate.pull_request
+        or bool(anchors & resources)
+        or (lease is not None and lease.get("resource") in resources)
+    )
+
+
+def _dispatcher_conflicts(
+    candidate: Candidate,
+    lifecycle: Mapping[str, Mapping[str, object]],
+    snapshot: Sequence[Mapping[str, object]],
+    *,
+    repository: str | None = None,
+) -> set[str]:
+    repository = repository or candidate.repository
+    resources = _candidate_dispatcher_resources(candidate, lifecycle)
+    now = dt.datetime.now(dt.UTC)
+    conflicts: set[str] = set()
+    tasks: list[Mapping[str, object]] = []
+    leases: dict[str, Mapping[str, object]] = {}
+    lease_references: dict[str, list[Mapping[str, object]]] = {}
+    for item in snapshot:
+        kind = item.get("kind")
+        record = item.get("record")
+        if kind not in {"task", "lease"} or not isinstance(record, Mapping):
+            raise RuntimeError("dispatcher_census_invalid")
+        if kind == "task":
+            tasks.append(record)
+            referenced_lease = record.get("lease_id")
+            if isinstance(referenced_lease, str) and referenced_lease:
+                lease_references.setdefault(referenced_lease, []).append(record)
+            continue
+        lease_id = record.get("lease_id")
+        if not isinstance(lease_id, str) or not lease_id or lease_id in leases:
+            raise RuntimeError("dispatcher_lease_identity_ambiguous")
+        leases[lease_id] = record
+
+    for lease in leases.values():
+        live = _dispatcher_live_lease(lease, now=now)
+        if not live:
+            continue
+        resource = lease.get("resource")
+        if not isinstance(resource, str) or not resource:
+            raise RuntimeError("dispatcher_lease_identity_ambiguous")
+        if resource in resources:
+            conflicts.add("live_dispatcher_claim")
+
+    for task in tasks:
+        task_lease_id = task.get("lease_id")
+        task_lease = leases.get(task_lease_id) if isinstance(task_lease_id, str) else None
+        if not _dispatcher_task_relevant(
+            task,
+            repository=repository,
+            candidate=candidate,
+            lease=task_lease,
+            lease_reference_count=len(lease_references.get(task_lease_id, ()))
+            if isinstance(task_lease_id, str)
+            else 0,
+            now=now,
+            resources=resources,
+        ):
+            continue
+        status = task.get("status")
+        if not isinstance(status, str) or (
+            status not in _NONTERMINAL_DISPATCHER_STATUSES
+            and status not in _TERMINAL_DISPATCHER_STATUSES
+        ):
+            raise RuntimeError("dispatcher_task_status_ambiguous")
+        nonterminal = status in _NONTERMINAL_DISPATCHER_STATUSES
+        live = _validate_dispatcher_task_lease_relationship(
+            task,
+            task_lease,
+            lease_reference_count=len(lease_references.get(task_lease_id, ()))
+            if isinstance(task_lease_id, str)
+            else 0,
+            now=now,
+        )
+        if task_lease_id is None:
+            if nonterminal:
+                conflicts.add("nonterminal_dispatcher_task")
+            continue
+        if live:
+            conflicts.add("live_dispatcher_claim")
+        elif nonterminal:
+            conflicts.add("nonterminal_dispatcher_task")
+    return conflicts
+
+
+def _remote_ref_sha(cwd: Path, push_url: str, ref: str) -> str | None:
+    """Return one exact remote ref value, or ``None`` only when it is absent."""
+    result = run_git_result(["ls-remote", "--exit-code", push_url, ref], cwd)
+    if result.returncode == 2:
+        return None
+    if result.returncode != 0:
+        raise RuntimeError(f"remote_ref_read_failed:{ref}")
+    rows = [line.split() for line in result.stdout.splitlines() if line.strip()]
+    if len(rows) != 1 or len(rows[0]) != 2 or rows[0][1] != ref:
+        raise RuntimeError(f"remote_ref_read_ambiguous:{ref}")
+    sha = rows[0][0]
+    if not re.fullmatch(r"[0-9a-f]{40}", sha):
+        raise RuntimeError(f"remote_ref_read_invalid:{ref}")
+    return sha
+
+
+def _fetch_exact_object(
+    cwd: Path,
+    identity: RepositoryIdentity,
+    *,
+    ref: str,
+    expected_sha: str,
+) -> None:
+    fetched = run_git_result(
+        [
+            "fetch",
+            "--no-tags",
+            "--no-write-fetch-head",
+            identity.fetch_url,
+            ref,
+        ],
+        cwd,
+    )
+    if fetched.returncode != 0:
+        raise RuntimeError("source_object_fetch_failed")
+    present = run_git_result(["cat-file", "-e", f"{expected_sha}^{{commit}}"], cwd)
+    if present.returncode != 0:
+        raise RuntimeError("source_object_fetch_mismatch")
+
+
+def _fetch_source_object(
+    cwd: Path, identity: RepositoryIdentity, candidate: Candidate
+) -> None:
+    _fetch_exact_object(
+        cwd,
+        identity,
+        ref=candidate.source_ref,
+        expected_sha=candidate.source_sha,
+    )
+
+
+def _restore_source_from_archive(
+    cwd: Path,
+    identity: RepositoryIdentity,
+    candidate: Candidate,
+) -> None:
+    if _remote_ref_sha(cwd, identity.push_url, candidate.source_ref) is not None:
+        raise RuntimeError("source_restore_expected_absence_failed")
+    _fetch_exact_object(
+        cwd,
+        identity,
+        ref=candidate.archive_ref,
+        expected_sha=candidate.source_sha,
+    )
+    _crash_hook("before_source_restore_cas_acceptance")
+    restored = run_git_result(
+        [
+            "push",
+            "--no-verify",
+            f"--force-with-lease={candidate.source_ref}:",
+            identity.push_url,
+            f"{candidate.source_sha}:{candidate.source_ref}",
+        ],
+        cwd,
+    )
+    if restored.returncode != 0:
+        raise RuntimeError("source_restore_cas_failed")
+    _crash_hook("after_source_restore_cas_acceptance")
+    _crash_hook("before_source_restore_readback")
+    source = _remote_ref_sha(cwd, identity.push_url, candidate.source_ref)
+    archive = _remote_ref_sha(cwd, identity.push_url, candidate.archive_ref)
+    _crash_hook("after_source_restore_readback")
+    if source != candidate.source_sha or archive != candidate.source_sha:
+        raise RuntimeError("source_restore_readback_failed")
+
+
+def _fresh_external_candidate_authority(
+    cwd: Path,
+    *,
+    requested_repository: str,
+    expected_repository: RepositoryIdentity,
+    candidate: Candidate,
+    expected_contract: PullContractIdentity,
+) -> RepositoryIdentity:
+    identity = _resolve_repository_identity(cwd, requested_repository)
+    if identity != expected_repository:
+        raise RuntimeError("repository_identity_changed")
+    protected = _read_protected_targets(identity, cwd=cwd)
+    _validate_protected_candidate(candidate, protected)
+    contract = _read_candidate_pr(identity, candidate, cwd=cwd)
+    if contract != expected_contract:
+        raise RuntimeError("candidate_pr_contract_changed")
+    return identity
+
+
+def _fresh_candidate_authority(
+    cwd: Path,
+    *,
+    requested_repository: str,
+    expected_repository: RepositoryIdentity,
+    candidate: Candidate,
+    expected_contract: PullContractIdentity,
+) -> RepositoryIdentity:
+    identity = _fresh_external_candidate_authority(
+        cwd,
+        requested_repository=requested_repository,
+        expected_repository=expected_repository,
+        candidate=candidate,
+        expected_contract=expected_contract,
+    )
+    lifecycle = _read_lifecycle_authority(cwd, candidate)
+    if _lifecycle_conflicts(cwd, candidate, lifecycle):
+        raise RuntimeError("candidate_lifecycle_conflict")
+    dispatcher = _read_dispatcher_authority(cwd, identity.full_name)
+    if _dispatcher_conflicts(
+        candidate, lifecycle, dispatcher, repository=identity.full_name
+    ):
+        raise RuntimeError("candidate_dispatcher_conflict")
+    return identity
+
+
+def _receipt_result(candidate: Candidate, paths: ReceiptPaths) -> dict[str, object]:
+    return {
+        "receipt": str(paths.receipt),
+        "state": "completed",
+        **asdict(candidate),
+    }
+
+
+def _validate_fenced_local_authority(
+    cwd: Path,
+    candidate: Candidate,
+    repository: str,
+    lifecycle_reader: Callable[[], dict[str, dict[str, object]]],
+    dispatcher_reader: Callable[[], list[dict[str, object]]],
+) -> None:
+    lifecycle = lifecycle_reader()
+    if _lifecycle_conflicts(cwd, candidate, lifecycle):
+        raise RuntimeError("candidate_lifecycle_conflict")
+    dispatcher = dispatcher_reader()
+    if _dispatcher_conflicts(
+        candidate,
+        lifecycle,
+        dispatcher,
+        repository=repository,
+    ):
+        raise RuntimeError("candidate_dispatcher_conflict")
+
+
+def _preflight_candidate(
+    cwd: Path,
+    *,
+    requested_repository: str,
+    identity: RepositoryIdentity,
+    candidate: Candidate,
+    expected: CandidateIdentity,
+    common_dir: Path,
+) -> None:
+    paths = _receipt_paths(
+        common_dir,
+        _receipt_resource_key(identity.database_id, candidate.source_ref),
+    )
+    receipt = _read_receipt(paths.receipt, expected=expected)
+    source = _remote_ref_sha(cwd, identity.push_url, candidate.source_ref)
+    archive = _remote_ref_sha(cwd, identity.push_url, candidate.archive_ref)
+    if receipt is None and source is None:
+        raise RuntimeError("source_absent_without_prepared_receipt")
+    if receipt is not None and receipt.state == "completed":
+        if source is not None or archive != candidate.source_sha:
+            raise RuntimeError("completed_receipt_live_state_conflict")
+        return
+    if source not in {None, candidate.source_sha}:
+        raise RuntimeError("source_identity_drift")
+    if archive not in {None, candidate.source_sha}:
+        raise RuntimeError("archive_sha_mismatch")
+    if receipt is not None and source is None:
+        # A prepared absence is recovery state. Authority disagreement must be
+        # handled under the final local fences so it can restore, not rejected
+        # here while leaving the source absent.
+        return
+    _fresh_candidate_authority(
+        cwd,
+        requested_repository=requested_repository,
+        expected_repository=identity,
+        candidate=candidate,
+        expected_contract=expected.authenticated_contract,
+    )
+
+
+def _compensate_absent_source_after_authority_error(
+    cwd: Path,
+    *,
+    identity: RepositoryIdentity,
+    candidate: Candidate,
+    expected: CandidateIdentity,
+    paths: ReceiptPaths,
+    resource_key: str,
+    authority_error: BaseException,
+) -> None:
+    """Restore one prepared absence while fencing all canonical local writers."""
+
+    with _final_authority_fence(
+        cwd, candidate
+    ) as (lifecycle_reader, dispatcher_reader):
+        try:
+            _validate_fenced_local_authority(
+                cwd,
+                candidate,
+                identity.full_name,
+                lifecycle_reader,
+                dispatcher_reader,
+            )
+        except (
+            OSError,
+            ValueError,
+            RuntimeError,
+            subprocess.SubprocessError,
+        ):
+            pass  # A local preservation signal strengthens restoration authority.
+        source = _remote_ref_sha(cwd, identity.push_url, candidate.source_ref)
+        archive = _remote_ref_sha(cwd, identity.push_url, candidate.archive_ref)
+        if source is not None:
+            raise RuntimeError("source_restore_expected_absence_failed")
+        if archive != candidate.source_sha:
+            raise RuntimeError("source_restore_archive_invalid")
+        _restore_source_from_archive(cwd, identity, candidate)
+        _replace_receipt(
+            paths.receipt,
+            Receipt(RECEIPT_SCHEMA, resource_key, "compensated", expected),
+        )
+    raise RuntimeError("post_delete_authority_changed_compensated") from authority_error
+
+
+def _recover_contract_drifted_absence(
+    cwd: Path,
+    *,
+    requested_repository: str,
+    identity: RepositoryIdentity,
+    candidate: Candidate,
+    current_expected: CandidateIdentity,
+    common_dir: Path,
+) -> bool:
+    """Compensate a prepared deletion whose live PR contract changed across a crash."""
+
+    resource_key = _receipt_resource_key(identity.database_id, candidate.source_ref)
+    paths = _receipt_paths(common_dir, resource_key)
+    receipt = _read_candidate_bound_receipt(paths.receipt, expected=current_expected)
+    if (
+        receipt is None
+        or receipt.identity == current_expected
+        or receipt.state not in {"prepared", "compensated"}
+    ):
+        return False
+    source = _remote_ref_sha(cwd, identity.push_url, candidate.source_ref)
+    archive = _remote_ref_sha(cwd, identity.push_url, candidate.archive_ref)
+    if source not in {None, candidate.source_sha}:
+        raise RuntimeError("contract_drift_recovery_source_advanced")
+    if archive != candidate.source_sha:
+        raise RuntimeError("contract_drift_recovery_archive_invalid")
+    with _resource_flock(paths.lock):
+        receipt = _read_candidate_bound_receipt(
+            paths.receipt, expected=current_expected
+        )
+        if (
+            receipt is None
+            or receipt.identity == current_expected
+            or receipt.state not in {"prepared", "compensated"}
+        ):
+            raise RuntimeError("contract_drift_recovery_authority_changed")
+        boundary = _fresh_external_candidate_authority(
+            cwd,
+            requested_repository=requested_repository,
+            expected_repository=identity,
+            candidate=candidate,
+            expected_contract=current_expected.authenticated_contract,
+        )
+        with _final_authority_fence(
+            cwd, candidate
+        ) as (lifecycle_reader, dispatcher_reader):
+            try:
+                _validate_fenced_local_authority(
+                    cwd,
+                    candidate,
+                    identity.full_name,
+                    lifecycle_reader,
+                    dispatcher_reader,
+                )
+            except (
+                OSError,
+                ValueError,
+                RuntimeError,
+                subprocess.SubprocessError,
+            ):
+                pass  # A preservation signal strengthens the obligation to restore.
+            source = _remote_ref_sha(cwd, boundary.push_url, candidate.source_ref)
+            archive = _remote_ref_sha(cwd, boundary.push_url, candidate.archive_ref)
+            if source not in {None, candidate.source_sha}:
+                raise RuntimeError("contract_drift_recovery_source_advanced")
+            if archive != candidate.source_sha:
+                raise RuntimeError("contract_drift_recovery_archive_invalid")
+            if source is None:
+                _restore_source_from_archive(cwd, boundary, candidate)
+            _replace_receipt(
+                paths.receipt,
+                Receipt(
+                    RECEIPT_SCHEMA,
+                    resource_key,
+                    "compensated",
+                    receipt.identity,
+                ),
+            )
+    return True
+
+
+def targeted_remote_cleanup(
+    cwd: Path,
+    *,
+    repository: str,
+    candidates: Sequence[Mapping[str, object]],
+) -> dict[str, object]:
+    """Archive then CAS-delete a bounded set of exact closed-unmerged PR heads."""
+    completed: list[dict[str, object]] = []
+    if not 1 <= len(candidates) <= 5:
+        return {"ok": False, "completed": completed, "error": "candidate_batch_size_invalid"}
+    try:
+        identity = _resolve_repository_identity(cwd, repository)
+        protected = _read_protected_targets(identity, cwd=cwd)
+        validated = [_validate_candidate(raw, identity, cwd) for raw in candidates]
+        if len({candidate.source_ref for candidate in validated}) != len(validated):
+            raise ValueError("candidate_resource_collision")
+        expected_identities: list[CandidateIdentity] = []
+        for candidate in validated:
+            _validate_protected_candidate(candidate, protected)
+            contract = _read_candidate_pr(identity, candidate, cwd=cwd)
+            expected_identities.append(
+                _candidate_identity(identity, candidate, contract)
+            )
+        common_dir = _git_common_dir(cwd)
+        for candidate, expected in zip(validated, expected_identities, strict=True):
+            if _recover_contract_drifted_absence(
+                cwd,
+                requested_repository=repository,
+                identity=identity,
+                candidate=candidate,
+                current_expected=expected,
+                common_dir=common_dir,
+            ):
+                raise RuntimeError("contract_drifted_source_compensated")
+            _preflight_candidate(
+                cwd,
+                requested_repository=repository,
+                identity=identity,
+                candidate=candidate,
+                expected=expected,
+                common_dir=common_dir,
+            )
+    except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as exc:
+        return {"ok": False, "completed": completed, "error": str(exc)}
+
+    for candidate, expected in zip(validated, expected_identities, strict=True):
+        resource_key = _receipt_resource_key(identity.database_id, candidate.source_ref)
+        paths = _receipt_paths(common_dir, resource_key)
+        try:
+            with _resource_flock(paths.lock):
+                # This read must precede observing source absence. Only a
+                # prepared record loaded here can authorize crash recovery.
+                loaded = _read_receipt(paths.receipt, expected=expected)
+                source = _remote_ref_sha(cwd, identity.push_url, candidate.source_ref)
+                archive = _remote_ref_sha(cwd, identity.push_url, candidate.archive_ref)
+                if loaded is not None and loaded.state == "completed":
+                    if source is not None or archive != candidate.source_sha:
+                        raise RuntimeError("completed_receipt_live_state_conflict")
+                    completed.append(_receipt_result(candidate, paths))
+                    continue
+                if loaded is None and source is None:
+                    raise RuntimeError("source_absent_without_prepared_receipt")
+                if source is None:
+                    boundary = identity
+                else:
+                    boundary = _fresh_candidate_authority(
+                        cwd,
+                        requested_repository=repository,
+                        expected_repository=identity,
+                        candidate=candidate,
+                        expected_contract=expected.authenticated_contract,
+                    )
+                    source = _remote_ref_sha(
+                        cwd, boundary.push_url, candidate.source_ref
+                    )
+                    archive = _remote_ref_sha(
+                        cwd, boundary.push_url, candidate.archive_ref
+                    )
+                if archive is None:
+                    if source != candidate.source_sha:
+                        raise RuntimeError("source_identity_drift_before_archive")
+                    _fetch_source_object(cwd, boundary, candidate)
+                    _crash_hook("before_archive_push")
+                    pushed = run_git_result(
+                        [
+                            "push",
+                            "--no-verify",
+                            f"--force-with-lease={candidate.archive_ref}:",
+                            boundary.push_url,
+                            f"{candidate.source_sha}:{candidate.archive_ref}",
+                        ],
+                        cwd,
+                    )
+                    if pushed.returncode != 0:
+                        raise RuntimeError("archive_expected_absence_cas_failed")
+                    _crash_hook("after_archive_push")
+                    _crash_hook("before_archive_readback")
+                    archive = _remote_ref_sha(cwd, boundary.push_url, candidate.archive_ref)
+                    _crash_hook("after_archive_readback")
+                if archive != candidate.source_sha:
+                    raise RuntimeError("archive_sha_mismatch")
+                prepared = Receipt(RECEIPT_SCHEMA, resource_key, "prepared", expected)
+                if loaded is None:
+                    _replace_receipt(paths.receipt, prepared)
+                    loaded = prepared
+                elif loaded.state not in {"prepared", "compensated"}:
+                    raise RuntimeError("receipt_identity_or_state_conflict")
+
+                try:
+                    boundary = _fresh_external_candidate_authority(
+                        cwd,
+                        requested_repository=repository,
+                        expected_repository=identity,
+                        candidate=candidate,
+                        expected_contract=expected.authenticated_contract,
+                    )
+                except (
+                    OSError,
+                    ValueError,
+                    RuntimeError,
+                    subprocess.SubprocessError,
+                ) as authority_error:
+                    if source is None:
+                        _compensate_absent_source_after_authority_error(
+                            cwd,
+                            identity=identity,
+                            candidate=candidate,
+                            expected=expected,
+                            paths=paths,
+                            resource_key=resource_key,
+                            authority_error=authority_error,
+                        )
+                    raise
+                with _final_authority_fence(
+                    cwd, candidate
+                ) as (lifecycle_reader, dispatcher_reader):
+                    source = _remote_ref_sha(
+                        cwd, boundary.push_url, candidate.source_ref
+                    )
+                    archive = _remote_ref_sha(
+                        cwd, boundary.push_url, candidate.archive_ref
+                    )
+                    if archive != candidate.source_sha:
+                        raise RuntimeError("archive_sha_mismatch_before_delete")
+                    if source not in {None, candidate.source_sha}:
+                        raise RuntimeError("source_identity_drift_before_delete")
+                    try:
+                        _validate_fenced_local_authority(
+                            cwd,
+                            candidate,
+                            identity.full_name,
+                            lifecycle_reader,
+                            dispatcher_reader,
+                        )
+                    except (
+                        OSError,
+                        ValueError,
+                        RuntimeError,
+                        subprocess.SubprocessError,
+                    ) as authority_error:
+                        if source is None:
+                            _restore_source_from_archive(cwd, boundary, candidate)
+                            _replace_receipt(
+                                paths.receipt,
+                                Receipt(
+                                    RECEIPT_SCHEMA,
+                                    resource_key,
+                                    "compensated",
+                                    expected,
+                                ),
+                            )
+                            raise RuntimeError(
+                                "post_delete_authority_changed_compensated"
+                            ) from authority_error
+                        raise
+                    if source == candidate.source_sha:
+                        _crash_hook("before_source_cas_acceptance")
+                        deleted = run_git_result(
+                            [
+                                "push",
+                                "--no-verify",
+                                f"--force-with-lease={candidate.source_ref}:{candidate.source_sha}",
+                                boundary.push_url,
+                                f":{candidate.source_ref}",
+                            ],
+                            cwd,
+                        )
+                        if deleted.returncode != 0:
+                            raise RuntimeError("source_cas_delete_failed")
+                        _crash_hook("after_source_cas_acceptance")
+                    _crash_hook("before_post_delete_readback")
+                    source = _remote_ref_sha(
+                        cwd, boundary.push_url, candidate.source_ref
+                    )
+                    archive = _remote_ref_sha(
+                        cwd, boundary.push_url, candidate.archive_ref
+                    )
+                    _crash_hook("after_post_delete_readback")
+                    if source is not None or archive != candidate.source_sha:
+                        raise RuntimeError("post_delete_readback_failed")
+                    try:
+                        _fresh_external_candidate_authority(
+                            cwd,
+                            requested_repository=repository,
+                            expected_repository=identity,
+                            candidate=candidate,
+                            expected_contract=expected.authenticated_contract,
+                        )
+                        _validate_fenced_local_authority(
+                            cwd,
+                            candidate,
+                            identity.full_name,
+                            lifecycle_reader,
+                            dispatcher_reader,
+                        )
+                    except (
+                        OSError,
+                        ValueError,
+                        RuntimeError,
+                        subprocess.SubprocessError,
+                    ) as authority_error:
+                        _restore_source_from_archive(cwd, boundary, candidate)
+                        _replace_receipt(
+                            paths.receipt,
+                            Receipt(
+                                RECEIPT_SCHEMA,
+                                resource_key,
+                                "compensated",
+                                expected,
+                            ),
+                        )
+                        raise RuntimeError(
+                            "post_delete_authority_changed_compensated"
+                        ) from authority_error
+                    source = _remote_ref_sha(
+                        cwd, boundary.push_url, candidate.source_ref
+                    )
+                    archive = _remote_ref_sha(
+                        cwd, boundary.push_url, candidate.archive_ref
+                    )
+                    if source is not None or archive != candidate.source_sha:
+                        raise RuntimeError("final_ref_state_changed")
+                    _replace_receipt(
+                        paths.receipt,
+                        Receipt(RECEIPT_SCHEMA, resource_key, "completed", expected),
+                    )
+                    completed.append(_receipt_result(candidate, paths))
+        except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as exc:
+            return {"ok": False, "completed": completed, "error": str(exc)}
+    return {"ok": True, "completed": completed}
 
 
 def _pr_state(branch: str, pr_states: dict[str, dict[str, Any]] | None) -> dict[str, Any]:
@@ -943,7 +2700,7 @@ def build_janitor_plan(
             continue
         candidate = {"branch": branch}
         if needs_rescue:
-            candidate["rescue_ref"] = _archive_ref(branch, now=now)
+            candidate["rescue_ref"] = _dated_archive_ref(branch, now=now)
             rescue_remote_branches.append(candidate)
         else:
             remote_branches.append(candidate)
@@ -1552,6 +3309,25 @@ def janitor_apply(
             }
         apply_git(["push", "origin", "--delete", remote["branch"]], {"artifact": "remote_branch", "action": "delete", **remote})
     for remote in plan["candidates"]["remote_branches_requiring_rescue"]:
+        # Broad janitor plans are evidence only.  They never carry the complete
+        # identity/disposition authority required by targeted_remote_cleanup.
+        errors.append(
+            {
+                "artifact": "remote_branch",
+                "action": "preserve",
+                "reason": "targeted_remote_cleanup_required",
+                **remote,
+            }
+        )
+        return {
+            **plan,
+            "mode": "apply",
+            "destructive_actions": actions,
+            "errors": errors,
+            "ok": False,
+        }
+        # Kept below temporarily as implementation history for the next
+        # narrowly-authorized migration; unreachable by construction.
         branch = remote["branch"]
         if authority_changed_for(branch=branch):
             return {

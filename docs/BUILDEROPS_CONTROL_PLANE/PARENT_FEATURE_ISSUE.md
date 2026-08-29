@@ -1,105 +1,44 @@
-State: FILED — parent feature issue [#3788](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3788) is the authoritative backlog/validation hub. It remains `agent:blocked` while child slices are outstanding.
-Doc role: Specification companion (parent issue draft/pointer)
-Authority: `README.md` owns task decomposition. The live GitHub parent owns backlog/validation state.
+State: Parent feature contract. #5056 amends the deployment durability posture.
 
 # Parent feature issue — BuilderOps independent control plane
 
 ## Context
 
-BuilderOps must become a permanent API-first enabling system on Demerzel. Current state embeds its
-unauthenticated routes in Product FastAPI and fragments operational authority across BuilderOps
-SQLite, dispatcher SQLite/JSONL, and file-first run/receipt stores. ADR-0062 selects one independent
-authenticated service and PostgreSQL authority while preserving GitHub/repo delivery authority.
+The BuilderOps control plane remains a target-state capability. The deployment path is rebuildable operational state; backup/restore is deferred and cannot block the parent or any child activation gate.
 
 ## Scope
 
-- deliver and validate BCP-01 through BCP-07 from `docs/BUILDEROPS_CONTROL_PLANE/`;
-- act as the validation hub rather than an implementation pickup;
-- reuse #3603 and the merged PR #3620 baseline for Demerzel orchestration, and #3690 for owner-doc
-  enactment; and
-- reconcile #3686/PR #3695 as migration evidence with a superseded SQLite target.
+Track bounded BCP deliveries and the final live validation hub without treating deployment receipts, Project cards, or backup work as authority.
 
 ## Source Anchors
 
-- `docs/adr/ADR-0010-builderops-vault-authority-boundary.md :: Decision`
-- `docs/AGENT_ISSUE_DISPATCHER.md :: Current-State Honesty`
-- `docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md :: Environment matrix`
+- `docs/BUILDEROPS_CONTROL_PLANE/README.md :: Builder-system rebuildable deployment posture`
+- `docs/BUILDEROPS_CONTROL_PLANE/INDEPENDENT_AUTHENTICATED_DEPLOYMENT.md :: Rebuildable VM deployment contract`
 
 ## SBS Impact
 
-Builder System capability with Product/Builder boundary cleanup. It extends the Builder System
-enabling-system deployment model and removes misplaced Product Runtime ownership; it does not add or
-reshape a Product SBS subsystem.
+- Primary subsystem: Builder System / CES boundary
+- Persistence impact: BuilderOps operational state is rebuildable
+- New or changed contract: backup/restore deferred and non-gating
 
 ## Constraints
 
-- Parent is a validation hub and never receives `agent:ready`.
-- BCP-01 is the first executable child; later children stay blocked until their named dependencies
-  are delivered.
-- GitHub/repo delivery authority remains unchanged.
-- No production direct-DB or local SQLite fallback is allowed.
-- Product Runtime owns no BuilderOps lifecycle or trust material at closure.
+- Child work keeps immutable pins, independent engine/project, VM-local secret references, private authenticated loopback ingress, migrations, fencing, no dual writer, rebuild receipts, health/readiness, and local WAL/disk guardrails.
+- No child uses backup, restore, manual `pg_wal` deletion, `pg_resetwal`, or reset/cleanup tooling as a readiness or rollback substitute.
 
 ## Acceptance Criteria
 
-- [ ] All BCP-01 through BCP-06 implementation work is merged and its receipts linked here.
-  Verify: child-issue/PR ledger in this issue.
-- [ ] Capability acceptance in `docs/BUILDEROPS_CONTROL_PLANE/README.md :: Capability acceptance criteria`
-  is fully evidenced.
-  Verify: BCP-06 cutover receipt and linked test/restore/merge receipts.
-- [ ] BCP-07 updates current-state owner docs and closes superseded backlog truth.
-  Verify: `docs/BUILDEROPS_CONTROL_PLANE/OWNER_DOC_ENACTMENT_AND_CLOSURE.md :: Acceptance Criteria`.
+- [ ] BCP children prove one API/PostgreSQL authority and Product separation.
+  Verify: BCP child receipts and `tests/architecture/test_builderops_product_separation.py::test_product_runtime_has_no_builderops_ownership`.
+- [ ] A live BuilderOps activation records private authenticated ingress, no dual writer, source/image pins, schema/epoch, health/readiness, and rebuild posture.
+  Verify: runtime receipt: builderops_vm_rebuild_activation.v1.
+- [ ] Parent closure uses only truthful child, CI, review, merge, and activation evidence; a deferred backup/restore capability is not a closure blocker.
+  Verify: `docs/BUILDEROPS_CONTROL_PLANE/OWNER_DOC_ENACTMENT_AND_CLOSURE.md :: Closure evidence`.
 
 ## Out of Scope
 
-- replacing GitHub Issues/PRs/CI as delivery authority;
-- making BuilderOps a Product Runtime subsystem;
-- external multi-tenant BuilderOps; and
-- requiring a separate source repository before the ADR-0062 source-extraction triggers fire.
+- Backup/restore implementation or acceptance.
 
 ## Suggested Validation
 
-- keep a child/PR/receipt ledger on the parent;
-- require the BCP-06 end-to-end cutover, authority-ambiguity resolution/tombstone reconciliation,
-  restore-from-backup drill (ADR-0062 A1), protected-base/manifest post-validation race rejection,
-  and independent recovery-key/KMS custody receipts before BCP-07; and
-- close only through BCP-07's parent-closure handoff.
-
-## Source Docs
-
-- `docs/adr/ADR-0062-builderops-ecosystem-wide-enabling-system.md`
-- `docs/BUILDEROPS_CONTROL_PLANE/README.md`
-- `docs/audits/BUILDEROPS_CONTROL_PLANE_2026-07-15.md`
-
-## Implementation Tasks
-
-| Task | GitHub work item | Initial state |
-|---|---|---|
-| BCP-01 | [#3792](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3792) | merged via PR #3852 |
-| BCP-02 | [#3790](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3790) | repo/deployment contract implemented; live activation remains gated |
-| BCP-03 | [#3789](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3789) | dependency-unblocked after BCP-01 |
-| BCP-04 | [#3791](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3791) | dependency-unblocked after BCP-02 |
-| BCP-05 | Existing #3603; PR #3620 merged | delivered SQLite-backed baseline retained as history; repo-side API/PostgreSQL/outbox migration implemented under #3603; installed-main Demerzel pilot receipt pending |
-| BCP-06 | [#3793](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3793) | `agent:blocked` on BCP-03/04/05 |
-| BCP-07 | Existing #3690 | `agent:blocked` on BCP-06 |
-
-Task specifications and dependency order are linked from
-`docs/BUILDEROPS_CONTROL_PLANE/README.md :: Implementation tasks`.
-
-## Verification Path
-
-Each child runs the exact `Verify:` targets in its specification and posts a compact receipt here.
-BCP-01 through BCP-05 must each be independently mergeable and verifiable. For BCP-05, the merged
-PR #3620 baseline and its later API/PostgreSQL migration are separate receipts under #3603. BCP-06
-consumes the migration receipt, not the pre-migration SQLite delivery alone, in the test and
-authoritative cutover gates.
-
-## Validation / Acceptance Path
-
-After BCP-06, attach the Demerzel end-to-end API/executor/GitHub readback receipt, legacy-import
-reconciliation (including evidence-only quarantine versus duplicate-preventing authority tombstones
-and the CKM/CEG tables per ADR-0062 A3), protected-base/manifest post-validation race proof,
-independent Product/BuilderOps lifecycle and failure-domain proof (ADR-0062 A2), and the encrypted
-full-backup + archived-WAL restore-from-backup drill (ADR-0062 A1) with Demerzel's host secret store
-unavailable and independently recoverable key/KMS custody. Only then
-may #3690/BCP-07 promote current-state owner docs and close this parent.
+- Resolve child `Verify:` targets and the live activation receipt before closure.

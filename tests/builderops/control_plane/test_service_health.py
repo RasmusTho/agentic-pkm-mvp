@@ -28,10 +28,6 @@ class _Store:
 
 
 class _Operational:
-    def __init__(self, *, independent: bool = True, recovery: str = "stalled") -> None:
-        self.independent = independent
-        self.recovery = recovery
-
     def snapshot(self) -> OperationalStatus:
         return OperationalStatus(
             outbox_pending=3,
@@ -42,8 +38,7 @@ class _Operational:
             rate_limit_enabled=True,
             rate_limit_rejections_total=5,
             executor_heartbeat_state="healthy",
-            recovery_pipeline_state=self.recovery,
-            recovery_target_independent=self.independent,
+            durability_posture="rebuildable",
         )
 
 
@@ -96,22 +91,14 @@ def test_readiness_and_status_cover_required_dependencies_without_secrets(tmp_pa
     assert payload["leases"] == {"active": 2, "conflicts_total": 4}
     assert payload["rate_limit"] == {"enabled": True, "rejections_total": 5}
     assert payload["executor_heartbeat"] == {"state": "healthy"}
-    assert payload["recovery_pipeline"] == {
-        "state": "stalled",
-        "target_independent": True,
-        "structural_ready": True,
-        "alert": True,
-        "acknowledgement_gate": False,
+    assert payload["durability"] == {
+        "posture": "rebuildable",
+        "database_rebuild_required": False,
+        "backup_restore_deferred": True,
     }
     serialized = json.dumps(payload)
     assert "raw-client-secret" not in serialized
     assert "raw-database-secret" not in serialized
-
-    co_resident_health = HealthService(store, registry, _Operational(independent=False))  # type: ignore[arg-type]
-    co_resident = TestClient(
-        create_app(store=store, credentials=registry, health=co_resident_health)  # type: ignore[arg-type]
-    )
-    assert co_resident.get("/readyz", headers=headers).status_code == 503
 
     unavailable_store = _Store(available=False)
     unavailable_health = HealthService(unavailable_store, registry, _Operational())  # type: ignore[arg-type]
@@ -150,7 +137,6 @@ def test_database_outage_cannot_escape_live_status_boundary(tmp_path: Path) -> N
     store = OfflineStore()
     operational = LiveOperationalStatusProvider(
         store,  # type: ignore[arg-type]
-        recovery_target_file=tmp_path / "missing-target.json",
         worker_heartbeat_file=tmp_path / "missing-worker.json",
     )
     client = TestClient(
@@ -175,23 +161,10 @@ def test_database_outage_cannot_escape_live_status_boundary(tmp_path: Path) -> N
     assert "raw-password" not in response.text
 
 
-def test_live_provider_validates_recovery_failure_domain_and_shared_worker_heartbeat(
+def test_live_provider_reports_rebuildable_posture_and_shared_worker_heartbeat(
     tmp_path: Path,
 ) -> None:
-    target = tmp_path / "recovery-target.json"
     heartbeat = tmp_path / "worker.json"
-    target.write_text(
-        json.dumps(
-            {
-                "url": "s3://offsite.example.invalid/builderops",
-                "primary_failure_domain": "builder-primary",
-                "recovery_failure_domain": "operator-offsite",
-                "encryption_key_ref": "kms:builderops-recovery",
-                "custody_ref": "operator:independent",
-            }
-        ),
-        encoding="utf-8",
-    )
     heartbeat.write_text(
         json.dumps(
             {
@@ -203,42 +176,11 @@ def test_live_provider_validates_recovery_failure_domain_and_shared_worker_heart
     )
     provider = LiveOperationalStatusProvider(
         _Store(),  # type: ignore[arg-type]
-        recovery_target_file=target,
         worker_heartbeat_file=heartbeat,
     )
     snapshot = provider.snapshot()
-    assert snapshot.recovery_target_independent is True
     assert snapshot.executor_heartbeat_state == "healthy"
-    assert snapshot.recovery_pipeline_state == "unknown"
-
-    document = json.loads(target.read_text(encoding="utf-8"))
-    document["recovery_failure_domain"] = "builder-primary"
-    target.write_text(json.dumps(document), encoding="utf-8")
-    assert provider.snapshot().recovery_target_independent is False
-
-
-def test_local_rebuildable_posture_disables_recovery_alarm_and_readiness_gate(tmp_path: Path) -> None:
-    provider = LiveOperationalStatusProvider(
-        _Store(),  # type: ignore[arg-type]
-        recovery_target_file=tmp_path / "missing-target.json",
-        worker_heartbeat_file=tmp_path / "missing-worker.json",
-        recovery_required=False,
-    )
-    snapshot = provider.snapshot()
-    assert snapshot.recovery_pipeline_state == "disabled"
-    assert snapshot.recovery_target_independent is False
-    assert snapshot.recovery_required is False
-
-    health = HealthService(_Store(), _registry(tmp_path), provider)  # type: ignore[arg-type]
-    payload = health.status()
-    assert payload["ready"] is True
-    assert payload["recovery_pipeline"] == {
-        "state": "disabled",
-        "target_independent": False,
-        "structural_ready": True,
-        "alert": False,
-        "acknowledgement_gate": False,
-    }
+    assert snapshot.durability_posture == "rebuildable"
 
 
 def test_worker_probe_requires_fresh_database_heartbeat(monkeypatch) -> None:

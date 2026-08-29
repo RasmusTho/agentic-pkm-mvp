@@ -25,8 +25,7 @@ class _Operational:
     def snapshot(self) -> OperationalStatus:
         return OperationalStatus(
             executor_heartbeat_state="healthy",
-            recovery_pipeline_state="current",
-            recovery_target_independent=True,
+            durability_posture="rebuildable",
         )
 
 

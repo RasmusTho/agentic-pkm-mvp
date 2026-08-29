@@ -18,14 +18,6 @@ builderops_engine_id() {
   docker --context "${context}" info --format '{{.ID}}'
 }
 
-builderops_validate_recovery_target() {
-  local root="${1:?repo root required}"
-  local secret_root="${BUILDEROPS_SECRET_ROOT:?BuilderOps host secret root is required}"
-  local archive_target="${BUILDEROPS_WALG_S3_PREFIX:?BuilderOps WAL archive target is required}"
-  python3 "$root/app/builderops/control_plane/recovery.py" \
-    "$secret_root/recovery-target.json" --expected-url "$archive_target" >/dev/null
-}
-
 builderops_assert_failure_domain() {
   local builder_context="${BUILDEROPS_DOCKER_CONTEXT:?BuilderOps Docker context is required}"
   local product_context="${PRODUCT_DOCKER_CONTEXT:?Product Docker context is required}"

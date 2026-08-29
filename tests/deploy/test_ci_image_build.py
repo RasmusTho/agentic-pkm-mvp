@@ -39,10 +39,10 @@ def test_ci_builds_sha_tagged_image() -> None:
     assert "tags: ${{ steps.build-identity.outputs.image }}" in workflow
     assert "if: github.event_name != 'push' || github.ref != 'refs/heads/main'" in workflow
     assert "platforms: linux/amd64" in workflow
-    assert "Publish the exact restore-proved BuilderOps images" in workflow
+    assert "Publish the exact rebuildable BuilderOps images" in workflow
     assert 'docker push "${{ steps.images.outputs.control_plane }}"' in workflow
     assert 'docker push "${{ steps.images.outputs.postgres }}"' in workflow
-    publish = workflow.split("Publish the exact restore-proved BuilderOps images", maxsplit=1)[1]
+    publish = workflow.split("Publish the exact rebuildable BuilderOps images", maxsplit=1)[1]
     assert "docker build" not in publish
     assert "load: true" in workflow
     assert "push: false" in workflow
@@ -94,20 +94,18 @@ def test_single_image_artifact_per_commit() -> None:
     assert "ENVIRONMENT" not in product_image_job
 
 
-def test_builderops_publish_reuses_the_restore_proved_images() -> None:
+def test_builderops_publish_reuses_the_rebuildable_images() -> None:
     builderops_job = _workflow_text().split("\n  build-builderops-images:", maxsplit=1)[1]
     build_job, attestation_job = builderops_job.split(
         "\n  attest-builderops-candidate-pair:", maxsplit=1
     )
-    restore = builderops_job.index("Prove encrypted full-backup plus archived-WAL restore")
-    publish = builderops_job.index("Publish the exact restore-proved BuilderOps images")
+    publish = builderops_job.index("Publish the exact rebuildable BuilderOps images")
 
-    assert restore < publish
     assert "docker build" not in builderops_job[publish:]
     assert 'docker push "${{ steps.images.outputs.control_plane }}"' in builderops_job[publish:]
     assert 'docker push "${{ steps.images.outputs.postgres }}"' in builderops_job[publish:]
-    receipt = build_job.index("Write the restore-proved candidate pair receipt")
-    upload = build_job.index("Upload the restore-proved candidate pair receipt")
+    receipt = build_job.index("Write the rebuildable candidate pair receipt")
+    upload = build_job.index("Upload the rebuildable candidate pair receipt")
     assert publish < receipt < upload
     assert "id-token: write" not in build_job
     assert "attestations: write" not in build_job

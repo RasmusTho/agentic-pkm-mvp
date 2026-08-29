@@ -1,7 +1,13 @@
+import json
+import os
 from pathlib import Path
+import signal
+import socket
 import subprocess
+import sys
+import threading
 import time
-from contextlib import nullcontext
+from contextlib import contextmanager, nullcontext
 
 import pytest
 
@@ -9,6 +15,2684 @@ from scripts import git_hygiene
 
 
 GENERATION = "a" * 32
+REPOSITORY_ID = 1234
+PUSH_URL = "git@github.com:RasmusTho/agentic-pkm-mvp.git"
+FETCH_URL = "https://github.com/RasmusTho/agentic-pkm-mvp.git"
+STANDARD_PR_BODY = "Governing-Issue: #5170\n\nFixes #5170\n"
+
+
+def _targeted_candidate(**overrides):
+    candidate = {
+        "repository": "RasmusTho/agentic-pkm-mvp",
+        "pull_request": 6000,
+        "source_ref": "refs/heads/closed-unmerged",
+        "source_sha": "a" * 40,
+        "archive_ref": "",
+        "owner": "builder-ops",
+        "governing_issue": 5170,
+        "no_issue_lane": None,
+        "successor": "none",
+        "retention_class": "safety_archive",
+        "review_at": "2030-02-01T00:00:00Z",
+        "discard": {"state": "retain", "receipt": None},
+    }
+    candidate.update(overrides)
+    if not candidate["archive_ref"]:
+        candidate["archive_ref"] = git_hygiene._archive_ref(
+            REPOSITORY_ID, candidate["source_ref"], candidate["source_sha"]
+        )
+    return candidate
+
+
+def _authenticated_contract(candidate) -> git_hygiene.PullContractIdentity:
+    lane = candidate.no_issue_lane if isinstance(candidate, git_hygiene.Candidate) else candidate["no_issue_lane"]
+    issue = candidate.governing_issue if isinstance(candidate, git_hygiene.Candidate) else candidate["governing_issue"]
+    body = STANDARD_PR_BODY
+    if lane is not None:
+        body = (
+            "## Change Lane\n"
+            f"- [x] {'Governance' if lane == 'governance' else 'Docs authoring'} lane\n\n"
+            "Final-Review-Rounds: 0\n"
+        )
+    return git_hygiene.PullContractIdentity(issue, lane, git_hygiene._sha256_pr_body(body))
+
+
+def _remote_cleanup_transport(refs, commands, *, advance_before_delete=False):
+    def fake(args: list[str], _cwd: Path):
+        commands.append(args)
+        if args[:2] == ["check-ref-format", args[1]]:
+            return subprocess.CompletedProcess(["git", *args], 0, "", "")
+        if args[:2] == ["ls-remote", "--exit-code"]:
+            ref = args[-1]
+            sha = refs.get(ref)
+            return subprocess.CompletedProcess(["git", *args], 0 if sha else 2, f"{sha}\t{ref}\n" if sha else "", "")
+        if args[0] == "fetch":
+            return subprocess.CompletedProcess(["git", *args], 0, "", "")
+        if args[:2] == ["cat-file", "-e"]:
+            return subprocess.CompletedProcess(["git", *args], 0, "", "")
+        if args[:2] == ["push", "--no-verify"] and ":refs/archive/" in args[-1]:
+            sha, ref = args[-1].split(":", 1)
+            if ref in refs:
+                return subprocess.CompletedProcess(["git", *args], 1, "", "stale info")
+            refs[ref] = sha
+            return subprocess.CompletedProcess(["git", *args], 0, "", "")
+        if args[:2] == ["push", "--no-verify"] and args[-1].startswith(":refs/heads/"):
+            ref = args[-1][1:]
+            if advance_before_delete:
+                refs[ref] = "b" * 40
+                return subprocess.CompletedProcess(["git", *args], 1, "", "stale info")
+            refs.pop(ref, None)
+            return subprocess.CompletedProcess(["git", *args], 0, "", "")
+        if args[:2] == ["push", "--no-verify"] and ":refs/heads/" in args[-1]:
+            sha, ref = args[-1].split(":", 1)
+            if ref in refs:
+                return subprocess.CompletedProcess(
+                    ["git", *args], 1, "", "stale info"
+                )
+            refs[ref] = sha
+            return subprocess.CompletedProcess(["git", *args], 0, "", "")
+        raise AssertionError(args)
+    return fake
+
+
+def _install_remote_cleanup_authority(monkeypatch, tmp_path, refs, commands):
+    identity = git_hygiene.RepositoryIdentity(
+        REPOSITORY_ID,
+        "RasmusTho/agentic-pkm-mvp",
+        FETCH_URL,
+        PUSH_URL,
+    )
+    protected = git_hygiene.ProtectedAuthority(
+        issue_number=4728,
+        pull_number=4813,
+        pull_ref="refs/heads/codex/protected-4813",
+        pull_sha="d" * 40,
+    )
+    monkeypatch.setattr(git_hygiene, "_resolve_repository_identity", lambda *_: identity)
+    monkeypatch.setattr(git_hygiene, "_read_protected_targets", lambda *_args, **_kwargs: protected)
+    monkeypatch.setattr(
+        git_hygiene,
+        "_read_candidate_pr",
+        lambda _identity, candidate, **_kwargs: _authenticated_contract(candidate),
+    )
+    monkeypatch.setattr(
+        git_hygiene, "_read_lifecycle_authority", lambda _cwd, _candidate: {}
+    )
+    monkeypatch.setattr(git_hygiene, "_lifecycle_conflicts", lambda *_: set())
+    monkeypatch.setattr(git_hygiene, "_read_dispatcher_authority", lambda *_: [])
+    monkeypatch.setattr(
+        git_hygiene,
+        "_final_authority_fence",
+        lambda *_: nullcontext((lambda: {}, lambda: [])),
+    )
+    monkeypatch.setattr(git_hygiene, "_git_common_dir", lambda _cwd: tmp_path / "common")
+    monkeypatch.setattr(
+        git_hygiene, "run_git_result", _remote_cleanup_transport(refs, commands)
+    )
+    return identity
+
+
+def test_targeted_remote_cleanup_binds_complete_candidate_identity(tmp_path, monkeypatch) -> None:
+    commands: list[list[str]] = []
+    _install_remote_cleanup_authority(monkeypatch, tmp_path, {}, commands)
+    report = git_hygiene.targeted_remote_cleanup(
+        tmp_path, repository="RasmusTho/agentic-pkm-mvp",
+        candidates=[_targeted_candidate(owner="")],
+    )
+    assert report["ok"] is False
+    assert report["error"] == "candidate_owner_invalid"
+    assert not any(command[0] == "push" for command in commands)
+
+
+def test_targeted_remote_cleanup_requires_exact_archive_sha_readback(tmp_path, monkeypatch) -> None:
+    candidate = _targeted_candidate()
+    refs = {candidate["source_ref"]: candidate["source_sha"], candidate["archive_ref"]: "b" * 40}
+    commands: list[list[str]] = []
+    _install_remote_cleanup_authority(monkeypatch, tmp_path, refs, commands)
+    report = git_hygiene.targeted_remote_cleanup(tmp_path, repository=candidate["repository"], candidates=[candidate])
+    assert report["ok"] is False
+    assert report["error"] == "archive_sha_mismatch"
+    assert candidate["source_ref"] in refs
+
+
+def test_targeted_remote_cleanup_cas_delete_stops_on_source_drift(tmp_path, monkeypatch) -> None:
+    first, later = _targeted_candidate(), _targeted_candidate(source_ref="refs/heads/later")
+    refs = {first["source_ref"]: first["source_sha"], later["source_ref"]: later["source_sha"]}
+    commands: list[list[str]] = []
+    _install_remote_cleanup_authority(monkeypatch, tmp_path, refs, commands)
+    monkeypatch.setattr(git_hygiene, "run_git_result", _remote_cleanup_transport(refs, commands, advance_before_delete=True))
+    report = git_hygiene.targeted_remote_cleanup(tmp_path, repository=first["repository"], candidates=[first, later])
+    assert report["ok"] is False
+    assert report["error"] == "source_cas_delete_failed"
+    assert later["source_ref"] in refs
+
+
+def test_targeted_remote_cleanup_receipt_precedes_delete_and_completes_after_readback(tmp_path, monkeypatch) -> None:
+    candidate = _targeted_candidate()
+    refs = {candidate["source_ref"]: candidate["source_sha"]}
+    commands: list[list[str]] = []
+    _install_remote_cleanup_authority(monkeypatch, tmp_path, refs, commands)
+    report = git_hygiene.targeted_remote_cleanup(tmp_path, repository=candidate["repository"], candidates=[candidate])
+    assert report["ok"] is True
+    receipts = tmp_path / "common" / "git-hygiene" / "targeted-remote-cleanup" / "v1" / "receipts"
+    receipt = json.loads(next(receipts.glob("*.json")).read_text(encoding="utf-8"))
+    assert receipt["state"] == "completed"
+    assert receipt["identity"]["owner"] == "builder-ops"
+    assert receipt["identity"]["authenticated_contract"] == {
+        "governing_issue": 5170,
+        "no_issue_lane": None,
+        "pr_body_sha256": git_hygiene._sha256_pr_body(
+            STANDARD_PR_BODY
+        ),
+    }
+    assert candidate["source_ref"] not in refs
+
+
+def test_targeted_remote_cleanup_retry_is_identity_bound_and_idempotent(tmp_path, monkeypatch) -> None:
+    candidate = _targeted_candidate()
+    refs = {candidate["source_ref"]: candidate["source_sha"]}
+    commands: list[list[str]] = []
+    _install_remote_cleanup_authority(monkeypatch, tmp_path, refs, commands)
+    first = git_hygiene.targeted_remote_cleanup(tmp_path, repository=candidate["repository"], candidates=[candidate])
+    before = len(commands)
+    second = git_hygiene.targeted_remote_cleanup(tmp_path, repository=candidate["repository"], candidates=[candidate])
+    assert first["ok"] is second["ok"] is True
+    assert not any(command[0] == "push" for command in commands[before:])
+
+
+def test_archive_review_trigger_never_authorizes_archive_delete(tmp_path, monkeypatch) -> None:
+    candidate = _targeted_candidate()
+    commands: list[list[str]] = []
+    refs = {candidate["source_ref"]: candidate["source_sha"]}
+    _install_remote_cleanup_authority(monkeypatch, tmp_path, refs, commands)
+    report = git_hygiene.targeted_remote_cleanup(tmp_path, repository=candidate["repository"], candidates=[candidate])
+    assert report["ok"] is True
+    assert candidate["archive_ref"] in {candidate["archive_ref"]}
+    assert not any(command[-1] == f":{candidate['archive_ref']}" for command in commands if command[0] == "push")
+
+
+def test_targeted_remote_cleanup_rejects_wrong_origin_without_push(tmp_path, monkeypatch) -> None:
+    candidate = _targeted_candidate()
+    commands: list[list[str]] = []
+    _install_remote_cleanup_authority(monkeypatch, tmp_path, {}, commands)
+    monkeypatch.setattr(
+        git_hygiene,
+        "_resolve_repository_identity",
+        lambda *_: (_ for _ in ()).throw(RuntimeError("origin_repository_mismatch")),
+    )
+    report = git_hygiene.targeted_remote_cleanup(tmp_path, repository=candidate["repository"], candidates=[candidate])
+    assert report["error"] == "origin_repository_mismatch"
+    assert not any(command[0] == "push" for command in commands)
+
+
+def test_targeted_remote_cleanup_protects_live_pr_heads_without_push(tmp_path, monkeypatch) -> None:
+    candidate = _targeted_candidate(source_ref="refs/heads/codex/protected-4813")
+    candidate["archive_ref"] = git_hygiene._archive_ref(REPOSITORY_ID, candidate["source_ref"], candidate["source_sha"])
+    commands: list[list[str]] = []
+    _install_remote_cleanup_authority(monkeypatch, tmp_path, {}, commands)
+    report = git_hygiene.targeted_remote_cleanup(tmp_path, repository=candidate["repository"], candidates=[candidate])
+    assert report["error"] == "candidate_uses_protected_pull_head"
+    assert not any(command[0] == "push" for command in commands)
+
+
+def test_targeted_remote_cleanup_preflights_archive_collisions_without_push(tmp_path, monkeypatch) -> None:
+    first = _targeted_candidate()
+    second = _targeted_candidate(source_ref="refs/heads/other", archive_ref=first["archive_ref"])
+    commands: list[list[str]] = []
+    _install_remote_cleanup_authority(monkeypatch, tmp_path, {}, commands)
+    report = git_hygiene.targeted_remote_cleanup(tmp_path, repository=first["repository"], candidates=[first, second])
+    assert report["error"] == "candidate_archive_ref_invalid"
+    assert not any(command[0] == "push" for command in commands)
+
+
+def test_targeted_remote_cleanup_prepared_write_failure_never_deletes(tmp_path, monkeypatch) -> None:
+    candidate = _targeted_candidate()
+    refs = {candidate["source_ref"]: candidate["source_sha"]}
+    commands: list[list[str]] = []
+    _install_remote_cleanup_authority(monkeypatch, tmp_path, refs, commands)
+    monkeypatch.setattr(
+        git_hygiene,
+        "_crash_hook",
+        lambda point: (_ for _ in ()).throw(OSError(point))
+        if point == "after_prepared_dir_fsync"
+        else None,
+    )
+    report = git_hygiene.targeted_remote_cleanup(tmp_path, repository=candidate["repository"], candidates=[candidate])
+    assert report["ok"] is False
+    assert candidate["source_ref"] in refs
+    assert not any(command[-1].startswith(":refs/heads/") for command in commands if command[0] == "push")
+
+
+def test_targeted_remote_cleanup_completed_write_failure_recovers_monotonically(tmp_path, monkeypatch) -> None:
+    candidate = _targeted_candidate()
+    refs = {candidate["source_ref"]: candidate["source_sha"]}
+    commands: list[list[str]] = []
+    _install_remote_cleanup_authority(monkeypatch, tmp_path, refs, commands)
+    monkeypatch.setattr(
+        git_hygiene,
+        "_crash_hook",
+        lambda point: (_ for _ in ()).throw(OSError(point))
+        if point == "before_completed_replace"
+        else None,
+    )
+    first = git_hygiene.targeted_remote_cleanup(tmp_path, repository=candidate["repository"], candidates=[candidate])
+    monkeypatch.setattr(git_hygiene, "_crash_hook", lambda _point: None)
+    second = git_hygiene.targeted_remote_cleanup(tmp_path, repository=candidate["repository"], candidates=[candidate])
+    assert first["ok"] is False and second["ok"] is True
+    receipts = tmp_path / "common" / "git-hygiene" / "targeted-remote-cleanup" / "v1" / "receipts"
+    assert json.loads(next(receipts.glob("*.json")).read_text())["state"] == "completed"
+
+
+def test_targeted_remote_cleanup_post_delete_readback_failure_retains_prepared(tmp_path, monkeypatch) -> None:
+    candidate = _targeted_candidate()
+    refs = {candidate["source_ref"]: candidate["source_sha"]}
+    commands: list[list[str]] = []
+    base = _remote_cleanup_transport(refs, commands)
+    def stale_delete(args, cwd):
+        if args[:2] == ["push", "--no-verify"] and args[-1].startswith(":refs/heads/"):
+            commands.append(args)
+            return subprocess.CompletedProcess(["git", *args], 0, "", "")
+        return base(args, cwd)
+    _install_remote_cleanup_authority(monkeypatch, tmp_path, refs, commands)
+    monkeypatch.setattr(git_hygiene, "run_git_result", stale_delete)
+    report = git_hygiene.targeted_remote_cleanup(tmp_path, repository=candidate["repository"], candidates=[candidate])
+    assert report["error"] == "post_delete_readback_failed"
+    receipts = tmp_path / "common" / "git-hygiene" / "targeted-remote-cleanup" / "v1" / "receipts"
+    assert json.loads(next(receipts.glob("*.json")).read_text())["state"] == "prepared"
+
+
+def _closed_pull_payload(
+    *,
+    number=6000,
+    state="closed",
+    merged=False,
+    merged_at=None,
+    repo_id=REPOSITORY_ID,
+    ref="closed-unmerged",
+    sha="a" * 40,
+    body=STANDARD_PR_BODY,
+):
+    return {
+        "number": number,
+        "state": state,
+        "merged": merged,
+        "merged_at": merged_at,
+        "head": {"repo": {"id": repo_id}, "ref": ref, "sha": sha},
+        "body": body,
+    }
+
+
+def test_targeted_remote_cleanup_requires_live_closed_unmerged_exact_pr(tmp_path, monkeypatch) -> None:
+    candidate = _targeted_candidate()
+    refs = {candidate["source_ref"]: candidate["source_sha"]}
+    commands: list[list[str]] = []
+    reads = 0
+    _install_remote_cleanup_authority(monkeypatch, tmp_path, refs, commands)
+
+    def read_pr(_identity, value, **_kwargs):
+        nonlocal reads
+        reads += 1
+        return _authenticated_contract(value)
+
+    monkeypatch.setattr(git_hygiene, "_read_candidate_pr", read_pr)
+    report = git_hygiene.targeted_remote_cleanup(
+        tmp_path, repository=candidate["repository"], candidates=[candidate]
+    )
+    assert report["ok"] is True
+    assert reads >= 4  # batch, no-side-effect preflight, archive, delete
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        _closed_pull_payload(state="open"),
+        _closed_pull_payload(merged=True, merged_at="2026-08-29T00:00:00Z"),
+        _closed_pull_payload(repo_id=999),
+        _closed_pull_payload(sha="b" * 40),
+    ],
+)
+def test_targeted_remote_cleanup_rejects_open_merged_forked_or_drifted_pr(
+    tmp_path, monkeypatch, payload
+) -> None:
+    candidate = git_hygiene.Candidate(**_targeted_candidate())
+    identity = git_hygiene.RepositoryIdentity(
+        REPOSITORY_ID, candidate.repository, FETCH_URL, PUSH_URL
+    )
+    monkeypatch.setattr(git_hygiene, "_github_get", lambda *_: payload)
+    with pytest.raises(RuntimeError):
+        git_hygiene._read_candidate_pr(identity, candidate, cwd=tmp_path)
+
+
+# Regression for https://github.com/RasmusTho/agentic-pkm-mvp/pull/5172#discussion_r3886294181
+@pytest.mark.parametrize(
+    "candidate",
+    [
+        _targeted_candidate(governing_issue=9999),
+        _targeted_candidate(governing_issue=None, no_issue_lane="governance"),
+    ],
+)
+def test_targeted_remote_cleanup_authenticates_live_pr_governing_issue(
+    tmp_path, monkeypatch, candidate
+) -> None:
+    identity = git_hygiene.RepositoryIdentity(
+        REPOSITORY_ID, candidate["repository"], FETCH_URL, PUSH_URL
+    )
+    monkeypatch.setattr(
+        git_hygiene,
+        "_github_get",
+        lambda *_: _closed_pull_payload(body="Governing-Issue: #5170\n\nFixes #5170\n"),
+    )
+
+    with pytest.raises(RuntimeError, match="candidate_pr_contract_mismatch"):
+        git_hygiene._read_candidate_pr(
+            identity, git_hygiene.Candidate(**candidate), cwd=tmp_path
+        )
+
+
+def test_targeted_remote_cleanup_authenticates_canonical_issue_free_lane(
+    tmp_path, monkeypatch
+) -> None:
+    identity = git_hygiene.RepositoryIdentity(
+        REPOSITORY_ID, "RasmusTho/agentic-pkm-mvp", FETCH_URL, PUSH_URL
+    )
+    body = (
+        "## Change Lane\n"
+        "- [ ] Docs authoring lane\n"
+        "- [x] Governance lane\n\n"
+        "Final-Review-Rounds: 0\n"
+    )
+    monkeypatch.setattr(
+        git_hygiene, "_github_get", lambda *_: _closed_pull_payload(body=body)
+    )
+    candidate = git_hygiene.Candidate(
+        **_targeted_candidate(governing_issue=None, no_issue_lane="governance")
+    )
+
+    contract = git_hygiene._read_candidate_pr(identity, candidate, cwd=tmp_path)
+
+    assert contract.governing_issue is None
+    assert contract.no_issue_lane == "governance"
+    assert contract.pr_body_sha256 == git_hygiene._sha256_pr_body(body)
+
+
+def test_targeted_remote_cleanup_rejects_issue_free_lane_mismatch(
+    tmp_path, monkeypatch
+) -> None:
+    identity = git_hygiene.RepositoryIdentity(
+        REPOSITORY_ID, "RasmusTho/agentic-pkm-mvp", FETCH_URL, PUSH_URL
+    )
+    body = (
+        "## Change Lane\n"
+        "- [ ] Docs authoring lane\n"
+        "- [x] Governance lane\n\n"
+        "Final-Review-Rounds: 0\n"
+    )
+    monkeypatch.setattr(
+        git_hygiene, "_github_get", lambda *_: _closed_pull_payload(body=body)
+    )
+    candidate = git_hygiene.Candidate(
+        **_targeted_candidate(governing_issue=None, no_issue_lane="docs-authoring")
+    )
+
+    with pytest.raises(RuntimeError, match="candidate_pr_contract_mismatch"):
+        git_hygiene._read_candidate_pr(identity, candidate, cwd=tmp_path)
+
+
+@pytest.mark.parametrize(
+    ("body", "candidate"),
+    [
+        (
+            "Governing-Issue: #5170\nGoverning-Issue: #5170\nFixes #5170\n",
+            _targeted_candidate(),
+        ),
+        ("Governing-Issue: #5170\n", _targeted_candidate()),
+        (
+            "## Change Lane\n"
+            "- [x] Docs authoring lane\n"
+            "- [x] Governance lane\n\n"
+            "Final-Review-Rounds: 0\n",
+            _targeted_candidate(governing_issue=None, no_issue_lane="governance"),
+        ),
+    ],
+)
+def test_targeted_remote_cleanup_rejects_malformed_or_ambiguous_pr_contract(
+    tmp_path, monkeypatch, body, candidate
+) -> None:
+    identity = git_hygiene.RepositoryIdentity(
+        REPOSITORY_ID, candidate["repository"], FETCH_URL, PUSH_URL
+    )
+    monkeypatch.setattr(
+        git_hygiene, "_github_get", lambda *_: _closed_pull_payload(body=body)
+    )
+
+    with pytest.raises(RuntimeError, match="candidate_pr_contract_mismatch"):
+        git_hygiene._read_candidate_pr(
+            identity, git_hygiene.Candidate(**candidate), cwd=tmp_path
+        )
+
+
+def test_targeted_remote_cleanup_treats_4728_as_protected_non_pull_issue(
+    tmp_path, monkeypatch
+) -> None:
+    identity = git_hygiene.RepositoryIdentity(
+        REPOSITORY_ID, "RasmusTho/agentic-pkm-mvp", FETCH_URL, PUSH_URL
+    )
+    issue = {
+        "number": 4728,
+        "state": "closed",
+        "repository_url": "https://api.github.com/repos/RasmusTho/agentic-pkm-mvp",
+    }
+    responses = {
+        "repos/RasmusTho/agentic-pkm-mvp/issues/4728": issue,
+        "repos/RasmusTho/agentic-pkm-mvp/pulls/4813": _closed_pull_payload(
+            number=4813, ref="codex/protected-4813", sha="d" * 40
+        ),
+    }
+    monkeypatch.setattr(git_hygiene, "_github_get", lambda _cwd, endpoint: responses[endpoint])
+    protected = git_hygiene._read_protected_targets(identity, cwd=tmp_path)
+    assert protected.issue_number == 4728
+    candidate = git_hygiene.Candidate(**_targeted_candidate(governing_issue=4728))
+    with pytest.raises(RuntimeError, match="protected_number"):
+        git_hygiene._validate_protected_candidate(candidate, protected)
+
+
+def test_targeted_remote_cleanup_fails_when_4728_kind_or_lookup_is_ambiguous(
+    tmp_path, monkeypatch
+) -> None:
+    identity = git_hygiene.RepositoryIdentity(
+        REPOSITORY_ID, "RasmusTho/agentic-pkm-mvp", FETCH_URL, PUSH_URL
+    )
+    issue = {
+        "number": 4728,
+        "state": "closed",
+        "repository_url": "https://api.github.com/repos/RasmusTho/agentic-pkm-mvp",
+        "pull_request": {},
+    }
+    monkeypatch.setattr(git_hygiene, "_github_get", lambda *_: issue)
+    with pytest.raises(RuntimeError, match="4728"):
+        git_hygiene._read_protected_targets(identity, cwd=tmp_path)
+
+
+@pytest.mark.parametrize("field", ["pull_request", "source_ref", "source_sha"])
+def test_targeted_remote_cleanup_protects_4813_number_ref_and_sha(field) -> None:
+    protected = git_hygiene.ProtectedAuthority(
+        4728, 4813, "refs/heads/codex/protected-4813", "d" * 40
+    )
+    overrides = {
+        "pull_request": 4813,
+        "source_ref": protected.pull_ref,
+        "source_sha": protected.pull_sha,
+    }
+    candidate_data = _targeted_candidate(**{field: overrides[field]})
+    if field in {"source_ref", "source_sha"}:
+        candidate_data["archive_ref"] = git_hygiene._archive_ref(
+            REPOSITORY_ID, candidate_data["source_ref"], candidate_data["source_sha"]
+        )
+    with pytest.raises(RuntimeError):
+        git_hygiene._validate_protected_candidate(
+            git_hygiene.Candidate(**candidate_data), protected
+        )
+
+
+def _repository_payload():
+    return {"id": REPOSITORY_ID, "full_name": "RasmusTho/agentic-pkm-mvp"}
+
+
+def test_targeted_remote_cleanup_rejects_alternate_push_repository(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(git_hygiene, "_github_get", lambda *_: _repository_payload())
+
+    def git_result(args, _cwd):
+        value = FETCH_URL if "--push" not in args else "git@github.com:other/repo.git"
+        return subprocess.CompletedProcess(args, 0, value + "\n", "")
+
+    monkeypatch.setattr(git_hygiene, "run_git_result", git_result)
+    with pytest.raises(RuntimeError, match="origin_repository_mismatch"):
+        git_hygiene._resolve_repository_identity(tmp_path, "RasmusTho/agentic-pkm-mvp")
+
+
+def test_targeted_remote_cleanup_allows_fetch_https_push_ssh_for_same_repo(
+    tmp_path, monkeypatch
+) -> None:
+    monkeypatch.setattr(git_hygiene, "_github_get", lambda *_: _repository_payload())
+
+    def git_result(args, _cwd):
+        value = FETCH_URL if "--push" not in args else PUSH_URL
+        return subprocess.CompletedProcess(args, 0, value + "\n", "")
+
+    monkeypatch.setattr(git_hygiene, "run_git_result", git_result)
+    identity = git_hygiene._resolve_repository_identity(
+        tmp_path, "RasmusTho/agentic-pkm-mvp"
+    )
+    assert identity.fetch_url == FETCH_URL
+    assert identity.push_url == PUSH_URL
+
+
+def test_targeted_remote_cleanup_fixes_rest_authority_to_github_com(
+    tmp_path, monkeypatch
+) -> None:
+    calls: list[tuple[list[str], dict[str, object]]] = []
+    monkeypatch.setenv("GH_HOST", "evil.example")
+    monkeypatch.setenv("GH_REPO", "attacker/redirect")
+    monkeypatch.setenv("GH_HTTP_UNIX_SOCKET", "/tmp/evil-gh.sock")
+    monkeypatch.setenv("GH_CONFIG_DIR", "/tmp/evil-gh-config")
+    monkeypatch.setenv("XDG_CONFIG_HOME", "/tmp/evil-xdg-config")
+    monkeypatch.setenv("GITHUB_API_URL", "https://evil.example/api")
+    monkeypatch.setenv("GITHUB_GRAPHQL_URL", "https://evil.example/graphql")
+    monkeypatch.setenv("GITHUB_SERVER_URL", "https://evil.example")
+    monkeypatch.setenv("GH_ENTERPRISE_TOKEN", "enterprise-token")
+    monkeypatch.setenv("GH_TOKEN", "github-token")
+    monkeypatch.setenv("GITHUB_TOKEN", "github-actions-token")
+    private_config_dirs: list[Path] = []
+
+    def command(args, **kwargs):
+        environment = kwargs["env"]
+        private_config = Path(environment["GH_CONFIG_DIR"])
+        private_config_dirs.append(private_config)
+        assert private_config.is_dir()
+        assert private_config.stat().st_mode & 0o777 == 0o700
+        assert list(private_config.iterdir()) == []
+        calls.append((args, kwargs))
+        return subprocess.CompletedProcess(
+            args, 0, json.dumps(_repository_payload()), ""
+        )
+
+    def git_result(args, _cwd):
+        value = FETCH_URL if "--push" not in args else PUSH_URL
+        return subprocess.CompletedProcess(args, 0, value + "\n", "")
+
+    monkeypatch.setattr(git_hygiene.subprocess, "run", command)
+    monkeypatch.setattr(git_hygiene, "run_git_result", git_result)
+
+    identity = git_hygiene._resolve_repository_identity(
+        tmp_path, "RasmusTho/agentic-pkm-mvp"
+    )
+
+    assert len(calls) == 1
+    args, kwargs = calls[0]
+    assert args == [
+        "gh",
+        "api",
+        "--hostname",
+        "github.com",
+        "--method",
+        "GET",
+        "repos/RasmusTho/agentic-pkm-mvp",
+    ]
+    environment = kwargs["env"]
+    assert isinstance(environment, dict)
+    assert "GH_HOST" not in environment
+    assert "GH_REPO" not in environment
+    assert "GH_HTTP_UNIX_SOCKET" not in environment
+    assert "XDG_CONFIG_HOME" not in environment
+    assert "GITHUB_API_URL" not in environment
+    assert "GITHUB_GRAPHQL_URL" not in environment
+    assert "GITHUB_SERVER_URL" not in environment
+    assert "GH_ENTERPRISE_TOKEN" not in environment
+    assert environment["GH_TOKEN"] == "github-token"
+    assert "GITHUB_TOKEN" not in environment
+    assert private_config_dirs and not private_config_dirs[0].exists()
+    assert identity.fetch_url == FETCH_URL
+    assert identity.push_url == PUSH_URL
+    assert git_hygiene._github_repo_from_url(identity.fetch_url) == identity.full_name
+
+
+def test_targeted_remote_cleanup_uses_github_token_fallback_without_config(
+    monkeypatch,
+) -> None:
+    monkeypatch.delenv("GH_TOKEN", raising=False)
+    monkeypatch.setenv("GITHUB_TOKEN", "github-actions-token")
+    monkeypatch.setenv("GH_CONFIG_DIR", "/tmp/attacker-config")
+
+    assert git_hygiene._github_auth_token() == "github-actions-token"
+
+
+def test_targeted_remote_cleanup_installed_gh_ignores_configured_unix_socket(
+    tmp_path, monkeypatch
+) -> None:
+    attacker_config = tmp_path / "attacker-gh-config"
+    attacker_config.mkdir(mode=0o700)
+    attacker_socket = Path("/tmp") / f"gh-r9-{os.getpid()}-{time.time_ns()}.sock"
+    (attacker_config / "config.yml").write_text(
+        f"http_unix_socket: {attacker_socket}\n",
+        encoding="utf-8",
+    )
+    repro_environment = os.environ.copy()
+    repro_environment["GH_CONFIG_DIR"] = str(attacker_config)
+    repro = subprocess.run(
+        ["gh", "config", "get", "http_unix_socket"],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=repro_environment,
+    )
+    assert repro.returncode == 0
+    assert repro.stdout.strip() == str(attacker_socket)
+    server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    server.bind(str(attacker_socket))
+    server.listen(1)
+    server.settimeout(0.1)
+    stop = threading.Event()
+    connections: list[bool] = []
+
+    def serve_attacker() -> None:
+        while not stop.is_set():
+            try:
+                connection, _ = server.accept()
+            except TimeoutError:
+                continue
+            except OSError:
+                return
+            connections.append(True)
+            body = b'{"attacker":true}'
+            connection.sendall(
+                b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
+                + f"Content-Length: {len(body)}\r\n\r\n".encode()
+                + body
+            )
+            connection.close()
+            return
+
+    thread = threading.Thread(target=serve_attacker, daemon=True)
+    thread.start()
+    monkeypatch.setenv("GH_CONFIG_DIR", str(attacker_config))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "attacker-xdg"))
+    monkeypatch.setenv("GH_HOST", "evil.example")
+    monkeypatch.setenv("GH_TOKEN", "invalid-token-for-fixed-host-test")
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+
+    payload: object | None = None
+    try:
+        payload = git_hygiene._github_get(tmp_path, "meta")
+    except RuntimeError as exc:
+        assert str(exc) == "github_get_failed:meta"
+    finally:
+        stop.set()
+        server.close()
+        thread.join(timeout=2)
+        attacker_socket.unlink(missing_ok=True)
+
+    assert connections == []
+    assert not (isinstance(payload, dict) and payload.get("attacker") is True)
+
+
+def test_targeted_remote_cleanup_rereads_lifecycle_before_archive(tmp_path, monkeypatch) -> None:
+    candidate = _targeted_candidate()
+    refs = {candidate["source_ref"]: candidate["source_sha"]}
+    commands: list[list[str]] = []
+    _install_remote_cleanup_authority(monkeypatch, tmp_path, refs, commands)
+    reads = 0
+
+    def lifecycle(_cwd, _candidate):
+        nonlocal reads
+        reads += 1
+        return {} if reads == 1 else {"conflict": {}}
+
+    monkeypatch.setattr(git_hygiene, "_read_lifecycle_authority", lifecycle)
+    monkeypatch.setattr(git_hygiene, "_lifecycle_conflicts", lambda _c, _v, records: set(records))
+    report = git_hygiene.targeted_remote_cleanup(
+        tmp_path, repository=candidate["repository"], candidates=[candidate]
+    )
+    assert report["error"] == "candidate_lifecycle_conflict"
+    assert not any(command[0] == "push" for command in commands)
+
+
+def test_targeted_remote_cleanup_rereads_lifecycle_before_delete(tmp_path, monkeypatch) -> None:
+    candidate = _targeted_candidate()
+    refs = {candidate["source_ref"]: candidate["source_sha"]}
+    commands: list[list[str]] = []
+    _install_remote_cleanup_authority(monkeypatch, tmp_path, refs, commands)
+    reads = 0
+
+    def lifecycle(_cwd, _candidate):
+        nonlocal reads
+        reads += 1
+        return {} if reads < 3 else {"conflict": {}}
+
+    monkeypatch.setattr(git_hygiene, "_read_lifecycle_authority", lifecycle)
+    monkeypatch.setattr(git_hygiene, "_lifecycle_conflicts", lambda _c, _v, records: set(records))
+    monkeypatch.setattr(
+        git_hygiene,
+        "_final_authority_fence",
+        lambda *_: nullcontext((lambda: lifecycle(None, None), lambda: [])),
+    )
+    report = git_hygiene.targeted_remote_cleanup(
+        tmp_path, repository=candidate["repository"], candidates=[candidate]
+    )
+    assert report["error"] == "candidate_lifecycle_conflict"
+    assert candidate["source_ref"] in refs
+    assert refs[candidate["archive_ref"]] == candidate["source_sha"]
+
+
+def test_targeted_remote_cleanup_rereads_dispatcher_leases_at_both_boundaries(
+    tmp_path, monkeypatch
+) -> None:
+    candidate = _targeted_candidate()
+    refs = {candidate["source_ref"]: candidate["source_sha"]}
+    commands: list[list[str]] = []
+    _install_remote_cleanup_authority(monkeypatch, tmp_path, refs, commands)
+    reads = 0
+
+    def dispatcher(*_args):
+        nonlocal reads
+        reads += 1
+        return []
+
+    monkeypatch.setattr(git_hygiene, "_read_dispatcher_authority", dispatcher)
+    monkeypatch.setattr(
+        git_hygiene,
+        "_final_authority_fence",
+        lambda *_: nullcontext((lambda: {}, lambda: dispatcher())),
+    )
+    report = git_hygiene.targeted_remote_cleanup(
+        tmp_path, repository=candidate["repository"], candidates=[candidate]
+    )
+    assert report["ok"] is True
+    assert reads == 4
+
+
+def test_targeted_remote_cleanup_pr_contract_drift_before_delete_preserves_source(
+    tmp_path, monkeypatch
+) -> None:
+    candidate = _targeted_candidate()
+    refs = {candidate["source_ref"]: candidate["source_sha"]}
+    commands: list[list[str]] = []
+    _install_remote_cleanup_authority(monkeypatch, tmp_path, refs, commands)
+    original = _authenticated_contract(git_hygiene.Candidate(**candidate))
+    changed = git_hygiene.PullContractIdentity(
+        governing_issue=original.governing_issue,
+        no_issue_lane=original.no_issue_lane,
+        pr_body_sha256="f" * 64,
+    )
+    reads = 0
+
+    def read_pr(_identity, _candidate, **_kwargs):
+        nonlocal reads
+        reads += 1
+        return changed if reads >= 4 else original
+
+    monkeypatch.setattr(git_hygiene, "_read_candidate_pr", read_pr)
+    report = git_hygiene.targeted_remote_cleanup(
+        tmp_path, repository=candidate["repository"], candidates=[candidate]
+    )
+
+    assert report["error"] == "candidate_pr_contract_changed"
+    assert refs[candidate["source_ref"]] == candidate["source_sha"]
+    assert refs[candidate["archive_ref"]] == candidate["source_sha"]
+    assert not any(
+        command[-1] == f":{candidate['source_ref']}"
+        for command in commands
+        if command[0] == "push"
+    )
+
+
+def test_targeted_remote_cleanup_github_drift_after_cas_restores_and_compensates(
+    tmp_path, monkeypatch
+) -> None:
+    candidate = _targeted_candidate()
+    refs = {candidate["source_ref"]: candidate["source_sha"]}
+    commands: list[list[str]] = []
+    _install_remote_cleanup_authority(monkeypatch, tmp_path, refs, commands)
+    original = _authenticated_contract(git_hygiene.Candidate(**candidate))
+    changed = git_hygiene.PullContractIdentity(
+        original.governing_issue,
+        original.no_issue_lane,
+        "f" * 64,
+    )
+    reads = 0
+
+    def read_pr(_identity, _candidate, **_kwargs):
+        nonlocal reads
+        reads += 1
+        return changed if reads >= 5 else original
+
+    monkeypatch.setattr(git_hygiene, "_read_candidate_pr", read_pr)
+    report = git_hygiene.targeted_remote_cleanup(
+        tmp_path, repository=candidate["repository"], candidates=[candidate]
+    )
+
+    assert report["error"] == "post_delete_authority_changed_compensated"
+    assert refs[candidate["source_ref"]] == candidate["source_sha"]
+    assert refs[candidate["archive_ref"]] == candidate["source_sha"]
+    receipts = (
+        tmp_path
+        / "common"
+        / "git-hygiene"
+        / "targeted-remote-cleanup"
+        / "v1"
+        / "receipts"
+    )
+    assert json.loads(next(receipts.glob("*.json")).read_text())["state"] == "compensated"
+    assert any(command[-1] == f":{candidate['source_ref']}" for command in commands)
+    assert any(
+        command[-1] == f"{candidate['source_sha']}:{candidate['source_ref']}"
+        for command in commands
+    )
+
+
+def test_targeted_remote_cleanup_concurrent_source_recreation_refuses_restore_cas(
+    tmp_path, monkeypatch
+) -> None:
+    candidate = _targeted_candidate()
+    refs = {candidate["source_ref"]: candidate["source_sha"]}
+    commands: list[list[str]] = []
+    _install_remote_cleanup_authority(monkeypatch, tmp_path, refs, commands)
+    original = _authenticated_contract(git_hygiene.Candidate(**candidate))
+    changed = git_hygiene.PullContractIdentity(
+        original.governing_issue,
+        original.no_issue_lane,
+        "f" * 64,
+    )
+    reads = 0
+
+    def read_pr(_identity, _candidate, **_kwargs):
+        nonlocal reads
+        reads += 1
+        if reads >= 5:
+            refs[candidate["source_ref"]] = "b" * 40
+            return changed
+        return original
+
+    monkeypatch.setattr(git_hygiene, "_read_candidate_pr", read_pr)
+    report = git_hygiene.targeted_remote_cleanup(
+        tmp_path, repository=candidate["repository"], candidates=[candidate]
+    )
+
+    assert report["error"] == "source_restore_expected_absence_failed"
+    assert refs[candidate["source_ref"]] == "b" * 40
+    assert refs[candidate["archive_ref"]] == candidate["source_sha"]
+    receipts = (
+        tmp_path
+        / "common"
+        / "git-hygiene"
+        / "targeted-remote-cleanup"
+        / "v1"
+        / "receipts"
+    )
+    assert json.loads(next(receipts.glob("*.json")).read_text())["state"] == "prepared"
+
+
+def test_targeted_remote_cleanup_new_lease_after_archive_preserves_source(
+    tmp_path, monkeypatch
+) -> None:
+    candidate = _targeted_candidate()
+    refs = {candidate["source_ref"]: candidate["source_sha"]}
+    commands: list[list[str]] = []
+    _install_remote_cleanup_authority(monkeypatch, tmp_path, refs, commands)
+    reads = 0
+
+    def dispatcher(*_args):
+        nonlocal reads
+        reads += 1
+        return [] if reads < 3 else [{"conflict": True}]
+
+    monkeypatch.setattr(git_hygiene, "_read_dispatcher_authority", dispatcher)
+    monkeypatch.setattr(
+        git_hygiene,
+        "_final_authority_fence",
+        lambda *_: nullcontext((lambda: {}, lambda: dispatcher())),
+    )
+    monkeypatch.setattr(
+        git_hygiene,
+        "_dispatcher_conflicts",
+        lambda _c, _l, value, **_kwargs: set() if not value else {"lease"},
+    )
+    report = git_hygiene.targeted_remote_cleanup(
+        tmp_path, repository=candidate["repository"], candidates=[candidate]
+    )
+    assert report["error"] == "candidate_dispatcher_conflict"
+    assert candidate["source_ref"] in refs
+    assert candidate["archive_ref"] in refs
+
+
+def test_targeted_remote_cleanup_dispatcher_writer_linearizes_after_source_cas(
+    tmp_path, monkeypatch
+) -> None:
+    from app.dispatcher.models import LeaseRecord
+    from app.dispatcher.store import SqliteStore
+    from scripts import agent_worktree
+
+    candidate = _targeted_candidate()
+    refs = {candidate["source_ref"]: candidate["source_sha"]}
+    commands: list[list[str]] = []
+    real_final_fence = git_hygiene._final_authority_fence
+    _install_remote_cleanup_authority(monkeypatch, tmp_path, refs, commands)
+    database = tmp_path / "dispatcher.sqlite3"
+    store = SqliteStore(database)
+    store.initialize()
+    monkeypatch.setattr(
+        git_hygiene, "_canonical_dispatcher_db_path", lambda _cwd: database
+    )
+    monkeypatch.setattr(
+        agent_worktree,
+        "locked_lifecycle_authority",
+        lambda *_args, **_kwargs: nullcontext(lambda: {}),
+    )
+    monkeypatch.setattr(git_hygiene, "_final_authority_fence", real_final_fence)
+    writer_started = threading.Event()
+    writer_finished = threading.Event()
+    errors: list[BaseException] = []
+    thread: threading.Thread | None = None
+
+    def insert_claim() -> None:
+        writer_started.set()
+        try:
+            store.upsert_lease(
+                LeaseRecord(
+                    lease_id="pre-cas-attempt",
+                    resource="issue:5170",
+                    holder="new-agent",
+                    ttl_seconds=60,
+                    acquired_at="2026-08-29T00:00:00+00:00",
+                    expires_at="2099-01-01T00:00:00+00:00",
+                )
+            )
+        except BaseException as exc:  # pragma: no cover - surfaced below
+            errors.append(exc)
+        finally:
+            writer_finished.set()
+
+    def hook(point: str) -> None:
+        nonlocal thread
+        if point == "before_source_cas_acceptance":
+            thread = threading.Thread(target=insert_claim)
+            thread.start()
+            assert writer_started.wait(1)
+            assert not writer_finished.wait(0.1)
+        elif point == "after_source_cas_acceptance":
+            assert not writer_finished.is_set()
+
+    monkeypatch.setattr(git_hygiene, "_crash_hook", hook)
+    report = git_hygiene.targeted_remote_cleanup(
+        tmp_path, repository=candidate["repository"], candidates=[candidate]
+    )
+
+    assert report["ok"] is True
+    assert thread is not None
+    assert writer_finished.wait(2)
+    thread.join(2)
+    assert not thread.is_alive()
+    assert errors == []
+    assert store.get_lease("pre-cas-attempt") is not None
+    receipt = next(
+        (tmp_path / "common" / "git-hygiene" / "targeted-remote-cleanup" / "v1" / "receipts").glob("*.json")
+    )
+    assert json.loads(receipt.read_text(encoding="utf-8"))["state"] == "completed"
+
+
+def test_final_authority_fence_uses_dispatcher_then_lifecycle_order(
+    tmp_path, monkeypatch
+) -> None:
+    from scripts import agent_worktree
+
+    events: list[str] = []
+    dispatcher_held = False
+
+    @contextmanager
+    def dispatcher_fence(_cwd):
+        nonlocal dispatcher_held
+        events.append("dispatcher-enter")
+        dispatcher_held = True
+        try:
+            yield object()
+        finally:
+            dispatcher_held = False
+            events.append("dispatcher-exit")
+
+    @contextmanager
+    def lifecycle_fence(*_args, **_kwargs):
+        assert dispatcher_held
+        events.append("lifecycle-enter")
+        try:
+            yield lambda: {}
+        finally:
+            events.append("lifecycle-exit")
+
+    monkeypatch.setattr(
+        git_hygiene, "_dispatcher_authority_write_fence", dispatcher_fence
+    )
+    monkeypatch.setattr(
+        agent_worktree, "locked_lifecycle_authority", lifecycle_fence
+    )
+    candidate = git_hygiene.Candidate(**_targeted_candidate())
+
+    with git_hygiene._final_authority_fence(tmp_path, candidate):
+        events.append("critical-section")
+
+    assert events == [
+        "dispatcher-enter",
+        "lifecycle-enter",
+        "critical-section",
+        "lifecycle-exit",
+        "dispatcher-exit",
+    ]
+
+
+def test_targeted_remote_cleanup_uses_git_common_dir_store_across_worktrees(tmp_path) -> None:
+    repo = tmp_path / "repo"
+    worktree = tmp_path / "worktree"
+    subprocess.run(["git", "init", str(repo)], check=True, capture_output=True)
+    subprocess.run(["git", "-C", str(repo), "config", "user.email", "test@example.com"], check=True)
+    subprocess.run(["git", "-C", str(repo), "config", "user.name", "Test"], check=True)
+    (repo / "a").write_text("a", encoding="utf-8")
+    subprocess.run(["git", "-C", str(repo), "add", "a"], check=True)
+    subprocess.run(["git", "-C", str(repo), "commit", "-m", "init"], check=True, capture_output=True)
+    subprocess.run(["git", "-C", str(repo), "worktree", "add", "-b", "other", str(worktree)], check=True, capture_output=True)
+    assert git_hygiene._git_common_dir(repo) == git_hygiene._git_common_dir(worktree)
+
+
+def test_targeted_remote_cleanup_sanitizes_explicit_cwd_repository_context(
+    tmp_path, monkeypatch
+) -> None:
+    from scripts import agent_worktree
+
+    repo_a = tmp_path / "repo-a"
+    repo_b = tmp_path / "repo-b"
+    for repo, remote in (
+        (repo_a, "https://github.com/Owner/repo-a.git"),
+        (repo_b, "https://github.com/Owner/repo-b.git"),
+    ):
+        subprocess.run(["git", "init", str(repo)], check=True, capture_output=True)
+        subprocess.run(
+            ["git", "-C", str(repo), "remote", "add", "origin", remote], check=True
+        )
+    registry_a = repo_a / ".git" / "agent-worktrees.json"
+    registry_a.write_text(
+        json.dumps({"schema": agent_worktree.REGISTRY_SCHEMA, "worktrees": {}}),
+        encoding="utf-8",
+    )
+    (repo_b / ".git" / "agent-worktrees.json").write_text(
+        "not-json", encoding="utf-8"
+    )
+
+    monkeypatch.setenv("GIT_DIR", str(repo_b / ".git"))
+    monkeypatch.setenv("GIT_WORK_TREE", str(repo_b))
+    monkeypatch.setenv("GIT_COMMON_DIR", str(repo_b / ".git"))
+    monkeypatch.setenv("GIT_INDEX_FILE", str(repo_b / ".git" / "index"))
+    monkeypatch.setenv("GIT_CONFIG_COUNT", "1")
+    monkeypatch.setenv("GIT_CONFIG_KEY_0", "test.marker")
+    monkeypatch.setenv("GIT_CONFIG_VALUE_0", "preserved")
+    monkeypatch.setattr(
+        git_hygiene,
+        "_github_get",
+        lambda _cwd, _endpoint: {"id": 101, "full_name": "Owner/repo-a"},
+    )
+
+    sanitized = git_hygiene._sanitized_git_environment()
+    assert "GIT_DIR" not in sanitized
+    assert "GIT_WORK_TREE" not in sanitized
+    assert "GIT_COMMON_DIR" not in sanitized
+    assert "GIT_INDEX_FILE" not in sanitized
+    assert sanitized["GIT_CONFIG_COUNT"] == "1"
+    assert git_hygiene.run_git(["config", "--get", "test.marker"], repo_a) == "preserved"
+
+    identity = git_hygiene._resolve_repository_identity(repo_a, "Owner/repo-a")
+    assert identity.fetch_url == "https://github.com/Owner/repo-a.git"
+    assert identity.push_url == "https://github.com/Owner/repo-a.git"
+    assert git_hygiene._git_common_dir(repo_a) == (repo_a / ".git").resolve()
+    assert agent_worktree._default_registry_path(repo_a) == registry_a.resolve()
+    assert agent_worktree.load_lifecycle_authority(
+        repo_a, candidate_branch="codex/no-such-branch"
+    ) == {}
+    assert git_hygiene._canonical_dispatcher_db_path(repo_a) == (
+        repo_a / "runtime" / "dispatcher" / "dispatcher.sqlite3"
+    ).resolve()
+
+
+def test_targeted_remote_cleanup_resource_key_rejects_disposition_rebinding(
+    tmp_path, monkeypatch
+) -> None:
+    candidate = _targeted_candidate()
+    refs = {candidate["source_ref"]: candidate["source_sha"]}
+    commands: list[list[str]] = []
+    _install_remote_cleanup_authority(monkeypatch, tmp_path, refs, commands)
+    assert git_hygiene.targeted_remote_cleanup(
+        tmp_path, repository=candidate["repository"], candidates=[candidate]
+    )["ok"] is True
+    rebound = _targeted_candidate(owner="different-owner")
+    report = git_hygiene.targeted_remote_cleanup(
+        tmp_path, repository=rebound["repository"], candidates=[rebound]
+    )
+    assert report["error"] == "receipt_identity_or_state_conflict"
+
+
+def _start_lock_holder(lock_path: Path, ready_path: Path) -> subprocess.Popen:
+    code = (
+        "import pathlib,time; from scripts.git_hygiene import _resource_flock; "
+        f"lock=pathlib.Path({str(lock_path)!r}); ready=pathlib.Path({str(ready_path)!r}); "
+        "\nwith _resource_flock(lock):\n ready.write_text('ready')\n time.sleep(30)\n"
+    )
+    return subprocess.Popen([sys.executable, "-c", code], cwd=Path(__file__).parents[2])
+
+
+def _wait_ready(path: Path) -> None:
+    deadline = time.time() + 5
+    while time.time() < deadline and not path.exists():
+        time.sleep(0.02)
+    assert path.exists()
+
+
+def test_targeted_remote_cleanup_flock_serializes_processes(tmp_path) -> None:
+    lock = tmp_path / "resource.lock"
+    ready = tmp_path / "ready"
+    process = _start_lock_holder(lock, ready)
+    try:
+        _wait_ready(ready)
+        with pytest.raises(RuntimeError, match="busy"):
+            with git_hygiene._resource_flock(lock):
+                pass
+    finally:
+        process.terminate()
+        process.wait(timeout=5)
+
+
+def test_targeted_remote_cleanup_sigkill_releases_flock(tmp_path) -> None:
+    lock = tmp_path / "resource.lock"
+    ready = tmp_path / "ready"
+    process = _start_lock_holder(lock, ready)
+    _wait_ready(ready)
+    os.kill(process.pid, signal.SIGKILL)
+    process.wait(timeout=5)
+    with git_hygiene._resource_flock(lock):
+        pass
+    assert lock.exists()
+
+
+def test_targeted_remote_cleanup_without_prepared_receipt_cannot_adopt_absence(
+    tmp_path, monkeypatch
+) -> None:
+    candidate = _targeted_candidate()
+    refs = {candidate["archive_ref"]: candidate["source_sha"]}
+    commands: list[list[str]] = []
+    _install_remote_cleanup_authority(monkeypatch, tmp_path, refs, commands)
+    report = git_hygiene.targeted_remote_cleanup(
+        tmp_path, repository=candidate["repository"], candidates=[candidate]
+    )
+    assert report["error"] == "source_absent_without_prepared_receipt"
+
+
+def test_targeted_remote_cleanup_prepared_absence_recovers_to_completed(
+    tmp_path, monkeypatch
+) -> None:
+    candidate_data = _targeted_candidate()
+    refs = {candidate_data["archive_ref"]: candidate_data["source_sha"]}
+    commands: list[list[str]] = []
+    identity = _install_remote_cleanup_authority(monkeypatch, tmp_path, refs, commands)
+    candidate = git_hygiene.Candidate(**candidate_data)
+    expected = git_hygiene._candidate_identity(
+        identity, candidate, _authenticated_contract(candidate)
+    )
+    key = git_hygiene._receipt_resource_key(REPOSITORY_ID, candidate.source_ref)
+    paths = git_hygiene._receipt_paths(tmp_path / "common", key)
+    git_hygiene._replace_receipt(
+        paths.receipt,
+        git_hygiene.Receipt(git_hygiene.RECEIPT_SCHEMA, key, "prepared", expected),
+    )
+    report = git_hygiene.targeted_remote_cleanup(
+        tmp_path, repository=candidate.repository, candidates=[candidate_data]
+    )
+    assert report["ok"] is True
+    assert json.loads(paths.receipt.read_text())["state"] == "completed"
+
+
+def test_targeted_remote_cleanup_atomic_transition_orders_fsync_replace_dirsync(
+    tmp_path, monkeypatch
+) -> None:
+    candidate = git_hygiene.Candidate(**_targeted_candidate())
+    identity = git_hygiene.RepositoryIdentity(REPOSITORY_ID, candidate.repository, FETCH_URL, PUSH_URL)
+    expected = git_hygiene._candidate_identity(
+        identity, candidate, _authenticated_contract(candidate)
+    )
+    key = git_hygiene._receipt_resource_key(REPOSITORY_ID, candidate.source_ref)
+    paths = git_hygiene._receipt_paths(tmp_path, key)
+    events = []
+    monkeypatch.setattr(git_hygiene, "_crash_hook", events.append)
+    git_hygiene._replace_receipt(
+        paths.receipt,
+        git_hygiene.Receipt(git_hygiene.RECEIPT_SCHEMA, key, "prepared", expected),
+    )
+    assert events == [
+        "before_prepared_temp_fsync",
+        "after_prepared_temp_fsync",
+        "before_prepared_replace",
+        "after_prepared_replace",
+        "before_prepared_dir_fsync",
+        "after_prepared_dir_fsync",
+    ]
+
+
+def test_targeted_remote_cleanup_receipt_schema_is_exact_and_monotonic(tmp_path) -> None:
+    candidate = git_hygiene.Candidate(**_targeted_candidate())
+    repository = git_hygiene.RepositoryIdentity(
+        REPOSITORY_ID, candidate.repository, FETCH_URL, PUSH_URL
+    )
+    identity = git_hygiene._candidate_identity(
+        repository, candidate, _authenticated_contract(candidate)
+    )
+    key = git_hygiene._receipt_resource_key(REPOSITORY_ID, candidate.source_ref)
+    paths = git_hygiene._receipt_paths(tmp_path, key)
+    prepared = git_hygiene.Receipt(
+        git_hygiene.RECEIPT_SCHEMA, key, "prepared", identity
+    )
+    git_hygiene._replace_receipt(paths.receipt, prepared)
+    payload = json.loads(paths.receipt.read_text(encoding="utf-8"))
+
+    payload["extra"] = True
+    paths.receipt.write_text(json.dumps(payload), encoding="utf-8")
+    with pytest.raises(RuntimeError, match="schema"):
+        git_hygiene._read_receipt(paths.receipt, expected=identity)
+    payload.pop("extra")
+
+    payload["identity_digest"] = "0" * 64
+    paths.receipt.write_text(json.dumps(payload), encoding="utf-8")
+    with pytest.raises(RuntimeError, match="identity"):
+        git_hygiene._read_receipt(paths.receipt, expected=identity)
+    payload["identity_digest"] = git_hygiene._identity_digest(identity)
+
+    duplicate = json.dumps(payload)[:-1] + ',"state":"prepared"}'
+    paths.receipt.write_text(duplicate, encoding="utf-8")
+    with pytest.raises(RuntimeError, match="json"):
+        git_hygiene._read_receipt(paths.receipt, expected=identity)
+
+    paths.receipt.unlink()
+    target = tmp_path / "target.json"
+    target.write_text("{}", encoding="utf-8")
+    paths.receipt.symlink_to(target)
+    with pytest.raises(RuntimeError, match="path"):
+        git_hygiene._read_receipt(paths.receipt, expected=identity)
+    paths.receipt.unlink()
+
+    compensated = git_hygiene.Receipt(
+        git_hygiene.RECEIPT_SCHEMA, key, "compensated", identity
+    )
+    git_hygiene._replace_receipt(paths.receipt, compensated)
+    assert git_hygiene._read_receipt(paths.receipt, expected=identity) == compensated
+    with pytest.raises(RuntimeError, match="regression"):
+        git_hygiene._replace_receipt(paths.receipt, prepared)
+
+    completed = git_hygiene.Receipt(
+        git_hygiene.RECEIPT_SCHEMA, key, "completed", identity
+    )
+    git_hygiene._replace_receipt(paths.receipt, completed)
+    with pytest.raises(RuntimeError, match="regression"):
+        git_hygiene._replace_receipt(paths.receipt, prepared)
+
+
+def test_targeted_remote_cleanup_reads_real_dispatcher_task_and_lease(
+    tmp_path, monkeypatch
+) -> None:
+    from app.dispatcher.models import LeaseRecord, TaskRecord
+    from app.dispatcher.store import SqliteStore
+
+    database = tmp_path / "dispatcher.sqlite3"
+    monkeypatch.setattr(
+        git_hygiene, "_canonical_dispatcher_db_path", lambda _cwd: database
+    )
+    store = SqliteStore(database)
+    store.initialize()
+    expires = "2099-01-01T00:00:00+00:00"
+    lease = LeaseRecord(
+        lease_id="lease-1",
+        resource="issue:5170",
+        holder="other-agent",
+        ttl_seconds=60,
+        acquired_at="2026-08-29T00:00:00+00:00",
+        expires_at=expires,
+    )
+    store.upsert_lease(lease)
+    store.upsert_task(
+        TaskRecord(
+            task_id="task-1",
+            issue_number=5170,
+            title="candidate",
+            status="claimed",
+            priority="high",
+            source_anchor_refs=[],
+            created_at="2026-08-29T00:00:00+00:00",
+            updated_at="2026-08-29T00:00:00+00:00",
+            repo="RasmusTho/agentic-pkm-mvp",
+            claimed_by="other-agent",
+            lease_id=lease.lease_id,
+            lease_expires_at=expires,
+            linked_pr="6000",
+        )
+    )
+    snapshot = git_hygiene._read_dispatcher_authority(
+        tmp_path, "RasmusTho/agentic-pkm-mvp"
+    )
+    candidate = git_hygiene.Candidate(**_targeted_candidate())
+    assert git_hygiene._dispatcher_conflicts(candidate, {}, snapshot) == {
+        "live_dispatcher_claim"
+    }
+
+
+def test_targeted_remote_cleanup_dispatcher_missing_db_fails_closed(
+    tmp_path, monkeypatch
+) -> None:
+    monkeypatch.setattr(
+        git_hygiene,
+        "_canonical_dispatcher_db_path",
+        lambda _cwd: tmp_path / "missing.sqlite3",
+    )
+    with pytest.raises(RuntimeError, match="missing"):
+        git_hygiene._read_dispatcher_authority(
+            tmp_path, "RasmusTho/agentic-pkm-mvp"
+        )
+
+
+def test_targeted_remote_cleanup_ignores_dispatcher_env_database_bypass(
+    tmp_path, monkeypatch
+) -> None:
+    from app.dispatcher.models import LeaseRecord
+    from app.dispatcher.store import SqliteStore
+
+    repo = tmp_path / "repo"
+    subprocess.run(["git", "init", str(repo)], check=True, capture_output=True)
+    canonical = repo / "runtime" / "dispatcher" / "dispatcher.sqlite3"
+    canonical_store = SqliteStore(canonical)
+    canonical_store.initialize()
+    canonical_store.upsert_lease(
+        LeaseRecord(
+            lease_id="canonical-live",
+            resource="branch:closed-unmerged",
+            holder="other-agent",
+            ttl_seconds=60,
+            acquired_at="2026-08-29T00:00:00+00:00",
+            expires_at="2099-01-01T00:00:00+00:00",
+        )
+    )
+    alternate = tmp_path / "alternate-empty.sqlite3"
+    SqliteStore(alternate).initialize()
+    monkeypatch.setenv("DISPATCHER_DB_PATH", str(alternate))
+
+    assert git_hygiene._canonical_dispatcher_db_path(repo) == canonical.resolve()
+    snapshot = git_hygiene._read_dispatcher_authority(
+        repo, "RasmusTho/agentic-pkm-mvp"
+    )
+    candidate = git_hygiene.Candidate(**_targeted_candidate())
+    assert git_hygiene._dispatcher_conflicts(candidate, {}, snapshot) == {
+        "live_dispatcher_claim"
+    }
+
+
+def test_targeted_remote_cleanup_detects_orphan_live_branch_lease(
+    tmp_path, monkeypatch
+) -> None:
+    from app.dispatcher.models import LeaseRecord
+    from app.dispatcher.store import SqliteStore
+
+    database = tmp_path / "dispatcher.sqlite3"
+    monkeypatch.setattr(
+        git_hygiene, "_canonical_dispatcher_db_path", lambda _cwd: database
+    )
+    store = SqliteStore(database)
+    store.initialize()
+    store.upsert_lease(
+        LeaseRecord(
+            lease_id="orphan-live",
+            resource="branch:closed-unmerged",
+            holder="other-agent",
+            ttl_seconds=60,
+            acquired_at="2026-08-29T00:00:00+00:00",
+            expires_at="2099-01-01T00:00:00+00:00",
+        )
+    )
+
+    snapshot = git_hygiene._read_dispatcher_authority(
+        tmp_path, "RasmusTho/agentic-pkm-mvp"
+    )
+    candidate = git_hygiene.Candidate(**_targeted_candidate())
+    assert git_hygiene._dispatcher_conflicts(candidate, {}, snapshot) == {
+        "live_dispatcher_claim"
+    }
+
+
+def test_targeted_remote_cleanup_detects_orphan_live_issue_lease_only_when_relevant(
+    tmp_path, monkeypatch
+) -> None:
+    from app.dispatcher.models import LeaseRecord
+    from app.dispatcher.store import SqliteStore
+
+    database = tmp_path / "dispatcher.sqlite3"
+    monkeypatch.setattr(
+        git_hygiene, "_canonical_dispatcher_db_path", lambda _cwd: database
+    )
+    store = SqliteStore(database)
+    store.initialize()
+    store.upsert_lease(
+        LeaseRecord(
+            lease_id="unrelated-issue",
+            resource="issue:9999",
+            holder="other-agent",
+            ttl_seconds=60,
+            acquired_at="2026-08-29T00:00:00+00:00",
+            expires_at="2099-01-01T00:00:00+00:00",
+        )
+    )
+    candidate = git_hygiene.Candidate(**_targeted_candidate())
+    snapshot = git_hygiene._read_dispatcher_authority(
+        tmp_path, "RasmusTho/agentic-pkm-mvp"
+    )
+    assert git_hygiene._dispatcher_conflicts(candidate, {}, snapshot) == set()
+
+    store.upsert_lease(
+        LeaseRecord(
+            lease_id="candidate-issue",
+            resource="issue:5170",
+            holder="other-agent",
+            ttl_seconds=60,
+            acquired_at="2026-08-29T00:00:00+00:00",
+            expires_at="2099-01-01T00:00:00+00:00",
+        )
+    )
+    snapshot = git_hygiene._read_dispatcher_authority(
+        tmp_path, "RasmusTho/agentic-pkm-mvp"
+    )
+    assert git_hygiene._dispatcher_conflicts(candidate, {}, snapshot) == {
+        "live_dispatcher_claim"
+    }
+
+
+# Regression for https://github.com/RasmusTho/agentic-pkm-mvp/pull/5172#discussion_r3886294181
+def test_targeted_remote_cleanup_cannot_omit_leased_live_pr_governing_issue(
+    tmp_path, monkeypatch
+) -> None:
+    from app.dispatcher.models import LeaseRecord
+    from app.dispatcher.store import SqliteStore
+
+    database = tmp_path / "dispatcher.sqlite3"
+    monkeypatch.setattr(
+        git_hygiene, "_canonical_dispatcher_db_path", lambda _cwd: database
+    )
+    store = SqliteStore(database)
+    store.initialize()
+    store.upsert_lease(
+        LeaseRecord(
+            lease_id="actual-governing-issue",
+            resource="issue:5170",
+            holder="other-agent",
+            ttl_seconds=60,
+            acquired_at="2026-08-29T00:00:00+00:00",
+            expires_at="2099-01-01T00:00:00+00:00",
+        )
+    )
+    candidate = git_hygiene.Candidate(
+        **_targeted_candidate(governing_issue=None, no_issue_lane="governance")
+    )
+    identity = git_hygiene.RepositoryIdentity(
+        REPOSITORY_ID, candidate.repository, FETCH_URL, PUSH_URL
+    )
+    monkeypatch.setattr(
+        git_hygiene,
+        "_github_get",
+        lambda *_: _closed_pull_payload(body="Governing-Issue: #5170\n\nFixes #5170\n"),
+    )
+
+    with pytest.raises(RuntimeError, match="candidate_pr_contract_mismatch"):
+        git_hygiene._read_candidate_pr(identity, candidate, cwd=tmp_path)
+
+    snapshot = git_hygiene._read_dispatcher_authority(
+        tmp_path, "RasmusTho/agentic-pkm-mvp"
+    )
+    authenticated = git_hygiene.Candidate(**_targeted_candidate())
+    assert git_hygiene._dispatcher_conflicts(authenticated, {}, snapshot) == {
+        "live_dispatcher_claim"
+    }
+
+
+# Regression for https://github.com/RasmusTho/agentic-pkm-mvp/pull/5172#discussion_r3886294191
+@pytest.mark.parametrize("status", ("backlog", "ready", "review", "blocked"))
+def test_targeted_remote_cleanup_blocks_relevant_resumable_task_without_lease(
+    tmp_path, monkeypatch, status
+) -> None:
+    from app.dispatcher.models import TaskRecord
+    from app.dispatcher.store import SqliteStore
+
+    database = tmp_path / "dispatcher.sqlite3"
+    monkeypatch.setattr(
+        git_hygiene, "_canonical_dispatcher_db_path", lambda _cwd: database
+    )
+    store = SqliteStore(database)
+    store.initialize()
+    store.upsert_task(
+        TaskRecord(
+            task_id=f"candidate-{status}",
+            issue_number=5170,
+            title="candidate retained work",
+            status=status,
+            priority="high",
+            source_anchor_refs=[],
+            created_at="2026-08-29T00:00:00+00:00",
+            updated_at="2026-08-29T00:00:00+00:00",
+            repo="RasmusTho/agentic-pkm-mvp",
+            linked_pr="6000",
+        )
+    )
+
+    snapshot = git_hygiene._read_dispatcher_authority(
+        tmp_path, "RasmusTho/agentic-pkm-mvp"
+    )
+    candidate = git_hygiene.Candidate(**_targeted_candidate())
+    assert git_hygiene._dispatcher_conflicts(candidate, {}, snapshot) == {
+        "nonterminal_dispatcher_task"
+    }
+
+
+@pytest.mark.parametrize("status", ("ready", "review", "claimed", "in_progress"))
+def test_targeted_remote_cleanup_blocks_resumable_task_with_released_lease(
+    tmp_path, monkeypatch, status
+) -> None:
+    from app.dispatcher.models import LeaseRecord, TaskRecord
+    from app.dispatcher.store import SqliteStore
+
+    database = tmp_path / "dispatcher.sqlite3"
+    monkeypatch.setattr(
+        git_hygiene, "_canonical_dispatcher_db_path", lambda _cwd: database
+    )
+    store = SqliteStore(database)
+    store.initialize()
+    expires = "2026-08-29T00:01:00+00:00"
+    store.upsert_lease(
+        LeaseRecord(
+            lease_id=f"released-{status}",
+            resource="issue:5170",
+            holder="prior-agent",
+            ttl_seconds=60,
+            acquired_at="2026-08-29T00:00:00+00:00",
+            expires_at=expires,
+            released_at="2026-08-29T00:00:30+00:00",
+            release_reason="review" if status == "review" else "manual",
+        )
+    )
+    store.upsert_task(
+        TaskRecord(
+            task_id=f"candidate-released-{status}",
+            issue_number=5170,
+            title="candidate retained work",
+            status=status,
+            priority="high",
+            source_anchor_refs=[],
+            created_at="2026-08-29T00:00:00+00:00",
+            updated_at="2026-08-29T00:00:30+00:00",
+            repo="RasmusTho/agentic-pkm-mvp",
+            claimed_by="prior-agent",
+            lease_id=f"released-{status}",
+            lease_expires_at=expires,
+            linked_pr="6000",
+        )
+    )
+
+    snapshot = git_hygiene._read_dispatcher_authority(
+        tmp_path, "RasmusTho/agentic-pkm-mvp"
+    )
+    candidate = git_hygiene.Candidate(**_targeted_candidate())
+    assert git_hygiene._dispatcher_conflicts(candidate, {}, snapshot) == {
+        "nonterminal_dispatcher_task"
+    }
+
+
+def test_targeted_remote_cleanup_blocks_review_task_with_expired_lease(
+    tmp_path, monkeypatch
+) -> None:
+    from app.dispatcher.models import LeaseRecord, TaskRecord
+    from app.dispatcher.store import SqliteStore
+
+    database = tmp_path / "dispatcher.sqlite3"
+    monkeypatch.setattr(
+        git_hygiene, "_canonical_dispatcher_db_path", lambda _cwd: database
+    )
+    store = SqliteStore(database)
+    store.initialize()
+    expires = "2020-01-01T00:01:00+00:00"
+    store.upsert_lease(
+        LeaseRecord(
+            lease_id="expired-review",
+            resource="issue:5170",
+            holder="prior-agent",
+            ttl_seconds=60,
+            acquired_at="2020-01-01T00:00:00+00:00",
+            expires_at=expires,
+        )
+    )
+    store.upsert_task(
+        TaskRecord(
+            task_id="candidate-expired-review",
+            issue_number=5170,
+            title="candidate retained review",
+            status="review",
+            priority="high",
+            source_anchor_refs=[],
+            created_at="2020-01-01T00:00:00+00:00",
+            updated_at="2020-01-01T00:01:00+00:00",
+            repo="RasmusTho/agentic-pkm-mvp",
+            claimed_by="prior-agent",
+            lease_id="expired-review",
+            lease_expires_at=expires,
+            linked_pr="6000",
+        )
+    )
+
+    snapshot = git_hygiene._read_dispatcher_authority(
+        tmp_path, "RasmusTho/agentic-pkm-mvp"
+    )
+    candidate = git_hygiene.Candidate(**_targeted_candidate())
+    assert git_hygiene._dispatcher_conflicts(candidate, {}, snapshot) == {
+        "nonterminal_dispatcher_task"
+    }
+
+
+def test_targeted_remote_cleanup_allows_canonical_completed_without_live_lease(
+    tmp_path, monkeypatch
+) -> None:
+    from app.dispatcher.models import TaskRecord
+    from app.dispatcher.store import SqliteStore
+
+    database = tmp_path / "dispatcher.sqlite3"
+    monkeypatch.setattr(
+        git_hygiene, "_canonical_dispatcher_db_path", lambda _cwd: database
+    )
+    store = SqliteStore(database)
+    store.initialize()
+    store.upsert_task(
+        TaskRecord(
+            task_id="candidate-terminal-completed",
+            issue_number=5170,
+            title="candidate terminal work",
+            status="completed",
+            priority="high",
+            source_anchor_refs=[],
+            created_at="2026-08-29T00:00:00+00:00",
+            updated_at="2026-08-29T00:00:30+00:00",
+            repo="RasmusTho/agentic-pkm-mvp",
+            lease_expires_at="2026-08-29T00:01:00+00:00",
+            linked_pr="6000",
+        )
+    )
+
+    snapshot = git_hygiene._read_dispatcher_authority(
+        tmp_path, "RasmusTho/agentic-pkm-mvp"
+    )
+    candidate = git_hygiene.Candidate(**_targeted_candidate())
+    assert git_hygiene._dispatcher_conflicts(candidate, {}, snapshot) == set()
+
+
+def test_targeted_remote_cleanup_accepts_real_claim_then_complete_transition(
+    tmp_path, monkeypatch
+) -> None:
+    from app.dispatcher.leases import claim
+    from app.dispatcher.models import TaskRecord
+    from app.dispatcher.queue import complete
+    from app.dispatcher.store import SqliteStore
+
+    database = tmp_path / "dispatcher.sqlite3"
+    monkeypatch.setattr(
+        git_hygiene, "_canonical_dispatcher_db_path", lambda _cwd: database
+    )
+    store = SqliteStore(database)
+    store.initialize()
+    store.upsert_task(
+        TaskRecord(
+            task_id="github-issue-5170",
+            issue_number=5170,
+            title="candidate producer transition",
+            status="ready",
+            priority="high",
+            source_anchor_refs=[],
+            created_at="2026-08-29T00:00:00+00:00",
+            updated_at="2026-08-29T00:00:00+00:00",
+            repo="RasmusTho/agentic-pkm-mvp",
+            linked_pr="6000",
+        )
+    )
+
+    claimed, lease = claim(store, "github-issue-5170", "producer-agent")
+    assert claimed.status == "claimed"
+    completed = complete(store, "github-issue-5170", "producer-agent")
+    assert completed.status == "completed"
+    assert completed.lease_id is None
+    assert completed.lease_expires_at == lease.expires_at
+
+    snapshot = git_hygiene._read_dispatcher_authority(
+        tmp_path, "RasmusTho/agentic-pkm-mvp"
+    )
+    candidate = git_hygiene.Candidate(**_targeted_candidate())
+    assert git_hygiene._dispatcher_conflicts(candidate, {}, snapshot) == set()
+
+
+@pytest.mark.parametrize("lease_state", ("released", "expired"))
+@pytest.mark.parametrize("claimed_by", (None, "wrong-agent"))
+def test_targeted_remote_cleanup_rejects_completed_retained_lease_without_holder(
+    tmp_path, monkeypatch, lease_state, claimed_by
+) -> None:
+    from app.dispatcher.models import LeaseRecord, TaskRecord
+    from app.dispatcher.store import SqliteStore
+
+    database = tmp_path / "dispatcher.sqlite3"
+    monkeypatch.setattr(
+        git_hygiene, "_canonical_dispatcher_db_path", lambda _cwd: database
+    )
+    store = SqliteStore(database)
+    store.initialize()
+    expires = (
+        "2099-01-01T00:01:00+00:00"
+        if lease_state == "released"
+        else "2020-01-01T00:01:00+00:00"
+    )
+    store.upsert_lease(
+        LeaseRecord(
+            lease_id=f"completed-{lease_state}",
+            resource="issue:5170",
+            holder="prior-agent",
+            ttl_seconds=60,
+            acquired_at="2020-01-01T00:00:00+00:00",
+            expires_at=expires,
+            released_at=(
+                "2026-08-29T00:00:30+00:00"
+                if lease_state == "released"
+                else None
+            ),
+            release_reason="completed" if lease_state == "released" else None,
+        )
+    )
+    store.upsert_task(
+        TaskRecord(
+            task_id=f"candidate-completed-{lease_state}-{claimed_by}",
+            issue_number=5170,
+            title="noncanonical terminal lease",
+            status="completed",
+            priority="high",
+            source_anchor_refs=[],
+            created_at="2020-01-01T00:00:00+00:00",
+            updated_at="2026-08-29T00:00:30+00:00",
+            repo="RasmusTho/agentic-pkm-mvp",
+            claimed_by=claimed_by,
+            lease_id=f"completed-{lease_state}",
+            lease_expires_at=expires,
+            linked_pr="6000",
+        )
+    )
+
+    snapshot = git_hygiene._read_dispatcher_authority(
+        tmp_path, "RasmusTho/agentic-pkm-mvp"
+    )
+    candidate = git_hygiene.Candidate(**_targeted_candidate())
+    with pytest.raises(RuntimeError, match="dispatcher_task_lease_disagreement"):
+        git_hygiene._dispatcher_conflicts(candidate, {}, snapshot)
+
+
+def test_targeted_remote_cleanup_rejects_completed_retained_lease_with_holder(
+    tmp_path, monkeypatch
+) -> None:
+    from app.dispatcher.models import LeaseRecord, TaskRecord
+    from app.dispatcher.store import SqliteStore
+
+    database = tmp_path / "dispatcher.sqlite3"
+    monkeypatch.setattr(
+        git_hygiene, "_canonical_dispatcher_db_path", lambda _cwd: database
+    )
+    store = SqliteStore(database)
+    store.initialize()
+    expires = "2026-08-29T00:01:00+00:00"
+    store.upsert_lease(
+        LeaseRecord(
+            lease_id="completed-matching-holder",
+            resource="issue:5170",
+            holder="prior-agent",
+            ttl_seconds=60,
+            acquired_at="2026-08-29T00:00:00+00:00",
+            expires_at=expires,
+            released_at="2026-08-29T00:00:30+00:00",
+            release_reason="completed",
+        )
+    )
+    store.upsert_task(
+        TaskRecord(
+            task_id="candidate-completed-matching-holder",
+            issue_number=5170,
+            title="noncanonical terminal lease",
+            status="completed",
+            priority="high",
+            source_anchor_refs=[],
+            created_at="2026-08-29T00:00:00+00:00",
+            updated_at="2026-08-29T00:00:30+00:00",
+            repo="RasmusTho/agentic-pkm-mvp",
+            claimed_by="prior-agent",
+            lease_id="completed-matching-holder",
+            lease_expires_at=expires,
+            linked_pr="6000",
+        )
+    )
+
+    snapshot = git_hygiene._read_dispatcher_authority(
+        tmp_path, "RasmusTho/agentic-pkm-mvp"
+    )
+    candidate = git_hygiene.Candidate(**_targeted_candidate())
+    with pytest.raises(RuntimeError, match="dispatcher_task_lease_disagreement"):
+        git_hygiene._dispatcher_conflicts(candidate, {}, snapshot)
+
+
+@pytest.mark.parametrize(
+    "status", ("done", "delivered", "cancelled", "superseded", "released", "unknown")
+)
+def test_targeted_remote_cleanup_rejects_unknown_relevant_task_state(
+    tmp_path, monkeypatch, status
+) -> None:
+    from app.dispatcher.models import TaskRecord
+    from app.dispatcher.store import SqliteStore
+
+    database = tmp_path / "dispatcher.sqlite3"
+    monkeypatch.setattr(
+        git_hygiene, "_canonical_dispatcher_db_path", lambda _cwd: database
+    )
+    store = SqliteStore(database)
+    store.initialize()
+    store.upsert_task(
+        TaskRecord(
+            task_id=f"candidate-invalid-{status}",
+            issue_number=5170,
+            title="ambiguous candidate history",
+            status=status,
+            priority="high",
+            source_anchor_refs=[],
+            created_at="2026-08-29T00:00:00+00:00",
+            updated_at="2026-08-29T00:00:30+00:00",
+            repo="RasmusTho/agentic-pkm-mvp",
+            linked_pr="6000",
+        )
+    )
+
+    snapshot = git_hygiene._read_dispatcher_authority(
+        tmp_path, "RasmusTho/agentic-pkm-mvp"
+    )
+    candidate = git_hygiene.Candidate(**_targeted_candidate())
+    with pytest.raises(RuntimeError, match="dispatcher_task_status_ambiguous"):
+        git_hygiene._dispatcher_conflicts(candidate, {}, snapshot)
+
+
+def test_targeted_remote_cleanup_rejects_referenced_released_wrong_issue_lease(
+    tmp_path, monkeypatch
+) -> None:
+    from app.dispatcher.models import LeaseRecord, TaskRecord
+    from app.dispatcher.store import SqliteStore
+
+    database = tmp_path / "dispatcher.sqlite3"
+    monkeypatch.setattr(
+        git_hygiene, "_canonical_dispatcher_db_path", lambda _cwd: database
+    )
+    store = SqliteStore(database)
+    store.initialize()
+    expires = "2026-08-29T00:01:00+00:00"
+    store.upsert_lease(
+        LeaseRecord(
+            lease_id="released-wrong-issue",
+            resource="issue:9999",
+            holder="prior-agent",
+            ttl_seconds=60,
+            acquired_at="2026-08-29T00:00:00+00:00",
+            expires_at=expires,
+            released_at="2026-08-29T00:00:30+00:00",
+            release_reason="completed",
+        )
+    )
+    store.upsert_task(
+        TaskRecord(
+            task_id="candidate-wrong-issue-lease",
+            issue_number=5170,
+            title="candidate terminal work",
+            status="completed",
+            priority="high",
+            source_anchor_refs=[],
+            created_at="2026-08-29T00:00:00+00:00",
+            updated_at="2026-08-29T00:00:30+00:00",
+            repo="RasmusTho/agentic-pkm-mvp",
+            lease_id="released-wrong-issue",
+            lease_expires_at=expires,
+            linked_pr="6000",
+        )
+    )
+
+    snapshot = git_hygiene._read_dispatcher_authority(
+        tmp_path, "RasmusTho/agentic-pkm-mvp"
+    )
+    candidate = git_hygiene.Candidate(**_targeted_candidate())
+    with pytest.raises(RuntimeError, match="dispatcher_task_lease_resource_mismatch"):
+        git_hygiene._dispatcher_conflicts(candidate, {}, snapshot)
+
+
+def test_targeted_remote_cleanup_scopes_dispatcher_disagreement_to_candidate(
+    tmp_path, monkeypatch
+) -> None:
+    from app.dispatcher.models import TaskRecord
+    from app.dispatcher.store import SqliteStore
+
+    database = tmp_path / "dispatcher.sqlite3"
+    monkeypatch.setattr(
+        git_hygiene, "_canonical_dispatcher_db_path", lambda _cwd: database
+    )
+    store = SqliteStore(database)
+    store.initialize()
+    store.upsert_task(
+        TaskRecord(
+            task_id="unrelated-expired-history",
+            issue_number=9999,
+            title="unrelated",
+            status="claimed",
+            priority="low",
+            source_anchor_refs=[],
+            created_at="2026-08-01T00:00:00+00:00",
+            updated_at="2026-08-01T00:00:00+00:00",
+            repo="RasmusTho/agentic-pkm-mvp",
+            claimed_by="old-agent",
+            lease_id="missing-expired-lease",
+            lease_expires_at="2026-08-01T00:01:00+00:00",
+            linked_pr="9998",
+        )
+    )
+    snapshot = git_hygiene._read_dispatcher_authority(
+        tmp_path, "RasmusTho/agentic-pkm-mvp"
+    )
+    candidate = git_hygiene.Candidate(**_targeted_candidate())
+    assert git_hygiene._dispatcher_conflicts(candidate, {}, snapshot) == set()
+
+    store.upsert_task(
+        TaskRecord(
+            task_id="relevant-expired-history",
+            issue_number=5170,
+            title="relevant",
+            status="claimed",
+            priority="high",
+            source_anchor_refs=[],
+            created_at="2026-08-01T00:00:00+00:00",
+            updated_at="2026-08-01T00:00:00+00:00",
+            repo="RasmusTho/agentic-pkm-mvp",
+            claimed_by="old-agent",
+            lease_id="missing-relevant-lease",
+            lease_expires_at="2026-08-01T00:01:00+00:00",
+            linked_pr="6000",
+        )
+    )
+    snapshot = git_hygiene._read_dispatcher_authority(
+        tmp_path, "RasmusTho/agentic-pkm-mvp"
+    )
+    with pytest.raises(RuntimeError, match="referenced_lease_missing"):
+        git_hygiene._dispatcher_conflicts(candidate, {}, snapshot)
+
+
+def test_targeted_remote_cleanup_rejects_live_ambiguous_orphan_lease(
+    tmp_path, monkeypatch
+) -> None:
+    from app.dispatcher.models import LeaseRecord
+    from app.dispatcher.store import SqliteStore
+
+    database = tmp_path / "dispatcher.sqlite3"
+    monkeypatch.setattr(
+        git_hygiene, "_canonical_dispatcher_db_path", lambda _cwd: database
+    )
+    store = SqliteStore(database)
+    store.initialize()
+    store.upsert_lease(
+        LeaseRecord(
+            lease_id="ambiguous-live",
+            resource="",
+            holder="other-agent",
+            ttl_seconds=60,
+            acquired_at="2026-08-29T00:00:00+00:00",
+            expires_at="2099-01-01T00:00:00+00:00",
+        )
+    )
+    snapshot = git_hygiene._read_dispatcher_authority(
+        tmp_path, "RasmusTho/agentic-pkm-mvp"
+    )
+    candidate = git_hygiene.Candidate(**_targeted_candidate())
+    with pytest.raises(RuntimeError, match="lease_identity_ambiguous"):
+        git_hygiene._dispatcher_conflicts(candidate, {}, snapshot)
+
+
+def test_targeted_remote_cleanup_ignores_current_store_shaped_blank_repo_history(
+    tmp_path, monkeypatch
+) -> None:
+    from app.dispatcher.models import TaskRecord
+    from app.dispatcher.store import SqliteStore
+
+    database = tmp_path / "dispatcher.sqlite3"
+    monkeypatch.setattr(
+        git_hygiene, "_canonical_dispatcher_db_path", lambda _cwd: database
+    )
+    store = SqliteStore(database)
+    store.initialize()
+    store.upsert_task(
+        TaskRecord(
+            task_id="_sync_meta_github",
+            issue_number=0,
+            title="GitHub sync metadata",
+            status="_meta",
+            priority="low",
+            source_anchor_refs=[],
+            created_at="2026-07-01T00:00:00+00:00",
+            updated_at="2026-07-11T00:00:00+00:00",
+            repo="",
+        )
+    )
+    for offset in range(35):
+        issue = 3000 + offset
+        store.upsert_task(
+            TaskRecord(
+                task_id=f"github-issue-{issue}",
+                issue_number=issue,
+                title=f"Legacy issue {issue}",
+                status="blocked" if offset >= 33 else "completed",
+                priority="low",
+                source_anchor_refs=[f"github:issue:{issue}"],
+                created_at="2026-07-01T00:00:00+00:00",
+                updated_at="2026-07-11T00:00:00+00:00",
+                repo="",
+                blocked_reason="legacy no-repo row" if offset >= 33 else None,
+            )
+        )
+
+    snapshot = git_hygiene._read_dispatcher_authority(
+        tmp_path, "RasmusTho/agentic-pkm-mvp"
+    )
+    assert sum(item["kind"] == "task" for item in snapshot) == 36
+    candidate = git_hygiene.Candidate(**_targeted_candidate())
+    assert git_hygiene._dispatcher_conflicts(candidate, {}, snapshot) == set()
+
+
+def test_targeted_remote_cleanup_ignores_blank_repo_unrelated_branch_history(
+    tmp_path, monkeypatch
+) -> None:
+    from app.dispatcher.models import TaskRecord
+    from app.dispatcher.store import SqliteStore
+
+    database = tmp_path / "dispatcher.sqlite3"
+    monkeypatch.setattr(
+        git_hygiene, "_canonical_dispatcher_db_path", lambda _cwd: database
+    )
+    store = SqliteStore(database)
+    store.initialize()
+    store.upsert_task(
+        TaskRecord(
+            task_id="github-issue-4000",
+            issue_number=4000,
+            title="unrelated branch history",
+            status="completed",
+            priority="low",
+            source_anchor_refs=["branch:unrelated-closed-branch"],
+            created_at="2026-07-01T00:00:00+00:00",
+            updated_at="2026-07-11T00:00:00+00:00",
+            repo="",
+        )
+    )
+    snapshot = git_hygiene._read_dispatcher_authority(
+        tmp_path, "RasmusTho/agentic-pkm-mvp"
+    )
+    candidate = git_hygiene.Candidate(**_targeted_candidate())
+    assert git_hygiene._dispatcher_conflicts(candidate, {}, snapshot) == set()
+
+
+@pytest.mark.parametrize(
+    "historical_expiry", (None, "2026-08-29T00:01:00+00:00")
+)
+def test_targeted_remote_cleanup_allows_blank_repo_canonical_completed_no_lease(
+    tmp_path, monkeypatch, historical_expiry
+) -> None:
+    from app.dispatcher.models import TaskRecord
+    from app.dispatcher.store import SqliteStore
+
+    database = tmp_path / "dispatcher.sqlite3"
+    monkeypatch.setattr(
+        git_hygiene, "_canonical_dispatcher_db_path", lambda _cwd: database
+    )
+    store = SqliteStore(database)
+    store.initialize()
+    store.upsert_task(
+        TaskRecord(
+            task_id="github-issue-4000",
+            issue_number=4000,
+            title="canonical legacy terminal row",
+            status="completed",
+            priority="low",
+            source_anchor_refs=["github:issue:4000"],
+            created_at="2026-07-01T00:00:00+00:00",
+            updated_at="2026-07-11T00:00:00+00:00",
+            repo="",
+            lease_expires_at=historical_expiry,
+        )
+    )
+
+    snapshot = git_hygiene._read_dispatcher_authority(
+        tmp_path, "RasmusTho/agentic-pkm-mvp"
+    )
+    candidate = git_hygiene.Candidate(**_targeted_candidate())
+    assert git_hygiene._dispatcher_conflicts(candidate, {}, snapshot) == set()
+
+
+@pytest.mark.parametrize("lease_state", ("released", "expired"))
+@pytest.mark.parametrize("claimed_by", (None, "wrong-agent", "prior-agent"))
+def test_targeted_remote_cleanup_rejects_blank_repo_completed_retained_lease(
+    tmp_path, monkeypatch, lease_state, claimed_by
+) -> None:
+    from app.dispatcher.models import LeaseRecord, TaskRecord
+    from app.dispatcher.store import SqliteStore
+
+    database = tmp_path / "dispatcher.sqlite3"
+    monkeypatch.setattr(
+        git_hygiene, "_canonical_dispatcher_db_path", lambda _cwd: database
+    )
+    store = SqliteStore(database)
+    store.initialize()
+    expires = (
+        "2099-01-01T00:01:00+00:00"
+        if lease_state == "released"
+        else "2020-01-01T00:01:00+00:00"
+    )
+    store.upsert_lease(
+        LeaseRecord(
+            lease_id=f"blank-completed-{lease_state}-{claimed_by}",
+            resource="issue:4000",
+            holder="prior-agent",
+            ttl_seconds=60,
+            acquired_at="2020-01-01T00:00:00+00:00",
+            expires_at=expires,
+            released_at=(
+                "2026-08-29T00:00:30+00:00"
+                if lease_state == "released"
+                else None
+            ),
+            release_reason="completed" if lease_state == "released" else None,
+        )
+    )
+    store.upsert_task(
+        TaskRecord(
+            task_id="github-issue-4000",
+            issue_number=4000,
+            title="noncanonical legacy terminal row",
+            status="completed",
+            priority="low",
+            source_anchor_refs=["github:issue:4000"],
+            created_at="2026-07-01T00:00:00+00:00",
+            updated_at="2026-07-11T00:00:00+00:00",
+            repo="",
+            claimed_by=claimed_by,
+            lease_id=f"blank-completed-{lease_state}-{claimed_by}",
+            lease_expires_at=expires,
+        )
+    )
+
+    snapshot = git_hygiene._read_dispatcher_authority(
+        tmp_path, "RasmusTho/agentic-pkm-mvp"
+    )
+    candidate = git_hygiene.Candidate(**_targeted_candidate())
+    with pytest.raises(RuntimeError, match="dispatcher_task_lease_disagreement"):
+        git_hygiene._dispatcher_conflicts(candidate, {}, snapshot)
+
+
+@pytest.mark.parametrize(
+    ("issue", "status", "linked_pr", "anchors", "repository"),
+    [
+        (5170, "completed", None, ["github:issue:5170"], ""),
+        (4000, "completed", "6000", ["github:issue:4000"], ""),
+        (4000, "completed", None, ["branch:closed-unmerged"], ""),
+        (4000, "claimed", None, ["github:issue:4000"], ""),
+        (4000, "completed", None, ["github:issue:4000"], " "),
+    ],
+)
+def test_targeted_remote_cleanup_rejects_adversarial_blank_repo_history(
+    tmp_path, monkeypatch, issue, status, linked_pr, anchors, repository
+) -> None:
+    from app.dispatcher.models import TaskRecord
+    from app.dispatcher.store import SqliteStore
+
+    database = tmp_path / "dispatcher.sqlite3"
+    monkeypatch.setattr(
+        git_hygiene, "_canonical_dispatcher_db_path", lambda _cwd: database
+    )
+    store = SqliteStore(database)
+    store.initialize()
+    store.upsert_task(
+        TaskRecord(
+            task_id=f"github-issue-{issue}",
+            issue_number=issue,
+            title="adversarial legacy row",
+            status=status,
+            priority="high",
+            source_anchor_refs=anchors,
+            created_at="2026-07-01T00:00:00+00:00",
+            updated_at="2026-07-11T00:00:00+00:00",
+            repo=repository,
+            linked_pr=linked_pr,
+        )
+    )
+    snapshot = git_hygiene._read_dispatcher_authority(
+        tmp_path, "RasmusTho/agentic-pkm-mvp"
+    )
+    candidate = git_hygiene.Candidate(**_targeted_candidate())
+    with pytest.raises(RuntimeError, match="task_identity_ambiguous"):
+        git_hygiene._dispatcher_conflicts(candidate, {}, snapshot)
+
+
+def test_targeted_remote_cleanup_rejects_blank_repo_unreleased_lease(
+    tmp_path, monkeypatch
+) -> None:
+    from app.dispatcher.models import LeaseRecord, TaskRecord
+    from app.dispatcher.store import SqliteStore
+
+    database = tmp_path / "dispatcher.sqlite3"
+    monkeypatch.setattr(
+        git_hygiene, "_canonical_dispatcher_db_path", lambda _cwd: database
+    )
+    store = SqliteStore(database)
+    store.initialize()
+    expires = "2026-08-01T00:01:00+00:00"
+    store.upsert_lease(
+        LeaseRecord(
+            lease_id="expired-but-unreleased",
+            resource="issue:4000",
+            holder="old-agent",
+            ttl_seconds=60,
+            acquired_at="2026-08-01T00:00:00+00:00",
+            expires_at=expires,
+        )
+    )
+    store.upsert_task(
+        TaskRecord(
+            task_id="github-issue-4000",
+            issue_number=4000,
+            title="legacy unreleased row",
+            status="completed",
+            priority="low",
+            source_anchor_refs=["github:issue:4000"],
+            created_at="2026-07-01T00:00:00+00:00",
+            updated_at="2026-07-11T00:00:00+00:00",
+            repo="",
+            lease_id="expired-but-unreleased",
+            lease_expires_at=expires,
+        )
+    )
+    snapshot = git_hygiene._read_dispatcher_authority(
+        tmp_path, "RasmusTho/agentic-pkm-mvp"
+    )
+    candidate = git_hygiene.Candidate(**_targeted_candidate())
+    with pytest.raises(RuntimeError, match="task_lease_disagreement"):
+        git_hygiene._dispatcher_conflicts(candidate, {}, snapshot)
+
+
+def test_targeted_remote_cleanup_archive_create_is_expected_absence_cas(
+    tmp_path, monkeypatch
+) -> None:
+    candidate = _targeted_candidate()
+    refs = {candidate["source_ref"]: candidate["source_sha"]}
+    commands: list[list[str]] = []
+    _install_remote_cleanup_authority(monkeypatch, tmp_path, refs, commands)
+    assert git_hygiene.targeted_remote_cleanup(
+        tmp_path, repository=candidate["repository"], candidates=[candidate]
+    )["ok"] is True
+    archive_push = next(command for command in commands if command[0] == "push" and ":refs/archive/" in command[-1])
+    assert f"--force-with-lease={candidate['archive_ref']}:" in archive_push
+    assert PUSH_URL in archive_push
+
+
+def test_targeted_remote_cleanup_source_delete_is_expected_old_sha_cas(
+    tmp_path, monkeypatch
+) -> None:
+    candidate = _targeted_candidate()
+    refs = {candidate["source_ref"]: candidate["source_sha"]}
+    commands: list[list[str]] = []
+    _install_remote_cleanup_authority(monkeypatch, tmp_path, refs, commands)
+    assert git_hygiene.targeted_remote_cleanup(
+        tmp_path, repository=candidate["repository"], candidates=[candidate]
+    )["ok"] is True
+    delete = next(command for command in commands if command[-1] == f":{candidate['source_ref']}")
+    assert f"--force-with-lease={candidate['source_ref']}:{candidate['source_sha']}" in delete
+    assert PUSH_URL in delete
+
+
+@pytest.mark.parametrize(
+    "crash_point",
+    [
+        "before_archive_push",
+        "after_archive_push",
+        "before_archive_readback",
+        "after_archive_readback",
+        "before_prepared_temp_fsync",
+        "after_prepared_temp_fsync",
+        "before_prepared_replace",
+        "after_prepared_replace",
+        "before_prepared_dir_fsync",
+        "after_prepared_dir_fsync",
+        "before_source_cas_acceptance",
+        "after_source_cas_acceptance",
+        "before_post_delete_readback",
+        "after_post_delete_readback",
+        "before_completed_temp_fsync",
+        "after_completed_temp_fsync",
+        "before_completed_replace",
+        "after_completed_replace",
+        "before_completed_dir_fsync",
+        "after_completed_dir_fsync",
+    ],
+)
+def test_targeted_remote_cleanup_crash_matrix(tmp_path, monkeypatch, crash_point) -> None:
+    candidate = _targeted_candidate()
+    refs = {candidate["source_ref"]: candidate["source_sha"]}
+    commands: list[list[str]] = []
+    _install_remote_cleanup_authority(monkeypatch, tmp_path, refs, commands)
+    fired = False
+
+    def crash(point):
+        nonlocal fired
+        if point == crash_point and not fired:
+            fired = True
+            raise OSError(f"crash:{point}")
+
+    monkeypatch.setattr(git_hygiene, "_crash_hook", crash)
+    first = git_hygiene.targeted_remote_cleanup(
+        tmp_path, repository=candidate["repository"], candidates=[candidate]
+    )
+    assert first["ok"] is False
+    monkeypatch.setattr(git_hygiene, "_crash_hook", lambda _point: None)
+    retry = git_hygiene.targeted_remote_cleanup(
+        tmp_path, repository=candidate["repository"], candidates=[candidate]
+    )
+    assert retry["ok"] is True
+    assert candidate["source_ref"] not in refs
+    assert refs[candidate["archive_ref"]] == candidate["source_sha"]
+
+
+@pytest.mark.parametrize(
+    "crash_point",
+    (
+        "before_source_restore_cas_acceptance",
+        "after_source_restore_cas_acceptance",
+        "before_source_restore_readback",
+        "after_source_restore_readback",
+        "before_compensated_temp_fsync",
+        "after_compensated_replace",
+        "after_compensated_dir_fsync",
+    ),
+)
+def test_targeted_remote_cleanup_compensation_crash_retries_without_completion(
+    tmp_path, monkeypatch, crash_point
+) -> None:
+    candidate = _targeted_candidate()
+    refs = {candidate["source_ref"]: candidate["source_sha"]}
+    commands: list[list[str]] = []
+    _install_remote_cleanup_authority(monkeypatch, tmp_path, refs, commands)
+    original = _authenticated_contract(git_hygiene.Candidate(**candidate))
+    changed = git_hygiene.PullContractIdentity(
+        original.governing_issue,
+        original.no_issue_lane,
+        "f" * 64,
+    )
+    reads = 0
+    fired = False
+
+    def read_pr(_identity, _candidate, **_kwargs):
+        nonlocal reads
+        reads += 1
+        return changed if reads >= 5 else original
+
+    def crash(point: str) -> None:
+        nonlocal fired
+        if point == crash_point and not fired:
+            fired = True
+            raise OSError(f"crash:{point}")
+
+    monkeypatch.setattr(git_hygiene, "_read_candidate_pr", read_pr)
+    monkeypatch.setattr(git_hygiene, "_crash_hook", crash)
+    first = git_hygiene.targeted_remote_cleanup(
+        tmp_path, repository=candidate["repository"], candidates=[candidate]
+    )
+    assert first["ok"] is False
+    assert fired
+
+    monkeypatch.setattr(git_hygiene, "_crash_hook", lambda _point: None)
+    retry = git_hygiene.targeted_remote_cleanup(
+        tmp_path, repository=candidate["repository"], candidates=[candidate]
+    )
+
+    assert retry["error"] == "contract_drifted_source_compensated"
+    assert refs[candidate["source_ref"]] == candidate["source_sha"]
+    assert refs[candidate["archive_ref"]] == candidate["source_sha"]
+    receipts = (
+        tmp_path
+        / "common"
+        / "git-hygiene"
+        / "targeted-remote-cleanup"
+        / "v1"
+        / "receipts"
+    )
+    assert json.loads(next(receipts.glob("*.json")).read_text())["state"] == "compensated"
+
+
+def test_targeted_remote_cleanup_crash_then_local_claim_restores_on_retry(
+    tmp_path, monkeypatch
+) -> None:
+    candidate = _targeted_candidate()
+    refs = {candidate["source_ref"]: candidate["source_sha"]}
+    commands: list[list[str]] = []
+    _install_remote_cleanup_authority(monkeypatch, tmp_path, refs, commands)
+    fired = False
+
+    def crash(point: str) -> None:
+        nonlocal fired
+        if point == "after_source_cas_acceptance" and not fired:
+            fired = True
+            raise OSError("crash:after_source_cas_acceptance")
+
+    monkeypatch.setattr(git_hygiene, "_crash_hook", crash)
+    first = git_hygiene.targeted_remote_cleanup(
+        tmp_path, repository=candidate["repository"], candidates=[candidate]
+    )
+    assert first["ok"] is False
+    assert fired
+    assert candidate["source_ref"] not in refs
+
+    monkeypatch.setattr(git_hygiene, "_crash_hook", lambda _point: None)
+    monkeypatch.setattr(
+        git_hygiene,
+        "_final_authority_fence",
+        lambda *_: nullcontext((lambda: {}, lambda: [{"new_claim": True}])),
+    )
+    monkeypatch.setattr(
+        git_hygiene,
+        "_dispatcher_conflicts",
+        lambda _candidate, _lifecycle, snapshot, **_kwargs: set()
+        if not snapshot
+        else {"live_dispatcher_claim"},
+    )
+    retry = git_hygiene.targeted_remote_cleanup(
+        tmp_path, repository=candidate["repository"], candidates=[candidate]
+    )
+
+    assert retry["error"] == "post_delete_authority_changed_compensated"
+    assert refs[candidate["source_ref"]] == candidate["source_sha"]
+    assert refs[candidate["archive_ref"]] == candidate["source_sha"]
+    receipts = (
+        tmp_path
+        / "common"
+        / "git-hygiene"
+        / "targeted-remote-cleanup"
+        / "v1"
+        / "receipts"
+    )
+    assert json.loads(next(receipts.glob("*.json")).read_text())["state"] == "compensated"
+
+
+@pytest.mark.parametrize(
+    ("mutate", "error"),
+    [
+        (lambda value: value.update({"authority": {}}), "candidate_schema_invalid"),
+        (lambda value: value.update({"pull_request": True}), "candidate_pull_request_invalid"),
+        (lambda value: value.update({"governing_issue": True}), "candidate_issue_identity_ambiguous"),
+        (lambda value: value.update({"no_issue_lane": "governance"}), "candidate_issue_identity_ambiguous"),
+        (
+            lambda value: value.update(
+                {"governing_issue": None, "no_issue_lane": "arbitrary"}
+            ),
+            "candidate_no_issue_lane_invalid",
+        ),
+        (
+            lambda value: value.update({"no_issue_lane": "arbitrary"}),
+            "candidate_no_issue_lane_invalid",
+        ),
+        (lambda value: value.update({"owner": "Bad Owner"}), "candidate_owner_invalid"),
+        (lambda value: value.update({"successor": "issue:0"}), "candidate_successor_invalid"),
+        (lambda value: value.update({"review_at": "2030-02-30T00:00:00Z"}), "candidate_review_at_invalid"),
+        (lambda value: value.update({"discard": {"state": "retain", "receipt": None, "extra": True}}), "candidate_discard_invalid"),
+        (lambda value: value.update({"source_ref": "refs/heads/main"}), "candidate_source_ref_protected"),
+        (lambda value: value.update({"archive_ref": "refs/archive/git-hygiene/v1/" + "0" * 64}), "candidate_archive_ref_invalid"),
+    ],
+)
+def test_targeted_remote_cleanup_semantic_validation(
+    tmp_path, monkeypatch, mutate, error
+) -> None:
+    candidate = _targeted_candidate()
+    mutate(candidate)
+    commands: list[list[str]] = []
+    _install_remote_cleanup_authority(monkeypatch, tmp_path, {}, commands)
+    report = git_hygiene.targeted_remote_cleanup(
+        tmp_path, repository="RasmusTho/agentic-pkm-mvp", candidates=[candidate]
+    )
+    assert report["error"] == error
+    assert not any(command[0] == "push" for command in commands)
+
+
+def test_targeted_remote_cleanup_batch_conflict_prevents_all_git_writes(
+    tmp_path, monkeypatch
+) -> None:
+    first = _targeted_candidate()
+    second = _targeted_candidate(
+        pull_request=6001, source_ref="refs/heads/later", source_sha="b" * 40
+    )
+    refs = {
+        first["source_ref"]: first["source_sha"],
+        second["source_ref"]: "c" * 40,
+    }
+    commands: list[list[str]] = []
+    _install_remote_cleanup_authority(monkeypatch, tmp_path, refs, commands)
+    report = git_hygiene.targeted_remote_cleanup(
+        tmp_path, repository=first["repository"], candidates=[first, second]
+    )
+    assert report["error"] == "source_identity_drift"
+    assert not any(command[0] == "push" for command in commands)
+
+
+def test_targeted_remote_cleanup_real_bare_remote_cas(tmp_path, monkeypatch) -> None:
+    remote = tmp_path / "remote.git"
+    repo = tmp_path / "repo"
+    redirect_remote = tmp_path / "redirect-remote.git"
+    redirect_repo = tmp_path / "redirect-repo"
+    subprocess.run(["git", "init", "--bare", str(remote)], check=True, capture_output=True)
+    subprocess.run(["git", "init", str(repo)], check=True, capture_output=True)
+    subprocess.run(["git", "-C", str(repo), "config", "user.email", "test@example.com"], check=True)
+    subprocess.run(["git", "-C", str(repo), "config", "user.name", "Test"], check=True)
+    (repo / "a").write_text("a", encoding="utf-8")
+    subprocess.run(["git", "-C", str(repo), "add", "a"], check=True)
+    subprocess.run(["git", "-C", str(repo), "commit", "-m", "init"], check=True, capture_output=True)
+    sha = subprocess.run(["git", "-C", str(repo), "rev-parse", "HEAD"], check=True, capture_output=True, text=True).stdout.strip()
+    subprocess.run(["git", "-C", str(repo), "remote", "add", "origin", str(remote)], check=True)
+    subprocess.run(["git", "-C", str(repo), "push", "origin", "HEAD:refs/heads/closed-unmerged"], check=True, capture_output=True)
+    subprocess.run(
+        ["git", "init", "--bare", str(redirect_remote)],
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "init", str(redirect_repo)], check=True, capture_output=True
+    )
+    subprocess.run(
+        ["git", "-C", str(redirect_repo), "config", "user.email", "test@example.com"],
+        check=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(redirect_repo), "config", "user.name", "Test"],
+        check=True,
+    )
+    (redirect_repo / "b").write_text("b", encoding="utf-8")
+    subprocess.run(["git", "-C", str(redirect_repo), "add", "b"], check=True)
+    subprocess.run(
+        ["git", "-C", str(redirect_repo), "commit", "-m", "redirect"],
+        check=True,
+        capture_output=True,
+    )
+    redirect_sha = subprocess.run(
+        ["git", "-C", str(redirect_repo), "rev-parse", "HEAD"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    subprocess.run(
+        ["git", "-C", str(redirect_repo), "remote", "add", "origin", str(redirect_remote)],
+        check=True,
+    )
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(redirect_repo),
+            "push",
+            "origin",
+            "HEAD:refs/heads/closed-unmerged",
+        ],
+        check=True,
+        capture_output=True,
+    )
+    identity = git_hygiene.RepositoryIdentity(
+        REPOSITORY_ID, "RasmusTho/agentic-pkm-mvp", str(remote), str(remote)
+    )
+    candidate = _targeted_candidate(source_sha=sha)
+    candidate["archive_ref"] = git_hygiene._archive_ref(
+        REPOSITORY_ID, candidate["source_ref"], sha
+    )
+    monkeypatch.setattr(git_hygiene, "_resolve_repository_identity", lambda *_: identity)
+    monkeypatch.setattr(
+        git_hygiene,
+        "_read_protected_targets",
+        lambda *_args, **_kwargs: git_hygiene.ProtectedAuthority(
+            4728, 4813, "refs/heads/protected", "d" * 40
+        ),
+    )
+    monkeypatch.setattr(
+        git_hygiene,
+        "_read_candidate_pr",
+        lambda _identity, value, **_kwargs: _authenticated_contract(value),
+    )
+    monkeypatch.setattr(
+        git_hygiene, "_read_lifecycle_authority", lambda _cwd, _candidate: {}
+    )
+    monkeypatch.setattr(git_hygiene, "_lifecycle_conflicts", lambda *_: set())
+    monkeypatch.setattr(git_hygiene, "_read_dispatcher_authority", lambda *_: [])
+    monkeypatch.setattr(
+        git_hygiene,
+        "_final_authority_fence",
+        lambda *_: nullcontext((lambda: {}, lambda: [])),
+    )
+    monkeypatch.setenv("GIT_DIR", str(redirect_repo / ".git"))
+    monkeypatch.setenv("GIT_WORK_TREE", str(redirect_repo))
+    monkeypatch.setenv("GIT_COMMON_DIR", str(redirect_repo / ".git"))
+    monkeypatch.setenv("GIT_OBJECT_DIRECTORY", str(redirect_repo / ".git" / "objects"))
+    report = git_hygiene.targeted_remote_cleanup(
+        repo, repository=candidate["repository"], candidates=[candidate]
+    )
+    assert report["ok"] is True
+    assert git_hygiene._remote_ref_sha(repo, str(remote), candidate["source_ref"]) is None
+    assert git_hygiene._remote_ref_sha(repo, str(remote), candidate["archive_ref"]) == sha
+    assert (
+        git_hygiene._remote_ref_sha(
+            redirect_repo, str(redirect_remote), candidate["source_ref"]
+        )
+        == redirect_sha
+    )
+    assert (
+        git_hygiene._remote_ref_sha(
+            redirect_repo, str(redirect_remote), candidate["archive_ref"]
+        )
+        is None
+    )
+    assert (repo / ".git" / "git-hygiene" / "targeted-remote-cleanup").is_dir()
+    assert not (
+        redirect_repo / ".git" / "git-hygiene" / "targeted-remote-cleanup"
+    ).exists()
 
 
 def _allow_lifecycle_authority(_targets):
@@ -803,11 +3487,6 @@ def test_janitor_plan_unknown_github_state_skips_branch(tmp_path, monkeypatch) -
 
 def test_janitor_apply_creates_rescue_before_remote_delete(tmp_path, monkeypatch) -> None:
     commands: list[list[str]] = []
-    rescue_refspec = (
-        "refs/archive/git-hygiene/20260607T000000Z/closed-unmerged:"
-        "refs/archive/git-hygiene/20260607T000000Z/closed-unmerged"
-    )
-
     def fake_run_git_result(args: list[str], _cwd: Path) -> subprocess.CompletedProcess[str]:
         commands.append(args)
         return subprocess.CompletedProcess(["git", *args], 0, "", "")
@@ -847,22 +3526,9 @@ def test_janitor_apply_creates_rescue_before_remote_delete(tmp_path, monkeypatch
         pr_states={"closed-unmerged": {"state": "CLOSED"}},
     )
 
-    assert report["ok"] is True
-    assert commands.index(
-        [
-            "update-ref",
-            "refs/archive/git-hygiene/20260607T000000Z/closed-unmerged",
-            "origin/closed-unmerged",
-        ]
-    ) < commands.index(["push", "--no-verify", "origin", rescue_refspec])
-    assert commands.index(["push", "--no-verify", "origin", rescue_refspec]) < commands.index(
-        ["ls-remote", "--exit-code", "origin", rescue_refspec.split(":", 1)[0]]
-    )
-    assert commands.index(
-        ["ls-remote", "--exit-code", "origin", rescue_refspec.split(":", 1)[0]]
-    ) < commands.index(
-        ["push", "--no-verify", "origin", ":refs/heads/closed-unmerged"]
-    )
+    assert report["ok"] is False
+    assert report["errors"][-1]["reason"] == "targeted_remote_cleanup_required"
+    assert not any(command[0] == "push" for command in commands)
 
 
 @pytest.mark.parametrize(
@@ -1228,17 +3894,18 @@ def test_janitor_rescue_publication_works_from_guarded_main_checkout(
         pr_states={"closed-unmerged": {"state": "CLOSED"}},
     )
 
-    assert report["ok"] is True
+    assert report["ok"] is False
+    assert report["errors"][-1]["reason"] == "targeted_remote_cleanup_required"
     assert subprocess.run(
         ["git", "show-ref", "--verify", "--quiet", rescue_ref],
         cwd=remote,
         check=False,
-    ).returncode == 0
+    ).returncode != 0
     assert subprocess.run(
         ["git", "show-ref", "--verify", "--quiet", "refs/heads/closed-unmerged"],
         cwd=remote,
         check=False,
-    ).returncode != 0
+    ).returncode == 0
     guarded_main_after_cleanup = subprocess.run(
         ["git", "push", "origin", "main:refs/heads/main"],
         cwd=repo,
@@ -1395,10 +4062,9 @@ def test_janitor_rescue_delete_uses_exact_full_ref_for_ref_like_branch(
         pr_states={branch: {"state": "CLOSED"}},
     )
 
-    assert report["ok"] is True
-    assert ["push", "--no-verify", "origin", ":refs/heads/refs/heads/main"] in commands
-    assert ["push", "--no-verify", "origin", ":refs/heads/main"] not in commands
-    assert ["push", "--no-verify", "origin", "--delete", branch] not in commands
+    assert report["ok"] is False
+    assert report["errors"][-1]["reason"] == "targeted_remote_cleanup_required"
+    assert not any(command[0] == "push" for command in commands)
 
 
 @pytest.mark.parametrize("branch", ["--force", "main"])

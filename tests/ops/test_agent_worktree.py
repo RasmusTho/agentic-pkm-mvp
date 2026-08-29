@@ -169,6 +169,241 @@ def _merged_pr_state(repo: Path, branch: str) -> dict[str, str]:
     return {"state": "MERGED", "head_sha": git_hygiene.run_git(["rev-parse", branch], repo)}
 
 
+def _active_lifecycle_repo(tmp_path: Path):
+    repo = tmp_path / "repo"
+    worktree = tmp_path / "worktree"
+    subprocess.run(["git", "init", "--initial-branch=main", repo], check=True)
+    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "user.name", "Test User"], cwd=repo, check=True)
+    (repo / "base.txt").write_text("base\n", encoding="utf-8")
+    subprocess.run(["git", "add", "base.txt"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-m", "base"], cwd=repo, check=True)
+    subprocess.run(
+        ["git", "worktree", "add", "-b", "codex/authority", worktree],
+        cwd=repo,
+        check=True,
+    )
+    registry = tmp_path / "agent-worktrees.json"
+    agent_worktree.register_worktree(
+        repo,
+        worktree=worktree,
+        owner="authority-owner",
+        registry_path=registry,
+        now=10,
+    )
+    return repo, worktree, registry
+
+
+def test_load_lifecycle_authority_rejects_missing_or_corrupt_registry(tmp_path) -> None:
+    missing = tmp_path / "missing.json"
+    with pytest.raises(agent_worktree.WorktreeLifecycleError, match="missing"):
+        agent_worktree.load_lifecycle_authority(tmp_path, registry_path=missing)
+    corrupt = tmp_path / "corrupt.json"
+    corrupt.write_text('{"schema":', encoding="utf-8")
+    with pytest.raises(agent_worktree.WorktreeLifecycleError, match="invalid"):
+        agent_worktree.load_lifecycle_authority(tmp_path, registry_path=corrupt)
+
+
+def test_load_lifecycle_authority_validates_and_binds_current_generation(tmp_path) -> None:
+    repo, worktree, registry = _active_lifecycle_repo(tmp_path)
+    records = agent_worktree.load_lifecycle_authority(repo, registry_path=registry)
+    record = records[str(worktree.resolve())]
+    assert record["branch"] == "codex/authority"
+    assert record["status"] == "active"
+    assert agent_worktree._valid_generation(record["generation"])
+
+
+@pytest.mark.parametrize("operation", ("register", "heartbeat"))
+def test_locked_lifecycle_authority_fences_register_and_heartbeat(
+    tmp_path, operation
+) -> None:
+    repo, worktree, registry = _active_lifecycle_repo(tmp_path)
+    started = threading.Event()
+    finished = threading.Event()
+    errors: list[BaseException] = []
+
+    def write_lifecycle() -> None:
+        started.set()
+        try:
+            if operation == "register":
+                agent_worktree.register_worktree(
+                    repo,
+                    worktree=worktree,
+                    owner="authority-owner",
+                    registry_path=registry,
+                    now=20,
+                )
+            else:
+                agent_worktree.heartbeat_worktree(
+                    repo,
+                    worktree=worktree,
+                    owner="authority-owner",
+                    registry_path=registry,
+                    now=20,
+                )
+        except BaseException as exc:  # pragma: no cover - surfaced below
+            errors.append(exc)
+        finally:
+            finished.set()
+
+    thread = threading.Thread(target=write_lifecycle)
+    with agent_worktree.locked_lifecycle_authority(
+        repo,
+        candidate_branch="codex/authority",
+        registry_path=registry,
+    ) as reader:
+        records = reader()
+        assert records[str(worktree.resolve())]["branch"] == "codex/authority"
+        thread.start()
+        assert started.wait(1)
+        assert not finished.wait(0.1)
+
+    assert finished.wait(2)
+    thread.join(2)
+    assert not thread.is_alive()
+    assert errors == []
+
+
+def test_load_lifecycle_authority_rejects_malformed_record(tmp_path) -> None:
+    repo, worktree, registry = _active_lifecycle_repo(tmp_path)
+    payload = json.loads(registry.read_text(encoding="utf-8"))
+    payload["worktrees"][str(worktree.resolve())]["owner"] = True
+    registry.write_text(json.dumps(payload), encoding="utf-8")
+    with pytest.raises(agent_worktree.WorktreeLifecycleError, match="record is invalid"):
+        agent_worktree.load_lifecycle_authority(repo, registry_path=registry)
+
+
+def test_load_lifecycle_authority_scopes_full_validation_to_candidate_identity(
+    tmp_path,
+) -> None:
+    repo, worktree, registry = _active_lifecycle_repo(tmp_path)
+    payload = json.loads(registry.read_text(encoding="utf-8"))
+    for index in range(300):
+        unrelated = (tmp_path / f"retired-{index}").resolve()
+        payload["worktrees"][str(unrelated)] = {
+            "path": str(unrelated),
+            "branch": f"codex/retired-{index}",
+            "prior_bindings": [],
+            # Deliberately unavailable as live authority. Identity is still
+            # sufficient to prove this row cannot govern the candidate.
+            "status": "active",
+        }
+    registry.write_text(json.dumps(payload), encoding="utf-8")
+
+    records = agent_worktree.load_lifecycle_authority(
+        repo,
+        candidate_branch="codex/authority",
+        registry_path=registry,
+    )
+
+    assert set(records) == {str(worktree.resolve())}
+    candidate = git_hygiene.Candidate(
+        repository="example/repo",
+        pull_request=6000,
+        source_ref="refs/heads/codex/authority",
+        source_sha="a" * 40,
+        archive_ref="refs/archive/example",
+        owner="owner",
+        governing_issue=5170,
+        no_issue_lane=None,
+        successor="none",
+        retention_class="safety_archive",
+        review_at="2030-01-01T00:00:00Z",
+        discard={"state": "retain", "receipt": None},
+    )
+    assert git_hygiene._lifecycle_conflicts(repo, candidate, records) == {
+        "live_worktree",
+        "lifecycle_binding",
+    }
+
+
+def test_load_lifecycle_authority_rejects_relevant_or_ambiguous_malformed_rows(
+    tmp_path,
+) -> None:
+    repo, worktree, registry = _active_lifecycle_repo(tmp_path)
+    payload = json.loads(registry.read_text(encoding="utf-8"))
+    payload["worktrees"][str(worktree.resolve())]["owner"] = True
+    registry.write_text(json.dumps(payload), encoding="utf-8")
+    with pytest.raises(agent_worktree.WorktreeLifecycleError, match="record is invalid"):
+        agent_worktree.load_lifecycle_authority(
+            repo,
+            candidate_branch="codex/authority",
+            registry_path=registry,
+        )
+
+    payload["worktrees"][str(worktree.resolve())]["branch"] = "codex/unrelated"
+    payload["worktrees"][str(worktree.resolve())]["prior_bindings"] = []
+    registry.write_text(json.dumps(payload), encoding="utf-8")
+    with pytest.raises(agent_worktree.WorktreeLifecycleError, match="record is invalid"):
+        agent_worktree.load_lifecycle_authority(
+            repo,
+            candidate_branch="codex/authority",
+            registry_path=registry,
+        )
+
+    payload["worktrees"][str(worktree.resolve())]["prior_bindings"] = [
+        {"removed_at": 5}
+    ]
+    registry.write_text(json.dumps(payload), encoding="utf-8")
+    with pytest.raises(agent_worktree.WorktreeLifecycleError, match="record is invalid"):
+        agent_worktree.load_lifecycle_authority(
+            repo,
+            candidate_branch="codex/authority",
+            registry_path=registry,
+        )
+
+
+def test_load_lifecycle_authority_uses_registry_lock_for_snapshot(tmp_path) -> None:
+    repo, _worktree, registry = _active_lifecycle_repo(tmp_path)
+    lock_acquired = threading.Event()
+    release_lock = threading.Event()
+    read_finished = threading.Event()
+    errors = []
+
+    def holder():
+        with agent_worktree._registry_lock(registry):
+            lock_acquired.set()
+            assert release_lock.wait(timeout=5)
+
+    def reader():
+        try:
+            agent_worktree.load_lifecycle_authority(repo, registry_path=registry)
+        except Exception as exc:  # pragma: no cover - asserted below
+            errors.append(exc)
+        finally:
+            read_finished.set()
+
+    holding = threading.Thread(target=holder)
+    holding.start()
+    assert lock_acquired.wait(timeout=5)
+    reading = threading.Thread(target=reader)
+    reading.start()
+    assert not read_finished.wait(timeout=0.1)
+    release_lock.set()
+    holding.join(timeout=5)
+    reading.join(timeout=5)
+    assert read_finished.is_set()
+    assert errors == []
+
+
+def test_load_lifecycle_authority_rejects_optimistic_readback_change(
+    tmp_path, monkeypatch
+) -> None:
+    repo, worktree, registry = _active_lifecycle_repo(tmp_path)
+    real_bind = agent_worktree._bind_live_generations
+
+    def mutate(cwd, records):
+        bound = real_bind(cwd, records)
+        payload = json.loads(registry.read_text(encoding="utf-8"))
+        payload["worktrees"][str(worktree.resolve())]["heartbeat_at"] += 1
+        agent_worktree._write_registry(registry, payload)
+        return bound
+
+    monkeypatch.setattr(agent_worktree, "_bind_live_generations", mutate)
+    with pytest.raises(agent_worktree.WorktreeLifecycleError, match="authority changed"):
+        agent_worktree.load_lifecycle_authority(repo, registry_path=registry)
+
+
 def test_registry_write_fsyncs_parent_directory_after_replace(
     tmp_path,
     monkeypatch,
