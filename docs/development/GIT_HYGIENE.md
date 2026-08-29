@@ -40,8 +40,8 @@ closed-unmerged pull request, frozen source SHA, archive ref, owner, governing I
 retain state. Candidate input has one exact schema; disposition metadata is never
 mutation authority. The entrypoint obtains repository, pull-request, protected-target,
 lifecycle-registry, and dispatcher authority itself and rereads all of it immediately
-before archive publication and immediately before source deletion. Any drift stops the
-batch before later candidates are touched.
+before archive publication. The final source mutation uses the bounded linearization
+section described below. Any drift stops the batch before later candidates are touched.
 
 Repository identity is the live GitHub REST repository ID and canonical full name plus
 exactly one effective `origin` fetch URL and one effective push URL. HTTPS fetch and
@@ -114,7 +114,8 @@ when it has the current terminal `completed`/`blocked` or sync-meta shape, has n
 candidate Issue/PR/ref/branch/path resource, and has no live or unreleased lease. A
 blank row that is live, unreleased, relevant, malformed beyond that bounded legacy
 shape, or otherwise cannot prove irrelevance remains fail-closed. These short snapshots
-never hold lifecycle or SQLite locks across REST or Git network I/O.
+remain unlocked during planning and archive preparation; the bounded final source-CAS
+section below is the deliberate exception that fences canonical local writers.
 
 The blank-repository compatibility path calls the same task/lease relationship validator
 as repository-bound tasks. Any retained `lease_id` therefore requires one exact lease,
@@ -129,21 +130,45 @@ Receipts live under the repository Git common directory at
 `sha256("v1\\0" + repository-id + "\\0" + full-source-ref)`. The resource key
 deliberately excludes disposition and SHA so a rebinding attempt collides with and is
 rejected by the existing record. Persistent per-resource files use non-blocking kernel
-`flock`; filenames are never unlinked as ownership signals. Prepared and completed
+`flock`; filenames are never unlinked as ownership signals. Prepared, compensated, and completed
 receipts reject symlinks, duplicate JSON keys, unknown fields, wrong identity or
-resource key, invalid states, and completed-to-prepared regression. Every transition
+resource key, invalid states, completed regression, and compensated-to-prepared regression. Every transition
 uses a mode-0600 temporary file, complete write and file `fsync`, atomic replace, then
 directory `fsync`.
 
 The archive ref is deterministically derived from repository ID, full source ref, and
 frozen source SHA. Archive creation uses an expected-absence remote CAS, reads the exact
 SHA back, and durably records `prepared` before source deletion. Source deletion uses a
-fully qualified expected-old-SHA CAS and must be followed by source-absence plus
-exact-archive readback before `completed` is durable. A missing receipt plus an already
-absent source is never adoptable: only a matching `prepared` receipt loaded from disk
-before observing absence authorizes crash recovery. A completed receipt is monotonic
-and idempotent only while the same live ref facts still agree. This slice never deletes
-an archive ref.
+fully qualified expected-old-SHA CAS inside one final-authority critical section. The
+canonical lock order is dispatcher SQLite writer reservation (`BEGIN IMMEDIATE`) first,
+then lifecycle-registry `flock`. Dispatcher claim/complete producers use the same SQLite
+writer serialization, and lifecycle register/heartbeat producers use the same registry
+lock; the normal claim-then-register workflow never nests these locks in the opposite
+order. The section is bounded to final local authority rereads, one source CAS, immediate
+ref readback, a final external/local authority reread, and the receipt transition. It is
+never held across batch planning, archive creation, or long-running validation.
+
+GitHub PR, Issue, body-contract, and protected-target authority cannot join the local
+lock domain. Cleanup reads that authority immediately before acquiring the local fences,
+then reads it again after the delete CAS while both local fences remain held. Source
+absence, exact archive identity, a clear final external reread, and a clear fenced local
+reread are all required before `completed` becomes durable. A dispatcher claim or
+lifecycle registration that begins after the locks are released is new authority after
+the completed deletion linearization; a writer that started earlier cannot become live
+until the critical section exits.
+
+If external drift or any local preservation signal appears after deletion, cleanup
+restores the exact archived object with an expected-absence source CAS, verifies both
+source and archive at the frozen SHA, records durable `compensated`, and stops the batch.
+It never overwrites a concurrently recreated or advanced source. Restore-CAS or readback
+ambiguity is a hard failure that leaves the archive retained and the receipt non-completed.
+Crash retry also recognizes a candidate-bound prepared/compensated receipt whose live PR
+contract has since changed: it restores an absent source or verifies the already-restored
+exact source, persists `compensated` under the same fences, and refuses advanced source or
+archive drift. A missing receipt plus an already absent source is never adoptable: only a
+matching `prepared` receipt loaded from disk before observing absence authorizes ordinary
+crash recovery. A completed receipt is monotonic and idempotent only while the same live
+ref facts still agree. This slice never deletes an archive ref.
 
 Archive refs are retained by default. `review_at` is only a review trigger for
 `safety_archive` and `quarantine`; elapsed time never authorizes archive deletion,

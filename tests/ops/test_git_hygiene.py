@@ -7,7 +7,7 @@ import subprocess
 import sys
 import threading
 import time
-from contextlib import nullcontext
+from contextlib import contextmanager, nullcontext
 
 import pytest
 
@@ -83,6 +83,14 @@ def _remote_cleanup_transport(refs, commands, *, advance_before_delete=False):
                 return subprocess.CompletedProcess(["git", *args], 1, "", "stale info")
             refs.pop(ref, None)
             return subprocess.CompletedProcess(["git", *args], 0, "", "")
+        if args[:2] == ["push", "--no-verify"] and ":refs/heads/" in args[-1]:
+            sha, ref = args[-1].split(":", 1)
+            if ref in refs:
+                return subprocess.CompletedProcess(
+                    ["git", *args], 1, "", "stale info"
+                )
+            refs[ref] = sha
+            return subprocess.CompletedProcess(["git", *args], 0, "", "")
         raise AssertionError(args)
     return fake
 
@@ -112,6 +120,11 @@ def _install_remote_cleanup_authority(monkeypatch, tmp_path, refs, commands):
     )
     monkeypatch.setattr(git_hygiene, "_lifecycle_conflicts", lambda *_: set())
     monkeypatch.setattr(git_hygiene, "_read_dispatcher_authority", lambda *_: [])
+    monkeypatch.setattr(
+        git_hygiene,
+        "_final_authority_fence",
+        lambda *_: nullcontext((lambda: {}, lambda: [])),
+    )
     monkeypatch.setattr(git_hygiene, "_git_common_dir", lambda _cwd: tmp_path / "common")
     monkeypatch.setattr(
         git_hygiene, "run_git_result", _remote_cleanup_transport(refs, commands)
@@ -737,6 +750,11 @@ def test_targeted_remote_cleanup_rereads_lifecycle_before_delete(tmp_path, monke
 
     monkeypatch.setattr(git_hygiene, "_read_lifecycle_authority", lifecycle)
     monkeypatch.setattr(git_hygiene, "_lifecycle_conflicts", lambda _c, _v, records: set(records))
+    monkeypatch.setattr(
+        git_hygiene,
+        "_final_authority_fence",
+        lambda *_: nullcontext((lambda: lifecycle(None, None), lambda: [])),
+    )
     report = git_hygiene.targeted_remote_cleanup(
         tmp_path, repository=candidate["repository"], candidates=[candidate]
     )
@@ -760,11 +778,16 @@ def test_targeted_remote_cleanup_rereads_dispatcher_leases_at_both_boundaries(
         return []
 
     monkeypatch.setattr(git_hygiene, "_read_dispatcher_authority", dispatcher)
+    monkeypatch.setattr(
+        git_hygiene,
+        "_final_authority_fence",
+        lambda *_: nullcontext((lambda: {}, lambda: dispatcher())),
+    )
     report = git_hygiene.targeted_remote_cleanup(
         tmp_path, repository=candidate["repository"], candidates=[candidate]
     )
     assert report["ok"] is True
-    assert reads == 3
+    assert reads == 4
 
 
 def test_targeted_remote_cleanup_pr_contract_drift_before_delete_preserves_source(
@@ -802,6 +825,92 @@ def test_targeted_remote_cleanup_pr_contract_drift_before_delete_preserves_sourc
     )
 
 
+def test_targeted_remote_cleanup_github_drift_after_cas_restores_and_compensates(
+    tmp_path, monkeypatch
+) -> None:
+    candidate = _targeted_candidate()
+    refs = {candidate["source_ref"]: candidate["source_sha"]}
+    commands: list[list[str]] = []
+    _install_remote_cleanup_authority(monkeypatch, tmp_path, refs, commands)
+    original = _authenticated_contract(git_hygiene.Candidate(**candidate))
+    changed = git_hygiene.PullContractIdentity(
+        original.governing_issue,
+        original.no_issue_lane,
+        "f" * 64,
+    )
+    reads = 0
+
+    def read_pr(_identity, _candidate, **_kwargs):
+        nonlocal reads
+        reads += 1
+        return changed if reads >= 5 else original
+
+    monkeypatch.setattr(git_hygiene, "_read_candidate_pr", read_pr)
+    report = git_hygiene.targeted_remote_cleanup(
+        tmp_path, repository=candidate["repository"], candidates=[candidate]
+    )
+
+    assert report["error"] == "post_delete_authority_changed_compensated"
+    assert refs[candidate["source_ref"]] == candidate["source_sha"]
+    assert refs[candidate["archive_ref"]] == candidate["source_sha"]
+    receipts = (
+        tmp_path
+        / "common"
+        / "git-hygiene"
+        / "targeted-remote-cleanup"
+        / "v1"
+        / "receipts"
+    )
+    assert json.loads(next(receipts.glob("*.json")).read_text())["state"] == "compensated"
+    assert any(command[-1] == f":{candidate['source_ref']}" for command in commands)
+    assert any(
+        command[-1] == f"{candidate['source_sha']}:{candidate['source_ref']}"
+        for command in commands
+    )
+
+
+def test_targeted_remote_cleanup_concurrent_source_recreation_refuses_restore_cas(
+    tmp_path, monkeypatch
+) -> None:
+    candidate = _targeted_candidate()
+    refs = {candidate["source_ref"]: candidate["source_sha"]}
+    commands: list[list[str]] = []
+    _install_remote_cleanup_authority(monkeypatch, tmp_path, refs, commands)
+    original = _authenticated_contract(git_hygiene.Candidate(**candidate))
+    changed = git_hygiene.PullContractIdentity(
+        original.governing_issue,
+        original.no_issue_lane,
+        "f" * 64,
+    )
+    reads = 0
+
+    def read_pr(_identity, _candidate, **_kwargs):
+        nonlocal reads
+        reads += 1
+        if reads >= 5:
+            refs[candidate["source_ref"]] = "b" * 40
+            return changed
+        return original
+
+    monkeypatch.setattr(git_hygiene, "_read_candidate_pr", read_pr)
+    report = git_hygiene.targeted_remote_cleanup(
+        tmp_path, repository=candidate["repository"], candidates=[candidate]
+    )
+
+    assert report["error"] == "source_restore_expected_absence_failed"
+    assert refs[candidate["source_ref"]] == "b" * 40
+    assert refs[candidate["archive_ref"]] == candidate["source_sha"]
+    receipts = (
+        tmp_path
+        / "common"
+        / "git-hygiene"
+        / "targeted-remote-cleanup"
+        / "v1"
+        / "receipts"
+    )
+    assert json.loads(next(receipts.glob("*.json")).read_text())["state"] == "prepared"
+
+
 def test_targeted_remote_cleanup_new_lease_after_archive_preserves_source(
     tmp_path, monkeypatch
 ) -> None:
@@ -819,6 +928,11 @@ def test_targeted_remote_cleanup_new_lease_after_archive_preserves_source(
     monkeypatch.setattr(git_hygiene, "_read_dispatcher_authority", dispatcher)
     monkeypatch.setattr(
         git_hygiene,
+        "_final_authority_fence",
+        lambda *_: nullcontext((lambda: {}, lambda: dispatcher())),
+    )
+    monkeypatch.setattr(
+        git_hygiene,
         "_dispatcher_conflicts",
         lambda _c, _l, value, **_kwargs: set() if not value else {"lease"},
     )
@@ -828,6 +942,129 @@ def test_targeted_remote_cleanup_new_lease_after_archive_preserves_source(
     assert report["error"] == "candidate_dispatcher_conflict"
     assert candidate["source_ref"] in refs
     assert candidate["archive_ref"] in refs
+
+
+def test_targeted_remote_cleanup_dispatcher_writer_linearizes_after_source_cas(
+    tmp_path, monkeypatch
+) -> None:
+    from app.dispatcher.models import LeaseRecord
+    from app.dispatcher.store import SqliteStore
+    from scripts import agent_worktree
+
+    candidate = _targeted_candidate()
+    refs = {candidate["source_ref"]: candidate["source_sha"]}
+    commands: list[list[str]] = []
+    real_final_fence = git_hygiene._final_authority_fence
+    _install_remote_cleanup_authority(monkeypatch, tmp_path, refs, commands)
+    database = tmp_path / "dispatcher.sqlite3"
+    store = SqliteStore(database)
+    store.initialize()
+    monkeypatch.setattr(
+        git_hygiene, "_canonical_dispatcher_db_path", lambda _cwd: database
+    )
+    monkeypatch.setattr(
+        agent_worktree,
+        "locked_lifecycle_authority",
+        lambda *_args, **_kwargs: nullcontext(lambda: {}),
+    )
+    monkeypatch.setattr(git_hygiene, "_final_authority_fence", real_final_fence)
+    writer_started = threading.Event()
+    writer_finished = threading.Event()
+    errors: list[BaseException] = []
+    thread: threading.Thread | None = None
+
+    def insert_claim() -> None:
+        writer_started.set()
+        try:
+            store.upsert_lease(
+                LeaseRecord(
+                    lease_id="pre-cas-attempt",
+                    resource="issue:5170",
+                    holder="new-agent",
+                    ttl_seconds=60,
+                    acquired_at="2026-08-29T00:00:00+00:00",
+                    expires_at="2099-01-01T00:00:00+00:00",
+                )
+            )
+        except BaseException as exc:  # pragma: no cover - surfaced below
+            errors.append(exc)
+        finally:
+            writer_finished.set()
+
+    def hook(point: str) -> None:
+        nonlocal thread
+        if point == "before_source_cas_acceptance":
+            thread = threading.Thread(target=insert_claim)
+            thread.start()
+            assert writer_started.wait(1)
+            assert not writer_finished.wait(0.1)
+        elif point == "after_source_cas_acceptance":
+            assert not writer_finished.is_set()
+
+    monkeypatch.setattr(git_hygiene, "_crash_hook", hook)
+    report = git_hygiene.targeted_remote_cleanup(
+        tmp_path, repository=candidate["repository"], candidates=[candidate]
+    )
+
+    assert report["ok"] is True
+    assert thread is not None
+    assert writer_finished.wait(2)
+    thread.join(2)
+    assert not thread.is_alive()
+    assert errors == []
+    assert store.get_lease("pre-cas-attempt") is not None
+    receipt = next(
+        (tmp_path / "common" / "git-hygiene" / "targeted-remote-cleanup" / "v1" / "receipts").glob("*.json")
+    )
+    assert json.loads(receipt.read_text(encoding="utf-8"))["state"] == "completed"
+
+
+def test_final_authority_fence_uses_dispatcher_then_lifecycle_order(
+    tmp_path, monkeypatch
+) -> None:
+    from scripts import agent_worktree
+
+    events: list[str] = []
+    dispatcher_held = False
+
+    @contextmanager
+    def dispatcher_fence(_cwd):
+        nonlocal dispatcher_held
+        events.append("dispatcher-enter")
+        dispatcher_held = True
+        try:
+            yield object()
+        finally:
+            dispatcher_held = False
+            events.append("dispatcher-exit")
+
+    @contextmanager
+    def lifecycle_fence(*_args, **_kwargs):
+        assert dispatcher_held
+        events.append("lifecycle-enter")
+        try:
+            yield lambda: {}
+        finally:
+            events.append("lifecycle-exit")
+
+    monkeypatch.setattr(
+        git_hygiene, "_dispatcher_authority_write_fence", dispatcher_fence
+    )
+    monkeypatch.setattr(
+        agent_worktree, "locked_lifecycle_authority", lifecycle_fence
+    )
+    candidate = git_hygiene.Candidate(**_targeted_candidate())
+
+    with git_hygiene._final_authority_fence(tmp_path, candidate):
+        events.append("critical-section")
+
+    assert events == [
+        "dispatcher-enter",
+        "lifecycle-enter",
+        "critical-section",
+        "lifecycle-exit",
+        "dispatcher-exit",
+    ]
 
 
 def test_targeted_remote_cleanup_uses_git_common_dir_store_across_worktrees(tmp_path) -> None:
@@ -1063,6 +1300,14 @@ def test_targeted_remote_cleanup_receipt_schema_is_exact_and_monotonic(tmp_path)
     with pytest.raises(RuntimeError, match="path"):
         git_hygiene._read_receipt(paths.receipt, expected=identity)
     paths.receipt.unlink()
+
+    compensated = git_hygiene.Receipt(
+        git_hygiene.RECEIPT_SCHEMA, key, "compensated", identity
+    )
+    git_hygiene._replace_receipt(paths.receipt, compensated)
+    assert git_hygiene._read_receipt(paths.receipt, expected=identity) == compensated
+    with pytest.raises(RuntimeError, match="regression"):
+        git_hygiene._replace_receipt(paths.receipt, prepared)
 
     completed = git_hygiene.Receipt(
         git_hygiene.RECEIPT_SCHEMA, key, "completed", identity
@@ -2154,6 +2399,126 @@ def test_targeted_remote_cleanup_crash_matrix(tmp_path, monkeypatch, crash_point
 
 
 @pytest.mark.parametrize(
+    "crash_point",
+    (
+        "before_source_restore_cas_acceptance",
+        "after_source_restore_cas_acceptance",
+        "before_source_restore_readback",
+        "after_source_restore_readback",
+        "before_compensated_temp_fsync",
+        "after_compensated_replace",
+        "after_compensated_dir_fsync",
+    ),
+)
+def test_targeted_remote_cleanup_compensation_crash_retries_without_completion(
+    tmp_path, monkeypatch, crash_point
+) -> None:
+    candidate = _targeted_candidate()
+    refs = {candidate["source_ref"]: candidate["source_sha"]}
+    commands: list[list[str]] = []
+    _install_remote_cleanup_authority(monkeypatch, tmp_path, refs, commands)
+    original = _authenticated_contract(git_hygiene.Candidate(**candidate))
+    changed = git_hygiene.PullContractIdentity(
+        original.governing_issue,
+        original.no_issue_lane,
+        "f" * 64,
+    )
+    reads = 0
+    fired = False
+
+    def read_pr(_identity, _candidate, **_kwargs):
+        nonlocal reads
+        reads += 1
+        return changed if reads >= 5 else original
+
+    def crash(point: str) -> None:
+        nonlocal fired
+        if point == crash_point and not fired:
+            fired = True
+            raise OSError(f"crash:{point}")
+
+    monkeypatch.setattr(git_hygiene, "_read_candidate_pr", read_pr)
+    monkeypatch.setattr(git_hygiene, "_crash_hook", crash)
+    first = git_hygiene.targeted_remote_cleanup(
+        tmp_path, repository=candidate["repository"], candidates=[candidate]
+    )
+    assert first["ok"] is False
+    assert fired
+
+    monkeypatch.setattr(git_hygiene, "_crash_hook", lambda _point: None)
+    retry = git_hygiene.targeted_remote_cleanup(
+        tmp_path, repository=candidate["repository"], candidates=[candidate]
+    )
+
+    assert retry["error"] == "contract_drifted_source_compensated"
+    assert refs[candidate["source_ref"]] == candidate["source_sha"]
+    assert refs[candidate["archive_ref"]] == candidate["source_sha"]
+    receipts = (
+        tmp_path
+        / "common"
+        / "git-hygiene"
+        / "targeted-remote-cleanup"
+        / "v1"
+        / "receipts"
+    )
+    assert json.loads(next(receipts.glob("*.json")).read_text())["state"] == "compensated"
+
+
+def test_targeted_remote_cleanup_crash_then_local_claim_restores_on_retry(
+    tmp_path, monkeypatch
+) -> None:
+    candidate = _targeted_candidate()
+    refs = {candidate["source_ref"]: candidate["source_sha"]}
+    commands: list[list[str]] = []
+    _install_remote_cleanup_authority(monkeypatch, tmp_path, refs, commands)
+    fired = False
+
+    def crash(point: str) -> None:
+        nonlocal fired
+        if point == "after_source_cas_acceptance" and not fired:
+            fired = True
+            raise OSError("crash:after_source_cas_acceptance")
+
+    monkeypatch.setattr(git_hygiene, "_crash_hook", crash)
+    first = git_hygiene.targeted_remote_cleanup(
+        tmp_path, repository=candidate["repository"], candidates=[candidate]
+    )
+    assert first["ok"] is False
+    assert fired
+    assert candidate["source_ref"] not in refs
+
+    monkeypatch.setattr(git_hygiene, "_crash_hook", lambda _point: None)
+    monkeypatch.setattr(
+        git_hygiene,
+        "_final_authority_fence",
+        lambda *_: nullcontext((lambda: {}, lambda: [{"new_claim": True}])),
+    )
+    monkeypatch.setattr(
+        git_hygiene,
+        "_dispatcher_conflicts",
+        lambda _candidate, _lifecycle, snapshot, **_kwargs: set()
+        if not snapshot
+        else {"live_dispatcher_claim"},
+    )
+    retry = git_hygiene.targeted_remote_cleanup(
+        tmp_path, repository=candidate["repository"], candidates=[candidate]
+    )
+
+    assert retry["error"] == "post_delete_authority_changed_compensated"
+    assert refs[candidate["source_ref"]] == candidate["source_sha"]
+    assert refs[candidate["archive_ref"]] == candidate["source_sha"]
+    receipts = (
+        tmp_path
+        / "common"
+        / "git-hygiene"
+        / "targeted-remote-cleanup"
+        / "v1"
+        / "receipts"
+    )
+    assert json.loads(next(receipts.glob("*.json")).read_text())["state"] == "compensated"
+
+
+@pytest.mark.parametrize(
     ("mutate", "error"),
     [
         (lambda value: value.update({"authority": {}}), "candidate_schema_invalid"),
@@ -2297,6 +2662,11 @@ def test_targeted_remote_cleanup_real_bare_remote_cas(tmp_path, monkeypatch) -> 
     )
     monkeypatch.setattr(git_hygiene, "_lifecycle_conflicts", lambda *_: set())
     monkeypatch.setattr(git_hygiene, "_read_dispatcher_authority", lambda *_: [])
+    monkeypatch.setattr(
+        git_hygiene,
+        "_final_authority_fence",
+        lambda *_: nullcontext((lambda: {}, lambda: [])),
+    )
     monkeypatch.setenv("GIT_DIR", str(redirect_repo / ".git"))
     monkeypatch.setenv("GIT_WORK_TREE", str(redirect_repo))
     monkeypatch.setenv("GIT_COMMON_DIR", str(redirect_repo / ".git"))

@@ -905,6 +905,17 @@ def _identity_digest(identity: CandidateIdentity) -> str:
 def _read_receipt(
     path: Path, *, expected: CandidateIdentity
 ) -> Receipt | None:
+    receipt = _read_candidate_bound_receipt(path, expected=expected)
+    if receipt is not None and receipt.identity != expected:
+        raise RuntimeError("receipt_identity_or_state_conflict")
+    return receipt
+
+
+def _read_candidate_bound_receipt(
+    path: Path, *, expected: CandidateIdentity
+) -> Receipt | None:
+    """Read one receipt bound to the candidate, allowing contract-drift recovery."""
+
     if path.is_symlink():
         raise RuntimeError("receipt_path_invalid")
     if not path.exists():
@@ -924,23 +935,56 @@ def _read_receipt(
     }:
         raise RuntimeError("receipt_schema_invalid")
     identity_payload = payload.get("identity")
+    expected_payload = asdict(expected)
     if (
         payload.get("schema") != RECEIPT_SCHEMA
-        or payload.get("state") not in {"prepared", "completed"}
-        or payload.get("identity_digest") != _identity_digest(expected)
+        or payload.get("state") not in {"prepared", "compensated", "completed"}
         or not isinstance(identity_payload, Mapping)
-        or set(identity_payload) != set(asdict(expected))
-        or dict(identity_payload) != asdict(expected)
+        or set(identity_payload) != set(expected_payload)
     ):
         raise RuntimeError("receipt_identity_or_state_conflict")
-    resource_key = _receipt_resource_key(expected.repository_id, expected.source_ref)
+    for key, value in expected_payload.items():
+        if key != "authenticated_contract" and identity_payload.get(key) != value:
+            raise RuntimeError("receipt_identity_or_state_conflict")
+    contract_payload = identity_payload.get("authenticated_contract")
+    if not isinstance(contract_payload, Mapping) or set(contract_payload) != {
+        "governing_issue",
+        "no_issue_lane",
+        "pr_body_sha256",
+    }:
+        raise RuntimeError("receipt_identity_or_state_conflict")
+    issue = contract_payload.get("governing_issue")
+    lane = contract_payload.get("no_issue_lane")
+    digest = contract_payload.get("pr_body_sha256")
+    if (
+        (_positive_int(issue) == (lane is not None))
+        or (lane is not None and lane not in _NO_ISSUE_LANES)
+        or not isinstance(digest, str)
+        or not re.fullmatch(r"[0-9a-f]{64}", digest)
+    ):
+        raise RuntimeError("receipt_identity_or_state_conflict")
+    stored_identity = CandidateIdentity(
+        **{
+            **{key: value for key, value in expected_payload.items() if key != "authenticated_contract"},
+            "authenticated_contract": PullContractIdentity(
+                governing_issue=issue if _positive_int(issue) else None,
+                no_issue_lane=str(lane) if lane is not None else None,
+                pr_body_sha256=digest,
+            ),
+        }
+    )
+    if payload.get("identity_digest") != _identity_digest(stored_identity):
+        raise RuntimeError("receipt_identity_or_state_conflict")
+    resource_key = _receipt_resource_key(
+        stored_identity.repository_id, stored_identity.source_ref
+    )
     if payload.get("resource_key") != resource_key:
         raise RuntimeError("receipt_resource_key_invalid")
     return Receipt(
         schema=RECEIPT_SCHEMA,
         resource_key=resource_key,
         state=str(payload["state"]),
-        identity=expected,
+        identity=stored_identity,
     )
 
 
@@ -951,6 +995,8 @@ def _crash_hook(_point: str) -> None:
 def _replace_receipt(path: Path, receipt: Receipt) -> None:
     existing = _read_receipt(path, expected=receipt.identity)
     if existing is not None and existing.state == "completed" and receipt.state != "completed":
+        raise RuntimeError("receipt_state_regression")
+    if existing is not None and existing.state == "compensated" and receipt.state == "prepared":
         raise RuntimeError("receipt_state_regression")
     path.parent.mkdir(parents=True, exist_ok=True)
     descriptor, temporary_name = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.")
@@ -1148,27 +1194,33 @@ def _dispatcher_snapshot(cwd: Path, repository: str) -> list[dict[str, object]]:
         connection = sqlite3.connect(f"{database.as_uri()}?mode=ro", uri=True)
         connection.row_factory = sqlite3.Row
         with connection:
-            tasks = [
-                dict(row)
-                for row in connection.execute(
-                    "SELECT * FROM dispatcher_tasks ORDER BY task_id"
-                ).fetchall()
-            ]
-            leases = [
-                dict(row)
-                for row in connection.execute(
-                    "SELECT * FROM dispatcher_leases ORDER BY lease_id"
-                ).fetchall()
-            ]
+            snapshot = _dispatcher_snapshot_from_connection(connection)
     except sqlite3.Error as exc:
         raise RuntimeError("dispatcher_database_invalid") from exc
     finally:
         if "connection" in locals():
             connection.close()
-    snapshot = [
+    return snapshot
+
+
+def _dispatcher_snapshot_from_connection(
+    connection: sqlite3.Connection,
+) -> list[dict[str, object]]:
+    tasks = [
+        dict(row)
+        for row in connection.execute(
+            "SELECT * FROM dispatcher_tasks ORDER BY task_id"
+        ).fetchall()
+    ]
+    leases = [
+        dict(row)
+        for row in connection.execute(
+            "SELECT * FROM dispatcher_leases ORDER BY lease_id"
+        ).fetchall()
+    ]
+    return [
         {"kind": "task", "record": task} for task in tasks
     ] + [{"kind": "lease", "record": lease} for lease in leases]
-    return snapshot
 
 
 def _read_dispatcher_authority(cwd: Path, repository: str) -> list[dict[str, object]]:
@@ -1177,6 +1229,56 @@ def _read_dispatcher_authority(cwd: Path, repository: str) -> list[dict[str, obj
     if first != second:
         raise RuntimeError("dispatcher_authority_changed")
     return first
+
+
+@contextmanager
+def _dispatcher_authority_write_fence(cwd: Path) -> Iterator[sqlite3.Connection]:
+    """Reserve the canonical dispatcher writer through one final source CAS."""
+
+    database = _canonical_dispatcher_db_path(cwd)
+    if not database.is_file() or database.is_symlink():
+        raise RuntimeError("dispatcher_database_missing")
+    connection: sqlite3.Connection | None = None
+    try:
+        connection = sqlite3.connect(
+            f"{database.as_uri()}?mode=rw",
+            uri=True,
+            timeout=30,
+        )
+        connection.row_factory = sqlite3.Row
+        connection.execute("PRAGMA foreign_keys = ON")
+        connection.execute("BEGIN IMMEDIATE")
+        yield connection
+    except sqlite3.Error as exc:
+        raise RuntimeError("dispatcher_write_fence_failed") from exc
+    finally:
+        if connection is not None:
+            connection.rollback()
+            connection.close()
+
+
+@contextmanager
+def _final_authority_fence(
+    cwd: Path,
+    candidate: Candidate,
+) -> Iterator[
+    tuple[
+        Callable[[], dict[str, dict[str, object]]],
+        Callable[[], list[dict[str, object]]],
+    ]
+]:
+    """Fence dispatcher then lifecycle writers in the canonical deadlock-safe order."""
+
+    from scripts import agent_worktree
+
+    with _dispatcher_authority_write_fence(cwd) as connection:
+        with agent_worktree.locked_lifecycle_authority(
+            cwd,
+            candidate_branch=candidate.source_ref.removeprefix("refs/heads/"),
+        ) as lifecycle_reader:
+            yield lifecycle_reader, lambda: _dispatcher_snapshot_from_connection(
+                connection
+            )
 
 
 def _candidate_dispatcher_resources(
@@ -1498,8 +1600,12 @@ def _remote_ref_sha(cwd: Path, push_url: str, ref: str) -> str | None:
     return sha
 
 
-def _fetch_source_object(
-    cwd: Path, identity: RepositoryIdentity, candidate: Candidate
+def _fetch_exact_object(
+    cwd: Path,
+    identity: RepositoryIdentity,
+    *,
+    ref: str,
+    expected_sha: str,
 ) -> None:
     fetched = run_git_result(
         [
@@ -1507,18 +1613,64 @@ def _fetch_source_object(
             "--no-tags",
             "--no-write-fetch-head",
             identity.fetch_url,
-            candidate.source_ref,
+            ref,
         ],
         cwd,
     )
     if fetched.returncode != 0:
         raise RuntimeError("source_object_fetch_failed")
-    present = run_git_result(["cat-file", "-e", f"{candidate.source_sha}^{{commit}}"], cwd)
+    present = run_git_result(["cat-file", "-e", f"{expected_sha}^{{commit}}"], cwd)
     if present.returncode != 0:
         raise RuntimeError("source_object_fetch_mismatch")
 
 
-def _fresh_candidate_authority(
+def _fetch_source_object(
+    cwd: Path, identity: RepositoryIdentity, candidate: Candidate
+) -> None:
+    _fetch_exact_object(
+        cwd,
+        identity,
+        ref=candidate.source_ref,
+        expected_sha=candidate.source_sha,
+    )
+
+
+def _restore_source_from_archive(
+    cwd: Path,
+    identity: RepositoryIdentity,
+    candidate: Candidate,
+) -> None:
+    if _remote_ref_sha(cwd, identity.push_url, candidate.source_ref) is not None:
+        raise RuntimeError("source_restore_expected_absence_failed")
+    _fetch_exact_object(
+        cwd,
+        identity,
+        ref=candidate.archive_ref,
+        expected_sha=candidate.source_sha,
+    )
+    _crash_hook("before_source_restore_cas_acceptance")
+    restored = run_git_result(
+        [
+            "push",
+            "--no-verify",
+            f"--force-with-lease={candidate.source_ref}:",
+            identity.push_url,
+            f"{candidate.source_sha}:{candidate.source_ref}",
+        ],
+        cwd,
+    )
+    if restored.returncode != 0:
+        raise RuntimeError("source_restore_cas_failed")
+    _crash_hook("after_source_restore_cas_acceptance")
+    _crash_hook("before_source_restore_readback")
+    source = _remote_ref_sha(cwd, identity.push_url, candidate.source_ref)
+    archive = _remote_ref_sha(cwd, identity.push_url, candidate.archive_ref)
+    _crash_hook("after_source_restore_readback")
+    if source != candidate.source_sha or archive != candidate.source_sha:
+        raise RuntimeError("source_restore_readback_failed")
+
+
+def _fresh_external_candidate_authority(
     cwd: Path,
     *,
     requested_repository: str,
@@ -1534,6 +1686,24 @@ def _fresh_candidate_authority(
     contract = _read_candidate_pr(identity, candidate, cwd=cwd)
     if contract != expected_contract:
         raise RuntimeError("candidate_pr_contract_changed")
+    return identity
+
+
+def _fresh_candidate_authority(
+    cwd: Path,
+    *,
+    requested_repository: str,
+    expected_repository: RepositoryIdentity,
+    candidate: Candidate,
+    expected_contract: PullContractIdentity,
+) -> RepositoryIdentity:
+    identity = _fresh_external_candidate_authority(
+        cwd,
+        requested_repository=requested_repository,
+        expected_repository=expected_repository,
+        candidate=candidate,
+        expected_contract=expected_contract,
+    )
     lifecycle = _read_lifecycle_authority(cwd, candidate)
     if _lifecycle_conflicts(cwd, candidate, lifecycle):
         raise RuntimeError("candidate_lifecycle_conflict")
@@ -1553,6 +1723,26 @@ def _receipt_result(candidate: Candidate, paths: ReceiptPaths) -> dict[str, obje
     }
 
 
+def _validate_fenced_local_authority(
+    cwd: Path,
+    candidate: Candidate,
+    repository: str,
+    lifecycle_reader: Callable[[], dict[str, dict[str, object]]],
+    dispatcher_reader: Callable[[], list[dict[str, object]]],
+) -> None:
+    lifecycle = lifecycle_reader()
+    if _lifecycle_conflicts(cwd, candidate, lifecycle):
+        raise RuntimeError("candidate_lifecycle_conflict")
+    dispatcher = dispatcher_reader()
+    if _dispatcher_conflicts(
+        candidate,
+        lifecycle,
+        dispatcher,
+        repository=repository,
+    ):
+        raise RuntimeError("candidate_dispatcher_conflict")
+
+
 def _preflight_candidate(
     cwd: Path,
     *,
@@ -1562,13 +1752,6 @@ def _preflight_candidate(
     expected: CandidateIdentity,
     common_dir: Path,
 ) -> None:
-    _fresh_candidate_authority(
-        cwd,
-        requested_repository=requested_repository,
-        expected_repository=identity,
-        candidate=candidate,
-        expected_contract=expected.authenticated_contract,
-    )
     paths = _receipt_paths(
         common_dir,
         _receipt_resource_key(identity.database_id, candidate.source_ref),
@@ -1586,6 +1769,143 @@ def _preflight_candidate(
         raise RuntimeError("source_identity_drift")
     if archive not in {None, candidate.source_sha}:
         raise RuntimeError("archive_sha_mismatch")
+    if receipt is not None and source is None:
+        # A prepared absence is recovery state. Authority disagreement must be
+        # handled under the final local fences so it can restore, not rejected
+        # here while leaving the source absent.
+        return
+    _fresh_candidate_authority(
+        cwd,
+        requested_repository=requested_repository,
+        expected_repository=identity,
+        candidate=candidate,
+        expected_contract=expected.authenticated_contract,
+    )
+
+
+def _compensate_absent_source_after_authority_error(
+    cwd: Path,
+    *,
+    identity: RepositoryIdentity,
+    candidate: Candidate,
+    expected: CandidateIdentity,
+    paths: ReceiptPaths,
+    resource_key: str,
+    authority_error: BaseException,
+) -> None:
+    """Restore one prepared absence while fencing all canonical local writers."""
+
+    with _final_authority_fence(
+        cwd, candidate
+    ) as (lifecycle_reader, dispatcher_reader):
+        try:
+            _validate_fenced_local_authority(
+                cwd,
+                candidate,
+                identity.full_name,
+                lifecycle_reader,
+                dispatcher_reader,
+            )
+        except (
+            OSError,
+            ValueError,
+            RuntimeError,
+            subprocess.SubprocessError,
+        ):
+            pass  # A local preservation signal strengthens restoration authority.
+        source = _remote_ref_sha(cwd, identity.push_url, candidate.source_ref)
+        archive = _remote_ref_sha(cwd, identity.push_url, candidate.archive_ref)
+        if source is not None:
+            raise RuntimeError("source_restore_expected_absence_failed")
+        if archive != candidate.source_sha:
+            raise RuntimeError("source_restore_archive_invalid")
+        _restore_source_from_archive(cwd, identity, candidate)
+        _replace_receipt(
+            paths.receipt,
+            Receipt(RECEIPT_SCHEMA, resource_key, "compensated", expected),
+        )
+    raise RuntimeError("post_delete_authority_changed_compensated") from authority_error
+
+
+def _recover_contract_drifted_absence(
+    cwd: Path,
+    *,
+    requested_repository: str,
+    identity: RepositoryIdentity,
+    candidate: Candidate,
+    current_expected: CandidateIdentity,
+    common_dir: Path,
+) -> bool:
+    """Compensate a prepared deletion whose live PR contract changed across a crash."""
+
+    resource_key = _receipt_resource_key(identity.database_id, candidate.source_ref)
+    paths = _receipt_paths(common_dir, resource_key)
+    receipt = _read_candidate_bound_receipt(paths.receipt, expected=current_expected)
+    if (
+        receipt is None
+        or receipt.identity == current_expected
+        or receipt.state not in {"prepared", "compensated"}
+    ):
+        return False
+    source = _remote_ref_sha(cwd, identity.push_url, candidate.source_ref)
+    archive = _remote_ref_sha(cwd, identity.push_url, candidate.archive_ref)
+    if source not in {None, candidate.source_sha}:
+        raise RuntimeError("contract_drift_recovery_source_advanced")
+    if archive != candidate.source_sha:
+        raise RuntimeError("contract_drift_recovery_archive_invalid")
+    with _resource_flock(paths.lock):
+        receipt = _read_candidate_bound_receipt(
+            paths.receipt, expected=current_expected
+        )
+        if (
+            receipt is None
+            or receipt.identity == current_expected
+            or receipt.state not in {"prepared", "compensated"}
+        ):
+            raise RuntimeError("contract_drift_recovery_authority_changed")
+        boundary = _fresh_external_candidate_authority(
+            cwd,
+            requested_repository=requested_repository,
+            expected_repository=identity,
+            candidate=candidate,
+            expected_contract=current_expected.authenticated_contract,
+        )
+        with _final_authority_fence(
+            cwd, candidate
+        ) as (lifecycle_reader, dispatcher_reader):
+            try:
+                _validate_fenced_local_authority(
+                    cwd,
+                    candidate,
+                    identity.full_name,
+                    lifecycle_reader,
+                    dispatcher_reader,
+                )
+            except (
+                OSError,
+                ValueError,
+                RuntimeError,
+                subprocess.SubprocessError,
+            ):
+                pass  # A preservation signal strengthens the obligation to restore.
+            source = _remote_ref_sha(cwd, boundary.push_url, candidate.source_ref)
+            archive = _remote_ref_sha(cwd, boundary.push_url, candidate.archive_ref)
+            if source not in {None, candidate.source_sha}:
+                raise RuntimeError("contract_drift_recovery_source_advanced")
+            if archive != candidate.source_sha:
+                raise RuntimeError("contract_drift_recovery_archive_invalid")
+            if source is None:
+                _restore_source_from_archive(cwd, boundary, candidate)
+            _replace_receipt(
+                paths.receipt,
+                Receipt(
+                    RECEIPT_SCHEMA,
+                    resource_key,
+                    "compensated",
+                    receipt.identity,
+                ),
+            )
+    return True
 
 
 def targeted_remote_cleanup(
@@ -1613,6 +1933,15 @@ def targeted_remote_cleanup(
             )
         common_dir = _git_common_dir(cwd)
         for candidate, expected in zip(validated, expected_identities, strict=True):
+            if _recover_contract_drifted_absence(
+                cwd,
+                requested_repository=repository,
+                identity=identity,
+                candidate=candidate,
+                current_expected=expected,
+                common_dir=common_dir,
+            ):
+                raise RuntimeError("contract_drifted_source_compensated")
             _preflight_candidate(
                 cwd,
                 requested_repository=repository,
@@ -1632,15 +1961,8 @@ def targeted_remote_cleanup(
                 # This read must precede observing source absence. Only a
                 # prepared record loaded here can authorize crash recovery.
                 loaded = _read_receipt(paths.receipt, expected=expected)
-                boundary = _fresh_candidate_authority(
-                    cwd,
-                    requested_repository=repository,
-                    expected_repository=identity,
-                    candidate=candidate,
-                    expected_contract=expected.authenticated_contract,
-                )
-                source = _remote_ref_sha(cwd, boundary.push_url, candidate.source_ref)
-                archive = _remote_ref_sha(cwd, boundary.push_url, candidate.archive_ref)
+                source = _remote_ref_sha(cwd, identity.push_url, candidate.source_ref)
+                archive = _remote_ref_sha(cwd, identity.push_url, candidate.archive_ref)
                 if loaded is not None and loaded.state == "completed":
                     if source is not None or archive != candidate.source_sha:
                         raise RuntimeError("completed_receipt_live_state_conflict")
@@ -1648,6 +1970,22 @@ def targeted_remote_cleanup(
                     continue
                 if loaded is None and source is None:
                     raise RuntimeError("source_absent_without_prepared_receipt")
+                if source is None:
+                    boundary = identity
+                else:
+                    boundary = _fresh_candidate_authority(
+                        cwd,
+                        requested_repository=repository,
+                        expected_repository=identity,
+                        candidate=candidate,
+                        expected_contract=expected.authenticated_contract,
+                    )
+                    source = _remote_ref_sha(
+                        cwd, boundary.push_url, candidate.source_ref
+                    )
+                    archive = _remote_ref_sha(
+                        cwd, boundary.push_url, candidate.archive_ref
+                    )
                 if archive is None:
                     if source != candidate.source_sha:
                         raise RuntimeError("source_identity_drift_before_archive")
@@ -1675,54 +2013,148 @@ def targeted_remote_cleanup(
                 if loaded is None:
                     _replace_receipt(paths.receipt, prepared)
                     loaded = prepared
-                elif loaded.state != "prepared":
+                elif loaded.state not in {"prepared", "compensated"}:
                     raise RuntimeError("receipt_identity_or_state_conflict")
 
-                boundary = _fresh_candidate_authority(
-                    cwd,
-                    requested_repository=repository,
-                    expected_repository=identity,
-                    candidate=candidate,
-                    expected_contract=expected.authenticated_contract,
-                )
-                source = _remote_ref_sha(cwd, boundary.push_url, candidate.source_ref)
-                archive = _remote_ref_sha(cwd, boundary.push_url, candidate.archive_ref)
-                if archive != candidate.source_sha:
-                    raise RuntimeError("archive_sha_mismatch_before_delete")
-                if source is None:
+                try:
+                    boundary = _fresh_external_candidate_authority(
+                        cwd,
+                        requested_repository=repository,
+                        expected_repository=identity,
+                        candidate=candidate,
+                        expected_contract=expected.authenticated_contract,
+                    )
+                except (
+                    OSError,
+                    ValueError,
+                    RuntimeError,
+                    subprocess.SubprocessError,
+                ) as authority_error:
+                    if source is None:
+                        _compensate_absent_source_after_authority_error(
+                            cwd,
+                            identity=identity,
+                            candidate=candidate,
+                            expected=expected,
+                            paths=paths,
+                            resource_key=resource_key,
+                            authority_error=authority_error,
+                        )
+                    raise
+                with _final_authority_fence(
+                    cwd, candidate
+                ) as (lifecycle_reader, dispatcher_reader):
+                    source = _remote_ref_sha(
+                        cwd, boundary.push_url, candidate.source_ref
+                    )
+                    archive = _remote_ref_sha(
+                        cwd, boundary.push_url, candidate.archive_ref
+                    )
+                    if archive != candidate.source_sha:
+                        raise RuntimeError("archive_sha_mismatch_before_delete")
+                    if source not in {None, candidate.source_sha}:
+                        raise RuntimeError("source_identity_drift_before_delete")
+                    try:
+                        _validate_fenced_local_authority(
+                            cwd,
+                            candidate,
+                            identity.full_name,
+                            lifecycle_reader,
+                            dispatcher_reader,
+                        )
+                    except (
+                        OSError,
+                        ValueError,
+                        RuntimeError,
+                        subprocess.SubprocessError,
+                    ) as authority_error:
+                        if source is None:
+                            _restore_source_from_archive(cwd, boundary, candidate)
+                            _replace_receipt(
+                                paths.receipt,
+                                Receipt(
+                                    RECEIPT_SCHEMA,
+                                    resource_key,
+                                    "compensated",
+                                    expected,
+                                ),
+                            )
+                            raise RuntimeError(
+                                "post_delete_authority_changed_compensated"
+                            ) from authority_error
+                        raise
+                    if source == candidate.source_sha:
+                        _crash_hook("before_source_cas_acceptance")
+                        deleted = run_git_result(
+                            [
+                                "push",
+                                "--no-verify",
+                                f"--force-with-lease={candidate.source_ref}:{candidate.source_sha}",
+                                boundary.push_url,
+                                f":{candidate.source_ref}",
+                            ],
+                            cwd,
+                        )
+                        if deleted.returncode != 0:
+                            raise RuntimeError("source_cas_delete_failed")
+                        _crash_hook("after_source_cas_acceptance")
+                    _crash_hook("before_post_delete_readback")
+                    source = _remote_ref_sha(
+                        cwd, boundary.push_url, candidate.source_ref
+                    )
+                    archive = _remote_ref_sha(
+                        cwd, boundary.push_url, candidate.archive_ref
+                    )
+                    _crash_hook("after_post_delete_readback")
+                    if source is not None or archive != candidate.source_sha:
+                        raise RuntimeError("post_delete_readback_failed")
+                    try:
+                        _fresh_external_candidate_authority(
+                            cwd,
+                            requested_repository=repository,
+                            expected_repository=identity,
+                            candidate=candidate,
+                            expected_contract=expected.authenticated_contract,
+                        )
+                        _validate_fenced_local_authority(
+                            cwd,
+                            candidate,
+                            identity.full_name,
+                            lifecycle_reader,
+                            dispatcher_reader,
+                        )
+                    except (
+                        OSError,
+                        ValueError,
+                        RuntimeError,
+                        subprocess.SubprocessError,
+                    ) as authority_error:
+                        _restore_source_from_archive(cwd, boundary, candidate)
+                        _replace_receipt(
+                            paths.receipt,
+                            Receipt(
+                                RECEIPT_SCHEMA,
+                                resource_key,
+                                "compensated",
+                                expected,
+                            ),
+                        )
+                        raise RuntimeError(
+                            "post_delete_authority_changed_compensated"
+                        ) from authority_error
+                    source = _remote_ref_sha(
+                        cwd, boundary.push_url, candidate.source_ref
+                    )
+                    archive = _remote_ref_sha(
+                        cwd, boundary.push_url, candidate.archive_ref
+                    )
+                    if source is not None or archive != candidate.source_sha:
+                        raise RuntimeError("final_ref_state_changed")
                     _replace_receipt(
                         paths.receipt,
                         Receipt(RECEIPT_SCHEMA, resource_key, "completed", expected),
                     )
                     completed.append(_receipt_result(candidate, paths))
-                    continue
-                if source != candidate.source_sha:
-                    raise RuntimeError("source_identity_drift_before_delete")
-                _crash_hook("before_source_cas_acceptance")
-                deleted = run_git_result(
-                    [
-                        "push",
-                        "--no-verify",
-                        f"--force-with-lease={candidate.source_ref}:{candidate.source_sha}",
-                        boundary.push_url,
-                        f":{candidate.source_ref}",
-                    ],
-                    cwd,
-                )
-                if deleted.returncode != 0:
-                    raise RuntimeError("source_cas_delete_failed")
-                _crash_hook("after_source_cas_acceptance")
-                _crash_hook("before_post_delete_readback")
-                source = _remote_ref_sha(cwd, boundary.push_url, candidate.source_ref)
-                archive = _remote_ref_sha(cwd, boundary.push_url, candidate.archive_ref)
-                _crash_hook("after_post_delete_readback")
-                if source is not None or archive != candidate.source_sha:
-                    raise RuntimeError("post_delete_readback_failed")
-                _replace_receipt(
-                    paths.receipt,
-                    Receipt(RECEIPT_SCHEMA, resource_key, "completed", expected),
-                )
-                completed.append(_receipt_result(candidate, paths))
         except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as exc:
             return {"ok": False, "completed": completed, "error": str(exc)}
     return {"ok": True, "completed": completed}

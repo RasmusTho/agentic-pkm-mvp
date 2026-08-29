@@ -756,6 +756,92 @@ def load_lifecycle_authority(
     return {key: dict(value) for key, value in bound.items()}
 
 
+def _lifecycle_authority_under_registry_lock(
+    cwd: Path,
+    path: Path,
+    *,
+    candidate_branch: str,
+) -> dict[str, dict[str, object]]:
+    """Read complete candidate authority while the caller holds the registry lock."""
+
+    if not path.is_file() or path.is_symlink():
+        raise WorktreeLifecycleError("worktree lifecycle registry is missing")
+    initial_live_entries = git_hygiene._parse_worktrees(
+        git_hygiene.run_git(["worktree", "list", "--porcelain"], cwd)
+    )
+    candidate_paths = {
+        str(_canonical(Path(entry["worktree"])))
+        for entry in initial_live_entries
+        if isinstance(entry.get("worktree"), str)
+        and entry.get("branch", "").removeprefix("refs/heads/") == candidate_branch
+    }
+    snapshot = _select_authority_records(
+        _read_registry(path).get("worktrees"),
+        candidate_branch=candidate_branch,
+        candidate_paths=candidate_paths,
+    )
+    bound = _bind_live_generations(cwd, snapshot)
+    live_entries = git_hygiene._parse_worktrees(
+        git_hygiene.run_git(["worktree", "list", "--porcelain"], cwd)
+    )
+    live_by_path = {
+        str(_canonical(Path(entry["worktree"]))): entry
+        for entry in live_entries
+        if isinstance(entry.get("worktree"), str)
+    }
+    current_candidate_paths = {
+        key
+        for key, entry in live_by_path.items()
+        if entry.get("branch", "").removeprefix("refs/heads/") == candidate_branch
+    }
+    if current_candidate_paths != candidate_paths:
+        raise WorktreeLifecycleError("worktree lifecycle authority changed")
+    if any(
+        record.get("status") != "removed"
+        and not _valid_generation(record.get("generation"))
+        for record in bound.values()
+    ):
+        raise WorktreeLifecycleError("worktree lifecycle generation is unavailable")
+    for key, record in bound.items():
+        entry = live_by_path.get(key)
+        if record.get("status") == "removed":
+            if entry is not None:
+                raise WorktreeLifecycleError("removed lifecycle path is live")
+            continue
+        if (
+            entry is None
+            or entry.get("branch", "").removeprefix("refs/heads/")
+            != record.get("branch")
+        ):
+            raise WorktreeLifecycleError("worktree lifecycle identity is unavailable")
+    current = _select_authority_records(
+        _read_registry(path).get("worktrees"),
+        candidate_branch=candidate_branch,
+        candidate_paths=current_candidate_paths,
+    )
+    if current != snapshot:
+        raise WorktreeLifecycleError("worktree lifecycle authority changed")
+    return {key: dict(value) for key, value in bound.items()}
+
+
+@contextmanager
+def locked_lifecycle_authority(
+    cwd: Path,
+    *,
+    candidate_branch: str,
+    registry_path: Path | None = None,
+) -> Iterator[Callable[[], dict[str, dict[str, object]]]]:
+    """Fence lifecycle writers and yield a repeatable candidate authority reader."""
+
+    path = _canonical(registry_path or _default_registry_path(cwd))
+    with _registry_lock(path):
+        yield lambda: _lifecycle_authority_under_registry_lock(
+            cwd,
+            path,
+            candidate_branch=candidate_branch,
+        )
+
+
 def _assert_registration_available(
     record: dict[str, Any] | None,
     *,

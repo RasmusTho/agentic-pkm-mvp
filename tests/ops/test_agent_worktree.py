@@ -213,6 +213,57 @@ def test_load_lifecycle_authority_validates_and_binds_current_generation(tmp_pat
     assert agent_worktree._valid_generation(record["generation"])
 
 
+@pytest.mark.parametrize("operation", ("register", "heartbeat"))
+def test_locked_lifecycle_authority_fences_register_and_heartbeat(
+    tmp_path, operation
+) -> None:
+    repo, worktree, registry = _active_lifecycle_repo(tmp_path)
+    started = threading.Event()
+    finished = threading.Event()
+    errors: list[BaseException] = []
+
+    def write_lifecycle() -> None:
+        started.set()
+        try:
+            if operation == "register":
+                agent_worktree.register_worktree(
+                    repo,
+                    worktree=worktree,
+                    owner="authority-owner",
+                    registry_path=registry,
+                    now=20,
+                )
+            else:
+                agent_worktree.heartbeat_worktree(
+                    repo,
+                    worktree=worktree,
+                    owner="authority-owner",
+                    registry_path=registry,
+                    now=20,
+                )
+        except BaseException as exc:  # pragma: no cover - surfaced below
+            errors.append(exc)
+        finally:
+            finished.set()
+
+    thread = threading.Thread(target=write_lifecycle)
+    with agent_worktree.locked_lifecycle_authority(
+        repo,
+        candidate_branch="codex/authority",
+        registry_path=registry,
+    ) as reader:
+        records = reader()
+        assert records[str(worktree.resolve())]["branch"] == "codex/authority"
+        thread.start()
+        assert started.wait(1)
+        assert not finished.wait(0.1)
+
+    assert finished.wait(2)
+    thread.join(2)
+    assert not thread.is_alive()
+    assert errors == []
+
+
 def test_load_lifecycle_authority_rejects_malformed_record(tmp_path) -> None:
     repo, worktree, registry = _active_lifecycle_repo(tmp_path)
     payload = json.loads(registry.read_text(encoding="utf-8"))
