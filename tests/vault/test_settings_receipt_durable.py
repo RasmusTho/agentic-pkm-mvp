@@ -24,6 +24,7 @@ from textwrap import dedent
 import pytest
 
 from app.events.types import SETTINGS_WRITE_RECEIPT
+from app.services.outbox import JsonlOutboxCorruptionError
 from app.receipts.settings_receipts import (
     SettingsReceiptQuery,
     query_settings_receipts,
@@ -376,6 +377,30 @@ def test_operation_scoped_receipt_has_exact_durable_readback(
     emit_settings_write_receipt(different_payload, require_durable=True)
     with pytest.raises(RuntimeError, match="operation_id collision"):
         durable_settings_write_receipt_exists(receipt)
+
+
+def test_operation_scoped_readback_fails_closed_on_corrupt_tail(
+    tmp_path: Path, monkeypatch
+) -> None:
+    outbox_path = tmp_path / "outbox.jsonl"
+    monkeypatch.setenv("INDEX_OUTBOX_PATH", str(outbox_path))
+    monkeypatch.setenv("STORE_BACKEND", "memory")
+    receipt = SettingsWriteReceipt(
+        key="ingest.override.include_folders",
+        value=["Test"],
+        surface="uat-bootstrap",
+        actor="uat-seed",
+        operation_id="corrupt-tail-operation:0",
+    )
+
+    emit_settings_write_receipt(receipt, require_durable=True)
+    with outbox_path.open("ab") as handle:
+        handle.write(b"{malformed-json\n")
+
+    with pytest.raises(JsonlOutboxCorruptionError):
+        durable_settings_write_receipt_exists(receipt)
+    with pytest.raises(JsonlOutboxCorruptionError):
+        emit_durable_settings_write_receipt_once(receipt)
 
 
 def test_duplicate_exact_operation_receipts_fail_loud(tmp_path: Path, monkeypatch) -> None:

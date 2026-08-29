@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import logging
 import os
 import fcntl
@@ -174,44 +173,38 @@ def durable_settings_write_receipt_exists(receipt: SettingsWriteReceipt) -> bool
     from app.outbox.events import get_index_outbox_path  # noqa: PLC0415
 
     outbox_path = _canonical_settings_receipt_path(get_index_outbox_path())
+    from app.services.outbox import read_jsonl_outbox_records  # noqa: PLC0415
+
     operation_id_collision = False
     exact_match_count = 0
-    try:
-        with outbox_path.open("r", encoding="utf-8") as handle:
-            for line in handle:
-                try:
-                    record = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                if record.get("event") != SETTINGS_WRITE_RECEIPT:
-                    continue
-                payload = record.get("payload")
-                if not isinstance(payload, dict):
-                    continue
-                if payload.get("operation_id") != receipt.operation_id:
-                    continue
-                exact_match = all(
-                    payload.get(key) == expected
-                    for key, expected in {
-                        "key": receipt.key,
-                        "value": receipt.value,
-                        "old_value": receipt.old_value,
-                        "new_value": receipt.new_value,
-                        "file": receipt.file,
-                        "surface": receipt.surface,
-                        "actor": receipt.actor,
-                        "timestamp": receipt.timestamp,
-                        "is_runtime_gating": receipt.is_runtime_gating,
-                        "vault_id": receipt.vault_id,
-                        "local_instance_id": receipt.local_instance_id,
-                    }.items()
-                )
-                if exact_match:
-                    exact_match_count += 1
-                else:
-                    operation_id_collision = True
-    except FileNotFoundError:
-        return False
+    for record in read_jsonl_outbox_records(outbox_path):
+        if record.get("event") != SETTINGS_WRITE_RECEIPT:
+            continue
+        payload = record.get("payload")
+        if not isinstance(payload, dict):
+            continue
+        if payload.get("operation_id") != receipt.operation_id:
+            continue
+        exact_match = all(
+            payload.get(key) == expected
+            for key, expected in {
+                "key": receipt.key,
+                "value": receipt.value,
+                "old_value": receipt.old_value,
+                "new_value": receipt.new_value,
+                "file": receipt.file,
+                "surface": receipt.surface,
+                "actor": receipt.actor,
+                "timestamp": receipt.timestamp,
+                "is_runtime_gating": receipt.is_runtime_gating,
+                "vault_id": receipt.vault_id,
+                "local_instance_id": receipt.local_instance_id,
+            }.items()
+        )
+        if exact_match:
+            exact_match_count += 1
+        else:
+            operation_id_collision = True
     if operation_id_collision or exact_match_count > 1:
         raise RuntimeError("settings receipt operation_id collision")
     if exact_match_count == 1:
