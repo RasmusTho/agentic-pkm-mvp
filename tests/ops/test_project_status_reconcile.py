@@ -192,7 +192,7 @@ def test_reconcile_issue_terminal_truth_precedes_explicit_status(monkeypatch) ->
     monkeypatch.setattr(
         reconcile_project_status,
         "get_issue",
-        lambda *_args: {"number": 1, "state": "CLOSED", "labels": [], "url": "https://example.test/1"},
+        lambda *_args: {"number": 1, "state": "CLOSED", "labels": [{"name": "agent:ready"}], "url": "https://example.test/1", "body": ""},
     )
     monkeypatch.setattr(
         reconcile_project_status,
@@ -201,7 +201,7 @@ def test_reconcile_issue_terminal_truth_precedes_explicit_status(monkeypatch) ->
     )
     calls = []
     monkeypatch.setattr(reconcile_project_status, "set_project_status", lambda *args: calls.append(args))
-    args = reconcile_project_status.argparse.Namespace(repo="owner/repo", issue=1, status="Review", dry_run=False)
+    args = reconcile_project_status.argparse.Namespace(repo="owner/repo", issue=1, status="Ready", dry_run=False)
 
     assert reconcile_project_status.reconcile_issue(args, "owner", {"id": "project", "number": 1, "title": "P"}, "field", {"Done": "done"}) == 0
     assert calls == [("owner", "project", "issue-1", "field", "done", False)]

@@ -608,7 +608,7 @@ def reconcile_issue(
     label_names = _issue_label_names(issue)
     invalid_ready_failure = (
         issue_ready_validation_failure(issue)
-        if "agent:ready" in label_names
+        if issue.get("state") != "CLOSED" and "agent:ready" in label_names
         else None
     )
     if args.status == "Ready" and invalid_ready_failure is not None:
