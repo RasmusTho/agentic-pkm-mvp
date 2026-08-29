@@ -655,6 +655,29 @@ def test_jsonl_append_preserves_unicode_line_separator_characters(tmp_path: Path
     assert read_jsonl_outbox_records(outbox_path)[0]["payload"]["text"] == "before\u2028after"
 
 
+def test_create_receipt_inspection_does_not_repair_unterminated_jsonl(
+    tmp_path: Path,
+) -> None:
+    outbox_path = tmp_path / "outbox.jsonl"
+    record = {
+        "event": "expansion.create.proposed",
+        "event_id": "create-inspection-id",
+        "payload": {"draft_id": "draft-1"},
+    }
+    raw = json.dumps(record).encode("utf-8")
+    outbox_path.write_bytes(raw)
+    lock_path = outbox_path.with_name(f".{outbox_path.name}.append.lock")
+
+    assert (
+        create_module._existing_receipt(
+            outbox_path, "expansion.create.proposed", "create-inspection-id"
+        )
+        == record
+    )
+    assert outbox_path.read_bytes() == raw
+    assert not lock_path.exists()
+
+
 def test_jsonl_event_id_identity_is_shared_across_real_path_and_symlink(
     tmp_path: Path,
 ) -> None:
