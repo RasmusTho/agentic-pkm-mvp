@@ -30,11 +30,7 @@ from app.release_channels.channel_manifest import (
 
 
 JOURNAL_VERSION = "ordinary-boot-journal.v1"
-_OPERATION_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}\Z")
-_SENSITIVE_OPERATION_ID = re.compile(
-    r"(?:^sk-|secret|password|token|credential|private[-_]?key|api[-_]?key)",
-    re.IGNORECASE,
-)
+_OPERATION_ID = re.compile(r"ob-[0-9a-f]{32}\Z")
 _DIGEST = re.compile(r"sha256:[0-9a-f]{64}\Z")
 _IMAGE_DIGEST = re.compile(
     r"[A-Za-z0-9][A-Za-z0-9._-]*(?:/[A-Za-z0-9._-]+)+@sha256:[0-9a-f]{64}\Z"
@@ -95,11 +91,7 @@ def _identity(value: object) -> str:
 
 
 def _operation_id_is_safe(value: object) -> bool:
-    return (
-        isinstance(value, str)
-        and _OPERATION_ID.fullmatch(value) is not None
-        and _SENSITIVE_OPERATION_ID.search(value) is None
-    )
+    return isinstance(value, str) and _OPERATION_ID.fullmatch(value) is not None
 
 
 def _mapping(value: object, *, path: str) -> Mapping[str, Any]:
@@ -582,6 +574,9 @@ def _validate_journal_path(path: Path) -> None:
         raise OrdinaryBootJournalError("journal_parent_missing") from exc
     if resolved_parent != path.parent:
         raise OrdinaryBootJournalError("unsafe_journal_parent")
+    parent = os.stat(path.parent, follow_symlinks=False)
+    if parent.st_uid != os.geteuid() or parent.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
+        raise OrdinaryBootJournalError("unsafe_journal_parent_permissions")
     if not hasattr(os, "O_NOFOLLOW") or not hasattr(os, "O_DIRECTORY"):
         raise OrdinaryBootJournalError("secure_journal_open_unavailable")
 
@@ -601,6 +596,13 @@ def _revalidate_journal_target(
         != (named_parent.st_dev, named_parent.st_ino)
     ):
         raise OrdinaryBootJournalError("unsafe_journal_parent")
+    if (
+        opened_parent.st_uid != os.geteuid()
+        or named_parent.st_uid != os.geteuid()
+        or opened_parent.st_mode & (stat.S_IWGRP | stat.S_IWOTH)
+        or named_parent.st_mode & (stat.S_IWGRP | stat.S_IWOTH)
+    ):
+        raise OrdinaryBootJournalError("unsafe_journal_parent_permissions")
 
     opened = os.fstat(journal_descriptor)
     named = os.stat(path.name, dir_fd=parent_descriptor, follow_symlinks=False)
@@ -676,9 +678,7 @@ def _append_terminal_once(path: Path, result: Mapping[str, object]) -> dict[str,
                 if row["operation_id"] != operation_id:
                     continue
                 if row != validated_result:
-                    raise OrdinaryBootJournalError(
-                        f"operation_conflict:{operation_id}:terminal_result_changed"
-                    )
+                    raise OrdinaryBootJournalError("operation_conflict:terminal_result_changed")
                 os.fsync(descriptor)
                 _fsync_parent_directory(parent_descriptor)
                 _revalidate_journal_target(

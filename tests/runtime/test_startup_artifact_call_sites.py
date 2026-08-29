@@ -475,6 +475,10 @@ def _journal_rows(path: Path) -> list[dict[str, object]]:
     return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
 
 
+def _ordinary_boot_operation_id(label: str) -> str:
+    return "ob-" + hashlib.sha256(label.encode("utf-8")).hexdigest()[:32]
+
+
 def test_ordinary_boot_has_no_mutation_calls(tmp_path: Path) -> None:
     """The production doctor calls only resolver checks and its terminal journal."""
     from app.release_channels import ordinary_boot
@@ -517,7 +521,7 @@ def test_ordinary_boot_has_no_mutation_calls(tmp_path: Path) -> None:
         _ordinary_boot_manifest(),
         _promotion_compose(),
         _compatible_dependencies(_ordinary_boot_manifest()),
-        operation_id="boot-001",
+        operation_id=_ordinary_boot_operation_id("boot-001"),
         journal_path=journal_path,
     )
 
@@ -531,7 +535,7 @@ def test_ordinary_boot_has_no_mutation_calls(tmp_path: Path) -> None:
         _ordinary_boot_manifest(),
         _promotion_compose(),
         _compatible_dependencies(_ordinary_boot_manifest()),
-        operation_id="boot-001",
+        operation_id=_ordinary_boot_operation_id("boot-001"),
         journal_path=journal_path,
     )
     assert replay == result
@@ -548,7 +552,7 @@ def test_ordinary_boot_dependency_policy(tmp_path: Path) -> None:
         manifest,
         _promotion_compose(),
         observations,
-        operation_id="boot-degraded",
+        operation_id=_ordinary_boot_operation_id("boot-degraded"),
         journal_path=journal_path,
     )
     assert degraded["terminal_phase"] == "ORDINARY_BOOT_PASS"
@@ -563,7 +567,7 @@ def test_ordinary_boot_dependency_policy(tmp_path: Path) -> None:
         manifest,
         _promotion_compose(),
         missing_required,
-        operation_id="boot-required-missing",
+        operation_id=_ordinary_boot_operation_id("boot-required-missing"),
         journal_path=journal_path,
     )
     classifications = {
@@ -585,7 +589,7 @@ def test_ordinary_boot_dependency_policy(tmp_path: Path) -> None:
         manifest,
         _promotion_compose(),
         incompatible_required,
-        operation_id="boot-required-incompatible",
+        operation_id=_ordinary_boot_operation_id("boot-required-incompatible"),
         journal_path=journal_path,
     )
     incompatible_classes = {
@@ -605,7 +609,7 @@ def test_ordinary_boot_dependency_policy(tmp_path: Path) -> None:
             manifest,
             _promotion_compose(),
             changed_replay,
-            operation_id="boot-degraded",
+            operation_id=_ordinary_boot_operation_id("boot-degraded"),
             journal_path=journal_path,
         )
     assert len(_journal_rows(journal_path)) == 3
@@ -616,7 +620,7 @@ def test_ordinary_boot_dependency_policy(tmp_path: Path) -> None:
         secret_manifest,
         _promotion_compose(),
         {},
-        operation_id="boot-invalid-resolution",
+        operation_id=_ordinary_boot_operation_id("boot-invalid-resolution"),
         journal_path=journal_path,
     )
     assert invalid["channel"] == "unresolved"
@@ -650,7 +654,7 @@ def test_ordinary_boot_replay_reestablishes_file_and_directory_durability(
             manifest,
             _promotion_compose(),
             _compatible_dependencies(manifest),
-            operation_id="boot-fsync-recovery",
+            operation_id=_ordinary_boot_operation_id("boot-fsync-recovery"),
             journal_path=journal_path,
         )
     monkeypatch.setattr(ordinary_boot.os, "fsync", real_fsync)
@@ -668,7 +672,7 @@ def test_ordinary_boot_replay_reestablishes_file_and_directory_durability(
         manifest,
         _promotion_compose(),
         _compatible_dependencies(manifest),
-        operation_id="boot-fsync-recovery",
+        operation_id=_ordinary_boot_operation_id("boot-fsync-recovery"),
         journal_path=journal_path,
     )
     assert replay["writers_permitted"] is True
@@ -691,14 +695,14 @@ def test_ordinary_boot_replay_reestablishes_file_and_directory_durability(
             manifest,
             _promotion_compose(),
             _compatible_dependencies(manifest),
-            operation_id="boot-directory-fsync-recovery",
+            operation_id=_ordinary_boot_operation_id("boot-directory-fsync-recovery"),
             journal_path=directory_journal,
         )
     recovered = run_ordinary_boot(
         manifest,
         _promotion_compose(),
         _compatible_dependencies(manifest),
-        operation_id="boot-directory-fsync-recovery",
+        operation_id=_ordinary_boot_operation_id("boot-directory-fsync-recovery"),
         journal_path=directory_journal,
     )
     assert recovered["writers_permitted"] is True
@@ -731,7 +735,7 @@ def test_ordinary_boot_partial_write_is_never_terminal_authority(
             manifest,
             _promotion_compose(),
             _compatible_dependencies(manifest),
-            operation_id="boot-torn-write",
+            operation_id=_ordinary_boot_operation_id("boot-torn-write"),
             journal_path=journal_path,
         )
     monkeypatch.setattr(ordinary_boot.os, "write", real_write)
@@ -741,7 +745,7 @@ def test_ordinary_boot_partial_write_is_never_terminal_authority(
             manifest,
             _promotion_compose(),
             _compatible_dependencies(manifest),
-            operation_id="boot-torn-write",
+            operation_id=_ordinary_boot_operation_id("boot-torn-write"),
             journal_path=journal_path,
         )
 
@@ -762,7 +766,7 @@ def test_ordinary_boot_rejects_unsafe_journal_targets_without_external_writes(
             manifest,
             _promotion_compose(),
             observations,
-            operation_id="boot-symlink-refusal",
+            operation_id=_ordinary_boot_operation_id("boot-symlink-refusal"),
             journal_path=symlink_journal,
         )
     assert symlink_target.read_text(encoding="utf-8") == "external-symlink-bytes"
@@ -776,7 +780,7 @@ def test_ordinary_boot_rejects_unsafe_journal_targets_without_external_writes(
             manifest,
             _promotion_compose(),
             observations,
-            operation_id="boot-hardlink-refusal",
+            operation_id=_ordinary_boot_operation_id("boot-hardlink-refusal"),
             journal_path=hardlink_journal,
         )
     assert hardlink_target.read_text(encoding="utf-8") == "external-hardlink-bytes"
@@ -788,9 +792,29 @@ def test_ordinary_boot_rejects_unsafe_journal_targets_without_external_writes(
             manifest,
             _promotion_compose(),
             observations,
-            operation_id="boot-fifo-refusal",
+            operation_id=_ordinary_boot_operation_id("boot-fifo-refusal"),
             journal_path=fifo_journal,
         )
+
+    shared_parent = tmp_path / "shared-parent"
+    shared_parent.mkdir()
+    shared_parent.chmod(0o777)
+    shared_journal = shared_parent / "ordinary-boot.jsonl"
+    try:
+        with pytest.raises(
+            OrdinaryBootJournalError,
+            match="unsafe_journal_parent_permissions",
+        ):
+            run_ordinary_boot(
+                manifest,
+                _promotion_compose(),
+                observations,
+                operation_id=_ordinary_boot_operation_id("boot-shared-parent-refusal"),
+                journal_path=shared_journal,
+            )
+        assert not shared_journal.exists()
+    finally:
+        shared_parent.chmod(0o700)
 
 
 def test_ordinary_boot_detects_named_path_replacement_before_authority(
@@ -834,7 +858,7 @@ def test_ordinary_boot_detects_named_path_replacement_before_authority(
             manifest,
             _promotion_compose(),
             _compatible_dependencies(manifest),
-            operation_id="boot-path-replacement",
+            operation_id=_ordinary_boot_operation_id("boot-path-replacement"),
             journal_path=journal_path,
         )
     assert journal_path.read_bytes() == external_bytes
@@ -845,19 +869,6 @@ def test_ordinary_boot_rejects_secret_pattern_operation_ids_without_echo(
     tmp_path: Path,
 ) -> None:
     manifest = _ordinary_boot_manifest()
-    secret_operation_id = "sk-private-token"
-    journal_path = tmp_path / "secret-id.jsonl"
-    with pytest.raises(OrdinaryBootJournalError, match="invalid_operation_id") as exc_info:
-        run_ordinary_boot(
-            manifest,
-            _promotion_compose(),
-            _compatible_dependencies(manifest),
-            operation_id=secret_operation_id,
-            journal_path=journal_path,
-        )
-    assert secret_operation_id not in str(exc_info.value)
-    assert not journal_path.exists()
-
     manifest_path = tmp_path / "manifest.json"
     compose_path = tmp_path / "compose.json"
     dependencies_path = tmp_path / "dependencies.json"
@@ -867,22 +878,63 @@ def test_ordinary_boot_rejects_secret_pattern_operation_ids_without_echo(
         json.dumps(_compatible_dependencies(manifest)),
         encoding="utf-8",
     )
-    proc = subprocess.run(
-        _ordinary_boot_cli_command(
-            manifest_path,
-            compose_path,
-            dependencies_path,
-            journal_path,
-            secret_operation_id,
-        ),
-        cwd=ROOT,
-        capture_output=True,
-        text=True,
+    secret_operation_ids = (
+        "sk-private-token",
+        "ghp_0123456789abcdefghijklmnopqrstuvwxyz",
+        "github_pat_0123456789abcdefghijklmnopqrstuvwxyz",
+        "AKIA0123456789ABCDEF",
+        "eyJhbGciOiJIUzI1NiJ9.payload.signature",
     )
-    assert proc.returncode == 2
-    assert secret_operation_id not in proc.stdout
-    assert secret_operation_id not in proc.stderr
-    assert not journal_path.exists()
+    for index, secret_operation_id in enumerate(secret_operation_ids):
+        journal_path = tmp_path / f"secret-id-{index}.jsonl"
+        with pytest.raises(OrdinaryBootJournalError, match="invalid_operation_id") as exc_info:
+            run_ordinary_boot(
+                manifest,
+                _promotion_compose(),
+                _compatible_dependencies(manifest),
+                operation_id=secret_operation_id,
+                journal_path=journal_path,
+            )
+        assert secret_operation_id not in str(exc_info.value)
+        assert not journal_path.exists()
+
+        proc = subprocess.run(
+            _ordinary_boot_cli_command(
+                manifest_path,
+                compose_path,
+                dependencies_path,
+                journal_path,
+                secret_operation_id,
+            ),
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+        )
+        assert proc.returncode == 2
+        assert secret_operation_id not in proc.stdout
+        assert secret_operation_id not in proc.stderr
+        assert not journal_path.exists()
+
+    valid_operation_id = _ordinary_boot_operation_id("redacted-conflict")
+    conflict_journal = tmp_path / "conflict-redaction.jsonl"
+    run_ordinary_boot(
+        manifest,
+        _promotion_compose(),
+        _compatible_dependencies(manifest),
+        operation_id=valid_operation_id,
+        journal_path=conflict_journal,
+    )
+    incompatible = _compatible_dependencies(manifest)
+    incompatible["schema"] = {"status": "unavailable"}
+    with pytest.raises(OrdinaryBootJournalError, match="operation_conflict") as exc_info:
+        run_ordinary_boot(
+            manifest,
+            _promotion_compose(),
+            incompatible,
+            operation_id=valid_operation_id,
+            journal_path=conflict_journal,
+        )
+    assert valid_operation_id not in str(exc_info.value)
 
 
 @pytest.mark.parametrize(
@@ -918,7 +970,7 @@ def test_ordinary_boot_semantic_journal_corruption_blocks_new_authority(
         manifest,
         _promotion_compose(),
         _compatible_dependencies(manifest),
-        operation_id="boot-valid-before-corruption",
+        operation_id=_ordinary_boot_operation_id("boot-valid-before-corruption"),
         journal_path=journal_path,
     )
     journal_path.write_text(
@@ -931,7 +983,7 @@ def test_ordinary_boot_semantic_journal_corruption_blocks_new_authority(
             manifest,
             _promotion_compose(),
             _compatible_dependencies(manifest),
-            operation_id="boot-after-corruption",
+            operation_id=_ordinary_boot_operation_id("boot-after-corruption"),
             journal_path=journal_path,
         )
 
@@ -947,7 +999,7 @@ def test_ordinary_boot_structural_journal_corruption_blocks_new_authority(
         manifest,
         _promotion_compose(),
         _compatible_dependencies(manifest),
-        operation_id="boot-valid-structural",
+        operation_id=_ordinary_boot_operation_id("boot-valid-structural"),
         journal_path=journal_path,
     )
     raw = journal_path.read_text(encoding="utf-8")
@@ -961,7 +1013,7 @@ def test_ordinary_boot_structural_journal_corruption_blocks_new_authority(
             manifest,
             _promotion_compose(),
             _compatible_dependencies(manifest),
-            operation_id="boot-after-structural-corruption",
+            operation_id=_ordinary_boot_operation_id("boot-after-structural-corruption"),
             journal_path=journal_path,
         )
 
@@ -1012,7 +1064,7 @@ def test_ordinary_boot_concurrent_callers_converge_or_conflict_once(tmp_path: Pa
         compose_path,
         compatible_path,
         identical_journal,
-        "boot-concurrent-identical",
+        _ordinary_boot_operation_id("boot-concurrent-identical"),
     )
     identical_processes = [
         subprocess.Popen(
@@ -1036,7 +1088,7 @@ def test_ordinary_boot_concurrent_callers_converge_or_conflict_once(tmp_path: Pa
                 compose_path,
                 dependency_path,
                 conflicting_journal,
-                "boot-concurrent-conflicting",
+                _ordinary_boot_operation_id("boot-concurrent-conflicting"),
             ),
             cwd=ROOT,
             stdout=subprocess.PIPE,

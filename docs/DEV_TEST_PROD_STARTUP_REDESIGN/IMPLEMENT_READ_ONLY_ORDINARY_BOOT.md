@@ -40,9 +40,11 @@ the LLM dependency to `degraded_ok`. Missing observations classify as unavailabl
 dependencies fail closed, and raw mismatched observed identity values are not copied into the
 terminal journal.
 
-The operation id must be an opaque non-secret identifier; values carrying credential-like markers
-are rejected without echo. The journal path must be an absolute `.jsonl` path under a real
-non-symlinked parent. The doctor pins and revalidates the parent plus opened file identity, accepts
+The operation id must be a generated opaque non-secret handle in the narrow
+`ob-<32 lowercase hex characters>` format; rejected values and conflict errors never echo the
+supplied handle. The journal path must be an absolute `.jsonl` path under a real, same-user-owned
+parent that is not group- or world-writable. That checked parent is the trust boundary against an
+untrusted alias race. The doctor pins and revalidates the parent plus opened file identity, accepts
 only a single-link regular file, and refuses symlink, hardlink, FIFO, or named-path replacement
 targets before returning terminal authority.
 
