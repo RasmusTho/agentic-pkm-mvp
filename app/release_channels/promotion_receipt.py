@@ -381,6 +381,138 @@ def _fetch_authoritative_prod_baseline() -> str:
     return baseline
 
 
+def _verified_git_object(
+    repo: Path,
+    *,
+    object_id: str,
+    object_type: str,
+) -> bytes:
+    if _SOURCE_SHA.fullmatch(object_id) is None or object_type not in {
+        "blob",
+        "commit",
+        "tree",
+    }:
+        raise PromotionReceiptError("migration_delta_invalid")
+    content = _run_git(
+        repo,
+        "cat-file",
+        object_type,
+        object_id,
+        code="migration_delta_invalid",
+    )
+    header = f"{object_type} {len(content)}\0".encode("ascii")
+    actual_id = hashlib.sha1(header + content, usedforsecurity=False).hexdigest()
+    if actual_id != object_id:
+        raise PromotionReceiptError("migration_delta_invalid")
+    return content
+
+
+def _verified_commit(
+    repo: Path,
+    object_id: str,
+) -> tuple[str, tuple[str, ...]]:
+    content = _verified_git_object(
+        repo,
+        object_id=object_id,
+        object_type="commit",
+    )
+    headers = content.partition(b"\n\n")[0].splitlines()
+    tree_ids: list[str] = []
+    parent_ids: list[str] = []
+    try:
+        for line in headers:
+            if line.startswith(b"tree "):
+                tree_ids.append(line.removeprefix(b"tree ").decode("ascii"))
+            elif line.startswith(b"parent "):
+                parent_ids.append(line.removeprefix(b"parent ").decode("ascii"))
+    except UnicodeDecodeError as exc:
+        raise PromotionReceiptError("migration_delta_invalid") from exc
+    if (
+        len(tree_ids) != 1
+        or _SOURCE_SHA.fullmatch(tree_ids[0]) is None
+        or any(_SOURCE_SHA.fullmatch(parent) is None for parent in parent_ids)
+    ):
+        raise PromotionReceiptError("migration_delta_invalid")
+    return tree_ids[0], tuple(parent_ids)
+
+
+def _verified_ancestry_trees(
+    repo: Path,
+    *,
+    baseline_sha: str,
+    target_sha: str,
+) -> tuple[str, str]:
+    stack = [target_sha]
+    visited: set[str] = set()
+    target_tree: str | None = None
+    while stack:
+        commit_id = stack.pop()
+        if commit_id in visited:
+            continue
+        visited.add(commit_id)
+        if len(visited) > 10_000:
+            raise PromotionReceiptError("migration_delta_invalid")
+        tree_id, parents = _verified_commit(repo, commit_id)
+        if commit_id == target_sha:
+            target_tree = tree_id
+        if commit_id == baseline_sha:
+            if target_tree is None:
+                raise PromotionReceiptError("migration_delta_invalid")
+            return tree_id, target_tree
+        stack.extend(reversed(parents))
+    raise PromotionReceiptError("migration_delta_invalid")
+
+
+def _verified_tree_entries(repo: Path, object_id: str) -> dict[bytes, tuple[str, str]]:
+    content = _verified_git_object(
+        repo,
+        object_id=object_id,
+        object_type="tree",
+    )
+    entries: dict[bytes, tuple[str, str]] = {}
+    cursor = 0
+    while cursor < len(content):
+        space = content.find(b" ", cursor)
+        terminator = content.find(b"\0", space + 1)
+        object_start = terminator + 1
+        object_end = object_start + 20
+        if space <= cursor or terminator <= space + 1 or object_end > len(content):
+            raise PromotionReceiptError("migration_delta_invalid")
+        try:
+            mode = content[cursor:space].decode("ascii")
+        except UnicodeDecodeError as exc:
+            raise PromotionReceiptError("migration_delta_invalid") from exc
+        name = content[space + 1 : terminator]
+        child_id = content[object_start:object_end].hex()
+        if (
+            re.fullmatch(r"[0-7]{5,6}", mode) is None
+            or not name
+            or b"/" in name
+            or name in entries
+            or _SOURCE_SHA.fullmatch(child_id) is None
+        ):
+            raise PromotionReceiptError("migration_delta_invalid")
+        entries[name] = (mode, child_id)
+        cursor = object_end
+    return entries
+
+
+def _verified_tree_at_path(
+    repo: Path,
+    *,
+    root_tree: str,
+    components: Sequence[bytes],
+) -> dict[bytes, tuple[str, str]]:
+    tree_id = root_tree
+    for component in components:
+        entries = _verified_tree_entries(repo, tree_id)
+        entry = entries.get(component)
+        if entry is None or entry[0] != "40000":
+            raise PromotionReceiptError("migration_delta_invalid")
+        tree_id = entry[1]
+    return _verified_tree_entries(repo, tree_id)
+
+
 def _capture_candidate_migration_snapshots(
     *,
     source_repo: Path,
@@ -397,85 +529,46 @@ def _capture_candidate_migration_snapshots(
         source_repo,
         code="migration_delta_unavailable",
     )
-    for sha in (baseline_sha, target_sha):
-        try:
-            resolved = _run_git(
-                repo,
-                "rev-parse",
-                "--verify",
-                f"{sha}^{{commit}}",
-                code="migration_delta_unavailable",
-            ).decode("ascii").strip()
-        except UnicodeDecodeError as exc:
-            raise PromotionReceiptError("migration_delta_unavailable") from exc
-        if resolved != sha:
-            raise PromotionReceiptError("migration_delta_invalid")
-    _run_git(
+    baseline_tree, target_tree = _verified_ancestry_trees(
         repo,
-        "merge-base",
-        "--is-ancestor",
-        baseline_sha,
-        target_sha,
-        code="migration_delta_invalid",
+        baseline_sha=baseline_sha,
+        target_sha=target_sha,
     )
-    raw_paths = _run_git(
+    components = (b"app", b"alembic", b"versions")
+    baseline_entries = _verified_tree_at_path(
         repo,
-        "diff",
-        "--name-only",
-        "-z",
-        f"{baseline_sha}..{target_sha}",
-        "--",
-        "app/alembic/versions",
-        code="migration_delta_unavailable",
+        root_tree=baseline_tree,
+        components=components,
     )
-    try:
-        paths = sorted(path.decode("utf-8") for path in raw_paths.split(b"\0") if path)
-    except UnicodeDecodeError as exc:
-        raise PromotionReceiptError("migration_delta_invalid") from exc
-    if len(set(paths)) != len(paths) or any(
-        _MIGRATION_GIT_PATH.fullmatch(path) is None for path in paths
-    ):
-        raise PromotionReceiptError("migration_delta_invalid")
+    target_entries = _verified_tree_at_path(
+        repo,
+        root_tree=target_tree,
+        components=components,
+    )
+    changed_names = sorted(
+        name
+        for name in baseline_entries.keys() | target_entries.keys()
+        if baseline_entries.get(name) != target_entries.get(name)
+    )
     snapshots: list[tuple[str, bytes]] = []
-    for path in paths:
-        raw_entry = _run_git(
-            repo,
-            "ls-tree",
-            "-z",
-            "--full-tree",
-            target_sha,
-            "--",
-            path,
-            code="migration_delta_invalid",
-        )
-        records = [record for record in raw_entry.split(b"\0") if record]
-        if len(records) != 1 or b"\t" not in records[0]:
-            raise PromotionReceiptError("migration_delta_invalid")
-        metadata, raw_path = records[0].split(b"\t", 1)
-        fields = metadata.split(b" ")
+    for raw_name in changed_names:
         try:
-            entry_path = raw_path.decode("utf-8")
-            mode = fields[0].decode("ascii")
-            object_type = fields[1].decode("ascii")
-            object_id = fields[2].decode("ascii")
-        except (IndexError, UnicodeDecodeError) as exc:
+            name = raw_name.decode("utf-8")
+        except UnicodeDecodeError as exc:
             raise PromotionReceiptError("migration_delta_invalid") from exc
-        if (
-            len(fields) != 3
-            or entry_path != path
-            or mode not in {"100644", "100755"}
-            or object_type != "blob"
-            or _SOURCE_SHA.fullmatch(object_id) is None
-        ):
+        path = f"app/alembic/versions/{name}"
+        entry = target_entries.get(raw_name)
+        if entry is None or _MIGRATION_GIT_PATH.fullmatch(path) is None:
             raise PromotionReceiptError("migration_delta_invalid")
-        content = _run_git(
+        mode, object_id = entry
+        if mode not in {"100644", "100755"}:
+            raise PromotionReceiptError("migration_delta_invalid")
+        content = _verified_git_object(
             repo,
-            "cat-file",
-            "blob",
-            object_id,
-            code="migration_delta_invalid",
+            object_id=object_id,
+            object_type="blob",
         )
-        snapshots.append((Path(path).name, content))
+        snapshots.append((name, content))
     return tuple(snapshots)
 
 

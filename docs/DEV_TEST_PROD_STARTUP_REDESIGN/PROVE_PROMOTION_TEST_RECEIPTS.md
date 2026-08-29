@@ -57,8 +57,9 @@ re-issued by a racing writer.
   immutable candidate objects;
   its refs and local Git config cannot select or rewrite the baseline authority.
 - Every changed migration path must resolve in the candidate tree to one regular Git blob with mode
-  `100644` or `100755`. Symlinks and other tree modes fail closed; classification and identity both
-  consume the exact validated blob bytes.
+  `100644` or `100755`. Symlinks, deletions, renames, and other tree modes fail closed. Candidate
+  ancestry plus every commit/tree/blob object used for the delta is rehash-verified against its
+  referenced Git object ID; classification and identity consume the same captured blob bytes.
 - Valid terminal states are `PASS` and `FAIL`; an issued registry entry may transition once to
   `revoked`. Receipt, attempt, reservation, and registry records are durable before the final
   registry issue boundary. Replays of the same attempt are idempotent; conflicting or revoked
@@ -76,6 +77,7 @@ Focused proof matrix:
 | Git executable cannot be replaced through caller `PATH` | `tests/runtime/test_startup_artifact_call_sites.py::test_git_evidence_ignores_caller_path_injection` |
 | Candidate cannot masquerade as the prod baseline | `tests/runtime/test_startup_artifact_call_sites.py::test_promotion_test_rejects_candidate_as_prod_migration_baseline` |
 | Symlink or non-regular migration tree entries cannot substitute executed bytes | `tests/runtime/test_startup_artifact_call_sites.py::test_promotion_test_rejects_symlink_migration_tree_entries` |
+| Corrupt or substituted local Git object bytes cannot masquerade under a candidate object ID | `tests/runtime/test_startup_artifact_call_sites.py::test_promotion_test_rehashes_candidate_migration_objects` |
 | Complete baseline-to-candidate migration delta | `tests/runtime/test_startup_artifact_call_sites.py::test_promotion_test_derives_complete_migration_delta_from_candidate_git` |
 | Issue and revoke cannot lose one another's registry update | `tests/runtime/test_startup_artifact_call_sites.py::test_promotion_registry_serializes_issue_and_revocation_updates` |
 | Crash/restart recovery at reservation, receipt, attempt, and registry boundaries | `tests/runtime/test_startup_artifact_call_sites.py::test_promotion_test_recovers_linked_temp_before_terminal_success` and adjacent terminal-binding tests |

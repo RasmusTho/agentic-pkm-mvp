@@ -185,8 +185,10 @@ environment and from the verified root-owned non-repository `/` working director
 baseline commit against the candidate's exact
 source commit under `app/alembic/versions`, then materializes each target file from those immutable
 Git objects. Each changed migration must be a regular Git blob with mode `100644` or `100755`;
-symlinks, submodules, trees, deletions, and other modes fail closed before classification. The same
-object bytes feed both the migration-set digest and
+symlinks, submodules, trees, deletions, renames, and other modes fail closed before classification.
+The candidate-to-baseline ancestry, commit objects, migration tree chain, and changed blobs are
+rehash-verified against every referenced Git object ID before use. The same captured blob bytes feed
+both the migration-set digest and
 `app.release_channels.reversibility.check_migration_snapshots`. The attempt journal records the six
 boolean check outcomes and that existing classifier's receipt. The promotion
 receipt itself retains the closed semantic field set above. Migration marker rules remain owned by
