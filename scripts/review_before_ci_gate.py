@@ -59,11 +59,15 @@ RISK_SURFACES = {
 }
 PR_SCOPE_REVALIDATION_OUTCOMES = frozenset({"continue_unchanged", "split", "expanded_contract"})
 PROTECTED_REVIEW_FINDING = re.compile(
-    r"(?im)^\s*(?:[-*]\s*)?(?:\[P[01]\]|\*\*P[01](?:\s*[:—-]|\s+)[^*\n]+\*\*"
-    r"|\*\*P[01]\s*[:—-]?\*\*|P[01](?:\s*[:—-]|\s+\S))"
+    r"(?im)^\s*(?:#{1,6}\s+)?(?:[-*+]\s+)?(?:\*\*)?"
+    r"(?:severity\s*:\s*(?:\*\*)?)?(?:\[P[01]\]|P[01])(?:\*\*)?"
+    r"(?=\s|[:—-]|$)"
 )
 REVIEW_CONTRACT_DIGEST = re.compile(
     r"(?im)^Governing-Contract-SHA256:\s*([0-9a-f]{64})\s*$"
+)
+REVIEW_CONTRACT_MARKER = re.compile(
+    r"(?im)^\s*(?:>\s*)*Governing-Contract-SHA256\s*:"
 )
 REVALIDATION_RECEIPT_MARKER = "<!-- pr-scope-revalidation-receipt:v1 -->"
 TRUSTED_RECEIPT_ASSOCIATIONS = frozenset({"OWNER", "MEMBER", "COLLABORATOR"})
@@ -289,6 +293,7 @@ def authenticated_pr_scope_revalidation_history(
     pr_number: int,
     governing_issue: int,
     head_sha: str,
+    expected_head_ref: str | None = None,
     follow_up_issue_numbers: Sequence[int] = (),
     api: Callable[[str, bool], object] | None = None,
 ) -> Mapping[str, object]:
@@ -328,8 +333,24 @@ def authenticated_pr_scope_revalidation_history(
     if pr.get("number") != pr_number or issue.get("number") != governing_issue:
         raise ReviewBeforeCiGateError("GitHub evidence does not identify the requested PR and Issue")
     base_repo = _nested_value(pr, "base", "repo", "full_name")
+    head_repo = _nested_value(pr, "head", "repo", "full_name")
+    head_ref = _nested_value(pr, "head", "ref")
     live_head = _nested_value(pr, "head", "sha")
-    if base_repo != repository or not isinstance(live_head, str) or not re.fullmatch(
+    if pr.get("state") != "open":
+        raise ReviewBeforeCiGateError(
+            "GitHub scope-revalidation evidence must identify an open PR"
+        )
+    if base_repo != repository:
+        raise ReviewBeforeCiGateError("GitHub PR base repository is foreign")
+    if (
+        head_repo != repository
+        or not _nonempty_string(head_ref)
+        or (expected_head_ref is not None and head_ref != expected_head_ref)
+    ):
+        raise ReviewBeforeCiGateError(
+            "GitHub PR head repository/ref does not match the authenticated current branch"
+        )
+    if not isinstance(live_head, str) or not re.fullmatch(
         r"[0-9a-f]{40}", live_head
     ):
         raise ReviewBeforeCiGateError(
@@ -416,10 +437,11 @@ def authenticated_pr_scope_revalidation_history(
         commit_id = review["commit_id"]
         if not isinstance(commit_id, str) or not re.fullmatch(r"[0-9a-f]{40}", commit_id):
             raise ReviewBeforeCiGateError("rejected review round has no exact reviewed head")
-        contract_match = REVIEW_CONTRACT_DIGEST.search(review["body"])
-        if contract_match is None:
+        contract_matches = REVIEW_CONTRACT_DIGEST.findall(review["body"])
+        contract_markers = REVIEW_CONTRACT_MARKER.findall(review["body"])
+        if len(contract_markers) != 1 or len(contract_matches) != 1:
             raise ReviewBeforeCiGateError(
-                "rejected review round has no governing contract SHA-256 lineage"
+                "rejected review round requires exactly one governing contract SHA-256 lineage marker"
             )
         round_id = f"review:{review_id}"
         finding_ids_by_round[round_id] = {round_id}
@@ -429,7 +451,7 @@ def authenticated_pr_scope_revalidation_history(
             "review_state": "CHANGES_REQUESTED",
             "reviewer": reviewer,
             "head_sha": commit_id,
-            "governing_contract_sha256": contract_match.group(1),
+            "governing_contract_sha256": contract_matches[0],
             "review_body_sha256": _sha256_text(review["body"]),
         }
     for comment in inline_comments:
@@ -552,7 +574,7 @@ def _github_api(path: str, paginate: bool) -> object:
     return payload
 
 
-def _current_branch_has_open_pr(repository: str) -> bool:
+def _current_branch_open_pr(repository: str) -> Mapping[str, object] | None:
     branch = subprocess.run(
         ["git", "branch", "--show-current"],
         capture_output=True,
@@ -571,8 +593,29 @@ def _current_branch_has_open_pr(repository: str) -> bool:
         False,
     )
     if not isinstance(payload, list) or not all(isinstance(pr, Mapping) for pr in payload):
-        raise ReviewBeforeCiGateError("new-PR publication cannot authenticate open-PR state")
-    return bool(payload)
+        raise ReviewBeforeCiGateError("publication cannot authenticate current-branch PR state")
+    if len(payload) > 1:
+        raise ReviewBeforeCiGateError(
+            "publication requires a unique open PR for the current branch"
+        )
+    if not payload:
+        return None
+    pr = payload[0]
+    if (
+        not isinstance(pr.get("number"), int)
+        or pr.get("state") != "open"
+        or _nested_value(pr, "base", "repo", "full_name") != repository
+        or _nested_value(pr, "head", "repo", "full_name") != repository
+        or _nested_value(pr, "head", "ref") != branch.stdout.strip()
+    ):
+        raise ReviewBeforeCiGateError(
+            "open PR evidence does not match the authenticated current branch"
+        )
+    return pr
+
+
+def _current_branch_has_open_pr(repository: str) -> bool:
+    return _current_branch_open_pr(repository) is not None
 
 
 def _github_repository_from_origin() -> str | None:
@@ -989,11 +1032,28 @@ def main(argv: Sequence[str] | None = None) -> int:
             raise ReviewBeforeCiGateError(
                 "GitHub repository identity does not match authenticated origin"
             )
+        current_branch_pr: Mapping[str, object] | None = None
+        current_branch_ref: str | None = None
         if args.publication_mode == "existing":
             if not args.pr_scope_revalidation:
                 raise ReviewBeforeCiGateError(
                     "existing-PR publication requires authenticated PR scope revalidation"
                 )
+            if not args.github_repository or args.pr_number is None:
+                raise ReviewBeforeCiGateError(
+                    "existing-PR publication requires GitHub repository and PR identity"
+                )
+            current_branch_pr = _current_branch_open_pr(args.github_repository)
+            if current_branch_pr is None or current_branch_pr.get("number") != args.pr_number:
+                raise ReviewBeforeCiGateError(
+                    "existing-PR publication must match the unique open PR for the current branch"
+                )
+            current_branch_ref_value = _nested_value(current_branch_pr, "head", "ref")
+            if not _nonempty_string(current_branch_ref_value):
+                raise ReviewBeforeCiGateError(
+                    "open PR evidence has no authenticated current branch ref"
+                )
+            current_branch_ref = current_branch_ref_value
         elif args.publication_mode == "new":
             if args.pr_scope_revalidation:
                 raise ReviewBeforeCiGateError(
@@ -1032,6 +1092,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 pr_number=args.pr_number,
                 governing_issue=args.governing_issue,
                 head_sha=evidence.head_sha,
+                expected_head_ref=current_branch_ref,
                 follow_up_issue_numbers=_follow_up_issue_numbers(receipt),
             )
             if not _git_is_strict_ancestor(history["live_pr_head_sha"], evidence.head_sha):

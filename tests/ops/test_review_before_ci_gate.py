@@ -15,6 +15,7 @@ import pytest
 
 from scripts.review_before_ci_gate import (
     ReviewBeforeCiGateError,
+    _current_branch_open_pr,
     _git_is_strict_ancestor,
     _github_repository_from_origin,
     authenticated_pr_scope_revalidation_history,
@@ -467,7 +468,12 @@ def _live_pr_review_api(
     responses: dict[str, object] = {
         f"repos/{repository}/pulls/4029": {
             "number": 4029,
-            "head": {"sha": head_sha},
+            "state": "open",
+            "head": {
+                "sha": head_sha,
+                "ref": "codex/issue-4028",
+                "repo": {"full_name": repository},
+            },
             "base": {"repo": {"full_name": repository}},
             "user": {"login": "implementation-author"},
             "body": "Governing-Issue: #4028\n\nFixes #4028\n",
@@ -693,6 +699,76 @@ def test_pr_scope_revalidation_rejects_foreign_or_stale_live_pr_evidence() -> No
         )
 
 
+def test_pr_scope_revalidation_rejects_closed_or_foreign_head_pr() -> None:
+    responses, api = _live_pr_review_api()
+    pr = responses["repos/octo/repo/pulls/4029"]
+    assert isinstance(pr, dict)
+    pr["state"] = "closed"
+
+    with pytest.raises(ReviewBeforeCiGateError, match="open PR"):
+        authenticated_pr_scope_revalidation_history(
+            repository="octo/repo",
+            pr_number=4029,
+            governing_issue=4028,
+            head_sha="a" * 40,
+            expected_head_ref="codex/issue-4028",
+            api=api,
+        )
+
+    pr["state"] = "open"
+    pr["head"]["repo"]["full_name"] = "foreign/repo"
+    with pytest.raises(ReviewBeforeCiGateError, match="current branch"):
+        authenticated_pr_scope_revalidation_history(
+            repository="octo/repo",
+            pr_number=4029,
+            governing_issue=4028,
+            head_sha="a" * 40,
+            expected_head_ref="codex/issue-4028",
+            api=api,
+        )
+
+    pr["head"]["repo"]["full_name"] = "octo/repo"
+    pr["head"]["ref"] = "foreign-branch"
+    with pytest.raises(ReviewBeforeCiGateError, match="current branch"):
+        authenticated_pr_scope_revalidation_history(
+            repository="octo/repo",
+            pr_number=4029,
+            governing_issue=4028,
+            head_sha="a" * 40,
+            expected_head_ref="codex/issue-4028",
+            api=api,
+        )
+
+
+@pytest.mark.parametrize("extra_digest", (None, "same", "conflicting"))
+def test_rejected_round_requires_exactly_one_governing_contract_digest(
+    extra_digest: str | None,
+) -> None:
+    responses, api = _live_pr_review_api()
+    reviews = responses["repos/octo/repo/pulls/4029/reviews?per_page=100"]
+    assert isinstance(reviews, list)
+    if extra_digest is None:
+        reviews[0]["body"] = re.sub(
+            r"\nGoverning-Contract-SHA256: [0-9a-f]{64}", "", reviews[0]["body"]
+        )
+    else:
+        digest = (
+            re.search(r"[0-9a-f]{64}", reviews[0]["body"]).group(0)
+            if extra_digest == "same"
+            else "d" * 64
+        )
+        reviews[0]["body"] += "\nGoverning-Contract-SHA256: " + digest
+
+    with pytest.raises(ReviewBeforeCiGateError, match="exactly one governing contract"):
+        authenticated_pr_scope_revalidation_history(
+            repository="octo/repo",
+            pr_number=4029,
+            governing_issue=4028,
+            head_sha="a" * 40,
+            api=api,
+        )
+
+
 def test_existing_publication_mode_cannot_omit_pr_scope_revalidation() -> None:
     result = subprocess.run(
         [
@@ -715,6 +791,75 @@ def test_existing_publication_mode_cannot_omit_pr_scope_revalidation() -> None:
 
     assert result.returncode == 2
     assert "requires authenticated PR scope revalidation" in result.stderr
+
+
+def test_existing_publication_must_match_unique_open_pr_for_current_branch(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(
+        "scripts.review_before_ci_gate.workflow_risk_evidence_from_git",
+        lambda *args, **kwargs: SimpleNamespace(risks=[], head_sha="b" * 40),
+    )
+    monkeypatch.setattr(
+        "scripts.review_before_ci_gate._github_repository_from_origin", lambda: "octo/repo"
+    )
+    monkeypatch.setattr(
+        "scripts.review_before_ci_gate._current_branch_open_pr",
+        lambda repository: {
+            "number": 4999,
+            "head": {"ref": "codex/issue-4028", "repo": {"full_name": repository}},
+        },
+    )
+
+    assert review_before_ci_main(
+        [
+            "--lane",
+            "governance",
+            "--changed-file",
+            "scripts/review_before_ci_gate.py",
+            "--risk-assessment-complete",
+            "--risk-surface",
+            "state-machine",
+            "--review-gate-complete",
+            "--publication-mode",
+            "existing",
+            "--pr-scope-revalidation",
+            "--github-repository",
+            "octo/repo",
+            "--pr-number",
+            "4029",
+            "--governing-issue",
+            "4028",
+        ]
+    ) == 2
+    assert "unique open PR for the current branch" in capsys.readouterr().err
+
+
+def test_current_branch_rejects_ambiguous_open_prs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "scripts.review_before_ci_gate.subprocess.run",
+        lambda *args, **kwargs: subprocess.CompletedProcess(
+            args[0], 0, "codex/issue-4028\n", ""
+        ),
+    )
+    open_pr = {
+        "number": 4029,
+        "state": "open",
+        "base": {"repo": {"full_name": "octo/repo"}},
+        "head": {
+            "ref": "codex/issue-4028",
+            "repo": {"full_name": "octo/repo"},
+        },
+    }
+    monkeypatch.setattr(
+        "scripts.review_before_ci_gate._github_api",
+        lambda path, paginate: [open_pr, {**open_pr, "number": 4030}],
+    )
+
+    with pytest.raises(ReviewBeforeCiGateError, match="unique open PR"):
+        _current_branch_open_pr("octo/repo")
 
 
 def test_open_pr_cannot_omit_publication_mode(
@@ -1101,6 +1246,41 @@ def test_bracketed_and_colon_protected_findings_are_content_bound() -> None:
         api=api,
     )
     assert "comment:101" in bold["finding_ids"]
+
+
+@pytest.mark.parametrize(
+    "finding",
+    (
+        "Severity: P1 — authority semantics",
+        "**Severity: P1** authority semantics",
+        "### [P1] authority semantics",
+        "- Severity: **P1** authority semantics",
+    ),
+)
+def test_ordinary_protected_severity_forms_are_content_bound(finding: str) -> None:
+    responses, api = _live_pr_review_api()
+    comments = responses["repos/octo/repo/pulls/4029/comments?per_page=100"]
+    assert isinstance(comments, list)
+    comments[0]["body"] = f"{finding} v1"
+    before = authenticated_pr_scope_revalidation_history(
+        repository="octo/repo",
+        pr_number=4029,
+        governing_issue=4028,
+        head_sha="a" * 40,
+        api=api,
+    )
+
+    comments[0]["body"] = f"{finding} v2"
+    after = authenticated_pr_scope_revalidation_history(
+        repository="octo/repo",
+        pr_number=4029,
+        governing_issue=4028,
+        head_sha="a" * 40,
+        api=api,
+    )
+
+    assert "comment:101" in before["finding_ids"]
+    assert before["authentication"] != after["authentication"]
 
 
 def test_pre_push_candidate_is_distinct_from_live_pr_head() -> None:
