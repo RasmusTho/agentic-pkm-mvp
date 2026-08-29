@@ -5,9 +5,9 @@ Doc role: Core SoT
 Authority: Canonical environment contract for the current baseline and forward-line work; defines what `dev`, `test`, and `prod` mean, what must remain invariant, and what may vary. Architecture, operations, testing, status, and component docs should reference this document instead of restating environment policy. Release-channel semantics (channel identity, DB-per-channel, promotion, rollback) are owned by `docs/RELEASE_CHANNELS/README.md`.
 Temporal class: operational
 Review cadence: as environment/channel posture changes
-Last reviewed: 2026-08-22
+Last reviewed: 2026-08-29
 Last live runtime verification: 2026-08-22 (Tailscale hosts `ygg-dev` and `ygg-prod`; `ygg-test` was not present/reachable)
-Last verified against: docs/RELEASE_CHANNELS/README.md, docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md, docker-compose.full-host-vault.yml, scripts/lib/deploy_channel_compose.sh, docs/STATUS.md (§Cognitive Expansion — activation status), ops/promotions/2026-06-13-cc3ce65d.md
+Last verified against: docs/RELEASE_CHANNELS/README.md, docs/DEV_TEST_PROD_STARTUP_REDESIGN/README.md, app/release_channels/promotion_receipt.py, docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md, docker-compose.full-host-vault.yml, scripts/lib/deploy_channel_compose.sh, docs/STATUS.md (§Cognitive Expansion — activation status), ops/promotions/2026-06-13-cc3ce65d.md
 
 ## Overview
 
@@ -365,6 +365,14 @@ provisioning, ingest, index, vault-restructure, activation, or writer-start hook
 `writers_permitted=true` result is read-only admission evidence for a separate caller; it is not a
 deployment, promotion receipt, live-host acceptance receipt, or replacement for the current
 canonical prod startup command.
+
+The STARTUP-04 receipt surface is available as `python -m
+app.release_channels.promotion_receipt`. Its promotion-test writer persists one signed,
+content-addressed PASS/FAIL terminal receipt outside resettable test roots and consumes migration
+classification through the existing release-channel reversibility module. Its prod command is a
+pre-activation validator only: it rejects missing, stale, revoked, non-PASS, untrusted, or
+identity-mismatched evidence and has no activation, deployment, migration, restart, or bypass hook.
+Repository availability is not a live promotion-test or prod-activation receipt.
 
 <a id="prod-ollama-topology"></a>
 
