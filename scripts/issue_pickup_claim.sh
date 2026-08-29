@@ -174,9 +174,53 @@ else
   fi
 fi
 
-remove_ready_label() {
-  gh api --method DELETE \
-    "repos/$REPO/issues/$ISSUE_NUMBER/labels/agent%3Aready" >/dev/null
+replace_ready_label_with_in_progress() {
+  # GitHub's per-label DELETE would leave a successful claim with no active
+  # agent-state label. Read the current labels, then use the collection PUT
+  # endpoint for one atomic replacement that keeps every non-agent label.
+  local labels_json label_payload
+  if ! labels_json="$(gh api --method GET "repos/$REPO/issues/$ISSUE_NUMBER/labels")"; then
+    return 1
+  fi
+  if ! label_payload="$(
+    GITHUB_LABELS_JSON="$labels_json" "$JSON_PYTHON_BIN" - <<'PY'
+import json
+import os
+
+try:
+    labels = json.loads(os.environ["GITHUB_LABELS_JSON"])
+except (KeyError, json.JSONDecodeError) as exc:
+    raise SystemExit(f"GitHub label read is not valid JSON: {exc}")
+
+if not isinstance(labels, list):
+    raise SystemExit("GitHub label read did not return a list")
+
+names = []
+for label in labels:
+    name = label.get("name") if isinstance(label, dict) else label
+    if not isinstance(name, str) or not name:
+        raise SystemExit("GitHub label read contained an invalid label")
+    if name.startswith("agent:"):
+        continue
+    if name not in names:
+        names.append(name)
+
+if "agent:ready" not in {
+    label.get("name") if isinstance(label, dict) else label for label in labels
+}:
+    raise SystemExit("GitHub label read no longer contains agent:ready")
+
+names.append("agent:in-progress")
+
+print(json.dumps({"labels": names}))
+PY
+  )"; then
+    return 1
+  fi
+
+  gh api --method PUT \
+    "repos/$REPO/issues/$ISSUE_NUMBER/labels" \
+    --input - <<<"$label_payload" >/dev/null
 }
 
 release_dispatcher_claim() {
@@ -281,11 +325,11 @@ PY
   fi
 
   read -r RECEIPT_LEASE_ID RECEIPT_HOLDER <<< "$validation"
-  if ! remove_ready_label; then
+  if ! replace_ready_label_with_in_progress; then
     if release_dispatcher_claim; then
-      echo "label-removal-failed cleanup=released task_id=$TASK_ID lease_id=$RECEIPT_LEASE_ID holder=$RECEIPT_HOLDER evidence=verified-dispatcher-release" >&2
+      echo "label-transition-failed cleanup=released task_id=$TASK_ID lease_id=$RECEIPT_LEASE_ID holder=$RECEIPT_HOLDER evidence=verified-dispatcher-release" >&2
     else
-      echo "label-removal-failed cleanup-failed task_id=$TASK_ID lease_id=$RECEIPT_LEASE_ID holder=$RECEIPT_HOLDER evidence=cleanup-failed" >&2
+      echo "label-transition-failed cleanup-failed task_id=$TASK_ID lease_id=$RECEIPT_LEASE_ID holder=$RECEIPT_HOLDER evidence=cleanup-failed" >&2
     fi
     exit 1
   fi
@@ -316,8 +360,8 @@ print(comment_id)
 PY
 )"
 
-if ! remove_ready_label; then
-  echo "GitHub label removal failed after claimant intent receipt comment=$comment_id" >&2
+if ! replace_ready_label_with_in_progress; then
+  echo "GitHub label transition failed after claimant intent receipt comment=$comment_id" >&2
   exit 1
 fi
 

@@ -44,6 +44,8 @@ operator projection; reconciliation must preserve it without inferring a PR rela
 
 - `agent:ready` is the pickup qualifier after strict validation. `Status=Ready` is its preferred
   legacy board projection, not a precondition or collision guard.
+- Successful pickup atomically normalizes `agent:*` labels to exactly `agent:in-progress`; a
+  subsequent explicit Project repair therefore projects the active Issue to `In Progress`.
 - Outside an explicit Project-repair run, absence from the Project is not drift and requires no
   read or mutation.
 - GitHub Issue state, agent labels, linked PR state, and merge/delivery reality outrank Project

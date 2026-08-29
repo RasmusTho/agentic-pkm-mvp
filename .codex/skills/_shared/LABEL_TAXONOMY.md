@@ -26,6 +26,8 @@ own copies.
 Rules:
 
 - Every new implementation Issue leaves creation with exactly one truthful agent-state label.
+- A successful pickup atomically normalizes `agent:*` labels to exactly `agent:in-progress`, preserving
+  every non-agent label; this is the authoritative active-claim transition.
 - `agent:blocked` and `agent:needs-human` belong on non-active work. When Project repair is in
   scope, non-parent `agent:blocked` projects to `Blocked` and non-parent `agent:needs-human`
   projects to `Needs Human`; durable epic/parent evidence projects to `Epic / Parent` first.

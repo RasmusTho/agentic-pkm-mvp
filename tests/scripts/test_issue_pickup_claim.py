@@ -54,7 +54,8 @@ def _make_harness(
     status_json: str,
     claim_json: str = "",
     claim_rc: int = 0,
-    label_delete_rc: int = 0,
+    label_replace_rc: int = 0,
+    labels_json: str = '[{"name":"type:task"},{"name":"prio:high"},{"name":"lane:governance"},{"name":"agent:ready"}]',
     release_json: str = '{"ok":true,"task":{"task_id":"github-RasmusTho--agentic-pkm-mvp-issue-3301","status":"ready","claimed_by":null,"lease_id":null}}',
     release_rc: int = 0,
 ) -> tuple[Path, dict[str, str]]:
@@ -94,7 +95,8 @@ set -eu
 printf 'gh %s\n' "$*" >> "$COMMAND_LOG"
 case "$*" in
   *"/comments"*) echo '{"id":9876,"html_url":"https://example.test/comment/9876"}' ;;
-  *"/labels/agent%3Aready"*) echo '[]'; exit "$FAKE_LABEL_DELETE_RC" ;;
+  *"--method GET repos/"*"/labels"*) printf '%s\n' "$FAKE_LABELS_JSON" ;;
+  *"--method PUT repos/"*"/labels"*) cat > "$FAKE_LABEL_PAYLOAD"; echo '[]'; exit "$FAKE_LABEL_REPLACE_RC" ;;
   *) echo "unexpected gh call: $*" >&2; exit 1 ;;
 esac
 """,
@@ -121,7 +123,9 @@ printf 'preflight %s\n' "$*" >> "$COMMAND_LOG"
             "FAKE_STATUS_JSON": status_json,
             "FAKE_CLAIM_JSON": claim_json,
             "FAKE_CLAIM_RC": str(claim_rc),
-            "FAKE_LABEL_DELETE_RC": str(label_delete_rc),
+            "FAKE_LABEL_REPLACE_RC": str(label_replace_rc),
+            "FAKE_LABELS_JSON": labels_json,
+            "FAKE_LABEL_PAYLOAD": str(tmp_path / "labels.json"),
             "FAKE_RELEASE_JSON": release_json,
             "FAKE_RELEASE_RC": str(release_rc),
         }
@@ -152,7 +156,7 @@ def _run(worktree: Path, env: dict[str, str], *extra: str) -> subprocess.Complet
     )
 
 
-def test_dispatcher_backed_pickup_requires_verified_lease_before_label_removal(
+def test_dispatcher_backed_pickup_replaces_ready_with_in_progress_after_verified_lease(
     tmp_path: Path,
 ) -> None:
     worktree, env = _make_harness(
@@ -177,8 +181,41 @@ def test_dispatcher_backed_pickup_requires_verified_lease_before_label_removal(
     assert "holder=codex-3301" in result.stdout
     commands = Path(env["COMMAND_LOG"]).read_text(encoding="utf-8")
     assert commands.index("dispatcher -m app.dispatcher claim") < commands.index(
-        "gh api --method DELETE"
+        "gh api --method GET repos/RasmusTho/agentic-pkm-mvp/issues/3301/labels"
     )
+    assert "gh api --method PUT repos/RasmusTho/agentic-pkm-mvp/issues/3301/labels" in commands
+    assert json.loads(Path(env["FAKE_LABEL_PAYLOAD"]).read_text(encoding="utf-8")) == {
+        "labels": ["type:task", "prio:high", "lane:governance", "agent:in-progress"]
+    }
+
+
+def test_pickup_normalizes_stale_mixed_agent_labels_without_erasing_non_agent_labels(
+    tmp_path: Path,
+) -> None:
+    worktree, env = _make_harness(
+        tmp_path,
+        status_json=json.dumps(
+            {
+                "ok": True,
+                "db_exists": True,
+                "coordination_mode": "dispatcher-backed",
+                "fallback_reason": None,
+            }
+        ),
+        claim_json=_dispatcher_claim(),
+        labels_json=(
+            '[{"name":"type:task"},{"name":"prio:high"},{"name":"lane:governance"},'
+            '{"name":"agent:ready"},{"name":"agent:blocked"},'
+            '{"name":"agent:needs-human"},{"name":"agent:in-progress"}]'
+        ),
+    )
+
+    result = _run(worktree, env)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert json.loads(Path(env["FAKE_LABEL_PAYLOAD"]).read_text(encoding="utf-8")) == {
+        "labels": ["type:task", "prio:high", "lane:governance", "agent:in-progress"]
+    }
 
 
 def test_default_task_id_is_repo_qualified_to_match_dispatcher_pull(tmp_path: Path) -> None:
@@ -347,7 +384,7 @@ def test_dispatcher_availability_is_not_reported_as_acquired_claim(tmp_path: Pat
         assert result.returncode != 0, name
         assert "pickup-claim-complete" not in result.stdout
         commands = Path(env["COMMAND_LOG"]).read_text(encoding="utf-8")
-        assert "gh api --method DELETE" not in commands
+        assert "gh api --method PUT repos/" not in commands
         if claim_rc == 0:
             assert "dispatcher -m app.dispatcher release github-RasmusTho--agentic-pkm-mvp-issue-3301" in commands
 
@@ -381,12 +418,15 @@ def test_label_only_fallback_emits_durable_claimant_receipt(tmp_path: Path) -> N
     assert "session=session-3301" in result.stdout
     commands = Path(env["COMMAND_LOG"]).read_text(encoding="utf-8")
     comment_at = commands.index("gh api --method POST")
-    label_at = commands.index("gh api --method DELETE")
+    label_at = commands.index("gh api --method PUT repos/RasmusTho/agentic-pkm-mvp/issues/3301/labels")
     assert comment_at < label_at
     assert "agent=codex-3301" in commands
     assert "session=session-3301" in commands
     assert "fallback_reason=dispatcher_db_missing" in commands
     assert "dispatcher-backed" not in result.stdout
+    assert json.loads(Path(env["FAKE_LABEL_PAYLOAD"]).read_text(encoding="utf-8")) == {
+        "labels": ["type:task", "prio:high", "lane:governance", "agent:in-progress"]
+    }
 
 
 def test_label_delete_failure_reports_verified_dispatcher_release(tmp_path: Path) -> None:
@@ -401,7 +441,7 @@ def test_label_delete_failure_reports_verified_dispatcher_release(tmp_path: Path
             }
         ),
         claim_json=_dispatcher_claim(),
-        label_delete_rc=1,
+        label_replace_rc=1,
     )
 
     result = _run(worktree, env)
@@ -429,7 +469,7 @@ def test_label_delete_and_release_failure_reports_cleanup_failed_evidence(
             }
         ),
         claim_json=_dispatcher_claim(),
-        label_delete_rc=1,
+        label_replace_rc=1,
         release_json='{ "ok": false }',
         release_rc=1,
     )
@@ -490,7 +530,7 @@ def test_partial_sync_fallback_requires_requested_task_evidence(
     assert "--coordination-mode github-label-only-fallback" not in result.stderr
     assert "dispatcher claim failed for expected task" in result.stderr
     commands = Path(env["COMMAND_LOG"]).read_text(encoding="utf-8")
-    assert "gh api --method DELETE" not in commands
+    assert "gh api --method PUT repos/" not in commands
 
 
 def test_complete_sync_missing_task_keeps_opaque_claim_failure(
@@ -530,4 +570,4 @@ def test_complete_sync_missing_task_keeps_opaque_claim_failure(
     assert "cause=kill-switch-partial-sync" not in result.stderr
     assert "dispatcher claim failed for expected task" in result.stderr
     commands = Path(env["COMMAND_LOG"]).read_text(encoding="utf-8")
-    assert "gh api --method DELETE" not in commands
+    assert "gh api --method PUT repos/" not in commands

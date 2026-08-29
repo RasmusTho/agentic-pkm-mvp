@@ -111,6 +111,12 @@ def test_desired_issue_status_splits_non_active_backlog_lanes() -> None:
     assert desired_issue_status({"state": "OPEN", "labels": []}) is None
 
 
+def test_successful_pickup_label_transition_projects_in_progress() -> None:
+    assert desired_issue_status(
+        {"state": "OPEN", "labels": [{"name": "agent:in-progress"}]}
+    ) == "In Progress"
+
+
 def test_desired_issue_status_projects_known_defect_registry_to_backlog() -> None:
     issue = {"state": "OPEN", "labels": [{"name": "state:known-defect"}]}
 
