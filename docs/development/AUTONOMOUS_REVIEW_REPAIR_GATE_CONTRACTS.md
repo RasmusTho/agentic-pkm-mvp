@@ -419,8 +419,10 @@ fetches the current PR, complete paginated review summaries, inline review comme
 and, for issue-backed work, the governing Issue itself. Issue-free docs, governance, and direct-repair
 PRs instead authenticate one complete lane/direct-repair contract in the live PR body, require its
 canonical classification to match the publication invocation lane, and reject ordinary or
-neutralized Issue authority plus unsupported line separators and indented lane markers. Lane and
-Direct Repair classification use the explicit ECMAScript whitespace set: Python-only C0/U+0085
+neutralized Issue authority plus unsupported line separators and indented lane markers. A Direct
+Repair contract has exactly one unindented `## Direct Repair` heading and exactly one canonical
+full-line occurrence of each required field; malformed, duplicate, or conflicting blocks and fields
+fail closed. Lane and Direct Repair classification use the explicit ECMAScript whitespace set: Python-only C0/U+0085
 forms are not whitespace, while hosted-valid U+FEFF is. The shared BuilderOps section twin applies
 the same mapping to bullet spacing and JavaScript `trim()`-equivalent concrete values. They may continue unchanged or split after revalidation,
 but scope expansion first requires promotion to an authenticated governing Issue. The gate binds the

@@ -424,7 +424,10 @@ EOF
 
 `Type:` must be exactly one of `docs`, `governance`, or `code` (`docs/development/PR_HOT_PATH.md ::
 Direct Repair`). No lane checkbox and no `Governing-Issue`/closing-keyword line are needed when this
-block is complete — the gate accepts the `## Direct Repair` block as the standalone contract.
+block is complete — the gate accepts the `## Direct Repair` block as the standalone contract. The
+heading must be an exact unindented level-two heading, the body must contain exactly one such block,
+and each required field must occur exactly once as a canonical full line; malformed, duplicate, or
+conflicting blocks and fields fail closed.
 
 **Update Existing PR:**
 ```bash
@@ -441,7 +444,7 @@ Pre-push PR-body contract gate:
     approved multi-Issue PR may reference an open governing parent and close delivered children
   - docs lane: `- [x] Docs authoring lane`
   - governance lane: `- [x] Governance lane`
-  - direct repair: a complete `## Direct Repair` block with `Type:`, `Reason:`, `Validation:`, and `Issue required: no`
+  - direct repair: exactly one canonical unindented `## Direct Repair` block with exactly one full-line `Type:`, `Reason:`, `Validation:`, and `Issue required: no`
 - If none is present, stop and repair the PR body before publication.
 - Verify exactly one `Final-Review-Rounds: 0`, `1`, or `2` line is present — every lane requires
   it, including direct repair; `0` declares the light delivery path per

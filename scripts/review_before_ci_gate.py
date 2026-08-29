@@ -79,6 +79,9 @@ TRUSTED_RECEIPT_ASSOCIATIONS = frozenset({"OWNER", "MEMBER", "COLLABORATOR"})
 ECMASCRIPT_WHITESPACE = (
     r"[ \t\n\x0b\x0c\r\xa0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000\ufeff]"
 )
+ECMASCRIPT_HORIZONTAL_WHITESPACE = (
+    r"[ \t\x0b\x0c\xa0\u1680\u2000-\u200a\u202f\u205f\u3000\ufeff]"
+)
 ECMASCRIPT_NON_WHITESPACE = (
     r"[^ \t\n\x0b\x0c\r\xa0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000\ufeff]"
 )
@@ -87,26 +90,33 @@ ISSUE_FREE_LANE = re.compile(
     r"(Docs authoring|Governance) lane\b",
     re.IGNORECASE | re.MULTILINE,
 )
-DIRECT_REPAIR_SECTION = re.compile(
-    rf"## Direct Repair.*?(?=\n##{ECMASCRIPT_WHITESPACE}|\n---)"
-    r"|## Direct Repair.*",
-    re.IGNORECASE | re.DOTALL,
+DIRECT_REPAIR_HEADING = re.compile(
+    rf"^## Direct Repair{ECMASCRIPT_HORIZONTAL_WHITESPACE}*$",
+    re.IGNORECASE | re.MULTILINE,
+)
+DIRECT_REPAIR_SECTION_BOUNDARY = re.compile(
+    rf"^(?:##{ECMASCRIPT_HORIZONTAL_WHITESPACE}+.*|"
+    rf"---{ECMASCRIPT_HORIZONTAL_WHITESPACE}*)$",
+    re.MULTILINE,
 )
 DIRECT_REPAIR_TYPE = re.compile(
-    rf"^Type:{ECMASCRIPT_WHITESPACE}*(?:docs|governance|code)"
-    rf"{ECMASCRIPT_WHITESPACE}*(?:\n|$)",
+    rf"^Type:{ECMASCRIPT_HORIZONTAL_WHITESPACE}*(?:docs|governance|code)"
+    rf"{ECMASCRIPT_HORIZONTAL_WHITESPACE}*$",
     re.IGNORECASE | re.MULTILINE,
 )
 DIRECT_REPAIR_REASON = re.compile(
-    rf"^Reason:{ECMASCRIPT_WHITESPACE}*{ECMASCRIPT_NON_WHITESPACE}",
+    rf"^Reason:{ECMASCRIPT_HORIZONTAL_WHITESPACE}*{ECMASCRIPT_NON_WHITESPACE}.*?"
+    rf"{ECMASCRIPT_HORIZONTAL_WHITESPACE}*$",
     re.IGNORECASE | re.MULTILINE,
 )
 DIRECT_REPAIR_VALIDATION = re.compile(
-    rf"^Validation:{ECMASCRIPT_WHITESPACE}*{ECMASCRIPT_NON_WHITESPACE}",
+    rf"^Validation:{ECMASCRIPT_HORIZONTAL_WHITESPACE}*{ECMASCRIPT_NON_WHITESPACE}.*?"
+    rf"{ECMASCRIPT_HORIZONTAL_WHITESPACE}*$",
     re.IGNORECASE | re.MULTILINE,
 )
 DIRECT_REPAIR_ISSUE = re.compile(
-    rf"^Issue required:{ECMASCRIPT_WHITESPACE}*no\b",
+    rf"^Issue required:{ECMASCRIPT_HORIZONTAL_WHITESPACE}*no"
+    rf"{ECMASCRIPT_HORIZONTAL_WHITESPACE}*$",
     re.IGNORECASE | re.MULTILINE,
 )
 GOVERNING_ISSUE_ATTEMPT = re.compile(r"(?im)^\s*Governing-Issue\s*:")
@@ -789,15 +799,29 @@ def _issue_free_pr_contract_lane(body: object) -> str | None:
     ):
         return None
     canonical_body = body.replace("\r\n", "\n")
-    direct_repair = DIRECT_REPAIR_SECTION.search(canonical_body)
-    has_direct_repair_contract = bool(
-        direct_repair
-        and DIRECT_REPAIR_TYPE.search(direct_repair.group(0))
-        and DIRECT_REPAIR_REASON.search(direct_repair.group(0))
-        and DIRECT_REPAIR_VALIDATION.search(direct_repair.group(0))
-        and DIRECT_REPAIR_ISSUE.search(direct_repair.group(0))
+    direct_repair_headings = list(DIRECT_REPAIR_HEADING.finditer(canonical_body))
+    if len(direct_repair_headings) > 1:
+        return None
+    direct_repair_section: str | None = None
+    if direct_repair_headings:
+        heading = direct_repair_headings[0]
+        boundary = DIRECT_REPAIR_SECTION_BOUNDARY.search(canonical_body, heading.end())
+        section_end = boundary.start() if boundary else len(canonical_body)
+        direct_repair_section = canonical_body[heading.start() : section_end]
+    direct_repair_fields = (
+        DIRECT_REPAIR_TYPE,
+        DIRECT_REPAIR_REASON,
+        DIRECT_REPAIR_VALIDATION,
+        DIRECT_REPAIR_ISSUE,
     )
-    if direct_repair and not has_direct_repair_contract:
+    has_direct_repair_contract = bool(
+        direct_repair_section
+        and all(
+            len(field.findall(direct_repair_section)) == 1
+            for field in direct_repair_fields
+        )
+    )
+    if direct_repair_section is not None and not has_direct_repair_contract:
         return None
     lane_matches = ISSUE_FREE_LANE.findall(canonical_body)
     classifiers = len(lane_matches) + has_direct_repair_contract
