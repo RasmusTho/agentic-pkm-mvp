@@ -149,8 +149,10 @@ reservation. It then writes and durability-fences the content-addressed receipt 
 one immutable canonical attempt binding. A later PASS/FAIL, timestamp, identity, candidate, or
 migration-set change for the same `pt-<id>` attempt is rejected. A crash after receipt persistence
 but before the attempt binding leaves an immutable reserved orphan; only an identical retry can
-reuse it and publish the single binding. The attempt journal records the six boolean check outcomes and the existing
-`app.release_channels.reversibility.check_all_migrations` classification receipt. The promotion
+reuse it and publish the single binding. Every migration is opened once without symlink traversal;
+the same captured bytes feed both the migration-set digest and
+`app.release_channels.reversibility.check_migration_snapshots`. The attempt journal records the six
+boolean check outcomes and that existing classifier's receipt. The promotion
 receipt itself retains the closed semantic field set above. Migration marker rules remain owned by
 the release-channel reversibility contract and are not reimplemented by P4.
 
