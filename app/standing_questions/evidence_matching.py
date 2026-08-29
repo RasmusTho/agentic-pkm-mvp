@@ -190,6 +190,7 @@ class MatchTickSummary:
     duplicate_basis: int = 0
     degraded: int = 0
     excluded_cross_scope: int = 0
+    excluded_question_note: int = 0
     excluded_non_open: int = 0
     unresolved_artifact: int = 0
     write_conflict: int = 0
@@ -282,6 +283,15 @@ def _resolve_content(vault_root: Path, candidate: CandidateArtifact) -> tuple[st
 
 def _content_hash(raw_bytes: bytes) -> str:
     return hashlib.sha256(raw_bytes).hexdigest()
+
+
+def _is_question_note_ref(artifact_ref: str) -> bool:
+    """Return whether a vault artifact ref points at a Question source note."""
+
+    if not artifact_ref.startswith(VAULT_REF_PREFIX):
+        return False
+    relative = Path(artifact_ref[len(VAULT_REF_PREFIX) :])
+    return bool(relative.parts) and relative.parts[0] == "questions"
 
 
 def _build_user_prompt(question_text: str, artifact_text: str) -> str:
@@ -381,6 +391,12 @@ def match_evidence_to_open_questions(
         new_entries: list[dict[str, Any]] = []
 
         for candidate in candidate_list:
+            # Question notes are the target of this matcher, never evidence
+            # for it. Keep this exclusion before content resolution and model
+            # judgment so a changed Question cannot self-seed its evidence log.
+            if _is_question_note_ref(candidate.artifact_ref):
+                counters.bump("excluded_question_note")
+                continue
             # Scope first, before any content is resolved: a cross-scope artifact's
             # text must never be read, prompted, or logged (content-free denial).
             if candidate.scope != baseline["scope"]:

@@ -43,6 +43,7 @@ from app.services.outbox import (
     JsonlOutboxCorruptionError,
     JsonlOutboxEventIdConflictError,
     append_jsonl_outbox_event,
+    read_jsonl_outbox_records,
 )
 from app.index.outbox import append_jsonl as append_legacy_index_jsonl
 from app.write_guard import WriteGuard
@@ -339,6 +340,54 @@ def test_expiry_sweep_removes_ignored_draft_past_staleness_window(tmp_path: Path
     assert len(expired_records) == 1
 
 
+def test_expired_draft_receipt_can_be_replayed_after_expiry(
+    tmp_path: Path,
+) -> None:
+    vault_root = tmp_path / "vault"
+    vault_root.mkdir()
+    outbox_path = tmp_path / "outbox.jsonl"
+    request = CreateRequest(
+        kind=OutputKind.ANSWER_NOTE,
+        title="Replay after expiry",
+        question="What remains replayable?",
+        sources=(_source("obj-a", "Evidence text.", "Evidence text."),),
+    )
+    expired_at = datetime.now(timezone.utc) - timedelta(days=30)
+    first = run_create_pass(
+        request,
+        vault_root=vault_root,
+        outbox_path=outbox_path,
+        write_guard=_allow_all_guard(),
+        staleness_days=14,
+        now=expired_at,
+        draft_id="expired-replay-draft",
+        receipt_id="expired-replay-receipt",
+    )
+    draft_path = vault_root / first.draft_path
+
+    sweep = sweep_expired_drafts(
+        vault_root=vault_root,
+        outbox_path=outbox_path,
+        now=datetime.now(timezone.utc),
+    )
+    assert sweep.expired == ("expired-replay-draft",)
+    assert not draft_path.exists()
+
+    replay = run_create_pass(
+        request,
+        vault_root=vault_root,
+        outbox_path=outbox_path,
+        write_guard=_allow_all_guard(),
+        draft_id="expired-replay-draft",
+        receipt_id="expired-replay-receipt",
+    )
+
+    assert replay.activatable is True
+    assert replay.receipt_id is not None
+    assert replay.receipt_id != "expired-replay-receipt"
+    assert (vault_root / replay.draft_path).exists()
+
+
 def test_expiry_sweep_never_removes_a_checked_draft(tmp_path: Path) -> None:
     """A checked (accepted) draft is EXP-4's concern; the sweep must never
     remove it even if it is past its staleness window."""
@@ -499,6 +548,23 @@ def test_jsonl_append_repairs_complete_unterminated_record(tmp_path: Path) -> No
     assert [record["event_id"] for record in records] == ["first-id", "second-id"]
     assert b"}{" not in outbox_path.read_bytes()
     assert outbox_path.read_bytes().endswith(b"\n")
+
+
+def test_jsonl_append_preserves_unicode_line_separator_characters(tmp_path: Path) -> None:
+    outbox_path = tmp_path / "outbox.jsonl"
+    first = {
+        "event": "first",
+        "event_id": "unicode-id",
+        "payload": {"text": "before\u2028after"},
+    }
+    outbox_path.write_text(json.dumps(first, ensure_ascii=False) + "\n", encoding="utf-8")
+
+    append_jsonl_outbox_event(
+        outbox_path,
+        {"event": "second", "event_id": "second-unicode-id", "payload": {}},
+    )
+
+    assert read_jsonl_outbox_records(outbox_path)[0]["payload"]["text"] == "before\u2028after"
 
 
 def test_jsonl_event_id_identity_is_shared_across_real_path_and_symlink(

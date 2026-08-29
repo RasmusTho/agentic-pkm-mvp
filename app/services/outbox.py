@@ -518,7 +518,10 @@ def _read_jsonl_records_unlocked(outbox_path: Path) -> list[dict[str, Any]]:
         ) from exc
 
     records: list[dict[str, Any]] = []
-    for line in text.splitlines():
+    # JSONL records are newline-delimited by the byte 0x0A delimiter only.
+    # ``str.splitlines`` also treats valid JSON characters such as U+2028 as
+    # delimiters, which could permanently wedge an otherwise healthy outbox.
+    for line in text.split("\n"):
         if not line.strip():
             continue
         try:

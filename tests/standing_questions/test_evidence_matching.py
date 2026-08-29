@@ -143,6 +143,28 @@ def test_relevant_artifact_attaches_irrelevant_does_not(tmp_path: Path) -> None:
     assert entry["matched_at"].endswith("Z")
 
 
+def test_question_note_cannot_become_its_own_evidence(tmp_path: Path) -> None:
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    store = _store(vault)
+    note, _ = store.create_question(text=QUESTION_TEXT, scope="work", registered_via="explicit")
+    question_ref = f"vault://questions/{note['question_id']}.md"
+    association = _Association({"event outbox": _attached()})
+
+    summary = match_evidence_to_open_questions(
+        vault_root=vault,
+        candidates=[_candidate(question_ref)],
+        store=store,
+        complete=association,
+    )
+
+    assert summary.excluded_question_note == 1
+    assert summary.evaluated_pairs == 0
+    assert summary.attached == 0
+    assert association.prompts == []
+    assert store.read_question(note["question_id"])["evidence"] == []
+
+
 def test_matching_hashes_exact_source_bytes(tmp_path: Path) -> None:
     vault = tmp_path / "vault"
     vault.mkdir()

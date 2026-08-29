@@ -584,6 +584,17 @@ def _existing_receipt(
     return first_match
 
 
+def _draft_was_expired(outbox_path: Path, draft_id: str) -> bool:
+    """Return whether the durable expiry ledger explains a missing draft."""
+
+    return any(
+        record.get("event") == CREATE_EXPIRED_EVENT
+        and isinstance(record.get("payload"), dict)
+        and record["payload"].get("draft_id") == draft_id
+        for record in read_jsonl_outbox_records(outbox_path)
+    )
+
+
 def _request_fingerprint(request: CreateRequest) -> str:
     material = {
         "kind": request.kind.value,
@@ -810,65 +821,77 @@ def run_create_pass(
         _drafts_dir(resolved_vault_root) / f"{draft_id}.md" if draft_id is not None else None
     )
     if replay_draft_path is not None:
-        replay = _replay_draft_metadata(
-            replay_draft_path,
-            request_fingerprint=request_fingerprint or "",
-            draft_id=draft_id or "",
-        )
-        existing_receipt = (
-            _existing_receipt(outbox_path, CREATE_PROPOSED_EVENT, receipt_id)
-            if receipt_id is not None
-            else None
-        )
-        if existing_receipt is not None and replay is None:
-            raise CreateIdempotencyConflictError(
-                f"deterministic Create receipt has no draft: {replay_draft_path}"
+        # Replay inspection and the expiry sweep share this lock.  Otherwise a
+        # receipt/draft pair can be observed between two expiry deletes and a
+        # caller can return an activatable report for a draft that no longer
+        # exists.
+        with _draft_publication_lock(replay_draft_path):
+            replay = _replay_draft_metadata(
+                replay_draft_path,
+                request_fingerprint=request_fingerprint or "",
+                draft_id=draft_id or "",
             )
-        replay_payload: dict[str, Any] | None = None
-        if replay is not None and receipt_id is not None:
-            replay_frontmatter = replay[0]
-            proposed_by = replay_frontmatter.get("proposed_by", {})
-            replay_payload = {
-                "draft_id": draft_id,
-                "kind": request.kind.value,
-                "sources": replay_frontmatter.get("sources", []),
-                "cognition_metadata": proposed_by.get("cognition", {}),
-                "draft_path": str(replay_draft_path.relative_to(resolved_vault_root)),
-                "language": replay_frontmatter.get("language"),
-                "language_rule": replay_frontmatter.get("language_rule"),
-                "request_fingerprint": request_fingerprint,
-                "draft_sha256": replay[1],
-            }
-        if replay is not None and existing_receipt is not None:
-            if existing_receipt.get("payload") != replay_payload:
-                raise CreateIdempotencyConflictError(
-                    f"deterministic Create replay receipt payload does not match draft: {replay_draft_path}"
+            existing_receipt = (
+                _existing_receipt(outbox_path, CREATE_PROPOSED_EVENT, receipt_id)
+                if receipt_id is not None
+                else None
+            )
+            if existing_receipt is not None and replay is None:
+                if _draft_was_expired(outbox_path, draft_id or ""):
+                    # Expiry deliberately removed the old bytes. Rebuild the
+                    # proposal with a fresh receipt identity rather than
+                    # pretending the new draft is byte-identical to history.
+                    receipt_id = None
+                    existing_receipt = None
+                else:
+                    raise CreateIdempotencyConflictError(
+                        f"deterministic Create receipt has no draft: {replay_draft_path}"
+                    )
+            replay_payload: dict[str, Any] | None = None
+            if replay is not None and receipt_id is not None:
+                replay_frontmatter = replay[0]
+                proposed_by = replay_frontmatter.get("proposed_by", {})
+                replay_payload = {
+                    "draft_id": draft_id,
+                    "kind": request.kind.value,
+                    "sources": replay_frontmatter.get("sources", []),
+                    "cognition_metadata": proposed_by.get("cognition", {}),
+                    "draft_path": str(replay_draft_path.relative_to(resolved_vault_root)),
+                    "language": replay_frontmatter.get("language"),
+                    "language_rule": replay_frontmatter.get("language_rule"),
+                    "request_fingerprint": request_fingerprint,
+                    "draft_sha256": replay[1],
+                }
+            if replay is not None and existing_receipt is not None:
+                if existing_receipt.get("payload") != replay_payload:
+                    raise CreateIdempotencyConflictError(
+                        f"deterministic Create replay receipt payload does not match draft: {replay_draft_path}"
+                    )
+                return CreatePassReport(
+                    activatable=True,
+                    blocked_reasons=(),
+                    draft_path=str(replay_draft_path.relative_to(resolved_vault_root)),
+                    receipt_id=receipt_id,
+                    kind=request.kind,
                 )
-            return CreatePassReport(
-                activatable=True,
-                blocked_reasons=(),
-                draft_path=str(replay_draft_path.relative_to(resolved_vault_root)),
-                receipt_id=receipt_id,
-                kind=request.kind,
-            )
-        if replay is not None and receipt_id is not None:
-            assert replay_payload is not None
-            _emit_receipt(
-                CREATE_PROPOSED_EVENT,
-                replay_payload,
-                outbox_path=outbox_path,
-                trace_id=request.trace_id,
-                event_id=receipt_id,
-                draft_path=replay_draft_path,
-                expected_draft_sha256=replay[1],
-            )
-            return CreatePassReport(
-                activatable=True,
-                blocked_reasons=(),
-                draft_path=str(replay_draft_path.relative_to(resolved_vault_root)),
-                receipt_id=receipt_id,
-                kind=request.kind,
-            )
+            if replay is not None and receipt_id is not None:
+                assert replay_payload is not None
+                _emit_receipt(
+                    CREATE_PROPOSED_EVENT,
+                    replay_payload,
+                    outbox_path=outbox_path,
+                    trace_id=request.trace_id,
+                    event_id=receipt_id,
+                    draft_path=replay_draft_path,
+                    expected_draft_sha256=replay[1],
+                )
+                return CreatePassReport(
+                    activatable=True,
+                    blocked_reasons=(),
+                    draft_path=str(replay_draft_path.relative_to(resolved_vault_root)),
+                    receipt_id=receipt_id,
+                    kind=request.kind,
+                )
 
     language, language_rule = _resolve_output_language(
         request.sources, language_policy=request.language_policy
@@ -1097,48 +1120,52 @@ def sweep_expired_drafts(
         return ExpirySweepReport(expired=(), receipt_ids=())
 
     for path in sorted(drafts_dir.glob("*.md")):
-        try:
-            text = path.read_text(encoding="utf-8")
-        except OSError:
-            continue
-        if _is_checked(text):
-            # An accepted draft is EXP-4's concern (acceptance/promotion);
-            # this sweep never removes a checked draft.
-            continue
-        frontmatter, _body = load_frontmatter(text)
-        expires_raw = frontmatter.get("expires")
-        if not isinstance(expires_raw, str) or not expires_raw:
-            continue
-        try:
-            expires_at = datetime.fromisoformat(expires_raw.replace("Z", "+00:00"))
-        except ValueError:
-            continue
-        if expires_at > now:
-            continue
+        # Expiry and deterministic replay must serialize on the same draft
+        # lock.  The lock covers deletion and its expiry receipt so a replay
+        # cannot return a draft that expiry removed mid-inspection.
+        with _draft_publication_lock(path) as locked_path:
+            try:
+                text = locked_path.read_text(encoding="utf-8")
+            except OSError:
+                continue
+            if _is_checked(text):
+                # An accepted draft is EXP-4's concern (acceptance/promotion);
+                # this sweep never removes a checked draft.
+                continue
+            frontmatter, _body = load_frontmatter(text)
+            expires_raw = frontmatter.get("expires")
+            if not isinstance(expires_raw, str) or not expires_raw:
+                continue
+            try:
+                expires_at = datetime.fromisoformat(expires_raw.replace("Z", "+00:00"))
+            except ValueError:
+                continue
+            if expires_at > now:
+                continue
 
-        draft_id = str(frontmatter.get("uuid") or path.stem)
-        try:
-            path.unlink()
-        except OSError:
-            continue
-        try:
-            _draft_integrity_path(path).unlink(missing_ok=True)
-        except OSError:
-            # Expiry is deliberately silent-safe; an orphaned integrity sidecar
-            # is harmless and can be cleaned by the next maintenance pass.
-            pass
-        expired.append(draft_id)
-        receipt_id = _emit_receipt(
-            CREATE_EXPIRED_EVENT,
-            {
-                "draft_id": draft_id,
-                "draft_path": str(path.relative_to(vault_root)),
-                "expired_at": _iso(now),
-            },
-            outbox_path=outbox_path,
-            trace_id=None,
-        )
-        receipt_ids.append(receipt_id)
+            draft_id = str(frontmatter.get("uuid") or locked_path.stem)
+            try:
+                locked_path.unlink()
+            except OSError:
+                continue
+            try:
+                _draft_integrity_path(locked_path).unlink(missing_ok=True)
+            except OSError:
+                # Expiry is deliberately silent-safe; an orphaned integrity sidecar
+                # is harmless and can be cleaned by the next maintenance pass.
+                pass
+            expired.append(draft_id)
+            receipt_id = _emit_receipt(
+                CREATE_EXPIRED_EVENT,
+                {
+                    "draft_id": draft_id,
+                    "draft_path": str(locked_path.relative_to(vault_root)),
+                    "expired_at": _iso(now),
+                },
+                outbox_path=outbox_path,
+                trace_id=None,
+            )
+            receipt_ids.append(receipt_id)
 
     return ExpirySweepReport(expired=tuple(expired), receipt_ids=tuple(receipt_ids))
 
