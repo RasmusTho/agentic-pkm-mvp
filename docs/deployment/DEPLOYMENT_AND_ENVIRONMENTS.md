@@ -11,6 +11,25 @@ Last verified against: `docker-compose.yaml`, `docker-compose.{dev,test,prod}.ym
 
 ## Why this document exists
 
+## BuilderOps local rebuildable deployment contract
+
+The BuilderOps control plane is a separate deployment boundary from the Product channels. Its API
+binds only to loopback; authenticated private ingress is supplied separately and does not turn the
+local port into a public endpoint. Its local PostgreSQL posture is explicitly rebuildable: archive
+mode is disabled, the archive command is empty, and the Compose project declares no recovery-egress
+network, WAL archive credential, recovery target, backup service, or recovery secret.
+
+This posture is deliberately not a backup, point-in-time recovery, or restore claim. The local WAL
+guard refuses archive drift, WAL growth above 2 GiB, and excessive data-volume use; PostgreSQL also
+pins `max_slot_wal_keep_size` to 2 GiB. The retained WAL-G/restore tooling belongs only to the
+separate independent-recovery path and must not be enabled by a local rebuildable deployment.
+
+The deployment wrapper preserves the previous source and image pins as rollback material and records
+both current and previous immutable image identities. A rollback changes the selected release but
+does not restore an older database snapshot. Setup-specific placement, qualification evidence, disk
+headroom, and Linux alert installation belong in a deployment profile such as
+`docs/deployment/profiles/TARS_PROXMOX.md`; they are not generic deployment facts.
+
 ## Current live runtime posture
 
 The intended live split is now: a dedicated Ollama host for Ollama only, and the product runtime on isolated Linux

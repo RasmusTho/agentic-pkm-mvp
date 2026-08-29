@@ -11,7 +11,7 @@ disk_limit_percent="${BUILDEROPS_LOCAL_DISK_MAX_USED_PERCENT:-85}"
 archive_mode="$(psql -U "${POSTGRES_USER:-postgres}" -d "${POSTGRES_DB:-postgres}" -Atqc 'SHOW archive_mode')"
 archive_command="$(psql -U "${POSTGRES_USER:-postgres}" -d "${POSTGRES_DB:-postgres}" -Atqc 'SHOW archive_command')"
 
-if [[ "$archive_mode" != "off" || -n "$archive_command" ]]; then
+if [[ "$archive_mode" != "off" && "$archive_mode" != "(disabled)" ]] || [[ -n "$archive_command" ]]; then
   echo "local BuilderOps WAL archive drift: archive_mode=$archive_mode archive_command=${archive_command:+set}" >&2
   exit 70
 fi
