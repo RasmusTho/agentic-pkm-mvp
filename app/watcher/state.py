@@ -46,6 +46,13 @@ def _sanitize_files(raw: dict[str, dict[str, Any]] | Any) -> dict[str, dict[str,
         trace_id = entry.get("trace_id")
         if isinstance(trace_id, str) and trace_id:
             new_entry["trace_id"] = trace_id
+        rebind_revision = entry.get("rebind_revision")
+        if (
+            isinstance(rebind_revision, int)
+            and not isinstance(rebind_revision, bool)
+            and rebind_revision > 0
+        ):
+            new_entry["rebind_revision"] = rebind_revision
         settings_values = entry.get("settings_runtime_values")
         if isinstance(settings_values, dict):
             new_entry["settings_runtime_values"] = dict(settings_values)
@@ -610,6 +617,7 @@ class WatcherState:
         seen_at: float | None = None,
         emitted_at: float | None = None,
         trace_id: str | None = None,
+        rebind_revision: int | None = None,
     ) -> None:
         entry = self.file_entry(rel_path) or {}
         if mtime is not None:
@@ -624,6 +632,10 @@ class WatcherState:
             entry["last_emitted"] = emitted_at
         if trace_id is not None:
             entry["trace_id"] = trace_id
+        if rebind_revision is not None:
+            if isinstance(rebind_revision, bool) or rebind_revision <= 0:
+                raise ValueError("rebind revision must be a positive integer")
+            entry["rebind_revision"] = rebind_revision
         if self._observation_store is not None:
             self._pending_deletes.discard(rel_path)
             self._pending_observations[rel_path] = (entry, self.scan_generation)
