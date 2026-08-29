@@ -33,7 +33,9 @@ runner report and classified delta to that exact candidate, and emits one durabl
 for an exact attempt. The writer may add an issued receipt entry to the existing registry but never
 creates that registry or enrolls a caller-supplied trusted key. `python -m app.release_channels.promotion_receipt
 validate-prod-activation ...` accepts only a current, unrevoked PASS whose
-artifact/config/test/vault/schema identities match. The second command only returns admission
+artifact/config/test/vault/schema identities match. It requires the exact check report and compares
+its canonical digest, migration-set identity, and migration baseline to the signed v2 receipt; the
+baseline must also match the independently supplied prod-admission context. The second command only returns admission
 evidence with state `validated_not_activated`; it performs no activation. P5 owns the future
 side-effecting caller and must invoke this boundary immediately before activation.
 

@@ -4,13 +4,16 @@
   "fresh_until": "2026-08-17T00:00:00Z",
   "issued_at": "2026-08-16T00:00:00Z",
   "outcome": "PASS",
-  "receipt_id": "sha256:bc530163db3e6cce1881013c5b6e80599af3d387be14fba4b7fc2d4e318bd258",
-  "receipt_version": "promotion-receipt.v1",
+  "receipt_id": "sha256:7cea195bd2aebe7b72e938e4ac034c7f8a9ca99d627061cf7e86b7467b299f1e",
+  "receipt_version": "promotion-receipt.v2",
   "required_checks": ["migration", "readiness", "schema", "smoke", "ui", "version"],
   "schema_identity": "alembic:20260816",
+  "migration_baseline_identity": "git:0123456789abcdef0123456789abcdef01234567",
+  "migration_set_identity": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+  "check_report_identity": "sha256:7d05a1d38046e95a16d06a2b23000af9fee077648855eb7b5b617ffa84f6a8a6",
   "test_identity": "promotion-test:20260816",
   "vault_identity": "prod-vault",
   "issuer_id": "promotion-test-issuer",
   "issuer_key_id": "promotion-test-issuer-key-v1",
-  "issuer_signature": "ed25519:v1:2dfDwYnElEux9HgiPbtpXEGugXG9CHbzI62LqcAyna1LDgSmOL16BuvZe4AdSexbrmChyaeOxN9YH1xmER0XBw"
+  "issuer_signature": "ed25519:v1:ft4s_aqyLBy1mOWXuhmdAFZ0SErkL1Ojoy6uNhXnzZ0cGgCXuP_KCQ07BNP2gACrRDa_QhjBG1rEME3DHvmDBg"
 }

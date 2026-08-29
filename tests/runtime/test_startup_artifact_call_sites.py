@@ -1352,6 +1352,12 @@ def test_prod_receipt_validator_is_invoked_before_activation(
             / "tests/fixtures/startup_redesign/promotion_admission_context.valid.json"
         ).read_text()
     )
+    check_report = json.loads(
+        (
+            ROOT
+            / "tests/fixtures/startup_redesign/promotion_check_report.valid.json"
+        ).read_text()
+    )
     now = datetime(2026, 8, 16, 12, tzinfo=timezone.utc)
 
     from app.release_channels import promotion_receipt
@@ -1372,6 +1378,7 @@ def test_prod_receipt_validator_is_invoked_before_activation(
         receipt,
         registry,
         context,
+        check_report=check_report,
         now=now,
     )
     assert calls == ["validate"]
@@ -1381,28 +1388,68 @@ def test_prod_receipt_validator_is_invoked_before_activation(
         "receipt_id": receipt["receipt_id"],
     }
 
-    rejected: list[tuple[object, object, object, datetime, str]] = [
-        (None, registry, context, now, "receipt_missing"),
+    rejected: list[tuple[object, object, object, object, datetime, str]] = [
+        (None, registry, context, check_report, now, "receipt_missing"),
         (
             receipt,
             registry,
             context,
+            check_report,
             datetime(2026, 8, 17, tzinfo=timezone.utc),
             "receipt_stale",
         ),
     ]
     revoked = json.loads(json.dumps(registry))
     revoked["entries"][receipt["receipt_id"]]["status"] = "revoked"
-    rejected.append((receipt, revoked, context, now, "receipt_revoked"))
+    rejected.append((receipt, revoked, context, check_report, now, "receipt_revoked"))
     mismatched = dict(context, config_identity="sha256:" + "c" * 64)
-    rejected.append((receipt, registry, mismatched, now, "identity_mismatch"))
+    rejected.append(
+        (receipt, registry, mismatched, check_report, now, "identity_mismatch")
+    )
+    mismatched_baseline = dict(
+        context,
+        migration_baseline_identity="git:" + "f" * 40,
+    )
+    rejected.append(
+        (
+            receipt,
+            registry,
+            mismatched_baseline,
+            check_report,
+            now,
+            "migration_baseline_mismatch",
+        )
+    )
+    mismatched_report = json.loads(json.dumps(check_report))
+    mismatched_report["migration_set_identity"] = "sha256:" + "e" * 64
+    rejected.append(
+        (
+            receipt,
+            registry,
+            context,
+            mismatched_report,
+            now,
+            "migration_set_mismatch",
+        )
+    )
+    rejected.append(
+        (receipt, registry, context, None, now, "check_report_invalid")
+    )
 
-    for candidate, candidate_registry, candidate_context, candidate_now, code in rejected:
+    for (
+        candidate,
+        candidate_registry,
+        candidate_context,
+        candidate_report,
+        candidate_now,
+        code,
+    ) in rejected:
         with pytest.raises(PromotionReceiptError) as exc_info:
             prepare_prod_activation(
                 candidate,
                 candidate_registry,
                 candidate_context,
+                check_report=candidate_report,
                 now=candidate_now,
             )
         assert exc_info.value.code == code
@@ -1650,15 +1697,28 @@ def test_promotion_test_writes_one_durable_terminal_receipt(tmp_path: Path) -> N
         "source_repo": ROOT,
     }
 
+    pass_report = _promotion_check_report()
     passed = write_promotion_test_terminal_receipt(
         attempt_id="pt-" + "1" * 32,
-        check_report=_promotion_check_report(),
+        check_report=pass_report,
         **common,
     )
     assert passed["outcome"] == "PASS"
+    assert passed["migration_baseline_identity"] == pass_report[
+        "migration_baseline_identity"
+    ]
+    assert passed["migration_set_identity"] == pass_report["migration_set_identity"]
+    assert passed["check_report_identity"] == "sha256:" + hashlib.sha256(
+        json.dumps(
+            pass_report,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode()
+    ).hexdigest()
     assert write_promotion_test_terminal_receipt(
         attempt_id="pt-" + "1" * 32,
-        check_report=_promotion_check_report(),
+        check_report=pass_report,
         **common,
     ) == passed
     assert len(list((store / "receipts").glob("*.json"))) == 1
@@ -1669,6 +1729,7 @@ def test_promotion_test_writes_one_durable_terminal_receipt(tmp_path: Path) -> N
         passed,
         registry,
         _promotion_admission_context(),
+        check_report=pass_report,
         now=datetime(2026, 8, 16, 12, tzinfo=timezone.utc),
     ) == {
         "activation_permitted": True,
@@ -2341,6 +2402,7 @@ def test_promotion_test_retry_never_reissues_a_revoked_receipt(tmp_path: Path) -
             receipt,
             persisted,
             _promotion_admission_context(),
+            check_report=_promotion_check_report(),
             now=datetime(2026, 8, 16, 12, tzinfo=timezone.utc),
         )
     assert exc_info.value.code == "receipt_revoked"
@@ -2406,6 +2468,7 @@ def test_promotion_test_never_issues_registry_authority_before_terminal_binding(
             receipt,
             registry,
             _promotion_admission_context(),
+            check_report=_promotion_check_report(),
             now=datetime(2026, 8, 16, 12, tzinfo=timezone.utc),
         )
     assert exc_info.value.code == "receipt_unregistered"
@@ -2470,6 +2533,7 @@ def test_promotion_test_terminal_binding_stays_inadmissible_until_registry_issue
             receipt,
             registry,
             _promotion_admission_context(),
+            check_report=_promotion_check_report(),
             now=datetime(2026, 8, 16, 12, tzinfo=timezone.utc),
         )
     assert exc_info.value.code == "receipt_unregistered"
@@ -2485,5 +2549,6 @@ def test_promotion_test_terminal_binding_stays_inadmissible_until_registry_issue
         retried,
         registry,
         _promotion_admission_context(),
+        check_report=_promotion_check_report(),
         now=datetime(2026, 8, 16, 12, tzinfo=timezone.utc),
     )["activation_state"] == "validated_not_activated"

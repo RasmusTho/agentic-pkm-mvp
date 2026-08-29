@@ -1,0 +1,20 @@
+{
+  "report_version": "promotion-test-check-report.v1",
+  "candidate_identity": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+  "identity": {
+    "artifact_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "config_identity": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "test_identity": "promotion-test:20260816",
+    "vault_identity": "prod-vault",
+    "schema_identity": "alembic:20260816"
+  },
+  "check_results": {
+    "readiness": true,
+    "schema": true,
+    "smoke": true,
+    "ui": true,
+    "version": true
+  },
+  "migration_set_identity": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+  "migration_baseline_identity": "git:0123456789abcdef0123456789abcdef01234567"
+}

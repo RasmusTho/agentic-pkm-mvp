@@ -43,7 +43,7 @@ from app.release_channels.reversibility import (
 )
 
 
-RECEIPT_VERSION = "promotion-receipt.v1"
+RECEIPT_VERSION = "promotion-receipt.v2"
 REGISTRY_VERSION = "promotion-receipt-registry.v1"
 ATTEMPT_VERSION = "promotion-test-attempt.v1"
 RESERVATION_VERSION = "promotion-test-reservation.v1"
@@ -59,6 +59,9 @@ _RECEIPT_FIELDS = {
     "test_identity",
     "vault_identity",
     "schema_identity",
+    "migration_baseline_identity",
+    "migration_set_identity",
+    "check_report_identity",
     "required_checks",
     "issued_at",
     "fresh_until",
@@ -480,6 +483,7 @@ def _receipt_digest_payload(receipt: Mapping[str, object]) -> bytes:
 def _build_receipt(
     *,
     identity: Mapping[str, str],
+    check_report: Mapping[str, object],
     outcome: str,
     issued_at: datetime,
     fresh_until: datetime,
@@ -498,10 +502,29 @@ def _build_receipt(
     fresh = _timestamp(fresh_until, code="fresh_until_invalid")
     if issued_at >= fresh_until:
         raise PromotionReceiptError("freshness_window_invalid")
+    migration_baseline_identity = check_report.get("migration_baseline_identity")
+    migration_set_identity = check_report.get("migration_set_identity")
+    if (
+        not isinstance(migration_baseline_identity, str)
+        or not migration_baseline_identity.startswith("git:")
+        or _SOURCE_SHA.fullmatch(
+            migration_baseline_identity.removeprefix("git:")
+        )
+        is None
+        or not isinstance(migration_set_identity, str)
+        or _DIGEST.fullmatch(migration_set_identity) is None
+    ):
+        raise PromotionReceiptError("check_report_invalid")
+    check_report_identity = "sha256:" + hashlib.sha256(
+        _canonical_bytes(check_report)
+    ).hexdigest()
     receipt: dict[str, object] = {
         "receipt_version": RECEIPT_VERSION,
         "outcome": outcome,
         **identity,
+        "migration_baseline_identity": migration_baseline_identity,
+        "migration_set_identity": migration_set_identity,
+        "check_report_identity": check_report_identity,
         "required_checks": list(REQUIRED_CHECKS),
         "issued_at": issued,
         "fresh_until": fresh,
@@ -934,6 +957,7 @@ def write_promotion_test_terminal_receipt(
     outcome = "PASS" if all(terminal_checks.values()) else "FAIL"
     receipt = _build_receipt(
         identity=validated_identity,
+        check_report=validated_report,
         outcome=outcome,
         issued_at=issued_at,
         fresh_until=fresh_until,
@@ -954,8 +978,7 @@ def write_promotion_test_terminal_receipt(
         "attempt_version": ATTEMPT_VERSION,
         "attempt_id": attempt_id,
         "candidate_identity": validated_report["candidate_identity"],
-        "check_report_identity": "sha256:"
-        + hashlib.sha256(_canonical_bytes(validated_report)).hexdigest(),
+        "check_report_identity": receipt["check_report_identity"],
         "receipt_id": receipt_id,
         "outcome": outcome,
         "identity": validated_identity,
@@ -1037,6 +1060,7 @@ def _validate_receipt(
     receipt: object,
     registry: object,
     expected_identity: object,
+    check_report: object,
     *,
     now: datetime,
 ) -> dict[str, object]:
@@ -1044,7 +1068,7 @@ def _validate_receipt(
         raise PromotionReceiptError("receipt_missing")
     receipt_mapping = _mapping(receipt, code="receipt_invalid")
     registry_mapping = _mapping(registry, code="registry_missing")
-    identity, _ = _validate_admission_context(expected_identity)
+    identity, migration_baseline_sha = _validate_admission_context(expected_identity)
     if set(receipt_mapping) != _RECEIPT_FIELDS:
         raise PromotionReceiptError("receipt_invalid")
     if set(registry_mapping) != _REGISTRY_FIELDS:
@@ -1058,6 +1082,34 @@ def _validate_receipt(
     for field, expected in identity.items():
         if receipt_mapping.get(field) != expected:
             raise PromotionReceiptError("identity_mismatch")
+    expected_baseline_identity = f"git:{migration_baseline_sha}"
+    if receipt_mapping.get("migration_baseline_identity") != expected_baseline_identity:
+        raise PromotionReceiptError("migration_baseline_mismatch")
+    report = _mapping(check_report, code="check_report_invalid")
+    if set(report) != _REPORT_FIELDS or report.get("report_version") != REPORT_VERSION:
+        raise PromotionReceiptError("check_report_invalid")
+    report_identity = _validate_identity(report.get("identity"))
+    if report_identity != identity:
+        raise PromotionReceiptError("check_report_identity_mismatch")
+    if report.get("migration_baseline_identity") != expected_baseline_identity:
+        raise PromotionReceiptError("migration_baseline_mismatch")
+    migration_set_identity = report.get("migration_set_identity")
+    if (
+        not isinstance(migration_set_identity, str)
+        or _DIGEST.fullmatch(migration_set_identity) is None
+        or receipt_mapping.get("migration_set_identity") != migration_set_identity
+    ):
+        raise PromotionReceiptError("migration_set_mismatch")
+    candidate_identity = report.get("candidate_identity")
+    if not isinstance(candidate_identity, str) or _DIGEST.fullmatch(candidate_identity) is None:
+        raise PromotionReceiptError("check_report_invalid")
+    if not all(_validate_checks(report.get("check_results")).values()):
+        raise PromotionReceiptError("check_report_not_pass")
+    expected_report_identity = "sha256:" + hashlib.sha256(
+        _canonical_bytes(report)
+    ).hexdigest()
+    if receipt_mapping.get("check_report_identity") != expected_report_identity:
+        raise PromotionReceiptError("check_report_mismatch")
     receipt_id = receipt_mapping.get("receipt_id")
     expected_receipt_id = "sha256:" + hashlib.sha256(
         _receipt_digest_payload(receipt_mapping)
@@ -1134,6 +1186,7 @@ def authorize_prod_activation(
     registry: object,
     expected_identity: object,
     *,
+    check_report: object,
     now: datetime,
 ) -> dict[str, object]:
     """Return admission evidence only after exact prod receipt validation.
@@ -1141,7 +1194,13 @@ def authorize_prod_activation(
     This is the production pre-activation call site.  It has no activation,
     deployment, restart, migration, or emergency-bypass capability.
     """
-    validated = _validate_receipt(receipt, registry, expected_identity, now=now)
+    validated = _validate_receipt(
+        receipt,
+        registry,
+        expected_identity,
+        check_report,
+        now=now,
+    )
     return {
         "activation_permitted": True,
         "receipt_id": validated["receipt_id"],
@@ -1153,6 +1212,7 @@ def prepare_prod_activation(
     registry: object,
     prod_admission_context: object,
     *,
+    check_report: object,
     now: datetime,
 ) -> dict[str, object]:
     """Production pre-activation boundary, intentionally without side effects.
@@ -1166,6 +1226,7 @@ def prepare_prod_activation(
         receipt,
         registry,
         prod_admission_context,
+        check_report=check_report,
         now=now,
     )
     return {
@@ -1255,6 +1316,7 @@ def _parser() -> argparse.ArgumentParser:
     validate.add_argument("--receipt", type=Path, required=True)
     validate.add_argument("--registry", type=Path, required=True)
     validate.add_argument("--admission-context", type=Path, required=True)
+    validate.add_argument("--check-report", type=Path, required=True)
     validate.add_argument("--now", required=True)
     return parser
 
@@ -1293,6 +1355,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                 _read_json(args.receipt, code="receipt_missing"),
                 _read_json(args.registry, code="registry_missing"),
                 _read_json(args.admission_context, code="identity_unavailable"),
+                check_report=_read_json(
+                    args.check_report,
+                    code="check_report_unavailable",
+                ),
                 now=_parse_timestamp(args.now, code="validation_time_invalid"),
             )
     except PromotionReceiptError as exc:

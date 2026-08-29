@@ -83,10 +83,12 @@ ordinary boot selects `ORDINARY_BOOT_PASS`.
 
 ### Promotion receipt contract
 
-The K5 receipt is a machine-readable, content-addressed record with exactly these semantic fields:
+The K5 receipt uses schema `promotion-receipt.v2` and is a machine-readable, content-addressed
+record with exactly these semantic fields:
 `receipt_version`, `receipt_id`, `outcome`, `artifact_digest`, `config_identity`, `test_identity`,
 `vault_identity`, `schema_identity`, `required_checks`, `issued_at`, `fresh_until`, `issuer_id`,
-`issuer_key_id`, and `issuer_signature`. The canonical
+`issuer_key_id`, `migration_baseline_identity`, `migration_set_identity`,
+`check_report_identity`, and `issuer_signature`. The canonical
 bytes are UTF-8 JSON with lexicographically sorted keys, compact separators, and no trailing
 newline; `receipt_id` is `sha256:` plus the digest of those bytes with `receipt_id` excluded.
 The issuer signs a separate acyclic canonical unsigned payload using the same encoding with both
@@ -114,10 +116,16 @@ Prod admission requires `outcome=PASS`, matching expected
 identities from an independently supplied prod-admission manifest and `test_identity` from the
 versioned promotion-test policy, current time at or after `issued_at` and before `fresh_until`, a valid trusted
 issuer attestation, a present registry entry with `status=issued` (never absent or revoked), and
-exact required-check coverage. The positive fixture is
+exact required-check coverage. The validator also consumes the canonical promotion-test check
+report: its digest must equal the signed `check_report_identity`, its migration-set identity must
+equal the signed `migration_set_identity`, and its baseline must equal both the signed
+`migration_baseline_identity` and the independently supplied prod-admission baseline. A caller
+cannot authorize a receipt by substituting a different syntactically valid baseline or report.
 `tests/fixtures/startup_redesign/promotion_admission_context.valid.json` supplies the independent
-positive-admission expectations; the receipt fixture is validated against that context rather than
-against itself. Receipts contain no secret values
+positive-admission expectations, while
+`tests/fixtures/startup_redesign/promotion_check_report.valid.json` supplies the signed report
+evidence; the receipt fixture is validated against both rather than against itself. Receipts and
+check reports contain no secret values
 or secret references.
 
 The machine-readable shapes are frozen as follows; producers must emit no additional fields:
@@ -127,7 +135,8 @@ The machine-readable shapes are frozen as follows; producers must emit no additi
   "receipt": [
     "receipt_version", "receipt_id", "outcome", "artifact_digest", "config_identity",
     "test_identity", "vault_identity", "schema_identity", "required_checks", "issued_at",
-    "fresh_until", "issuer_id", "issuer_key_id", "issuer_signature"
+    "fresh_until", "issuer_id", "issuer_key_id", "migration_baseline_identity",
+    "migration_set_identity", "check_report_identity", "issuer_signature"
   ],
   "registry": ["registry_version", "trusted_keys", "entries"],
   "registry_entry": [
