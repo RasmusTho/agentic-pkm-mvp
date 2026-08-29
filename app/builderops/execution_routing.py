@@ -180,6 +180,34 @@ class ExecutionRouteDecision(CanonicalDeliveryContract):
         )
         if (observation_fields[0] is None) != (observation_fields[1] is None):
             raise ValueError("allocation observation identity and hash must travel together")
+        has_observation = observation_fields[0] is not None
+        if self.selected_capability == "spark":
+            if self.transition_reason != "fresh_bonus_available" or not has_observation:
+                raise ValueError(
+                    "Spark selection requires a bound fresh bonus observation"
+                )
+        elif self.transition_reason == "fresh_bonus_available":
+            raise ValueError("fresh bonus availability must select Spark")
+        elif (self.transition_reason == "allocation_observation_missing") == has_observation:
+            raise ValueError(
+                "missing allocation evidence must be represented without an observation"
+            )
+
+        expected_lineage_id = f"execution-route:{self.request_hash}"
+        if self.route_lineage_id != expected_lineage_id:
+            raise ValueError("route lineage identity must bind the request hash")
+        decision_identity_payload = {
+            "request_hash": self.request_hash,
+            "selected_capability": self.selected_capability,
+            "transition_kind": self.transition_kind,
+            "transition_reason": self.transition_reason,
+        }
+        expected_decision_id = (
+            "execution-route-decision:"
+            f"{canonical_hash(decision_identity_payload)}"
+        )
+        if self.decision_id != expected_decision_id:
+            raise ValueError("decision identity must bind the routing result")
         return self
 
 

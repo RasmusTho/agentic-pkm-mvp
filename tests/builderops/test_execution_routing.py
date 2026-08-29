@@ -120,6 +120,48 @@ def test_spark_requires_fresh_bonus_observation_otherwise_luna_fallback() -> Non
         assert decision.delivery_blocked is False
 
 
+def test_route_decision_deserialization_cannot_fabricate_spark_authority() -> None:
+    missing = resolve_bounded_fast_route(_request())
+    fabricated_spark = missing.model_dump(mode="json")
+    fabricated_spark.update(
+        selected_capability="spark",
+        transition_kind="none",
+    )
+    with pytest.raises(
+        ValidationError,
+        match="Spark selection requires a bound fresh bonus observation",
+    ):
+        type(missing).model_validate(fabricated_spark)
+
+    fresh = AllocationObservation(
+        observation_id="spark-observation-fresh",
+        capability="spark",
+        state="bonus_available",
+        observed_at="2026-08-29T14:55:00Z",
+        valid_until="2026-08-29T15:05:00Z",
+        source_kind="operator",
+        source_ref="operator-observation:codex-spark-bonus",
+    )
+    spark = resolve_bounded_fast_route(_request(allocation_observation=fresh))
+    for field in ("allocation_observation_id", "allocation_observation_hash"):
+        unbound_spark = spark.model_dump(mode="json")
+        unbound_spark[field] = None
+        with pytest.raises(ValidationError):
+            type(spark).model_validate(unbound_spark)
+
+    fabricated_missing = spark.model_dump(mode="json")
+    fabricated_missing.update(
+        selected_capability="luna",
+        transition_kind="capacity_fallback",
+        transition_reason="allocation_observation_missing",
+    )
+    with pytest.raises(
+        ValidationError,
+        match="represented without an observation",
+    ):
+        type(spark).model_validate(fabricated_missing)
+
+
 def test_fallback_preserves_semantic_hashes_and_changes_attempt_identity() -> None:
     observation = AllocationObservation(
         observation_id="spark-observation-fresh",
