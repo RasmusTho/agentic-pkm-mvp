@@ -10,11 +10,13 @@ permitted only when the result says ``writers_permitted=true``.
 from __future__ import annotations
 
 import argparse
+import errno
 import fcntl
 import hashlib
 import json
 import os
 import re
+import stat
 import sys
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -29,6 +31,10 @@ from app.release_channels.channel_manifest import (
 
 JOURNAL_VERSION = "ordinary-boot-journal.v1"
 _OPERATION_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}\Z")
+_SENSITIVE_OPERATION_ID = re.compile(
+    r"(?:^sk-|secret|password|token|credential|private[-_]?key|api[-_]?key)",
+    re.IGNORECASE,
+)
 _DIGEST = re.compile(r"sha256:[0-9a-f]{64}\Z")
 _IMAGE_DIGEST = re.compile(
     r"[A-Za-z0-9][A-Za-z0-9._-]*(?:/[A-Za-z0-9._-]+)+@sha256:[0-9a-f]{64}\Z"
@@ -86,6 +92,14 @@ def _canonical_bytes(value: object) -> bytes:
 
 def _identity(value: object) -> str:
     return "sha256:" + hashlib.sha256(_canonical_bytes(value)).hexdigest()
+
+
+def _operation_id_is_safe(value: object) -> bool:
+    return (
+        isinstance(value, str)
+        and _OPERATION_ID.fullmatch(value) is not None
+        and _SENSITIVE_OPERATION_ID.search(value) is None
+    )
 
 
 def _mapping(value: object, *, path: str) -> Mapping[str, Any]:
@@ -349,12 +363,12 @@ def _validate_dependency_entry(
 ) -> dict[str, object]:
     if not isinstance(value, dict) or not set(value).issubset(_DEPENDENCY_FIELDS):
         raise OrdinaryBootJournalError(
-            f"journal_corrupt:{path}:line_{line_number}:dependency_shape"
+            f"journal_corrupt:line_{line_number}:dependency_shape"
         )
     required = {"name", "policy", "classification"}
     if not required.issubset(value):
         raise OrdinaryBootJournalError(
-            f"journal_corrupt:{path}:line_{line_number}:dependency_shape"
+            f"journal_corrupt:line_{line_number}:dependency_shape"
         )
     name = value["name"]
     policy = value["policy"]
@@ -367,7 +381,7 @@ def _validate_dependency_entry(
         or policy not in {"required", "degraded_ok"}
     ):
         raise OrdinaryBootJournalError(
-            f"journal_corrupt:{path}:line_{line_number}:dependency_value"
+            f"journal_corrupt:line_{line_number}:dependency_value"
         )
     allowed_classifications = (
         {"required_compatible", "required_unavailable", "required_incompatible"}
@@ -376,27 +390,27 @@ def _validate_dependency_entry(
     )
     if classification not in allowed_classifications:
         raise OrdinaryBootJournalError(
-            f"journal_corrupt:{path}:line_{line_number}:dependency_classification"
+            f"journal_corrupt:line_{line_number}:dependency_classification"
         )
     has_expected = "expected_identity" in value
     has_match = "identity_matches" in value
     if has_expected != has_match:
         raise OrdinaryBootJournalError(
-            f"journal_corrupt:{path}:line_{line_number}:dependency_identity_shape"
+            f"journal_corrupt:line_{line_number}:dependency_identity_shape"
         )
     if has_expected:
         if not isinstance(value["expected_identity"], str) or not value["expected_identity"]:
             raise OrdinaryBootJournalError(
-                f"journal_corrupt:{path}:line_{line_number}:dependency_identity_value"
+                f"journal_corrupt:line_{line_number}:dependency_identity_value"
             )
         if type(value["identity_matches"]) is not bool:
             raise OrdinaryBootJournalError(
-                f"journal_corrupt:{path}:line_{line_number}:dependency_identity_value"
+                f"journal_corrupt:line_{line_number}:dependency_identity_value"
             )
         compatible = classification in {"required_compatible", "degraded_compatible"}
         if value["identity_matches"] is not compatible:
             raise OrdinaryBootJournalError(
-                f"journal_corrupt:{path}:line_{line_number}:dependency_identity_mismatch"
+                f"journal_corrupt:line_{line_number}:dependency_identity_mismatch"
             )
         identity = value["expected_identity"]
         identity_pattern = {
@@ -409,11 +423,11 @@ def _validate_dependency_entry(
         }.get(str(name))
         if identity_pattern is None or identity_pattern.fullmatch(str(identity)) is None:
             raise OrdinaryBootJournalError(
-                f"journal_corrupt:{path}:line_{line_number}:dependency_identity_contract"
+                f"journal_corrupt:line_{line_number}:dependency_identity_contract"
             )
     elif name != "llm":
         raise OrdinaryBootJournalError(
-            f"journal_corrupt:{path}:line_{line_number}:dependency_identity_missing"
+            f"journal_corrupt:line_{line_number}:dependency_identity_missing"
         )
     return value
 
@@ -421,51 +435,51 @@ def _validate_dependency_entry(
 def _validate_journal_row(row: object, *, path: Path, line_number: int) -> dict[str, object]:
     if not isinstance(row, dict) or set(row) != _JOURNAL_FIELDS:
         raise OrdinaryBootJournalError(
-            f"journal_corrupt:{path}:line_{line_number}:invalid_shape"
+            f"journal_corrupt:line_{line_number}:invalid_shape"
         )
     operation_id = row["operation_id"]
     phase = row["terminal_phase"]
     reason = row["reason_code"]
     if row["journal_version"] != JOURNAL_VERSION:
         raise OrdinaryBootJournalError(
-            f"journal_corrupt:{path}:line_{line_number}:invalid_version"
+            f"journal_corrupt:line_{line_number}:invalid_version"
         )
-    if not isinstance(operation_id, str) or _OPERATION_ID.fullmatch(operation_id) is None:
+    if not _operation_id_is_safe(operation_id):
         raise OrdinaryBootJournalError(
-            f"journal_corrupt:{path}:line_{line_number}:invalid_operation"
+            f"journal_corrupt:line_{line_number}:invalid_operation"
         )
     if not isinstance(row["channel"], str) or row["channel"] not in {"prod", "unresolved"}:
         raise OrdinaryBootJournalError(
-            f"journal_corrupt:{path}:line_{line_number}:invalid_channel"
+            f"journal_corrupt:line_{line_number}:invalid_channel"
         )
     if not isinstance(row["manifest_identity"], str) or _DIGEST.fullmatch(
         row["manifest_identity"]
     ) is None:
         raise OrdinaryBootJournalError(
-            f"journal_corrupt:{path}:line_{line_number}:invalid_manifest_identity"
+            f"journal_corrupt:line_{line_number}:invalid_manifest_identity"
         )
     if not isinstance(phase, str) or phase not in {"PRE_MUTATION_FAILURE", "ORDINARY_BOOT_PASS"}:
         raise OrdinaryBootJournalError(
-            f"journal_corrupt:{path}:line_{line_number}:invalid_terminal_phase"
+            f"journal_corrupt:line_{line_number}:invalid_terminal_phase"
         )
     if not isinstance(reason, str) or not reason:
         raise OrdinaryBootJournalError(
-            f"journal_corrupt:{path}:line_{line_number}:invalid_reason"
+            f"journal_corrupt:line_{line_number}:invalid_reason"
         )
     if type(row["writers_permitted"]) is not bool or row["writers_permitted"] is not (
         phase == "ORDINARY_BOOT_PASS"
     ):
         raise OrdinaryBootJournalError(
-            f"journal_corrupt:{path}:line_{line_number}:writer_permission_mismatch"
+            f"journal_corrupt:line_{line_number}:writer_permission_mismatch"
         )
     if row["mutation_evidence"] is not False:
         raise OrdinaryBootJournalError(
-            f"journal_corrupt:{path}:line_{line_number}:mutation_evidence_mismatch"
+            f"journal_corrupt:line_{line_number}:mutation_evidence_mismatch"
         )
     raw_dependencies = row["dependencies"]
     if not isinstance(raw_dependencies, list):
         raise OrdinaryBootJournalError(
-            f"journal_corrupt:{path}:line_{line_number}:dependencies_shape"
+            f"journal_corrupt:line_{line_number}:dependencies_shape"
         )
     dependencies = [
         _validate_dependency_entry(value, path=path, line_number=line_number)
@@ -474,7 +488,7 @@ def _validate_journal_row(row: object, *, path: Path, line_number: int) -> dict[
     names = [str(entry["name"]) for entry in dependencies]
     if names != sorted(names) or len(names) != len(set(names)):
         raise OrdinaryBootJournalError(
-            f"journal_corrupt:{path}:line_{line_number}:dependency_order_or_duplicate"
+            f"journal_corrupt:line_{line_number}:dependency_order_or_duplicate"
         )
     dependency_names = set(names)
     if dependencies:
@@ -483,12 +497,12 @@ def _validate_journal_row(row: object, *, path: Path, line_number: int) -> dict[
             and dependency_names != _BASE_DEPENDENCIES | {"llm"}
         ):
             raise OrdinaryBootJournalError(
-                f"journal_corrupt:{path}:line_{line_number}:dependency_set_invariant"
+                f"journal_corrupt:line_{line_number}:dependency_set_invariant"
             )
         by_name = {str(entry["name"]): entry for entry in dependencies}
         if any(by_name[name]["policy"] != "required" for name in _BASE_DEPENDENCIES):
             raise OrdinaryBootJournalError(
-                f"journal_corrupt:{path}:line_{line_number}:dependency_policy_invariant"
+                f"journal_corrupt:line_{line_number}:dependency_policy_invariant"
             )
         llm = by_name.get("llm")
         if llm is not None and llm["classification"] in {
@@ -496,7 +510,7 @@ def _validate_journal_row(row: object, *, path: Path, line_number: int) -> dict[
             "degraded_incompatible",
         }:
             raise OrdinaryBootJournalError(
-                f"journal_corrupt:{path}:line_{line_number}:llm_classification_invariant"
+                f"journal_corrupt:line_{line_number}:llm_classification_invariant"
             )
     required_classes = {
         str(entry["classification"])
@@ -506,26 +520,26 @@ def _validate_journal_row(row: object, *, path: Path, line_number: int) -> dict[
     if phase == "ORDINARY_BOOT_PASS":
         if reason != "compatible" or not dependencies or required_classes != {"required_compatible"}:
             raise OrdinaryBootJournalError(
-                f"journal_corrupt:{path}:line_{line_number}:pass_invariant"
+                f"journal_corrupt:line_{line_number}:pass_invariant"
             )
     elif reason.startswith("compatibility_resolution_failed:"):
         if dependencies or row["channel"] not in {"prod", "unresolved"}:
             raise OrdinaryBootJournalError(
-                f"journal_corrupt:{path}:line_{line_number}:resolution_failure_invariant"
+                f"journal_corrupt:line_{line_number}:resolution_failure_invariant"
             )
     elif reason == "required_dependency_unavailable":
         if "required_unavailable" not in required_classes:
             raise OrdinaryBootJournalError(
-                f"journal_corrupt:{path}:line_{line_number}:required_failure_invariant"
+                f"journal_corrupt:line_{line_number}:required_failure_invariant"
             )
     elif reason == "required_dependency_incompatible":
         if "required_incompatible" not in required_classes:
             raise OrdinaryBootJournalError(
-                f"journal_corrupt:{path}:line_{line_number}:required_failure_invariant"
+                f"journal_corrupt:line_{line_number}:required_failure_invariant"
             )
     else:
         raise OrdinaryBootJournalError(
-            f"journal_corrupt:{path}:line_{line_number}:failure_reason_invariant"
+            f"journal_corrupt:line_{line_number}:failure_reason_invariant"
         )
     return row
 
@@ -534,7 +548,7 @@ def _decode_journal(data: bytes, *, path: Path) -> list[dict[str, object]]:
     if not data:
         return []
     if not data.endswith(b"\n"):
-        raise OrdinaryBootJournalError(f"journal_corrupt:{path}:unterminated_record")
+        raise OrdinaryBootJournalError("journal_corrupt:unterminated_record")
     rows: list[dict[str, object]] = []
     seen: set[str] = set()
     for line_number, raw_line in enumerate(data.splitlines(), start=1):
@@ -542,44 +556,113 @@ def _decode_journal(data: bytes, *, path: Path) -> list[dict[str, object]]:
             row = json.loads(raw_line, object_pairs_hook=_reject_duplicate_keys)
         except (json.JSONDecodeError, OrdinaryBootJournalError) as exc:
             raise OrdinaryBootJournalError(
-                f"journal_corrupt:{path}:line_{line_number}"
+                f"journal_corrupt:line_{line_number}"
             ) from exc
         if _canonical_bytes(row) != raw_line:
             raise OrdinaryBootJournalError(
-                f"journal_corrupt:{path}:line_{line_number}:noncanonical_record"
+                f"journal_corrupt:line_{line_number}:noncanonical_record"
             )
         validated = _validate_journal_row(row, path=path, line_number=line_number)
         operation_id = str(validated["operation_id"])
         if operation_id in seen:
             raise OrdinaryBootJournalError(
-                f"journal_corrupt:{path}:line_{line_number}:duplicate_operation"
+                f"journal_corrupt:line_{line_number}:duplicate_operation"
             )
         seen.add(operation_id)
         rows.append(validated)
     return rows
 
 
-def _fsync_parent_directory(path: Path) -> None:
-    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
-    descriptor = os.open(path.parent, flags)
+def _validate_journal_path(path: Path) -> None:
+    if not path.is_absolute() or path.suffix != ".jsonl" or path.name in {"", ".", ".."}:
+        raise OrdinaryBootJournalError("unsafe_journal_path")
     try:
-        os.fsync(descriptor)
-    finally:
-        os.close(descriptor)
+        resolved_parent = path.parent.resolve(strict=True)
+    except OSError as exc:
+        raise OrdinaryBootJournalError("journal_parent_missing") from exc
+    if resolved_parent != path.parent:
+        raise OrdinaryBootJournalError("unsafe_journal_parent")
+    if not hasattr(os, "O_NOFOLLOW") or not hasattr(os, "O_DIRECTORY"):
+        raise OrdinaryBootJournalError("secure_journal_open_unavailable")
+
+
+def _revalidate_journal_target(
+    path: Path,
+    *,
+    parent_descriptor: int,
+    journal_descriptor: int,
+) -> None:
+    opened_parent = os.fstat(parent_descriptor)
+    named_parent = os.stat(path.parent, follow_symlinks=False)
+    if (
+        not stat.S_ISDIR(opened_parent.st_mode)
+        or not stat.S_ISDIR(named_parent.st_mode)
+        or (opened_parent.st_dev, opened_parent.st_ino)
+        != (named_parent.st_dev, named_parent.st_ino)
+    ):
+        raise OrdinaryBootJournalError("unsafe_journal_parent")
+
+    opened = os.fstat(journal_descriptor)
+    named = os.stat(path.name, dir_fd=parent_descriptor, follow_symlinks=False)
+    if not stat.S_ISREG(opened.st_mode) or not stat.S_ISREG(named.st_mode):
+        raise OrdinaryBootJournalError("unsafe_journal_target:not_regular")
+    if opened.st_nlink != 1 or named.st_nlink != 1:
+        raise OrdinaryBootJournalError("unsafe_journal_target:linked")
+    if (opened.st_dev, opened.st_ino) != (named.st_dev, named.st_ino):
+        raise OrdinaryBootJournalError("unsafe_journal_target:replaced")
+
+
+def _fsync_parent_directory(parent_descriptor: int) -> None:
+    os.fsync(parent_descriptor)
+
+
+def _open_journal_descriptor(parent_descriptor: int, name: str) -> int:
+    common_flags = (
+        os.O_RDWR
+        | os.O_APPEND
+        | os.O_NOFOLLOW
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_NONBLOCK", 0)
+    )
+    for _ in range(16):
+        try:
+            return os.open(name, common_flags, dir_fd=parent_descriptor)
+        except OSError as exc:
+            if exc.errno != errno.ENOENT:
+                raise OrdinaryBootJournalError("unsafe_journal_target") from exc
+        try:
+            return os.open(
+                name,
+                common_flags | os.O_CREAT | os.O_EXCL,
+                0o600,
+                dir_fd=parent_descriptor,
+            )
+        except OSError as exc:
+            if exc.errno == errno.EEXIST:
+                continue
+            raise OrdinaryBootJournalError("unsafe_journal_target") from exc
+    raise OrdinaryBootJournalError("journal_target_unstable")
 
 
 def _append_terminal_once(path: Path, result: Mapping[str, object]) -> dict[str, object]:
-    if not path.parent.is_dir():
-        raise OrdinaryBootJournalError(f"journal_parent_missing:{path.parent}")
+    _validate_journal_path(path)
     validated_result = _validate_journal_row(dict(result), path=path, line_number=0)
-    flags = os.O_RDWR | os.O_APPEND | os.O_CREAT
+    parent_flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
     try:
-        descriptor = os.open(path, flags, 0o600)
+        parent_descriptor = os.open(path.parent, parent_flags)
     except OSError as exc:
-        raise OrdinaryBootJournalError(f"journal_io_failure:{path}") from exc
+        raise OrdinaryBootJournalError("journal_io_failure") from exc
     try:
+        descriptor = _open_journal_descriptor(parent_descriptor, path.name)
+        locked = False
         try:
+            _revalidate_journal_target(
+                path,
+                parent_descriptor=parent_descriptor,
+                journal_descriptor=descriptor,
+            )
             fcntl.flock(descriptor, fcntl.LOCK_EX)
+            locked = True
             os.lseek(descriptor, 0, os.SEEK_SET)
             chunks: list[bytes] = []
             while True:
@@ -597,7 +680,12 @@ def _append_terminal_once(path: Path, result: Mapping[str, object]) -> dict[str,
                         f"operation_conflict:{operation_id}:terminal_result_changed"
                     )
                 os.fsync(descriptor)
-                _fsync_parent_directory(path)
+                _fsync_parent_directory(parent_descriptor)
+                _revalidate_journal_target(
+                    path,
+                    parent_descriptor=parent_descriptor,
+                    journal_descriptor=descriptor,
+                )
                 return row
 
             encoded = _canonical_bytes(validated_result) + b"\n"
@@ -608,15 +696,23 @@ def _append_terminal_once(path: Path, result: Mapping[str, object]) -> dict[str,
                     raise OSError("journal write made no progress")
                 offset += written
             os.fsync(descriptor)
-            _fsync_parent_directory(path)
+            _fsync_parent_directory(parent_descriptor)
+            _revalidate_journal_target(
+                path,
+                parent_descriptor=parent_descriptor,
+                journal_descriptor=descriptor,
+            )
             return dict(validated_result)
         except OSError as exc:
-            raise OrdinaryBootJournalError(f"journal_io_failure:{path}") from exc
-    finally:
-        try:
-            fcntl.flock(descriptor, fcntl.LOCK_UN)
+            raise OrdinaryBootJournalError("journal_io_failure") from exc
         finally:
-            os.close(descriptor)
+            try:
+                if locked:
+                    fcntl.flock(descriptor, fcntl.LOCK_UN)
+            finally:
+                os.close(descriptor)
+    finally:
+        os.close(parent_descriptor)
 
 
 def run_ordinary_boot(
@@ -633,7 +729,7 @@ def run_ordinary_boot(
     admission result for a separate caller and is false for every required
     dependency failure.
     """
-    if _OPERATION_ID.fullmatch(operation_id) is None:
+    if not _operation_id_is_safe(operation_id):
         raise OrdinaryBootJournalError("invalid_operation_id")
     if not isinstance(journal_path, Path):
         raise OrdinaryBootJournalError("journal_path_must_be_path")
@@ -650,9 +746,9 @@ def _read_mapping(path: Path, *, label: str) -> Mapping[str, Any]:
     try:
         value = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
-        raise OrdinaryBootJournalError(f"{label}_unreadable:{path}") from exc
+        raise OrdinaryBootJournalError(f"{label}_unreadable") from exc
     if not isinstance(value, Mapping) or not all(isinstance(key, str) for key in value):
-        raise OrdinaryBootJournalError(f"{label}_invalid_shape:{path}")
+        raise OrdinaryBootJournalError(f"{label}_invalid_shape")
     return value
 
 

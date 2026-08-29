@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import ast
 import json
+import os
 import subprocess
 import sys
 
@@ -657,10 +658,10 @@ def test_ordinary_boot_replay_reestablishes_file_and_directory_durability(
     parent_fsync_calls = 0
     real_parent_fsync = ordinary_boot._fsync_parent_directory
 
-    def record_parent_fsync(path: Path) -> None:
+    def record_parent_fsync(parent_descriptor: int) -> None:
         nonlocal parent_fsync_calls
         parent_fsync_calls += 1
-        real_parent_fsync(path)
+        real_parent_fsync(parent_descriptor)
 
     monkeypatch.setattr(ordinary_boot, "_fsync_parent_directory", record_parent_fsync)
     replay = run_ordinary_boot(
@@ -677,12 +678,12 @@ def test_ordinary_boot_replay_reestablishes_file_and_directory_durability(
     directory_journal = tmp_path / "ordinary-boot-directory-fsync.jsonl"
     directory_fsync_calls = 0
 
-    def fail_first_parent_fsync(path: Path) -> None:
+    def fail_first_parent_fsync(parent_descriptor: int) -> None:
         nonlocal directory_fsync_calls
         directory_fsync_calls += 1
         if directory_fsync_calls == 1:
             raise OSError("injected directory fsync failure")
-        real_parent_fsync(path)
+        real_parent_fsync(parent_descriptor)
 
     monkeypatch.setattr(ordinary_boot, "_fsync_parent_directory", fail_first_parent_fsync)
     with pytest.raises(OrdinaryBootJournalError, match="journal_io_failure"):
@@ -743,6 +744,145 @@ def test_ordinary_boot_partial_write_is_never_terminal_authority(
             operation_id="boot-torn-write",
             journal_path=journal_path,
         )
+
+
+def test_ordinary_boot_rejects_unsafe_journal_targets_without_external_writes(
+    tmp_path: Path,
+) -> None:
+    """Symlink, hardlink, and FIFO targets cannot escape the journal boundary."""
+    manifest = _ordinary_boot_manifest()
+    observations = _compatible_dependencies(manifest)
+
+    symlink_target = tmp_path / "symlink-target.txt"
+    symlink_target.write_text("external-symlink-bytes", encoding="utf-8")
+    symlink_journal = tmp_path / "symlink.jsonl"
+    symlink_journal.symlink_to(symlink_target)
+    with pytest.raises(OrdinaryBootJournalError, match="unsafe_journal_target"):
+        run_ordinary_boot(
+            manifest,
+            _promotion_compose(),
+            observations,
+            operation_id="boot-symlink-refusal",
+            journal_path=symlink_journal,
+        )
+    assert symlink_target.read_text(encoding="utf-8") == "external-symlink-bytes"
+
+    hardlink_target = tmp_path / "hardlink-target.jsonl"
+    hardlink_target.write_text("external-hardlink-bytes", encoding="utf-8")
+    hardlink_journal = tmp_path / "hardlink.jsonl"
+    os.link(hardlink_target, hardlink_journal)
+    with pytest.raises(OrdinaryBootJournalError, match="unsafe_journal_target"):
+        run_ordinary_boot(
+            manifest,
+            _promotion_compose(),
+            observations,
+            operation_id="boot-hardlink-refusal",
+            journal_path=hardlink_journal,
+        )
+    assert hardlink_target.read_text(encoding="utf-8") == "external-hardlink-bytes"
+
+    fifo_journal = tmp_path / "fifo.jsonl"
+    os.mkfifo(fifo_journal)
+    with pytest.raises(OrdinaryBootJournalError, match="unsafe_journal_target"):
+        run_ordinary_boot(
+            manifest,
+            _promotion_compose(),
+            observations,
+            operation_id="boot-fifo-refusal",
+            journal_path=fifo_journal,
+        )
+
+
+def test_ordinary_boot_detects_named_path_replacement_before_authority(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A swapped name never turns the opened inode into terminal authority."""
+    from app.release_channels import ordinary_boot
+
+    manifest = _ordinary_boot_manifest()
+    journal_path = tmp_path / "replace.jsonl"
+    moved_journal = tmp_path / "opened-inode.jsonl"
+    external_bytes = b"external-replacement-bytes"
+    real_revalidate = ordinary_boot._revalidate_journal_target
+    revalidation_calls = 0
+
+    def replace_before_terminal_revalidation(
+        path: Path,
+        *,
+        parent_descriptor: int,
+        journal_descriptor: int,
+    ) -> None:
+        nonlocal revalidation_calls
+        revalidation_calls += 1
+        if revalidation_calls == 2:
+            path.rename(moved_journal)
+            path.write_bytes(external_bytes)
+        real_revalidate(
+            path,
+            parent_descriptor=parent_descriptor,
+            journal_descriptor=journal_descriptor,
+        )
+
+    monkeypatch.setattr(
+        ordinary_boot,
+        "_revalidate_journal_target",
+        replace_before_terminal_revalidation,
+    )
+    with pytest.raises(OrdinaryBootJournalError, match="unsafe_journal_target"):
+        run_ordinary_boot(
+            manifest,
+            _promotion_compose(),
+            _compatible_dependencies(manifest),
+            operation_id="boot-path-replacement",
+            journal_path=journal_path,
+        )
+    assert journal_path.read_bytes() == external_bytes
+    assert moved_journal.read_bytes().endswith(b"\n")
+
+
+def test_ordinary_boot_rejects_secret_pattern_operation_ids_without_echo(
+    tmp_path: Path,
+) -> None:
+    manifest = _ordinary_boot_manifest()
+    secret_operation_id = "sk-private-token"
+    journal_path = tmp_path / "secret-id.jsonl"
+    with pytest.raises(OrdinaryBootJournalError, match="invalid_operation_id") as exc_info:
+        run_ordinary_boot(
+            manifest,
+            _promotion_compose(),
+            _compatible_dependencies(manifest),
+            operation_id=secret_operation_id,
+            journal_path=journal_path,
+        )
+    assert secret_operation_id not in str(exc_info.value)
+    assert not journal_path.exists()
+
+    manifest_path = tmp_path / "manifest.json"
+    compose_path = tmp_path / "compose.json"
+    dependencies_path = tmp_path / "dependencies.json"
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    compose_path.write_text(json.dumps(_promotion_compose()), encoding="utf-8")
+    dependencies_path.write_text(
+        json.dumps(_compatible_dependencies(manifest)),
+        encoding="utf-8",
+    )
+    proc = subprocess.run(
+        _ordinary_boot_cli_command(
+            manifest_path,
+            compose_path,
+            dependencies_path,
+            journal_path,
+            secret_operation_id,
+        ),
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+    )
+    assert proc.returncode == 2
+    assert secret_operation_id not in proc.stdout
+    assert secret_operation_id not in proc.stderr
+    assert not journal_path.exists()
 
 
 @pytest.mark.parametrize(
@@ -908,7 +1048,9 @@ def test_ordinary_boot_concurrent_callers_converge_or_conflict_once(tmp_path: Pa
     conflicting_results = [process.communicate(timeout=10) for process in conflicting_processes]
     return_codes = {process.returncode for process in conflicting_processes}
     assert 2 in return_codes and return_codes & {0, 3}, conflicting_results
-    assert sum("operation_conflict" in stderr for _, stderr in conflicting_results) == 1
+    assert (
+        sum("operation_conflict" in stderr for _, stderr in conflicting_results) == 1
+    ), conflicting_results
     assert len(_journal_rows(conflicting_journal)) == 1
 
 
