@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 import subprocess
 import time
@@ -9,6 +10,119 @@ from scripts import git_hygiene
 
 
 GENERATION = "a" * 32
+
+
+def _targeted_candidate(**overrides):
+    candidate = {
+        "repository": "RasmusTho/agentic-pkm-mvp",
+        "source_ref": "refs/heads/closed-unmerged",
+        "source_sha": "a" * 40,
+        "archive_ref": "refs/archive/git-hygiene/20300101T000000Z/closed-unmerged",
+        "owner": "builder-ops",
+        "governing_issue": 5170,
+        "successor": "none",
+        "retention_class": "safety_archive",
+        "review_at": "2030-02-01T00:00:00Z",
+        "discard": {"state": "retain", "receipt": None},
+    }
+    candidate.update(overrides)
+    return candidate
+
+
+def _remote_cleanup_transport(refs, commands, *, advance_before_delete=False):
+    def fake(args: list[str], _cwd: Path):
+        commands.append(args)
+        if args[:2] == ["check-ref-format", args[1]]:
+            return subprocess.CompletedProcess(["git", *args], 0, "", "")
+        if args[:2] == ["ls-remote", "--exit-code"]:
+            ref = args[-1]
+            sha = refs.get(ref)
+            return subprocess.CompletedProcess(["git", *args], 0 if sha else 2, f"{sha}\t{ref}\n" if sha else "", "")
+        if args[:2] == ["push", "--no-verify"] and ":refs/archive/" in args[-1]:
+            sha, ref = args[-1].split(":", 1)
+            refs[ref] = sha
+            return subprocess.CompletedProcess(["git", *args], 0, "", "")
+        if args[:2] == ["push", "--no-verify"] and args[-1].startswith(":refs/heads/"):
+            ref = args[-1][1:]
+            if advance_before_delete:
+                refs[ref] = "b" * 40
+                return subprocess.CompletedProcess(["git", *args], 1, "", "stale info")
+            refs.pop(ref, None)
+            return subprocess.CompletedProcess(["git", *args], 0, "", "")
+        raise AssertionError(args)
+    return fake
+
+
+def test_targeted_remote_cleanup_binds_complete_candidate_identity(tmp_path, monkeypatch) -> None:
+    commands: list[list[str]] = []
+    monkeypatch.setattr(git_hygiene, "run_git_result", _remote_cleanup_transport({}, commands))
+    report = git_hygiene.targeted_remote_cleanup(
+        tmp_path, repository="RasmusTho/agentic-pkm-mvp",
+        candidates=[_targeted_candidate(owner="")], receipt_dir=tmp_path / "receipts",
+    )
+    assert report["ok"] is False
+    assert report["error"] == "candidate_identity_malformed"
+    assert not any(command[0] == "push" for command in commands)
+
+
+def test_targeted_remote_cleanup_requires_exact_archive_sha_readback(tmp_path, monkeypatch) -> None:
+    candidate = _targeted_candidate()
+    refs = {candidate["source_ref"]: candidate["source_sha"], candidate["archive_ref"]: "b" * 40}
+    commands: list[list[str]] = []
+    monkeypatch.setattr(git_hygiene, "run_git_result", _remote_cleanup_transport(refs, commands))
+    report = git_hygiene.targeted_remote_cleanup(tmp_path, repository=candidate["repository"], candidates=[candidate], receipt_dir=tmp_path / "receipts")
+    assert report["ok"] is False
+    assert report["error"] == "archive_sha_mismatch"
+    assert candidate["source_ref"] in refs
+
+
+def test_targeted_remote_cleanup_cas_delete_stops_on_source_drift(tmp_path, monkeypatch) -> None:
+    first, later = _targeted_candidate(), _targeted_candidate(source_ref="refs/heads/later", archive_ref="refs/archive/git-hygiene/20300101T000000Z/later")
+    refs = {first["source_ref"]: first["source_sha"], later["source_ref"]: later["source_sha"]}
+    commands: list[list[str]] = []
+    monkeypatch.setattr(git_hygiene, "run_git_result", _remote_cleanup_transport(refs, commands, advance_before_delete=True))
+    report = git_hygiene.targeted_remote_cleanup(tmp_path, repository=first["repository"], candidates=[first, later], receipt_dir=tmp_path / "receipts")
+    assert report["ok"] is False
+    assert report["error"] == "source_cas_delete_failed"
+    assert later["source_ref"] in refs
+
+
+def test_targeted_remote_cleanup_receipt_precedes_delete_and_completes_after_readback(tmp_path, monkeypatch) -> None:
+    candidate = _targeted_candidate()
+    refs = {candidate["source_ref"]: candidate["source_sha"]}
+    commands: list[list[str]] = []
+    monkeypatch.setattr(git_hygiene, "run_git_result", _remote_cleanup_transport(refs, commands))
+    receipts = tmp_path / "receipts"
+    report = git_hygiene.targeted_remote_cleanup(tmp_path, repository=candidate["repository"], candidates=[candidate], receipt_dir=receipts)
+    assert report["ok"] is True
+    receipt = json.loads(next(receipts.iterdir()).read_text(encoding="utf-8"))
+    assert receipt["state"] == "completed"
+    assert receipt["identity"]["owner"] == "builder-ops"
+    assert candidate["source_ref"] not in refs
+
+
+def test_targeted_remote_cleanup_retry_is_identity_bound_and_idempotent(tmp_path, monkeypatch) -> None:
+    candidate = _targeted_candidate()
+    refs = {candidate["source_ref"]: candidate["source_sha"]}
+    commands: list[list[str]] = []
+    monkeypatch.setattr(git_hygiene, "run_git_result", _remote_cleanup_transport(refs, commands))
+    receipts = tmp_path / "receipts"
+    first = git_hygiene.targeted_remote_cleanup(tmp_path, repository=candidate["repository"], candidates=[candidate], receipt_dir=receipts)
+    before = len(commands)
+    second = git_hygiene.targeted_remote_cleanup(tmp_path, repository=candidate["repository"], candidates=[candidate], receipt_dir=receipts)
+    assert first["ok"] is second["ok"] is True
+    assert not any(command[0] == "push" for command in commands[before:])
+
+
+def test_archive_review_trigger_never_authorizes_archive_delete(tmp_path, monkeypatch) -> None:
+    candidate = _targeted_candidate()
+    commands: list[list[str]] = []
+    monkeypatch.setattr(git_hygiene, "run_git_result", _remote_cleanup_transport({candidate["archive_ref"]: candidate["source_sha"]}, commands))
+    report = git_hygiene.targeted_remote_cleanup(tmp_path, repository=candidate["repository"], candidates=[candidate], receipt_dir=tmp_path / "receipts")
+    assert report["ok"] is False
+    assert report["error"] == "prepared_receipt_source_absent_ambiguous"
+    assert candidate["archive_ref"] in {candidate["archive_ref"]}
+    assert not any(command[-1] == f":{candidate['archive_ref']}" for command in commands if command[0] == "push")
 
 
 def _allow_lifecycle_authority(_targets):
@@ -803,11 +917,6 @@ def test_janitor_plan_unknown_github_state_skips_branch(tmp_path, monkeypatch) -
 
 def test_janitor_apply_creates_rescue_before_remote_delete(tmp_path, monkeypatch) -> None:
     commands: list[list[str]] = []
-    rescue_refspec = (
-        "refs/archive/git-hygiene/20260607T000000Z/closed-unmerged:"
-        "refs/archive/git-hygiene/20260607T000000Z/closed-unmerged"
-    )
-
     def fake_run_git_result(args: list[str], _cwd: Path) -> subprocess.CompletedProcess[str]:
         commands.append(args)
         return subprocess.CompletedProcess(["git", *args], 0, "", "")
@@ -847,22 +956,9 @@ def test_janitor_apply_creates_rescue_before_remote_delete(tmp_path, monkeypatch
         pr_states={"closed-unmerged": {"state": "CLOSED"}},
     )
 
-    assert report["ok"] is True
-    assert commands.index(
-        [
-            "update-ref",
-            "refs/archive/git-hygiene/20260607T000000Z/closed-unmerged",
-            "origin/closed-unmerged",
-        ]
-    ) < commands.index(["push", "--no-verify", "origin", rescue_refspec])
-    assert commands.index(["push", "--no-verify", "origin", rescue_refspec]) < commands.index(
-        ["ls-remote", "--exit-code", "origin", rescue_refspec.split(":", 1)[0]]
-    )
-    assert commands.index(
-        ["ls-remote", "--exit-code", "origin", rescue_refspec.split(":", 1)[0]]
-    ) < commands.index(
-        ["push", "--no-verify", "origin", ":refs/heads/closed-unmerged"]
-    )
+    assert report["ok"] is False
+    assert report["errors"][-1]["reason"] == "targeted_remote_cleanup_required"
+    assert not any(command[0] == "push" for command in commands)
 
 
 @pytest.mark.parametrize(
@@ -1228,17 +1324,18 @@ def test_janitor_rescue_publication_works_from_guarded_main_checkout(
         pr_states={"closed-unmerged": {"state": "CLOSED"}},
     )
 
-    assert report["ok"] is True
+    assert report["ok"] is False
+    assert report["errors"][-1]["reason"] == "targeted_remote_cleanup_required"
     assert subprocess.run(
         ["git", "show-ref", "--verify", "--quiet", rescue_ref],
         cwd=remote,
         check=False,
-    ).returncode == 0
+    ).returncode != 0
     assert subprocess.run(
         ["git", "show-ref", "--verify", "--quiet", "refs/heads/closed-unmerged"],
         cwd=remote,
         check=False,
-    ).returncode != 0
+    ).returncode == 0
     guarded_main_after_cleanup = subprocess.run(
         ["git", "push", "origin", "main:refs/heads/main"],
         cwd=repo,
@@ -1395,10 +1492,9 @@ def test_janitor_rescue_delete_uses_exact_full_ref_for_ref_like_branch(
         pr_states={branch: {"state": "CLOSED"}},
     )
 
-    assert report["ok"] is True
-    assert ["push", "--no-verify", "origin", ":refs/heads/refs/heads/main"] in commands
-    assert ["push", "--no-verify", "origin", ":refs/heads/main"] not in commands
-    assert ["push", "--no-verify", "origin", "--delete", branch] not in commands
+    assert report["ok"] is False
+    assert report["errors"][-1]["reason"] == "targeted_remote_cleanup_required"
+    assert not any(command[0] == "push" for command in commands)
 
 
 @pytest.mark.parametrize("branch", ["--force", "main"])

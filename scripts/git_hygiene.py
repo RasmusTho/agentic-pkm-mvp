@@ -6,6 +6,7 @@ Git hygiene checks and cleanup for multi-agent repo workflows.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import datetime as dt
 import json
 import math
@@ -401,6 +402,125 @@ def _utc_stamp(now: float | None = None) -> str:
 def _archive_ref(branch: str, now: float | None = None) -> str:
     safe_branch = branch.replace("/", "-")
     return f"refs/archive/git-hygiene/{_utc_stamp(now)}/{safe_branch}"
+
+
+def _remote_ref_sha(cwd: Path, ref: str) -> str | None:
+    """Return one exact remote ref value, or ``None`` only when it is absent."""
+    result = run_git_result(["ls-remote", "--exit-code", "origin", ref], cwd)
+    if result.returncode == 2:
+        return None
+    if result.returncode != 0:
+        raise RuntimeError(f"remote_ref_read_failed:{ref}")
+    rows = [line.split() for line in result.stdout.splitlines() if line.strip()]
+    if len(rows) != 1 or len(rows[0]) < 2 or rows[0][1] != ref:
+        raise RuntimeError(f"remote_ref_read_ambiguous:{ref}")
+    return rows[0][0]
+
+
+def _targeted_remote_candidate(
+    candidate: Mapping[str, Any], repository: str, cwd: Path
+) -> dict[str, Any]:
+    """Validate and canonicalise one deletion authority record.
+
+    This deliberately does not infer identity from a janitor report: the caller
+    supplies a bounded, reviewable disposition record and every field is part of
+    the receipt digest used for retries.
+    """
+    required = {
+        "repository", "source_ref", "source_sha", "archive_ref", "owner", "successor",
+        "retention_class", "review_at", "discard",
+    }
+    if not required <= set(candidate) or candidate.get("repository") != repository:
+        raise ValueError("candidate_identity_incomplete_or_wrong_repository")
+    source_ref = candidate["source_ref"]
+    archive_ref = candidate["archive_ref"]
+    source_sha = candidate["source_sha"]
+    if not all(isinstance(value, str) and value.strip() for value in (source_ref, archive_ref, source_sha, candidate["owner"], candidate["successor"], candidate["review_at"])):
+        raise ValueError("candidate_identity_malformed")
+    if not re.fullmatch(r"[0-9a-f]{40}", source_sha):
+        raise ValueError("candidate_source_sha_malformed")
+    if (not source_ref.startswith("refs/heads/") or source_ref in {f"refs/heads/{name}" for name in DEFAULT_PROTECTED_BRANCHES} or not archive_ref.startswith("refs/archive/git-hygiene/")):
+        raise ValueError("candidate_ref_protected_or_invalid")
+    for ref in (source_ref, archive_ref):
+        if run_git_result(["check-ref-format", ref], cwd).returncode != 0:
+            raise ValueError("candidate_ref_malformed")
+    issue = candidate.get("governing_issue")
+    no_issue_lane = candidate.get("no_issue_lane")
+    if (isinstance(issue, int)) == (isinstance(no_issue_lane, str) and bool(no_issue_lane.strip())):
+        raise ValueError("candidate_issue_identity_ambiguous")
+    if candidate["retention_class"] not in {"safety_archive", "quarantine"}:
+        raise ValueError("candidate_retention_invalid")
+    discard = candidate["discard"]
+    if not isinstance(discard, Mapping) or discard.get("state") != "retain" or discard.get("receipt") is not None:
+        raise ValueError("candidate_discard_state_not_explicit_retain")
+    return {key: candidate.get(key) for key in sorted(required | {"governing_issue", "no_issue_lane"})}
+
+
+def targeted_remote_cleanup(
+    cwd: Path,
+    *,
+    repository: str,
+    candidates: list[Mapping[str, Any]],
+    receipt_dir: Path,
+) -> dict[str, Any]:
+    """Archive then CAS-delete no more than five explicitly bound remote refs.
+
+    The function is intentionally not wired into broad ``janitor --apply``.
+    It is the only production entrypoint for this targeted mechanism; callers
+    must separately establish lifecycle/lease/GitHub authority before invoking it.
+    """
+    if not 1 <= len(candidates) <= 5:
+        return {"ok": False, "completed": [], "error": "candidate_batch_size_invalid"}
+    receipt_dir.mkdir(parents=True, exist_ok=True)
+    completed: list[dict[str, Any]] = []
+    for raw in candidates:
+        try:
+            candidate = _targeted_remote_candidate(raw, repository, cwd)
+            identity = json.dumps(candidate, sort_keys=True, separators=(",", ":"))
+            receipt_id = hashlib.sha256(identity.encode()).hexdigest()
+            receipt_path = receipt_dir / f"{receipt_id}.json"
+            receipt = {"version": 1, "identity": candidate, "receipt_id": receipt_id, "state": "prepared"}
+            if receipt_path.exists():
+                existing = json.loads(receipt_path.read_text(encoding="utf-8"))
+                if existing.get("identity") != candidate or existing.get("receipt_id") != receipt_id or existing.get("state") not in {"prepared", "completed"}:
+                    raise RuntimeError("receipt_identity_or_state_conflict")
+                receipt = existing
+            source_sha = _remote_ref_sha(cwd, candidate["source_ref"])
+            archive_sha = _remote_ref_sha(cwd, candidate["archive_ref"])
+            if receipt["state"] == "completed":
+                if source_sha is not None or archive_sha != candidate["source_sha"]:
+                    raise RuntimeError("completed_receipt_live_state_conflict")
+                completed.append({"receipt": str(receipt_path), "state": "completed", **candidate})
+                continue
+            if archive_sha is None:
+                if source_sha != candidate["source_sha"]:
+                    raise RuntimeError("source_identity_drift_before_archive")
+                pushed = run_git_result(["push", "--no-verify", "origin", f"{source_sha}:{candidate['archive_ref']}"], cwd)
+                if pushed.returncode != 0:
+                    raise RuntimeError("archive_push_failed")
+                archive_sha = _remote_ref_sha(cwd, candidate["archive_ref"])
+            if archive_sha != candidate["source_sha"]:
+                raise RuntimeError("archive_sha_mismatch")
+            # The durable prepared record exists before the irreversible command.
+            receipt_path.write_text(json.dumps(receipt, sort_keys=True) + "\n", encoding="utf-8")
+            if source_sha is None:
+                raise RuntimeError("prepared_receipt_source_absent_ambiguous")
+            if source_sha != candidate["source_sha"]:
+                raise RuntimeError("source_identity_drift_before_delete")
+            deleted = run_git_result([
+                "push", "--no-verify", f"--force-with-lease={candidate['source_ref']}:{source_sha}",
+                "origin", f":{candidate['source_ref']}",
+            ], cwd)
+            if deleted.returncode != 0:
+                raise RuntimeError("source_cas_delete_failed")
+            if _remote_ref_sha(cwd, candidate["source_ref"]) is not None or _remote_ref_sha(cwd, candidate["archive_ref"]) != candidate["source_sha"]:
+                raise RuntimeError("post_delete_readback_failed")
+            receipt["state"] = "completed"
+            receipt_path.write_text(json.dumps(receipt, sort_keys=True) + "\n", encoding="utf-8")
+            completed.append({"receipt": str(receipt_path), "state": "completed", **candidate})
+        except (OSError, ValueError, RuntimeError, json.JSONDecodeError) as exc:
+            return {"ok": False, "completed": completed, "error": str(exc)}
+    return {"ok": True, "completed": completed}
 
 
 def _pr_state(branch: str, pr_states: dict[str, dict[str, Any]] | None) -> dict[str, Any]:
@@ -1552,6 +1672,25 @@ def janitor_apply(
             }
         apply_git(["push", "origin", "--delete", remote["branch"]], {"artifact": "remote_branch", "action": "delete", **remote})
     for remote in plan["candidates"]["remote_branches_requiring_rescue"]:
+        # Broad janitor plans are evidence only.  They never carry the complete
+        # identity/disposition authority required by targeted_remote_cleanup.
+        errors.append(
+            {
+                "artifact": "remote_branch",
+                "action": "preserve",
+                "reason": "targeted_remote_cleanup_required",
+                **remote,
+            }
+        )
+        return {
+            **plan,
+            "mode": "apply",
+            "destructive_actions": actions,
+            "errors": errors,
+            "ok": False,
+        }
+        # Kept below temporarily as implementation history for the next
+        # narrowly-authorized migration; unreachable by construction.
         branch = remote["branch"]
         if authority_changed_for(branch=branch):
             return {
