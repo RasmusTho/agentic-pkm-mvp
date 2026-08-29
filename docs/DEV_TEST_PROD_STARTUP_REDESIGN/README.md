@@ -120,8 +120,9 @@ exact required-check coverage. The validator also consumes the canonical promoti
 report: its digest must equal the signed `check_report_identity`, its migration-set identity must
 equal the signed `migration_set_identity`, and its baseline must equal both the signed
 `migration_baseline_identity` and the independently supplied prod-admission context. The writer
-and validator resolve that baseline from the authoritative current promotion ref (`origin/main`
-in the current interim model), so a caller cannot choose the candidate itself or substitute a
+and validator resolve that baseline from the fixed canonical repository's authoritative current
+promotion ref (`refs/heads/main`, exposed locally as `origin/main` in the current interim model),
+so a caller cannot choose the candidate itself or substitute a
 different syntactically valid baseline or report.
 `tests/fixtures/startup_redesign/promotion_admission_context.valid.json` supplies the independent
 positive-admission expectations, while
@@ -175,8 +176,9 @@ matching issued entry; a revoked or conflicting entry is never repaired away. Im
 records use a same-directory fsynced temp hard link, remove that temp name before the final
 directory fence, and recover only a same-owner temp that is the exact published inode after a
 crash in that unlink/fence gap. The complete migration delta is derived, not accepted from the
-caller: the writer resolves the authoritative current promotion ref (`origin/main` in the current
-interim model), then diffs that baseline commit against the candidate's exact
+caller: the writer resolves the fixed canonical repository's authoritative current promotion ref
+(`refs/heads/main`, exposed locally as `origin/main` in the current interim model), then diffs that
+baseline commit against the candidate's exact
 source commit under `app/alembic/versions`, then materializes each target file from those immutable
 Git objects. The same object bytes feed both the migration-set digest and
 `app.release_channels.reversibility.check_migration_snapshots`. The attempt journal records the six

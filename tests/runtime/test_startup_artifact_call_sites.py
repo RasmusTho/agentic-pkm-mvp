@@ -30,6 +30,7 @@ from app.release_channels.ordinary_boot import (
     run_ordinary_boot,
 )
 from app.release_channels.promotion_receipt import (
+    PROD_REPOSITORY_URL,
     PromotionReceiptError,
     build_promotion_test_check_report,
     prepare_prod_activation,
@@ -1462,6 +1463,37 @@ def test_prod_receipt_validator_is_invoked_before_activation(
         assert exc_info.value.code == code
 
 
+def test_validate_prod_activation_cli_resolves_repo_root(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from app.release_channels.promotion_receipt import main
+
+    rc = main(
+        [
+            "validate-prod-activation",
+            "--receipt",
+            str(ROOT / "tests/fixtures/startup_redesign/promotion_receipt.valid.json"),
+            "--registry",
+            str(
+                ROOT
+                / "tests/fixtures/startup_redesign/promotion_receipt_registry.valid.json"
+            ),
+            "--admission-context",
+            str(
+                ROOT
+                / "tests/fixtures/startup_redesign/promotion_admission_context.valid.json"
+            ),
+            "--check-report",
+            str(ROOT / "tests/fixtures/startup_redesign/promotion_check_report.valid.json"),
+            "--now",
+            "2026-08-16T12:00:00Z",
+        ]
+    )
+
+    assert rc == 0
+    assert json.loads(capsys.readouterr().out)["activation_state"] == "validated_not_activated"
+
+
 def _promotion_test_signing_material() -> tuple[Ed25519PrivateKey, bytes]:
     private_key = Ed25519PrivateKey.from_private_bytes(bytes(range(32, 64)))
     public_key = private_key.public_key().public_bytes(
@@ -1574,23 +1606,41 @@ def _promotion_migration_git_delta(
     repo = tmp_path / "source-repo"
     repo.mkdir(parents=True)
     subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+    subprocess.run(
+        ["git", "remote", "add", "origin", PROD_REPOSITORY_URL],
+        cwd=repo,
+        check=True,
+    )
+    subprocess.run(
+        [
+            "git",
+            "fetch",
+            "-q",
+            "--no-tags",
+            "origin",
+            "refs/heads/main:refs/remotes/origin/main",
+        ],
+        cwd=repo,
+        check=True,
+    )
+    subprocess.run(
+        ["git", "checkout", "-q", "--detach", "origin/main"],
+        cwd=repo,
+        check=True,
+    )
     subprocess.run(["git", "config", "user.name", "Receipt Test"], cwd=repo, check=True)
     subprocess.run(
         ["git", "config", "user.email", "receipt-test@example.invalid"],
         cwd=repo,
         check=True,
     )
-    (repo / "README.md").write_text("baseline\n", encoding="utf-8")
-    subprocess.run(["git", "add", "README.md"], cwd=repo, check=True)
-    subprocess.run(["git", "commit", "-qm", "baseline"], cwd=repo, check=True)
-    baseline = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo, text=True).strip()
-    subprocess.run(
-        ["git", "update-ref", "refs/remotes/origin/main", baseline],
+    baseline = subprocess.check_output(
+        ["git", "rev-parse", "origin/main"],
         cwd=repo,
-        check=True,
-    )
+        text=True,
+    ).strip()
     migrations = repo / "app" / "alembic" / "versions"
-    migrations.mkdir(parents=True)
+    migrations.mkdir(parents=True, exist_ok=True)
     (migrations / "receipt_delta.py").write_text(content, encoding="utf-8")
     subprocess.run(["git", "add", "app/alembic/versions/receipt_delta.py"], cwd=repo, check=True)
     subprocess.run(["git", "commit", "-qm", "add migration"], cwd=repo, check=True)

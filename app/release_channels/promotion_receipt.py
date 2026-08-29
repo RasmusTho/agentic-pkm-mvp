@@ -13,6 +13,7 @@ import argparse
 import base64
 import binascii
 import fcntl
+import functools
 import hashlib
 import json
 import os
@@ -48,7 +49,8 @@ REGISTRY_VERSION = "promotion-receipt-registry.v1"
 ATTEMPT_VERSION = "promotion-test-attempt.v1"
 RESERVATION_VERSION = "promotion-test-reservation.v1"
 REPORT_VERSION = "promotion-test-check-report.v1"
-PROD_PROMOTION_REF = "origin/main"
+PROD_REPOSITORY_URL = "https://github.com/RasmusTho/agentic-pkm-mvp.git"
+PROD_PROMOTION_REF = "refs/heads/main"
 REQUIRED_CHECKS = ("migration", "readiness", "schema", "smoke", "ui", "version")
 _OBSERVED_CHECKS = REQUIRED_CHECKS[1:]
 _RECEIPT_FIELDS = {
@@ -278,20 +280,43 @@ def _validated_source_repo(source_repo: Path, *, code: str) -> Path:
 
 
 def _resolve_authoritative_prod_baseline(source_repo: Path) -> str:
-    repo = _validated_source_repo(
+    _validated_source_repo(
         source_repo,
         code="migration_baseline_unavailable",
     )
     try:
-        baseline = _run_git(
-            repo,
-            "rev-parse",
-            "--verify",
-            f"{PROD_PROMOTION_REF}^{{commit}}",
-            code="migration_baseline_unavailable",
-        ).decode("ascii").strip()
+        baseline = _fetch_authoritative_prod_baseline()
     except UnicodeDecodeError as exc:
         raise PromotionReceiptError("migration_baseline_unavailable") from exc
+    if _SOURCE_SHA.fullmatch(baseline) is None:
+        raise PromotionReceiptError("migration_baseline_invalid")
+    return baseline
+
+
+@functools.lru_cache(maxsize=1)
+def _fetch_authoritative_prod_baseline() -> str:
+    try:
+        completed = subprocess.run(
+            ["git", "ls-remote", "--refs", PROD_REPOSITORY_URL, PROD_PROMOTION_REF],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            check=False,
+            timeout=30,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise PromotionReceiptError("migration_baseline_unavailable") from exc
+    if completed.returncode != 0:
+        raise PromotionReceiptError("migration_baseline_unavailable")
+    try:
+        rows = completed.stdout.decode("ascii").splitlines()
+    except UnicodeDecodeError as exc:
+        raise PromotionReceiptError("migration_baseline_unavailable") from exc
+    if len(rows) != 1:
+        raise PromotionReceiptError("migration_baseline_invalid")
+    fields = rows[0].split("\t")
+    if len(fields) != 2 or fields[1] != PROD_PROMOTION_REF:
+        raise PromotionReceiptError("migration_baseline_invalid")
+    baseline = fields[0]
     if _SOURCE_SHA.fullmatch(baseline) is None:
         raise PromotionReceiptError("migration_baseline_invalid")
     return baseline
@@ -1367,6 +1392,7 @@ def _parser() -> argparse.ArgumentParser:
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
+    repo_root = Path(__file__).resolve().parents[2]
     try:
         if args.command == "promotion-test-verify":
             private_key = _read_private_key(args.issuer_private_key)
@@ -1374,7 +1400,6 @@ def main(argv: Sequence[str] | None = None) -> int:
                 encoding=serialization.Encoding.Raw,
                 format=serialization.PublicFormat.Raw,
             )
-            repo_root = Path(__file__).resolve().parents[2]
             result = write_promotion_test_terminal_receipt(
                 attempt_id=args.attempt_id,
                 rendered=_read_json(args.rendered, code="candidate_unavailable"),
