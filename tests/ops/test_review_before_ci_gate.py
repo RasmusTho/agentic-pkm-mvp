@@ -1074,6 +1074,49 @@ Final-Review-Rounds: 1
         )
 
 
+@pytest.mark.parametrize(
+    ("lane", "expected_lane"),
+    (
+        ("    - [x] Docs authoring lane", "docs-authoring"),
+        ("-\x1c[x]\x1cDocs authoring lane", "docs-authoring"),
+        (
+            "## Direct Repair\n"
+            "Type:\x1cgovernance\n"
+            "Reason: bounded repair\n"
+            "Validation: focused tests\n"
+            "Issue required: no",
+            "direct-repair",
+        ),
+    ),
+)
+def test_issue_free_contract_matches_hosted_lane_whitespace_grammar(
+    lane: str, expected_lane: str
+) -> None:
+    responses, api = _live_pr_review_api()
+    responses.pop("repos/octo/repo/issues/4028")
+    pr = responses["repos/octo/repo/pulls/4029"]
+    assert isinstance(pr, dict)
+    pr["body"] = f"""## Change Lane
+{lane}
+
+Final-Review-Rounds: 1
+
+## BuilderOps Routing
+- Records/projections/receipts: none
+- Reason: No BuilderOps material was routed.
+"""
+
+    with pytest.raises(ReviewBeforeCiGateError, match="issue-free PR body"):
+        authenticated_pr_scope_revalidation_history(
+            repository="octo/repo",
+            pr_number=4029,
+            governing_issue=None,
+            head_sha="a" * 40,
+            expected_lane=expected_lane,
+            api=api,
+        )
+
+
 def test_current_branch_rejects_ambiguous_open_prs(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

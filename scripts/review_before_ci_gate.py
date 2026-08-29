@@ -77,7 +77,8 @@ REVIEW_CONTRACT_MARKER = re.compile(
 REVALIDATION_RECEIPT_MARKER = "<!-- pr-scope-revalidation-receipt:v1 -->"
 TRUSTED_RECEIPT_ASSOCIATIONS = frozenset({"OWNER", "MEMBER", "COLLABORATOR"})
 ISSUE_FREE_LANE = re.compile(
-    r"(?im)^\s*-\s*\[x\]\s*(Docs authoring|Governance) lane\s*$"
+    r"^\-\s+\[x\]\s+(Docs authoring|Governance) lane\b",
+    re.IGNORECASE | re.MULTILINE,
 )
 DIRECT_REPAIR_SECTION = re.compile(
     r"(?ims)^## Direct Repair\s*$.*?(?=^##\s|\Z)"
@@ -90,7 +91,9 @@ GOVERNING_ISSUE_ATTEMPT = re.compile(r"(?im)^\s*Governing-Issue\s*:")
 NEUTRALIZED_CLOSING_ATTEMPT = re.compile(
     r"(?im)^[ \t]*Verified-Closing-Issues[ \t]*:"
 )
-UNSUPPORTED_CONTRACT_LINE_SEPARATOR = re.compile(r"\r(?!\n)|[\u2028\u2029]")
+UNSUPPORTED_CONTRACT_LINE_SEPARATOR = re.compile(
+    r"\r(?!\n)|[\x1c-\x1f\u2028\u2029]"
+)
 
 
 class ReviewBeforeCiGateError(ValueError):
