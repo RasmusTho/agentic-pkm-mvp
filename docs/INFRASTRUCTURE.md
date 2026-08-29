@@ -1,10 +1,10 @@
-State: SoT v5.5 baseline (descriptive, ops-oriented). Local Compose is the fallback runtime; the live
-product topology is the new Linux/Tailscale host split recorded below. If a detail drifts, prefer live
-host evidence and the deployment contract, then update this doc.
+State: SoT v5.5 baseline (descriptive, ops-oriented). Local Compose is the fallback runtime; live
+product placement is recorded by the selected deployment profile. If a detail drifts, prefer live host
+evidence and the deployment contract, then update the relevant profile or this doc.
 
 Documentation hierarchy: `docs/YGGDRASIL_PLATFORM_AND_OPERATIONS_SYSTEM/README.md` owns the
 target operational-platform boundary. This document owns the local Docker/Colima fallback description
-and records the verified live host boundary; it does not claim that the new-host deployment handoff is
+and records the verified live host boundary; it does not claim that the remote deployment handoff is
 already a separately delivered implementation.
 
 ## v5.5 Baseline Delta (Current Reality)
@@ -13,7 +13,7 @@ already a separately delivered implementation.
 - Watcher auto-run defaults on (`WATCHER_AUTO_EXEC=1`); set `WATCHER_AUTO_EXEC=0` for emit-only mode. LangGraph/Reasoning rollout remains opt-in.
 - See `docs/STATUS.md` and `docs/ARCHITECTURE.md` for the current baseline and forward line.
 
-# Infrastructure — Local Fallback and New-Host Runtime
+# Infrastructure — Local Fallback and Remote Runtime
 
 This document describes the local Docker + Colima fallback and the current live host boundary for the
 Agentic PKM stack. It does not claim that local Compose is the live product deployment.
@@ -21,14 +21,14 @@ Agentic PKM stack. It does not claim that local Compose is the live product depl
 ## Current live host boundary (verified 2026-08-22)
 
 - Dedicated Ollama host: Ollama/model serving only; no product API, worker, watcher, database, or Companion UI.
-- `ygg-dev`: Linux/Tailscale dev runtime, API `:18001`, Companion UI `:8111`; reachable but degraded.
-- `ygg-test`: intended isolated test runtime; no reachable host or endpoint was found.
-- `ygg-prod`: Linux/Tailscale prod runtime, API `:18000`; liveness responds but functional health is
-  failing and Companion UI `:8113` is unavailable.
+- Product runtime targets and their host/VM placement: see the selected deployment profile, currently
+  [`docs/deployment/profiles/TARS_PROXMOX.md`](deployment/profiles/TARS_PROXMOX.md).
+- The current environment evidence is degraded/incomplete: `dev` is reachable but degraded, `test` is
+  unavailable, and `prod` has API liveness but failing functional health and unavailable Companion UI.
 - Both live APIs report `git_sha=unknown`; promotion cannot use them as immutable artifact evidence.
 
 The repository still documents and supports local Compose commands for fallback development and
-verification. Those commands do not deploy the new hosts and are not promotion evidence.
+verification. Those commands do not deploy remote runtime targets and are not promotion evidence.
 
 ## Local fallback stack overview
 - Host: macOS

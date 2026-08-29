@@ -19,22 +19,23 @@ Owner: `docs/ROADMAP.md`
 Temporal class: strategic
 Review cadence: biweekly
 Last reviewed: 2026-08-22
-Last live runtime verification: 2026-08-22 (new-host topology; `ygg-test` unavailable)
+Last live runtime verification: 2026-08-22 (selected deployment profile; `test` unavailable)
 Last verified against: docs/ENVIRONMENTS.md, docs/ARCHITECTURE.md, docs/STATUS.md, docs/OPERATIONS.md, docs/DB_SCHEMA.md, docs/adr/ADR-0040-prod-promotion-ref-main-interim.md
 
 # Release Channels Specification
 
 ## Current live posture
 
-The operator's current topology is a dedicated Ollama host only; the product runtime belongs on the new
-Linux/Tailscale hosts. The live baseline is incomplete: `ygg-dev` answers on API `:18001` and UI
-`:8111` but is degraded and uses the `mock` LLM provider; `ygg-test` is not available; `ygg-prod`
-answers API liveness on `:18000` but fails functional health and has no reachable UI on `:8113`.
+The operator's current topology is a dedicated model-service target plus product runtime targets defined by the
+selected deployment profile. The live baseline is incomplete: `dev` answers on API and UI but is
+degraded and uses the `mock` LLM provider; `test` is not available; `prod` answers API liveness but
+fails functional health and has no reachable UI. The current setup-specific placement record is
+[`docs/deployment/profiles/TARS_PROXMOX.md`](../deployment/profiles/TARS_PROXMOX.md).
 Both live APIs report an unknown build identity. The old single-host Compose model described in this
 specification is therefore a local fallback/reference model, not current live topology.
 
 The promotion chain remains `dev → test → prod`, but it cannot start until the candidate identity is
-immutable and observable, the new-host deployment handoff is authoritative, `test` is reachable, and
+immutable and observable, the remote deployment handoff is authoritative, `test` is reachable, and
 test verification produces a durable PASS receipt. A liveness response alone is not a promotion gate.
 
 This directory specifies the capability that lets a **stable build run in prod against the real vault** while **new feature work continues in dev across the same governed runtime fleet**, without dev churn destabilizing prod and without prod freeze blocking dev.

@@ -3,17 +3,17 @@
 State: Legacy host-setup reference; product runtime deployment is owned by `docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md`.
 
 **Current boundary (2026-08-22): the Mac mini is Ollama-only.** Do not install or run the Yggdrasil
-API, database, worker, watcher, Companion UI, or gateway on it. Product runtime belongs on the new
-Linux/Tailscale `ygg-dev`, `ygg-test`, and `ygg-prod` hosts. The playbooks below predate that split and
-must not be treated as a live deployment procedure until they are reconciled with the new host handoff.
+API, database, worker, watcher, Companion UI, or gateway on it. Product runtime placement belongs to
+the selected deployment profile. The playbooks below predate the current deployment handoff and must
+not be treated as a live deployment procedure until reconciled with that profile.
 
 The remaining supported purpose of this setup is to provide optional Ollama capacity to the product
 runtime over the private Tailscale network.
 
 ```
             Tailscale (private, MagicDNS)
-  MacBook Air ──────── ygg-dev / ygg-test / ygg-prod
-  thin client          Linux product runtime hosts
+  MacBook Air ──────── approved runtime targets
+  thin client          profile-defined product runtime hosts
        │                         │
        └──── Tailscale ──── Mac mini Ollama-only
                               (optional Gaming PC Ollama)

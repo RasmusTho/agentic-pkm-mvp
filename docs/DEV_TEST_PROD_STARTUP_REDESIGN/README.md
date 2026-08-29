@@ -1,11 +1,12 @@
 State: Active capability specification. P1's manifest contract, P2's immutable artifact renderer,
 and P3's read-only ordinary-boot doctor are implemented in the repository; P4–P6 remain
-unimplemented. This does not claim a running remote
-deployment model or a live immutable channel identity.
-Current-state note (2026-08-22): the live topology is now intended to be a dedicated Ollama host plus
-Linux/Tailscale `ygg-dev` / `ygg-test` / `ygg-prod` runtime hosts. The redesign contract is not yet
-implemented as a remote-host deployment path; `ygg-test` and immutable live artifact identity remain
-gates before staged promotion.
+unimplemented. This does not claim a running remote deployment model or a live immutable channel
+identity.
+Current-state note (2026-08-22): the live topology is now intended to be a dedicated model-service
+target plus product runtime targets selected by a deployment profile. The redesign contract is not
+yet implemented as a remote-target deployment path; the `test` target and immutable live artifact
+identity remain gates before staged promotion. See
+`docs/deployment/profiles/TARS_PROXMOX.md` for the current setup-specific placement record.
 Doc role: Capability specification directory (Product/Runtime + Builder System release boundary)
 Owning SoT: `docs/ENVIRONMENTS.md`, `docs/RELEASE_CHANNELS/README.md`, and `docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md`
 

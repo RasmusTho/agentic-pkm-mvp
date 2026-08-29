@@ -6,7 +6,7 @@ Authority: Canonical environment contract for the current baseline and forward-l
 Temporal class: operational
 Review cadence: as environment/channel posture changes
 Last reviewed: 2026-08-22
-Last live runtime verification: 2026-08-22 (Tailscale hosts `ygg-dev` and `ygg-prod`; `ygg-test` was not present/reachable)
+Last live runtime verification: 2026-08-22 (see the setup-specific deployment profile; `test` was not present/reachable)
 Last verified against: docs/RELEASE_CHANNELS/README.md, docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md, docker-compose.full-host-vault.yml, scripts/lib/deploy_channel_compose.sh, docs/STATUS.md (§Cognitive Expansion — activation status), ops/promotions/2026-06-13-cc3ce65d.md
 
 ## Overview
@@ -19,20 +19,22 @@ Reading rule:
 - Use this document when a change touches environment-specific behavior, storage boundaries, runtime topology, write safety, rollout posture, or local bootstrap expectations.
 - Use `docs/ARCHITECTURE.md` for system structure, `docs/OPERATIONS.md` for operator procedure, `docs/TESTING.md` for verification layers, and `docs/STATUS.md` for current rollout posture.
 
-## Current live runtime topology
+## Current live runtime evidence
 
-The live product runtime is now intended to run on the new Linux/Tailscale hosts. The Mac mini is an
-Ollama/model host only; its legacy `pkm-*` Compose stacks are not evidence that the product runtime is
-deployed there. The following is the verified live baseline as of 2026-08-22:
+Host, VM, provider, and model-service placement are deliberately not part of this environment
+contract. They belong to a selected setup-specific deployment profile, currently
+[`docs/deployment/profiles/TARS_PROXMOX.md`](deployment/profiles/TARS_PROXMOX.md). A model-service
+target and its legacy local stacks are not evidence that the product runtime is deployed there. The
+following is the verified environment baseline as of 2026-08-22:
 
-| Environment | Live endpoint evidence | Current state | Artifact identity |
+| Environment | Live runtime evidence | Current state | Artifact identity |
 | --- | --- | --- | --- |
-| `dev` (`ygg-dev`) | API `:18001` and Companion UI `:8111` respond | API required checks pass, but runtime is degraded: watcher paused and two dead-lettered events; LLM provider is `mock` | `/version` reports `git_sha=unknown`, `built_at` empty |
-| `test` | No `ygg-test` peer or reachable test API/UI endpoint was found | Not deployed/available for staged verification | No candidate identity available |
-| `prod` (`ygg-prod`) | API liveness `:18000` responds; UI `:8113` unavailable | Functional health is failing: stale/paused watcher and no worker heartbeat | `/version` reports `git_sha=unknown`, `built_at` empty |
+| `dev` | API and Companion UI responded | API required checks pass, but runtime is degraded: watcher paused and two dead-lettered events; LLM provider is `mock` | `/version` reports `git_sha=unknown`, `built_at` empty |
+| `test` | No reachable runtime target was found | Not deployed/available for staged verification | No candidate identity available |
+| `prod` | API liveness responded; Companion UI unavailable | Functional health is failing: stale/paused watcher and no worker heartbeat | `/version` reports `git_sha=unknown`, `built_at` empty |
 
 This table is runtime evidence, not a replacement for the environment contract below. Promotion is
-blocked until the new host deployment path is authoritative, the candidate has an exact immutable
+blocked until the remote deployment path is authoritative, the candidate has an exact immutable
 identity, `test` is reachable, and the test verification receipt is green. Until then, local Compose
 commands are a fallback for development/testing only and must not be reported as promotion evidence.
 
@@ -368,17 +370,17 @@ canonical prod startup command.
 
 <a id="prod-ollama-topology"></a>
 
-### Ollama topology
+### Model-service topology
 
-The live host boundary reserves the Mac mini for Ollama/model serving only. The product runtime must
-reach that service through an explicitly configured Tailscale-reachable endpoint; it must not assume a
-co-resident Compose sidecar, `host.docker.internal`, or a local `ollama` service name on the Linux
-runtime host. The exact endpoint, authentication posture, model inventory, and embedding identity are
-deployment inputs that still require host-side qualification.
+The environment contract does not require a model service to be co-resident with Product Runtime.
+When a model service is external, the selected deployment profile must define an explicitly configured
+reachable endpoint, authentication posture, model inventory, and embedding identity. Product Runtime
+must not infer a co-resident Compose sidecar, `host.docker.internal`, or a local service name from the
+hosting platform.
 
-The local Compose overlays retain an Ollama sidecar as a fallback for local development/testing. That
-fallback is not the live production topology and its project-scoped cache is not evidence that the Mac
-mini or a new Linux host has the required models. Never change the provider/model/dimension identity or
+The local Compose overlays may retain a model-service sidecar as a fallback for local
+development/testing. That fallback is not the live production topology and its project-scoped cache is
+not evidence that a deployment target has the required models. Never change the provider/model/dimension identity or
 start a rebuild/download as part of a transport-only runtime repair.
 
 ## Runtime Control Surface

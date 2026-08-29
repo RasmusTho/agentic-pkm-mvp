@@ -6,17 +6,17 @@ Temporal class: operational
 Review cadence: weekly
 Source of truth: mixed
 Last reviewed: 2026-08-22
-Last live runtime verification: 2026-08-22 (new-host topology; see `docs/ENVIRONMENTS.md`)
+Last live runtime verification: 2026-08-22 (selected deployment profile; see `docs/ENVIRONMENTS.md`)
 Last verified against: docs/ARCHITECTURE.md, docs/ROADMAP.md, docs/DOCS_INDEX.md, docs/OPERATIONS.md, docs/HUMAN-FLOWS.md, docs/CONTEXTUAL_RELEVANCE_ENGINE/README.md, docs/CONCEPTS/MOMENT_ARTIFACT_CONTRACT.md, docs/CONCEPTS/RELEVANCE_EVALUATOR_CONTRACT.md, docs/CONCEPTS/REACHOUT_AND_SCARCITY_GATE_CONTRACT.md, docs/CONCEPTS/AGENT_MEMORY_AND_KNOWLEDGE_CONTRACT.md, docs/plans/CONTEXTUAL_RELEVANCE_ENGINE.md, docs/CKM_COCKPIT_DIRECTION_B/README.md, docs/BUILDEROPS_CONTROL_PLANE/DEMERZEL_REVIEW_MERGE_ORCHESTRATION.md, app/agent_memory/provisional_recall.py, app/agents/ask/graph.py, app/relevance/evaluator.py, app/relevance/materialization.py, app/relevance/attention_loop.py, app/relevance/now_surface.py, app/instance/filesystem_identity.py, app/instance/vault_registry.py, app/dispatcher/verification_api.py, app/dispatcher/verification_runtime.py, scripts/select_pr_tests.py, companion-ui/companion-app/companion_ui/workspace/now_surface.py, tests/agent_memory/test_provisional_memory_recall.py, tests/agent_memory/test_provisional_memory_call_sites.py, tests/relevance/test_vault_native_moments.py, tests/relevance/test_attention_loop_runtime.py, merged PRs #1948/#1977/#2092/#2097/#2098/#2115/#2119/#2127/#2128/#2129/#2131/#2133/#2135/#2137/#2140/#2142/#2636/#2642/#2643/#2645/#2656/#2678/#2686/#2689/#2692/#3730/#4224/#4244/#4420/#4424, issue #3720, PRs #3743/#4416, closed parent issue #4080, live issue #3603, and current repo state at `origin/main` `f0bafe6e79f3cc1a087b2c2fcbe40450c8302da2` on 2026-07-30
 
 ### Live environment baseline (2026-08-22)
 
-The Mac mini is now an Ollama/model host only. Product runtime evidence is on the new Linux/Tailscale
-hosts: `ygg-dev` is reachable but degraded, `ygg-test` is not available, and `ygg-prod` has API
-liveness but failing functional health (stale watcher/no worker heartbeat; Companion UI unavailable).
-Both new-host APIs report unknown build identity. The promotion chain is therefore not yet executable;
+The model-service target is separate from Product Runtime. Product runtime evidence is on the targets
+named by the selected deployment profile: `dev` is reachable but degraded, `test` is not available, and `prod` has
+API liveness but failing functional health (stale watcher/no worker heartbeat; Companion UI unavailable).
+Both observed remote APIs report unknown build identity. The promotion chain is therefore not yet executable;
 the missing test host, immutable artifact identity, and authoritative deployment handoff are explicit
-follow-up gates rather than implied by local Compose or old Mac mini state.
+follow-up gates rather than implied by local Compose or legacy model-service state.
 
 Status snapshot now includes SoT baseline + release-line fields and intent/event counters (`promote.intent.created`, `panel.intent.executed`, `watcher.run`, ingest runs by plane). Code still exposes `sot_forward_line_version` / `feature_line_version` as the v5.6 release-line marker, but GitHub issue truth treats v5.6 as delivered rather than active. `watcher_runs` now counts watcher audit events from the registry watcher as well as the legacy snapshot watcher, while runtime health still relies on heartbeat + tick logs.
 
