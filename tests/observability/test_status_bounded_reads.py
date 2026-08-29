@@ -98,6 +98,35 @@ def test_count_events_does_not_read_entire_file(tmp_path: Path) -> None:
     assert counters.watcher_runs_total < line_count
 
 
+def test_status_outbox_consumers_preserve_unicode_line_separators(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "outbox.jsonl"
+    path.write_text(
+        json.dumps(
+            {
+                "event": "panel.intent.executed",
+                "timestamp": "2026-08-29T00:00:00Z",
+                "payload": {"text": "before\u2028after\u2029end"},
+            },
+            ensure_ascii=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    counters = _count_events(path)
+
+    assert counters.panel_runs_total == 1
+
+
+def test_status_outbox_consumers_fail_closed_on_malformed_tail(tmp_path: Path) -> None:
+    path = tmp_path / "outbox.jsonl"
+    path.write_text(json.dumps({"event": "panel.intent.executed"}) + "\n{", encoding="utf-8")
+
+    assert _read_last_json_record(path) is None
+
+
 def test_delivery_sla_does_not_read_entire_file(tmp_path: Path) -> None:
     path = tmp_path / "outbox.jsonl"
     payload = json.dumps({"event": "orchestrator.step.error", "timestamp": "2024-01-01T00:00:00Z"})
