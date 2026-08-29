@@ -398,7 +398,11 @@ class DormantSettingsRebindReconciler:
         if cycle.mode not in {"prepared", "committed"}:
             return cycle.receipt
         self._assert_scan_success(summaries)
-        observations = self._observations(summaries, states=states)
+        observations = self._observations(
+            summaries,
+            states=states,
+            desired_revision=cycle.record.desired_revision,
+        )
         watcher_ticks = {
             name: state.ticks_run
             for name, state in states.items()
@@ -553,6 +557,12 @@ class DormantSettingsRebindReconciler:
         for name, summary in summaries.items():
             if name in {"briefing", "journal_review"}:
                 continue
+            if summary.get("scan_complete") is not True:
+                reason = summary.get("scan_incomplete_reason") or "unknown"
+                raise RegistryError(
+                    "settings rebind watcher scan was incomplete "
+                    f"for {name}: {reason}"
+                )
             if bool(summary.get("kill_switch")):
                 raise RegistryError(
                     f"settings rebind watcher scan was paused by the kill switch for {name}"
@@ -583,6 +593,7 @@ class DormantSettingsRebindReconciler:
         summaries: Mapping[str, Mapping[str, object]],
         *,
         states: Mapping[str, WatcherState],
+        desired_revision: int,
     ) -> tuple[BufferedObservation, ...]:
         observations: dict[
             tuple[str, str, str], BufferedObservation
@@ -619,6 +630,8 @@ class DormantSettingsRebindReconciler:
         # written. Reconstruct that same buffer from the state file on restart.
         for watcher, state in states.items():
             for relative_path, item in state.files.items():
+                if item.get("rebind_revision") != desired_revision:
+                    continue
                 content_hash = item.get("hash")
                 mtime = item.get("mtime")
                 trace_id = item.get("trace_id")
