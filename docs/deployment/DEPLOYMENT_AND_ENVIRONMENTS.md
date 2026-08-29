@@ -53,6 +53,9 @@ The ordered receipt schemas and first-deployment rollback refusal are owned only
 This portable deployment document consumes that contract without redefining it. It still refuses a
 screen observation, Project view, unbound guest readback, healthy default-engine stack,
 secret-bearing evidence, or absent compatible rollback baseline as deployment or rollback proof.
+The first inventory receipt is produced and validated only through the linked owner's
+[`devsystem_vm102_component_inventory.v1` executable boundary](../BUILDEROPS_CONTROL_PLANE/README.md#vm-102-evidence-and-receipt-contract);
+this deployment contract does not collect host evidence or duplicate its schema.
 
 ## Current live runtime posture
 

@@ -1,0 +1,254 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "devsystem_vm102_component_inventory.v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "receipt_type",
+    "receipt_version",
+    "target_vm",
+    "observed_at",
+    "source_refs",
+    "components",
+    "secret_material",
+    "gaps",
+    "refusals",
+    "claims",
+    "component_inventory_digest",
+    "evidence_fingerprints",
+    "evidence_fingerprint"
+  ],
+  "properties": {
+    "receipt_type": {"const": "devsystem_vm102_component_inventory.v1"},
+    "receipt_version": {"const": 1},
+    "target_vm": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["vmid", "name"],
+      "properties": {
+        "vmid": {"const": 102},
+        "name": {"const": "builder-system"}
+      }
+    },
+    "observed_at": {"type": "string", "format": "date-time"},
+    "source_refs": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "pattern": "^(repo|github|receipt|operator):[A-Za-z0-9][A-Za-z0-9._/#:-]*$"
+      }
+    },
+    "components": {
+      "type": "array",
+      "minItems": 12,
+      "maxItems": 12,
+      "prefixItems": [
+        {"$ref": "#/$defs/vm102_gap_component", "properties": {"component_id": {"const": "devui_projection"}}},
+        {"$ref": "#/$defs/vm102_gap_component", "properties": {"component_id": {"const": "builderops_control_plane"}}},
+        {"$ref": "#/$defs/vm102_gap_component", "properties": {"component_id": {"const": "builderops_cockpit"}}},
+        {"$ref": "#/$defs/vm102_gap_component", "properties": {"component_id": {"const": "dispatcher_signboard"}}},
+        {"$ref": "#/$defs/vm102_gap_component", "properties": {"component_id": {"const": "ddo"}}},
+        {"$ref": "#/$defs/vm102_gap_component", "properties": {"component_id": {"const": "ckm_kvasir"}}},
+        {"$ref": "#/$defs/vm102_gap_component", "properties": {"component_id": {"const": "focus_conversation_port"}}},
+        {"$ref": "#/$defs/external_gap_component", "properties": {"component_id": {"const": "soi_evidence"}}},
+        {"$ref": "#/$defs/external_component", "properties": {"component_id": {"const": "github_git_ci_delivery"}}},
+        {"$ref": "#/$defs/external_gap_component", "properties": {"component_id": {"const": "model_service"}}},
+        {"$ref": "#/$defs/external_gap_component", "properties": {"component_id": {"const": "tars_proxmox_control"}}},
+        {"$ref": "#/$defs/excluded_component", "properties": {"component_id": {"const": "product_runtime"}}}
+      ],
+      "items": false
+    },
+    "secret_material": {"const": "absent"},
+    "gaps": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {"$ref": "#/$defs/gap"}
+    },
+    "refusals": {
+      "type": "array",
+      "minItems": 6,
+      "uniqueItems": true,
+      "items": {"type": "string", "pattern": "^[a-z0-9]+(?:_[a-z0-9]+)*$"},
+      "allOf": [
+        {"contains": {"const": "activation_not_proven"}},
+        {"contains": {"const": "deployment_not_proven"}},
+        {"contains": {"const": "health_not_proven"}},
+        {"contains": {"const": "qualification_not_proven"}},
+        {"contains": {"const": "residency_not_proven"}},
+        {"contains": {"const": "rollback_not_proven"}}
+      ]
+    },
+    "claims": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "inventory_complete",
+        "residency_proven",
+        "qualification_proven",
+        "activation_proven",
+        "deployment_proven",
+        "health_proven",
+        "rollback_proven"
+      ],
+      "properties": {
+        "inventory_complete": {"const": true},
+        "residency_proven": {"const": false},
+        "qualification_proven": {"const": false},
+        "activation_proven": {"const": false},
+        "deployment_proven": {"const": false},
+        "health_proven": {"const": false},
+        "rollback_proven": {"const": false}
+      }
+    },
+    "component_inventory_digest": {"$ref": "#/$defs/digest"},
+    "evidence_fingerprints": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "devui_projection",
+        "builderops_control_plane",
+        "builderops_cockpit",
+        "dispatcher_signboard",
+        "ddo",
+        "ckm_kvasir",
+        "focus_conversation_port",
+        "soi_evidence",
+        "github_git_ci_delivery",
+        "model_service",
+        "tars_proxmox_control",
+        "product_runtime"
+      ],
+      "properties": {
+        "devui_projection": {"$ref": "#/$defs/digest"},
+        "builderops_control_plane": {"$ref": "#/$defs/digest"},
+        "builderops_cockpit": {"$ref": "#/$defs/digest"},
+        "dispatcher_signboard": {"$ref": "#/$defs/digest"},
+        "ddo": {"$ref": "#/$defs/digest"},
+        "ckm_kvasir": {"$ref": "#/$defs/digest"},
+        "focus_conversation_port": {"$ref": "#/$defs/digest"},
+        "soi_evidence": {"$ref": "#/$defs/digest"},
+        "github_git_ci_delivery": {"$ref": "#/$defs/digest"},
+        "model_service": {"$ref": "#/$defs/digest"},
+        "tars_proxmox_control": {"$ref": "#/$defs/digest"},
+        "product_runtime": {"$ref": "#/$defs/digest"}
+      }
+    },
+    "evidence_fingerprint": {"$ref": "#/$defs/digest"}
+  },
+  "$defs": {
+    "digest": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "component": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "component_id",
+        "placement_class",
+        "owner",
+        "service_or_project",
+        "source_identity",
+        "ingress_auth",
+        "health_version",
+        "deployment_lifecycle",
+        "migration_rollback",
+        "reconciliation_state",
+        "evidence_refs"
+      ],
+      "properties": {
+        "component_id": {"type": "string"},
+        "placement_class": {
+          "enum": [
+            "vm102_resident_target",
+            "external_dependency",
+            "intentionally_non_runtime"
+          ]
+        },
+        "owner": {"type": "string", "minLength": 1, "maxLength": 512},
+        "service_or_project": {"type": "string", "minLength": 1, "maxLength": 2048},
+        "source_identity": {"type": "string", "minLength": 1, "maxLength": 2048},
+        "ingress_auth": {"type": "string", "minLength": 1, "maxLength": 2048},
+        "health_version": {"type": "string", "minLength": 1, "maxLength": 2048},
+        "deployment_lifecycle": {"type": "string", "minLength": 1, "maxLength": 2048},
+        "migration_rollback": {"type": "string", "minLength": 1, "maxLength": 2048},
+        "reconciliation_state": {"enum": ["gap", "unknown", "external", "excluded"]},
+        "evidence_refs": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^(repo|github|receipt|operator):[A-Za-z0-9][A-Za-z0-9._/#:-]*$"
+          }
+        }
+      }
+    },
+    "vm102_gap_component": {
+      "allOf": [
+        {"$ref": "#/$defs/component"},
+        {
+          "properties": {
+            "placement_class": {"const": "vm102_resident_target"},
+            "reconciliation_state": {"enum": ["gap", "unknown"]}
+          }
+        }
+      ]
+    },
+    "external_gap_component": {
+      "allOf": [
+        {"$ref": "#/$defs/component"},
+        {
+          "properties": {
+            "placement_class": {"const": "external_dependency"},
+            "reconciliation_state": {"enum": ["gap", "unknown"]}
+          }
+        }
+      ]
+    },
+    "external_component": {
+      "allOf": [
+        {"$ref": "#/$defs/component"},
+        {
+          "properties": {
+            "placement_class": {"const": "external_dependency"},
+            "reconciliation_state": {"const": "external"}
+          }
+        }
+      ]
+    },
+    "excluded_component": {
+      "allOf": [
+        {"$ref": "#/$defs/component"},
+        {
+          "properties": {
+            "placement_class": {"const": "intentionally_non_runtime"},
+            "reconciliation_state": {"const": "excluded"}
+          }
+        }
+      ]
+    },
+    "gap": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["component_id", "code", "detail"],
+      "properties": {
+        "component_id": {"enum": [
+          "devui_projection",
+          "builderops_control_plane",
+          "builderops_cockpit",
+          "dispatcher_signboard",
+          "ddo",
+          "ckm_kvasir",
+          "focus_conversation_port",
+          "soi_evidence",
+          "github_git_ci_delivery",
+          "model_service",
+          "tars_proxmox_control",
+          "product_runtime"
+        ]},
+        "code": {"type": "string", "pattern": "^[a-z0-9]+(?:_[a-z0-9]+)*$"},
+        "detail": {"type": "string", "minLength": 1, "maxLength": 2048}
+      }
+    }
+  }
+}

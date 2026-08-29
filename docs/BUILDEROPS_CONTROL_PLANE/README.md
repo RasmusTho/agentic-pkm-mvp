@@ -120,6 +120,13 @@ Required common fields are `receipt_type`, `receipt_version`, `target_vm` (`vmid
 and an explicit `gaps`/`refusals` list. A receipt without the required evidence or with secret
 material is invalid. A live guest check without the named receipt remains only an observation.
 
+The inventory-only boundary is executable through the
+[`devsystem_vm102_component_inventory.v1` schema](../../config/platform/devsystem_vm102_component_inventory.v1.schema.json)
+and its [pure producer/validator](../../app/ops/devsystem_vm102_component_inventory.py). The
+`python -m app.ops.devsystem_vm102_component_inventory --evidence <operator-supplied.json>` entrypoint
+uses caller-supplied JSON only; it performs no host inspection and cannot emit residency,
+qualification, activation, deployment, health, or rollback proof.
+
 `devsystem_vm102_deploy.v1` has an explicit rollback-baseline state:
 
 - `rollback_baseline_state: available` requires a complete, compatible, runnable previous
