@@ -99,6 +99,63 @@ def test_run_watcher_tick_emits_event_when_no_changes(tmp_path: Path, monkeypatc
         assert not any(ev.get("event") == "watcher.run" for ev in outbox_payloads)
 
 
+def test_watcher_tick_calls_standing_questions_composition_after_ingest(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """The real vault-ingest caller must invoke SQ-03 followed by SQ-04."""
+    vault = tmp_path / "vault"
+    evidence = vault / "Inbox" / "evidence.md"
+    evidence.parent.mkdir(parents=True)
+    evidence.write_text(
+        "---\n"
+        "uuid: 00000000-0000-0000-0000-000000000001\n"
+        "scope: work\n"
+        "---\n\n"
+        "the test channel is isolated\n",
+        encoding="utf-8",
+    )
+    outbox = tmp_path / "events.jsonl"
+    calls: list[dict[str, object]] = []
+    monkeypatch.setenv("INDEX_OUTBOX_PATH", str(outbox))
+    monkeypatch.setenv("WATCHER_RUN_LOG_PATH", str(tmp_path / "watcher_run.jsonl"))
+    monkeypatch.setattr(
+        "app.watcher.vault_watcher.run_vault_alpha_ingest_paths",
+        lambda *_args, **_kwargs: SimpleNamespace(ingested=1, errors=0),
+    )
+
+    def standing_tick(**kwargs):
+        calls.append(kwargs)
+        return SimpleNamespace(
+            matching=SimpleNamespace(attached=1),
+            refresh=SimpleNamespace(
+                refresh_candidates=("sq-1",),
+                drafted=("sq-1",),
+                deferred_pending_review=(),
+            ),
+        )
+
+    monkeypatch.setattr(
+        "app.standing_questions.evidence_matching.run_standing_questions_tick",
+        standing_tick,
+    )
+
+    summary, _ = run_watcher_tick(
+        vault_root=vault,
+        snapshot_path=vault / ".state.json",
+        skip_panel=True,
+        emit_only=False,
+        dry_run=False,
+        max_notes=10,
+        force=False,
+        outbox_path=outbox,
+    )
+
+    assert len(calls) == 1
+    assert calls[0]["candidates"]
+    assert summary["standing_questions_matching_attached"] == 1
+    assert summary["standing_questions_drafted"] == 1
+
+
 def test_run_watcher_tick_uses_watcher_settings_default_when_env_unset(tmp_path: Path, monkeypatch) -> None:
     vault = tmp_path / "vault"
     inbox = vault / "Inbox"
