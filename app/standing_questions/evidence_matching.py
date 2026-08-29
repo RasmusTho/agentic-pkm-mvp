@@ -383,7 +383,7 @@ def match_evidence_to_open_questions(
         for candidate in candidate_list:
             # Scope first, before any content is resolved: a cross-scope artifact's
             # text must never be read, prompted, or logged (content-free denial).
-            if candidate.scope != note["scope"]:
+            if candidate.scope != baseline["scope"]:
                 counters.bump("excluded_cross_scope")
                 continue
             resolved_content = _resolve_content(resolved_root, candidate)

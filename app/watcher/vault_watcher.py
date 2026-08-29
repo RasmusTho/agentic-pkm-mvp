@@ -533,11 +533,20 @@ class VaultWatcher:
         return VaultWatcherResult(changed=changed, deleted=deleted, snapshot=current)
 
     def refresh_snapshot(self) -> Snapshot:
-        current = _scan_md_files(self.vault_root)
-        _discard_reappeared_unreconciled_deletions(self.snapshot_path, current)
-        retained = _snapshot_with_unreconciled_deletions(self.snapshot_path, current)
+        retained = self.scan_snapshot()
         save_snapshot(self.snapshot_path, retained)
         return retained
+
+    def scan_snapshot(self) -> Snapshot:
+        """Build the next snapshot without persisting its main file.
+
+        The watcher tick applies retry-preservation decisions before the main
+        snapshot is committed. This keeps a crash between composition and
+        restoration from acknowledging a failed capability.
+        """
+        current = _scan_md_files(self.vault_root)
+        _discard_reappeared_unreconciled_deletions(self.snapshot_path, current)
+        return _snapshot_with_unreconciled_deletions(self.snapshot_path, current)
 
 
 _DeleteReconciliation = Literal["emitted", "superseded_by_rename", "not_queued"]
@@ -747,7 +756,7 @@ def run_watcher_tick(
             if preserve_changed_observations:
                 _advance_terminal_delete_observations(watcher.snapshot_path)
             else:
-                refreshed = watcher.refresh_snapshot()
+                refreshed = watcher.scan_snapshot()
                 # SQ is part of the changed-note delivery chain.  If its
                 # composition fails, leave those source observations at their
                 # pre-tick cursor so an unchanged next tick retries the
@@ -761,8 +770,7 @@ def run_watcher_tick(
                         refreshed[rel_path] = initial_snapshot[rel_path]
                     else:
                         refreshed.pop(rel_path, None)
-                if standing_questions_retry_paths:
-                    save_snapshot(watcher.snapshot_path, refreshed)
+                save_snapshot(watcher.snapshot_path, refreshed)
         _emit_run_event(
             summary,
             vault_root=vault_root,

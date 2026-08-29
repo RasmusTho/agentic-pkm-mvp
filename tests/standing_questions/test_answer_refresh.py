@@ -16,7 +16,10 @@ import pytest
 from app.expansion.create import CreateIdempotencyConflictError, SourceInput
 from app.knowledge.errors import KnowledgeWriteConflict
 from app.standing_questions import answer_refresh as refresh_module
-from app.standing_questions.answer_refresh import refresh_answers_on_evidence_delta
+from app.standing_questions.answer_refresh import (
+    _refresh_attempt_ids,
+    refresh_answers_on_evidence_delta,
+)
 from app.standing_questions.evidence_matching import (
     CandidateArtifact,
     run_standing_questions_tick,
@@ -363,6 +366,31 @@ def test_standing_answer_newline_edit_during_cognition_blocks_stale_refresh(
 
     assert result.blocked == (note["question_id"],)
     assert store.read_question(note["question_id"])["candidate_answer_ref"] is None
+
+
+def test_question_raw_byte_version_changes_refresh_generation() -> None:
+    first = _refresh_attempt_ids(
+        "question-1",
+        None,
+        [],
+        question_version="sha256:crlf",
+        question_text="Which boundary?",
+        standing_answer_referenced=False,
+        standing_answer=None,
+        standing_answer_bytes=None,
+    )
+    second = _refresh_attempt_ids(
+        "question-1",
+        None,
+        [],
+        question_version="sha256:lf",
+        question_text="Which boundary?",
+        standing_answer_referenced=False,
+        standing_answer=None,
+        standing_answer_bytes=None,
+    )
+
+    assert first != second
 
 
 def test_changed_source_bytes_cannot_replay_historical_evidence(tmp_path: Path) -> None:
@@ -958,6 +986,37 @@ def test_refresh_replay_rejects_receipt_payload_collision(tmp_path: Path) -> Non
     store.update_system_fields_if_unchanged = original  # type: ignore[method-assign]
 
     with pytest.raises(CreateIdempotencyConflictError, match="receipt payload"):
+        refresh_answers_on_evidence_delta(
+            vault_root=vault, outbox_path=outbox, evidence_sources=sources,
+            store=store, write_guard=_guard(), now=_dt(13)
+        )
+
+
+def test_emit_receipt_rejects_conflicting_duplicate_event_ids(tmp_path: Path) -> None:
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    outbox = tmp_path / "outbox.jsonl"
+    store, note = _question(vault)
+    evidence = _evidence("vault://notes/a.md", "outbox://evidence/1", "first evidence", 10)
+    store.update_system_fields(note["question_id"], {"evidence": [evidence]})
+    sources = {"outbox://evidence/1": _source("outbox://evidence/1", evidence["quoted_span"])}
+    original = store.update_system_fields_if_unchanged
+
+    def conflict(*_args: Any, **_kwargs: Any) -> Any:
+        raise KnowledgeWriteConflict("simulated crash after proposal receipt")
+
+    store.update_system_fields_if_unchanged = conflict  # type: ignore[method-assign]
+    refresh_answers_on_evidence_delta(
+        vault_root=vault, outbox_path=outbox, evidence_sources=sources,
+        store=store, write_guard=_guard(), now=_dt(12)
+    )
+    records = _records(outbox)
+    proposal = next(record for record in records if record["event"] == "expansion.create.proposed")
+    records.append({**proposal, "payload": {**proposal["payload"], "kind": "create.digest"}})
+    outbox.write_text("\n".join(json.dumps(record) for record in records) + "\n", encoding="utf-8")
+    store.update_system_fields_if_unchanged = original  # type: ignore[method-assign]
+
+    with pytest.raises(CreateIdempotencyConflictError, match="conflicting duplicate"):
         refresh_answers_on_evidence_delta(
             vault_root=vault, outbox_path=outbox, evidence_sources=sources,
             store=store, write_guard=_guard(), now=_dt(13)

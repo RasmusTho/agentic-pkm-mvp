@@ -223,6 +223,46 @@ def test_match_human_edit_during_judgment_blocks_stale_evidence(tmp_path: Path) 
     assert store.read_question(note["question_id"])["evidence"] == []
 
 
+def test_match_uses_fresh_scope_baseline(tmp_path: Path) -> None:
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    base_store = _store(vault)
+    note, _ = base_store.create_question(text=QUESTION_TEXT, scope="work", registered_via="explicit")
+    path = vault / "questions" / f"{note['question_id']}.md"
+
+    class ScopeFlipStore(QuestionStore):
+        flipped = False
+
+        def read_question_with_version(self, question_id: str):  # type: ignore[no-untyped-def]
+            if not self.flipped:
+                current = parse_question_note(path.read_text(encoding="utf-8"))
+                path.write_text(
+                    serialize_question_note({**current, "scope": "personal"}),
+                    encoding="utf-8",
+                )
+                self.flipped = True
+            return super().read_question_with_version(question_id)
+
+    store = ScopeFlipStore(vault, write_guard=_store(vault).write_guard)
+    candidate = CandidateArtifact(
+        artifact_ref="vault://notes/evidence.md",
+        source_stream="ingest.vault.changed",
+        scope="work",
+        provenance_ref="outbox://evidence/1",
+        content="work-only evidence",
+    )
+    summary = match_evidence_to_open_questions(
+        vault_root=vault,
+        candidates=[candidate],
+        store=store,
+        complete=lambda **_kwargs: json.dumps(_attached(span="work-only evidence")),
+    )
+
+    assert summary.excluded_cross_scope == 1
+    assert summary.attached == 0
+    assert store.read_question(note["question_id"])["evidence"] == []
+
+
 def test_cross_scope_artifact_excluded_content_free(tmp_path: Path) -> None:
     """AC2: a same-content, different-scope artifact is excluded before any content
     is read or shown to the model."""

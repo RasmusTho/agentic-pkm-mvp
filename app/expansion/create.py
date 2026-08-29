@@ -563,14 +563,20 @@ def _existing_receipt(outbox_path: Path, event: str, event_id: str) -> dict[str,
         lines = outbox_path.read_text(encoding="utf-8").splitlines()
     except OSError:
         return None
+    first_match: dict[str, Any] | None = None
     for line in lines:
         try:
             record = json.loads(line)
         except (TypeError, ValueError):
             continue
         if record.get("event") == event and record.get("event_id") == event_id:
-            return record
-    return None
+            if first_match is None:
+                first_match = record
+            elif record.get("payload") != first_match.get("payload"):
+                raise CreateIdempotencyConflictError(
+                    f"deterministic Create receipt has conflicting duplicate: {event}/{event_id}"
+                )
+    return first_match
 
 
 def _request_fingerprint(request: CreateRequest) -> str:

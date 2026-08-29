@@ -6,6 +6,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from uuid import uuid4
 
+import pytest
+
 from app.knowledge import adapters as knowledge_adapters
 from app.knowledge.multiwriter import is_conflict_artifact
 from app.knowledge.write_ops import write_note_from_absolute
@@ -154,6 +156,50 @@ def test_watcher_tick_calls_standing_questions_composition_after_ingest(
     assert calls[0]["candidates"]
     assert summary["standing_questions_matching_attached"] == 1
     assert summary["standing_questions_drafted"] == 1
+
+
+def test_watcher_retry_snapshot_is_restored_before_persist_crash(
+    tmp_path: Path, monkeypatch
+) -> None:
+    vault = tmp_path / "vault"
+    evidence = _write_note(
+        vault,
+        "Inbox/evidence.md",
+        "---\n"
+        "uuid: 00000000-0000-0000-0000-000000000001\n"
+        "scope: work\n"
+        "---\n\n"
+        "retry me\n",
+    )
+    snapshot = tmp_path / "state.json"
+    old_mtime = evidence.stat().st_mtime - 1
+    save_snapshot(snapshot, {"Inbox/evidence.md": old_mtime})
+    original_save = watcher_module.save_snapshot
+
+    def save_then_crash(path: Path, value: dict[str, float]) -> None:
+        original_save(path, value)
+        raise RuntimeError("crash after final snapshot attempt")
+
+    monkeypatch.setenv("WATCHER_RUN_LOG_PATH", str(tmp_path / "watcher.jsonl"))
+    monkeypatch.setattr(watcher_module, "save_snapshot", save_then_crash)
+    monkeypatch.setattr(
+        "app.standing_questions.evidence_matching.run_standing_questions_tick",
+        lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("temporary SQ outage")),
+    )
+
+    with pytest.raises(RuntimeError, match="crash after final snapshot attempt"):
+        run_watcher_tick(
+            vault_root=vault,
+            snapshot_path=snapshot,
+            skip_panel=True,
+            emit_only=False,
+            dry_run=False,
+            max_notes=10,
+            force=False,
+            outbox_path=tmp_path / "outbox.jsonl",
+        )
+
+    assert load_snapshot(snapshot)["Inbox/evidence.md"] == old_mtime
 
 
 def test_watcher_retries_standing_questions_failure_before_advancing_snapshot(

@@ -119,6 +119,7 @@ def _refresh_attempt_ids(
     last_refreshed_at: str | None,
     evidence: Sequence[Mapping[str, Any]],
     *,
+    question_version: str,
     question_text: str,
     standing_answer_referenced: bool,
     standing_answer: str | None,
@@ -128,6 +129,7 @@ def _refresh_attempt_ids(
     generation = last_refreshed_at or "never"
     material = {
         "question_id": question_id,
+        "question_version": question_version,
         "question_text": question_text,
         "generation": generation,
         "evidence": list(evidence),
@@ -525,6 +527,7 @@ def refresh_answers_on_evidence_delta(
                     question_id,
                     current.get("last_refreshed_at"),
                     current.get("evidence", []),
+                    question_version=observed_version,
                     question_text=current["text"],
                     standing_answer_referenced=standing_answer_referenced,
                     standing_answer=standing_answer,
