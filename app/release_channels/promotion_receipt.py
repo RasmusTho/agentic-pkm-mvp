@@ -38,7 +38,7 @@ from app.release_channels.channel_manifest import (
 )
 from app.release_channels.reversibility import (
     MigrationMarkerError,
-    check_all_migrations,
+    check_migration_snapshots,
 )
 
 
@@ -210,18 +210,47 @@ def _validate_checks(value: object) -> dict[str, bool]:
     return {name: bool(checks[name]) for name in _OBSERVED_CHECKS}
 
 
-def _migration_set_identity(paths: Sequence[Path]) -> str:
-    records: list[dict[str, str]] = []
+def _capture_migration_snapshots(paths: Sequence[Path]) -> tuple[tuple[str, bytes], ...]:
+    snapshots: list[tuple[str, bytes]] = []
     names: set[str] = set()
     for path in paths:
         if path.name in names or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*\.py", path.name) is None:
             raise PromotionReceiptError("migration_paths_invalid")
-        names.add(path.name)
+        descriptor = -1
         try:
-            digest = hashlib.sha256(path.read_bytes()).hexdigest()
+            descriptor = os.open(
+                path,
+                os.O_RDONLY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0),
+            )
+            info = os.fstat(descriptor)
+            chunks: list[bytes] = []
+            while True:
+                chunk = os.read(descriptor, 64 * 1024)
+                if not chunk:
+                    break
+                chunks.append(chunk)
+            named_info = path.stat(follow_symlinks=False)
         except OSError as exc:
             raise PromotionReceiptError("migration_paths_invalid") from exc
-        records.append({"migration": path.name, "digest": f"sha256:{digest}"})
+        finally:
+            if descriptor >= 0:
+                os.close(descriptor)
+        if (
+            not stat.S_ISREG(info.st_mode)
+            or info.st_nlink != 1
+            or (named_info.st_dev, named_info.st_ino) != (info.st_dev, info.st_ino)
+        ):
+            raise PromotionReceiptError("migration_paths_invalid")
+        names.add(path.name)
+        snapshots.append((path.name, b"".join(chunks)))
+    return tuple(snapshots)
+
+
+def _migration_set_identity(snapshots: Sequence[tuple[str, bytes]]) -> str:
+    records: list[dict[str, str]] = []
+    for name, content in snapshots:
+        digest = hashlib.sha256(content).hexdigest()
+        records.append({"migration": name, "digest": f"sha256:{digest}"})
     return "sha256:" + hashlib.sha256(
         _canonical_bytes(sorted(records, key=lambda record: record["migration"]))
     ).hexdigest()
@@ -274,6 +303,7 @@ def build_promotion_test_check_report(
 ) -> dict[str, object]:
     """Bind runner observations to one immutable candidate and migration set."""
     validated_paths = _validate_migration_paths(migration_paths)
+    migration_snapshots = _capture_migration_snapshots(validated_paths)
     candidate, identity = _derive_candidate_identity(
         rendered=rendered,
         channel_manifest=channel_manifest,
@@ -284,7 +314,7 @@ def build_promotion_test_check_report(
         "candidate_identity": candidate["candidate_identity"],
         "identity": identity,
         "check_results": _validate_checks(check_results),
-        "migration_set_identity": _migration_set_identity(validated_paths),
+        "migration_set_identity": _migration_set_identity(migration_snapshots),
     }
 
 
@@ -294,7 +324,7 @@ def _bind_promotion_test_report(
     channel_manifest: Mapping[str, object],
     prod_admission_context: Mapping[str, str],
     check_report: Mapping[str, object],
-    migration_paths: Sequence[Path],
+    migration_snapshots: Sequence[tuple[str, bytes]],
 ) -> tuple[dict[str, str], dict[str, bool], dict[str, object]]:
     candidate, candidate_bound_identity = _derive_candidate_identity(
         rendered=rendered,
@@ -312,7 +342,7 @@ def _bind_promotion_test_report(
     if report_identity != candidate_bound_identity:
         raise PromotionReceiptError("check_report_identity_mismatch")
     migration_set_identity = report.get("migration_set_identity")
-    if migration_set_identity != _migration_set_identity(migration_paths):
+    if migration_set_identity != _migration_set_identity(migration_snapshots):
         raise PromotionReceiptError("check_report_migration_mismatch")
     validated_checks = _validate_checks(report.get("check_results"))
     validated_report: dict[str, object] = {
@@ -403,12 +433,20 @@ def _validate_private_directory(path: Path) -> None:
 
 def _durable_mkdir(path: Path) -> None:
     if path.exists():
+        try:
+            _fsync_directory(path.parent)
+        except OSError as exc:
+            raise PromotionReceiptError("receipt_store_unavailable") from exc
         return
     missing: list[Path] = []
     cursor = path
     while not cursor.exists():
         missing.append(cursor)
         cursor = cursor.parent
+    try:
+        _fsync_directory(cursor.parent)
+    except OSError as exc:
+        raise PromotionReceiptError("receipt_store_unavailable") from exc
     for directory in reversed(missing):
         try:
             directory.mkdir(mode=0o700)
@@ -528,6 +566,10 @@ def _install_content_addressed(path: Path, data: bytes) -> None:
     if path.exists():
         if _read_canonical_file(path, code="receipt_store_corrupt") != json.loads(data):
             raise PromotionReceiptError("receipt_store_corrupt")
+        try:
+            _fsync_directory(path.parent)
+        except OSError as exc:
+            raise PromotionReceiptError("receipt_store_io_failure") from exc
         return
     temp = _write_temp(path, data)
     try:
@@ -547,6 +589,10 @@ def _install_immutable_record(path: Path, data: bytes, *, code: str) -> None:
     if path.exists():
         if _read_canonical_file(path, code=code) != json.loads(data):
             raise PromotionReceiptError(code)
+        try:
+            _fsync_directory(path.parent)
+        except OSError as exc:
+            raise PromotionReceiptError("receipt_store_io_failure") from exc
         return
     temp = _write_temp(path, data)
     try:
@@ -597,25 +643,22 @@ def write_promotion_test_terminal_receipt(
     if not isinstance(attempt_id, str) or _ATTEMPT_ID.fullmatch(attempt_id) is None:
         raise PromotionReceiptError("attempt_id_invalid")
     validated_paths = _validate_migration_paths(migration_paths)
+    migration_snapshots = _capture_migration_snapshots(validated_paths)
     validated_identity, validated_checks, validated_report = _bind_promotion_test_report(
         rendered=rendered,
         channel_manifest=channel_manifest,
         prod_admission_context=prod_admission_context,
         check_report=check_report,
-        migration_paths=validated_paths,
+        migration_snapshots=migration_snapshots,
     )
     try:
-        migration_classification: dict[str, object] = check_all_migrations(
-            validated_paths
+        migration_classification: dict[str, object] = check_migration_snapshots(
+            migration_snapshots
         )
         migration_ok = True
     except (MigrationMarkerError, OSError, UnicodeError):
         migration_classification = {"status": "invalid"}
         migration_ok = False
-    if validated_report["migration_set_identity"] != _migration_set_identity(
-        validated_paths
-    ):
-        raise PromotionReceiptError("migration_set_changed")
     terminal_checks = {"migration": migration_ok, **validated_checks}
     outcome = "PASS" if all(terminal_checks.values()) else "FAIL"
     receipt = _build_receipt(
@@ -670,23 +713,24 @@ def write_promotion_test_terminal_receipt(
             raise PromotionReceiptError("unsafe_receipt_store")
         fcntl.flock(lock_descriptor, fcntl.LOCK_EX)
         _fsync_directory(store)
-        if reservation_path.exists():
-            existing_reservation = _read_canonical_file(
-                reservation_path,
-                code="attempt_conflict",
-            )
-            if (
-                set(existing_reservation) != _RESERVATION_FIELDS
-                or existing_reservation != reservation
-            ):
-                raise PromotionReceiptError("attempt_conflict")
-        else:
-            _install_immutable_record(
-                reservation_path,
-                reservation_bytes,
-                code="attempt_conflict",
-            )
+        _install_immutable_record(
+            reservation_path,
+            reservation_bytes,
+            code="attempt_conflict",
+        )
+        existing_reservation = _read_canonical_file(
+            reservation_path,
+            code="attempt_conflict",
+        )
+        if set(existing_reservation) != _RESERVATION_FIELDS:
+            raise PromotionReceiptError("attempt_conflict")
         if attempt_path.exists():
+            _install_content_addressed(receipt_path, receipt_bytes)
+            _install_immutable_record(
+                attempt_path,
+                attempt_bytes,
+                code="attempt_conflict",
+            )
             existing_attempt = _read_canonical_file(
                 attempt_path,
                 code="attempt_record_corrupt",

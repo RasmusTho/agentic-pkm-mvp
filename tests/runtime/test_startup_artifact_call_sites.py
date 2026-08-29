@@ -1781,7 +1781,7 @@ def test_promotion_test_rejects_stale_candidate_and_migration_reports(
     assert first["outcome"] == "PASS"
 
 
-def test_promotion_test_detects_migration_change_during_classification(
+def test_promotion_test_classifies_same_migration_snapshot_used_for_identity(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1792,40 +1792,84 @@ def test_promotion_test_detects_migration_change_during_classification(
     migration = tmp_path / "classified.py"
     migration.write_text('reversibility = "reversible"\n', encoding="utf-8")
     report = _promotion_check_report((migration,))
-    real_check = promotion_receipt.check_all_migrations
+    real_check = promotion_receipt.check_migration_snapshots
 
-    def mutate_after_classification(paths):
-        result = real_check(paths)
+    def aba_while_classifying(snapshots):
         migration.write_text(
             'reversibility = "forward-only"\n',
             encoding="utf-8",
         )
+        result = real_check(snapshots)
+        migration.write_text('reversibility = "reversible"\n', encoding="utf-8")
         return result
 
     monkeypatch.setattr(
         promotion_receipt,
-        "check_all_migrations",
-        mutate_after_classification,
+        "check_migration_snapshots",
+        aba_while_classifying,
     )
+    store = tmp_path / "ops" / "test-promotions"
+    receipt = write_promotion_test_terminal_receipt(
+        attempt_id="pt-" + "b" * 32,
+        rendered=rendered,
+        channel_manifest=manifest,
+        prod_admission_context=_promotion_admission_context(),
+        check_report=report,
+        migration_paths=(migration,),
+        issued_at=datetime(2026, 8, 16, tzinfo=timezone.utc),
+        fresh_until=datetime(2026, 8, 17, tzinfo=timezone.utc),
+        issuer_id="promotion-test-issuer",
+        issuer_key_id="promotion-test-issuer-key-v1",
+        signer=private_key.sign,
+        issuer_public_key=public_key,
+        receipt_store=store,
+        resettable_roots=(tmp_path / "tmp-test", tmp_path / "vault-test"),
+    )
+    attempt = json.loads(next((store / "attempts").glob("*.json")).read_text())
+    assert receipt["outcome"] == "PASS"
+    assert attempt["migration_classification"]["reversible"] == ["classified.py"]
+    assert attempt["migration_classification"]["forward_only"] == []
+    assert migration.read_text(encoding="utf-8") == 'reversibility = "reversible"\n'
+
+    symlink = tmp_path / "symlinked.py"
+    target = tmp_path / "target.py"
+    target.write_text('reversibility = "reversible"\n', encoding="utf-8")
+    symlink.symlink_to(target)
     with pytest.raises(PromotionReceiptError) as exc_info:
-        write_promotion_test_terminal_receipt(
-            attempt_id="pt-" + "b" * 32,
+        build_promotion_test_check_report(
             rendered=rendered,
             channel_manifest=manifest,
             prod_admission_context=_promotion_admission_context(),
-            check_report=report,
-            migration_paths=(migration,),
-            issued_at=datetime(2026, 8, 16, tzinfo=timezone.utc),
-            fresh_until=datetime(2026, 8, 17, tzinfo=timezone.utc),
-            issuer_id="promotion-test-issuer",
-            issuer_key_id="promotion-test-issuer-key-v1",
-            signer=private_key.sign,
-            issuer_public_key=public_key,
-            receipt_store=tmp_path / "ops" / "test-promotions",
-            resettable_roots=(tmp_path / "tmp-test", tmp_path / "vault-test"),
+            check_results=_promotion_check_results(),
+            migration_paths=(symlink,),
         )
-    assert exc_info.value.code == "migration_set_changed"
-    assert not (tmp_path / "ops" / "test-promotions").exists()
+    assert exc_info.value.code == "migration_paths_invalid"
+
+    replaced = tmp_path / "replaced.py"
+    moved = tmp_path / "opened-inode.py"
+    replaced.write_text('reversibility = "reversible"\n', encoding="utf-8")
+    real_read = promotion_receipt.os.read
+    swapped = False
+
+    def replace_named_path(descriptor: int, size: int) -> bytes:
+        nonlocal swapped
+        data = real_read(descriptor, size)
+        if data and not swapped:
+            swapped = True
+            replaced.replace(moved)
+            replaced.write_text('reversibility = "forward-only"\n', encoding="utf-8")
+        return data
+
+    monkeypatch.setattr(promotion_receipt.os, "read", replace_named_path)
+    with pytest.raises(PromotionReceiptError) as exc_info:
+        build_promotion_test_check_report(
+            rendered=rendered,
+            channel_manifest=manifest,
+            prod_admission_context=_promotion_admission_context(),
+            check_results=_promotion_check_results(),
+            migration_paths=(replaced,),
+        )
+    assert exc_info.value.code == "migration_paths_invalid"
 
 
 def test_promotion_test_attempt_publication_never_overwrites_racing_path(
@@ -1939,3 +1983,82 @@ def test_promotion_test_fences_fresh_store_parent_directories(
         )
     assert exc_info.value.code == "receipt_store_unavailable"
     assert not (failed_store / "receipts").exists()
+
+
+@pytest.mark.parametrize(
+    ("target_kind", "target_occurrence"),
+    [
+        ("ops-parent", 1),
+        ("store-parent", 1),
+        ("store", 1),
+        ("store", 2),
+        ("store", 3),
+        ("reservations", 1),
+        ("receipts", 1),
+        ("attempts", 1),
+    ],
+)
+def test_promotion_test_retry_refences_every_uncertain_directory_entry(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    target_kind: str,
+    target_occurrence: int,
+) -> None:
+    from app.release_channels import promotion_receipt
+
+    private_key, public_key = _promotion_test_signing_material()
+    rendered, manifest = _promotion_test_candidate_inputs()
+    store = tmp_path / "ops" / "test-promotions"
+    targets = {
+        "ops-parent": tmp_path,
+        "store-parent": store.parent,
+        "store": store,
+        "reservations": store / "reservations",
+        "receipts": store / "receipts",
+        "attempts": store / "attempts",
+    }
+    target = targets[target_kind]
+    real_fsync = promotion_receipt._fsync_directory
+    target_calls = 0
+
+    def fail_once(path: Path) -> None:
+        nonlocal target_calls
+        if path == target:
+            target_calls += 1
+            if target_calls == target_occurrence:
+                raise OSError("injected uncertain directory entry")
+        real_fsync(path)
+
+    common = {
+        "attempt_id": "pt-" + "d" * 32,
+        "rendered": rendered,
+        "channel_manifest": manifest,
+        "prod_admission_context": _promotion_admission_context(),
+        "check_report": _promotion_check_report(),
+        "migration_paths": (),
+        "issued_at": datetime(2026, 8, 16, tzinfo=timezone.utc),
+        "fresh_until": datetime(2026, 8, 17, tzinfo=timezone.utc),
+        "issuer_id": "promotion-test-issuer",
+        "issuer_key_id": "promotion-test-issuer-key-v1",
+        "signer": private_key.sign,
+        "issuer_public_key": public_key,
+        "receipt_store": store,
+        "resettable_roots": (tmp_path / "tmp-test", tmp_path / "vault-test"),
+    }
+    monkeypatch.setattr(promotion_receipt, "_fsync_directory", fail_once)
+    with pytest.raises(PromotionReceiptError):
+        write_promotion_test_terminal_receipt(**common)
+
+    retry_fences: list[Path] = []
+
+    def observe_retry(path: Path) -> None:
+        retry_fences.append(path)
+        real_fsync(path)
+
+    monkeypatch.setattr(promotion_receipt, "_fsync_directory", observe_retry)
+    receipt = write_promotion_test_terminal_receipt(**common)
+    assert receipt["outcome"] == "PASS"
+    assert target in retry_fences
+    assert len(list((store / "reservations").glob("*.json"))) == 1
+    assert len(list((store / "receipts").glob("*.json"))) == 1
+    assert len(list((store / "attempts").glob("*.json"))) == 1
