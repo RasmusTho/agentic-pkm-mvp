@@ -60,6 +60,17 @@ def _confirm_file_and_parent_durable(path: Path) -> None:
     _fsync_parent(path)
 
 
+def _canonical_settings_receipt_path(path: Path) -> Path:
+    """Resolve aliases before settings receipt locks or reads are derived."""
+
+    return path.expanduser().resolve(strict=False)
+
+
+def _settings_receipt_lock_path(outbox_path: Path) -> Path:
+    canonical_path = _canonical_settings_receipt_path(outbox_path)
+    return canonical_path.with_name(f".{canonical_path.name}.settings-receipt.lock")
+
+
 @dataclass(frozen=True)
 class SettingsWriteReceipt:
     """Actor-tagged observation of one settings value mutation."""
@@ -162,7 +173,7 @@ def durable_settings_write_receipt_exists(receipt: SettingsWriteReceipt) -> bool
 
     from app.outbox.events import get_index_outbox_path  # noqa: PLC0415
 
-    outbox_path = get_index_outbox_path()
+    outbox_path = _canonical_settings_receipt_path(get_index_outbox_path())
     operation_id_collision = False
     exact_match_count = 0
     try:
@@ -227,9 +238,9 @@ def emit_durable_settings_write_receipt_once(
 
     from app.outbox.events import get_index_outbox_path  # noqa: PLC0415
 
-    outbox_path = get_index_outbox_path()
+    outbox_path = _canonical_settings_receipt_path(get_index_outbox_path())
     outbox_path.parent.mkdir(parents=True, exist_ok=True)
-    lock_path = outbox_path.with_name(f".{outbox_path.name}.settings-receipt.lock")
+    lock_path = _settings_receipt_lock_path(outbox_path)
     with lock_path.open("a+b") as lock_handle:
         fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX)
         try:

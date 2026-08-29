@@ -39,8 +39,8 @@ or human acceptance.
   invariant is atomic across independent writers, event types, and path aliases.
 - The configured index-outbox writer census includes settings receipts, worker latency summaries,
   CLI pipe results, promotion emissions, index/audit writers, legacy emissions, orchestrator
-  events, and watcher paths; unrelated incident, telemetry, queue, and failure-report files remain
-  separate sinks.
+  events, and watcher paths. Settings once-only receipt locking also canonicalizes path aliases;
+  unrelated incident, telemetry, queue, and failure-report files remain separate sinks.
 
 ## States and transitions
 
@@ -151,6 +151,7 @@ historical evidence claim. No SQ-04 writer changes the standing answer or human-
 | Watcher scan writer uses the shared event-id seam | `test_watcher_scan_writer_uses_shared_event_id_seam` | Passed |
 | Settings receipt durable writer preserves fsync/readback behavior through shared seam | `tests/vault/test_settings_receipt_durable.py` | Passed |
 | Worker latency writer preserves idempotent handler behavior through shared seam | `tests/workers/test_handler_idempotency_harness.py` | Passed |
+| Settings once-only lock is shared by real-path and symlink aliases | `test_settings_receipt_aliases_share_once_only_lock` | Passed |
 | Draft mutation after staging cannot be accepted by deterministic replay | `test_refresh_replay_reuses_draft_and_receipt_bytes` | Passed |
 | Crash between integrity record and draft replace remains replayable | `test_crash_between_integrity_and_draft_write_remains_replayable` | Passed |
 | Rollback converges after a competing Question CAS conflict | `test_standing_answer_drift_rollback_retries_after_question_conflict` | Passed |
@@ -182,6 +183,7 @@ where the finding was observed; a later head invalidates the earlier clean/uncle
 | `4da79b80a174311bf12038b155b46f48239fecd1` | Exact-head Sol review still found three P1s: the legacy writer and path aliases could bypass global event-id uniqueness, outbox read/parse failures could append fail-open, and JSON/delimiter plus draft/sidecar publication were not protected against crash/concurrent-writer residue. | This repair adds one canonical locked JSONL record seam for legacy and event writers, strict fail-closed inspection with complete-tail repair and fsynced single-record append, a draft-scoped publication lock, and parent-directory fsync after atomic draft/sidecar replacement. New focused probes cover each finding and concurrent Create convergence. |
 | `f2fb014c21a5d26e4358e7a1bd9b21283508751c` | Exact-head Sol review found a remaining P1: production writers in `app/outbox/events.py`, `app/outbox/legacy_events.py`, `app/watcher/watcher.py`, and `app/watcher/vault_watcher.py` still directly appended to the configured index outbox, bypassing the shared seam and invalidating the all-writer claim. | This repair routes those writers and the adjacent orchestrator writer through `append_jsonl_record(..., require_event_id=True)`, adds direct index-audit and watcher collision probes, and narrows the invariant wording to the configured index-outbox sink rather than unrelated telemetry/queue JSONL files. |
 | `f1d487e4aef4ee27263cb9ab2b8e89b6cf64c651` | Fresh exact-head Sol census found two additional configured index-outbox bypasses: settings receipts and worker latency summaries directly appended bytes, leaving the all-writer claim incomplete. | This repair routes settings receipt publication through the shared seam while retaining its durable parent-fsync/readback contract, routes worker latency publication through `append_jsonl_outbox_event`, and also folds the CLI pipe and promotion consumer direct paths into the shared record seam. The focused writer/settings/worker/promotion regression set passed. |
+| `d320aef5a13cab9372e7081dd0bb004fd79d41a6` | Fresh exact-head Sol census found the settings once-only lock was still lexical-path based, so real-path and symlink writers could both pass the operation check and append duplicate operation receipts. | This repair canonicalizes the settings receipt path before deriving both the once-only lock and readback path, with a regression asserting alias lock identity. The durable parent-fsync/readback behavior remains intact. |
 
 The first row is sourced from GitHub review comments whose `original_commit_id` is
 `0d032250274b54eb62c50e50e436077fb032401a`; the later rows are local independent review receipts

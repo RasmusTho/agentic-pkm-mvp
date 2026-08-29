@@ -29,10 +29,21 @@ from app.receipts.settings_receipts import (
     query_settings_receipts,
 )
 from app.receipts.settings_write import (
+    _settings_receipt_lock_path,
     durable_settings_write_receipt_exists,
     emit_durable_settings_write_receipt_once,
     emit_settings_write_receipt,
 )
+
+
+def test_settings_receipt_aliases_share_once_only_lock(tmp_path: Path) -> None:
+    real_path = tmp_path / "outbox.jsonl"
+    alias_dir = tmp_path / "alias"
+    alias_dir.symlink_to(tmp_path, target_is_directory=True)
+
+    assert _settings_receipt_lock_path(real_path) == _settings_receipt_lock_path(
+        alias_dir / "outbox.jsonl"
+    )
 from app.settings import compiler
 from app.vault.app_local import AppLocalSettingsStore, KnownVaultRef
 from app.vault.manager import VaultManager
