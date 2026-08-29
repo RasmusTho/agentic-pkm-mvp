@@ -50,13 +50,14 @@ def _evidence(ref: str, provenance: str, span: str, hour: int) -> dict[str, Any]
     }
 
 
-def _source(provenance: str, text: str) -> SourceInput:
+def _source(provenance: str, text: str, *, raw_bytes: bytes | None = None) -> SourceInput:
     return SourceInput(
         object_id=provenance,
         note_path="notes/evidence.md",
         text=text,
         language="en",
         review_state="reviewed",
+        raw_bytes=raw_bytes,
     )
 
 
@@ -344,6 +345,34 @@ def test_changed_source_bytes_cannot_replay_historical_evidence(tmp_path: Path) 
         outbox_path=tmp_path / "outbox.jsonl",
         evidence_sources={
             "outbox://evidence/1": _source("outbox://evidence/1", "edited evidence")
+        },
+        store=store,
+        write_guard=_guard(),
+        now=_dt(12),
+    )
+
+    assert summary.blocked == (note["question_id"],)
+    assert store.read_question(note["question_id"])["candidate_answer_ref"] is None
+
+
+def test_newline_only_source_mutation_cannot_replay_historical_evidence(tmp_path: Path) -> None:
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    store, note = _question(vault)
+    evidence = _evidence(
+        "vault://notes/evidence.md", "outbox://evidence/1", "original evidence", 10
+    )
+    original_bytes = b"original evidence\r\n"
+    evidence["content_hash"] = hashlib.sha256(original_bytes).hexdigest()
+    store.update_system_fields(note["question_id"], {"evidence": [evidence]})
+
+    summary = refresh_answers_on_evidence_delta(
+        vault_root=vault,
+        outbox_path=tmp_path / "outbox.jsonl",
+        evidence_sources={
+            "outbox://evidence/1": _source(
+                "outbox://evidence/1", "original evidence\n", raw_bytes=b"original evidence\n"
+            )
         },
         store=store,
         write_guard=_guard(),

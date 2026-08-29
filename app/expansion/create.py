@@ -198,6 +198,10 @@ class SourceInput:
     # by cognition and citation resolution; callers may retain an upstream
     # provenance reference without using a URI as an object-store id.
     provenance_ref: str | None = None
+    # Exact UTF-8 source bytes when the caller has them. Cognition still uses
+    # ``text``; durability and replay checks use these bytes so newline
+    # normalization cannot erase a source mutation.
+    raw_bytes: bytes | None = None
 
 
 class CreateIdempotencyConflictError(RuntimeError):
@@ -580,6 +584,11 @@ def _request_fingerprint(request: CreateRequest) -> str:
                 "object_id": source.object_id,
                 "note_path": source.note_path,
                 "text_sha256": hashlib.sha256(source.text.encode("utf-8")).hexdigest(),
+                "raw_bytes_sha256": hashlib.sha256(
+                    source.raw_bytes
+                    if source.raw_bytes is not None
+                    else source.text.encode("utf-8")
+                ).hexdigest(),
                 "quoted_spans": list(source.quoted_spans),
                 "language": source.language,
                 "review_state": source.review_state,

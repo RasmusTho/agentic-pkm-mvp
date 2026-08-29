@@ -114,6 +114,10 @@ def _content_hash(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
+def _source_bytes(source: SourceInput) -> bytes:
+    return source.raw_bytes if source.raw_bytes is not None else source.text.encode("utf-8")
+
+
 def _refresh_attempt_ids(
     question_id: str,
     last_refreshed_at: str | None,
@@ -304,7 +308,7 @@ def _source_inputs(
             )
         expected_hash = entry.get("content_hash")
         if isinstance(expected_hash, str) and expected_hash:
-            actual_hash = _content_hash(source.text)
+            actual_hash = hashlib.sha256(_source_bytes(source)).hexdigest()
             if actual_hash != expected_hash:
                 raise UnresolvableCitationError(
                     f"evidence content changed for {provenance_ref!r}; refusing historical replay"
@@ -347,6 +351,7 @@ def _source_inputs(
                 language=source.language,
                 review_state=source.review_state,
                 provenance_ref=str(entry["provenance_ref"]),
+                raw_bytes=source.raw_bytes,
             )
         )
     return tuple(sources)

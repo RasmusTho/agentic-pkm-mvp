@@ -155,6 +155,7 @@ class CandidateArtifact:
     provenance_ref: str
     content: str | None = None
     content_hash: str | None = None
+    raw_bytes: bytes | None = None
 
 
 @dataclass(frozen=True)
@@ -240,14 +241,24 @@ def _open_questions(vault_root: Path, counters: _Counters) -> list[dict[str, Any
     return open_notes
 
 
-def _resolve_content(vault_root: Path, candidate: CandidateArtifact) -> str | None:
+def _resolve_content(vault_root: Path, candidate: CandidateArtifact) -> tuple[str, bytes] | None:
     """Read the artifact's text. Read-only by construction — there is no write path.
 
     Returns ``None`` when the artifact cannot be resolved (for example a note
     deleted between the ingest event and this tick), which yields no link.
     """
     if candidate.content is not None:
-        return candidate.content
+        raw_bytes = (
+            candidate.raw_bytes
+            if candidate.raw_bytes is not None
+            else candidate.content.encode("utf-8")
+        )
+        try:
+            if raw_bytes.decode("utf-8") != candidate.content:
+                return None
+        except UnicodeError:
+            return None
+        return candidate.content, raw_bytes
     if not candidate.artifact_ref.startswith(VAULT_REF_PREFIX):
         _LOGGER.warning(
             "Standing Questions matching cannot resolve artifact ref without inline content: %s",
@@ -262,11 +273,15 @@ def _resolve_content(vault_root: Path, candidate: CandidateArtifact) -> str | No
             candidate.artifact_ref,
         )
         return None
-    return path.read_text(encoding="utf-8")
+    try:
+        raw_bytes = path.read_bytes()
+        return raw_bytes.decode("utf-8"), raw_bytes
+    except (OSError, UnicodeError):
+        return None
 
 
-def _content_hash(text: str) -> str:
-    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+def _content_hash(raw_bytes: bytes) -> str:
+    return hashlib.sha256(raw_bytes).hexdigest()
 
 
 def _build_user_prompt(question_text: str, artifact_text: str) -> str:
@@ -371,11 +386,12 @@ def match_evidence_to_open_questions(
             if candidate.scope != note["scope"]:
                 counters.bump("excluded_cross_scope")
                 continue
-            artifact_text = _resolve_content(resolved_root, candidate)
-            if artifact_text is None:
+            resolved_content = _resolve_content(resolved_root, candidate)
+            if resolved_content is None:
                 counters.bump("unresolved_artifact")
                 continue
-            content_hash = _content_hash(artifact_text)
+            artifact_text, artifact_bytes = resolved_content
+            content_hash = _content_hash(artifact_bytes)
             if candidate.content_hash is not None and candidate.content_hash != content_hash:
                 counters.bump("unresolved_artifact")
                 continue

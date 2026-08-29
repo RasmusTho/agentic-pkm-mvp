@@ -83,13 +83,20 @@ def _standing_question_tick_inputs(
     candidates: list[CandidateArtifact] = []
     sources: dict[str, SourceInput] = {}
 
-    def add_source(artifact_ref: str, provenance_ref: str, text: str, note_path: str) -> None:
-        content_hash = hashlib.sha256(text.encode("utf-8")).hexdigest()
+    def add_source(
+        artifact_ref: str,
+        provenance_ref: str,
+        text: str,
+        raw_bytes: bytes,
+        note_path: str,
+    ) -> None:
+        content_hash = hashlib.sha256(raw_bytes).hexdigest()
         source = SourceInput(
             object_id=provenance_ref,
             note_path=note_path,
             text=text,
             review_state="reviewed",
+            raw_bytes=raw_bytes,
         )
         sources[provenance_ref] = source
         sources[artifact_ref] = source
@@ -98,7 +105,8 @@ def _standing_question_tick_inputs(
     for path in changed_paths:
         try:
             relative = path.relative_to(vault_root)
-            text = path.read_text(encoding="utf-8")
+            raw_bytes = path.read_bytes()
+            text = raw_bytes.decode("utf-8")
             frontmatter, _body = load_frontmatter(text)
         except (OSError, UnicodeError, ValueError):
             continue
@@ -118,10 +126,11 @@ def _standing_question_tick_inputs(
                 scope=scope,
                 provenance_ref=provenance_ref,
                 content=text,
-                content_hash=hashlib.sha256(text.encode("utf-8")).hexdigest(),
+                raw_bytes=raw_bytes,
+                content_hash=hashlib.sha256(raw_bytes).hexdigest(),
             )
         )
-        add_source(artifact_ref, provenance_ref, text, relative.as_posix())
+        add_source(artifact_ref, provenance_ref, text, raw_bytes, relative.as_posix())
 
     try:
         question_notes = iter_question_notes(vault_root)
@@ -140,10 +149,11 @@ def _standing_question_tick_inputs(
                 source_path = (vault_root / relative).resolve()
                 if not source_path.is_relative_to(vault_root) or not source_path.is_file():
                     continue
-                text = source_path.read_text(encoding="utf-8")
+                raw_bytes = source_path.read_bytes()
+                text = raw_bytes.decode("utf-8")
             except (OSError, UnicodeError, ValueError, RuntimeError):
                 continue
-            add_source(artifact_ref, provenance_ref, text, relative.as_posix())
+            add_source(artifact_ref, provenance_ref, text, raw_bytes, relative.as_posix())
 
     return candidates, sources
 

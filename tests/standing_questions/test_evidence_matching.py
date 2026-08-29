@@ -143,6 +143,28 @@ def test_relevant_artifact_attaches_irrelevant_does_not(tmp_path: Path) -> None:
     assert entry["matched_at"].endswith("Z")
 
 
+def test_matching_hashes_exact_source_bytes(tmp_path: Path) -> None:
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    store = _store(vault)
+    note, _ = store.create_question(text=QUESTION_TEXT, scope="work", registered_via="explicit")
+    raw_body = RELEVANT_BODY.replace("\n", "\r\n").encode("utf-8")
+    path = vault / "notes/outbox-measurements.md"
+    path.parent.mkdir(parents=True)
+    path.write_bytes(raw_body)
+
+    summary = match_evidence_to_open_questions(
+        vault_root=vault,
+        candidates=[_candidate("vault://notes/outbox-measurements.md")],
+        store=store,
+        complete=_Association({"single-writer ceiling": _attached()}),
+    )
+
+    assert summary.attached == 1
+    evidence = store.read_question(note["question_id"])["evidence"]
+    assert evidence[0]["content_hash"] == hashlib.sha256(raw_body).hexdigest()
+
+
 def test_match_write_conflict_does_not_clobber_question(tmp_path: Path) -> None:
     vault = tmp_path / "vault"
     vault.mkdir()
