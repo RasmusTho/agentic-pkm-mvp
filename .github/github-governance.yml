@@ -42,8 +42,8 @@ labels:
     - lane:governance
   interpretation:
     agent:ready: strictly validated queue-eligible work; Project Status is optional projection, never a pickup, claim, blocked-state, or review-handoff gate
-    agent:blocked: blocked by dependency or setup; normally non-active backlog work
-    agent:needs-human: blocked on human decision or missing authority; normally non-active backlog work
+    agent:blocked: blocked by dependency or setup; projected to Blocked unless durable epic/parent evidence takes precedence
+    agent:needs-human: blocked on human decision or missing authority; projected to Needs Human unless durable epic/parent evidence takes precedence
     state:known-defect: rolling confirmed-defect registry container; Backlog, no agent-state label, never pickup-eligible
     lane:governance: narrow additive label for governance-lane Issues and PRs
 project:
@@ -52,6 +52,9 @@ project:
   fields:
     Status:
       - Backlog
+      - Epic / Parent
+      - Blocked
+      - Needs Human
       - Ready
       - In Progress
       - Review
@@ -89,6 +92,8 @@ project:
   interpretation:
     status_is_projection_of_issue_and_pr_truth: true
     ready_requires_agent_ready: true
+    epic_parent_precedes_blocker_labels: true
+    explicit_open_issue_review_is_preserved: true
     in_progress_covers_draft_or_rework_prs: true
     review_covers_open_non_draft_prs: true
     done_requires_closed_issue_or_terminal_pr_card: true

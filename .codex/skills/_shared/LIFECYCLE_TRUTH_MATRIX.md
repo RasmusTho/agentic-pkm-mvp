@@ -10,16 +10,20 @@ reconciliation.
 
 ## Allowed Project statuses
 
-`Backlog`, `Ready`, `In Progress`, `Review`, `Done`
+`Backlog`, `Epic / Parent`, `Blocked`, `Needs Human`, `Ready`, `In Progress`, `Review`, `Done`
 
 ## Matrix
 
 | Content | Content state | Projected Status |
 |---------|---------------|-------------------------|
 | Issue | CLOSED | `Done` |
-| Issue | OPEN + `agent:ready` | `Ready` |
-| Issue | OPEN + `agent:blocked` | `Backlog` |
-| Issue | OPEN + `agent:needs-human` | `Backlog` |
+| Issue | OPEN + existing explicit `Review` projection | `Review` |
+| Issue | OPEN + `type:epic`, `type:feature`, or non-empty GitHub sub-issue set | `Epic / Parent` |
+| Issue | OPEN + `agent:needs-human` | `Needs Human` |
+| Issue | OPEN + `agent:blocked` | `Blocked` |
+| Issue | OPEN + valid `agent:ready` | `Ready` |
+| Issue | OPEN + `agent:in-progress` | `In Progress` |
+| Issue | OPEN + no derived status | retain current projection (new Issue automation initially uses `Backlog`) |
 | PR | MERGED | `Done` |
 | PR | CLOSED (unmerged) | `Done` |
 | PR | OPEN + Draft | `In Progress` |
@@ -32,7 +36,8 @@ reconciliation.
 `Review` is the Project handoff state for open non-draft PRs. The shipped Project automation maps
 `opened`, `reopened`, and `ready_for_review` non-draft PR events to `Review`; draft PRs remain
 `In Progress` until they are marked ready. Maintenance runs must not treat a normal open non-draft
-PR card in `Review` as drift.
+PR card in `Review` as drift. An existing open Issue card in `Review` is likewise an explicit
+operator projection; reconciliation must preserve it without inferring a PR relationship.
 
 ## Binding rules
 
@@ -42,3 +47,5 @@ PR card in `Review` as drift.
   read or mutation.
 - GitHub Issue state, agent labels, linked PR state, and merge/delivery reality outrank Project
   state when they disagree; correct the projection to match the harder truth.
+- Parent evidence is limited to `type:epic`, `type:feature`, or a non-empty GitHub sub-issue set;
+  title prose alone is not sufficient.

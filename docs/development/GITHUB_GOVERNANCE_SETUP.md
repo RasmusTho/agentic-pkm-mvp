@@ -50,11 +50,14 @@ Project name:
 - `Agent Delivery Control Plane`
 
 Required fields:
-- `Status`: `Backlog`, `Ready`, `In Progress`, `Review`, `Done`
+- `Status`: `Backlog`, `Epic / Parent`, `Blocked`, `Needs Human`, `Ready`, `In Progress`, `Review`, `Done`
 - `Agent State`: `Idle`, `Running`, `Waiting`
 
 Status meanings:
-- `Backlog`: tracked work that is not yet ready for agent execution or has been moved out of active execution
+- `Backlog`: residual tracked work with no more-specific lifecycle projection; new Issue automation initially places new work here
+- `Epic / Parent`: validation hub evidenced by `type:epic`, `type:feature`, or a non-empty GitHub sub-issue set
+- `Blocked`: an open non-parent Issue labeled `agent:blocked`
+- `Needs Human`: an open non-parent Issue labeled `agent:needs-human`
 - `Ready`: bounded, testable, unblocked work that is eligible for pickup and labeled `agent:ready`
 - `In Progress`: active implementation issue state; on PR items this covers draft PRs and open non-draft PRs without a requested review
 - `Review`: explicit review-handoff state for PR/project items, entered when review is requested — not a default for open PRs (see the lifecycle truth matrix in `.codex/skills/issue-maintenance-change-control/SKILL.md`)
@@ -62,8 +65,8 @@ Status meanings:
 
 Agent-label meanings:
 - `agent:ready`: strictly validated queue-eligible work; Project Status is not a pickup precondition
-- `agent:blocked`: blocked by dependency waiting, including parent validation hubs waiting on child slices; normally pair with a non-active status such as `Backlog`
-- `agent:needs-human`: blocked on a named human decision, tradeoff, missing input, or authority question; normally pair with a non-active status such as `Backlog`
+- `agent:blocked`: blocked by dependency waiting; normally pair with `Blocked` unless durable epic/parent evidence takes precedence
+- `agent:needs-human`: blocked on a named human decision, tradeoff, missing input, or authority question; normally pair with `Needs Human` unless durable epic/parent evidence takes precedence
 - open implementation Issues should normally carry exactly one truthful agent-state label
 - `state:known-defect`: one locked rolling registry Issue for confirmed deferred P2 entries;
   keep it in `Backlog`, with `type:bug`, without an agent-state label, and never treat it as
@@ -100,7 +103,7 @@ Lifecycle guardrails:
 - closed issues must not retain `agent:ready`, `agent:blocked`, or `agent:needs-human`
 - when optional Project repair is in scope, merged or otherwise closed terminal PR items should
   reconcile to `Done`
-- parent feature issues are validation hubs, not direct pickup issues; while child slices remain outstanding they normally live in `Backlog` with `agent:blocked`
+- parent feature issues are validation hubs, not direct pickup issues; while child slices remain outstanding they normally project to `Epic / Parent` even if they carry `agent:blocked`
 - use `agent:needs-human` only when the blocker is a named human decision, tradeoff, missing input, or authority question
 - the `state:known-defect` registry is not an implementation Issue; promotion creates a separate
   canonical `type:bug` Issue and links it back to the registry entry
@@ -108,6 +111,8 @@ Lifecycle guardrails:
 Projection rule:
 - When Project state disagrees with Issue state, PR state, or merged delivery reality, treat the Issue/PR state as authoritative and correct the Project opportunistically.
 - Do not block delivery solely because a personal Project v2 card could not be updated by repo automation.
+- An existing open Issue card explicitly placed in `Review` is an operator projection override and is retained; reconciliation does not infer a PR link or move it back into a split backlog lane.
+- Otherwise, Issue projection precedence is closed → `Done`; epic/parent evidence → `Epic / Parent`; `agent:needs-human` → `Needs Human`; `agent:blocked` → `Blocked`; valid `agent:ready` → `Ready`; `agent:in-progress` → `In Progress`. An otherwise-unmapped open Issue retains its current Project status.
 
 ## Shared operational lease boundary
 

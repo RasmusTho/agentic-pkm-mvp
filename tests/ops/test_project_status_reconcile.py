@@ -89,6 +89,49 @@ def test_desired_issue_status_requires_ready_candidate_body() -> None:
     assert desired_issue_status(invalid_issue) == "Backlog"
 
 
+def test_desired_issue_status_splits_non_active_backlog_lanes() -> None:
+    assert desired_issue_status({"state": "OPEN", "labels": [{"name": "agent:needs-human"}]}) == "Needs Human"
+    assert desired_issue_status({"state": "OPEN", "labels": [{"name": "agent:blocked"}]}) == "Blocked"
+    assert desired_issue_status({"state": "OPEN", "labels": [{"name": "agent:in-progress"}]}) == "In Progress"
+    assert desired_issue_status({"state": "OPEN", "labels": []}) is None
+
+
+def test_epic_parent_projection_precedes_blocker_projection() -> None:
+    assert desired_issue_status(
+        {"state": "OPEN", "labels": [{"name": "type:epic"}, {"name": "agent:blocked"}]}
+    ) == "Epic / Parent"
+    assert desired_issue_status(
+        {"state": "OPEN", "labels": [{"name": "agent:needs-human"}], "subIssues": {"totalCount": 1}}
+    ) == "Epic / Parent"
+
+
+def test_desired_issue_status_preserves_explicit_review_override() -> None:
+    issue = {"state": "OPEN", "labels": [{"name": "agent:blocked"}]}
+    assert desired_issue_status(issue, "Review") == "Review"
+    assert desired_issue_status({**issue, "state": "CLOSED"}, "Review") == "Done"
+
+
+def test_get_issue_fetches_parent_projection_evidence(monkeypatch) -> None:
+    commands = []
+
+    def fake_run_gh(*args: str) -> str:
+        commands.append(args)
+        return reconcile_project_status.json.dumps({"number": 5177, "subIssues": {"totalCount": 1}})
+
+    monkeypatch.setattr(reconcile_project_status, "run_gh", fake_run_gh)
+
+    assert reconcile_project_status.get_issue("RasmusTho/agentic-pkm-mvp", 5177)["subIssues"]["totalCount"] == 1
+    assert commands == [
+        ("issue", "view", "5177", "--repo", "RasmusTho/agentic-pkm-mvp", "--json", "number,state,labels,url,title,body,subIssues")
+    ]
+
+
+def test_reconcile_cli_accepts_split_backlog_statuses() -> None:
+    assert set(reconcile_project_status.PROJECT_STATUS_VALUES) == {
+        "Backlog", "Epic / Parent", "Blocked", "Needs Human", "Ready", "In Progress", "Review", "Done"
+    }
+
+
 def test_pr_stage_change_workflow_subscribes_to_closed_event() -> None:
     # Merge/close must be event-driven so terminal projection does not depend on
     # the best-effort hourly reconcile scan.

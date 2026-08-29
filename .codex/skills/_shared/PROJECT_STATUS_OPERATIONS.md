@@ -39,8 +39,9 @@ An empty `projectItems` list means the item is not in the Project yet — add it
 
 ## Set Project Status
 
-The single canonical mutation; pass the option ID for the target status (`Backlog`, `Ready`,
-`In Progress`, `Review`, `Done` — see `LIFECYCLE_TRUTH_MATRIX.md`):
+The single canonical mutation; pass the option ID for the target status (`Backlog`,
+`Epic / Parent`, `Blocked`, `Needs Human`, `Ready`, `In Progress`, `Review`, `Done` — see
+`LIFECYCLE_TRUTH_MATRIX.md`):
 
 Before setting an Issue item to `Ready`, first run strict executable-contract validation on the
 exact Issue body that will be paired with `agent:ready`:
