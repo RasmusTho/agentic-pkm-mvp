@@ -52,6 +52,16 @@ def test_spec_preserves_source_authority_and_lifecycle() -> None:
     assert "A capability is never the policy or workflow owner." in normalized
 
 
+def test_spec_preserves_builderops_record_operational_dispositions() -> None:
+    normalized = _normalized_spec()
+
+    for record_type in ("LearningSignal", "PromotionIntent", "BuilderOpsReceipt"):
+        assert record_type in normalized
+    assert "retain the operational authority assigned by their own contracts" in normalized
+    assert "may render those source-owned dispositions" in normalized
+    assert "cannot create, override, or reinterpret them" in normalized
+
+
 def test_spec_requires_correlated_deviation_and_existing_route() -> None:
     spec = _spec()
     normalized = _normalized_spec()

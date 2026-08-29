@@ -128,11 +128,15 @@ decision-maker.
 
 ### Explicit non-authority
 
-Neither the lens nor any BuilderOps, UX, design, or browser artifact owns policy, workflow
+Neither the lens nor any UX, design, browser, or read-model projection owns policy, workflow
 transition, task, queue, claim, session, source registry, delivery graph, correlation, severity,
-approval, mutation, or durable disposition. None writes GitHub, the repository, BuilderOps, a
-provider, or an external system directly. The lens never promotes a descriptive process-map
-observation into intended governance.
+approval, mutation, or a BuilderOps disposition. Source BuilderOps records retain the operational
+authority assigned by their own contracts: `LearningSignal` records delivery divergences,
+`PromotionIntent` stages cross-authority proposals, and `BuilderOpsReceipt` records transitions,
+projections, promotions, supersessions, or discards. The lens may render those source-owned
+dispositions, but it cannot create, override, or reinterpret them. Neither the lens nor its
+projections writes GitHub, the repository, BuilderOps, a provider, or an external system directly.
+The lens never promotes a descriptive process-map observation into intended governance.
 
 ### Intent–evidence continuity
 
