@@ -731,6 +731,39 @@ def test_outbox_embedding_events_select_shared_regressions() -> None:
     assert "tests/architecture/test_events_outbox_contracts.py" in selection.targets
 
 
+def test_shared_cli_entrypoint_change_selects_full_suite() -> None:
+    """The shared CLI entrypoint can affect every command's wiring."""
+    selection = select_tests(["app/cli.py"])
+
+    assert selection.full_suite is True
+    assert selection.unowned_paths == ()
+
+
+def test_event_diagnostic_and_legacy_outbox_surfaces_select_event_coverage() -> None:
+    """Legacy event surfaces must not fail CI selection as unowned paths."""
+    selection = select_tests(
+        ["app/cli/events_doctor.py", "app/outbox/legacy_events.py"]
+    )
+
+    assert selection.full_suite is False
+    assert selection.subsystems == ("events_receipts",)
+    assert selection.unowned_paths == ()
+    assert "tests/events" in selection.targets
+    assert "tests/receipts" in selection.targets
+    assert "tests/contracts" in selection.targets
+
+
+def test_orientation_runtime_change_selects_observability_coverage() -> None:
+    """Derived orientation status belongs to the observability selection."""
+    selection = select_tests(["app/orientation/runtime.py"])
+
+    assert selection.full_suite is False
+    assert selection.subsystems == ("observability",)
+    assert selection.unowned_paths == ()
+    assert "tests/observability" in selection.targets
+    assert "tests/api" in selection.targets
+
+
 def test_worker_metrics_module_change_has_a_ci_owner() -> None:
     """The worker /metrics endpoint module is outbox_worker surface: its
     coverage lives in tests/workers/test_worker_metrics.py, so a change must

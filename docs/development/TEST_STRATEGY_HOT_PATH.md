@@ -50,12 +50,19 @@ The goal is to keep docs-only and governance/skill PRs cheap while preserving di
   intentionally excludes live-Postgres tests; a PR that changes a Postgres store or vault ingest
   path must record its explicit `pg`/integrated-runtime validation separately rather than treating
   the selected CI result as database-path evidence.
+- The shared `app/cli.py` entrypoint is a full-suite trigger because command wiring and shared
+  imports can affect every runtime subsystem. The event diagnostic CLI
+  (`app/cli/events_doctor.py`) and legacy event producer (`app/outbox/legacy_events.py`) are
+  explicitly owned by `events_receipts`, while the derived orientation adapter
+  (`app/orientation/runtime.py`) is owned by `observability`; these seams must not fail CI
+  selection as unowned when their outbox-corruption behavior changes.
 - The exact shared producer `app/objects/__init__.py` uses the same `store_ingest` selection: its
   canonical object-store facade writes through the store provider seam and emits ingest lifecycle
   events, and its selection includes the exact ObjectStore outbox-emission regression. The exact
   `app/outbox/events.py` producer belongs to both `outbox_worker` and `memory_retrieval`, so its
   selection unions delivery-worker/event, indexer, and event-envelope contract coverage. Other
-  `app/objects/**` and `app/outbox/**` paths remain unowned unless explicitly mapped.
+  `app/objects/**` and `app/outbox/**` paths remain unowned unless explicitly mapped; the
+  `legacy_events.py` exception above is deliberate and covered by selector regressions.
 - The push-lane `CI gate: vaultwide panel verifier` step (`.github/workflows/ci-smoke.yaml ::
   smoke-docker`) exercises the MVR-01B instance-state deployment producer against the composed
   runtime only after merge. Its protected verification logic has pre-merge signal (#4371): every
