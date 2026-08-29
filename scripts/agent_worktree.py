@@ -621,9 +621,55 @@ def _validate_authority_record(key: str, record: object) -> dict[str, object]:
     return dict(record)
 
 
+def _select_authority_records(
+    raw_records: object,
+    *,
+    candidate_branch: str | None,
+    candidate_paths: set[str] | None = None,
+) -> dict[str, dict[str, object]]:
+    """Select records whose branch identity can affect one cleanup candidate.
+
+    Targeted cleanup must not turn an old, unrelated checkout into a global
+    availability dependency.  Branch and prior-binding identity are therefore
+    inspected first.  A record that cannot prove it is unrelated remains
+    fail-closed; a relevant record still receives the complete authority and
+    live-generation validation below.
+    """
+
+    if not isinstance(raw_records, dict):
+        raise WorktreeLifecycleError("worktree lifecycle registry is invalid")
+    selected: dict[str, dict[str, object]] = {}
+    for key, value in raw_records.items():
+        if not isinstance(key, str) or not isinstance(value, dict):
+            raise WorktreeLifecycleError("worktree lifecycle record is invalid")
+        branch = value.get("branch")
+        prior = value.get("prior_bindings", [])
+        if not isinstance(branch, str) or not branch or not isinstance(prior, list):
+            raise WorktreeLifecycleError("worktree lifecycle record is invalid")
+        prior_branches: list[str] = []
+        for binding in prior:
+            if (
+                not isinstance(binding, dict)
+                or not isinstance(binding.get("branch"), str)
+                or not binding["branch"]
+            ):
+                raise WorktreeLifecycleError("worktree lifecycle record is invalid")
+            prior_branches.append(binding["branch"])
+        relevant = (
+            candidate_branch is None
+            or candidate_branch in {branch, *prior_branches}
+            or key in (candidate_paths or set())
+            or value.get("path") in (candidate_paths or set())
+        )
+        if relevant:
+            selected[key] = _validate_authority_record(key, value)
+    return selected
+
+
 def load_lifecycle_authority(
     cwd: Path,
     *,
+    candidate_branch: str | None = None,
     registry_path: Path | None = None,
 ) -> dict[str, dict[str, object]]:
     """Return a generation-bound, fail-closed lifecycle authority snapshot.
@@ -635,22 +681,31 @@ def load_lifecycle_authority(
     """
 
     path = _canonical(registry_path or _default_registry_path(cwd))
+    initial_live_entries = (
+        git_hygiene._parse_worktrees(
+            git_hygiene.run_git(["worktree", "list", "--porcelain"], cwd)
+        )
+        if candidate_branch is not None
+        else []
+    )
+    candidate_paths = {
+        str(_canonical(Path(entry["worktree"])))
+        for entry in initial_live_entries
+        if candidate_branch is not None
+        and isinstance(entry.get("worktree"), str)
+        and entry.get("branch", "").removeprefix("refs/heads/") == candidate_branch
+    }
     if not path.is_file() or path.is_symlink():
         raise WorktreeLifecycleError("worktree lifecycle registry is missing")
     with _registry_lock(path):
         if not path.is_file() or path.is_symlink():
             raise WorktreeLifecycleError("worktree lifecycle registry is missing")
         payload = _read_registry(path)
-        raw_records = payload.get("worktrees")
-        if not isinstance(raw_records, dict):
-            raise WorktreeLifecycleError("worktree lifecycle registry is invalid")
-        snapshot = {
-            key: _validate_authority_record(key, value)
-            for key, value in raw_records.items()
-            if isinstance(key, str)
-        }
-        if len(snapshot) != len(raw_records):
-            raise WorktreeLifecycleError("worktree lifecycle record is invalid")
+        snapshot = _select_authority_records(
+            payload.get("worktrees"),
+            candidate_branch=candidate_branch,
+            candidate_paths=candidate_paths,
+        )
 
     bound = _bind_live_generations(cwd, snapshot)
     live_entries = git_hygiene._parse_worktrees(
@@ -661,6 +716,14 @@ def load_lifecycle_authority(
         for entry in live_entries
         if isinstance(entry.get("worktree"), str)
     }
+    current_candidate_paths = {
+        key
+        for key, entry in live_by_path.items()
+        if candidate_branch is not None
+        and entry.get("branch", "").removeprefix("refs/heads/") == candidate_branch
+    }
+    if current_candidate_paths != candidate_paths:
+        raise WorktreeLifecycleError("worktree lifecycle authority changed")
     if any(
         record.get("status") != "removed"
         and not _valid_generation(record.get("generation"))
@@ -683,7 +746,11 @@ def load_lifecycle_authority(
     with _registry_lock(path):
         if not path.is_file() or path.is_symlink():
             raise WorktreeLifecycleError("worktree lifecycle registry is missing")
-        current = _read_registry(path).get("worktrees")
+        current = _select_authority_records(
+            _read_registry(path).get("worktrees"),
+            candidate_branch=candidate_branch,
+            candidate_paths=current_candidate_paths,
+        )
         if current != snapshot:
             raise WorktreeLifecycleError("worktree lifecycle authority changed")
     return {key: dict(value) for key, value in bound.items()}

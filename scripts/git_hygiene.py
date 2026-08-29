@@ -13,6 +13,7 @@ import json
 import math
 import os
 import re
+import sqlite3
 import subprocess
 import tempfile
 import time
@@ -915,10 +916,15 @@ def _validate_protected_candidate(
         raise RuntimeError("candidate_uses_protected_pull_head")
 
 
-def _read_lifecycle_authority(cwd: Path) -> dict[str, dict[str, object]]:
+def _read_lifecycle_authority(
+    cwd: Path, candidate: Candidate
+) -> dict[str, dict[str, object]]:
     from scripts import agent_worktree
 
-    return agent_worktree.load_lifecycle_authority(cwd)
+    return agent_worktree.load_lifecycle_authority(
+        cwd,
+        candidate_branch=candidate.source_ref.removeprefix("refs/heads/"),
+    )
 
 
 def _lifecycle_conflicts(
@@ -957,41 +963,43 @@ def _parse_dispatcher_time(value: object) -> dt.datetime:
     return parsed.astimezone(dt.UTC)
 
 
-def _dispatcher_snapshot(cwd: Path, repository: str) -> list[dict[str, object]]:
-    from app.dispatcher.config import load_paths
-    from app.dispatcher.store import SqliteStore
+def _canonical_dispatcher_db_path(cwd: Path) -> Path:
+    """Return the repo-common production dispatcher DB without env overrides."""
 
-    paths = load_paths(cwd=cwd)
-    if not paths.db_path.is_file():
+    from app.dispatcher.config import load_paths
+
+    return load_paths(env={}, cwd=cwd).db_path.resolve(strict=False)
+
+
+def _dispatcher_snapshot(cwd: Path, repository: str) -> list[dict[str, object]]:
+    database = _canonical_dispatcher_db_path(cwd)
+    if not database.is_file() or database.is_symlink():
         raise RuntimeError("dispatcher_database_missing")
-    store = SqliteStore(paths.db_path)
-    snapshot: list[dict[str, object]] = []
-    for listed in store.list_tasks(repo=repository):
-        task = store.get_task(listed.task_id)
-        if task is None or task.to_dict() != listed.to_dict():
-            raise RuntimeError("dispatcher_task_readback_changed")
-        active_task = task.status in {"claimed", "in_progress"}
-        lease = None
-        if task.lease_id is not None:
-            lease_record = store.get_lease(task.lease_id)
-            if lease_record is None:
-                raise RuntimeError("dispatcher_referenced_lease_missing")
-            lease = lease_record.to_dict()
-            expiry = _parse_dispatcher_time(lease_record.expires_at)
-            if lease_record.released_at is not None:
-                _parse_dispatcher_time(lease_record.released_at)
-            reread = store.get_lease(task.lease_id)
-            if reread is None or reread.to_dict() != lease:
-                raise RuntimeError("dispatcher_lease_readback_changed")
-            if (
-                task.lease_expires_at != lease_record.expires_at
-                or active_task != (lease_record.released_at is None and expiry > dt.datetime.now(dt.UTC))
-            ):
-                raise RuntimeError("dispatcher_task_lease_disagreement")
-        elif active_task:
-            raise RuntimeError("dispatcher_referenced_lease_missing")
-        snapshot.append({"task": task.to_dict(), "lease": lease})
-    snapshot.sort(key=lambda item: str(item["task"]))
+    del repository  # Repository relevance is evaluated only after the full census.
+    try:
+        connection = sqlite3.connect(f"{database.as_uri()}?mode=ro", uri=True)
+        connection.row_factory = sqlite3.Row
+        with connection:
+            tasks = [
+                dict(row)
+                for row in connection.execute(
+                    "SELECT * FROM dispatcher_tasks ORDER BY task_id"
+                ).fetchall()
+            ]
+            leases = [
+                dict(row)
+                for row in connection.execute(
+                    "SELECT * FROM dispatcher_leases ORDER BY lease_id"
+                ).fetchall()
+            ]
+    except sqlite3.Error as exc:
+        raise RuntimeError("dispatcher_database_invalid") from exc
+    finally:
+        if "connection" in locals():
+            connection.close()
+    snapshot = [
+        {"kind": "task", "record": task} for task in tasks
+    ] + [{"kind": "lease", "record": lease} for lease in leases]
     return snapshot
 
 
@@ -1003,10 +1011,9 @@ def _read_dispatcher_authority(cwd: Path, repository: str) -> list[dict[str, obj
     return first
 
 
-def _dispatcher_conflicts(
+def _candidate_dispatcher_resources(
     candidate: Candidate,
     lifecycle: Mapping[str, Mapping[str, object]],
-    snapshot: Sequence[Mapping[str, object]],
 ) -> set[str]:
     branch = candidate.source_ref.removeprefix("refs/heads/")
     resources = {
@@ -1028,25 +1035,117 @@ def _dispatcher_conflicts(
             resources.add(f"worktree:{path}")
             if isinstance(record.get("path"), str):
                 resources.add(f"worktree:{record['path']}")
+    return resources
+
+
+def _dispatcher_live_lease(lease: Mapping[str, object], *, now: dt.datetime) -> bool:
+    released = lease.get("released_at")
+    if released is not None:
+        _parse_dispatcher_time(released)
+        return False
+    return _parse_dispatcher_time(lease.get("expires_at")) > now
+
+
+def _dispatcher_linked_pr(value: object) -> int | None:
+    if value is None:
+        return None
+    if not isinstance(value, str) or not re.fullmatch(r"#?[1-9][0-9]*", value):
+        raise RuntimeError("dispatcher_task_identity_ambiguous")
+    return int(value.removeprefix("#"))
+
+
+def _dispatcher_task_relevant(
+    task: Mapping[str, object],
+    *,
+    repository: str,
+    candidate: Candidate,
+    lease: Mapping[str, object] | None,
+    resources: set[str],
+) -> bool:
+    task_repository = task.get("repo")
+    if (
+        not isinstance(task_repository, str)
+        or not re.fullmatch(r"[^/\s]+/[^/\s]+", task_repository)
+    ):
+        raise RuntimeError("dispatcher_task_identity_ambiguous")
+    if task_repository.casefold() != repository.casefold():
+        return False
+    issue = task.get("issue_number")
+    if not isinstance(issue, int) or isinstance(issue, bool) or issue < 1:
+        raise RuntimeError("dispatcher_task_identity_ambiguous")
+    linked_pr = _dispatcher_linked_pr(task.get("linked_pr"))
+    return (
+        issue == candidate.governing_issue
+        or linked_pr == candidate.pull_request
+        or (lease is not None and lease.get("resource") in resources)
+    )
+
+
+def _dispatcher_conflicts(
+    candidate: Candidate,
+    lifecycle: Mapping[str, Mapping[str, object]],
+    snapshot: Sequence[Mapping[str, object]],
+    *,
+    repository: str | None = None,
+) -> set[str]:
+    repository = repository or candidate.repository
+    resources = _candidate_dispatcher_resources(candidate, lifecycle)
     now = dt.datetime.now(dt.UTC)
     conflicts: set[str] = set()
+    tasks: list[Mapping[str, object]] = []
+    leases: dict[str, Mapping[str, object]] = {}
     for item in snapshot:
-        task = item.get("task")
-        lease = item.get("lease")
-        if not isinstance(task, Mapping) or not isinstance(lease, Mapping):
+        kind = item.get("kind")
+        record = item.get("record")
+        if kind not in {"task", "lease"} or not isinstance(record, Mapping):
+            raise RuntimeError("dispatcher_census_invalid")
+        if kind == "task":
+            tasks.append(record)
             continue
-        live = lease.get("released_at") is None and _parse_dispatcher_time(
-            lease.get("expires_at")
-        ) > now
+        lease_id = record.get("lease_id")
+        if not isinstance(lease_id, str) or not lease_id or lease_id in leases:
+            raise RuntimeError("dispatcher_lease_identity_ambiguous")
+        leases[lease_id] = record
+
+    for lease in leases.values():
+        live = _dispatcher_live_lease(lease, now=now)
         if not live:
             continue
-        linked_pr = task.get("linked_pr")
-        relevant = (
-            task.get("issue_number") == candidate.governing_issue
-            or str(linked_pr or "").removeprefix("#") == str(candidate.pull_request)
-            or lease.get("resource") in resources
-        )
-        if relevant:
+        resource = lease.get("resource")
+        if not isinstance(resource, str) or not resource:
+            raise RuntimeError("dispatcher_lease_identity_ambiguous")
+        if resource in resources:
+            conflicts.add("live_dispatcher_claim")
+
+    for task in tasks:
+        task_lease_id = task.get("lease_id")
+        task_lease = leases.get(task_lease_id) if isinstance(task_lease_id, str) else None
+        if not _dispatcher_task_relevant(
+            task,
+            repository=repository,
+            candidate=candidate,
+            lease=task_lease,
+            resources=resources,
+        ):
+            continue
+        status = task.get("status")
+        if not isinstance(status, str) or not status:
+            raise RuntimeError("dispatcher_task_identity_ambiguous")
+        active_task = status in {"claimed", "in_progress"}
+        lease_id = task_lease_id
+        if lease_id is None:
+            if active_task:
+                raise RuntimeError("dispatcher_referenced_lease_missing")
+            continue
+        if not isinstance(lease_id, str) or not lease_id:
+            raise RuntimeError("dispatcher_task_identity_ambiguous")
+        lease = leases.get(lease_id)
+        if lease is None:
+            raise RuntimeError("dispatcher_referenced_lease_missing")
+        live = _dispatcher_live_lease(lease, now=now)
+        if task.get("lease_expires_at") != lease.get("expires_at") or active_task != live:
+            raise RuntimeError("dispatcher_task_lease_disagreement")
+        if live:
             conflicts.add("live_dispatcher_claim")
     return conflicts
 
@@ -1100,11 +1199,13 @@ def _fresh_candidate_authority(
     protected = _read_protected_targets(identity, cwd=cwd)
     _validate_protected_candidate(candidate, protected)
     _read_candidate_pr(identity, candidate, cwd=cwd)
-    lifecycle = _read_lifecycle_authority(cwd)
+    lifecycle = _read_lifecycle_authority(cwd, candidate)
     if _lifecycle_conflicts(cwd, candidate, lifecycle):
         raise RuntimeError("candidate_lifecycle_conflict")
     dispatcher = _read_dispatcher_authority(cwd, identity.full_name)
-    if _dispatcher_conflicts(candidate, lifecycle, dispatcher):
+    if _dispatcher_conflicts(
+        candidate, lifecycle, dispatcher, repository=identity.full_name
+    ):
         raise RuntimeError("candidate_dispatcher_conflict")
     return identity
 
