@@ -14,6 +14,7 @@ from app.observability.status_service import (
     _iter_tail_lines,
     _last_watcher_run_record,
     _read_last_json_record,
+    _status_outbox_path,
     _status_context_dimensions,
     OrientationSignals,
 )
@@ -43,6 +44,22 @@ def test_iter_tail_lines_caps_bytes(tmp_path: Path) -> None:
 
 def test_iter_tail_lines_missing_file(tmp_path: Path) -> None:
     assert _iter_tail_lines(tmp_path / "missing.jsonl") == []
+
+
+def test_default_read_only_outbox_resolution_does_not_create_path(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("INDEX_OUTBOX_PATH", raising=False)
+
+    status_path = _status_outbox_path()
+    from app.health_contract import _read_tail_records
+
+    assert not status_path.exists()
+    assert _read_tail_records() == []
+    assert _count_events(status_path).panel_runs_total == 0
+    assert not status_path.exists()
+    assert not status_path.parent.exists()
 
 
 def test_count_outbox_events_capped(tmp_path: Path) -> None:

@@ -75,6 +75,14 @@ _STATUS_MAX_OUTBOX_LINES = 5000
 _STATUS_TAIL_BYTES = 8 * 1024 * 1024  # 8 MB tail is enough for recent records
 
 
+def _status_outbox_path() -> Path:
+    """Resolve the status outbox path without invoking a writable resolver."""
+    peek = getattr(INDEX_OUTBOX_PATH, "peek", None)
+    if callable(peek):
+        return peek()
+    return Path(INDEX_OUTBOX_PATH)
+
+
 def _iter_tail_lines(path: Path, max_bytes: int = _STATUS_TAIL_BYTES) -> list[str]:
     """Compatibility view of strict tail records for bounded-read tests."""
     return [
@@ -450,7 +458,7 @@ def _get_outbox_lag() -> OutboxLagStatus:
             worker_processed_total=processed_total,
             pending_estimate=pending,
         )
-    outbox_path = Path(INDEX_OUTBOX_PATH)
+    outbox_path = _status_outbox_path()
     if heartbeat:
         heartbeat_path = heartbeat.get("outbox_path")
         if heartbeat_path:
@@ -566,7 +574,7 @@ def _get_panel_diagnostics() -> PanelDiagnostics:
 
 
 def _events_log_status() -> EventsLogStatus:
-    outbox_path = Path(INDEX_OUTBOX_PATH)
+    outbox_path = _status_outbox_path()
     total_lines, truncated = _count_outbox_events(outbox_path)
     # Hide the capped count from the events_log surface; consumers read this
     # as the true total and a capped value would be misleading.
@@ -662,7 +670,7 @@ def _get_worker_queue_status() -> WorkerQueueStatus:
         source_path = os.getenv("DATABASE_URL") or os.getenv("DB_DSN") or "outbox"
         pending = _count_outbox_pending_db()
     elif mode == "jsonl":
-        source_path = os.getenv("INDEX_OUTBOX_PATH") or str(Path(INDEX_OUTBOX_PATH))
+        source_path = os.getenv("INDEX_OUTBOX_PATH") or str(_status_outbox_path())
         total_lines, truncated = (
             _count_outbox_events(Path(source_path)) if source_path else (None, False)
         )
@@ -903,7 +911,7 @@ def _get_watcher_lifecycle_status() -> WatcherLifecycleStatus | None:
         except Exception:
             pass
 
-    outbox_path = Path(INDEX_OUTBOX_PATH) if INDEX_OUTBOX_PATH else None
+    outbox_path = _status_outbox_path()
     panel_event_log = watcher_settings.paths.panel_event_log
 
     executed_record = _newer_panel_record(
@@ -1240,7 +1248,7 @@ def get_system_status() -> SystemStatus:
     if queue_mode == "db":
         counters = _count_events_db()
     if counters is None:
-        counters = _count_events(Path(INDEX_OUTBOX_PATH)) if INDEX_OUTBOX_PATH else EventCounters()
+        counters = _count_events(_status_outbox_path())
     counters = _fill_ingest_run_counts(counters, ingestion)
     intent_status = _get_intent_status(counters)
     stores = get_store_status()
@@ -1267,7 +1275,7 @@ def get_system_status() -> SystemStatus:
         ask=get_ask_status(),
         intents=intent_status,
         events=counters,
-        delivery_sla=_delivery_sla_status(Path(INDEX_OUTBOX_PATH)),
+        delivery_sla=_delivery_sla_status(_status_outbox_path()),
         index=_get_index_status(),
         panel_diagnostics=_get_panel_diagnostics(),
         write_guard=write_guard,
@@ -1278,7 +1286,7 @@ def get_system_status() -> SystemStatus:
         watcher_automation=_get_watcher_automation_status(write_guard=write_guard),
         watcher_lifecycle=_get_watcher_lifecycle_status(),
         instance_provenance=_get_instance_provenance_status(),
-        context_dimensions=_status_context_dimensions(Path(INDEX_OUTBOX_PATH)),
+        context_dimensions=_status_context_dimensions(_status_outbox_path()),
         v6_0_seams=_get_v6_seams(),
         heimdal_ingress=heimdal_ingress,
         integrated_runtime_v1=_integrated_runtime_v1_matrix(
@@ -1297,7 +1305,7 @@ def get_orientation_signals() -> OrientationSignals:
     if queue_mode == "db":
         counters = _count_events_db()
     if counters is None:
-        counters = _count_events(Path(INDEX_OUTBOX_PATH)) if INDEX_OUTBOX_PATH else EventCounters()
+        counters = _count_events(_status_outbox_path())
     counters = _fill_ingest_run_counts(counters, ingestion)
     return OrientationSignals(
         events=counters,

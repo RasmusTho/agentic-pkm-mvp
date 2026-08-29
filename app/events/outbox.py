@@ -8,6 +8,9 @@ from app.services.outbox import read_jsonl_outbox_records
 
 
 def default_outbox_path() -> Path:
+    peek = getattr(INDEX_OUTBOX_PATH, "peek", None)
+    if callable(peek):
+        return peek()
     return Path(INDEX_OUTBOX_PATH)
 
 

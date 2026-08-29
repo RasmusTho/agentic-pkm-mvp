@@ -97,6 +97,13 @@ class _DynamicIndexOutboxPath:
         self._cache_path = path
         return path
 
+    def peek(self) -> Path:
+        """Resolve the configured path without creating or opening anything."""
+        env_value = os.environ.get("INDEX_OUTBOX_PATH")
+        if env_value and env_value.strip():
+            return Path(env_value).expanduser()
+        return load_watcher_settings().paths.index_outbox
+
     def __getattr__(self, name: str):
         return getattr(self.current(), name)
 
