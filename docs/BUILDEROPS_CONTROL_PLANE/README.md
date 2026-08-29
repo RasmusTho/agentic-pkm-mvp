@@ -1,4 +1,4 @@
-State: Accepted target-state specification (owner decision, 2026-07-15; amended per ADR-0062 A1-A3, 2026-07-16: asynchronous recovery durability, failure-domain separation, degraded-mode contract, CKM/CEG migration source). Parent validation hub #3788 remains `agent:blocked` while child slices are outstanding. BCP-01 is implemented in the development baseline by #3792/PR #3852; the repo/deployment contract for BCP-02 is implemented by #3790; BCP-03 is implemented in the development baseline by #3789/PR #3929 (mechanism only, no cutover); BCP-04 is implemented in the development baseline by #3791 (client transport and gates only, non-authoritative); live authority activation remains forbidden until BCP-03 through BCP-06 complete. BCP-05 still waits for BCP-04 acceptance, and BCP-06/07 remain dependency-blocked. Existing issues #3603 and #3690 are reconciled into the sequence.
+State: Accepted target-state specification. #5056 amends the BuilderOps VM deployment posture: BuilderOps is rebuildable operational state, while backup/restore is deferred and non-gating. Parent validation hub #3788 remains `agent:blocked` while child slices are outstanding. BCP-01 is implemented in the development baseline by #3792/PR #3852; the repo/deployment contract for BCP-02 is implemented by #3790 and #5056; BCP-03 is implemented in the development baseline by #3789/PR #3929 (mechanism only, no cutover); BCP-04 is implemented in the development baseline by #3791 (client transport and gates only, non-authoritative); live authority activation remains forbidden until BCP-03 through BCP-06 complete.
 Doc role: Specification directory
 Authority: Owns the bounded task decomposition and cross-task invariants after merge. ADR-0062 owns the architectural decision; ADR-0010 owns the repo/BuilderOps authority seam; shipped owner docs win for current behavior.
 Owner: BuilderOps governance / Architecture spine
@@ -22,11 +22,21 @@ PostgreSQL migration lineage, domain-neutral store port, atomic local task/trans
 idempotency/outbox transaction, fenced leases, crash-safe reconciliation, and explicit SQLite
 migration/test adapter. BCP-02 (#3790) adds the independent scoped-auth service, migration-gated
 BuilderOps Compose project, separate-engine preflight, immutable pins, authenticated probes,
-secret-safe status/metrics, deploy/rollback receipts, asynchronous WAL-G backup/archive contract,
-and independently credentialed restore drill with a new recovery epoch and executor fence. This is
-still not a production cutover: the checked-in zero pins are non-runnable placeholders, no live
-Demerzel authority was activated, and client migration, legacy import, privileged execution, final
-restore rehearsal, and Product Runtime route removal remain owned by BCP-03 through BCP-06.
+secret-safe status/metrics, deploy/rollback receipts, and rebuildable local durability. Candidate
+images and readiness deliberately have no WAL-G, backup service, recovery target, or restore gate.
+This is still not a production cutover: the checked-in zero pins are non-runnable placeholders, no
+live authority was activated, and client migration, legacy import, privileged execution, and Product
+Runtime route removal remain owned by BCP-03 through BCP-06.
+
+## Builder-system rebuildable deployment posture
+
+BuilderOps is rebuilt from the repository, attested immutable control-plane and PostgreSQL images,
+pinned configuration, and VM-local secret references. Backup and restore are deferred capabilities,
+not candidate, migration, readiness, rollout, or closure gates. Rebuild preserves schema/migration,
+authority epoch/fencing, no dual writer, loopback API, private authenticated ingress, health/readiness,
+disk/WAL guardrails, and truthful receipts. Rollback selects code/config/image only and never rewinds
+surviving database state. Manual `pg_wal` deletion, `pg_resetwal`, and reset/cleanup tools remain
+prohibited.
 
 BCP-03 is implemented in the development baseline by #3789/PR #3929
 (`app/builderops/control_plane/legacy_migration.py`): producer-derived expected-source
@@ -110,11 +120,11 @@ the live TARS state.
 | # | Task | ID | Issue | Delivers | Depends on |
 |---|---|---|---|---|---|
 | 1 | [PostgreSQL Transaction Kernel](POSTGRES_TRANSACTION_KERNEL.md) | BCP-01 | #3792 | Store port, PostgreSQL schema/migrations, fenced leases, atomic idempotency + state + receipt + outbox | — |
-| 2 | [Independent Authenticated Deployment](INDEPENDENT_AUTHENTICATED_DEPLOYMENT.md) | BCP-02 | #3790 | Separate service app/Compose project outside the `pkm-*` failure domain, auth, release pin, health + alerting, encrypted backup + archived-WAL recovery, trust boundary | BCP-01 |
+| 2 | [Independent Authenticated Deployment](INDEPENDENT_AUTHENTICATED_DEPLOYMENT.md) | BCP-02 | #3790 / #5056 | Separate service app/Compose project outside the `pkm-*` failure domain, auth, release pin, rebuildable durability, health + alerting, trust boundary | BCP-01 |
 | 3 | [Legacy Authority Migration](LEGACY_AUTHORITY_MIGRATION.md) | BCP-03 | #3789 | Complete SQLite/JSONL/JSON inventory, read-only import, evidence-quarantine/authority-tombstone report, authority epoch | BCP-01 |
 | 4 | [API-Only Client Cutover](API_ONLY_CLIENT_CUTOVER.md) | BCP-04 | #3791 | MacBook skills/CLI/automation use authenticated API and fail closed with no local/direct-DB fallback | BCP-02 |
 | 5 | [Demerzel Review And Merge Orchestration](DEMERZEL_REVIEW_MERGE_ORCHESTRATION.md) | BCP-05 | existing #3603; baseline PR #3620 merged | Migrate the delivered executor to API/PostgreSQL/outbox and scoped merge authority | BCP-02, BCP-04 |
-| 6 | [Authority Cutover And Product Separation](AUTHORITY_CUTOVER_PRODUCT_SEPARATION.md) | BCP-06 | #3793 | Import/cutover, disable legacy writers, remove Product routes/startup, prove restore-from-backup/no-fallback, archive sources | BCP-03, BCP-04, BCP-05 |
+| 6 | [Authority Cutover And Product Separation](AUTHORITY_CUTOVER_PRODUCT_SEPARATION.md) | BCP-06 | #3793 | Import/cutover, disable legacy writers, remove Product routes/startup, prove rebuild/no-fallback, archive sources | BCP-03, BCP-04, BCP-05 |
 | 7 | [Owner-Doc Enactment And Closure](OWNER_DOC_ENACTMENT_AND_CLOSURE.md) | BCP-07 | existing #3690 | Reconcile shipped Builder System/store/dispatcher/deployment/security/health docs and close parent | BCP-06 |
 
 Execution order:
@@ -141,15 +151,13 @@ not by rewriting that merge.
 3. **Atomic local transition.** Idempotency result, guarded state mutation, receipt, and outbox intent
    commit in one PostgreSQL transaction. If any part fails, none becomes visible. The local
    PostgreSQL commit is the acknowledgement gate for API success/replay, dependent authority
-   transitions, and outbox claim eligibility (ADR-0062 A1). Recovery durability is asynchronous:
-   encrypted backups plus archived WAL to a target outside Demerzel's primary host/storage failure
-   domains. A co-resident recovery target fails readiness (structural misconfiguration is
-   fail-closed); stalled archiving raises a loud alert, not an acknowledgement block.
+   transitions, and outbox claim eligibility. BuilderOps durability is rebuildable: no archive
+   pipeline or recovery target is admitted, and a deferred backup capability cannot affect readiness.
 4. **Durable, reconciled external effects.** After an eligible intent is claimed, the executor
    commits a fenced pre-effect attempt/receipt locally before calling GitHub; an uncommitted attempt
    leaves GitHub untouched (ADR-0062 A1). A timeout is `unknown`, not `failed`; retry reads GitHub
    before repeating, and terminal success requires GitHub readback bound to repo and current SHA.
-   After a restore, external effects reconcile against GitHub before the executor resumes.
+   After a service rebuild, external effects reconcile against GitHub before the executor resumes.
 5. **Fenced leases.** Stale workers cannot mutate after expiry/reassignment; fencing survives API,
    worker, and database restarts.
 6. **Credential/policy non-transitivity and non-persistence.** A credential/lease for repo A cannot
@@ -158,25 +166,22 @@ not by rewriting that merge.
    is conditional on the same protected-base/manifest authorization fence or a merge queue that
    revalidates it, so a post-validation base/policy change produces no merge. Product and general
    clients cannot obtain merge credentials. Raw secrets never enter PostgreSQL, outbox payloads,
-   receipts, artifacts, logs/metrics, WAL, or BuilderOps backups. Backup/WAL decryption uses
-   independently recoverable key/KMS custody outside Demerzel's failure domains rather than depending
-   solely on its host secret store.
-7. **Independent lifecycle and failure domain.** Product start/stop/deploy/health/backup cannot
-   start, stop, publish, or restore BuilderOps, and BuilderOps failure does not change Product
+   receipts, artifacts, logs/metrics, or WAL. A future deferred backup capability requires a separate
+   custody decision and cannot be inferred from this deployment contract.
+7. **Independent lifecycle and failure domain.** Product start/stop/deploy/health cannot
+   start, stop, publish, or rebuild BuilderOps, and BuilderOps failure does not change Product
    process ownership. The BuilderOps service/database run outside the `pkm-*` container-VM failure
    domain (ADR-0062 A2), and `/healthz` is wired into the operator alerting path. Degraded mode:
    with the control plane unreachable, repo-authorized direct git/GitHub work continues without
    fabricating BuilderOps state; orchestration-gated actions wait.
-8. **No authority rewind.** Before activation, rollback may use the pre-import PostgreSQL backup.
-   After activation, recovery restores the latest archived point, reconciles external effects
-   against GitHub, and starts a new fencing epoch before writes reopen (ADR-0062 A1: the tail since
-   the last archived point is an accepted loss window); it never rewinds surviving state or
-   re-enables SQLite/JSONL/JSON.
+8. **No authority rewind.** Rollback selects a compatible prior code/config/image pin. After a
+   rebuild, external effects reconcile against GitHub before writes reopen under current fencing;
+   BuilderOps never rewinds surviving state or re-enables SQLite/JSONL/JSON.
 9. **Artifact integrity.** Large artifacts may remain content-addressed files, but identity, state,
    terminal receipts, and promotion/outbox status are PostgreSQL-authoritative.
 10. **Fail-loud cutover.** Incomplete producer-derived source coverage, an unenumerated host/
     worktree/container root, authority-bearing ambiguity that is neither evidence-resolved nor
-    converted into a duplicate-preventing non-authoritative tombstone, failed restore drill,
+    converted into a duplicate-preventing non-authoritative tombstone, failed rebuild preflight,
     unhealthy schema/outbox, missing credentials, or an extant Product route blocks cutover. Plain
     quarantine is permitted only for evidence-only material that cannot authorize or replay effects.
 
@@ -191,8 +196,8 @@ Partial-failure examples:
 - If import sees two authority-bearing records with one identity and different hashes, neither is
   chosen silently; cutover stays blocked until evidence resolves the conflict or a non-authoritative
   tombstone reserves every identity/operation key and makes replay fail closed.
-- If backup succeeds but the restore drill fails, deployment may continue in a non-authoritative test
-  environment but production cutover is rejected.
+- A deferred backup/restore proposal has no effect on BuilderOps deployment or cutover until it is
+  separately governed and accepted.
 - If BuilderOps is unavailable, MacBook commands return a typed unavailable/auth error. They do not
   initialize SQLite or fall back to direct GitHub lease simulation.
 
@@ -221,14 +226,12 @@ Partial-failure examples:
 - [ ] Product Runtime contains no BuilderOps route, process bootstrap, data mount, secret, or health
   dependency, and its lifecycle remains healthy with BuilderOps stopped.
   Verify: `tests/architecture/test_builderops_product_separation.py::test_product_runtime_has_no_builderops_ownership`.
-- [ ] An encrypted full backup plus archived WAL restores into a disposable database to the latest
-  archived point with Demerzel's host secret store unavailable, using independently recoverable
-  key/KMS custody, and passes readiness/invariant checks before authoritative cutover.
-  Verify: BCP-02 restore-from-backup drill and BCP-06 cutover/recovery gate.
-- [ ] Durable-state, WAL, and restored-backup negative scans prove no raw client/database/GitHub/
-  model/recovery-decryption credential is persisted, and post-activation recovery cannot rewind
-  surviving state.
-  Verify: BCP-02 credential-persistence test plus BCP-06 no-authority-rewind rehearsal.
+- [ ] A rebuild from repository source, attested images, configuration, and VM-local secret references
+  reaches migration-gated readiness without a backup, restore, recovery target, or WAL archive.
+  Verify: `tests/ops/test_builderops_deploy_contract.py::test_deploy_and_rollback_receipts_bind_pin_schema_and_epoch`.
+- [ ] Durable state contains no raw client/database/GitHub/model credential, and rollback/rebuild
+  cannot rewind surviving state.
+  Verify: `tests/ops/test_builderops_deploy_contract.py::test_readiness_failure_reactivates_previous_live_release`.
 - [ ] A verification-gated merge uses the repo-scoped executor credential, independently binds the
   protected-base delivery manifest and host credential mapping to the current PR SHA, executes only
   through a GitHub-enforced base/manifest conditional or revalidated merge queue, rejects a base or

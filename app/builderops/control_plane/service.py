@@ -574,13 +574,9 @@ def create_app(
         credentials,
         LiveOperationalStatusProvider(
             store,
-            recovery_target_file=os.getenv(
-                "BUILDEROPS_RECOVERY_TARGET_FILE", "/run/secrets/builderops_recovery_target"
-            ),
             worker_heartbeat_file=os.getenv(
                 "BUILDEROPS_WORKER_HEARTBEAT_FILE", "/run/builderops/worker.json"
             ),
-            recovery_required=os.getenv("BUILDEROPS_LOCAL_DURABILITY_MODE") != "rebuildable",
         ),
         rate_limiter,
     )

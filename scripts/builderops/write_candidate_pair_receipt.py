@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Write the exact BuilderOps image pair proved by the main restore gate."""
+"""Write the exact rebuildable BuilderOps image pair produced on main."""
 
 from __future__ import annotations
 
@@ -20,7 +20,7 @@ def main() -> int:
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--source-sha", required=True)
     parser.add_argument("--control-plane-digest", type=_digest, required=True)
-    parser.add_argument("--postgres-walg-digest", type=_digest, required=True)
+    parser.add_argument("--postgres-digest", type=_digest, required=True)
     args = parser.parse_args()
     if re.fullmatch(r"[0-9a-f]{40}", args.source_sha) is None:
         parser.error("source SHA must be 40 lowercase hex characters")
@@ -32,8 +32,8 @@ def main() -> int:
         "source_ref": "refs/heads/main",
         "source_sha": args.source_sha,
         "control_plane_image_digest": args.control_plane_digest,
-        "postgres_walg_image_digest": args.postgres_walg_digest,
-        "restore_gate": "encrypted-full-backup-plus-archived-wal",
+        "postgres_image_digest": args.postgres_digest,
+        "durability_posture": "rebuildable",
         "platform": "linux/amd64",
     }
     args.output.write_text(

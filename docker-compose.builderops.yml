@@ -9,9 +9,9 @@ x-builderops-image: &builderops-image
 
 services:
   db:
-    # This separately built pin is PostgreSQL 16 plus WAL-G. It is not the
-    # Product pgvector image and must be immutable for the same reason as the
-    # API pin.
+    # This separately built PostgreSQL pin is not the Product pgvector image
+    # and must be immutable for the same reason as the API pin. Rebuildable
+    # local BuilderOps does not include a backup client or recovery egress.
     image: ${BUILDEROPS_POSTGRES_IMAGE_REPOSITORY:?BuilderOps PostgreSQL image repository is required}@${BUILDEROPS_POSTGRES_IMAGE_DIGEST:?BuilderOps PostgreSQL immutable image digest is required}
     restart: unless-stopped
     environment:
