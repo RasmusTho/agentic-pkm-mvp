@@ -157,7 +157,7 @@
         {"const": "github:issue:5194"},
         {"pattern": "^github:pr:[1-9][0-9]*$"},
         {"pattern": "^github:commit:[a-f0-9]{40,64}$"},
-        {"pattern": "^receipt:[a-z][a-z0-9_.-]*:[a-f0-9]{64}$"},
+        {"pattern": "^receipt:(devsystem_vm102_component_inventory\\.v1|builderops_vm_rebuild_activation\\.v1|devui_vm102_runtime_qualification\\.v1|devsystem_vm102_deploy\\.v1|devsystem_vm102_health\\.v1|devui-stage-a-read-only-owner-pilot\\.v1|devsystem_vm102_rollback\\.v1|tars_host_qualification\\.v1):[a-f0-9]{64}$"},
         {"pattern": "^operator:sha256:[a-f0-9]{64}$"}
       ]
     },

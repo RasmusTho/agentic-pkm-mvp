@@ -138,6 +138,19 @@ _CLAIMS: Final[dict[str, bool]] = {
     "health_proven": False,
     "rollback_proven": False,
 }
+_SOURCE_RECEIPT_TYPES: Final[tuple[str, ...]] = (
+    "devsystem_vm102_component_inventory.v1",
+    "builderops_vm_rebuild_activation.v1",
+    "devui_vm102_runtime_qualification.v1",
+    "devsystem_vm102_deploy.v1",
+    "devsystem_vm102_health.v1",
+    "devui-stage-a-read-only-owner-pilot.v1",
+    "devsystem_vm102_rollback.v1",
+    "tars_host_qualification.v1",
+)
+_SOURCE_RECEIPT_PATTERN = "|".join(
+    re.escape(receipt_type) for receipt_type in _SOURCE_RECEIPT_TYPES
+)
 _SOURCE_REF = re.compile(
     r"^(?:"
     r"repo:docs/BUILDEROPS_CONTROL_PLANE/README\.md"
@@ -145,7 +158,7 @@ _SOURCE_REF = re.compile(
     r"github:issue:5194|"
     r"github:pr:[1-9][0-9]*|"
     r"github:commit:[a-f0-9]{40,64}|"
-    r"receipt:[a-z][a-z0-9_.-]*:[a-f0-9]{64}|"
+    rf"receipt:(?:{_SOURCE_RECEIPT_PATTERN}):[a-f0-9]{{64}}|"
     r"operator:sha256:[a-f0-9]{64}"
     r")$"
 )

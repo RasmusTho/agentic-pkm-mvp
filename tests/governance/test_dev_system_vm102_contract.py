@@ -351,12 +351,16 @@ def test_component_inventory_rejects_malformed_and_secret_bearing_evidence() -> 
     with pytest.raises(InventoryValidationError):
         build_component_inventory_receipt(opaque_owner)
 
-    cleartext_reference = _inventory_evidence()
-    unsafe_ref = f"repo:docs/{'b' * 48}"
-    cleartext_reference["source_refs"].append(unsafe_ref)
-    cleartext_reference["components"][0]["evidence_refs"].append(unsafe_ref)
-    with pytest.raises(InventoryValidationError):
-        build_component_inventory_receipt(cleartext_reference)
+    for unsafe_ref in (
+        f"repo:docs/{'b' * 48}",
+        f"receipt:opaque_credential_material_11aa22bb33cc:{'a' * 64}",
+        f"receipt:deployment_proven:{'a' * 64}",
+    ):
+        cleartext_reference = _inventory_evidence()
+        cleartext_reference["source_refs"].append(unsafe_ref)
+        cleartext_reference["components"][0]["evidence_refs"].append(unsafe_ref)
+        with pytest.raises(InventoryValidationError):
+            build_component_inventory_receipt(cleartext_reference)
 
     receipt = build_component_inventory_receipt(_inventory_evidence())
     tampered_digest = copy.deepcopy(receipt)
