@@ -156,6 +156,79 @@ def test_watcher_tick_calls_standing_questions_composition_after_ingest(
     assert summary["standing_questions_drafted"] == 1
 
 
+def test_watcher_retries_standing_questions_failure_before_advancing_snapshot(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """A failed SQ delivery remains observable on the next unchanged tick."""
+    vault = tmp_path / "vault"
+    evidence = vault / "Inbox" / "evidence.md"
+    evidence.parent.mkdir(parents=True)
+    evidence.write_text(
+        "---\n"
+        "uuid: 00000000-0000-0000-0000-000000000002\n"
+        "scope: work\n"
+        "---\n\n"
+        "the retryable test evidence\n",
+        encoding="utf-8",
+    )
+    snapshot_path = vault / ".state.json"
+    outbox = tmp_path / "events.jsonl"
+    attempts: list[int] = []
+    monkeypatch.setenv("INDEX_OUTBOX_PATH", str(outbox))
+    monkeypatch.setenv("WATCHER_RUN_LOG_PATH", str(tmp_path / "watcher_run.jsonl"))
+    monkeypatch.setattr(
+        "app.watcher.vault_watcher.run_vault_alpha_ingest_paths",
+        lambda *_args, **_kwargs: SimpleNamespace(ingested=1, errors=0),
+    )
+
+    def standing_tick(**_kwargs):
+        attempts.append(1)
+        if len(attempts) == 1:
+            raise RuntimeError("temporary SQ outage")
+        return SimpleNamespace(
+            matching=SimpleNamespace(attached=1),
+            refresh=SimpleNamespace(
+                refresh_candidates=("sq-2",),
+                drafted=("sq-2",),
+                deferred_pending_review=(),
+            ),
+        )
+
+    monkeypatch.setattr(
+        "app.standing_questions.evidence_matching.run_standing_questions_tick",
+        standing_tick,
+    )
+
+    first_summary, _ = run_watcher_tick(
+        vault_root=vault,
+        snapshot_path=snapshot_path,
+        skip_panel=True,
+        emit_only=False,
+        dry_run=False,
+        max_notes=10,
+        force=False,
+        outbox_path=outbox,
+    )
+
+    assert first_summary["standing_questions_tick_error"] == "temporary SQ outage"
+    assert "Inbox/evidence.md" not in load_snapshot(snapshot_path)
+
+    second_summary, _ = run_watcher_tick(
+        vault_root=vault,
+        snapshot_path=snapshot_path,
+        skip_panel=True,
+        emit_only=False,
+        dry_run=False,
+        max_notes=10,
+        force=False,
+        outbox_path=outbox,
+    )
+
+    assert len(attempts) == 2
+    assert second_summary["standing_questions_drafted"] == 1
+    assert "Inbox/evidence.md" in load_snapshot(snapshot_path)
+
+
 def test_run_watcher_tick_uses_watcher_settings_default_when_env_unset(tmp_path: Path, monkeypatch) -> None:
     vault = tmp_path / "vault"
     inbox = vault / "Inbox"
