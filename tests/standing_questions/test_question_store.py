@@ -8,6 +8,7 @@ import jsonschema
 import pytest
 
 from app.standing_questions import question_store as question_store_module
+from app.knowledge.errors import KnowledgeWriteConflict
 from app.standing_questions.question_store import (
     HumanOwnedFieldMutationError,
     QuestionStore,
@@ -83,6 +84,28 @@ def test_engine_may_append_system_owned_fields_only(tmp_path: Path) -> None:
     assert updated["status"] == "open"
     assert updated["created_at"] == note["created_at"]
     assert updated["evidence"][0]["artifact_ref"] == "note:abc"
+
+
+def test_conditional_system_update_rejects_body_only_concurrent_edit(tmp_path: Path) -> None:
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    store = _store(vault)
+    note, _receipt = store.create_question(
+        text="Original question", scope="work", registered_via="explicit"
+    )
+    observed, observed_version = store.read_question_with_version(note["question_id"])
+    path = vault / "questions" / f"{note['question_id']}.md"
+    path.write_text(path.read_text(encoding="utf-8") + "\nconcurrent body marker\n", encoding="utf-8")
+
+    with pytest.raises(KnowledgeWriteConflict):
+        store.update_system_fields_if_unchanged(
+            note["question_id"],
+            observed,
+            {"last_refreshed_at": "2026-08-29T12:00:00Z"},
+            expected_version=observed_version,
+        )
+
+    assert "concurrent body marker" in path.read_text(encoding="utf-8")
 
 
 def _minimal_valid_note(**overrides: object) -> dict[str, object]:

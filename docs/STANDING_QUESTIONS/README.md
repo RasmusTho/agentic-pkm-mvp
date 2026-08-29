@@ -1,9 +1,9 @@
-State: Specification directory — FILED (parent #3325; children #3326–#3330 filed 2026-07-07, all agent:blocked at filing per the uniform closed-loops filing policy). System-level source of truth for building Standing Questions, the third of the seven uncaptured closed loops named in `docs/research/yggdrasil-closed-loops-ideation.md`. Grounded in that ideation capture; not itself the grounding research. GitHub issues are execution artifacts; this spec remains the contract.
+State: Specification directory — SQ-04 implementation delivered in #3327; parent #3325 remains the validation hub and SQ-05 is still the review-surface follow-up. System-level source of truth for building Standing Questions, the third of the seven uncaptured closed loops named in `docs/research/yggdrasil-closed-loops-ideation.md`. Grounded in that ideation capture; not itself the grounding research. GitHub issues are execution artifacts; this spec remains the contract.
 Doc role: Capability specification (feature-breakdown lane)
 Temporal class: strategic
 Review cadence: event-driven (task merges, parent-issue lifecycle)
 Source of truth: this directory; GitHub issues (#3325–#3330) are execution artifacts, this spec is the contract
-Last reviewed: 2026-07-07
+Last reviewed: 2026-08-29
 
 # Standing Questions — Specification
 
@@ -40,13 +40,12 @@ seam and `CompilationDraft`:
 | Panel `AI-åtgärder` checkbox + Companion UI read-mode checkbox-projection acceleration (`docs/PANEL_AGENT.md`) | SQ-05's visual accept/dismiss — a UI click projects the same governed checkbox semantics, never a parallel authority store |
 | FRONTMATTER.md human-owned vs. system-owned (bounded) field ownership model | the Question note's write discipline (SQ-01): human owns `text`; system appends bounded fields only |
 
-**External, cross-capability dependency (named once, load-bearing):** SQ-04 needs the Create engine
-(EXP-3, `docs/MIMER_CAPABILITY_HARDENING/EXPANSION_CONNECT_AND_CREATE.md`) delivered. That spec is
-"Advisory until child issues are delivered" as of this writing — **EXP-3 has not merged**. SQ-04 is
-fully specifiable now (the trigger, contradiction-surfacing, and partial-failure discipline are this
-capability's own contribution), but it cannot be *implemented* before EXP-3 lands. See SQ-04's
-Context for how its GitHub issue should actually be labeled despite the uniform drafting convention
-used below.
+**External, cross-capability dependency (named once, load-bearing):** SQ-04 reuses the delivered
+Create engine (EXP-3, `docs/MIMER_CAPABILITY_HARDENING/EXPANSION_CONNECT_AND_CREATE.md`, #2996).
+The SQ-04 implementation owns only the evidence-delta trigger, contradiction surfacing, and
+pending-review discipline; it does not duplicate Create's synthesis, staging, citation, or expiry
+contract. The remaining end-to-end capability gap is SQ-05's governed review surface and owner/UAT
+acceptance.
 
 ## Implementation tasks (execution order)
 
@@ -55,7 +54,7 @@ used below.
 | 1 | [STORE_QUESTION_NOTES_AND_PROJECTION](STORE_QUESTION_NOTES_AND_PROJECTION.md) | SQ-01 | — |
 | 2 | [REGISTER_QUESTIONS_FRICTION_FREE](REGISTER_QUESTIONS_FRICTION_FREE.md) | SQ-02 | SQ-01 (∥ with 3) |
 | 3 | [MATCH_EVIDENCE_TO_OPEN_QUESTIONS](MATCH_EVIDENCE_TO_OPEN_QUESTIONS.md) | SQ-03 | SQ-01 (∥ with 2) |
-| 4 | [REFRESH_ANSWER_ON_EVIDENCE_DELTA](REFRESH_ANSWER_ON_EVIDENCE_DELTA.md) | SQ-04 | SQ-01, SQ-03 + **external**: EXP-3 (Create engine) merged |
+| 4 | [REFRESH_ANSWER_ON_EVIDENCE_DELTA](REFRESH_ANSWER_ON_EVIDENCE_DELTA.md) | SQ-04 | SQ-01, SQ-03 + EXP-3 (#2996) |
 | 5 | [SURFACE_QUESTION_LIST_AND_REVIEW](SURFACE_QUESTION_LIST_AND_REVIEW.md) | SQ-05 | SQ-01, SQ-02, SQ-03, SQ-04 |
 
 Flat order: 1 → 2‖3 → 4 → 5. No task here needs a plan beyond this list; if a future revision cannot

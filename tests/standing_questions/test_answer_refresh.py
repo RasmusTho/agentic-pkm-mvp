@@ -1,0 +1,596 @@
+"""SQ-04 production-entrypoint acceptance tests."""
+
+from __future__ import annotations
+
+import json
+import os
+import time
+from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
+
+import pytest
+
+from app.expansion.create import SourceInput
+from app.standing_questions import answer_refresh as refresh_module
+from app.standing_questions.answer_refresh import refresh_answers_on_evidence_delta
+from app.standing_questions.question_store import QuestionStore
+from app.write_guard import WriteGuard
+from scripts.yaml_roundtrip import load_frontmatter
+
+
+def _guard() -> WriteGuard:
+    return WriteGuard(snapshot_fn=lambda: {"state": "healthy"})
+
+
+def _store(vault: Path) -> QuestionStore:
+    return QuestionStore(vault, write_guard=_guard())
+
+
+def _dt(hour: int) -> datetime:
+    return datetime(2026, 8, 29, hour, 0, tzinfo=timezone.utc)
+
+
+def _evidence(ref: str, provenance: str, span: str, hour: int) -> dict[str, Any]:
+    return {
+        "artifact_ref": ref,
+        "source_stream": "ingest.vault.changed",
+        "matched_at": f"2026-08-29T{hour:02d}:00:00Z",
+        "confidence_class": "high",
+        "provenance_ref": provenance,
+        "quoted_span": span,
+    }
+
+
+def _source(provenance: str, text: str) -> SourceInput:
+    return SourceInput(
+        object_id=provenance,
+        note_path="notes/evidence.md",
+        text=text,
+        language="en",
+        review_state="reviewed",
+    )
+
+
+def _question(
+    vault: Path, *, standing_answer_ref: str | None = None
+) -> tuple[QuestionStore, dict[str, Any]]:
+    store = _store(vault)
+    note, _receipt = store.create_question(
+        text="Which deployment boundary is supported?",
+        scope="work",
+        registered_via="explicit",
+    )
+    if standing_answer_ref is not None:
+        note, _receipt = store.update_system_fields(
+            note["question_id"], {"standing_answer_ref": standing_answer_ref}
+        )
+    return store, note
+
+
+def _records(outbox: Path) -> list[dict[str, Any]]:
+    if not outbox.exists():
+        return []
+    return [json.loads(line) for line in outbox.read_text(encoding="utf-8").splitlines()]
+
+
+def test_delta_threshold_triggers_one_draft(tmp_path: Path) -> None:
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    outbox = tmp_path / "outbox.jsonl"
+    store, note = _question(vault)
+    evidence = _evidence(
+        "vault://notes/evidence.md",
+        "outbox://evidence/1",
+        "the test channel is isolated",
+        10,
+    )
+    store.update_system_fields(note["question_id"], {"evidence": [evidence]})
+
+    summary = refresh_answers_on_evidence_delta(
+        vault_root=vault,
+        outbox_path=outbox,
+        evidence_sources={
+            "outbox://evidence/1": _source("outbox://evidence/1", evidence["quoted_span"])
+        },
+        store=store,
+        write_guard=_guard(),
+        now=_dt(12),
+    )
+
+    assert summary.refresh_candidates == (note["question_id"],)
+    assert summary.drafted == (note["question_id"],)
+    assert len([r for r in _records(outbox) if r["event"] == "expansion.create.proposed"]) == 1
+    refreshed = store.read_question(note["question_id"])
+    assert refreshed["candidate_answer_ref"].startswith("vault://")
+    assert refreshed["last_refreshed_at"] == "2026-08-29T12:00:00Z"
+    draft = vault / refreshed["candidate_answer_ref"][len("vault://") :]
+    frontmatter, body = load_frontmatter(draft.read_text(encoding="utf-8"))
+    assert frontmatter["sources"] == ["outbox://evidence/1"]
+    assert frontmatter["authority_state"] == "proposal"
+    assert evidence["quoted_span"] in body
+
+
+def test_pending_review_not_clobbered_by_new_delta(tmp_path: Path) -> None:
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    outbox = tmp_path / "outbox.jsonl"
+    store, note = _question(vault)
+    first = _evidence("vault://notes/a.md", "outbox://evidence/1", "first evidence", 10)
+    second = _evidence("vault://notes/b.md", "outbox://evidence/2", "second evidence", 13)
+    store.update_system_fields(note["question_id"], {"evidence": [first]})
+    sources = {
+        "outbox://evidence/1": _source("outbox://evidence/1", first["quoted_span"]),
+        "outbox://evidence/2": _source("outbox://evidence/2", second["quoted_span"]),
+    }
+    refresh_answers_on_evidence_delta(
+        vault_root=vault,
+        outbox_path=outbox,
+        evidence_sources=sources,
+        store=store,
+        write_guard=_guard(),
+        now=_dt(12),
+    )
+    prior_ref = store.read_question(note["question_id"])["candidate_answer_ref"]
+    updated = store.read_question(note["question_id"])
+    store.update_system_fields(note["question_id"], {"evidence": [*updated["evidence"], second]})
+
+    summary = refresh_answers_on_evidence_delta(
+        vault_root=vault,
+        outbox_path=outbox,
+        evidence_sources=sources,
+        store=store,
+        write_guard=_guard(),
+        now=_dt(14),
+    )
+
+    assert summary.deferred_pending_review == (note["question_id"],)
+    assert summary.drafted == ()
+    assert store.read_question(note["question_id"])["candidate_answer_ref"] == prior_ref
+    assert len([r for r in _records(outbox) if r["event"] == "expansion.create.proposed"]) == 1
+
+
+def test_deferral_is_derived_not_persisted(tmp_path: Path) -> None:
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    outbox = tmp_path / "outbox.jsonl"
+    store, note = _question(vault)
+    first = _evidence("vault://notes/a.md", "outbox://evidence/1", "first evidence", 10)
+    second = _evidence("vault://notes/b.md", "outbox://evidence/2", "second evidence", 13)
+    store.update_system_fields(note["question_id"], {"evidence": [first]})
+    sources = {
+        "outbox://evidence/1": _source("outbox://evidence/1", first["quoted_span"]),
+        "outbox://evidence/2": _source("outbox://evidence/2", second["quoted_span"]),
+    }
+    refresh_answers_on_evidence_delta(
+        vault_root=vault,
+        outbox_path=outbox,
+        evidence_sources=sources,
+        store=store,
+        write_guard=_guard(),
+        now=_dt(12),
+    )
+    current = store.read_question(note["question_id"])
+    store.update_system_fields(note["question_id"], {"evidence": [*current["evidence"], second]})
+    deferred = refresh_answers_on_evidence_delta(
+        vault_root=vault,
+        outbox_path=outbox,
+        evidence_sources=sources,
+        store=store,
+        write_guard=_guard(),
+        now=_dt(14),
+    )
+    assert deferred.deferred_pending_review == (note["question_id"],)
+    after_defer = store.read_question(note["question_id"])
+    assert set(after_defer) == set(current)
+    assert "refresh_deferred" not in after_defer
+
+    # Simulate the governed dismiss path clearing the candidate pointer. The
+    # next tick recomputes state from the note and consumes the still-present delta.
+    store.update_system_fields(note["question_id"], {"candidate_answer_ref": None})
+    retried = refresh_answers_on_evidence_delta(
+        vault_root=vault,
+        outbox_path=outbox,
+        evidence_sources=sources,
+        store=store,
+        write_guard=_guard(),
+        now=_dt(15),
+    )
+    assert retried.drafted == (note["question_id"],)
+
+
+def test_contradiction_surfaced_not_silently_rewritten(tmp_path: Path) -> None:
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    answer = vault / "answers/current.md"
+    answer.parent.mkdir()
+    answer.write_text("The supported boundary is production.", encoding="utf-8")
+    store, note = _question(vault, standing_answer_ref="vault://answers/current.md")
+    evidence = _evidence(
+        "vault://notes/evidence.md", "outbox://evidence/1", "the test channel is isolated", 10
+    )
+    store.update_system_fields(note["question_id"], {"evidence": [evidence]})
+
+    def contradiction(
+        *, system: str, user: str, trace_id: str | None = None, max_tokens: int | None = None
+    ) -> str:
+        assert "production" in user
+        assert "test channel" in user
+        return json.dumps(
+            {
+                "contradicts_standing_answer": True,
+                "contradiction_basis": "The evidence says test, not production.",
+            }
+        )
+
+    summary = refresh_answers_on_evidence_delta(
+        vault_root=vault,
+        outbox_path=tmp_path / "outbox.jsonl",
+        evidence_sources={
+            "outbox://evidence/1": _source("outbox://evidence/1", evidence["quoted_span"])
+        },
+        store=store,
+        contradiction_complete=contradiction,
+        write_guard=_guard(),
+        now=_dt(12),
+    )
+    assert summary.drafted == (note["question_id"],)
+    refreshed = store.read_question(note["question_id"])
+    frontmatter, _body = load_frontmatter(
+        (vault / refreshed["candidate_answer_ref"][len("vault://") :]).read_text(encoding="utf-8")
+    )
+    assert frontmatter["contradicts_standing_answer"] is True
+    assert frontmatter["contradiction"] is True
+    assert frontmatter["contradiction_basis"] == "The evidence says test, not production."
+
+
+def test_degraded_contradiction_judgment_lands_unknown_not_false(tmp_path: Path) -> None:
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    answer = vault / "answers/current.md"
+    answer.parent.mkdir()
+    answer.write_text("The supported boundary is production.", encoding="utf-8")
+    store, note = _question(vault, standing_answer_ref="vault://answers/current.md")
+    evidence = _evidence(
+        "vault://notes/evidence.md", "outbox://evidence/1", "the test channel is isolated", 10
+    )
+    store.update_system_fields(note["question_id"], {"evidence": [evidence]})
+
+    def degraded(**_kwargs: Any) -> str:
+        return "not json"
+
+    refresh_answers_on_evidence_delta(
+        vault_root=vault,
+        outbox_path=tmp_path / "outbox.jsonl",
+        evidence_sources={
+            "outbox://evidence/1": _source("outbox://evidence/1", evidence["quoted_span"])
+        },
+        store=store,
+        contradiction_complete=degraded,
+        write_guard=_guard(),
+        now=_dt(12),
+    )
+    refreshed = store.read_question(note["question_id"])
+    frontmatter, _body = load_frontmatter(
+        (vault / refreshed["candidate_answer_ref"][len("vault://") :]).read_text(encoding="utf-8")
+    )
+    assert frontmatter["contradiction"] == "unknown"
+    assert frontmatter["contradiction"] is not False
+
+
+def test_unreadable_standing_answer_lands_unknown_not_false(tmp_path: Path) -> None:
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    store, note = _question(vault, standing_answer_ref="vault://answers/missing.md")
+    evidence = _evidence("vault://notes/evidence.md", "outbox://evidence/1", "the test channel is isolated", 10)
+    store.update_system_fields(note["question_id"], {"evidence": [evidence]})
+
+    refresh_answers_on_evidence_delta(
+        vault_root=vault,
+        outbox_path=tmp_path / "outbox.jsonl",
+        evidence_sources={"outbox://evidence/1": _source("outbox://evidence/1", evidence["quoted_span"])},
+        store=store,
+        write_guard=_guard(),
+        now=_dt(12),
+    )
+    refreshed = store.read_question(note["question_id"])
+    frontmatter, _body = load_frontmatter(
+        (vault / refreshed["candidate_answer_ref"][len("vault://") :]).read_text(encoding="utf-8")
+    )
+    assert frontmatter["contradiction"] == "unknown"
+    assert frontmatter["contradiction"] is not False
+
+
+def test_invalid_utf8_standing_answer_lands_unknown_not_false(tmp_path: Path) -> None:
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    answer = vault / "answers/corrupt.md"
+    answer.parent.mkdir()
+    answer.write_bytes(b"standing answer with invalid utf-8: \xff")
+    store, note = _question(vault, standing_answer_ref="vault://answers/corrupt.md")
+    evidence = _evidence("vault://notes/evidence.md", "outbox://evidence/1", "the test channel is isolated", 10)
+    store.update_system_fields(note["question_id"], {"evidence": [evidence]})
+
+    refresh_answers_on_evidence_delta(
+        vault_root=vault,
+        outbox_path=tmp_path / "outbox.jsonl",
+        evidence_sources={"outbox://evidence/1": _source("outbox://evidence/1", evidence["quoted_span"])},
+        store=store,
+        write_guard=_guard(),
+        now=_dt(12),
+    )
+    refreshed = store.read_question(note["question_id"])
+    frontmatter, _body = load_frontmatter(
+        (vault / refreshed["candidate_answer_ref"][len("vault://") :]).read_text(encoding="utf-8")
+    )
+    assert frontmatter["contradiction"] == "unknown"
+    assert frontmatter["contradiction"] is not False
+
+
+def test_surrogate_standing_answer_ref_lands_unknown_not_false(tmp_path: Path) -> None:
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    store, note = _question(vault, standing_answer_ref="vault://answers/placeholder.md")
+    evidence = _evidence(
+        "vault://notes/evidence.md", "outbox://evidence/1", "the test channel is isolated", 10
+    )
+    store.update_system_fields(note["question_id"], {"evidence": [evidence]})
+    question_path = vault / "questions" / f"{note['question_id']}.md"
+    question_path.write_text(
+        question_path.read_text(encoding="utf-8").replace(
+            "standing_answer_ref: vault://answers/placeholder.md",
+            'standing_answer_ref: "vault://answers/\\ud800.md"',
+        ),
+        encoding="utf-8",
+    )
+
+    refresh_answers_on_evidence_delta(
+        vault_root=vault,
+        outbox_path=tmp_path / "outbox.jsonl",
+        evidence_sources={
+            "outbox://evidence/1": _source("outbox://evidence/1", evidence["quoted_span"])
+        },
+        store=store,
+        write_guard=_guard(),
+        now=_dt(12),
+    )
+    refreshed = store.read_question(note["question_id"])
+    frontmatter, _body = load_frontmatter(
+        (vault / refreshed["candidate_answer_ref"][len("vault://") :]).read_text(encoding="utf-8")
+    )
+    assert frontmatter["contradiction"] == "unknown"
+    assert frontmatter["contradiction"] is not False
+
+
+def test_symlink_loop_standing_answer_ref_lands_unknown_not_false(tmp_path: Path) -> None:
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    answers = vault / "answers"
+    answers.mkdir()
+    os.symlink("loop", answers / "loop")
+    store, note = _question(vault, standing_answer_ref="vault://answers/loop/answer.md")
+    evidence = _evidence(
+        "vault://notes/evidence.md", "outbox://evidence/1", "the test channel is isolated", 10
+    )
+    store.update_system_fields(note["question_id"], {"evidence": [evidence]})
+
+    refresh_answers_on_evidence_delta(
+        vault_root=vault,
+        outbox_path=tmp_path / "outbox.jsonl",
+        evidence_sources={
+            "outbox://evidence/1": _source("outbox://evidence/1", evidence["quoted_span"])
+        },
+        store=store,
+        write_guard=_guard(),
+        now=_dt(12),
+    )
+    refreshed = store.read_question(note["question_id"])
+    frontmatter, _body = load_frontmatter(
+        (vault / refreshed["candidate_answer_ref"][len("vault://") :]).read_text(encoding="utf-8")
+    )
+    assert frontmatter["contradiction"] == "unknown"
+    assert frontmatter["contradiction"] is not False
+
+
+def test_standing_answer_stat_error_lands_unknown_not_false(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    store, note = _question(vault, standing_answer_ref="vault://answers/current.md")
+    evidence = _evidence(
+        "vault://notes/evidence.md", "outbox://evidence/1", "the test channel is isolated", 10
+    )
+    store.update_system_fields(note["question_id"], {"evidence": [evidence]})
+    real_is_file = Path.is_file
+
+    def permission_race(path: Path) -> bool:
+        if path == vault / "answers" / "current.md":
+            raise PermissionError("standing answer permissions changed")
+        return real_is_file(path)
+
+    monkeypatch.setattr(Path, "is_file", permission_race)
+    refresh_answers_on_evidence_delta(
+        vault_root=vault,
+        outbox_path=tmp_path / "outbox.jsonl",
+        evidence_sources={
+            "outbox://evidence/1": _source("outbox://evidence/1", evidence["quoted_span"])
+        },
+        store=store,
+        write_guard=_guard(),
+        now=_dt(12),
+    )
+    refreshed = store.read_question(note["question_id"])
+    frontmatter, _body = load_frontmatter(
+        (vault / refreshed["candidate_answer_ref"][len("vault://") :]).read_text(encoding="utf-8")
+    )
+    assert frontmatter["contradiction"] == "unknown"
+    assert frontmatter["contradiction"] is not False
+
+
+def test_unreadable_pending_candidate_is_deferred_not_rebuilt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    outbox = tmp_path / "outbox.jsonl"
+    store, note = _question(vault)
+    first = _evidence("vault://notes/a.md", "outbox://evidence/1", "first evidence", 10)
+    second = _evidence("vault://notes/b.md", "outbox://evidence/2", "second evidence", 13)
+    store.update_system_fields(note["question_id"], {"evidence": [first]})
+    sources = {
+        "outbox://evidence/1": _source("outbox://evidence/1", first["quoted_span"]),
+        "outbox://evidence/2": _source("outbox://evidence/2", second["quoted_span"]),
+    }
+    refresh_answers_on_evidence_delta(
+        vault_root=vault, outbox_path=outbox, evidence_sources=sources, store=store,
+        write_guard=_guard(), now=_dt(12)
+    )
+    current = store.read_question(note["question_id"])
+    store.update_system_fields(note["question_id"], {"evidence": [*current["evidence"], second]})
+    candidate_path = vault / current["candidate_answer_ref"][len("vault://") :]
+    real_is_file = Path.is_file
+
+    def permission_race(path: Path) -> bool:
+        if path == candidate_path:
+            raise PermissionError("candidate permissions changed")
+        return real_is_file(path)
+
+    monkeypatch.setattr(Path, "is_file", permission_race)
+    summary = refresh_answers_on_evidence_delta(
+        vault_root=vault, outbox_path=outbox, evidence_sources=sources, store=store,
+        write_guard=_guard(), now=_dt(14)
+    )
+    assert summary.deferred_pending_review == (note["question_id"],)
+    assert summary.drafted == ()
+    assert store.read_question(note["question_id"])["candidate_answer_ref"] == current["candidate_answer_ref"]
+    assert len([r for r in _records(outbox) if r["event"] == "expansion.create.proposed"]) == 1
+
+
+def test_concurrent_refreshes_cannot_clobber_pending_review(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    outbox = tmp_path / "outbox.jsonl"
+    store, note = _question(vault)
+    evidence = _evidence("vault://notes/evidence.md", "outbox://evidence/1", "the test channel is isolated", 10)
+    store.update_system_fields(note["question_id"], {"evidence": [evidence]})
+    sources = {"outbox://evidence/1": _source("outbox://evidence/1", evidence["quoted_span"])}
+    original = refresh_module.run_create_pass
+
+    def slow_create(*args: Any, **kwargs: Any) -> Any:
+        time.sleep(0.1)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(refresh_module, "run_create_pass", slow_create)
+
+    def tick() -> Any:
+        return refresh_answers_on_evidence_delta(
+            vault_root=vault,
+            outbox_path=outbox,
+            evidence_sources=sources,
+            store=store,
+            write_guard=_guard(),
+            now=_dt(12),
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        summaries = list(executor.map(lambda _index: tick(), range(2)))
+
+    assert sum(summary.drafted == (note["question_id"],) for summary in summaries) == 1
+    assert sum(summary.refresh_candidates == (note["question_id"],) for summary in summaries) == 1
+    assert len([r for r in _records(outbox) if r["event"] == "expansion.create.proposed"]) == 1
+
+
+def test_draft_never_sets_standing_answer_ref(tmp_path: Path) -> None:
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    store, note = _question(vault)
+    evidence = _evidence(
+        "vault://notes/evidence.md", "outbox://evidence/1", "the test channel is isolated", 10
+    )
+    store.update_system_fields(note["question_id"], {"evidence": [evidence]})
+    refresh_answers_on_evidence_delta(
+        vault_root=vault,
+        outbox_path=tmp_path / "outbox.jsonl",
+        evidence_sources={
+            "outbox://evidence/1": _source("outbox://evidence/1", evidence["quoted_span"])
+        },
+        store=store,
+        write_guard=_guard(),
+        now=_dt(12),
+    )
+    refreshed = store.read_question(note["question_id"])
+    assert refreshed["standing_answer_ref"] is None
+    assert refreshed["status"] == "open"
+
+
+def test_last_refreshed_at_only_advances_on_success(tmp_path: Path) -> None:
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    outbox = tmp_path / "outbox.jsonl"
+    store, note = _question(vault)
+    evidence = _evidence(
+        "vault://notes/evidence.md", "outbox://missing", "the test channel is isolated", 10
+    )
+    store.update_system_fields(note["question_id"], {"evidence": [evidence]})
+    blocked = refresh_answers_on_evidence_delta(
+        vault_root=vault,
+        outbox_path=outbox,
+        evidence_sources={},
+        store=store,
+        write_guard=_guard(),
+        now=_dt(12),
+    )
+    assert blocked.blocked == (note["question_id"],)
+    assert store.read_question(note["question_id"])["last_refreshed_at"] is None
+
+    successful = refresh_answers_on_evidence_delta(
+        vault_root=vault,
+        outbox_path=outbox,
+        evidence_sources={"outbox://missing": _source("outbox://missing", evidence["quoted_span"])},
+        store=store,
+        write_guard=_guard(),
+        now=_dt(13),
+    )
+    assert successful.drafted == (note["question_id"],)
+    assert store.read_question(note["question_id"])["last_refreshed_at"] == "2026-08-29T13:00:00Z"
+
+
+def test_refresh_path_never_writes_status(tmp_path: Path) -> None:
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    store, note = _question(vault)
+    evidence = _evidence(
+        "vault://notes/evidence.md", "outbox://evidence/1", "the test channel is isolated", 10
+    )
+    store.update_system_fields(note["question_id"], {"evidence": [evidence]})
+    updates: list[dict[str, Any]] = []
+    original = store.update_system_fields_if_unchanged
+
+    def recording(
+        question_id: str,
+        expected: dict[str, Any],
+        fields: dict[str, Any],
+        *,
+        expected_version: str,
+    ) -> tuple[dict[str, Any], Any]:
+        updates.append(dict(fields))
+        return original(question_id, expected, fields, expected_version=expected_version)
+
+    store.update_system_fields_if_unchanged = recording  # type: ignore[method-assign]
+    refresh_answers_on_evidence_delta(
+        vault_root=vault,
+        outbox_path=tmp_path / "outbox.jsonl",
+        evidence_sources={
+            "outbox://evidence/1": _source("outbox://evidence/1", evidence["quoted_span"])
+        },
+        store=store,
+        write_guard=_guard(),
+        now=_dt(12),
+    )
+    assert updates
+    assert all("status" not in fields and "standing_answer_ref" not in fields for fields in updates)
+    assert store.read_question(note["question_id"])["status"] == "open"
