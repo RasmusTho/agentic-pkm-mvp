@@ -4,11 +4,11 @@
     "promotion-test-issuer-key-v1": "Kay64UG8yvCyLhqU000LxzYeUm0L_hLIl5S8kyKWbdc"
   },
   "entries": {
-    "sha256:7cea195bd2aebe7b72e938e4ac034c7f8a9ca99d627061cf7e86b7467b299f1e": {
+    "sha256:a10c3caa3cdde7b6f61c1afae46239d03aa2282f280a5fefa9e3daca9b04c077": {
       "issuer_id": "promotion-test-issuer",
       "issuer_key_id": "promotion-test-issuer-key-v1",
       "public_key": "Kay64UG8yvCyLhqU000LxzYeUm0L_hLIl5S8kyKWbdc",
-      "issuer_signature": "ed25519:v1:ft4s_aqyLBy1mOWXuhmdAFZ0SErkL1Ojoy6uNhXnzZ0cGgCXuP_KCQ07BNP2gACrRDa_QhjBG1rEME3DHvmDBg",
+      "issuer_signature": "ed25519:v1:p3VAnzuysPpTxGU-FX_oz5wjwGXuYQmMIksMpmLS5OrzKwD1GT7EoT310zldx3SBX8xhyoKZxMU_KbgKxjYKBg",
       "status": "issued"
     }
   }

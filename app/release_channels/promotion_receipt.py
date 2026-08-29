@@ -48,6 +48,7 @@ REGISTRY_VERSION = "promotion-receipt-registry.v1"
 ATTEMPT_VERSION = "promotion-test-attempt.v1"
 RESERVATION_VERSION = "promotion-test-reservation.v1"
 REPORT_VERSION = "promotion-test-check-report.v1"
+PROD_PROMOTION_REF = "origin/main"
 REQUIRED_CHECKS = ("migration", "readiness", "schema", "smoke", "ui", "version")
 _OBSERVED_CHECKS = REQUIRED_CHECKS[1:]
 _RECEIPT_FIELDS = {
@@ -253,6 +254,49 @@ def _run_git(repo: Path, *args: str, code: str) -> bytes:
     return completed.stdout
 
 
+def _validated_source_repo(source_repo: Path, *, code: str) -> Path:
+    if not source_repo.is_absolute():
+        raise PromotionReceiptError(code)
+    try:
+        repo = source_repo.resolve(strict=True)
+        repo_info = repo.stat()
+        top_level = _run_git(
+            repo,
+            "rev-parse",
+            "--show-toplevel",
+            code=code,
+        ).decode("utf-8").strip()
+    except (OSError, UnicodeDecodeError) as exc:
+        raise PromotionReceiptError(code) from exc
+    if (
+        not stat.S_ISDIR(repo_info.st_mode)
+        or repo_info.st_uid != os.geteuid()
+        or Path(top_level).resolve(strict=True) != repo
+    ):
+        raise PromotionReceiptError(code)
+    return repo
+
+
+def _resolve_authoritative_prod_baseline(source_repo: Path) -> str:
+    repo = _validated_source_repo(
+        source_repo,
+        code="migration_baseline_unavailable",
+    )
+    try:
+        baseline = _run_git(
+            repo,
+            "rev-parse",
+            "--verify",
+            f"{PROD_PROMOTION_REF}^{{commit}}",
+            code="migration_baseline_unavailable",
+        ).decode("ascii").strip()
+    except UnicodeDecodeError as exc:
+        raise PromotionReceiptError("migration_baseline_unavailable") from exc
+    if _SOURCE_SHA.fullmatch(baseline) is None:
+        raise PromotionReceiptError("migration_baseline_invalid")
+    return baseline
+
+
 def _capture_candidate_migration_snapshots(
     *,
     source_repo: Path,
@@ -265,24 +309,10 @@ def _capture_candidate_migration_snapshots(
         or _SOURCE_SHA.fullmatch(target_sha) is None
     ):
         raise PromotionReceiptError("migration_delta_invalid")
-    try:
-        repo = source_repo.resolve(strict=True)
-        repo_info = repo.stat()
-    except OSError as exc:
-        raise PromotionReceiptError("migration_delta_unavailable") from exc
-    if not stat.S_ISDIR(repo_info.st_mode) or repo_info.st_uid != os.geteuid():
-        raise PromotionReceiptError("migration_delta_unavailable")
-    try:
-        top_level = _run_git(
-            repo,
-            "rev-parse",
-            "--show-toplevel",
-            code="migration_delta_unavailable",
-        ).decode("utf-8").strip()
-        if Path(top_level).resolve(strict=True) != repo:
-            raise PromotionReceiptError("migration_delta_unavailable")
-    except (OSError, UnicodeDecodeError) as exc:
-        raise PromotionReceiptError("migration_delta_unavailable") from exc
+    repo = _validated_source_repo(
+        source_repo,
+        code="migration_delta_unavailable",
+    )
     for sha in (baseline_sha, target_sha):
         try:
             resolved = _run_git(
@@ -349,6 +379,7 @@ def _derive_candidate_identity(
     rendered: Mapping[str, object],
     channel_manifest: Mapping[str, object],
     prod_admission_context: Mapping[str, str],
+    source_repo: Path,
 ) -> tuple[dict[str, object], dict[str, str], str]:
     try:
         candidate = create_promotion_candidate(rendered, channel_manifest)
@@ -362,9 +393,12 @@ def _derive_candidate_identity(
     schema_identity = graph.get("migration_identity")
     if not isinstance(image_index, str) or "@" not in image_index:
         raise PromotionReceiptError("candidate_invalid")
-    candidate_bound_identity, migration_baseline_sha = _validate_admission_context(
+    candidate_bound_identity, requested_baseline_sha = _validate_admission_context(
         prod_admission_context
     )
+    migration_baseline_sha = _resolve_authoritative_prod_baseline(source_repo)
+    if requested_baseline_sha != migration_baseline_sha:
+        raise PromotionReceiptError("migration_baseline_mismatch")
     for field, expected in (
         ("artifact_digest", image_index.rsplit("@", 1)[1]),
         ("config_identity", config_identity),
@@ -388,6 +422,7 @@ def build_promotion_test_check_report(
         rendered=rendered,
         channel_manifest=channel_manifest,
         prod_admission_context=prod_admission_context,
+        source_repo=source_repo,
     )
     graph = _mapping(candidate.get("artifact_graph"), code="candidate_invalid")
     source_identity = graph.get("source_identity")
@@ -429,6 +464,7 @@ def _bind_promotion_test_report(
         rendered=rendered,
         channel_manifest=channel_manifest,
         prod_admission_context=prod_admission_context,
+        source_repo=source_repo,
     )
 
     report = _mapping(check_report, code="check_report_invalid")
@@ -1061,6 +1097,7 @@ def _validate_receipt(
     registry: object,
     expected_identity: object,
     check_report: object,
+    source_repo: Path,
     *,
     now: datetime,
 ) -> dict[str, object]:
@@ -1068,7 +1105,10 @@ def _validate_receipt(
         raise PromotionReceiptError("receipt_missing")
     receipt_mapping = _mapping(receipt, code="receipt_invalid")
     registry_mapping = _mapping(registry, code="registry_missing")
-    identity, migration_baseline_sha = _validate_admission_context(expected_identity)
+    identity, requested_baseline_sha = _validate_admission_context(expected_identity)
+    migration_baseline_sha = _resolve_authoritative_prod_baseline(source_repo)
+    if requested_baseline_sha != migration_baseline_sha:
+        raise PromotionReceiptError("migration_baseline_mismatch")
     if set(receipt_mapping) != _RECEIPT_FIELDS:
         raise PromotionReceiptError("receipt_invalid")
     if set(registry_mapping) != _REGISTRY_FIELDS:
@@ -1187,6 +1227,7 @@ def authorize_prod_activation(
     expected_identity: object,
     *,
     check_report: object,
+    source_repo: Path,
     now: datetime,
 ) -> dict[str, object]:
     """Return admission evidence only after exact prod receipt validation.
@@ -1199,6 +1240,7 @@ def authorize_prod_activation(
         registry,
         expected_identity,
         check_report,
+        source_repo,
         now=now,
     )
     return {
@@ -1213,6 +1255,7 @@ def prepare_prod_activation(
     prod_admission_context: object,
     *,
     check_report: object,
+    source_repo: Path,
     now: datetime,
 ) -> dict[str, object]:
     """Production pre-activation boundary, intentionally without side effects.
@@ -1227,6 +1270,7 @@ def prepare_prod_activation(
         registry,
         prod_admission_context,
         check_report=check_report,
+        source_repo=source_repo,
         now=now,
     )
     return {
@@ -1359,6 +1403,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     args.check_report,
                     code="check_report_unavailable",
                 ),
+                source_repo=repo_root,
                 now=_parse_timestamp(args.now, code="validation_time_invalid"),
             )
     except PromotionReceiptError as exc:

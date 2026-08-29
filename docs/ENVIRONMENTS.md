@@ -373,8 +373,9 @@ classification through the existing release-channel reversibility module. It req
 independently provisioned issuer trust root and never enrolls its caller's key. Candidate identity,
 runner checks, and the complete baseline-to-candidate migration delta derived from immutable Git
 objects are bound before signing. The v2 receipt signs the migration baseline, migration-set
-identity, and canonical check-report identity; prod admission compares all three against the supplied
-report and its independent baseline context. Its prod command is a
+identity, and canonical check-report identity; the writer and prod admission resolve the baseline
+from the authoritative current promotion ref (`origin/main` in the current interim model), then
+compare all three against the supplied report and context. Its prod command is a
 pre-activation validator only: it rejects missing, stale, revoked, non-PASS, untrusted, or
 identity-mismatched evidence and has no activation, deployment, migration, restart, or bypass hook.
 Repository availability is not a live promotion-test or prod-activation receipt.

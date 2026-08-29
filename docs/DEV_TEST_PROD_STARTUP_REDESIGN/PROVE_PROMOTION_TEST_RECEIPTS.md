@@ -35,7 +35,8 @@ creates that registry or enrolls a caller-supplied trusted key. `python -m app.r
 validate-prod-activation ...` accepts only a current, unrevoked PASS whose
 artifact/config/test/vault/schema identities match. It requires the exact check report and compares
 its canonical digest, migration-set identity, and migration baseline to the signed v2 receipt; the
-baseline must also match the independently supplied prod-admission context. The second command only returns admission
+baseline must match the repository's authoritative current promotion ref (`origin/main` in the
+current interim model) and the independently supplied prod-admission context. The second command only returns admission
 evidence with state `validated_not_activated`; it performs no activation. P5 owns the future
 side-effecting caller and must invoke this boundary immediately before activation.
 

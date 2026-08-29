@@ -77,6 +77,11 @@ PROMOTION_SOURCE_SHA = subprocess.check_output(
     cwd=ROOT,
     text=True,
 ).strip()
+PROMOTION_BASELINE_SHA = subprocess.check_output(
+    ["git", "rev-parse", "origin/main"],
+    cwd=ROOT,
+    text=True,
+).strip()
 DIGEST = "sha256:" + "b" * 64
 
 
@@ -1379,6 +1384,7 @@ def test_prod_receipt_validator_is_invoked_before_activation(
         registry,
         context,
         check_report=check_report,
+        source_repo=ROOT,
         now=now,
     )
     assert calls == ["validate"]
@@ -1450,6 +1456,7 @@ def test_prod_receipt_validator_is_invoked_before_activation(
                 candidate_registry,
                 candidate_context,
                 check_report=candidate_report,
+                source_repo=ROOT,
                 now=candidate_now,
             )
         assert exc_info.value.code == code
@@ -1476,7 +1483,7 @@ def _promotion_check_results() -> dict[str, bool]:
 
 def _promotion_admission_context(
     *,
-    migration_baseline_sha: str = PROMOTION_SOURCE_SHA,
+    migration_baseline_sha: str = PROMOTION_BASELINE_SHA,
 ) -> dict[str, str]:
     context = json.loads(
         (
@@ -1525,7 +1532,7 @@ def _promotion_check_report(
     *,
     check_results: dict[str, bool] | None = None,
     source_repo: Path = ROOT,
-    migration_baseline_sha: str = PROMOTION_SOURCE_SHA,
+    migration_baseline_sha: str = PROMOTION_BASELINE_SHA,
     source_sha: str = PROMOTION_SOURCE_SHA,
 ) -> dict[str, object]:
     rendered, manifest = _promotion_test_candidate_inputs(source_sha=source_sha)
@@ -1577,6 +1584,11 @@ def _promotion_migration_git_delta(
     subprocess.run(["git", "add", "README.md"], cwd=repo, check=True)
     subprocess.run(["git", "commit", "-qm", "baseline"], cwd=repo, check=True)
     baseline = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo, text=True).strip()
+    subprocess.run(
+        ["git", "update-ref", "refs/remotes/origin/main", baseline],
+        cwd=repo,
+        check=True,
+    )
     migrations = repo / "app" / "alembic" / "versions"
     migrations.mkdir(parents=True)
     (migrations / "receipt_delta.py").write_text(content, encoding="utf-8")
@@ -1676,6 +1688,28 @@ def test_promotion_test_derives_complete_migration_delta_from_candidate_git(
     assert report["migration_baseline_identity"] == f"git:{baseline}"
 
 
+def test_promotion_test_rejects_candidate_as_prod_migration_baseline(
+    tmp_path: Path,
+) -> None:
+    repo, _, target = _promotion_migration_git_delta(
+        tmp_path,
+        content='reversibility = "reversible"\n',
+    )
+    rendered, manifest = _promotion_test_candidate_inputs(source_sha=target)
+
+    with pytest.raises(PromotionReceiptError) as exc_info:
+        build_promotion_test_check_report(
+            rendered=rendered,
+            channel_manifest=manifest,
+            prod_admission_context=_promotion_admission_context(
+                migration_baseline_sha=target
+            ),
+            check_results=_promotion_check_results(),
+            source_repo=repo,
+        )
+    assert exc_info.value.code == "migration_baseline_mismatch"
+
+
 def test_promotion_test_writes_one_durable_terminal_receipt(tmp_path: Path) -> None:
     private_key, public_key = _promotion_test_signing_material()
     store = tmp_path / "ops" / "test-promotions"
@@ -1730,6 +1764,7 @@ def test_promotion_test_writes_one_durable_terminal_receipt(tmp_path: Path) -> N
         registry,
         _promotion_admission_context(),
         check_report=pass_report,
+        source_repo=ROOT,
         now=datetime(2026, 8, 16, 12, tzinfo=timezone.utc),
     ) == {
         "activation_permitted": True,
@@ -2010,7 +2045,7 @@ def test_promotion_test_rejects_stale_candidate_and_migration_reports(
                 ),
             ),
         )
-    assert exc_info.value.code == "check_report_migration_mismatch"
+    assert exc_info.value.code == "migration_baseline_mismatch"
     assert not (store / "receipts").exists()
 
     first = write_promotion_test_terminal_receipt(
@@ -2022,9 +2057,7 @@ def test_promotion_test_rejects_stale_candidate_and_migration_reports(
     report_b = build_promotion_test_check_report(
         rendered=rendered_b,
         channel_manifest=manifest_b,
-        prod_admission_context=_promotion_admission_context(
-            migration_baseline_sha=previous_source_sha
-        ),
+        prod_admission_context=_promotion_admission_context(),
         check_results=_promotion_check_results(),
         source_repo=ROOT,
     )
@@ -2032,13 +2065,11 @@ def test_promotion_test_rejects_stale_candidate_and_migration_reports(
         write_promotion_test_terminal_receipt(
             rendered=rendered_b,
             channel_manifest=manifest_b,
-            check_report=report_b,
-            **dict(
-                common,
-                prod_admission_context=_promotion_admission_context(
-                    migration_baseline_sha=previous_source_sha
+                check_report=report_b,
+                **dict(
+                    common,
+                    prod_admission_context=_promotion_admission_context(),
                 ),
-            ),
         )
     assert exc_info.value.code == "attempt_conflict"
     assert len(list((common["receipt_store"] / "receipts").glob("*.json"))) == 1
@@ -2403,6 +2434,7 @@ def test_promotion_test_retry_never_reissues_a_revoked_receipt(tmp_path: Path) -
             persisted,
             _promotion_admission_context(),
             check_report=_promotion_check_report(),
+            source_repo=ROOT,
             now=datetime(2026, 8, 16, 12, tzinfo=timezone.utc),
         )
     assert exc_info.value.code == "receipt_revoked"
@@ -2469,6 +2501,7 @@ def test_promotion_test_never_issues_registry_authority_before_terminal_binding(
             registry,
             _promotion_admission_context(),
             check_report=_promotion_check_report(),
+            source_repo=ROOT,
             now=datetime(2026, 8, 16, 12, tzinfo=timezone.utc),
         )
     assert exc_info.value.code == "receipt_unregistered"
@@ -2534,6 +2567,7 @@ def test_promotion_test_terminal_binding_stays_inadmissible_until_registry_issue
             registry,
             _promotion_admission_context(),
             check_report=_promotion_check_report(),
+            source_repo=ROOT,
             now=datetime(2026, 8, 16, 12, tzinfo=timezone.utc),
         )
     assert exc_info.value.code == "receipt_unregistered"
@@ -2550,5 +2584,6 @@ def test_promotion_test_terminal_binding_stays_inadmissible_until_registry_issue
         registry,
         _promotion_admission_context(),
         check_report=_promotion_check_report(),
+        source_repo=ROOT,
         now=datetime(2026, 8, 16, 12, tzinfo=timezone.utc),
     )["activation_state"] == "validated_not_activated"
