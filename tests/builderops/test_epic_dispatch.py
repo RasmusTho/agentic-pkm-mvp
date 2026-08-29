@@ -369,11 +369,12 @@ def test_run_state_accepts_dispatch_decision_summaries(tmp_path: Path) -> None:
             "issue_number": 4001,
             "selected_path": "subagent",
             "selected_for_dispatch": True,
-            "runtime_model_hint": {
-                "runtime": "codex",
-                "model_class": "high-reasoning",
-                "runtime_difference": "invocation-hint-only",
-            },
+                "runtime_model_hint": {
+                    "runtime": "codex",
+                    "model_class": "high-reasoning",
+                    "capability": "sol",
+                    "runtime_difference": "invocation-hint-only",
+                },
             "budget_class": "high",
             "stop_condition": updated["dispatch_decisions"][0]["stop_condition"],
             "skip_reason": None,
@@ -825,6 +826,98 @@ def test_codex_issue_session_command_is_fresh_and_tcd_bounded(tmp_path: Path) ->
     assert "slice_implementer" in prompt
     assert ".codex/skills/issue-to-code/SKILL.md" in prompt
     assert '"number": 5801' in prompt
+
+
+def test_bounded_fast_shadow_preflight_uses_configured_route_and_preserves_launch_policy(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ambient = tmp_path / "ambient-providers.yaml"
+    ambient.write_text("not: the declared census\n", encoding="utf-8")
+    monkeypatch.setenv("PROVIDER_CENSUS_PATH", str(ambient))
+    candidate = _candidate(
+        5811,
+        risk="low",
+        files=["app/a.py"],
+        worktree=str(tmp_path / "issue-5811"),
+        preferred_path="subagent",
+    )
+    candidate["execution_routing"] = {
+        "mode": "shadow",
+        "work_class": "bounded_fast",
+        "ambiguity": "low",
+        "protected_surface": False,
+        "decision_at": "2026-08-29T15:00:00Z",
+        "allocation_observation": {
+            "observation_id": "spark-observation-5811",
+            "capability": "spark",
+            "state": "bonus_available",
+            "observed_at": "2026-08-29T14:55:00Z",
+            "valid_until": "2026-08-29T15:05:00Z",
+            "source_kind": "operator",
+            "source_ref": "operator-observation:codex-spark-bonus",
+        },
+    }
+    plan = build_dispatch_plan(
+        independent_issue_numbers=[5811],
+        run_id="bounded-fast-shadow",
+        candidates=[candidate],
+    )
+
+    decision = plan["decisions"][0]
+    routing = decision["execution_routing"]
+    assert routing["mode"] == "shadow"
+    assert routing["route_decision"]["selected_capability"] == "spark"
+    assert routing["proposed_target"] == {
+        "capability": "spark",
+        "provider": "openai",
+        "model": "gpt-5.3-codex-spark",
+        "reasoning_effort": "low",
+        "configuration_ref": "docs/settings/models/providers.yaml#builder_execution.dev.spark",
+    }
+    assert routing["shadow_comparison"]["incumbent_capability"] == "luna"
+    assert routing["shadow_comparison"]["proposed_capability"] == "spark"
+    assert routing["attempt_observation"]["mode"] == "shadow"
+    assert routing["attempt_observation"]["outcome"] == "not_invoked"
+    assert routing["attempt_observation"]["requested_capability"] == "spark"
+    assert routing["attempt_observation"]["actual_capability"] == "spark"
+
+    # Phase 1 is shadow-first: routing evidence stays outside the immutable
+    # worker packet and the incumbent launch policy still wins.
+    pack = plan["context_packs"][0]
+    assert "execution_routing" not in pack
+    assert pack["runtime"]["capability"] == "luna"
+    launcher = CodexIssueSessionLauncher(repo_root=tmp_path)
+    command = launcher.command(pack)
+    assert command[command.index("--model") + 1] == "gpt-5.6-luna"
+    assert "_TCD_CODEX_ROUTE" not in inspect.getsource(epic_dispatch_module)
+
+
+def test_bounded_fast_shadow_preflight_cannot_override_candidate_risk() -> None:
+    candidate = _candidate(
+        5812,
+        risk="high",
+        files=["app/a.py"],
+        preferred_path="subagent",
+    )
+    candidate["execution_routing"] = {
+        "mode": "shadow",
+        "work_class": "bounded_fast",
+        "risk": "low",
+        "ambiguity": "low",
+        "protected_surface": False,
+        "decision_at": "2026-08-29T15:00:00Z",
+    }
+
+    with pytest.raises(
+        EpicDispatchError,
+        match="risk must come from the canonical candidate",
+    ):
+        build_dispatch_plan(
+            independent_issue_numbers=[5812],
+            run_id="bounded-fast-risk-override",
+            candidates=[candidate],
+        )
 
 
 def test_codex_issue_session_captures_exposed_token_usage_and_pack_bytes(

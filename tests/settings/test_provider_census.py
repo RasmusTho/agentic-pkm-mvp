@@ -116,6 +116,18 @@ def test_runtime_channel_tier_mappings_reference_capable_declared_models() -> No
                 _assert_mapping(census, mapping)
 
 
+def test_builder_execution_profiles_cover_supported_capability_tiers() -> None:
+    census = _census()
+    expected_tiers = {"spark", "luna", "terra", "sol"}
+    assert set(census.runtime_channels.builder_execution) == {"dev", "test", "prod"}
+    for profiles in census.runtime_channels.builder_execution.values():
+        assert set(profiles) == expected_tiers
+        for capability, profile in profiles.items():
+            assert profile.capability_tier == capability
+            assert profile.reasoning_effort in {"low", "medium", "high"}
+            _assert_mapping(census, profile)
+
+
 def test_model_inquiry_role_profiles_are_exact_distinct_and_provider_free() -> None:
     census = _census()
     expected = {

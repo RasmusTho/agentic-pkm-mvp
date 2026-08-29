@@ -154,6 +154,15 @@ Delivery rules:
   needs local coordination evidence.
   When run-state contains reusable constraints, the helper includes those constraints in worker
   context packs so later workers consume prior learning without rereading the full epic history.
+- For an explicitly classified low-risk, low-ambiguity, unprotected `bounded_fast` candidate, the
+  dispatch input may include the Phase 1 `execution_routing` shadow preflight. Supply only an
+  explicit scoped allocation observation with its observation and expiry times; absence, unknown,
+  stale, or economically unavailable evidence resolves safely to Luna and never blocks delivery.
+  The resulting route request, decision, configured target, comparison, and attempt observation are
+  evidence-only fields on the dispatch decision and run-state summary. They remain outside the
+  worker context pack and do not change the incumbent launch, Verify targets, claim/lifecycle
+  authority, verification depth, or merge/closure path. Skills never infer quota state or encode
+  provider/model identifiers; the canonical resolver and declared model census own those seams.
 - When coordinating claim, review-handoff, or terminal projection decisions, use the dry-run
   lifecycle planner before issuing live mutations:
   `python3 -m app.builderops builderops epic-run-state lifecycle-plan --transition <claim|review|done> --issue-file <file> [--pr-file <file>] --json`.

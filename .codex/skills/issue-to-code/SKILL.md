@@ -139,6 +139,14 @@ BuilderOps write is unavailable.
 
 Treat every canonical Issue contract section (`.codex/skills/_shared/ISSUE_CONTRACT.md`) as binding for the governing slice issue.
 
+When a `deliver-issue-set` handoff carries a Phase 1 `bounded_fast` execution-routing shadow
+receipt, treat it as evidence only. Confirm its Issue authority, worker-context hash, and immutable
+verification-profile hash match the supplied context; do not copy the route into the worker pack or
+let it change scope, claim/lifecycle truth, required checks, review depth, merge, or closure. A Spark
+capacity fallback is not a capability escalation and missing/stale allocation evidence is never a
+pickup blocker. The current invocation remains governed by the handoff's incumbent launch policy;
+later canary/active routing requires a separately authorized child contract.
+
 ## GitHub and optional Project projection rules
 
 - GitHub Issue is the canonical implementation task contract.
