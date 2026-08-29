@@ -20,12 +20,14 @@ Covers every behavioral Acceptance Criterion from the issue:
 from __future__ import annotations
 
 import json
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
 
 from app.expansion.create import (
+    CreateIdempotencyConflictError,
     CreatePassReport,
     CreateRequest,
     ExpirySweepReport,
@@ -35,6 +37,7 @@ from app.expansion.create import (
     run_create_pass,
     sweep_expired_drafts,
 )
+from app.expansion import create as create_module
 from app.write_guard import WriteGuard
 from app.reasoning.schema import ReasoningOutput
 
@@ -366,6 +369,33 @@ def test_expiry_sweep_missing_staging_dir_never_errors(tmp_path: Path) -> None:
     sweep = sweep_expired_drafts(vault_root=vault_root, outbox_path=outbox_path)
     assert sweep.expired == ()
     assert sweep.receipt_ids == ()
+
+
+def test_deterministic_receipt_event_id_is_atomic_across_event_types(tmp_path: Path) -> None:
+    """Concurrent receipt writers cannot both publish one event id."""
+
+    outbox_path = tmp_path / "outbox.jsonl"
+
+    def emit(event: str) -> tuple[str, str]:
+        try:
+            create_module._emit_receipt(
+                event,
+                {"event": event},
+                outbox_path=outbox_path,
+                trace_id="trace-concurrent",
+                event_id="same-event-id",
+            )
+        except CreateIdempotencyConflictError:
+            return (event, "conflict")
+        return (event, "ok")
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(emit, ("expansion.create.proposed", "other.event")))
+
+    assert sorted(result for _event, result in results) == ["conflict", "ok"]
+    records = _outbox_records(outbox_path)
+    assert len(records) == 1
+    assert records[0]["event_id"] == "same-event-id"
 
 
 def test_staged_draft_not_indexed_by_vault_alpha_ingest(tmp_path: Path) -> None:

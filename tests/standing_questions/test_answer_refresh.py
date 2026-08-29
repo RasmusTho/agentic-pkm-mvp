@@ -410,6 +410,53 @@ def test_standing_answer_edit_between_final_check_and_cas_rolls_back_candidate(
     assert final["last_refreshed_at"] is None
 
 
+def test_standing_answer_drift_rollback_retries_after_question_conflict(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A competing Question write must not leave the stale candidate pointer live."""
+
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    answer = vault / "answers/current.md"
+    answer.parent.mkdir()
+    answer.write_text("The supported boundary is production.", encoding="utf-8")
+    store, note = _question(vault, standing_answer_ref="vault://answers/current.md")
+    evidence = _evidence(
+        "vault://notes/evidence.md", "outbox://evidence/1", "the test channel is isolated", 10
+    )
+    store.update_system_fields(note["question_id"], {"evidence": [evidence]})
+    original = store.update_system_fields_if_unchanged
+    calls = 0
+
+    def conflict_once(*args: Any, **kwargs: Any) -> Any:
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise KnowledgeWriteConflict("simulated competing Question write")
+        result = original(*args, **kwargs)
+        if calls == 1:
+            answer.write_text("The supported boundary is staging.", encoding="utf-8")
+        return result
+
+    monkeypatch.setattr(store, "update_system_fields_if_unchanged", conflict_once)
+    result = refresh_answers_on_evidence_delta(
+        vault_root=vault,
+        outbox_path=tmp_path / "outbox.jsonl",
+        evidence_sources={
+            "outbox://evidence/1": _source("outbox://evidence/1", evidence["quoted_span"])
+        },
+        store=store,
+        write_guard=_guard(),
+        now=_dt(12),
+    )
+
+    final = store.read_question(note["question_id"])
+    assert result.blocked == (note["question_id"],)
+    assert final["candidate_answer_ref"] is None
+    assert final["last_refreshed_at"] is None
+    assert calls == 3
+
+
 def test_question_raw_byte_version_changes_refresh_generation() -> None:
     first = _refresh_attempt_ids(
         "question-1",

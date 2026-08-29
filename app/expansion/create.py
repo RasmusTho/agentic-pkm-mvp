@@ -98,7 +98,7 @@ from app.activation.gate import (
 from app.knowledge_compilation.proposal_builders import ProposalContext, build_compilation_draft
 from app.knowledge_compilation.runtime_artifacts import CompilationDraft, ContextAuthorityLimits, SourceRef
 from app.reasoning.multi import run_multi_note_reasoning
-from app.services.outbox import append_jsonl_outbox_event
+from app.services.outbox import append_jsonl_outbox_event, jsonl_outbox_append_lock
 from app.write_guard import DEFAULT_WRITE_GUARD, WriteGuard
 from scripts.yaml_roundtrip import load_frontmatter
 
@@ -635,7 +635,49 @@ def _replay_draft_metadata(
         raise CreateIdempotencyConflictError(
             f"deterministic Create draft identity/content mismatch: {draft_path}"
         )
-    return frontmatter, hashlib.sha256(raw_bytes).hexdigest()
+    draft_sha256 = hashlib.sha256(raw_bytes).hexdigest()
+    integrity_path = _draft_integrity_path(draft_path)
+    try:
+        integrity = json.loads(integrity_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, TypeError, ValueError) as exc:
+        raise CreateIdempotencyConflictError(
+            f"deterministic Create draft integrity record is missing or invalid: {draft_path}"
+        ) from exc
+    if not isinstance(integrity, dict) or (
+        integrity.get("draft_id") != draft_id
+        or integrity.get("request_fingerprint") != request_fingerprint
+        or integrity.get("draft_sha256") != draft_sha256
+    ):
+        raise CreateIdempotencyConflictError(
+            f"deterministic Create draft integrity does not match draft: {draft_path}"
+        )
+    return frontmatter, draft_sha256
+
+
+def _draft_integrity_path(draft_path: Path) -> Path:
+    return draft_path.with_suffix(draft_path.suffix + ".integrity.json")
+
+
+def _write_draft_integrity(
+    draft_path: Path,
+    *,
+    draft_id: str,
+    request_fingerprint: str | None,
+    draft_sha256: str,
+) -> None:
+    integrity_path = _draft_integrity_path(draft_path)
+    integrity_path.write_text(
+        json.dumps(
+            {
+                "draft_id": draft_id,
+                "request_fingerprint": request_fingerprint,
+                "draft_sha256": draft_sha256,
+            },
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
 
 
 def _emit_receipt(
@@ -645,24 +687,40 @@ def _emit_receipt(
     outbox_path: Path,
     trace_id: str | None,
     event_id: str | None = None,
+    draft_path: Path | None = None,
+    expected_draft_sha256: str | None = None,
 ) -> str:
     event_id = event_id or uuid4().hex
-    existing = _existing_receipt(outbox_path, event, event_id)
-    if existing is not None:
-        if existing.get("payload") != payload:
-            raise CreateIdempotencyConflictError(
-                f"deterministic Create receipt payload mismatch: {event}/{event_id}"
-            )
-        return event_id
-    record = {
-        "event": event,
-        "event_id": event_id,
-        "trace_id": trace_id or uuid4().hex,
-        "source": CREATE_EVENT_SOURCE,
-        "timestamp": _iso(_now()),
-        "payload": payload,
-    }
-    append_jsonl_outbox_event(outbox_path, record, default_source=CREATE_EVENT_SOURCE)
+    with jsonl_outbox_append_lock(outbox_path):
+        if draft_path is not None and expected_draft_sha256 is not None:
+            try:
+                actual_draft_sha256 = hashlib.sha256(draft_path.read_bytes()).hexdigest()
+            except OSError as exc:
+                raise CreateIdempotencyConflictError(
+                    f"deterministic Create draft disappeared before receipt: {draft_path}"
+                ) from exc
+            if actual_draft_sha256 != expected_draft_sha256:
+                raise CreateIdempotencyConflictError(
+                    f"deterministic Create draft changed before receipt: {draft_path}"
+                )
+        existing = _existing_receipt(outbox_path, event, event_id)
+        if existing is not None:
+            if existing.get("payload") != payload:
+                raise CreateIdempotencyConflictError(
+                    f"deterministic Create receipt payload mismatch: {event}/{event_id}"
+                )
+            return event_id
+        record = {
+            "event": event,
+            "event_id": event_id,
+            "trace_id": trace_id or uuid4().hex,
+            "source": CREATE_EVENT_SOURCE,
+            "timestamp": _iso(_now()),
+            "payload": payload,
+        }
+        append_jsonl_outbox_event(
+            outbox_path, record, default_source=CREATE_EVENT_SOURCE, _lock_held=True
+        )
     return event_id
 
 
@@ -767,6 +825,8 @@ def run_create_pass(
                 outbox_path=outbox_path,
                 trace_id=request.trace_id,
                 event_id=receipt_id,
+                draft_path=replay_draft_path,
+                expected_draft_sha256=replay[1],
             )
             return CreatePassReport(
                 activatable=True,
@@ -843,6 +903,12 @@ def run_create_pass(
     else:
         draft_path.write_text(note_text, encoding="utf-8")
         draft_sha256 = hashlib.sha256(note_text.encode("utf-8")).hexdigest()
+    _write_draft_integrity(
+        draft_path,
+        draft_id=draft.artifact_id,
+        request_fingerprint=request_fingerprint,
+        draft_sha256=draft_sha256,
+    )
 
     receipt_id = _emit_receipt(
         CREATE_PROPOSED_EVENT,
@@ -860,6 +926,8 @@ def run_create_pass(
         outbox_path=outbox_path,
         trace_id=request.trace_id,
         event_id=receipt_id,
+        draft_path=draft_path,
+        expected_draft_sha256=draft_sha256,
     )
 
     return CreatePassReport(
@@ -1012,6 +1080,12 @@ def sweep_expired_drafts(
             path.unlink()
         except OSError:
             continue
+        try:
+            _draft_integrity_path(path).unlink(missing_ok=True)
+        except OSError:
+            # Expiry is deliberately silent-safe; an orphaned integrity sidecar
+            # is harmless and can be cleaned by the next maintenance pass.
+            pass
         expired.append(draft_id)
         receipt_id = _emit_receipt(
             CREATE_EXPIRED_EVENT,

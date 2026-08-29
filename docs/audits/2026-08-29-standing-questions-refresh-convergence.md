@@ -24,7 +24,12 @@ or human acceptance.
   observation instead of advancing the snapshot as if the capability succeeded.
 - Receipt event IDs are globally unique across event types; conflicting duplicates fail closed.
 - A standing-answer edit detected after the Question pointer write triggers a guarded rollback of the
-  pointer and refresh timestamp, preserving fail-closed semantics for the external-file race.
+  pointer and refresh timestamp, preserving fail-closed semantics for the external-file race; a
+  competing Question write is retried and rollback exhaustion is fail-loud.
+- The deterministic proposal pair carries a sidecar integrity record; replay or receipt emission
+  fails closed if staged draft bytes no longer match the recorded identity.
+- JSONL receipt read/check/append is serialized per outbox path, so the global event-id invariant is
+  atomic across independent writers and event types.
 
 ## States and transitions
 
@@ -97,10 +102,10 @@ historical evidence claim. No SQ-04 writer changes the standing answer or human-
 | CAS conflict does not duplicate proposal artifacts | `test_refresh_cas_snapshot_is_taken_before_drafting` | Passed |
 | Pending review is not clobbered | `test_pending_review_not_clobbered_by_new_delta` | Passed |
 | Changed source bytes cannot be replayed | `test_changed_source_bytes_cannot_replay_historical_evidence` | Passed |
-| Contradiction basis is exact or unknown | `test_invalid_contradiction_basis_degrades_to_unknown`, `test_refresh_marks_contradiction` | Passed |
+| Contradiction basis is exact or unknown | `test_contradiction_surfaced_not_silently_rewritten`, `test_invalid_contradiction_basis_degrades_to_unknown` | Passed |
 | Human fields remain protected | QuestionStore CAS and human-field tests | Passed |
 | Evidence entries carry content identity | `test_relevant_artifact_attaches_irrelevant_does_not` | Passed |
-| Focused SQ/Create regression set | Standing Questions, Create lifecycle, and QuestionStore tests | `148 passed` |
+| Focused SQ/Create regression set | Standing Questions, evidence matching, Create lifecycle, and QuestionStore tests | `150 passed` in the current run; the preceding packet recorded `148 passed` before these additions |
 | Matcher CAS conflict is observable and non-clobbering | `test_match_write_conflict_does_not_clobber_question` | Passed |
 | Deterministic replay preserves draft bytes and receipt payload | `test_refresh_replay_reuses_draft_and_receipt_bytes` | Passed |
 | Matcher CAS conflict remains watcher-retryable | `test_watcher_retries_standing_questions_matching_conflict_before_advancing_snapshot` | Passed locally; CI proof is pending for the current head |
@@ -117,6 +122,9 @@ historical evidence claim. No SQ-04 writer changes the standing answer or human-
 | Snapshot retry restoration precedes persistence | `test_watcher_retry_snapshot_is_restored_before_persist_crash` | Passed in CI environment; local watcher collection is dependency-gated |
 | Event IDs cannot collide across event types | `test_emit_receipt_rejects_event_id_collision_across_event_types` | Passed |
 | Standing-answer edit after Question write rolls back stale candidate | `test_standing_answer_edit_between_final_check_and_cas_rolls_back_candidate` | Passed |
+| Concurrent receipt writers cannot publish one event ID twice | `test_deterministic_receipt_event_id_is_atomic_across_event_types` | Passed |
+| Draft mutation after staging cannot be accepted by deterministic replay | `test_refresh_replay_reuses_draft_and_receipt_bytes` | Passed |
+| Rollback converges after a competing Question CAS conflict | `test_standing_answer_drift_rollback_retries_after_question_conflict` | Passed |
 
 The full not-PostgreSQL suite was not a valid local proof at packet creation: the host-global
 `pytest-not-pg` lease was unavailable and the local watcher collection also lacked the declared
@@ -140,6 +148,7 @@ where the finding was observed; a later head invalidates the earlier clean/uncle
 | `c360e8096` | Fresh review found standing-answer fingerprints and the pre-CAS race check still used newline-normalized text. | Standing-answer reads now retain raw bytes, generation fingerprints hash them, and the final race check compares exact bytes with a newline-only regression. |
 | `e9602573d` | Fresh review found conflicting duplicate receipts, stale matcher scope, missing Question raw-byte generation binding, and snapshot persistence before retry restoration. | Duplicate receipt payloads now fail closed; matcher scope and refresh generation use fresh exact baselines; watcher scans without persisting until retry restoration is applied. |
 | `f9508f065` | Fresh review found event IDs were only checked within one event type and that standing-answer validation had a final check-to-write race. | Event IDs are checked globally; a changed standing answer after pointer write triggers a versioned compensating rollback before the refresh is reported drafted. |
+| `2916fc5ce` | Exact-head Sol review found the global event-id check was still read-then-append and non-atomic; a staged draft could be mutated before receipt/replay and receipted with new bytes; rollback silently swallowed a Question CAS conflict. | A shared JSONL append lock now covers read/check/append; staged drafts carry and validate a durable raw-byte integrity record plus pre-receipt hash check; rollback retries against fresh Question versions and fails loud if it cannot converge. |
 
 The first row is sourced from GitHub review comments whose `original_commit_id` is
 `0d032250274b54eb62c50e50e436077fb032401a`; the later rows are local independent review receipts

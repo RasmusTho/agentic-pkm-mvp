@@ -274,6 +274,49 @@ def _pending_candidate(vault_root: Path, note: Mapping[str, Any], *, now: dateti
     return frontmatter.get("authority_state") != "accepted"
 
 
+def _rollback_candidate_after_standing_answer_drift(
+    question_store: QuestionStore,
+    question_id: str,
+    *,
+    candidate_ref: str,
+    refreshed_at: str,
+    original: Mapping[str, Any],
+) -> None:
+    """Remove this refresh's pointer without clobbering a concurrent writer.
+
+    The standing-answer file is outside the QuestionStore CAS boundary, so a
+    drift can be discovered after the candidate pointer was published. Retry
+    against a fresh Question version when another writer wins the first
+    compensating CAS. If the pointer is no longer ours, leave that newer writer
+    untouched. Exhaustion is fail-loud: a stale pointer must not be silently
+    reported as a clean blocked refresh.
+    """
+
+    for _attempt in range(3):
+        latest, latest_version = question_store.read_question_with_version(question_id)
+        if (
+            latest.get("candidate_answer_ref") != candidate_ref
+            or latest.get("last_refreshed_at") != refreshed_at
+        ):
+            return
+        try:
+            question_store.update_system_fields_if_unchanged(
+                question_id,
+                latest,
+                {
+                    "candidate_answer_ref": original.get("candidate_answer_ref"),
+                    "last_refreshed_at": original.get("last_refreshed_at"),
+                },
+                expected_version=latest_version,
+            )
+            return
+        except KnowledgeWriteConflict:
+            continue
+    raise KnowledgeWriteConflict(
+        f"standing-answer drift rollback could not converge for Question {question_id}"
+    )
+
+
 def _source_inputs(
     evidence: Sequence[Mapping[str, Any]],
     evidence_sources: Mapping[str, SourceInput],
@@ -624,18 +667,13 @@ def refresh_answers_on_evidence_delta(
                 # remove only the pointer and timestamp we just wrote, using
                 # the new Question version; never clobber a concurrent human
                 # edit or another system update.
-                try:
-                    question_store.update_system_fields_if_unchanged(
-                        question_id,
-                        latest_after,
-                        {
-                            "candidate_answer_ref": initial.get("candidate_answer_ref"),
-                            "last_refreshed_at": initial.get("last_refreshed_at"),
-                        },
-                        expected_version=latest_after_version,
-                    )
-                except KnowledgeWriteConflict:
-                    pass
+                _rollback_candidate_after_standing_answer_drift(
+                    question_store,
+                    question_id,
+                    candidate_ref=f"vault://{report.draft_path}",
+                    refreshed_at=_iso(tick_now),
+                    original=initial,
+                )
                 blocked.append(question_id)
                 continue
             drafted.append(question_id)

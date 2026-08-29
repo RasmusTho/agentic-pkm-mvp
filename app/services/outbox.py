@@ -4,10 +4,12 @@ import hashlib
 import json
 import logging
 import os
+import fcntl
 import uuid as uuid_module
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Dict, Literal, Mapping, Optional, Tuple
+from typing import Any, Callable, Dict, Iterator, Literal, Mapping, Optional, Tuple
 
 from app.config.database import explicit_runtime_database_url
 from app.db.errors import OutboxSchemaMissingError
@@ -442,14 +444,49 @@ def serialize_outbox_record(event: Any, *, default_source: str = "app") -> dict[
     return coerced.model_dump(mode="json", exclude_none=True)
 
 
-def append_jsonl_outbox_event(outbox_path: Path, event: Any, *, default_source: str = "app") -> bool:
-    record = serialize_outbox_record(event, default_source=default_source)
-    if record is None:
-        return False
+@contextmanager
+def jsonl_outbox_append_lock(outbox_path: Path) -> Iterator[None]:
+    """Serialize JSONL read/check/append sequences for one outbox path.
+
+    The sidecar lock is shared by every JSONL producer through
+    :func:`append_jsonl_outbox_event`.  Callers that must inspect the file before
+    appending (for example deterministic receipt emitters) hold this context and
+    pass ``_lock_held=True`` to the append helper.
+    """
+
     outbox_path.parent.mkdir(parents=True, exist_ok=True)
+    lock_path = outbox_path.with_name(f".{outbox_path.name}.append.lock")
+    with lock_path.open("a", encoding="utf-8") as handle:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
+def _append_jsonl_outbox_event_unlocked(
+    outbox_path: Path, record: dict[str, Any]
+) -> None:
     with outbox_path.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(record, ensure_ascii=False))
         handle.write("\n")
+
+
+def append_jsonl_outbox_event(
+    outbox_path: Path,
+    event: Any,
+    *,
+    default_source: str = "app",
+    _lock_held: bool = False,
+) -> bool:
+    record = serialize_outbox_record(event, default_source=default_source)
+    if record is None:
+        return False
+    if _lock_held:
+        _append_jsonl_outbox_event_unlocked(outbox_path, record)
+    else:
+        with jsonl_outbox_append_lock(outbox_path):
+            _append_jsonl_outbox_event_unlocked(outbox_path, record)
     return True
 
 
@@ -1049,5 +1086,6 @@ __all__ = [
     "event_payload_dict",
     "coerce_outbox_event",
     "serialize_outbox_record",
+    "jsonl_outbox_append_lock",
     "append_jsonl_outbox_event",
 ]
