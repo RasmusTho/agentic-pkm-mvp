@@ -41,26 +41,26 @@ class AskStatus(BaseModel):
 
 
 class IntentStatus(BaseModel):
-    promote_created_total: int = 0
-    promote_created_24h: int = 0
+    promote_created_total: int | None = 0
+    promote_created_24h: int | None = 0
     source_path: str | None = None
 
 
 class EventCounters(BaseModel):
-    watcher_runs_total: int = 0
-    watcher_runs_24h: int = 0
-    panel_runs_total: int = 0
-    panel_runs_24h: int = 0
-    promote_created_total: int = 0
-    promote_created_24h: int = 0
-    promotion_executed_total: int = 0
-    promotion_executed_24h: int = 0
+    watcher_runs_total: int | None = 0
+    watcher_runs_24h: int | None = 0
+    panel_runs_total: int | None = 0
+    panel_runs_24h: int | None = 0
+    promote_created_total: int | None = 0
+    promote_created_24h: int | None = 0
+    promotion_executed_total: int | None = 0
+    promotion_executed_24h: int | None = 0
     ingest_runs_by_plane: dict[str, int] = Field(default_factory=dict)
     source_path: str | None = None
 
 
 class DeliverySLAStatus(BaseModel):
-    outcomes_total: dict[str, int] = Field(default_factory=dict)
+    outcomes_total: dict[str, int] | None = Field(default_factory=dict)
     source_path: str | None = None
 
 

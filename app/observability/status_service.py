@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import time
 from dataclasses import dataclass
@@ -51,6 +52,8 @@ from app.settings.panel_actions import get_panel_actions_diagnostics
 from app.stores import get_object_store
 from app.version import SOT_FORWARD, get_sot_version, get_sot_metadata
 
+logger = logging.getLogger(__name__)
+
 _ASK_LATENCIES: list[tuple[float, float]] = []
 _ASK_ERRORS: list[float] = []
 _ASK_WINDOW = timedelta(hours=24)
@@ -74,17 +77,21 @@ _STATUS_TAIL_BYTES = 8 * 1024 * 1024  # 8 MB tail is enough for recent records
 
 def _iter_tail_lines(path: Path, max_bytes: int = _STATUS_TAIL_BYTES) -> list[str]:
     """Compatibility view of strict tail records for bounded-read tests."""
-    return [json.dumps(record, ensure_ascii=False) for record in _iter_tail_records(path, max_bytes)]
+    return [
+        json.dumps(record, ensure_ascii=False)
+        for record in (_iter_tail_records(path, max_bytes) or [])
+    ]
 
 
-def _iter_tail_records(path: Path, max_bytes: int = _STATUS_TAIL_BYTES) -> list[dict]:
+def _iter_tail_records(path: Path, max_bytes: int = _STATUS_TAIL_BYTES) -> list[dict] | None:
     """Read bounded, complete JSONL records through the shared outbox seam."""
     from app.services.outbox import read_jsonl_outbox_records
 
     try:
         return read_jsonl_outbox_records(path, max_bytes=max_bytes, read_only=True)
     except Exception:
-        return []
+        logger.warning("Status outbox read failed for %s", path, exc_info=True)
+        return None
 
 
 @dataclass(frozen=True)
@@ -245,7 +252,21 @@ def _count_events(outbox_path: Path) -> EventCounters:
     promotion_done_total = promotion_done_recent = 0
     source = str(outbox_path) if outbox_path else None
     cutoff = datetime.now(timezone.utc) - _EVENT_WINDOW
-    for record in _iter_tail_records(outbox_path):
+    records = _iter_tail_records(outbox_path)
+    if records is None:
+        return EventCounters(
+            watcher_runs_total=None,
+            watcher_runs_24h=None,
+            panel_runs_total=None,
+            panel_runs_24h=None,
+            promote_created_total=None,
+            promote_created_24h=None,
+            promotion_executed_total=None,
+            promotion_executed_24h=None,
+            ingest_runs_by_plane={},
+            source_path=source,
+        )
+    for record in records:
         event = record.get("event") or record.get("event_type") or record.get("topic") or ""
         ts = _parse_timestamp(record.get("timestamp") or record.get("created_at"))
         is_recent = ts is not None and ts >= cutoff
@@ -286,7 +307,10 @@ def _delivery_sla_status(outbox_path: Path) -> DeliverySLAStatus:
         DELIVERY_SLA_FAILED: 0,
         DELIVERY_SLA_ROLLED_BACK: 0,
     }
-    for record in _iter_tail_records(outbox_path):
+    records = _iter_tail_records(outbox_path)
+    if records is None:
+        return DeliverySLAStatus(outcomes_total=None, source_path=str(outbox_path))
+    for record in records:
         event = record.get("event") or record.get("event_type") or record.get("topic") or ""
         if event not in {ORCHESTRATOR_STEP_ERROR, ORCHESTRATOR_STEP_FINISHED}:
             continue
@@ -554,14 +578,14 @@ def _events_log_status() -> EventsLogStatus:
 
 def _read_last_json_record(path: Path) -> dict | None:
     last: dict | None = None
-    for payload in _iter_tail_records(path):
+    for payload in _iter_tail_records(path) or []:
         last = payload
     return last
 
 
 def _last_watcher_run_record(path: Path) -> dict | None:
     last: dict | None = None
-    for payload in _iter_tail_records(path):
+    for payload in _iter_tail_records(path) or []:
         event_name = payload.get("event") or payload.get("event_type") or payload.get("topic")
         if event_name in _WATCHER_EVENT_NAMES:
             last = payload
@@ -802,7 +826,7 @@ def _normalize_context_dimensions(value: object) -> ContextDimensionsStatus | No
 
 
 def _status_context_dimensions(outbox_path: Path) -> ContextDimensionsStatus | None:
-    records = _iter_tail_records(outbox_path)
+    records = _iter_tail_records(outbox_path) or []
     for record in reversed(records):
         top_level = _normalize_context_dimensions(record.get("context_dimensions"))
         if top_level is not None:
@@ -830,7 +854,7 @@ def _read_watcher_heartbeat_watchers() -> dict[str, dict]:
 
 def _last_panel_run_record(path: Path) -> dict | None:
     last: dict | None = None
-    for payload in _iter_tail_records(path):
+    for payload in _iter_tail_records(path) or []:
         topic = payload.get("event") or payload.get("event_type") or payload.get("topic")
         if topic == PANEL_INTENT_EXECUTED:
             last = payload
@@ -839,7 +863,7 @@ def _last_panel_run_record(path: Path) -> dict | None:
 
 def _last_panel_log_record(path: Path) -> dict | None:
     last: dict | None = None
-    for payload in _iter_tail_records(path):
+    for payload in _iter_tail_records(path) or []:
         topic = payload.get("event") or payload.get("event_type") or payload.get("topic")
         if topic == PANEL_LOG_CREATED:
             last = payload

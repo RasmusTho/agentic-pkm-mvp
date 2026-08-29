@@ -68,6 +68,17 @@ def test_count_outbox_events_fails_closed_on_malformed_record(tmp_path: Path) ->
     assert truncated is False
 
 
+def test_status_event_and_sla_counters_remain_unknown_on_corruption(tmp_path: Path) -> None:
+    path = tmp_path / "outbox.jsonl"
+    path.write_bytes(b'{"event":"panel.intent.executed"}\n{')
+
+    events = _count_events(path)
+    sla = _delivery_sla_status(path)
+
+    assert events.panel_runs_total is None
+    assert sla.outcomes_total is None
+
+
 def test_outbox_lag_hides_pending_when_truncated(tmp_path: Path, monkeypatch) -> None:
     """Regression for #1209 review: capped counts must not yield wrong pending=0."""
     import json as _json
