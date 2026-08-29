@@ -108,12 +108,15 @@ def _standing_question_tick_inputs(
 
     for path in changed_paths:
         try:
-            relative = path.relative_to(vault_root)
+            canonical_path = path.expanduser().resolve()
+            if not canonical_path.is_relative_to(vault_root):
+                continue
+            relative = canonical_path.relative_to(vault_root)
             if relative.parts and relative.parts[0] == "questions":
                 # Question notes are matcher targets, not evidence sources.
                 # Their own edits must not self-seed the evidence log.
                 continue
-            raw_bytes = path.read_bytes()
+            raw_bytes = canonical_path.read_bytes()
             text = raw_bytes.decode("utf-8")
             frontmatter, _body = load_frontmatter(text)
         except (OSError, UnicodeError, ValueError):

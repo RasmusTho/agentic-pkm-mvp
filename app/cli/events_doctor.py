@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-import json
 import os
 from pathlib import Path
 from typing import Any, List
+
+from app.services.outbox import read_jsonl_outbox_records
 
 import click
 
@@ -11,18 +12,7 @@ DEFAULT_OUTBOX = Path(os.environ.get("INDEX_OUTBOX_PATH", "./tmp/index-outbox.js
 
 
 def _load_records(path: Path) -> List[dict[str, Any]]:
-    records: list[dict[str, Any]] = []
-    if not path.exists():
-        return records
-    for line in path.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            records.append(json.loads(line))
-        except Exception:
-            continue
-    return records
+    return read_jsonl_outbox_records(path)
 
 
 def _trace_id_for_record(rec: dict[str, Any]) -> str:

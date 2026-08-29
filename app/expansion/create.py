@@ -880,6 +880,12 @@ def run_create_pass(
                 if receipt_id is not None
                 else None
             )
+            if replay is not None and existing_receipt is not None and _draft_was_expired(
+                outbox_path, draft_id or "", receipt_id or ""
+            ):
+                raise CreateIdempotencyConflictError(
+                    f"deterministic Create proposal already expired: {replay_draft_path}"
+                )
             if existing_receipt is not None and replay is None:
                 if _draft_was_expired(
                     outbox_path, draft_id or "", receipt_id or ""

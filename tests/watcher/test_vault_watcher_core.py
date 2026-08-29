@@ -158,6 +158,24 @@ def test_watcher_tick_calls_standing_questions_composition_after_ingest(
     assert summary["standing_questions_drafted"] == 1
 
 
+def test_standing_question_inputs_exclude_question_path_aliases(tmp_path: Path) -> None:
+    vault = tmp_path / "vault"
+    question_path = vault / "questions" / "question-1.md"
+    question_path.parent.mkdir(parents=True)
+    question_path.write_text(
+        "---\nquestion_id: question-1\nstatus: open\nscope: work\ntext: A question\n---\n",
+        encoding="utf-8",
+    )
+
+    candidates, sources = watcher_module._standing_question_tick_inputs(
+        vault,
+        [vault / "notes" / ".." / "questions" / "question-1.md"],
+    )
+
+    assert candidates == []
+    assert sources == {}
+
+
 def test_watcher_retry_snapshot_is_restored_before_persist_crash(
     tmp_path: Path, monkeypatch
 ) -> None:

@@ -8,7 +8,6 @@ receipt data once it has been emitted to the outbox.
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterable
@@ -213,6 +212,8 @@ def _same_operation_payload(
 def _read_durable_jsonl_records(
     *, outbox_path: Path | None
 ) -> list[dict[str, Any]] | None:
+    from app.services.outbox import read_jsonl_outbox_records
+
     if outbox_path is None:
         from app.outbox.events import get_index_outbox_path  # noqa: PLC0415
 
@@ -221,16 +222,7 @@ def _read_durable_jsonl_records(
         resolved = Path(outbox_path).expanduser()
     if not resolved.exists() or not resolved.is_file():
         return None
-    records: list[dict[str, Any]] = []
-    with resolved.open("r", encoding="utf-8") as handle:
-        for line in handle:
-            try:
-                record = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if isinstance(record, dict):
-                records.append(record)
-    return records
+    return read_jsonl_outbox_records(resolved)
 
 
 __all__ = [

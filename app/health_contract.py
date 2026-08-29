@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 from copy import deepcopy
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
@@ -205,49 +204,16 @@ def dead_letter_snapshot(*, thresholds: HealthThresholds | None = None) -> dict[
 
 def _read_tail_records(path: Path | None = None) -> list[dict[str, Any]]:
     """Read at most _HEALTH_TAIL_BYTES from the end of the outbox; return parsed records."""
+    from app.services.outbox import read_jsonl_outbox_records
+
     target = (path or default_outbox_path()).expanduser()
-    if not target.exists():
-        return []
     try:
-        with target.open("rb") as fh:
-            fh.seek(0, os.SEEK_END)
-            size = fh.tell()
-            if size > _HEALTH_TAIL_BYTES:
-                fh.seek(size - _HEALTH_TAIL_BYTES)
-                partial = True
-            else:
-                fh.seek(0)
-                partial = False
-            data = fh.read()
+        return read_jsonl_outbox_records(target, max_bytes=_HEALTH_TAIL_BYTES)
     except Exception:
         # Intentional swallow: an unreadable outbox tail degrades to "no recent
         # records" for health purposes, but the I/O failure is logged (#3894).
         logger.warning("Outbox tail read failed for %s", target, exc_info=True)
         return []
-    try:
-        lines = data.decode("utf-8", errors="replace").splitlines()
-    except Exception:
-        # Defensive only: decode(errors="replace") cannot realistically raise;
-        # logged loudly if it ever does.
-        logger.warning("Outbox tail decode failed for %s", target, exc_info=True)
-        return []
-    if partial and lines:
-        lines = lines[1:]  # drop potentially truncated first line
-    records: list[dict[str, Any]] = []
-    for ln in lines:
-        ln = ln.strip()
-        if not ln:
-            continue
-        try:
-            obj = json.loads(ln)
-            if isinstance(obj, dict):
-                records.append(obj)
-        except Exception:
-            # Intentionally silent: a truncated/garbled JSONL line in an
-            # append-only log tail is expected (partial writes at the cut
-            # boundary); logging per line would spam every health poll.
-            continue
-    return records
 
 WRITE_BLOCKED_STATES = {"safe_mode", "unhealthy"}
 INCIDENT_STATES = {"degraded", "unhealthy", "safe_mode"}

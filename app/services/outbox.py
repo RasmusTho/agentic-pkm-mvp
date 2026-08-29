@@ -497,11 +497,24 @@ def _append_jsonl_outbox_event_unlocked(
         os.close(descriptor)
 
 
-def _read_jsonl_records_unlocked(outbox_path: Path) -> list[dict[str, Any]]:
+def _read_jsonl_records_unlocked(
+    outbox_path: Path, *, max_bytes: int | None = None
+) -> list[dict[str, Any]]:
     """Read and safely repair one final complete unterminated record."""
 
     try:
-        raw = outbox_path.read_bytes()
+        if max_bytes is not None and max_bytes > 0:
+            size = outbox_path.stat().st_size
+            if size > max_bytes:
+                with outbox_path.open("rb") as handle:
+                    handle.seek(size - max_bytes)
+                    raw = handle.read()
+                first_delimiter = raw.find(b"\n")
+                raw = raw[first_delimiter + 1 :] if first_delimiter >= 0 else b""
+            else:
+                raw = outbox_path.read_bytes()
+        else:
+            raw = outbox_path.read_bytes()
     except FileNotFoundError:
         return []
     except OSError as exc:
@@ -550,14 +563,16 @@ def _read_jsonl_records_unlocked(outbox_path: Path) -> list[dict[str, Any]]:
 
 
 def read_jsonl_outbox_records(
-    outbox_path: Path, *, _lock_held: bool = False
+    outbox_path: Path, *, _lock_held: bool = False, max_bytes: int | None = None
 ) -> list[dict[str, Any]]:
     """Read JSONL records under the same lock used by appenders."""
 
     if _lock_held:
-        return _read_jsonl_records_unlocked(_canonical_jsonl_outbox_path(outbox_path))
+        return _read_jsonl_records_unlocked(
+            _canonical_jsonl_outbox_path(outbox_path), max_bytes=max_bytes
+        )
     with jsonl_outbox_append_lock(outbox_path) as canonical_path:
-        return _read_jsonl_records_unlocked(canonical_path)
+        return _read_jsonl_records_unlocked(canonical_path, max_bytes=max_bytes)
 
 
 def append_jsonl_record(

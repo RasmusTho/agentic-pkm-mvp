@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import os
 from pathlib import Path
 from typing import Any
@@ -8,6 +7,7 @@ from typing import Any
 from fastapi import APIRouter, Query
 
 from app.outbox.events import INDEX_OUTBOX_PATH
+from app.services.outbox import read_jsonl_outbox_records
 
 router = APIRouter()
 
@@ -20,23 +20,7 @@ def _resolve_outbox_path() -> Path:
 
 
 def _load_events(path: Path) -> list[dict[str, Any]]:
-    if not path.exists():
-        return []
-    records: list[dict[str, Any]] = []
-    try:
-        lines = path.read_text(encoding="utf-8").splitlines()
-    except Exception:
-        return []
-    for line in lines:
-        if not line.strip():
-            continue
-        try:
-            payload = json.loads(line)
-        except Exception:
-            continue
-        if isinstance(payload, dict):
-            records.append(payload)
-    return records
+    return read_jsonl_outbox_records(path)
 
 
 @router.get("/events/tail")

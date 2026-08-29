@@ -426,6 +426,56 @@ def test_expiry_receipt_failure_preserves_draft_for_retry(
     assert draft_path.exists()
 
 
+def test_expired_receipt_cannot_revive_draft_before_deletion(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    vault_root = tmp_path / "vault"
+    vault_root.mkdir()
+    outbox_path = tmp_path / "outbox.jsonl"
+    request = CreateRequest(
+        kind=OutputKind.ANSWER_NOTE,
+        title="Expired before delete",
+        sources=(_source("obj-a", "Evidence text.", "Evidence text."),),
+    )
+    created_at = datetime.now(timezone.utc) - timedelta(days=30)
+    first = run_create_pass(
+        request,
+        vault_root=vault_root,
+        outbox_path=outbox_path,
+        write_guard=_allow_all_guard(),
+        staleness_days=14,
+        now=created_at,
+        draft_id="expired-before-delete",
+        receipt_id="expired-before-delete-receipt",
+    )
+    draft_path = vault_root / first.draft_path
+    original_unlink = Path.unlink
+
+    def crash_before_delete(path: Path, *args, **kwargs):
+        if path == draft_path:
+            raise OSError("simulated delete failure after expiry receipt")
+        return original_unlink(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", crash_before_delete)
+    sweep = sweep_expired_drafts(
+        vault_root=vault_root,
+        outbox_path=outbox_path,
+        now=datetime.now(timezone.utc),
+    )
+    assert sweep.expired == ()
+    assert draft_path.exists()
+
+    with pytest.raises(CreateIdempotencyConflictError, match="already expired"):
+        run_create_pass(
+            request,
+            vault_root=vault_root,
+            outbox_path=outbox_path,
+            write_guard=_allow_all_guard(),
+            draft_id="expired-before-delete",
+            receipt_id="expired-before-delete-receipt",
+        )
+
+
 def test_expiry_sweep_never_removes_a_checked_draft(tmp_path: Path) -> None:
     """A checked (accepted) draft is EXP-4's concern; the sweep must never
     remove it even if it is past its staleness window."""
