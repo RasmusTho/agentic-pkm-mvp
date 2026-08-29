@@ -198,6 +198,23 @@ def test_targeted_remote_cleanup_completed_write_failure_recovers_monotonically(
     assert json.loads(next(receipts.glob("*.json")).read_text())["state"] == "completed"
 
 
+def test_targeted_remote_cleanup_post_delete_readback_failure_retains_prepared(tmp_path, monkeypatch) -> None:
+    candidate = _targeted_candidate()
+    refs = {candidate["source_ref"]: candidate["source_sha"]}
+    commands: list[list[str]] = []
+    base = _remote_cleanup_transport(refs, commands)
+    def stale_delete(args, cwd):
+        if args[:2] == ["push", "--no-verify"] and args[-1].startswith(":refs/heads/"):
+            commands.append(args)
+            return subprocess.CompletedProcess(["git", *args], 0, "", "")
+        return base(args, cwd)
+    monkeypatch.setattr(git_hygiene, "run_git_result", stale_delete)
+    receipts = tmp_path / "receipts"
+    report = git_hygiene.targeted_remote_cleanup(tmp_path, repository=candidate["repository"], candidates=[candidate], receipt_dir=receipts)
+    assert report["error"] == "post_delete_readback_failed"
+    assert json.loads(next(receipts.glob("*.json")).read_text())["state"] == "prepared"
+
+
 def _allow_lifecycle_authority(_targets):
     return nullcontext(lambda: None)
 
