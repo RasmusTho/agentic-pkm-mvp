@@ -18,7 +18,8 @@ services:
       POSTGRES_DB: builderops
       POSTGRES_USER: builderops_owner
       POSTGRES_PASSWORD_FILE: /run/secrets/builderops_database_owner_password
-      BUILDEROPS_DATABASE_APP_PASSWORD_FILE: /run/secrets/builderops_database_app_password
+      BUILDEROPS_DATABASE_APP_PASSWORD_FILE: /run/builderops-init/app-password
+      BUILDEROPS_DATABASE_APP_PASSWORD_SECRET_FILE: /run/secrets/builderops_database_app_password
     command:
       - postgres
       - -c
@@ -31,6 +32,8 @@ services:
     secrets:
       - builderops_database_owner_password
       - builderops_database_app_password
+    tmpfs:
+      - /run/builderops-init:uid=999,gid=999,mode=0700
     networks: [builderops-internal]
     healthcheck:
       # Probing 127.0.0.1 would pass even under the buggy listen_addresses=localhost

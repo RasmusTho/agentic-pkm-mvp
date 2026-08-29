@@ -7,9 +7,17 @@ if [[ ! -r "$BUILDEROPS_DATABASE_APP_PASSWORD_FILE" ]]; then
   exit 78
 fi
 
-# psql reads the Docker secret through its shell-capture meta-command; quoted
-# variable interpolation then produces a correctly escaped SQL literal. The
-# raw value never enters argv, the parent environment, or a durable SQL file.
+# The entrypoint supplies a postgres-owned copy on tmpfs only for this first
+# initialization. Remove it on both success and failure; the root-only Docker
+# secret is never read by this script.
+cleanup() {
+  rm -f -- "$BUILDEROPS_DATABASE_APP_PASSWORD_FILE"
+}
+trap cleanup EXIT
+
+# psql reads the tmpfs-staged file through its shell-capture meta-command;
+# quoted variable interpolation then produces a correctly escaped SQL literal.
+# The raw value never enters argv, the parent environment, or a durable SQL file.
 psql --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" \
   --set=ON_ERROR_STOP=1 <<'SQL'
 \set app_password `cat "$BUILDEROPS_DATABASE_APP_PASSWORD_FILE"`

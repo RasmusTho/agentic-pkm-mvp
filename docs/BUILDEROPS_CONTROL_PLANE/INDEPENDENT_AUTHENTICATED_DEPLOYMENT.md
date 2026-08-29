@@ -14,6 +14,8 @@ BuilderOps operational state is rebuilt from repository source, exact attested i
 
 PostgreSQL has `archive_mode = off` and an empty `archive_command`. The local guard rejects archive drift, WAL growth, and disk pressure. It never deletes `pg_wal`, invokes `pg_resetwal`, or treats a reset/cleanup tool as a rebuild substitute.
 
+For first database initialization only, the PostgreSQL image's root entrypoint copies the single app-role password from its root-only Docker secret into a `postgres`-owned tmpfs file. `init_roles.sh` reads and removes that staged file before the service starts. No other secret is staged or made readable to the init script, and neither the original secret nor its value enters an environment variable, image layer, durable file, log, or another service.
+
 ## Purpose
 
 Keep BuilderOps outside the `pkm-*` Product failure domain while preserving a truthful, private, and rebuildable deployment path.

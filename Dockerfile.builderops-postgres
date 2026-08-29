@@ -6,3 +6,10 @@ FROM postgres:16-bookworm
 LABEL org.opencontainers.image.title="BuilderOps PostgreSQL" \
       org.opencontainers.image.source="https://github.com/RasmusTho/agentic-pkm-mvp" \
       org.opencontainers.image.durability="rebuildable"
+
+# Docker Compose mounts file-backed secrets root-only. The upstream PostgreSQL
+# entrypoint later runs init scripts as postgres, so stage only the app-role
+# password into a postgres-only tmpfs for first initialization.
+COPY scripts/builderops/postgres_entrypoint.sh /usr/local/bin/builderops-postgres-entrypoint.sh
+RUN chmod 0755 /usr/local/bin/builderops-postgres-entrypoint.sh
+ENTRYPOINT ["/usr/local/bin/builderops-postgres-entrypoint.sh"]
