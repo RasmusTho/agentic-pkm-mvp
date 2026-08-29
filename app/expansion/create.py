@@ -569,7 +569,11 @@ def _draft_note_text(
 def _existing_receipt(
     outbox_path: Path, event: str, event_id: str, *, _lock_held: bool = False
 ) -> dict[str, Any] | None:
-    records = read_jsonl_outbox_records(outbox_path, _lock_held=_lock_held)
+    records = read_jsonl_outbox_records(
+        outbox_path,
+        _lock_held=_lock_held,
+        read_only=not _lock_held,
+    )
     first_match: dict[str, Any] | None = None
     for record in records:
         if record.get("event_id") != event_id:
@@ -597,14 +601,14 @@ def _draft_was_expired(
         and isinstance(record.get("payload"), dict)
         and record["payload"].get("draft_id") == draft_id
         and record["payload"].get("proposal_receipt_id") == proposal_receipt_id
-        for record in read_jsonl_outbox_records(outbox_path)
+        for record in read_jsonl_outbox_records(outbox_path, read_only=True)
     )
 
 
 def _proposal_receipt_id_for_draft(
     outbox_path: Path, draft_id: str, draft_sha256: str
 ) -> str | None:
-    for record in read_jsonl_outbox_records(outbox_path):
+    for record in read_jsonl_outbox_records(outbox_path, read_only=True):
         payload = record.get("payload")
         if (
             record.get("event") == CREATE_PROPOSED_EVENT
@@ -624,7 +628,7 @@ def _existing_expiry_receipt_id(
     draft_sha256: str,
     proposal_receipt_id: str | None,
 ) -> str | None:
-    for record in read_jsonl_outbox_records(outbox_path):
+    for record in read_jsonl_outbox_records(outbox_path, read_only=True):
         payload = record.get("payload")
         if not (
             record.get("event") == CREATE_EXPIRED_EVENT

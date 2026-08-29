@@ -83,30 +83,30 @@ def _count_outbox_lines_db(resolution: StoreBackendResolution | None = None) -> 
         return None
 
 
-def _count_outbox_lines_from_file(path: Path) -> int:
-    """Streaming file line count of the outbox; never touches the DB. 0 on error."""
+def _count_outbox_lines_from_file(path: Path) -> int | None:
+    """Count a bounded, strictly parsed file outbox; ``None`` means unavailable."""
+    from app.services.outbox import read_jsonl_outbox_records
+
     if not path.exists():
         return 0
     try:
-        count = 0
-        saw_bytes = False
-        last_byte = b""
-        with path.open("rb") as fh:
-            for chunk in iter(lambda: fh.read(1024 * 1024), b""):
-                saw_bytes = True
-                count += chunk.count(b"\n")
-                last_byte = chunk[-1:]
-        if saw_bytes and last_byte != b"\n":
-            count += 1
-        return count
+        size = path.stat().st_size
+        records = read_jsonl_outbox_records(
+            path, max_bytes=_HEALTH_TAIL_BYTES, read_only=True
+        )
     except Exception:
         # Intentional swallow: health must not crash on an unreadable outbox
-        # file, but the read failure is logged rather than folded into 0.
+        # file, but the read failure is logged and remains unavailable, not 0.
         logger.warning("Outbox file line count failed for %s", path, exc_info=True)
-        return 0
+        return None
+    if size > _HEALTH_TAIL_BYTES:
+        return None
+    return len(records)
 
 
-def _count_outbox_lines(path: Path, resolution: StoreBackendResolution | None = None) -> int:
+def _count_outbox_lines(
+    path: Path, resolution: StoreBackendResolution | None = None
+) -> int | None:
     """Count outbox records: DB when available, else streaming file line count."""
     db_count = _count_outbox_lines_db(resolution)
     if db_count is not None:
@@ -859,10 +859,12 @@ class HealthContract:
 
     def _catch_up_progress(
         self,
-        outbox_count: int,
+        outbox_count: int | None,
         outbox_recent_age_s: float,
         thresholds: HealthThresholds,
     ) -> dict[str, Any] | None:
+        if outbox_count is None:
+            return None
         if outbox_count <= 0:
             mode = "idle"
         elif outbox_recent_age_s > thresholds.outbox_degrade_oldest_age_s:
@@ -914,7 +916,7 @@ class HealthContract:
         reason: str,
         since_ts: str,
         settings_result: Any,
-        outbox_count: int,
+        outbox_count: int | None,
         outbox_recent_age_s: float,
         index_status: str,
         events_status: str,
@@ -975,10 +977,16 @@ class HealthContract:
             return 0, f"{type(exc).__name__}: {exc}"
 
     def _bootstrap_state(
-        self, object_count: int, outbox_count: int, *, store_error: str | None = None
+        self,
+        object_count: int,
+        outbox_count: int | None,
+        *,
+        store_error: str | None = None,
     ) -> tuple[str, str]:
         if store_error is not None:
             return "unknown", f"store object count unavailable: {store_error}"
+        if outbox_count is None:
+            return "unknown", "outbox count unavailable"
         if object_count == 0 and outbox_count == 0:
             return "empty", "no objects ingested yet"
         return "active", "objects or outbox events detected"

@@ -28,6 +28,7 @@ from app.health_contract import (
     WRITE_BLOCKED_STATES,
     HealthContract,
     HealthStateMachine,
+    _count_outbox_lines_from_file,
     reset_state_machine,
 )
 from app.settings.health_settings import HealthThresholds, load_health_settings
@@ -90,6 +91,13 @@ def _fresh_contract() -> HealthContract:
         state_machine=HealthStateMachine(),
         vault_root_fn=lambda: None,
     )
+
+
+def test_file_outbox_count_fails_closed_on_malformed_jsonl(tmp_path: Path) -> None:
+    outbox_path = tmp_path / "index-outbox.jsonl"
+    outbox_path.write_bytes(b'{"event":"valid"}\n{')
+
+    assert _count_outbox_lines_from_file(outbox_path) is None
 
 
 # ---------------------------------------------------------------------------
