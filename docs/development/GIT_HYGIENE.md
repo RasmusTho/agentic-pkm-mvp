@@ -46,9 +46,14 @@ batch before later candidates are touched.
 Repository identity is the live GitHub REST repository ID and canonical full name plus
 exactly one effective `origin` fetch URL and one effective push URL. HTTPS fetch and
 GitHub SSH push forms may differ, but both must identify that REST repository. The
-REST client fixes every authority request to `github.com` and removes ambient `GH_HOST`,
-`GH_REPO`, and alternate HTTP-socket selectors while preserving GitHub token/auth
-environment. The captured literal push URL—not the mutable remote name—is passed to
+REST client fixes every authority request to `github.com` and gives each invocation a
+fresh mode-0700 empty `GH_CONFIG_DIR`. Ambient gh/XDG config paths, host/repository/API
+selectors, alternate HTTP sockets, and enterprise tokens are absent from that process.
+Only `GH_TOKEN` or `GITHUB_TOKEN` authentication for github.com is normalized into the
+clean call; when environment auth is absent, `gh auth token --hostname github.com`
+performs a local credential lookup and only its single token value crosses the boundary.
+No other gh config is copied, and temporary config is removed after the call. The
+captured literal push URL—not the mutable remote name—is passed to
 every `ls-remote` and `push`; the fetch URL is used to obtain the exact source object.
 Every candidate PR
 must freshly be closed, unmerged, same-repository, and at the named full head ref and

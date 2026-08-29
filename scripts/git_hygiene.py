@@ -60,7 +60,19 @@ _GIT_LOCAL_CONTEXT_ENV_KEYS = frozenset(
     }
 )
 _GITHUB_AUTHORITY_REDIRECT_ENV_KEYS = frozenset(
-    {"GH_HOST", "GH_HTTP_UNIX_SOCKET", "GH_REPO"}
+    {
+        "GH_CONFIG_DIR",
+        "GH_HOST",
+        "GH_HTTP_UNIX_SOCKET",
+        "GH_REPO",
+        "GITHUB_API_URL",
+        "GITHUB_GRAPHQL_URL",
+        "GITHUB_SERVER_URL",
+        "XDG_CONFIG_HOME",
+    }
+)
+_GITHUB_AUTH_ENV_KEYS = frozenset(
+    {"GH_ENTERPRISE_TOKEN", "GH_TOKEN", "GITHUB_ENTERPRISE_TOKEN", "GITHUB_TOKEN"}
 )
 
 
@@ -74,14 +86,49 @@ def _sanitized_git_environment() -> dict[str, str]:
     }
 
 
-def _sanitized_github_environment() -> dict[str, str]:
-    """Keep GitHub authentication while removing ambient endpoint redirects."""
+def _github_auth_token() -> str | None:
+    """Resolve only github.com authentication without using config as endpoint authority."""
 
-    return {
+    for key in ("GH_TOKEN", "GITHUB_TOKEN"):
+        token = os.environ.get(key)
+        if token:
+            return token
+    lookup_env = {
         key: value
         for key, value in os.environ.items()
-        if key not in _GITHUB_AUTHORITY_REDIRECT_ENV_KEYS
+        if key
+        not in (
+            _GITHUB_AUTH_ENV_KEYS
+            | (_GITHUB_AUTHORITY_REDIRECT_ENV_KEYS - {"GH_CONFIG_DIR", "XDG_CONFIG_HOME"})
+        )
     }
+    result = subprocess.run(
+        ["gh", "auth", "token", "--hostname", "github.com"],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=lookup_env,
+    )
+    if result.returncode != 0:
+        return None
+    token = result.stdout.strip()
+    if not token or any(character.isspace() for character in token):
+        return None
+    return token
+
+
+def _sanitized_github_environment(config_dir: Path, token: str | None) -> dict[str, str]:
+    """Use one empty private config and only github.com authentication."""
+
+    environment = {
+        key: value
+        for key, value in os.environ.items()
+        if key not in _GITHUB_AUTHORITY_REDIRECT_ENV_KEYS | _GITHUB_AUTH_ENV_KEYS
+    }
+    environment["GH_CONFIG_DIR"] = str(config_dir)
+    if token is not None:
+        environment["GH_TOKEN"] = token
+    return environment
 
 
 def run_git(args: list[str], cwd: Path) -> str:
@@ -595,14 +642,18 @@ def _json_without_duplicates(raw: str) -> object:
 
 
 def _github_get(cwd: Path, endpoint: str) -> Mapping[str, object]:
-    result = subprocess.run(
-        ["gh", "api", "--hostname", "github.com", "--method", "GET", endpoint],
-        cwd=cwd,
-        check=False,
-        capture_output=True,
-        text=True,
-        env=_sanitized_github_environment(),
-    )
+    token = _github_auth_token()
+    with tempfile.TemporaryDirectory(prefix="git-hygiene-gh-") as raw_config_dir:
+        config_dir = Path(raw_config_dir)
+        config_dir.chmod(0o700)
+        result = subprocess.run(
+            ["gh", "api", "--hostname", "github.com", "--method", "GET", endpoint],
+            cwd=cwd,
+            check=False,
+            capture_output=True,
+            text=True,
+            env=_sanitized_github_environment(config_dir, token),
+        )
     if result.returncode != 0:
         raise RuntimeError(f"github_get_failed:{endpoint}")
     try:

@@ -2,8 +2,10 @@ import json
 import os
 from pathlib import Path
 import signal
+import socket
 import subprocess
 import sys
+import threading
 import time
 from contextlib import nullcontext
 
@@ -559,10 +561,23 @@ def test_targeted_remote_cleanup_fixes_rest_authority_to_github_com(
     monkeypatch.setenv("GH_HOST", "evil.example")
     monkeypatch.setenv("GH_REPO", "attacker/redirect")
     monkeypatch.setenv("GH_HTTP_UNIX_SOCKET", "/tmp/evil-gh.sock")
+    monkeypatch.setenv("GH_CONFIG_DIR", "/tmp/evil-gh-config")
+    monkeypatch.setenv("XDG_CONFIG_HOME", "/tmp/evil-xdg-config")
+    monkeypatch.setenv("GITHUB_API_URL", "https://evil.example/api")
+    monkeypatch.setenv("GITHUB_GRAPHQL_URL", "https://evil.example/graphql")
+    monkeypatch.setenv("GITHUB_SERVER_URL", "https://evil.example")
+    monkeypatch.setenv("GH_ENTERPRISE_TOKEN", "enterprise-token")
     monkeypatch.setenv("GH_TOKEN", "github-token")
     monkeypatch.setenv("GITHUB_TOKEN", "github-actions-token")
+    private_config_dirs: list[Path] = []
 
     def command(args, **kwargs):
+        environment = kwargs["env"]
+        private_config = Path(environment["GH_CONFIG_DIR"])
+        private_config_dirs.append(private_config)
+        assert private_config.is_dir()
+        assert private_config.stat().st_mode & 0o777 == 0o700
+        assert list(private_config.iterdir()) == []
         calls.append((args, kwargs))
         return subprocess.CompletedProcess(
             args, 0, json.dumps(_repository_payload()), ""
@@ -595,11 +610,96 @@ def test_targeted_remote_cleanup_fixes_rest_authority_to_github_com(
     assert "GH_HOST" not in environment
     assert "GH_REPO" not in environment
     assert "GH_HTTP_UNIX_SOCKET" not in environment
+    assert "XDG_CONFIG_HOME" not in environment
+    assert "GITHUB_API_URL" not in environment
+    assert "GITHUB_GRAPHQL_URL" not in environment
+    assert "GITHUB_SERVER_URL" not in environment
+    assert "GH_ENTERPRISE_TOKEN" not in environment
     assert environment["GH_TOKEN"] == "github-token"
-    assert environment["GITHUB_TOKEN"] == "github-actions-token"
+    assert "GITHUB_TOKEN" not in environment
+    assert private_config_dirs and not private_config_dirs[0].exists()
     assert identity.fetch_url == FETCH_URL
     assert identity.push_url == PUSH_URL
     assert git_hygiene._github_repo_from_url(identity.fetch_url) == identity.full_name
+
+
+def test_targeted_remote_cleanup_uses_github_token_fallback_without_config(
+    monkeypatch,
+) -> None:
+    monkeypatch.delenv("GH_TOKEN", raising=False)
+    monkeypatch.setenv("GITHUB_TOKEN", "github-actions-token")
+    monkeypatch.setenv("GH_CONFIG_DIR", "/tmp/attacker-config")
+
+    assert git_hygiene._github_auth_token() == "github-actions-token"
+
+
+def test_targeted_remote_cleanup_installed_gh_ignores_configured_unix_socket(
+    tmp_path, monkeypatch
+) -> None:
+    attacker_config = tmp_path / "attacker-gh-config"
+    attacker_config.mkdir(mode=0o700)
+    attacker_socket = Path("/tmp") / f"gh-r9-{os.getpid()}-{time.time_ns()}.sock"
+    (attacker_config / "config.yml").write_text(
+        f"http_unix_socket: {attacker_socket}\n",
+        encoding="utf-8",
+    )
+    repro_environment = os.environ.copy()
+    repro_environment["GH_CONFIG_DIR"] = str(attacker_config)
+    repro = subprocess.run(
+        ["gh", "config", "get", "http_unix_socket"],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=repro_environment,
+    )
+    assert repro.returncode == 0
+    assert repro.stdout.strip() == str(attacker_socket)
+    server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    server.bind(str(attacker_socket))
+    server.listen(1)
+    server.settimeout(0.1)
+    stop = threading.Event()
+    connections: list[bool] = []
+
+    def serve_attacker() -> None:
+        while not stop.is_set():
+            try:
+                connection, _ = server.accept()
+            except TimeoutError:
+                continue
+            except OSError:
+                return
+            connections.append(True)
+            body = b'{"attacker":true}'
+            connection.sendall(
+                b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
+                + f"Content-Length: {len(body)}\r\n\r\n".encode()
+                + body
+            )
+            connection.close()
+            return
+
+    thread = threading.Thread(target=serve_attacker, daemon=True)
+    thread.start()
+    monkeypatch.setenv("GH_CONFIG_DIR", str(attacker_config))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "attacker-xdg"))
+    monkeypatch.setenv("GH_HOST", "evil.example")
+    monkeypatch.setenv("GH_TOKEN", "invalid-token-for-fixed-host-test")
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+
+    payload: object | None = None
+    try:
+        payload = git_hygiene._github_get(tmp_path, "meta")
+    except RuntimeError as exc:
+        assert str(exc) == "github_get_failed:meta"
+    finally:
+        stop.set()
+        server.close()
+        thread.join(timeout=2)
+        attacker_socket.unlink(missing_ok=True)
+
+    assert connections == []
+    assert not (isinstance(payload, dict) and payload.get("attacker") is True)
 
 
 def test_targeted_remote_cleanup_rereads_lifecycle_before_archive(tmp_path, monkeypatch) -> None:
