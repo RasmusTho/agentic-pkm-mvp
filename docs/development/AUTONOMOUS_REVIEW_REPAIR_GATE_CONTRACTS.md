@@ -417,8 +417,9 @@ closed; byte-identical duplicates are idempotent.
 The executable gate
 fetches the current PR, complete paginated review summaries, inline review comments, PR conversation,
 and, for issue-backed work, the governing Issue itself. Issue-free docs, governance, and direct-repair
-PRs instead authenticate a complete lane/direct-repair contract in the live PR body and reject any
-governing-Issue or closing-keyword attempt. They may continue unchanged or split after revalidation,
+PRs instead authenticate one complete lane/direct-repair contract in the live PR body, require its
+canonical classification to match the publication invocation lane, and reject ordinary or
+neutralized Issue authority plus unsupported line separators. They may continue unchanged or split after revalidation,
 but scope expansion first requires promotion to an authenticated governing Issue. The gate binds the
 repository/base identity, exact candidate and live heads, contract digest, rejected-round IDs,
 protected finding IDs, and the content digest of that rejected-review history. Caller-supplied history, actors, URLs,
@@ -434,7 +435,8 @@ revalidation inputs to match it. `new` authenticates that the branch has no open
 mode is rejected whenever the current branch already has an open PR. Before an existing PR is
 updated, the local candidate must either strictly descend from the authenticated live PR head or be
 a rebased candidate with the same stable patch identity and changed-path blob identities relative to
-the canonical publication base. The candidate must still differ from the live head. `continue_unchanged`
+the canonical publication base. The candidate must contain the current canonical publication base
+before either proof can authorize it, and must still differ from the live head. `continue_unchanged`
 permits only governing-contract blockers and PR-introduced regressions. Every `split` receipt must
 name a positive, non-governing `follow_up_issue`; the executable gate fetches it and requires an
 existing, bounded canonical Issue contract before it routes affected work there. `expanded_contract`

@@ -742,6 +742,7 @@ def test_pr_scope_revalidation_binds_expected_base_ref() -> None:
         head_sha="a" * 40,
         expected_base_ref="main",
         expected_head_ref="codex/issue-4028",
+        expected_lane="docs-authoring",
         api=api,
     )
     assert history["authentication"]["base_ref"] == "main"
@@ -914,11 +915,13 @@ Final-Review-Rounds: 1
         head_sha="a" * 40,
         expected_base_ref="main",
         expected_head_ref="codex/issue-4028",
+        expected_lane="docs-authoring",
         api=api,
     )
 
     assert history["governing_issue"] is None
     assert history["contract_source"] == "pr-body"
+    assert history["contract_lane"] == "docs-authoring"
 
 
 def test_issue_free_existing_publication_does_not_require_governing_issue(
@@ -975,6 +978,7 @@ def test_issue_free_existing_publication_does_not_require_governing_issue(
         ]
     ) == 0
     assert captured["governing_issue"] is None
+    assert captured["expected_lane"] == "governance"
 
 
 @pytest.mark.parametrize(
@@ -983,6 +987,7 @@ def test_issue_free_existing_publication_does_not_require_governing_issue(
         "\nFixes #99\n",
         "\n- [x] Governance lane\n",
         "\nGoverning-Issue: #99\n",
+        "\nVerified-Closing-Issues: #99\n",
         "\n## Direct Repair\nType: governance\nReason: incomplete\n",
     ),
 )
@@ -1010,6 +1015,61 @@ Final-Review-Rounds: 1
             pr_number=4029,
             governing_issue=None,
             head_sha="a" * 40,
+            expected_lane="docs-authoring",
+            api=api,
+        )
+
+
+@pytest.mark.parametrize("separator", ("\r", "\u2028", "\u2029"))
+def test_issue_free_contract_rejects_unsupported_line_separators(separator: str) -> None:
+    responses, api = _live_pr_review_api()
+    responses.pop("repos/octo/repo/issues/4028")
+    pr = responses["repos/octo/repo/pulls/4029"]
+    assert isinstance(pr, dict)
+    pr["body"] = separator.join(
+        (
+            "## Change Lane",
+            "- [x] Docs authoring lane",
+            "Final-Review-Rounds: 1",
+            "## BuilderOps Routing",
+            "- Records/projections/receipts: none",
+            "- Reason: No BuilderOps material was routed.",
+        )
+    )
+
+    with pytest.raises(ReviewBeforeCiGateError, match="issue-free PR body"):
+        authenticated_pr_scope_revalidation_history(
+            repository="octo/repo",
+            pr_number=4029,
+            governing_issue=None,
+            head_sha="a" * 40,
+            expected_lane="docs-authoring",
+            api=api,
+        )
+
+
+def test_issue_free_contract_must_match_invocation_lane() -> None:
+    responses, api = _live_pr_review_api()
+    responses.pop("repos/octo/repo/issues/4028")
+    pr = responses["repos/octo/repo/pulls/4029"]
+    assert isinstance(pr, dict)
+    pr["body"] = """## Change Lane
+- [x] Docs authoring lane
+
+Final-Review-Rounds: 1
+
+## BuilderOps Routing
+- Records/projections/receipts: none
+- Reason: No BuilderOps material was routed.
+"""
+
+    with pytest.raises(ReviewBeforeCiGateError, match="publication lane"):
+        authenticated_pr_scope_revalidation_history(
+            repository="octo/repo",
+            pr_number=4029,
+            governing_issue=None,
+            head_sha="a" * 40,
+            expected_lane="implementation",
             api=api,
         )
 
@@ -1513,17 +1573,37 @@ def test_pre_push_accepts_byte_identical_rebased_candidate(
     subprocess.run(["git", "commit", "-qm", "live delivery"], cwd=repo, check=True)
     live = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo, text=True).strip()
 
-    subprocess.run(["git", "checkout", "-qb", "rebased", base], cwd=repo, check=True)
+    subprocess.run(["git", "checkout", "-qb", "canonical-main", base], cwd=repo, check=True)
+    (repo / "main.txt").write_text("current canonical base\n", encoding="utf-8")
+    subprocess.run(["git", "add", "."], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-qm", "advance main"], cwd=repo, check=True)
+    canonical_base = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=repo, text=True
+    ).strip()
+
+    subprocess.run(["git", "checkout", "-qb", "stale-sibling", base], cwd=repo, check=True)
+    (repo / "feature.txt").write_text("same delivery patch\n", encoding="utf-8")
+    subprocess.run(["git", "add", "."], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-qm", "stale sibling delivery"], cwd=repo, check=True)
+    stale_candidate = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=repo, text=True
+    ).strip()
+    monkeypatch.chdir(repo)
+    assert not _git_is_strict_ancestor(canonical_base, stale_candidate)
+    assert not _git_allows_pr_update(live, stale_candidate, canonical_base)
+
+    subprocess.run(
+        ["git", "checkout", "-qb", "rebased", canonical_base], cwd=repo, check=True
+    )
     (repo / "feature.txt").write_text("same delivery patch\n", encoding="utf-8")
     subprocess.run(["git", "add", "."], cwd=repo, check=True)
     subprocess.run(["git", "commit", "-qm", "rebased delivery"], cwd=repo, check=True)
     candidate = subprocess.check_output(
         ["git", "rev-parse", "HEAD"], cwd=repo, text=True
     ).strip()
-    monkeypatch.chdir(repo)
-
+    assert _git_is_strict_ancestor(canonical_base, candidate)
     assert not _git_is_strict_ancestor(live, candidate)
-    assert _git_allows_pr_update(live, candidate, base)
+    assert _git_allows_pr_update(live, candidate, canonical_base)
 
     (repo / "feature.txt").write_text("different delivery patch\n", encoding="utf-8")
     subprocess.run(["git", "add", "."], cwd=repo, check=True)
@@ -1531,7 +1611,7 @@ def test_pre_push_accepts_byte_identical_rebased_candidate(
     divergent = subprocess.check_output(
         ["git", "rev-parse", "HEAD"], cwd=repo, text=True
     ).strip()
-    assert not _git_allows_pr_update(live, divergent, base)
+    assert not _git_allows_pr_update(live, divergent, canonical_base)
 
 
 def test_duplicate_key_durable_receipt_is_rejected() -> None:

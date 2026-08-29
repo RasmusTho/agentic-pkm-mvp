@@ -77,7 +77,7 @@ REVIEW_CONTRACT_MARKER = re.compile(
 REVALIDATION_RECEIPT_MARKER = "<!-- pr-scope-revalidation-receipt:v1 -->"
 TRUSTED_RECEIPT_ASSOCIATIONS = frozenset({"OWNER", "MEMBER", "COLLABORATOR"})
 ISSUE_FREE_LANE = re.compile(
-    r"(?im)^\s*-\s*\[x\]\s*(?:Docs authoring|Governance) lane\s*$"
+    r"(?im)^\s*-\s*\[x\]\s*(Docs authoring|Governance) lane\s*$"
 )
 DIRECT_REPAIR_SECTION = re.compile(
     r"(?ims)^## Direct Repair\s*$.*?(?=^##\s|\Z)"
@@ -87,6 +87,10 @@ DIRECT_REPAIR_REASON = re.compile(r"(?im)^Reason:\s*\S.*$")
 DIRECT_REPAIR_VALIDATION = re.compile(r"(?im)^Validation:\s*\S.*$")
 DIRECT_REPAIR_ISSUE = re.compile(r"(?im)^Issue required:\s*no\b")
 GOVERNING_ISSUE_ATTEMPT = re.compile(r"(?im)^\s*Governing-Issue\s*:")
+NEUTRALIZED_CLOSING_ATTEMPT = re.compile(
+    r"(?im)^[ \t]*Verified-Closing-Issues[ \t]*:"
+)
+UNSUPPORTED_CONTRACT_LINE_SEPARATOR = re.compile(r"\r(?!\n)|[\u2028\u2029]")
 
 
 class ReviewBeforeCiGateError(ValueError):
@@ -324,6 +328,7 @@ def authenticated_pr_scope_revalidation_history(
     head_sha: str,
     expected_base_ref: str | None = None,
     expected_head_ref: str | None = None,
+    expected_lane: str | None = None,
     follow_up_issue_numbers: Sequence[int] = (),
     api: Callable[[str, bool], object] | None = None,
 ) -> Mapping[str, object]:
@@ -410,6 +415,7 @@ def authenticated_pr_scope_revalidation_history(
         raise ReviewBeforeCiGateError("local publication candidate has no exact head")
     if not isinstance(pr.get("body"), str):
         raise ReviewBeforeCiGateError("GitHub PR body is unavailable for contract binding")
+    contract_lane: str | None = None
     if governing_issue is not None:
         if not isinstance(issue, Mapping) or not isinstance(issue.get("body"), str):
             raise ReviewBeforeCiGateError(
@@ -423,9 +429,14 @@ def authenticated_pr_scope_revalidation_history(
         contract_body = issue["body"]
         contract_source = "governing-issue"
     else:
-        if not _is_issue_free_pr_contract(pr["body"]):
+        contract_lane = _issue_free_pr_contract_lane(pr["body"])
+        if contract_lane is None:
             raise ReviewBeforeCiGateError(
                 "issue-free PR body has no authenticated docs, governance, or direct-repair contract"
+            )
+        if expected_lane != contract_lane:
+            raise ReviewBeforeCiGateError(
+                "issue-free PR contract does not match the authenticated publication lane"
             )
         contract_body = pr["body"]
         contract_source = "pr-body"
@@ -622,6 +633,7 @@ def authenticated_pr_scope_revalidation_history(
             "repository": repository,
             "governing_issue": governing_issue,
             "contract_source": contract_source,
+            "contract_lane": contract_lane,
             "base_ref": base_ref,
             "head_repository": head_repo,
             "head_ref": head_ref,
@@ -638,6 +650,7 @@ def authenticated_pr_scope_revalidation_history(
         ).hexdigest(),
         "governing_issue": governing_issue,
         "contract_source": contract_source,
+        "contract_lane": contract_lane,
         "bounded_follow_up_issues": bounded_follow_up_issues,
         "bounded_follow_up_routes": bounded_follow_up_routes,
         "candidate_head_sha": head_sha,
@@ -743,13 +756,15 @@ def _github_repository_from_origin() -> str | None:
     return match.group(1) if match else None
 
 
-def _is_issue_free_pr_contract(body: object) -> bool:
+def _issue_free_pr_contract_lane(body: object) -> str | None:
     if (
         not isinstance(body, str)
+        or UNSUPPORTED_CONTRACT_LINE_SEPARATOR.search(body)
         or GOVERNING_ISSUE_ATTEMPT.search(body)
         or has_closing_issue_attempt(body)
+        or NEUTRALIZED_CLOSING_ATTEMPT.search(body)
     ):
-        return False
+        return None
     direct_repair = DIRECT_REPAIR_SECTION.search(body)
     has_direct_repair_contract = bool(
         direct_repair
@@ -759,15 +774,23 @@ def _is_issue_free_pr_contract(body: object) -> bool:
         and DIRECT_REPAIR_ISSUE.search(direct_repair.group(0))
     )
     if direct_repair and not has_direct_repair_contract:
-        return False
-    classifiers = len(ISSUE_FREE_LANE.findall(body)) + has_direct_repair_contract
-    return (
-        classifiers == 1
-        and resolve_pr_contract_final_review_rounds(body).satisfied
-        and resolve_builderops_routing_status(
+        return None
+    lane_matches = ISSUE_FREE_LANE.findall(body)
+    classifiers = len(lane_matches) + has_direct_repair_contract
+    if (
+        classifiers != 1
+        or not resolve_pr_contract_final_review_rounds(body).satisfied
+        or not resolve_builderops_routing_status(
             body, has_issue_authority=False
         ).satisfied
-    )
+    ):
+        return None
+    if has_direct_repair_contract:
+        return "direct-repair"
+    return {
+        "docs authoring": "docs-authoring",
+        "governance": "governance",
+    }[lane_matches[0].lower()]
 
 
 def _canonical_contract_body(body: str) -> str:
@@ -801,6 +824,18 @@ def _git_is_strict_ancestor(ancestor_sha: object, candidate_sha: object) -> bool
         return False
     completed = subprocess.run(
         ["git", "merge-base", "--is-ancestor", ancestor_sha, candidate_sha],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return completed.returncode == 0
+
+
+def _git_is_ancestor(ancestor_ref: object, candidate_sha: object) -> bool:
+    if not isinstance(ancestor_ref, str) or not isinstance(candidate_sha, str):
+        return False
+    completed = subprocess.run(
+        ["git", "merge-base", "--is-ancestor", ancestor_ref, candidate_sha],
         capture_output=True,
         text=True,
         check=False,
@@ -868,6 +903,8 @@ def _git_patch_identity(
 def _git_allows_pr_update(
     live_head_sha: object, candidate_sha: object, base_ref: object
 ) -> bool:
+    if not _git_is_ancestor(base_ref, candidate_sha):
+        return False
     if _git_is_strict_ancestor(live_head_sha, candidate_sha):
         return True
     if live_head_sha == candidate_sha:
@@ -1311,6 +1348,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 head_sha=evidence.head_sha,
                 expected_base_ref=publication_base_ref,
                 expected_head_ref=current_branch_ref,
+                expected_lane=args.lane,
                 follow_up_issue_numbers=_follow_up_issue_numbers(receipt),
             )
             if not _git_allows_pr_update(
