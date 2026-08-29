@@ -335,6 +335,9 @@ case "$*" in
   *"/api/health"*) printf '{"ok":true,"required_ok":true,"version":{"git_sha":"%s"},"checks":{}}\\n' "${FAKE_HEALTH_VERSION_SHA:-$FAKE_SHA}" ;;
   *"/healthz"*)
     if [ "${FAKE_API_LIVENESS:-pass}" = "fail" ]; then
+      if [ -n "${FAKE_REMOVE_SETTINGS_REBIND_RECEIPT:-}" ]; then
+        rm -f -- "${FAKE_REMOVE_SETTINGS_REBIND_RECEIPT}"
+      fi
       exit 22
     fi
     printf '{"ok":true}\\n'
@@ -507,6 +510,114 @@ def _run_rollback(
     )
 
 
+def _settings_rebind_unsafe_and_safe_heads(root: Path) -> tuple[str, str]:
+    """Create an abandoned module-only predecessor and one attested successor."""
+
+    module_path = root / "app/instance/settings_rebind.py"
+    module_path.write_text(
+        '"""Unsafe predecessor: module presence was not compatibility proof."""\n',
+        encoding="utf-8",
+    )
+    subprocess.run(
+        ["git", "add", "app/instance/settings_rebind.py"],
+        cwd=root,
+        check=True,
+    )
+    subprocess.run(
+        ["git", "commit", "-qm", "fixture unsafe settings predecessor"],
+        cwd=root,
+        check=True,
+    )
+    unsafe_sha = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=root, text=True
+    ).strip()
+
+    shutil.copy2(REPO_ROOT / "app/instance/settings_rebind.py", module_path)
+    capability_path = root / "app/instance/settings_rebind_runtime_capability.json"
+    shutil.copy2(
+        REPO_ROOT / "app/instance/settings_rebind_runtime_capability.json",
+        capability_path,
+    )
+    subprocess.run(
+        [
+            "git",
+            "add",
+            "app/instance/settings_rebind.py",
+            "app/instance/settings_rebind_runtime_capability.json",
+        ],
+        cwd=root,
+        check=True,
+    )
+    subprocess.run(
+        ["git", "commit", "-qm", "fixture attested settings runtime"],
+        cwd=root,
+        check=True,
+    )
+    safe_sha = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=root, text=True
+    ).strip()
+    return unsafe_sha, safe_sha
+
+
+def _prefloor_and_preattestation_floor_heads(
+    root: Path,
+) -> tuple[str, str]:
+    """Materialize a self-contained pre-floor -> pre-attestation transition."""
+
+    runtime_path = root / "app/instance/runtime.py"
+    module_path = root / "app/instance/settings_rebind.py"
+    capability_path = root / "app/instance/settings_rebind_runtime_capability.json"
+
+    runtime_path.write_text(
+        "# Runtime before the dormant settings-rebind installer.\n",
+        encoding="utf-8",
+    )
+    module_path.unlink(missing_ok=True)
+    capability_path.unlink(missing_ok=True)
+    subprocess.run(
+        ["git", "add", "-A", "app/instance"],
+        cwd=root,
+        check=True,
+    )
+    subprocess.run(
+        ["git", "commit", "-qm", "fixture pre-floor runtime"],
+        cwd=root,
+        check=True,
+    )
+    prefloor_sha = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=root, text=True
+    ).strip()
+
+    runtime_path.write_text(
+        "# Runtime with settings-rebind-install-dormant support.\n",
+        encoding="utf-8",
+    )
+    module_path.write_text(
+        "# Dormant settings-rebind module before capability attestation.\n",
+        encoding="utf-8",
+    )
+    capability_path.unlink(missing_ok=True)
+    subprocess.run(
+        ["git", "add", "-A", "app/instance"],
+        cwd=root,
+        check=True,
+    )
+    subprocess.run(
+        [
+            "git",
+            "commit",
+            "-qm",
+            "fixture pre-attestation floor runtime",
+        ],
+        cwd=root,
+        check=True,
+    )
+    floor_sha = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=root, text=True
+    ).strip()
+    return prefloor_sha, floor_sha
+
+
 def test_archive_preflight_blocks_deploy_but_never_gates_rollback(tmp_path: Path) -> None:
     root, env, sha = _deploy_harness(tmp_path)
     pin_path = root / "config/deploy/dev.env"
@@ -525,6 +636,159 @@ def test_archive_preflight_blocks_deploy_but_never_gates_rollback(tmp_path: Path
     rollback = _run_rollback(root, env, sha)
     assert rollback.returncode == 0, rollback.stdout + rollback.stderr
     assert not any(event.startswith("archive-preflight") for event in _deploy_events(env))
+
+
+def test_pending_settings_rebind_floor_blocks_older_rollback_before_compose(
+    tmp_path: Path,
+) -> None:
+    root, env, _ = _deploy_harness(tmp_path)
+    unsafe_sha, safe_sha = _settings_rebind_unsafe_and_safe_heads(root)
+    pin_path = root / "config/deploy/dev.env"
+    pin_path.write_text(
+        "APP_IMAGE_REPOSITORY=example.invalid/pkm-app\n" f"APP_IMAGE_TAG={safe_sha}\n",
+        encoding="utf-8",
+    )
+    ownership_root = Path(env["INSTANCE_OWNERSHIP_HOST_STATE_DIR"])
+    ownership_root.mkdir(mode=0o700)
+    receipt = ownership_root / "settings-rebind-runtime-floor-dev.json"
+    receipt.write_text(
+        json.dumps(
+            {
+                "schema": "agentic-pkm.settings-rebind-runtime-floor.v1",
+                "channel": "dev",
+                "phase": "pending",
+                "minimum_settings_rebind_runtime": "1",
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    receipt.chmod(0o600)
+
+    result = _run_rollback(root, env, unsafe_sha)
+
+    assert result.returncode == 78
+    assert "settings rebind floor installation is pending" in result.stderr
+    assert not Path(env["FAKE_DEPLOY_EVENT_LOG"]).exists()
+
+
+def test_installed_settings_floor_routes_module_only_predecessor_to_legacy_guard(
+    tmp_path: Path,
+) -> None:
+    root, env, _ = _deploy_harness(tmp_path)
+    unsafe_sha, safe_sha = _settings_rebind_unsafe_and_safe_heads(root)
+    (root / "config/deploy/dev.env").write_text(
+        "APP_IMAGE_REPOSITORY=example.invalid/pkm-app\n"
+        f"APP_IMAGE_TAG={safe_sha}\n",
+        encoding="utf-8",
+    )
+    ownership_root = Path(env["INSTANCE_OWNERSHIP_HOST_STATE_DIR"])
+    ownership_root.mkdir(mode=0o700)
+    receipt = ownership_root / "settings-rebind-runtime-floor-dev.json"
+    receipt.write_text(
+        json.dumps(
+            {
+                "schema": "agentic-pkm.settings-rebind-runtime-floor.v1",
+                "channel": "dev",
+                "phase": "installed",
+                "minimum_settings_rebind_runtime": "1",
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    receipt.chmod(0o600)
+
+    result = _run_rollback(root, env, unsafe_sha)
+
+    assert result.returncode == 78
+    assert "scalar rollback requires SCALAR_ROLLBACK_VAULT_BINDING_ID" in result.stderr
+    assert not Path(env["FAKE_DEPLOY_EVENT_LOG"]).exists()
+
+
+def test_absent_settings_floor_receipt_blocks_module_only_predecessor(
+    tmp_path: Path,
+) -> None:
+    root, env, _ = _deploy_harness(tmp_path)
+    unsafe_sha, safe_sha = _settings_rebind_unsafe_and_safe_heads(root)
+    (root / "config/deploy/dev.env").write_text(
+        "APP_IMAGE_REPOSITORY=example.invalid/pkm-app\n"
+        f"APP_IMAGE_TAG={safe_sha}\n",
+        encoding="utf-8",
+    )
+
+    result = _run_rollback(root, env, unsafe_sha)
+
+    assert result.returncode == 78
+    assert "settings rebind runtime floor receipt is absent" in result.stderr
+    assert not Path(env["FAKE_DEPLOY_EVENT_LOG"]).exists()
+
+
+def test_absent_receipt_blocks_preattestation_floor_to_prefloor_rollback(
+    tmp_path: Path,
+) -> None:
+    root, env, _ = _deploy_harness(tmp_path)
+    prefloor_sha, floor_sha = _prefloor_and_preattestation_floor_heads(
+        root
+    )
+    (root / "config/deploy/dev.env").write_text(
+        "APP_IMAGE_REPOSITORY=example.invalid/pkm-app\n"
+        f"APP_IMAGE_TAG={floor_sha}\n",
+        encoding="utf-8",
+    )
+
+    result = _run_rollback(root, env, prefloor_sha)
+
+    assert result.returncode == 78
+    assert "settings rebind runtime floor receipt is absent" in result.stderr
+    assert not Path(env["FAKE_DEPLOY_EVENT_LOG"]).exists()
+
+
+def test_floor_capability_inspection_failure_blocks_manual_transition_rollback(
+    tmp_path: Path,
+) -> None:
+    root, env, _ = _deploy_harness(tmp_path)
+    prefloor_sha, floor_sha = _prefloor_and_preattestation_floor_heads(
+        root
+    )
+    (root / "config/deploy/dev.env").write_text(
+        "APP_IMAGE_REPOSITORY=example.invalid/pkm-app\n"
+        f"APP_IMAGE_TAG={floor_sha}\n",
+        encoding="utf-8",
+    )
+    env["FAKE_GIT_FAIL_MATCH"] = f"ls-tree -r --name-only {floor_sha}"
+    env["FAKE_GIT_FAIL_RC"] = "87"
+
+    result = _run_rollback(root, env, prefloor_sha)
+
+    assert result.returncode == 87
+    assert "floor capability inspection failed for current" in result.stderr
+    assert not Path(env["FAKE_DEPLOY_EVENT_LOG"]).exists()
+
+
+def test_malformed_settings_rebind_floor_receipt_blocks_rollback_before_compose(
+    tmp_path: Path,
+) -> None:
+    root, env, sha = _deploy_harness(tmp_path)
+    (root / "config/deploy/dev.env").write_text(
+        "APP_IMAGE_REPOSITORY=example.invalid/pkm-app\n" f"APP_IMAGE_TAG={sha}\n",
+        encoding="utf-8",
+    )
+    ownership_root = Path(env["INSTANCE_OWNERSHIP_HOST_STATE_DIR"])
+    ownership_root.mkdir(mode=0o700)
+    receipt = ownership_root / "settings-rebind-runtime-floor-dev.json"
+    receipt.write_text("{}\n", encoding="utf-8")
+    receipt.chmod(0o600)
+
+    result = _run_rollback(root, env, sha)
+
+    assert result.returncode != 0
+    assert "settings rebind runtime floor receipt is invalid" in result.stderr
+    assert not Path(env["FAKE_DEPLOY_EVENT_LOG"]).exists()
 
 
 def test_prod_archive_preflight_precedes_keychain_lookup(tmp_path: Path) -> None:
@@ -1266,11 +1530,12 @@ def test_unacknowledged_deploy_keeps_strict_compose_startup(tmp_path: Path) -> N
     assert not any("--no-deps companion-ui" in event for event in events)
 
 
-def test_acknowledged_embedding_cutover_liveness_failure_rolls_back_candidate(
+def test_acknowledged_embedding_cutover_liveness_failure_retains_floored_candidate(
     tmp_path: Path,
 ) -> None:
-    root, env, sha = _deploy_harness(tmp_path)
-    previous_sha = "1" * 40
+    root, env, _ = _deploy_harness(tmp_path)
+    previous_sha, sha = _settings_rebind_unsafe_and_safe_heads(root)
+    env["FAKE_SHA"] = sha
     pin_path = root / "config/deploy/dev.env"
     pin_path.write_text(
         "APP_IMAGE_REPOSITORY=example.invalid/pkm-app\n" f"APP_IMAGE_TAG={previous_sha}\n",
@@ -1282,13 +1547,14 @@ def test_acknowledged_embedding_cutover_liveness_failure_rolls_back_candidate(
 
     assert result.returncode == 1
     assert "service recreate/liveness gate failed" in result.stderr
-    assert f"APP_IMAGE_TAG={previous_sha}" in pin_path.read_text(encoding="utf-8")
+    assert f"APP_IMAGE_TAG={sha}" in pin_path.read_text(encoding="utf-8")
+    assert "settings rebind floor is installed" in result.stderr
     events = _deploy_events(env)
     assert any(
         event.endswith("up -d --force-recreate api worker watcher heimdal-capture-watch")
         for event in events
     )
-    assert any(
+    assert not any(
         event.endswith(
             "up -d --force-recreate api worker watcher heimdal-capture-watch companion-ui"
         )
@@ -1296,11 +1562,115 @@ def test_acknowledged_embedding_cutover_liveness_failure_rolls_back_candidate(
     )
 
 
-def test_acknowledged_embedding_cutover_gateway_failure_rolls_back_candidate(
+def test_missing_settings_floor_receipt_never_auto_restarts_module_only_predecessor(
     tmp_path: Path,
 ) -> None:
-    root, env, sha = _deploy_harness(tmp_path)
-    previous_sha = "2" * 40
+    root, env, _ = _deploy_harness(tmp_path)
+    previous_sha, sha = _settings_rebind_unsafe_and_safe_heads(root)
+    env["FAKE_SHA"] = sha
+    pin_path = root / "config/deploy/dev.env"
+    pin_path.write_text(
+        "APP_IMAGE_REPOSITORY=example.invalid/pkm-app\n"
+        f"APP_IMAGE_TAG={previous_sha}\n",
+        encoding="utf-8",
+    )
+    receipt = (
+        Path(env["INSTANCE_OWNERSHIP_HOST_STATE_DIR"])
+        / "settings-rebind-runtime-floor-dev.json"
+    )
+    env["FAKE_REMOVE_SETTINGS_REBIND_RECEIPT"] = str(receipt)
+    env["FAKE_API_LIVENESS"] = "fail"
+
+    result = _run_deploy(root, env, sha, "--ack-embedding-rebuild-required")
+
+    assert result.returncode == 1
+    assert not receipt.exists()
+    assert "settings rebind floor receipt is absent" in result.stderr
+    assert f"APP_IMAGE_TAG={sha}" in pin_path.read_text(encoding="utf-8")
+    strict_recreates = [
+        event
+        for event in _deploy_events(env)
+        if event.endswith(
+            "up -d --force-recreate api worker watcher heimdal-capture-watch companion-ui"
+        )
+    ]
+    assert strict_recreates == []
+
+
+def test_missing_receipt_never_auto_rolls_floor_candidate_back_to_prefloor(
+    tmp_path: Path,
+) -> None:
+    root, env, _ = _deploy_harness(tmp_path)
+    previous_sha, sha = _prefloor_and_preattestation_floor_heads(root)
+    env["FAKE_SHA"] = sha
+    pin_path = root / "config/deploy/dev.env"
+    pin_path.write_text(
+        "APP_IMAGE_REPOSITORY=example.invalid/pkm-app\n"
+        f"APP_IMAGE_TAG={previous_sha}\n",
+        encoding="utf-8",
+    )
+    receipt = (
+        Path(env["INSTANCE_OWNERSHIP_HOST_STATE_DIR"])
+        / "settings-rebind-runtime-floor-dev.json"
+    )
+    env["FAKE_REMOVE_SETTINGS_REBIND_RECEIPT"] = str(receipt)
+    env["FAKE_API_LIVENESS"] = "fail"
+
+    result = _run_deploy(root, env, sha, "--ack-embedding-rebuild-required")
+
+    assert result.returncode == 1
+    assert not receipt.exists()
+    assert "settings rebind floor receipt is absent" in result.stderr
+    assert f"APP_IMAGE_TAG={sha}" in pin_path.read_text(encoding="utf-8")
+    assert not any(
+        event.endswith(
+            "up -d --force-recreate api worker watcher heimdal-capture-watch companion-ui"
+        )
+        for event in _deploy_events(env)
+    )
+
+
+def test_floor_capability_inspection_failure_retains_deploy_candidate(
+    tmp_path: Path,
+) -> None:
+    root, env, _ = _deploy_harness(tmp_path)
+    previous_sha, sha = _prefloor_and_preattestation_floor_heads(root)
+    env["FAKE_SHA"] = sha
+    pin_path = root / "config/deploy/dev.env"
+    pin_path.write_text(
+        "APP_IMAGE_REPOSITORY=example.invalid/pkm-app\n"
+        f"APP_IMAGE_TAG={previous_sha}\n",
+        encoding="utf-8",
+    )
+    receipt = (
+        Path(env["INSTANCE_OWNERSHIP_HOST_STATE_DIR"])
+        / "settings-rebind-runtime-floor-dev.json"
+    )
+    env["FAKE_REMOVE_SETTINGS_REBIND_RECEIPT"] = str(receipt)
+    env["FAKE_API_LIVENESS"] = "fail"
+    env["FAKE_GIT_FAIL_MATCH"] = f"ls-tree -r --name-only {sha}"
+    env["FAKE_GIT_FAIL_RC"] = "87"
+
+    result = _run_deploy(root, env, sha, "--ack-embedding-rebuild-required")
+
+    assert result.returncode == 1
+    assert not receipt.exists()
+    assert "floor capability inspection failed for the target (status 87)" in result.stderr
+    assert f"APP_IMAGE_TAG={sha}" in pin_path.read_text(encoding="utf-8")
+    assert not any(
+        event.endswith(
+            "up -d --force-recreate api worker watcher heimdal-capture-watch companion-ui"
+        )
+        for event in _deploy_events(env)
+    )
+
+
+def test_acknowledged_embedding_cutover_gateway_failure_retains_floored_candidate(
+    tmp_path: Path,
+) -> None:
+    root, env, _ = _deploy_harness(tmp_path)
+    previous_sha, sha = _settings_rebind_unsafe_and_safe_heads(root)
+    env["FAKE_SHA"] = sha
     pin_path = root / "config/deploy/dev.env"
     pin_path.write_text(
         "APP_IMAGE_REPOSITORY=example.invalid/pkm-app\n" f"APP_IMAGE_TAG={previous_sha}\n",
@@ -1312,10 +1682,11 @@ def test_acknowledged_embedding_cutover_gateway_failure_rolls_back_candidate(
 
     assert result.returncode == 24
     assert "service recreate/liveness gate failed" in result.stderr
-    assert f"APP_IMAGE_TAG={previous_sha}" in pin_path.read_text(encoding="utf-8")
+    assert f"APP_IMAGE_TAG={sha}" in pin_path.read_text(encoding="utf-8")
+    assert "settings rebind floor is installed" in result.stderr
     events = _deploy_events(env)
     assert any("--no-deps companion-ui" in event for event in events)
-    assert any(
+    assert not any(
         event.endswith(
             "up -d --force-recreate api worker watcher heimdal-capture-watch companion-ui"
         )

@@ -105,23 +105,23 @@ deliveries precisely because production initiation stays fail-closed until C.
 
 ## Acceptance Criteria
 
-- [ ] **SETTINGS-05A:** API and watcher startup use the production protected-store resolver to read
+- [x] **SETTINGS-05A:** API and watcher startup use the production protected-store resolver to read
       the same complete `settings_rebind.v1` revision; atomic write/restart preserves stable binding
       IDs, monotonic desired/applied revisions, phase, lifecycle posture, and checksum.
   - Verify: `tests/integration/test_settings_rebind_record.py::test_api_and_watcher_startup_share_one_dormant_rebind_revision`
-- [ ] **SETTINGS-05A:** Interrupted record writes and every persisted phase recover through the
+- [x] **SETTINGS-05A:** Interrupted record writes and every persisted phase recover through the
       production store/startup path to the last complete revision, never a guessed binding or partial
       record; invalid checksum/revision fails before watcher root resolution.
   - Verify: `tests/integration/test_settings_rebind_record.py::test_production_startup_recovers_every_dormant_record_phase_fail_closed`
-- [ ] **SETTINGS-05A:** Init/bootstrap, migration, no-lifecycle setup, and runtime fixtures produce the
+- [x] **SETTINGS-05A:** Init/bootstrap, migration, no-lifecycle setup, and runtime fixtures produce the
       same current schema, while production picker/API and direct initiation calls remain sealed and
       cannot change selection or watcher behavior before SETTINGS-05C.
   - Verify: `tests/architecture/test_settings_rebind_producers.py::test_all_producers_match_production_rebind_schema_and_activation_seal`
-- [ ] **SETTINGS-05A:** The rollout records `minimum_settings_rebind_runtime=1` before the first
+- [x] **SETTINGS-05A:** The rollout records `minimum_settings_rebind_runtime=1` before the first
       authoritative v1 record; host-side and process startup guards reject incompatible API/watcher
       capability before protected-state access or root resolution.
   - Verify: `tests/ops/test_settings_rebind_runtime_floor.py::test_rebind_floor_blocks_incompatible_api_and_watcher_before_start`
-- [ ] **SETTINGS-05A:** Every CLI, bootstrap/reconciliation, compiler/delta, fixture, and direct
+- [x] **SETTINGS-05A:** Every CLI, bootstrap/reconciliation, compiler/delta, fixture, and direct
       store/manager producer is migrated in the same slice and fails before protected-state mutation
       when it cannot preserve the v1 floor and revision.
   - Verify: `tests/ops/test_settings_rebind_runtime_floor.py::test_rebind_floor_blocks_every_legacy_writer_after_cutover`

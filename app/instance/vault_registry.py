@@ -31,6 +31,12 @@ from app.instance.filesystem_identity import (
     same_filesystem_root,
 )
 from app.receipts.settings_write import emit_settings_write_receipts_for_changes
+from app.instance.settings_rebind import (
+    MINIMUM_SETTINGS_REBIND_RUNTIME,
+    MINIMUM_SETTINGS_REBIND_RUNTIME_KEY,
+    SettingsRebindRecord,
+    provisional_binding_id,
+)
 
 if TYPE_CHECKING:
     from app.instance.runtime import InstanceRegistryRuntime
@@ -387,6 +393,158 @@ class VaultRegistryStore:
             if not self.path.exists():
                 return self._restore_or_initialize_missing_locked()
             return self._read_current_locked(recover=True)
+
+    def install_settings_rebind_dormant(
+        self,
+        *,
+        binding_id: str | None = None,
+        _capability: _StorageMutationCapability | None = None,
+    ) -> RegistrySnapshot:
+        """Install the complete dormant record and its runtime floor atomically."""
+
+        _require_storage_mutation_capability(_capability)
+        requested_binding = _optional_str(binding_id)
+        with self._locked():
+            self._assert_no_scalar_rollback_session_locked()
+            current = (
+                self._read_current_locked(recover=True)
+                if self.path.exists()
+                else self._restore_or_initialize_missing_locked()
+            )
+            floors = current.extensions.get("runtimeFloors") or {}
+            if not isinstance(floors, dict):
+                raise RegistryError("runtime floors are invalid")
+            existing_floor = _optional_str(
+                floors.get(MINIMUM_SETTINGS_REBIND_RUNTIME_KEY)
+            )
+            if existing_floor is not None:
+                if existing_floor != MINIMUM_SETTINGS_REBIND_RUNTIME:
+                    raise RegistryError("settings rebind runtime floor is incompatible")
+                installed = SettingsRebindRecord.from_payload(current.settings_rebind)
+                if requested_binding is not None and requested_binding not in {
+                    installed.prior_binding_id,
+                    installed.candidate_binding_id,
+                }:
+                    raise RegistryError(
+                        "installed settings rebind record does not match the requested binding"
+                    )
+                return current
+
+            provisional_binding: str | None = None
+            if current.settings_rebind is not None:
+                provisional_binding = provisional_binding_id(current.settings_rebind)
+            if (
+                requested_binding is not None
+                and provisional_binding is not None
+                and requested_binding != provisional_binding
+            ):
+                raise RegistryError("settings rebind provisional binding cannot be replaced")
+            selected_binding = (
+                provisional_binding
+                or requested_binding
+                or current.default_vault_binding_id
+            )
+            self._validate_settings_rebind_binding(current, selected_binding)
+            record = SettingsRebindRecord.dormant(
+                binding_id=selected_binding
+            ).as_payload()
+            extensions = copy.deepcopy(current.extensions)
+            next_floors = copy.deepcopy(floors)
+            next_floors[MINIMUM_SETTINGS_REBIND_RUNTIME_KEY] = (
+                MINIMUM_SETTINGS_REBIND_RUNTIME
+            )
+            extensions["runtimeFloors"] = next_floors
+            next_revision = current.revision + 1
+            if current.authority == REGISTRY_AUTHORITY_ACTIVE:
+                scalar_floor = extensions.get("scalarRollback")
+                if not isinstance(scalar_floor, dict):
+                    raise RegistryError("active registry scalar rollback floor is invalid")
+                extensions["scalarRollback"] = {
+                    **scalar_floor,
+                    "forkRegistryRevision": next_revision,
+                }
+            updated = replace(
+                current,
+                revision=next_revision,
+                settings_rebind=record,
+                extensions=extensions,
+            )
+            self._write_locked(updated)
+            return updated
+
+    def set_settings_rebind_state(
+        self,
+        payload: Mapping[str, object],
+        *,
+        expected_revision: int | None = None,
+        _capability: _StorageMutationCapability | None = None,
+    ) -> RegistrySnapshot:
+        """Commit one checksum-valid monotonic rebind state generation."""
+
+        _require_storage_mutation_capability(_capability)
+        requested = SettingsRebindRecord.from_payload(dict(payload))
+        with self._locked():
+            self._assert_no_scalar_rollback_session_locked()
+            current = self._read_current_locked(recover=True)
+            self._assert_revision(current, expected_revision)
+            floors = current.extensions.get("runtimeFloors") or {}
+            if (
+                not isinstance(floors, dict)
+                or floors.get(MINIMUM_SETTINGS_REBIND_RUNTIME_KEY)
+                != MINIMUM_SETTINGS_REBIND_RUNTIME
+            ):
+                raise RegistryError("settings rebind runtime floor is not installed")
+            existing = SettingsRebindRecord.from_payload(current.settings_rebind)
+            if (
+                requested.desired_revision < existing.desired_revision
+                or requested.applied_revision < existing.applied_revision
+            ):
+                raise RegistryError("settings rebind revisions must be monotonic")
+            if (
+                requested.desired_revision == existing.desired_revision
+                and requested.applied_revision == existing.applied_revision
+                and requested != existing
+            ):
+                raise RegistryError(
+                    "settings rebind state cannot change without a revision advance"
+                )
+            if requested == existing:
+                return current
+            self._validate_settings_rebind_binding(current, requested.prior_binding_id)
+            self._validate_settings_rebind_binding(
+                current, requested.candidate_binding_id
+            )
+            next_revision = current.revision + 1
+            extensions = copy.deepcopy(current.extensions)
+            if current.authority == REGISTRY_AUTHORITY_ACTIVE:
+                scalar_floor = extensions.get("scalarRollback")
+                if not isinstance(scalar_floor, dict):
+                    raise RegistryError("active registry scalar rollback floor is invalid")
+                extensions["scalarRollback"] = {
+                    **scalar_floor,
+                    "forkRegistryRevision": next_revision,
+                }
+            updated = replace(
+                current,
+                revision=next_revision,
+                settings_rebind=requested.as_payload(),
+                extensions=extensions,
+            )
+            self._write_locked(updated)
+            return updated
+
+    @staticmethod
+    def _validate_settings_rebind_binding(
+        snapshot: RegistrySnapshot,
+        binding_id: str | None,
+    ) -> None:
+        if binding_id is None:
+            return
+        if (
+            binding_id not in snapshot.registrations
+            and binding_id not in snapshot.removal_tombstones
+        ):
+            raise RegistryError("settings rebind record names an unknown binding")
 
     def require_no_scalar_rollback_session(self) -> None:
         """Fail current-runtime startup while an authenticated old image is live."""
@@ -954,11 +1112,32 @@ class VaultRegistryStore:
         current = self.load()
         self._assert_revision(current, expected_revision)
         extensions = copy.deepcopy(current.extensions)
+        next_runtime_floors = copy.deepcopy(dict(runtime_floors))
+        current_runtime_floors = current.extensions.get("runtimeFloors") or {}
+        if not isinstance(current_runtime_floors, dict):
+            raise RegistryError("runtime floors are invalid")
+        current_rebind_floor = current_runtime_floors.get(
+            MINIMUM_SETTINGS_REBIND_RUNTIME_KEY
+        )
+        incoming_rebind_floor = next_runtime_floors.get(
+            MINIMUM_SETTINGS_REBIND_RUNTIME_KEY
+        )
+        if current_rebind_floor is not None:
+            if (
+                incoming_rebind_floor is not None
+                and incoming_rebind_floor != current_rebind_floor
+            ):
+                raise RegistryError(
+                    "settings rebind runtime floor cannot be changed by a legacy extension writer"
+                )
+            next_runtime_floors[MINIMUM_SETTINGS_REBIND_RUNTIME_KEY] = (
+                current_rebind_floor
+            )
         extensions.update(
             {
                 "principalState": copy.deepcopy(dict(principal_state)),
                 "backgroundState": copy.deepcopy(dict(background_state)),
-                "runtimeFloors": copy.deepcopy(dict(runtime_floors)),
+                "runtimeFloors": next_runtime_floors,
             }
         )
         return self.commit_state(
@@ -1871,6 +2050,39 @@ class VaultRegistryStore:
         settings_rebind = frontmatter.get("settingsRebind")
         if settings_rebind is not None and not isinstance(settings_rebind, dict):
             raise RegistryError("settingsRebind must be a mapping")
+        runtime_floors = extensions.get("runtimeFloors") or {}
+        if not isinstance(runtime_floors, dict):
+            raise RegistryError("runtime floors are invalid")
+        settings_floor = _optional_str(
+            runtime_floors.get(MINIMUM_SETTINGS_REBIND_RUNTIME_KEY)
+        )
+        if settings_floor is None:
+            if settings_rebind is not None:
+                if "schemaRevision" in settings_rebind:
+                    SettingsRebindRecord.from_payload(settings_rebind)
+                    raise RegistryError(
+                        "settings rebind record requires its runtime floor; "
+                        "settings rebind runtime floor must precede the record"
+                    )
+                provisional_binding_id(settings_rebind)
+        else:
+            if settings_floor != MINIMUM_SETTINGS_REBIND_RUNTIME:
+                raise RegistryError("settings rebind runtime floor is incompatible")
+            if settings_rebind is None or "schemaRevision" not in settings_rebind:
+                raise RegistryError(
+                    "settings rebind runtime floor requires its dormant record"
+                )
+            parsed_rebind = SettingsRebindRecord.from_payload(settings_rebind)
+            for rebind_binding_id in (
+                parsed_rebind.prior_binding_id,
+                parsed_rebind.candidate_binding_id,
+            ):
+                if (
+                    rebind_binding_id is not None
+                    and rebind_binding_id not in registrations
+                    and rebind_binding_id not in removal_tombstones
+                ):
+                    raise RegistryError("settings rebind record names an unknown binding")
         default_binding_id, default_provenance = _read_default_from_frontmatter(
             frontmatter, registrations, extensions
         )
@@ -1994,6 +2206,36 @@ class VaultRegistryStore:
             default_provenance = (
                 DEFAULT_PROVENANCE_LEGACY_MIGRATION if default_binding_id else None
             )
+        migrated_rebind: dict[str, Any] | None = None
+        if rewritten_rebind is not None:
+            # The legacy payload carried stable binding identity but no
+            # checksum/revision contract. Convert it during the same one-time
+            # schema migration transaction; never publish a provisional v1
+            # record without its compatibility floor.
+            try:
+                migrated_binding_id = provisional_binding_id(rewritten_rebind)
+            except RegistryError as exc:
+                raise RegistryMigrationError(str(exc)) from exc
+            migrated_rebind = SettingsRebindRecord.dormant(
+                binding_id=migrated_binding_id
+            ).as_payload()
+            runtime_floors = copy.deepcopy(extensions.get("runtimeFloors") or {})
+            if not isinstance(runtime_floors, dict):
+                raise RegistryMigrationError("legacy runtime floors must be a mapping")
+            existing_rebind_floor = runtime_floors.get(
+                MINIMUM_SETTINGS_REBIND_RUNTIME_KEY
+            )
+            if existing_rebind_floor not in (
+                None,
+                MINIMUM_SETTINGS_REBIND_RUNTIME,
+            ):
+                raise RegistryMigrationError(
+                    "legacy settings rebind runtime floor is incompatible"
+                )
+            runtime_floors[MINIMUM_SETTINGS_REBIND_RUNTIME_KEY] = (
+                MINIMUM_SETTINGS_REBIND_RUNTIME
+            )
+            extensions["runtimeFloors"] = runtime_floors
         # No separate "migration applied" marker: this branch runs only for an
         # `APP_LOCAL_SCHEMA` document, and the schema transition it performs is
         # itself the once-only guarantee. `default_vault_provenance` already
@@ -2005,7 +2247,7 @@ class VaultRegistryStore:
             app_install_id=app_install_id,
             last_active_vault_ref=last_active_vault_ref,
             registrations=registrations,
-            settings_rebind=rewritten_rebind,
+            settings_rebind=migrated_rebind,
             extensions=extensions,
             default_vault_binding_id=default_binding_id,
             default_vault_provenance=default_provenance,

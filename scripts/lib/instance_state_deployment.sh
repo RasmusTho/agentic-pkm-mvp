@@ -75,6 +75,62 @@ _instance_state_deployment_host_ownership_path() {
   esac
 }
 
+_write_settings_rebind_floor_receipt() {
+  local channel="${1:?channel required}"
+  local phase="${2:?phase required}"
+  local receipt_path
+  case "${phase}" in
+    pending|installed) ;;
+    *)
+      echo "instance state deployment: invalid settings rebind floor phase" >&2
+      return 78
+      ;;
+  esac
+  receipt_path="${INSTANCE_OWNERSHIP_HOST_STATE_DIR}/settings-rebind-runtime-floor-${channel}.json"
+  python3 - "${receipt_path}" "${channel}" "${phase}" <<'PY'
+import json
+import os
+import stat
+import sys
+import tempfile
+
+path, channel, phase = sys.argv[1:]
+directory = os.path.dirname(path)
+metadata = os.lstat(directory)
+if (
+    not stat.S_ISDIR(metadata.st_mode)
+    or metadata.st_uid != os.geteuid()
+    or stat.S_IMODE(metadata.st_mode) != 0o700
+):
+    raise SystemExit("settings rebind receipt directory is not private")
+payload = {
+    "schema": "agentic-pkm.settings-rebind-runtime-floor.v1",
+    "channel": channel,
+    "phase": phase,
+    "minimum_settings_rebind_runtime": "1",
+}
+descriptor, temporary = tempfile.mkstemp(
+    prefix=os.path.basename(path) + ".tmp.", dir=directory
+)
+try:
+    os.fchmod(descriptor, 0o600)
+    with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+        json.dump(payload, handle, sort_keys=True, separators=(",", ":"))
+        handle.write("\n")
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.replace(temporary, path)
+    directory_fd = os.open(directory, os.O_RDONLY)
+    try:
+        os.fsync(directory_fd)
+    finally:
+        os.close(directory_fd)
+finally:
+    if os.path.exists(temporary):
+        os.unlink(temporary)
+PY
+}
+
 # Explicit operator recovery for exactly one missing active ownership lease.
 # This is deliberately not called by deploy/start: the failed deployment must
 # already have left its host-global restart fence and proved quiescence in
@@ -564,6 +620,43 @@ prepare_instance_state_deployment() {
       --fence-plan "/app/instance-ownership/mvr05-fence-plan-${controller_pid}.json"
   inventory_rc=$?
   rm -f -- "${mvr05_fence_plan_host_path}"
+  if [ "${inventory_rc}" -ne 0 ]; then
+    _release_abandoned_instance_state_deployment_lease \
+      "${compose_function}" "${channel}" "${runtime_user}" \
+      "${controller_pid}" "${controller_start_token}"
+    return "${inventory_rc}"
+  fi
+
+  # SETTINGS-05A uses the same proved, writer-stopped deployment window but a
+  # dedicated producer: generic deployment finalization and older test fixtures
+  # must not silently acquire this compatibility floor.
+  # Write pending only after every caught pre-install check has succeeded and
+  # immediately before the installer may commit the floor. A crash or an
+  # ambiguous installer failure preserves pending; a proven earlier failure
+  # never creates compatibility evidence for a floor that could not exist.
+  _write_settings_rebind_floor_receipt "${channel}" pending
+  inventory_rc=$?
+  if [ "${inventory_rc}" -ne 0 ]; then
+    _release_abandoned_instance_state_deployment_lease \
+      "${compose_function}" "${channel}" "${runtime_user}" \
+      "${controller_pid}" "${controller_start_token}"
+    return "${inventory_rc}"
+  fi
+  "${compose_function}" run --rm --no-deps -T --user "${runtime_user}" instance-state-init \
+    python -m app.instance.runtime settings-rebind-install-dormant \
+      --channel "${channel}" \
+      --registry-path /app/instance-state/agentic-pkm/vault-registry.md \
+      --host-global-root /app/instance-ownership \
+      --quiescence-proof-path /app/instance-ownership/deployment-quiescence-proof.json
+  inventory_rc=$?
+  if [ "${inventory_rc}" -ne 0 ]; then
+    _release_abandoned_instance_state_deployment_lease \
+      "${compose_function}" "${channel}" "${runtime_user}" \
+      "${controller_pid}" "${controller_start_token}"
+    return "${inventory_rc}"
+  fi
+  _write_settings_rebind_floor_receipt "${channel}" installed
+  inventory_rc=$?
   if [ "${inventory_rc}" -ne 0 ]; then
     _release_abandoned_instance_state_deployment_lease \
       "${compose_function}" "${channel}" "${runtime_user}" \

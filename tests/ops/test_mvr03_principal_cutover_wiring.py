@@ -150,7 +150,7 @@ def _wrapper_run(
     python = fake_bin / "python3"
     python.write_text(
         "#!/usr/bin/env bash\n"
-        'if [ "${1:-}" = -c ]; then exec "$REAL_PYTHON" "$@"; fi\n'
+        'if [ "${1:-}" = -c ] || [ "${1:-}" = - ]; then exec "$REAL_PYTHON" "$@"; fi\n'
         'printf \'python:%s\\n\' "$*" >> "$EVENT_LOG"\n'
         'case " $* " in\n'
         "  *' produce-legacy-owners '*)\n"
@@ -177,7 +177,7 @@ def _wrapper_run(
         "      shift\n"
         "    done; exit 2 ;;\n"
         "esac\n"
-        "exit 2\n",
+        'exec "$REAL_PYTHON" "$@"\n',
         encoding="utf-8",
     )
     python.chmod(0o755)
@@ -202,7 +202,7 @@ def _wrapper_run(
     )
     harness.chmod(0o755)
     ownership_root = tmp_path / "instance-ownership"
-    ownership_root.mkdir()
+    ownership_root.mkdir(mode=0o700)
     env = {
         **os.environ,
         "EVENT_LOG": str(event_log),

@@ -54,6 +54,11 @@ from app.instance.local_operator_principal import (
     PRINCIPAL_RECORD_FILENAME,
     PrincipalPreflightError,
 )
+from app.instance.settings_rebind import (
+    MINIMUM_SETTINGS_REBIND_RUNTIME,
+    MINIMUM_SETTINGS_REBIND_RUNTIME_KEY,
+    SettingsRebindStore,
+)
 from app.instance.vault_registry import (
     AppLocalSettings,
     AppLocalSettingsStore,
@@ -142,6 +147,12 @@ class InstanceRegistryRuntime:
             OwnershipLedger(Path(host_global_root).resolve(strict=False)),
             initialize_layout=initialize_layout,
         )
+
+    def open_settings_rebind_store(self) -> SettingsRebindStore:
+        """Open the dormant record only after this image passes its floor."""
+
+        _require_runtime_floor(self.registry.load(), scalar_runtime=False)
+        return SettingsRebindStore(self.registry)
 
     def bootstrap_env_binding(
         self,
@@ -873,6 +884,18 @@ def _require_runtime_floor(snapshot: RegistrySnapshot, *, scalar_runtime: bool) 
             "minimum runtime principal blocks a credential-only scalar image; use a "
             "compatible roll-forward image instead of scalar rollback"
         )
+    settings_rebind_floor = str(
+        floors.get(MINIMUM_SETTINGS_REBIND_RUNTIME_KEY) or ""
+    ).strip()
+    if settings_rebind_floor:
+        if settings_rebind_floor != MINIMUM_SETTINGS_REBIND_RUNTIME:
+            raise CapabilityNotReadyError(
+                "settings rebind runtime floor blocks this API/watcher image before start"
+            )
+        if scalar_runtime:
+            raise CapabilityNotReadyError(
+                "settings rebind runtime floor blocks every legacy scalar writer"
+            )
 
 
 def _preflight_scalar_rollback(
@@ -3901,6 +3924,13 @@ def main(argv: list[str] | None = None) -> int:
     mvr05_floor.add_argument("--host-global-root", type=Path, required=True)
     mvr05_floor.add_argument("--quiescence-proof-path", type=Path, required=True)
     mvr05_floor.add_argument("--fence-plan", type=Path, required=True)
+    rebind_install = subparsers.add_parser("settings-rebind-install-dormant")
+    rebind_install.add_argument("--channel", required=True)
+    rebind_install.add_argument("--registry-path", type=Path, required=True)
+    rebind_install.add_argument("--host-global-root", type=Path, required=True)
+    rebind_install.add_argument(
+        "--quiescence-proof-path", type=Path, required=True
+    )
     for name in ("default-vault-get", "default-vault-set", "default-vault-clear"):
         command = subparsers.add_parser(name)
         command.add_argument("--registry-path", type=Path, required=True)
@@ -4027,6 +4057,41 @@ def main(argv: list[str] | None = None) -> int:
                     _capability=local_operator_storage_capability(),
                 )
         print(json.dumps({"ok": True, "registry_revision": result.revision}, sort_keys=True))
+        return 0
+    if args.command == "settings-rebind-install-dormant":
+        from app.instance.settings_rebind import _install_dormant_settings_rebind
+
+        layout = InstanceStateLayout(
+            root=args.registry_path.parent,
+            channel_id=args.channel,
+            registry_path=args.registry_path,
+        )
+        layout.require_existing()
+        with _deployment_admission_locked(args.host_global_root):
+            with _producer_transition_locked(layout):
+                proof = json.loads(
+                    args.quiescence_proof_path.read_text(encoding="utf-8")
+                )
+                _require_proved_deployment_lease(
+                    host_global_root=args.host_global_root,
+                    channel=args.channel,
+                    nonce=proof.get("nonce"),
+                )
+                record = _install_dormant_settings_rebind(
+                    VaultRegistryStore(args.registry_path),
+                    _capability=local_operator_storage_capability(),  # type: ignore[arg-type]
+                )
+        print(
+            json.dumps(
+                {
+                    "ok": True,
+                    "desired_revision": record.desired_revision,
+                    "applied_revision": record.applied_revision,
+                    "phase": record.phase,
+                },
+                sort_keys=True,
+            )
+        )
         return 0
     if args.command == "preflight":
         return _preflight_runtime(
