@@ -196,6 +196,8 @@ receipt preserves ordering evidence only; it does not replace hosted current-hea
 ```bash
 PR_LANE="<implementation|docs-authoring|governance|direct-repair>"
 TCD_RISK_SURFACES="<space-separated applicable surfaces, or empty>"
+PR_PUBLICATION_MODE="<new|existing>"
+PR_GITHUB_REPOSITORY="<owner/repository>"
 if [ "$PR_LANE" = "implementation" ] || [ "$PR_LANE" = "docs-authoring" ] || [ "$PR_LANE" = "governance" ] || [ "$PR_LANE" = "direct-repair" ]; then
   # Portable read loop, not `mapfile`/`readarray` (bash 4+ only) — macOS ships bash 3.2.
   review_gate_args=(--lane "$PR_LANE" --review-gate-complete)
@@ -208,6 +210,31 @@ if [ "$PR_LANE" = "implementation" ] || [ "$PR_LANE" = "docs-authoring" ] || [ "
   for risk_surface in $TCD_RISK_SURFACES; do
     review_gate_args+=(--risk-surface "$risk_surface")
   done
+  case "$PR_PUBLICATION_MODE" in
+    new)
+      : "${PR_GITHUB_REPOSITORY:?new PR publication requires owner/repository}"
+      review_gate_args+=(--publication-mode new --github-repository "$PR_GITHUB_REPOSITORY")
+      ;;
+    existing)
+      : "${PR_GITHUB_REPOSITORY:?existing PR publication requires owner/repository}"
+      : "${PR_NUMBER:?existing PR publication requires PR_NUMBER}"
+      : "${GOVERNING_ISSUE:?existing PR publication requires GOVERNING_ISSUE}"
+      review_gate_args+=(
+        --publication-mode existing
+        --pr-scope-revalidation
+        --github-repository "$PR_GITHUB_REPOSITORY"
+        --pr-number "$PR_NUMBER"
+        --governing-issue "$GOVERNING_ISSUE"
+      )
+      if [ -n "${CONTRACT_REVALIDATION_RECEIPT:-}" ]; then
+        review_gate_args+=(--contract-revalidation-receipt "$CONTRACT_REVALIDATION_RECEIPT")
+      fi
+      ;;
+    *)
+      echo "PR_PUBLICATION_MODE must be new or existing" >&2
+      exit 2
+      ;;
+  esac
   python3 scripts/review_before_ci_gate.py "${review_gate_args[@]}" || exit 1
 fi
 ```
@@ -216,6 +243,8 @@ Allowed risk-surface values are: auth, security, data, migration, concurrency, e
 credential-durability, and state-machine. After a multi-blocker or adjacent
 repeat finding in one mechanism, do not set `--review-gate-complete` again until the low-convergence
 circuit breaker in `verification-and-closure` has produced and reviewed a new convergence packet.
+
+Every publication invocation must set `PR_PUBLICATION_MODE` to `new` or `existing`; an omitted or other value fails before the gate runs. Apply `docs/development/AUTONOMOUS_REVIEW_REPAIR_GATE_CONTRACTS.md :: PR-Level Scope Revalidation Gate` through this shared gate before another expensive proof or push. A `new` publication authenticates that its branch has no open PR; an `existing` publication requires `--pr-scope-revalidation --github-repository <owner/repo> --pr-number <N> --governing-issue <N>` and, when two rejected rounds exist, `--contract-revalidation-receipt <path>`. The gate derives the complete current GitHub review history and protected finding IDs itself; never pass a caller-authored history, URL, actor, or partial finding list as authority.
 
 For any implementation, governance, or direct-repair lane with a declared high-risk surface, the
 executable order is mandatory and fail-closed:
