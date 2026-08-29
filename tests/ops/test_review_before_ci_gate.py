@@ -1170,6 +1170,52 @@ def test_issue_free_contract_accepts_ecmascript_only_whitespace(
     assert history["contract_lane"] == expected_lane
 
 
+@pytest.mark.parametrize(
+    ("routing_lines", "accepted"),
+    (
+        (
+            "\ufeff-\ufeffRecords/projections/receipts: none\n"
+            "\ufeff-\ufeffReason: routed",
+            True,
+        ),
+        (
+            "\x85-\x85Records/projections/receipts: none\n"
+            "\x85-\x85Reason: routed",
+            False,
+        ),
+        ("- Records/projections/receipts: \ufeff\n- Reason: \ufeff", False),
+        ("- Records/projections/receipts: \x85\n- Reason: \x85", True),
+    ),
+)
+def test_issue_free_builderops_routing_matches_ecmascript_whitespace(
+    routing_lines: str, accepted: bool
+) -> None:
+    responses, api = _live_pr_review_api()
+    responses.pop("repos/octo/repo/issues/4028")
+    pr = responses["repos/octo/repo/pulls/4029"]
+    assert isinstance(pr, dict)
+    pr["body"] = (
+        "## Change Lane\n- [x] Docs authoring lane\n\n"
+        "Final-Review-Rounds: 1\n\n## BuilderOps Routing\n"
+        f"{routing_lines}\n"
+    )
+
+    def invocation() -> Mapping[str, object]:
+        return authenticated_pr_scope_revalidation_history(
+            repository="octo/repo",
+            pr_number=4029,
+            governing_issue=None,
+            head_sha="a" * 40,
+            expected_lane="docs-authoring",
+            api=api,
+        )
+    if accepted:
+        assert invocation()["contract_lane"] == "docs-authoring"
+    else:
+        with pytest.raises(ReviewBeforeCiGateError, match="issue-free PR body"):
+            invocation()
+
+
 def test_current_branch_rejects_ambiguous_open_prs(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
