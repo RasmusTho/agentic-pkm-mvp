@@ -403,6 +403,51 @@ def test_operation_scoped_readback_fails_closed_on_corrupt_tail(
         emit_durable_settings_write_receipt_once(receipt)
 
 
+def test_receipt_queries_do_not_repair_unterminated_jsonl(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    outbox_path = tmp_path / "outbox.jsonl"
+    monkeypatch.setenv("INDEX_OUTBOX_PATH", str(outbox_path))
+    receipt = SettingsWriteReceipt(
+        key="settings.location",
+        value="settings",
+        surface="migration",
+        actor="operator",
+        timestamp="2026-08-29T00:00:00Z",
+        operation_id="read-only-query:0",
+    )
+    record = {
+        "event": SETTINGS_WRITE_RECEIPT,
+        "event_id": "read-only-query-event",
+        "payload": {
+            "key": receipt.key,
+            "value": receipt.value,
+            "old_value": receipt.old_value,
+            "new_value": receipt.new_value,
+            "file": receipt.file,
+            "surface": receipt.surface,
+            "actor": receipt.actor,
+            "timestamp": receipt.timestamp,
+            "is_runtime_gating": receipt.is_runtime_gating,
+            "operation_id": receipt.operation_id,
+            "vault_id": receipt.vault_id,
+            "local_instance_id": receipt.local_instance_id,
+        },
+    }
+    raw = json.dumps(record).encode("utf-8")
+    outbox_path.write_bytes(raw)
+    lock_path = outbox_path.with_name(f".{outbox_path.name}.append.lock")
+
+    from app.settings.migration import _transaction_receipt_is_durable
+
+    assert durable_settings_write_receipt_exists(receipt) is True
+    assert _transaction_receipt_is_durable(
+        {"receipt_key": receipt.key, "receipt_timestamp": receipt.timestamp}
+    ) is True
+    assert outbox_path.read_bytes() == raw
+    assert not lock_path.exists()
+
+
 def test_duplicate_exact_operation_receipts_fail_loud(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("INDEX_OUTBOX_PATH", str(tmp_path / "outbox.jsonl"))
     monkeypatch.setenv("STORE_BACKEND", "memory")

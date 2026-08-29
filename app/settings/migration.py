@@ -398,7 +398,7 @@ def _transaction_receipt_is_durable(marker: dict[str, object]) -> bool:
         return False
     expected_key = marker.get("receipt_key")
     expected_timestamp = marker.get("receipt_timestamp")
-    for record in reversed(read_jsonl_outbox_records(path)):
+    for record in reversed(read_jsonl_outbox_records(path, read_only=True)):
         payload = record.get("payload") if isinstance(record, dict) else None
         if not isinstance(payload, dict):
             continue

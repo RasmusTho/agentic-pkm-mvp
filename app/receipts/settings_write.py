@@ -177,7 +177,7 @@ def durable_settings_write_receipt_exists(receipt: SettingsWriteReceipt) -> bool
 
     operation_id_collision = False
     exact_match_count = 0
-    for record in read_jsonl_outbox_records(outbox_path):
+    for record in read_jsonl_outbox_records(outbox_path, read_only=True):
         if record.get("event") != SETTINGS_WRITE_RECEIPT:
             continue
         payload = record.get("payload")
