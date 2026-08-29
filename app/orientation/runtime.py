@@ -53,9 +53,17 @@ def build_orientation_frame(signals: OrientationSignals | None = None) -> Orient
     open_items: list[str] = []
     if queue and (queue.pending or 0) > 0:
         open_items.append(f"Worker queue pending runtime changes: {queue.pending}.")
-    if events and events.promote_created_total > events.promotion_executed_total:
-        remaining = events.promote_created_total - events.promotion_executed_total
+    promote_created_total = events.promote_created_total if events else None
+    promotion_executed_total = events.promotion_executed_total if events else None
+    if (
+        promote_created_total is not None
+        and promotion_executed_total is not None
+        and promote_created_total > promotion_executed_total
+    ):
+        remaining = promote_created_total - promotion_executed_total
         open_items.append(f"Promotion intents created but not executed: {remaining}.")
+    elif events and (promote_created_total is None or promotion_executed_total is None):
+        open_items.append("Promotion counters unavailable in current status snapshot.")
     if not open_items:
         open_items.append("No unresolved runtime loops detected in current snapshot.")
 

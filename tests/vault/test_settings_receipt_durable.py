@@ -24,15 +24,55 @@ from textwrap import dedent
 import pytest
 
 from app.events.types import SETTINGS_WRITE_RECEIPT
+from app.services.outbox import JsonlOutboxCorruptionError
 from app.receipts.settings_receipts import (
     SettingsReceiptQuery,
     query_settings_receipts,
 )
 from app.receipts.settings_write import (
+    _settings_receipt_lock_path,
     durable_settings_write_receipt_exists,
     emit_durable_settings_write_receipt_once,
     emit_settings_write_receipt,
 )
+
+
+def test_settings_receipt_aliases_share_once_only_lock(tmp_path: Path) -> None:
+    real_path = tmp_path / "outbox.jsonl"
+    alias_dir = tmp_path / "alias"
+    alias_dir.symlink_to(tmp_path, target_is_directory=True)
+
+    assert _settings_receipt_lock_path(real_path) == _settings_receipt_lock_path(
+        alias_dir / "outbox.jsonl"
+    )
+
+
+def test_settings_receipt_and_migration_readers_do_not_create_default_outbox(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("INDEX_OUTBOX_PATH", raising=False)
+
+    from app.events.outbox import default_outbox_path
+    from app.receipts.settings_receipts import _read_durable_jsonl_records
+    from app.settings.migration import _transaction_receipt_is_durable
+
+    outbox_path = default_outbox_path()
+    receipt = SettingsWriteReceipt(
+        key="settings.location",
+        value="settings",
+        surface="migration",
+        actor="operator",
+        operation_id="missing-default-read:0",
+    )
+
+    assert _read_durable_jsonl_records(outbox_path=None) is None
+    assert durable_settings_write_receipt_exists(receipt) is False
+    assert _transaction_receipt_is_durable(
+        {"receipt_key": receipt.key, "receipt_timestamp": receipt.timestamp}
+    ) is False
+    assert not outbox_path.exists()
+    assert not outbox_path.parent.exists()
 from app.settings import compiler
 from app.vault.app_local import AppLocalSettingsStore, KnownVaultRef
 from app.vault.manager import VaultManager
@@ -365,6 +405,75 @@ def test_operation_scoped_receipt_has_exact_durable_readback(
     emit_settings_write_receipt(different_payload, require_durable=True)
     with pytest.raises(RuntimeError, match="operation_id collision"):
         durable_settings_write_receipt_exists(receipt)
+
+
+def test_operation_scoped_readback_fails_closed_on_corrupt_tail(
+    tmp_path: Path, monkeypatch
+) -> None:
+    outbox_path = tmp_path / "outbox.jsonl"
+    monkeypatch.setenv("INDEX_OUTBOX_PATH", str(outbox_path))
+    monkeypatch.setenv("STORE_BACKEND", "memory")
+    receipt = SettingsWriteReceipt(
+        key="ingest.override.include_folders",
+        value=["Test"],
+        surface="uat-bootstrap",
+        actor="uat-seed",
+        operation_id="corrupt-tail-operation:0",
+    )
+
+    emit_settings_write_receipt(receipt, require_durable=True)
+    with outbox_path.open("ab") as handle:
+        handle.write(b"{malformed-json\n")
+
+    with pytest.raises(JsonlOutboxCorruptionError):
+        durable_settings_write_receipt_exists(receipt)
+    with pytest.raises(JsonlOutboxCorruptionError):
+        emit_durable_settings_write_receipt_once(receipt)
+
+
+def test_receipt_queries_do_not_repair_unterminated_jsonl(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    outbox_path = tmp_path / "outbox.jsonl"
+    monkeypatch.setenv("INDEX_OUTBOX_PATH", str(outbox_path))
+    receipt = SettingsWriteReceipt(
+        key="settings.location",
+        value="settings",
+        surface="migration",
+        actor="operator",
+        timestamp="2026-08-29T00:00:00Z",
+        operation_id="read-only-query:0",
+    )
+    record = {
+        "event": SETTINGS_WRITE_RECEIPT,
+        "event_id": "read-only-query-event",
+        "payload": {
+            "key": receipt.key,
+            "value": receipt.value,
+            "old_value": receipt.old_value,
+            "new_value": receipt.new_value,
+            "file": receipt.file,
+            "surface": receipt.surface,
+            "actor": receipt.actor,
+            "timestamp": receipt.timestamp,
+            "is_runtime_gating": receipt.is_runtime_gating,
+            "operation_id": receipt.operation_id,
+            "vault_id": receipt.vault_id,
+            "local_instance_id": receipt.local_instance_id,
+        },
+    }
+    raw = json.dumps(record).encode("utf-8")
+    outbox_path.write_bytes(raw)
+    lock_path = outbox_path.with_name(f".{outbox_path.name}.append.lock")
+
+    from app.settings.migration import _transaction_receipt_is_durable
+
+    assert durable_settings_write_receipt_exists(receipt) is True
+    assert _transaction_receipt_is_durable(
+        {"receipt_key": receipt.key, "receipt_timestamp": receipt.timestamp}
+    ) is True
+    assert outbox_path.read_bytes() == raw
+    assert not lock_path.exists()
 
 
 def test_duplicate_exact_operation_receipts_fail_loud(tmp_path: Path, monkeypatch) -> None:

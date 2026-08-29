@@ -41,6 +41,7 @@ FULL_SUITE_REASONS = (
 FULL_SUITE_EXACT = {
     # Shared CLI registration and path resolution affect many runtime
     # subsystems. Never narrow their coverage to a single feature owner.
+    "app/cli.py",
     "app/cli/__init__.py",
     "app/config/paths.py",
     # Canonical runtime DSN resolution. `app/db/db.py::_psycopg_dsn` (already a
@@ -479,6 +480,9 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
         "observability",
         (
             "app/observability/",
+            # Orientation is a derived status projection; preserve its
+            # unknown-on-corruption proof when its runtime adapter changes.
+            "app/orientation/runtime.py",
             "tests/observability/",
             "docs/OBSERVABILITY.md",
         ),
@@ -785,7 +789,17 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
     ),
     (
         "events_receipts",
-        ("app/events/", "app/receipts/", "docs/contracts/events/", "tests/events/", "tests/receipts/"),
+        (
+            "app/events/",
+            "app/receipts/",
+            # The diagnostic CLI and legacy producer are governed event
+            # outbox surfaces even though they predate the app/events/ tree.
+            "app/cli/events_doctor.py",
+            "app/outbox/legacy_events.py",
+            "docs/contracts/events/",
+            "tests/events/",
+            "tests/receipts/",
+        ),
         ("tests/events", "tests/receipts", "tests/contracts"),
     ),
     (

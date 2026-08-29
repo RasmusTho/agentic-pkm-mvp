@@ -6,6 +6,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from uuid import uuid4
 
+import pytest
+
 from app.knowledge import adapters as knowledge_adapters
 from app.knowledge.multiwriter import is_conflict_artifact
 from app.knowledge.write_ops import write_note_from_absolute
@@ -97,6 +99,340 @@ def test_run_watcher_tick_emits_event_when_no_changes(tmp_path: Path, monkeypatc
     if outbox.exists():
         outbox_payloads = [json.loads(line) for line in outbox.read_text(encoding="utf-8").splitlines() if line.strip()]
         assert not any(ev.get("event") == "watcher.run" for ev in outbox_payloads)
+
+
+def test_watcher_tick_calls_standing_questions_composition_after_ingest(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """The real vault-ingest caller must invoke SQ-03 followed by SQ-04."""
+    vault = tmp_path / "vault"
+    evidence = vault / "Inbox" / "evidence.md"
+    evidence.parent.mkdir(parents=True)
+    evidence.write_text(
+        "---\n"
+        "uuid: 00000000-0000-0000-0000-000000000001\n"
+        "scope: work\n"
+        "---\n\n"
+        "the test channel is isolated\n",
+        encoding="utf-8",
+    )
+    outbox = tmp_path / "events.jsonl"
+    calls: list[dict[str, object]] = []
+    monkeypatch.setenv("INDEX_OUTBOX_PATH", str(outbox))
+    monkeypatch.setenv("WATCHER_RUN_LOG_PATH", str(tmp_path / "watcher_run.jsonl"))
+    monkeypatch.setattr(
+        "app.watcher.vault_watcher.run_vault_alpha_ingest_paths",
+        lambda *_args, **_kwargs: SimpleNamespace(ingested=1, errors=0),
+    )
+
+    def standing_tick(**kwargs):
+        calls.append(kwargs)
+        return SimpleNamespace(
+            matching=SimpleNamespace(attached=1),
+            refresh=SimpleNamespace(
+                refresh_candidates=("sq-1",),
+                drafted=("sq-1",),
+                deferred_pending_review=(),
+            ),
+        )
+
+    monkeypatch.setattr(
+        "app.standing_questions.evidence_matching.run_standing_questions_tick",
+        standing_tick,
+    )
+
+    summary, _ = run_watcher_tick(
+        vault_root=vault,
+        snapshot_path=vault / ".state.json",
+        skip_panel=True,
+        emit_only=False,
+        dry_run=False,
+        max_notes=10,
+        force=False,
+        outbox_path=outbox,
+    )
+
+    assert len(calls) == 1
+    assert calls[0]["candidates"]
+    assert summary["standing_questions_matching_attached"] == 1
+    assert summary["standing_questions_drafted"] == 1
+
+
+def test_standing_question_inputs_exclude_question_path_aliases(tmp_path: Path) -> None:
+    vault = tmp_path / "vault"
+    question_path = vault / "questions" / "question-1.md"
+    question_path.parent.mkdir(parents=True)
+    question_path.write_text(
+        "---\nquestion_id: question-1\nstatus: open\nscope: work\ntext: A question\n---\n",
+        encoding="utf-8",
+    )
+
+    candidates, sources = watcher_module._standing_question_tick_inputs(
+        vault,
+        [vault / "notes" / ".." / "questions" / "question-1.md"],
+    )
+
+    assert candidates == []
+    assert sources == {}
+
+
+def test_watcher_retry_snapshot_is_restored_before_persist_crash(
+    tmp_path: Path, monkeypatch
+) -> None:
+    vault = tmp_path / "vault"
+    evidence = _write_note(
+        vault,
+        "Inbox/evidence.md",
+        "---\n"
+        "uuid: 00000000-0000-0000-0000-000000000001\n"
+        "scope: work\n"
+        "---\n\n"
+        "retry me\n",
+    )
+    snapshot = tmp_path / "state.json"
+    old_mtime = evidence.stat().st_mtime - 1
+    save_snapshot(snapshot, {"Inbox/evidence.md": old_mtime})
+    original_save = watcher_module.save_snapshot
+
+    def save_then_crash(path: Path, value: dict[str, float]) -> None:
+        original_save(path, value)
+        raise RuntimeError("crash after final snapshot attempt")
+
+    monkeypatch.setenv("WATCHER_RUN_LOG_PATH", str(tmp_path / "watcher.jsonl"))
+    monkeypatch.setattr(watcher_module, "save_snapshot", save_then_crash)
+    monkeypatch.setattr(
+        "app.standing_questions.evidence_matching.run_standing_questions_tick",
+        lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("temporary SQ outage")),
+    )
+
+    with pytest.raises(RuntimeError, match="crash after final snapshot attempt"):
+        run_watcher_tick(
+            vault_root=vault,
+            snapshot_path=snapshot,
+            skip_panel=True,
+            emit_only=False,
+            dry_run=False,
+            max_notes=10,
+            force=False,
+            outbox_path=tmp_path / "outbox.jsonl",
+        )
+
+    assert load_snapshot(snapshot)["Inbox/evidence.md"] == old_mtime
+
+
+def test_watcher_retries_standing_questions_failure_before_advancing_snapshot(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """A failed SQ delivery remains observable on the next unchanged tick."""
+    vault = tmp_path / "vault"
+    evidence = vault / "Inbox" / "evidence.md"
+    evidence.parent.mkdir(parents=True)
+    evidence.write_text(
+        "---\n"
+        "uuid: 00000000-0000-0000-0000-000000000002\n"
+        "scope: work\n"
+        "---\n\n"
+        "the retryable test evidence\n",
+        encoding="utf-8",
+    )
+    snapshot_path = vault / ".state.json"
+    outbox = tmp_path / "events.jsonl"
+    attempts: list[int] = []
+    monkeypatch.setenv("INDEX_OUTBOX_PATH", str(outbox))
+    monkeypatch.setenv("WATCHER_RUN_LOG_PATH", str(tmp_path / "watcher_run.jsonl"))
+    monkeypatch.setattr(
+        "app.watcher.vault_watcher.run_vault_alpha_ingest_paths",
+        lambda *_args, **_kwargs: SimpleNamespace(ingested=1, errors=0),
+    )
+
+    def standing_tick(**_kwargs):
+        attempts.append(1)
+        if len(attempts) == 1:
+            raise RuntimeError("temporary SQ outage")
+        return SimpleNamespace(
+            matching=SimpleNamespace(attached=1),
+            refresh=SimpleNamespace(
+                refresh_candidates=("sq-2",),
+                drafted=("sq-2",),
+                deferred_pending_review=(),
+                blocked=(),
+            ),
+        )
+
+    monkeypatch.setattr(
+        "app.standing_questions.evidence_matching.run_standing_questions_tick",
+        standing_tick,
+    )
+
+    first_summary, _ = run_watcher_tick(
+        vault_root=vault,
+        snapshot_path=snapshot_path,
+        skip_panel=True,
+        emit_only=False,
+        dry_run=False,
+        max_notes=10,
+        force=False,
+        outbox_path=outbox,
+    )
+
+    assert first_summary["standing_questions_tick_error"] == "temporary SQ outage"
+    assert "Inbox/evidence.md" not in load_snapshot(snapshot_path)
+
+    second_summary, _ = run_watcher_tick(
+        vault_root=vault,
+        snapshot_path=snapshot_path,
+        skip_panel=True,
+        emit_only=False,
+        dry_run=False,
+        max_notes=10,
+        force=False,
+        outbox_path=outbox,
+    )
+
+    assert len(attempts) == 2
+    assert second_summary["standing_questions_drafted"] == 1
+    assert "Inbox/evidence.md" in load_snapshot(snapshot_path)
+
+
+def test_watcher_retries_blocked_standing_questions_before_advancing_snapshot(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """A structured blocked SQ result has the same retry contract as an exception."""
+    vault = tmp_path / "vault"
+    evidence = vault / "Inbox" / "blocked.md"
+    evidence.parent.mkdir(parents=True)
+    evidence.write_text("---\nscope: work\n---\n\nblocked once\n", encoding="utf-8")
+    snapshot_path = vault / ".state.json"
+    outbox = tmp_path / "events.jsonl"
+    attempts: list[int] = []
+    monkeypatch.setenv("INDEX_OUTBOX_PATH", str(outbox))
+    monkeypatch.setenv("WATCHER_RUN_LOG_PATH", str(tmp_path / "watcher_run.jsonl"))
+    monkeypatch.setattr(
+        "app.watcher.vault_watcher.run_vault_alpha_ingest_paths",
+        lambda *_args, **_kwargs: SimpleNamespace(ingested=1, errors=0),
+    )
+
+    def standing_tick(**_kwargs):
+        attempts.append(1)
+        if len(attempts) == 1:
+            return SimpleNamespace(
+                matching=SimpleNamespace(attached=1),
+                refresh=SimpleNamespace(
+                    refresh_candidates=("sq-blocked",),
+                    drafted=(),
+                    deferred_pending_review=(),
+                    blocked=("sq-blocked",),
+                ),
+            )
+        return SimpleNamespace(
+            matching=SimpleNamespace(attached=1),
+            refresh=SimpleNamespace(
+                refresh_candidates=("sq-blocked",),
+                drafted=("sq-blocked",),
+                deferred_pending_review=(),
+                blocked=(),
+            ),
+        )
+
+    monkeypatch.setattr(
+        "app.standing_questions.evidence_matching.run_standing_questions_tick",
+        standing_tick,
+    )
+
+    first_summary, _ = run_watcher_tick(
+        vault_root=vault,
+        snapshot_path=snapshot_path,
+        skip_panel=True,
+        emit_only=False,
+        dry_run=False,
+        max_notes=10,
+        force=False,
+        outbox_path=outbox,
+    )
+    assert first_summary["standing_questions_blocked"] == 1
+    assert "Inbox/blocked.md" not in load_snapshot(snapshot_path)
+
+    second_summary, _ = run_watcher_tick(
+        vault_root=vault,
+        snapshot_path=snapshot_path,
+        skip_panel=True,
+        emit_only=False,
+        dry_run=False,
+        max_notes=10,
+        force=False,
+        outbox_path=outbox,
+    )
+    assert len(attempts) == 2
+    assert second_summary["standing_questions_drafted"] == 1
+    assert "Inbox/blocked.md" in load_snapshot(snapshot_path)
+
+
+def test_watcher_retries_standing_questions_matching_conflict_before_advancing_snapshot(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """A matcher CAS conflict is a delivery failure, not an acknowledged observation."""
+    vault = tmp_path / "vault"
+    evidence = vault / "Inbox" / "conflict.md"
+    evidence.parent.mkdir(parents=True)
+    evidence.write_text("---\nscope: work\n---\n\nconflicted once\n", encoding="utf-8")
+    snapshot_path = vault / ".state.json"
+    outbox = tmp_path / "events.jsonl"
+    attempts: list[int] = []
+    monkeypatch.setattr(
+        "app.watcher.vault_watcher.run_vault_alpha_ingest_paths",
+        lambda *_args, **_kwargs: SimpleNamespace(ingested=1, errors=0),
+    )
+
+    def standing_tick(**_kwargs):
+        attempts.append(1)
+        if len(attempts) == 1:
+            return SimpleNamespace(
+                matching=SimpleNamespace(attached=0, write_conflict=1),
+                refresh=SimpleNamespace(
+                    refresh_candidates=(), drafted=(), deferred_pending_review=(), blocked=()
+                ),
+            )
+        return SimpleNamespace(
+            matching=SimpleNamespace(attached=1, write_conflict=0),
+            refresh=SimpleNamespace(
+                refresh_candidates=("sq-conflict",),
+                drafted=("sq-conflict",),
+                deferred_pending_review=(),
+                blocked=(),
+            ),
+        )
+
+    monkeypatch.setattr(
+        "app.standing_questions.evidence_matching.run_standing_questions_tick",
+        standing_tick,
+    )
+
+    first_summary, _ = run_watcher_tick(
+        vault_root=vault,
+        snapshot_path=snapshot_path,
+        skip_panel=True,
+        emit_only=False,
+        dry_run=False,
+        max_notes=10,
+        force=False,
+        outbox_path=outbox,
+    )
+    assert first_summary["standing_questions_matching_write_conflicts"] == 1
+    assert "Inbox/conflict.md" not in load_snapshot(snapshot_path)
+
+    second_summary, _ = run_watcher_tick(
+        vault_root=vault,
+        snapshot_path=snapshot_path,
+        skip_panel=True,
+        emit_only=False,
+        dry_run=False,
+        max_notes=10,
+        force=False,
+        outbox_path=outbox,
+    )
+    assert len(attempts) == 2
+    assert second_summary["standing_questions_drafted"] == 1
+    assert "Inbox/conflict.md" in load_snapshot(snapshot_path)
 
 
 def test_run_watcher_tick_uses_watcher_settings_default_when_env_unset(tmp_path: Path, monkeypatch) -> None:

@@ -27,8 +27,11 @@ note-store+projection pattern (`docs/EPISODE_RESOLUTION_ENGINE/EPISODE_NOTE_STOR
    (pointer to the currently accepted answer note, null until first acceptance), `candidate_answer_ref`
    (pointer to a pending staged candidate-answer draft, null when none pending — system-owned bounded),
    `evidence` (system-owned, bounded, **append-only** list: `{artifact_ref, source_stream, matched_at,
-   confidence_class, provenance_ref, quoted_span}`), `last_matched_at` / `last_refreshed_at`
-   (system-owned bounded timestamps). Prose-mirror-of-schema section in this capability's README,
+   confidence_class, provenance_ref, quoted_span, `content_hash` (SHA-256 of the exact judged source
+   bytes)}`), `last_matched_at` / `last_refreshed_at` (system-owned bounded timestamps). A hashless
+   legacy evidence entry is rejected at the QuestionStore boundary until an explicit migration or
+   backfill can bind it to the exact historical bytes; the store never hashes whatever mutable path
+   happens to resolve today. Prose-mirror-of-schema section in this capability's README,
    consistent with `docs/architecture/*` contract style. `date-time` is the only `format` keyword in
    the schema. The production validation seam checks every non-null `format: date-time` value against
    a repo-local RFC 3339 grammar — four-digit proleptic Gregorian dates and numeric offsets through
@@ -85,9 +88,9 @@ note-store+projection pattern (`docs/EPISODE_RESOLUTION_ENGINE/EPISODE_NOTE_STOR
 
 ## Concretely
 
-Not yet implemented (#3532 audit finding): this task (SQ-01) has not shipped, and no `questions`
-CLI group exists in `app/cli/` today — `python -m app.cli questions ...` does not currently run.
-The block below is the TARGET shape this task builds toward, mirroring the already-shipped
+The vault-canonical QuestionStore/schema and projection slice is delivered by #3329, but no
+`questions` CLI group exists in `app/cli/` today — `python -m app.cli questions ...` does not
+currently run. The block below is the remaining TARGET CLI shape, mirroring the already-shipped
 `episodes` CLI (`app/cli/episodes.py`), not a description of current behavior.
 
 ```

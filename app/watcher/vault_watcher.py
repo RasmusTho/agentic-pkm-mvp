@@ -9,7 +9,7 @@ from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 from app.agents.panel.agent import handle_note_update
 from app.config.database import runtime_database_is_named
@@ -32,7 +32,11 @@ from app.ingest.vault_alpha import run_vault_alpha_ingest_paths
 from app.knowledge.errors import KnowledgeWriteConflict
 from app.knowledge.write_ops import read_note_text_with_version
 from app.knowledge.write_ops import write_note_from_absolute
-from app.services.outbox import insert_object_and_outbox, self_owned_write_would_skip
+from app.services.outbox import (
+    append_jsonl_record,
+    insert_object_and_outbox,
+    self_owned_write_would_skip,
+)
 from app.services.vault_sync import delete_note
 from app.watcher.registry import db_outbox_required
 from app.settings.panel_actions import PanelActionMapping, load_panel_action_mappings
@@ -62,6 +66,113 @@ def _resolve_outbox_path(outbox_path: Path | None) -> Path | None:
     if env_path:
         return Path(env_path)
     return None
+
+
+def _standing_question_tick_inputs(
+    vault_root: Path, changed_paths: Iterable[Path]
+) -> tuple[list[Any], dict[str, Any]]:
+    """Build the read-side SQ inputs at the existing vault-ingest boundary.
+
+    The watcher already owns the changed-note read and is one of SQ-03's
+    declared existing evidence streams.  This adapter does not write source
+    notes or fetch external data; it supplies the match-then-refresh
+    composition with changed candidates and the complete, already-read source
+    map needed to re-draft a question without a second acquisition path.
+    """
+
+    from app.expansion.create import SourceInput
+    from app.standing_questions.evidence_matching import CandidateArtifact
+    from app.standing_questions.projection import iter_question_notes
+
+    candidates: list[CandidateArtifact] = []
+    sources: dict[str, SourceInput] = {}
+
+    def add_source(
+        artifact_ref: str,
+        provenance_ref: str,
+        text: str,
+        raw_bytes: bytes,
+        note_path: str,
+    ) -> None:
+        content_hash = hashlib.sha256(raw_bytes).hexdigest()
+        source = SourceInput(
+            object_id=provenance_ref,
+            note_path=note_path,
+            text=text,
+            review_state="reviewed",
+            raw_bytes=raw_bytes,
+        )
+        sources[provenance_ref] = source
+        sources[artifact_ref] = source
+        sources[f"content://sha256/{content_hash}"] = source
+
+    for path in changed_paths:
+        try:
+            canonical_path = path.expanduser().resolve()
+            if not canonical_path.is_relative_to(vault_root):
+                continue
+            relative = canonical_path.relative_to(vault_root)
+            if relative.parts and relative.parts[0] == "questions":
+                # Question notes are matcher targets, not evidence sources.
+                # Their own edits must not self-seed the evidence log.
+                continue
+            raw_bytes = canonical_path.read_bytes()
+            text = raw_bytes.decode("utf-8")
+            frontmatter, _body = load_frontmatter(text)
+        except (OSError, UnicodeError, ValueError):
+            continue
+        if not isinstance(frontmatter, dict):
+            continue
+        scope = frontmatter.get("scope")
+        if not isinstance(scope, str) or not scope.strip():
+            # Scope is a hard matcher boundary; an unscoped source is not
+            # guessed into a Question scope.
+            continue
+        artifact_ref = f"vault://{relative.as_posix()}"
+        provenance_ref = f"outbox://ingest.vault.changed/{artifact_ref}"
+        candidates.append(
+            CandidateArtifact(
+                artifact_ref=artifact_ref,
+                source_stream="ingest.vault.changed",
+                scope=scope,
+                provenance_ref=provenance_ref,
+                content=text,
+                raw_bytes=raw_bytes,
+                content_hash=hashlib.sha256(raw_bytes).hexdigest(),
+            )
+        )
+        add_source(artifact_ref, provenance_ref, text, raw_bytes, relative.as_posix())
+
+    try:
+        question_notes = iter_question_notes(vault_root)
+    except Exception:
+        question_notes = []
+    for _path, note in question_notes:
+        for entry in note.get("evidence", []):
+            artifact_ref = entry.get("artifact_ref")
+            provenance_ref = entry.get("provenance_ref")
+            if not isinstance(artifact_ref, str) or not isinstance(provenance_ref, str):
+                continue
+            if not artifact_ref.startswith("vault://"):
+                continue
+            try:
+                relative = Path(artifact_ref[len("vault://") :])
+                source_path = (vault_root / relative).resolve()
+                if not source_path.is_relative_to(vault_root) or not source_path.is_file():
+                    continue
+                source_relative = source_path.relative_to(vault_root)
+                if source_relative.parts and source_relative.parts[0] == "questions":
+                    # Persisted evidence is replayed through this source map
+                    # too; reapply the same canonical exclusion as changed
+                    # paths so old self-references cannot return.
+                    continue
+                raw_bytes = source_path.read_bytes()
+                text = raw_bytes.decode("utf-8")
+            except (OSError, UnicodeError, ValueError, RuntimeError):
+                continue
+            add_source(artifact_ref, provenance_ref, text, raw_bytes, relative.as_posix())
+
+    return candidates, sources
 
 
 def _default_snapshot_path(vault_root: Path) -> Path:
@@ -250,15 +361,13 @@ def _hydrate_store_with_markdown(note_uuid: str, note_path: Path) -> None:
 def _write_outbox_events(outbox_path: Path | None, events: Iterable) -> int:
     if outbox_path is None:
         return 0
-    outbox_path.parent.mkdir(parents=True, exist_ok=True)
     written = 0
-    with outbox_path.open("a", encoding="utf-8") as handle:
-        for event in events:
-            payload = event.model_dump(mode="json") if hasattr(event, "model_dump") else None
-            if payload is None:
-                continue
-            handle.write(json.dumps(payload, ensure_ascii=False) + "\n")
-            written += 1
+    for event in events:
+        payload = event.model_dump(mode="json") if hasattr(event, "model_dump") else None
+        if payload is None:
+            continue
+        append_jsonl_record(outbox_path, payload, require_event_id=True)
+        written += 1
     return written
 
 
@@ -439,11 +548,20 @@ class VaultWatcher:
         return VaultWatcherResult(changed=changed, deleted=deleted, snapshot=current)
 
     def refresh_snapshot(self) -> Snapshot:
-        current = _scan_md_files(self.vault_root)
-        _discard_reappeared_unreconciled_deletions(self.snapshot_path, current)
-        retained = _snapshot_with_unreconciled_deletions(self.snapshot_path, current)
+        retained = self.scan_snapshot()
         save_snapshot(self.snapshot_path, retained)
         return retained
+
+    def scan_snapshot(self) -> Snapshot:
+        """Build the next snapshot without persisting its main file.
+
+        The watcher tick applies retry-preservation decisions before the main
+        snapshot is committed. This keeps a crash between composition and
+        restoration from acknowledging a failed capability.
+        """
+        current = _scan_md_files(self.vault_root)
+        _discard_reappeared_unreconciled_deletions(self.snapshot_path, current)
+        return _snapshot_with_unreconciled_deletions(self.snapshot_path, current)
 
 
 _DeleteReconciliation = Literal["emitted", "superseded_by_rename", "not_queued"]
@@ -585,6 +703,7 @@ def run_watcher_tick(
     except Exception:
         pass
     watcher = VaultWatcher(vault_root, snapshot_path=snapshot_path)
+    initial_snapshot = load_snapshot(watcher.snapshot_path)
     result = watcher.run(save=False)
     resolved_outbox = _resolve_outbox_path(outbox_path)
     if resolved_outbox is None and not dry_run:
@@ -639,6 +758,8 @@ def run_watcher_tick(
             for rel_path in recovered_terminal
         )
 
+    standing_questions_retry_paths: list[Path] = []
+
     def _finish_tick(*, preserve_changed_observations: bool = False) -> None:
         """Persist snapshot before its receipt, then retire reported terminals.
 
@@ -650,7 +771,21 @@ def run_watcher_tick(
             if preserve_changed_observations:
                 _advance_terminal_delete_observations(watcher.snapshot_path)
             else:
-                watcher.refresh_snapshot()
+                refreshed = watcher.scan_snapshot()
+                # SQ is part of the changed-note delivery chain.  If its
+                # composition fails, leave those source observations at their
+                # pre-tick cursor so an unchanged next tick retries the
+                # capability instead of silently acknowledging the failure.
+                for path in standing_questions_retry_paths:
+                    try:
+                        rel_path = path.relative_to(vault_root).as_posix()
+                    except ValueError:
+                        continue
+                    if rel_path in initial_snapshot:
+                        refreshed[rel_path] = initial_snapshot[rel_path]
+                    else:
+                        refreshed.pop(rel_path, None)
+                save_snapshot(watcher.snapshot_path, refreshed)
         _emit_run_event(
             summary,
             vault_root=vault_root,
@@ -846,6 +981,46 @@ def run_watcher_tick(
     # After ingest: renames' new paths are re-ingested (companion source_ref
     # updated) before their old paths are reconciled -- see _reconcile_deletions.
     _reconcile_deletions()
+
+    # SQ-03 is one of the existing vault-ingest evidence streams. Invoke the
+    # explicit production composition here, after ingest has read the changed
+    # notes, so SQ-04 cannot be omitted by a watcher caller. The adapter is
+    # read-only and conservative about missing scope/source data.
+    if not dry_run:
+        standing_candidates, standing_sources = _standing_question_tick_inputs(
+            vault_root, result.changed
+        )
+        if standing_candidates:
+            try:
+                from app.standing_questions.evidence_matching import run_standing_questions_tick
+
+                standing_tick = run_standing_questions_tick(
+                    vault_root=vault_root,
+                    candidates=standing_candidates,
+                    evidence_sources=standing_sources,
+                    outbox_path=resolved_outbox,
+                )
+                summary["standing_questions_matching_attached"] = standing_tick.matching.attached
+                summary["standing_questions_matching_write_conflicts"] = getattr(
+                    standing_tick.matching, "write_conflict", 0
+                )
+                summary["standing_questions_refresh_candidates"] = len(
+                    standing_tick.refresh.refresh_candidates
+                )
+                summary["standing_questions_drafted"] = len(standing_tick.refresh.drafted)
+                summary["standing_questions_deferred"] = len(
+                    standing_tick.refresh.deferred_pending_review
+                )
+                blocked_refreshes = tuple(getattr(standing_tick.refresh, "blocked", ()))
+                summary["standing_questions_blocked"] = len(blocked_refreshes)
+                if blocked_refreshes:
+                    standing_questions_retry_paths = list(result.changed)
+                if summary["standing_questions_matching_write_conflicts"]:
+                    standing_questions_retry_paths = list(result.changed)
+            except Exception as exc:  # pragma: no cover - runtime degradation is surfaced
+                summary["errors"] += 1
+                summary["standing_questions_tick_error"] = str(exc)
+                standing_questions_retry_paths = list(result.changed)
 
     if not skip_panel and policy_allowed_paths:
         store = ObjectStore()

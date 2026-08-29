@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 from copy import deepcopy
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
@@ -84,30 +83,30 @@ def _count_outbox_lines_db(resolution: StoreBackendResolution | None = None) -> 
         return None
 
 
-def _count_outbox_lines_from_file(path: Path) -> int:
-    """Streaming file line count of the outbox; never touches the DB. 0 on error."""
+def _count_outbox_lines_from_file(path: Path) -> int | None:
+    """Count a bounded, strictly parsed file outbox; ``None`` means unavailable."""
+    from app.services.outbox import read_jsonl_outbox_records
+
     if not path.exists():
         return 0
     try:
-        count = 0
-        saw_bytes = False
-        last_byte = b""
-        with path.open("rb") as fh:
-            for chunk in iter(lambda: fh.read(1024 * 1024), b""):
-                saw_bytes = True
-                count += chunk.count(b"\n")
-                last_byte = chunk[-1:]
-        if saw_bytes and last_byte != b"\n":
-            count += 1
-        return count
+        size = path.stat().st_size
+        records = read_jsonl_outbox_records(
+            path, max_bytes=_HEALTH_TAIL_BYTES, read_only=True
+        )
     except Exception:
         # Intentional swallow: health must not crash on an unreadable outbox
-        # file, but the read failure is logged rather than folded into 0.
+        # file, but the read failure is logged and remains unavailable, not 0.
         logger.warning("Outbox file line count failed for %s", path, exc_info=True)
-        return 0
+        return None
+    if size > _HEALTH_TAIL_BYTES:
+        return None
+    return len(records)
 
 
-def _count_outbox_lines(path: Path, resolution: StoreBackendResolution | None = None) -> int:
+def _count_outbox_lines(
+    path: Path, resolution: StoreBackendResolution | None = None
+) -> int | None:
     """Count outbox records: DB when available, else streaming file line count."""
     db_count = _count_outbox_lines_db(resolution)
     if db_count is not None:
@@ -142,13 +141,20 @@ def _dead_letter_stats_db(resolution: StoreBackendResolution | None = None) -> d
         return None
 
 
-def _dead_letter_stats_from_records(records: Iterable[dict[str, Any]]) -> dict[str, Any]:
+def _dead_letter_stats_from_records(
+    records: Iterable[dict[str, Any]] | None,
+) -> dict[str, Any]:
     """File-based fallback: count dead-letter audit records in the JSONL tail.
 
     The JSONL log is an append-only audit sink with no delivery tracking, so
     ``oldest_undelivered_age_seconds`` is 0.0 on this path — the DB outbox is
     the only delivery queue (the memory backend has none).
     """
+    if records is None:
+        return {
+            "dead_lettered_count": None,
+            "oldest_undelivered_age_seconds": None,
+        }
     count = 0
     for rec in records:
         if event_name(rec) == _DEAD_LETTER_EVENT:
@@ -163,6 +169,11 @@ def _dead_letter_status(stats: dict[str, Any], thresholds: HealthThresholds) -> 
     ``WRITE_BLOCKED_STATES`` — dead-letters are downstream-processing failures
     and must not block the human's ability to capture notes.
     """
+    if (
+        stats.get("dead_lettered_count") is None
+        or stats.get("oldest_undelivered_age_seconds") is None
+    ):
+        return "unknown"
     warn_count = max(int(thresholds.dead_lettered_warn), 1)
     if int(stats.get("dead_lettered_count") or 0) >= warn_count:
         return "warn"
@@ -203,51 +214,20 @@ def dead_letter_snapshot(*, thresholds: HealthThresholds | None = None) -> dict[
     }
 
 
-def _read_tail_records(path: Path | None = None) -> list[dict[str, Any]]:
-    """Read at most _HEALTH_TAIL_BYTES from the end of the outbox; return parsed records."""
+def _read_tail_records(path: Path | None = None) -> list[dict[str, Any]] | None:
+    """Read a bounded outbox tail; return None when the tail is unavailable."""
+    from app.services.outbox import read_jsonl_outbox_records
+
     target = (path or default_outbox_path()).expanduser()
-    if not target.exists():
-        return []
     try:
-        with target.open("rb") as fh:
-            fh.seek(0, os.SEEK_END)
-            size = fh.tell()
-            if size > _HEALTH_TAIL_BYTES:
-                fh.seek(size - _HEALTH_TAIL_BYTES)
-                partial = True
-            else:
-                fh.seek(0)
-                partial = False
-            data = fh.read()
+        return read_jsonl_outbox_records(
+            target, max_bytes=_HEALTH_TAIL_BYTES, read_only=True
+        )
     except Exception:
-        # Intentional swallow: an unreadable outbox tail degrades to "no recent
-        # records" for health purposes, but the I/O failure is logged (#3894).
+        # Intentional swallow: health must remain available, but an unreadable
+        # outbox tail is unknown rather than an empty/healthy observation.
         logger.warning("Outbox tail read failed for %s", target, exc_info=True)
-        return []
-    try:
-        lines = data.decode("utf-8", errors="replace").splitlines()
-    except Exception:
-        # Defensive only: decode(errors="replace") cannot realistically raise;
-        # logged loudly if it ever does.
-        logger.warning("Outbox tail decode failed for %s", target, exc_info=True)
-        return []
-    if partial and lines:
-        lines = lines[1:]  # drop potentially truncated first line
-    records: list[dict[str, Any]] = []
-    for ln in lines:
-        ln = ln.strip()
-        if not ln:
-            continue
-        try:
-            obj = json.loads(ln)
-            if isinstance(obj, dict):
-                records.append(obj)
-        except Exception:
-            # Intentionally silent: a truncated/garbled JSONL line in an
-            # append-only log tail is expected (partial writes at the cut
-            # boundary); logging per line would spam every health poll.
-            continue
-    return records
+        return None
 
 WRITE_BLOCKED_STATES = {"safe_mode", "unhealthy"}
 INCIDENT_STATES = {"degraded", "unhealthy", "safe_mode"}
@@ -502,10 +482,10 @@ class HealthContract:
         # "genuinely empty".
         object_count, store_count_error = self._count_objects()
         latest_ts = self._latest_timestamp(records)
-        age = self._compute_age(latest_ts, now)
+        age = self._compute_age(latest_ts, now) if records is not None else None
         state, reason, since_ts, transitioned, transition_history, sample_applied = (
             self.state_machine.update_with_transition(
-                age,
+                age if age is not None else 0.0,
                 settings_result.settings.thresholds,
                 now=now,
                 sample_sequence=sample_sequence,
@@ -660,7 +640,11 @@ class HealthContract:
         # the DB is known down. _read_tail_records is file-based and fail-soft.
         outbox_count = _count_outbox_lines_from_file(outbox_path)
         records = _read_tail_records(outbox_path)
-        age = self._compute_age(self._latest_timestamp(records), now)
+        age = (
+            self._compute_age(self._latest_timestamp(records), now)
+            if records is not None
+            else None
+        )
         # Do NOT count objects here: the pg object store's connect() has no bounded
         # timeout, so on a known-down DB it could block for seconds. Report 0.
         object_count = 0
@@ -826,9 +810,11 @@ class HealthContract:
             return None
         return f"postgres unreachable: {detail}"
 
-    def _latest_timestamp(self, records: Iterable[dict[str, Any]]) -> datetime | None:
+    def _latest_timestamp(
+        self, records: Iterable[dict[str, Any]] | None
+    ) -> datetime | None:
         latest: datetime | None = None
-        for rec in records:
+        for rec in records or []:
             value = normalize_timestamp(rec)
             ts = self._parse_timestamp(value)
             if ts is None:
@@ -864,7 +850,9 @@ class HealthContract:
             return "warn"
         return "pass"
 
-    def _events_status(self, records: Iterable[dict[str, Any]]) -> str:
+    def _events_status(self, records: Iterable[dict[str, Any]] | None) -> str:
+        if records is None:
+            return "unknown"
         rows = list(records)
         if not rows:
             return "warn"
@@ -873,7 +861,11 @@ class HealthContract:
             return "pass"
         return "warn"
 
-    def _count_errors(self, records: Iterable[dict[str, Any]], now: datetime) -> int | None:
+    def _count_errors(
+        self, records: Iterable[dict[str, Any]] | None, now: datetime
+    ) -> int | None:
+        if records is None:
+            return None
         cutoff = now - timedelta(minutes=10)
         errors = 0
         seen = False
@@ -891,10 +883,12 @@ class HealthContract:
 
     def _catch_up_progress(
         self,
-        outbox_count: int,
-        outbox_recent_age_s: float,
+        outbox_count: int | None,
+        outbox_recent_age_s: float | None,
         thresholds: HealthThresholds,
     ) -> dict[str, Any] | None:
+        if outbox_count is None or outbox_recent_age_s is None:
+            return None
         if outbox_count <= 0:
             mode = "idle"
         elif outbox_recent_age_s > thresholds.outbox_degrade_oldest_age_s:
@@ -911,7 +905,7 @@ class HealthContract:
 
     def _suggested_actions(
         self,
-        age: float,
+        age: float | None,
         index_status: str,
         writes_allowed: bool,
         *,
@@ -919,7 +913,7 @@ class HealthContract:
         store_count_error: str | None = None,
     ) -> list[str]:
         actions: list[str] = []
-        if age > 0:
+        if age is None or age > 0:
             actions.append("python -m app.cli events-doctor --path $INDEX_OUTBOX_PATH")
         if index_status in {"warn", "fail"}:
             actions.append("python -m app.cli index doctor --json")
@@ -946,8 +940,8 @@ class HealthContract:
         reason: str,
         since_ts: str,
         settings_result: Any,
-        outbox_count: int,
-        outbox_recent_age_s: float,
+        outbox_count: int | None,
+        outbox_recent_age_s: float | None,
         index_status: str,
         events_status: str,
         writes_allowed: bool,
@@ -1007,10 +1001,16 @@ class HealthContract:
             return 0, f"{type(exc).__name__}: {exc}"
 
     def _bootstrap_state(
-        self, object_count: int, outbox_count: int, *, store_error: str | None = None
+        self,
+        object_count: int,
+        outbox_count: int | None,
+        *,
+        store_error: str | None = None,
     ) -> tuple[str, str]:
         if store_error is not None:
             return "unknown", f"store object count unavailable: {store_error}"
+        if outbox_count is None:
+            return "unknown", "outbox count unavailable"
         if object_count == 0 and outbox_count == 0:
             return "empty", "no objects ingested yet"
         return "active", "objects or outbox events detected"

@@ -19,13 +19,16 @@ Covers every behavioral Acceptance Criterion from the issue:
 """
 from __future__ import annotations
 
+import hashlib
 import json
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
 
 from app.expansion.create import (
+    CreateIdempotencyConflictError,
     CreatePassReport,
     CreateRequest,
     ExpirySweepReport,
@@ -35,6 +38,14 @@ from app.expansion.create import (
     run_create_pass,
     sweep_expired_drafts,
 )
+from app.expansion import create as create_module
+from app.services.outbox import (
+    JsonlOutboxCorruptionError,
+    JsonlOutboxEventIdConflictError,
+    append_jsonl_outbox_event,
+    read_jsonl_outbox_records,
+)
+from app.index.outbox import append_jsonl as append_legacy_index_jsonl
 from app.write_guard import WriteGuard
 from app.reasoning.schema import ReasoningOutput
 
@@ -329,6 +340,142 @@ def test_expiry_sweep_removes_ignored_draft_past_staleness_window(tmp_path: Path
     assert len(expired_records) == 1
 
 
+def test_expired_draft_receipt_can_be_replayed_after_expiry(
+    tmp_path: Path,
+) -> None:
+    vault_root = tmp_path / "vault"
+    vault_root.mkdir()
+    outbox_path = tmp_path / "outbox.jsonl"
+    request = CreateRequest(
+        kind=OutputKind.ANSWER_NOTE,
+        title="Replay after expiry",
+        question="What remains replayable?",
+        sources=(_source("obj-a", "Evidence text.", "Evidence text."),),
+    )
+    expired_at = datetime.now(timezone.utc) - timedelta(days=30)
+    first = run_create_pass(
+        request,
+        vault_root=vault_root,
+        outbox_path=outbox_path,
+        write_guard=_allow_all_guard(),
+        staleness_days=14,
+        now=expired_at,
+        draft_id="expired-replay-draft",
+        receipt_id="expired-replay-receipt",
+    )
+    draft_path = vault_root / first.draft_path
+
+    sweep = sweep_expired_drafts(
+        vault_root=vault_root,
+        outbox_path=outbox_path,
+        now=datetime.now(timezone.utc),
+    )
+    assert sweep.expired == ("expired-replay-draft",)
+    assert not draft_path.exists()
+
+    replay = run_create_pass(
+        request,
+        vault_root=vault_root,
+        outbox_path=outbox_path,
+        write_guard=_allow_all_guard(),
+        draft_id="expired-replay-draft",
+        receipt_id="expired-replay-receipt",
+    )
+
+    assert replay.activatable is True
+    assert replay.receipt_id is not None
+    assert replay.receipt_id != "expired-replay-receipt"
+    assert (vault_root / replay.draft_path).exists()
+
+
+def test_expiry_receipt_failure_preserves_draft_for_retry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    vault_root = tmp_path / "vault"
+    vault_root.mkdir()
+    outbox_path = tmp_path / "outbox.jsonl"
+    expired_at = datetime.now(timezone.utc) - timedelta(days=30)
+    report = run_create_pass(
+        CreateRequest(
+            kind=OutputKind.OVERVIEW,
+            title="Receipt failure",
+            sources=(_source("obj-a", "Evidence text.", "Evidence text."),),
+        ),
+        vault_root=vault_root,
+        outbox_path=outbox_path,
+        write_guard=_allow_all_guard(),
+        staleness_days=14,
+        now=expired_at,
+    )
+    draft_path = vault_root / report.draft_path
+    original_emit = create_module._emit_receipt
+
+    def fail_expiry(event: str, *args, **kwargs):
+        if event == create_module.CREATE_EXPIRED_EVENT:
+            raise RuntimeError("simulated expiry receipt outage")
+        return original_emit(event, *args, **kwargs)
+
+    monkeypatch.setattr(create_module, "_emit_receipt", fail_expiry)
+    sweep = sweep_expired_drafts(
+        vault_root=vault_root,
+        outbox_path=outbox_path,
+        now=datetime.now(timezone.utc),
+    )
+
+    assert sweep.expired == ()
+    assert draft_path.exists()
+
+
+def test_expired_receipt_cannot_revive_draft_before_deletion(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    vault_root = tmp_path / "vault"
+    vault_root.mkdir()
+    outbox_path = tmp_path / "outbox.jsonl"
+    request = CreateRequest(
+        kind=OutputKind.ANSWER_NOTE,
+        title="Expired before delete",
+        sources=(_source("obj-a", "Evidence text.", "Evidence text."),),
+    )
+    created_at = datetime.now(timezone.utc) - timedelta(days=30)
+    first = run_create_pass(
+        request,
+        vault_root=vault_root,
+        outbox_path=outbox_path,
+        write_guard=_allow_all_guard(),
+        staleness_days=14,
+        now=created_at,
+        draft_id="expired-before-delete",
+        receipt_id="expired-before-delete-receipt",
+    )
+    draft_path = vault_root / first.draft_path
+    original_unlink = Path.unlink
+
+    def crash_before_delete(path: Path, *args, **kwargs):
+        if path == draft_path:
+            raise OSError("simulated delete failure after expiry receipt")
+        return original_unlink(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", crash_before_delete)
+    sweep = sweep_expired_drafts(
+        vault_root=vault_root,
+        outbox_path=outbox_path,
+        now=datetime.now(timezone.utc),
+    )
+    assert sweep.expired == ()
+    assert draft_path.exists()
+
+    with pytest.raises(CreateIdempotencyConflictError, match="already expired"):
+        run_create_pass(
+            request,
+            vault_root=vault_root,
+            outbox_path=outbox_path,
+            write_guard=_allow_all_guard(),
+            draft_id="expired-before-delete",
+            receipt_id="expired-before-delete-receipt",
+        )
+
+
 def test_expiry_sweep_never_removes_a_checked_draft(tmp_path: Path) -> None:
     """A checked (accepted) draft is EXP-4's concern; the sweep must never
     remove it even if it is past its staleness window."""
@@ -366,6 +513,279 @@ def test_expiry_sweep_missing_staging_dir_never_errors(tmp_path: Path) -> None:
     sweep = sweep_expired_drafts(vault_root=vault_root, outbox_path=outbox_path)
     assert sweep.expired == ()
     assert sweep.receipt_ids == ()
+
+
+def test_deterministic_receipt_event_id_is_atomic_across_event_types(tmp_path: Path) -> None:
+    """Concurrent receipt writers cannot both publish one event id."""
+
+    outbox_path = tmp_path / "outbox.jsonl"
+
+    def emit(event: str) -> tuple[str, str]:
+        try:
+            create_module._emit_receipt(
+                event,
+                {"event": event},
+                outbox_path=outbox_path,
+                trace_id="trace-concurrent",
+                event_id="same-event-id",
+            )
+        except CreateIdempotencyConflictError:
+            return (event, "conflict")
+        return (event, "ok")
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(emit, ("expansion.create.proposed", "other.event")))
+
+    assert sorted(result for _event, result in results) == ["conflict", "ok"]
+    records = _outbox_records(outbox_path)
+    assert len(records) == 1
+    assert records[0]["event_id"] == "same-event-id"
+
+
+def test_public_jsonl_writer_rejects_existing_event_id_collision(tmp_path: Path) -> None:
+    outbox_path = tmp_path / "outbox.jsonl"
+    create_module._emit_receipt(
+        "expansion.create.proposed",
+        {"value": "first"},
+        outbox_path=outbox_path,
+        trace_id="trace-first",
+        event_id="same-event-id",
+    )
+
+    with pytest.raises(JsonlOutboxEventIdConflictError, match="event_id"):
+        append_jsonl_outbox_event(
+            outbox_path,
+            {
+                "event": "other.event",
+                "event_id": "same-event-id",
+                "trace_id": "trace-second",
+                "source": "test",
+                "timestamp": "2026-08-29T12:00:00Z",
+                "payload": {"value": "second"},
+            },
+        )
+
+    assert len(_outbox_records(outbox_path)) == 1
+
+
+def test_legacy_jsonl_writer_uses_global_event_id_seam(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    outbox_path = tmp_path / "outbox.jsonl"
+    monkeypatch.setenv("INDEX_OUTBOX_PATH", str(outbox_path))
+    create_module._emit_receipt(
+        "expansion.create.proposed",
+        {"value": "first"},
+        outbox_path=outbox_path,
+        trace_id="trace-first",
+        event_id="same-event-id",
+    )
+
+    with pytest.raises(JsonlOutboxEventIdConflictError, match="event_id"):
+        append_legacy_index_jsonl(
+            {
+                "object_id": "obj-1",
+                "kind": "note",
+                "payload": {"value": "second"},
+                "event_id": "same-event-id",
+            }
+        )
+
+    assert len(_outbox_records(outbox_path)) == 1
+
+
+def test_jsonl_append_fails_closed_when_existing_outbox_cannot_be_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    outbox_path = tmp_path / "outbox.jsonl"
+    outbox_path.write_text(
+        json.dumps({"event": "existing", "event_id": "existing-id"}) + "\n",
+        encoding="utf-8",
+    )
+    original_read_bytes = Path.read_bytes
+
+    def unreadable(path: Path) -> bytes:
+        if path == outbox_path:
+            raise OSError("simulated read failure")
+        return original_read_bytes(path)
+
+    monkeypatch.setattr(Path, "read_bytes", unreadable)
+    with pytest.raises(JsonlOutboxCorruptionError, match="cannot be inspected"):
+        append_jsonl_outbox_event(
+            outbox_path,
+            {
+                "event": "new.event",
+                "event_id": "new-id",
+                "payload": {},
+            },
+        )
+    assert outbox_path.read_text(encoding="utf-8").count("existing-id") == 1
+
+
+def test_jsonl_append_repairs_complete_unterminated_record(tmp_path: Path) -> None:
+    outbox_path = tmp_path / "outbox.jsonl"
+    first = {"event": "first", "event_id": "first-id"}
+    outbox_path.write_bytes(json.dumps(first).encode("utf-8"))
+
+    append_jsonl_outbox_event(
+        outbox_path,
+        {"event": "second", "event_id": "second-id", "payload": {}},
+    )
+
+    records = _outbox_records(outbox_path)
+    assert [record["event_id"] for record in records] == ["first-id", "second-id"]
+    assert b"}{" not in outbox_path.read_bytes()
+    assert outbox_path.read_bytes().endswith(b"\n")
+
+
+def test_jsonl_append_preserves_unicode_line_separator_characters(tmp_path: Path) -> None:
+    outbox_path = tmp_path / "outbox.jsonl"
+    first = {
+        "event": "first",
+        "event_id": "unicode-id",
+        "payload": {"text": "before\u2028after"},
+    }
+    outbox_path.write_text(json.dumps(first, ensure_ascii=False) + "\n", encoding="utf-8")
+
+    append_jsonl_outbox_event(
+        outbox_path,
+        {"event": "second", "event_id": "second-unicode-id", "payload": {}},
+    )
+
+    assert read_jsonl_outbox_records(outbox_path)[0]["payload"]["text"] == "before\u2028after"
+
+
+def test_create_receipt_inspection_does_not_repair_unterminated_jsonl(
+    tmp_path: Path,
+) -> None:
+    outbox_path = tmp_path / "outbox.jsonl"
+    record = {
+        "event": "expansion.create.proposed",
+        "event_id": "create-inspection-id",
+        "payload": {"draft_id": "draft-1"},
+    }
+    raw = json.dumps(record).encode("utf-8")
+    outbox_path.write_bytes(raw)
+    lock_path = outbox_path.with_name(f".{outbox_path.name}.append.lock")
+
+    assert (
+        create_module._existing_receipt(
+            outbox_path, "expansion.create.proposed", "create-inspection-id"
+        )
+        == record
+    )
+    assert outbox_path.read_bytes() == raw
+    assert not lock_path.exists()
+
+
+def test_jsonl_event_id_identity_is_shared_across_real_path_and_symlink(
+    tmp_path: Path,
+) -> None:
+    outbox_path = tmp_path / "outbox.jsonl"
+    alias_dir = tmp_path / "alias"
+    alias_dir.symlink_to(tmp_path, target_is_directory=True)
+    alias_path = alias_dir / "outbox.jsonl"
+    record = {"event": "same", "event_id": "alias-id", "payload": {"x": 1}}
+
+    assert append_jsonl_outbox_event(alias_path, record) is True
+    assert append_jsonl_outbox_event(outbox_path, record) is True
+    assert len(_outbox_records(outbox_path)) == 1
+
+    with pytest.raises(JsonlOutboxEventIdConflictError):
+        append_jsonl_outbox_event(
+            outbox_path,
+            {"event": "same", "event_id": "alias-id", "payload": {"x": 2}},
+        )
+
+
+def test_concurrent_deterministic_create_publication_converges(
+    tmp_path: Path,
+) -> None:
+    vault_root = tmp_path / "vault"
+    vault_root.mkdir()
+    outbox_path = tmp_path / "outbox.jsonl"
+    request = CreateRequest(
+        kind=OutputKind.ANSWER_NOTE,
+        title="Concurrent answer",
+        question="What is the boundary?",
+        sources=(_source("obj-a", "Evidence text.", "Evidence text."),),
+    )
+
+    def create() -> CreatePassReport:
+        return run_create_pass(
+            request,
+            vault_root=vault_root,
+            outbox_path=outbox_path,
+            write_guard=_allow_all_guard(),
+            draft_id="concurrent-draft",
+            receipt_id="concurrent-receipt",
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        reports = list(pool.map(lambda _unused: create(), (1, 2)))
+
+    assert [report.receipt_id for report in reports] == [
+        "concurrent-receipt",
+        "concurrent-receipt",
+    ]
+    records = _outbox_records(outbox_path)
+    assert len(records) == 1
+    draft_path = vault_root / reports[0].draft_path
+    integrity_path = draft_path.with_suffix(draft_path.suffix + ".integrity.json")
+    draft_sha256 = hashlib.sha256(draft_path.read_bytes()).hexdigest()
+    assert json.loads(integrity_path.read_text(encoding="utf-8"))["draft_sha256"] == draft_sha256
+    assert records[0]["payload"]["draft_sha256"] == draft_sha256
+
+
+def test_crash_between_integrity_and_draft_write_remains_replayable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class SimulatedCrash(RuntimeError):
+        pass
+
+    vault_root = tmp_path / "vault"
+    vault_root.mkdir()
+    outbox_path = tmp_path / "outbox.jsonl"
+    request = CreateRequest(
+        kind=OutputKind.ANSWER_NOTE,
+        title="Replayable answer",
+        question="What is the boundary?",
+        sources=(_source("obj-a", "Evidence text.", "Evidence text."),),
+    )
+    original = create_module._atomic_write_bytes
+
+    def crash_before_draft(path: Path, content: bytes) -> None:
+        if path.suffix == ".md":
+            raise SimulatedCrash("crash after integrity record, before draft")
+        original(path, content)
+
+    monkeypatch.setattr(create_module, "_atomic_write_bytes", crash_before_draft)
+    with pytest.raises(SimulatedCrash):
+        run_create_pass(
+            request,
+            vault_root=vault_root,
+            outbox_path=outbox_path,
+            write_guard=_allow_all_guard(),
+            draft_id="replayable-draft",
+            receipt_id="replayable-receipt",
+        )
+
+    draft_path = vault_root / "⚙️ System" / "drafts" / "replayable-draft.md"
+    sidecar_path = draft_path.with_suffix(draft_path.suffix + ".integrity.json")
+    assert not draft_path.exists()
+    assert sidecar_path.exists()
+
+    monkeypatch.setattr(create_module, "_atomic_write_bytes", original)
+    report = run_create_pass(
+        request,
+        vault_root=vault_root,
+        outbox_path=outbox_path,
+        write_guard=_allow_all_guard(),
+        draft_id="replayable-draft",
+        receipt_id="replayable-receipt",
+    )
+    assert report.receipt_id == "replayable-receipt"
+    assert draft_path.exists()
 
 
 def test_staged_draft_not_indexed_by_vault_alpha_ingest(tmp_path: Path) -> None:

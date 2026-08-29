@@ -1,13 +1,15 @@
 from __future__ import annotations
 
+import fcntl
 import hashlib
 import json
 import logging
 import os
 import uuid as uuid_module
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Dict, Literal, Mapping, Optional, Tuple
+from typing import Any, Callable, Dict, Iterator, Literal, Mapping, Optional, Tuple
 
 from app.config.database import explicit_runtime_database_url
 from app.db.errors import OutboxSchemaMissingError
@@ -26,6 +28,14 @@ from app.instance.binding_ids import (
 from app.instance.scalar_binding_runtime import resolve_scalar_binding_runtime
 
 _LOGGER = logging.getLogger(__name__)
+
+
+class JsonlOutboxEventIdConflictError(RuntimeError):
+    """Raised when one JSONL outbox path maps an event id to new content."""
+
+
+class JsonlOutboxCorruptionError(RuntimeError):
+    """Raised when a JSONL outbox cannot be inspected safely before append."""
 
 # Optional DB helpers (tests kan ge FakeConn). Import the real implementations
 # from app.db.db directly: the package-level names (`from app.db import
@@ -442,15 +452,223 @@ def serialize_outbox_record(event: Any, *, default_source: str = "app") -> dict[
     return coerced.model_dump(mode="json", exclude_none=True)
 
 
-def append_jsonl_outbox_event(outbox_path: Path, event: Any, *, default_source: str = "app") -> bool:
+def _canonical_jsonl_outbox_path(outbox_path: Path) -> Path:
+    """Resolve aliases before deriving the lock and accessing the outbox."""
+
+    return Path(outbox_path).expanduser().resolve(strict=False)
+
+
+@contextmanager
+def jsonl_outbox_append_lock(outbox_path: Path) -> Iterator[Path]:
+    """Serialize JSONL read/check/append sequences for one outbox path.
+
+    The sidecar lock is shared by every JSONL producer through
+    :func:`append_jsonl_outbox_event`.  Callers that must inspect the file before
+    appending (for example deterministic receipt emitters) hold this context and
+    pass ``_lock_held=True`` to the append helper.
+    """
+
+    canonical_path = _canonical_jsonl_outbox_path(outbox_path)
+    canonical_path.parent.mkdir(parents=True, exist_ok=True)
+    lock_path = canonical_path.with_name(f".{canonical_path.name}.append.lock")
+    with lock_path.open("a", encoding="utf-8") as handle:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        try:
+            yield canonical_path
+        finally:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
+@contextmanager
+def _jsonl_outbox_read_lock(outbox_path: Path) -> Iterator[Path]:
+    """Use an existing append lock without creating or changing filesystem state."""
+
+    canonical_path = _canonical_jsonl_outbox_path(outbox_path)
+    lock_path = canonical_path.with_name(f".{canonical_path.name}.append.lock")
+    try:
+        handle = lock_path.open("r", encoding="utf-8")
+    except FileNotFoundError:
+        yield canonical_path
+        return
+    try:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_SH)
+        yield canonical_path
+    finally:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        handle.close()
+
+
+def _append_jsonl_outbox_event_unlocked(
+    outbox_path: Path, record: dict[str, Any]
+) -> None:
+    data = (json.dumps(record, ensure_ascii=False) + "\n").encode("utf-8")
+    descriptor = os.open(
+        outbox_path,
+        os.O_APPEND | os.O_CREAT | os.O_WRONLY,
+        0o600,
+    )
+    try:
+        written = os.write(descriptor, data)
+        if written != len(data):
+            raise OSError("partial JSONL outbox append")
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def _read_jsonl_records_unlocked(
+    outbox_path: Path,
+    *,
+    max_bytes: int | None = None,
+    repair_final_delimiter: bool = True,
+) -> list[dict[str, Any]]:
+    """Read and safely repair one final complete unterminated record."""
+
+    try:
+        if max_bytes is not None and max_bytes > 0:
+            size = outbox_path.stat().st_size
+            if size > max_bytes:
+                with outbox_path.open("rb") as handle:
+                    handle.seek(size - max_bytes)
+                    raw = handle.read()
+                first_delimiter = raw.find(b"\n")
+                if first_delimiter < 0:
+                    raise JsonlOutboxCorruptionError(
+                        "JSONL outbox bounded read cannot identify a complete record: "
+                        f"{outbox_path}"
+                    )
+                raw = raw[first_delimiter + 1 :]
+            else:
+                raw = outbox_path.read_bytes()
+        else:
+            raw = outbox_path.read_bytes()
+    except FileNotFoundError:
+        return []
+    except OSError as exc:
+        raise JsonlOutboxCorruptionError(
+            f"JSONL outbox cannot be inspected safely: {outbox_path}"
+        ) from exc
+    if not raw:
+        return []
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise JsonlOutboxCorruptionError(
+            f"JSONL outbox is not valid UTF-8: {outbox_path}"
+        ) from exc
+
+    records: list[dict[str, Any]] = []
+    # JSONL records are newline-delimited by the byte 0x0A delimiter only.
+    # ``str.splitlines`` also treats valid JSON characters such as U+2028 as
+    # delimiters, which could permanently wedge an otherwise healthy outbox.
+    for line in text.split("\n"):
+        if not line.strip():
+            continue
+        try:
+            existing = json.loads(line)
+        except (TypeError, ValueError) as exc:
+            raise JsonlOutboxCorruptionError(
+                f"JSONL outbox contains malformed JSON: {outbox_path}"
+            ) from exc
+        if not isinstance(existing, dict):
+            raise JsonlOutboxCorruptionError(
+                f"JSONL outbox record is not an object: {outbox_path}"
+            )
+        records.append(existing)
+
+    if repair_final_delimiter and not raw.endswith(b"\n"):
+        try:
+            with outbox_path.open("ab") as handle:
+                handle.write(b"\n")
+                handle.flush()
+                os.fsync(handle.fileno())
+        except OSError as exc:
+            raise JsonlOutboxCorruptionError(
+                f"JSONL outbox final delimiter cannot be repaired: {outbox_path}"
+            ) from exc
+    return records
+
+
+def read_jsonl_outbox_records(
+    outbox_path: Path,
+    *,
+    _lock_held: bool = False,
+    max_bytes: int | None = None,
+    read_only: bool = False,
+) -> list[dict[str, Any]]:
+    """Read JSONL records under the append lock or a non-mutating read-only view."""
+
+    if _lock_held:
+        return _read_jsonl_records_unlocked(
+            _canonical_jsonl_outbox_path(outbox_path), max_bytes=max_bytes
+        )
+    if read_only:
+        with _jsonl_outbox_read_lock(outbox_path) as canonical_path:
+            return _read_jsonl_records_unlocked(
+                canonical_path,
+                max_bytes=max_bytes,
+                repair_final_delimiter=False,
+            )
+    with jsonl_outbox_append_lock(outbox_path) as canonical_path:
+        return _read_jsonl_records_unlocked(canonical_path, max_bytes=max_bytes)
+
+
+def append_jsonl_record(
+    outbox_path: Path,
+    record: Mapping[str, Any],
+    *,
+    require_event_id: bool = False,
+    _lock_held: bool = False,
+) -> bool:
+    """Append one JSON object through the shared integrity/uniqueness seam."""
+
+    normalized = dict(record)
+    event_id = normalized.get("event_id")
+    if require_event_id and (not isinstance(event_id, str) or not event_id.strip()):
+        raise ValueError("JSONL outbox events require a non-empty event_id")
+
+    def append_locked(canonical_path: Path) -> None:
+        records = _read_jsonl_records_unlocked(canonical_path)
+        if isinstance(event_id, str) and event_id.strip():
+            first_match: dict[str, Any] | None = None
+            for existing in records:
+                if existing.get("event_id") != event_id:
+                    continue
+                if first_match is None:
+                    first_match = existing
+                elif existing != first_match:
+                    raise JsonlOutboxEventIdConflictError(
+                        f"JSONL outbox already contains conflicting duplicate event_id: {event_id}"
+                    )
+                if existing != normalized:
+                    raise JsonlOutboxEventIdConflictError(
+                        f"JSONL outbox event_id maps to different content: {event_id}"
+                    )
+            if first_match is not None:
+                return
+        _append_jsonl_outbox_event_unlocked(canonical_path, normalized)
+
+    if _lock_held:
+        append_locked(_canonical_jsonl_outbox_path(outbox_path))
+    else:
+        with jsonl_outbox_append_lock(outbox_path) as canonical_path:
+            append_locked(canonical_path)
+    return True
+
+
+def append_jsonl_outbox_event(
+    outbox_path: Path,
+    event: Any,
+    *,
+    default_source: str = "app",
+    _lock_held: bool = False,
+) -> bool:
     record = serialize_outbox_record(event, default_source=default_source)
     if record is None:
         return False
-    outbox_path.parent.mkdir(parents=True, exist_ok=True)
-    with outbox_path.open("a", encoding="utf-8") as handle:
-        handle.write(json.dumps(record, ensure_ascii=False))
-        handle.write("\n")
-    return True
+    return append_jsonl_record(
+        outbox_path, record, require_event_id=True, _lock_held=_lock_held
+    )
 
 
 def _coerce_event(event: Event | OutboxEvent) -> Event:
@@ -1049,5 +1267,10 @@ __all__ = [
     "event_payload_dict",
     "coerce_outbox_event",
     "serialize_outbox_record",
+    "JsonlOutboxEventIdConflictError",
+    "JsonlOutboxCorruptionError",
+    "jsonl_outbox_append_lock",
+    "read_jsonl_outbox_records",
+    "append_jsonl_record",
     "append_jsonl_outbox_event",
 ]

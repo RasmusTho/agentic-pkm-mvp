@@ -36,3 +36,27 @@ def test_events_doctor_renders_story(tmp_path: Path) -> None:
     assert "Trace T-story" in result.output
     assert "ask.query.received" in result.output
     assert "index.embedding.created" in result.output
+
+
+def test_events_doctor_is_bounded_and_read_only(tmp_path: Path) -> None:
+    outbox = tmp_path / "index-outbox.jsonl"
+    raw = b'{"event":"ask.query.received","trace_id":"T-read-only"}'
+    outbox.write_bytes(raw)
+    lock_path = outbox.with_name(f".{outbox.name}.append.lock")
+
+    result = CliRunner().invoke(cli, ["events-doctor", "--path", str(outbox)])
+
+    assert result.exit_code == 0
+    assert "Trace T-read-only" in result.output
+    assert outbox.read_bytes() == raw
+    assert not lock_path.exists()
+
+
+def test_events_doctor_reports_corrupt_outbox(tmp_path: Path) -> None:
+    outbox = tmp_path / "index-outbox.jsonl"
+    outbox.write_bytes(b'{"event":"ask.query.received"}\n{')
+
+    result = CliRunner().invoke(cli, ["events-doctor", "--path", str(outbox)])
+
+    assert result.exit_code != 0
+    assert "Configured event outbox is unreadable" in result.output

@@ -14,6 +14,7 @@ from app.standing_questions.evidence_matching import (
     ConfidenceClass,
     match_evidence_to_open_questions,
 )
+from app.knowledge.errors import KnowledgeWriteConflict
 from app.standing_questions.question_store import (
     QuestionStore,
     parse_question_note,
@@ -130,6 +131,7 @@ def test_relevant_artifact_attaches_irrelevant_does_not(tmp_path: Path) -> None:
     assert len(evidence) == 1
     entry = evidence[0]
     assert entry["artifact_ref"] == relevant_ref
+    assert entry["content_hash"] == hashlib.sha256(RELEVANT_BODY.encode("utf-8")).hexdigest()
     assert entry["source_stream"] == "ingest.vault.changed"
     assert entry["provenance_ref"] == f"outbox://ingest.vault.changed/{relevant_ref}"
     assert entry["confidence_class"] == ConfidenceClass.HIGH.value
@@ -139,6 +141,168 @@ def test_relevant_artifact_attaches_irrelevant_does_not(tmp_path: Path) -> None:
         encoding="utf-8"
     )
     assert entry["matched_at"].endswith("Z")
+
+
+def test_question_note_cannot_become_its_own_evidence(tmp_path: Path) -> None:
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    store = _store(vault)
+    note, _ = store.create_question(text=QUESTION_TEXT, scope="work", registered_via="explicit")
+    question_ref = f"vault://questions/{note['question_id']}.md"
+    association = _Association({"event outbox": _attached()})
+
+    summary = match_evidence_to_open_questions(
+        vault_root=vault,
+        candidates=[_candidate(question_ref)],
+        store=store,
+        complete=association,
+    )
+
+    assert summary.excluded_question_note == 1
+    assert summary.evaluated_pairs == 0
+    assert summary.attached == 0
+    assert association.prompts == []
+    assert store.read_question(note["question_id"])["evidence"] == []
+
+
+def test_question_note_path_traversal_cannot_bypass_self_exclusion(tmp_path: Path) -> None:
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    store = _store(vault)
+    note, _ = store.create_question(text=QUESTION_TEXT, scope="work", registered_via="explicit")
+    traversal_ref = f"vault://notes/../questions/{note['question_id']}.md"
+    association = _Association({"event outbox": _attached()})
+
+    summary = match_evidence_to_open_questions(
+        vault_root=vault,
+        candidates=[_candidate(traversal_ref)],
+        store=store,
+        complete=association,
+    )
+
+    assert summary.excluded_question_note == 1
+    assert association.prompts == []
+    assert store.read_question(note["question_id"])["evidence"] == []
+
+
+def test_matching_hashes_exact_source_bytes(tmp_path: Path) -> None:
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    store = _store(vault)
+    note, _ = store.create_question(text=QUESTION_TEXT, scope="work", registered_via="explicit")
+    raw_body = RELEVANT_BODY.replace("\n", "\r\n").encode("utf-8")
+    path = vault / "notes/outbox-measurements.md"
+    path.parent.mkdir(parents=True)
+    path.write_bytes(raw_body)
+
+    summary = match_evidence_to_open_questions(
+        vault_root=vault,
+        candidates=[_candidate("vault://notes/outbox-measurements.md")],
+        store=store,
+        complete=_Association({"single-writer ceiling": _attached()}),
+    )
+
+    assert summary.attached == 1
+    evidence = store.read_question(note["question_id"])["evidence"]
+    assert evidence[0]["content_hash"] == hashlib.sha256(raw_body).hexdigest()
+
+
+def test_match_write_conflict_does_not_clobber_question(tmp_path: Path) -> None:
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    store = _store(vault)
+    note, _ = store.create_question(text=QUESTION_TEXT, scope="work", registered_via="explicit")
+    ref = _write_artifact(vault, "notes/outbox-measurements.md", RELEVANT_BODY)
+
+    def conflict(*_args: Any, **_kwargs: Any) -> None:
+        raise KnowledgeWriteConflict("simulated concurrent Question edit")
+
+    store.update_system_fields_if_unchanged = conflict  # type: ignore[method-assign]
+    summary = match_evidence_to_open_questions(
+        vault_root=vault,
+        candidates=[_candidate(ref)],
+        store=store,
+        complete=_Association({"single-writer ceiling": _attached()}),
+    )
+
+    assert summary.write_conflict == 1
+    assert summary.attached == 0
+    assert store.read_question(note["question_id"])["evidence"] == []
+
+
+def test_match_human_edit_during_judgment_blocks_stale_evidence(tmp_path: Path) -> None:
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    store = _store(vault)
+    note, _ = store.create_question(text=QUESTION_TEXT, scope="work", registered_via="explicit")
+    ref = _write_artifact(vault, "notes/outbox-measurements.md", RELEVANT_BODY)
+    path = vault / "questions" / f"{note['question_id']}.md"
+    changed = False
+
+    def edit_then_attach(**_kwargs: Any) -> str:
+        nonlocal changed
+        if not changed:
+            path.write_text(
+                path.read_text(encoding="utf-8").replace(
+                    QUESTION_TEXT,
+                    "Which unrelated question is now being reviewed?",
+                    1,
+                ),
+                encoding="utf-8",
+            )
+            changed = True
+        return json.dumps(_attached())
+
+    summary = match_evidence_to_open_questions(
+        vault_root=vault,
+        candidates=[_candidate(ref)],
+        store=store,
+        complete=edit_then_attach,
+    )
+
+    assert summary.write_conflict == 1
+    assert summary.attached == 0
+    assert store.read_question(note["question_id"])["evidence"] == []
+
+
+def test_match_uses_fresh_scope_baseline(tmp_path: Path) -> None:
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    base_store = _store(vault)
+    note, _ = base_store.create_question(text=QUESTION_TEXT, scope="work", registered_via="explicit")
+    path = vault / "questions" / f"{note['question_id']}.md"
+
+    class ScopeFlipStore(QuestionStore):
+        flipped = False
+
+        def read_question_with_version(self, question_id: str):  # type: ignore[no-untyped-def]
+            if not self.flipped:
+                current = parse_question_note(path.read_text(encoding="utf-8"))
+                path.write_text(
+                    serialize_question_note({**current, "scope": "personal"}),
+                    encoding="utf-8",
+                )
+                self.flipped = True
+            return super().read_question_with_version(question_id)
+
+    store = ScopeFlipStore(vault, write_guard=_store(vault).write_guard)
+    candidate = CandidateArtifact(
+        artifact_ref="vault://notes/evidence.md",
+        source_stream="ingest.vault.changed",
+        scope="work",
+        provenance_ref="outbox://evidence/1",
+        content="work-only evidence",
+    )
+    summary = match_evidence_to_open_questions(
+        vault_root=vault,
+        candidates=[candidate],
+        store=store,
+        complete=lambda **_kwargs: json.dumps(_attached(span="work-only evidence")),
+    )
+
+    assert summary.excluded_cross_scope == 1
+    assert summary.attached == 0
+    assert store.read_question(note["question_id"])["evidence"] == []
 
 
 def test_cross_scope_artifact_excluded_content_free(tmp_path: Path) -> None:
@@ -400,7 +564,7 @@ def test_question_closed_mid_tick_is_never_resurrected(tmp_path: Path) -> None:
     )
 
     assert summary.attached == 0
-    assert summary.excluded_non_open == 1
+    assert summary.write_conflict == 1
     assert store.read_question(note["question_id"])["evidence"] == []
 
 

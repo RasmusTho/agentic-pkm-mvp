@@ -20,15 +20,12 @@ owner currently believes (the standing answer), that disagreement is surfaced ex
 smoothed over by a confident-sounding rewrite.
 
 **Named external dependency (load-bearing, read before starting this task).** This task does not
-reimplement synthesis. It reuses the Create engine's `create.answer_note` kind — draft assembly via
-`CompilationDraft`, cognition via `run_reasoning`/`run_multi_note_reasoning`, citation validation,
-staging write with an in-draft `AI-åtgärder` acceptance checkbox, expiry sweep — from
-`docs/MIMER_CAPABILITY_HARDENING/EXPANSION_CONNECT_AND_CREATE.md` §2 (EXP-3). **EXP-3 has not merged
-as of this spec's writing** (that spec's own header states "advisory until child issues are
-delivered"). This task's own contribution is the trigger (evidence-delta, not explicit-ask), the
-contradiction-flagging extension to the draft, and the pending-review-not-clobbered discipline —
-none of which can be implemented before EXP-3 exists. See Context in this task's GitHub issue draft
-for how its ready/blocked label should actually read.
+reimplement synthesis. It reuses the delivered Create engine's `create.answer_note` kind — draft
+assembly via `CompilationDraft`, cognition via `run_reasoning`/`run_multi_note_reasoning`, citation
+validation, staging write with an in-draft `AI-åtgärder` acceptance checkbox, expiry sweep — from
+`docs/MIMER_CAPABILITY_HARDENING/EXPANSION_CONNECT_AND_CREATE.md` §2 (EXP-3, #2996). This task's own
+contribution is the trigger (evidence-delta, not explicit-ask), the contradiction-flagging extension
+to the draft, and the pending-review-not-clobbered discipline.
 
 ## What This Task Does
 
@@ -37,6 +34,14 @@ for how its ready/blocked label should actually read.
    constant — see README), a refresh is scheduled. Threshold crossing is evaluated on the current
    evidence log state, never on a separately stored counter (so a crash between evidence-attach and
    refresh-scheduling loses nothing — the next tick re-derives the delta from the log itself).
+   The shipped composition entrypoint is
+   `app.standing_questions.evidence_matching.run_standing_questions_tick`: it runs SQ-03 and then
+   this refresh in that order, so a matching tick cannot return before the delta is evaluated. The
+   existing vault-ingest caller `app.watcher.vault_watcher.run_watcher_tick` supplies changed,
+   explicitly scoped notes and invokes that composition after ingest; it does not guess a scope or
+   add a new acquisition path. If the composition fails, the watcher retains the changed-note
+   observation at its pre-tick snapshot cursor so an unchanged next tick retries the same delivery
+   rather than silently acknowledging the failed capability step.
 2. **Pending-review guard (INV-SQ-D, the seam this task exists to walk)**: before drafting, the
    refresh checks `candidate_answer_ref` — if a prior candidate-answer draft is still pending (not yet
    accepted, dismissed, or expired), the refresh **defers**: evidence keeps accruing in the log, no
@@ -46,7 +51,12 @@ for how its ready/blocked label should actually read.
 3. **Draft assembly (reusing EXP-3)**: context assembly through the retrieval capability seam at
    cited-proposal admissibility tier (scope prefilter + evidence-role clamp intact, same-scope only —
    consistent with SQ-03's discipline), sources = the question's evidence-log entries (their
-   `provenance_ref`s resolved, never re-fetched); cognition run through the Create engine's existing
+   `provenance_ref`s resolved, never re-fetched). Each entry's `content_hash` must match the exact
+   bytes supplied by the caller; a path/provenance match with changed bytes is blocked as an
+   unresolvable historical observation. The already-resolved source text is materialized
+   through the existing rebuildable reasoning-input adapter when the Create cognition substrate needs
+   a UUID/object-store identity; the evidence-log provenance refs remain explicitly recorded in the
+   draft frontmatter. Cognition then runs through the Create engine's existing
    `create.answer_note` path; citation validation (every cited source resolves, quoted spans verbatim)
    blocks the draft loudly on any unresolvable citation — never silently pruned.
 4. **Contradiction flag (this task's schema extension to the Create draft frontmatter)**: the drafting
@@ -65,6 +75,11 @@ for how its ready/blocked label should actually read.
 6. **`last_refreshed_at` update**: only on successful draft materialization (staging write receipted)
    — a failed/blocked draft attempt does not advance `last_refreshed_at`, so the delta that triggered it
    is not silently lost from future evaluation.
+   The Question byte-version snapshot is captured before Create drafting and is used for the final
+   conditional update, so any human or runtime edit during cognition blocks publication of the stale
+   candidate. Draft and proposed-receipt ids are deterministic for the unconsumed
+   `last_refreshed_at` generation, so a crash or CAS retry reuses one logical proposal instead of
+   creating an orphan duplicate.
 
 ## Concretely
 
@@ -116,6 +131,18 @@ standing question rather than re-asking ASK cold every time.
 - [ ] AC8 (enforcement): `status: answered` is asserted unreachable from this task's write path — this
       task's own production entrypoint never sets `status`. Verify:
       `tests/standing_questions/test_answer_refresh.py::test_refresh_path_never_writes_status`
+- [ ] AC9: a watcher-triggered refresh failure remains replayable on the next unchanged tick and
+      advances the watcher snapshot only after the composition succeeds. Verify:
+      `tests/watcher/test_vault_watcher_core.py::test_watcher_retries_standing_questions_failure_before_advancing_snapshot`
+- [ ] AC10: a structured blocked refresh result remains replayable on the next unchanged tick.
+      Verify:
+      `tests/watcher/test_vault_watcher_core.py::test_watcher_retries_blocked_standing_questions_before_advancing_snapshot`
+- [ ] AC11: a CAS conflict followed by retry converges to one staged draft and one proposed receipt
+      for the refresh generation. Verify:
+      `tests/standing_questions/test_answer_refresh.py::test_refresh_cas_snapshot_is_taken_before_drafting`
+- [ ] AC12: a contradiction marked `true` carries an exact quote from the standing answer or
+      candidate body; an ungrounded basis degrades to `unknown`. Verify:
+      `tests/standing_questions/test_answer_refresh.py::test_invalid_contradiction_basis_degrades_to_unknown`
 
 ## How to Verify (Pre-Merge)
 
@@ -153,11 +180,10 @@ point during the check leaves nothing to reconcile.
 
 ## Related GitHub Issues
 
-One issue: `[Standing Questions] refresh-answer-on-evidence-delta: threshold-triggered candidate
-re-drafting with explicit contradiction surfacing`. **Hard-blocked on the external EXP-3 (Create
-engine) dependency in addition to SQ-01/SQ-03** — do not pick this up until EXP-3 has merged, even if
-its drafted GitHub issue carries a `ready`-shaped label at filing time; verify EXP-3's live state
-before starting. TCD hint: Opus / high effort — mirrors EXP-4's own "Opus (authority semantics)"
+Implementation issue: #3327, `[Standing Questions] refresh-answer-on-evidence-delta:`
+threshold-triggered candidate re-drafting with explicit contradiction surfacing. EXP-3 is delivered
+in #2996; the remaining capability-level follow-up is SQ-05's governed review surface and live
+owner/UAT acceptance. TCD hint: Opus / high effort — mirrors EXP-4's own "Opus (authority semantics)"
 rating; the pending-review-not-clobbered race (AC2/AC3) and the contradiction-never-silently-dropped
 guarantee (AC4/AC5) are exactly the kind of subtle correctness/authority-adjacent work the repo routes
 above Sonnet.

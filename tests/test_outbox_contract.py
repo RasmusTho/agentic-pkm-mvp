@@ -1,18 +1,26 @@
 import json
 from datetime import datetime, timezone
+from pathlib import Path
+
+import pytest
 
 from app.events.panel import NoteRef, PanelInfo, PanelIntentExecutedEvent, PanelIntentExecutedPayload
 from app.events.models import new_event
 from app.events.schema import OutboxEvent
 from app.events.types import INGEST_OBJECT_CREATED
 from app.services.outbox import (
+    JsonlOutboxCorruptionError,
+    JsonlOutboxEventIdConflictError,
     append_jsonl_outbox_event,
     coerce_outbox_event,
     derive_binding_scoped_idempotency_key,
     derive_idempotency_key,
+    read_jsonl_outbox_records,
     serialize_outbox_record,
     write_outbox_event,
 )
+from app.outbox import events as index_outbox_events
+from app.watcher import watcher as watcher_module
 
 
 class FakeConn:
@@ -21,6 +29,14 @@ class FakeConn:
 
     def execute(self, sql, params):
         self.executed.append((sql.strip(), params))
+
+
+def test_bounded_reader_rejects_retained_tail_without_record_delimiter(tmp_path: Path) -> None:
+    outbox_path = tmp_path / "oversized-record.jsonl"
+    outbox_path.write_text(json.dumps({"event": "x", "payload": "y" * 64}), encoding="utf-8")
+
+    with pytest.raises(JsonlOutboxCorruptionError, match="bounded read"):
+        read_jsonl_outbox_records(outbox_path, max_bytes=16, read_only=True)
 
 
 def test_write_outbox_event_serializes_payload():
@@ -83,6 +99,41 @@ def test_write_outbox_event_accepts_panel_event_source_models():
     assert data["payload"]["note"]["uuid"] == "note-1"
     assert data["payload"]["panel"]["panel_id"] == "panel-1"
     assert attempts == 0
+
+
+def test_configured_jsonl_consumers_preserve_unicode_line_separators(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app.events.outbox import read_jsonl
+    from app.receipts.outbox_sources import read_receipt_source_records
+    from app.settings.migration import _transaction_receipt_is_durable
+    from app.promotion.consumer import consume_promotion_intents
+
+    outbox_path = tmp_path / "outbox.jsonl"
+    record = {
+        "event": "settings.write.receipt",
+        "event_id": "unicode-consumer-id",
+        "payload": {
+            "key": "settings.label",
+            "timestamp": "2026-08-29T00:00:00Z",
+            "text": "before\u2028after\u2029end",
+        },
+    }
+    outbox_path.write_text(json.dumps(record, ensure_ascii=False) + "\n", encoding="utf-8")
+    monkeypatch.setenv("INDEX_OUTBOX_PATH", str(outbox_path))
+
+    assert read_jsonl(outbox_path)[0]["payload"]["text"] == "before\u2028after\u2029end"
+    assert read_receipt_source_records(outbox_path=outbox_path)[0]["event_id"] == (
+        "unicode-consumer-id"
+    )
+    assert _transaction_receipt_is_durable(
+        {"receipt_key": "settings.label", "receipt_timestamp": "2026-08-29T00:00:00Z"}
+    )
+    cursor_path = tmp_path / "cursor.json"
+    assert consume_promotion_intents(
+        outbox_path=outbox_path, cursor_path=cursor_path
+    )["intents_seen"] == 0
+    assert json.loads(cursor_path.read_text(encoding="utf-8"))["line_index"] == 1
 
 
 def test_coerce_outbox_event_uses_typed_payload_not_full_event_envelope(tmp_path):
@@ -185,3 +236,53 @@ def test_append_jsonl_outbox_event_omits_context_dimensions_when_absent(tmp_path
     assert "context_dimensions" not in records[0], (
         f"JSONL record must not include context_dimensions when absent, got: {records[0].get('context_dimensions')!r}"
     )
+
+
+def test_index_audit_writer_uses_shared_event_id_seam(
+    tmp_path, monkeypatch
+) -> None:
+    outbox_path = tmp_path / "index-outbox.jsonl"
+    monkeypatch.setenv("INDEX_OUTBOX_PATH", str(outbox_path))
+    index_outbox_events.reset_audit_emission_dedup_store()
+    record = {"event": "index.test", "event_id": "shared-id", "payload": {"x": 1}}
+
+    index_outbox_events._append_record(record)
+
+    with pytest.raises(JsonlOutboxEventIdConflictError):
+        index_outbox_events._append_record(
+            {"event": "index.test", "event_id": "shared-id", "payload": {"x": 2}}
+        )
+
+    assert len(outbox_path.read_text(encoding="utf-8").splitlines()) == 1
+
+
+def test_watcher_scan_writer_uses_shared_event_id_seam(
+    tmp_path, monkeypatch
+) -> None:
+    class FixedUUID:
+        hex = "shared-scan-id"
+
+    monkeypatch.setattr(watcher_module, "uuid4", lambda: FixedUUID())
+    monkeypatch.setattr(
+        watcher_module,
+        "_now_iso_from_timestamp",
+        lambda _value: "2026-08-29T12:00:00Z",
+    )
+    outbox_path = tmp_path / "watcher-outbox.jsonl"
+
+    watcher_module._emit_scan_event(
+        outbox_path=outbox_path,
+        vault_root=tmp_path / "vault",
+        rel_path=Path("note.md"),
+        mtime=1.0,
+        content_hash="hash",
+    )
+
+    with pytest.raises(JsonlOutboxEventIdConflictError):
+        watcher_module._emit_scan_event(
+            outbox_path=outbox_path,
+            vault_root=tmp_path / "vault",
+            rel_path=Path("note.md"),
+            mtime=1.0,
+            content_hash="different-hash",
+        )

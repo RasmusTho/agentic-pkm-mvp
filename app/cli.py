@@ -30,6 +30,7 @@ os.environ.setdefault(
 # Importera agenterna enligt repo-layouten (ref: tests använde dessa symboler)
 from app.agents.normalizer.agent import run as normalize_run
 from app.agents.classifier.agent import run as classify_run
+from app.services.outbox import append_jsonl_record
 
 def _trace(prefix: str) -> str:
     return f"cli-{prefix}-{uuid.uuid4()}"
@@ -81,9 +82,7 @@ def cmd_pipe(args: argparse.Namespace) -> int:
             "source_ref": f"cli:{src.name}",
             "payload": out,
         }
-        Path(outbox).parent.mkdir(parents=True, exist_ok=True)
-        with open(outbox, "a", encoding="utf-8") as f:
-            f.write(json.dumps(line, ensure_ascii=False) + "\n")
+        append_jsonl_record(Path(outbox), line)
     return 0
 
 def main(argv: list[str] | None = None) -> int:

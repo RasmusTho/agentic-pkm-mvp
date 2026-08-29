@@ -17,7 +17,7 @@
       "type": "array",
       "items": {
         "type": "object",
-        "required": ["artifact_ref", "source_stream", "matched_at", "confidence_class", "provenance_ref", "quoted_span"],
+        "required": ["artifact_ref", "source_stream", "matched_at", "confidence_class", "provenance_ref", "quoted_span", "content_hash"],
         "additionalProperties": false,
         "properties": {
           "artifact_ref": {"type": "string"},
@@ -25,7 +25,8 @@
           "matched_at": {"type": "string", "format": "date-time"},
           "confidence_class": {"type": "string"},
           "provenance_ref": {"type": "string"},
-          "quoted_span": {"type": "string"}
+          "quoted_span": {"type": "string"},
+          "content_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
         }
       }
     },

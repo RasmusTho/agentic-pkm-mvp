@@ -1,42 +1,31 @@
 from __future__ import annotations
 
-import json
 import os
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, HTTPException, Query
 
-from app.outbox.events import INDEX_OUTBOX_PATH
+from app.events.outbox import default_outbox_path
+from app.services.outbox import JsonlOutboxCorruptionError, read_jsonl_outbox_records
 
 router = APIRouter()
+_EVENTS_TAIL_BYTES = 8 * 1024 * 1024
 
 
 def _resolve_outbox_path() -> Path:
     raw = os.getenv("INDEX_OUTBOX_PATH")
     if raw:
         return Path(raw).expanduser()
-    return Path(INDEX_OUTBOX_PATH).expanduser()
+    return default_outbox_path().expanduser()
 
 
 def _load_events(path: Path) -> list[dict[str, Any]]:
-    if not path.exists():
-        return []
-    records: list[dict[str, Any]] = []
-    try:
-        lines = path.read_text(encoding="utf-8").splitlines()
-    except Exception:
-        return []
-    for line in lines:
-        if not line.strip():
-            continue
-        try:
-            payload = json.loads(line)
-        except Exception:
-            continue
-        if isinstance(payload, dict):
-            records.append(payload)
-    return records
+    return read_jsonl_outbox_records(
+        path,
+        max_bytes=_EVENTS_TAIL_BYTES,
+        read_only=True,
+    )
 
 
 @router.get("/events/tail")
@@ -46,7 +35,13 @@ async def events_tail(
     trace_id: str | None = Query(default=None),
 ) -> dict[str, Any]:
     path = _resolve_outbox_path()
-    records = _load_events(path)
+    try:
+        records = _load_events(path)
+    except JsonlOutboxCorruptionError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="configured event outbox is unreadable",
+        ) from exc
     filtered: list[dict[str, Any]] = []
     for rec in records:
         ev = rec.get("event") or rec.get("event_type") or rec.get("topic") or ""

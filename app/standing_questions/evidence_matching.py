@@ -34,8 +34,9 @@ callers:
 
 from __future__ import annotations
 
+import hashlib
 import logging
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
@@ -48,11 +49,15 @@ from app.components.llm.constrained import (
     constrained_completion,
     register_schema,
 )
+from app.expansion.create import SourceInput
+from app.knowledge.errors import KnowledgeWriteConflict
+from app.standing_questions.answer_refresh import AnswerRefreshSummary
 from app.standing_questions.projection import (
     QuestionsDirectoryMissingError,
     iter_question_notes,
 )
 from app.standing_questions.question_store import QuestionStore
+from app.write_guard import DEFAULT_WRITE_GUARD, WriteGuard
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -149,6 +154,8 @@ class CandidateArtifact:
     scope: str
     provenance_ref: str
     content: str | None = None
+    content_hash: str | None = None
+    raw_bytes: bytes | None = None
 
 
 @dataclass(frozen=True)
@@ -183,8 +190,18 @@ class MatchTickSummary:
     duplicate_basis: int = 0
     degraded: int = 0
     excluded_cross_scope: int = 0
+    excluded_question_note: int = 0
     excluded_non_open: int = 0
     unresolved_artifact: int = 0
+    write_conflict: int = 0
+
+
+@dataclass(frozen=True)
+class StandingQuestionsTickSummary:
+    """The observable result of one match-then-refresh production tick."""
+
+    matching: MatchTickSummary
+    refresh: AnswerRefreshSummary
 
 
 @dataclass
@@ -225,14 +242,24 @@ def _open_questions(vault_root: Path, counters: _Counters) -> list[dict[str, Any
     return open_notes
 
 
-def _resolve_content(vault_root: Path, candidate: CandidateArtifact) -> str | None:
+def _resolve_content(vault_root: Path, candidate: CandidateArtifact) -> tuple[str, bytes] | None:
     """Read the artifact's text. Read-only by construction — there is no write path.
 
     Returns ``None`` when the artifact cannot be resolved (for example a note
     deleted between the ingest event and this tick), which yields no link.
     """
     if candidate.content is not None:
-        return candidate.content
+        raw_bytes = (
+            candidate.raw_bytes
+            if candidate.raw_bytes is not None
+            else candidate.content.encode("utf-8")
+        )
+        try:
+            if raw_bytes.decode("utf-8") != candidate.content:
+                return None
+        except UnicodeError:
+            return None
+        return candidate.content, raw_bytes
     if not candidate.artifact_ref.startswith(VAULT_REF_PREFIX):
         _LOGGER.warning(
             "Standing Questions matching cannot resolve artifact ref without inline content: %s",
@@ -247,7 +274,29 @@ def _resolve_content(vault_root: Path, candidate: CandidateArtifact) -> str | No
             candidate.artifact_ref,
         )
         return None
-    return path.read_text(encoding="utf-8")
+    try:
+        raw_bytes = path.read_bytes()
+        return raw_bytes.decode("utf-8"), raw_bytes
+    except (OSError, UnicodeError):
+        return None
+
+
+def _content_hash(raw_bytes: bytes) -> str:
+    return hashlib.sha256(raw_bytes).hexdigest()
+
+
+def _is_question_note_ref(vault_root: Path, artifact_ref: str) -> bool:
+    """Return whether a vault artifact ref points at a Question source note."""
+
+    if not artifact_ref.startswith(VAULT_REF_PREFIX):
+        return False
+    relative = Path(artifact_ref[len(VAULT_REF_PREFIX) :])
+    resolved = (vault_root / relative).resolve()
+    try:
+        relative = resolved.relative_to(vault_root)
+    except ValueError:
+        return False
+    return bool(relative.parts) and relative.parts[0] == "questions"
 
 
 def _build_user_prompt(question_text: str, artifact_text: str) -> str:
@@ -304,9 +353,14 @@ def judge_association(
     )
 
 
-def _existing_bases(note: dict[str, Any]) -> set[tuple[str, str]]:
+def _existing_bases(note: dict[str, Any]) -> set[tuple[str, str, str]]:
     return {
-        (entry["artifact_ref"], entry["quoted_span"]) for entry in note.get("evidence", [])
+        (
+            entry["artifact_ref"],
+            str(entry.get("content_hash") or ""),
+            entry["quoted_span"],
+        )
+        for entry in note.get("evidence", [])
     }
 
 
@@ -331,23 +385,41 @@ def match_evidence_to_open_questions(
 
     for note in _open_questions(resolved_root, counters):
         question_id = note["question_id"]
-        seen_bases = _existing_bases(note)
+        # Capture the question bytes before any model judgment. A later read is
+        # only a change detector; it must never become the baseline for a
+        # judgment made against older text.
+        baseline, baseline_version = question_store.read_question_with_version(question_id)
+        if baseline["status"] != "open":
+            counters.bump("excluded_non_open")
+            continue
+        seen_bases = _existing_bases(baseline)
         new_entries: list[dict[str, Any]] = []
 
         for candidate in candidate_list:
+            # Question notes are the target of this matcher, never evidence
+            # for it. Keep this exclusion before content resolution and model
+            # judgment so a changed Question cannot self-seed its evidence log.
+            if _is_question_note_ref(resolved_root, candidate.artifact_ref):
+                counters.bump("excluded_question_note")
+                continue
             # Scope first, before any content is resolved: a cross-scope artifact's
             # text must never be read, prompted, or logged (content-free denial).
-            if candidate.scope != note["scope"]:
+            if candidate.scope != baseline["scope"]:
                 counters.bump("excluded_cross_scope")
                 continue
-            artifact_text = _resolve_content(resolved_root, candidate)
-            if artifact_text is None:
+            resolved_content = _resolve_content(resolved_root, candidate)
+            if resolved_content is None:
+                counters.bump("unresolved_artifact")
+                continue
+            artifact_text, artifact_bytes = resolved_content
+            content_hash = _content_hash(artifact_bytes)
+            if candidate.content_hash is not None and candidate.content_hash != content_hash:
                 counters.bump("unresolved_artifact")
                 continue
 
             counters.bump("evaluated_pairs")
             association = judge_association(
-                question_text=note["text"],
+                question_text=baseline["text"],
                 artifact_text=artifact_text,
                 complete=complete,
                 trace_id=trace_id,
@@ -369,12 +441,12 @@ def match_evidence_to_open_questions(
             if not span.strip() or span not in artifact_text:
                 counters.bump("unverifiable_span")
                 continue
-            basis = (candidate.artifact_ref, span)
+            basis = (candidate.artifact_ref, content_hash, span)
             # Idempotency fold key is (question_id, artifact_ref) narrowed by the
             # quoted basis: re-ticking never duplicates an identical-basis entry,
             # while a later pass carrying a materially different span still may add
             # one.
-            if basis in seen_bases:
+            if basis in seen_bases or (candidate.artifact_ref, "", span) in seen_bases:
                 counters.bump("duplicate_basis")
                 continue
             seen_bases.add(basis)
@@ -386,6 +458,7 @@ def match_evidence_to_open_questions(
                     "confidence_class": association.confidence_class.value,
                     "provenance_ref": candidate.provenance_ref,
                     "quoted_span": span,
+                    "content_hash": content_hash,
                 }
             )
 
@@ -394,20 +467,92 @@ def match_evidence_to_open_questions(
         # Re-read immediately before the guarded append: a human may have closed the
         # question mid-tick, and a closed question must never be resurrected by a
         # race (INV-SQ-F partial failure).
-        current = question_store.read_question(question_id)
-        if current["status"] != "open":
+        latest, latest_version = question_store.read_question_with_version(question_id)
+        if latest_version != baseline_version or latest != baseline:
+            counters.bump("write_conflict")
+            continue
+        if latest["status"] != "open":
             counters.bump("excluded_non_open")
             continue
-        question_store.update_system_fields(
-            question_id,
-            {
-                "evidence": [*current["evidence"], *new_entries],
-                "last_matched_at": _utc_now(),
-            },
-        )
-        counters.bump("attached", len(new_entries))
+        current_bases = _existing_bases(baseline)
+        append_entries = [
+            entry
+            for entry in new_entries
+            if (
+                entry["artifact_ref"],
+                entry["content_hash"],
+                entry["quoted_span"],
+            ) not in current_bases
+        ]
+        if len(append_entries) != len(new_entries):
+            counters.bump("duplicate_basis", len(new_entries) - len(append_entries))
+        if not append_entries:
+            continue
+        try:
+            question_store.update_system_fields_if_unchanged(
+                question_id,
+                baseline,
+                {
+                    "evidence": [*baseline["evidence"], *append_entries],
+                    "last_matched_at": _utc_now(),
+                },
+                expected_version=baseline_version,
+            )
+        except KnowledgeWriteConflict:
+            # A concurrent human close or another evidence append wins. The
+            # unchanged candidate is retried on the next tick; never rebuild a
+            # whole note from a stale read.
+            counters.bump("write_conflict")
+            continue
+        counters.bump("attached", len(append_entries))
 
     return counters.summary()
+
+
+def run_standing_questions_tick(
+    *,
+    vault_root: Path | str,
+    candidates: Iterable[CandidateArtifact],
+    evidence_sources: Mapping[str, SourceInput],
+    outbox_path: Path,
+    store: QuestionStore | None = None,
+    complete: CompletionFn | None = None,
+    contradiction_complete: CompletionFn | None = None,
+    write_guard: WriteGuard = DEFAULT_WRITE_GUARD,
+    now: datetime | None = None,
+    trace_id: str | None = None,
+) -> StandingQuestionsTickSummary:
+    """Run the production Standing Questions composition in dependency order.
+
+    SQ-03 attaches evidence first; SQ-04 then derives its delta from the
+    question note written by that match pass. ``evidence_sources`` is a
+    read-side map assembled by the existing ingest consumer, so refresh does
+    not fetch provenance refs or create a second acquisition path.
+    """
+
+    # Keep the refresh import local: the two slices are allowed to evolve
+    # independently, while this function is the explicit composition seam.
+    from app.standing_questions.answer_refresh import refresh_answers_on_evidence_delta
+
+    candidate_list = list(candidates)
+    matching = match_evidence_to_open_questions(
+        vault_root=vault_root,
+        candidates=candidate_list,
+        store=store,
+        complete=complete,
+        trace_id=trace_id,
+    )
+    refresh = refresh_answers_on_evidence_delta(
+        vault_root=vault_root,
+        outbox_path=outbox_path,
+        evidence_sources=evidence_sources,
+        store=store,
+        contradiction_complete=contradiction_complete,
+        write_guard=write_guard,
+        now=now,
+        trace_id=trace_id,
+    )
+    return StandingQuestionsTickSummary(matching=matching, refresh=refresh)
 
 
 __all__ = [
@@ -418,7 +563,9 @@ __all__ = [
     "ConfidenceClass",
     "EvidenceAssociation",
     "MatchTickSummary",
+    "StandingQuestionsTickSummary",
     "judge_association",
     "match_evidence_to_open_questions",
+    "run_standing_questions_tick",
     "VAULT_REF_PREFIX",
 ]

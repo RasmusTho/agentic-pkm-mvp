@@ -390,22 +390,15 @@ def _owned_transactions(root: Path) -> list[Path]:
 
 
 def _transaction_receipt_is_durable(marker: dict[str, object]) -> bool:
-    from app.outbox.events import get_index_outbox_path
+    from app.events.outbox import default_outbox_path
+    from app.services.outbox import read_jsonl_outbox_records
 
-    path = get_index_outbox_path()
+    path = default_outbox_path()
     if not path.is_file():
         return False
     expected_key = marker.get("receipt_key")
     expected_timestamp = marker.get("receipt_timestamp")
-    try:
-        lines = path.read_text(encoding="utf-8").splitlines()
-    except OSError:
-        return False
-    for line in reversed(lines):
-        try:
-            record = json.loads(line)
-        except (json.JSONDecodeError, TypeError):
-            continue
+    for record in reversed(read_jsonl_outbox_records(path, read_only=True)):
         payload = record.get("payload") if isinstance(record, dict) else None
         if not isinstance(payload, dict):
             continue

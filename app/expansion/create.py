@@ -79,11 +79,17 @@ ADR, mirroring ``app.expansion.connect``'s and
 """
 from __future__ import annotations
 
+import fcntl
+import hashlib
+import json
+import logging
+import os
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from enum import Enum
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any, Callable, Iterator, Mapping, Sequence
 from uuid import uuid4
 
 from app.activation.gate import (
@@ -96,8 +102,15 @@ from app.activation.gate import (
 from app.knowledge_compilation.proposal_builders import ProposalContext, build_compilation_draft
 from app.knowledge_compilation.runtime_artifacts import CompilationDraft, ContextAuthorityLimits, SourceRef
 from app.reasoning.multi import run_multi_note_reasoning
-from app.services.outbox import append_jsonl_outbox_event
+from app.services.outbox import (
+    append_jsonl_outbox_event,
+    jsonl_outbox_append_lock,
+    read_jsonl_outbox_records,
+)
 from app.write_guard import DEFAULT_WRITE_GUARD, WriteGuard
+from scripts.yaml_roundtrip import load_frontmatter
+
+_LOGGER = logging.getLogger(__name__)
 
 # --- output kinds (closed enum; no default) ---------------------------------
 
@@ -191,6 +204,18 @@ class SourceInput:
     quoted_spans: tuple[str, ...] = field(default_factory=tuple)
     language: str | None = None
     review_state: str | None = None
+    # Optional evidence-log identity. ``object_id`` remains the identity used
+    # by cognition and citation resolution; callers may retain an upstream
+    # provenance reference without using a URI as an object-store id.
+    provenance_ref: str | None = None
+    # Exact UTF-8 source bytes when the caller has them. Cognition still uses
+    # ``text``; durability and replay checks use these bytes so newline
+    # normalization cannot erase a source mutation.
+    raw_bytes: bytes | None = None
+
+
+class CreateIdempotencyConflictError(RuntimeError):
+    """Raised when a deterministic replay identity maps to different content."""
 
 
 @dataclass(frozen=True)
@@ -490,8 +515,11 @@ def _draft_frontmatter(
     cognition_metadata: dict[str, Any],
     created_at: datetime,
     staleness_days: int,
+    request_fingerprint: str | None = None,
+    language: str | None = None,
+    language_rule: str | None = None,
 ) -> dict[str, Any]:
-    return {
+    frontmatter = {
         "uuid": draft_id,
         "kind": "draft",
         "derived_by": "synthesis",
@@ -505,6 +533,20 @@ def _draft_frontmatter(
         "created": _iso(created_at),
         "expires": _iso(created_at + timedelta(days=staleness_days)),
     }
+    provenance_refs = [
+        source.provenance_ref
+        for source in sources
+        if source.provenance_ref is not None
+    ]
+    if provenance_refs:
+        frontmatter["provenance_refs"] = provenance_refs
+    if request_fingerprint is not None:
+        frontmatter["request_fingerprint"] = request_fingerprint
+    if language is not None:
+        frontmatter["language"] = language
+    if language_rule is not None:
+        frontmatter["language_rule"] = language_rule
+    return frontmatter
 
 
 def _draft_note_text(
@@ -524,17 +566,254 @@ def _draft_note_text(
     return dump_frontmatter(frontmatter, body) + checkbox_block
 
 
-def _emit_receipt(event: str, payload: dict[str, Any], *, outbox_path: Path, trace_id: str | None) -> str:
-    event_id = uuid4().hex
-    record = {
-        "event": event,
-        "event_id": event_id,
-        "trace_id": trace_id or uuid4().hex,
-        "source": CREATE_EVENT_SOURCE,
-        "timestamp": _iso(_now()),
-        "payload": payload,
+def _existing_receipt(
+    outbox_path: Path, event: str, event_id: str, *, _lock_held: bool = False
+) -> dict[str, Any] | None:
+    records = read_jsonl_outbox_records(
+        outbox_path,
+        _lock_held=_lock_held,
+        read_only=not _lock_held,
+    )
+    first_match: dict[str, Any] | None = None
+    for record in records:
+        if record.get("event_id") != event_id:
+            continue
+        if record.get("event") != event:
+            raise CreateIdempotencyConflictError(
+                f"deterministic Create receipt event_id is not globally unique: {event_id}"
+            )
+        if first_match is None:
+            first_match = record
+        elif record.get("payload") != first_match.get("payload"):
+            raise CreateIdempotencyConflictError(
+                f"deterministic Create receipt has conflicting duplicate: {event}/{event_id}"
+            )
+    return first_match
+
+
+def _draft_was_expired(
+    outbox_path: Path, draft_id: str, proposal_receipt_id: str
+) -> bool:
+    """Return whether the matching proposal generation was explicitly expired."""
+
+    return any(
+        record.get("event") == CREATE_EXPIRED_EVENT
+        and isinstance(record.get("payload"), dict)
+        and record["payload"].get("draft_id") == draft_id
+        and record["payload"].get("proposal_receipt_id") == proposal_receipt_id
+        for record in read_jsonl_outbox_records(outbox_path, read_only=True)
+    )
+
+
+def _proposal_receipt_id_for_draft(
+    outbox_path: Path, draft_id: str, draft_sha256: str
+) -> str | None:
+    for record in read_jsonl_outbox_records(outbox_path, read_only=True):
+        payload = record.get("payload")
+        if (
+            record.get("event") == CREATE_PROPOSED_EVENT
+            and isinstance(payload, dict)
+            and payload.get("draft_id") == draft_id
+            and payload.get("draft_sha256") == draft_sha256
+        ):
+            event_id = record.get("event_id")
+            return event_id if isinstance(event_id, str) else None
+    return None
+
+
+def _existing_expiry_receipt_id(
+    outbox_path: Path,
+    *,
+    draft_id: str,
+    draft_sha256: str,
+    proposal_receipt_id: str | None,
+) -> str | None:
+    for record in read_jsonl_outbox_records(outbox_path, read_only=True):
+        payload = record.get("payload")
+        if not (
+            record.get("event") == CREATE_EXPIRED_EVENT
+            and isinstance(payload, dict)
+            and payload.get("draft_id") == draft_id
+            and payload.get("draft_sha256") == draft_sha256
+            and payload.get("proposal_receipt_id") == proposal_receipt_id
+        ):
+            continue
+        event_id = record.get("event_id")
+        return event_id if isinstance(event_id, str) else ""
+    return None
+
+
+def _request_fingerprint(request: CreateRequest) -> str:
+    material = {
+        "kind": request.kind.value,
+        "title": request.title,
+        "question": request.question,
+        "language_policy": request.language_policy,
+        "sources": [
+            {
+                "object_id": source.object_id,
+                "note_path": source.note_path,
+                "text_sha256": hashlib.sha256(source.text.encode("utf-8")).hexdigest(),
+                "raw_bytes_sha256": hashlib.sha256(
+                    source.raw_bytes
+                    if source.raw_bytes is not None
+                    else source.text.encode("utf-8")
+                ).hexdigest(),
+                "quoted_spans": list(source.quoted_spans),
+                "language": source.language,
+                "review_state": source.review_state,
+                "provenance_ref": source.provenance_ref,
+            }
+            for source in request.sources
+        ],
     }
-    append_jsonl_outbox_event(outbox_path, record, default_source=CREATE_EVENT_SOURCE)
+    encoded = json.dumps(material, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _replay_draft_metadata(
+    draft_path: Path,
+    *,
+    request_fingerprint: str,
+    draft_id: str,
+) -> tuple[dict[str, Any], str] | None:
+    if not draft_path.exists():
+        return None
+    try:
+        raw_bytes = draft_path.read_bytes()
+        raw = raw_bytes.decode("utf-8")
+        frontmatter, _body = load_frontmatter(raw)
+    except (OSError, UnicodeError, ValueError) as exc:
+        raise CreateIdempotencyConflictError(
+            f"deterministic Create draft cannot be inspected: {draft_path}"
+        ) from exc
+    if (
+        frontmatter.get("uuid") != draft_id
+        or frontmatter.get("request_fingerprint") != request_fingerprint
+    ):
+        raise CreateIdempotencyConflictError(
+            f"deterministic Create draft identity/content mismatch: {draft_path}"
+        )
+    draft_sha256 = hashlib.sha256(raw_bytes).hexdigest()
+    integrity_path = _draft_integrity_path(draft_path)
+    try:
+        integrity = json.loads(integrity_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, TypeError, ValueError) as exc:
+        raise CreateIdempotencyConflictError(
+            f"deterministic Create draft integrity record is missing or invalid: {draft_path}"
+        ) from exc
+    if not isinstance(integrity, dict) or (
+        integrity.get("draft_id") != draft_id
+        or integrity.get("request_fingerprint") != request_fingerprint
+        or integrity.get("draft_sha256") != draft_sha256
+    ):
+        raise CreateIdempotencyConflictError(
+            f"deterministic Create draft integrity does not match draft: {draft_path}"
+        )
+    return frontmatter, draft_sha256
+
+
+def _draft_integrity_path(draft_path: Path) -> Path:
+    return draft_path.with_suffix(draft_path.suffix + ".integrity.json")
+
+
+@contextmanager
+def _draft_publication_lock(draft_path: Path) -> Iterator[Path]:
+    """Serialize deterministic draft, integrity, and receipt publication."""
+
+    canonical_path = draft_path.expanduser().resolve(strict=False)
+    canonical_path.parent.mkdir(parents=True, exist_ok=True)
+    lock_path = canonical_path.with_name(f".{canonical_path.name}.publication.lock")
+    with lock_path.open("a", encoding="utf-8") as handle:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        try:
+            yield canonical_path
+        finally:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
+def _atomic_write_bytes(path: Path, content: bytes) -> None:
+    temporary = path.with_name(f".{path.name}.{uuid4().hex}.tmp")
+    try:
+        with temporary.open("wb") as handle:
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+        directory_fd = os.open(str(path.parent), os.O_RDONLY)
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def _write_draft_integrity(
+    draft_path: Path,
+    *,
+    draft_id: str,
+    request_fingerprint: str | None,
+    draft_sha256: str,
+) -> None:
+    integrity_path = _draft_integrity_path(draft_path)
+    _atomic_write_bytes(
+        integrity_path,
+        (
+            json.dumps(
+                {
+                    "draft_id": draft_id,
+                    "request_fingerprint": request_fingerprint,
+                    "draft_sha256": draft_sha256,
+                },
+                sort_keys=True,
+            )
+            + "\n"
+        ).encode("utf-8"),
+    )
+
+
+def _emit_receipt(
+    event: str,
+    payload: dict[str, Any],
+    *,
+    outbox_path: Path,
+    trace_id: str | None,
+    event_id: str | None = None,
+    draft_path: Path | None = None,
+    expected_draft_sha256: str | None = None,
+) -> str:
+    event_id = event_id or uuid4().hex
+    with jsonl_outbox_append_lock(outbox_path):
+        if draft_path is not None and expected_draft_sha256 is not None:
+            try:
+                actual_draft_sha256 = hashlib.sha256(draft_path.read_bytes()).hexdigest()
+            except OSError as exc:
+                raise CreateIdempotencyConflictError(
+                    f"deterministic Create draft disappeared before receipt: {draft_path}"
+                ) from exc
+            if actual_draft_sha256 != expected_draft_sha256:
+                raise CreateIdempotencyConflictError(
+                    f"deterministic Create draft changed before receipt: {draft_path}"
+                )
+        existing = _existing_receipt(outbox_path, event, event_id, _lock_held=True)
+        if existing is not None:
+            if existing.get("payload") != payload:
+                raise CreateIdempotencyConflictError(
+                    f"deterministic Create receipt payload mismatch: {event}/{event_id}"
+                )
+            return event_id
+        record = {
+            "event": event,
+            "event_id": event_id,
+            "trace_id": trace_id or uuid4().hex,
+            "source": CREATE_EVENT_SOURCE,
+            "timestamp": _iso(_now()),
+            "payload": payload,
+        }
+        append_jsonl_outbox_event(
+            outbox_path, record, default_source=CREATE_EVENT_SOURCE, _lock_held=True
+        )
     return event_id
 
 
@@ -546,6 +825,9 @@ def run_create_pass(
     write_guard: WriteGuard = DEFAULT_WRITE_GUARD,
     staleness_days: int = DEFAULT_STALENESS_DAYS,
     now: datetime | None = None,
+    draft_frontmatter_enricher: Callable[[CompilationDraft], Mapping[str, Any]] | None = None,
+    draft_id: str | None = None,
+    receipt_id: str | None = None,
 ) -> CreatePassReport:
     """Run one Create pass end to end: activation gate -> cognition ->
     CompilationDraft -> citation validation -> staging write -> receipt.
@@ -581,6 +863,92 @@ def run_create_pass(
     # claim (spec §2.2 keystone).
     _validate_citations(request.sources)
 
+    request_fingerprint = _request_fingerprint(request) if draft_id is not None else None
+    resolved_vault_root = Path(vault_root).expanduser().resolve()
+    replay_draft_path = (
+        _drafts_dir(resolved_vault_root) / f"{draft_id}.md" if draft_id is not None else None
+    )
+    if replay_draft_path is not None:
+        # Replay inspection and the expiry sweep share this lock.  Otherwise a
+        # receipt/draft pair can be observed between two expiry deletes and a
+        # caller can return an activatable report for a draft that no longer
+        # exists.
+        with _draft_publication_lock(replay_draft_path):
+            replay = _replay_draft_metadata(
+                replay_draft_path,
+                request_fingerprint=request_fingerprint or "",
+                draft_id=draft_id or "",
+            )
+            existing_receipt = (
+                _existing_receipt(outbox_path, CREATE_PROPOSED_EVENT, receipt_id)
+                if receipt_id is not None
+                else None
+            )
+            if replay is not None and existing_receipt is not None and _draft_was_expired(
+                outbox_path, draft_id or "", receipt_id or ""
+            ):
+                raise CreateIdempotencyConflictError(
+                    f"deterministic Create proposal already expired: {replay_draft_path}"
+                )
+            if existing_receipt is not None and replay is None:
+                if _draft_was_expired(
+                    outbox_path, draft_id or "", receipt_id or ""
+                ):
+                    # Expiry deliberately removed the old bytes. Rebuild the
+                    # proposal with a fresh receipt identity rather than
+                    # pretending the new draft is byte-identical to history.
+                    receipt_id = None
+                    existing_receipt = None
+                else:
+                    raise CreateIdempotencyConflictError(
+                        f"deterministic Create receipt has no draft: {replay_draft_path}"
+                    )
+            replay_payload: dict[str, Any] | None = None
+            if replay is not None and receipt_id is not None:
+                replay_frontmatter = replay[0]
+                proposed_by = replay_frontmatter.get("proposed_by", {})
+                replay_payload = {
+                    "draft_id": draft_id,
+                    "kind": request.kind.value,
+                    "sources": replay_frontmatter.get("sources", []),
+                    "cognition_metadata": proposed_by.get("cognition", {}),
+                    "draft_path": str(replay_draft_path.relative_to(resolved_vault_root)),
+                    "language": replay_frontmatter.get("language"),
+                    "language_rule": replay_frontmatter.get("language_rule"),
+                    "request_fingerprint": request_fingerprint,
+                    "draft_sha256": replay[1],
+                }
+            if replay is not None and existing_receipt is not None:
+                if existing_receipt.get("payload") != replay_payload:
+                    raise CreateIdempotencyConflictError(
+                        f"deterministic Create replay receipt payload does not match draft: {replay_draft_path}"
+                    )
+                return CreatePassReport(
+                    activatable=True,
+                    blocked_reasons=(),
+                    draft_path=str(replay_draft_path.relative_to(resolved_vault_root)),
+                    receipt_id=receipt_id,
+                    kind=request.kind,
+                )
+            if replay is not None and receipt_id is not None:
+                assert replay_payload is not None
+                _emit_receipt(
+                    CREATE_PROPOSED_EVENT,
+                    replay_payload,
+                    outbox_path=outbox_path,
+                    trace_id=request.trace_id,
+                    event_id=receipt_id,
+                    draft_path=replay_draft_path,
+                    expected_draft_sha256=replay[1],
+                )
+                return CreatePassReport(
+                    activatable=True,
+                    blocked_reasons=(),
+                    draft_path=str(replay_draft_path.relative_to(resolved_vault_root)),
+                    receipt_id=receipt_id,
+                    kind=request.kind,
+                )
+
     language, language_rule = _resolve_output_language(
         request.sources, language_policy=request.language_policy
     )
@@ -601,10 +969,12 @@ def run_create_pass(
         trace_ref=request.trace_id,
     )
     draft: CompilationDraft = build_compilation_draft(context, title=request.title)
+    if draft_id is not None:
+        draft = draft.model_copy(update={"artifact_id": draft_id})
 
     write_guard.assert_writes_allowed(CREATE_STAGING_WRITE_ACTION)
 
-    vault_root = Path(vault_root).expanduser().resolve()
+    vault_root = resolved_vault_root
     drafts_dir = _drafts_dir(vault_root)
     drafts_dir.mkdir(parents=True, exist_ok=True)
 
@@ -615,25 +985,70 @@ def run_create_pass(
         cognition_metadata=cognition_metadata,
         created_at=now,
         staleness_days=staleness_days,
+        request_fingerprint=request_fingerprint,
+        language=language,
+        language_rule=language_rule,
     )
-    note_text = _draft_note_text(frontmatter=frontmatter, body=draft.body or "", draft_id=draft.artifact_id)
+    if draft_frontmatter_enricher is not None:
+        extra_frontmatter = dict(draft_frontmatter_enricher(draft))
+        reserved = set(extra_frontmatter) & set(frontmatter)
+        if reserved:
+            raise ValueError(
+                "Create draft metadata cannot override engine-owned frontmatter fields: "
+                + ", ".join(sorted(reserved))
+            )
+        frontmatter.update(extra_frontmatter)
+    note_text = _draft_note_text(
+        frontmatter=frontmatter, body=draft.body or "", draft_id=draft.artifact_id
+    )
     draft_path = drafts_dir / f"{draft.artifact_id}.md"
-    draft_path.write_text(note_text, encoding="utf-8")
+    with _draft_publication_lock(draft_path):
+        draft_needs_write = not (draft_id is not None and draft_path.exists())
+        if not draft_needs_write:
+            replay = _replay_draft_metadata(
+                draft_path,
+                request_fingerprint=request_fingerprint or "",
+                draft_id=draft.artifact_id,
+            )
+            if replay is None:
+                raise CreateIdempotencyConflictError(
+                    f"deterministic Create draft disappeared during replay: {draft_path}"
+                )
+            draft_sha256 = replay[1]
+        else:
+            draft_sha256 = hashlib.sha256(note_text.encode("utf-8")).hexdigest()
+        if draft_needs_write:
+            # Publish the expected identity first. If the process dies before the
+            # atomic draft replace, the next deterministic retry sees no draft and
+            # safely rebuilds it; it never accepts a draft without its expected
+            # bytes or rewrites an already-validated replay artifact.
+            _write_draft_integrity(
+                draft_path,
+                draft_id=draft.artifact_id,
+                request_fingerprint=request_fingerprint,
+                draft_sha256=draft_sha256,
+            )
+            _atomic_write_bytes(draft_path, note_text.encode("utf-8"))
 
-    receipt_id = _emit_receipt(
-        CREATE_PROPOSED_EVENT,
-        {
-            "draft_id": draft.artifact_id,
-            "kind": request.kind.value,
-            "sources": [s.object_id for s in request.sources],
-            "cognition_metadata": cognition_metadata,
-            "draft_path": str(draft_path.relative_to(vault_root)),
-            "language": language,
-            "language_rule": language_rule,
-        },
-        outbox_path=outbox_path,
-        trace_id=request.trace_id,
-    )
+        receipt_id = _emit_receipt(
+            CREATE_PROPOSED_EVENT,
+            {
+                "draft_id": draft.artifact_id,
+                "kind": request.kind.value,
+                "sources": [s.object_id for s in request.sources],
+                "cognition_metadata": cognition_metadata,
+                "draft_path": str(draft_path.relative_to(vault_root)),
+                "language": language,
+                "language_rule": language_rule,
+                "request_fingerprint": request_fingerprint,
+                "draft_sha256": draft_sha256,
+            },
+            outbox_path=outbox_path,
+            trace_id=request.trace_id,
+            event_id=receipt_id,
+            draft_path=draft_path,
+            expected_draft_sha256=draft_sha256,
+        )
 
     return CreatePassReport(
         activatable=True,
@@ -761,42 +1176,87 @@ def sweep_expired_drafts(
         return ExpirySweepReport(expired=(), receipt_ids=())
 
     for path in sorted(drafts_dir.glob("*.md")):
-        try:
-            text = path.read_text(encoding="utf-8")
-        except OSError:
-            continue
-        if _is_checked(text):
-            # An accepted draft is EXP-4's concern (acceptance/promotion);
-            # this sweep never removes a checked draft.
-            continue
-        frontmatter, _body = load_frontmatter(text)
-        expires_raw = frontmatter.get("expires")
-        if not isinstance(expires_raw, str) or not expires_raw:
-            continue
-        try:
-            expires_at = datetime.fromisoformat(expires_raw.replace("Z", "+00:00"))
-        except ValueError:
-            continue
-        if expires_at > now:
-            continue
+        # Expiry and deterministic replay must serialize on the same draft
+        # lock.  The lock covers deletion and its expiry receipt so a replay
+        # cannot return a draft that expiry removed mid-inspection.
+        with _draft_publication_lock(path) as locked_path:
+            try:
+                text = locked_path.read_text(encoding="utf-8")
+            except OSError:
+                continue
+            if _is_checked(text):
+                # An accepted draft is EXP-4's concern (acceptance/promotion);
+                # this sweep never removes a checked draft.
+                continue
+            frontmatter, _body = load_frontmatter(text)
+            expires_raw = frontmatter.get("expires")
+            if not isinstance(expires_raw, str) or not expires_raw:
+                continue
+            try:
+                expires_at = datetime.fromisoformat(expires_raw.replace("Z", "+00:00"))
+            except ValueError:
+                continue
+            if expires_at > now:
+                continue
 
-        draft_id = str(frontmatter.get("uuid") or path.stem)
-        try:
-            path.unlink()
-        except OSError:
-            continue
-        expired.append(draft_id)
-        receipt_id = _emit_receipt(
-            CREATE_EXPIRED_EVENT,
-            {
+            draft_id = str(frontmatter.get("uuid") or locked_path.stem)
+            try:
+                draft_sha256 = hashlib.sha256(locked_path.read_bytes()).hexdigest()
+            except OSError:
+                continue
+            proposal_receipt_id = _proposal_receipt_id_for_draft(
+                outbox_path, draft_id, draft_sha256
+            )
+            expiry_payload = {
                 "draft_id": draft_id,
-                "draft_path": str(path.relative_to(vault_root)),
+                "draft_path": str(locked_path.relative_to(vault_root)),
+                "draft_sha256": draft_sha256,
+                "proposal_receipt_id": proposal_receipt_id,
                 "expired_at": _iso(now),
-            },
-            outbox_path=outbox_path,
-            trace_id=None,
-        )
-        receipt_ids.append(receipt_id)
+            }
+            try:
+                receipt_id = _existing_expiry_receipt_id(
+                    outbox_path,
+                    draft_id=draft_id,
+                    draft_sha256=draft_sha256,
+                    proposal_receipt_id=proposal_receipt_id,
+                )
+                if receipt_id is None:
+                    _emit_receipt(
+                        CREATE_EXPIRED_EVENT,
+                        expiry_payload,
+                        outbox_path=outbox_path,
+                        trace_id=None,
+                    )
+                    receipt_id = _existing_expiry_receipt_id(
+                        outbox_path,
+                        draft_id=draft_id,
+                        draft_sha256=draft_sha256,
+                        proposal_receipt_id=proposal_receipt_id,
+                    )
+                if not receipt_id:
+                    raise RuntimeError("Create draft expiry receipt was not durable")
+            except Exception:
+                # Keep the draft intact when its audit receipt cannot be
+                # published; a later sweep can retry safely.
+                _LOGGER.warning(
+                    "Create draft expiry receipt failed; preserving draft: %s",
+                    locked_path,
+                    exc_info=True,
+                )
+                continue
+            try:
+                locked_path.unlink()
+            except OSError:
+                continue
+            try:
+                _draft_integrity_path(locked_path).unlink(missing_ok=True)
+            except OSError:
+                # Expiry is deliberately silent-safe; an orphaned integrity sidecar
+                # is harmless and can be cleaned by the next maintenance pass.
+                pass
+            expired.append(draft_id)
+            receipt_ids.append(receipt_id)
 
     return ExpirySweepReport(expired=tuple(expired), receipt_ids=tuple(receipt_ids))
 
@@ -812,6 +1272,7 @@ __all__ = [
     "DRAFTS_SUBDIR",
     "SUPPORTED_OUTPUT_KINDS",
     "CreateBlockedError",
+    "CreateIdempotencyConflictError",
     "CreatePassReport",
     "CreateRequest",
     "DigestActivityInput",

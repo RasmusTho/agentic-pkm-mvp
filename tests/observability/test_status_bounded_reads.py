@@ -14,8 +14,12 @@ from app.observability.status_service import (
     _iter_tail_lines,
     _last_watcher_run_record,
     _read_last_json_record,
+    _status_outbox_path,
     _status_context_dimensions,
+    OrientationSignals,
 )
+from app.observability.status_model import IngestionStatus, WorkerQueueStatus
+from app.orientation.runtime import build_orientation_frame
 
 
 def _write_lines(path: Path, line: str, count: int) -> None:
@@ -42,6 +46,22 @@ def test_iter_tail_lines_missing_file(tmp_path: Path) -> None:
     assert _iter_tail_lines(tmp_path / "missing.jsonl") == []
 
 
+def test_default_read_only_outbox_resolution_does_not_create_path(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("INDEX_OUTBOX_PATH", raising=False)
+
+    status_path = _status_outbox_path()
+    from app.health_contract import _read_tail_records
+
+    assert not status_path.exists()
+    assert _read_tail_records() == []
+    assert _count_events(status_path).panel_runs_total == 0
+    assert not status_path.exists()
+    assert not status_path.parent.exists()
+
+
 def test_count_outbox_events_capped(tmp_path: Path) -> None:
     path = tmp_path / "outbox.jsonl"
     _write_lines(path, "{}", _STATUS_MAX_OUTBOX_LINES + 500)
@@ -56,6 +76,54 @@ def test_count_outbox_events_under_cap(tmp_path: Path) -> None:
     count, truncated = _count_outbox_events(path)
     assert count == 10
     assert truncated is False
+
+
+def test_count_outbox_events_fails_closed_on_malformed_record(tmp_path: Path) -> None:
+    path = tmp_path / "outbox.jsonl"
+    path.write_bytes(b'{"event":"valid"}\n{')
+
+    count, truncated = _count_outbox_events(path)
+
+    assert count is None
+    assert truncated is False
+
+
+def test_status_event_and_sla_counters_remain_unknown_on_corruption(tmp_path: Path) -> None:
+    path = tmp_path / "outbox.jsonl"
+    path.write_bytes(b'{"event":"panel.intent.executed"}\n{')
+
+    events = _count_events(path)
+    sla = _delivery_sla_status(path)
+
+    assert events.panel_runs_total is None
+    assert sla.outcomes_total is None
+
+
+def test_oversized_retained_record_stays_unknown_through_orientation(tmp_path: Path) -> None:
+    path = tmp_path / "oversized-outbox.jsonl"
+    path.write_text(
+        json.dumps(
+            {
+                "event": "panel.intent.executed",
+                "payload": "x" * (_STATUS_TAIL_BYTES + 1_024),
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    events = _count_events(path)
+    sla = _delivery_sla_status(path)
+    frame = build_orientation_frame(
+        OrientationSignals(
+            events=events,
+            ingestion=IngestionStatus(),
+            worker_queue=WorkerQueueStatus(mode="jsonl"),
+        )
+    )
+
+    assert events.panel_runs_total is None
+    assert sla.outcomes_total is None
+    assert "counters unavailable" in " ".join(frame.explanation.open_items)
 
 
 def test_outbox_lag_hides_pending_when_truncated(tmp_path: Path, monkeypatch) -> None:
@@ -96,6 +164,48 @@ def test_count_events_does_not_read_entire_file(tmp_path: Path) -> None:
     counters = _count_events(path)
     # We tail-read at most ~8 MB worth of lines; the counter must reflect that bound.
     assert counters.watcher_runs_total < line_count
+
+
+def test_status_outbox_consumers_preserve_unicode_line_separators(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "outbox.jsonl"
+    path.write_text(
+        json.dumps(
+            {
+                "event": "panel.intent.executed",
+                "timestamp": "2026-08-29T00:00:00Z",
+                "payload": {"text": "before\u2028after\u2029end"},
+            },
+            ensure_ascii=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    counters = _count_events(path)
+
+    assert counters.panel_runs_total == 1
+
+
+def test_status_outbox_consumers_fail_closed_on_malformed_tail(tmp_path: Path) -> None:
+    path = tmp_path / "outbox.jsonl"
+    path.write_text(json.dumps({"event": "panel.intent.executed"}) + "\n{", encoding="utf-8")
+
+    assert _read_last_json_record(path) is None
+
+
+def test_status_outbox_reads_do_not_mutate_unterminated_tail_or_create_lock(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "outbox.jsonl"
+    raw = json.dumps({"event": "panel.intent.executed"}).encode("utf-8")
+    path.write_bytes(raw)
+    lock_path = path.with_name(f".{path.name}.append.lock")
+
+    assert _read_last_json_record(path) == {"event": "panel.intent.executed"}
+    assert path.read_bytes() == raw
+    assert not lock_path.exists()
 
 
 def test_delivery_sla_does_not_read_entire_file(tmp_path: Path) -> None:

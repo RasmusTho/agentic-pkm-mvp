@@ -13,21 +13,22 @@ from app.outbox.events import INDEX_OUTBOX_PATH
 from app.services.note_update import apply_promotion_frontmatter
 from app.components.concurrency import EventDedupStore
 from app.objects import DomainObject, ObjectStore
-from app.services.outbox import derive_idempotency_key, payload_fingerprint, write_outbox_event
+from app.services.outbox import (
+    append_jsonl_record,
+    derive_idempotency_key,
+    payload_fingerprint,
+    read_jsonl_outbox_records,
+    write_outbox_event,
+)
 
 
 def _read_outbox(path: Path, start: int = 0) -> Iterable[dict]:
-    if not path.exists():
-        return []
-    lines = path.read_text(encoding="utf-8").splitlines()
-    return [json.loads(line) for line in lines[start:] if line.strip()]
+    return read_jsonl_outbox_records(path)[start:]
 
 
 def _write_outbox(path: Path, events: Iterable[OutboxEvent]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("a", encoding="utf-8") as handle:
-        for ev in events:
-            handle.write(json.dumps(ev.model_dump(mode="json"), ensure_ascii=False) + "\n")
+    for ev in events:
+        append_jsonl_record(path, ev.model_dump(mode="json"), require_event_id=True)
 
 
 def _resolve_cursor_path(outbox_path: Path, cursor_path: Path | None, snapshot_path: Path | None) -> Path | None:
@@ -279,18 +280,10 @@ def consume_promotion_intents(
     snapshot_path: Path | None = None,
 ) -> dict:
     resolved_outbox = Path(outbox_path) if outbox_path else Path(INDEX_OUTBOX_PATH)
-    lines = resolved_outbox.read_text(encoding="utf-8").splitlines() if resolved_outbox.exists() else []
+    lines = read_jsonl_outbox_records(resolved_outbox)
     resolved_cursor = _resolve_cursor_path(resolved_outbox, cursor_path, snapshot_path)
     start_idx = _load_cursor(resolved_cursor, resolved_outbox, len(lines))
-
-    records = []
-    for line in lines[start_idx:]:
-        if not line.strip():
-            continue
-        try:
-            records.append(json.loads(line))
-        except Exception:
-            continue
+    records = lines[start_idx:]
 
     emitted: list[OutboxEvent] = []
     summary = {"intents_seen": 0, "applied": 0, "errors": 0, "emitted": 0, "skipped_duplicates": 0}

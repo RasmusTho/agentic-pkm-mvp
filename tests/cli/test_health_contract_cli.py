@@ -1,3 +1,4 @@
+import importlib
 import json
 from pathlib import Path
 from uuid import uuid4
@@ -45,6 +46,48 @@ def test_health_status_cli_json(monkeypatch, tmp_path: Path) -> None:
     assert payload["settings_source"]["path"].endswith("health.md")
     assert payload["writes_allowed"] is True
     assert payload["write_guard_reason"] is None
+
+
+def test_run_health_does_not_create_default_outbox_path(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """Health inspection must not create the producer-owned outbox path."""
+    health_module = importlib.import_module("app.cli.health")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("INDEX_OUTBOX_PATH", raising=False)
+
+    def ok(*args, **kwargs):
+        return {"ok": True, "detail": "ok"}
+
+    for name in (
+        "_check_ffmpeg",
+        "_check_yt_dlp",
+        "_check_dead_letters",
+        "_check_panel_actions",
+        "_check_ollama",
+        "_check_obsidian_dependencies",
+        "_check_llm_router",
+        "_check_llm_providers",
+        "_check_embedding_index",
+        "_check_companion_diagnostics",
+    ):
+        monkeypatch.setattr(health_module, name, ok)
+    monkeypatch.setattr(health_module, "_check_llm_task_routes", ok)
+    monkeypatch.setattr(health_module, "_watcher_runtime_status", lambda: {"ok": True})
+    monkeypatch.setattr(health_module, "_worker_runtime_status", lambda: {"ok": True})
+    monkeypatch.setattr(health_module, "_db_runtime_status", lambda: {"ok": True})
+    monkeypatch.setattr(health_module, "_llm_runtime_status", lambda *_args: {"ok": True})
+    monkeypatch.setattr(health_module, "_settings_ingestion_status", lambda: {})
+    monkeypatch.setattr(health_module, "check_v6_seams", lambda: {})
+    monkeypatch.setattr(health_module, "get_runtime_version", lambda: {"git_sha": "test"})
+
+    result = health_module.run_health()
+    outbox_path = tmp_path / "tmp" / "index-outbox.jsonl"
+
+    assert result["checks"]["index_outbox"]["ok"] is False
+    assert result["checks"]["index_outbox"]["data"]["status"] == "missing"
+    assert not outbox_path.exists()
+    assert not outbox_path.parent.exists()
 
 
 def test_health_status_cli_environment_explicit_dev(monkeypatch, tmp_path: Path) -> None:

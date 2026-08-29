@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from datetime import date
 from pathlib import Path
@@ -8,6 +9,7 @@ import jsonschema
 import pytest
 
 from app.standing_questions import question_store as question_store_module
+from app.knowledge.errors import KnowledgeWriteConflict
 from app.standing_questions.question_store import (
     HumanOwnedFieldMutationError,
     QuestionStore,
@@ -71,6 +73,7 @@ def test_engine_may_append_system_owned_fields_only(tmp_path: Path) -> None:
                     "confidence_class": "high",
                     "provenance_ref": "receipt:abc",
                     "quoted_span": "evidence",
+                    "content_hash": hashlib.sha256(b"evidence").hexdigest(),
                 }
             ],
             "candidate_answer_ref": "note:candidate",
@@ -83,6 +86,46 @@ def test_engine_may_append_system_owned_fields_only(tmp_path: Path) -> None:
     assert updated["status"] == "open"
     assert updated["created_at"] == note["created_at"]
     assert updated["evidence"][0]["artifact_ref"] == "note:abc"
+
+
+def test_hashless_legacy_evidence_is_rejected_until_explicit_backfill() -> None:
+    note = _minimal_valid_note(
+        evidence=[
+            {
+                "artifact_ref": "note:legacy",
+                "source_stream": "vault.activity",
+                "matched_at": "2026-07-11T11:00:00Z",
+                "confidence_class": "high",
+                "provenance_ref": "receipt:legacy",
+                "quoted_span": "historical bytes",
+            }
+        ]
+    )
+
+    with pytest.raises(jsonschema.ValidationError, match="content_hash"):
+        validate_question_note(note)
+
+
+def test_conditional_system_update_rejects_body_only_concurrent_edit(tmp_path: Path) -> None:
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    store = _store(vault)
+    note, _receipt = store.create_question(
+        text="Original question", scope="work", registered_via="explicit"
+    )
+    observed, observed_version = store.read_question_with_version(note["question_id"])
+    path = vault / "questions" / f"{note['question_id']}.md"
+    path.write_text(path.read_text(encoding="utf-8") + "\nconcurrent body marker\n", encoding="utf-8")
+
+    with pytest.raises(KnowledgeWriteConflict):
+        store.update_system_fields_if_unchanged(
+            note["question_id"],
+            observed,
+            {"last_refreshed_at": "2026-08-29T12:00:00Z"},
+            expected_version=observed_version,
+        )
+
+    assert "concurrent body marker" in path.read_text(encoding="utf-8")
 
 
 def _minimal_valid_note(**overrides: object) -> dict[str, object]:
@@ -198,6 +241,7 @@ def test_datetime_schema_type_and_nullable_field_semantics() -> None:
             "confidence_class": "high",
             "provenance_ref": "receipt:abc",
             "quoted_span": "evidence",
+            "content_hash": hashlib.sha256(b"evidence").hexdigest(),
         }
     ]
     with pytest.raises(jsonschema.ValidationError) as exc_info:
@@ -236,6 +280,7 @@ def test_all_schema_datetime_fields_use_the_same_rfc3339_boundary(
             "confidence_class": "high",
             "provenance_ref": "receipt:abc",
             "quoted_span": "evidence",
+            "content_hash": hashlib.sha256(b"evidence").hexdigest(),
         }
         valid_note["evidence"] = [{**evidence, "matched_at": "2016-12-31T23:59:60Z"}]
         invalid_note["evidence"] = [{**evidence, "matched_at": invalid_value}]

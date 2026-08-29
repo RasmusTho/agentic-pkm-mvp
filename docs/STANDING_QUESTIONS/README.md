@@ -1,9 +1,9 @@
-State: Specification directory — FILED (parent #3325; children #3326–#3330 filed 2026-07-07, all agent:blocked at filing per the uniform closed-loops filing policy). System-level source of truth for building Standing Questions, the third of the seven uncaptured closed loops named in `docs/research/yggdrasil-closed-loops-ideation.md`. Grounded in that ideation capture; not itself the grounding research. GitHub issues are execution artifacts; this spec remains the contract.
+State: Specification directory — SQ-04 candidate implementation is under PR #5174 for #3327; parent #3325 remains the validation hub and SQ-05 is still the review-surface follow-up. System-level source of truth for building Standing Questions, the third of the seven uncaptured closed loops named in `docs/research/yggdrasil-closed-loops-ideation.md`. Grounded in that ideation capture; not itself the grounding research. GitHub issues are execution artifacts; this spec remains the contract.
 Doc role: Capability specification (feature-breakdown lane)
 Temporal class: strategic
 Review cadence: event-driven (task merges, parent-issue lifecycle)
 Source of truth: this directory; GitHub issues (#3325–#3330) are execution artifacts, this spec is the contract
-Last reviewed: 2026-07-07
+Last reviewed: 2026-08-29
 
 # Standing Questions — Specification
 
@@ -35,18 +35,18 @@ seam and `CompilationDraft`:
 | Guarded knowledge-write seam (`app/knowledge/write_ops.py::guard.assert_writes_allowed`), `WriteReceipt` | every Question-note and evidence-log write (SQ-01/03/04) |
 | Note-store + rebuildable-projection pattern (`docs/EPISODE_RESOLUTION_ENGINE/EPISODE_NOTE_STORE_AND_PROJECTION.md`, `app/jobs/decisions_projection.py` precedent) | SQ-01's persistence substrate, copied structurally |
 | Schema-constrained LLM completion with explicit `UNKNOWN` (`app/components/llm/constrained.py::constrained_completion`, `docs/RUNTIME_CORRECTNESS_KERNEL/STRUCTURED_INTENT_OUTPUT_WITH_UNKNOWN.md`) | SQ-02's capture-intent classification and SQ-03's evidence-association judgment — the repo's standing pattern for "LLM cognition, deterministic gate" |
+| Existing SQ-03 matcher plus `run_standing_questions_tick` composition (`app/standing_questions/evidence_matching.py`), called from `app.watcher.vault_watcher.run_watcher_tick` | The production ordering: attach evidence first, then derive and run SQ-04 refresh from the updated Question note |
 | Create engine (`docs/MIMER_CAPABILITY_HARDENING/EXPANSION_CONNECT_AND_CREATE.md` §2, `create.answer_note` kind, `CompilationDraft`, staging, citation validation, in-draft `AI-åtgärder` acceptance checkbox) | SQ-04's candidate-answer drafting, given a new trigger (evidence-delta) instead of explicit-ask |
 | Declined-proposal ledger (`EXPANSION_CONNECT_AND_CREATE.md` §3) | SQ-05's dismiss path — a dismissed candidate answer is a decline, not a deletion |
 | Panel `AI-åtgärder` checkbox + Companion UI read-mode checkbox-projection acceleration (`docs/PANEL_AGENT.md`) | SQ-05's visual accept/dismiss — a UI click projects the same governed checkbox semantics, never a parallel authority store |
 | FRONTMATTER.md human-owned vs. system-owned (bounded) field ownership model | the Question note's write discipline (SQ-01): human owns `text`; system appends bounded fields only |
 
-**External, cross-capability dependency (named once, load-bearing):** SQ-04 needs the Create engine
-(EXP-3, `docs/MIMER_CAPABILITY_HARDENING/EXPANSION_CONNECT_AND_CREATE.md`) delivered. That spec is
-"Advisory until child issues are delivered" as of this writing — **EXP-3 has not merged**. SQ-04 is
-fully specifiable now (the trigger, contradiction-surfacing, and partial-failure discipline are this
-capability's own contribution), but it cannot be *implemented* before EXP-3 lands. See SQ-04's
-Context for how its GitHub issue should actually be labeled despite the uniform drafting convention
-used below.
+**External, cross-capability dependency (named once, load-bearing):** SQ-04 reuses the delivered
+Create engine (EXP-3, `docs/MIMER_CAPABILITY_HARDENING/EXPANSION_CONNECT_AND_CREATE.md`, #2996).
+The SQ-04 implementation owns the evidence-delta trigger, the production match-then-refresh
+composition, contradiction surfacing, and pending-review discipline; it does not duplicate Create's
+synthesis, staging, citation, or expiry contract. The remaining end-to-end capability gap is SQ-05's
+governed review surface and owner/UAT acceptance.
 
 ## Implementation tasks (execution order)
 
@@ -55,7 +55,7 @@ used below.
 | 1 | [STORE_QUESTION_NOTES_AND_PROJECTION](STORE_QUESTION_NOTES_AND_PROJECTION.md) | SQ-01 | — |
 | 2 | [REGISTER_QUESTIONS_FRICTION_FREE](REGISTER_QUESTIONS_FRICTION_FREE.md) | SQ-02 | SQ-01 (∥ with 3) |
 | 3 | [MATCH_EVIDENCE_TO_OPEN_QUESTIONS](MATCH_EVIDENCE_TO_OPEN_QUESTIONS.md) | SQ-03 | SQ-01 (∥ with 2) |
-| 4 | [REFRESH_ANSWER_ON_EVIDENCE_DELTA](REFRESH_ANSWER_ON_EVIDENCE_DELTA.md) | SQ-04 | SQ-01, SQ-03 + **external**: EXP-3 (Create engine) merged |
+| 4 | [REFRESH_ANSWER_ON_EVIDENCE_DELTA](REFRESH_ANSWER_ON_EVIDENCE_DELTA.md) | SQ-04 | SQ-01, SQ-03 + EXP-3 (#2996) |
 | 5 | [SURFACE_QUESTION_LIST_AND_REVIEW](SURFACE_QUESTION_LIST_AND_REVIEW.md) | SQ-05 | SQ-01, SQ-02, SQ-03, SQ-04 |
 
 Flat order: 1 → 2‖3 → 4 → 5. No task here needs a plan beyond this list; if a future revision cannot
@@ -176,7 +176,7 @@ Resolution Engine — not a pre-code gate.
 
 ## Relationship to GitHub issues
 
-**Filed 2026-07-07.** Parent feature issue: **#3325** (Backlog, `agent:blocked` live validation hub; see [PARENT_FEATURE_ISSUE.md](PARENT_FEATURE_ISSUE.md)). All five children were filed `agent:blocked`: SQ-01 → **#3329** (the dependency-free head — flips to `agent:ready` once this spec PR merges to `main`); SQ-02 → **#3328** and SQ-03 → **#3326** (both stay `agent:blocked` until SQ-01/#3329 merges); SQ-04 → **#3327** (stays `agent:blocked` until SQ-01/#3329 and SQ-03/#3326 merge, **and** the external Create-engine prerequisite EXP-3 lands); SQ-05 → **#3330** (stays `agent:blocked` until SQ-01/#3329, SQ-02/#3328, SQ-03/#3326, and SQ-04/#3327 all merge). The spec is the source of truth; issues track pickup state.
+**Filed 2026-07-07.** Parent feature issue: **#3325** (open, `agent:blocked` validation hub; see [PARENT_FEATURE_ISSUE.md](PARENT_FEATURE_ISSUE.md)). At filing, all five children were `agent:blocked`; current GitHub lifecycle is SQ-01 **#3329 closed**, SQ-02 **#3328 closed**, SQ-03 **#3326 closed**, SQ-04 **#3327 open / `agent:in-progress` under PR #5174**, and SQ-05 **#3330 open / `agent:blocked`** pending SQ-04 plus its review-surface prerequisites. The spec is the source of truth; issues track pickup state.
 
 ## Open research carried (not blocking)
 

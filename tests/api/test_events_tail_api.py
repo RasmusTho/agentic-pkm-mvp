@@ -38,3 +38,50 @@ def test_events_tail_returns_last_events(tmp_path: Path, monkeypatch) -> None:
     assert resp_trace.status_code == 200
     traces = [ev.get("trace_id") for ev in resp_trace.json().get("events") or []]
     assert traces == ["t2"]
+
+
+def test_events_tail_missing_default_does_not_create_outbox_path(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("INDEX_OUTBOX_PATH", raising=False)
+
+    response = TestClient(app).get("/api/events/tail")
+    outbox_path = tmp_path / "tmp" / "index-outbox.jsonl"
+
+    assert response.status_code == 200
+    assert response.json()["events"] == []
+    assert not outbox_path.exists()
+    assert not outbox_path.parent.exists()
+
+
+def test_events_tail_is_read_only_for_unterminated_outbox(tmp_path: Path, monkeypatch) -> None:
+    outbox = tmp_path / "outbox.jsonl"
+    raw = b'{"event":"watcher.run","trace_id":"unterminated"}'
+    outbox.write_bytes(raw)
+    monkeypatch.setenv("INDEX_OUTBOX_PATH", str(outbox))
+    lock_path = outbox.with_name(f".{outbox.name}.append.lock")
+
+    response = TestClient(app).get("/api/events/tail")
+
+    assert response.status_code == 200
+    assert response.json()["events"][0]["trace_id"] == "unterminated"
+    assert outbox.read_bytes() == raw
+    assert not lock_path.exists()
+
+
+def test_events_tail_reports_corrupt_outbox_without_mutating_it(
+    tmp_path: Path, monkeypatch
+) -> None:
+    outbox = tmp_path / "outbox.jsonl"
+    raw = b'{"event":"watcher.run"}\n{'
+    outbox.write_bytes(raw)
+    monkeypatch.setenv("INDEX_OUTBOX_PATH", str(outbox))
+    lock_path = outbox.with_name(f".{outbox.name}.append.lock")
+
+    response = TestClient(app).get("/api/events/tail")
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == "configured event outbox is unreadable"
+    assert outbox.read_bytes() == raw
+    assert not lock_path.exists()

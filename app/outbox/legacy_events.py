@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from typing import Any, Dict
 from uuid import UUID
 
 from app.events.schema import make_outbox_event
 from app.outbox.events import INDEX_OUTBOX_PATH
+from app.services.outbox import append_jsonl_record
 
 
 def emit_index_object_embedded_with_vector(event: Dict[str, Any]) -> None:
@@ -34,11 +34,9 @@ def emit_index_object_embedded_with_vector(event: Dict[str, Any]) -> None:
         payload=payload,
     )
 
-    INDEX_OUTBOX_PATH.parent.mkdir(parents=True, exist_ok=True)
-    with INDEX_OUTBOX_PATH.open("a", encoding="utf-8") as fh:
-        record = dict(payload)
-        record.update(envelope.model_dump())
-        fh.write(json.dumps(record, ensure_ascii=False) + "\n")
+    record = dict(payload)
+    record.update(envelope.model_dump())
+    append_jsonl_record(Path(INDEX_OUTBOX_PATH), record, require_event_id=True)
 
 
 __all__ = ["emit_index_object_embedded_with_vector", "INDEX_OUTBOX_PATH"]

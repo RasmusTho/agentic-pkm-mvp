@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import time
 from dataclasses import dataclass
@@ -51,6 +52,8 @@ from app.settings.panel_actions import get_panel_actions_diagnostics
 from app.stores import get_object_store
 from app.version import SOT_FORWARD, get_sot_version, get_sot_metadata
 
+logger = logging.getLogger(__name__)
+
 _ASK_LATENCIES: list[tuple[float, float]] = []
 _ASK_ERRORS: list[float] = []
 _ASK_WINDOW = timedelta(hours=24)
@@ -72,38 +75,31 @@ _STATUS_MAX_OUTBOX_LINES = 5000
 _STATUS_TAIL_BYTES = 8 * 1024 * 1024  # 8 MB tail is enough for recent records
 
 
-def _iter_tail_lines(path: Path, max_bytes: int = _STATUS_TAIL_BYTES) -> list[str]:
-    """Read at most ``max_bytes`` from the end of ``path`` and return non-empty lines.
+def _status_outbox_path() -> Path:
+    """Resolve the status outbox path without invoking a writable resolver."""
+    peek = getattr(INDEX_OUTBOX_PATH, "peek", None)
+    if callable(peek):
+        return peek()
+    return Path(INDEX_OUTBOX_PATH)
 
-    Drops the (possibly partial) first line so callers always see complete JSONL
-    records. Returns an empty list on FileNotFoundError or read errors.
-    """
+
+def _iter_tail_lines(path: Path, max_bytes: int = _STATUS_TAIL_BYTES) -> list[str]:
+    """Compatibility view of strict tail records for bounded-read tests."""
+    return [
+        json.dumps(record, ensure_ascii=False)
+        for record in (_iter_tail_records(path, max_bytes) or [])
+    ]
+
+
+def _iter_tail_records(path: Path, max_bytes: int = _STATUS_TAIL_BYTES) -> list[dict] | None:
+    """Read bounded, complete JSONL records through the shared outbox seam."""
+    from app.services.outbox import read_jsonl_outbox_records
+
     try:
-        with path.open("rb") as handle:
-            try:
-                handle.seek(0, os.SEEK_END)
-                size = handle.tell()
-            except OSError:
-                size = 0
-            if size > max_bytes:
-                handle.seek(size - max_bytes)
-                partial = True
-            else:
-                handle.seek(0)
-                partial = False
-            data = handle.read()
-    except FileNotFoundError:
-        return []
+        return read_jsonl_outbox_records(path, max_bytes=max_bytes, read_only=True)
     except Exception:
-        return []
-    try:
-        text = data.decode("utf-8", errors="replace")
-    except Exception:
-        return []
-    lines = text.splitlines()
-    if partial and lines:
-        lines = lines[1:]
-    return [line for line in lines if line.strip()]
+        logger.warning("Status outbox read failed for %s", path, exc_info=True)
+        return None
 
 
 @dataclass(frozen=True)
@@ -264,11 +260,21 @@ def _count_events(outbox_path: Path) -> EventCounters:
     promotion_done_total = promotion_done_recent = 0
     source = str(outbox_path) if outbox_path else None
     cutoff = datetime.now(timezone.utc) - _EVENT_WINDOW
-    for line in _iter_tail_lines(outbox_path):
-        try:
-            record = json.loads(line)
-        except Exception:
-            continue
+    records = _iter_tail_records(outbox_path)
+    if records is None:
+        return EventCounters(
+            watcher_runs_total=None,
+            watcher_runs_24h=None,
+            panel_runs_total=None,
+            panel_runs_24h=None,
+            promote_created_total=None,
+            promote_created_24h=None,
+            promotion_executed_total=None,
+            promotion_executed_24h=None,
+            ingest_runs_by_plane={},
+            source_path=source,
+        )
+    for record in records:
         event = record.get("event") or record.get("event_type") or record.get("topic") or ""
         ts = _parse_timestamp(record.get("timestamp") or record.get("created_at"))
         is_recent = ts is not None and ts >= cutoff
@@ -309,11 +315,10 @@ def _delivery_sla_status(outbox_path: Path) -> DeliverySLAStatus:
         DELIVERY_SLA_FAILED: 0,
         DELIVERY_SLA_ROLLED_BACK: 0,
     }
-    for line in _iter_tail_lines(outbox_path):
-        try:
-            record = json.loads(line)
-        except Exception:
-            continue
+    records = _iter_tail_records(outbox_path)
+    if records is None:
+        return DeliverySLAStatus(outcomes_total=None, source_path=str(outbox_path))
+    for record in records:
         event = record.get("event") or record.get("event_type") or record.get("topic") or ""
         if event not in {ORCHESTRATOR_STEP_ERROR, ORCHESTRATOR_STEP_FINISHED}:
             continue
@@ -421,27 +426,22 @@ def _read_worker_heartbeat() -> dict | None:
 
 
 def _count_outbox_events(path: Path) -> tuple[int | None, bool]:
-    """Return a bounded ``(count, truncated)`` line count for the outbox file.
+    """Return a bounded, strictly parsed ``(count, truncated)`` outbox view."""
+    from app.services.outbox import read_jsonl_outbox_records
 
-    The scan stops at ``_STATUS_MAX_OUTBOX_LINES`` so a multi-hundred-MB file
-    never blocks the status request path. When the cap is hit, ``truncated``
-    is ``True`` and the count reflects only the scanned prefix — callers must
-    treat the true total as unknown (e.g. omit derived lag estimates) to
-    avoid masking real backlog (see #1206 review feedback).
-    """
     try:
-        with path.open("r", encoding="utf-8") as handle:
-            count = 0
-            for line in handle:
-                if line.strip():
-                    count += 1
-                    if count >= _STATUS_MAX_OUTBOX_LINES:
-                        return count, True
-            return count, False
+        size = path.stat().st_size
+        records = read_jsonl_outbox_records(
+            path,
+            max_bytes=_STATUS_TAIL_BYTES,
+            read_only=True,
+        )
     except FileNotFoundError:
         return 0, False
     except Exception:
         return None, False
+    truncated = size > _STATUS_TAIL_BYTES or len(records) >= _STATUS_MAX_OUTBOX_LINES
+    return min(len(records), _STATUS_MAX_OUTBOX_LINES), truncated
 
 
 def _get_outbox_lag() -> OutboxLagStatus:
@@ -458,7 +458,7 @@ def _get_outbox_lag() -> OutboxLagStatus:
             worker_processed_total=processed_total,
             pending_estimate=pending,
         )
-    outbox_path = Path(INDEX_OUTBOX_PATH)
+    outbox_path = _status_outbox_path()
     if heartbeat:
         heartbeat_path = heartbeat.get("outbox_path")
         if heartbeat_path:
@@ -574,7 +574,7 @@ def _get_panel_diagnostics() -> PanelDiagnostics:
 
 
 def _events_log_status() -> EventsLogStatus:
-    outbox_path = Path(INDEX_OUTBOX_PATH)
+    outbox_path = _status_outbox_path()
     total_lines, truncated = _count_outbox_events(outbox_path)
     # Hide the capped count from the events_log surface; consumers read this
     # as the true total and a capped value would be misleading.
@@ -586,25 +586,14 @@ def _events_log_status() -> EventsLogStatus:
 
 def _read_last_json_record(path: Path) -> dict | None:
     last: dict | None = None
-    for line in _iter_tail_lines(path):
-        try:
-            payload = json.loads(line)
-        except Exception:
-            continue
-        if isinstance(payload, dict):
-            last = payload
+    for payload in _iter_tail_records(path) or []:
+        last = payload
     return last
 
 
 def _last_watcher_run_record(path: Path) -> dict | None:
     last: dict | None = None
-    for line in _iter_tail_lines(path):
-        try:
-            payload = json.loads(line)
-        except Exception:
-            continue
-        if not isinstance(payload, dict):
-            continue
+    for payload in _iter_tail_records(path) or []:
         event_name = payload.get("event") or payload.get("event_type") or payload.get("topic")
         if event_name in _WATCHER_EVENT_NAMES:
             last = payload
@@ -681,7 +670,7 @@ def _get_worker_queue_status() -> WorkerQueueStatus:
         source_path = os.getenv("DATABASE_URL") or os.getenv("DB_DSN") or "outbox"
         pending = _count_outbox_pending_db()
     elif mode == "jsonl":
-        source_path = os.getenv("INDEX_OUTBOX_PATH") or str(Path(INDEX_OUTBOX_PATH))
+        source_path = os.getenv("INDEX_OUTBOX_PATH") or str(_status_outbox_path())
         total_lines, truncated = (
             _count_outbox_events(Path(source_path)) if source_path else (None, False)
         )
@@ -845,12 +834,8 @@ def _normalize_context_dimensions(value: object) -> ContextDimensionsStatus | No
 
 
 def _status_context_dimensions(outbox_path: Path) -> ContextDimensionsStatus | None:
-    lines = _iter_tail_lines(outbox_path)
-    for line in reversed(lines):
-        try:
-            record = json.loads(line)
-        except Exception:
-            continue
+    records = _iter_tail_records(outbox_path) or []
+    for record in reversed(records):
         top_level = _normalize_context_dimensions(record.get("context_dimensions"))
         if top_level is not None:
             return top_level
@@ -877,13 +862,7 @@ def _read_watcher_heartbeat_watchers() -> dict[str, dict]:
 
 def _last_panel_run_record(path: Path) -> dict | None:
     last: dict | None = None
-    for line in _iter_tail_lines(path):
-        try:
-            payload = json.loads(line)
-        except Exception:
-            continue
-        if not isinstance(payload, dict):
-            continue
+    for payload in _iter_tail_records(path) or []:
         topic = payload.get("event") or payload.get("event_type") or payload.get("topic")
         if topic == PANEL_INTENT_EXECUTED:
             last = payload
@@ -892,13 +871,7 @@ def _last_panel_run_record(path: Path) -> dict | None:
 
 def _last_panel_log_record(path: Path) -> dict | None:
     last: dict | None = None
-    for line in _iter_tail_lines(path):
-        try:
-            payload = json.loads(line)
-        except Exception:
-            continue
-        if not isinstance(payload, dict):
-            continue
+    for payload in _iter_tail_records(path) or []:
         topic = payload.get("event") or payload.get("event_type") or payload.get("topic")
         if topic == PANEL_LOG_CREATED:
             last = payload
@@ -938,7 +911,7 @@ def _get_watcher_lifecycle_status() -> WatcherLifecycleStatus | None:
         except Exception:
             pass
 
-    outbox_path = Path(INDEX_OUTBOX_PATH) if INDEX_OUTBOX_PATH else None
+    outbox_path = _status_outbox_path()
     panel_event_log = watcher_settings.paths.panel_event_log
 
     executed_record = _newer_panel_record(
@@ -1275,7 +1248,7 @@ def get_system_status() -> SystemStatus:
     if queue_mode == "db":
         counters = _count_events_db()
     if counters is None:
-        counters = _count_events(Path(INDEX_OUTBOX_PATH)) if INDEX_OUTBOX_PATH else EventCounters()
+        counters = _count_events(_status_outbox_path())
     counters = _fill_ingest_run_counts(counters, ingestion)
     intent_status = _get_intent_status(counters)
     stores = get_store_status()
@@ -1302,7 +1275,7 @@ def get_system_status() -> SystemStatus:
         ask=get_ask_status(),
         intents=intent_status,
         events=counters,
-        delivery_sla=_delivery_sla_status(Path(INDEX_OUTBOX_PATH)),
+        delivery_sla=_delivery_sla_status(_status_outbox_path()),
         index=_get_index_status(),
         panel_diagnostics=_get_panel_diagnostics(),
         write_guard=write_guard,
@@ -1313,7 +1286,7 @@ def get_system_status() -> SystemStatus:
         watcher_automation=_get_watcher_automation_status(write_guard=write_guard),
         watcher_lifecycle=_get_watcher_lifecycle_status(),
         instance_provenance=_get_instance_provenance_status(),
-        context_dimensions=_status_context_dimensions(Path(INDEX_OUTBOX_PATH)),
+        context_dimensions=_status_context_dimensions(_status_outbox_path()),
         v6_0_seams=_get_v6_seams(),
         heimdal_ingress=heimdal_ingress,
         integrated_runtime_v1=_integrated_runtime_v1_matrix(
@@ -1332,7 +1305,7 @@ def get_orientation_signals() -> OrientationSignals:
     if queue_mode == "db":
         counters = _count_events_db()
     if counters is None:
-        counters = _count_events(Path(INDEX_OUTBOX_PATH)) if INDEX_OUTBOX_PATH else EventCounters()
+        counters = _count_events(_status_outbox_path())
     counters = _fill_ingest_run_counts(counters, ingestion)
     return OrientationSignals(
         events=counters,
