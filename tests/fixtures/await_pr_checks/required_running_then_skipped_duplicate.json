@@ -1,0 +1,19 @@
+{
+  "total_count": 2,
+  "check_runs": [
+    {
+      "id": 101,
+      "name": "Unit tests (not pg)",
+      "status": "in_progress",
+      "conclusion": null,
+      "started_at": "2026-08-29T10:00:00Z"
+    },
+    {
+      "id": 102,
+      "name": "Unit tests (not pg)",
+      "status": "completed",
+      "conclusion": "skipped",
+      "started_at": "2026-08-29T10:01:00Z"
+    }
+  ]
+}

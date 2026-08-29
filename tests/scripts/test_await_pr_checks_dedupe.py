@@ -57,7 +57,9 @@ def _make_fake_gh(tmp_path: Path) -> Path:
     return bin_dir
 
 
-def _run_await_script(tmp_path: Path, fixture_name: str) -> subprocess.CompletedProcess[str]:
+def _run_await_script(
+    tmp_path: Path, fixture_name: str, *, timeout: int = 30
+) -> subprocess.CompletedProcess[str]:
     fake_bin_dir = _make_fake_gh(tmp_path)
     fixture_path = FIXTURES_DIR / fixture_name
     assert fixture_path.exists(), f"missing fixture: {fixture_path}"
@@ -80,7 +82,7 @@ def _run_await_script(tmp_path: Path, fixture_name: str) -> subprocess.Completed
             "--interval",
             "60",
             "--timeout",
-            "30",
+            str(timeout),
         ],
         cwd=REPO_ROOT,
         env=env,
@@ -103,3 +105,32 @@ def test_genuine_latest_failure_still_fails_closed(tmp_path: Path) -> None:
     result = _run_await_script(tmp_path, "pr2915_genuine_latest_failure.json")
     assert result.returncode == 1, result.stdout + result.stderr
     assert "CHECKS FAILED: pr-contract: failure" in result.stderr
+
+
+def test_required_check_running_is_not_masked_by_later_skipped_duplicate(
+    tmp_path: Path,
+) -> None:
+    result = _run_await_script(
+        tmp_path,
+        "required_running_then_skipped_duplicate.json",
+        timeout=0,
+    )
+
+    assert result.returncode == 2, result.stdout + result.stderr
+    assert "still running: Unit tests (not pg)" in result.stdout
+
+
+def test_required_check_failure_is_not_masked_by_later_skipped_duplicate(
+    tmp_path: Path,
+) -> None:
+    result = _run_await_script(tmp_path, "required_failure_then_skipped_duplicate.json")
+
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "CHECKS FAILED: Unit tests (not pg): failure" in result.stderr
+
+
+def test_executed_successful_rerun_supersedes_earlier_failure(tmp_path: Path) -> None:
+    result = _run_await_script(tmp_path, "required_failure_then_successful_rerun.json")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "all required checks passed" in result.stdout
