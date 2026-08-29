@@ -18,6 +18,7 @@ reconciliation.
 |---------|---------------|-------------------------|
 | Issue | CLOSED | `Done` |
 | Issue | OPEN + existing explicit `Review` projection | `Review` |
+| Issue | OPEN + `state:known-defect` registry | `Backlog` |
 | Issue | OPEN + `type:epic`, `type:feature`, or non-empty GitHub sub-issue set | `Epic / Parent` |
 | Issue | OPEN + `agent:needs-human` | `Needs Human` |
 | Issue | OPEN + `agent:blocked` | `Blocked` |

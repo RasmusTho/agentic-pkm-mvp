@@ -12,12 +12,15 @@ own copies.
 | `type:task` | default for bounded implementation or maintenance work |
 | `type:bug` | confirmed defect or regression |
 | `type:refactor` | code structure change with no behavior change |
+| `type:epic` | parent delivery or validation hub |
+| `type:feature` | parent feature or validation hub |
 | `prio:high` | blocks other work or has active regression |
 | `prio:med` | normal delivery priority |
 | `prio:low` | nice-to-have, no urgency |
 | `agent:ready` | bounded, testable, unblocked, and strictly validated — safe for agent pickup without requiring Project Status |
 | `agent:blocked` | dependency unresolved, including parent validation hubs waiting on child slices |
 | `agent:needs-human` | requires a named human decision, tradeoff, missing input, or authority question |
+| `agent:in-progress` | active implementation work under a current claim or delivery handoff |
 | `state:known-defect` | rolling registry Issue containing confirmed deferred P2 defect entries; never an implementation pickup label |
 
 Rules:
@@ -31,7 +34,8 @@ Rules:
 - Closed or delivered Issues must not retain any `agent:*` label.
 - `state:known-defect` belongs only on the locked rolling Known Defects registry Issue. That
   container also carries `type:bug`, is not an implementation Issue, carries no `agent:*` label,
-  remains in `Backlog` if projected, and must never carry `agent:ready`.
+  remains in `Backlog` if projected, and must never carry `agent:ready`. During explicit Project
+  reconciliation, the open registry derives `Backlog` before the generic unmapped-issue fallthrough.
 - Registry entries are schema-marked Issue comments, not labels or child Issues. When an entry is
   selected for implementation, create/link a normal bounded `type:bug` Issue with exactly one
   priority, exactly one truthful normal agent state, the canonical contract, ACs, and `Verify:`

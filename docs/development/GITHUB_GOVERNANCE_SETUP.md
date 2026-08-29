@@ -20,12 +20,15 @@ Keep only these labels for the delivery control plane taxonomy:
 - `type:task`
 - `type:bug`
 - `type:refactor`
+- `type:epic`
+- `type:feature`
 - `prio:high`
 - `prio:med`
 - `prio:low`
 - `agent:ready`
 - `agent:blocked`
 - `agent:needs-human`
+- `agent:in-progress`
 - `state:known-defect`
 - `lane:governance`
 
@@ -67,6 +70,7 @@ Agent-label meanings:
 - `agent:ready`: strictly validated queue-eligible work; Project Status is not a pickup precondition
 - `agent:blocked`: blocked by dependency waiting; normally pair with `Blocked` unless durable epic/parent evidence takes precedence
 - `agent:needs-human`: blocked on a named human decision, tradeoff, missing input, or authority question; normally pair with `Needs Human` unless durable epic/parent evidence takes precedence
+- `agent:in-progress`: active implementation work; normally pair with `In Progress` unless a higher-precedence projection condition applies
 - open implementation Issues should normally carry exactly one truthful agent-state label
 - `state:known-defect`: one locked rolling registry Issue for confirmed deferred P2 entries;
   keep it in `Backlog`, with `type:bug`, without an agent-state label, and never treat it as
@@ -112,7 +116,7 @@ Projection rule:
 - When Project state disagrees with Issue state, PR state, or merged delivery reality, treat the Issue/PR state as authoritative and correct the Project opportunistically.
 - Do not block delivery solely because a personal Project v2 card could not be updated by repo automation.
 - An existing open Issue card explicitly placed in `Review` is an operator projection override and is retained; reconciliation does not infer a PR link or move it back into a split backlog lane.
-- Otherwise, Issue projection precedence is closed → `Done`; epic/parent evidence → `Epic / Parent`; `agent:needs-human` → `Needs Human`; `agent:blocked` → `Blocked`; valid `agent:ready` → `Ready`; `agent:in-progress` → `In Progress`. An otherwise-unmapped open Issue retains its current Project status.
+- Otherwise, Issue projection precedence is closed → `Done`; open `state:known-defect` registry → `Backlog`; epic/parent evidence → `Epic / Parent`; `agent:needs-human` → `Needs Human`; `agent:blocked` → `Blocked`; valid `agent:ready` → `Ready`; `agent:in-progress` → `In Progress`. An otherwise-unmapped open Issue retains its current Project status.
 
 ## Shared operational lease boundary
 

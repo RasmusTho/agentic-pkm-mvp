@@ -94,11 +94,12 @@ conditional path (`Issue maintenance -> Agent`), not the hot path.
 The canonical optional projection matrix lives at `.codex/skills/_shared/LIFECYCLE_TRUTH_MATRIX.md`. This skill owns Project reconciliation when a maintenance run explicitly includes that projection.
 
 For open Issue cards, retain an existing explicit `Review` projection. Otherwise apply the
-canonical precedence: durable epic/parent evidence (`type:epic`, `type:feature`, or a non-empty
-GitHub sub-issue set) → `Epic / Parent`; `agent:needs-human` → `Needs Human`; `agent:blocked` →
-`Blocked`; valid `agent:ready` → `Ready`; `agent:in-progress` → `In Progress`. An otherwise
-unmapped open Issue retains its current Project status; new-Issue automation initially uses
-`Backlog`. Do not infer parenthood from title prose or infer a PR relationship to preserve Review.
+canonical precedence: the `state:known-defect` registry → `Backlog`; durable epic/parent evidence
+(`type:epic`, `type:feature`, or a non-empty GitHub sub-issue set) → `Epic / Parent`;
+`agent:needs-human` → `Needs Human`; `agent:blocked` → `Blocked`; valid `agent:ready` → `Ready`;
+`agent:in-progress` → `In Progress`. An otherwise unmapped open Issue retains its current Project
+status; new-Issue automation initially uses `Backlog`. Do not infer parenthood from title prose or
+infer a PR relationship to preserve Review.
 
 ### Drift patterns that must be flagged explicitly
 
@@ -427,8 +428,9 @@ Use this when the user asks for a maintenance run across everything not done.
    - **Optionally execute Project state reconciliation** only when projection repair is in scope and after labels are corrected and
      strict validation has passed for any `Ready` target: run the Set Project Status mutation from
      `.codex/skills/_shared/PROJECT_STATUS_OPERATIONS.md` — validated `agent:ready` → `Ready`
-     option ID; parent evidence → `Epic / Parent`; `agent:needs-human` → `Needs Human`; and
-     `agent:blocked` → `Blocked`, after preserving an existing explicit open-Issue `Review`.
+     option ID; open `state:known-defect` registry → `Backlog`; parent evidence → `Epic / Parent`;
+     `agent:needs-human` → `Needs Human`; and `agent:blocked` → `Blocked`, after preserving an
+     existing explicit open-Issue `Review`.
      - If the issue is missing from the Project or missing `Status`, add/reconcile it during the same run
 5. **Execute Deduplication:**
    - If duplicate issues have the same scope/contract:

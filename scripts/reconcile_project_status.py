@@ -523,6 +523,8 @@ def desired_issue_status(
         # inferred PR links that reconciliation may overwrite.
         return "Review"
     label_names = _issue_label_names(issue)
+    if "state:known-defect" in label_names:
+        return "Backlog"
     if _has_epic_or_parent_evidence(issue):
         return "Epic / Parent"
     if "agent:needs-human" in label_names:

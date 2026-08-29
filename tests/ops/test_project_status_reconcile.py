@@ -96,6 +96,68 @@ def test_desired_issue_status_splits_non_active_backlog_lanes() -> None:
     assert desired_issue_status({"state": "OPEN", "labels": []}) is None
 
 
+def test_desired_issue_status_projects_known_defect_registry_to_backlog() -> None:
+    issue = {"state": "OPEN", "labels": [{"name": "state:known-defect"}]}
+
+    assert desired_issue_status(issue) == "Backlog"
+    assert desired_issue_status(issue, "Review") == "Review"
+
+
+def test_scan_projects_known_defect_registry_to_backlog(monkeypatch, tmp_path) -> None:
+    watermark_path = tmp_path / "project_status_reconcile_scan_watermark.json"
+    monkeypatch.setattr(reconcile_project_status, "SCAN_WATERMARK_PATH", watermark_path)
+    monkeypatch.setattr(
+        reconcile_project_status,
+        "list_project_items_for_scan",
+        lambda *_args: [
+            {
+                "id": "known-defect-item",
+                "content": {
+                    "type": "Issue",
+                    "number": 4172,
+                    "updatedAt": "2026-08-29T15:00:00Z",
+                },
+                "status": "Needs Human",
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        reconcile_project_status,
+        "get_issue",
+        lambda *_args: {
+            "number": 4172,
+            "state": "OPEN",
+            "labels": [{"name": "state:known-defect"}],
+            "url": "https://github.com/RasmusTho/agentic-pkm-mvp/issues/4172",
+            "body": "",
+        },
+    )
+    status_calls = []
+    monkeypatch.setattr(
+        reconcile_project_status, "set_project_status", lambda *args: status_calls.append(args)
+    )
+    monkeypatch.setattr(
+        reconcile_project_status,
+        "_scan_started_at",
+        lambda: datetime(2026, 8, 29, 16, 0, tzinfo=timezone.utc),
+    )
+
+    args = reconcile_project_status.argparse.Namespace(
+        repo="RasmusTho/agentic-pkm-mvp", dry_run=False, status=None
+    )
+    project = {"id": "project-1", "number": 1, "title": "Agent Delivery Control Plane"}
+
+    assert (
+        reconcile_project_status.reconcile_scan(
+            args, "RasmusTho", project, "field-id", {"Backlog": "backlog-id"}
+        )
+        == 0
+    )
+    assert status_calls == [
+        ("RasmusTho", "project-1", "known-defect-item", "field-id", "backlog-id", False)
+    ]
+
+
 def test_epic_parent_projection_precedes_blocker_projection() -> None:
     assert desired_issue_status(
         {"state": "OPEN", "labels": [{"name": "type:epic"}, {"name": "agent:blocked"}]}
@@ -145,6 +207,20 @@ def test_canonical_maintenance_surfaces_document_split_lane_precedence() -> None
         assert "Needs Human" in content
         assert "Blocked" in content
         assert "explicit open-Issue `Review`" in content
+
+
+def test_canonical_label_taxonomy_declares_projection_inputs() -> None:
+    governance = yaml.safe_load(
+        Path(".github/github-governance.yml").read_text(encoding="utf-8")
+    )
+    taxonomy = Path(".codex/skills/_shared/LABEL_TAXONOMY.md").read_text(
+        encoding="utf-8"
+    )
+
+    assert {"type:epic", "type:feature"} <= set(governance["labels"]["type"])
+    assert "agent:in-progress" in governance["labels"]["agent"]
+    for label in ("type:epic", "type:feature", "agent:in-progress"):
+        assert f"| `{label}`" in taxonomy
 
 
 def test_pr_stage_change_workflow_subscribes_to_closed_event() -> None:
