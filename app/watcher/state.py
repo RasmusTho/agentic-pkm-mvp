@@ -43,6 +43,9 @@ def _sanitize_files(raw: dict[str, dict[str, Any]] | Any) -> dict[str, dict[str,
                 new_entry["hash"] = str(entry["hash"])
             except Exception:
                 pass
+        trace_id = entry.get("trace_id")
+        if isinstance(trace_id, str) and trace_id:
+            new_entry["trace_id"] = trace_id
         settings_values = entry.get("settings_runtime_values")
         if isinstance(settings_values, dict):
             new_entry["settings_runtime_values"] = dict(settings_values)
@@ -606,6 +609,7 @@ class WatcherState:
         settings_runtime_values: Mapping[str, Any] | None = None,
         seen_at: float | None = None,
         emitted_at: float | None = None,
+        trace_id: str | None = None,
     ) -> None:
         entry = self.file_entry(rel_path) or {}
         if mtime is not None:
@@ -618,6 +622,8 @@ class WatcherState:
             entry["last_seen"] = seen_at
         if emitted_at is not None:
             entry["last_emitted"] = emitted_at
+        if trace_id is not None:
+            entry["trace_id"] = trace_id
         if self._observation_store is not None:
             self._pending_deletes.discard(rel_path)
             self._pending_observations[rel_path] = (entry, self.scan_generation)
