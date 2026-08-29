@@ -10,6 +10,10 @@ depends_on: [FREEZE_CHANNEL_MANIFEST_AND_OPERATION_CONTRACT.md, BUILD_IMMUTABLE_
 can_parallelize_with: []
 ---
 
+State: Implemented in the repository by Issue #4916. The delivered surface is the read-only
+resolver/doctor and terminal journal; it does not activate a channel, run migration, or replace the
+current canonical prod startup command.
+
 # Implement Read-Only Ordinary Boot
 
 ## Purpose
@@ -22,7 +26,31 @@ Adds a deterministic resolver/doctor and terminal journal. Ordinary boot neither
 
 ## Concretely
 
-`channel-doctor prod ordinary-boot` reports the resolved digest/config/vault/schema identities and a single terminal classification; it exits before writers when required compatibility is absent.
+`python -m app.release_channels.ordinary_boot doctor` reports the resolved
+digest/config/vault/schema identities and a single terminal classification; it exits before writers
+when required compatibility is absent. A separate caller may act only when the result says
+`writers_permitted=true`; this doctor does not expose a writer-start hook.
+
+The manifest and dependency inputs are JSON mappings; Compose uses the canonical YAML model (JSON
+remains valid YAML). A syntactically complete invocation with a valid operation handle and journal
+target records one deterministic `PRE_MUTATION_FAILURE` when any of those three inputs is missing,
+unreadable, malformed, or not a mapping. The dependency input is an already-observed mapping keyed
+by `artifact`, `config`, `database`,
+`gateway`, `schema`, `vault`, and (when declared) `llm`. Each entry carries
+`status=available|unavailable`; identity-bearing required dependencies also carry their observed
+`identity`. Policy is derived from the exact manifest, never supplied by the observation: identity,
+schema, vault, database, gateway, and config are `required`; `llm_policy=declared-optional` maps only
+the LLM dependency to `degraded_ok`. Missing observations classify as unavailable, unknown
+dependencies fail closed, and raw mismatched observed identity values are not copied into the
+terminal journal.
+
+The operation id must be a generated opaque non-secret handle in the narrow
+`ob-<32 lowercase hex characters>` format; rejected values and conflict errors never echo the
+supplied handle. The journal path must be an absolute `.jsonl` path under a real, same-user-owned
+parent that is not group- or world-writable. That checked parent is the trust boundary against an
+untrusted alias race. The doctor pins and revalidates the parent plus opened file identity, accepts
+only a single-link regular file, and refuses symlink, hardlink, FIFO, or named-path replacement
+targets before returning terminal authority.
 
 ## Why This Matters
 
