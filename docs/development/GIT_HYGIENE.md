@@ -54,13 +54,23 @@ as a pull head; `#4813` is resolved as a closed-unmerged pull request and protec
 number, full head ref, and head SHA. Lookup, kind, repository, or shape ambiguity is a
 batch-wide refusal.
 
-Lifecycle authority comes from the generation-bound registry under its kernel lock;
-missing, corrupt, malformed, mismatched, locked, dirty/unavailable, live, or prior-path
-binding evidence preserves the source. Dispatcher authority comes from optimistic
-read/readback of the configured SQLite task and lease APIs. Missing state, missing
-referenced leases, malformed expiry, released/current-task disagreement, changed
-readback, or a live Issue/PR/ref/path claim fails closed. These short snapshots never
-hold lifecycle or SQLite locks across REST or Git network I/O.
+Lifecycle authority comes from the generation-bound registry under its kernel lock.
+Candidate branch, live candidate path, and prior-binding records receive complete
+semantic and live-generation validation; an unrelated record with sufficient branch
+and prior-binding identity does not make old unavailable checkout state a global
+cleanup dependency. Missing or corrupt registry state, identity-ambiguous rows, and
+relevant malformed, mismatched, unavailable, live, or prior-path binding evidence
+preserve the source.
+
+Dispatcher authority ignores dispatcher path environment overrides and always resolves
+the repo-common production SQLite database from Git's primary worktree. Each optimistic
+snapshot exhaustively reads every task and every lease, including orphan leases with no
+task. Candidate Issue, PR, ref, branch, and lifecycle path identity is classified before
+an unrelated expired task/lease disagreement is evaluated. Missing canonical state,
+identity-ambiguous or relevant malformed rows, missing relevant referenced leases,
+relevant released/current-task disagreement, changed census, or any live relevant task
+or orphan resource claim fails closed. These short snapshots never hold lifecycle or
+SQLite locks across REST or Git network I/O.
 
 Receipts live under the repository Git common directory at
 `git-hygiene/targeted-remote-cleanup/v1/`, keyed by

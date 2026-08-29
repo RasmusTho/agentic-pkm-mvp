@@ -222,6 +222,86 @@ def test_load_lifecycle_authority_rejects_malformed_record(tmp_path) -> None:
         agent_worktree.load_lifecycle_authority(repo, registry_path=registry)
 
 
+def test_load_lifecycle_authority_scopes_full_validation_to_candidate_identity(
+    tmp_path,
+) -> None:
+    repo, worktree, registry = _active_lifecycle_repo(tmp_path)
+    payload = json.loads(registry.read_text(encoding="utf-8"))
+    for index in range(300):
+        unrelated = (tmp_path / f"retired-{index}").resolve()
+        payload["worktrees"][str(unrelated)] = {
+            "path": str(unrelated),
+            "branch": f"codex/retired-{index}",
+            "prior_bindings": [],
+            # Deliberately unavailable as live authority. Identity is still
+            # sufficient to prove this row cannot govern the candidate.
+            "status": "active",
+        }
+    registry.write_text(json.dumps(payload), encoding="utf-8")
+
+    records = agent_worktree.load_lifecycle_authority(
+        repo,
+        candidate_branch="codex/authority",
+        registry_path=registry,
+    )
+
+    assert set(records) == {str(worktree.resolve())}
+    candidate = git_hygiene.Candidate(
+        repository="example/repo",
+        pull_request=6000,
+        source_ref="refs/heads/codex/authority",
+        source_sha="a" * 40,
+        archive_ref="refs/archive/example",
+        owner="owner",
+        governing_issue=5170,
+        no_issue_lane=None,
+        successor="none",
+        retention_class="safety_archive",
+        review_at="2030-01-01T00:00:00Z",
+        discard={"state": "retain", "receipt": None},
+    )
+    assert git_hygiene._lifecycle_conflicts(repo, candidate, records) == {
+        "live_worktree",
+        "lifecycle_binding",
+    }
+
+
+def test_load_lifecycle_authority_rejects_relevant_or_ambiguous_malformed_rows(
+    tmp_path,
+) -> None:
+    repo, worktree, registry = _active_lifecycle_repo(tmp_path)
+    payload = json.loads(registry.read_text(encoding="utf-8"))
+    payload["worktrees"][str(worktree.resolve())]["owner"] = True
+    registry.write_text(json.dumps(payload), encoding="utf-8")
+    with pytest.raises(agent_worktree.WorktreeLifecycleError, match="record is invalid"):
+        agent_worktree.load_lifecycle_authority(
+            repo,
+            candidate_branch="codex/authority",
+            registry_path=registry,
+        )
+
+    payload["worktrees"][str(worktree.resolve())]["branch"] = "codex/unrelated"
+    payload["worktrees"][str(worktree.resolve())]["prior_bindings"] = []
+    registry.write_text(json.dumps(payload), encoding="utf-8")
+    with pytest.raises(agent_worktree.WorktreeLifecycleError, match="record is invalid"):
+        agent_worktree.load_lifecycle_authority(
+            repo,
+            candidate_branch="codex/authority",
+            registry_path=registry,
+        )
+
+    payload["worktrees"][str(worktree.resolve())]["prior_bindings"] = [
+        {"removed_at": 5}
+    ]
+    registry.write_text(json.dumps(payload), encoding="utf-8")
+    with pytest.raises(agent_worktree.WorktreeLifecycleError, match="record is invalid"):
+        agent_worktree.load_lifecycle_authority(
+            repo,
+            candidate_branch="codex/authority",
+            registry_path=registry,
+        )
+
+
 def test_load_lifecycle_authority_uses_registry_lock_for_snapshot(tmp_path) -> None:
     repo, _worktree, registry = _active_lifecycle_repo(tmp_path)
     lock_acquired = threading.Event()

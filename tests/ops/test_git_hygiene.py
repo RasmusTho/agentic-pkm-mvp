@@ -93,7 +93,9 @@ def _install_remote_cleanup_authority(monkeypatch, tmp_path, refs, commands):
             candidate.pull_request, candidate.source_ref, candidate.source_sha
         ),
     )
-    monkeypatch.setattr(git_hygiene, "_read_lifecycle_authority", lambda _cwd: {})
+    monkeypatch.setattr(
+        git_hygiene, "_read_lifecycle_authority", lambda _cwd, _candidate: {}
+    )
     monkeypatch.setattr(git_hygiene, "_lifecycle_conflicts", lambda *_: set())
     monkeypatch.setattr(git_hygiene, "_read_dispatcher_authority", lambda *_: [])
     monkeypatch.setattr(git_hygiene, "_git_common_dir", lambda _cwd: tmp_path / "common")
@@ -430,7 +432,7 @@ def test_targeted_remote_cleanup_rereads_lifecycle_before_archive(tmp_path, monk
     _install_remote_cleanup_authority(monkeypatch, tmp_path, refs, commands)
     reads = 0
 
-    def lifecycle(_cwd):
+    def lifecycle(_cwd, _candidate):
         nonlocal reads
         reads += 1
         return {} if reads == 1 else {"conflict": {}}
@@ -451,7 +453,7 @@ def test_targeted_remote_cleanup_rereads_lifecycle_before_delete(tmp_path, monke
     _install_remote_cleanup_authority(monkeypatch, tmp_path, refs, commands)
     reads = 0
 
-    def lifecycle(_cwd):
+    def lifecycle(_cwd, _candidate):
         nonlocal reads
         reads += 1
         return {} if reads < 3 else {"conflict": {}}
@@ -503,7 +505,11 @@ def test_targeted_remote_cleanup_new_lease_after_archive_preserves_source(
         return [] if reads < 3 else [{"conflict": True}]
 
     monkeypatch.setattr(git_hygiene, "_read_dispatcher_authority", dispatcher)
-    monkeypatch.setattr(git_hygiene, "_dispatcher_conflicts", lambda _c, _l, value: set() if not value else {"lease"})
+    monkeypatch.setattr(
+        git_hygiene,
+        "_dispatcher_conflicts",
+        lambda _c, _l, value, **_kwargs: set() if not value else {"lease"},
+    )
     report = git_hygiene.targeted_remote_cleanup(
         tmp_path, repository=candidate["repository"], candidates=[candidate]
     )
@@ -697,7 +703,9 @@ def test_targeted_remote_cleanup_reads_real_dispatcher_task_and_lease(
     from app.dispatcher.store import SqliteStore
 
     database = tmp_path / "dispatcher.sqlite3"
-    monkeypatch.setenv("DISPATCHER_DB_PATH", str(database))
+    monkeypatch.setattr(
+        git_hygiene, "_canonical_dispatcher_db_path", lambda _cwd: database
+    )
     store = SqliteStore(database)
     store.initialize()
     expires = "2099-01-01T00:00:00+00:00"
@@ -739,11 +747,171 @@ def test_targeted_remote_cleanup_reads_real_dispatcher_task_and_lease(
 def test_targeted_remote_cleanup_dispatcher_missing_db_fails_closed(
     tmp_path, monkeypatch
 ) -> None:
-    monkeypatch.setenv("DISPATCHER_DB_PATH", str(tmp_path / "missing.sqlite3"))
+    monkeypatch.setattr(
+        git_hygiene,
+        "_canonical_dispatcher_db_path",
+        lambda _cwd: tmp_path / "missing.sqlite3",
+    )
     with pytest.raises(RuntimeError, match="missing"):
         git_hygiene._read_dispatcher_authority(
             tmp_path, "RasmusTho/agentic-pkm-mvp"
         )
+
+
+def test_targeted_remote_cleanup_ignores_dispatcher_env_database_bypass(
+    tmp_path, monkeypatch
+) -> None:
+    from app.dispatcher.models import LeaseRecord
+    from app.dispatcher.store import SqliteStore
+
+    repo = tmp_path / "repo"
+    subprocess.run(["git", "init", str(repo)], check=True, capture_output=True)
+    canonical = repo / "runtime" / "dispatcher" / "dispatcher.sqlite3"
+    canonical_store = SqliteStore(canonical)
+    canonical_store.initialize()
+    canonical_store.upsert_lease(
+        LeaseRecord(
+            lease_id="canonical-live",
+            resource="branch:closed-unmerged",
+            holder="other-agent",
+            ttl_seconds=60,
+            acquired_at="2026-08-29T00:00:00+00:00",
+            expires_at="2099-01-01T00:00:00+00:00",
+        )
+    )
+    alternate = tmp_path / "alternate-empty.sqlite3"
+    SqliteStore(alternate).initialize()
+    monkeypatch.setenv("DISPATCHER_DB_PATH", str(alternate))
+
+    assert git_hygiene._canonical_dispatcher_db_path(repo) == canonical.resolve()
+    snapshot = git_hygiene._read_dispatcher_authority(
+        repo, "RasmusTho/agentic-pkm-mvp"
+    )
+    candidate = git_hygiene.Candidate(**_targeted_candidate())
+    assert git_hygiene._dispatcher_conflicts(candidate, {}, snapshot) == {
+        "live_dispatcher_claim"
+    }
+
+
+def test_targeted_remote_cleanup_detects_orphan_live_branch_lease(
+    tmp_path, monkeypatch
+) -> None:
+    from app.dispatcher.models import LeaseRecord
+    from app.dispatcher.store import SqliteStore
+
+    database = tmp_path / "dispatcher.sqlite3"
+    monkeypatch.setattr(
+        git_hygiene, "_canonical_dispatcher_db_path", lambda _cwd: database
+    )
+    store = SqliteStore(database)
+    store.initialize()
+    store.upsert_lease(
+        LeaseRecord(
+            lease_id="orphan-live",
+            resource="branch:closed-unmerged",
+            holder="other-agent",
+            ttl_seconds=60,
+            acquired_at="2026-08-29T00:00:00+00:00",
+            expires_at="2099-01-01T00:00:00+00:00",
+        )
+    )
+
+    snapshot = git_hygiene._read_dispatcher_authority(
+        tmp_path, "RasmusTho/agentic-pkm-mvp"
+    )
+    candidate = git_hygiene.Candidate(**_targeted_candidate())
+    assert git_hygiene._dispatcher_conflicts(candidate, {}, snapshot) == {
+        "live_dispatcher_claim"
+    }
+
+
+def test_targeted_remote_cleanup_scopes_dispatcher_disagreement_to_candidate(
+    tmp_path, monkeypatch
+) -> None:
+    from app.dispatcher.models import TaskRecord
+    from app.dispatcher.store import SqliteStore
+
+    database = tmp_path / "dispatcher.sqlite3"
+    monkeypatch.setattr(
+        git_hygiene, "_canonical_dispatcher_db_path", lambda _cwd: database
+    )
+    store = SqliteStore(database)
+    store.initialize()
+    store.upsert_task(
+        TaskRecord(
+            task_id="unrelated-expired-history",
+            issue_number=9999,
+            title="unrelated",
+            status="claimed",
+            priority="low",
+            source_anchor_refs=[],
+            created_at="2026-08-01T00:00:00+00:00",
+            updated_at="2026-08-01T00:00:00+00:00",
+            repo="RasmusTho/agentic-pkm-mvp",
+            claimed_by="old-agent",
+            lease_id="missing-expired-lease",
+            lease_expires_at="2026-08-01T00:01:00+00:00",
+            linked_pr="9998",
+        )
+    )
+    snapshot = git_hygiene._read_dispatcher_authority(
+        tmp_path, "RasmusTho/agentic-pkm-mvp"
+    )
+    candidate = git_hygiene.Candidate(**_targeted_candidate())
+    assert git_hygiene._dispatcher_conflicts(candidate, {}, snapshot) == set()
+
+    store.upsert_task(
+        TaskRecord(
+            task_id="relevant-expired-history",
+            issue_number=5170,
+            title="relevant",
+            status="claimed",
+            priority="high",
+            source_anchor_refs=[],
+            created_at="2026-08-01T00:00:00+00:00",
+            updated_at="2026-08-01T00:00:00+00:00",
+            repo="RasmusTho/agentic-pkm-mvp",
+            claimed_by="old-agent",
+            lease_id="missing-relevant-lease",
+            lease_expires_at="2026-08-01T00:01:00+00:00",
+            linked_pr="6000",
+        )
+    )
+    snapshot = git_hygiene._read_dispatcher_authority(
+        tmp_path, "RasmusTho/agentic-pkm-mvp"
+    )
+    with pytest.raises(RuntimeError, match="referenced_lease_missing"):
+        git_hygiene._dispatcher_conflicts(candidate, {}, snapshot)
+
+
+def test_targeted_remote_cleanup_rejects_live_ambiguous_orphan_lease(
+    tmp_path, monkeypatch
+) -> None:
+    from app.dispatcher.models import LeaseRecord
+    from app.dispatcher.store import SqliteStore
+
+    database = tmp_path / "dispatcher.sqlite3"
+    monkeypatch.setattr(
+        git_hygiene, "_canonical_dispatcher_db_path", lambda _cwd: database
+    )
+    store = SqliteStore(database)
+    store.initialize()
+    store.upsert_lease(
+        LeaseRecord(
+            lease_id="ambiguous-live",
+            resource="",
+            holder="other-agent",
+            ttl_seconds=60,
+            acquired_at="2026-08-29T00:00:00+00:00",
+            expires_at="2099-01-01T00:00:00+00:00",
+        )
+    )
+    snapshot = git_hygiene._read_dispatcher_authority(
+        tmp_path, "RasmusTho/agentic-pkm-mvp"
+    )
+    candidate = git_hygiene.Candidate(**_targeted_candidate())
+    with pytest.raises(RuntimeError, match="lease_identity_ambiguous"):
+        git_hygiene._dispatcher_conflicts(candidate, {}, snapshot)
 
 
 def test_targeted_remote_cleanup_archive_create_is_expected_absence_cas(
@@ -912,7 +1080,9 @@ def test_targeted_remote_cleanup_real_bare_remote_cas(tmp_path, monkeypatch) -> 
             value.pull_request, value.source_ref, value.source_sha
         ),
     )
-    monkeypatch.setattr(git_hygiene, "_read_lifecycle_authority", lambda _cwd: {})
+    monkeypatch.setattr(
+        git_hygiene, "_read_lifecycle_authority", lambda _cwd, _candidate: {}
+    )
     monkeypatch.setattr(git_hygiene, "_lifecycle_conflicts", lambda *_: set())
     monkeypatch.setattr(git_hygiene, "_read_dispatcher_authority", lambda *_: [])
     report = git_hygiene.targeted_remote_cleanup(
