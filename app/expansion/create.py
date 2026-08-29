@@ -569,13 +569,18 @@ def _existing_receipt(outbox_path: Path, event: str, event_id: str) -> dict[str,
             record = json.loads(line)
         except (TypeError, ValueError):
             continue
-        if record.get("event") == event and record.get("event_id") == event_id:
-            if first_match is None:
-                first_match = record
-            elif record.get("payload") != first_match.get("payload"):
-                raise CreateIdempotencyConflictError(
-                    f"deterministic Create receipt has conflicting duplicate: {event}/{event_id}"
-                )
+        if record.get("event_id") != event_id:
+            continue
+        if record.get("event") != event:
+            raise CreateIdempotencyConflictError(
+                f"deterministic Create receipt event_id is not globally unique: {event_id}"
+            )
+        if first_match is None:
+            first_match = record
+        elif record.get("payload") != first_match.get("payload"):
+            raise CreateIdempotencyConflictError(
+                f"deterministic Create receipt has conflicting duplicate: {event}/{event_id}"
+            )
     return first_match
 
 

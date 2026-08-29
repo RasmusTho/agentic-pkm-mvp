@@ -606,6 +606,38 @@ def refresh_answers_on_evidence_delta(
                 else:
                     blocked.append(question_id)
                 continue
+            latest_after, latest_after_version = question_store.read_question_with_version(
+                question_id
+            )
+            (
+                after_answer_referenced,
+                after_answer,
+                after_answer_bytes,
+            ) = _read_standing_answer(resolved_root, latest_after)
+            if (
+                after_answer_referenced != standing_answer_referenced
+                or after_answer != standing_answer
+                or after_answer_bytes != standing_answer_bytes
+            ):
+                # The external standing-answer file has no QuestionStore CAS
+                # seam. If it changed in the final check-to-write window,
+                # remove only the pointer and timestamp we just wrote, using
+                # the new Question version; never clobber a concurrent human
+                # edit or another system update.
+                try:
+                    question_store.update_system_fields_if_unchanged(
+                        question_id,
+                        latest_after,
+                        {
+                            "candidate_answer_ref": initial.get("candidate_answer_ref"),
+                            "last_refreshed_at": initial.get("last_refreshed_at"),
+                        },
+                        expected_version=latest_after_version,
+                    )
+                except KnowledgeWriteConflict:
+                    pass
+                blocked.append(question_id)
+                continue
             drafted.append(question_id)
 
     return AnswerRefreshSummary(

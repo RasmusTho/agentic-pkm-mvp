@@ -368,6 +368,48 @@ def test_standing_answer_newline_edit_during_cognition_blocks_stale_refresh(
     assert store.read_question(note["question_id"])["candidate_answer_ref"] is None
 
 
+def test_standing_answer_edit_between_final_check_and_cas_rolls_back_candidate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    answer = vault / "answers/current.md"
+    answer.parent.mkdir()
+    answer.write_text("The supported boundary is production.", encoding="utf-8")
+    store, note = _question(vault, standing_answer_ref="vault://answers/current.md")
+    evidence = _evidence(
+        "vault://notes/evidence.md", "outbox://evidence/1", "the test channel is isolated", 10
+    )
+    store.update_system_fields(note["question_id"], {"evidence": [evidence]})
+    original = store.update_system_fields_if_unchanged
+    writes = 0
+
+    def write_then_edit(*args: Any, **kwargs: Any) -> Any:
+        nonlocal writes
+        result = original(*args, **kwargs)
+        writes += 1
+        if writes == 1:
+            answer.write_text("The supported boundary is staging.", encoding="utf-8")
+        return result
+
+    monkeypatch.setattr(store, "update_system_fields_if_unchanged", write_then_edit)
+    result = refresh_answers_on_evidence_delta(
+        vault_root=vault,
+        outbox_path=tmp_path / "outbox.jsonl",
+        evidence_sources={
+            "outbox://evidence/1": _source("outbox://evidence/1", evidence["quoted_span"])
+        },
+        store=store,
+        write_guard=_guard(),
+        now=_dt(12),
+    )
+
+    final = store.read_question(note["question_id"])
+    assert result.blocked == (note["question_id"],)
+    assert final["candidate_answer_ref"] is None
+    assert final["last_refreshed_at"] is None
+
+
 def test_question_raw_byte_version_changes_refresh_generation() -> None:
     first = _refresh_attempt_ids(
         "question-1",
@@ -1017,6 +1059,37 @@ def test_emit_receipt_rejects_conflicting_duplicate_event_ids(tmp_path: Path) ->
     store.update_system_fields_if_unchanged = original  # type: ignore[method-assign]
 
     with pytest.raises(CreateIdempotencyConflictError, match="conflicting duplicate"):
+        refresh_answers_on_evidence_delta(
+            vault_root=vault, outbox_path=outbox, evidence_sources=sources,
+            store=store, write_guard=_guard(), now=_dt(13)
+        )
+
+
+def test_emit_receipt_rejects_event_id_collision_across_event_types(tmp_path: Path) -> None:
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    outbox = tmp_path / "outbox.jsonl"
+    store, note = _question(vault)
+    evidence = _evidence("vault://notes/a.md", "outbox://evidence/1", "first evidence", 10)
+    store.update_system_fields(note["question_id"], {"evidence": [evidence]})
+    sources = {"outbox://evidence/1": _source("outbox://evidence/1", evidence["quoted_span"])}
+    original = store.update_system_fields_if_unchanged
+
+    def conflict(*_args: Any, **_kwargs: Any) -> Any:
+        raise KnowledgeWriteConflict("simulated crash after proposal receipt")
+
+    store.update_system_fields_if_unchanged = conflict  # type: ignore[method-assign]
+    refresh_answers_on_evidence_delta(
+        vault_root=vault, outbox_path=outbox, evidence_sources=sources,
+        store=store, write_guard=_guard(), now=_dt(12)
+    )
+    records = _records(outbox)
+    proposal = next(record for record in records if record["event"] == "expansion.create.proposed")
+    records.append({**proposal, "event": "other.event"})
+    outbox.write_text("\n".join(json.dumps(record) for record in records) + "\n", encoding="utf-8")
+    store.update_system_fields_if_unchanged = original  # type: ignore[method-assign]
+
+    with pytest.raises(CreateIdempotencyConflictError, match="globally unique"):
         refresh_answers_on_evidence_delta(
             vault_root=vault, outbox_path=outbox, evidence_sources=sources,
             store=store, write_guard=_guard(), now=_dt(13)
