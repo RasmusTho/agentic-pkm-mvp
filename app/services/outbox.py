@@ -532,7 +532,12 @@ def _read_jsonl_records_unlocked(
                     handle.seek(size - max_bytes)
                     raw = handle.read()
                 first_delimiter = raw.find(b"\n")
-                raw = raw[first_delimiter + 1 :] if first_delimiter >= 0 else b""
+                if first_delimiter < 0:
+                    raise JsonlOutboxCorruptionError(
+                        "JSONL outbox bounded read cannot identify a complete record: "
+                        f"{outbox_path}"
+                    )
+                raw = raw[first_delimiter + 1 :]
             else:
                 raw = outbox_path.read_bytes()
         else:

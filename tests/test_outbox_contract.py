@@ -9,11 +9,13 @@ from app.events.models import new_event
 from app.events.schema import OutboxEvent
 from app.events.types import INGEST_OBJECT_CREATED
 from app.services.outbox import (
+    JsonlOutboxCorruptionError,
     JsonlOutboxEventIdConflictError,
     append_jsonl_outbox_event,
     coerce_outbox_event,
     derive_binding_scoped_idempotency_key,
     derive_idempotency_key,
+    read_jsonl_outbox_records,
     serialize_outbox_record,
     write_outbox_event,
 )
@@ -27,6 +29,14 @@ class FakeConn:
 
     def execute(self, sql, params):
         self.executed.append((sql.strip(), params))
+
+
+def test_bounded_reader_rejects_retained_tail_without_record_delimiter(tmp_path: Path) -> None:
+    outbox_path = tmp_path / "oversized-record.jsonl"
+    outbox_path.write_text(json.dumps({"event": "x", "payload": "y" * 64}), encoding="utf-8")
+
+    with pytest.raises(JsonlOutboxCorruptionError, match="bounded read"):
+        read_jsonl_outbox_records(outbox_path, max_bytes=16, read_only=True)
 
 
 def test_write_outbox_event_serializes_payload():

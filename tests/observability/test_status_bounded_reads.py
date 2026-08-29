@@ -15,7 +15,10 @@ from app.observability.status_service import (
     _last_watcher_run_record,
     _read_last_json_record,
     _status_context_dimensions,
+    OrientationSignals,
 )
+from app.observability.status_model import IngestionStatus, WorkerQueueStatus
+from app.orientation.runtime import build_orientation_frame
 
 
 def _write_lines(path: Path, line: str, count: int) -> None:
@@ -77,6 +80,33 @@ def test_status_event_and_sla_counters_remain_unknown_on_corruption(tmp_path: Pa
 
     assert events.panel_runs_total is None
     assert sla.outcomes_total is None
+
+
+def test_oversized_retained_record_stays_unknown_through_orientation(tmp_path: Path) -> None:
+    path = tmp_path / "oversized-outbox.jsonl"
+    path.write_text(
+        json.dumps(
+            {
+                "event": "panel.intent.executed",
+                "payload": "x" * (_STATUS_TAIL_BYTES + 1_024),
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    events = _count_events(path)
+    sla = _delivery_sla_status(path)
+    frame = build_orientation_frame(
+        OrientationSignals(
+            events=events,
+            ingestion=IngestionStatus(),
+            worker_queue=WorkerQueueStatus(mode="jsonl"),
+        )
+    )
+
+    assert events.panel_runs_total is None
+    assert sla.outcomes_total is None
+    assert "counters unavailable" in " ".join(frame.explanation.open_items)
 
 
 def test_outbox_lag_hides_pending_when_truncated(tmp_path: Path, monkeypatch) -> None:
