@@ -418,7 +418,9 @@ and governing Issue itself. It binds the
 repository/base identity, exact candidate and live heads, contract digest, rejected-round IDs,
 protected finding IDs, and the content digest of that rejected-review history. Caller-supplied history, actors, URLs,
 labels, or finding subsets are never evidence. Omitted,
-foreign, stale, malformed, or partial evidence fails closed. Publication invokes the executable gate
+foreign, stale, malformed, or partial evidence fails closed. The executable gate issues publication
+authority only against the canonical `origin/main...HEAD` selectors; workflow-risk analysis may use
+alternate selectors only when it is not issuing publication authority. Publication invokes the gate
 with an explicit `new` or `existing` mode; `existing` derives a unique open PR whose base repository
 and ref match the publication base and whose head repository and ref match the authenticated current
 branch, then requires the supplied PR identity and scope

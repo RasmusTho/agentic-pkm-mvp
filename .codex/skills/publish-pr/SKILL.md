@@ -249,6 +249,8 @@ Existing publication also derives the unique open PR whose base repository/ref m
 publication base and whose head repository/ref match the current local branch; a supplied closed,
 foreign, retargeted, or different-branch PR number is not history authority.
 Each counted rejected review must contain exactly one canonical `Governing-Contract-SHA256` marker.
+Publication authority is always evaluated at canonical `origin/main...HEAD`; the workflow-risk
+selector overrides are analysis-only and fail closed whenever `--publication-mode` is present.
 
 For any implementation, governance, or direct-repair lane with a declared high-risk surface, the
 executable order is mandatory and fail-closed:

@@ -1468,6 +1468,49 @@ def test_publication_repository_must_match_authenticated_origin(
     assert "does not match authenticated origin" in capsys.readouterr().err
 
 
+@pytest.mark.parametrize(
+    "selector_override",
+    (
+        ["--workflow-risk-head", "HEAD^"],
+        ["--workflow-risk-base", "origin/stable"],
+    ),
+)
+def test_publication_rejects_caller_selected_head_or_base(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    selector_override: list[str],
+) -> None:
+    monkeypatch.setattr(
+        "scripts.review_before_ci_gate.workflow_risk_evidence_from_git",
+        lambda *args, **kwargs: SimpleNamespace(risks=[], head_sha="a" * 40),
+    )
+    monkeypatch.setattr(
+        "scripts.review_before_ci_gate._github_repository_from_origin", lambda: "octo/repo"
+    )
+    monkeypatch.setattr(
+        "scripts.review_before_ci_gate._current_branch_has_open_pr", lambda repository: False
+    )
+
+    assert review_before_ci_main(
+        [
+            "--lane",
+            "governance",
+            "--changed-file",
+            "scripts/review_before_ci_gate.py",
+            "--risk-assessment-complete",
+            "--risk-surface",
+            "state-machine",
+            "--review-gate-complete",
+            "--publication-mode",
+            "new",
+            "--github-repository",
+            "octo/repo",
+            *selector_override,
+        ]
+    ) == 2
+    assert "canonical origin/main...HEAD" in capsys.readouterr().err
+
+
 @pytest.mark.parametrize("lane", ["implmentation", "docs", "code", "maintenance", "promotion"])
 def test_unknown_lane_is_rejected_instead_of_failing_open(lane: str) -> None:
     with pytest.raises(ReviewBeforeCiGateError, match=f"unknown lane: {lane}"):

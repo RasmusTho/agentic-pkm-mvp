@@ -1044,6 +1044,12 @@ def _parser() -> argparse.ArgumentParser:
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     try:
+        if args.publication_mode is not None and (
+            args.workflow_risk_base != "origin/main" or args.workflow_risk_head != "HEAD"
+        ):
+            raise ReviewBeforeCiGateError(
+                "publication must authenticate the canonical origin/main...HEAD selectors"
+            )
         evidence = workflow_risk_evidence_from_git(
             Path.cwd(), base=args.workflow_risk_base, head=args.workflow_risk_head
         )
