@@ -66,6 +66,7 @@ from app.watcher.settings_delta import (
     is_settings_source_path,
     settings_delta_state_values,
 )
+from app.watcher.settings_rebind import DormantSettingsRebindReconciler
 from app.watcher.state import WatcherState
 from scripts.yaml_roundtrip import load_frontmatter
 
@@ -1762,7 +1763,13 @@ def _emit_changed_entry(
     state.intents_emitted += 1
     state.last_emitted_event_at = now
     state.record_rate_event(now)
-    state.update_file_state(str(entry.rel_path), mtime=current_mtime, content_hash=current_digest, emitted_at=now)
+    state.update_file_state(
+        str(entry.rel_path),
+        mtime=current_mtime,
+        content_hash=current_digest,
+        emitted_at=now,
+        trace_id=trace_id,
+    )
     if spec.emit_event == PANEL_SCAN_REQUESTED and process_panel_notes_inline:
         _process_panel_note(
             vault_root=cfg.vault_path,
@@ -1897,6 +1904,7 @@ def _run_spec_tick(
     states: Mapping[str, WatcherState] | None = None,
     process_panel_notes_inline: bool = False,
     handled_settings_sources: set[Path] | None = None,
+    retain_unemitted_observations: bool = False,
 ) -> dict[str, object]:
     tick_start = now
     handled_settings_sources = handled_settings_sources if handled_settings_sources is not None else set()
@@ -1924,6 +1932,8 @@ def _run_spec_tick(
         "panel_candidates": 0,
         "panel_skipped_policy": 0,
         "panel_skipped_auto_exec": 0,
+        "rebind_observations": [],
+        "rebind_unemitted_observations": 0,
     }
 
     if not cfg.enable:
@@ -2129,6 +2139,10 @@ def _run_spec_tick(
     delivery_observation_identity = state.observation_identity
     committed_observations: dict[str, dict[str, dict[str, Any] | None]] = {}
     for entry in changed_entries:
+        rel_path = str(entry.rel_path)
+        previous_file_state = (
+            dict(state.files[rel_path]) if rel_path in state.files else None
+        )
         try:
             trace_id = _emit_changed_entry(
                 spec=spec,
@@ -2150,7 +2164,35 @@ def _run_spec_tick(
                 for name, active_state in active_states.items()
             }
             if not trace_id:
+                if (
+                    retain_unemitted_observations
+                    and spec.emit_event == INGEST_VAULT_CHANGED
+                    and not is_settings_control_path(
+                        entry.rel_path,
+                        configured_system_dir=resolve_vault_system_dir_rel_or_default(
+                            cfg.vault_path
+                        ),
+                    )
+                ):
+                    if previous_file_state is None:
+                        state.files.pop(rel_path, None)
+                    else:
+                        state.files[rel_path] = previous_file_state
+                    summary["rebind_unemitted_observations"] = int(
+                        summary["rebind_unemitted_observations"]
+                    ) + 1
                 continue
+            observations = summary["rebind_observations"]
+            assert isinstance(observations, list)
+            emitted_state = state.files.get(rel_path) or {}
+            observations.append(
+                {
+                    "relative_path": rel_path,
+                    "content_hash": emitted_state.get("hash", entry.digest),
+                    "mtime": emitted_state.get("mtime", entry.mtime),
+                    "trace_id": trace_id,
+                }
+            )
             emitted_in_tick += 1
         except Exception:
             state.errors += 1
@@ -2272,6 +2314,12 @@ def run_registry_once(
     _loaded_config: RegistryConfig | None = None,
 ) -> dict[str, dict[str, object]]:
     cfg = _loaded_config or load_registry_config(config_path)
+    reconciler = DormantSettingsRebindReconciler.from_config(cfg)
+    rebind_cycle = reconciler.begin_cycle(cfg) if reconciler is not None else None
+    retain_rebind_observations = bool(
+        rebind_cycle is not None
+        and rebind_cycle.mode in {"prepared", "committed"}
+    )
     states = {
         spec.name: _load_registry_state(_state_path(cfg.state_dir, spec.name))
         for spec in cfg.specs
@@ -2287,6 +2335,7 @@ def run_registry_once(
             states=states,
             process_panel_notes_inline=True,
             handled_settings_sources=handled_settings_sources,
+            retain_unemitted_observations=retain_rebind_observations,
         )
         for spec in cfg.specs
     }
@@ -2296,6 +2345,12 @@ def run_registry_once(
         cadence=BriefingTickCadence(),
     )
     summaries["journal_review"] = _run_journal_review_tick(cfg)
+    if reconciler is not None and rebind_cycle is not None:
+        reconciler.finish_cycle(
+            rebind_cycle,
+            summaries=summaries,
+            states=states,
+        )
     enqueue_failures_total = sum(state.enqueue_failures_total for state in states.values())
     write_registry_heartbeat(
         path=cfg.heartbeat_path,
@@ -2319,6 +2374,7 @@ def run_registry_forever(
     _loaded_config: RegistryConfig | None = None,
 ) -> None:
     cfg = _loaded_config or load_registry_config(config_path)
+    reconciler = DormantSettingsRebindReconciler.from_config(cfg)
     # `watcher run` is the production entrypoint.  Compile its bound vault at
     # boot just as API and worker do; the registry config is authoritative for
     # this process and need not depend on VAULT_ROOT being set separately.
@@ -2340,6 +2396,11 @@ def run_registry_forever(
 
     tick = 0
     while True:
+        rebind_cycle = reconciler.begin_cycle(cfg) if reconciler is not None else None
+        retain_rebind_observations = bool(
+            rebind_cycle is not None
+            and rebind_cycle.mode in {"prepared", "committed"}
+        )
         now = time.time()
         handled_settings_sources: set[Path] = set()
         summaries = {
@@ -2350,6 +2411,7 @@ def run_registry_forever(
                 now=now,
                 states=states,
                 handled_settings_sources=handled_settings_sources,
+                retain_unemitted_observations=retain_rebind_observations,
             )
             for spec in cfg.specs
         }
@@ -2359,6 +2421,12 @@ def run_registry_forever(
             cadence=briefing_cadence,
         )
         summaries["journal_review"] = _run_journal_review_tick(cfg)
+        if reconciler is not None and rebind_cycle is not None:
+            reconciler.finish_cycle(
+                rebind_cycle,
+                summaries=summaries,
+                states=states,
+            )
         enqueue_failures_total = sum(state.enqueue_failures_total for state in states.values())
         write_registry_heartbeat(
             path=cfg.heartbeat_path,
