@@ -880,41 +880,28 @@ def write_promotion_test_terminal_receipt(
         )
         if set(existing_reservation) != _RESERVATION_FIELDS:
             raise PromotionReceiptError("attempt_conflict")
-        if attempt_path.exists():
-            _install_content_addressed(receipt_path, receipt_bytes)
-            _publish_registry_entry(
-                registry_path,
-                receipt=receipt,
-                issuer_public_key=issuer_public_key,
-            )
-            _install_immutable_record(
-                attempt_path,
-                attempt_bytes,
-                code="attempt_conflict",
-            )
-            existing_attempt = _read_canonical_file(
-                attempt_path,
-                code="attempt_record_corrupt",
-            )
-            if set(existing_attempt) != _ATTEMPT_FIELDS or existing_attempt != attempt:
-                raise PromotionReceiptError("attempt_conflict")
-            existing_receipt = _read_canonical_file(
-                receipt_path,
-                code="receipt_store_corrupt",
-            )
-            if existing_receipt != receipt:
-                raise PromotionReceiptError("receipt_store_corrupt")
-            return receipt
         _install_content_addressed(receipt_path, receipt_bytes)
-        _publish_registry_entry(
-            registry_path,
-            receipt=receipt,
-            issuer_public_key=issuer_public_key,
-        )
         _install_immutable_record(
             attempt_path,
             attempt_bytes,
             code="attempt_conflict",
+        )
+        existing_attempt = _read_canonical_file(
+            attempt_path,
+            code="attempt_record_corrupt",
+        )
+        if set(existing_attempt) != _ATTEMPT_FIELDS or existing_attempt != attempt:
+            raise PromotionReceiptError("attempt_conflict")
+        existing_receipt = _read_canonical_file(
+            receipt_path,
+            code="receipt_store_corrupt",
+        )
+        if existing_receipt != receipt:
+            raise PromotionReceiptError("receipt_store_corrupt")
+        _publish_registry_entry(
+            registry_path,
+            receipt=receipt,
+            issuer_public_key=issuer_public_key,
         )
         _fence_receipt_store(store)
         return receipt
