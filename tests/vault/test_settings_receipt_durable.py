@@ -45,6 +45,34 @@ def test_settings_receipt_aliases_share_once_only_lock(tmp_path: Path) -> None:
     assert _settings_receipt_lock_path(real_path) == _settings_receipt_lock_path(
         alias_dir / "outbox.jsonl"
     )
+
+
+def test_settings_receipt_and_migration_readers_do_not_create_default_outbox(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("INDEX_OUTBOX_PATH", raising=False)
+
+    from app.events.outbox import default_outbox_path
+    from app.receipts.settings_receipts import _read_durable_jsonl_records
+    from app.settings.migration import _transaction_receipt_is_durable
+
+    outbox_path = default_outbox_path()
+    receipt = SettingsWriteReceipt(
+        key="settings.location",
+        value="settings",
+        surface="migration",
+        actor="operator",
+        operation_id="missing-default-read:0",
+    )
+
+    assert _read_durable_jsonl_records(outbox_path=None) is None
+    assert durable_settings_write_receipt_exists(receipt) is False
+    assert _transaction_receipt_is_durable(
+        {"receipt_key": receipt.key, "receipt_timestamp": receipt.timestamp}
+    ) is False
+    assert not outbox_path.exists()
+    assert not outbox_path.parent.exists()
 from app.settings import compiler
 from app.vault.app_local import AppLocalSettingsStore, KnownVaultRef
 from app.vault.manager import VaultManager

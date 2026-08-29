@@ -215,9 +215,9 @@ def _read_durable_jsonl_records(
     from app.services.outbox import read_jsonl_outbox_records
 
     if outbox_path is None:
-        from app.outbox.events import get_index_outbox_path  # noqa: PLC0415
+        from app.events.outbox import default_outbox_path  # noqa: PLC0415
 
-        resolved = get_index_outbox_path()
+        resolved = default_outbox_path()
     else:
         resolved = Path(outbox_path).expanduser()
     if not resolved.exists() or not resolved.is_file():

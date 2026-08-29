@@ -390,10 +390,10 @@ def _owned_transactions(root: Path) -> list[Path]:
 
 
 def _transaction_receipt_is_durable(marker: dict[str, object]) -> bool:
-    from app.outbox.events import get_index_outbox_path
+    from app.events.outbox import default_outbox_path
     from app.services.outbox import read_jsonl_outbox_records
 
-    path = get_index_outbox_path()
+    path = default_outbox_path()
     if not path.is_file():
         return False
     expected_key = marker.get("receipt_key")

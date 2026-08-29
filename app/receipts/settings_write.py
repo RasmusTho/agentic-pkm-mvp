@@ -170,9 +170,9 @@ def durable_settings_write_receipt_exists(receipt: SettingsWriteReceipt) -> bool
     if not receipt.operation_id:
         raise ValueError("durable receipt readback requires operation_id")
 
-    from app.outbox.events import get_index_outbox_path  # noqa: PLC0415
+    from app.events.outbox import default_outbox_path  # noqa: PLC0415
 
-    outbox_path = _canonical_settings_receipt_path(get_index_outbox_path())
+    outbox_path = _canonical_settings_receipt_path(default_outbox_path())
     from app.services.outbox import read_jsonl_outbox_records  # noqa: PLC0415
 
     operation_id_collision = False

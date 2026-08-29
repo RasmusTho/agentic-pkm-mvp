@@ -6,7 +6,7 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query
 
-from app.outbox.events import INDEX_OUTBOX_PATH
+from app.events.outbox import default_outbox_path
 from app.services.outbox import JsonlOutboxCorruptionError, read_jsonl_outbox_records
 
 router = APIRouter()
@@ -17,7 +17,7 @@ def _resolve_outbox_path() -> Path:
     raw = os.getenv("INDEX_OUTBOX_PATH")
     if raw:
         return Path(raw).expanduser()
-    return Path(INDEX_OUTBOX_PATH).expanduser()
+    return default_outbox_path().expanduser()
 
 
 def _load_events(path: Path) -> list[dict[str, Any]]:
