@@ -32,6 +32,21 @@ the path and branch lease identities immediately before deletion and retains
 prior path-to-branch bindings when a path is reused. A report, missing record,
 or missing worktree is never evidence that cleanup is authorized.
 
+Remote branch disposition is not a broad-janitor action. The bounded
+`targeted_remote_cleanup` production entrypoint accepts at most five caller-supplied
+candidates and requires each to bind the repository, fully qualified source ref,
+frozen source SHA, archive ref, owner, governing Issue (or explicit no-Issue lane),
+successor, retention class, review trigger, and explicit retain/discard state. It
+publishes and reads back the archive at the frozen SHA, writes a durable `prepared`
+receipt, and only then uses an expected-old-SHA remote CAS delete. It completes the
+receipt only after source absence and exact archive-SHA readback; a retry is valid
+only when the same identity receipt and both live refs agree. Any drift stops the
+batch before later candidates are touched.
+
+Archive refs are retained by default. `review_at` is only a review trigger for
+`safety_archive` and `quarantine`; elapsed time never authorizes archive deletion,
+and a missing or non-explicit discard receipt remains a retain decision.
+
 This document is `scripts/git_hygiene.py`'s paired temporal-owner contract.
 Update it whenever the preflight inputs, janitor preservation rules, cleanup
 authority, or command behavior changes. Focused executable coverage lives in
