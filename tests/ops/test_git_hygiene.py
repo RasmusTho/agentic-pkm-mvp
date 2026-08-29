@@ -17,7 +17,7 @@ def _targeted_candidate(**overrides):
         "repository": "RasmusTho/agentic-pkm-mvp",
         "source_ref": "refs/heads/closed-unmerged",
         "source_sha": "a" * 40,
-        "archive_ref": "refs/archive/git-hygiene/20300101T000000Z/closed-unmerged",
+        "archive_ref": "",
         "owner": "builder-ops",
         "governing_issue": 5170,
         "successor": "none",
@@ -27,6 +27,10 @@ def _targeted_candidate(**overrides):
         "authority": {"repository": "RasmusTho/agentic-pkm-mvp", "lease_conflicts": [], "lifecycle_conflicts": [], "protected_pr_heads": {"4728": "c" * 40, "4813": "d" * 40}},
     }
     candidate.update(overrides)
+    if not candidate["archive_ref"]:
+        candidate["archive_ref"] = git_hygiene._targeted_archive_ref(
+            candidate["repository"], candidate["source_ref"], candidate["source_sha"]
+        )
     return candidate
 
 
@@ -80,7 +84,7 @@ def test_targeted_remote_cleanup_requires_exact_archive_sha_readback(tmp_path, m
 
 
 def test_targeted_remote_cleanup_cas_delete_stops_on_source_drift(tmp_path, monkeypatch) -> None:
-    first, later = _targeted_candidate(), _targeted_candidate(source_ref="refs/heads/later", archive_ref="refs/archive/git-hygiene/20300101T000000Z/later")
+    first, later = _targeted_candidate(), _targeted_candidate(source_ref="refs/heads/later")
     refs = {first["source_ref"]: first["source_sha"], later["source_ref"]: later["source_sha"]}
     commands: list[list[str]] = []
     monkeypatch.setattr(git_hygiene, "run_git_result", _remote_cleanup_transport(refs, commands, advance_before_delete=True))
@@ -122,8 +126,7 @@ def test_archive_review_trigger_never_authorizes_archive_delete(tmp_path, monkey
     commands: list[list[str]] = []
     monkeypatch.setattr(git_hygiene, "run_git_result", _remote_cleanup_transport({candidate["archive_ref"]: candidate["source_sha"]}, commands))
     report = git_hygiene.targeted_remote_cleanup(tmp_path, repository=candidate["repository"], candidates=[candidate], receipt_dir=tmp_path / "receipts")
-    assert report["ok"] is False
-    assert report["error"] == "prepared_receipt_source_absent_ambiguous"
+    assert report["ok"] is True
     assert candidate["archive_ref"] in {candidate["archive_ref"]}
     assert not any(command[-1] == f":{candidate['archive_ref']}" for command in commands if command[0] == "push")
 
@@ -154,12 +157,45 @@ def test_targeted_remote_cleanup_protects_live_pr_heads_without_push(tmp_path, m
 
 def test_targeted_remote_cleanup_preflights_archive_collisions_without_push(tmp_path, monkeypatch) -> None:
     first = _targeted_candidate()
-    second = _targeted_candidate(source_ref="refs/heads/other")
+    second = _targeted_candidate(source_ref="refs/heads/other", archive_ref=first["archive_ref"])
     commands: list[list[str]] = []
     monkeypatch.setattr(git_hygiene, "run_git_result", _remote_cleanup_transport({}, commands))
     report = git_hygiene.targeted_remote_cleanup(tmp_path, repository=first["repository"], candidates=[first, second], receipt_dir=tmp_path / "receipts")
-    assert report["error"] == "candidate_archive_namespace_collision"
+    assert report["error"] == "candidate_archive_ref_not_identity_derived"
     assert not any(command[0] == "push" for command in commands)
+
+
+def test_targeted_remote_cleanup_prepared_write_failure_never_deletes(tmp_path, monkeypatch) -> None:
+    candidate = _targeted_candidate()
+    refs = {candidate["source_ref"]: candidate["source_sha"]}
+    commands: list[list[str]] = []
+    monkeypatch.setattr(git_hygiene, "run_git_result", _remote_cleanup_transport(refs, commands))
+    def fail_prepared(path, receipt):
+        git_hygiene._write_receipt(path, receipt)
+        raise OSError("crash-after-prepared-fsync")
+    report = git_hygiene.targeted_remote_cleanup(tmp_path, repository=candidate["repository"], candidates=[candidate], receipt_dir=tmp_path / "receipts", receipt_writer=fail_prepared)
+    assert report["ok"] is False
+    assert candidate["source_ref"] in refs
+    assert not any(command[-1].startswith(":refs/heads/") for command in commands if command[0] == "push")
+
+
+def test_targeted_remote_cleanup_completed_write_failure_recovers_monotonically(tmp_path, monkeypatch) -> None:
+    candidate = _targeted_candidate()
+    refs = {candidate["source_ref"]: candidate["source_sha"]}
+    commands: list[list[str]] = []
+    monkeypatch.setattr(git_hygiene, "run_git_result", _remote_cleanup_transport(refs, commands))
+    calls = 0
+    def fail_completed(path, receipt):
+        nonlocal calls
+        calls += 1
+        if receipt["state"] == "completed":
+            raise OSError("crash-before-completed-write")
+        git_hygiene._write_receipt(path, receipt)
+    receipts = tmp_path / "receipts"
+    first = git_hygiene.targeted_remote_cleanup(tmp_path, repository=candidate["repository"], candidates=[candidate], receipt_dir=receipts, receipt_writer=fail_completed)
+    second = git_hygiene.targeted_remote_cleanup(tmp_path, repository=candidate["repository"], candidates=[candidate], receipt_dir=receipts)
+    assert first["ok"] is False and second["ok"] is True
+    assert json.loads(next(receipts.glob("*.json")).read_text())["state"] == "completed"
 
 
 def _allow_lifecycle_authority(_targets):
