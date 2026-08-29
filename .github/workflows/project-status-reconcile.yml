@@ -27,7 +27,6 @@ permissions:
   contents: read
   issues: read
   pull-requests: read
-  repository-projects: write
 
 jobs:
   reconcile-issue:
@@ -54,7 +53,8 @@ jobs:
         with:
           app-id: ${{ secrets.PROJECT_APP_ID }}
           private-key: ${{ secrets.PROJECT_APP_PRIVATE_KEY }}
-          permission-repository-projects: write
+          owner: Yggdrasil-PKM
+          permission-organization-projects: write
           permission-issues: read
           permission-pull-requests: read
       - name: Reconcile issue project status
@@ -63,9 +63,11 @@ jobs:
           # agent quota. Falls back to GITHUB_TOKEN (graceful no-op) when the App
           # secrets are absent.
           GH_TOKEN: ${{ steps.project-app-token.outputs.token || secrets.GITHUB_TOKEN }}
+          REPO_GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           python3 scripts/reconcile_project_status.py \
             --repo "${{ github.repository }}" \
+            --owner "Yggdrasil-PKM" \
             --issue "${{ github.event.issue.number }}"
 
   reconcile-scan:
@@ -104,7 +106,8 @@ jobs:
         with:
           app-id: ${{ secrets.PROJECT_APP_ID }}
           private-key: ${{ secrets.PROJECT_APP_PRIVATE_KEY }}
-          permission-repository-projects: write
+          owner: Yggdrasil-PKM
+          permission-organization-projects: write
           permission-issues: read
           permission-pull-requests: read
       - name: Reconcile existing project items
@@ -113,7 +116,9 @@ jobs:
           # agent quota. Falls back to GITHUB_TOKEN (graceful no-op) when the App
           # secrets are absent.
           GH_TOKEN: ${{ steps.project-app-token.outputs.token || secrets.GITHUB_TOKEN }}
+          REPO_GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           python3 scripts/reconcile_project_status.py \
             --repo "${{ github.repository }}" \
+            --owner "Yggdrasil-PKM" \
             --scan

@@ -22,10 +22,13 @@ def test_project_workflows_use_app_installation_token() -> None:
         assert "if: ${{ steps.project-app-config.outputs.configured == 'true' }}" in workflow
         assert "app-id: ${{ secrets.PROJECT_APP_ID }}" in workflow
         assert "private-key: ${{ secrets.PROJECT_APP_PRIVATE_KEY }}" in workflow
-        assert "permission-repository-projects: write" in workflow
+        assert "owner: Yggdrasil-PKM" in workflow
+        assert "permission-organization-projects: write" in workflow
         assert "permission-issues: read" in workflow
         assert "permission-pull-requests: read" in workflow
         assert "GH_TOKEN: ${{ steps.project-app-token.outputs.token || secrets.GITHUB_TOKEN }}" in workflow
+        assert "REPO_GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}" in workflow
+        assert "--owner \"Yggdrasil-PKM\"" in workflow
         assert "PROJECT_TOKEN" not in workflow
 
         for job in workflow_data["jobs"].values():
@@ -48,4 +51,14 @@ def test_project_workflows_use_app_installation_token() -> None:
             assert token_step["uses"] == "actions/create-github-app-token@v3"
             assert token_step["with"]["app-id"] == "${{ secrets.PROJECT_APP_ID }}"
             assert token_step["with"]["private-key"] == "${{ secrets.PROJECT_APP_PRIVATE_KEY }}"
+            assert token_step["with"]["owner"] == "Yggdrasil-PKM"
+            assert token_step["with"]["permission-organization-projects"] == "write"
             assert projection_step["env"]["GH_TOKEN"].endswith("secrets.GITHUB_TOKEN }}")
+            assert projection_step["env"]["REPO_GH_TOKEN"] == "${{ secrets.GITHUB_TOKEN }}"
+
+
+def test_governance_project_owner_is_the_organization_target() -> None:
+    governance = yaml.safe_load(
+        Path(".github/github-governance.yml").read_text(encoding="utf-8")
+    )
+    assert governance["project"]["owner"] == "Yggdrasil-PKM"

@@ -52,6 +52,7 @@ labels:
     lane:governance: narrow additive label for governance-lane Issues and PRs
 project:
   name: Agent Delivery Control Plane
+  owner: Yggdrasil-PKM
   type: github-project-v2
   fields:
     Status:

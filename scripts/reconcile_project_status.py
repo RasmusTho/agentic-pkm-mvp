@@ -43,40 +43,36 @@ PROJECT_ITEM_LIST_INITIAL_LIMIT = 200
 PROJECT_ITEM_SCAN_PAGE_SIZE = 100
 GH_RETRY_ATTEMPTS = 5
 GH_RETRY_BASE_DELAY_SECONDS = 0.4
-PROJECT_ITEMS_WITH_UPDATED_AT_QUERY = """
-query($owner: String!, $number: Int!, $after: String) {
-  user(login: $owner) {
-    projectV2(number: $number) {
-      items(first: 100, after: $after) {
-        totalCount
-        pageInfo {
-          hasNextPage
-          endCursor
+_PROJECT_ITEMS_FRAGMENT = """
+fragment ProjectItems on ProjectV2 {
+  items(first: 100, after: $after) {
+    totalCount
+    pageInfo {
+      hasNextPage
+      endCursor
+    }
+    nodes {
+      id
+      content {
+        __typename
+        ... on Issue {
+          number
+          url
+          updatedAt
         }
+        ... on PullRequest {
+          number
+          url
+          updatedAt
+        }
+      }
+      fieldValues(first: 20) {
         nodes {
-          id
-          content {
-            __typename
-            ... on Issue {
-              number
-              url
-              updatedAt
-            }
-            ... on PullRequest {
-              number
-              url
-              updatedAt
-            }
-          }
-          fieldValues(first: 20) {
-            nodes {
-              ... on ProjectV2ItemFieldSingleSelectValue {
+          ... on ProjectV2ItemFieldSingleSelectValue {
+            name
+            field {
+              ... on ProjectV2SingleSelectField {
                 name
-                field {
-                  ... on ProjectV2SingleSelectField {
-                    name
-                  }
-                }
               }
             }
           }
@@ -86,6 +82,22 @@ query($owner: String!, $number: Int!, $after: String) {
   }
 }
 """
+
+
+def _project_items_query(owner_type: str) -> str:
+    """Build an owner-typed query so GraphQL never resolves both owner kinds."""
+    return f"""
+{_PROJECT_ITEMS_FRAGMENT}
+query($owner: String!, $number: Int!, $after: String) {{
+  {owner_type}(login: $owner) {{
+    projectV2(number: $number) {{ ...ProjectItems }}
+  }}
+}}
+"""
+
+
+PROJECT_ITEMS_WITH_UPDATED_AT_QUERY = _project_items_query("organization")
+PROJECT_ITEMS_FOR_USER_WITH_UPDATED_AT_QUERY = _project_items_query("user")
 
 # GitHub's shared GraphQL pool (~5000 points/hr, shared across every tool/agent
 # on this identity) exhausts long before REST core. Below these remaining-budget
@@ -251,11 +263,16 @@ def run_gh(*args: str) -> str:
     for attempt in range(1, GH_RETRY_ATTEMPTS + 1):
         started = time.monotonic()
         try:
+            env = None
+            if args and args[0] in {"issue", "pr"} and os.environ.get("REPO_GH_TOKEN"):
+                env = os.environ.copy()
+                env["GH_TOKEN"] = os.environ["REPO_GH_TOKEN"]
             result = subprocess.run(
                 ["gh", *args],
                 check=True,
                 capture_output=True,
                 text=True,
+                env=env,
             )
             _log_event(
                 {
@@ -314,6 +331,17 @@ def run_gh_project(owner: str, *args: str) -> str:
     if args and args[0] == "item-edit":
         return run_gh("project", *args)
     return run_gh("project", *args, "--owner", owner)
+
+
+def project_owner_type(owner: str) -> str:
+    """Return the GitHub owner kind before selecting its GraphQL root field."""
+    payload = json.loads(run_gh("api", f"users/{owner}"))
+    owner_type = payload.get("type")
+    if owner_type == "Organization":
+        return "organization"
+    if owner_type == "User":
+        return "user"
+    raise RuntimeError(f'Could not determine GitHub owner type for "{owner}"')
 
 
 def load_governance_project_name() -> str:
@@ -422,6 +450,16 @@ def _scan_item_from_graphql_node(node: dict[str, Any]) -> dict[str, Any] | None:
 
 
 def list_project_items_for_scan(owner: str, project_number: int) -> list[dict[str, Any]]:
+    # A single GraphQL operation that includes both `organization` and `user`
+    # fields fails for either owner kind before the selected project can be
+    # read. Resolve the public owner kind first, then issue exactly one typed
+    # query; this keeps legacy personal-owner projects supported as well.
+    owner_type = project_owner_type(owner)
+    query = (
+        PROJECT_ITEMS_WITH_UPDATED_AT_QUERY
+        if owner_type == "organization"
+        else PROJECT_ITEMS_FOR_USER_WITH_UPDATED_AT_QUERY
+    )
     items: list[dict[str, Any]] = []
     after: str | None = None
     while True:
@@ -429,7 +467,7 @@ def list_project_items_for_scan(owner: str, project_number: int) -> list[dict[st
             "api",
             "graphql",
             "-f",
-            f"query={PROJECT_ITEMS_WITH_UPDATED_AT_QUERY}",
+            f"query={query}",
             "-F",
             f"owner={owner}",
             "-F",
@@ -438,7 +476,8 @@ def list_project_items_for_scan(owner: str, project_number: int) -> list[dict[st
         if after:
             cmd.extend(["-F", f"after={after}"])
         payload = json.loads(run_gh(*cmd))
-        project = ((payload.get("data") or {}).get("user") or {}).get("projectV2")
+        data = payload.get("data") or {}
+        project = ((data.get(owner_type) or {}).get("projectV2"))
         if not project:
             raise RuntimeError(f'Project #{project_number} not found for owner "{owner}"')
         page = project.get("items") or {}
@@ -448,13 +487,12 @@ def list_project_items_for_scan(owner: str, project_number: int) -> list[dict[st
                 items.append(item)
         page_info = page.get("pageInfo") or {}
         if not page_info.get("hasNextPage"):
-            break
+            return items
         after = page_info.get("endCursor")
         if not after:
             raise ProjectItemListDeferred(
                 "project scan pagination did not return an end cursor"
             )
-    return items
 
 
 def find_item_by_number(items: list[dict[str, Any]], kind: str, number: int) -> dict[str, Any] | None:

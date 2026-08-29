@@ -21,17 +21,28 @@ two Actions secrets are configured:
 - `PROJECT_APP_ID` — the numeric GitHub App ID.
 - `PROJECT_APP_PRIVATE_KEY` — the complete PEM private-key contents, including the begin/end lines.
 
-The three workflows generate a short-lived installation token with the App's granted
-`repository-projects: write`, `issues: read`, and `pull-requests: read` permissions, then pass it to
-the board projection script as `GH_TOKEN`. The private key is never stored in the repository. If
-either secret is absent, token creation is skipped and the workflow passes `secrets.GITHUB_TOKEN`
-instead; the board script therefore keeps its existing graceful no-op behavior when a usable
-Project credential is unavailable. `PROJECT_TOKEN` is not used.
+The target Project is the organization-owned `Yggdrasil-PKM` project, not the legacy personal
+project with the same title. The App must be installed on the `Yggdrasil-PKM` organization with
+the organization Projects permission `write`; repository-project permission is not sufficient for
+this target. The three workflows request that organization installation explicitly and generate a
+short-lived installation token, then pass it to the board projection script as `GH_TOKEN`. The
+repository remains user-owned, so repository Issue/PR reads use the per-run `GITHUB_TOKEN` through
+`REPO_GH_TOKEN`. The private key is never stored in the repository. If either App secret is absent,
+token creation is skipped and `secrets.GITHUB_TOKEN` is used for both paths; the board script keeps
+its existing graceful no-op behavior when a usable Project credential is unavailable. `PROJECT_TOKEN`
+is retained as a legacy repository secret for rollback/inspection only and is not read by these
+workflows.
+
+Live target verification on 2026-08-29: `Yggdrasil-PKM` Project `#1`, node ID
+`PVT_kwDOEzoj4s4Bh2sR`, title `Agent Delivery Control Plane`, currently exists but is blank. Its
+fields, views, and lifecycle automation still need to be configured to match the repository
+contract before this projection is considered operational. The App installation and permission
+grant are platform-side prerequisites and are not claimed by this repository change.
 
 | Token / identity | Workload | Authority boundary |
 | --- | --- | --- |
-| `PROJECT_APP_ID` + `PROJECT_APP_PRIVATE_KEY` → App installation token | `project-status-reconcile.yml`, `project-pr-opened.yml`, `project-pr-stage-change.yml` | Board projection writes and their issue/PR reads; isolated App quota |
-| `GITHUB_TOKEN` | Ordinary repository-owned Actions governance and the documented fallback for the optional board workflows | Per-workflow repository token; not the preferred board identity |
+| `PROJECT_APP_ID` + `PROJECT_APP_PRIVATE_KEY` → organization App installation token | `project-status-reconcile.yml`, `project-pr-opened.yml`, `project-pr-stage-change.yml` | Organization Project writes; isolated App quota |
+| `GITHUB_TOKEN` | Ordinary repository-owned Actions governance, plus Issue/PR reads and the documented fallback for the optional board workflows | Per-workflow repository token; no organization Project write authority |
 | Interactive `gh` authentication | Claude/Codex agent issue, PR, and delivery operations | Separate human/agent identity and quota from the board App |
 
 ## Exact label set

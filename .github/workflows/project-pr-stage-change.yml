@@ -17,7 +17,6 @@ concurrency:
 permissions:
   contents: read
   pull-requests: read
-  repository-projects: write
 
 jobs:
   project-pr-projection:
@@ -43,7 +42,8 @@ jobs:
         with:
           app-id: ${{ secrets.PROJECT_APP_ID }}
           private-key: ${{ secrets.PROJECT_APP_PRIVATE_KEY }}
-          permission-repository-projects: write
+          owner: Yggdrasil-PKM
+          permission-organization-projects: write
           permission-issues: read
           permission-pull-requests: read
       - name: Project PR stage projection
@@ -56,8 +56,10 @@ jobs:
           # agent quota. Falls back to GITHUB_TOKEN (graceful no-op) when the App
           # secrets are absent.
           GH_TOKEN: ${{ steps.project-app-token.outputs.token || secrets.GITHUB_TOKEN }}
+          REPO_GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           python3 scripts/project_status.py \
             --repo "${{ github.repository }}" \
+            --owner "Yggdrasil-PKM" \
             --pr "${{ github.event.pull_request.number }}" \
             --action "${{ github.event.action }}"
