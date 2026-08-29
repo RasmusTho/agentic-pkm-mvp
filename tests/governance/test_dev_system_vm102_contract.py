@@ -30,9 +30,37 @@ RECEIPTS = (
     "devsystem_vm102_rollback.v1",
 )
 
+RECEIPT_CONSUMERS = {
+    "docs/BUILDEROPS_CONTROL_PLANE/INDEPENDENT_AUTHENTICATED_DEPLOYMENT.md": (
+        "README.md#vm-102-evidence-and-receipt-contract"
+    ),
+    "docs/DEVUI.md": (
+        "BUILDEROPS_CONTROL_PLANE/README.md#vm-102-evidence-and-receipt-contract"
+    ),
+    "docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md": (
+        "../BUILDEROPS_CONTROL_PLANE/README.md#vm-102-evidence-and-receipt-contract"
+    ),
+    "docs/deployment/profiles/TARS_PROXMOX.md": (
+        "../../BUILDEROPS_CONTROL_PLANE/README.md#vm-102-evidence-and-receipt-contract"
+    ),
+}
+
 
 def _read(relative: str) -> str:
     return (ROOT / relative).read_text(encoding="utf-8")
+
+
+def test_adr0062_amendment_owns_vm102_placement_and_rebuildable_posture() -> None:
+    adr = _read("docs/adr/ADR-0062-builderops-ecosystem-wide-enabling-system.md")
+    amendment = adr.split("### A4", 1)[1].split("## Source docs and evidence", 1)[0]
+    normalized_amendment = " ".join(amendment.split()).lower()
+
+    assert "complete dev system placement on vm 102" in normalized_amendment
+    assert "vm 102 is the intended cohesive runtime home" in normalized_amendment
+    assert "demerzel is an external authenticated client and operator dependency" in normalized_amendment
+    assert "rebuildable from source, images, configuration, and host-managed secrets" in normalized_amendment
+    assert "backup, wal archive, and restore drill are deferred" in normalized_amendment
+    assert "a4 supersedes conflicting placement and recovery-gate language in d2 through d6" in normalized_amendment
 
 
 def test_complete_vm102_topology_keeps_known_components_and_gaps_visible() -> None:
@@ -50,18 +78,16 @@ def test_complete_vm102_topology_keeps_known_components_and_gaps_visible() -> No
     assert "`gap` is a required state" in normalized_topology
     for component_id in COMPONENT_IDS:
         assert f"`{component_id}`" in normalized_topology
-    assert "dedicated BuilderOps engine is empty" in normalized_topology
-    assert "strict host ownership inventory was not freshly verified" in normalized_topology
+    assert "runtime evidence remains an explicit `gap` until a bound receipt proves it" in normalized_topology.lower()
 
 
 def test_vm102_receipt_contract_names_exact_identity_and_no_secret_gate() -> None:
     contract = _read("docs/BUILDEROPS_CONTROL_PLANE/README.md")
-    deployment = _read("docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md")
     receipt_contract = contract.split("## VM-102 evidence and receipt contract", 1)[1]
+    normalized_receipt_contract = " ".join(receipt_contract.split()).lower()
 
     for receipt in RECEIPTS:
         assert f"`{receipt}`" in receipt_contract
-        assert f"`{receipt}`" in deployment
     for field in (
         "receipt_type",
         "receipt_version",
@@ -75,7 +101,19 @@ def test_vm102_receipt_contract_names_exact_identity_and_no_secret_gate() -> Non
     ):
         assert field in receipt_contract
     assert "`tars_host_qualification.v1` is only the repository-side candidate" in receipt_contract
-    assert "No screen observation, Project view, unbound guest readback" in deployment
+    assert "`rollback_baseline_state: available`" in receipt_contract
+    assert "`rollback_baseline_state: no_baseline`" in receipt_contract
+    assert "`no_compatible_baseline`" in receipt_contract
+    assert "all-zero source, image, or configuration placeholders are invalid" in normalized_receipt_contract
+    assert "a later successful deployment establishes a runnable baseline" in normalized_receipt_contract
+
+
+def test_receipt_consumers_link_to_single_normative_owner() -> None:
+    for relative, owner_link in RECEIPT_CONSUMERS.items():
+        consumer = _read(relative)
+        assert owner_link in consumer
+        assert "rollback_baseline_state" not in consumer
+        assert "receipt_version" not in consumer
 
 
 def test_dev_system_docs_preserve_the_product_runtime_boundary() -> None:

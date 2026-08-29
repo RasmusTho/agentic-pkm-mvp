@@ -46,29 +46,13 @@ posture, health/version evidence, deployment role, lifecycle evidence, migration
 rollback boundary. An unknown or unavailable component remains an explicit gap and blocks admission;
 it cannot be silently omitted or inferred from a guest check.
 
-### VM-102 deployment receipt chain
+### VM-102 deployment receipts
 
-The following are receipt contracts, not claims that the target is deployed or qualified:
-
-1. `devsystem_vm102_component_inventory.v1` binds the complete component matrix and inventory
-   digest to VM 102 and its observation time.
-2. `builderops_vm_rebuild_activation.v1` plus `devui_vm102_runtime_qualification.v1` bind fresh
-   VM/engine/project/service admission, private authenticated ingress, health/version, fencing, and
-   no-dual-writer evidence. The candidate-only `tars_host_qualification.v1` result is not enough.
-3. `devsystem_vm102_deploy.v1` binds the exact candidate source SHA, all image digests, pinned
-   configuration fingerprint, component inventory digest, deployment owner, migration
-   classification/completion, and previous rollback identity.
-4. `devsystem_vm102_health.v1` binds post-deploy identity, health/version/readiness, ingress/auth,
-   topology completeness, and read-only smoke to the deployed candidate. The Dev UI Stage A pilot
-   additionally requires `devui-stage-a-read-only-owner-pilot.v1` and #4748 exact-SHA browser proof.
-5. `devsystem_vm102_rollback.v1` binds the previous known-good source/image/config identity,
-   restored health/version/read-only smoke, and preserved GitHub/BuilderOps authority. It never
-   reverses a forward-only migration or rewinds authority data.
-
-No screen observation, Project view, unbound guest readback, or healthy default-engine stack is a
-deployment receipt. Receipts are redaction-safe, must include `target_vm` (`vmid: 102`,
-`name: builder-system`), `observed_at`, source references, an evidence fingerprint, and explicit
-gaps/refusals; they never contain credentials or secret-bearing environment dumps.
+The ordered receipt schemas and first-deployment rollback refusal are owned only by the
+[VM-102 evidence and receipt contract](../BUILDEROPS_CONTROL_PLANE/README.md#vm-102-evidence-and-receipt-contract).
+This portable deployment document consumes that contract without redefining it. It still refuses a
+screen observation, Project view, unbound guest readback, healthy default-engine stack,
+secret-bearing evidence, or absent compatible rollback baseline as deployment or rollback proof.
 
 ## Current live runtime posture
 

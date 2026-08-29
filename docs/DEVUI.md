@@ -64,11 +64,11 @@ The complete component inventory and gaps are owned by
 The read-time view may surface the inventory and its freshness/refusal state, but it cannot create
 local workflow state, duplicate lifecycle authority, or upgrade a missing receipt into proof.
 
-The deployment evidence chain is `devsystem_vm102_component_inventory.v1` →
-`builderops_vm_rebuild_activation.v1` + `devui_vm102_runtime_qualification.v1` →
-`devsystem_vm102_deploy.v1` → `devsystem_vm102_health.v1`; the Stage A pilot and rollback have
-their own exact-SHA receipts. If any source or component is unavailable, Dev UI withdraws only the
-affected claim and leaves the gap visible.
+The ordered schemas are owned only by the
+[VM-102 evidence and receipt contract](BUILDEROPS_CONTROL_PLANE/README.md#vm-102-evidence-and-receipt-contract).
+Dev UI consumes those source receipts without copying their schema. If any source or component is
+unavailable, Dev UI withdraws only the affected claim and leaves the gap visible; it never infers a
+deployment, rollback target, or owner acceptance.
 
 ### Discovery/control-plane boundary
 

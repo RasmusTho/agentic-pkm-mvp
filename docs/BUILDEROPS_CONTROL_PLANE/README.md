@@ -56,7 +56,7 @@ row must be retained in `devsystem_vm102_component_inventory.v1`, including rows
 | Component ID | Placement class | Owner / service or project | Identity, ingress, health, and lifecycle contract | Migration / rollback boundary | Current reconciliation state |
 | --- | --- | --- | --- | --- | --- |
 | `devui_projection` | VM-102 resident (target) | Dev UI owner; read-only projection component | Exact source SHA and image digest; internal authenticated GET-only path; `devsystem_vm102_health.v1` plus #4748 browser evidence; GitHub/BuilderOps remain authority | No local workflow state; no migration; restore previous image/config only | `gap`: no VM-102 Dev UI deployment receipt or candidate identity is proven |
-| `builderops_control_plane` | VM-102 resident (target) | BuilderOps; PostgreSQL, migrations, API, worker, internal network, dedicated engine/context, service manager, epoch fencing, journal/outbox, health receipts; `builderops-control-plane` | Repository SHA and attested image digests; loopback API with private authenticated ingress and no Funnel; schema/epoch/fencing and BuilderOps receipts | Migration-gated; classify forward-only versus reversible; rollback pins compatible code/config/image and never rewinds authority data | `gap`: default engine has DB/API/worker evidence; dedicated BuilderOps engine is empty |
+| `builderops_control_plane` | VM-102 resident (target) | BuilderOps; PostgreSQL, migrations, API, worker, internal network, dedicated engine/context, service manager, epoch fencing, journal/outbox, health receipts; `builderops-control-plane` | Repository SHA and attested image digests; loopback API with private authenticated ingress and no Funnel; schema/epoch/fencing and BuilderOps receipts | Migration-gated; classify forward-only versus reversible; rollback pins compatible code/config/image and never rewinds authority data | `gap`: no bound receipt proves the complete engine/project/service identity and runtime state |
 | `builderops_cockpit` | VM-102 resident (target) | BuilderOps Cockpit read-time join | Source-owned BuilderOps read path; authenticated internal access; health/version and freshness in component inventory; BuilderOps receipt lineage | Read-only projection; no independent state migration; rebuild from source and prior compatible image | `gap`: service/project and runtime identity not evidenced |
 | `dispatcher_signboard` | VM-102 resident (target) | Dispatcher queue/claim/lease/activity providers and Signboard diagnostic projection | BuilderOps-owned API/read path, fenced lease evidence, exact source/image identity, health/readiness receipt; no local lifecycle authority | Lease/state migration only through BuilderOps contract; rollback preserves GitHub and BuilderOps authority | `gap`: complete VM-102 service and project inventory not evidenced |
 | `ddo` | VM-102 resident (target) | Deterministic Delivery Orchestration plans, reducer, worker/effect boundaries, reconciliation, receipts | Source/image identity and authenticated internal boundary; reducer and receipt health evidence; BuilderOps journal/outbox lifecycle | Apply only governed, classified migrations; rollback compatible executor/config without replaying or rewinding effects | `gap`: runtime residency and version evidence not proven |
@@ -65,13 +65,15 @@ row must be retained in `devsystem_vm102_component_inventory.v1`, including rows
 | `soi_evidence` | explicit external dependency | Product/Runtime-owned SoI Evidence provider consumed read-only by Dev UI | External source identity, freshness, refusal, and auth posture must be named; Dev UI cannot copy or upgrade its authority | Product/Runtime owns its migrations and rollback; Dev System only withdraws unavailable claims | `gap`: no fresh provider/residency evidence on VM 102 |
 | `github_git_ci_delivery` | explicit external dependency | GitHub, Git, review, CI, merge, closure, and promotion/verification adapters | GitHub/repository/CI exact refs and head SHAs are lifecycle authority; any VM adapter is subordinate and credential-free in receipts | External systems own migration/rollback; deployment cannot replace or rewind their authority | `external`: never replaced by VM-local state; adapter placement remains an explicit gap |
 | `model_service` | explicit external dependency | Model Access Substrate / model-service dependency | Provider identity, endpoint class, auth reference (never secret), health/version and degradation evidence | Provider-specific; no model data or credential migration in this contract; deployment withdraws unavailable capability | `gap`: no fresh evidence proves model service residency or reachability from VM 102 |
-| `tars_proxmox_control` | explicit external dependency | TARS/Proxmox host qualification, deploy, health, and rollback control | Host/VM identity, ownership, private ingress, qualification receipt, and operator boundary; host key verification must remain strict | Host/VM operations stay with #5052/#5056 and operator controls; no guest contract authorizes host mutation | `gap`: strict host ownership inventory was not freshly verified |
+| `tars_proxmox_control` | explicit external dependency | TARS/Proxmox host qualification, deploy, health, and rollback control | Host/VM identity, ownership, private ingress, qualification receipt, and operator boundary; host key verification must remain strict | Host/VM operations stay with #5052/#5056 and operator controls; no guest contract authorizes host mutation | `gap`: no current qualification receipt binds host ownership and inventory evidence |
 | `product_runtime` | intentionally non-runtime | Product Runtime and its data, credentials, routes, and lifecycle | No `pkm-*` project, Product credential, vault, or network identity on the BuilderOps engine/VM; separation must be evidenced | Product migrations and rollback remain Product-owned; never run them from this contract | `excluded`: separate authority class by design |
 
 For every `VM-102 resident (target)` row, a future qualification receipt must bind the actual
 service/project, engine, source/image identity, ingress/auth posture, health/version, deployment
 owner, lifecycle evidence, migration boundary, and rollback identity. `gap` is a required state,
-not permission to deploy or to infer residency.
+not permission to deploy or to infer residency. Runtime evidence remains an explicit `gap` until a
+bound receipt proves it; transient screen, guest, or default-engine observations are not frozen as
+contract truth.
 
 ## VM-102 evidence and receipt contract
 
@@ -86,16 +88,29 @@ policy receipt and cannot substitute for live qualification.
 | `devsystem_vm102_component_inventory.v1` | All inventory rows, placement class, owner, service/project, source/image, ingress/auth, health/version, deployment/lifecycle, migration/rollback fields, observed-at, and inventory digest; gaps are explicit | Residency or deployment |
 | `builderops_vm_rebuild_activation.v1` | Fresh VM identity/ownership, rebuild activation, dedicated engine/project, migration/readiness, fencing, no dual writer, and redacted operator evidence | Complete Dev System topology or Dev UI deployment |
 | `devui_vm102_runtime_qualification.v1` | Complete resident-component topology, exact engine/project/service identities, source/image identities, internal ingress/auth, health/version, no dual writer, and deployment/rollback ownership | Candidate-policy pass or a successful deployment |
-| `devsystem_vm102_deploy.v1` | Component-inventory digest, VM identity, exact candidate SHA, all image digests, pinned config fingerprint, owner, timestamp, migration classification/completion, and previous rollback identity | Post-deploy health or owner acceptance |
+| `devsystem_vm102_deploy.v1` | Component-inventory digest, VM identity, exact candidate SHA, all image digests, pinned config fingerprint, owner, timestamp, migration classification/completion, and typed rollback-baseline state with a previous identity only when available | Post-deploy health, a runnable rollback target, or owner acceptance |
 | `devsystem_vm102_health.v1` | Exact deployed identities, complete topology, health/version/readiness, internal ingress/auth, no-dual-writer proof, and read-only smoke results | Deployment authorization, promotion, or owner acceptance |
 | `devui-stage-a-read-only-owner-pilot.v1` | Receipt-sourced URL/SHA, #4748 exact-SHA browser evidence, source-backed normal/review/blocked/completed projections, zero-effect journey, and owner acknowledgement | Any claim about components not covered by the pilot |
-| `devsystem_vm102_rollback.v1` | Previous known-good source/image/config identity, selected rollback identity, migration classification, restored health/version/read-only smoke, and preserved GitHub/BuilderOps authority | Reversal of a forward-only migration or authority data rewind |
+| `devsystem_vm102_rollback.v1` | An available previous known-good source/image/config identity, selected rollback identity, migration classification, restored health/version/read-only smoke, and preserved GitHub/BuilderOps authority | Reversal of a forward-only migration, authority data rewind, or rollback when no compatible baseline exists |
 
 Required common fields are `receipt_type`, `receipt_version`, `target_vm` (`vmid: 102`,
 `name: builder-system`), `observed_at`, `source_refs`, `candidate_identity` when applicable,
 `component_inventory_digest` when applicable, `evidence_fingerprint`, `secret_material: absent`,
 and an explicit `gaps`/`refusals` list. A receipt without the required evidence or with secret
 material is invalid. A live guest check without the named receipt remains only an observation.
+
+`devsystem_vm102_deploy.v1` has an explicit rollback-baseline state:
+
+- `rollback_baseline_state: available` requires a complete, compatible, runnable previous
+  source/image/configuration identity.
+- `rollback_baseline_state: no_baseline` is the only valid first-deployment state. Previous identity
+  fields are absent or null, `refusals` includes `no_compatible_baseline`, and rollback is refused.
+
+Committed all-zero source, image, or configuration placeholders are invalid rollback identities;
+they are bootstrap sentinels, not releases. Rollback remains refused until a later successful
+deployment establishes a runnable baseline. The existing lower-level deploy-script receipt is
+implementation evidence only and is not `devsystem_vm102_deploy.v1` until a separate code/test slice
+implements and verifies this typed schema.
 
 BCP-03 is implemented in the development baseline by #3789/PR #3929
 (`app/builderops/control_plane/legacy_migration.py`): producer-derived expected-source

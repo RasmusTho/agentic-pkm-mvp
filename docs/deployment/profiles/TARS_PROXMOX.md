@@ -39,11 +39,11 @@ project or carry Product production credentials, vault references, or network id
 host-key verification is required for any operational readback. A failed or unavailable host
 ownership inventory is evidence of an open qualification gate, not permission to weaken SSH policy.
 
-Admission requires the receipt chain `devsystem_vm102_component_inventory.v1` →
-`builderops_vm_rebuild_activation.v1` + `devui_vm102_runtime_qualification.v1` →
-`devsystem_vm102_deploy.v1` → `devsystem_vm102_health.v1`. The Stage A owner pilot and rollback
-remain separate receipts. These are contracts only; this profile records no live residency,
-deployment, health, or owner acceptance.
+The ordered schemas and rollback-baseline rules are owned only by the
+[VM-102 evidence and receipt contract](../../BUILDEROPS_CONTROL_PLANE/README.md#vm-102-evidence-and-receipt-contract).
+This profile supplies setup-specific qualification evidence and refuses missing ownership,
+identity, ingress, health, or rollback evidence; it does not redefine the receipt chain or record
+live residency, deployment, health, or owner acceptance.
 
 ## Disk and WAL headroom policy
 

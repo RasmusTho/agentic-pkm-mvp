@@ -32,22 +32,12 @@ inventory must classify every known component as `VM-102 resident (target)`, `ex
 dependency`, or `intentionally non-runtime`, and must leave unresolved identity, service, ingress,
 health, lifecycle, migration, and rollback facts as explicit gaps.
 
-The required evidence chain is ordered and exact-identity bound:
-
-1. `devsystem_vm102_component_inventory.v1` records the complete topology and its gaps.
-2. `builderops_vm_rebuild_activation.v1` and `devui_vm102_runtime_qualification.v1` separately
-   prove the VM/engine/service admission and complete resident-component qualification.
-3. `devsystem_vm102_deploy.v1` binds the candidate SHA, image digests, pinned configuration,
-   component inventory digest, migration classification, and prior rollback identity.
-4. `devsystem_vm102_health.v1` binds post-deploy health/version and read-only smoke to those
-   identities; the Stage A pilot additionally requires #4748 exact-SHA browser evidence.
-5. `devsystem_vm102_rollback.v1` binds restoration of the previous compatible identity without
-   reversing forward-only migrations or rewinding BuilderOps/GitHub authority data.
-
-These names identify receipt contracts; they do not assert that any receipt exists. A receipt must
-contain no secret material and must include the target VM identity, observation time, source refs,
-evidence fingerprint, and explicit gaps/refusals. The repository-side `tars_host_qualification.v1`
-candidate receipt remains insufficient for live qualification.
+The ordered schemas and bootstrap-without-baseline refusal are owned only by the
+[VM-102 evidence and receipt contract](README.md#vm-102-evidence-and-receipt-contract). This BCP-02
+contract consumes those receipts but does not redefine them. Locally, deployment still refuses
+secret-bearing evidence, unqualified hosts, missing component gaps, and rollback without a
+compatible runnable baseline; the repository-side candidate qualification remains insufficient for
+live qualification.
 
 ## Purpose
 
