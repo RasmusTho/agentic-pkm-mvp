@@ -2,12 +2,168 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 from pathlib import Path
 
+import yaml
+
 
 ROOT = Path(__file__).resolve().parents[2]
+
+
+class _ComposeLoader(yaml.SafeLoader):
+    """Load the Compose-only !override tag as its wrapped value for contract checks."""
+
+
+def _construct_compose_override(
+    loader: _ComposeLoader, node: yaml.nodes.SequenceNode
+) -> object:
+    return loader.construct_sequence(node)
+
+
+_ComposeLoader.add_constructor("!override", _construct_compose_override)
+
+
+def _run_local_wal_guard(
+    tmp_path: Path, *, archive_mode: str, archive_command: str = ""
+) -> subprocess.CompletedProcess[str]:
+    pgdata = tmp_path / "pgdata"
+    (pgdata / "pg_wal").mkdir(parents=True)
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    _write_executable(
+        bin_dir / "psql",
+        """#!/usr/bin/env bash
+set -eu
+case "$*" in
+  *'SHOW archive_mode'*) printf '%s\\n' "$TEST_ARCHIVE_MODE" ;;
+  *'SHOW archive_command'*) printf '%s\\n' "$TEST_ARCHIVE_COMMAND" ;;
+  *) exit 2 ;;
+esac
+""",
+    )
+    _write_executable(
+        bin_dir / "du",
+        """#!/usr/bin/env bash
+printf '0\\t%s\\n' "$2"
+""",
+    )
+    _write_executable(
+        bin_dir / "df",
+        """#!/usr/bin/env bash
+printf 'Filesystem 1024-blocks Used Available Capacity Mounted on\\n'
+printf 'tmpfs 100 10 90 10%% /tmp\\n'
+""",
+    )
+    env = os.environ.copy()
+    env.update(
+        {
+            "PATH": f"{bin_dir}:{env['PATH']}",
+            "PGDATA": str(pgdata),
+            "TEST_ARCHIVE_MODE": archive_mode,
+            "TEST_ARCHIVE_COMMAND": archive_command,
+        }
+    )
+    return subprocess.run(
+        ["bash", str(ROOT / "scripts/builderops/local_wal_guard.sh")],
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+
+def test_local_wal_guard_accepts_postgresql_disabled_archive_mode(tmp_path: Path) -> None:
+    result = _run_local_wal_guard(tmp_path, archive_mode="(disabled)")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_local_wal_guard_refuses_enabled_or_unexpected_archive_configuration(
+    tmp_path: Path,
+) -> None:
+    for archive_mode in ("on", "always", "unknown"):
+        enabled = _run_local_wal_guard(
+            tmp_path / archive_mode, archive_mode=archive_mode
+        )
+
+        assert enabled.returncode == 70
+        assert "archive drift" in enabled.stderr
+    unexpected = _run_local_wal_guard(
+        tmp_path / "unexpected", archive_mode="off", archive_command="wal-g wal-push %p"
+    )
+
+    assert unexpected.returncode == 70
+    assert "archive_command=set" in unexpected.stderr
+
+
+def _slot_wal_keep_size_assignments(config: str) -> list[str]:
+    return re.findall(
+        r"^\s*max_slot_wal_keep_size\s*=\s*['\"]?([^\s'#]+)['\"]?\s*(?:#.*)?$",
+        config,
+        flags=re.MULTILINE,
+    )
+
+
+def test_postgres_wal_limits_are_pinned() -> None:
+    config = (ROOT / "config/builderops/postgresql.conf").read_text(encoding="utf-8")
+
+    assert "max_wal_size = '2GB'" in config
+    assert _slot_wal_keep_size_assignments(config) == ["2GB"]
+    for drifted_value in ("1GB", "0", "3GB"):
+        assert _slot_wal_keep_size_assignments(
+            config.replace("max_slot_wal_keep_size = '2GB'", f"max_slot_wal_keep_size = '{drifted_value}'")
+        ) != ["2GB"]
+    assert _slot_wal_keep_size_assignments(
+        config + "\nmax_slot_wal_keep_size = '3GB'\n"
+    ) != ["2GB"]
+
+
+def test_tars_profile_is_setup_specific_and_probe_truthful() -> None:
+    profile = (ROOT / "docs/deployment/profiles/TARS_PROXMOX.md").read_text(
+        encoding="utf-8"
+    )
+    normalized_profile = " ".join(profile.split())
+
+    assert "does not qualify a host or authorize a deployment" in normalized_profile
+    assert "fresh qualification input" in normalized_profile
+    assert "required-but-not-yet-installed live prerequisite" in normalized_profile
+    assert "macOS launchd" in normalized_profile
+    assert "does not prove a Linux installation" in normalized_profile
+
+
+def test_effective_builderops_compose_has_no_recovery_egress_or_wal_secrets() -> None:
+    compose = (ROOT / "docker-compose.builderops.yml").read_text(encoding="utf-8")
+    effective = yaml.load(compose, Loader=_ComposeLoader)
+    deploy = (ROOT / "scripts/deploy_builderops.sh").read_text(encoding="utf-8")
+
+    assert effective["networks"]["builderops-internal"]["internal"] is True
+    services = effective["services"]
+    assert all(
+        service["networks"] == ["builderops-internal"]
+        for service in services.values()
+    )
+    assert services["api"]["ports"] == [
+        "127.0.0.1:${BUILDEROPS_API_PORT:-18100}:8000"
+    ]
+    assert all(
+        name == "api" or "ports" not in service
+        for name, service in services.items()
+    )
+    declared_secrets = effective["secrets"]
+    assert not any(
+        token in secret.lower()
+        for secret in declared_secrets
+        for token in ("wal", "archive", "recovery")
+    )
+    assert "recovery-target" not in compose
+    assert 'BUILDEROPS_LOCAL_DURABILITY_MODE=rebuildable' in (
+        ROOT / "config/deploy/builderops.env"
+    ).read_text(encoding="utf-8")
+    assert '"source_sha": os.environ["SOURCE_SHA"]' in deploy
+    assert '"previous_image_digest": os.environ["PREVIOUS_DIGEST"]' in deploy
 
 
 def _write_executable(path: Path, body: str) -> None:
