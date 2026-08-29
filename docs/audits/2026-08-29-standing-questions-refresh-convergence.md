@@ -97,7 +97,7 @@ historical evidence claim. No SQ-04 writer changes the standing answer or human-
 | Contradiction basis is exact or unknown | `test_invalid_contradiction_basis_degrades_to_unknown`, `test_refresh_marks_contradiction` | Passed |
 | Human fields remain protected | QuestionStore CAS and human-field tests | Passed |
 | Evidence entries carry content identity | `test_relevant_artifact_attaches_irrelevant_does_not` | Passed |
-| Focused SQ/Create regression set | Standing Questions, Create lifecycle, and QuestionStore tests | `143 passed` |
+| Focused SQ/Create regression set | Standing Questions, Create lifecycle, and QuestionStore tests | `146 passed` |
 | Matcher CAS conflict is observable and non-clobbering | `test_match_write_conflict_does_not_clobber_question` | Passed |
 | Deterministic replay preserves draft bytes and receipt payload | `test_refresh_replay_reuses_draft_and_receipt_bytes` | Passed |
 | Matcher CAS conflict remains watcher-retryable | `test_watcher_retries_standing_questions_matching_conflict_before_advancing_snapshot` | Passed locally; CI proof is pending for the current head |
@@ -108,6 +108,10 @@ historical evidence claim. No SQ-04 writer changes the standing answer or human-
 | Matching records exact CRLF source bytes | `test_matching_hashes_exact_source_bytes` | Passed |
 | Newline-only source mutation cannot replay refresh evidence | `test_newline_only_source_mutation_cannot_replay_historical_evidence` | Passed |
 | Newline-only standing-answer edit cannot pass refresh race check | `test_standing_answer_newline_edit_during_cognition_blocks_stale_refresh` | Passed |
+| Conflicting duplicate receipt IDs fail closed | `test_emit_receipt_rejects_conflicting_duplicate_event_ids` | Passed |
+| Matcher uses scope from the fresh CAS baseline | `test_match_uses_fresh_scope_baseline` | Passed |
+| Question raw-byte version changes refresh generation | `test_question_raw_byte_version_changes_refresh_generation` | Passed |
+| Snapshot retry restoration precedes persistence | `test_watcher_retry_snapshot_is_restored_before_persist_crash` | Passed in CI environment; local watcher collection is dependency-gated |
 
 The full not-PostgreSQL suite was not a valid local proof at packet creation: the host-global
 `pytest-not-pg` lease was unavailable and the local watcher collection also lacked the declared
@@ -129,6 +133,7 @@ where the finding was observed; a later head invalidates the earlier clean/uncle
 | `bcf0f2120` | Replay did not compare full receipt payload; standing-answer bytes were outside the refresh identity; SQ-03 append lacked a fresh duplicate fold; matcher CAS conflicts were not watcher-retryable; docs overstated lifecycle. | Full payload/byte parity, standing-answer fingerprinting, post-read duplicate filtering, matcher conflict retry, and lifecycle/doc corrections were added in the current repair. |
 | `efe48163d` | Fresh review found source content hashes were still derived from newline-normalized text, so CRLF↔LF mutations could retain identity. | Raw bytes now travel separately from cognition text through matcher, watcher, refresh, and Create fingerprints; exact-byte regressions were added. |
 | `c360e8096` | Fresh review found standing-answer fingerprints and the pre-CAS race check still used newline-normalized text. | Standing-answer reads now retain raw bytes, generation fingerprints hash them, and the final race check compares exact bytes with a newline-only regression. |
+| `e9602573d` | Fresh review found conflicting duplicate receipts, stale matcher scope, missing Question raw-byte generation binding, and snapshot persistence before retry restoration. | Duplicate receipt payloads now fail closed; matcher scope and refresh generation use fresh exact baselines; watcher scans without persisting until retry restoration is applied. |
 
 The first row is sourced from GitHub review comments whose `original_commit_id` is
 `0d032250274b54eb62c50e50e436077fb032401a`; the later rows are local independent review receipts
