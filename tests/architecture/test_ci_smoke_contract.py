@@ -107,28 +107,28 @@ def test_vaultwide_smoke_cleanup_removes_cutover_receipts_and_state() -> None:
     assert step.index("trap cleanup EXIT") < step.index("run_ci_compose up -d --wait db")
 
 
-def test_vaultwide_smoke_materializes_ci_vault_host_identity_for_finalizer() -> None:
+def test_vaultwide_smoke_seeds_adopted_fixture_with_same_path_identity() -> None:
     step = _vaultwide_panel_step()
 
     overlay_write = 'cat > "$VAULT_IDENTITY_OVERLAY_PATH" <<EOF'
-    initial_compose_files = (
-        'compose_files="-f docker-compose.yaml -f docker-compose.legacy-vault.yml"'
-    )
-    identity_append = (
-        'compose_files="$compose_files -f $VAULT_IDENTITY_OVERLAY_PATH"'
+    seeded_compose_files = (
+        'compose_files="-f docker-compose.yaml -f docker-compose.legacy-vault.yml '
+        '-f $VAULT_IDENTITY_OVERLAY_PATH"'
     )
     deployment = "\n          prepare_ci_instance_state_deployment\n"
 
     assert 'VAULT_IDENTITY_OVERLAY_PATH="${RUNNER_TEMP}/ci-vault-identity.' in step
     assert overlay_write in step
     assert "          services:\n            instance-state-init:\n" in step
+    assert "            worker:\n              volumes:\n" in step
     assert '                  source: "$VAULT_ROOT"' in step
     assert '                  target: "$VAULT_ROOT"' in step
     assert "                  read_only: true" in step
-    assert initial_compose_files in step
-    assert identity_append in step
+    assert seeded_compose_files in step
+    assert 'run_ci_compose run --rm --no-deps -T -e VAULT_ROOT="$VAULT_ROOT" worker \\' in step
     first_deployment = step.index(deployment)
     second_deployment = step.index(deployment, first_deployment + len(deployment))
-    assert step.index(overlay_write) < step.index(initial_compose_files)
-    assert first_deployment < step.index(identity_append) < second_deployment
+    assert step.index(overlay_write) < step.index(seeded_compose_files)
+    assert step.index(seeded_compose_files) < first_deployment
+    assert first_deployment < step.index("python -m app.instance.runtime preflight") < second_deployment
     assert "VAULT_IDENTITY_OVERLAY_PATH" not in _worker_startup_step()

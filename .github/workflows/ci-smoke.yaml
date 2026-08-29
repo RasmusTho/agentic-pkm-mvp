@@ -537,7 +537,10 @@ jobs:
           VAULT_IDENTITY_OVERLAY_PATH="${RUNNER_TEMP}/ci-vault-identity.${GITHUB_RUN_ID}.${GITHUB_RUN_ATTEMPT}.yml"
           # Production finalizers see host-spelled vault roots through the
           # same-path /Users and /Volumes mounts. Mirror that identity contract
-          # for the /tmp CI fixture without widening any long-lived service.
+          # for the /tmp CI fixture while it seeds the binding and finalizes it:
+          # the staged registry and the host-produced owner inventory must name
+          # the same root, or an adopted lease is indistinguishable from a
+          # registry/ledger inconsistency in the mount-blind verifier.
           cat > "$VAULT_IDENTITY_OVERLAY_PATH" <<EOF
           services:
             instance-state-init:
@@ -546,8 +549,14 @@ jobs:
                   source: "$VAULT_ROOT"
                   target: "$VAULT_ROOT"
                   read_only: true
+            worker:
+              volumes:
+                - type: bind
+                  source: "$VAULT_ROOT"
+                  target: "$VAULT_ROOT"
+                  read_only: true
           EOF
-          compose_files="-f docker-compose.yaml -f docker-compose.legacy-vault.yml"
+          compose_files="-f docker-compose.yaml -f docker-compose.legacy-vault.yml -f $VAULT_IDENTITY_OVERLAY_PATH"
           # #4463: single source of truth for the verifier's artifact paths. The
           # diagnostic below used to read the script's workspace-relative tmp/
           # defaults while the invocation overrode them to absolute /tmp paths,
@@ -633,7 +642,7 @@ jobs:
           # binding effects. This models an already-cut-over installation; it
           # does not teach ordinary deployment to infer authority activation.
           set +e
-          run_ci_compose run --rm --no-deps -T worker \
+          run_ci_compose run --rm --no-deps -T -e VAULT_ROOT="$VAULT_ROOT" worker \
             python -m app.instance.runtime preflight \
               --channel "${PKM_ENVIRONMENT:-dev}" \
               --instance-state-root /app/instance-state \
@@ -662,11 +671,9 @@ jobs:
             exit "$binding_parse_rc"
           fi
           read -r MVR01C_ROLLBACK_VAULT_BINDING_ID < "$VAULT_BINDING_ID_PATH"
-          # The first fresh-volume deployment intentionally treats the seeded
-          # fixture as unadopted. Materialize its host spelling only after the
-          # worker has registered the binding, so the cutover deployment can
-          # reconcile that adopted lease without weakening the rev-0 gate.
-          compose_files="$compose_files -f $VAULT_IDENTITY_OVERLAY_PATH"
+          # The fixture was seeded through the same host spelling used by the
+          # finalizer, so its adopted binding remains comparable to the
+          # host-produced owner inventory through cutover.
           export MVR01C_ROLLBACK_VAULT_BINDING_ID
           export MVR01C_ROLLBACK_VAULT_ROOT="$VAULT_ROOT"
           export MVR03_PRINCIPAL_CUTOVER=1
