@@ -848,11 +848,11 @@ key before launch. Those actions remain with their live owning workflows.
 
 ### Execution Routing target contract
 
-**Status: target; not shipped.** Execution Routing is the Builder System policy that selects an
+**Status: target architecture with the Phase 1 shadow seam shipped.** Execution Routing is the Builder System policy that selects an
 adequate execution capability for one already-authorized unit of work. It is a policy/decision seam
 inside the existing Builder control plane, not another orchestrator, lifecycle authority, task
-store, or verification authority. Until an implementation Issue delivers this contract, the
-current TCD policy, agent adapters, and launcher defaults remain operative.
+store, or verification authority. The shipped seam is intentionally evidence-only; the current
+TCD policy, agent adapters, and general-delivery launcher defaults remain operative.
 
 The canonical policy owner is this Builder System process architecture. A future versioned,
 provider-neutral execution-routing contract and pure resolver should be implemented adjacent to the
@@ -923,6 +923,39 @@ latency, verification/review/CI outcome, rework, human steering, and post-merge 
 of one model and cheapest invocation cost are not success metrics. Luna becoming the general-delivery
 default, or Terra being displaced, requires accepted-delivery evidence; this target contract does
 not change the current TCD ladder.
+
+### Execution Routing shipped Phase 1 seam
+
+Phase 1 ships the provider-neutral `builderops.execution-route-*.v1`, allocation-observation,
+configured-target, and attempt-observation contracts in `app/builderops/execution_routing.py`. The
+pure resolver accepts only low-risk, low-ambiguity, unprotected `bounded_fast` work. A fresh,
+explicit `bonus_available` Spark observation selects the Spark capability; missing, unknown, stale,
+or economically unavailable evidence selects Luna with a typed capacity-fallback reason and never
+blocks the delivery. The resolver contains no provider/model inventory.
+
+`docs/settings/models/providers.yaml :: runtime_channels.builder_execution` late-binds the stable
+Spark/Luna/Terra/Sol capability names to provider, model, and reasoning configuration. The existing
+`epic_dispatch` issue-worker path can opt one candidate into `mode: shadow`: its dispatch decision
+then carries the route request/decision, configured proposed target, incumbent comparison, and a
+truthful `not_invoked` attempt observation. That evidence stays outside the worker context pack and
+may be indexed by evidence-only epic run-state. The incumbent launch still runs, and the launcher
+now resolves that incumbent tier through the same declared configuration rather than a hard-coded
+model table.
+
+Before a shadow-routed frozen plan can reach `dispatch-sessions`, its canonical plan hash must be
+observed and preserved outside the plan JSON and supplied as `--expected-plan-hash`. Dispatch then
+checks that independent freeze root before replaying request -> pure route decision -> configured
+target -> canonical shadow attempt against the frozen Issue, incumbent runtime, context, authority,
+and verification hashes. Missing or changed freeze evidence refuses the routed launch; a consumer
+must never recompute the expected value from the persisted plan at dispatch time. Non-routed
+general delivery keeps its existing compatibility path.
+
+Fallback/canary attempt contracts preserve the exact context-pack, authority, and verification
+hashes while deriving a new attempt identity and binding the triggering attempt. A Spark capacity
+failure may therefore produce one typed Luna fallback without being misreported as a capability
+escalation. Phase 1 adds no automatic Luna/Terra/Sol escalation, coordinator proposal authority,
+general-delivery policy change, quota polling, worker-start authority, or verification/merge/closure
+change. Active/canary launches and any later default promotion remain separately governed work.
 
 ```mermaid
 flowchart TD

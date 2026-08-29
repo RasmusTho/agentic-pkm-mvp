@@ -6,15 +6,37 @@ import json
 import subprocess
 import tomllib
 from pathlib import Path
-from typing import Any, Callable, Iterable, Mapping, Protocol
+from typing import Any, Callable, Iterable, Literal, Mapping, Protocol, cast
 
+from app.builderops.delivery_orchestration_contracts import canonical_hash
 from app.builderops.epic_run_state import validate_run_id
+from app.builderops.execution_routing import (
+    AllocationObservation,
+    CapabilityTier,
+    ExecutionAttemptObservation,
+    ExecutionRouteDecision,
+    ExecutionRouteRequest,
+    ResolvedExecutionTarget,
+    WorkClass,
+    create_execution_attempt,
+    resolve_bounded_fast_route,
+    resolve_execution_target,
+    validate_route_decision,
+)
+from app.components.settings.providers_loader import load_provider_census
 
 SCHEMA_VERSION = 2
 DEFAULT_MAX_PARALLEL = 2
 FAST_LANE_MAX_PARALLEL = 2
 MAX_NON_ROOT_AGENT_SLOTS = 2
 VALID_PATHS = {"inline", "script", "subagent", "skip"}
+_DECLARED_PROVIDER_CENSUS_PATH = (
+    Path(__file__).resolve().parents[2]
+    / "docs"
+    / "settings"
+    / "models"
+    / "providers.yaml"
+)
 
 HANDOFF_RECEIPT_SCHEMA: dict[str, Any] = {
     "schema_version": SCHEMA_VERSION,
@@ -56,10 +78,10 @@ class IssueSessionLauncher(Protocol):
     def launch(self, context_pack: Mapping[str, Any]) -> Mapping[str, Any]: ...
 
 
-_TCD_CODEX_ROUTE = {
-    "low-cost": ("gpt-5.6-luna", "low"),
-    "standard": ("gpt-5.6-terra", "medium"),
-    "high-reasoning": ("gpt-5.6-sol", "high"),
+_CAPABILITY_FOR_MODEL_CLASS = {
+    "low-cost": "luna",
+    "standard": "terra",
+    "high-reasoning": "sol",
 }
 
 
@@ -71,6 +93,8 @@ class CodexIssueSessionLauncher:
         *,
         repo_root: Path,
         adapter_path: Path | None = None,
+        provider_census_path: Path | None = None,
+        builder_channel: str = "dev",
         runner: Callable[..., subprocess.CompletedProcess[str]] | None = None,
     ) -> None:
         self.repo_root = repo_root.resolve()
@@ -81,6 +105,10 @@ class CodexIssueSessionLauncher:
             / "slice-implementer.toml"
         )
         self.runner = runner or subprocess.run
+        self.provider_census = load_provider_census(
+            provider_census_path or _DECLARED_PROVIDER_CENSUS_PATH
+        )
+        self.builder_channel = builder_channel
         try:
             adapter = tomllib.loads(self.adapter_path.read_text(encoding="utf-8"))
         except (OSError, tomllib.TOMLDecodeError) as exc:
@@ -214,15 +242,31 @@ class CodexIssueSessionLauncher:
             "worker_receipt": worker_receipt,
         }
 
-    @staticmethod
-    def _tcd_route(context_pack: Mapping[str, Any]) -> tuple[str, str]:
+    def _tcd_route(self, context_pack: Mapping[str, Any]) -> tuple[str, str]:
         runtime = context_pack.get("runtime")
         if not isinstance(runtime, Mapping) or runtime.get("runtime") != "codex":
             raise EpicDispatchError("serial session launcher supports codex runtime only")
         model_class = runtime.get("model_class")
-        if not isinstance(model_class, str) or model_class not in _TCD_CODEX_ROUTE:
+        if (
+            not isinstance(model_class, str)
+            or model_class not in _CAPABILITY_FOR_MODEL_CLASS
+        ):
             raise EpicDispatchError("context pack has no supported TCD model class")
-        return _TCD_CODEX_ROUTE[model_class]
+        capability = runtime.get("capability")
+        if capability is None:
+            capability = _CAPABILITY_FOR_MODEL_CLASS[model_class]
+        if capability != _CAPABILITY_FOR_MODEL_CLASS[model_class]:
+            raise EpicDispatchError("context pack capability conflicts with TCD model class")
+        capability_tier = cast(CapabilityTier, capability)
+        try:
+            target = resolve_execution_target(
+                self.provider_census,
+                channel=self.builder_channel,
+                capability=capability_tier,
+            )
+        except ValueError as exc:
+            raise EpicDispatchError(str(exc)) from exc
+        return target.model, target.reasoning_effort
 
     @staticmethod
     def _planned_worktree(context_pack: Mapping[str, Any]) -> Path:
@@ -339,6 +383,16 @@ def build_dispatch_plan(
                     dispatch_slot=selected_count,
                     discovered_overlap_policy=discovered_overlap_policy,
                 )
+                routing_input = candidate.get("execution_routing")
+                if routing_input is not None:
+                    decision["execution_routing"] = _build_shadow_routing(
+                        candidate,
+                        routing_input=routing_input,
+                        context_pack=context_pack,
+                        incumbent_capability=decision["runtime_model_hint"][
+                            "capability"
+                        ],
+                    )
                 context_packs.append(context_pack)
                 decision["context_cost_estimate"] = {
                     "measurement": "proxy",
@@ -403,11 +457,45 @@ def build_dispatch_plan(
     return result
 
 
+def frozen_dispatch_plan_hash(plan: Mapping[str, Any]) -> str:
+    """Hash the exact frozen plan bytes independently supplied at dispatch."""
+
+    return canonical_hash(plan)
+
+
+def _contains_execution_routing(value: object) -> bool:
+    if isinstance(value, Mapping):
+        return "execution_routing" in value or any(
+            _contains_execution_routing(item) for item in value.values()
+        )
+    if isinstance(value, list):
+        return any(_contains_execution_routing(item) for item in value)
+    return False
+
+
 def dispatch_issue_sessions(
     plan: Mapping[str, Any],
     launcher: IssueSessionLauncher,
+    *,
+    expected_plan_hash: str | None = None,
 ) -> dict[str, Any]:
     """Execute a frozen dispatch plan serially, with one fresh session per Issue."""
+
+    routing_present = _contains_execution_routing(plan)
+    if routing_present and expected_plan_hash is None:
+        raise EpicDispatchError(
+            "shadow-routed dispatch requires an independently preserved plan hash"
+        )
+    if expected_plan_hash is not None:
+        if (
+            len(expected_plan_hash) != 64
+            or any(character not in "0123456789abcdef" for character in expected_plan_hash)
+        ):
+            raise EpicDispatchError("expected plan hash must be a lowercase SHA-256")
+        if frozen_dispatch_plan_hash(plan) != expected_plan_hash:
+            raise EpicDispatchError(
+                "frozen dispatch plan does not match the independently preserved hash"
+            )
 
     run_id, ordered = _validated_session_contexts(plan)
     sessions: list[dict[str, Any]] = []
@@ -515,6 +603,19 @@ def _validated_session_contexts(
     contexts_raw = plan.get("context_packs")
     if not isinstance(decisions_raw, list) or not isinstance(contexts_raw, list):
         raise EpicDispatchError("dispatch plan decisions and context_packs must be lists")
+    run_state_update = plan.get("epic_run_state_update")
+    expected_state_decisions = [
+        _dispatch_state_summary(decision)
+        for decision in decisions_raw
+        if isinstance(decision, Mapping)
+    ]
+    if (
+        not isinstance(run_state_update, Mapping)
+        or run_state_update.get("dispatch_decisions") != expected_state_decisions
+    ):
+        raise EpicDispatchError(
+            "epic run-state dispatch summary must exactly mirror the frozen decisions"
+        )
 
     selected: list[dict[str, Any]] = []
     for raw in decisions_raw:
@@ -579,8 +680,106 @@ def _validated_session_contexts(
             or runtime.get("runtime") != "codex"
         ):
             raise EpicDispatchError("context pack does not match its selected decision")
+        _validate_execution_routing_context(decision, matching_context)
         ordered.append((decision, matching_context))
     return run_id, ordered
+
+
+def _validate_execution_routing_context(
+    decision: Mapping[str, Any],
+    context_pack: Mapping[str, Any],
+) -> None:
+    routing_payload = decision.get("execution_routing")
+    if routing_payload is None:
+        return
+    if not isinstance(routing_payload, Mapping):
+        raise EpicDispatchError("execution routing evidence must be an object")
+    expected_routing_fields = {
+        "schema_version",
+        "mode",
+        "route_request",
+        "route_decision",
+        "proposed_target",
+        "shadow_comparison",
+        "attempt_observation",
+        "authority",
+    }
+    if set(routing_payload) != expected_routing_fields:
+        raise EpicDispatchError("execution routing evidence has an invalid field set")
+    try:
+        request = ExecutionRouteRequest.model_validate(
+            routing_payload.get("route_request")
+        )
+        route = ExecutionRouteDecision.model_validate(
+            routing_payload.get("route_decision")
+        )
+        attempt = ExecutionAttemptObservation.model_validate(
+            routing_payload.get("attempt_observation")
+        )
+        target = ResolvedExecutionTarget.model_validate(
+            routing_payload.get("proposed_target")
+        )
+    except (TypeError, ValueError) as exc:
+        raise EpicDispatchError(f"invalid execution routing evidence: {exc}") from exc
+
+    context_hash = canonical_hash(context_pack)
+    issue_contract = context_pack.get("issue_contract")
+    validation_ledger = context_pack.get("validation_ledger")
+    runtime = context_pack.get("runtime")
+    if not isinstance(issue_contract, Mapping) or not isinstance(
+        validation_ledger, list
+    ) or not isinstance(runtime, Mapping):
+        raise EpicDispatchError("context pack lacks routing hash inputs")
+    authority_hash = canonical_hash(issue_contract)
+    verification_hash = canonical_hash(validation_ledger)
+    try:
+        validate_route_decision(request, route)
+        census = load_provider_census(_DECLARED_PROVIDER_CENSUS_PATH)
+        expected_target = resolve_execution_target(
+            census,
+            channel="dev",
+            capability=route.selected_capability,
+        )
+        expected_attempt = create_execution_attempt(
+            request=request,
+            decision=route,
+            target=expected_target,
+            attempt_number=1,
+            mode="shadow",
+            outcome="not_invoked",
+            observed_at=request.decision_at,
+            transition_reason="shadow_route_not_invoked",
+        )
+    except (KeyError, TypeError, ValueError) as exc:
+        raise EpicDispatchError(
+            f"execution routing evidence cannot be replayed: {exc}"
+        ) from exc
+    expected_comparison = {
+        "incumbent_capability": route.shadow_against_capability,
+        "proposed_capability": route.selected_capability,
+        "verification_profile_hash_unchanged": True,
+        "launch_policy_changed": False,
+    }
+    if (
+        routing_payload.get("schema_version") != 1
+        or routing_payload.get("mode") != "shadow"
+        or routing_payload.get("authority")
+        != "evidence-only-no-launch-or-lifecycle-effect"
+        or request.issue_number != issue_contract.get("number")
+        or request.shadow_against_capability != runtime.get("capability")
+        or target != expected_target
+        or attempt != expected_attempt
+        or routing_payload.get("shadow_comparison") != expected_comparison
+        or any(
+            contract.context_pack_hash != context_hash
+            or contract.authority_hash != authority_hash
+            or contract.verification_profile_hash != verification_hash
+            for contract in (request, route, attempt)
+        )
+    ):
+        raise EpicDispatchError(
+            "execution routing evidence does not bind the frozen context pack"
+        )
 
 
 def _dispatch_slot(decision: Mapping[str, Any]) -> int:
@@ -701,6 +900,7 @@ def _build_tcd_decision(
         "runtime_model_hint": {
             "runtime": runtime_target,
             "model_class": _model_class_for(risk),
+            "capability": _capability_for_risk(risk),
             "runtime_difference": "invocation-hint-only",
         },
         "budget_class": _budget_class_for(risk, candidate["expected_value"]),
@@ -844,7 +1044,7 @@ def _selected_path(candidate: Mapping[str, Any]) -> str:
 
 
 def _dispatch_state_summary(decision: Mapping[str, Any]) -> dict[str, Any]:
-    return {
+    summary = {
         "id": decision["id"],
         "issue_number": decision["issue_number"],
         "selected_path": decision["selected_path"],
@@ -855,6 +1055,9 @@ def _dispatch_state_summary(decision: Mapping[str, Any]) -> dict[str, Any]:
         "skip_reason": decision["skip_reason"],
         "context_pack_id": decision["context_pack_id"],
     }
+    if "execution_routing" in decision:
+        summary["execution_routing"] = decision["execution_routing"]
+    return summary
 
 
 def _normalize_candidate(candidate: Mapping[str, Any]) -> dict[str, Any]:
@@ -895,6 +1098,9 @@ def _normalize_candidate(candidate: Mapping[str, Any]) -> dict[str, Any]:
         raise EpicDispatchError(
             "issue_local_helper_budget=1 requires an explicit issue_local_helper_rationale"
         )
+    execution_routing = candidate.get("execution_routing")
+    if execution_routing is not None and not isinstance(execution_routing, Mapping):
+        raise EpicDispatchError("execution_routing must be an object when supplied")
     return {
         "issue_number": issue_number,
         "title": _normalize_string(candidate.get("title"), "title"),
@@ -967,6 +1173,124 @@ def _normalize_candidate(candidate: Mapping[str, Any]) -> dict[str, Any]:
         or f"codex/issue-{issue_number}",
         "worktree": _normalize_optional_string(candidate.get("worktree"))
         or f"<dedicated-worktree-for-issue-{issue_number}>",
+        "execution_routing": (
+            json.loads(json.dumps(dict(execution_routing), sort_keys=True))
+            if isinstance(execution_routing, Mapping)
+            else None
+        ),
+    }
+
+
+def _build_shadow_routing(
+    candidate: Mapping[str, Any],
+    *,
+    routing_input: Mapping[str, Any],
+    context_pack: Mapping[str, Any],
+    incumbent_capability: str,
+) -> dict[str, Any]:
+    if routing_input.get("mode") != "shadow":
+        raise EpicDispatchError("Phase 1 execution routing supports shadow mode only")
+    if "risk" in routing_input:
+        raise EpicDispatchError(
+            "execution_routing.risk must come from the canonical candidate"
+        )
+    incumbent = _normalize_choice(
+        incumbent_capability,
+        "incumbent_capability",
+        {"spark", "luna", "terra", "sol"},
+    )
+    work_class = _normalize_choice(
+        routing_input.get("work_class"),
+        "execution_routing.work_class",
+        {
+            "deterministic",
+            "bounded_fast",
+            "general_delivery",
+            "complex_delivery",
+            "frontier_high_risk",
+        },
+    )
+    route_risk = _normalize_choice(
+        candidate.get("risk"),
+        "candidate.risk",
+        {"low", "medium", "high", "critical"},
+    )
+    ambiguity = _normalize_choice(
+        routing_input.get("ambiguity"),
+        "execution_routing.ambiguity",
+        {"low", "medium", "high"},
+    )
+    protected_surface = routing_input.get("protected_surface")
+    if not isinstance(protected_surface, bool):
+        raise EpicDispatchError(
+            "execution_routing.protected_surface must be a boolean"
+        )
+    decision_at = _normalize_string(
+        routing_input.get("decision_at"),
+        "execution_routing.decision_at",
+    )
+    observation_payload = routing_input.get("allocation_observation")
+    try:
+        observation = (
+            AllocationObservation.model_validate(observation_payload)
+            if observation_payload is not None
+            else None
+        )
+        context_pack_hash = canonical_hash(context_pack)
+        authority_hash = canonical_hash(context_pack["issue_contract"])
+        verification_hash = canonical_hash(context_pack["validation_ledger"])
+        request = ExecutionRouteRequest(
+            request_id=(
+                f"execution-route-request:{candidate['issue_number']}:{context_pack_hash}"
+            ),
+            issue_number=candidate["issue_number"],
+            work_class=cast(WorkClass, work_class),
+            risk=cast(
+                Literal["low", "medium", "high", "critical"], route_risk
+            ),
+            ambiguity=cast(Literal["low", "medium", "high"], ambiguity),
+            protected_surface=protected_surface,
+            decision_at=decision_at,
+            context_pack_hash=context_pack_hash,
+            authority_hash=authority_hash,
+            verification_profile_hash=verification_hash,
+            shadow_against_capability=cast(CapabilityTier, incumbent),
+            allocation_observation=observation,
+        )
+        route = resolve_bounded_fast_route(request)
+        census = load_provider_census(_DECLARED_PROVIDER_CENSUS_PATH)
+        proposed_target = resolve_execution_target(
+            census,
+            channel="dev",
+            capability=route.selected_capability,
+        )
+        attempt = create_execution_attempt(
+            request=request,
+            decision=route,
+            target=proposed_target,
+            attempt_number=1,
+            mode="shadow",
+            outcome="not_invoked",
+            observed_at=request.decision_at,
+            transition_reason="shadow_route_not_invoked",
+        )
+    except (KeyError, TypeError, ValueError) as exc:
+        raise EpicDispatchError(f"invalid execution_routing input: {exc}") from exc
+
+    return {
+        "schema_version": 1,
+        "mode": "shadow",
+        "route_request": request.model_dump(mode="json"),
+        "route_decision": route.model_dump(mode="json"),
+        "proposed_target": proposed_target.receipt_fields(),
+        "shadow_comparison": {
+            "incumbent_capability": incumbent,
+            "proposed_capability": route.selected_capability,
+            "verification_profile_hash_unchanged": True,
+            "launch_policy_changed": False,
+        },
+        "attempt_observation": attempt.model_dump(mode="json"),
+        "authority": "evidence-only-no-launch-or-lifecycle-effect",
     }
 
 
@@ -1132,6 +1456,10 @@ def _model_class_for(risk: str) -> str:
     return "standard"
 
 
+def _capability_for_risk(risk: str) -> str:
+    return _CAPABILITY_FOR_MODEL_CLASS[_model_class_for(risk)]
+
+
 def _budget_class_for(risk: str, expected_value: str) -> str:
     if risk in {"critical", "high"} or expected_value == "high":
         return "high"
@@ -1150,4 +1478,5 @@ __all__ = [
     "EpicDispatchError",
     "build_dispatch_plan",
     "dispatch_issue_sessions",
+    "frozen_dispatch_plan_hash",
 ]

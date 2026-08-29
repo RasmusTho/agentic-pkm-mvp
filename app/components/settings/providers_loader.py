@@ -81,6 +81,15 @@ class TierMapping(BaseModel):
     requires: set[Literal["structured_output", "native_tools", "system_prompt_channel", "deterministic_execution"]] = Field(default_factory=set)
 
 
+class BuilderExecutionProfile(TierMapping):
+    """Configured provider/model binding for one Builder capability tier."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    capability_tier: Literal["spark", "luna", "terra", "sol"]
+    reasoning_effort: Literal["minimal", "low", "medium", "high", "xhigh"]
+
+
 class RoleProfile(TierMapping):
     model_config = ConfigDict(extra="forbid")
 
@@ -111,6 +120,9 @@ class RuntimeChannelMappings(BaseModel):
 
     product: dict[str, dict[str, TierMapping]] = Field(default_factory=dict)
     builder: dict[str, dict[str, TierMapping]] = Field(default_factory=dict)
+    builder_execution: dict[str, dict[str, BuilderExecutionProfile]] = Field(
+        default_factory=dict
+    )
     model_inquiry_profiles: dict[str, list[RoleProfile]] = Field(default_factory=dict)
     design_agent_profiles: dict[str, list[DesignAgentProfile]] = Field(
         default_factory=dict
@@ -139,6 +151,11 @@ class ProviderCensus(BaseModel):
         mappings: list[TierMapping] = []
         for runtime in (self.runtime_channels.product, self.runtime_channels.builder):
             mappings.extend(mapping for channel in runtime.values() for mapping in channel.values())
+        mappings.extend(
+            profile
+            for profiles in self.runtime_channels.builder_execution.values()
+            for profile in profiles.values()
+        )
         mappings.extend(
             profile
             for profiles in self.runtime_channels.model_inquiry_profiles.values()
@@ -186,6 +203,25 @@ class ProviderCensus(BaseModel):
             raise ValueError(
                 "Design-agent profiles must cover every declared Builder channel"
             )
+        if set(self.runtime_channels.builder_execution) != set(
+            self.runtime_channels.builder
+        ):
+            raise ValueError(
+                "Builder execution profiles must cover every declared Builder channel"
+            )
+        expected_execution_tiers = {"spark", "luna", "terra", "sol"}
+        for profiles in self.runtime_channels.builder_execution.values():
+            if set(profiles) != expected_execution_tiers:
+                raise ValueError(
+                    "Builder execution profiles must declare exactly spark, luna, terra, and sol"
+                )
+            if any(
+                profile.capability_tier != capability
+                for capability, profile in profiles.items()
+            ):
+                raise ValueError(
+                    "Builder execution profile key must match capability_tier"
+                )
         for profiles in self.runtime_channels.design_agent_profiles.values():
             actual = {
                 profile.design_agent_id: profile.role

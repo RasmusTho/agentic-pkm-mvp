@@ -191,6 +191,48 @@ workflow — see `## App-agent skill family (product-lane)` below for the full d
 - `mimer-vault-workspace`
   - direct-filesystem drafting/synthesis/editing under human delegation
 
+## Builder execution-routing skill integration inventory
+
+Phase 1 keeps one routing-policy seam and does not copy capability or allocation policy into every
+workflow. `deliver-issue-set` produces the optional shadow preflight and `issue-to-code` consumes its
+bounded evidence; all other Builder skills either continue to use `AGENTS.md :: Total Cost of
+Development` for their own capability choice or remain outside execution routing. The Product-lane
+`mimer-*` client family is intentionally excluded from this Builder inventory.
+
+| Skill | Phase 1 disposition | Reason |
+|---|---|---|
+| `agentic-pkm` | principle-only | Continues to route capability through canonical TCD policy. |
+| `architecture-research` | principle-only | Keeps its architecture-grade role policy; no issue-worker preflight. |
+| `automation-maintenance` | unaffected | Maintains app automations, not issue-worker execution. |
+| `backlog-reconciliation-drift-audit` | unaffected | Reconciles authority state and does not launch issue workers. |
+| `bug-to-issue` | unaffected | Produces task contracts; execution routing begins after readiness. |
+| `capture-learning` | unaffected | Records divergence signals without selecting execution capability. |
+| `decision-quality` | principle-only | May assess an agent decision but does not own model/allocation policy. |
+| `deliver-issue-set` | direct-consumer | Owns the optional `bounded_fast` shadow preflight on `epic_dispatch`. |
+| `docs-authoring` | principle-only | Uses TCD normally; no separate docs routing policy. |
+| `docs-governance` | unaffected | Routes doc authority and narrower skills, not worker capability. |
+| `docs-to-issue` | unaffected | Creates strict Issues before execution routing applies. |
+| `execute-promotion` | unaffected | Executes operator-authorized deterministic release effects. |
+| `feature-breakdown` | principle-only | Uses TCD for decomposition but does not launch routed workers. |
+| `issue-maintenance-change-control` | unaffected | Repairs lifecycle/task-contract truth before execution. |
+| `issue-to-code` | direct-consumer | Preserves and validates a supplied shadow route receipt at pickup. |
+| `learning-retrospective` | principle-only | May recommend later policy changes from evidence; never mutates routing policy directly. |
+| `learning-to-issue` | unaffected | Promotes mature learning into a strict Issue. |
+| `owner-decision-brief` | unaffected | Formats genuine owner decisions without selecting workers. |
+| `post-merge-owner-doc` | unaffected | Runs after delivery and does not affect execution capability. |
+| `pr-integration` | principle-only | Uses TCD for repair capability while preserving PR gates. |
+| `prepare-promotion` | unaffected | Produces deterministic/operator-reviewed promotion plans. |
+| `promote-test-to-prod` | unaffected | Orchestrates governed release skills, not model routing. |
+| `promote-to-test` | unaffected | Orchestrates governed test-channel promotion. |
+| `publish-pr` | unaffected | Owns publication truth, independent of worker capability. |
+| `resume-work` | principle-only | Resumes the same authority and may reapply TCD without inventing a route. |
+| `rollback-promotion` | unaffected | Executes governed release recovery. |
+| `start-model-inquiry` | unaffected | Retains its separate role-specific model-access contract. |
+| `temporal-doc-governance` | principle-only | Uses TCD normally; temporal authority routing is unchanged. |
+| `verification-and-closure` | principle-only | Verification capability may vary under TCD, but routing cannot weaken its gates. |
+| `verify-promotion` | unaffected | Verifies release-channel state independently of execution routing. |
+| `yggdrasil-design-handoff` | unaffected | Retains its separate governed design/model-access boundary. |
+
 ## Connected execution paths
 
 - Implementation path:
