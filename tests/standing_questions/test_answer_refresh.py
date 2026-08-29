@@ -330,6 +330,41 @@ def test_standing_answer_edit_during_cognition_blocks_stale_contradiction(
     assert store.read_question(note["question_id"])["candidate_answer_ref"] is None
 
 
+def test_standing_answer_newline_edit_during_cognition_blocks_stale_refresh(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    answer = vault / "answers/current.md"
+    answer.parent.mkdir()
+    answer.write_bytes(b"The supported boundary is production.\r\n")
+    store, note = _question(vault, standing_answer_ref="vault://answers/current.md")
+    evidence = _evidence(
+        "vault://notes/evidence.md", "outbox://evidence/1", "the test channel is isolated", 10
+    )
+    store.update_system_fields(note["question_id"], {"evidence": [evidence]})
+    original = refresh_module.run_create_pass
+
+    def create_then_normalize_answer(*args: Any, **kwargs: Any) -> Any:
+        answer.write_bytes(b"The supported boundary is production.\n")
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(refresh_module, "run_create_pass", create_then_normalize_answer)
+    result = refresh_answers_on_evidence_delta(
+        vault_root=vault,
+        outbox_path=tmp_path / "outbox.jsonl",
+        evidence_sources={
+            "outbox://evidence/1": _source("outbox://evidence/1", evidence["quoted_span"])
+        },
+        store=store,
+        write_guard=_guard(),
+        now=_dt(12),
+    )
+
+    assert result.blocked == (note["question_id"],)
+    assert store.read_question(note["question_id"])["candidate_answer_ref"] is None
+
+
 def test_changed_source_bytes_cannot_replay_historical_evidence(tmp_path: Path) -> None:
     vault = tmp_path / "vault"
     vault.mkdir()

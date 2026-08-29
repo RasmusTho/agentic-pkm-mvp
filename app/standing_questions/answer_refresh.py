@@ -110,10 +110,6 @@ def _iso(value: datetime) -> str:
     return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
-def _content_hash(text: str) -> str:
-    return hashlib.sha256(text.encode("utf-8")).hexdigest()
-
-
 def _source_bytes(source: SourceInput) -> bytes:
     return source.raw_bytes if source.raw_bytes is not None else source.text.encode("utf-8")
 
@@ -126,6 +122,7 @@ def _refresh_attempt_ids(
     question_text: str,
     standing_answer_referenced: bool,
     standing_answer: str | None,
+    standing_answer_bytes: bytes | None,
 ) -> tuple[str, str, str]:
     """Return stable ids for one exact evidence + standing-answer generation."""
     generation = last_refreshed_at or "never"
@@ -136,7 +133,13 @@ def _refresh_attempt_ids(
         "evidence": list(evidence),
         "standing_answer_referenced": standing_answer_referenced,
         "standing_answer_sha256": (
-            _content_hash(standing_answer) if standing_answer is not None else None
+            hashlib.sha256(
+                standing_answer_bytes
+                if standing_answer_bytes is not None
+                else standing_answer.encode("utf-8")
+            ).hexdigest()
+            if standing_answer is not None
+            else None
         ),
     }
     evidence_bytes = json.dumps(material, sort_keys=True, separators=(",", ":"))
@@ -359,20 +362,21 @@ def _source_inputs(
 
 def _read_standing_answer(
     vault_root: Path, note: Mapping[str, Any]
-) -> tuple[bool, str | None]:
+) -> tuple[bool, str | None, bytes | None]:
     reference = note.get("standing_answer_ref")
     if not isinstance(reference, str) or not reference.strip():
-        return False, None
+        return False, None, None
     try:
         path = _resolve_vault_ref(vault_root, reference)
     except UnreadableVaultReferenceError:
-        return True, None
+        return True, None, None
     if path is None:
-        return True, None
+        return True, None, None
     try:
-        return True, path.read_text(encoding="utf-8")
+        raw_bytes = path.read_bytes()
+        return True, raw_bytes.decode("utf-8"), raw_bytes
     except (OSError, UnicodeError):
-        return True, None
+        return True, None, None
 
 
 def _contradiction_metadata(
@@ -510,7 +514,11 @@ def refresh_answers_on_evidence_delta(
                     question=current["text"],
                     trace_id=trace_id,
                 )
-                standing_answer_referenced, standing_answer = _read_standing_answer(
+                (
+                    standing_answer_referenced,
+                    standing_answer,
+                    standing_answer_bytes,
+                ) = _read_standing_answer(
                     resolved_root, current
                 )
                 refresh_key, draft_id, receipt_id = _refresh_attempt_ids(
@@ -520,6 +528,7 @@ def refresh_answers_on_evidence_delta(
                     question_text=current["text"],
                     standing_answer_referenced=standing_answer_referenced,
                     standing_answer=standing_answer,
+                    standing_answer_bytes=standing_answer_bytes,
                 )
                 report: CreatePassReport = run_create_pass(
                     request,
@@ -560,12 +569,17 @@ def refresh_answers_on_evidence_delta(
             if latest["status"] != "open":
                 blocked.append(question_id)
                 continue
-            latest_answer_referenced, latest_answer = _read_standing_answer(
+            (
+                latest_answer_referenced,
+                latest_answer,
+                latest_answer_bytes,
+            ) = _read_standing_answer(
                 resolved_root, latest
             )
             if (
                 latest_answer_referenced != standing_answer_referenced
                 or latest_answer != standing_answer
+                or latest_answer_bytes != standing_answer_bytes
             ):
                 blocked.append(question_id)
                 continue
