@@ -193,7 +193,10 @@ Each transition records from/to tier, transition kind, stable reason code, trigg
 Extend rather than replace the DDO chain:
 
 1. Add `ExecutionRouteRequest`, `ExecutionRouteDecision`, `ExecutionAttemptObservation`, and canonical refs/hashes.
-2. Add a route-decision ref to `WorkerContextPack`/`WorkerInvocation`; keep Verify targets and authorizing reducer effect immutable.
+2. Keep `WorkerContextPack` byte-stable across fallback. The route decision references its context-pack
+   hash, while `WorkerInvocation` or an additive attempt envelope binds the route decision, stable
+   context pack, and authorizing reducer effect. Each fallback receives a new invocation/attempt
+   identity without changing the context hash, Verify targets, or effect authority.
 3. Add actual capability/provider/model/reasoning and transition/attempt observations to the carrier/result/receipt layer, never to delivery authority.
 4. Add compact `routing_decisions` and attempt summaries to epic run-state for resume; keep it evidence-only and excluded from worker context.
 5. Keep one bounded worker packet: authority, goal, refs, constraints, findings, prior result, verification, and stop conditions.
@@ -256,7 +259,8 @@ Create one bounded Issue for a **shadow-first `bounded_fast` execution preflight
 1. implement provider-neutral route request/decision/attempt contracts and a pure deterministic resolver;
 2. consume exact Issue eligibility, risk/protected-surface inputs, immutable Verify targets, prior attempts, and an injected explicit allocation observation;
 3. select Spark only for adequate `bounded_fast` work with fresh `bonus_available`; otherwise select Luna;
-4. keep the same DDO context/authority/verification hashes through fallback;
+4. keep the same DDO context/authority/verification hashes through fallback while creating a new
+   invocation/attempt identity for the fallback carrier;
 5. resolve tier -> model/reasoning through configuration rather than `_TCD_CODEX_ROUTE`;
 6. emit a routing decision/attempt receipt and shadow comparison;
 7. make no Luna->Terra->Sol automatic escalation, no general-delivery default change, no skill-wide rewrite, and no merge/closure change.

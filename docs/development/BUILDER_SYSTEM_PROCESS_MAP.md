@@ -905,9 +905,10 @@ state transitions. Luna-to-Terra or Terra-to-Sol escalation requires a named evi
 not capacity exhaustion.
 
 The worker context must be hash-bound and carry only authority, bounded goal, relevant sources and
-tests, constraints, prior-attempt result, verification targets, and stop/escalation conditions.
-Execution-routing fields extend the existing DDO worker context/invocation/receipt chain; Product
-Context Bundles are not the Builder worker-packet substrate.
+tests, constraints, prior-attempt result, verification targets, and stop/escalation conditions. A
+route decision references that stable context-pack hash; changing route metadata stays in the
+invocation/attempt/result/receipt chain so fallback creates a new attempt identity without changing
+the context pack. Product Context Bundles are not the Builder worker-packet substrate.
 
 Capability selection cannot reduce or replace acceptance evidence. Test requirements, independent
 review, exact-head CI, branch protection, merge authorization, Human Exception classification,
