@@ -942,8 +942,10 @@ def test_ordinary_boot_rejects_secret_pattern_operation_ids_without_echo(
     [
         ("manifest", "missing", "compatibility_resolution_failed:manifest_unreadable"),
         ("manifest", "malformed", "compatibility_resolution_failed:manifest_unreadable"),
+        ("manifest", "invalid_utf8", "compatibility_resolution_failed:manifest_unreadable"),
         ("compose", "missing", "compatibility_resolution_failed:compose_unreadable"),
         ("compose", "malformed", "compatibility_resolution_failed:compose_unreadable"),
+        ("compose", "invalid_utf8", "compatibility_resolution_failed:compose_unreadable"),
         (
             "dependencies",
             "missing",
@@ -952,6 +954,11 @@ def test_ordinary_boot_rejects_secret_pattern_operation_ids_without_echo(
         (
             "dependencies",
             "malformed",
+            "compatibility_resolution_failed:dependencies_unreadable",
+        ),
+        (
+            "dependencies",
+            "invalid_utf8",
             "compatibility_resolution_failed:dependencies_unreadable",
         ),
     ],
@@ -980,8 +987,10 @@ def test_ordinary_boot_cli_input_failure_writes_one_terminal_result(
     damaged_path = paths[input_name]
     if damage == "missing":
         damaged_path.unlink()
-    else:
+    elif damage == "malformed":
         damaged_path.write_text(":\n - [", encoding="utf-8")
+    else:
+        damaged_path.write_bytes(b"\xff")
 
     operation_id = _ordinary_boot_operation_id(f"{input_name}-{damage}")
     journal_path = tmp_path / "ordinary-boot.jsonl"

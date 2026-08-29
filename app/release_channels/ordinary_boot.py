@@ -753,7 +753,7 @@ def run_ordinary_boot(
 def _read_json_mapping(path: Path, *, label: str) -> Mapping[str, Any]:
     try:
         value = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise _OrdinaryBootInputError(f"{label}_unreadable") from exc
     if not isinstance(value, Mapping) or not all(isinstance(key, str) for key in value):
         raise _OrdinaryBootInputError(f"{label}_invalid_shape")
@@ -763,7 +763,7 @@ def _read_json_mapping(path: Path, *, label: str) -> Mapping[str, Any]:
 def _read_compose_mapping(path: Path) -> Mapping[str, Any]:
     try:
         value = yaml.safe_load(path.read_text(encoding="utf-8"))
-    except (OSError, yaml.YAMLError) as exc:
+    except (OSError, UnicodeDecodeError, yaml.YAMLError) as exc:
         raise _OrdinaryBootInputError("compose_unreadable") from exc
     if not isinstance(value, Mapping) or not all(isinstance(key, str) for key in value):
         raise _OrdinaryBootInputError("compose_invalid_shape")
