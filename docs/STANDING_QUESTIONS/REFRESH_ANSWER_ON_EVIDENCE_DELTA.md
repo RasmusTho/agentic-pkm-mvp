@@ -20,15 +20,12 @@ owner currently believes (the standing answer), that disagreement is surfaced ex
 smoothed over by a confident-sounding rewrite.
 
 **Named external dependency (load-bearing, read before starting this task).** This task does not
-reimplement synthesis. It reuses the Create engine's `create.answer_note` kind — draft assembly via
-`CompilationDraft`, cognition via `run_reasoning`/`run_multi_note_reasoning`, citation validation,
-staging write with an in-draft `AI-åtgärder` acceptance checkbox, expiry sweep — from
-`docs/MIMER_CAPABILITY_HARDENING/EXPANSION_CONNECT_AND_CREATE.md` §2 (EXP-3). **EXP-3 has not merged
-as of this spec's writing** (that spec's own header states "advisory until child issues are
-delivered"). This task's own contribution is the trigger (evidence-delta, not explicit-ask), the
-contradiction-flagging extension to the draft, and the pending-review-not-clobbered discipline —
-none of which can be implemented before EXP-3 exists. See Context in this task's GitHub issue draft
-for how its ready/blocked label should actually read.
+reimplement synthesis. It reuses the delivered Create engine's `create.answer_note` kind — draft
+assembly via `CompilationDraft`, cognition via `run_reasoning`/`run_multi_note_reasoning`, citation
+validation, staging write with an in-draft `AI-åtgärder` acceptance checkbox, expiry sweep — from
+`docs/MIMER_CAPABILITY_HARDENING/EXPANSION_CONNECT_AND_CREATE.md` §2 (EXP-3, #2996). This task's own
+contribution is the trigger (evidence-delta, not explicit-ask), the contradiction-flagging extension
+to the draft, and the pending-review-not-clobbered discipline.
 
 ## What This Task Does
 
@@ -153,11 +150,10 @@ point during the check leaves nothing to reconcile.
 
 ## Related GitHub Issues
 
-One issue: `[Standing Questions] refresh-answer-on-evidence-delta: threshold-triggered candidate
-re-drafting with explicit contradiction surfacing`. **Hard-blocked on the external EXP-3 (Create
-engine) dependency in addition to SQ-01/SQ-03** — do not pick this up until EXP-3 has merged, even if
-its drafted GitHub issue carries a `ready`-shaped label at filing time; verify EXP-3's live state
-before starting. TCD hint: Opus / high effort — mirrors EXP-4's own "Opus (authority semantics)"
+Implementation issue: #3327, `[Standing Questions] refresh-answer-on-evidence-delta:`
+threshold-triggered candidate re-drafting with explicit contradiction surfacing. EXP-3 is delivered
+in #2996; the remaining capability-level follow-up is SQ-05's governed review surface and live
+owner/UAT acceptance. TCD hint: Opus / high effort — mirrors EXP-4's own "Opus (authority semantics)"
 rating; the pending-review-not-clobbered race (AC2/AC3) and the contradiction-never-silently-dropped
 guarantee (AC4/AC5) are exactly the kind of subtle correctness/authority-adjacent work the repo routes
 above Sonnet.

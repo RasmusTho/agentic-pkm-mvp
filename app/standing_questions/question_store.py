@@ -13,7 +13,8 @@ from typing import Any, Mapping
 from jsonschema import Draft202012Validator, FormatChecker
 
 from app.knowledge.contracts import WriteReceipt
-from app.knowledge.write_ops import write_note_relative
+from app.knowledge.errors import KnowledgeWriteConflict
+from app.knowledge.write_ops import read_note_text_with_version, write_note_relative
 from app.write_guard import DEFAULT_WRITE_GUARD, WriteGuard
 from scripts.yaml_roundtrip import dump_frontmatter, load_frontmatter
 
@@ -307,12 +308,59 @@ class QuestionStore:
         return note, receipt
 
     def read_question(self, question_id: str) -> dict[str, Any]:
-        return parse_question_note(self._path(question_id).read_text(encoding="utf-8"))
+        note, _version = self.read_question_with_version(question_id)
+        return note
+
+    def read_question_with_version(self, question_id: str) -> tuple[dict[str, Any], str]:
+        """Read a Question note and return its exact-byte version token."""
+
+        content, version = read_note_text_with_version(self._path(question_id))
+        return parse_question_note(content), version
 
     def update_system_fields(
         self, question_id: str, updates: Mapping[str, Any]
     ) -> tuple[dict[str, Any], WriteReceipt]:
         current = self.read_question(question_id)
+        return self._update_system_fields_from_current(question_id, current, updates)
+
+    def update_system_fields_if_unchanged(
+        self,
+        question_id: str,
+        expected: Mapping[str, Any],
+        updates: Mapping[str, Any],
+        *,
+        expected_version: str,
+    ) -> tuple[dict[str, Any], WriteReceipt]:
+        """Apply a bounded system update only if the note bytes are unchanged.
+
+        Refresh and review paths can observe the same Question concurrently. The
+        version token is computed from the exact bytes read and enforced by the
+        knowledge adapter, so a stale refresh cannot replace a newer candidate,
+        acceptance, dismissal, or human status change.
+        """
+
+        content, current_version = read_note_text_with_version(self._path(question_id))
+        if current_version != expected_version:
+            raise KnowledgeWriteConflict(
+                f"Question note bytes changed before conditional update: {question_id}"
+            )
+        current = parse_question_note(content)
+        if dict(current) != dict(expected):
+            raise KnowledgeWriteConflict(
+                f"Question note changed before conditional update: {question_id}"
+            )
+        return self._update_system_fields_from_current(
+            question_id, current, updates, expected_version=expected_version
+        )
+
+    def _update_system_fields_from_current(
+        self,
+        question_id: str,
+        current: Mapping[str, Any],
+        updates: Mapping[str, Any],
+        *,
+        expected_version: str | None = None,
+    ) -> tuple[dict[str, Any], WriteReceipt]:
         changes = dict(updates)
         forbidden = set(changes) & (_HUMAN_OWNED_FIELDS | _IMMUTABLE_FIELDS)
         unknown = set(changes) - _SYSTEM_OWNED_FIELDS
@@ -330,13 +378,15 @@ class QuestionStore:
             if not isinstance(evidence, list) or evidence[: len(current["evidence"])] != current["evidence"]:
                 raise ValueError("engine evidence updates must append to the existing evidence list")
         updated = {**current, **changes}
-        receipt = self._write(updated)
+        receipt = self._write(updated, expected_version=expected_version)
         return updated, receipt
 
     def _path(self, question_id: str) -> Path:
         return self.vault_root / question_note_path(question_id)
 
-    def _write(self, note: Mapping[str, Any]) -> WriteReceipt:
+    def _write(
+        self, note: Mapping[str, Any], *, expected_version: str | None = None
+    ) -> WriteReceipt:
         payload = validate_question_note(note)
         # This is the production seam assertion. It runs before serialisation,
         # path creation, or any filesystem mutation; write_note_relative repeats
@@ -348,6 +398,7 @@ class QuestionStore:
             vault_root=self.vault_root,
             action=WRITE_ACTION,
             write_guard=self.write_guard,
+            expected_version=expected_version,
         )
         return replace(receipt, operation=WRITE_ACTION)
 

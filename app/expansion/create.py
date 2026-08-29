@@ -83,7 +83,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from enum import Enum
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any, Callable, Mapping, Sequence
 from uuid import uuid4
 
 from app.activation.gate import (
@@ -546,6 +546,7 @@ def run_create_pass(
     write_guard: WriteGuard = DEFAULT_WRITE_GUARD,
     staleness_days: int = DEFAULT_STALENESS_DAYS,
     now: datetime | None = None,
+    draft_frontmatter_enricher: Callable[[CompilationDraft], Mapping[str, Any]] | None = None,
 ) -> CreatePassReport:
     """Run one Create pass end to end: activation gate -> cognition ->
     CompilationDraft -> citation validation -> staging write -> receipt.
@@ -616,6 +617,15 @@ def run_create_pass(
         created_at=now,
         staleness_days=staleness_days,
     )
+    if draft_frontmatter_enricher is not None:
+        extra_frontmatter = dict(draft_frontmatter_enricher(draft))
+        reserved = set(extra_frontmatter) & set(frontmatter)
+        if reserved:
+            raise ValueError(
+                "Create draft metadata cannot override engine-owned frontmatter fields: "
+                + ", ".join(sorted(reserved))
+            )
+        frontmatter.update(extra_frontmatter)
     note_text = _draft_note_text(frontmatter=frontmatter, body=draft.body or "", draft_id=draft.artifact_id)
     draft_path = drafts_dir / f"{draft.artifact_id}.md"
     draft_path.write_text(note_text, encoding="utf-8")
