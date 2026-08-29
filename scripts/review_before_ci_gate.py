@@ -17,7 +17,12 @@ from typing import Callable, Mapping, Sequence
 if __package__ in {None, ""}:  # Supports direct ``python scripts/...`` invocation.
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from app.dispatcher.verification_contract import resolve_issue_authority
+from app.dispatcher.verification_contract import (
+    has_closing_issue_attempt,
+    resolve_builderops_routing_status,
+    resolve_issue_authority,
+    resolve_pr_contract_final_review_rounds,
+)
 from scripts.validate_issue_readiness import classify_issue_body
 
 try:  # Supports both ``python scripts/...`` and package imports in tests.
@@ -71,6 +76,17 @@ REVIEW_CONTRACT_MARKER = re.compile(
 )
 REVALIDATION_RECEIPT_MARKER = "<!-- pr-scope-revalidation-receipt:v1 -->"
 TRUSTED_RECEIPT_ASSOCIATIONS = frozenset({"OWNER", "MEMBER", "COLLABORATOR"})
+ISSUE_FREE_LANE = re.compile(
+    r"(?im)^\s*-\s*\[x\]\s*(?:Docs authoring|Governance) lane\s*$"
+)
+DIRECT_REPAIR_SECTION = re.compile(
+    r"(?ims)^## Direct Repair\s*$.*?(?=^##\s|\Z)"
+)
+DIRECT_REPAIR_TYPE = re.compile(r"(?im)^Type:\s*(?:docs|governance|code)\s*$")
+DIRECT_REPAIR_REASON = re.compile(r"(?im)^Reason:\s*\S.*$")
+DIRECT_REPAIR_VALIDATION = re.compile(r"(?im)^Validation:\s*\S.*$")
+DIRECT_REPAIR_ISSUE = re.compile(r"(?im)^Issue required:\s*no\b")
+GOVERNING_ISSUE_ATTEMPT = re.compile(r"(?im)^\s*Governing-Issue\s*:")
 
 
 class ReviewBeforeCiGateError(ValueError):
@@ -79,7 +95,7 @@ class ReviewBeforeCiGateError(ValueError):
 
 def validate_pr_scope_revalidation(
     pr_number: int,
-    governing_issue: int,
+    governing_issue: int | None,
     head_sha: str,
     rejected_rounds: Sequence[Mapping[str, object]],
     receipt: Mapping[str, object] | None,
@@ -119,6 +135,10 @@ def validate_pr_scope_revalidation(
     if outcome not in PR_SCOPE_REVALIDATION_OUTCOMES:
         raise ReviewBeforeCiGateError(
             "contract revalidation receipt outcome must be continue_unchanged, split, or expanded_contract"
+        )
+    if governing_issue is None and outcome == "expanded_contract":
+        raise ReviewBeforeCiGateError(
+            "issue-free PR scope expansion requires an authenticated governing Issue"
         )
     authenticated_follow_up_issues = _authenticated_follow_up_issue_ids(authenticated_history)
     authenticated_follow_up_routes = _authenticated_follow_up_issue_routes(authenticated_history)
@@ -184,6 +204,14 @@ def validate_pr_scope_revalidation(
         if not isinstance(rejected_round_contracts, list):
             raise ReviewBeforeCiGateError("authenticated rejected-round contract lineage is missing")
         if outcome == "expanded_contract":
+            if any(
+                isinstance(round_contract, Mapping)
+                and round_contract.get("governing_contract_sha256") is None
+                for round_contract in rejected_round_contracts
+            ):
+                raise ReviewBeforeCiGateError(
+                    "expanded_contract requires complete rejected-round contract lineage"
+                )
             if (
                 receipt.get("expanded_issue") != governing_issue
                 or receipt.get("expanded_contract_sha256") != governing_contract_sha256
@@ -205,6 +233,7 @@ def validate_pr_scope_revalidation(
                 )
         elif any(
             isinstance(round_contract, Mapping)
+            and round_contract.get("governing_contract_sha256") is not None
             and round_contract.get("governing_contract_sha256") != governing_contract_sha256
             for round_contract in rejected_round_contracts
         ):
@@ -291,7 +320,7 @@ def authenticated_pr_scope_revalidation_history(
     *,
     repository: str,
     pr_number: int,
-    governing_issue: int,
+    governing_issue: int | None,
     head_sha: str,
     expected_base_ref: str | None = None,
     expected_head_ref: str | None = None,
@@ -306,11 +335,17 @@ def authenticated_pr_scope_revalidation_history(
     """
     if not re.fullmatch(r"[^/\s]+/[^/\s]+", repository):
         raise ReviewBeforeCiGateError("GitHub repository must be an owner/repository identity")
-    if pr_number <= 0 or governing_issue <= 0:
+    if pr_number <= 0 or (
+        governing_issue is not None and governing_issue <= 0
+    ):
         raise ReviewBeforeCiGateError("GitHub PR and governing Issue numbers must be positive")
     github_api = api or _github_api
     pr = github_api(f"repos/{repository}/pulls/{pr_number}", False)
-    issue = github_api(f"repos/{repository}/issues/{governing_issue}", False)
+    issue = (
+        github_api(f"repos/{repository}/issues/{governing_issue}", False)
+        if governing_issue is not None
+        else None
+    )
     reviews = github_api(f"repos/{repository}/pulls/{pr_number}/reviews?per_page=100", True)
     inline_comments = github_api(
         f"repos/{repository}/pulls/{pr_number}/comments?per_page=100", True
@@ -320,7 +355,6 @@ def authenticated_pr_scope_revalidation_history(
     )
     snapshot_requests: list[tuple[str, bool, object]] = [
         (f"repos/{repository}/pulls/{pr_number}", False, pr),
-        (f"repos/{repository}/issues/{governing_issue}", False, issue),
         (f"repos/{repository}/pulls/{pr_number}/reviews?per_page=100", True, reviews),
         (f"repos/{repository}/pulls/{pr_number}/comments?per_page=100", True, inline_comments),
         (
@@ -329,9 +363,17 @@ def authenticated_pr_scope_revalidation_history(
             conversation_comments,
         ),
     ]
-    if not isinstance(pr, Mapping) or not isinstance(issue, Mapping):
+    if governing_issue is not None:
+        snapshot_requests.insert(
+            1, (f"repos/{repository}/issues/{governing_issue}", False, issue)
+        )
+    if not isinstance(pr, Mapping) or (
+        governing_issue is not None and not isinstance(issue, Mapping)
+    ):
         raise ReviewBeforeCiGateError("GitHub PR or governing Issue response is malformed")
-    if pr.get("number") != pr_number or issue.get("number") != governing_issue:
+    if pr.get("number") != pr_number or (
+        governing_issue is not None and issue.get("number") != governing_issue
+    ):
         raise ReviewBeforeCiGateError("GitHub evidence does not identify the requested PR and Issue")
     base_repo = _nested_value(pr, "base", "repo", "full_name")
     base_ref = _nested_value(pr, "base", "ref")
@@ -366,15 +408,27 @@ def authenticated_pr_scope_revalidation_history(
         )
     if not re.fullmatch(r"[0-9a-f]{40}", head_sha):
         raise ReviewBeforeCiGateError("local publication candidate has no exact head")
-    if not isinstance(issue.get("body"), str):
-        raise ReviewBeforeCiGateError("GitHub governing Issue body is unavailable for contract binding")
     if not isinstance(pr.get("body"), str):
-        raise ReviewBeforeCiGateError("GitHub PR body is unavailable for governing Issue binding")
-    authority = resolve_issue_authority(pr["body"])
-    if authority is None or authority.governing_issue != governing_issue:
-        raise ReviewBeforeCiGateError(
-            "GitHub PR governing Issue identity is missing, foreign, or stale"
-        )
+        raise ReviewBeforeCiGateError("GitHub PR body is unavailable for contract binding")
+    if governing_issue is not None:
+        if not isinstance(issue, Mapping) or not isinstance(issue.get("body"), str):
+            raise ReviewBeforeCiGateError(
+                "GitHub governing Issue body is unavailable for contract binding"
+            )
+        authority = resolve_issue_authority(pr["body"])
+        if authority is None or authority.governing_issue != governing_issue:
+            raise ReviewBeforeCiGateError(
+                "GitHub PR governing Issue identity is missing, foreign, or stale"
+            )
+        contract_body = issue["body"]
+        contract_source = "governing-issue"
+    else:
+        if not _is_issue_free_pr_contract(pr["body"]):
+            raise ReviewBeforeCiGateError(
+                "issue-free PR body has no authenticated docs, governance, or direct-repair contract"
+            )
+        contract_body = pr["body"]
+        contract_source = "pr-body"
     bounded_follow_up_issues: list[int] = []
     bounded_follow_up_routes: dict[int, list[str]] = {}
     for follow_up_issue in sorted(set(follow_up_issue_numbers)):
@@ -400,8 +454,14 @@ def authenticated_pr_scope_revalidation_history(
             set(re.findall(r"(?im)^Routed-Finding:\s*([^\s]+)\s*$", follow_up_body))
         )
         if (
-            source_issue is None
-            or int(source_issue.group(1)) != governing_issue
+            (
+                governing_issue is not None
+                and (
+                    source_issue is None
+                    or int(source_issue.group(1)) != governing_issue
+                )
+            )
+            or (governing_issue is None and source_issue is not None)
             or source_pr is None
             or int(source_pr.group(1)) != pr_number
             or not routed_findings
@@ -438,19 +498,34 @@ def authenticated_pr_scope_revalidation_history(
         reviews_by_id[review["id"]] = review
     finding_ids_by_round: dict[str, set[str]] = {}
     rejected_round_details: dict[str, dict[str, object]] = {}
-    for review_id, review in reviews_by_id.items():
+    rejected_review_ids = sorted(
+        review_id
+        for review_id, review in reviews_by_id.items()
+        if review.get("state") == "CHANGES_REQUESTED"
+        and _nested_value(review, "user", "login") != pr_author
+    )
+    for review_id in rejected_review_ids:
+        review = reviews_by_id[review_id]
         reviewer = _nested_value(review, "user", "login")
-        if review.get("state") != "CHANGES_REQUESTED" or reviewer == pr_author:
-            continue
         commit_id = review["commit_id"]
         if not isinstance(commit_id, str) or not re.fullmatch(r"[0-9a-f]{40}", commit_id):
             raise ReviewBeforeCiGateError("rejected review round has no exact reviewed head")
         contract_matches = REVIEW_CONTRACT_DIGEST.findall(review["body"])
         contract_markers = REVIEW_CONTRACT_MARKER.findall(review["body"])
-        if len(contract_markers) != 1 or len(contract_matches) != 1:
+        contract_digest: str | None = None
+        if (
+            len(contract_markers) > 1
+            or len(contract_matches) > 1
+            or (
+                len(rejected_review_ids) >= 2
+                and (len(contract_markers) != 1 or len(contract_matches) != 1)
+            )
+        ):
             raise ReviewBeforeCiGateError(
                 "rejected review round requires exactly one governing contract SHA-256 lineage marker"
             )
+        if len(contract_markers) == 1 and len(contract_matches) == 1:
+            contract_digest = contract_matches[0]
         round_id = f"review:{review_id}"
         finding_ids_by_round[round_id] = {round_id}
         rejected_round_details[round_id] = {
@@ -459,7 +534,7 @@ def authenticated_pr_scope_revalidation_history(
             "review_state": "CHANGES_REQUESTED",
             "reviewer": reviewer,
             "head_sha": commit_id,
-            "governing_contract_sha256": contract_matches[0],
+            "governing_contract_sha256": contract_digest,
             "review_body_sha256": _sha256_text(review["body"]),
         }
     for comment in inline_comments:
@@ -545,6 +620,8 @@ def authenticated_pr_scope_revalidation_history(
         "authentication": {
             "source": "github-api",
             "repository": repository,
+            "governing_issue": governing_issue,
+            "contract_source": contract_source,
             "base_ref": base_ref,
             "head_repository": head_repo,
             "head_ref": head_ref,
@@ -557,8 +634,10 @@ def authenticated_pr_scope_revalidation_history(
             "review_history_sha256": review_history_sha256,
         },
         "governing_contract_sha256": hashlib.sha256(
-            _canonical_contract_body(issue["body"]).encode("utf-8")
+            _canonical_contract_body(contract_body).encode("utf-8")
         ).hexdigest(),
+        "governing_issue": governing_issue,
+        "contract_source": contract_source,
         "bounded_follow_up_issues": bounded_follow_up_issues,
         "bounded_follow_up_routes": bounded_follow_up_routes,
         "candidate_head_sha": head_sha,
@@ -664,6 +743,33 @@ def _github_repository_from_origin() -> str | None:
     return match.group(1) if match else None
 
 
+def _is_issue_free_pr_contract(body: object) -> bool:
+    if (
+        not isinstance(body, str)
+        or GOVERNING_ISSUE_ATTEMPT.search(body)
+        or has_closing_issue_attempt(body)
+    ):
+        return False
+    direct_repair = DIRECT_REPAIR_SECTION.search(body)
+    has_direct_repair_contract = bool(
+        direct_repair
+        and DIRECT_REPAIR_TYPE.search(direct_repair.group(0))
+        and DIRECT_REPAIR_REASON.search(direct_repair.group(0))
+        and DIRECT_REPAIR_VALIDATION.search(direct_repair.group(0))
+        and DIRECT_REPAIR_ISSUE.search(direct_repair.group(0))
+    )
+    if direct_repair and not has_direct_repair_contract:
+        return False
+    classifiers = len(ISSUE_FREE_LANE.findall(body)) + has_direct_repair_contract
+    return (
+        classifiers == 1
+        and resolve_pr_contract_final_review_rounds(body).satisfied
+        and resolve_builderops_routing_status(
+            body, has_issue_authority=False
+        ).satisfied
+    )
+
+
 def _canonical_contract_body(body: str) -> str:
     return body.replace("\r\n", "\n").replace("\r", "\n").rstrip("\n") + "\n"
 
@@ -700,6 +806,75 @@ def _git_is_strict_ancestor(ancestor_sha: object, candidate_sha: object) -> bool
         check=False,
     )
     return completed.returncode == 0
+
+
+def _git_patch_identity(
+    head_sha: object, base_ref: object
+) -> tuple[str, tuple[tuple[str, str | None], ...]] | None:
+    if not isinstance(head_sha, str) or not isinstance(base_ref, str):
+        return None
+    merge_base = subprocess.run(
+        ["git", "merge-base", base_ref, head_sha],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if merge_base.returncode != 0 or not _nonempty_string(merge_base.stdout):
+        return None
+    base_sha = merge_base.stdout.strip()
+    diff = subprocess.run(
+        ["git", "diff", "--binary", "--full-index", base_sha, head_sha],
+        capture_output=True,
+        check=False,
+    )
+    if diff.returncode != 0 or not diff.stdout:
+        return None
+    patch_id = subprocess.run(
+        ["git", "patch-id", "--stable"],
+        input=diff.stdout,
+        capture_output=True,
+        check=False,
+    )
+    patch_fields = patch_id.stdout.decode("utf-8", errors="strict").split()
+    if (
+        patch_id.returncode != 0
+        or not patch_fields
+        or re.fullmatch(r"[0-9a-f]{40,64}", patch_fields[0]) is None
+    ):
+        return None
+    changed = subprocess.run(
+        ["git", "diff", "--name-only", "-z", base_sha, head_sha],
+        capture_output=True,
+        check=False,
+    )
+    if changed.returncode != 0:
+        return None
+    paths = [path for path in changed.stdout.decode("utf-8").split("\0") if path]
+    blobs: list[tuple[str, str | None]] = []
+    for path in paths:
+        blob = subprocess.run(
+            ["git", "rev-parse", f"{head_sha}:{path}"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        blob_sha = blob.stdout.strip() if blob.returncode == 0 else None
+        if blob_sha is not None and re.fullmatch(r"[0-9a-f]{40,64}", blob_sha) is None:
+            return None
+        blobs.append((path, blob_sha))
+    return patch_fields[0], tuple(sorted(blobs))
+
+
+def _git_allows_pr_update(
+    live_head_sha: object, candidate_sha: object, base_ref: object
+) -> bool:
+    if _git_is_strict_ancestor(live_head_sha, candidate_sha):
+        return True
+    if live_head_sha == candidate_sha:
+        return False
+    live_identity = _git_patch_identity(live_head_sha, base_ref)
+    candidate_identity = _git_patch_identity(candidate_sha, base_ref)
+    return live_identity is not None and live_identity == candidate_identity
 
 
 def _nested_value(payload: Mapping[str, object], *keys: str) -> object:
@@ -1000,7 +1175,7 @@ def _authenticated_follow_up_issue_routes(
 
 
 def _is_bounded_follow_up_issue(
-    value: object, governing_issue: int, authenticated_issue_ids: set[int] | None = None
+    value: object, governing_issue: int | None, authenticated_issue_ids: set[int] | None = None
 ) -> bool:
     return (
         isinstance(value, int)
@@ -1117,11 +1292,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.pr_scope_revalidation:
             if (
                 args.pr_number is None
-                or args.governing_issue is None
                 or not args.github_repository
             ):
                 raise ReviewBeforeCiGateError(
-                    "PR scope revalidation requires --github-repository, --pr-number, and --governing-issue"
+                    "PR scope revalidation requires --github-repository and --pr-number"
                 )
             receipt = (
                 _load_json_without_duplicate_keys(
@@ -1139,9 +1313,11 @@ def main(argv: Sequence[str] | None = None) -> int:
                 expected_head_ref=current_branch_ref,
                 follow_up_issue_numbers=_follow_up_issue_numbers(receipt),
             )
-            if not _git_is_strict_ancestor(history["live_pr_head_sha"], evidence.head_sha):
+            if not _git_allows_pr_update(
+                history["live_pr_head_sha"], evidence.head_sha, args.workflow_risk_base
+            ):
                 raise ReviewBeforeCiGateError(
-                    "local publication candidate does not strictly descend from the authenticated live PR head"
+                    "local publication candidate is neither a strict descendant nor a byte-identical rebase of the authenticated live PR head"
                 )
             validate_pr_scope_revalidation(
                 args.pr_number,

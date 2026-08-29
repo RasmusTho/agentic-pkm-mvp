@@ -399,14 +399,16 @@ and does not replace the existing per-mechanism repair accounting or the Mechani
 Only a formal GitHub `CHANGES_REQUESTED` review by an author other than the PR author creates a
 rejected round. Approval text, repair/status conversation, severity-like prose, and comments outside
 such a rejected review cannot create or reset a round. Each counted round binds its exact reviewed
-head, reviewer, review-body digest, protected inline-finding digests, and the
-single canonical `Governing-Contract-SHA256` recorded in that review; zero or multiple markers fail
-closed. Protected inline findings use a line-leading P0/P1 severity token, with ordinary Markdown
+head, reviewer, review-body digest, protected inline-finding digests, and the canonical
+`Governing-Contract-SHA256` recorded in that review. Before the two-round threshold, one legacy
+rejected review may omit the marker because scope revalidation is not yet active; a marker that is
+present must still be unique. Once two rejected rounds exist, every counted round requires exactly
+one marker, so incomplete lineage fails closed. Protected inline findings use a line-leading P0/P1 severity token, with ordinary Markdown
 heading, ordered/unordered list, bold, bracketed, and `Severity:` wrappers accepted. Severity-like
 prose elsewhere is not a finding.
 
-An authenticated receipt bound to the current PR number, head SHA, governing Issue, and a canonical
-SHA-256 governing-contract identity must select exactly one outcome: `continue_unchanged`, `split`,
+An authenticated receipt bound to the current PR number, head SHA, contract authority, and a canonical
+SHA-256 contract identity must select exactly one outcome: `continue_unchanged`, `split`,
 or `expanded_contract`. The local JSON is only a canonical working copy: the same receipt object must
 exist in a PR conversation comment beginning `<!-- pr-scope-revalidation-receipt:v1 -->`, authored
 by a GitHub `OWNER`, `MEMBER`, or `COLLABORATOR`; duplicate JSON keys are malformed and fail closed.
@@ -414,7 +416,10 @@ Distinct trusted receipts for the same PR/candidate/Issue identity are conflicti
 closed; byte-identical duplicates are idempotent.
 The executable gate
 fetches the current PR, complete paginated review summaries, inline review comments, PR conversation,
-and governing Issue itself. It binds the
+and, for issue-backed work, the governing Issue itself. Issue-free docs, governance, and direct-repair
+PRs instead authenticate a complete lane/direct-repair contract in the live PR body and reject any
+governing-Issue or closing-keyword attempt. They may continue unchanged or split after revalidation,
+but scope expansion first requires promotion to an authenticated governing Issue. The gate binds the
 repository/base identity, exact candidate and live heads, contract digest, rejected-round IDs,
 protected finding IDs, and the content digest of that rejected-review history. Caller-supplied history, actors, URLs,
 labels, or finding subsets are never evidence. Omitted,
@@ -427,8 +432,9 @@ and ref match the publication base and whose head repository and ref match the a
 branch, then requires the supplied PR identity and scope
 revalidation inputs to match it. `new` authenticates that the branch has no open PR and an omitted
 mode is rejected whenever the current branch already has an open PR. Before an existing PR is
-updated, the local candidate must strictly descend from (and therefore differ from) the authenticated
-live PR head. `continue_unchanged`
+updated, the local candidate must either strictly descend from the authenticated live PR head or be
+a rebased candidate with the same stable patch identity and changed-path blob identities relative to
+the canonical publication base. The candidate must still differ from the live head. `continue_unchanged`
 permits only governing-contract blockers and PR-introduced regressions. Every `split` receipt must
 name a positive, non-governing `follow_up_issue`; the executable gate fetches it and requires an
 existing, bounded canonical Issue contract before it routes affected work there. `expanded_contract`
@@ -441,7 +447,8 @@ shape is insufficient, and `split` requires at least one classified adjacent/pre
 whose follow-up identity matches that route. The evaluator closes its snapshot by re-reading every PR, Issue, review,
 comment, and follow-up payload used for authority and fails if any changed during collection.
 For an existing PR before push, the receipt binds the local candidate head separately from the
-authenticated live PR head; Git ancestry must prove the candidate descends from that live head.
+authenticated live PR head; Git ancestry or the byte-identical rebase proof must bind the candidate
+to that live delivery.
 This permits the gate to run before publication without treating the necessarily unpushed candidate
 as if it were already the live PR head.
 

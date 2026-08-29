@@ -218,14 +218,15 @@ if [ "$PR_LANE" = "implementation" ] || [ "$PR_LANE" = "docs-authoring" ] || [ "
     existing)
       : "${PR_GITHUB_REPOSITORY:?existing PR publication requires owner/repository}"
       : "${PR_NUMBER:?existing PR publication requires PR_NUMBER}"
-      : "${GOVERNING_ISSUE:?existing PR publication requires GOVERNING_ISSUE}"
       review_gate_args+=(
         --publication-mode existing
         --pr-scope-revalidation
         --github-repository "$PR_GITHUB_REPOSITORY"
         --pr-number "$PR_NUMBER"
-        --governing-issue "$GOVERNING_ISSUE"
       )
+      if [ -n "${GOVERNING_ISSUE:-}" ]; then
+        review_gate_args+=(--governing-issue "$GOVERNING_ISSUE")
+      fi
       if [ -n "${CONTRACT_REVALIDATION_RECEIPT:-}" ]; then
         review_gate_args+=(--contract-revalidation-receipt "$CONTRACT_REVALIDATION_RECEIPT")
       fi
@@ -244,11 +245,13 @@ credential-durability, and state-machine. After a multi-blocker or adjacent
 repeat finding in one mechanism, do not set `--review-gate-complete` again until the low-convergence
 circuit breaker in `verification-and-closure` has produced and reviewed a new convergence packet.
 
-Every publication invocation must set `PR_PUBLICATION_MODE` to `new` or `existing`; an omitted or other value fails before the gate runs. Apply `docs/development/AUTONOMOUS_REVIEW_REPAIR_GATE_CONTRACTS.md :: PR-Level Scope Revalidation Gate` through this shared gate before another expensive proof or push. A `new` publication authenticates that its branch has no open PR; an `existing` publication requires `--pr-scope-revalidation --github-repository <owner/repo> --pr-number <N> --governing-issue <N>` and, when two rejected rounds exist, `--contract-revalidation-receipt <path>`. Before push, the gate authenticates the still-live PR head separately and proves it is a strict Git ancestor of the local candidate head, so the required ordering does not assume the candidate is already published. The gate requires that local receipt to match a durable trusted-author PR comment, derives formal independent `CHANGES_REQUESTED` rounds and their protected finding contents itself, and authenticates expansion against the live Issue digest plus every prior round/head/digest; never pass caller-authored history, URL, actor, digest, or partial finding list as authority.
+Every publication invocation must set `PR_PUBLICATION_MODE` to `new` or `existing`; an omitted or other value fails before the gate runs. Apply `docs/development/AUTONOMOUS_REVIEW_REPAIR_GATE_CONTRACTS.md :: PR-Level Scope Revalidation Gate` through this shared gate before another expensive proof or push. A `new` publication authenticates that its branch has no open PR; an `existing` publication requires `--pr-scope-revalidation --github-repository <owner/repo> --pr-number <N>`, plus `--governing-issue <N>` for issue-backed work and, when two rejected rounds exist, `--contract-revalidation-receipt <path>`. Issue-free docs, governance, and direct-repair work instead binds the complete authenticated live PR-body contract; expansion requires promotion to a governing Issue. Before push, the gate authenticates the still-live PR head separately and proves that the candidate either strictly descends from it or is a byte-identical rebase with the same stable patch and changed-path blob identities, so the required ordering does not assume the candidate is already published. The gate requires that local receipt to match a durable trusted-author PR comment, derives formal independent `CHANGES_REQUESTED` rounds and their protected finding contents itself, and authenticates expansion against the live Issue digest plus every prior round/head/digest; never pass caller-authored history, URL, actor, digest, or partial finding list as authority.
 Existing publication also derives the unique open PR whose base repository/ref match the requested
 publication base and whose head repository/ref match the current local branch; a supplied closed,
 foreign, retargeted, or different-branch PR number is not history authority.
-Each counted rejected review must contain exactly one canonical `Governing-Contract-SHA256` marker.
+Before the two-round threshold, a single legacy rejected review may omit its lineage marker. At and
+after the threshold, each counted rejected review must contain exactly one canonical
+`Governing-Contract-SHA256` marker.
 Publication authority is always evaluated at canonical `origin/main...HEAD`; the workflow-risk
 selector overrides are analysis-only and fail closed whenever `--publication-mode` is present.
 `--pr-scope-revalidation` is publication authority and is valid only with

@@ -16,6 +16,7 @@ import pytest
 from scripts.review_before_ci_gate import (
     ReviewBeforeCiGateError,
     _current_branch_open_pr,
+    _git_allows_pr_update,
     _git_is_strict_ancestor,
     _github_repository_from_origin,
     authenticated_pr_scope_revalidation_history,
@@ -799,6 +800,28 @@ def test_rejected_round_requires_exactly_one_governing_contract_digest(
         )
 
 
+def test_single_legacy_rejected_round_does_not_require_lineage_marker() -> None:
+    responses, api = _live_pr_review_api()
+    reviews = responses["repos/octo/repo/pulls/4029/reviews?per_page=100"]
+    assert isinstance(reviews, list)
+    reviews[:] = reviews[:1]
+    reviews[0]["body"] = "P1 legacy finding without contract lineage"
+    comments = responses["repos/octo/repo/pulls/4029/comments?per_page=100"]
+    assert isinstance(comments, list)
+    comments[:] = [comment for comment in comments if comment["pull_request_review_id"] == 11]
+
+    history = authenticated_pr_scope_revalidation_history(
+        repository="octo/repo",
+        pr_number=4029,
+        governing_issue=4028,
+        head_sha="a" * 40,
+        api=api,
+    )
+
+    assert len(history["rejected_rounds"]) == 1
+    assert history["rejected_round_contracts"][0]["governing_contract_sha256"] is None
+
+
 def test_existing_publication_mode_cannot_omit_pr_scope_revalidation() -> None:
     result = subprocess.run(
         [
@@ -863,6 +886,132 @@ def test_existing_publication_must_match_unique_open_pr_for_current_branch(
         ]
     ) == 2
     assert "unique open PR for the current branch" in capsys.readouterr().err
+
+
+def test_issue_free_existing_pr_uses_pr_body_as_contract_authority() -> None:
+    responses, api = _live_pr_review_api()
+    responses.pop("repos/octo/repo/issues/4028")
+    pr = responses["repos/octo/repo/pulls/4029"]
+    assert isinstance(pr, dict)
+    pr["body"] = """## Change Lane
+- [x] Docs authoring lane
+- [ ] Governance lane
+
+Final-Review-Rounds: 1
+
+## Summary
+- Bounded docs change.
+
+## BuilderOps Routing
+- Records/projections/receipts: none
+- Reason: No BuilderOps material was routed.
+"""
+
+    history = authenticated_pr_scope_revalidation_history(
+        repository="octo/repo",
+        pr_number=4029,
+        governing_issue=None,
+        head_sha="a" * 40,
+        expected_base_ref="main",
+        expected_head_ref="codex/issue-4028",
+        api=api,
+    )
+
+    assert history["governing_issue"] is None
+    assert history["contract_source"] == "pr-body"
+
+
+def test_issue_free_existing_publication_does_not_require_governing_issue(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    candidate_head = "b" * 40
+    captured: dict[str, object] = {}
+    monkeypatch.setattr(
+        "scripts.review_before_ci_gate.workflow_risk_evidence_from_git",
+        lambda *args, **kwargs: SimpleNamespace(risks=[], head_sha=candidate_head),
+    )
+    monkeypatch.setattr(
+        "scripts.review_before_ci_gate._github_repository_from_origin", lambda: "octo/repo"
+    )
+    monkeypatch.setattr(
+        "scripts.review_before_ci_gate._current_branch_open_pr",
+        lambda repository, expected_base_ref=None: {
+            "number": 4029,
+            "head": {"ref": "codex/docs", "repo": {"full_name": repository}},
+        },
+    )
+
+    def history(**kwargs: object) -> Mapping[str, object]:
+        captured.update(kwargs)
+        return {
+            "live_pr_head_sha": "a" * 40,
+            "rejected_rounds": [],
+            "governing_contract_sha256": "c" * 64,
+        }
+
+    monkeypatch.setattr(
+        "scripts.review_before_ci_gate.authenticated_pr_scope_revalidation_history",
+        history,
+    )
+    monkeypatch.setattr(
+        "scripts.review_before_ci_gate._git_allows_pr_update", lambda *args: True
+    )
+
+    assert review_before_ci_main(
+        [
+            "--lane",
+            "governance",
+            "--changed-file",
+            "docs/development/PR_HOT_PATH.md",
+            "--risk-assessment-complete",
+            "--review-gate-complete",
+            "--publication-mode",
+            "existing",
+            "--pr-scope-revalidation",
+            "--github-repository",
+            "octo/repo",
+            "--pr-number",
+            "4029",
+        ]
+    ) == 0
+    assert captured["governing_issue"] is None
+
+
+@pytest.mark.parametrize(
+    "authority_violation",
+    (
+        "\nFixes #99\n",
+        "\n- [x] Governance lane\n",
+        "\nGoverning-Issue: #99\n",
+        "\n## Direct Repair\nType: governance\nReason: incomplete\n",
+    ),
+)
+def test_issue_free_contract_rejects_ambiguous_or_issue_backed_authority(
+    authority_violation: str,
+) -> None:
+    responses, api = _live_pr_review_api()
+    responses.pop("repos/octo/repo/issues/4028")
+    pr = responses["repos/octo/repo/pulls/4029"]
+    assert isinstance(pr, dict)
+    pr["body"] = f"""## Change Lane
+- [x] Docs authoring lane
+- [ ] Governance lane
+
+Final-Review-Rounds: 1
+
+## BuilderOps Routing
+- Records/projections/receipts: none
+- Reason: No BuilderOps material was routed.
+{authority_violation}"""
+
+    with pytest.raises(ReviewBeforeCiGateError, match="issue-free PR body"):
+        authenticated_pr_scope_revalidation_history(
+            repository="octo/repo",
+            pr_number=4029,
+            governing_issue=None,
+            head_sha="a" * 40,
+            api=api,
+        )
 
 
 def test_current_branch_rejects_ambiguous_open_prs(
@@ -1341,6 +1490,48 @@ def test_pre_push_candidate_must_strictly_descend_from_live_pr_head() -> None:
 
     assert not _git_is_strict_ancestor(head_sha, head_sha)
     assert _git_is_strict_ancestor(parent_sha, head_sha)
+
+
+def test_pre_push_accepts_byte_identical_rebased_candidate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    for command in (
+        ["git", "init", "-q"],
+        ["git", "config", "user.email", "test@example.invalid"],
+        ["git", "config", "user.name", "test"],
+    ):
+        subprocess.run(command, cwd=repo, check=True)
+    (repo / "base.txt").write_text("base\n", encoding="utf-8")
+    subprocess.run(["git", "add", "."], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-qm", "base"], cwd=repo, check=True)
+    base = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo, text=True).strip()
+
+    (repo / "feature.txt").write_text("same delivery patch\n", encoding="utf-8")
+    subprocess.run(["git", "add", "."], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-qm", "live delivery"], cwd=repo, check=True)
+    live = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo, text=True).strip()
+
+    subprocess.run(["git", "checkout", "-qb", "rebased", base], cwd=repo, check=True)
+    (repo / "feature.txt").write_text("same delivery patch\n", encoding="utf-8")
+    subprocess.run(["git", "add", "."], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-qm", "rebased delivery"], cwd=repo, check=True)
+    candidate = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=repo, text=True
+    ).strip()
+    monkeypatch.chdir(repo)
+
+    assert not _git_is_strict_ancestor(live, candidate)
+    assert _git_allows_pr_update(live, candidate, base)
+
+    (repo / "feature.txt").write_text("different delivery patch\n", encoding="utf-8")
+    subprocess.run(["git", "add", "."], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-qm", "divergent delivery"], cwd=repo, check=True)
+    divergent = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=repo, text=True
+    ).strip()
+    assert not _git_allows_pr_update(live, divergent, base)
 
 
 def test_duplicate_key_durable_receipt_is_rejected() -> None:
