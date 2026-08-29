@@ -6,7 +6,12 @@ Authority: Defines the independent BuilderOps Compose, image, secret, ingress, h
 
 ## Implementation Status
 
-The repository contract provides a separate BuilderOps Compose project, immutable control-plane and PostgreSQL image pins, an isolated Docker context/engine preflight, VM-local secret references, migration-gated API and worker startup, loopback API exposure, Tailscale Serve without Funnel, authenticated probes, rebuild/rollback receipts, and a local disk/WAL guard. It does not activate a live VM or make a backup/restore claim.
+The repository contract provides a separate BuilderOps Compose project, immutable control-plane and
+PostgreSQL image pins, an isolated Docker context/engine preflight, VM-local secret references,
+migration-gated API and worker startup, loopback API exposure, private authenticated ingress,
+authenticated probes, rebuild/rollback receipts, and a local disk/WAL guard. The deployment target
+for the complete Dev System is TARS VM 102 (`builder-system`), with Dev UI as one read-only
+component; this contract does not activate a live VM or make a backup/restore claim.
 
 ## Rebuildable VM deployment contract
 
@@ -14,9 +19,36 @@ BuilderOps operational state is rebuilt from repository source, exact attested i
 
 PostgreSQL has `archive_mode = off` and an empty `archive_command`. The local guard rejects archive drift, WAL growth, and disk pressure. It never deletes `pg_wal`, invokes `pg_resetwal`, or treats a reset/cleanup tool as a rebuild substitute.
 
+### Complete Dev System admission
+
+BuilderOps deployment is admitted only as one part of the complete Dev System topology described in
+[`README.md :: Complete Dev System VM-102 topology contract`](README.md). A Dev UI-only deployment,
+the default Docker engine, or a healthy guest check cannot satisfy this boundary. The component
+inventory must classify every known component as `VM-102 resident (target)`, `explicit external
+dependency`, or `intentionally non-runtime`, and must leave unresolved identity, service, ingress,
+health, lifecycle, migration, and rollback facts as explicit gaps.
+
+The required evidence chain is ordered and exact-identity bound:
+
+1. `devsystem_vm102_component_inventory.v1` records the complete topology and its gaps.
+2. `builderops_vm_rebuild_activation.v1` and `devui_vm102_runtime_qualification.v1` separately
+   prove the VM/engine/service admission and complete resident-component qualification.
+3. `devsystem_vm102_deploy.v1` binds the candidate SHA, image digests, pinned configuration,
+   component inventory digest, migration classification, and prior rollback identity.
+4. `devsystem_vm102_health.v1` binds post-deploy health/version and read-only smoke to those
+   identities; the Stage A pilot additionally requires #4748 exact-SHA browser evidence.
+5. `devsystem_vm102_rollback.v1` binds restoration of the previous compatible identity without
+   reversing forward-only migrations or rewinding BuilderOps/GitHub authority data.
+
+These names identify receipt contracts; they do not assert that any receipt exists. A receipt must
+contain no secret material and must include the target VM identity, observation time, source refs,
+evidence fingerprint, and explicit gaps/refusals. The repository-side `tars_host_qualification.v1`
+candidate receipt remains insufficient for live qualification.
+
 ## Purpose
 
-Keep BuilderOps outside the `pkm-*` Product failure domain while preserving a truthful, private, and rebuildable deployment path.
+Keep BuilderOps outside the `pkm-*` Product Runtime failure domain while preserving a truthful,
+private, and rebuildable deployment path.
 
 ## Constraints
 

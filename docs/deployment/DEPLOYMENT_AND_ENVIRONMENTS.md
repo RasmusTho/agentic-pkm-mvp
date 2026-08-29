@@ -30,6 +30,46 @@ does not restore an older database snapshot. Setup-specific placement, qualifica
 headroom, and Linux alert installation belong in a deployment profile such as
 `docs/deployment/profiles/TARS_PROXMOX.md`; they are not generic deployment facts.
 
+## Complete Dev System placement and admission
+
+The portable deployment contract admits a selected setup profile; it does not choose a host. The
+TARS/Proxmox profile selects VM 102 (`builder-system`) as the intended cohesive runtime home for
+the complete Builder System / Dev System. This includes Dev UI as a read-only projection component
+and the BuilderOps control plane and its internal providers. It is not a Dev UI-only deployment and
+it does not merge the Dev System with Product Runtime.
+
+The complete topology and all unresolved components are owned by
+[`docs/BUILDEROPS_CONTROL_PLANE/README.md :: Complete Dev System VM-102 topology contract`](../BUILDEROPS_CONTROL_PLANE/README.md).
+Every component must be classified as `VM-102 resident (target)`, `explicit external dependency`,
+or `intentionally non-runtime`, with an owner, service/project, source/image identity, ingress/auth
+posture, health/version evidence, deployment role, lifecycle evidence, migration boundary, and
+rollback boundary. An unknown or unavailable component remains an explicit gap and blocks admission;
+it cannot be silently omitted or inferred from a guest check.
+
+### VM-102 deployment receipt chain
+
+The following are receipt contracts, not claims that the target is deployed or qualified:
+
+1. `devsystem_vm102_component_inventory.v1` binds the complete component matrix and inventory
+   digest to VM 102 and its observation time.
+2. `builderops_vm_rebuild_activation.v1` plus `devui_vm102_runtime_qualification.v1` bind fresh
+   VM/engine/project/service admission, private authenticated ingress, health/version, fencing, and
+   no-dual-writer evidence. The candidate-only `tars_host_qualification.v1` result is not enough.
+3. `devsystem_vm102_deploy.v1` binds the exact candidate source SHA, all image digests, pinned
+   configuration fingerprint, component inventory digest, deployment owner, migration
+   classification/completion, and previous rollback identity.
+4. `devsystem_vm102_health.v1` binds post-deploy identity, health/version/readiness, ingress/auth,
+   topology completeness, and read-only smoke to the deployed candidate. The Dev UI Stage A pilot
+   additionally requires `devui-stage-a-read-only-owner-pilot.v1` and #4748 exact-SHA browser proof.
+5. `devsystem_vm102_rollback.v1` binds the previous known-good source/image/config identity,
+   restored health/version/read-only smoke, and preserved GitHub/BuilderOps authority. It never
+   reverses a forward-only migration or rewinds authority data.
+
+No screen observation, Project view, unbound guest readback, or healthy default-engine stack is a
+deployment receipt. Receipts are redaction-safe, must include `target_vm` (`vmid: 102`,
+`name: builder-system`), `observed_at`, source references, an evidence fingerprint, and explicit
+gaps/refusals; they never contain credentials or secret-bearing environment dumps.
+
 ## Current live runtime posture
 
 The intended live split is now: a dedicated Ollama host for Ollama only, and the product runtime on isolated Linux
