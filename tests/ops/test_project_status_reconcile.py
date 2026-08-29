@@ -132,6 +132,21 @@ def test_reconcile_cli_accepts_split_backlog_statuses() -> None:
     }
 
 
+def test_canonical_maintenance_surfaces_document_split_lane_precedence() -> None:
+    maintenance_skill = Path(
+        ".codex/skills/issue-maintenance-change-control/SKILL.md"
+    ).read_text(encoding="utf-8")
+    label_taxonomy = Path(".codex/skills/_shared/LABEL_TAXONOMY.md").read_text(
+        encoding="utf-8"
+    )
+
+    for content in (maintenance_skill, label_taxonomy):
+        assert "Epic / Parent" in content
+        assert "Needs Human" in content
+        assert "Blocked" in content
+        assert "explicit open-Issue `Review`" in content
+
+
 def test_pr_stage_change_workflow_subscribes_to_closed_event() -> None:
     # Merge/close must be event-driven so terminal projection does not depend on
     # the best-effort hourly reconcile scan.

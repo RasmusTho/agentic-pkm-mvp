@@ -93,6 +93,13 @@ conditional path (`Issue maintenance -> Agent`), not the hot path.
 
 The canonical optional projection matrix lives at `.codex/skills/_shared/LIFECYCLE_TRUTH_MATRIX.md`. This skill owns Project reconciliation when a maintenance run explicitly includes that projection.
 
+For open Issue cards, retain an existing explicit `Review` projection. Otherwise apply the
+canonical precedence: durable epic/parent evidence (`type:epic`, `type:feature`, or a non-empty
+GitHub sub-issue set) → `Epic / Parent`; `agent:needs-human` → `Needs Human`; `agent:blocked` →
+`Blocked`; valid `agent:ready` → `Ready`; `agent:in-progress` → `In Progress`. An otherwise
+unmapped open Issue retains its current Project status; new-Issue automation initially uses
+`Backlog`. Do not infer parenthood from title prose or infer a PR relationship to preserve Review.
+
 ### Drift patterns that must be flagged explicitly
 
 These are the high-frequency drift patterns that are easy to miss. Audit authoritative items on
@@ -238,7 +245,8 @@ If an open implementation Issue is malformed, stale, or no longer safely executa
 
 2. **Post comment with the required action.**
 
-3. **Optional Project repair:** when explicitly in scope, apply and verify the `Backlog` projection.
+3. **Optional Project repair:** when explicitly in scope, apply and verify the derived projection
+   (`Needs Human` unless a retained `Review` or higher-precedence epic/parent condition applies).
 
 ### Maintenance path versus hot path
 
@@ -264,7 +272,9 @@ Parent feature issues are validation hubs, not direct pickup issues. Unless expl
    ```
 
 2. **Use them to track child slice delivery** in comments and body updates, including validation receipts posted by each delivered child
-3. **When the parent is fully repo-verifiable and only future observation remains, close it and move that observation to a BuilderOps `LearningSignal`, `PromotionIntent`, discard/supersession receipt, or a follow-up GitHub Issue when it is executable work**
+3. **Optional Project repair:** when explicitly in scope, project durable parent evidence to
+   `Epic / Parent`; do not overwrite an existing explicit `Review` card.
+4. **When the parent is fully repo-verifiable and only future observation remains, close it and move that observation to a BuilderOps `LearningSignal`, `PromotionIntent`, discard/supersession receipt, or a follow-up GitHub Issue when it is executable work**
 
 ### Child Slice Issues
 
@@ -281,10 +291,10 @@ Child slice issues may become `agent:ready` only when their executable contract 
 | Condition | Action | Issue Labels | Issue Status | Notes |
 |-----------|--------|-------------|-------------|-------|
 | Issue closed | Execute Close Delivered | -agent:* | Done | Remove all agent labels |
-| Malformed/stale open | Execute Malformed/Stale | +agent:needs-human | Backlog | Non-active state |
-| Delivered but open | Execute Delivered Open | +agent:needs-human | Backlog | Comment explaining next step |
-| Parent feature | Keep non-active | +agent:blocked | Backlog | Validation hub, waiting on child chain |
-| Child with spec in PR | Keep non-active | +agent:blocked | Backlog | Wait for spec merge |
+| Malformed/stale open | Execute Malformed/Stale | +agent:needs-human | Needs Human | Retain explicit Review; parent evidence still wins |
+| Delivered but open | Execute Delivered Open | +agent:needs-human | Needs Human | Retain explicit Review; comment explaining next step |
+| Parent feature | Keep non-active | +agent:blocked | Epic / Parent | Validation hub, waiting on child chain |
+| Child with spec in PR | Keep non-active | +agent:blocked | Blocked | Retain explicit Review; wait for spec merge |
 | Child with concrete contract | Can label ready | +agent:ready | Optional projection: Ready | Only when merged, clear, and strict readiness validation passes |
 
 ## When splitting
@@ -417,7 +427,8 @@ Use this when the user asks for a maintenance run across everything not done.
    - **Optionally execute Project state reconciliation** only when projection repair is in scope and after labels are corrected and
      strict validation has passed for any `Ready` target: run the Set Project Status mutation from
      `.codex/skills/_shared/PROJECT_STATUS_OPERATIONS.md` — validated `agent:ready` → `Ready`
-     option ID; `agent:blocked` or `agent:needs-human` → `Backlog` option ID.
+     option ID; parent evidence → `Epic / Parent`; `agent:needs-human` → `Needs Human`; and
+     `agent:blocked` → `Blocked`, after preserving an existing explicit open-Issue `Review`.
      - If the issue is missing from the Project or missing `Status`, add/reconcile it during the same run
 5. **Execute Deduplication:**
    - If duplicate issues have the same scope/contract:

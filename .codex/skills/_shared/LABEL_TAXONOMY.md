@@ -23,8 +23,11 @@ own copies.
 Rules:
 
 - Every new implementation Issue leaves creation with exactly one truthful agent-state label.
-- `agent:blocked` and `agent:needs-human` belong on non-active work. A Project may mirror them as
-  `Backlog`, but that projection does not control pickup.
+- `agent:blocked` and `agent:needs-human` belong on non-active work. When Project repair is in
+  scope, non-parent `agent:blocked` projects to `Blocked` and non-parent `agent:needs-human`
+  projects to `Needs Human`; durable epic/parent evidence projects to `Epic / Parent` first.
+  An existing explicit open-Issue `Review` projection is retained. None of these projections
+  controls pickup.
 - Closed or delivered Issues must not retain any `agent:*` label.
 - `state:known-defect` belongs only on the locked rolling Known Defects registry Issue. That
   container also carries `type:bug`, is not an implementation Issue, carries no `agent:*` label,
