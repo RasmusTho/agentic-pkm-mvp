@@ -22,12 +22,14 @@ or human acceptance.
   blocked and hashless legacy evidence is rejected until an explicit backfill binds historical bytes.
 - Watcher delivery is retryable: exception and structured-blocked refresh outcomes preserve the source
   observation instead of advancing the snapshot as if the capability succeeded.
-- Receipt event IDs are globally unique across event types; conflicting duplicates fail closed.
+- Receipt event IDs are globally unique across all JSONL writers and event types; conflicting
+  duplicates fail closed under one shared append lock.
 - A standing-answer edit detected after the Question pointer write triggers a guarded rollback of the
   pointer and refresh timestamp, preserving fail-closed semantics for the external-file race; a
   competing Question write is retried and rollback exhaustion is fail-loud.
-- The deterministic proposal pair carries a sidecar integrity record; replay or receipt emission
-  fails closed if staged draft bytes no longer match the recorded identity.
+- The deterministic proposal pair carries an integrity-first sidecar and an atomically replaced
+  draft; replay or receipt emission fails closed if staged draft bytes no longer match the recorded
+  identity, while a crash between the two writes remains replayable.
 - JSONL receipt read/check/append is serialized per outbox path, so the global event-id invariant is
   atomic across independent writers and event types.
 
@@ -73,13 +75,16 @@ For one refresh generation, the durable order is:
    hash before decoding text for cognition.
 2. Match new evidence and append a bounded evidence entry through the guarded QuestionStore seam.
 3. Capture the exact Question byte/version snapshot before cognition.
-4. Run Create and write the deterministic staged draft id.
-5. Emit/reuse the deterministic `expansion.create.proposed` receipt id.
+4. Run Create, publish the expected draft identity, and atomically replace the deterministic staged
+   draft id.
+5. Emit/reuse the deterministic `expansion.create.proposed` receipt id under the shared JSONL lock.
 6. Apply the Question update with exact-byte CAS.
 
 If the process dies before the CAS, the deterministic draft/receipt pair is reused for the same
 `question_id` plus exact evidence-generation fingerprint. The draft is not rewritten, and a reused
-receipt must match both the draft byte hash and its full payload. If CAS conflicts, the retry re-reads
+receipt must match both the draft byte hash and its full payload. If the process dies after the
+integrity record but before the draft replace, the orphan identity is safely overwritten on retry
+because no draft exists; an existing draft without its identity remains fail-closed. If CAS conflicts, the retry re-reads
 the Question; unchanged evidence reuses the one logical proposal, while newly appended evidence gets
 a distinct generation identity rather than silently changing an old receipted draft. If source bytes
 no longer match their recorded content hash, replay fails closed. If watcher composition raises or
@@ -105,7 +110,7 @@ historical evidence claim. No SQ-04 writer changes the standing answer or human-
 | Contradiction basis is exact or unknown | `test_contradiction_surfaced_not_silently_rewritten`, `test_invalid_contradiction_basis_degrades_to_unknown` | Passed |
 | Human fields remain protected | QuestionStore CAS and human-field tests | Passed |
 | Evidence entries carry content identity | `test_relevant_artifact_attaches_irrelevant_does_not` | Passed |
-| Focused SQ/Create regression set | Standing Questions, evidence matching, Create lifecycle, and QuestionStore tests | `150 passed` in the current run; the preceding packet recorded `148 passed` before these additions |
+| Focused SQ/Create regression set | Standing Questions, evidence matching, Create lifecycle, QuestionStore, and JSONL outbox contract tests | `160 passed` in the current run; the preceding packet recorded `148 passed` before these additions |
 | Matcher CAS conflict is observable and non-clobbering | `test_match_write_conflict_does_not_clobber_question` | Passed |
 | Deterministic replay preserves draft bytes and receipt payload | `test_refresh_replay_reuses_draft_and_receipt_bytes` | Passed |
 | Matcher CAS conflict remains watcher-retryable | `test_watcher_retries_standing_questions_matching_conflict_before_advancing_snapshot` | Passed locally; CI proof is pending for the current head |
@@ -123,7 +128,9 @@ historical evidence claim. No SQ-04 writer changes the standing answer or human-
 | Event IDs cannot collide across event types | `test_emit_receipt_rejects_event_id_collision_across_event_types` | Passed |
 | Standing-answer edit after Question write rolls back stale candidate | `test_standing_answer_edit_between_final_check_and_cas_rolls_back_candidate` | Passed |
 | Concurrent receipt writers cannot publish one event ID twice | `test_deterministic_receipt_event_id_is_atomic_across_event_types` | Passed |
+| Public JSONL writer rejects an existing event-ID collision | `test_public_jsonl_writer_rejects_existing_event_id_collision` | Passed |
 | Draft mutation after staging cannot be accepted by deterministic replay | `test_refresh_replay_reuses_draft_and_receipt_bytes` | Passed |
+| Crash between integrity record and draft replace remains replayable | `test_crash_between_integrity_and_draft_write_remains_replayable` | Passed |
 | Rollback converges after a competing Question CAS conflict | `test_standing_answer_drift_rollback_retries_after_question_conflict` | Passed |
 
 The full not-PostgreSQL suite was not a valid local proof at packet creation: the host-global
@@ -148,7 +155,8 @@ where the finding was observed; a later head invalidates the earlier clean/uncle
 | `c360e8096` | Fresh review found standing-answer fingerprints and the pre-CAS race check still used newline-normalized text. | Standing-answer reads now retain raw bytes, generation fingerprints hash them, and the final race check compares exact bytes with a newline-only regression. |
 | `e9602573d` | Fresh review found conflicting duplicate receipts, stale matcher scope, missing Question raw-byte generation binding, and snapshot persistence before retry restoration. | Duplicate receipt payloads now fail closed; matcher scope and refresh generation use fresh exact baselines; watcher scans without persisting until retry restoration is applied. |
 | `f9508f065` | Fresh review found event IDs were only checked within one event type and that standing-answer validation had a final check-to-write race. | Event IDs are checked globally; a changed standing answer after pointer write triggers a versioned compensating rollback before the refresh is reported drafted. |
-| `2916fc5ce` | Exact-head Sol review found the global event-id check was still read-then-append and non-atomic; a staged draft could be mutated before receipt/replay and receipted with new bytes; rollback silently swallowed a Question CAS conflict. | A shared JSONL append lock now covers read/check/append; staged drafts carry and validate a durable raw-byte integrity record plus pre-receipt hash check; rollback retries against fresh Question versions and fails loud if it cannot converge. |
+| `2916fc5ce` | Exact-head Sol review found the global event-id check was still read-then-append and non-atomic; a staged draft could be mutated before receipt/replay and receipted with new bytes; rollback silently swallowed a Question CAS conflict. | A shared JSONL append lock now covers every public writer's event-id check and append; integrity-first sidecar publication plus atomic draft replace makes the staging crash window replayable, with pre-receipt/replay raw-byte checks; rollback retries against fresh Question versions and fails loud if it cannot converge. |
+| `d6df515ba` | Follow-up Sol review found the first repair still left public JSONL writers without event-id validation and left a crash between draft write and sidecar write permanently stranded. | This repair round moved event-id uniqueness into the shared public writer seam, added an independent-writer collision probe, and changed staging order to integrity-first plus atomic draft replacement, with an explicit crash/replay probe. |
 
 The first row is sourced from GitHub review comments whose `original_commit_id` is
 `0d032250274b54eb62c50e50e436077fb032401a`; the later rows are local independent review receipts

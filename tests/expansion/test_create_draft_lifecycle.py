@@ -38,6 +38,10 @@ from app.expansion.create import (
     sweep_expired_drafts,
 )
 from app.expansion import create as create_module
+from app.services.outbox import (
+    JsonlOutboxEventIdConflictError,
+    append_jsonl_outbox_event,
+)
 from app.write_guard import WriteGuard
 from app.reasoning.schema import ReasoningOutput
 
@@ -396,6 +400,83 @@ def test_deterministic_receipt_event_id_is_atomic_across_event_types(tmp_path: P
     records = _outbox_records(outbox_path)
     assert len(records) == 1
     assert records[0]["event_id"] == "same-event-id"
+
+
+def test_public_jsonl_writer_rejects_existing_event_id_collision(tmp_path: Path) -> None:
+    outbox_path = tmp_path / "outbox.jsonl"
+    create_module._emit_receipt(
+        "expansion.create.proposed",
+        {"value": "first"},
+        outbox_path=outbox_path,
+        trace_id="trace-first",
+        event_id="same-event-id",
+    )
+
+    with pytest.raises(JsonlOutboxEventIdConflictError, match="event_id"):
+        append_jsonl_outbox_event(
+            outbox_path,
+            {
+                "event": "other.event",
+                "event_id": "same-event-id",
+                "trace_id": "trace-second",
+                "source": "test",
+                "timestamp": "2026-08-29T12:00:00Z",
+                "payload": {"value": "second"},
+            },
+        )
+
+    assert len(_outbox_records(outbox_path)) == 1
+
+
+def test_crash_between_integrity_and_draft_write_remains_replayable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class SimulatedCrash(RuntimeError):
+        pass
+
+    vault_root = tmp_path / "vault"
+    vault_root.mkdir()
+    outbox_path = tmp_path / "outbox.jsonl"
+    request = CreateRequest(
+        kind=OutputKind.ANSWER_NOTE,
+        title="Replayable answer",
+        question="What is the boundary?",
+        sources=(_source("obj-a", "Evidence text.", "Evidence text."),),
+    )
+    original = create_module._atomic_write_bytes
+
+    def crash_before_draft(path: Path, content: bytes) -> None:
+        if path.suffix == ".md":
+            raise SimulatedCrash("crash after integrity record, before draft")
+        original(path, content)
+
+    monkeypatch.setattr(create_module, "_atomic_write_bytes", crash_before_draft)
+    with pytest.raises(SimulatedCrash):
+        run_create_pass(
+            request,
+            vault_root=vault_root,
+            outbox_path=outbox_path,
+            write_guard=_allow_all_guard(),
+            draft_id="replayable-draft",
+            receipt_id="replayable-receipt",
+        )
+
+    draft_path = vault_root / "⚙️ System" / "drafts" / "replayable-draft.md"
+    sidecar_path = draft_path.with_suffix(draft_path.suffix + ".integrity.json")
+    assert not draft_path.exists()
+    assert sidecar_path.exists()
+
+    monkeypatch.setattr(create_module, "_atomic_write_bytes", original)
+    report = run_create_pass(
+        request,
+        vault_root=vault_root,
+        outbox_path=outbox_path,
+        write_guard=_allow_all_guard(),
+        draft_id="replayable-draft",
+        receipt_id="replayable-receipt",
+    )
+    assert report.receipt_id == "replayable-receipt"
+    assert draft_path.exists()
 
 
 def test_staged_draft_not_indexed_by_vault_alpha_ingest(tmp_path: Path) -> None:

@@ -1,10 +1,10 @@
 from __future__ import annotations
 
+import fcntl
 import hashlib
 import json
 import logging
 import os
-import fcntl
 import uuid as uuid_module
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -28,6 +28,10 @@ from app.instance.binding_ids import (
 from app.instance.scalar_binding_runtime import resolve_scalar_binding_runtime
 
 _LOGGER = logging.getLogger(__name__)
+
+
+class JsonlOutboxEventIdConflictError(RuntimeError):
+    """Raised when one JSONL outbox path maps an event id to new content."""
 
 # Optional DB helpers (tests kan ge FakeConn). Import the real implementations
 # from app.db.db directly: the package-level names (`from app.db import
@@ -472,6 +476,37 @@ def _append_jsonl_outbox_event_unlocked(
         handle.write("\n")
 
 
+def _jsonl_record_is_existing_duplicate(outbox_path: Path, record: dict[str, Any]) -> bool:
+    event_id = record.get("event_id")
+    if not isinstance(event_id, str) or not event_id.strip():
+        raise ValueError("JSONL outbox events require a non-empty event_id")
+    if not outbox_path.exists():
+        return False
+    try:
+        lines = outbox_path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return False
+    first_match: dict[str, Any] | None = None
+    for line in lines:
+        try:
+            existing = json.loads(line)
+        except (TypeError, ValueError):
+            continue
+        if not isinstance(existing, dict) or existing.get("event_id") != event_id:
+            continue
+        if first_match is None:
+            first_match = existing
+        elif existing != first_match:
+            raise JsonlOutboxEventIdConflictError(
+                f"JSONL outbox already contains conflicting duplicate event_id: {event_id}"
+            )
+        if existing != record:
+            raise JsonlOutboxEventIdConflictError(
+                f"JSONL outbox event_id maps to different content: {event_id}"
+            )
+    return first_match is not None
+
+
 def append_jsonl_outbox_event(
     outbox_path: Path,
     event: Any,
@@ -483,10 +518,12 @@ def append_jsonl_outbox_event(
     if record is None:
         return False
     if _lock_held:
-        _append_jsonl_outbox_event_unlocked(outbox_path, record)
+        if not _jsonl_record_is_existing_duplicate(outbox_path, record):
+            _append_jsonl_outbox_event_unlocked(outbox_path, record)
     else:
         with jsonl_outbox_append_lock(outbox_path):
-            _append_jsonl_outbox_event_unlocked(outbox_path, record)
+            if not _jsonl_record_is_existing_duplicate(outbox_path, record):
+                _append_jsonl_outbox_event_unlocked(outbox_path, record)
     return True
 
 
@@ -1086,6 +1123,7 @@ __all__ = [
     "event_payload_dict",
     "coerce_outbox_event",
     "serialize_outbox_record",
+    "JsonlOutboxEventIdConflictError",
     "jsonl_outbox_append_lock",
     "append_jsonl_outbox_event",
 ]

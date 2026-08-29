@@ -658,6 +658,20 @@ def _draft_integrity_path(draft_path: Path) -> Path:
     return draft_path.with_suffix(draft_path.suffix + ".integrity.json")
 
 
+def _atomic_write_bytes(path: Path, content: bytes) -> None:
+    import os
+
+    temporary = path.with_name(f".{path.name}.{uuid4().hex}.tmp")
+    try:
+        with temporary.open("wb") as handle:
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
 def _write_draft_integrity(
     draft_path: Path,
     *,
@@ -666,17 +680,19 @@ def _write_draft_integrity(
     draft_sha256: str,
 ) -> None:
     integrity_path = _draft_integrity_path(draft_path)
-    integrity_path.write_text(
-        json.dumps(
-            {
-                "draft_id": draft_id,
-                "request_fingerprint": request_fingerprint,
-                "draft_sha256": draft_sha256,
-            },
-            sort_keys=True,
-        )
-        + "\n",
-        encoding="utf-8",
+    _atomic_write_bytes(
+        integrity_path,
+        (
+            json.dumps(
+                {
+                    "draft_id": draft_id,
+                    "request_fingerprint": request_fingerprint,
+                    "draft_sha256": draft_sha256,
+                },
+                sort_keys=True,
+            )
+            + "\n"
+        ).encode("utf-8"),
     )
 
 
@@ -889,7 +905,8 @@ def run_create_pass(
         frontmatter=frontmatter, body=draft.body or "", draft_id=draft.artifact_id
     )
     draft_path = drafts_dir / f"{draft.artifact_id}.md"
-    if draft_id is not None and draft_path.exists():
+    draft_needs_write = not (draft_id is not None and draft_path.exists())
+    if not draft_needs_write:
         replay = _replay_draft_metadata(
             draft_path,
             request_fingerprint=request_fingerprint or "",
@@ -901,14 +918,19 @@ def run_create_pass(
             )
         draft_sha256 = replay[1]
     else:
-        draft_path.write_text(note_text, encoding="utf-8")
         draft_sha256 = hashlib.sha256(note_text.encode("utf-8")).hexdigest()
-    _write_draft_integrity(
-        draft_path,
-        draft_id=draft.artifact_id,
-        request_fingerprint=request_fingerprint,
-        draft_sha256=draft_sha256,
-    )
+    if draft_needs_write:
+        # Publish the expected identity first. If the process dies before the
+        # atomic draft replace, the next deterministic retry sees no draft and
+        # safely rebuilds it; it never accepts a draft without its expected
+        # bytes or rewrites an already-validated replay artifact.
+        _write_draft_integrity(
+            draft_path,
+            draft_id=draft.artifact_id,
+            request_fingerprint=request_fingerprint,
+            draft_sha256=draft_sha256,
+        )
+        _atomic_write_bytes(draft_path, note_text.encode("utf-8"))
 
     receipt_id = _emit_receipt(
         CREATE_PROPOSED_EVENT,
