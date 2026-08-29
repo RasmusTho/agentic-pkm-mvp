@@ -1,4 +1,4 @@
-State: Accepted (owner decision, 2026-07-15). Re-scopes BuilderOps as an ecosystem-wide, API-first enabling system with an independent Demerzel deployment and one PostgreSQL operational authority. Docs/governance decision only; no runtime behavior changes here. Amended 2026-07-16 (A1-A3, owner ruling): asynchronous recovery durability replaces the synchronous watermark regime; failure-domain separation and a degraded-mode contract are added; CKM/CEG (ADR-0057) is named as a D6 migration source.
+State: Accepted (owner decision, 2026-07-15). Re-scopes BuilderOps as an ecosystem-wide, API-first enabling system with one PostgreSQL operational authority. Docs/governance decision only; no runtime behavior changes here. Amended 2026-07-16 (A1-A3) and 2026-08-29 (A4, owner ruling): A4 moves the complete Dev System runtime target from Demerzel to TARS VM 102 and adopts the rebuildable, backup-deferred posture.
 Doc role: Decision record (ADR)
 Authority: Authoritative for BuilderOps scope, deployment/trust boundary, operational authority, client access, and extraction posture. Layers on ADR-0010 without changing repo/GitHub delivery authority.
 Owner: BuilderOps governance / Architecture spine (Rasmus)
@@ -7,8 +7,8 @@ Source of truth: This ADR plus ADR-0010. `docs/BUILDEROPS_CONTROL_PLANE/` is the
 
 # ADR-0062: BuilderOps as an ecosystem-wide API-first enabling system
 
-**Date:** 2026-07-14; revised 2026-07-15
-**Status:** Accepted (owner decision, 2026-07-15)
+**Date:** 2026-07-14; revised 2026-08-29
+**Status:** Accepted (owner decision, 2026-07-15; amended through A4, 2026-08-29)
 
 ## Context
 
@@ -52,6 +52,10 @@ protection rules, and GitHub merge result remain authoritative for delivery.
 
 ### D2 — Permanent API-first control plane on Demerzel
 
+> **Placement amended by A4 (2026-08-29):** the Demerzel-hosted runtime and Demerzel-local secret
+> custody clauses below are retained as decision history but are no longer current authority. VM 102
+> owns the intended runtime placement; Demerzel is an authenticated external client/operator boundary.
+
 Demerzel (the Mac mini) hosts one permanent BuilderOps control plane. MacBook clients use its
 authenticated API over the Demerzel/Tailscale boundary. No client may open the production database,
 invoke a database-owning CLI through SSH, or create a local SQLite fallback for an authority-bearing
@@ -79,6 +83,10 @@ recoverable key custody or KMS authorization outside Demerzel's primary host/sto
 the restore path cannot depend solely on the lost host secret store.
 
 ### D3 — One PostgreSQL operational authority
+
+> **Placement amended by A4 (2026-08-29):** the single PostgreSQL authority remains mandatory, but
+> its intended runtime home is VM 102 rather than Demerzel. The atomicity, fencing, reconciliation,
+> outbox, receipt, and no-SQLite-fallback clauses remain unchanged.
 
 One BuilderOps PostgreSQL store on Demerzel is the production authority for operational identity and
 state, including tasks, attempts, records, transitions, leases/fencing tokens, idempotency keys,
@@ -123,6 +131,10 @@ adapter. Production paths contain no SQLite authority or automatic SQLite fallba
 
 ### D4 — Independent deployment, lifecycle, and trust zone
 
+> **Placement and recovery posture amended by A4 (2026-08-29):** the separate runtime/failure-domain
+> requirement remains, but VM 102 replaces Demerzel as the intended home. Backup, WAL archive, and
+> restore drill are deferred and are not deployment, readiness, rollout, or closure gates.
+
 > **Amended by A2 (2026-07-16):** “reuse” below means Demerzel's operational patterns and
 > capability, not a shared container engine or runtime failure domain. This delivery runs the
 > BuilderOps-only Compose project on a separate BuilderOps VM/container engine on Demerzel. See
@@ -153,6 +165,10 @@ separate source repository remains trigger-gated.
 
 ### D5 — Scoped review and merge authority on Demerzel
 
+> **Execution placement amended by A4 (2026-08-29):** review/repair/verification/merge semantics and
+> repository gates remain mandatory, but no current contract requires their executor to reside on
+> Demerzel. Any VM-102 resident executor must satisfy the same scoped credential and fencing rules.
+
 Demerzel runs the review/repair/verification/merge orchestration tracked by issue #3603. PR #3620
 merged on 2026-07-15 and delivers the repo-side consumer, recovery, review, and gated-merge baseline;
 subsequent correctness repairs are also present on `main`. That work is migrated, not duplicated:
@@ -179,6 +195,10 @@ policy revocation while the pre-effect attempt becomes durable produces a stale/
 not a merge.
 
 ### D6 — Governed migration and one-way cutover
+
+> **Placement and recovery posture amended by A4 (2026-08-29):** migration still requires inventory,
+> freeze, deterministic import, reconciliation, a fresh authority epoch, and no SQLite reactivation.
+> Demerzel placement and backup/WAL/restore-drill launch gates below are historical, not current.
 
 Cutover inventories **all** legacy BuilderOps, dispatcher, model-inquiry, and epic-run SQLite/JSONL/
 JSON stores across relevant worktrees and hosts. Each source is frozen, hashed, and imported through
@@ -246,14 +266,16 @@ Source-repository extraction remains a separate future decision. Revisit it when
 
 ## Decision status
 
-Owner-settled on 2026-07-15:
+Owner-settled on 2026-07-15 and amended by A4 on 2026-08-29:
 
-1. permanent API-first control plane on Demerzel;
+1. permanent API-first control plane in the complete Dev System runtime on TARS VM 102;
 2. authenticated MacBook clients with no direct-database or local-authority fallback;
 3. one PostgreSQL operational authority, with SQLite limited to migration/tests;
-4. independent Compose/data/credential/release/health/backup trust zone;
+4. independent Compose/data/credential/release/health trust zone with a rebuildable,
+   backup-deferred posture;
 5. Product Runtime owns no BuilderOps process, data, credential, or route;
-6. Demerzel owns scoped review/merge orchestration; and
+6. scoped review/merge orchestration retains the same repository-authorized gates without a
+   mandatory Demerzel runtime placement; and
 7. repo/GitHub delivery authority remains unchanged.
 
 This ADR additionally makes the necessary multi-repo provenance, atomic outbox, migration, and
@@ -278,10 +300,9 @@ requires an owner decision before specification and backlog preparation.
 - Current local/file-first BuilderOps records are not silently discarded. Migration preserves
   identity/provenance, limits plain quarantine to evidence-only material, and emits a reviewable
   duplicate-preventing tombstone/conflict receipt for unresolved authority-bearing inputs.
-- Independent full-backup + continuous-WAL restore-through-watermark with independently recoverable
-  key/KMS custody is a launch gate *(superseded by A1, 2026-07-16: the launch gate is a
-  restore-from-backup drill + GitHub reconciliation + new-epoch activation)*. A persistent volume or
-  snapshot alone is not recoverability.
+- BuilderOps on VM 102 is rebuilt from exact source, attested images, pinned configuration, and
+  host-managed secrets. A4 supersedes A1's restore-from-backup launch gate: backup, WAL archive, and
+  restore remain deferred capabilities requiring a separate owner decision and bounded delivery.
 - Product availability and BuilderOps availability are independent: either may be down without the
   other process owning or restarting it.
 
@@ -347,6 +368,29 @@ through that substrate, while D6's inventory did not name CKM.
   addition is migration surface and must stay import-coverable.
 - At cutover, ADR-0057 OD-K4's substrate clause is superseded by D3: the CEG lives in the BuilderOps
   PostgreSQL authority. ADR-0057's capability model and projection-only semantics are unchanged.
+
+### A4 (2026-08-29, owner ruling) — Complete Dev System placement on VM 102
+
+The owner requires one cohesive runtime home for the complete Builder System / Dev System rather
+than a Dev UI-only target or a Demerzel-only BuilderOps placement.
+
+- VM 102 is the intended cohesive runtime home for BuilderOps, BuilderOps-owned providers, and Dev
+  UI. This is target architecture only; no live deployment, host qualification, authority cutover,
+  health, or owner-acceptance receipt is created by this amendment.
+- Demerzel is an external authenticated client and operator dependency where fresh evidence proves
+  that role. It is no longer the mandatory control-plane, PostgreSQL, executor, or secret-custody
+  runtime host. API-only access, scoped credentials, fencing, deterministic reconciliation, and
+  GitHub/repository authority remain unchanged.
+- The VM-102 system is rebuildable from source, images, configuration, and host-managed secrets.
+  Local disk/WAL guardrails remain fail-closed; manual `pg_wal` deletion, `pg_resetwal`, and
+  reset/cleanup recovery remain forbidden.
+- In the accepted current posture, backup, WAL archive, and restore drill are deferred capabilities,
+  not deployment, migration, readiness, rollout, cutover, or closure gates. A future durability or
+  restore capability requires a separate owner decision and bounded delivery.
+- A4 supersedes conflicting placement and recovery-gate language in D2 through D6, Decision status,
+  Consequences, A1, and A2. D1 authority, D3 transactional semantics, D5 repository gates, D6
+  migration/reconciliation invariants, Product Runtime separation, and no-SQLite-reactivation
+  remain authoritative.
 
 ## Source docs and evidence
 

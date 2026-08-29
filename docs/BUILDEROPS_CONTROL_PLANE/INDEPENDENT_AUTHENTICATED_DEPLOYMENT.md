@@ -6,7 +6,12 @@ Authority: Defines the independent BuilderOps Compose, image, secret, ingress, h
 
 ## Implementation Status
 
-The repository contract provides a separate BuilderOps Compose project, immutable control-plane and PostgreSQL image pins, an isolated Docker context/engine preflight, VM-local secret references, migration-gated API and worker startup, loopback API exposure, Tailscale Serve without Funnel, authenticated probes, rebuild/rollback receipts, and a local disk/WAL guard. It does not activate a live VM or make a backup/restore claim.
+The repository contract provides a separate BuilderOps Compose project, immutable control-plane and
+PostgreSQL image pins, an isolated Docker context/engine preflight, VM-local secret references,
+migration-gated API and worker startup, loopback API exposure, private authenticated ingress,
+authenticated probes, rebuild/rollback receipts, and a local disk/WAL guard. The deployment target
+for the complete Dev System is TARS VM 102 (`builder-system`), with Dev UI as one read-only
+component; this contract does not activate a live VM or make a backup/restore claim.
 
 ## Rebuildable VM deployment contract
 
@@ -18,9 +23,26 @@ For first database initialization only, deployment preflights the exact regular 
 
 The first-init handoff is fail-closed across crashes: a pending marker is durable before `initdb`, while a ready marker is written only after the app-role transaction commits. A restarted new cluster with a pending marker but no ready marker refuses to start instead of serving incomplete authorization state; an explicit, separately authorized recovery or rebuild is required. Existing clusters that predate this marker have no pending marker and are not modified by this guard.
 
+### Complete Dev System admission
+
+BuilderOps deployment is admitted only as one part of the complete Dev System topology described in
+[`README.md :: Complete Dev System VM-102 topology contract`](README.md). A Dev UI-only deployment,
+the default Docker engine, or a healthy guest check cannot satisfy this boundary. The component
+inventory must classify every known component as `VM-102 resident (target)`, `explicit external
+dependency`, or `intentionally non-runtime`, and must leave unresolved identity, service, ingress,
+health, lifecycle, migration, and rollback facts as explicit gaps.
+
+The ordered schemas and bootstrap-without-baseline refusal are owned only by the
+[VM-102 evidence and receipt contract](README.md#vm-102-evidence-and-receipt-contract). This BCP-02
+contract consumes those receipts but does not redefine them. Locally, deployment still refuses
+secret-bearing evidence, unqualified hosts, missing component gaps, and rollback without a
+compatible runnable baseline; the repository-side candidate qualification remains insufficient for
+live qualification.
+
 ## Purpose
 
-Keep BuilderOps outside the `pkm-*` Product failure domain while preserving a truthful, private, and rebuildable deployment path.
+Keep BuilderOps outside the `pkm-*` Product Runtime failure domain while preserving a truthful,
+private, and rebuildable deployment path.
 
 ## Constraints
 

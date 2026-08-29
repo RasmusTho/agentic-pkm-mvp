@@ -30,6 +30,30 @@ does not restore an older database snapshot. Setup-specific placement, qualifica
 headroom, and Linux alert installation belong in a deployment profile such as
 `docs/deployment/profiles/TARS_PROXMOX.md`; they are not generic deployment facts.
 
+## Complete Dev System placement and admission
+
+The portable deployment contract admits a selected setup profile; it does not choose a host. The
+TARS/Proxmox profile selects VM 102 (`builder-system`) as the intended cohesive runtime home for
+the complete Builder System / Dev System. This includes Dev UI as a read-only projection component
+and the BuilderOps control plane and its internal providers. It is not a Dev UI-only deployment and
+it does not merge the Dev System with Product Runtime.
+
+The complete topology and all unresolved components are owned by
+[`docs/BUILDEROPS_CONTROL_PLANE/README.md :: Complete Dev System VM-102 topology contract`](../BUILDEROPS_CONTROL_PLANE/README.md).
+Every component must be classified as `VM-102 resident (target)`, `explicit external dependency`,
+or `intentionally non-runtime`, with an owner, service/project, source/image identity, ingress/auth
+posture, health/version evidence, deployment role, lifecycle evidence, migration boundary, and
+rollback boundary. An unknown or unavailable component remains an explicit gap and blocks admission;
+it cannot be silently omitted or inferred from a guest check.
+
+### VM-102 deployment receipts
+
+The ordered receipt schemas and first-deployment rollback refusal are owned only by the
+[VM-102 evidence and receipt contract](../BUILDEROPS_CONTROL_PLANE/README.md#vm-102-evidence-and-receipt-contract).
+This portable deployment document consumes that contract without redefining it. It still refuses a
+screen observation, Project view, unbound guest readback, healthy default-engine stack,
+secret-bearing evidence, or absent compatible rollback baseline as deployment or rollback proof.
+
 ## Current live runtime posture
 
 The intended live split is now: a dedicated Ollama host for Ollama only, and the product runtime on isolated Linux

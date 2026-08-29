@@ -7,10 +7,12 @@ Source of truth: ADR-0062 plus this directory for task shape and dependency orde
 
 # BuilderOps independent control plane
 
-Build a permanent API-first BuilderOps control plane on Demerzel with one PostgreSQL operational
-authority, independent deployment/trust lifecycle, API-only MacBook clients, durable outbox-based
-external effects, and scoped review/merge execution. Then migrate every SQLite/file authority and
-remove BuilderOps ownership from Product Runtime.
+Build a permanent API-first BuilderOps control plane as part of the cohesive Dev System runtime
+home on TARS VM 102 (`builder-system`), with one PostgreSQL operational authority, independent
+deployment/trust lifecycle, API-only clients, durable outbox-based external effects, and scoped
+review/merge execution. Then migrate every SQLite/file authority and remove BuilderOps ownership
+from Product Runtime. The former Demerzel-only placement is superseded by this VM-102 target; the
+BCP task names and historical file paths remain for traceability.
 
 This specification does not transfer product or delivery authority. GitHub Issues, PR head SHA,
 required CI, review gates, repository protection, and GitHub merge results remain authoritative.
@@ -37,6 +39,99 @@ authority epoch/fencing, no dual writer, loopback API, private authenticated ing
 disk/WAL guardrails, and truthful receipts. Rollback selects code/config/image only and never rewinds
 surviving database state. Manual `pg_wal` deletion, `pg_resetwal`, and reset/cleanup tools remain
 prohibited.
+
+## Complete Dev System VM-102 topology contract
+
+BuilderOps, BuilderOps-owned providers, and Dev UI are one Builder System / Dev System for
+placement purposes. VM 102 is the intended cohesive runtime home for the complete system, not a
+Dev UI-only deployment. This is a target placement contract: this document does not claim that VM
+102 is qualified, that any service is resident, or that a deployment occurred. A guest readback,
+screen observation, or running default-engine container is not a deployment or qualification
+receipt.
+
+The inventory below is complete for the components currently named by the governing Issue. Each
+row must be retained in `devsystem_vm102_component_inventory.v1`, including rows whose status is
+`gap` or `unknown`; a missing row is not an acceptable omission.
+
+| Component ID | Placement class | Owner / service or project | Identity, ingress, health, and lifecycle contract | Migration / rollback boundary | Current reconciliation state |
+| --- | --- | --- | --- | --- | --- |
+| `devui_projection` | VM-102 resident (target) | Dev UI owner; read-only projection component | Exact source SHA and image digest; internal authenticated GET-only path; `devsystem_vm102_health.v1` plus #4748 browser evidence; GitHub/BuilderOps remain authority | No local workflow state; no migration; restore previous image/config only | `gap`: no VM-102 Dev UI deployment receipt or candidate identity is proven |
+| `builderops_control_plane` | VM-102 resident (target) | BuilderOps; PostgreSQL, migrations, API, worker, internal network, dedicated engine/context, service manager, epoch fencing, journal/outbox, health receipts; `builderops-control-plane` | Repository SHA and attested image digests; loopback API with private authenticated ingress and no Funnel; schema/epoch/fencing and BuilderOps receipts | Migration-gated; classify forward-only versus reversible; rollback pins compatible code/config/image and never rewinds authority data | `gap`: no bound receipt proves the complete engine/project/service identity and runtime state |
+| `builderops_cockpit` | VM-102 resident (target) | BuilderOps Cockpit read-time join | Source-owned BuilderOps read path; authenticated internal access; health/version and freshness in component inventory; BuilderOps receipt lineage | Read-only projection; no independent state migration; rebuild from source and prior compatible image | `gap`: service/project and runtime identity not evidenced |
+| `dispatcher_signboard` | VM-102 resident (target) | Dispatcher queue/claim/lease/activity providers and Signboard diagnostic projection | BuilderOps-owned API/read path, fenced lease evidence, exact source/image identity, health/readiness receipt; no local lifecycle authority | Lease/state migration only through BuilderOps contract; rollback preserves GitHub and BuilderOps authority | `gap`: complete VM-102 service and project inventory not evidenced |
+| `ddo` | VM-102 resident (target) | Deterministic Delivery Orchestration plans, reducer, worker/effect boundaries, reconciliation, receipts | Source/image identity and authenticated internal boundary; reducer and receipt health evidence; BuilderOps journal/outbox lifecycle | Apply only governed, classified migrations; rollback compatible executor/config without replaying or rewinding effects | `gap`: runtime residency and version evidence not proven |
+| `ckm_kvasir` | VM-102 resident (target) | CKM/Kvasir capability and evidence projections | Read-only source-owned projections with freshness/refusal semantics; exact candidate identity and health/version evidence | Rebuildable derived state; no authority migration; rollback to compatible image/config | `gap`: provider topology and identity not evidenced |
+| `focus_conversation_port` | VM-102 resident (target) | Focus / Conversation Port read surfaces | Authenticated internal read boundary, source-owned references, exact image/source identity, health and browser/read proof where applicable | No local workflow authority; rebuild projection; rollback preserves external source authority | `gap`: runtime residency and version evidence not proven |
+| `soi_evidence` | explicit external dependency | Product/Runtime-owned SoI Evidence provider consumed read-only by Dev UI | External source identity, freshness, refusal, and auth posture must be named; Dev UI cannot copy or upgrade its authority | Product/Runtime owns its migrations and rollback; Dev System only withdraws unavailable claims | `gap`: no fresh provider/residency evidence on VM 102 |
+| `github_git_ci_delivery` | explicit external dependency | GitHub, Git, review, CI, merge, closure, and promotion/verification adapters | GitHub/repository/CI exact refs and head SHAs are lifecycle authority; any VM adapter is subordinate and credential-free in receipts | External systems own migration/rollback; deployment cannot replace or rewind their authority | `external`: never replaced by VM-local state; adapter placement remains an explicit gap |
+| `model_service` | explicit external dependency | Model Access Substrate / model-service dependency | Provider identity, endpoint class, auth reference (never secret), health/version and degradation evidence | Provider-specific; no model data or credential migration in this contract; deployment withdraws unavailable capability | `gap`: no fresh evidence proves model service residency or reachability from VM 102 |
+| `tars_proxmox_control` | explicit external dependency | TARS/Proxmox host qualification, deploy, health, and rollback control | Host/VM identity, ownership, private ingress, qualification receipt, and operator boundary; host key verification must remain strict | Host/VM operations stay with #5052/#5056 and operator controls; no guest contract authorizes host mutation | `gap`: no current qualification receipt binds host ownership and inventory evidence |
+| `product_runtime` | intentionally non-runtime | Product Runtime and its data, credentials, routes, and lifecycle | No `pkm-*` project, Product credential, vault, or network identity on the BuilderOps engine/VM; separation must be evidenced | Product migrations and rollback remain Product-owned; never run them from this contract | `excluded`: separate authority class by design |
+
+For every `VM-102 resident (target)` row, a future qualification receipt must bind the actual
+service/project, engine, source/image identity, ingress/auth posture, health/version, deployment
+owner, lifecycle evidence, migration boundary, and rollback identity. `gap` is a required state,
+not permission to deploy or to infer residency. Runtime evidence remains an explicit `gap` until a
+bound receipt proves it; transient screen, guest, or default-engine observations are not frozen as
+contract truth.
+
+## VM-102 evidence and receipt contract
+
+The following receipt names are contract identifiers, not evidence that a receipt exists. Each
+receipt is redaction-safe and binds its observations to the target VM identity and a timestamp;
+deployment and health receipts additionally bind the exact candidate SHA, image digests, and
+configuration fingerprint. `tars_host_qualification.v1` is only the repository-side candidate
+policy receipt and cannot substitute for live qualification.
+
+### Normative receipt dependency order
+
+The required successful-deployment path is ordered by evidence dependency, not merely by receipt
+appearance:
+
+1. `devsystem_vm102_component_inventory.v1` records the complete topology and every unresolved gap.
+2. `builderops_vm_rebuild_activation.v1` and `devui_vm102_runtime_qualification.v1` each depend on
+   that inventory. They may run in parallel, but both must pass before deployment.
+3. `devsystem_vm102_deploy.v1` depends on both qualification receipts and binds the exact candidate,
+   migration result, configuration, inventory digest, and rollback-baseline state.
+4. `devsystem_vm102_health.v1` depends on the completed deployment and binds post-deploy identity,
+   readiness, ingress/auth, topology, and read-only smoke to that deployed candidate.
+5. `devui-stage-a-read-only-owner-pilot.v1` depends on the health receipt plus #4748 exact-SHA
+   browser evidence; it is not deployment or health proof.
+
+`devsystem_vm102_rollback.v1` is a conditional side path after a deployment attempt, not a required
+step in the successful-deployment path. It is admitted only when
+`rollback_baseline_state: available` names a complete compatible identity and restored health/smoke
+passes. `rollback_baseline_state: no_baseline` refuses rollback until a later successful deployment
+establishes that runnable baseline.
+
+| Receipt | Required proof | Does not prove by itself |
+| --- | --- | --- |
+| `devsystem_vm102_component_inventory.v1` | All inventory rows, placement class, owner, service/project, source/image, ingress/auth, health/version, deployment/lifecycle, migration/rollback fields, observed-at, and inventory digest; gaps are explicit | Residency or deployment |
+| `builderops_vm_rebuild_activation.v1` | Fresh VM identity/ownership, rebuild activation, dedicated engine/project, migration/readiness, fencing, no dual writer, and redacted operator evidence | Complete Dev System topology or Dev UI deployment |
+| `devui_vm102_runtime_qualification.v1` | Complete resident-component topology, exact engine/project/service identities, source/image identities, internal ingress/auth, health/version, no dual writer, and deployment/rollback ownership | Candidate-policy pass or a successful deployment |
+| `devsystem_vm102_deploy.v1` | Component-inventory digest, VM identity, exact candidate SHA, all image digests, pinned config fingerprint, owner, timestamp, migration classification/completion, and typed rollback-baseline state with a previous identity only when available | Post-deploy health, a runnable rollback target, or owner acceptance |
+| `devsystem_vm102_health.v1` | Exact deployed identities, complete topology, health/version/readiness, internal ingress/auth, no-dual-writer proof, and read-only smoke results | Deployment authorization, promotion, or owner acceptance |
+| `devui-stage-a-read-only-owner-pilot.v1` | Receipt-sourced URL/SHA, #4748 exact-SHA browser evidence, source-backed normal/review/blocked/completed projections, zero-effect journey, and owner acknowledgement | Any claim about components not covered by the pilot |
+| `devsystem_vm102_rollback.v1` | An available previous known-good source/image/config identity, selected rollback identity, migration classification, restored health/version/read-only smoke, and preserved GitHub/BuilderOps authority | Reversal of a forward-only migration, authority data rewind, or rollback when no compatible baseline exists |
+
+Required common fields are `receipt_type`, `receipt_version`, `target_vm` (`vmid: 102`,
+`name: builder-system`), `observed_at`, `source_refs`, `candidate_identity` when applicable,
+`component_inventory_digest` when applicable, `evidence_fingerprint`, `secret_material: absent`,
+and an explicit `gaps`/`refusals` list. A receipt without the required evidence or with secret
+material is invalid. A live guest check without the named receipt remains only an observation.
+
+`devsystem_vm102_deploy.v1` has an explicit rollback-baseline state:
+
+- `rollback_baseline_state: available` requires a complete, compatible, runnable previous
+  source/image/configuration identity.
+- `rollback_baseline_state: no_baseline` is the only valid first-deployment state. Previous identity
+  fields are absent or null, `refusals` includes `no_compatible_baseline`, and rollback is refused.
+
+Committed all-zero source, image, or configuration placeholders are invalid rollback identities;
+they are bootstrap sentinels, not releases. Rollback remains refused until a later successful
+deployment establishes a runnable baseline. The existing lower-level deploy-script receipt is
+implementation evidence only and is not `devsystem_vm102_deploy.v1` until a separate code/test slice
+implements and verifies this typed schema.
 
 BCP-03 is implemented in the development baseline by #3789/PR #3929
 (`app/builderops/control_plane/legacy_migration.py`): producer-derived expected-source
@@ -105,12 +200,14 @@ the live TARS state.
 
 ## Target boundary
 
-- Demerzel hosts the independently deployed BuilderOps API, PostgreSQL store, migration gate, and
-  outbox worker.
-- MacBook workflows call the authenticated API over Tailscale; no workflow opens PostgreSQL, shells
-  into a database-owning CLI, or creates local authority.
-- a privileged Demerzel executor calls the same API and alone holds scoped GitHub/model credentials
-  for review/repair/verification/merge orchestration;
+- VM 102 hosts the independently deployed BuilderOps API, PostgreSQL store, migration gate, outbox
+  worker, and the other resident Dev System components only after the complete topology and
+  qualification receipts pass.
+- MacBook workflows call the authenticated API over an approved private path; no workflow opens
+  PostgreSQL, shells into a database-owning CLI, or creates local authority.
+- a privileged Builder System executor, wherever its separately evidenced execution adapter runs,
+  calls the same API and alone holds any scoped GitHub/model credentials for
+  review/repair/verification/merge orchestration;
 - Product Runtime has no BuilderOps route, startup hook, state mount, credential, health path, or
   deployment ownership; and
 - SQLite/JSONL/JSON remains only read-only migration input or an explicitly injected test adapter.
@@ -146,7 +243,7 @@ not by rewriting that merge.
 
 1. **One authority epoch.** At most one production PostgreSQL authority epoch accepts mutations.
    Legacy sources are frozen before import; no live SQLite lease is imported.
-2. **API-only authority.** Every production client, including the Demerzel executor, uses the
+2. **API-only authority.** Every production client, including the Builder System executor, uses the
    authenticated API. Only the BuilderOps data layer reaches PostgreSQL.
 3. **Atomic local transition.** Idempotency result, guarded state mutation, receipt, and outbox intent
    commit in one PostgreSQL transaction. If any part fails, none becomes visible. The local
@@ -203,20 +300,20 @@ Partial-failure examples:
 
 ## Capability acceptance criteria
 
-- [ ] One authenticated API endpoint on Demerzel coordinates records, tasks, leases, attempts,
+- [ ] One authenticated API endpoint on VM 102 coordinates records, tasks, leases, attempts,
   idempotency, receipts, and outbox state against one PostgreSQL authority.
   Verify: BCP-01/02 contract tests named in their task files.
 - [ ] Every authority-bearing record carries the mandatory multi-repo envelope; leases,
   idempotency, promotions, and routing are namespaced by repo and fail closed on absent/ambiguous
   `(repo, stack, task-class)` policy.
   Verify: BCP-01 multi-repo namespace test plus BCP-04 delivery-manifest routing test.
-- [ ] A MacBook client and the privileged Demerzel executor can complete a restart-safe task flow
+- [ ] A MacBook client and the privileged Builder System executor can complete a restart-safe task flow
   without direct database access or local-authority fallback.
   Verify: `tests/builderops/control_plane/test_end_to_end_api_flow.py::test_remote_client_and_executor_share_one_authority_epoch`.
 - [ ] A crash at each state/outbox/external-effect boundary produces no duplicate accepted transition
   and a reconcilable receipt chain.
   Verify: `tests/builderops/control_plane/test_outbox_recovery.py::test_external_effect_crash_windows_reconcile_once`.
-- [ ] A producer-derived manifest proves the complete MacBook/Demerzel worktree/container source
+- [ ] A producer-derived manifest proves the complete client/VM-102 worktree/container source
   universe, and every expected source is imported, quarantined, tombstoned, explicitly accounted
   missing, or archived, with no live lease carried into the new epoch. Evidence-backed repo
   provenance is backfilled. Plain quarantine contains only evidence-only material; every authority-
