@@ -160,26 +160,28 @@ def provisional_binding_id(value: object) -> str | None:
 
 
 class SettingsRebindStore:
-    """Sealed facade for the durable dormant SETTINGS-05A record."""
+    """Read-only facade for the durable dormant SETTINGS-05A record."""
 
-    def __init__(
-        self,
-        registry: VaultRegistryStore,
-        *,
-        capability: _StorageMutationCapability,
-    ) -> None:
+    def __init__(self, registry: VaultRegistryStore) -> None:
         self._registry = registry
-        self._capability = capability
-
-    def install_dormant(self, *, binding_id: str | None = None) -> SettingsRebindRecord:
-        snapshot = self._registry.install_settings_rebind_dormant(
-            binding_id=binding_id,
-            _capability=self._capability,
-        )
-        return SettingsRebindRecord.from_payload(snapshot.settings_rebind)
 
     def read(self) -> SettingsRebindRecord:
         value = self._registry.load().settings_rebind
         if value is None:
             raise RegistryError("settings rebind record is not installed")
         return SettingsRebindRecord.from_payload(value)
+
+
+def _install_dormant_settings_rebind(
+    registry: VaultRegistryStore,
+    *,
+    binding_id: str | None = None,
+    _capability: _StorageMutationCapability,
+) -> SettingsRebindRecord:
+    """Install only from the proved deployment producer or an explicit test fixture."""
+
+    snapshot = registry.install_settings_rebind_dormant(
+        binding_id=binding_id,
+        _capability=_capability,
+    )
+    return SettingsRebindRecord.from_payload(snapshot.settings_rebind)

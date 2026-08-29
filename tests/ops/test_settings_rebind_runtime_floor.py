@@ -8,7 +8,10 @@ import pytest
 from app.instance._storage_boundary import CapabilityNotReadyError, RegistryError
 from app.instance.instance_state import InstanceStateLayout
 from app.instance.runtime import InstanceRegistryRuntime, _require_runtime_floor
-from app.instance.settings_rebind import SettingsRebindRecord
+from app.instance.settings_rebind import (
+    SettingsRebindRecord,
+    _install_dormant_settings_rebind,
+)
 from app.instance.vault_registry import VaultRegistration
 from tests.helpers.instance_storage_capability import STORAGE_MUTATION_CAPABILITY
 
@@ -48,8 +51,11 @@ def test_rebind_floor_blocks_every_legacy_writer_after_cutover(
         VaultRegistration("binding-a", "path:/binding-a", "/binding-a"),
         _capability=STORAGE_MUTATION_CAPABILITY,
     )
-    store = runtime.open_settings_rebind_store()
-    record = store.install_dormant(binding_id="binding-a")
+    record = _install_dormant_settings_rebind(
+        runtime.registry,
+        binding_id="binding-a",
+        _capability=STORAGE_MUTATION_CAPABILITY,
+    )
 
     runtime.registry.register(
         VaultRegistration("binding-b", "path:/binding-b", "/binding-b"),

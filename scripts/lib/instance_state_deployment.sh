@@ -456,18 +456,6 @@ prepare_instance_state_deployment() {
     return "${inventory_rc}"
   fi
 
-  # Durable host-side compatibility evidence begins before the first possible
-  # registry-floor commit. If this stopped-window attempt crashes, rollback
-  # classification must still know that an older writer cannot safely start.
-  _write_settings_rebind_floor_receipt "${channel}" pending
-  inventory_rc=$?
-  if [ "${inventory_rc}" -ne 0 ]; then
-    _release_abandoned_instance_state_deployment_lease \
-      "${compose_function}" "${channel}" "${runtime_user}" \
-      "${controller_pid}" "${controller_start_token}"
-    return "${inventory_rc}"
-  fi
-
   # Re-read every owner/config producer after all writers are stopped and the
   # lease-bound quiescence proof is durable. Any missing or changed source
   # aborts while the durable fence remains installed; only an exact match may
@@ -642,6 +630,18 @@ prepare_instance_state_deployment() {
   # SETTINGS-05A uses the same proved, writer-stopped deployment window but a
   # dedicated producer: generic deployment finalization and older test fixtures
   # must not silently acquire this compatibility floor.
+  # Write pending only after every caught pre-install check has succeeded and
+  # immediately before the installer may commit the floor. A crash or an
+  # ambiguous installer failure preserves pending; a proven earlier failure
+  # never creates compatibility evidence for a floor that could not exist.
+  _write_settings_rebind_floor_receipt "${channel}" pending
+  inventory_rc=$?
+  if [ "${inventory_rc}" -ne 0 ]; then
+    _release_abandoned_instance_state_deployment_lease \
+      "${compose_function}" "${channel}" "${runtime_user}" \
+      "${controller_pid}" "${controller_start_token}"
+    return "${inventory_rc}"
+  fi
   "${compose_function}" run --rm --no-deps -T --user "${runtime_user}" instance-state-init \
     python -m app.instance.runtime settings-rebind-install-dormant \
       --channel "${channel}" \

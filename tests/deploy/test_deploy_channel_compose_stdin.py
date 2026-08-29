@@ -13,13 +13,13 @@ These tests exercise the fix at both levels named in the issue:
 - `deploy_channel_compose` itself must not consume a caller's stdin for its
   own override document (test 1).
 - The real deployment producer, `prepare_instance_state_deployment`, must
-  deliver non-empty, privately-owned inventories to their consumer paths
-  (tests 2-4), and must still fail closed when a source inventory is empty
-  or missing (test 5).
+  deliver non-empty, privately-owned inventories, fail closed on invalid
+  sources, and keep SETTINGS floor evidence aligned with installer ambiguity.
 """
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import stat
@@ -133,6 +133,7 @@ def _install_writer_inventory_fixture(
         "      done\n"
         "      exit 2 ;;\n"
         "    *' validate-legacy-owners '*)\n"
+        '      if [ "${FAIL_VALIDATE_LEGACY_OWNERS:-0}" = 1 ]; then exit 73; fi\n'
         '      while [ "$#" -gt 0 ]; do\n'
         '        if [ "$1" = --output ]; then '
         f"printf '{owner_inventory_content}' > \"$2\"; exit 0; fi\n"
@@ -176,6 +177,7 @@ def _fake_compose_harness(tmp_path: Path, extra_env: dict[str, str]) -> tuple[su
         "  if [ \"${1:-}\" = config ] && [ -n \"${DEPLOY_COMPOSE_FENCE_CONFIG_OUTPUT:-}\" ]; then\n"
         "    printf '%s\\n' 'services: {api: {depends_on: [db], labels: {com.agentic-pkm.mvr05.db-role: client}}, db: {labels: {com.agentic-pkm.mvr05.db-role: server}}, instance-state-init: {labels: {com.agentic-pkm.mvr05.db-role: fence-controller}}, migrate: {command: [/app/scripts/run_migrations.sh], depends_on: [db], labels: {com.agentic-pkm.mvr05.db-role: migration-runner}}}' > \"$DEPLOY_COMPOSE_FENCE_CONFIG_OUTPUT\"\n"
         "  fi\n"
+        "  if [[ \" $* \" == *' settings-rebind-install-dormant '* ]] && [ \"${FAIL_SETTINGS_REBIND_INSTALL:-0}\" = 1 ]; then return 74; fi\n"
         "  return 0\n"
         "}\n"
         "prepare_instance_state_deployment fake_compose prod\n",
@@ -225,6 +227,37 @@ def test_producer_delivers_owner_inventory_with_content(tmp_path: Path) -> None:
     content = delivered.read_text(encoding="utf-8")
     assert content.strip() != ""
     assert "legacy-owner" in content
+
+
+def test_preinstall_validation_failure_never_creates_settings_floor_receipt(
+    tmp_path: Path,
+) -> None:
+    result, ownership_root = _fake_compose_harness(
+        tmp_path,
+        {"FAIL_VALIDATE_LEGACY_OWNERS": "1"},
+    )
+
+    assert result.returncode == 73
+    assert not (
+        ownership_root / "settings-rebind-runtime-floor-prod.json"
+    ).exists()
+
+
+def test_ambiguous_settings_installer_failure_preserves_pending_receipt(
+    tmp_path: Path,
+) -> None:
+    result, ownership_root = _fake_compose_harness(
+        tmp_path,
+        {"FAIL_SETTINGS_REBIND_INSTALL": "1"},
+    )
+
+    assert result.returncode == 74
+    receipt = json.loads(
+        (
+            ownership_root / "settings-rebind-runtime-floor-prod.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert receipt["phase"] == "pending"
 
 
 def test_delivered_inventories_are_private(tmp_path: Path) -> None:

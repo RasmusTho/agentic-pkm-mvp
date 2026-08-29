@@ -52,7 +52,10 @@ def test_all_producers_match_production_rebind_schema_and_activation_seal(
         )
         == 0
     )
-    record = runtime.open_settings_rebind_store().read()
+    reader = runtime.open_settings_rebind_store()
+    record = reader.read()
+    assert not hasattr(reader, "install_dormant")
+    assert not hasattr(reader, "_capability")
     snapshot = runtime.registry.load()
     app_sources = _sources("app")
     script_sources = _sources("scripts")
@@ -94,6 +97,14 @@ def test_all_producers_match_production_rebind_schema_and_activation_seal(
     assert not any(
         "settings-rebind-initiate" in source for source in script_sources.values()
     )
+    assert sorted(
+        path
+        for path, source in app_sources.items()
+        if "_install_dormant_settings_rebind" in source
+    ) == [
+        "app/instance/runtime.py",
+        "app/instance/settings_rebind.py",
+    ]
 
     deployment = (REPO_ROOT / "scripts/lib/instance_state_deployment.sh").read_text(
         encoding="utf-8"

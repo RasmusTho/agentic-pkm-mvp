@@ -152,12 +152,7 @@ class InstanceRegistryRuntime:
         """Open the dormant record only after this image passes its floor."""
 
         _require_runtime_floor(self.registry.load(), scalar_runtime=False)
-        from app.instance._storage_boundary import _STORAGE_MUTATION_CAPABILITY
-
-        return SettingsRebindStore(
-            self.registry,
-            capability=_STORAGE_MUTATION_CAPABILITY,
-        )
+        return SettingsRebindStore(self.registry)
 
     def bootstrap_env_binding(
         self,
@@ -4064,6 +4059,8 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps({"ok": True, "registry_revision": result.revision}, sort_keys=True))
         return 0
     if args.command == "settings-rebind-install-dormant":
+        from app.instance.settings_rebind import _install_dormant_settings_rebind
+
         layout = InstanceStateLayout(
             root=args.registry_path.parent,
             channel_id=args.channel,
@@ -4080,10 +4077,10 @@ def main(argv: list[str] | None = None) -> int:
                     channel=args.channel,
                     nonce=proof.get("nonce"),
                 )
-                record = SettingsRebindStore(
+                record = _install_dormant_settings_rebind(
                     VaultRegistryStore(args.registry_path),
-                    capability=local_operator_storage_capability(),  # type: ignore[arg-type]
-                ).install_dormant()
+                    _capability=local_operator_storage_capability(),  # type: ignore[arg-type]
+                )
         print(
             json.dumps(
                 {

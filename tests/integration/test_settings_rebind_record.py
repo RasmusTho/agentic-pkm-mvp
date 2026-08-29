@@ -7,7 +7,10 @@ import pytest
 from app.instance._storage_boundary import RegistryError
 from app.instance.instance_state import InstanceStateLayout
 from app.instance.runtime import InstanceRegistryRuntime
-from app.instance.settings_rebind import SettingsRebindRecord
+from app.instance.settings_rebind import (
+    SettingsRebindRecord,
+    _install_dormant_settings_rebind,
+)
 from app.instance.vault_registry import VaultRegistration
 from tests.helpers.instance_storage_capability import STORAGE_MUTATION_CAPABILITY
 
@@ -26,12 +29,22 @@ def _register(runtime: InstanceRegistryRuntime, binding_id: str) -> None:
     )
 
 
+def _install_dormant(
+    runtime: InstanceRegistryRuntime,
+    *,
+    binding_id: str,
+) -> SettingsRebindRecord:
+    return _install_dormant_settings_rebind(
+        runtime.registry,
+        binding_id=binding_id,
+        _capability=STORAGE_MUTATION_CAPABILITY,
+    )
+
+
 def test_api_and_watcher_startup_share_one_dormant_rebind_revision(tmp_path: Path) -> None:
     runtime = _runtime(tmp_path)
     _register(runtime, "binding-a")
-    installed = runtime.open_settings_rebind_store().install_dormant(
-        binding_id="binding-a"
-    )
+    installed = _install_dormant(runtime, binding_id="binding-a")
 
     api_runtime = _runtime(tmp_path)
     watcher_runtime = _runtime(tmp_path)
@@ -62,8 +75,7 @@ def test_production_startup_recovers_every_dormant_record_phase_fail_closed(
 ) -> None:
     runtime = _runtime(tmp_path / phase)
     _register(runtime, "binding-a")
-    store = runtime.open_settings_rebind_store()
-    store.install_dormant(binding_id="binding-a")
+    _install_dormant(runtime, binding_id="binding-a")
     expected = SettingsRebindRecord(
         schema_revision=1,
         desired_revision=desired,
@@ -102,7 +114,7 @@ def test_delayed_writer_cannot_regress_durable_rebind_revision(tmp_path: Path) -
     runtime = _runtime(tmp_path)
     _register(runtime, "binding-a")
     store = runtime.open_settings_rebind_store()
-    store.install_dormant(binding_id="binding-a")
+    _install_dormant(runtime, binding_id="binding-a")
     committed = SettingsRebindRecord(
         schema_revision=1,
         desired_revision=1,
