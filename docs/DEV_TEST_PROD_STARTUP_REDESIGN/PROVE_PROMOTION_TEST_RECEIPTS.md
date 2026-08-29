@@ -10,6 +10,10 @@ depends_on: [FREEZE_CHANNEL_MANIFEST_AND_OPERATION_CONTRACT.md, BUILD_IMMUTABLE_
 can_parallelize_with: []
 ---
 
+State: Implemented in the repository by issue #4917. This state covers the receipt writer and
+prod admission validator only; no promotion-test run, prod promotion, activation, or owner
+acceptance is claimed.
+
 # Prove Promotion-Test Receipts
 
 ## Purpose
@@ -22,7 +26,60 @@ Runs one exact digest against the declared prod-compatible baseline; records mig
 
 ## Concretely
 
-`promotion-test verify --digest <digest>` emits one receipt. `promotion-receipt validate --channel prod --digest <digest>` accepts only a current, unrevoked PASS whose config/test/vault/schema identities match.
+`python -m app.release_channels.promotion_receipt promotion-test-verify ...` validates a P2 render
+against its ChannelManifest, verifies an independently provisioned issuer trust root, derives the
+complete migration delta from the prod-admission baseline and candidate Git objects, binds the
+runner report and classified delta to that exact candidate, and emits one durable terminal receipt
+for an exact attempt. The writer may add an issued receipt entry to the existing registry but never
+creates that registry or enrolls a caller-supplied trusted key. Registry issue and revocation writes
+are serialized through the receipt-store writer lock; revocation uses
+`revoke_promotion_test_receipt(...)` and never edits `registry.json` directly. `python -m app.release_channels.promotion_receipt
+validate-prod-activation ...` accepts only a current, unrevoked PASS whose
+artifact/config/test/vault/schema identities match. It requires the exact check report and compares
+its canonical digest, migration-set identity, and migration baseline to the signed v2 receipt; the
+baseline must match the fixed canonical repository's authoritative current promotion ref
+(`refs/heads/main`, exposed locally as `origin/main` in the current interim model) and the
+independently supplied prod-admission context. The second command only returns admission
+evidence with state `validated_not_activated`; it performs no activation. P5 owns the future
+side-effecting caller and must invoke this boundary immediately before activation.
+
+## Mechanism Convergence Contract
+
+The protected invariant is: a receipt can authorize only the exact signed candidate, migration
+delta, check report, and current canonical prod baseline, and a revoked receipt can never be
+re-issued by a racing writer.
+
+- Baseline authority is fetched fresh for every binding from the fixed repository URL and
+  `refs/heads/main`. Git is invoked through a root-owned absolute system executable with a fixed
+  system `PATH` and verified root-owned non-repository `/` working directory. The child receives a
+  minimal allowlisted environment, excluding caller Git/temp/certificate/dynamic-loader settings,
+  replace refs, object overlays, and interactive transport. The source repository supplies only
+  immutable candidate objects;
+  its refs and local Git config cannot select or rewrite the baseline authority.
+- Every changed migration path must resolve in the candidate tree to one regular Git blob with mode
+  `100644` or `100755`. Symlinks and other tree modes fail closed; classification and identity both
+  consume the exact validated blob bytes.
+- Valid terminal states are `PASS` and `FAIL`; an issued registry entry may transition once to
+  `revoked`. Receipt, attempt, reservation, and registry records are durable before the final
+  registry issue boundary. Replays of the same attempt are idempotent; conflicting or revoked
+  records fail closed.
+- The receipt-store `.writer.lock` serializes every registry writer. Issue, revoke, crash recovery,
+  and retry all re-read and validate the registry while holding that lock, then replace and fsync
+  the canonical file before releasing it. The prod validator is read-only and accepts only an
+  issued entry with a valid signature and matching identities.
+
+Focused proof matrix:
+
+| Invariant / transition | Proof |
+| --- | --- |
+| Fresh canonical baseline and sanitized Git authority | `tests/runtime/test_startup_artifact_call_sites.py::test_authoritative_baseline_fetch_is_fresh_and_ignores_git_config` and `tests/runtime/test_startup_artifact_call_sites.py::test_authoritative_baseline_ignores_caller_repo_and_tmpdir_url_rewrites` |
+| Git executable cannot be replaced through caller `PATH` | `tests/runtime/test_startup_artifact_call_sites.py::test_git_evidence_ignores_caller_path_injection` |
+| Candidate cannot masquerade as the prod baseline | `tests/runtime/test_startup_artifact_call_sites.py::test_promotion_test_rejects_candidate_as_prod_migration_baseline` |
+| Symlink or non-regular migration tree entries cannot substitute executed bytes | `tests/runtime/test_startup_artifact_call_sites.py::test_promotion_test_rejects_symlink_migration_tree_entries` |
+| Complete baseline-to-candidate migration delta | `tests/runtime/test_startup_artifact_call_sites.py::test_promotion_test_derives_complete_migration_delta_from_candidate_git` |
+| Issue and revoke cannot lose one another's registry update | `tests/runtime/test_startup_artifact_call_sites.py::test_promotion_registry_serializes_issue_and_revocation_updates` |
+| Crash/restart recovery at reservation, receipt, attempt, and registry boundaries | `tests/runtime/test_startup_artifact_call_sites.py::test_promotion_test_recovers_linked_temp_before_terminal_success` and adjacent terminal-binding tests |
+| Missing, stale, revoked, mismatched, and non-PASS admission | `tests/runtime/test_startup_artifact_call_sites.py::test_prod_receipt_validator_is_invoked_before_activation` |
 
 ## Why This Matters
 
@@ -30,8 +87,8 @@ A healthy local test does not authorize a different prod artifact or configurati
 
 ## Acceptance Criteria
 
-- [ ] Receipt validation rejects each missing, stale, revoked, digest/config/test/schema mismatch. Verify: `tests/runtime/test_startup_artifact_call_sites.py::test_prod_receipt_validator_is_invoked_before_activation`.
-- [ ] PASS and FAIL are both durable terminal evidence outside resettable test volumes. Verify: `tests/runtime/test_startup_artifact_call_sites.py::test_promotion_test_writes_one_durable_terminal_receipt`.
+- [x] Receipt validation rejects each missing, stale, revoked, digest/config/test/schema mismatch. Verify: `tests/runtime/test_startup_artifact_call_sites.py::test_prod_receipt_validator_is_invoked_before_activation`.
+- [x] PASS and FAIL are both durable terminal evidence outside resettable test volumes. Verify: `tests/runtime/test_startup_artifact_call_sites.py::test_promotion_test_writes_one_durable_terminal_receipt`.
 
 ## How to Verify (Pre-Merge)
 

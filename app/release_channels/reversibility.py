@@ -45,26 +45,32 @@ class MigrationClassificationResult:
         }
 
 
-def read_migration_marker(path: Path) -> str:
-    """Extract and validate the reversibility marker from a migration file.
-
-    Raises MigrationMarkerError if the marker is absent or not one of VALID_MARKERS.
-    """
-    text = path.read_text(encoding="utf-8")
+def _read_marker_from_text(text: str, *, migration_name: str) -> str:
     match = _MARKER_RE.search(text)
     if not match:
         raise MigrationMarkerError(
-            f"Migration {path.name!r} is missing a 'reversibility' marker. "
+            f"Migration {migration_name!r} is missing a 'reversibility' marker. "
             f"Add `reversibility = \"{REVERSIBLE}\"` or `reversibility = \"{FORWARD_ONLY}\"` "
             f"to the migration file."
         )
     value = match.group(1)
     if value not in VALID_MARKERS:
         raise MigrationMarkerError(
-            f"Migration {path.name!r} has an invalid reversibility marker {value!r}. "
+            f"Migration {migration_name!r} has an invalid reversibility marker {value!r}. "
             f"Allowed values: {sorted(VALID_MARKERS)}."
         )
     return value
+
+
+def read_migration_marker(path: Path) -> str:
+    """Extract and validate the reversibility marker from a migration file.
+
+    Raises MigrationMarkerError if the marker is absent or not one of VALID_MARKERS.
+    """
+    return _read_marker_from_text(
+        path.read_text(encoding="utf-8"),
+        migration_name=path.name,
+    )
 
 
 def classify_migration(path: Path) -> MigrationClassificationResult:
@@ -74,6 +80,38 @@ def classify_migration(path: Path) -> MigrationClassificationResult:
         migration=path.name,
         classification=classification,
         is_forward_only=(classification == FORWARD_ONLY),
+    )
+
+
+def classify_migration_snapshot(
+    migration_name: str,
+    content: bytes,
+) -> MigrationClassificationResult:
+    """Classify immutable bytes captured by an authority-bearing caller."""
+    classification = _read_marker_from_text(
+        content.decode("utf-8"),
+        migration_name=migration_name,
+    )
+    return MigrationClassificationResult(
+        migration=migration_name,
+        classification=classification,
+        is_forward_only=(classification == FORWARD_ONLY),
+    )
+
+
+def _classification_receipt(results: list[MigrationClassificationResult]) -> dict:
+    return {
+        "migrations_checked": len(results),
+        "reversible": [r.migration for r in results if not r.is_forward_only],
+        "forward_only": [r.migration for r in results if r.is_forward_only],
+        "classification_decisions": [r.to_receipt() for r in results],
+    }
+
+
+def check_migration_snapshots(snapshots: Iterable[tuple[str, bytes]]) -> dict:
+    """Classify names and bytes already captured as one immutable input set."""
+    return _classification_receipt(
+        [classify_migration_snapshot(name, content) for name, content in snapshots]
     )
 
 
@@ -95,12 +133,7 @@ def check_all_migrations(paths: Iterable[Path]) -> dict:
     for path in paths:
         results.append(classify_migration(path))
 
-    return {
-        "migrations_checked": len(results),
-        "reversible": [r.migration for r in results if not r.is_forward_only],
-        "forward_only": [r.migration for r in results if r.is_forward_only],
-        "classification_decisions": [r.to_receipt() for r in results],
-    }
+    return _classification_receipt(results)
 
 
 def heimdal_raw_representation_migration_pending(receipt: object) -> bool:

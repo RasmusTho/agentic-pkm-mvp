@@ -18,9 +18,9 @@ Doc role: Core SoT for the release-channels capability
 Owner: `docs/ROADMAP.md`
 Temporal class: strategic
 Review cadence: biweekly
-Last reviewed: 2026-08-22
+Last reviewed: 2026-08-29
 Last live runtime verification: 2026-08-22 (new-host topology; `ygg-test` unavailable)
-Last verified against: docs/ENVIRONMENTS.md, docs/ARCHITECTURE.md, docs/STATUS.md, docs/OPERATIONS.md, docs/DB_SCHEMA.md, docs/adr/ADR-0040-prod-promotion-ref-main-interim.md
+Last verified against: docs/ENVIRONMENTS.md, docs/ARCHITECTURE.md, docs/STATUS.md, docs/OPERATIONS.md, docs/DB_SCHEMA.md, docs/DEV_TEST_PROD_STARTUP_REDESIGN/README.md, app/release_channels/promotion_receipt.py, docs/adr/ADR-0040-prod-promotion-ref-main-interim.md
 
 # Release Channels Specification
 
@@ -63,7 +63,17 @@ Once the prod baseline is stable, the promotion workflow (prepare → execute �
 - the `promote-to-test` and `promote-test-to-prod` staged workflows
 - automated enforcement of migration reversibility classification
 - durable promotion-plan acknowledgement receipts for forward-only migrations
-- CI/UAT-as-test for the test channel: today `.github/workflows/harness-selfverify.yml` only runs the harness (IR-v1 UAT, channel preflight, bootstrap smoke, fault injection) and writes **no** receipt, and `ops/test-promotions/` does not exist. The current test-channel gate is therefore **harness self-verification only**; CI/UAT cannot yet substitute for a live test run because `promote-to-test` still requires a durable machine-readable receipt naming the candidate SHA, channel config, and passing check suite (see `.codex/skills/promote-to-test/SKILL.md` §"CI/UAT as substitute for a live test run"). This stays future hardening until CI emits that candidate-SHA receipt.
+- CI/UAT-as-test for the test channel: `.github/workflows/harness-selfverify.yml` still runs the
+  harness (IR-v1 UAT, channel preflight, bootstrap smoke, fault injection) and writes **no**
+  promotion-test receipt. STARTUP-04 now provides the repository writer and prod admission
+  validator. The writer binds a validated immutable candidate, runner check report, and exact
+  migration set before producing durable local output under the ignored `ops/test-promotions/`
+  store when invoked,
+  but no live test-channel run or receipt is fabricated by that implementation. The current
+  test-channel gate is therefore still **harness self-verification only**; CI/UAT cannot substitute
+  for a live test run until an authorized runner invokes the writer for the exact candidate and
+  check suite (see `.codex/skills/promote-to-test/SKILL.md` §"CI/UAT as substitute for a live test
+  run").
 
 The absence of these does not block establishing a prod baseline. Operators should not wait for promotion hardening to run prod.
 

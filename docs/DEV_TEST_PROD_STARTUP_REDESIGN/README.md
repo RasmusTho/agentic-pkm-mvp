@@ -1,6 +1,6 @@
 State: Active capability specification. P1's manifest contract, P2's immutable artifact renderer,
-and P3's read-only ordinary-boot doctor are implemented in the repository; P4–P6 remain
-unimplemented. This does not claim a running remote
+P3's read-only ordinary-boot doctor, and P4's durable promotion-test receipt writer and prod
+admission validator are implemented in the repository; P5–P6 remain unimplemented. This does not claim a running remote
 deployment model or a live immutable channel identity.
 Current-state note (2026-08-22): the live topology is now intended to be a dedicated Ollama host plus
 Linux/Tailscale `ygg-dev` / `ygg-test` / `ygg-prod` runtime hosts. The redesign contract is not yet
@@ -26,7 +26,7 @@ P0 is deliberately not a child task: the live Colima persistent-substrate recove
 1. [Freeze Channel Manifest And Operation Contract](FREEZE_CHANNEL_MANIFEST_AND_OPERATION_CONTRACT.md) — P1, implemented by #4914
 2. [Build Immutable Artifact Graph](BUILD_IMMUTABLE_ARTIFACT_GRAPH.md) — P2, implemented by #4915
 3. [Implement Read-Only Ordinary Boot](IMPLEMENT_READ_ONLY_ORDINARY_BOOT.md) — P3, implemented by #4916
-4. [Prove Promotion-Test Receipts](PROVE_PROMOTION_TEST_RECEIPTS.md) — P4
+4. [Prove Promotion-Test Receipts](PROVE_PROMOTION_TEST_RECEIPTS.md) — P4, implemented by #4917
 5. [Execute Topology-Only Prod Cutover](EXECUTE_TOPOLOGY_ONLY_PROD_CUTOVER.md) — P5, operator-gated
 6. [Retire Legacy Startup Paths](RETIRE_LEGACY_STARTUP_PATHS.md) — P6, post-soak
 
@@ -83,10 +83,12 @@ ordinary boot selects `ORDINARY_BOOT_PASS`.
 
 ### Promotion receipt contract
 
-The K5 receipt is a machine-readable, content-addressed record with exactly these semantic fields:
+The K5 receipt uses schema `promotion-receipt.v2` and is a machine-readable, content-addressed
+record with exactly these semantic fields:
 `receipt_version`, `receipt_id`, `outcome`, `artifact_digest`, `config_identity`, `test_identity`,
 `vault_identity`, `schema_identity`, `required_checks`, `issued_at`, `fresh_until`, `issuer_id`,
-`issuer_key_id`, and `issuer_signature`. The canonical
+`issuer_key_id`, `migration_baseline_identity`, `migration_set_identity`,
+`check_report_identity`, and `issuer_signature`. The canonical
 bytes are UTF-8 JSON with lexicographically sorted keys, compact separators, and no trailing
 newline; `receipt_id` is `sha256:` plus the digest of those bytes with `receipt_id` excluded.
 The issuer signs a separate acyclic canonical unsigned payload using the same encoding with both
@@ -105,15 +107,28 @@ unpadded URL-safe Base64, and `issuer_signature` is exactly 64 raw Ed25519 signa
 as `ed25519:v1:<unpadded-base64url>`. `issuer_key_id` selects the trusted public key. Registry
 fields are outside the receipt digest. The registry also has exactly `trusted_keys`, an independent
 `issuer_key_id` → `public_key` mapping; admission resolves the key only from that mapping and
-requires the entry key material to match it. Registry lookup failure is a hard admission failure.
+requires the entry key material to match it. That trust-root mapping must be provisioned by an
+independent operator-controlled producer before promotion-test verification. The receipt writer
+never creates the registry or enrolls a caller-supplied key; a missing registry, absent key, or key
+mismatch fails before it reserves an attempt or publishes terminal evidence. Registry lookup
+failure is a hard admission failure.
 Prod admission requires `outcome=PASS`, matching expected
 identities from an independently supplied prod-admission manifest and `test_identity` from the
 versioned promotion-test policy, current time at or after `issued_at` and before `fresh_until`, a valid trusted
 issuer attestation, a present registry entry with `status=issued` (never absent or revoked), and
-exact required-check coverage. The positive fixture is
+exact required-check coverage. The validator also consumes the canonical promotion-test check
+report: its digest must equal the signed `check_report_identity`, its migration-set identity must
+equal the signed `migration_set_identity`, and its baseline must equal both the signed
+`migration_baseline_identity` and the independently supplied prod-admission context. The writer
+and validator resolve that baseline fresh from the fixed canonical repository's authoritative
+current promotion ref (`refs/heads/main`) without consulting caller repository refs or Git config,
+so a caller cannot choose the candidate itself or substitute a
+different syntactically valid baseline or report.
 `tests/fixtures/startup_redesign/promotion_admission_context.valid.json` supplies the independent
-positive-admission expectations; the receipt fixture is validated against that context rather than
-against itself. Receipts contain no secret values
+positive-admission expectations, while
+`tests/fixtures/startup_redesign/promotion_check_report.valid.json` supplies the signed report
+evidence; the receipt fixture is validated against both rather than against itself. Receipts and
+check reports contain no secret values
 or secret references.
 
 The machine-readable shapes are frozen as follows; producers must emit no additional fields:
@@ -123,7 +138,8 @@ The machine-readable shapes are frozen as follows; producers must emit no additi
   "receipt": [
     "receipt_version", "receipt_id", "outcome", "artifact_digest", "config_identity",
     "test_identity", "vault_identity", "schema_identity", "required_checks", "issued_at",
-    "fresh_until", "issuer_id", "issuer_key_id", "issuer_signature"
+    "fresh_until", "issuer_id", "issuer_key_id", "migration_baseline_identity",
+    "migration_set_identity", "check_report_identity", "issuer_signature"
   ],
   "registry": ["registry_version", "trusted_keys", "entries"],
   "registry_entry": [
@@ -140,9 +156,45 @@ re-encoded before use; the re-encoded
 unpadded URL-safe value must be byte-for-byte identical, which rejects nonzero terminal pad bits
 as well as padding and standard-Base64 characters.
 
+The P4 writer stores receipts under an explicitly configured non-resettable promotion-test store,
+never under `tmp-test/` or `vault-test/`. It derives artifact/config/schema identity from a validated
+P2 promotion-test candidate, matches that against an independently supplied prod-admission context,
+including that context's exact Git migration-baseline identity, and requires the runner report to
+bind the same candidate, identity, and check results. Under the store lock it first verifies the
+independently provisioned trust registry and then durability-fences an immutable attempt
+reservation. It writes and durability-fences the content-addressed receipt and one immutable
+canonical attempt binding. Only after both terminal records revalidate does it add the issued entry
+to the pre-existing durability-fenced `registry.json`; it never changes `trusted_keys`. Issuance,
+retry, and `revoke_promotion_test_receipt(...)` all mutate the registry under the same store-global
+writer lock, re-read the current snapshot while holding that lock, and atomically replace plus
+durability-fence it before unlocking. Direct registry edits are not a supported producer. That
+registry is the authority input consumed by `prepare_prod_activation`; an absent, changed, or
+revoked entry fails closed. A later PASS/FAIL,
+timestamp, identity, candidate, or
+migration-set change for the same `pt-<id>` attempt is rejected. A crash after receipt persistence
+but before the attempt binding leaves an immutable reserved orphan; only an identical retry can
+reuse it and publish the single binding. A crash after the binding but before registry publication
+leaves terminal evidence that remains inadmissible to prod until an identical retry publishes the
+matching issued entry; a revoked or conflicting entry is never repaired away. Immutable
+records use a same-directory fsynced temp hard link, remove that temp name before the final
+directory fence, and recover only a same-owner temp that is the exact published inode after a
+crash in that unlink/fence gap. The complete migration delta is derived, not accepted from the
+caller: the writer fetches the fixed canonical repository's authoritative current promotion ref
+(`refs/heads/main`) through a root-owned system Git executable, with a minimal allowlisted child
+environment and from the verified root-owned non-repository `/` working directory, then diffs that
+baseline commit against the candidate's exact
+source commit under `app/alembic/versions`, then materializes each target file from those immutable
+Git objects. Each changed migration must be a regular Git blob with mode `100644` or `100755`;
+symlinks, submodules, trees, deletions, and other modes fail closed before classification. The same
+object bytes feed both the migration-set digest and
+`app.release_channels.reversibility.check_migration_snapshots`. The attempt journal records the six
+boolean check outcomes and that existing classifier's receipt. The promotion
+receipt itself retains the closed semantic field set above. Migration marker rules remain owned by
+the release-channel reversibility contract and are not reimplemented by P4.
+
 ## Verification and acceptance
 
-P1 is proven by the static contract test and fixture in `tests/architecture/test_startup_redesign_contract.py`. P2 is proven through the side-effect-free production renderer in `app/release_channels/channel_manifest.py` and its runtime call-site tests. P3 is proven through the read-only resolver and exactly-once terminal journal in `app/release_channels/ordinary_boot.py` plus the production call-site tests. P4 retains strict-xfail call-site skeletons until its production entrypoints exist; an XPASS is a failure and requires converting the skeleton into a real runtime-path proof. P3 does not activate a channel or replace the current canonical prod startup command. P5 requires a live-host acceptance receipt; P6 requires soak and drill receipts. No local-source result is promotion evidence.
+P1 is proven by the static contract test and fixture in `tests/architecture/test_startup_redesign_contract.py`. P2 is proven through the side-effect-free production renderer in `app/release_channels/channel_manifest.py` and its runtime call-site tests. P3 is proven through the read-only resolver and exactly-once terminal journal in `app/release_channels/ordinary_boot.py` plus the production call-site tests. P4 is proven through `app/release_channels/promotion_receipt.py`: the promotion-test entrypoint binds runner observations to one validated candidate and writes one signed PASS/FAIL receipt plus its terminal attempt journal. The `prepare_prod_activation` boundary invokes the prod validator and accepts only an exact, current, issued, non-revoked PASS. It returns `validated_not_activated` admission evidence only; it cannot activate, deploy, migrate, restart, or bypass a channel. P5 must consume this boundary immediately before its separately governed activation. P3 does not activate a channel or replace the current canonical prod startup command. P5 requires a live-host acceptance receipt; P6 requires soak and drill receipts. No local-source result is promotion evidence.
 
 ## Relationship to existing work
 

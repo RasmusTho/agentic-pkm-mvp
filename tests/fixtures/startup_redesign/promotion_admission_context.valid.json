@@ -1,6 +1,7 @@
 {
   "artifact_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
   "config_identity": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "migration_baseline_identity": "git:547f5b35c53e76bd9b6a6f1fc6df175a694be99e",
   "test_identity": "promotion-test:20260816",
   "vault_identity": "prod-vault",
   "schema_identity": "alembic:20260816"

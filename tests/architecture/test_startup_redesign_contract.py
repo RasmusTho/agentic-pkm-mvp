@@ -18,6 +18,7 @@ README = (SPEC / "README.md").read_text()
 FIXTURE = ROOT / "tests" / "fixtures" / "startup_redesign" / "channel_manifest.valid.json"
 RECEIPT_FIXTURE = ROOT / "tests" / "fixtures" / "startup_redesign" / "promotion_receipt.valid.json"
 ADMISSION_CONTEXT_FIXTURE = ROOT / "tests" / "fixtures" / "startup_redesign" / "promotion_admission_context.valid.json"
+CHECK_REPORT_FIXTURE = ROOT / "tests" / "fixtures" / "startup_redesign" / "promotion_check_report.valid.json"
 
 
 def test_kernel_contract_names_every_invariant() -> None:
@@ -193,6 +194,7 @@ def test_receipt_contract_names_binding_freshness_and_revocation() -> None:
         "receipt_version", "receipt_id", "outcome", "artifact_digest", "config_identity",
         "test_identity", "vault_identity", "schema_identity", "required_checks", "issued_at",
         "fresh_until", "issuer_id", "issuer_key_id", "issuer_signature",
+        "migration_baseline_identity", "migration_set_identity", "check_report_identity",
     ):
         assert f"`{field}`" in README
     assert "content-addressed" in README
@@ -211,6 +213,11 @@ RECEIPT_FIELDS = {
     "receipt_version", "receipt_id", "outcome", "artifact_digest", "config_identity",
     "test_identity", "vault_identity", "schema_identity", "required_checks", "issued_at",
     "fresh_until", "issuer_id", "issuer_key_id", "issuer_signature",
+    "migration_baseline_identity", "migration_set_identity", "check_report_identity",
+}
+CHECK_REPORT_FIELDS = {
+    "report_version", "candidate_identity", "identity", "check_results",
+    "migration_set_identity", "migration_baseline_identity",
 }
 REGISTRY_FIELDS = {"registry_version", "trusted_keys", "entries"}
 REGISTRY_ENTRY_FIELDS = {
@@ -251,10 +258,12 @@ def _assert_receipt_schema(
         raise AssertionError("revocation/issuer registry lookup must fail closed")
     assert set(receipt) == RECEIPT_FIELDS
     assert set(registry) == REGISTRY_FIELDS
+    check_report = json.loads(CHECK_REPORT_FIXTURE.read_text())
+    assert set(check_report) == CHECK_REPORT_FIELDS
     signature_parts = receipt["issuer_signature"].split(":", 2)
     assert signature_parts[:2] == ["ed25519", "v1"]
     assert B64URL.fullmatch(signature_parts[2]) and len(signature_parts[2]) % 4 != 1
-    assert receipt["receipt_version"] == "promotion-receipt.v1"
+    assert receipt["receipt_version"] == "promotion-receipt.v2"
     assert receipt["outcome"] == "PASS"
     assert isinstance(receipt["receipt_id"], str)
     assert receipt["receipt_id"] == "sha256:" + hashlib.sha256(_receipt_digest_body(receipt)).hexdigest()
@@ -263,6 +272,19 @@ def _assert_receipt_schema(
     assert re.fullmatch(r"sha256:[0-9a-f]{64}", receipt["config_identity"])
     for field in ("artifact_digest", "config_identity", "test_identity", "vault_identity", "schema_identity"):
         assert receipt[field] == expected_manifest[field]
+        assert check_report["identity"][field] == expected_manifest[field]
+    assert receipt["migration_baseline_identity"] == expected_manifest["migration_baseline_identity"]
+    assert check_report["migration_baseline_identity"] == expected_manifest["migration_baseline_identity"]
+    assert receipt["migration_set_identity"] == check_report["migration_set_identity"]
+    expected_report_identity = "sha256:" + hashlib.sha256(
+        json.dumps(
+            check_report,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode()
+    ).hexdigest()
+    assert receipt["check_report_identity"] == expected_report_identity
     assert re.fullmatch(r"promotion-test:\d{8}", receipt["test_identity"])
     assert receipt["vault_identity"] == "prod-vault"
     assert re.fullmatch(r"alembic:[A-Za-z0-9._-]+", receipt["schema_identity"])
@@ -294,6 +316,7 @@ def _assert_receipt_schema(
     assert entry["issuer_signature"] == receipt["issuer_signature"]
     public_key.verify(signature_bytes, _receipt_unsigned_body(receipt))
     _assert_secret_free(receipt)
+    _assert_secret_free(check_report)
 
 
 def _reseal_test_receipt(receipt: dict[str, object], registry: dict[str, object], **updates: str) -> None:
@@ -422,6 +445,9 @@ def test_receipt_identity_binding_rejects_resealed_mismatches() -> None:
         "test_identity": "promotion-test:20990101",
         "vault_identity": "staging-vault",
         "schema_identity": "alembic:attacker-selected",
+        "migration_baseline_identity": "git:" + "f" * 40,
+        "migration_set_identity": "sha256:" + "f" * 64,
+        "check_report_identity": "sha256:" + "f" * 64,
     }
     for field, value in mutations.items():
         receipt = json.loads(RECEIPT_FIXTURE.read_text())
@@ -437,7 +463,13 @@ def test_receipt_wire_encoding_rejects_nonzero_base64url_pad_bits() -> None:
     key = registry["trusted_keys"][receipt["issuer_key_id"]]
     signature = receipt["issuer_signature"].split(":", 2)[2]
     key_mutation = key[:-1] + "d"
-    signature_mutation = signature[:-1] + "x"
+    signature_mutation = next(
+        signature[:-1] + candidate
+        for candidate in "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+        if candidate != signature[-1]
+        and base64.urlsafe_b64decode(signature + "==")
+        == base64.urlsafe_b64decode(signature[:-1] + candidate + "==")
+    )
 
     assert base64.urlsafe_b64decode(key + "=") == base64.urlsafe_b64decode(key_mutation + "=")
     assert base64.urlsafe_b64decode(signature + "==") == base64.urlsafe_b64decode(signature_mutation + "==")

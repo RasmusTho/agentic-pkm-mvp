@@ -19,6 +19,7 @@ from app.release_channels.reversibility import (
     MigrationClassificationResult,
     MigrationMarkerError,
     check_all_migrations,
+    check_migration_snapshots,
     classify_migration,
     heimdal_raw_representation_migration_pending,
     read_migration_marker,
@@ -115,6 +116,23 @@ class TestPrePromotionFailurePath:
 
 
 class TestClassificationReceipt:
+    def test_snapshot_receipt_classifies_supplied_bytes(self) -> None:
+        receipt = check_migration_snapshots(
+            [("captured.py", b'reversibility = "forward-only"\n')]
+        )
+        assert receipt == {
+            "migrations_checked": 1,
+            "reversible": [],
+            "forward_only": ["captured.py"],
+            "classification_decisions": [
+                {
+                    "migration": "captured.py",
+                    "classification": "forward-only",
+                    "is_forward_only": True,
+                }
+            ],
+        }
+
     def test_single_reversible_migration_receipt(self, tmp_path: Path) -> None:
         f = tmp_path / "001.py"
         f.write_text('reversibility = "reversible"\n', encoding="utf-8")
