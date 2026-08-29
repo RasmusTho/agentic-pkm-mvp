@@ -381,7 +381,11 @@ def _scope_revalidation_receipt(
             "receipt_url": "https://github.example/receipt/1",
         },
         "finding_classifications": [
-            {"finding_id": "f-1", "scope_class": "governing_contract_blocker"}
+            {
+                "finding_id": "f-1",
+                "scope_class": "adjacent_pre_existing" if outcome == "split" else "governing_contract_blocker",
+                **({"follow_up_issue": 4172} if outcome == "split" else {}),
+            }
         ],
     }
 
@@ -625,7 +629,13 @@ Routed-Finding: review:11
         "follow_up_issue": 4172,
         "authentication": history["authentication"],
         "finding_classifications": [
-            {"finding_id": finding_id, "scope_class": "governing_contract_blocker"}
+            {
+                "finding_id": finding_id,
+                "scope_class": (
+                    "adjacent_pre_existing" if finding_id == "review:11" else "governing_contract_blocker"
+                ),
+                **({"follow_up_issue": 4172} if finding_id == "review:11" else {}),
+            }
             for finding_id in history["finding_ids"]
         ],
     }
@@ -1081,6 +1091,16 @@ def test_bracketed_and_colon_protected_findings_are_content_bound() -> None:
     assert {"comment:101", "comment:102"} <= set(before["finding_ids"])
     assert before["authentication"] != after["authentication"]
 
+    comments[0]["body"] = "- **P1: authority semantics v3**"
+    bold = authenticated_pr_scope_revalidation_history(
+        repository="octo/repo",
+        pr_number=4029,
+        governing_issue=4028,
+        head_sha="a" * 40,
+        api=api,
+    )
+    assert "comment:101" in bold["finding_ids"]
+
 
 def test_pre_push_candidate_is_distinct_from_live_pr_head() -> None:
     responses, api = _live_pr_review_api(head_sha="b" * 40)
@@ -1119,6 +1139,79 @@ def test_duplicate_key_durable_receipt_is_rejected() -> None:
             governing_issue=4028,
             head_sha="a" * 40,
             api=api,
+        )
+
+
+def test_conflicting_durable_receipts_for_same_candidate_fail_closed() -> None:
+    responses, api = _live_pr_review_api()
+    history = authenticated_pr_scope_revalidation_history(
+        repository="octo/repo",
+        pr_number=4029,
+        governing_issue=4028,
+        head_sha="a" * 40,
+        api=api,
+    )
+    receipt = {
+        "version": 1,
+        "pr_number": 4029,
+        "head_sha": "a" * 40,
+        "governing_issue": 4028,
+        "governing_contract_sha256": history["governing_contract_sha256"],
+        "outcome": "continue_unchanged",
+        "authentication": history["authentication"],
+        "finding_classifications": [
+            {"finding_id": finding_id, "scope_class": "governing_contract_blocker"}
+            for finding_id in history["finding_ids"]
+        ],
+    }
+    conflicting = {
+        **receipt,
+        "finding_classifications": [
+            {"finding_id": finding_id, "scope_class": "pr_introduced_regression"}
+            for finding_id in history["finding_ids"]
+        ],
+    }
+    comments = responses["repos/octo/repo/issues/4029/comments?per_page=100"]
+    assert isinstance(comments, list)
+    for comment_id, durable_receipt in ((299, receipt), (300, conflicting)):
+        comments.append(
+            {
+                "id": comment_id,
+                "body": "<!-- pr-scope-revalidation-receipt:v1 -->\n"
+                + json.dumps(durable_receipt, sort_keys=True),
+                "user": {"login": "repository-owner"},
+                "author_association": "OWNER",
+            }
+        )
+    history = authenticated_pr_scope_revalidation_history(
+        repository="octo/repo",
+        pr_number=4029,
+        governing_issue=4028,
+        head_sha="a" * 40,
+        api=api,
+    )
+
+    with pytest.raises(ReviewBeforeCiGateError, match="conflicting durable GitHub receipts"):
+        validate_pr_scope_revalidation(
+            4029,
+            4028,
+            "a" * 40,
+            history["rejected_rounds"],
+            receipt,
+            governing_contract_sha256=history["governing_contract_sha256"],
+            authenticated_history=history,
+        )
+
+
+def test_split_requires_at_least_one_classified_routed_finding() -> None:
+    receipt = _scope_revalidation_receipt(outcome="split")
+    receipt["finding_classifications"] = [
+        {"finding_id": "f-1", "scope_class": "governing_contract_blocker"}
+    ]
+
+    with pytest.raises(ReviewBeforeCiGateError, match="split requires at least one"):
+        validate_pr_scope_revalidation(
+            4029, 4028, "a" * 40, [{"verdict": "rejected"}] * 2, receipt
         )
 
 

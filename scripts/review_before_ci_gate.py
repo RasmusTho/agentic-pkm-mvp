@@ -59,8 +59,8 @@ RISK_SURFACES = {
 }
 PR_SCOPE_REVALIDATION_OUTCOMES = frozenset({"continue_unchanged", "split", "expanded_contract"})
 PROTECTED_REVIEW_FINDING = re.compile(
-    r"(?im)^\s*(?:[-*]\s*)?(?:\[P[01]\]|\*\*P[01]\*\*|P[01]\s*[:—-]"
-    r"|P[01]\s+(?:badge|blocker|finding|violation|regression)\b)"
+    r"(?im)^\s*(?:[-*]\s*)?(?:\[P[01]\]|\*\*P[01](?:\s*[:—-]|\s+)[^*\n]+\*\*"
+    r"|\*\*P[01]\s*[:—-]?\*\*|P[01](?:\s*[:—-]|\s+\S))"
 )
 REVIEW_CONTRACT_DIGEST = re.compile(
     r"(?im)^Governing-Contract-SHA256:\s*([0-9a-f]{64})\s*$"
@@ -140,10 +140,29 @@ def validate_pr_scope_revalidation(
             )
         expected_finding_ids = set(raw_finding_ids)
         durable_receipts = authenticated_history.get("durable_receipts")
-        if not isinstance(durable_receipts, list) or not any(
-            isinstance(candidate, Mapping) and candidate.get("receipt") == receipt
+        if not isinstance(durable_receipts, list):
+            raise ReviewBeforeCiGateError("authenticated durable GitHub receipts are malformed")
+        relevant_receipts = [
+            candidate.get("receipt")
             for candidate in durable_receipts
-        ):
+            if isinstance(candidate, Mapping)
+            and isinstance(candidate.get("receipt"), Mapping)
+            and all(
+                candidate["receipt"].get(field) == value
+                for field, value in {
+                    "version": 1,
+                    "pr_number": pr_number,
+                    "head_sha": head_sha,
+                    "governing_issue": governing_issue,
+                }.items()
+            )
+        ]
+        distinct_receipts = {_canonical_json(candidate) for candidate in relevant_receipts}
+        if len(distinct_receipts) > 1:
+            raise ReviewBeforeCiGateError(
+                "conflicting durable GitHub receipts exist for the same publication candidate"
+            )
+        if len(distinct_receipts) != 1 or receipt != relevant_receipts[0]:
             raise ReviewBeforeCiGateError(
                 "local contract revalidation receipt must match a durable GitHub receipt"
             )
@@ -207,6 +226,7 @@ def validate_pr_scope_revalidation(
         "adjacent_pre_existing",
     }
     classified_finding_ids: set[str] = set()
+    split_has_routed_finding = False
     for finding in classifications:
         if not isinstance(finding, Mapping) or not _nonempty_string(finding.get("finding_id")):
             raise ReviewBeforeCiGateError("each revalidation finding requires an identifier")
@@ -243,6 +263,11 @@ def validate_pr_scope_revalidation(
             raise ReviewBeforeCiGateError(
                 "adjacent/pre-existing finding is not durably routed by its follow-up Issue"
             )
+        if (
+            scope_class == "adjacent_pre_existing"
+            and finding.get("follow_up_issue") == receipt.get("follow_up_issue")
+        ):
+            split_has_routed_finding = True
         if scope_class == "security_authority_scope_expansion" and outcome != "expanded_contract":
             raise ReviewBeforeCiGateError(
                 "security/authority findings require authenticated expanded_contract scope"
@@ -250,6 +275,10 @@ def validate_pr_scope_revalidation(
     if expected_finding_ids is not None and classified_finding_ids != expected_finding_ids:
         raise ReviewBeforeCiGateError(
             "contract revalidation receipt must classify every authenticated rejected finding exactly once"
+        )
+    if outcome == "split" and not split_has_routed_finding:
+        raise ReviewBeforeCiGateError(
+            "split requires at least one classified finding routed to its follow-up Issue"
         )
     return receipt
 

@@ -407,6 +407,8 @@ SHA-256 governing-contract identity must select exactly one outcome: `continue_u
 or `expanded_contract`. The local JSON is only a canonical working copy: the same receipt object must
 exist in a PR conversation comment beginning `<!-- pr-scope-revalidation-receipt:v1 -->`, authored
 by a GitHub `OWNER`, `MEMBER`, or `COLLABORATOR`; duplicate JSON keys are malformed and fail closed.
+Distinct trusted receipts for the same PR/candidate/Issue identity are conflicting authority and fail
+closed; byte-identical duplicates are idempotent.
 The executable gate
 fetches the current PR, complete paginated review summaries, inline review comments, PR conversation,
 and governing Issue itself; it binds the
@@ -425,7 +427,8 @@ exact `expanded_from_rounds` lineage entry (round, reviewed head, prior contract
 authenticated rejected round before repair continues. An arbitrary well-formed digest is rejected.
 The bounded follow-up contract must durably name its source governing Issue and PR plus each routed
 finding (`Source-Governing-Issue`, `Source-PR`, and `Routed-Finding` markers); generic ready-Issue
-shape is insufficient. The evaluator closes its snapshot by re-reading every PR, Issue, review,
+shape is insufficient, and `split` requires at least one classified adjacent/pre-existing finding
+whose follow-up identity matches that route. The evaluator closes its snapshot by re-reading every PR, Issue, review,
 comment, and follow-up payload used for authority and fails if any changed during collection.
 For an existing PR before push, the receipt binds the local candidate head separately from the
 authenticated live PR head; Git ancestry must prove the candidate descends from that live head.
