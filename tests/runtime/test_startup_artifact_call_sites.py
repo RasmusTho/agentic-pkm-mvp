@@ -1546,6 +1546,30 @@ def test_authoritative_baseline_fetch_is_fresh_and_ignores_git_config(
         assert environment["GIT_NO_REPLACE_OBJECTS"] == "1"
 
 
+def test_git_evidence_ignores_caller_path_injection(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.release_channels import promotion_receipt
+
+    marker = tmp_path / "executed"
+    fake_git = tmp_path / "git"
+    fake_git.write_text(f"#!/bin/sh\ntouch {marker}\n", encoding="utf-8")
+    fake_git.chmod(0o700)
+    monkeypatch.setenv("PATH", str(tmp_path))
+
+    output = promotion_receipt._run_git(
+        ROOT,
+        "rev-parse",
+        "--verify",
+        "HEAD^{commit}",
+        code="git_test_failed",
+    )
+
+    assert output.decode("ascii").strip() == PROMOTION_SOURCE_SHA
+    assert not marker.exists()
+
+
 def _promotion_test_signing_material() -> tuple[Ed25519PrivateKey, bytes]:
     private_key = Ed25519PrivateKey.from_private_bytes(bytes(range(32, 64)))
     public_key = private_key.public_key().public_bytes(

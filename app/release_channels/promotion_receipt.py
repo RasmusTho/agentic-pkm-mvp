@@ -21,6 +21,7 @@ import re
 import stat
 import subprocess
 import sys
+import tempfile
 import uuid
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from datetime import datetime, timezone
@@ -126,6 +127,7 @@ _SCHEMA_IDENTITY = re.compile(r"alembic:[A-Za-z0-9._-]+\Z")
 _ISSUER_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*\Z")
 _B64URL = re.compile(r"[A-Za-z0-9_-]+\Z")
 _TIMESTAMP = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z\Z")
+_TRUSTED_GIT_PATHS = (Path("/usr/bin/git"), Path("/bin/git"))
 
 
 class PromotionReceiptError(RuntimeError):
@@ -242,8 +244,16 @@ def _validate_checks(value: object) -> dict[str, bool]:
 
 def _git_environment() -> dict[str, str]:
     """Run Git without caller-controlled config, refs, or object overlays."""
+    certificate_overrides = {
+        "CURL_CA_BUNDLE",
+        "REQUESTS_CA_BUNDLE",
+        "SSL_CERT_DIR",
+        "SSL_CERT_FILE",
+    }
     environment = {
-        key: value for key, value in os.environ.items() if not key.startswith("GIT_")
+        key: value
+        for key, value in os.environ.items()
+        if not key.startswith("GIT_") and key.upper() not in certificate_overrides
     }
     environment.update(
         {
@@ -252,16 +262,33 @@ def _git_environment() -> dict[str, str]:
             "GIT_CONFIG_SYSTEM": os.devnull,
             "GIT_NO_REPLACE_OBJECTS": "1",
             "GIT_TERMINAL_PROMPT": "0",
+            "PATH": "/usr/bin:/bin",
         }
     )
     return environment
+
+
+def _trusted_git_executable() -> str:
+    for candidate in _TRUSTED_GIT_PATHS:
+        try:
+            info = candidate.stat()
+        except OSError:
+            continue
+        if (
+            stat.S_ISREG(info.st_mode)
+            and info.st_uid == 0
+            and info.st_mode & stat.S_IXUSR
+            and not info.st_mode & (stat.S_IWGRP | stat.S_IWOTH)
+        ):
+            return str(candidate)
+    raise PromotionReceiptError("git_unavailable")
 
 
 def _run_git(repo: Path, *args: str, code: str) -> bytes:
     environment = _git_environment()
     try:
         completed = subprocess.run(
-            ["git", "-C", str(repo), *args],
+            [_trusted_git_executable(), "-C", str(repo), *args],
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
             check=False,
@@ -315,14 +342,22 @@ def _resolve_authoritative_prod_baseline(source_repo: Path) -> str:
 def _fetch_authoritative_prod_baseline() -> str:
     environment = _git_environment()
     try:
-        completed = subprocess.run(
-            ["git", "ls-remote", "--refs", PROD_REPOSITORY_URL, PROD_PROMOTION_REF],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-            check=False,
-            timeout=30,
-            env=environment,
-        )
+        with tempfile.TemporaryDirectory(prefix="promotion-baseline-") as authority_cwd:
+            completed = subprocess.run(
+                [
+                    _trusted_git_executable(),
+                    "ls-remote",
+                    "--refs",
+                    PROD_REPOSITORY_URL,
+                    PROD_PROMOTION_REF,
+                ],
+                cwd=authority_cwd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                check=False,
+                timeout=30,
+                env=environment,
+            )
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise PromotionReceiptError("migration_baseline_unavailable") from exc
     if completed.returncode != 0:

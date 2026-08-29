@@ -50,7 +50,8 @@ delta, check report, and current canonical prod baseline, and a revoked receipt 
 re-issued by a racing writer.
 
 - Baseline authority is fetched fresh for every binding from the fixed repository URL and
-  `refs/heads/main`. Git configuration, replace refs, object overlays, and interactive transport
+  `refs/heads/main`. Git is invoked through a root-owned absolute system executable with a fixed
+  system `PATH`; Git configuration, replace refs, object overlays, and interactive transport
   settings are removed from the child environment. The caller-selected source repository supplies
   only immutable candidate objects; it cannot select the baseline.
 - Valid terminal states are `PASS` and `FAIL`; an issued registry entry may transition once to
@@ -67,6 +68,7 @@ Focused proof matrix:
 | Invariant / transition | Proof |
 | --- | --- |
 | Fresh canonical baseline and sanitized Git authority | `tests/runtime/test_startup_artifact_call_sites.py::test_authoritative_baseline_fetch_is_fresh_and_ignores_git_config` |
+| Git executable cannot be replaced through caller `PATH` | `tests/runtime/test_startup_artifact_call_sites.py::test_git_evidence_ignores_caller_path_injection` |
 | Candidate cannot masquerade as the prod baseline | `tests/runtime/test_startup_artifact_call_sites.py::test_promotion_test_rejects_candidate_as_prod_migration_baseline` |
 | Complete baseline-to-candidate migration delta | `tests/runtime/test_startup_artifact_call_sites.py::test_promotion_test_derives_complete_migration_delta_from_candidate_git` |
 | Issue and revoke cannot lose one another's registry update | `tests/runtime/test_startup_artifact_call_sites.py::test_promotion_registry_serializes_issue_and_revocation_updates` |
