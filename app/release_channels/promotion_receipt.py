@@ -528,6 +528,13 @@ def _fsync_directory(path: Path) -> None:
         os.close(descriptor)
 
 
+def _fence_receipt_store(path: Path) -> None:
+    try:
+        _fsync_directory(path)
+    except OSError as exc:
+        raise PromotionReceiptError("receipt_store_io_failure") from exc
+
+
 def _read_canonical_file(path: Path, *, code: str) -> dict[str, object]:
     descriptor = -1
     try:
@@ -562,8 +569,34 @@ def _read_canonical_file(path: Path, *, code: str) -> dict[str, object]:
     return value
 
 
+def _recover_linked_temp(path: Path, *, code: str) -> None:
+    """Remove only writer temp names hard-linked to an already published inode."""
+    try:
+        target = path.stat(follow_symlinks=False)
+        candidates = tuple(path.parent.glob(f".{path.name}.*.tmp"))
+        removed = False
+        for candidate in candidates:
+            info = candidate.stat(follow_symlinks=False)
+            if (
+                stat.S_ISREG(info.st_mode)
+                and info.st_uid == os.geteuid()
+                and (info.st_dev, info.st_ino) == (target.st_dev, target.st_ino)
+            ):
+                candidate.unlink()
+                removed = True
+        if removed:
+            _fsync_directory(path.parent)
+    except OSError as exc:
+        raise PromotionReceiptError(code) from exc
+
+
+def _unlink_temp(path: Path) -> None:
+    path.unlink(missing_ok=True)
+
+
 def _install_content_addressed(path: Path, data: bytes) -> None:
     if path.exists():
+        _recover_linked_temp(path, code="receipt_store_corrupt")
         if _read_canonical_file(path, code="receipt_store_corrupt") != json.loads(data):
             raise PromotionReceiptError("receipt_store_corrupt")
         try:
@@ -576,17 +609,22 @@ def _install_content_addressed(path: Path, data: bytes) -> None:
         try:
             os.link(temp, path, follow_symlinks=False)
         except FileExistsError:
+            _unlink_temp(temp)
+            _recover_linked_temp(path, code="receipt_store_corrupt")
             if _read_canonical_file(path, code="receipt_store_corrupt") != json.loads(data):
                 raise PromotionReceiptError("receipt_store_corrupt")
+        else:
+            _unlink_temp(temp)
         _fsync_directory(path.parent)
     except OSError as exc:
         raise PromotionReceiptError("receipt_store_io_failure") from exc
     finally:
-        temp.unlink(missing_ok=True)
+        _unlink_temp(temp)
 
 
 def _install_immutable_record(path: Path, data: bytes, *, code: str) -> None:
     if path.exists():
+        _recover_linked_temp(path, code=code)
         if _read_canonical_file(path, code=code) != json.loads(data):
             raise PromotionReceiptError(code)
         try:
@@ -599,13 +637,130 @@ def _install_immutable_record(path: Path, data: bytes, *, code: str) -> None:
         try:
             os.link(temp, path, follow_symlinks=False)
         except FileExistsError:
+            _unlink_temp(temp)
+            _recover_linked_temp(path, code=code)
             if _read_canonical_file(path, code=code) != json.loads(data):
                 raise PromotionReceiptError(code)
+        else:
+            _unlink_temp(temp)
         _fsync_directory(path.parent)
     except OSError as exc:
         raise PromotionReceiptError("receipt_store_io_failure") from exc
     finally:
-        temp.unlink(missing_ok=True)
+        _unlink_temp(temp)
+
+
+def _validate_registry_update_shape(registry: Mapping[str, object]) -> None:
+    if set(registry) != _REGISTRY_FIELDS or registry.get("registry_version") != REGISTRY_VERSION:
+        raise PromotionReceiptError("registry_corrupt")
+    trusted_keys = _mapping(registry.get("trusted_keys"), code="registry_corrupt")
+    entries = _mapping(registry.get("entries"), code="registry_corrupt")
+    for key_id, public_key in trusted_keys.items():
+        if _ISSUER_ID.fullmatch(key_id) is None:
+            raise PromotionReceiptError("registry_corrupt")
+        _decode_canonical_b64url(
+            public_key,
+            length=32,
+            code="registry_corrupt",
+        )
+    for receipt_id, raw_entry in entries.items():
+        if _DIGEST.fullmatch(receipt_id) is None:
+            raise PromotionReceiptError("registry_corrupt")
+        entry = _mapping(raw_entry, code="registry_corrupt")
+        if set(entry) != _REGISTRY_ENTRY_FIELDS or entry.get("status") not in {
+            "issued",
+            "revoked",
+        }:
+            raise PromotionReceiptError("registry_corrupt")
+        issuer_id = entry.get("issuer_id")
+        issuer_key_id = entry.get("issuer_key_id")
+        public_key = entry.get("public_key")
+        signature = entry.get("issuer_signature")
+        if (
+            not isinstance(issuer_id, str)
+            or _ISSUER_ID.fullmatch(issuer_id) is None
+            or not isinstance(issuer_key_id, str)
+            or _ISSUER_ID.fullmatch(issuer_key_id) is None
+            or trusted_keys.get(issuer_key_id) != public_key
+            or not isinstance(signature, str)
+            or not signature.startswith("ed25519:v1:")
+        ):
+            raise PromotionReceiptError("registry_corrupt")
+        _decode_canonical_b64url(public_key, length=32, code="registry_corrupt")
+        _decode_canonical_b64url(
+            signature.removeprefix("ed25519:v1:"),
+            length=64,
+            code="registry_corrupt",
+        )
+
+
+def _publish_registry_entry(
+    path: Path,
+    *,
+    receipt: Mapping[str, object],
+    issuer_public_key: bytes,
+) -> dict[str, object]:
+    receipt_id = str(receipt["receipt_id"])
+    issuer_key_id = str(receipt["issuer_key_id"])
+    public_key = _canonical_b64url(issuer_public_key)
+    entry: dict[str, object] = {
+        "issuer_id": receipt["issuer_id"],
+        "issuer_key_id": issuer_key_id,
+        "public_key": public_key,
+        "issuer_signature": receipt["issuer_signature"],
+        "status": "issued",
+    }
+    if not path.exists():
+        initial: dict[str, object] = {
+            "registry_version": REGISTRY_VERSION,
+            "trusted_keys": {issuer_key_id: public_key},
+            "entries": {receipt_id: entry},
+        }
+        _install_immutable_record(
+            path,
+            _canonical_bytes(initial),
+            code="registry_conflict",
+        )
+        return initial
+
+    _recover_linked_temp(path, code="registry_corrupt")
+    existing = _read_canonical_file(path, code="registry_corrupt")
+    _validate_registry_update_shape(existing)
+    trusted_keys = dict(
+        _mapping(existing["trusted_keys"], code="registry_corrupt")
+    )
+    entries = dict(_mapping(existing["entries"], code="registry_corrupt"))
+    current_key = trusted_keys.get(issuer_key_id)
+    if current_key is not None and current_key != public_key:
+        raise PromotionReceiptError("registry_key_conflict")
+    current_entry = entries.get(receipt_id)
+    if current_entry is not None:
+        if current_entry != entry:
+            raise PromotionReceiptError("registry_entry_conflict")
+        try:
+            _fsync_directory(path.parent)
+        except OSError as exc:
+            raise PromotionReceiptError("receipt_store_io_failure") from exc
+        return existing
+
+    trusted_keys[issuer_key_id] = public_key
+    entries[receipt_id] = entry
+    updated: dict[str, object] = {
+        "registry_version": REGISTRY_VERSION,
+        "trusted_keys": trusted_keys,
+        "entries": entries,
+    }
+    temp = _write_temp(path, _canonical_bytes(updated))
+    try:
+        if _read_canonical_file(path, code="registry_conflict") != existing:
+            raise PromotionReceiptError("registry_conflict")
+        os.replace(temp, path)
+        _fsync_directory(path.parent)
+    except OSError as exc:
+        raise PromotionReceiptError("receipt_store_io_failure") from exc
+    finally:
+        _unlink_temp(temp)
+    return updated
 
 
 def _reject_duplicate_keys(pairs: list[tuple[str, object]]) -> dict[str, object]:
@@ -677,6 +832,7 @@ def write_promotion_test_terminal_receipt(
     )
     receipt_id = str(receipt["receipt_id"])
     receipt_path = receipts / f"{receipt_id.removeprefix('sha256:')}.json"
+    registry_path = store / "registry.json"
     attempt_path = attempts / f"{attempt_id}.json"
     attempt = {
         "attempt_version": ATTEMPT_VERSION,
@@ -712,7 +868,7 @@ def write_promotion_test_terminal_receipt(
         if not stat.S_ISREG(lock_info.st_mode) or lock_info.st_nlink != 1:
             raise PromotionReceiptError("unsafe_receipt_store")
         fcntl.flock(lock_descriptor, fcntl.LOCK_EX)
-        _fsync_directory(store)
+        _fence_receipt_store(store)
         _install_immutable_record(
             reservation_path,
             reservation_bytes,
@@ -726,6 +882,11 @@ def write_promotion_test_terminal_receipt(
             raise PromotionReceiptError("attempt_conflict")
         if attempt_path.exists():
             _install_content_addressed(receipt_path, receipt_bytes)
+            _publish_registry_entry(
+                registry_path,
+                receipt=receipt,
+                issuer_public_key=issuer_public_key,
+            )
             _install_immutable_record(
                 attempt_path,
                 attempt_bytes,
@@ -745,12 +906,17 @@ def write_promotion_test_terminal_receipt(
                 raise PromotionReceiptError("receipt_store_corrupt")
             return receipt
         _install_content_addressed(receipt_path, receipt_bytes)
+        _publish_registry_entry(
+            registry_path,
+            receipt=receipt,
+            issuer_public_key=issuer_public_key,
+        )
         _install_immutable_record(
             attempt_path,
             attempt_bytes,
             code="attempt_conflict",
         )
-        _fsync_directory(store)
+        _fence_receipt_store(store)
         return receipt
     finally:
         try:

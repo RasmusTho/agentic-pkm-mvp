@@ -1510,6 +1510,18 @@ def test_promotion_test_writes_one_durable_terminal_receipt(tmp_path: Path) -> N
     ) == passed
     assert len(list((store / "receipts").glob("*.json"))) == 1
     assert len(list((store / "attempts").glob("*.json"))) == 1
+    registry = json.loads((store / "registry.json").read_text(encoding="utf-8"))
+    assert registry["entries"][passed["receipt_id"]]["status"] == "issued"
+    assert prepare_prod_activation(
+        passed,
+        registry,
+        _promotion_admission_context(),
+        now=datetime(2026, 8, 16, 12, tzinfo=timezone.utc),
+    ) == {
+        "activation_permitted": True,
+        "activation_state": "validated_not_activated",
+        "receipt_id": passed["receipt_id"],
+    }
     pass_attempt = json.loads(
         (store / "attempts" / f"pt-{'1' * 32}.json").read_text(encoding="utf-8")
     )
@@ -1536,6 +1548,8 @@ def test_promotion_test_writes_one_durable_terminal_receipt(tmp_path: Path) -> N
     assert failed["outcome"] == "FAIL"
     assert len(list((store / "receipts").glob("*.json"))) == 2
     assert len(list((store / "attempts").glob("*.json"))) == 2
+    registry = json.loads((store / "registry.json").read_text(encoding="utf-8"))
+    assert set(registry["entries"]) == {passed["receipt_id"], failed["receipt_id"]}
     fail_attempt = json.loads(
         (store / "attempts" / f"pt-{'2' * 32}.json").read_text(encoding="utf-8")
     )
@@ -1993,6 +2007,9 @@ def test_promotion_test_fences_fresh_store_parent_directories(
         ("store", 1),
         ("store", 2),
         ("store", 3),
+        ("store", 4),
+        ("store", 5),
+        ("store", 6),
         ("reservations", 1),
         ("receipts", 1),
         ("attempts", 1),
@@ -2062,3 +2079,114 @@ def test_promotion_test_retry_refences_every_uncertain_directory_entry(
     assert len(list((store / "reservations").glob("*.json"))) == 1
     assert len(list((store / "receipts").glob("*.json"))) == 1
     assert len(list((store / "attempts").glob("*.json"))) == 1
+
+
+@pytest.mark.parametrize("crash_target", ["reservations", "receipts", "registry", "attempts"])
+def test_promotion_test_recovers_linked_temp_before_terminal_success(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    crash_target: str,
+) -> None:
+    from app.release_channels import promotion_receipt
+
+    class SimulatedPowerLoss(BaseException):
+        pass
+
+    private_key, public_key = _promotion_test_signing_material()
+    rendered, manifest = _promotion_test_candidate_inputs()
+    store = tmp_path / "ops" / "test-promotions"
+    target_parent = store if crash_target == "registry" else store / crash_target
+    real_unlink = promotion_receipt._unlink_temp
+
+    def lose_power_before_unlink(path: Path) -> None:
+        if path.parent == target_parent:
+            raise SimulatedPowerLoss
+        real_unlink(path)
+
+    common = {
+        "attempt_id": "pt-" + "e" * 32,
+        "rendered": rendered,
+        "channel_manifest": manifest,
+        "prod_admission_context": _promotion_admission_context(),
+        "check_report": _promotion_check_report(),
+        "migration_paths": (),
+        "issued_at": datetime(2026, 8, 16, tzinfo=timezone.utc),
+        "fresh_until": datetime(2026, 8, 17, tzinfo=timezone.utc),
+        "issuer_id": "promotion-test-issuer",
+        "issuer_key_id": "promotion-test-issuer-key-v1",
+        "signer": private_key.sign,
+        "issuer_public_key": public_key,
+        "receipt_store": store,
+        "resettable_roots": (tmp_path / "tmp-test", tmp_path / "vault-test"),
+    }
+    monkeypatch.setattr(promotion_receipt, "_unlink_temp", lose_power_before_unlink)
+    with pytest.raises(SimulatedPowerLoss):
+        write_promotion_test_terminal_receipt(**common)
+    linked_temps = list(target_parent.glob(".*.tmp"))
+    assert len(linked_temps) == 1
+    published = [
+        path
+        for path in target_parent.iterdir()
+        if not path.name.startswith(".") and path.is_file()
+    ]
+    assert any(path.stat().st_nlink == 2 for path in published)
+
+    monkeypatch.setattr(promotion_receipt, "_unlink_temp", real_unlink)
+    receipt = write_promotion_test_terminal_receipt(**common)
+    assert receipt["outcome"] == "PASS"
+    assert list(target_parent.glob(".*.tmp")) == []
+    assert all(
+        path.stat().st_nlink == 1
+        for path in target_parent.iterdir()
+        if path.is_file()
+    )
+    registry = json.loads((store / "registry.json").read_text(encoding="utf-8"))
+    assert registry["entries"][receipt["receipt_id"]]["status"] == "issued"
+
+
+def test_promotion_test_retry_never_reissues_a_revoked_receipt(tmp_path: Path) -> None:
+    private_key, public_key = _promotion_test_signing_material()
+    rendered, manifest = _promotion_test_candidate_inputs()
+    store = tmp_path / "ops" / "test-promotions"
+    common = {
+        "attempt_id": "pt-" + "f" * 32,
+        "rendered": rendered,
+        "channel_manifest": manifest,
+        "prod_admission_context": _promotion_admission_context(),
+        "check_report": _promotion_check_report(),
+        "migration_paths": (),
+        "issued_at": datetime(2026, 8, 16, tzinfo=timezone.utc),
+        "fresh_until": datetime(2026, 8, 17, tzinfo=timezone.utc),
+        "issuer_id": "promotion-test-issuer",
+        "issuer_key_id": "promotion-test-issuer-key-v1",
+        "signer": private_key.sign,
+        "issuer_public_key": public_key,
+        "receipt_store": store,
+        "resettable_roots": (tmp_path / "tmp-test", tmp_path / "vault-test"),
+    }
+    receipt = write_promotion_test_terminal_receipt(**common)
+    registry_path = store / "registry.json"
+    registry = json.loads(registry_path.read_text(encoding="utf-8"))
+    registry["entries"][receipt["receipt_id"]]["status"] = "revoked"
+    registry_path.write_bytes(
+        json.dumps(
+            registry,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    )
+
+    with pytest.raises(PromotionReceiptError) as exc_info:
+        write_promotion_test_terminal_receipt(**common)
+    assert exc_info.value.code == "registry_entry_conflict"
+    persisted = json.loads(registry_path.read_text(encoding="utf-8"))
+    assert persisted["entries"][receipt["receipt_id"]]["status"] == "revoked"
+    with pytest.raises(PromotionReceiptError) as exc_info:
+        prepare_prod_activation(
+            receipt,
+            persisted,
+            _promotion_admission_context(),
+            now=datetime(2026, 8, 16, 12, tzinfo=timezone.utc),
+        )
+    assert exc_info.value.code == "receipt_revoked"
