@@ -39,7 +39,9 @@ to the draft, and the pending-review-not-clobbered discipline.
    this refresh in that order, so a matching tick cannot return before the delta is evaluated. The
    existing vault-ingest caller `app.watcher.vault_watcher.run_watcher_tick` supplies changed,
    explicitly scoped notes and invokes that composition after ingest; it does not guess a scope or
-   add a new acquisition path.
+   add a new acquisition path. If the composition fails, the watcher retains the changed-note
+   observation at its pre-tick snapshot cursor so an unchanged next tick retries the same delivery
+   rather than silently acknowledging the failed capability step.
 2. **Pending-review guard (INV-SQ-D, the seam this task exists to walk)**: before drafting, the
    refresh checks `candidate_answer_ref` — if a prior candidate-answer draft is still pending (not yet
    accepted, dismissed, or expired), the refresh **defers**: evidence keeps accruing in the log, no
@@ -125,6 +127,9 @@ standing question rather than re-asking ASK cold every time.
 - [ ] AC8 (enforcement): `status: answered` is asserted unreachable from this task's write path — this
       task's own production entrypoint never sets `status`. Verify:
       `tests/standing_questions/test_answer_refresh.py::test_refresh_path_never_writes_status`
+- [ ] AC9: a watcher-triggered refresh failure remains replayable on the next unchanged tick and
+      advances the watcher snapshot only after the composition succeeds. Verify:
+      `tests/watcher/test_vault_watcher_core.py::test_watcher_retries_standing_questions_failure_before_advancing_snapshot`
 
 ## How to Verify (Pre-Merge)
 

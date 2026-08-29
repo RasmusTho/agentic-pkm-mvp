@@ -666,6 +666,7 @@ def run_watcher_tick(
     except Exception:
         pass
     watcher = VaultWatcher(vault_root, snapshot_path=snapshot_path)
+    initial_snapshot = load_snapshot(watcher.snapshot_path)
     result = watcher.run(save=False)
     resolved_outbox = _resolve_outbox_path(outbox_path)
     if resolved_outbox is None and not dry_run:
@@ -720,6 +721,8 @@ def run_watcher_tick(
             for rel_path in recovered_terminal
         )
 
+    standing_questions_retry_paths: list[Path] = []
+
     def _finish_tick(*, preserve_changed_observations: bool = False) -> None:
         """Persist snapshot before its receipt, then retire reported terminals.
 
@@ -731,7 +734,22 @@ def run_watcher_tick(
             if preserve_changed_observations:
                 _advance_terminal_delete_observations(watcher.snapshot_path)
             else:
-                watcher.refresh_snapshot()
+                refreshed = watcher.refresh_snapshot()
+                # SQ is part of the changed-note delivery chain.  If its
+                # composition fails, leave those source observations at their
+                # pre-tick cursor so an unchanged next tick retries the
+                # capability instead of silently acknowledging the failure.
+                for path in standing_questions_retry_paths:
+                    try:
+                        rel_path = path.relative_to(vault_root).as_posix()
+                    except ValueError:
+                        continue
+                    if rel_path in initial_snapshot:
+                        refreshed[rel_path] = initial_snapshot[rel_path]
+                    else:
+                        refreshed.pop(rel_path, None)
+                if standing_questions_retry_paths:
+                    save_snapshot(watcher.snapshot_path, refreshed)
         _emit_run_event(
             summary,
             vault_root=vault_root,
@@ -957,6 +975,7 @@ def run_watcher_tick(
             except Exception as exc:  # pragma: no cover - runtime degradation is surfaced
                 summary["errors"] += 1
                 summary["standing_questions_tick_error"] = str(exc)
+                standing_questions_retry_paths = list(result.changed)
 
     if not skip_panel and policy_allowed_paths:
         store = ObjectStore()
