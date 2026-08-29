@@ -82,11 +82,17 @@ The posture labels follow `docs/plans/HUMAN_NEED_UAT_STRATEGY.md`: `baseline`, `
 `release gate` describe test gating. A `partial` scenario may be valuable UAT without being a smoke
 failure; a `baseline` scenario becomes a release gate only when current-state owner docs claim it.
 
-## 5. Full validation-coverage audit
+## 5. Full validation-coverage audit (dated evidence snapshot)
 
-The scenario matrix is broader than the eight canonical loops: it contains fourteen human-facing
-scenarios (including 2A and 7A) and seven direct human-agent scenarios. Coverage means that every
-row has all of the following, or an explicit `unsupported`/`N/A` reason:
+This section is a point-in-time inventory of evidence observed on 2026-08-28. It is not a new
+repository-wide contract. The active coverage fields and human-acceptance separation are owned by
+`docs/plans/HUMAN_NEED_UAT_STRATEGY.md :: Human-need acceptance` and
+`docs/plans/SCENARIO_ACCEPTANCE_MATRIX.md :: Coverage and reporting`.
+
+The scenario matrix was broader than the eight canonical loops at snapshot time: it contained
+fourteen human-facing scenarios (including 2A and 7A) and seven direct human-agent scenarios. For
+this snapshot, each row was inspected against the following owner-defined fields, or an explicit
+`unsupported`/`N/A` reason:
 
 1. a stable human-outcome source anchor;
 2. an implementation posture owned by the current-state docs;
@@ -175,7 +181,7 @@ do not upgrade `capability_validated`, `ready_to_try`, `owner_tried`, or `owner_
 | Row 12 support-free survivability | #5144 / PR #5147; implementation head `9e72564fead3430a5ecdd15e4f3a97dd444ac911`; merge `7c2e357b8da73767f512079b3857d0b821927b7c` | Cold-rebuild suite: 11 passed; selector suite: 99 passed; required CI green | No composed survivability/UAT walkthrough or owner observation/acceptance |
 | Row 7A watcher safe enablement | #5145 / PR #5148; implementation head `bffae72f03854cbc9b5b6a08e6421243168dabfc`; merge `c3e4ca1888655f5b818e7280bf4078385dd890df` | Exact-head Unit tests (not pg) and smoke green; required CI green | No owner enablement decision or separate composed capability acceptance |
 
-### Coverage-to-framework mapping
+### Coverage-to-framework mapping (snapshot routing)
 
 The gaps above should be filled by existing frames, in this order:
 
@@ -224,9 +230,14 @@ the primary proof is API/PostgreSQL/concurrency/recovery/cutover evidence.
 | Temporal-intention authority | #4375 | Open and blocked | Preserve opaque-first and single-writer boundary; do not treat target spec as shipped runtime. |
 | Human-need scenario execution | `docs/plans/HUMAN_NEED_UAT_STRATEGY.md`, scenario matrix, existing UAT tests | Mixed baseline/partial/future | #5144 and #5145 are the first two slice-verified validation receipts; advance composed scenario/UAT only under the owning capability Issue; avoid a catch-all epic. |
 
-## 8. Reporting template for a capability or parent Issue
+## 8. Dated-audit reporting template (non-normative snapshot)
 
-Every parent validation hub or capability receipt should report one row per capability with:
+The following template records what was known for this audit's rows. It is a receipt shape for the
+dated snapshot, not a second source of policy. New or updated capability receipts use the owner
+requirements in the two linked plan sections above.
+
+For this dated snapshot, each parent validation hub or capability receipt was recorded, where
+available, with one row per capability containing:
 
 ```text
 Human outcome:
