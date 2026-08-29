@@ -18,7 +18,8 @@ or human acceptance.
 - `INV-SQ-D`: an un-actioned candidate is never clobbered by a new evidence delta.
 - `INV-SQ-E`: contradiction is surfaced with an exact textual basis, or degrades to `unknown`.
 - Exact-byte Question CAS rejects a stale refresh after human/runtime edits.
-- Evidence identity is the judged content, not a mutable path alone; a changed source is blocked.
+- Evidence identity is the judged content, not a mutable path alone; a changed source is blocked and
+  hashless legacy evidence is rejected until an explicit backfill binds historical bytes.
 - Watcher delivery is retryable: exception and structured-blocked refresh outcomes preserve the source
   observation instead of advancing the snapshot as if the capability succeeded.
 
@@ -35,8 +36,9 @@ The mechanism recognizes these states without adding a second authority store:
 - `deferred`: a pending candidate protects the review surface, so the new delta remains in the log.
 - `retryable-failed`: watcher composition failed or returned a structured blocked result; the source
   snapshot remains at its previous cursor.
-- `conflict`: the Question bytes changed during cognition; the refresh retries the same logical
-  generation rather than publishing stale state.
+- `conflict`: the Question bytes changed during cognition; the refresh retries the same exact evidence
+  generation rather than publishing stale state. A materially changed evidence generation receives a
+  new deterministic identity; the prior proposal remains traceable and is never overwritten.
 
 Terminal or indeterminate outcomes are explicit: `accepted` is terminal for SQ-04, while `blocked`,
 `deferred`, `retryable-failed`, and `conflict` remain observable and replayable. A missing staged
@@ -67,11 +69,12 @@ For one refresh generation, the durable order is:
 6. Apply the Question update with exact-byte CAS.
 
 If the process dies before the CAS, the deterministic draft/receipt pair is reused for the same
-`question_id` plus unconsumed `last_refreshed_at` generation. If CAS conflicts, the retry re-reads
-the Question and either defers to an existing pending candidate or repeats the logical proposal
-without creating a duplicate. If source bytes no longer match their recorded content hash, replay
-fails closed. If watcher composition raises or returns structured `blocked`, the changed observation
-is retained for the next unchanged tick.
+`question_id` plus exact evidence-generation fingerprint. The draft is not rewritten, and a reused
+receipt must match both the draft byte hash and its full payload. If CAS conflicts, the retry re-reads
+the Question; unchanged evidence reuses the one logical proposal, while newly appended evidence gets
+a distinct generation identity rather than silently changing an old receipted draft. If source bytes
+no longer match their recorded content hash, replay fails closed. If watcher composition raises or
+returns structured `blocked`, the changed observation is retained for the next unchanged tick.
 
 ## Locks and races
 
@@ -93,10 +96,13 @@ historical evidence claim. No SQ-04 writer changes the standing answer or human-
 | Contradiction basis is exact or unknown | `test_invalid_contradiction_basis_degrades_to_unknown`, `test_refresh_marks_contradiction` | Passed |
 | Human fields remain protected | QuestionStore CAS and human-field tests | Passed |
 | Evidence entries carry content identity | `test_relevant_artifact_attaches_irrelevant_does_not` | Passed |
-| Focused SQ/Create regression set | Standing Questions, Create lifecycle, and QuestionStore tests | `133 passed` |
+| Focused SQ/Create regression set | Standing Questions, Create lifecycle, and QuestionStore tests | `136 passed` |
+| Matcher CAS conflict is observable and non-clobbering | `test_match_write_conflict_does_not_clobber_question` | Passed |
+| Deterministic replay preserves draft bytes and receipt payload | `test_refresh_replay_reuses_draft_and_receipt_bytes` | Passed |
 
 The full not-PostgreSQL suite was not a valid local proof at packet creation: the host-global
 `pytest-not-pg` lease was unavailable and the local watcher collection also lacked the declared
-`lingua` dependency. CI remains the authoritative environment for that selected suite. Live test,
-Playwright/browser proof, owner observation, and SQ-05 acceptance remain unclaimed and are not
-silently promoted by this packet.
+`lingua` dependency. CI remains the authoritative environment for that selected suite; the focused
+watcher tests use the same production tick seam but are not a substitute for that environment proof.
+Live test, Playwright/browser proof, owner observation, and SQ-05 acceptance remain unclaimed and are
+not silently promoted by this packet.

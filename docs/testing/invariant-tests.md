@@ -796,7 +796,7 @@ current runtime probes discoverable without claiming that SQ-05's review/accepta
   than silently replaying an old observation.
 - **Runtime test path:** `tests/standing_questions/test_answer_refresh.py::test_invalid_contradiction_basis_degrades_to_unknown`,
   `tests/standing_questions/test_answer_refresh.py::test_changed_source_bytes_cannot_replay_historical_evidence`,
-  `tests/standing_questions/test_answer_refresh.py::test_refresh_marks_contradiction`.
+  `tests/standing_questions/test_answer_refresh.py::test_contradiction_surfaced_not_silently_rewritten`.
 - **Related docs / contracts / ADRs:** [REFRESH_ANSWER_ON_EVIDENCE_DELTA](../STANDING_QUESTIONS/REFRESH_ANSWER_ON_EVIDENCE_DELTA.md);
   [MATCH_EVIDENCE_TO_OPEN_QUESTIONS](../STANDING_QUESTIONS/MATCH_EVIDENCE_TO_OPEN_QUESTIONS.md);
   [structured UNKNOWN](../RUNTIME_CORRECTNESS_KERNEL/STRUCTURED_INTENT_OUTPUT_WITH_UNKNOWN.md).

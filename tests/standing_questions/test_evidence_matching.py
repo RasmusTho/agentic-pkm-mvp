@@ -14,6 +14,7 @@ from app.standing_questions.evidence_matching import (
     ConfidenceClass,
     match_evidence_to_open_questions,
 )
+from app.knowledge.errors import KnowledgeWriteConflict
 from app.standing_questions.question_store import (
     QuestionStore,
     parse_question_note,
@@ -140,6 +141,29 @@ def test_relevant_artifact_attaches_irrelevant_does_not(tmp_path: Path) -> None:
         encoding="utf-8"
     )
     assert entry["matched_at"].endswith("Z")
+
+
+def test_match_write_conflict_does_not_clobber_question(tmp_path: Path) -> None:
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    store = _store(vault)
+    note, _ = store.create_question(text=QUESTION_TEXT, scope="work", registered_via="explicit")
+    ref = _write_artifact(vault, "notes/outbox-measurements.md", RELEVANT_BODY)
+
+    def conflict(*_args: Any, **_kwargs: Any) -> None:
+        raise KnowledgeWriteConflict("simulated concurrent Question edit")
+
+    store.update_system_fields_if_unchanged = conflict  # type: ignore[method-assign]
+    summary = match_evidence_to_open_questions(
+        vault_root=vault,
+        candidates=[_candidate(ref)],
+        store=store,
+        complete=_Association({"single-writer ceiling": _attached()}),
+    )
+
+    assert summary.write_conflict == 1
+    assert summary.attached == 0
+    assert store.read_question(note["question_id"])["evidence"] == []
 
 
 def test_cross_scope_artifact_excluded_content_free(tmp_path: Path) -> None:

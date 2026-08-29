@@ -975,8 +975,9 @@ def run_watcher_tick(
                 summary["standing_questions_deferred"] = len(
                     standing_tick.refresh.deferred_pending_review
                 )
-                summary["standing_questions_blocked"] = len(standing_tick.refresh.blocked)
-                if standing_tick.refresh.blocked:
+                blocked_refreshes = tuple(getattr(standing_tick.refresh, "blocked", ()))
+                summary["standing_questions_blocked"] = len(blocked_refreshes)
+                if blocked_refreshes:
                     standing_questions_retry_paths = list(result.changed)
             except Exception as exc:  # pragma: no cover - runtime degradation is surfaced
                 summary["errors"] += 1

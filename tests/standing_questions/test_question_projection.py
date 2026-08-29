@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import re
 import uuid
 from pathlib import Path
@@ -346,6 +347,7 @@ def test_projection_adapts_rfc3339_edges_for_postgres(
                     "confidence_class": "high",
                     "provenance_ref": "receipt:abc",
                     "quoted_span": "evidence",
+                    "content_hash": hashlib.sha256(b"evidence").hexdigest(),
                 }
             ],
             "last_matched_at": "0000-02-29T00:00:00Z",

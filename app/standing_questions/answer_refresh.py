@@ -12,6 +12,7 @@ from __future__ import annotations
 import logging
 import fcntl
 import hashlib
+import json
 import os
 import stat
 import threading
@@ -114,11 +115,16 @@ def _content_hash(text: str) -> str:
 
 
 def _refresh_attempt_ids(
-    question_id: str, last_refreshed_at: str | None
+    question_id: str,
+    last_refreshed_at: str | None,
+    evidence: Sequence[Mapping[str, Any]],
 ) -> tuple[str, str, str]:
-    """Return stable draft/receipt ids for one unconsumed refresh generation."""
+    """Return stable draft/receipt ids for one exact unconsumed evidence generation."""
     generation = last_refreshed_at or "never"
-    key = hashlib.sha256(f"{question_id}\x1f{generation}".encode("utf-8")).hexdigest()
+    evidence_bytes = json.dumps(list(evidence), sort_keys=True, separators=(",", ":"))
+    key = hashlib.sha256(
+        f"{question_id}\x1f{generation}\x1f{evidence_bytes}".encode("utf-8")
+    ).hexdigest()
     return (
         key,
         uuid5(NAMESPACE_URL, f"agentic-pkm:standing-question-refresh:draft:{key}").hex,
@@ -266,6 +272,10 @@ def _source_inputs(
         provenance_ref = str(entry["provenance_ref"])
         artifact_ref = str(entry["artifact_ref"])
         expected_hash = entry.get("content_hash")
+        if not isinstance(expected_hash, str) or not expected_hash:
+            raise UnresolvableCitationError(
+                f"evidence entry lacks immutable content identity: {entry.get('artifact_ref')}"
+            )
         content_ref = (
             f"content://sha256/{expected_hash}"
             if isinstance(expected_hash, str) and expected_hash
@@ -482,7 +492,9 @@ def refresh_answers_on_evidence_delta(
                     trace_id=trace_id,
                 )
                 refresh_key, draft_id, receipt_id = _refresh_attempt_ids(
-                    question_id, current.get("last_refreshed_at")
+                    question_id,
+                    current.get("last_refreshed_at"),
+                    current.get("evidence", []),
                 )
                 standing_answer_referenced, standing_answer = _read_standing_answer(
                     resolved_root, current

@@ -14,6 +14,7 @@ from typing import Any
 import pytest
 
 from app.expansion.create import SourceInput
+from app.knowledge.errors import KnowledgeWriteConflict
 from app.standing_questions import answer_refresh as refresh_module
 from app.standing_questions.answer_refresh import refresh_answers_on_evidence_delta
 from app.standing_questions.evidence_matching import (
@@ -45,6 +46,7 @@ def _evidence(ref: str, provenance: str, span: str, hour: int) -> dict[str, Any]
         "confidence_class": "high",
         "provenance_ref": provenance,
         "quoted_span": span,
+        "content_hash": hashlib.sha256(span.encode("utf-8")).hexdigest(),
     }
 
 
@@ -773,5 +775,48 @@ def test_refresh_cas_snapshot_is_taken_before_drafting(
     assert retry.drafted == (note["question_id"],)
     final = store.read_question(note["question_id"])
     candidate_path = vault / final["candidate_answer_ref"][len("vault://") :]
-    assert len(list(candidate_path.parent.glob("*.md"))) == 1
-    assert len([r for r in _records(outbox) if r["event"] == "expansion.create.proposed"]) == 1
+    assert candidate_path.exists()
+    assert len(list(candidate_path.parent.glob("*.md"))) == 2
+    assert len([r for r in _records(outbox) if r["event"] == "expansion.create.proposed"]) == 2
+
+
+def test_refresh_replay_reuses_draft_and_receipt_bytes(tmp_path: Path) -> None:
+    """A crash/CAS retry with the same evidence generation cannot rewrite a receipted draft."""
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    outbox = tmp_path / "outbox.jsonl"
+    store, note = _question(vault)
+    evidence = _evidence("vault://notes/a.md", "outbox://evidence/1", "first evidence", 10)
+    store.update_system_fields(note["question_id"], {"evidence": [evidence]})
+    sources = {"outbox://evidence/1": _source("outbox://evidence/1", evidence["quoted_span"])}
+
+    original = store.update_system_fields_if_unchanged
+    failed = True
+
+    def fail_once(*args: Any, **kwargs: Any) -> Any:
+        nonlocal failed
+        if failed:
+            failed = False
+            raise KnowledgeWriteConflict("simulated crash after proposal receipt")
+        return original(*args, **kwargs)
+
+    store.update_system_fields_if_unchanged = fail_once  # type: ignore[method-assign]
+    first = refresh_answers_on_evidence_delta(
+        vault_root=vault, outbox_path=outbox, evidence_sources=sources,
+        store=store, write_guard=_guard(), now=_dt(12)
+    )
+    assert first.blocked == (note["question_id"],)
+    records_before = _records(outbox)
+    proposal_before = [r for r in records_before if r["event"] == "expansion.create.proposed"]
+    assert len(proposal_before) == 1
+    draft_before = (vault / proposal_before[0]["payload"]["draft_path"]).read_bytes()
+
+    second = refresh_answers_on_evidence_delta(
+        vault_root=vault, outbox_path=outbox, evidence_sources=sources,
+        store=store, write_guard=_guard(), now=_dt(13)
+    )
+    assert second.drafted == (note["question_id"],)
+    records_after = _records(outbox)
+    proposal_after = [r for r in records_after if r["event"] == "expansion.create.proposed"]
+    assert proposal_after == proposal_before
+    assert (vault / proposal_after[0]["payload"]["draft_path"]).read_bytes() == draft_before

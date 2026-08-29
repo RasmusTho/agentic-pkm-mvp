@@ -50,6 +50,7 @@ from app.components.llm.constrained import (
     register_schema,
 )
 from app.expansion.create import SourceInput
+from app.knowledge.errors import KnowledgeWriteConflict
 from app.standing_questions.answer_refresh import AnswerRefreshSummary
 from app.standing_questions.projection import (
     QuestionsDirectoryMissingError,
@@ -190,6 +191,7 @@ class MatchTickSummary:
     excluded_cross_scope: int = 0
     excluded_non_open: int = 0
     unresolved_artifact: int = 0
+    write_conflict: int = 0
 
 
 @dataclass(frozen=True)
@@ -421,17 +423,26 @@ def match_evidence_to_open_questions(
         # Re-read immediately before the guarded append: a human may have closed the
         # question mid-tick, and a closed question must never be resurrected by a
         # race (INV-SQ-F partial failure).
-        current = question_store.read_question(question_id)
+        current, current_version = question_store.read_question_with_version(question_id)
         if current["status"] != "open":
             counters.bump("excluded_non_open")
             continue
-        question_store.update_system_fields(
-            question_id,
-            {
-                "evidence": [*current["evidence"], *new_entries],
-                "last_matched_at": _utc_now(),
-            },
-        )
+        try:
+            question_store.update_system_fields_if_unchanged(
+                question_id,
+                current,
+                {
+                    "evidence": [*current["evidence"], *new_entries],
+                    "last_matched_at": _utc_now(),
+                },
+                expected_version=current_version,
+            )
+        except KnowledgeWriteConflict:
+            # A concurrent human close or another evidence append wins. The
+            # unchanged candidate is retried on the next tick; never rebuild a
+            # whole note from a stale read.
+            counters.bump("write_conflict")
+            continue
         counters.bump("attached", len(new_entries))
 
     return counters.summary()

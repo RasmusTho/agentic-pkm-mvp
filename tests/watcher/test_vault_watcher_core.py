@@ -191,6 +191,7 @@ def test_watcher_retries_standing_questions_failure_before_advancing_snapshot(
                 refresh_candidates=("sq-2",),
                 drafted=("sq-2",),
                 deferred_pending_review=(),
+                blocked=(),
             ),
         )
 

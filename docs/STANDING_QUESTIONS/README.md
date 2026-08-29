@@ -1,4 +1,4 @@
-State: Specification directory — SQ-04 implementation delivered in #3327; parent #3325 remains the validation hub and SQ-05 is still the review-surface follow-up. System-level source of truth for building Standing Questions, the third of the seven uncaptured closed loops named in `docs/research/yggdrasil-closed-loops-ideation.md`. Grounded in that ideation capture; not itself the grounding research. GitHub issues are execution artifacts; this spec remains the contract.
+State: Specification directory — SQ-04 candidate implementation is under PR #5174 for #3327; parent #3325 remains the validation hub and SQ-05 is still the review-surface follow-up. System-level source of truth for building Standing Questions, the third of the seven uncaptured closed loops named in `docs/research/yggdrasil-closed-loops-ideation.md`. Grounded in that ideation capture; not itself the grounding research. GitHub issues are execution artifacts; this spec remains the contract.
 Doc role: Capability specification (feature-breakdown lane)
 Temporal class: strategic
 Review cadence: event-driven (task merges, parent-issue lifecycle)

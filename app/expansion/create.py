@@ -80,6 +80,7 @@ ADR, mirroring ``app.expansion.connect``'s and
 from __future__ import annotations
 
 import json
+import hashlib
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from enum import Enum
@@ -99,6 +100,7 @@ from app.knowledge_compilation.runtime_artifacts import CompilationDraft, Contex
 from app.reasoning.multi import run_multi_note_reasoning
 from app.services.outbox import append_jsonl_outbox_event
 from app.write_guard import DEFAULT_WRITE_GUARD, WriteGuard
+from scripts.yaml_roundtrip import load_frontmatter
 
 # --- output kinds (closed enum; no default) ---------------------------------
 
@@ -196,6 +198,10 @@ class SourceInput:
     # by cognition and citation resolution; callers may retain an upstream
     # provenance reference without using a URI as an object-store id.
     provenance_ref: str | None = None
+
+
+class CreateIdempotencyConflictError(RuntimeError):
+    """Raised when a deterministic replay identity maps to different content."""
 
 
 @dataclass(frozen=True)
@@ -495,6 +501,9 @@ def _draft_frontmatter(
     cognition_metadata: dict[str, Any],
     created_at: datetime,
     staleness_days: int,
+    request_fingerprint: str | None = None,
+    language: str | None = None,
+    language_rule: str | None = None,
 ) -> dict[str, Any]:
     frontmatter = {
         "uuid": draft_id,
@@ -517,6 +526,12 @@ def _draft_frontmatter(
     ]
     if provenance_refs:
         frontmatter["provenance_refs"] = provenance_refs
+    if request_fingerprint is not None:
+        frontmatter["request_fingerprint"] = request_fingerprint
+    if language is not None:
+        frontmatter["language"] = language
+    if language_rule is not None:
+        frontmatter["language_rule"] = language_rule
     return frontmatter
 
 
@@ -537,21 +552,69 @@ def _draft_note_text(
     return dump_frontmatter(frontmatter, body) + checkbox_block
 
 
-def _receipt_already_emitted(outbox_path: Path, event: str, event_id: str) -> bool:
+def _existing_receipt(outbox_path: Path, event: str, event_id: str) -> dict[str, Any] | None:
     if not outbox_path.exists():
-        return False
+        return None
     try:
         lines = outbox_path.read_text(encoding="utf-8").splitlines()
     except OSError:
-        return False
+        return None
     for line in lines:
         try:
             record = json.loads(line)
         except (TypeError, ValueError):
             continue
         if record.get("event") == event and record.get("event_id") == event_id:
-            return True
-    return False
+            return record
+    return None
+
+
+def _request_fingerprint(request: CreateRequest) -> str:
+    material = {
+        "kind": request.kind.value,
+        "title": request.title,
+        "question": request.question,
+        "language_policy": request.language_policy,
+        "sources": [
+            {
+                "object_id": source.object_id,
+                "note_path": source.note_path,
+                "text_sha256": hashlib.sha256(source.text.encode("utf-8")).hexdigest(),
+                "quoted_spans": list(source.quoted_spans),
+                "language": source.language,
+                "review_state": source.review_state,
+                "provenance_ref": source.provenance_ref,
+            }
+            for source in request.sources
+        ],
+    }
+    encoded = json.dumps(material, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _replay_draft_metadata(
+    draft_path: Path,
+    *,
+    request_fingerprint: str,
+    draft_id: str,
+) -> tuple[dict[str, Any], str] | None:
+    if not draft_path.exists():
+        return None
+    try:
+        raw = draft_path.read_text(encoding="utf-8")
+        frontmatter, _body = load_frontmatter(raw)
+    except (OSError, UnicodeError, ValueError) as exc:
+        raise CreateIdempotencyConflictError(
+            f"deterministic Create draft cannot be inspected: {draft_path}"
+        ) from exc
+    if (
+        frontmatter.get("uuid") != draft_id
+        or frontmatter.get("request_fingerprint") != request_fingerprint
+    ):
+        raise CreateIdempotencyConflictError(
+            f"deterministic Create draft identity/content mismatch: {draft_path}"
+        )
+    return frontmatter, hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
 def _emit_receipt(
@@ -563,7 +626,12 @@ def _emit_receipt(
     event_id: str | None = None,
 ) -> str:
     event_id = event_id or uuid4().hex
-    if _receipt_already_emitted(outbox_path, event, event_id):
+    existing = _existing_receipt(outbox_path, event, event_id)
+    if existing is not None:
+        if existing.get("payload") != payload:
+            raise CreateIdempotencyConflictError(
+                f"deterministic Create receipt payload mismatch: {event}/{event_id}"
+            )
         return event_id
     record = {
         "event": event,
@@ -623,6 +691,71 @@ def run_create_pass(
     # claim (spec §2.2 keystone).
     _validate_citations(request.sources)
 
+    request_fingerprint = _request_fingerprint(request) if draft_id is not None else None
+    resolved_vault_root = Path(vault_root).expanduser().resolve()
+    replay_draft_path = (
+        _drafts_dir(resolved_vault_root) / f"{draft_id}.md" if draft_id is not None else None
+    )
+    if replay_draft_path is not None:
+        replay = _replay_draft_metadata(
+            replay_draft_path,
+            request_fingerprint=request_fingerprint or "",
+            draft_id=draft_id or "",
+        )
+        existing_receipt = (
+            _existing_receipt(outbox_path, CREATE_PROPOSED_EVENT, receipt_id)
+            if receipt_id is not None
+            else None
+        )
+        if existing_receipt is not None and replay is None:
+            raise CreateIdempotencyConflictError(
+                f"deterministic Create receipt has no draft: {replay_draft_path}"
+            )
+        if replay is not None and existing_receipt is not None:
+            payload = existing_receipt.get("payload", {})
+            if payload.get("draft_sha256") != replay[1] or payload.get(
+                "request_fingerprint"
+            ) != request_fingerprint:
+                raise CreateIdempotencyConflictError(
+                    f"deterministic Create replay receipt does not match draft: {replay_draft_path}"
+                )
+            return CreatePassReport(
+                activatable=True,
+                blocked_reasons=(),
+                draft_path=str(replay_draft_path.relative_to(resolved_vault_root)),
+                receipt_id=receipt_id,
+                kind=request.kind,
+            )
+        if replay is not None and receipt_id is not None:
+            replay_frontmatter = replay[0]
+            proposed_by = replay_frontmatter.get("proposed_by", {})
+            cognition_metadata = proposed_by.get("cognition", {})
+            replay_payload = {
+                "draft_id": draft_id,
+                "kind": request.kind.value,
+                "sources": replay_frontmatter.get("sources", []),
+                "cognition_metadata": cognition_metadata,
+                "draft_path": str(replay_draft_path.relative_to(resolved_vault_root)),
+                "language": replay_frontmatter.get("language"),
+                "language_rule": replay_frontmatter.get("language_rule"),
+                "request_fingerprint": request_fingerprint,
+                "draft_sha256": replay[1],
+            }
+            _emit_receipt(
+                CREATE_PROPOSED_EVENT,
+                replay_payload,
+                outbox_path=outbox_path,
+                trace_id=request.trace_id,
+                event_id=receipt_id,
+            )
+            return CreatePassReport(
+                activatable=True,
+                blocked_reasons=(),
+                draft_path=str(replay_draft_path.relative_to(resolved_vault_root)),
+                receipt_id=receipt_id,
+                kind=request.kind,
+            )
+
     language, language_rule = _resolve_output_language(
         request.sources, language_policy=request.language_policy
     )
@@ -648,7 +781,7 @@ def run_create_pass(
 
     write_guard.assert_writes_allowed(CREATE_STAGING_WRITE_ACTION)
 
-    vault_root = Path(vault_root).expanduser().resolve()
+    vault_root = resolved_vault_root
     drafts_dir = _drafts_dir(vault_root)
     drafts_dir.mkdir(parents=True, exist_ok=True)
 
@@ -659,6 +792,9 @@ def run_create_pass(
         cognition_metadata=cognition_metadata,
         created_at=now,
         staleness_days=staleness_days,
+        request_fingerprint=request_fingerprint,
+        language=language,
+        language_rule=language_rule,
     )
     if draft_frontmatter_enricher is not None:
         extra_frontmatter = dict(draft_frontmatter_enricher(draft))
@@ -669,9 +805,24 @@ def run_create_pass(
                 + ", ".join(sorted(reserved))
             )
         frontmatter.update(extra_frontmatter)
-    note_text = _draft_note_text(frontmatter=frontmatter, body=draft.body or "", draft_id=draft.artifact_id)
+    note_text = _draft_note_text(
+        frontmatter=frontmatter, body=draft.body or "", draft_id=draft.artifact_id
+    )
     draft_path = drafts_dir / f"{draft.artifact_id}.md"
-    draft_path.write_text(note_text, encoding="utf-8")
+    if draft_id is not None and draft_path.exists():
+        replay = _replay_draft_metadata(
+            draft_path,
+            request_fingerprint=request_fingerprint or "",
+            draft_id=draft.artifact_id,
+        )
+        if replay is None:
+            raise CreateIdempotencyConflictError(
+                f"deterministic Create draft disappeared during replay: {draft_path}"
+            )
+        draft_sha256 = replay[1]
+    else:
+        draft_path.write_text(note_text, encoding="utf-8")
+        draft_sha256 = hashlib.sha256(note_text.encode("utf-8")).hexdigest()
 
     receipt_id = _emit_receipt(
         CREATE_PROPOSED_EVENT,
@@ -683,6 +834,8 @@ def run_create_pass(
             "draft_path": str(draft_path.relative_to(vault_root)),
             "language": language,
             "language_rule": language_rule,
+            "request_fingerprint": request_fingerprint,
+            "draft_sha256": draft_sha256,
         },
         outbox_path=outbox_path,
         trace_id=request.trace_id,
@@ -866,6 +1019,7 @@ __all__ = [
     "DRAFTS_SUBDIR",
     "SUPPORTED_OUTPUT_KINDS",
     "CreateBlockedError",
+    "CreateIdempotencyConflictError",
     "CreatePassReport",
     "CreateRequest",
     "DigestActivityInput",
