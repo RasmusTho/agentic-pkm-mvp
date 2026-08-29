@@ -46,8 +46,11 @@ batch before later candidates are touched.
 Repository identity is the live GitHub REST repository ID and canonical full name plus
 exactly one effective `origin` fetch URL and one effective push URL. HTTPS fetch and
 GitHub SSH push forms may differ, but both must identify that REST repository. The
-captured literal push URL—not the mutable remote name—is passed to every `ls-remote`
-and `push`; the fetch URL is used to obtain the exact source object. Every candidate PR
+REST client fixes every authority request to `github.com` and removes ambient `GH_HOST`,
+`GH_REPO`, and alternate HTTP-socket selectors while preserving GitHub token/auth
+environment. The captured literal push URL—not the mutable remote name—is passed to
+every `ls-remote` and `push`; the fetch URL is used to obtain the exact source object.
+Every candidate PR
 must freshly be closed, unmerged, same-repository, and at the named full head ref and
 SHA. The candidate's Issue/no-Issue routing fields are not authority: the live PR body
 is parsed with the same canonical governance classifier used by publication and
@@ -107,6 +110,14 @@ candidate Issue/PR/ref/branch/path resource, and has no live or unreleased lease
 blank row that is live, unreleased, relevant, malformed beyond that bounded legacy
 shape, or otherwise cannot prove irrelevance remains fail-closed. These short snapshots
 never hold lifecycle or SQLite locks across REST or Git network I/O.
+
+The blank-repository compatibility path calls the same task/lease relationship validator
+as repository-bound tasks. Any retained `lease_id` therefore requires one exact lease,
+one canonical Issue resource, one unique task reference, exact nonempty holder identity,
+and a complete inactive relationship; `completed` plus retained lease remains
+noncanonical and fails closed even with a matching holder. A canonical `completed` row
+with null lease/holder and an optional valid historical expiry remains admissible when it
+is provably unrelated.
 
 Receipts live under the repository Git common directory at
 `git-hygiene/targeted-remote-cleanup/v1/`, keyed by

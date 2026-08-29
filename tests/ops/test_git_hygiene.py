@@ -552,6 +552,56 @@ def test_targeted_remote_cleanup_allows_fetch_https_push_ssh_for_same_repo(
     assert identity.push_url == PUSH_URL
 
 
+def test_targeted_remote_cleanup_fixes_rest_authority_to_github_com(
+    tmp_path, monkeypatch
+) -> None:
+    calls: list[tuple[list[str], dict[str, object]]] = []
+    monkeypatch.setenv("GH_HOST", "evil.example")
+    monkeypatch.setenv("GH_REPO", "attacker/redirect")
+    monkeypatch.setenv("GH_HTTP_UNIX_SOCKET", "/tmp/evil-gh.sock")
+    monkeypatch.setenv("GH_TOKEN", "github-token")
+    monkeypatch.setenv("GITHUB_TOKEN", "github-actions-token")
+
+    def command(args, **kwargs):
+        calls.append((args, kwargs))
+        return subprocess.CompletedProcess(
+            args, 0, json.dumps(_repository_payload()), ""
+        )
+
+    def git_result(args, _cwd):
+        value = FETCH_URL if "--push" not in args else PUSH_URL
+        return subprocess.CompletedProcess(args, 0, value + "\n", "")
+
+    monkeypatch.setattr(git_hygiene.subprocess, "run", command)
+    monkeypatch.setattr(git_hygiene, "run_git_result", git_result)
+
+    identity = git_hygiene._resolve_repository_identity(
+        tmp_path, "RasmusTho/agentic-pkm-mvp"
+    )
+
+    assert len(calls) == 1
+    args, kwargs = calls[0]
+    assert args == [
+        "gh",
+        "api",
+        "--hostname",
+        "github.com",
+        "--method",
+        "GET",
+        "repos/RasmusTho/agentic-pkm-mvp",
+    ]
+    environment = kwargs["env"]
+    assert isinstance(environment, dict)
+    assert "GH_HOST" not in environment
+    assert "GH_REPO" not in environment
+    assert "GH_HTTP_UNIX_SOCKET" not in environment
+    assert environment["GH_TOKEN"] == "github-token"
+    assert environment["GITHUB_TOKEN"] == "github-actions-token"
+    assert identity.fetch_url == FETCH_URL
+    assert identity.push_url == PUSH_URL
+    assert git_hygiene._github_repo_from_url(identity.fetch_url) == identity.full_name
+
+
 def test_targeted_remote_cleanup_rereads_lifecycle_before_archive(tmp_path, monkeypatch) -> None:
     candidate = _targeted_candidate()
     refs = {candidate["source_ref"]: candidate["source_sha"]}
@@ -1735,6 +1785,103 @@ def test_targeted_remote_cleanup_ignores_blank_repo_unrelated_branch_history(
 
 
 @pytest.mark.parametrize(
+    "historical_expiry", (None, "2026-08-29T00:01:00+00:00")
+)
+def test_targeted_remote_cleanup_allows_blank_repo_canonical_completed_no_lease(
+    tmp_path, monkeypatch, historical_expiry
+) -> None:
+    from app.dispatcher.models import TaskRecord
+    from app.dispatcher.store import SqliteStore
+
+    database = tmp_path / "dispatcher.sqlite3"
+    monkeypatch.setattr(
+        git_hygiene, "_canonical_dispatcher_db_path", lambda _cwd: database
+    )
+    store = SqliteStore(database)
+    store.initialize()
+    store.upsert_task(
+        TaskRecord(
+            task_id="github-issue-4000",
+            issue_number=4000,
+            title="canonical legacy terminal row",
+            status="completed",
+            priority="low",
+            source_anchor_refs=["github:issue:4000"],
+            created_at="2026-07-01T00:00:00+00:00",
+            updated_at="2026-07-11T00:00:00+00:00",
+            repo="",
+            lease_expires_at=historical_expiry,
+        )
+    )
+
+    snapshot = git_hygiene._read_dispatcher_authority(
+        tmp_path, "RasmusTho/agentic-pkm-mvp"
+    )
+    candidate = git_hygiene.Candidate(**_targeted_candidate())
+    assert git_hygiene._dispatcher_conflicts(candidate, {}, snapshot) == set()
+
+
+@pytest.mark.parametrize("lease_state", ("released", "expired"))
+@pytest.mark.parametrize("claimed_by", (None, "wrong-agent", "prior-agent"))
+def test_targeted_remote_cleanup_rejects_blank_repo_completed_retained_lease(
+    tmp_path, monkeypatch, lease_state, claimed_by
+) -> None:
+    from app.dispatcher.models import LeaseRecord, TaskRecord
+    from app.dispatcher.store import SqliteStore
+
+    database = tmp_path / "dispatcher.sqlite3"
+    monkeypatch.setattr(
+        git_hygiene, "_canonical_dispatcher_db_path", lambda _cwd: database
+    )
+    store = SqliteStore(database)
+    store.initialize()
+    expires = (
+        "2099-01-01T00:01:00+00:00"
+        if lease_state == "released"
+        else "2020-01-01T00:01:00+00:00"
+    )
+    store.upsert_lease(
+        LeaseRecord(
+            lease_id=f"blank-completed-{lease_state}-{claimed_by}",
+            resource="issue:4000",
+            holder="prior-agent",
+            ttl_seconds=60,
+            acquired_at="2020-01-01T00:00:00+00:00",
+            expires_at=expires,
+            released_at=(
+                "2026-08-29T00:00:30+00:00"
+                if lease_state == "released"
+                else None
+            ),
+            release_reason="completed" if lease_state == "released" else None,
+        )
+    )
+    store.upsert_task(
+        TaskRecord(
+            task_id="github-issue-4000",
+            issue_number=4000,
+            title="noncanonical legacy terminal row",
+            status="completed",
+            priority="low",
+            source_anchor_refs=["github:issue:4000"],
+            created_at="2026-07-01T00:00:00+00:00",
+            updated_at="2026-07-11T00:00:00+00:00",
+            repo="",
+            claimed_by=claimed_by,
+            lease_id=f"blank-completed-{lease_state}-{claimed_by}",
+            lease_expires_at=expires,
+        )
+    )
+
+    snapshot = git_hygiene._read_dispatcher_authority(
+        tmp_path, "RasmusTho/agentic-pkm-mvp"
+    )
+    candidate = git_hygiene.Candidate(**_targeted_candidate())
+    with pytest.raises(RuntimeError, match="dispatcher_task_lease_disagreement"):
+        git_hygiene._dispatcher_conflicts(candidate, {}, snapshot)
+
+
+@pytest.mark.parametrize(
     ("issue", "status", "linked_pr", "anchors", "repository"),
     [
         (5170, "completed", None, ["github:issue:5170"], ""),
@@ -1820,7 +1967,7 @@ def test_targeted_remote_cleanup_rejects_blank_repo_unreleased_lease(
         tmp_path, "RasmusTho/agentic-pkm-mvp"
     )
     candidate = git_hygiene.Candidate(**_targeted_candidate())
-    with pytest.raises(RuntimeError, match="task_identity_ambiguous"):
+    with pytest.raises(RuntimeError, match="task_lease_disagreement"):
         git_hygiene._dispatcher_conflicts(candidate, {}, snapshot)
 
 

@@ -59,6 +59,9 @@ _GIT_LOCAL_CONTEXT_ENV_KEYS = frozenset(
         "GIT_WORK_TREE",
     }
 )
+_GITHUB_AUTHORITY_REDIRECT_ENV_KEYS = frozenset(
+    {"GH_HOST", "GH_HTTP_UNIX_SOCKET", "GH_REPO"}
+)
 
 
 def _sanitized_git_environment() -> dict[str, str]:
@@ -68,6 +71,16 @@ def _sanitized_git_environment() -> dict[str, str]:
         key: value
         for key, value in os.environ.items()
         if key not in _GIT_LOCAL_CONTEXT_ENV_KEYS
+    }
+
+
+def _sanitized_github_environment() -> dict[str, str]:
+    """Keep GitHub authentication while removing ambient endpoint redirects."""
+
+    return {
+        key: value
+        for key, value in os.environ.items()
+        if key not in _GITHUB_AUTHORITY_REDIRECT_ENV_KEYS
     }
 
 
@@ -582,7 +595,14 @@ def _json_without_duplicates(raw: str) -> object:
 
 
 def _github_get(cwd: Path, endpoint: str) -> Mapping[str, object]:
-    result = run_command(["gh", "api", "--method", "GET", endpoint], cwd)
+    result = subprocess.run(
+        ["gh", "api", "--hostname", "github.com", "--method", "GET", endpoint],
+        cwd=cwd,
+        check=False,
+        capture_output=True,
+        text=True,
+        env=_sanitized_github_environment(),
+    )
     if result.returncode != 0:
         raise RuntimeError(f"github_get_failed:{endpoint}")
     try:
@@ -1187,6 +1207,8 @@ def _legacy_blank_dispatcher_task_irrelevant(
     *,
     candidate: Candidate,
     lease: Mapping[str, object] | None,
+    lease_reference_count: int,
+    now: dt.datetime,
     resources: set[str],
 ) -> bool:
     """Prove one current-store-shaped blank-repository history row irrelevant."""
@@ -1227,23 +1249,65 @@ def _legacy_blank_dispatcher_task_irrelevant(
     if relevant:
         raise RuntimeError("dispatcher_task_identity_ambiguous")
 
+    live = _validate_dispatcher_task_lease_relationship(
+        task,
+        lease,
+        lease_reference_count=lease_reference_count,
+        now=now,
+    )
+    if live:
+        raise RuntimeError("dispatcher_task_identity_ambiguous")
+    return True
+
+
+def _validate_dispatcher_task_lease_relationship(
+    task: Mapping[str, object],
+    lease: Mapping[str, object] | None,
+    *,
+    lease_reference_count: int,
+    now: dt.datetime,
+) -> bool | None:
+    """Validate one task's canonical lease relationship and return liveness."""
+
+    status = task.get("status")
     lease_id = task.get("lease_id")
     if lease_id is None:
-        if task.get("lease_expires_at") is not None:
-            raise RuntimeError("dispatcher_task_identity_ambiguous")
-        return True
-    if not isinstance(lease_id, str) or not lease_id or lease is None:
+        historical_expiry = task.get("lease_expires_at")
+        if status == "completed":
+            if historical_expiry is not None:
+                _parse_dispatcher_time(historical_expiry)
+            if task.get("claimed_by") is not None or task.get("last_heartbeat_at") is not None:
+                raise RuntimeError("dispatcher_task_lease_disagreement")
+        elif (
+            historical_expiry is not None
+            or task.get("claimed_by") is not None
+            or task.get("last_heartbeat_at") is not None
+        ):
+            raise RuntimeError("dispatcher_task_lease_disagreement")
+        return None
+    if not isinstance(lease_id, str) or not lease_id:
         raise RuntimeError("dispatcher_task_identity_ambiguous")
+    if lease is None:
+        raise RuntimeError("dispatcher_referenced_lease_missing")
+    if lease_reference_count != 1:
+        raise RuntimeError("dispatcher_task_lease_disagreement")
     resource = lease.get("resource")
+    issue = task.get("issue_number")
     if not isinstance(resource, str) or not resource:
         raise RuntimeError("dispatcher_lease_identity_ambiguous")
-    if lease.get("released_at") is None:
-        raise RuntimeError("dispatcher_task_identity_ambiguous")
-    _parse_dispatcher_time(lease.get("expires_at"))
-    _parse_dispatcher_time(lease.get("released_at"))
+    if resource != f"issue:{issue}":
+        raise RuntimeError("dispatcher_task_lease_resource_mismatch")
+    holder = lease.get("holder")
+    if not isinstance(holder, str) or not holder:
+        raise RuntimeError("dispatcher_lease_identity_ambiguous")
+    claimed_by = task.get("claimed_by")
+    if not isinstance(claimed_by, str) or not claimed_by or claimed_by != holder:
+        raise RuntimeError("dispatcher_task_lease_disagreement")
+    if status == "completed":
+        raise RuntimeError("dispatcher_task_lease_disagreement")
     if task.get("lease_expires_at") != lease.get("expires_at"):
         raise RuntimeError("dispatcher_task_lease_disagreement")
-    return True
+    return _dispatcher_live_lease(lease, now=now)
 
 
 def _dispatcher_task_relevant(
@@ -1252,6 +1316,8 @@ def _dispatcher_task_relevant(
     repository: str,
     candidate: Candidate,
     lease: Mapping[str, object] | None,
+    lease_reference_count: int,
+    now: dt.datetime,
     resources: set[str],
 ) -> bool:
     task_repository = task.get("repo")
@@ -1260,6 +1326,8 @@ def _dispatcher_task_relevant(
             task,
             candidate=candidate,
             lease=lease,
+            lease_reference_count=lease_reference_count,
+            now=now,
             resources=resources,
         )
         return False
@@ -1330,6 +1398,10 @@ def _dispatcher_conflicts(
             repository=repository,
             candidate=candidate,
             lease=task_lease,
+            lease_reference_count=len(lease_references.get(task_lease_id, ()))
+            if isinstance(task_lease_id, str)
+            else 0,
+            now=now,
             resources=resources,
         ):
             continue
@@ -1340,45 +1412,18 @@ def _dispatcher_conflicts(
         ):
             raise RuntimeError("dispatcher_task_status_ambiguous")
         nonterminal = status in _NONTERMINAL_DISPATCHER_STATUSES
-        lease_id = task_lease_id
-        if lease_id is None:
-            historical_expiry = task.get("lease_expires_at")
-            if nonterminal and historical_expiry is not None:
-                raise RuntimeError("dispatcher_task_lease_disagreement")
-            if historical_expiry is not None:
-                _parse_dispatcher_time(historical_expiry)
-            if not nonterminal and (
-                task.get("claimed_by") is not None
-                or task.get("last_heartbeat_at") is not None
-            ):
-                raise RuntimeError("dispatcher_task_lease_disagreement")
+        live = _validate_dispatcher_task_lease_relationship(
+            task,
+            task_lease,
+            lease_reference_count=len(lease_references.get(task_lease_id, ()))
+            if isinstance(task_lease_id, str)
+            else 0,
+            now=now,
+        )
+        if task_lease_id is None:
             if nonterminal:
                 conflicts.add("nonterminal_dispatcher_task")
             continue
-        if not isinstance(lease_id, str) or not lease_id:
-            raise RuntimeError("dispatcher_task_identity_ambiguous")
-        lease = leases.get(lease_id)
-        if lease is None:
-            raise RuntimeError("dispatcher_referenced_lease_missing")
-        if len(lease_references.get(lease_id, ())) != 1:
-            raise RuntimeError("dispatcher_task_lease_disagreement")
-        resource = lease.get("resource")
-        if not isinstance(resource, str) or not resource:
-            raise RuntimeError("dispatcher_lease_identity_ambiguous")
-        issue = task.get("issue_number")
-        if resource != f"issue:{issue}":
-            raise RuntimeError("dispatcher_task_lease_resource_mismatch")
-        holder = lease.get("holder")
-        if not isinstance(holder, str) or not holder:
-            raise RuntimeError("dispatcher_lease_identity_ambiguous")
-        claimed_by = task.get("claimed_by")
-        if not isinstance(claimed_by, str) or not claimed_by or claimed_by != holder:
-            raise RuntimeError("dispatcher_task_lease_disagreement")
-        if not nonterminal:
-            raise RuntimeError("dispatcher_task_lease_disagreement")
-        if task.get("lease_expires_at") != lease.get("expires_at"):
-            raise RuntimeError("dispatcher_task_lease_disagreement")
-        live = _dispatcher_live_lease(lease, now=now)
         if live:
             conflicts.add("live_dispatcher_claim")
         elif nonterminal:
