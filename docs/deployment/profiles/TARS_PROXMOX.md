@@ -25,13 +25,25 @@ This profile isolates one TARS/Proxmox setup from the portable BuilderOps deploy
 Alternative hosts, hypervisors, VM layouts, container runtimes, and alerting mechanisms may satisfy
 the generic contract with equivalent evidence.
 
-## BuilderOps placement boundary
+## Complete Dev System placement boundary
 
-The TARS qualification contract identifies VM 102 (`builder-system`) as the intended isolated
-BuilderOps candidate. That is a candidate-policy identifier, not a live deployment assertion. The
-candidate must remain separate from Product Runtime: it must not host a `pkm-*` Product Compose
-project or carry Product production credentials, vault references, or network identities. See
-`docs/BUILDEROPS_CONTROL_PLANE/README.md :: TARS qualification contract` for the owner contract.
+The TARS qualification contract identifies VM 102 (`builder-system`) as the intended cohesive home
+for the complete Builder System / Dev System, including Dev UI as one read-only projection and the
+BuilderOps control plane and internal providers. That is a candidate-policy identifier, not a live
+deployment assertion. The complete topology is owned by
+`docs/BUILDEROPS_CONTROL_PLANE/README.md :: Complete Dev System VM-102 topology contract`; every
+unresolved component remains a named reconciliation gap.
+
+The candidate must remain separate from Product Runtime: it must not host a `pkm-*` Product Compose
+project or carry Product production credentials, vault references, or network identities. Strict
+host-key verification is required for any operational readback. A failed or unavailable host
+ownership inventory is evidence of an open qualification gate, not permission to weaken SSH policy.
+
+The ordered schemas and rollback-baseline rules are owned only by the
+[VM-102 evidence and receipt contract](../../BUILDEROPS_CONTROL_PLANE/README.md#vm-102-evidence-and-receipt-contract).
+This profile supplies setup-specific qualification evidence and refuses missing ownership,
+identity, ingress, health, or rollback evidence; it does not redefine the receipt chain or record
+live residency, deployment, health, or owner acceptance.
 
 ## Disk and WAL headroom policy
 

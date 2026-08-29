@@ -47,6 +47,29 @@ not define primary navigation or split one owner journey across subsystem UIs.
 Its primary success criterion is reduced cognitive load: the owner can keep directing the project
 without first rebuilding an internal model of the delivery machinery.
 
+## Dev System runtime boundary
+
+The complete Builder System / Dev System has one intended cohesive runtime home: TARS VM 102
+(`builder-system`). Dev UI is one read-only projection component of that system, not the system's
+whole deployment and not Product Runtime. BuilderOps and its internal providers supply the
+source-owned operational read paths; GitHub, Git, review, CI, merge, closure, promotion, and
+Product/Runtime-owned evidence remain external authority boundaries. TARS/Proxmox remains the
+external host qualification and VM control boundary. The model-service dependency is external
+unless a later receipt explicitly proves another placement.
+
+This is target placement, not current residency. Dev UI must not show a component as deployed,
+healthy, or ready from a VM screen, Project view, default-engine container, or unbound guest check.
+The complete component inventory and gaps are owned by
+[`docs/BUILDEROPS_CONTROL_PLANE/README.md :: Complete Dev System VM-102 topology contract`](BUILDEROPS_CONTROL_PLANE/README.md).
+The read-time view may surface the inventory and its freshness/refusal state, but it cannot create
+local workflow state, duplicate lifecycle authority, or upgrade a missing receipt into proof.
+
+The ordered schemas are owned only by the
+[VM-102 evidence and receipt contract](BUILDEROPS_CONTROL_PLANE/README.md#vm-102-evidence-and-receipt-contract).
+Dev UI consumes those source receipts without copying their schema. If any source or component is
+unavailable, Dev UI withdraws only the affected claim and leaves the gap visible; it never infers a
+deployment, rollback target, or owner acceptance.
+
 ### Discovery/control-plane boundary
 
 devUI is a discovery and control plane, not a separate documentation portal. It may index, project,
