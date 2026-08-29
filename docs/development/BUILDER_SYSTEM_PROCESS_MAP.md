@@ -5,7 +5,7 @@ Owner: Builder System governance
 Temporal class: operational
 Review cadence: event-driven
 Source of truth: observed repo files and read-only GitHub command output cited inline
-Last reviewed: 2026-08-15
+Last reviewed: 2026-08-29
 
 # Builder System Process Map
 
@@ -845,6 +845,83 @@ state, proving that they emit no GitHub mutations or coordinator claims and that
 self-attest terminal delivery. Persisted run-state, including reusable constraints, is excluded
 from worker context entirely; the production session validator also rejects an injected run-state
 key before launch. Those actions remain with their live owning workflows.
+
+### Execution Routing target contract
+
+**Status: target; not shipped.** Execution Routing is the Builder System policy that selects an
+adequate execution capability for one already-authorized unit of work. It is a policy/decision seam
+inside the existing Builder control plane, not another orchestrator, lifecycle authority, task
+store, or verification authority. Until an implementation Issue delivers this contract, the
+current TCD policy, agent adapters, and launcher defaults remain operative.
+
+The canonical policy owner is this Builder System process architecture. A future versioned,
+provider-neutral execution-routing contract and pure resolver should be implemented adjacent to the
+Deterministic Delivery Orchestration plan/compiler contracts. Consumers may expose or persist the
+decision, but must not independently redefine it:
+
+| Surface | Target responsibility | Explicit non-responsibility |
+|---|---|---|
+| TCD policy | Define proportional cost, risk, and evidence principles | Model inventory, capacity detection, or per-run lifecycle |
+| Execution Routing resolver | Validate inputs and authorize work class, capability tier, fallback, or escalation | Issue/PR authority, worker execution, or verification waiver |
+| Dispatcher/control plane | Preserve task, claim, lease, limit, retry, and legal-transition state; execute an authorized route | Choosing policy independently |
+| Model-access substrate and launcher | Resolve an authorized capability tier to configured provider/model/reasoning and invoke it | Work classification or commercial allocation policy |
+| BuilderOps | Persist observations, attempts, outcomes, and receipts | Route authorization or GitHub lifecycle truth |
+| Epic run-state | Index compact routing evidence for resume and reconciliation | Mutation or worker-start authority |
+| Skills | Gather required inputs and call the owner contract at the governed workflow seam | Hard-coded model or allocation ladders |
+| Verification and closure | Enforce the Issue contract, current-head evidence, CI, review, merge, and writeback gates | Trusting a capability choice as acceptance evidence |
+
+Execution Routing must keep these dimensions separate:
+
+- **work class**: `deterministic`, `bounded_fast`, `general_delivery`, `complex_delivery`, or
+  `frontier_high_risk`;
+- **capability tier**: `spark`, `luna`, `terra`, or `sol` (stable policy names, not provider/model
+  identifiers);
+- **allocation observation**: scoped, timestamped `bonus_available`, `economically_unavailable`, or
+  `unknown`; and
+- **transition kind**: `initial`, `fallback`, or `escalation`.
+
+The pure resolver's minimum input is the immutable task/Issue authority reference, work class,
+risk, ambiguity, protected-surface flags, prior attempt summaries, allocation observations,
+requested verification profile, and policy version. Its output is one immutable route decision:
+selected capability tier and reasoning class; decision kind and reason code; preserved authority,
+context-pack, attempt-lineage, and verification-profile references; applicable budget/retry limits;
+and an explicit stop or escalation condition. Provider/model IDs and credentials are resolved only
+by configured execution adapters after policy authorization.
+
+A cheap coordinator may propose classification, context selection, decomposition, capability, and
+next action. The proposal must be schema-valid, bounded to the current Issue/run, and contain no
+effect authority. Deterministic policy validates eligibility, leases, caps, protected surfaces,
+legal transitions, attempt lineage, and verification invariants before accepting any proposal. A
+coordinator restart reuses the durable run identity and compact evidence; it does not copy an epic
+or prior-agent transcript into the worker.
+
+Spark is opportunistic capacity, never a dependency. `bounded_fast` may select Spark only from an
+existing supported, explicit, fresh `bonus_available` observation. `economically_unavailable` and
+`unknown` both fall back safely to Luna in the same workflow, with the same authority, bounded
+context pack, constraints, attempt lineage, and verification profile. No quota oracle is implied.
+Fallback means an adequate alternative capability for the same work class; escalation means the
+current capability proved inadequate or risk/ambiguity increased. These are distinct, receipted
+state transitions. Luna-to-Terra or Terra-to-Sol escalation requires a named evidence-based reason,
+not capacity exhaustion.
+
+The worker context must be hash-bound and carry only authority, bounded goal, relevant sources and
+tests, constraints, prior-attempt result, verification targets, and stop/escalation conditions.
+Execution-routing fields extend the existing DDO worker context/invocation/receipt chain; Product
+Context Bundles are not the Builder worker-packet substrate.
+
+Capability selection cannot reduce or replace acceptance evidence. Test requirements, independent
+review, exact-head CI, branch protection, merge authorization, Human Exception classification,
+owner-doc/writeback, and live closure readback derive from the governing task and verification
+profile before routing and remain invariant across every fallback or escalation. A route decision
+grants no repository or external effect by itself.
+
+The economic measure is expected Total Cost of Development per accepted delivery. Attempt receipts
+should minimally record work class, coordinator capability, requested and actual capability,
+provider/model/reasoning observation, allocation class, fallback/escalation reason, attempt count,
+latency, verification/review/CI outcome, rework, human steering, and post-merge repair. Utilization
+of one model and cheapest invocation cost are not success metrics. Luna becoming the general-delivery
+default, or Terra being displaced, requires accepted-delivery evidence; this target contract does
+not change the current TCD ladder.
 
 ```mermaid
 flowchart TD
