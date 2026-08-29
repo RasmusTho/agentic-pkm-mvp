@@ -553,6 +553,142 @@ def load_lifecycle_records(
     return _lifecycle_records(_read_registry(path))
 
 
+def _valid_authority_timestamp(value: object) -> bool:
+    return (
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and math.isfinite(value)
+    )
+
+
+def _validate_authority_record(key: str, record: object) -> dict[str, object]:
+    if not isinstance(record, dict):
+        raise WorktreeLifecycleError("worktree lifecycle record is invalid")
+    path = record.get("path")
+    branch = record.get("branch")
+    owner = record.get("owner")
+    status = record.get("status")
+    registered_at = record.get("registered_at")
+    heartbeat_at = record.get("heartbeat_at")
+    expires_at = record.get("expires_at")
+    if (
+        not isinstance(path, str)
+        or str(_canonical(Path(path))) != key
+        or path != key
+        or not isinstance(branch, str)
+        or not branch
+        or not isinstance(owner, str)
+        or not owner.strip()
+        or not _valid_generation(record.get("generation"))
+        or status
+        not in {"active", "released", "complete", "removal_pending", "removed"}
+        or not _valid_authority_timestamp(registered_at)
+        or not _valid_authority_timestamp(heartbeat_at)
+        or not _valid_authority_timestamp(expires_at)
+        or registered_at > heartbeat_at
+        or heartbeat_at > expires_at
+    ):
+        raise WorktreeLifecycleError("worktree lifecycle record is invalid")
+    if status in {"released", "complete"}:
+        terminal = record.get(f"{status}_at")
+        if not _valid_authority_timestamp(terminal) or terminal != expires_at:
+            raise WorktreeLifecycleError("worktree lifecycle record is invalid")
+    if status == "removal_pending":
+        if (
+            record.get("removal_pending_from_status")
+            not in {"active", "released", "complete"}
+            or not _valid_authority_timestamp(record.get("removal_pending_at"))
+        ):
+            raise WorktreeLifecycleError("worktree lifecycle record is invalid")
+    if status == "removed" and not _valid_authority_timestamp(record.get("removed_at")):
+        raise WorktreeLifecycleError("worktree lifecycle record is invalid")
+    prior = record.get("prior_bindings", [])
+    if not isinstance(prior, list) or len(prior) > MAX_PRIOR_BINDINGS:
+        raise WorktreeLifecycleError("worktree lifecycle record is invalid")
+    prior_branches: set[str] = set()
+    for binding in prior:
+        if (
+            not isinstance(binding, dict)
+            or set(binding) != {"branch", "removed_at"}
+            or not isinstance(binding.get("branch"), str)
+            or not binding["branch"]
+            or binding["branch"] == branch
+            or binding["branch"] in prior_branches
+            or not _valid_authority_timestamp(binding.get("removed_at"))
+        ):
+            raise WorktreeLifecycleError("worktree lifecycle record is invalid")
+        prior_branches.add(binding["branch"])
+    return dict(record)
+
+
+def load_lifecycle_authority(
+    cwd: Path,
+    *,
+    registry_path: Path | None = None,
+) -> dict[str, dict[str, object]]:
+    """Return a generation-bound, fail-closed lifecycle authority snapshot.
+
+    Unlike report-mode ``load_lifecycle_records``, destructive consumers may
+    not interpret a missing registry or filtered malformed row as an empty
+    authority set. Slow Git/marker reads stay outside the shared registry lock;
+    a second locked read proves that the optimistic snapshot did not change.
+    """
+
+    path = _canonical(registry_path or _default_registry_path(cwd))
+    if not path.is_file() or path.is_symlink():
+        raise WorktreeLifecycleError("worktree lifecycle registry is missing")
+    with _registry_lock(path):
+        if not path.is_file() or path.is_symlink():
+            raise WorktreeLifecycleError("worktree lifecycle registry is missing")
+        payload = _read_registry(path)
+        raw_records = payload.get("worktrees")
+        if not isinstance(raw_records, dict):
+            raise WorktreeLifecycleError("worktree lifecycle registry is invalid")
+        snapshot = {
+            key: _validate_authority_record(key, value)
+            for key, value in raw_records.items()
+            if isinstance(key, str)
+        }
+        if len(snapshot) != len(raw_records):
+            raise WorktreeLifecycleError("worktree lifecycle record is invalid")
+
+    bound = _bind_live_generations(cwd, snapshot)
+    live_entries = git_hygiene._parse_worktrees(
+        git_hygiene.run_git(["worktree", "list", "--porcelain"], cwd)
+    )
+    live_by_path = {
+        str(_canonical(Path(entry["worktree"]))): entry
+        for entry in live_entries
+        if isinstance(entry.get("worktree"), str)
+    }
+    if any(
+        record.get("status") != "removed"
+        and not _valid_generation(record.get("generation"))
+        for record in bound.values()
+    ):
+        raise WorktreeLifecycleError("worktree lifecycle generation is unavailable")
+    for key, record in bound.items():
+        entry = live_by_path.get(key)
+        if record.get("status") == "removed":
+            if entry is not None:
+                raise WorktreeLifecycleError("removed lifecycle path is live")
+            continue
+        if (
+            entry is None
+            or entry.get("branch", "").removeprefix("refs/heads/")
+            != record.get("branch")
+        ):
+            raise WorktreeLifecycleError("worktree lifecycle identity is unavailable")
+
+    with _registry_lock(path):
+        if not path.is_file() or path.is_symlink():
+            raise WorktreeLifecycleError("worktree lifecycle registry is missing")
+        current = _read_registry(path).get("worktrees")
+        if current != snapshot:
+            raise WorktreeLifecycleError("worktree lifecycle authority changed")
+    return {key: dict(value) for key, value in bound.items()}
+
+
 def _assert_registration_available(
     record: dict[str, Any] | None,
     *,
