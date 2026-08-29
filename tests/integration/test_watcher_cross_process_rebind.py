@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
+import subprocess
+import sys
 
 import pytest
 
@@ -14,7 +17,12 @@ from app.instance.settings_rebind import (
 )
 from app.instance.vault_registry import VaultRegistration
 from app.watcher import registry
-from app.watcher.settings_rebind import load_settings_rebind_watcher_receipt
+from app.watcher.settings_rebind import (
+    _write_receipt,
+    SettingsRebindWatcherReceipt,
+    load_settings_rebind_watcher_receipt,
+    settings_rebind_watcher_receipt_path,
+)
 from tests.helpers.instance_storage_capability import STORAGE_MUTATION_CAPABILITY
 from tests.helpers.vault_settings import initialize_test_vault
 
@@ -44,14 +52,21 @@ def _register(
     )
 
 
-def _prepare(runtime: InstanceRegistryRuntime) -> SettingsRebindRecord:
+def _prepare(
+    runtime: InstanceRegistryRuntime,
+    *,
+    desired_revision: int = 1,
+    applied_revision: int = 0,
+    prior_binding_id: str | None = "binding-a",
+    candidate_binding_id: str | None = "binding-b",
+) -> SettingsRebindRecord:
     prepared = SettingsRebindRecord(
-        desired_revision=1,
-        applied_revision=0,
+        desired_revision=desired_revision,
+        applied_revision=applied_revision,
         phase="prepared",
         lifecycle_posture="watcher",
-        prior_binding_id="binding-a",
-        candidate_binding_id="binding-b",
+        prior_binding_id=prior_binding_id,
+        candidate_binding_id=candidate_binding_id,
     )
     runtime.registry.set_settings_rebind_state(
         prepared.as_payload(),
@@ -60,14 +75,20 @@ def _prepare(runtime: InstanceRegistryRuntime) -> SettingsRebindRecord:
     return prepared
 
 
-def _commit(runtime: InstanceRegistryRuntime) -> SettingsRebindRecord:
+def _commit(
+    runtime: InstanceRegistryRuntime,
+    *,
+    desired_revision: int = 1,
+    prior_binding_id: str | None = "binding-a",
+    candidate_binding_id: str | None = "binding-b",
+) -> SettingsRebindRecord:
     committed = SettingsRebindRecord(
-        desired_revision=1,
-        applied_revision=1,
+        desired_revision=desired_revision,
+        applied_revision=desired_revision,
         phase="committed",
         lifecycle_posture="watcher",
-        prior_binding_id="binding-a",
-        candidate_binding_id="binding-b",
+        prior_binding_id=prior_binding_id,
+        candidate_binding_id=candidate_binding_id,
     )
     runtime.registry.set_settings_rebind_state(
         committed.as_payload(),
@@ -170,6 +191,10 @@ def _event_paths(root: Path) -> list[str]:
     ]
 
 
+def _revision_receipt_path(root: Path, revision: int) -> Path:
+    return settings_rebind_watcher_receipt_path(root / "watcher-state", revision)
+
+
 def test_production_watcher_reconciler_quiesces_old_binding_without_picker_activation(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -180,10 +205,38 @@ def test_production_watcher_reconciler_quiesces_old_binding_without_picker_activ
     candidate_note = vault_b / "candidate-root.md"
     candidate_note.write_text("candidate must stay unseen\n", encoding="utf-8")
 
-    registry.run_registry_forever(config_path, max_ticks=1)
+    process_env = os.environ.copy()
+    repo_root = Path(__file__).resolve().parents[2]
+    existing_pythonpath = process_env.get("PYTHONPATH")
+    process_env["PYTHONPATH"] = os.pathsep.join(
+        part
+        for part in (str(repo_root), existing_pythonpath)
+        if part
+    )
+    process_env["PYTHONDONTWRITEBYTECODE"] = "1"
+    process = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "app.cli",
+            "watcher",
+            "run",
+            "--config",
+            str(config_path),
+            "--max-ticks",
+            "1",
+        ],
+        cwd=repo_root,
+        env=process_env,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    assert process.returncode == 0, process.stdout + process.stderr
 
     receipt = load_settings_rebind_watcher_receipt(
-        tmp_path / "watcher-state" / "settings-rebind-watcher.json"
+        _revision_receipt_path(tmp_path, 1)
     )
     assert receipt.stage == "acknowledged"
     assert receipt.desired_revision == 1
@@ -228,7 +281,7 @@ def test_dormant_reconciler_failure_matrix_preserves_old_root_observation(
             registry.run_registry_forever(config_path, max_ticks=1)
     registry.run_registry_forever(config_path, max_ticks=1)
     acknowledged = load_settings_rebind_watcher_receipt(
-        tmp_path / "watcher-state" / "settings-rebind-watcher.json"
+        _revision_receipt_path(tmp_path, 1)
     )
     assert acknowledged.stage == "acknowledged"
 
@@ -238,21 +291,91 @@ def test_dormant_reconciler_failure_matrix_preserves_old_root_observation(
         with pytest.raises(RuntimeError, match=f"injected {fault_stage} fault"):
             registry.run_registry_forever(config_path, max_ticks=1)
 
+    resumed = vault_a / "after-drain-before-resume.md"
+    if fault_stage == "resume":
+        resumed.write_text("resume scan\n", encoding="utf-8")
+
     registry.run_registry_forever(config_path, max_ticks=1)
     completed = load_settings_rebind_watcher_receipt(
-        tmp_path / "watcher-state" / "settings-rebind-watcher.json"
+        _revision_receipt_path(tmp_path, 1)
     )
     assert completed.stage == "completed"
     assert completed.drain_receipt is not None
     assert completed.drain_receipt.scan_kind == "post_commit"
     buffered = {item.relative_path for item in completed.buffer}
     assert {"before-ack.md", "between-ack-and-commit.md"}.issubset(buffered)
+    if fault_stage == "resume":
+        assert resumed.name in buffered
 
     event_paths = _event_paths(tmp_path)
     assert str(before) in event_paths
     assert str(between) in event_paths
     assert str(candidate) not in event_paths
     assert all(path.startswith(str(vault_a)) for path in event_paths)
+
+
+@pytest.mark.parametrize("scan_blocker", ["kill_switch", "missing_scope"])
+def test_prepare_ack_requires_complete_successful_old_root_scan(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    scan_blocker: str,
+) -> None:
+    runtime, _vault_a, _vault_b, config_path = _fixture(tmp_path, monkeypatch)
+    if scan_blocker == "kill_switch":
+        (tmp_path / "watcher.stop").touch()
+    else:
+        monkeypatch.setenv("WATCHER_SCOPE_GLOB", "missing-scope/**/*.md")
+
+    with pytest.raises(RegistryError, match="settings rebind watcher scan"):
+        registry.run_registry_once(config_path)
+
+    assert runtime.open_settings_rebind_store().read().phase == "prepared"
+    assert not _revision_receipt_path(tmp_path, 1).exists()
+
+
+def test_reconciler_uses_revision_bound_receipts_for_monotonic_reconciliation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime, _vault_a, vault_b, config_path = _fixture(tmp_path, monkeypatch)
+
+    registry.run_registry_once(config_path)
+    _commit(runtime)
+    registry.run_registry_once(config_path)
+
+    _prepare(runtime, desired_revision=2, applied_revision=1)
+    registry.run_registry_once(config_path)
+
+    revision_one = load_settings_rebind_watcher_receipt(
+        _revision_receipt_path(tmp_path, 1)
+    )
+    revision_two = load_settings_rebind_watcher_receipt(
+        _revision_receipt_path(tmp_path, 2)
+    )
+    assert revision_one.desired_revision == 1
+    assert revision_one.stage == "completed"
+    assert revision_two.desired_revision == 2
+    assert revision_two.stage == "acknowledged"
+    assert not any(path.startswith(str(vault_b)) for path in _event_paths(tmp_path))
+
+    _write_receipt(
+        _revision_receipt_path(tmp_path, 2),
+        SettingsRebindWatcherReceipt(
+            desired_revision=revision_two.desired_revision,
+            prior_binding_id=revision_two.prior_binding_id,
+            candidate_binding_id="binding-c",
+            stage=revision_two.stage,
+            buffer=revision_two.buffer,
+            acknowledgement=revision_two.acknowledgement,
+            drain_receipt=revision_two.drain_receipt,
+            resume_ready_at=revision_two.resume_ready_at,
+        ),
+    )
+    with pytest.raises(
+        RegistryError,
+        match="receipt does not match durable authority",
+    ):
+        registry.run_registry_once(config_path)
 
 
 def test_dormant_no_lifecycle_reconciles_without_unsealing_picker(
@@ -284,6 +407,35 @@ def test_dormant_no_lifecycle_reconciles_without_unsealing_picker(
     )
     with pytest.raises(RegistryError, match="settings rebind record is not installed"):
         registry.run_registry_once(missing_config)
+
+    no_vault_root = tmp_path / "no-vault"
+    no_vault_runtime = _runtime(no_vault_root)
+    _register(no_vault_runtime, binding_id="binding-b", vault_root=_vault_b)
+    _install_dormant_settings_rebind(
+        no_vault_runtime.registry,
+        binding_id=None,
+        _capability=STORAGE_MUTATION_CAPABILITY,
+    )
+    _prepare(
+        no_vault_runtime,
+        prior_binding_id=None,
+        candidate_binding_id="binding-b",
+    )
+    no_vault_config = _configure_watcher(
+        monkeypatch,
+        root=no_vault_root,
+        runtime=no_vault_runtime,
+        vault_a=vault_a,
+        enabled=True,
+    )
+    monkeypatch.delenv("WATCHER_VAULT_PATH")
+
+    registry.run_registry_once(no_vault_config)
+
+    no_vault = no_vault_runtime.open_settings_rebind_store().read()
+    assert no_vault.phase == "no_lifecycle"
+    assert no_vault.prior_binding_id is None
+    assert no_vault.candidate_binding_id == "binding-b"
 
     picker_sources = "\n".join(
         path.read_text(encoding="utf-8")
