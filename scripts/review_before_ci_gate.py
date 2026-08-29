@@ -119,6 +119,23 @@ DIRECT_REPAIR_ISSUE = re.compile(
     rf"{ECMASCRIPT_HORIZONTAL_WHITESPACE}*$",
     re.IGNORECASE | re.MULTILINE,
 )
+DIRECT_REPAIR_TYPE_ATTEMPT = re.compile(
+    rf"^{ECMASCRIPT_HORIZONTAL_WHITESPACE}*Type\b",
+    re.IGNORECASE | re.MULTILINE,
+)
+DIRECT_REPAIR_REASON_ATTEMPT = re.compile(
+    rf"^{ECMASCRIPT_HORIZONTAL_WHITESPACE}*Reason\b",
+    re.IGNORECASE | re.MULTILINE,
+)
+DIRECT_REPAIR_VALIDATION_ATTEMPT = re.compile(
+    rf"^{ECMASCRIPT_HORIZONTAL_WHITESPACE}*Validation\b",
+    re.IGNORECASE | re.MULTILINE,
+)
+DIRECT_REPAIR_ISSUE_ATTEMPT = re.compile(
+    rf"^{ECMASCRIPT_HORIZONTAL_WHITESPACE}*Issue"
+    rf"{ECMASCRIPT_HORIZONTAL_WHITESPACE}+required\b",
+    re.IGNORECASE | re.MULTILINE,
+)
 GOVERNING_ISSUE_ATTEMPT = re.compile(r"(?im)^\s*Governing-Issue\s*:")
 NEUTRALIZED_CLOSING_ATTEMPT = re.compile(
     r"(?im)^[ \t]*Verified-Closing-Issues[ \t]*:"
@@ -809,16 +826,17 @@ def _issue_free_pr_contract_lane(body: object) -> str | None:
         section_end = boundary.start() if boundary else len(canonical_body)
         direct_repair_section = canonical_body[heading.start() : section_end]
     direct_repair_fields = (
-        DIRECT_REPAIR_TYPE,
-        DIRECT_REPAIR_REASON,
-        DIRECT_REPAIR_VALIDATION,
-        DIRECT_REPAIR_ISSUE,
+        (DIRECT_REPAIR_TYPE_ATTEMPT, DIRECT_REPAIR_TYPE),
+        (DIRECT_REPAIR_REASON_ATTEMPT, DIRECT_REPAIR_REASON),
+        (DIRECT_REPAIR_VALIDATION_ATTEMPT, DIRECT_REPAIR_VALIDATION),
+        (DIRECT_REPAIR_ISSUE_ATTEMPT, DIRECT_REPAIR_ISSUE),
     )
     has_direct_repair_contract = bool(
         direct_repair_section
         and all(
-            len(field.findall(direct_repair_section)) == 1
-            for field in direct_repair_fields
+            len(attempt.findall(direct_repair_section)) == 1
+            and len(canonical.findall(direct_repair_section)) == 1
+            for attempt, canonical in direct_repair_fields
         )
     )
     if direct_repair_section is not None and not has_direct_repair_contract:

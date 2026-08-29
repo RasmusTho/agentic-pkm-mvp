@@ -1258,12 +1258,22 @@ def test_issue_free_direct_repair_rejects_feff_in_builderops_literal_heading() -
         "Validation: tests\nIssue required: no",
         "## Direct Repair\nType: governance\nType: docs\nReason: bounded\n"
         "Validation: tests\nIssue required: no",
+        "## Direct Repair\nType: governance\nType: invalid\nReason: bounded\n"
+        "Validation: tests\nIssue required: no",
+        "## Direct Repair\nType: governance\n    Type: docs\nReason: bounded\n"
+        "Validation: tests\nIssue required: no",
         "## Direct Repair\nType: governance\nReason: bounded\nReason: duplicate\n"
+        "Validation: tests\nIssue required: no",
+        "## Direct Repair\nType: governance\nReason: bounded\nReason:\n"
         "Validation: tests\nIssue required: no",
         "## Direct Repair\nType: governance\nReason: bounded\n"
         "Validation: tests\nValidation: duplicate\nIssue required: no",
         "## Direct Repair\nType: governance\nReason: bounded\n"
+        "Validation: tests\n    Validation:\nIssue required: no",
+        "## Direct Repair\nType: governance\nReason: bounded\n"
         "Validation: tests\nIssue required: no\nIssue required: no",
+        "## Direct Repair\nType: governance\nReason: bounded\n"
+        "Validation: tests\nIssue required: no\nIssue required: yes",
     ),
 )
 def test_issue_free_direct_repair_requires_one_canonical_section_and_fields(
