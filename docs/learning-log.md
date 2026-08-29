@@ -241,3 +241,8 @@ Resolution note (2026-05-06): verified `app/orchestrator/v2_runtime.py` now cont
 **Diverged:** The plan described a joined watcher safe-enablement receipt, but CI exposed three missing production-seam fixture assumptions before the test could validate behavior: the settings parent directory, configured tick/run receipt paths, and the canonical watcher settings path.
 **Upstream artifact:** `docs/TESTING.md :: Quality Wave acceptance harness / watcher-runtime convergence tests`
 **Compatibility fallback:** BuilderOps LearningSignal write unavailable: local CLI import failed because the pinned `lingua` dependency is unavailable; convert this entry to a `LearningSignal` when the acknowledged BuilderOps store is reachable.
+## 2026-08-29 — #5056 (BuilderOps rebuildable deployment parent)
+**Source:** issue-to-code
+**Diverged:** The merged Compose contract mounted the app-role password root-only while `init_roles.sh` runs as `postgres`, so its test suite did not prove the first-init secret read path.
+**Upstream artifact:** `tests/ops/test_builderops_compose_contract.py`
+**Compatibility fallback:** BuilderOps LearningSignal write unavailable: local CLI import failed because the `lingua` dependency is absent.

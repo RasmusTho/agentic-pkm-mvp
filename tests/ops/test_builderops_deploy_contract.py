@@ -176,6 +176,7 @@ def _harness(tmp_path: Path) -> tuple[Path, dict[str, str], str, str, str]:
     for relative in (
         "scripts/lib/builderops_compose.sh",
         "scripts/deploy_builderops.sh",
+        "scripts/builderops/preflight_app_password_secret.sh",
         "scripts/builderops/configure_tailnet_tls.sh",
         "config/deploy/builderops.env",
         "docker-compose.builderops.yml",
@@ -224,6 +225,9 @@ def _harness(tmp_path: Path) -> tuple[Path, dict[str, str], str, str, str]:
     event_log = tmp_path / "events.log"
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
+    secret_root = tmp_path / "secrets"
+    secret_root.mkdir()
+    (secret_root / "database-app-password").write_text("not-a-real-secret\n", encoding="utf-8")
 
     _write_executable(
         bin_dir / "gh",
@@ -278,6 +282,10 @@ elif [ "${1:-}" = serve ] && [ "${2:-}" = status ]; then
 fi
 """,
     )
+    _write_executable(
+        bin_dir / "stat",
+        "#!/usr/bin/env bash\nprintf '%s\\n' \"${FAKE_SECRET_STAT:-0:600}\"\n",
+    )
 
     env = os.environ.copy()
     env.update(
@@ -288,6 +296,7 @@ fi
             "BUILDEROPS_RECEIPT_DIR": str(receipt_dir),
             "BUILDEROPS_HEALTH_TIMEOUT_SECONDS": "1",
             "BUILDEROPS_TEST_CANDIDATE_RECEIPT": str(candidate_receipt),
+            "BUILDEROPS_SECRET_ROOT": str(secret_root),
         }
     )
     return root, env, source_sha, digest, postgres_digest
@@ -363,6 +372,56 @@ def test_deploy_and_rollback_receipts_bind_pin_schema_and_epoch(tmp_path: Path) 
     assert rollback_receipt["action"] == "rollback"
     assert rollback_receipt["database_rebuild_required"] is False
     assert rollback_receipt["rollback_data_rewind"] == "forbidden"
+
+
+def test_deploy_preflight_accepts_root_0400_app_secret(tmp_path: Path) -> None:
+    root, env, _source_sha, _digest, _postgres_digest = _harness(tmp_path)
+    env["FAKE_SECRET_STAT"] = "0:400"
+
+    result = subprocess.run(
+        ["bash", "scripts/deploy_builderops.sh", "deploy", env["BUILDEROPS_TEST_CANDIDATE_RECEIPT"]],
+        cwd=root,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    events = Path(env["FAKE_EVENT_LOG"]).read_text(encoding="utf-8")
+    assert "up -d db" in events
+
+
+def test_deploy_preflight_refuses_nonprivate_app_secret_before_pull_or_db_up(
+    tmp_path: Path,
+) -> None:
+    for fixture_name, metadata in (
+        ("non_root_owner", "1000:600"),
+        ("group_readable", "0:640"),
+    ):
+        root, env, _source_sha, _digest, _postgres_digest = _harness(
+            tmp_path / fixture_name
+        )
+        env["FAKE_SECRET_STAT"] = metadata
+
+        result = subprocess.run(
+            [
+                "bash",
+                "scripts/deploy_builderops.sh",
+                "deploy",
+                env["BUILDEROPS_TEST_CANDIDATE_RECEIPT"],
+            ],
+            cwd=root,
+            env=env,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+
+        assert result.returncode != 0, result.stdout + result.stderr
+        events = Path(env["FAKE_EVENT_LOG"]).read_text(encoding="utf-8")
+        assert " pull " not in events
+        assert " up " not in events
 
 
 def test_deploy_refuses_a_local_mode_that_would_require_recovery_egress(tmp_path: Path) -> None:

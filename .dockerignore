@@ -69,3 +69,8 @@ scripts
 !scripts/yaml_roundtrip.py
 !scripts/validate_issue_readiness.py
 !scripts/validate_source_anchors.py
+# The BuilderOps PostgreSQL image has one independent bootstrap entrypoint.
+# Re-include only that directory and file; it stages no secret value into the
+# build context or image.
+!scripts/builderops
+!scripts/builderops/postgres_entrypoint.sh

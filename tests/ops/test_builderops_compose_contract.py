@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+import subprocess
 from pathlib import Path
 
 import yaml
@@ -138,6 +140,174 @@ def test_builderops_image_has_a_dedicated_non_root_entrypoint() -> None:
     assert "ALTER DEFAULT PRIVILEGES FOR ROLE builderops_owner" in roles
     assert "BUILDEROPS_DATABASE_APP_PASSWORD_FILE" in roles
     assert "PASSWORD %L" in roles
+
+
+def test_builderops_init_stages_only_app_password_for_postgres() -> None:
+    compose = _compose()
+    db = compose["services"]["db"]
+    environment = db["environment"]
+    dockerfile = (ROOT / "Dockerfile.builderops-postgres").read_text(encoding="utf-8")
+    entrypoint = (ROOT / "scripts/builderops/postgres_entrypoint.sh").read_text(
+        encoding="utf-8"
+    )
+    roles = (ROOT / "scripts/builderops/init_roles.sh").read_text(encoding="utf-8")
+
+    assert environment["BUILDEROPS_DATABASE_APP_PASSWORD_FILE"] == (
+        "/run/builderops-init/app-password"
+    )
+    assert "BUILDEROPS_DATABASE_APP_PASSWORD_SECRET_FILE" not in environment
+    assert db["secrets"] == [
+        "builderops_database_owner_password",
+        "builderops_database_app_password",
+    ]
+    assert db["tmpfs"] == ["/run/builderops-init:uid=999,gid=999,mode=0700"]
+    assert all(
+        "builderops_database_app_password" not in service.get("secrets", [])
+        for name, service in compose["services"].items()
+        if name != "db"
+    )
+
+    assert "COPY scripts/builderops/postgres_entrypoint.sh /usr/local/bin/" in dockerfile
+    assert 'ENTRYPOINT ["/usr/local/bin/builderops-postgres-entrypoint.sh"]' in dockerfile
+    dockerignore = (ROOT / ".dockerignore").read_text(encoding="utf-8")
+    assert "!scripts/builderops" in dockerignore
+    assert "!scripts/builderops/postgres_entrypoint.sh" in dockerignore
+    assert 'readonly source_secret="/run/secrets/builderops_database_app_password"' in entrypoint
+    assert "BUILDEROPS_DATABASE_APP_PASSWORD_FILE" in entrypoint
+    assert '"$(id -u)" -eq 0' in entrypoint
+    assert "PG_VERSION" in entrypoint
+    assert 'staged_directory="/run/builderops-init"' in entrypoint
+    assert "stat -c '%u:%a'" in entrypoint
+    assert "0:400|0:600" in entrypoint
+    assert "/proc/mounts" in entrypoint
+    assert '"tmpfs"' in entrypoint
+    assert "install -m 0400 -o postgres -g postgres" in entrypoint
+    assert 'exec /usr/local/bin/docker-entrypoint.sh "$@"' in entrypoint
+    assert ".builderops-app-role-init-pending" in entrypoint
+    assert ".builderops-app-role-init-ready" in entrypoint
+
+    assert "trap cleanup EXIT" in roles
+    assert 'rm -f -- "$BUILDEROPS_DATABASE_APP_PASSWORD_FILE"' in roles
+    assert "BEGIN;" in roles and "COMMIT;" in roles
+
+
+def test_builderops_init_secret_staging_refuses_bad_inputs_and_cleans_up(tmp_path: Path) -> None:
+    entrypoint = ROOT / "scripts/builderops/postgres_entrypoint.sh"
+    roles = ROOT / "scripts/builderops/init_roles.sh"
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    event_log = tmp_path / "events.log"
+    source_secret = tmp_path / "app-password-source"
+    source_secret.write_text("not-a-real-secret\n", encoding="utf-8")
+    staged_secret = tmp_path / "app-password-staged"
+    entrypoint_copy = tmp_path / "postgres_entrypoint.sh"
+    entrypoint_copy.write_text(
+        entrypoint.read_text(encoding="utf-8").replace(
+            'readonly source_secret="/run/secrets/builderops_database_app_password"',
+            f'readonly source_secret="{source_secret}"',
+        ), encoding="utf-8"
+    )
+
+    _write_executable(bin_dir / "id", "#!/usr/bin/env bash\nprintf '0\\n'\n")
+    _write_executable(
+        bin_dir / "awk",
+        "#!/usr/bin/env bash\n[ \"${TEST_TMPFS:-1}\" = 1 ]\n",
+    )
+    _write_executable(
+        bin_dir / "stat",
+        "#!/usr/bin/env bash\nprintf '%s\\n' \"${TEST_SECRET_STAT:-0:600}\"\n",
+    )
+    _write_executable(
+        bin_dir / "install",
+        "#!/usr/bin/env bash\nprintf '%s\\n' \"$*\" >> \"$TEST_EVENT_LOG\"\n",
+    )
+    _write_executable(bin_dir / "psql", "#!/usr/bin/env bash\nexit 1\n")
+
+    env = os.environ.copy()
+    env.update(
+        {
+            "PATH": f"{bin_dir}:{env['PATH']}",
+            "TEST_EVENT_LOG": str(event_log),
+            "BUILDEROPS_DATABASE_APP_PASSWORD_FILE": "/run/builderops-init/app-password",
+        }
+    )
+
+    success = _run_staging_function(entrypoint_copy, env)
+    assert success.returncode == 0, success.stderr
+    events = event_log.read_text(encoding="utf-8")
+    assert "-d -m 0700 -o postgres -g postgres /run/builderops-init" in events
+    assert (
+        f"-m 0400 -o postgres -g postgres {source_secret} /run/builderops-init/app-password"
+        in events
+    )
+
+    event_log.unlink()
+    missing_copy = tmp_path / "missing_source_entrypoint.sh"
+    missing_copy.write_text(entrypoint_copy.read_text(encoding="utf-8").replace(str(source_secret), str(tmp_path / "missing")), encoding="utf-8")
+    missing = _run_staging_function(missing_copy, env)
+    assert missing.returncode == 78
+    assert not event_log.exists()
+
+    owner_read_only_source = env | {"TEST_SECRET_STAT": "0:400"}
+    owner_read_only = _run_staging_function(entrypoint_copy, owner_read_only_source)
+    assert owner_read_only.returncode == 0, owner_read_only.stderr
+    assert event_log.exists()
+
+    event_log.unlink()
+
+    non_root_source = env | {"TEST_SECRET_STAT": "1000:600"}
+    non_root = _run_staging_function(entrypoint_copy, non_root_source)
+    assert non_root.returncode == 78
+    assert not event_log.exists()
+
+    group_readable_source = env | {"TEST_SECRET_STAT": "0:640"}
+    group_readable = _run_staging_function(entrypoint_copy, group_readable_source)
+    assert group_readable.returncode == 78
+    assert not event_log.exists()
+
+    wrong_target = env | {"BUILDEROPS_DATABASE_APP_PASSWORD_FILE": str(tmp_path / "not-tmpfs")}
+    wrong = _run_staging_function(entrypoint_copy, wrong_target)
+    assert wrong.returncode == 78
+    assert not event_log.exists()
+
+    absent_tmpfs = env | {"TEST_TMPFS": "0"}
+    no_tmpfs = _run_staging_function(entrypoint_copy, absent_tmpfs)
+    assert no_tmpfs.returncode == 78
+    assert not event_log.exists()
+
+    staged_secret.write_text("not-a-real-secret\n", encoding="utf-8")
+    cleanup = subprocess.run(
+        ["bash", str(roles)],
+        env=env
+        | {
+            "BUILDEROPS_DATABASE_APP_PASSWORD_FILE": str(staged_secret),
+            "POSTGRES_USER": "builderops_owner",
+            "POSTGRES_DB": "builderops",
+            "PGDATA": str(tmp_path / "pgdata"),
+        },
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert cleanup.returncode == 1
+    assert not staged_secret.exists()
+
+
+def _run_staging_function(
+    entrypoint: Path, env: dict[str, str]
+) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["bash", "-c", 'source "$1"; stage_app_password', "_", str(entrypoint)],
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+
+def _write_executable(path: Path, body: str) -> None:
+    path.write_text(body, encoding="utf-8")
+    path.chmod(0o755)
 
 
 def test_builderops_postgres_pin_has_a_rebuildable_candidate_producer() -> None:
