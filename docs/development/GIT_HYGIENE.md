@@ -93,11 +93,14 @@ released or expires, because that canonical state can still represent retained o
 resumable work. The dispatcher producer's only positively terminal stored status is
 `completed`; every unknown or legacy raw status remains ambiguous and fails closed. A
 task-referenced lease must exist, be uniquely referenced, carry the canonical
-`issue:<task.issue_number>` resource, agree with the task's holder and expiry, and be
-positively released or expired before a terminal row can become nonconflicting. The
-canonical claim-then-complete transition clears `lease_id` but intentionally retains
-the historical `lease_expires_at`; that exact shape is accepted only after the exhaustive
-census proves there is no relevant live task or orphan resource lease. Narrow legacy
+`issue:<task.issue_number>` resource, and have a nonempty `claimed_by` exactly equal to
+the lease holder. Missing or mismatched holder identity fails closed even when the lease
+is released or expired. No canonical legacy contract authorizes a terminal `completed`
+row to retain `lease_id`, so every such shape fails closed, including a matching holder.
+The canonical claim-then-complete transition clears both `lease_id` and `claimed_by` but
+intentionally retains the historical `lease_expires_at`; that exact shape is accepted
+only after the exhaustive census proves there is no relevant live task or orphan resource
+lease. Narrow legacy
 blank-repository history is ignored only
 when it has the current terminal `completed`/`blocked` or sync-meta shape, has no
 candidate Issue/PR/ref/branch/path resource, and has no live or unreleased lease. A

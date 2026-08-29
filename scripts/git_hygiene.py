@@ -1371,14 +1371,14 @@ def _dispatcher_conflicts(
         holder = lease.get("holder")
         if not isinstance(holder, str) or not holder:
             raise RuntimeError("dispatcher_lease_identity_ambiguous")
-        live = _dispatcher_live_lease(lease, now=now)
         claimed_by = task.get("claimed_by")
-        if claimed_by is not None and claimed_by != holder:
+        if not isinstance(claimed_by, str) or not claimed_by or claimed_by != holder:
             raise RuntimeError("dispatcher_task_lease_disagreement")
-        if live and claimed_by != holder:
+        if not nonterminal:
             raise RuntimeError("dispatcher_task_lease_disagreement")
         if task.get("lease_expires_at") != lease.get("expires_at"):
             raise RuntimeError("dispatcher_task_lease_disagreement")
+        live = _dispatcher_live_lease(lease, now=now)
         if live:
             conflicts.add("live_dispatcher_claim")
         elif nonterminal:
