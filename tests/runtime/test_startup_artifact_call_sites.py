@@ -8,6 +8,7 @@ import json
 import os
 import subprocess
 import sys
+from collections.abc import Mapping
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 
@@ -2190,3 +2191,142 @@ def test_promotion_test_retry_never_reissues_a_revoked_receipt(tmp_path: Path) -
             now=datetime(2026, 8, 16, 12, tzinfo=timezone.utc),
         )
     assert exc_info.value.code == "receipt_revoked"
+
+
+def test_promotion_test_never_issues_registry_authority_before_terminal_binding(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.release_channels import promotion_receipt
+
+    class SimulatedPowerLoss(BaseException):
+        pass
+
+    private_key, public_key = _promotion_test_signing_material()
+    rendered, manifest = _promotion_test_candidate_inputs()
+    store = tmp_path / "ops" / "test-promotions"
+    real_install = promotion_receipt._install_immutable_record
+
+    def lose_power_before_attempt_binding(
+        path: Path,
+        data: bytes,
+        *,
+        code: str,
+    ) -> None:
+        if path.parent == store / "attempts":
+            raise SimulatedPowerLoss
+        real_install(path, data, code=code)
+
+    monkeypatch.setattr(
+        promotion_receipt,
+        "_install_immutable_record",
+        lose_power_before_attempt_binding,
+    )
+    with pytest.raises(SimulatedPowerLoss):
+        write_promotion_test_terminal_receipt(
+            attempt_id="pt-" + "0" * 32,
+            rendered=rendered,
+            channel_manifest=manifest,
+            prod_admission_context=_promotion_admission_context(),
+            check_report=_promotion_check_report(),
+            migration_paths=(),
+            issued_at=datetime(2026, 8, 16, tzinfo=timezone.utc),
+            fresh_until=datetime(2026, 8, 17, tzinfo=timezone.utc),
+            issuer_id="promotion-test-issuer",
+            issuer_key_id="promotion-test-issuer-key-v1",
+            signer=private_key.sign,
+            issuer_public_key=public_key,
+            receipt_store=store,
+            resettable_roots=(tmp_path / "tmp-test", tmp_path / "vault-test"),
+        )
+
+    assert len(list((store / "receipts").glob("*.json"))) == 1
+    assert list((store / "attempts").glob("*.json")) == []
+    assert not (store / "registry.json").exists()
+    receipt = json.loads(
+        next((store / "receipts").glob("*.json")).read_text(encoding="utf-8")
+    )
+    with pytest.raises(PromotionReceiptError) as exc_info:
+        prepare_prod_activation(
+            receipt,
+            None,
+            _promotion_admission_context(),
+            now=datetime(2026, 8, 16, 12, tzinfo=timezone.utc),
+        )
+    assert exc_info.value.code == "registry_missing"
+
+
+def test_promotion_test_terminal_binding_stays_inadmissible_until_registry_issue(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.release_channels import promotion_receipt
+
+    class SimulatedPowerLoss(BaseException):
+        pass
+
+    private_key, public_key = _promotion_test_signing_material()
+    rendered, manifest = _promotion_test_candidate_inputs()
+    store = tmp_path / "ops" / "test-promotions"
+    real_publish = promotion_receipt._publish_registry_entry
+    common = {
+        "attempt_id": "pt-" + "3" * 32,
+        "rendered": rendered,
+        "channel_manifest": manifest,
+        "prod_admission_context": _promotion_admission_context(),
+        "check_report": _promotion_check_report(),
+        "migration_paths": (),
+        "issued_at": datetime(2026, 8, 16, tzinfo=timezone.utc),
+        "fresh_until": datetime(2026, 8, 17, tzinfo=timezone.utc),
+        "issuer_id": "promotion-test-issuer",
+        "issuer_key_id": "promotion-test-issuer-key-v1",
+        "signer": private_key.sign,
+        "issuer_public_key": public_key,
+        "receipt_store": store,
+        "resettable_roots": (tmp_path / "tmp-test", tmp_path / "vault-test"),
+    }
+
+    def lose_power_before_registry_issue(
+        path: Path,
+        *,
+        receipt: Mapping[str, object],
+        issuer_public_key: bytes,
+    ) -> dict[str, object]:
+        raise SimulatedPowerLoss
+
+    monkeypatch.setattr(
+        promotion_receipt,
+        "_publish_registry_entry",
+        lose_power_before_registry_issue,
+    )
+    with pytest.raises(SimulatedPowerLoss):
+        write_promotion_test_terminal_receipt(**common)
+
+    assert len(list((store / "receipts").glob("*.json"))) == 1
+    assert len(list((store / "attempts").glob("*.json"))) == 1
+    assert not (store / "registry.json").exists()
+    receipt = json.loads(
+        next((store / "receipts").glob("*.json")).read_text(encoding="utf-8")
+    )
+    with pytest.raises(PromotionReceiptError) as exc_info:
+        prepare_prod_activation(
+            receipt,
+            None,
+            _promotion_admission_context(),
+            now=datetime(2026, 8, 16, 12, tzinfo=timezone.utc),
+        )
+    assert exc_info.value.code == "registry_missing"
+
+    monkeypatch.setattr(
+        promotion_receipt,
+        "_publish_registry_entry",
+        real_publish,
+    )
+    retried = write_promotion_test_terminal_receipt(**common)
+    registry = json.loads((store / "registry.json").read_text(encoding="utf-8"))
+    assert prepare_prod_activation(
+        retried,
+        registry,
+        _promotion_admission_context(),
+        now=datetime(2026, 8, 16, 12, tzinfo=timezone.utc),
+    )["activation_state"] == "validated_not_activated"
