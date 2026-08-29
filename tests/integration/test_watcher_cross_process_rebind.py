@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -331,6 +332,81 @@ def test_prepare_ack_requires_complete_successful_old_root_scan(
 
     assert runtime.open_settings_rebind_store().read().phase == "prepared"
     assert not _revision_receipt_path(tmp_path, 1).exists()
+
+
+@pytest.mark.parametrize("failure_kind", ["stat", "hash"])
+def test_prepare_ack_refuses_incomplete_registry_scan(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failure_kind: str,
+) -> None:
+    runtime, vault_a, _vault_b, config_path = _fixture(tmp_path, monkeypatch)
+    unreadable = vault_a / "unreadable.md"
+    unreadable.write_text("must not be skipped\n", encoding="utf-8")
+    healthy = vault_a / "healthy.md"
+    healthy.write_text("healthy scope witness\n", encoding="utf-8")
+
+    monkeypatch.setattr(
+        registry,
+        "iter_vault_markdown_files",
+        lambda *_args, **_kwargs: iter((unreadable, healthy)),
+    )
+    if failure_kind == "stat":
+        original_stat = Path.stat
+
+        def fail_selected_stat(path: Path, *args: object, **kwargs: object) -> os.stat_result:
+            if path == unreadable:
+                raise OSError("injected stat failure")
+            return original_stat(path, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "stat", fail_selected_stat)
+    else:
+        original_hash = registry._hash_file
+
+        def fail_selected_hash(path: Path) -> tuple[str, int] | None:
+            if path == unreadable:
+                return None
+            return original_hash(path)
+
+        monkeypatch.setattr(registry, "_hash_file", fail_selected_hash)
+
+    with pytest.raises(RegistryError, match="scan was incomplete"):
+        registry.run_registry_once(config_path)
+
+    assert runtime.open_settings_rebind_store().read().phase == "prepared"
+    assert not _revision_receipt_path(tmp_path, 1).exists()
+
+
+def test_rebind_receipt_buffer_is_bounded_to_current_revision_observation_window(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _runtime_value, vault_a, _vault_b, config_path = _fixture(tmp_path, monkeypatch)
+    state_path = tmp_path / "watcher-state" / "watcher_state_ingest.json"
+    state_payload = json.loads(state_path.read_text(encoding="utf-8"))
+    files = state_payload.setdefault("files", {})
+    assert isinstance(files, dict)
+
+    historical_count = 64
+    for index in range(historical_count):
+        relative_path = f"historical-{index}.md"
+        historical = vault_a / relative_path
+        content = f"historical {index}\n".encode()
+        historical.write_bytes(content)
+        files[relative_path] = {
+            "mtime": historical.stat().st_mtime,
+            "hash": hashlib.sha256(content).hexdigest(),
+            "trace_id": f"historical-trace-{index}",
+        }
+    state_path.write_text(json.dumps(state_payload), encoding="utf-8")
+
+    current = vault_a / "current-window.md"
+    current.write_text("current revision\n", encoding="utf-8")
+    registry.run_registry_once(config_path)
+
+    receipt = load_settings_rebind_watcher_receipt(_revision_receipt_path(tmp_path, 1))
+    assert [item.relative_path for item in receipt.buffer] == ["current-window.md"]
+    assert len(receipt.buffer) < historical_count
 
 
 def test_reconciler_uses_revision_bound_receipts_for_monotonic_reconciliation(

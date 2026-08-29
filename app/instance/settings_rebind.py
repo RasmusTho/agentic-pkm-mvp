@@ -212,6 +212,20 @@ class SettingsRebindStore:
         )
         return SettingsRebindRecord.from_payload(updated.settings_rebind)
 
+    def reconcile_no_lifecycle(self) -> SettingsRebindRecord:
+        """Converge an absent watcher without preparing or committing a revision."""
+
+        current = self.read()
+        if current.phase in {"dormant", "no_lifecycle"}:
+            return current
+        if current.phase == "prepared":
+            return self.acknowledge_no_lifecycle(
+                desired_revision=current.desired_revision,
+            )
+        raise RegistryError(
+            "absent watcher cannot reconcile a committed settings rebind revision"
+        )
+
 
 def _install_dormant_settings_rebind(
     registry: VaultRegistryStore,

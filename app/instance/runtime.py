@@ -3931,6 +3931,8 @@ def main(argv: list[str] | None = None) -> int:
     rebind_install.add_argument(
         "--quiescence-proof-path", type=Path, required=True
     )
+    rebind_no_lifecycle = subparsers.add_parser("settings-rebind-no-lifecycle")
+    rebind_no_lifecycle.add_argument("--registry-path", type=Path, required=True)
     for name in ("default-vault-get", "default-vault-set", "default-vault-clear"):
         command = subparsers.add_parser(name)
         command.add_argument("--registry-path", type=Path, required=True)
@@ -4081,6 +4083,24 @@ def main(argv: list[str] | None = None) -> int:
                     VaultRegistryStore(args.registry_path),
                     _capability=local_operator_storage_capability(),  # type: ignore[arg-type]
                 )
+        print(
+            json.dumps(
+                {
+                    "ok": True,
+                    "desired_revision": record.desired_revision,
+                    "applied_revision": record.applied_revision,
+                    "phase": record.phase,
+                },
+                sort_keys=True,
+            )
+        )
+        return 0
+    if args.command == "settings-rebind-no-lifecycle":
+        from app.instance.settings_rebind import SettingsRebindStore
+
+        record = SettingsRebindStore(
+            VaultRegistryStore(args.registry_path)
+        ).reconcile_no_lifecycle()
         print(
             json.dumps(
                 {

@@ -1933,6 +1933,23 @@ set_phase "db_probe"
 run_db_probe
 mark_phase_ok "db_probe"
 wait_for_healthz
+if [ "$NO_VAULT_MODE" -eq 1 ]; then
+  set_phase "settings_rebind_no_lifecycle"
+  if ! settings_rebind_no_lifecycle_json=$(
+    run_docker_compose exec -T api \
+      python -m app.instance.runtime settings-rebind-no-lifecycle \
+      --registry-path /app/instance-state/agentic-pkm/vault-registry.md
+  ); then
+    EXIT_REASON="settings_rebind_no_lifecycle_failed"
+    EXIT_CODE=1
+    export EXIT_REASON EXIT_CODE
+    write_startup_status 0 "$EXIT_REASON"
+    echo "ERROR: no-vault startup could not reconcile durable settings rebind lifecycle" >&2
+    exit 1
+  fi
+  echo "Settings rebind no-vault reconciliation: $settings_rebind_no_lifecycle_json"
+  mark_phase_ok "settings_rebind_no_lifecycle"
+fi
 if [ "$NO_VAULT_MODE" -ne 1 ]; then
   set_phase "vault_rw_probe"
   probe_vault_mount_rw

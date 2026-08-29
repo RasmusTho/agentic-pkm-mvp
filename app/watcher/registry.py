@@ -137,6 +137,8 @@ def _scan_markdown_many(
     vault_root: Path,
     scan_roots: Iterable[Path],
     scope_glob: str,
+    *,
+    summary: dict[str, object],
 ) -> Iterable[tuple[Path, float, Path]]:
     seen: set[Path] = set()
     for scan_root in scan_roots:
@@ -146,6 +148,7 @@ def _scan_markdown_many(
             try:
                 rel = path.relative_to(vault_root)
             except Exception:
+                _mark_scan_incomplete(summary, reason="relative_path")
                 continue
             if any(part.startswith(".") for part in rel.parts):
                 continue
@@ -159,9 +162,21 @@ def _scan_markdown_many(
             try:
                 mtime = path.stat().st_mtime
             except Exception:
+                _mark_scan_incomplete(summary, reason="stat")
                 continue
             seen.add(rel)
             yield rel, mtime, path
+
+
+def _mark_scan_incomplete(
+    summary: dict[str, object],
+    *,
+    reason: str,
+) -> None:
+    summary["scan_complete"] = False
+    summary["scan_errors_in_tick"] = int(summary.get("scan_errors_in_tick", 0)) + 1
+    if "scan_incomplete_reason" not in summary:
+        summary["scan_incomplete_reason"] = reason
 
 
 def _now_iso_from_timestamp(value: float) -> str:
@@ -192,6 +207,9 @@ def write_tick_diagnostics(
         "panel_skipped_auto_exec": summary.get("panel_skipped_auto_exec", 0),
         "bad_tick": summary.get("bad_tick", False),
         "bad_reason": summary.get("bad_tick_reason"),
+        "scan_complete": summary.get("scan_complete"),
+        "scan_errors_in_tick": summary.get("scan_errors_in_tick", 0),
+        "scan_incomplete_reason": summary.get("scan_incomplete_reason"),
         "chosen_sleep_seconds": summary.get("chosen_sleep_seconds"),
         "kill_switch": summary.get("kill_switch", False),
         "thresholds": summary.get("thresholds"),
@@ -1529,6 +1547,7 @@ def _collect_changed_entries(
             # reconciliation cannot misclassify it as removed.
             _record_scan_error(state)
             state.update_file_state(rel_str)
+            _mark_scan_incomplete(summary, reason="hash")
             continue
         digest, read_bytes = hashed
         summary["hashed_files"] = int(summary["hashed_files"]) + 1
@@ -1904,7 +1923,7 @@ def _run_spec_tick(
     states: Mapping[str, WatcherState] | None = None,
     process_panel_notes_inline: bool = False,
     handled_settings_sources: set[Path] | None = None,
-    retain_unemitted_observations: bool = False,
+    retain_unemitted_observations: int | None = None,
 ) -> dict[str, object]:
     tick_start = now
     handled_settings_sources = handled_settings_sources if handled_settings_sources is not None else set()
@@ -1934,6 +1953,8 @@ def _run_spec_tick(
         "panel_skipped_auto_exec": 0,
         "rebind_observations": [],
         "rebind_unemitted_observations": 0,
+        "scan_complete": True,
+        "scan_errors_in_tick": 0,
     }
 
     if not cfg.enable:
@@ -2193,6 +2214,16 @@ def _run_spec_tick(
                     "trace_id": trace_id,
                 }
             )
+            rebind_revision = retain_unemitted_observations
+            if (
+                isinstance(rebind_revision, int)
+                and not isinstance(rebind_revision, bool)
+                and rebind_revision > 0
+            ):
+                state.update_file_state(
+                    rel_path,
+                    rebind_revision=rebind_revision,
+                )
             emitted_in_tick += 1
         except Exception:
             state.errors += 1
@@ -2316,9 +2347,11 @@ def run_registry_once(
     cfg = _loaded_config or load_registry_config(config_path)
     reconciler = DormantSettingsRebindReconciler.from_config(cfg)
     rebind_cycle = reconciler.begin_cycle(cfg) if reconciler is not None else None
-    retain_rebind_observations = bool(
-        rebind_cycle is not None
+    rebind_observation_revision = (
+        rebind_cycle.record.desired_revision
+        if rebind_cycle is not None
         and rebind_cycle.mode in {"prepared", "committed"}
+        else None
     )
     states = {
         spec.name: _load_registry_state(_state_path(cfg.state_dir, spec.name))
@@ -2335,7 +2368,7 @@ def run_registry_once(
             states=states,
             process_panel_notes_inline=True,
             handled_settings_sources=handled_settings_sources,
-            retain_unemitted_observations=retain_rebind_observations,
+            retain_unemitted_observations=rebind_observation_revision,
         )
         for spec in cfg.specs
     }
@@ -2397,9 +2430,11 @@ def run_registry_forever(
     tick = 0
     while True:
         rebind_cycle = reconciler.begin_cycle(cfg) if reconciler is not None else None
-        retain_rebind_observations = bool(
-            rebind_cycle is not None
+        rebind_observation_revision = (
+            rebind_cycle.record.desired_revision
+            if rebind_cycle is not None
             and rebind_cycle.mode in {"prepared", "committed"}
+            else None
         )
         now = time.time()
         handled_settings_sources: set[Path] = set()
@@ -2411,7 +2446,7 @@ def run_registry_forever(
                 now=now,
                 states=states,
                 handled_settings_sources=handled_settings_sources,
-                retain_unemitted_observations=retain_rebind_observations,
+                retain_unemitted_observations=rebind_observation_revision,
             )
             for spec in cfg.specs
         }

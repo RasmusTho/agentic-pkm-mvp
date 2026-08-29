@@ -8,11 +8,19 @@ import sys
 import textwrap
 from pathlib import Path
 
+from app.instance.instance_state import InstanceStateLayout
+from app.instance.runtime import InstanceRegistryRuntime
+from app.instance.settings_rebind import (
+    SettingsRebindRecord,
+    _install_dormant_settings_rebind,
+)
+from app.instance.vault_registry import VaultRegistration
 from tests.helpers.runtime_archive_gate import (
     assert_archive_gate_preceded_host_mutation,
     configure_ready_archive_gate,
 )
 from tests.helpers.runtime_start_harness import run_runtime_start
+from tests.helpers.instance_storage_capability import STORAGE_MUTATION_CAPABILITY
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -81,6 +89,7 @@ def _fake_docker_bin(bin_dir: Path, health: dict[str, object]) -> None:
         #!/usr/bin/env python3
         import json
         import os
+        import subprocess
         import sys
 
         HEALTH = {health_json!r}
@@ -175,6 +184,24 @@ def _fake_docker_bin(bin_dir: Path, health: dict[str, object]) -> None:
                 raise SystemExit(0)
             elif service == "api" and "read_outbox" in command:
                 print("0")
+            elif service == "api" and "settings-rebind-no-lifecycle" in command:
+                registry_path = os.environ["STARTUP_HARNESS_SETTINGS_REBIND_REGISTRY"]
+                completed = subprocess.run(
+                    [
+                        sys.executable,
+                        "-m",
+                        "app.instance.runtime",
+                        "settings-rebind-no-lifecycle",
+                        "--registry-path",
+                        registry_path,
+                    ],
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                )
+                sys.stdout.write(completed.stdout)
+                sys.stderr.write(completed.stderr)
+                raise SystemExit(completed.returncode)
             elif service == "api" and ".startup_rw_probe" in command:
                 print('{{"ok": true}}')
             else:
@@ -387,6 +414,63 @@ def test_dev_channel_alias_returns_zero_with_deferred_index_rebuild(tmp_path: Pa
     assert result.returncode == 0, result.stderr + result.stdout
     assert "INFO: index rebuild is required but deferred" in result.stdout
     assert "runtime verified: true" in result.stdout
+
+
+def test_no_vault_startup_entrypoint_records_durable_no_lifecycle(tmp_path: Path) -> None:
+    health = _deferred_index_health()
+    health["ok"] = True
+    health["required_ok"] = True
+    health["checks"] = {}
+    health["suggested_actions"] = []
+    env = _runtime_env(tmp_path, health)
+    env.pop("VAULT_ROOT", None)
+
+    runtime = InstanceRegistryRuntime.for_paths(
+        InstanceStateLayout.for_channel(tmp_path / "instance-state", "test"),
+        tmp_path / "ownership",
+    )
+    runtime.registry.register(
+        VaultRegistration(
+            vault_binding_id="binding-b",
+            ref=f"path:{tmp_path / 'candidate-vault'}",
+            path=str(tmp_path / "candidate-vault"),
+        ),
+        _capability=STORAGE_MUTATION_CAPABILITY,
+    )
+    _install_dormant_settings_rebind(
+        runtime.registry,
+        binding_id=None,
+        _capability=STORAGE_MUTATION_CAPABILITY,
+    )
+    prepared = SettingsRebindRecord(
+        desired_revision=1,
+        applied_revision=0,
+        phase="prepared",
+        lifecycle_posture="watcher",
+        prior_binding_id=None,
+        candidate_binding_id="binding-b",
+    )
+    runtime.registry.set_settings_rebind_state(
+        prepared.as_payload(),
+        _capability=STORAGE_MUTATION_CAPABILITY,
+    )
+    env["STARTUP_HARNESS_SETTINGS_REBIND_REGISTRY"] = str(runtime.registry.path)
+
+    result = run_runtime_start(
+        ["bash", "scripts/start_full_system.sh"],
+        cwd=REPO_ROOT,
+        env=env,
+        progress_path=Path(env["STARTUP_HARNESS_PROGRESS_PATH"]),
+        total_timeout=STARTUP_FIXTURE_TIMEOUT_SECONDS,
+    )
+
+    assert result.returncode == 0, result.stderr + result.stdout
+    record = runtime.open_settings_rebind_store().read()
+    assert record.phase == "no_lifecycle"
+    assert record.lifecycle_posture == "no_lifecycle"
+    assert record.desired_revision == record.applied_revision == 1
+    progress = Path(env["STARTUP_HARNESS_PROGRESS_PATH"]).read_text(encoding="utf-8")
+    assert "settings-rebind-no-lifecycle" in progress
 
 
 def test_prod_start_full_rejects_deferred_index_rebuild(tmp_path: Path) -> None:
