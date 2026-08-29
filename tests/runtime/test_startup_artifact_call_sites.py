@@ -92,7 +92,7 @@ def _pin_promotion_baseline(
     request: pytest.FixtureRequest,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    if request.node.get_closest_marker("live_prod_baseline") is not None:
+    if request.node.get_closest_marker("authoritative_prod_baseline_transport") is not None:
         return
     from app.release_channels import promotion_receipt
 
@@ -1512,17 +1512,17 @@ def test_validate_prod_activation_cli_resolves_repo_root(
     assert json.loads(capsys.readouterr().out)["activation_state"] == "validated_not_activated"
 
 
-@pytest.mark.live_prod_baseline
+@pytest.mark.authoritative_prod_baseline_transport
 def test_authoritative_baseline_fetch_is_fresh_and_ignores_git_config(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from app.release_channels import promotion_receipt
 
     baselines = ["a" * 40, "b" * 40]
-    calls: list[dict[str, str]] = []
+    calls: list[tuple[dict[str, str], str]] = []
 
     def fake_run(command, **kwargs):
-        calls.append(kwargs["env"])
+        calls.append((kwargs["env"], kwargs["cwd"]))
         return subprocess.CompletedProcess(
             command,
             0,
@@ -1538,12 +1538,72 @@ def test_authoritative_baseline_fetch_is_fresh_and_ignores_git_config(
     assert promotion_receipt._fetch_authoritative_prod_baseline() == baselines[0]
     assert promotion_receipt._fetch_authoritative_prod_baseline() == baselines[1]
     assert len(calls) == 2
-    for environment in calls:
+    for environment, authority_cwd in calls:
         assert "GIT_CONFIG_COUNT" not in environment
         assert environment["GIT_CONFIG_NOSYSTEM"] == "1"
         assert environment["GIT_CONFIG_GLOBAL"] == os.devnull
         assert environment["GIT_CONFIG_SYSTEM"] == os.devnull
         assert environment["GIT_NO_REPLACE_OBJECTS"] == "1"
+        assert not (Path(authority_cwd) / ".git").exists()
+
+
+@pytest.mark.authoritative_prod_baseline_transport
+def test_authoritative_baseline_ignores_caller_repo_local_url_rewrites(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.release_channels import promotion_receipt
+
+    def make_remote(name: str, content: str) -> tuple[Path, str]:
+        work = tmp_path / f"{name}-work"
+        remote = tmp_path / f"{name}.git"
+        work.mkdir()
+        subprocess.run(["git", "init", "-q"], cwd=work, check=True)
+        subprocess.run(
+            ["git", "config", "user.email", "test@example.invalid"],
+            cwd=work,
+            check=True,
+        )
+        subprocess.run(
+            ["git", "config", "user.name", "promotion baseline test"],
+            cwd=work,
+            check=True,
+        )
+        (work / "baseline.txt").write_text(content, encoding="utf-8")
+        subprocess.run(["git", "add", "baseline.txt"], cwd=work, check=True)
+        subprocess.run(["git", "commit", "-q", "-m", name], cwd=work, check=True)
+        source_sha = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"],
+            cwd=work,
+            text=True,
+        ).strip()
+        subprocess.run(["git", "clone", "-q", "--bare", str(work), str(remote)], check=True)
+        subprocess.run(
+            ["git", "update-ref", "refs/heads/main", source_sha],
+            cwd=remote,
+            check=True,
+        )
+        return remote, source_sha
+
+    canonical_remote, canonical_sha = make_remote("canonical", "canonical\n")
+    attacker_remote, _ = make_remote("attacker", "attacker\n")
+    caller_repo = tmp_path / "caller"
+    caller_repo.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=caller_repo, check=True)
+    canonical_url = canonical_remote.resolve().as_uri()
+    attacker_url = attacker_remote.resolve().as_uri()
+    subprocess.run(
+        ["git", "config", f"url.{attacker_url}.insteadOf", canonical_url],
+        cwd=caller_repo,
+        check=True,
+    )
+    monkeypatch.chdir(caller_repo)
+    monkeypatch.setattr(promotion_receipt, "PROD_REPOSITORY_URL", canonical_url)
+    monkeypatch.setenv("GIT_CONFIG_COUNT", "1")
+    monkeypatch.setenv("GIT_CONFIG_KEY_0", f"url.{attacker_url}.insteadOf")
+    monkeypatch.setenv("GIT_CONFIG_VALUE_0", canonical_url)
+
+    assert promotion_receipt._fetch_authoritative_prod_baseline() == canonical_sha
 
 
 def test_git_evidence_ignores_caller_path_injection(
