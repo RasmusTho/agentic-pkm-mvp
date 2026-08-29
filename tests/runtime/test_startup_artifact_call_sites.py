@@ -9,6 +9,7 @@ import json
 import os
 import subprocess
 import sys
+import zlib
 from collections.abc import Mapping
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
@@ -1820,6 +1821,128 @@ def test_promotion_test_rejects_symlink_migration_tree_entries(tmp_path: Path) -
         text=True,
     ).strip()
     rendered, manifest = _promotion_test_candidate_inputs(source_sha=target)
+
+    with pytest.raises(PromotionReceiptError) as exc_info:
+        build_promotion_test_check_report(
+            rendered=rendered,
+            channel_manifest=manifest,
+            prod_admission_context=_promotion_admission_context(
+                migration_baseline_sha=baseline
+            ),
+            check_results=_promotion_check_results(),
+            source_repo=repo,
+        )
+
+    assert exc_info.value.code == "migration_delta_invalid"
+
+
+def test_promotion_test_rehashes_candidate_migration_objects(tmp_path: Path) -> None:
+    repo, baseline, target = _promotion_migration_git_delta(
+        tmp_path,
+        content='reversibility = "forward-only"\n',
+    )
+    object_id = subprocess.check_output(
+        ["git", "rev-parse", f"{target}:app/alembic/versions/receipt_delta.py"],
+        cwd=repo,
+        text=True,
+    ).strip()
+    replacement = b'reversibility = "reversible"\n'
+    loose_object = repo / ".git" / "objects" / object_id[:2] / object_id[2:]
+    loose_object.chmod(0o600)
+    loose_object.write_bytes(
+        zlib.compress(f"blob {len(replacement)}\0".encode("ascii") + replacement)
+    )
+    rendered, manifest = _promotion_test_candidate_inputs(source_sha=target)
+
+    with pytest.raises(PromotionReceiptError) as exc_info:
+        build_promotion_test_check_report(
+            rendered=rendered,
+            channel_manifest=manifest,
+            prod_admission_context=_promotion_admission_context(
+                migration_baseline_sha=baseline
+            ),
+            check_results=_promotion_check_results(),
+            source_repo=repo,
+        )
+
+    assert exc_info.value.code == "migration_delta_invalid"
+
+
+def test_promotion_test_uses_git_commit_parent_header_semantics(tmp_path: Path) -> None:
+    repo, baseline, target = _promotion_migration_git_delta(
+        tmp_path,
+        content='reversibility = "reversible"\n',
+    )
+    tree = subprocess.check_output(
+        ["git", "rev-parse", f"{target}^{{tree}}"],
+        cwd=repo,
+        text=True,
+    ).strip()
+    forged_commit = (
+        f"tree {tree}\n"
+        "author Receipt Test <receipt-test@example.invalid> 0 +0000\n"
+        f"parent {baseline}\n"
+        "committer Receipt Test <receipt-test@example.invalid> 0 +0000\n"
+        "\n"
+        "late parent header is not Git ancestry\n"
+    ).encode("ascii")
+    forged_target = subprocess.check_output(
+        ["git", "hash-object", "--literally", "-t", "commit", "-w", "--stdin"],
+        cwd=repo,
+        input=forged_commit,
+    ).decode("ascii").strip()
+    git_ancestry = subprocess.run(
+        ["git", "merge-base", "--is-ancestor", baseline, forged_target],
+        cwd=repo,
+        check=False,
+    )
+    assert git_ancestry.returncode != 0
+    rendered, manifest = _promotion_test_candidate_inputs(source_sha=forged_target)
+
+    with pytest.raises(PromotionReceiptError) as exc_info:
+        build_promotion_test_check_report(
+            rendered=rendered,
+            channel_manifest=manifest,
+            prod_admission_context=_promotion_admission_context(
+                migration_baseline_sha=baseline
+            ),
+            check_results=_promotion_check_results(),
+            source_repo=repo,
+        )
+
+    assert exc_info.value.code == "migration_delta_invalid"
+
+
+def test_promotion_test_rejects_bare_cr_commit_header_boundaries(tmp_path: Path) -> None:
+    repo, baseline, target = _promotion_migration_git_delta(
+        tmp_path,
+        content='reversibility = "reversible"\n',
+    )
+    tree = subprocess.check_output(
+        ["git", "rev-parse", f"{target}^{{tree}}"],
+        cwd=repo,
+        text=True,
+    ).strip()
+    forged_commit = (
+        f"tree {tree}\r"
+        f"parent {baseline}\n"
+        "author Receipt Test <receipt-test@example.invalid> 0 +0000\n"
+        "committer Receipt Test <receipt-test@example.invalid> 0 +0000\n"
+        "\n"
+        "bare CR is not a Git commit header boundary\n"
+    ).encode("ascii")
+    forged_target = subprocess.check_output(
+        ["git", "hash-object", "--literally", "-t", "commit", "-w", "--stdin"],
+        cwd=repo,
+        input=forged_commit,
+    ).decode("ascii").strip()
+    git_ancestry = subprocess.run(
+        ["git", "merge-base", "--is-ancestor", baseline, forged_target],
+        cwd=repo,
+        check=False,
+    )
+    assert git_ancestry.returncode != 0
+    rendered, manifest = _promotion_test_candidate_inputs(source_sha=forged_target)
 
     with pytest.raises(PromotionReceiptError) as exc_info:
         build_promotion_test_check_report(
