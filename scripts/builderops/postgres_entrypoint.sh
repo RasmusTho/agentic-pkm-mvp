@@ -1,9 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-source_secret="${BUILDEROPS_DATABASE_APP_PASSWORD_SECRET_FILE:?BuilderOps app-role source secret file is required}"
+readonly source_secret="/run/secrets/builderops_database_app_password"
 staged_secret="${BUILDEROPS_DATABASE_APP_PASSWORD_FILE:?BuilderOps app-role staged password file is required}"
 staged_directory="/run/builderops-init"
+pgdata="${PGDATA:-/var/lib/postgresql/data}"
+initialization_pending="${pgdata}/.builderops-app-role-init-pending"
+initialization_ready="${pgdata}/.builderops-app-role-init-ready"
 
 # The official entrypoint drops root before it executes initdb scripts. Stage
 # only the app-role password, only before the initial PGDATA bootstrap, and
@@ -27,9 +30,24 @@ stage_app_password() {
   install -m 0400 -o postgres -g postgres "$source_secret" "$staged_secret"
 }
 
-if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
-  if [[ "$(id -u)" -eq 0 && ! -s "${PGDATA:-/var/lib/postgresql/data}/PG_VERSION" ]]; then
+prepare_initialization_state() {
+  if [[ ! -s "${pgdata}/PG_VERSION" ]]; then
+    install -m 0600 -o postgres -g postgres /dev/null "$initialization_pending"
     stage_app_password
+    return
+  fi
+  if [[ -e "$initialization_pending" ]]; then
+    if [[ ! -s "$initialization_ready" || -L "$initialization_ready" ]]; then
+      echo "BuilderOps PostgreSQL initialization is incomplete; refusing startup" >&2
+      exit 78
+    fi
+    rm -f -- "$initialization_pending"
+  fi
+}
+
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  if [[ "$(id -u)" -eq 0 ]]; then
+    prepare_initialization_state
   fi
 
   exec /usr/local/bin/docker-entrypoint.sh "$@"

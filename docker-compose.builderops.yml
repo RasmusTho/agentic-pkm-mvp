@@ -19,7 +19,6 @@ services:
       POSTGRES_USER: builderops_owner
       POSTGRES_PASSWORD_FILE: /run/secrets/builderops_database_owner_password
       BUILDEROPS_DATABASE_APP_PASSWORD_FILE: /run/builderops-init/app-password
-      BUILDEROPS_DATABASE_APP_PASSWORD_SECRET_FILE: /run/secrets/builderops_database_app_password
     command:
       - postgres
       - -c

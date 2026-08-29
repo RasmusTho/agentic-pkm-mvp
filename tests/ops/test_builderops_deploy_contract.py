@@ -176,6 +176,7 @@ def _harness(tmp_path: Path) -> tuple[Path, dict[str, str], str, str, str]:
     for relative in (
         "scripts/lib/builderops_compose.sh",
         "scripts/deploy_builderops.sh",
+        "scripts/builderops/preflight_app_password_secret.sh",
         "scripts/builderops/configure_tailnet_tls.sh",
         "config/deploy/builderops.env",
         "docker-compose.builderops.yml",
@@ -224,6 +225,9 @@ def _harness(tmp_path: Path) -> tuple[Path, dict[str, str], str, str, str]:
     event_log = tmp_path / "events.log"
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
+    secret_root = tmp_path / "secrets"
+    secret_root.mkdir()
+    (secret_root / "database-app-password").write_text("not-a-real-secret\n", encoding="utf-8")
 
     _write_executable(
         bin_dir / "gh",
@@ -278,6 +282,10 @@ elif [ "${1:-}" = serve ] && [ "${2:-}" = status ]; then
 fi
 """,
     )
+    _write_executable(
+        bin_dir / "stat",
+        "#!/usr/bin/env bash\nprintf '%s\\n' \"${FAKE_SECRET_STAT:-0:600}\"\n",
+    )
 
     env = os.environ.copy()
     env.update(
@@ -288,6 +296,7 @@ fi
             "BUILDEROPS_RECEIPT_DIR": str(receipt_dir),
             "BUILDEROPS_HEALTH_TIMEOUT_SECONDS": "1",
             "BUILDEROPS_TEST_CANDIDATE_RECEIPT": str(candidate_receipt),
+            "BUILDEROPS_SECRET_ROOT": str(secret_root),
         }
     )
     return root, env, source_sha, digest, postgres_digest

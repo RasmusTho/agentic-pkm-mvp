@@ -10,6 +10,8 @@ export BUILDEROPS_PIN_FILE
 
 # shellcheck source=lib/builderops_compose.sh
 source "${ROOT}/scripts/lib/builderops_compose.sh"
+# shellcheck source=builderops/preflight_app_password_secret.sh
+source "${ROOT}/scripts/builderops/preflight_app_password_secret.sh"
 
 usage() {
   echo "usage: scripts/deploy_builderops.sh deploy <attested-candidate-pair-receipt.json> | rollback" >&2
@@ -203,6 +205,7 @@ pin_backup="$(mktemp "${PIN_FILE}.rollback.XXXXXX")"
 cp "${PIN_FILE}" "${pin_backup}"
 
 activate_target() {
+  builderops_preflight_app_password_secret || return
   write_pin "${PIN_FILE}" "${target_sha}" "${target_digest}" "${target_postgres_digest}" || return
   builderops_compose "${ROOT}" pull db api worker migrate || return
   builderops_compose "${ROOT}" up -d db || return
@@ -213,6 +216,7 @@ activate_target() {
 }
 
 reactivate_previous_release() {
+  builderops_preflight_app_password_secret || return
   cp "${pin_backup}" "${PIN_FILE}" || return
   builderops_compose "${ROOT}" pull db api worker || return
   builderops_compose "${ROOT}" up -d --force-recreate db api worker || return
