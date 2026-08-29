@@ -84,7 +84,7 @@ def test_vaultwide_smoke_activates_registered_fixture_through_production_cutover
     cutover_root = 'export MVR01C_ROLLBACK_VAULT_ROOT="$VAULT_ROOT"'
     principal_cutover = "export MVR03_PRINCIPAL_CUTOVER=1"
     principal_topology = "export MVR03_PRINCIPAL_LOOPBACK_LISTENER=0"
-    services = "docker compose $compose_files up -d --build db api watcher worker"
+    services = "docker compose $compose_files up -d --build db watcher"
 
     assert step.count(deployment) == 2
     first_deployment = step.index(deployment)
@@ -120,12 +120,15 @@ def test_vaultwide_smoke_seeds_adopted_fixture_with_same_path_identity() -> None
     assert 'VAULT_IDENTITY_OVERLAY_PATH="${RUNNER_TEMP}/ci-vault-identity.' in step
     assert overlay_write in step
     assert "          services:\n            instance-state-init:\n" in step
-    assert "            worker:\n              volumes:\n" in step
+    assert "            watcher:\n              volumes:\n" in step
     assert '                  source: "$VAULT_ROOT"' in step
     assert '                  target: "$VAULT_ROOT"' in step
     assert "                  read_only: true" in step
     assert seeded_compose_files in step
-    assert 'run_ci_compose run --rm --no-deps -T -e VAULT_ROOT="$VAULT_ROOT" worker \\' in step
+    assert 'run_ci_compose run --rm --no-deps -T -e VAULT_ROOT="$VAULT_ROOT" watcher \\' in step
+    assert '--consumer watcher > "$VAULT_BINDING_RECEIPT_PATH"' in step
+    assert "docker compose $compose_files up -d --build db watcher" in step
+    assert "docker compose $compose_files up -d --build db api watcher worker" not in step
     first_deployment = step.index(deployment)
     second_deployment = step.index(deployment, first_deployment + len(deployment))
     assert step.index(overlay_write) < step.index(seeded_compose_files)

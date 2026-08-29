@@ -549,7 +549,7 @@ jobs:
                   source: "$VAULT_ROOT"
                   target: "$VAULT_ROOT"
                   read_only: true
-            worker:
+            watcher:
               volumes:
                 - type: bind
                   source: "$VAULT_ROOT"
@@ -637,17 +637,17 @@ jobs:
 
           # A fresh CI volume is intentionally dormant after mechanical state
           # preparation. Register the seeded fixture through the exact runtime
-          # consumer preflight, then exercise the existing explicit MVR-01C and
+          # watcher preflight, then exercise the existing explicit MVR-01C and
           # MVR-03 production cutovers before asking the panel to emit governed
           # binding effects. This models an already-cut-over installation; it
           # does not teach ordinary deployment to infer authority activation.
           set +e
-          run_ci_compose run --rm --no-deps -T -e VAULT_ROOT="$VAULT_ROOT" worker \
+          run_ci_compose run --rm --no-deps -T -e VAULT_ROOT="$VAULT_ROOT" watcher \
             python -m app.instance.runtime preflight \
               --channel "${PKM_ENVIRONMENT:-dev}" \
               --instance-state-root /app/instance-state \
               --host-global-root /app/instance-ownership \
-              --consumer worker > "$VAULT_BINDING_RECEIPT_PATH"
+              --consumer watcher > "$VAULT_BINDING_RECEIPT_PATH"
           binding_registration_rc=$?
           set -e
           if [ "$binding_registration_rc" -ne 0 ]; then
@@ -680,7 +680,10 @@ jobs:
           export MVR03_PRINCIPAL_LOOPBACK_LISTENER=0
           prepare_ci_instance_state_deployment
 
-          docker compose $compose_files up -d --build db api watcher worker
+          # The panel verifier exercises the watcher consumer only. Starting
+          # api/worker here would create separate live global owners for this
+          # single CI fixture root, which the ownership ledger must reject.
+          docker compose $compose_files up -d --build db watcher
           LOG_PATH="$VAULTWIDE_PANEL_LOG_PATH" \
           REPORT_PATH="$VAULTWIDE_PANEL_REPORT_PATH" \
           bash scripts/verify_vaultwide_panel.sh
