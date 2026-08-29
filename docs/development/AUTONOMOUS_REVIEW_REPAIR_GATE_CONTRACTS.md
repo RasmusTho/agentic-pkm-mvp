@@ -396,14 +396,22 @@ After two rejected independent review rounds on one PR, the production review/pu
 fails closed before another expensive proof or publication cycle. This count is PR-level: changing a
 mechanism identifier, reviewer, model, branch, or head SHA does not reset it. The gate composes with
 and does not replace the existing per-mechanism repair accounting or the Mechanism Convergence Gate.
+Only a formal GitHub `CHANGES_REQUESTED` review by an author other than the PR author creates a
+rejected round. Approval text, repair/status conversation, severity-like prose, and comments outside
+such a rejected review cannot create or reset a round. Each counted round binds its exact reviewed
+head, reviewer, review-body digest, protected inline-finding digests, and the
+`Governing-Contract-SHA256` recorded in that review.
 
 An authenticated receipt bound to the current PR number, head SHA, governing Issue, and a canonical
 SHA-256 governing-contract identity must select exactly one outcome: `continue_unchanged`, `split`,
-or `expanded_contract`. It must include authenticated GitHub review evidence. The executable gate
+or `expanded_contract`. The local JSON is only a byte-for-byte working copy: the same receipt must
+exist in a PR conversation comment beginning `<!-- pr-scope-revalidation-receipt:v1 -->`, authored
+by a GitHub `OWNER`, `MEMBER`, or `COLLABORATOR`. The executable gate
 fetches the current PR, complete paginated review summaries, inline review comments, PR conversation,
 and governing Issue itself; it binds the
 repository/base identity, exact head, contract digest, rejected-round IDs, and protected finding IDs.
-Caller-supplied history, actors, URLs, labels, or finding subsets are never evidence. Omitted,
+including the content digest of that rejected-review history. Caller-supplied history, actors, URLs,
+labels, or finding subsets are never evidence. Omitted,
 foreign, stale, malformed, or partial evidence fails closed. Publication invokes the executable gate
 with an explicit `new` or `existing` mode; `existing` requires the live PR identity and authenticated
 scope revalidation inputs, while `new` authenticates that the branch has no open PR and an omitted
@@ -411,8 +419,9 @@ mode is rejected whenever the current branch already has an open PR. `continue_u
 permits only governing-contract blockers and PR-introduced regressions. Every `split` receipt must
 name a positive, non-governing `follow_up_issue`; the executable gate fetches it and requires an
 existing, bounded canonical Issue contract before it routes affected work there. `expanded_contract`
-requires an authenticated updated governing
-Issue and updated contract identity before repair continues.
+requires the current live governing-Issue digest to differ from at least one rejected round and an
+exact `expanded_from_rounds` lineage entry (round, reviewed head, prior contract digest) for every
+authenticated rejected round before repair continues. An arbitrary well-formed digest is rejected.
 
 Classify every protected finding derived from each rejected round exactly once as one of:
 

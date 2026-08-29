@@ -58,7 +58,14 @@ RISK_SURFACES = {
     "state-machine",
 }
 PR_SCOPE_REVALIDATION_OUTCOMES = frozenset({"continue_unchanged", "split", "expanded_contract"})
-PROTECTED_REVIEW_SEVERITY = re.compile(r"(?:\bP[01]\b|P[01][ _-]?(?:Badge|blocker))", re.IGNORECASE)
+PROTECTED_REVIEW_FINDING = re.compile(
+    r"(?im)^\s*(?:[-*]\s*)?P[01]\s+(?:blocker|finding|violation|regression)\b"
+)
+REVIEW_CONTRACT_DIGEST = re.compile(
+    r"(?im)^Governing-Contract-SHA256:\s*([0-9a-f]{64})\s*$"
+)
+REVALIDATION_RECEIPT_MARKER = "<!-- pr-scope-revalidation-receipt:v1 -->"
+TRUSTED_RECEIPT_ASSOCIATIONS = frozenset({"OWNER", "MEMBER", "COLLABORATOR"})
 
 
 class ReviewBeforeCiGateError(ValueError):
@@ -130,6 +137,14 @@ def validate_pr_scope_revalidation(
                 "authenticated GitHub review history has no exact protected finding set"
             )
         expected_finding_ids = set(raw_finding_ids)
+        durable_receipts = authenticated_history.get("durable_receipts")
+        if not isinstance(durable_receipts, list) or not any(
+            isinstance(candidate, Mapping) and candidate.get("receipt") == receipt
+            for candidate in durable_receipts
+        ):
+            raise ReviewBeforeCiGateError(
+                "local contract revalidation receipt must match a durable GitHub receipt"
+            )
     elif (
         not isinstance(receipt.get("authentication"), Mapping)
         or receipt["authentication"].get("source") != "github-review"
@@ -139,12 +154,44 @@ def validate_pr_scope_revalidation(
         raise ReviewBeforeCiGateError(
             "contract revalidation receipt must carry authenticated GitHub review evidence"
         )
-    if outcome == "expanded_contract" and (
+    if authenticated_history is not None:
+        rejected_round_contracts = authenticated_history.get("rejected_round_contracts")
+        if not isinstance(rejected_round_contracts, list):
+            raise ReviewBeforeCiGateError("authenticated rejected-round contract lineage is missing")
+        if outcome == "expanded_contract":
+            if (
+                receipt.get("expanded_issue") != governing_issue
+                or receipt.get("expanded_contract_sha256") != governing_contract_sha256
+            ):
+                raise ReviewBeforeCiGateError(
+                    "expanded_contract must bind the live governing Issue contract"
+                )
+            if receipt.get("expanded_from_rounds") != rejected_round_contracts:
+                raise ReviewBeforeCiGateError(
+                    "expanded_contract must bind every authenticated rejected-round contract/head"
+                )
+            if not any(
+                round_contract.get("governing_contract_sha256") != governing_contract_sha256
+                for round_contract in rejected_round_contracts
+                if isinstance(round_contract, Mapping)
+            ):
+                raise ReviewBeforeCiGateError(
+                    "expanded_contract requires a changed live governing Issue contract"
+                )
+        elif any(
+            isinstance(round_contract, Mapping)
+            and round_contract.get("governing_contract_sha256") != governing_contract_sha256
+            for round_contract in rejected_round_contracts
+        ):
+            raise ReviewBeforeCiGateError(
+                "changed governing Issue contract requires expanded_contract lineage"
+            )
+    elif outcome == "expanded_contract" and (
         receipt.get("expanded_issue") != governing_issue
-        or not _is_sha256(receipt.get("expanded_contract_sha256"))
+        or receipt.get("expanded_contract_sha256") != governing_contract_sha256
     ):
         raise ReviewBeforeCiGateError(
-            "expanded_contract requires the authenticated updated governing Issue and contract SHA-256"
+            "expanded_contract must bind the live governing Issue contract"
         )
     classifications = receipt.get("finding_classifications")
     if not isinstance(classifications, list):
@@ -269,6 +316,9 @@ def authenticated_pr_scope_revalidation_history(
     ):
         raise ReviewBeforeCiGateError("GitHub review history is incomplete")
 
+    pr_author = _nested_value(pr, "user", "login")
+    if not _nonempty_string(pr_author):
+        raise ReviewBeforeCiGateError("GitHub PR author identity is unavailable")
     reviews_by_id: dict[int, Mapping[str, object]] = {}
     for review in reviews:
         if (
@@ -276,47 +326,101 @@ def authenticated_pr_scope_revalidation_history(
             or not isinstance(review.get("id"), int)
             or not isinstance(review.get("state"), str)
             or not isinstance(review.get("body"), str)
+            or not _nonempty_string(_nested_value(review, "user", "login"))
+            or not _nonempty_string(review.get("commit_id"))
         ):
             raise ReviewBeforeCiGateError("GitHub review history is malformed")
         reviews_by_id[review["id"]] = review
     finding_ids_by_round: dict[str, set[str]] = {}
+    rejected_round_details: dict[str, dict[str, object]] = {}
     for review_id, review in reviews_by_id.items():
-        if review.get("state") == "CHANGES_REQUESTED":
-            finding_ids_by_round.setdefault(f"review:{review_id}", set()).add(f"review:{review_id}")
-        if PROTECTED_REVIEW_SEVERITY.search(review["body"]):
-            finding_ids_by_round.setdefault(f"review:{review_id}", set()).add(
-                f"review:{review_id}"
+        reviewer = _nested_value(review, "user", "login")
+        if review.get("state") != "CHANGES_REQUESTED" or reviewer == pr_author:
+            continue
+        commit_id = review["commit_id"]
+        if not isinstance(commit_id, str) or not re.fullmatch(r"[0-9a-f]{40}", commit_id):
+            raise ReviewBeforeCiGateError("rejected review round has no exact reviewed head")
+        contract_match = REVIEW_CONTRACT_DIGEST.search(review["body"])
+        if contract_match is None:
+            raise ReviewBeforeCiGateError(
+                "rejected review round has no governing contract SHA-256 lineage"
             )
+        round_id = f"review:{review_id}"
+        finding_ids_by_round[round_id] = {round_id}
+        rejected_round_details[round_id] = {
+            "round_id": round_id,
+            "verdict": "rejected",
+            "review_state": "CHANGES_REQUESTED",
+            "reviewer": reviewer,
+            "head_sha": commit_id,
+            "governing_contract_sha256": contract_match.group(1),
+            "review_body_sha256": _sha256_text(review["body"]),
+        }
     for comment in inline_comments:
         if not isinstance(comment, Mapping) or not isinstance(comment.get("id"), int):
             raise ReviewBeforeCiGateError("GitHub review comment history is malformed")
         body = comment.get("body")
-        if not isinstance(body, str) or not PROTECTED_REVIEW_SEVERITY.search(body):
+        if not isinstance(body, str) or not PROTECTED_REVIEW_FINDING.search(body):
             continue
         review_id = comment.get("pull_request_review_id")
         if isinstance(review_id, int) and review_id not in reviews_by_id:
             raise ReviewBeforeCiGateError("GitHub review comment references an unknown review")
-        round_id = f"review:{review_id}" if isinstance(review_id, int) else f"comment:{comment['id']}"
-        finding_ids_by_round.setdefault(round_id, set()).add(f"comment:{comment['id']}")
+        if not isinstance(review_id, int):
+            continue
+        round_id = f"review:{review_id}"
+        if round_id in finding_ids_by_round:
+            finding_ids_by_round[round_id].add(f"comment:{comment['id']}")
+            rejected_round_details[round_id].setdefault("finding_body_sha256", {})[
+                f"comment:{comment['id']}"
+            ] = _sha256_text(body)
+    durable_receipts: list[dict[str, object]] = []
     for comment in conversation_comments:
         if not isinstance(comment, Mapping) or not isinstance(comment.get("id"), int):
             raise ReviewBeforeCiGateError("GitHub PR conversation history is malformed")
         body = comment.get("body")
-        if not isinstance(body, str) or not PROTECTED_REVIEW_SEVERITY.search(body):
+        if not isinstance(body, str) or not body.startswith(REVALIDATION_RECEIPT_MARKER):
             continue
-        round_id = f"issue-comment:{comment['id']}"
-        finding_ids_by_round.setdefault(round_id, set()).add(f"issue-comment:{comment['id']}")
+        association = comment.get("author_association")
+        author = _nested_value(comment, "user", "login")
+        if association not in TRUSTED_RECEIPT_ASSOCIATIONS or not _nonempty_string(author):
+            continue
+        try:
+            parsed_receipt = json.loads(body[len(REVALIDATION_RECEIPT_MARKER) :].strip())
+        except json.JSONDecodeError as exc:
+            raise ReviewBeforeCiGateError("durable GitHub revalidation receipt is malformed") from exc
+        if not isinstance(parsed_receipt, Mapping):
+            raise ReviewBeforeCiGateError("durable GitHub revalidation receipt is malformed")
+        durable_receipts.append(
+            {
+                "comment_id": comment["id"],
+                "author": author,
+                "author_association": association,
+                "receipt": parsed_receipt,
+            }
+        )
 
-    rejected_rounds = [
-        {"round_id": round_id, "verdict": "rejected", "finding_ids": sorted(finding_ids)}
-        for round_id, finding_ids in sorted(finding_ids_by_round.items())
-    ]
+    rejected_rounds = []
+    for round_id, finding_ids in sorted(finding_ids_by_round.items()):
+        round_detail = rejected_round_details[round_id]
+        round_detail["finding_ids"] = sorted(finding_ids)
+        rejected_rounds.append(round_detail)
     finding_ids = sorted(
         finding_id for finding_set in finding_ids_by_round.values() for finding_id in finding_set
     )
+    rejected_round_contracts = [
+        {
+            "round_id": round_["round_id"],
+            "head_sha": round_["head_sha"],
+            "governing_contract_sha256": round_["governing_contract_sha256"],
+        }
+        for round_ in rejected_rounds
+    ]
+    review_history_sha256 = _sha256_text(_canonical_json(rejected_rounds))
     return {
         "rejected_rounds": rejected_rounds,
         "finding_ids": finding_ids,
+        "rejected_round_contracts": rejected_round_contracts,
+        "durable_receipts": durable_receipts,
         "authentication": {
             "source": "github-api",
             "repository": repository,
@@ -324,6 +428,7 @@ def authenticated_pr_scope_revalidation_history(
             "head_sha": head_sha,
             "rejected_round_ids": [round_["round_id"] for round_ in rejected_rounds],
             "finding_ids": finding_ids,
+            "review_history_sha256": review_history_sha256,
         },
         "governing_contract_sha256": hashlib.sha256(
             _canonical_contract_body(issue["body"]).encode("utf-8")
@@ -393,6 +498,14 @@ def _github_repository_from_origin() -> str | None:
 
 def _canonical_contract_body(body: str) -> str:
     return body.replace("\r\n", "\n").replace("\r", "\n").rstrip("\n") + "\n"
+
+
+def _canonical_json(value: object) -> str:
+    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+
+
+def _sha256_text(value: str) -> str:
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
 def _nested_value(payload: Mapping[str, object], *keys: str) -> object:
@@ -729,6 +842,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             validate_workflow_review_receipt(
                 Path(args.workflow_review_receipt).read_text(encoding="utf-8"), evidence
             )
+        origin_repository = _github_repository_from_origin()
+        if args.github_repository is not None and args.github_repository != origin_repository:
+            raise ReviewBeforeCiGateError(
+                "GitHub repository identity does not match authenticated origin"
+            )
         if args.publication_mode == "existing":
             if not args.pr_scope_revalidation:
                 raise ReviewBeforeCiGateError(
@@ -747,9 +865,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 raise ReviewBeforeCiGateError(
                     "new-PR publication found an existing open PR for the current branch"
                 )
-        elif (repository := _github_repository_from_origin()) is not None and _current_branch_has_open_pr(
-            repository
-        ):
+        elif origin_repository is not None and _current_branch_has_open_pr(origin_repository):
             raise ReviewBeforeCiGateError(
                 "publication requires explicit --publication-mode existing"
             )
