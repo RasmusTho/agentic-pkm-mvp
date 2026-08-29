@@ -32,6 +32,148 @@ the path and branch lease identities immediately before deletion and retains
 prior path-to-branch bindings when a path is reused. A report, missing record,
 or missing worktree is never evidence that cleanup is authorized.
 
+Remote branch disposition is not a broad-janitor action. The bounded
+`targeted_remote_cleanup` production entrypoint accepts at most five caller-supplied
+candidates and requires each to bind the repository, fully qualified source ref,
+closed-unmerged pull request, frozen source SHA, archive ref, owner, governing Issue
+(or explicit no-Issue lane), successor, retention class, review trigger, and explicit
+retain state. Candidate input has one exact schema; disposition metadata is never
+mutation authority. The entrypoint obtains repository, pull-request, protected-target,
+lifecycle-registry, and dispatcher authority itself and rereads all of it immediately
+before archive publication. The final source mutation uses the bounded linearization
+section described below. Any drift stops the batch before later candidates are touched.
+
+Repository identity is the live GitHub REST repository ID and canonical full name plus
+exactly one effective `origin` fetch URL and one effective push URL. HTTPS fetch and
+GitHub SSH push forms may differ, but both must identify that REST repository. The
+REST client fixes every authority request to `github.com` and gives each invocation a
+fresh mode-0700 empty `GH_CONFIG_DIR`. Ambient gh/XDG config paths, host/repository/API
+selectors, alternate HTTP sockets, and enterprise tokens are absent from that process.
+Only `GH_TOKEN` or `GITHUB_TOKEN` authentication for github.com is normalized into the
+clean call; when environment auth is absent, `gh auth token --hostname github.com`
+performs a local credential lookup and only its single token value crosses the boundary.
+No other gh config is copied, and temporary config is removed after the call. The
+captured literal push URL—not the mutable remote name—is passed to
+every `ls-remote` and `push`; the fetch URL is used to obtain the exact source object.
+Every candidate PR
+must freshly be closed, unmerged, same-repository, and at the named full head ref and
+SHA. The candidate's Issue/no-Issue routing fields are not authority: the live PR body
+is parsed with the same canonical governance classifier used by publication and
+verification. An issue-backed candidate must match the body's unique positive
+`Governing-Issue`; an issue-free candidate must match exactly one authenticated
+`docs-authoring`, `governance`, or `direct-repair` lane. Missing, malformed, duplicate,
+ambiguous, or mismatched contract identity refuses cleanup, and its exact PR-body digest
+plus resolved Issue/lane identity is part of the durable receipt identity. Protected
+target `#4728` is resolved as a closed Issue and must not be fabricated
+as a pull head; `#4813` is resolved as a closed-unmerged pull request and protects its
+number, full head ref, and head SHA. Lookup, kind, repository, or shape ambiguity is a
+batch-wide refusal.
+
+Every Git operation that derives repository, lifecycle, dispatcher, receipt-store, or
+remote transport authority starts from the explicit `cwd` with ambient repository
+redirection removed. In particular, `GIT_DIR`, `GIT_WORK_TREE`, `GIT_COMMON_DIR`,
+alternate object/index/namespace paths, and related discovery context cannot redirect
+cleanup from repository A into repository B. Intentional Git configuration and
+transport configuration remain available; only local repository-context selectors are
+sanitized. The already-captured literal fetch and push URLs remain the network targets
+for the destructive sequence.
+
+Lifecycle authority comes from the generation-bound registry under its kernel lock.
+Candidate branch, live candidate path, and prior-binding records receive complete
+semantic and live-generation validation; an unrelated record with sufficient branch
+and prior-binding identity does not make old unavailable checkout state a global
+cleanup dependency. Missing or corrupt registry state, identity-ambiguous rows, and
+relevant malformed, mismatched, unavailable, live, or prior-path binding evidence
+preserve the source.
+
+Dispatcher authority ignores dispatcher path environment overrides and always resolves
+the repo-common production SQLite database from Git's primary worktree. Each optimistic
+snapshot exhaustively reads every task and every lease, including orphan leases with no
+task. Candidate Issue, PR, ref, branch, and lifecycle path identity is classified before
+an unrelated expired task/lease disagreement is evaluated. Missing canonical state,
+identity-ambiguous or relevant malformed rows, missing relevant referenced leases,
+relevant task/lease/resource disagreement, changed census, or any live relevant task
+or orphan resource claim fails closed. Candidate resources include canonical
+`issue:<positive governing_issue>` identities, so an orphan Issue lease protects the
+source even without a task row. Relevant `ready`, `review`, `claimed`, `in_progress`,
+`blocked`, or `backlog` task state preserves the source even after its pickup lease is
+released or expires, because that canonical state can still represent retained or
+resumable work. The dispatcher producer's only positively terminal stored status is
+`completed`; every unknown or legacy raw status remains ambiguous and fails closed. A
+task-referenced lease must exist, be uniquely referenced, carry the canonical
+`issue:<task.issue_number>` resource, and have a nonempty `claimed_by` exactly equal to
+the lease holder. Missing or mismatched holder identity fails closed even when the lease
+is released or expired. No canonical legacy contract authorizes a terminal `completed`
+row to retain `lease_id`, so every such shape fails closed, including a matching holder.
+The canonical claim-then-complete transition clears both `lease_id` and `claimed_by` but
+intentionally retains the historical `lease_expires_at`; that exact shape is accepted
+only after the exhaustive census proves there is no relevant live task or orphan resource
+lease. Narrow legacy
+blank-repository history is ignored only
+when it has the current terminal `completed`/`blocked` or sync-meta shape, has no
+candidate Issue/PR/ref/branch/path resource, and has no live or unreleased lease. A
+blank row that is live, unreleased, relevant, malformed beyond that bounded legacy
+shape, or otherwise cannot prove irrelevance remains fail-closed. These short snapshots
+remain unlocked during planning and archive preparation; the bounded final source-CAS
+section below is the deliberate exception that fences canonical local writers.
+
+The blank-repository compatibility path calls the same task/lease relationship validator
+as repository-bound tasks. Any retained `lease_id` therefore requires one exact lease,
+one canonical Issue resource, one unique task reference, exact nonempty holder identity,
+and a complete inactive relationship; `completed` plus retained lease remains
+noncanonical and fails closed even with a matching holder. A canonical `completed` row
+with null lease/holder and an optional valid historical expiry remains admissible when it
+is provably unrelated.
+
+Receipts live under the repository Git common directory at
+`git-hygiene/targeted-remote-cleanup/v1/`, keyed by
+`sha256("v1\\0" + repository-id + "\\0" + full-source-ref)`. The resource key
+deliberately excludes disposition and SHA so a rebinding attempt collides with and is
+rejected by the existing record. Persistent per-resource files use non-blocking kernel
+`flock`; filenames are never unlinked as ownership signals. Prepared, compensated, and completed
+receipts reject symlinks, duplicate JSON keys, unknown fields, wrong identity or
+resource key, invalid states, completed regression, and compensated-to-prepared regression. Every transition
+uses a mode-0600 temporary file, complete write and file `fsync`, atomic replace, then
+directory `fsync`.
+
+The archive ref is deterministically derived from repository ID, full source ref, and
+frozen source SHA. Archive creation uses an expected-absence remote CAS, reads the exact
+SHA back, and durably records `prepared` before source deletion. Source deletion uses a
+fully qualified expected-old-SHA CAS inside one final-authority critical section. The
+canonical lock order is dispatcher SQLite writer reservation (`BEGIN IMMEDIATE`) first,
+then lifecycle-registry `flock`. Dispatcher claim/complete producers use the same SQLite
+writer serialization, and lifecycle register/heartbeat producers use the same registry
+lock; the normal claim-then-register workflow never nests these locks in the opposite
+order. The section is bounded to final local authority rereads, one source CAS, immediate
+ref readback, a final external/local authority reread, and the receipt transition. It is
+never held across batch planning, archive creation, or long-running validation.
+
+GitHub PR, Issue, body-contract, and protected-target authority cannot join the local
+lock domain. Cleanup reads that authority immediately before acquiring the local fences,
+then reads it again after the delete CAS while both local fences remain held. Source
+absence, exact archive identity, a clear final external reread, and a clear fenced local
+reread are all required before `completed` becomes durable. A dispatcher claim or
+lifecycle registration that begins after the locks are released is new authority after
+the completed deletion linearization; a writer that started earlier cannot become live
+until the critical section exits.
+
+If external drift or any local preservation signal appears after deletion, cleanup
+restores the exact archived object with an expected-absence source CAS, verifies both
+source and archive at the frozen SHA, records durable `compensated`, and stops the batch.
+It never overwrites a concurrently recreated or advanced source. Restore-CAS or readback
+ambiguity is a hard failure that leaves the archive retained and the receipt non-completed.
+Crash retry also recognizes a candidate-bound prepared/compensated receipt whose live PR
+contract has since changed: it restores an absent source or verifies the already-restored
+exact source, persists `compensated` under the same fences, and refuses advanced source or
+archive drift. A missing receipt plus an already absent source is never adoptable: only a
+matching `prepared` receipt loaded from disk before observing absence authorizes ordinary
+crash recovery. A completed receipt is monotonic and idempotent only while the same live
+ref facts still agree. This slice never deletes an archive ref.
+
+Archive refs are retained by default. `review_at` is only a review trigger for
+`safety_archive` and `quarantine`; elapsed time never authorizes archive deletion,
+and a missing or non-explicit discard receipt remains a retain decision.
+
 This document is `scripts/git_hygiene.py`'s paired temporal-owner contract.
 Update it whenever the preflight inputs, janitor preservation rules, cleanup
 authority, or command behavior changes. Focused executable coverage lives in
