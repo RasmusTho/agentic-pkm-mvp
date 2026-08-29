@@ -1913,6 +1913,51 @@ def test_promotion_test_uses_git_commit_parent_header_semantics(tmp_path: Path) 
     assert exc_info.value.code == "migration_delta_invalid"
 
 
+def test_promotion_test_rejects_bare_cr_commit_header_boundaries(tmp_path: Path) -> None:
+    repo, baseline, target = _promotion_migration_git_delta(
+        tmp_path,
+        content='reversibility = "reversible"\n',
+    )
+    tree = subprocess.check_output(
+        ["git", "rev-parse", f"{target}^{{tree}}"],
+        cwd=repo,
+        text=True,
+    ).strip()
+    forged_commit = (
+        f"tree {tree}\r"
+        f"parent {baseline}\n"
+        "author Receipt Test <receipt-test@example.invalid> 0 +0000\n"
+        "committer Receipt Test <receipt-test@example.invalid> 0 +0000\n"
+        "\n"
+        "bare CR is not a Git commit header boundary\n"
+    ).encode("ascii")
+    forged_target = subprocess.check_output(
+        ["git", "hash-object", "--literally", "-t", "commit", "-w", "--stdin"],
+        cwd=repo,
+        input=forged_commit,
+    ).decode("ascii").strip()
+    git_ancestry = subprocess.run(
+        ["git", "merge-base", "--is-ancestor", baseline, forged_target],
+        cwd=repo,
+        check=False,
+    )
+    assert git_ancestry.returncode != 0
+    rendered, manifest = _promotion_test_candidate_inputs(source_sha=forged_target)
+
+    with pytest.raises(PromotionReceiptError) as exc_info:
+        build_promotion_test_check_report(
+            rendered=rendered,
+            channel_manifest=manifest,
+            prod_admission_context=_promotion_admission_context(
+                migration_baseline_sha=baseline
+            ),
+            check_results=_promotion_check_results(),
+            source_repo=repo,
+        )
+
+    assert exc_info.value.code == "migration_delta_invalid"
+
+
 def test_promotion_test_refuses_self_enrolled_registry_trust(tmp_path: Path) -> None:
     private_key, public_key = _promotion_test_signing_material()
     rendered, manifest = _promotion_test_candidate_inputs()

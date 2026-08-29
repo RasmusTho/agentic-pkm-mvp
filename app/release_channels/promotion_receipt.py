@@ -416,7 +416,10 @@ def _verified_commit(
         object_id=object_id,
         object_type="commit",
     )
-    headers = content.partition(b"\n\n")[0].splitlines()
+    header_block, separator, _message = content.partition(b"\n\n")
+    if not separator or b"\r" in header_block or b"\0" in header_block:
+        raise PromotionReceiptError("migration_delta_invalid")
+    headers = header_block.split(b"\n")
     if not headers or not headers[0].startswith(b"tree "):
         raise PromotionReceiptError("migration_delta_invalid")
     parent_ids: list[str] = []
