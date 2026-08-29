@@ -33,6 +33,20 @@ mixed, or unknown delta.
 read APIs. #4836 must consume its exact admission and header-stripping boundary; it provides no
 page, asset, or visual destination.
 
+## Complete Dev System placement boundary
+
+Stage A is one read-only Dev UI projection component within the complete Builder System / Dev
+System. Its target runtime home is TARS VM 102 (`builder-system`), but this capability specification
+does not claim that Stage A, Dev UI, or the complete Dev System is resident or deployed there. The
+complete topology, external dependencies, intentionally non-runtime components, and unresolved
+gaps are owned by [`docs/BUILDEROPS_CONTROL_PLANE/README.md :: Complete Dev System VM-102 topology
+contract`](../BUILDEROPS_CONTROL_PLANE/README.md).
+
+Stage A cannot replace BuilderOps, GitHub/CI/review/merge/closure, Product Runtime, or TARS/Proxmox
+authority. Its browser and owner-pilot evidence is valid only when bound to the complete-system
+deployment receipts and exact candidate SHA. A missing component or receipt withdraws the affected
+claim; it is never treated as an empty, healthy, or deployed state.
+
 ## Current-to-target truth
 
 | Surface | Current delivered fact | Remaining target |
@@ -80,7 +94,7 @@ changes none of the withdrawal conclusions for **Needs you** or **Ready to try**
 | 5 | ARO-05 — Validate Connected Overview and Focus Yggdrasil Evidence #4746 | `agent:blocked` | Merged stable #4834 source-owned Now fixtures plus delivered #4768 Focus API fixtures, then either an independently reviewed `yggdrasil-constrained-reuse.v1` exact-reuse receipt or a passing live Yggdrasil Design Handoff Receipt for novel, mixed, or unknown scope |
 | 6 | ARO-06 — Render the Read-Only Overview Shell | `agent:blocked` | Accepted ARO-05 design evidence and merged ARO-03/04 |
 | 7 | ARO-07 — Prove Overview Browser and Accessibility States | `agent:blocked` | ARO-06 merged at an exact testable SHA |
-| 8 | ARO-08 — Run the Read-Only Owner Pilot | `agent:blocked` | #4748 receipt, repaired pilot contract, Demerzel prod access, #4747 selectors, receipt-sourced deployed URL/SHA, and disposable-state classification |
+| 8 | ARO-08 — Run the Read-Only Owner Pilot | `agent:blocked` | #4748 receipt, repaired pilot contract, VM-102 Dev System health/deploy receipts, #4747 selectors, receipt-sourced deployed URL/SHA, and disposable-state classification |
 
 No task is `agent:ready` at filing. The parent is a blocked validation hub and never becomes a
 pickup issue.
@@ -126,7 +140,7 @@ pickup issue.
       unlinked states without browser reclassification.
 - [ ] The owner pilot answers Now, Needs you, and Ready to try without a false decision, readiness,
       durable acceptance, or dependency on opening standalone subsystem UIs. It runs only on the
-      receipt-sourced Demerzel production deployment (`pkm-prod`, `PKM_ENVIRONMENT=prod`, Midgård),
+      receipt-sourced VM-102 Dev System deployment and selected environment identity (`pkm-prod`, `PKM_ENVIRONMENT=prod`, Midgård),
       proves the deployed SHA across CI/review/deploy receipt, `/version`, `/api/health.version`,
       and gateway marker, and records the disposable-state Overview → server-supplied Focus →
       return journey with zero effects/errors/storage/unauthorized writes and durable evidence.

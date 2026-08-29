@@ -25,13 +25,25 @@ This profile isolates one TARS/Proxmox setup from the portable BuilderOps deploy
 Alternative hosts, hypervisors, VM layouts, container runtimes, and alerting mechanisms may satisfy
 the generic contract with equivalent evidence.
 
-## BuilderOps placement boundary
+## Complete Dev System placement boundary
 
-The TARS qualification contract identifies VM 102 (`builder-system`) as the intended isolated
-BuilderOps candidate. That is a candidate-policy identifier, not a live deployment assertion. The
-candidate must remain separate from Product Runtime: it must not host a `pkm-*` Product Compose
-project or carry Product production credentials, vault references, or network identities. See
-`docs/BUILDEROPS_CONTROL_PLANE/README.md :: TARS qualification contract` for the owner contract.
+The TARS qualification contract identifies VM 102 (`builder-system`) as the intended cohesive home
+for the complete Builder System / Dev System, including Dev UI as one read-only projection and the
+BuilderOps control plane and internal providers. That is a candidate-policy identifier, not a live
+deployment assertion. The complete topology is owned by
+`docs/BUILDEROPS_CONTROL_PLANE/README.md :: Complete Dev System VM-102 topology contract`; every
+unresolved component remains a named reconciliation gap.
+
+The candidate must remain separate from Product Runtime: it must not host a `pkm-*` Product Compose
+project or carry Product production credentials, vault references, or network identities. Strict
+host-key verification is required for any operational readback. A failed or unavailable host
+ownership inventory is evidence of an open qualification gate, not permission to weaken SSH policy.
+
+Admission requires the receipt chain `devsystem_vm102_component_inventory.v1` →
+`builderops_vm_rebuild_activation.v1` + `devui_vm102_runtime_qualification.v1` →
+`devsystem_vm102_deploy.v1` → `devsystem_vm102_health.v1`. The Stage A owner pilot and rollback
+remain separate receipts. These are contracts only; this profile records no live residency,
+deployment, health, or owner acceptance.
 
 ## Disk and WAL headroom policy
 
