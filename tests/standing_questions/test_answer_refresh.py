@@ -294,6 +294,41 @@ def test_invalid_contradiction_basis_degrades_to_unknown(tmp_path: Path) -> None
     assert frontmatter["contradiction_basis"] is None
 
 
+def test_standing_answer_edit_during_cognition_blocks_stale_contradiction(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    answer = vault / "answers/current.md"
+    answer.parent.mkdir()
+    answer.write_text("The supported boundary is production.", encoding="utf-8")
+    store, note = _question(vault, standing_answer_ref="vault://answers/current.md")
+    evidence = _evidence(
+        "vault://notes/evidence.md", "outbox://evidence/1", "the test channel is isolated", 10
+    )
+    store.update_system_fields(note["question_id"], {"evidence": [evidence]})
+    original = refresh_module.run_create_pass
+
+    def create_then_edit_answer(*args: Any, **kwargs: Any) -> Any:
+        answer.write_text("The supported boundary is staging.", encoding="utf-8")
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(refresh_module, "run_create_pass", create_then_edit_answer)
+    result = refresh_answers_on_evidence_delta(
+        vault_root=vault,
+        outbox_path=tmp_path / "outbox.jsonl",
+        evidence_sources={
+            "outbox://evidence/1": _source("outbox://evidence/1", evidence["quoted_span"])
+        },
+        store=store,
+        write_guard=_guard(),
+        now=_dt(12),
+    )
+
+    assert result.blocked == (note["question_id"],)
+    assert store.read_question(note["question_id"])["candidate_answer_ref"] is None
+
+
 def test_changed_source_bytes_cannot_replay_historical_evidence(tmp_path: Path) -> None:
     vault = tmp_path / "vault"
     vault.mkdir()
@@ -819,7 +854,19 @@ def test_refresh_replay_reuses_draft_and_receipt_bytes(tmp_path: Path) -> None:
     records_after = _records(outbox)
     proposal_after = [r for r in records_after if r["event"] == "expansion.create.proposed"]
     assert proposal_after == proposal_before
-    assert (vault / proposal_after[0]["payload"]["draft_path"]).read_bytes() == draft_before
+    draft_path = vault / proposal_after[0]["payload"]["draft_path"]
+    assert draft_path.read_bytes() == draft_before
+
+    # The receipt binds raw bytes, not text normalized through universal-newline decoding.
+    draft_path.write_bytes(draft_before.replace(b"\n", b"\r\n", 1))
+    store.update_system_fields(
+        note["question_id"], {"candidate_answer_ref": None, "last_refreshed_at": None}
+    )
+    with pytest.raises(CreateIdempotencyConflictError, match="does not match draft"):
+        refresh_answers_on_evidence_delta(
+            vault_root=vault, outbox_path=outbox, evidence_sources=sources,
+            store=store, write_guard=_guard(), now=_dt(14)
+        )
 
 
 def test_refresh_replay_rejects_receipt_payload_collision(tmp_path: Path) -> None:
@@ -851,3 +898,45 @@ def test_refresh_replay_rejects_receipt_payload_collision(tmp_path: Path) -> Non
             vault_root=vault, outbox_path=outbox, evidence_sources=sources,
             store=store, write_guard=_guard(), now=_dt(13)
         )
+
+
+def test_refresh_retry_after_question_text_edit_derives_new_generation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    outbox = tmp_path / "outbox.jsonl"
+    store, note = _question(vault)
+    evidence = _evidence("vault://notes/a.md", "outbox://evidence/1", "first evidence", 10)
+    store.update_system_fields(note["question_id"], {"evidence": [evidence]})
+    sources = {"outbox://evidence/1": _source("outbox://evidence/1", evidence["quoted_span"])}
+    original = refresh_module.run_create_pass
+    changed = False
+
+    def create_then_edit(*args: Any, **kwargs: Any) -> Any:
+        nonlocal changed
+        if not changed:
+            path = vault / "questions" / f"{note['question_id']}.md"
+            path.write_text(
+                path.read_text(encoding="utf-8").replace(
+                    "Which deployment boundary is supported?",
+                    "Which deployment boundary is supported after the edit?",
+                    1,
+                ),
+                encoding="utf-8",
+            )
+            changed = True
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(refresh_module, "run_create_pass", create_then_edit)
+    first = refresh_answers_on_evidence_delta(
+        vault_root=vault, outbox_path=outbox, evidence_sources=sources,
+        store=store, write_guard=_guard(), now=_dt(12)
+    )
+    assert first.blocked == (note["question_id"],)
+    monkeypatch.setattr(refresh_module, "run_create_pass", original)
+    retry = refresh_answers_on_evidence_delta(
+        vault_root=vault, outbox_path=outbox, evidence_sources=sources,
+        store=store, write_guard=_guard(), now=_dt(13)
+    )
+    assert retry.drafted == (note["question_id"],)

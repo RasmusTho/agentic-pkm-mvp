@@ -601,7 +601,8 @@ def _replay_draft_metadata(
     if not draft_path.exists():
         return None
     try:
-        raw = draft_path.read_text(encoding="utf-8")
+        raw_bytes = draft_path.read_bytes()
+        raw = raw_bytes.decode("utf-8")
         frontmatter, _body = load_frontmatter(raw)
     except (OSError, UnicodeError, ValueError) as exc:
         raise CreateIdempotencyConflictError(
@@ -614,7 +615,7 @@ def _replay_draft_metadata(
         raise CreateIdempotencyConflictError(
             f"deterministic Create draft identity/content mismatch: {draft_path}"
         )
-    return frontmatter, hashlib.sha256(raw.encode("utf-8")).hexdigest()
+    return frontmatter, hashlib.sha256(raw_bytes).hexdigest()
 
 
 def _emit_receipt(

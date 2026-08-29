@@ -119,6 +119,7 @@ def _refresh_attempt_ids(
     last_refreshed_at: str | None,
     evidence: Sequence[Mapping[str, Any]],
     *,
+    question_text: str,
     standing_answer_referenced: bool,
     standing_answer: str | None,
 ) -> tuple[str, str, str]:
@@ -126,6 +127,7 @@ def _refresh_attempt_ids(
     generation = last_refreshed_at or "never"
     material = {
         "question_id": question_id,
+        "question_text": question_text,
         "generation": generation,
         "evidence": list(evidence),
         "standing_answer_referenced": standing_answer_referenced,
@@ -510,6 +512,7 @@ def refresh_answers_on_evidence_delta(
                     question_id,
                     current.get("last_refreshed_at"),
                     current.get("evidence", []),
+                    question_text=current["text"],
                     standing_answer_referenced=standing_answer_referenced,
                     standing_answer=standing_answer,
                 )
@@ -550,6 +553,15 @@ def refresh_answers_on_evidence_delta(
             # seam; no human-owned field is ever supplied here.
             latest, _latest_version = question_store.read_question_with_version(question_id)
             if latest["status"] != "open":
+                blocked.append(question_id)
+                continue
+            latest_answer_referenced, latest_answer = _read_standing_answer(
+                resolved_root, latest
+            )
+            if (
+                latest_answer_referenced != standing_answer_referenced
+                or latest_answer != standing_answer
+            ):
                 blocked.append(question_id)
                 continue
             if _pending_candidate(resolved_root, latest, now=tick_now):

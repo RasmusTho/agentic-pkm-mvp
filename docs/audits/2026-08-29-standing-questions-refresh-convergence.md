@@ -96,10 +96,14 @@ historical evidence claim. No SQ-04 writer changes the standing answer or human-
 | Contradiction basis is exact or unknown | `test_invalid_contradiction_basis_degrades_to_unknown`, `test_refresh_marks_contradiction` | Passed |
 | Human fields remain protected | QuestionStore CAS and human-field tests | Passed |
 | Evidence entries carry content identity | `test_relevant_artifact_attaches_irrelevant_does_not` | Passed |
-| Focused SQ/Create regression set | Standing Questions, Create lifecycle, and QuestionStore tests | `136 passed` |
+| Focused SQ/Create regression set | Standing Questions, Create lifecycle, and QuestionStore tests | `140 passed` |
 | Matcher CAS conflict is observable and non-clobbering | `test_match_write_conflict_does_not_clobber_question` | Passed |
 | Deterministic replay preserves draft bytes and receipt payload | `test_refresh_replay_reuses_draft_and_receipt_bytes` | Passed |
-| Matcher CAS conflict remains watcher-retryable | `test_watcher_retries_standing_questions_matching_conflict_before_advancing_snapshot` | Passed in CI-selected watcher coverage; local collection is dependency-blocked |
+| Matcher CAS conflict remains watcher-retryable | `test_watcher_retries_standing_questions_matching_conflict_before_advancing_snapshot` | Passed locally; CI proof is pending for the current head |
+| Raw draft-byte mutation cannot replay a deterministic proposal | `test_refresh_replay_reuses_draft_and_receipt_bytes` | Passed |
+| Human question edit changes refresh generation and blocks stale CAS | `test_refresh_retry_after_question_text_edit_derives_new_generation` | Passed |
+| Standing-answer edit during cognition blocks stale contradiction | `test_standing_answer_edit_during_cognition_blocks_stale_contradiction` | Passed |
+| Human matcher edit during judgment cannot attach stale evidence | `test_match_human_edit_during_judgment_blocks_stale_evidence` | Passed |
 
 The full not-PostgreSQL suite was not a valid local proof at packet creation: the host-global
 `pytest-not-pg` lease was unavailable and the local watcher collection also lacked the declared
@@ -115,10 +119,13 @@ where the finding was observed; a later head invalidates the earlier clean/uncle
 
 | Review head | Finding | Disposition in the next repair |
 | --- | --- | --- |
-| `3627cec12` | No production match-then-refresh caller; cognition was initially given a provenance URI as an object id; CAS baseline was captured too late. | Production watcher composition, reasoning-input materialization, and pre-cognition Question version capture were added before the next review. |
-| `2f042410b` | Watcher SQ failure could advance the source snapshot; static property registrations drifted after watcher hydration moved. | Exception retry preservation was added; the census was repinned at the actual sink/producer lines. |
+| `0d0322502` (GitHub review original commit) | No production match-then-refresh caller; cognition was initially given a provenance URI as an object id; CAS baseline was captured too late. | Production watcher composition, reasoning-input materialization, and pre-cognition Question version capture were added before the next review. |
+| `3627cec12` (local follow-up) | Watcher SQ failure could advance the source snapshot; static property registrations drifted after watcher hydration moved. | Exception retry preservation was added; the census was repinned at the actual sink/producer lines. |
 | `1bca186bd` | Structured blocked results were treated as success; CAS retry could orphan/duplicate draft and receipt; mutable path could replay changed evidence; contradiction basis was only nonempty; registry rows were missing. | Blocked-result retry, deterministic proposal identity, source content hashes, exact contradiction basis, and registry entries were added. |
 | `bcf0f2120` | Replay did not compare full receipt payload; standing-answer bytes were outside the refresh identity; SQ-03 append lacked a fresh duplicate fold; matcher CAS conflicts were not watcher-retryable; docs overstated lifecycle. | Full payload/byte parity, standing-answer fingerprinting, post-read duplicate filtering, matcher conflict retry, and lifecycle/doc corrections were added in the current repair. |
 
-This history does not itself authorize merge or acceptance. The current exact-head independent review
-must be clean before selected CI and delivery gates can be treated as valid.
+The first row is sourced from GitHub review comments whose `original_commit_id` is
+`0d032250274b54eb62c50e50e436077fb032401a`; the later rows are local independent review receipts
+bound to their listed heads. The history does not itself authorize merge or acceptance. The current
+exact-head independent review must be clean before selected CI and delivery gates can be treated as
+valid.

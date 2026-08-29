@@ -166,6 +166,41 @@ def test_match_write_conflict_does_not_clobber_question(tmp_path: Path) -> None:
     assert store.read_question(note["question_id"])["evidence"] == []
 
 
+def test_match_human_edit_during_judgment_blocks_stale_evidence(tmp_path: Path) -> None:
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    store = _store(vault)
+    note, _ = store.create_question(text=QUESTION_TEXT, scope="work", registered_via="explicit")
+    ref = _write_artifact(vault, "notes/outbox-measurements.md", RELEVANT_BODY)
+    path = vault / "questions" / f"{note['question_id']}.md"
+    changed = False
+
+    def edit_then_attach(**_kwargs: Any) -> str:
+        nonlocal changed
+        if not changed:
+            path.write_text(
+                path.read_text(encoding="utf-8").replace(
+                    QUESTION_TEXT,
+                    "Which unrelated question is now being reviewed?",
+                    1,
+                ),
+                encoding="utf-8",
+            )
+            changed = True
+        return json.dumps(_attached())
+
+    summary = match_evidence_to_open_questions(
+        vault_root=vault,
+        candidates=[_candidate(ref)],
+        store=store,
+        complete=edit_then_attach,
+    )
+
+    assert summary.write_conflict == 1
+    assert summary.attached == 0
+    assert store.read_question(note["question_id"])["evidence"] == []
+
+
 def test_cross_scope_artifact_excluded_content_free(tmp_path: Path) -> None:
     """AC2: a same-content, different-scope artifact is excluded before any content
     is read or shown to the model."""
@@ -425,7 +460,7 @@ def test_question_closed_mid_tick_is_never_resurrected(tmp_path: Path) -> None:
     )
 
     assert summary.attached == 0
-    assert summary.excluded_non_open == 1
+    assert summary.write_conflict == 1
     assert store.read_question(note["question_id"])["evidence"] == []
 
 

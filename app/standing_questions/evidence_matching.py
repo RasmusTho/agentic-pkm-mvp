@@ -355,7 +355,14 @@ def match_evidence_to_open_questions(
 
     for note in _open_questions(resolved_root, counters):
         question_id = note["question_id"]
-        seen_bases = _existing_bases(note)
+        # Capture the question bytes before any model judgment. A later read is
+        # only a change detector; it must never become the baseline for a
+        # judgment made against older text.
+        baseline, baseline_version = question_store.read_question_with_version(question_id)
+        if baseline["status"] != "open":
+            counters.bump("excluded_non_open")
+            continue
+        seen_bases = _existing_bases(baseline)
         new_entries: list[dict[str, Any]] = []
 
         for candidate in candidate_list:
@@ -375,7 +382,7 @@ def match_evidence_to_open_questions(
 
             counters.bump("evaluated_pairs")
             association = judge_association(
-                question_text=note["text"],
+                question_text=baseline["text"],
                 artifact_text=artifact_text,
                 complete=complete,
                 trace_id=trace_id,
@@ -423,11 +430,14 @@ def match_evidence_to_open_questions(
         # Re-read immediately before the guarded append: a human may have closed the
         # question mid-tick, and a closed question must never be resurrected by a
         # race (INV-SQ-F partial failure).
-        current, current_version = question_store.read_question_with_version(question_id)
-        if current["status"] != "open":
+        latest, latest_version = question_store.read_question_with_version(question_id)
+        if latest_version != baseline_version or latest != baseline:
+            counters.bump("write_conflict")
+            continue
+        if latest["status"] != "open":
             counters.bump("excluded_non_open")
             continue
-        current_bases = _existing_bases(current)
+        current_bases = _existing_bases(baseline)
         append_entries = [
             entry
             for entry in new_entries
@@ -444,12 +454,12 @@ def match_evidence_to_open_questions(
         try:
             question_store.update_system_fields_if_unchanged(
                 question_id,
-                current,
+                baseline,
                 {
-                    "evidence": [*current["evidence"], *append_entries],
+                    "evidence": [*baseline["evidence"], *append_entries],
                     "last_matched_at": _utc_now(),
                 },
-                expected_version=current_version,
+                expected_version=baseline_version,
             )
         except KnowledgeWriteConflict:
             # A concurrent human close or another evidence append wins. The
