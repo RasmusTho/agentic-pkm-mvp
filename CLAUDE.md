@@ -1,4 +1,4 @@
-# Claude Code Instructions
+# Builder Compatibility Pointer
 
 `AGENTS.md` is the canonical builder-agent instruction file for this repository. At session entry read
 `AGENTS.md :: Reading order` — it is the scoped entry list and names which of its own sections and
@@ -7,7 +7,12 @@ which external documents are required now versus only under a stated condition. 
 
 Then use `.codex/skills/README.md` (specifically `:: Skill routing`) to choose the repo-local workflow skill for the task.
 For GitHub implementation work, load `.codex/skills/issue-to-code/SKILL.md` before coding; that skill states every further read it needs.
-For specialist subagent roles, use `docs/development/BUILDER_SUBAGENT_ROLES.md`; do not treat `.codex/agents/*.toml` as Claude authority.
+The current Builder System worker carrier is Codex. This file is retained only as a non-operational
+compatibility pointer for legacy tooling; it must not launch Claude, read Anthropic credentials, or
+select a provider/model target.
+
+For specialist subagent roles, use `docs/development/BUILDER_SUBAGENT_ROLES.md` and the active Codex
+adapters under `.codex/agents/`.
 
 Read scope for every citation in this chain is `.codex/skills/_shared/READ_SCOPE.md`: `FILE :: Section` means read that section only, a citation with no `::` is a whole-file read that must state its reason, and `docs/DOCS_INDEX.md` is grep-only.
 
@@ -19,4 +24,5 @@ the decision cannot be understood without it. Durable evidence belongs in the re
 already owns it, not restated in chat. Length must be earned by the task (a plan, a comparison, a
 multi-file change), not by how much material happens to be in context.
 
-This file is only a Claude compatibility entrypoint. If a Claude-specific workflow note is ever needed, keep it here and keep `AGENTS.md` authoritative.
+Keep `AGENTS.md` authoritative. Any future non-Codex carrier requires a separate governed contract
+and current authority readback; this compatibility file does not authorize it.

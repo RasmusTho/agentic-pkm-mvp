@@ -2398,7 +2398,7 @@ def show_epic_run_state(run_id: str, root: Path | None, as_json: bool) -> None:
     "--runtime",
     "runtime_targets",
     multiple=True,
-    help="Allowed worker runtime target. Repeat for Codex/Claude.",
+    help="Allowed worker runtime target. The active Builder carrier is Codex.",
 )
 @click.option("--json", "as_json", is_flag=True)
 def dispatch_plan(
@@ -2426,7 +2426,7 @@ def dispatch_plan(
             run_id=run_id,
             candidates=candidates,
             max_parallel=max_parallel,
-            runtime_targets=runtime_targets or ("codex", "claude"),
+            runtime_targets=runtime_targets or ("codex",),
             active_leases=active_leases,
             run_state=state,
         )

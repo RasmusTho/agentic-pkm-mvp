@@ -208,19 +208,19 @@ def test_project_status_does_not_gate_dispatch() -> None:
     ]
 
 
-def test_codex_and_claude_use_same_minimal_context_pack_schema() -> None:
+def test_dispatch_runtime_targets_are_codex_only() -> None:
     plan = build_dispatch_plan(
         epic_issue_number=3229,
         run_id="run-runtime",
-        runtime_targets=["codex", "claude"],
         candidates=[
             _candidate(3001, risk="high", runtime_hint="codex", files=["app/a.py"]),
-            _candidate(3002, risk="high", runtime_hint="claude", files=["app/b.py"]),
+            _candidate(3002, risk="high", files=["app/b.py"]),
         ],
     )
 
     packs = plan["context_packs"]
-    assert [pack["runtime"]["runtime"] for pack in packs] == ["codex", "claude"]
+    assert plan["runtime_targets"] == ["codex"]
+    assert [pack["runtime"]["runtime"] for pack in packs] == ["codex", "codex"]
     assert packs[0].keys() == packs[1].keys()
     assert packs[0]["return_schema"] == packs[1]["return_schema"]
     assert "subagent_handoff_receipt" == packs[0]["return_schema"]["schema_name"]
@@ -244,6 +244,87 @@ def test_codex_and_claude_use_same_minimal_context_pack_schema() -> None:
     assert baseline["context_pack_bytes_excluding_baseline"] == len(
         json.dumps(without_baseline, sort_keys=True, ensure_ascii=False).encode("utf-8")
     )
+
+    with pytest.raises(EpicDispatchError, match="Codex-only"):
+        build_dispatch_plan(
+            epic_issue_number=3229,
+            run_id="run-claude-rejected",
+            runtime_targets=["codex", "claude"],
+            candidates=[_candidate(3003, risk="high", files=["app/c.py"])],
+        )
+
+    with pytest.raises(EpicDispatchError, match="runtime_hint must be codex"):
+        build_dispatch_plan(
+            epic_issue_number=3229,
+            run_id="run-claude-hint-rejected",
+            candidates=[
+                _candidate(3004, risk="high", runtime_hint="claude", files=["app/d.py"])
+            ],
+        )
+
+
+def test_cli_dispatch_plan_rejects_non_codex_runtime(tmp_path: Path) -> None:
+    candidates_file = tmp_path / "candidates.json"
+    candidates_file.write_text(
+        json.dumps({"candidates": [_candidate(3005, risk="high", files=["app/a.py"])]}),
+        encoding="utf-8",
+    )
+
+    result = _run_builderops(
+        [
+            "epic-run-state",
+            "dispatch-plan",
+            "--epic-issue-number",
+            "3229",
+            "--run-id",
+            "run-cli-claude-rejected",
+            "--root",
+            str(tmp_path),
+            "--candidates-file",
+            str(candidates_file),
+            "--runtime",
+            "claude",
+            "--json",
+        ]
+    )
+
+    assert result.exit_code != 0
+    assert "Codex-only" in result.output
+
+
+def test_codex_launcher_resolves_model_from_capability_census(tmp_path: Path) -> None:
+    census_source = (
+        Path(__file__).resolve().parents[2]
+        / "docs"
+        / "settings"
+        / "models"
+        / "providers.yaml"
+    ).read_text(encoding="utf-8")
+    configured_model = "configured-sol-model"
+    census_path = tmp_path / "providers.yaml"
+    census_path.write_text(
+        census_source.replace("gpt-5.6-sol", configured_model), encoding="utf-8"
+    )
+    plan = build_dispatch_plan(
+        independent_issue_numbers=[3006],
+        run_id="census-model-resolution",
+        candidates=[
+            _candidate(
+                3006,
+                risk="high",
+                files=["app/a.py"],
+                worktree=str(tmp_path / "issue-3006"),
+            )
+        ],
+    )
+
+    launcher = CodexIssueSessionLauncher(
+        repo_root=tmp_path,
+        provider_census_path=census_path,
+    )
+    command = launcher.command(plan["context_packs"][0])
+
+    assert command[command.index("--model") + 1] == configured_model
 
 
 def test_context_pack_overlap_policy_matches_dispatch_scope() -> None:
@@ -468,8 +549,6 @@ def test_cli_dispatch_plan_is_dry_run_and_does_not_write_state(tmp_path: Path) -
             str(candidates_file),
             "--runtime",
             "codex",
-            "--runtime",
-            "claude",
             "--json",
         ]
     )
