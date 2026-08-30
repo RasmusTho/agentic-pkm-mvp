@@ -188,6 +188,39 @@ def test_accept_is_governed_decision(
     assert queue.get(anonymous.candidate_id).status is ReviewStatus.PENDING
 
 
+def test_semantic_accept_without_scope_refuses_before_durable_decision(
+    client: TestClient,
+    queue: MemoryCandidateReviewQueue,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """A scope-less semantic accept must not create a stranded decision."""
+
+    store = ReviewDecisionStore(tmp_path / "review_decisions.sqlite3")
+    monkeypatch.setattr(companion_module, "_memory_review_decision_store", lambda: store)
+    candidate = _candidate(
+        title="Scope-less semantic candidate",
+        memory_type=MemoryType.SEMANTIC_MEMORY,
+        inferred=False,
+        scope_id=None,
+    )
+    queue.enqueue(candidate)
+
+    refused = client.post(
+        _decision_url(candidate.candidate_id),
+        json={"action": "accept", "reviewed_by": "reviewer:human"},
+    )
+
+    assert refused.status_code == 409
+    assert refused.json()["detail"]["error"] == "promotion_refused"
+    assert queue.get(candidate.candidate_id).status is ReviewStatus.PENDING
+    assert store.get_decision(
+        candidate.candidate_id,
+        vault_context=companion_module._memory_review_vault_context(),
+        channel="test",
+    ) is None
+
+
 def test_reject_and_revise_are_receipted_review_outcomes_not_promotions(
     client: TestClient, queue: MemoryCandidateReviewQueue
 ) -> None:

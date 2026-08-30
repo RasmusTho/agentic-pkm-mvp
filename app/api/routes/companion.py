@@ -28,7 +28,11 @@ from app.chat.reflection_conversation import (
     build_evening_reflection_offer,
     load_reflection_settings,
 )
-from app.agent_memory.candidate import MemoryCandidate, MemoryType
+from app.agent_memory.candidate import (
+    MemoryCandidate,
+    MemoryType,
+    validated_memory_scope_id,
+)
 from app.agent_memory.materialization import (
     MemoryMaterializationError,
     MemoryMaterializationResult,
@@ -5136,6 +5140,27 @@ def post_memory_review_decision(
                 "Deferred: candidate remains pending in agent_memory.review_queue; "
                 "no review decision was recorded and no receipt exists."
             ),
+        )
+
+    if (
+        req.action == "accept"
+        and entry.candidate.memory_type is MemoryType.SEMANTIC_MEMORY
+        and validated_memory_scope_id(entry.scope_id) is None
+    ):
+        # A semantic promotion without an explicit scope can never be
+        # materialized or safely admitted to bound recall. Refuse before the
+        # queue transition and durable decision write so the candidate remains
+        # actionable instead of becoming a permanently non-materializable
+        # accepted decision.
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": "promotion_refused",
+                "message": (
+                    "semantic promotion requires a valid candidate.scope_id; "
+                    "no review decision was recorded"
+                ),
+            },
         )
 
     vault_context = _memory_review_vault_context()
