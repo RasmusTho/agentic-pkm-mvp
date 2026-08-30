@@ -29,6 +29,10 @@ The pass used the following method:
 - reconciled against live open Issues without creating or changing one; and
 - classified each finding as accepted, deferred, or requiring an owner decision.
 
+The default-ref recheck before synthesis was performed at `2026-08-30T11:25:35Z` and returned the
+same `origin/main` SHA `b1b71f205ff57da2df99a6747102066e5e74b350`. The local audit commit is based on
+that SHA; the later audit-only commit does not claim to change the source snapshot.
+
 No bounded explorer briefs were dispatched. The work was coordinator-only: the source set was
 already named, the repository is large but the independent explorer context would duplicate the
 same owner-doc and exact-SHA loads, and the expected human-time saving did not exceed the TCD cost
@@ -73,6 +77,50 @@ configuration facts?
 
 RQ7. Which apparent “all calls” are explicitly outside the model-turn substrate, especially
 embeddings, reranking, tools, and non-model agent orchestration?
+
+### 2.1 Evidence-backed resolutions
+
+**RQ1 — resolved.** The effective entrypoints are not one function: Product fabric/constrained/
+reasoning/planner/QA/reflection/domain callers, embedding/rerank/eval consumers, A2A and graph
+execution, Builder Model Inquiry/CKM/design adapters, DDO workers, and the verification closer are
+distinct surfaces. The inventory in §4 records their transport and authority owners. The direct
+Product reflection exit and the Builder verification subprocess are the clearest duplicated seams
+(`app/chat/reflection_conversation.py:271-285`; `app/dispatcher/verification_consumer.py:2697-2763`).
+
+**RQ2 — resolved.** Intent is provider-free capability demand. Resolution is a runtime-owned choice
+of adapter, target, capabilities, and logical credential/session identity. Provider/model/session/
+thread/process values are provenance. Domain result and durable receipt are owner-specific. DDO makes
+the distinction executable by binding run/plan/effect/Issue/head in the Worker authority chain and
+placing carrier identity in an explicitly non-authoritative envelope
+(`app/builderops/delivery_orchestration_contracts.py:3217-3389,3617-3665`).
+
+**RQ3 — resolved.** Duplication is present in Product direct HTTP, reflection, prompt-only structured
+parsing, planner fallback, embedding fallback, Model Inquiry role launch, verification adapter
+validation, and role configuration. The high-risk crossings are fallback selection inside callers,
+concrete target selection outside a census, and any use of carrier identity as delivery state
+(`app/services/llm.py:78-312`; `app/components/reasoning/facade.py:272-385`; `scripts/model_inquiry_subscription_adapter.py:34-71`).
+
+**RQ4 — resolved.** Yes, but only as a neutral kernel plus separate Product/Builder resolvers and
+adapters. `llm_contract` is already a leaf contract surface; ADR-0063 and ADR-0064 explicitly reject
+sharing policy, registries, credentials, sessions, fallback decisions, stores, or health receipts
+(`llm_contract/__init__.py:1-205`; `docs/adr/ADR-0063-shared-llm-contract-kernel.md:70-100`; `docs/adr/ADR-0064-model-access-substrate.md:60-78`).
+
+**RQ5 — resolved.** Runtime MUSTs protect request/result truth and secrets; GATEs protect census,
+adapter, mapper, and Worker-contract conformance; DOCTORs reconcile direct calls, stale references,
+attempt receipts, and provenance/authority misuse. The §7 table records which are already local,
+violated in current paths, or new; it does not claim the proposed kernel is shipped.
+
+**RQ6 — resolved.** The least-risk path is additive: freeze the census, adapt one Product exit at a
+time, preserve domain-specific fallback/results, keep Builder resolver/receipt authority separate,
+then add the Worker mapper and migrate eval/scripts last. Resume must remain bound to semantic input
+hash and current authority readback; a repair attempt gets a new authorized identity. Existing Model
+Inquiry and DDO contracts provide the strongest compatibility precedents
+(`app/builderops/model_inquiry_runner.py:797-850`; `app/builderops/delivery_orchestration_contracts.py:3304-3358`).
+
+**RQ7 — resolved.** Embeddings remain Product identity/reconciliation work; reranking remains outside
+the model-access substrate; A2A, graph, tool, and DDO calls are agent/workflow contracts, not model
+turns. They may consume the model boundary through an explicit mapper but must retain their own
+authority, effects, receipts, and retry semantics (`app/llm/fallback_orchestrator.py:50-110`; `app/retrieval/rerank/provider.py:52-203`; `docs/ORCHESTRATOR_A2A_ROUTING/README.md:24-46`).
 
 ## 3. Authority and SBS reconciliation
 
@@ -315,27 +363,27 @@ existing invariant registry vocabulary in `docs/testing/invariant-tests.md`; it 
 second registry. `MUST` means runtime fail-loud, `GATE` means CI/publication block, and `DOCTOR` means
 read-only reconciliation.
 
-| ID | Category | Invariant | Current evidence / enforcement gap |
-| --- | --- | --- | --- |
-| LLM-BOUNDARY-01 | MUST | Caller intent contains no provider, model, endpoint, credential value, host path, or session handle. | Builder intent already enforces this (`app/builderops/model_inquiry_adapters.py:355-432`); Product and eval callers still accept provider/model through settings/env paths. |
-| LLM-BOUNDARY-02 | MUST | Only an adapter executes provider HTTP, provider SDK, or model-process transport; direct call sites fail the boundary review. | Product legacy HTTP and reflection direct call are present (`app/services/llm.py:78-312`; `app/chat/reflection_conversation.py:271-285`). |
-| LLM-BOUNDARY-03 | MUST | Resolution is immutable and records selected/effective identity, adapter, capabilities, runtime/channel/consumer scope, and degraded state. | Builder `ResolvedModelAccess` covers the pattern; Product `LLMRoute` is a separate policy object. |
-| LLM-BOUNDARY-04 | MUST | A typed failure or empty/invalid result cannot be normalized as successful cognition. | Strong in constrained completion, Model Inquiry, and verification closer; inconsistent among reasoning/planner/QA fallback paths. |
-| LLM-BOUNDARY-05 | MUST | Fallback executes only when an owning runtime has declared and selected the allowed fallback requirement; substrate never chooses. | ADR-0063/0064 define this; multiple current domain-specific fallbacks remain to be mapped. |
-| LLM-BOUNDARY-06 | MUST | Credential values, raw auth headers, provider error bodies, and secret-bearing environment values never enter prompts, artifacts, logs, or receipts. | Builder adapters test redaction and minimal environments (`tests/builderops/test_model_inquiry_adapters.py:67-147`); Product transport/logging needs a complete audit. |
-| LLM-BOUNDARY-07 | MUST | A model/session/thread/process identity cannot advance Product authority, DDO reducer state, Issue/PR lifecycle, merge, closure, or human acceptance. | DDO WorkerResultV2 and process-map contracts enforce the intended distinction (`app/builderops/delivery_orchestration_contracts.py:3364-3665`); broader mapper coverage is not complete. |
-| LLM-BOUNDARY-08 | MUST | Resume reuses the same semantic input and start-once identity only after current authority/readback validation; a new repair attempt gets a new authorized identity. | Model Inquiry request lineage and DDO idempotency are strong; Product cognition and eval have no equivalent universal rule. |
-| LLM-BOUNDARY-09 | MUST | Structured output is validated against a named local schema before domain acceptance; prompt-only JSON is not sufficient. | `constrained_completion` and Model Inquiry do this; `ReasoningFacade.structured/tool_use` is a known gap. |
-| LLM-BOUNDARY-10 | MUST | A model result remains candidate cognition/provenance until its domain owner admits it; it cannot directly mutate durable human knowledge or governance state. | Product domain callers and DDO authority rules support this; the invariant must be tested at all new mappers. |
-| LLM-BOUNDARY-11 | GATE | Provider/model allowlists equal the declared census projection; no new workflow, skill, script, or adapter literal selects a concrete target outside configuration. | ADR-0064 names an equality test; current Product/launcher/verification seams are drift candidates (`app/llm/adapter.py:14`; `scripts/model_inquiry_subscription_adapter.py:34-71`; `app/dispatcher/verification_consumer.py:2721-2743`). |
-| LLM-BOUNDARY-12 | GATE | Static transport census proves every effective provider/process call is behind an approved adapter, with explicit exemptions only for legacy migration and never for active Builder paths. | Existing import tests are partial; no complete cross-surface census gate exists. |
-| LLM-BOUNDARY-13 | GATE | Every mapper has contract tests for identity, failure, fallback, degradation, schema, receipt linkage, and unknown-version failure. | Builder kernel/adapter tests exist; cross-runtime mapper suite is not yet present. |
-| LLM-BOUNDARY-14 | GATE | Worker adapters preserve `WorkerContextPack`/`WorkerInvocation` authority and return `WorkerResultV2`; carrier variation cannot change conformance or delivery authority. | DDO contract tests are named in #4167 and implemented in `tests/builderops/test_delivery_orchestration_contracts.py`; future model-worker adapters must consume them. |
-| LLM-BOUNDARY-15 | GATE | Active Builder carrier policy is resolved once by the governed dispatcher/capability contract; skills and prompts do not add provider/model ladders. | Live #5205 owns Codex-only active carrier writeback; this audit does not duplicate it. |
-| LLM-BOUNDARY-16 | DOCTOR | Reconcile invocation census against adapter registry, provider census, and owner-doc declared entrypoints; report missing, duplicate, direct, or unreachable seams. | No single doctor currently spans Product, Builder, eval, scripts, and graph entrypoints. |
-| LLM-BOUNDARY-17 | DOCTOR | Reconcile every terminal model/worker attempt to its request hash, effective identity, failure/fallback state, domain receipt, and current authority chain. | Model Inquiry and DDO provide local doctors; Product telemetry and eval do not provide one common reconciliation. |
-| LLM-BOUNDARY-18 | DOCTOR | Detect provenance fields being consumed as authority inputs, including model/session/thread/process identifiers used to select scope or lifecycle. | DDO validator is a strong local guard; cross-system static/data-flow doctor is absent. |
-| LLM-BOUNDARY-19 | DOCTOR | Detect stale compatibility wording and classify non-active provider/role references as current, historical, compatibility-only, design provenance, or separately governed. | Live #5203/#5205 are the current owner routes; the main snapshot still contains transition language. |
+| ID | Category | Status | Invariant | Current evidence / enforcement gap |
+| --- | --- | --- | --- | --- |
+| LLM-BOUNDARY-01 | MUST | Violated today | Caller intent contains no provider, model, endpoint, credential value, host path, or session handle. | Builder intent enforces this (`app/builderops/model_inquiry_adapters.py:355-432`); Product/eval settings paths still expose provider/model selection (`app/services/llm.py:315-364`; `app/eval/llm_client.py:18-71`). |
+| LLM-BOUNDARY-02 | MUST | Violated today | Only an adapter executes provider HTTP, provider SDK, or model-process transport; direct call sites fail the boundary review. | Product legacy HTTP and reflection direct call are present (`app/services/llm.py:78-312`; `app/chat/reflection_conversation.py:271-285`). |
+| LLM-BOUNDARY-03 | MUST | Exists — keep | Resolution is immutable and records selected/effective identity, adapter, capabilities, runtime/channel/consumer scope, and degraded state. | Builder `ResolvedModelAccess` covers the pattern (`llm_contract/__init__.py:101-123`; `app/builderops/model_access_resolver.py:137-182`); Product `LLMRoute` remains a separate policy object (`app/components/llm/fabric.py:41-73`). |
+| LLM-BOUNDARY-04 | MUST | Violated today | A typed failure or empty/invalid result cannot be normalized as successful cognition. | Strong in constrained completion (`app/components/llm/constrained.py:138-177`) and Model Inquiry (`app/builderops/model_inquiry_runner.py:570-688`); reasoning/planner/QA fallback paths differ (`app/components/reasoning/facade.py:477-500`; `app/planner/provider.py:296-305`). |
+| LLM-BOUNDARY-05 | MUST | Exists — keep | Fallback executes only when an owning runtime has declared and selected the allowed fallback requirement; substrate never chooses. | ADR-0063/0064 define this (`docs/adr/ADR-0063-shared-llm-contract-kernel.md:102-116`; `docs/adr/ADR-0064-model-access-substrate.md:141-148`); domain fallbacks remain separate. |
+| LLM-BOUNDARY-06 | MUST | Exists — keep | Credential values, raw auth headers, provider error bodies, and secret-bearing environment values never enter prompts, artifacts, logs, or receipts. | Builder redaction/minimal-env tests pass in the inspected suite (`tests/builderops/test_model_inquiry_adapters.py:67-147`); Product transport/logging remains incomplete (`app/services/llm.py:484-495`). |
+| LLM-BOUNDARY-07 | MUST | Exists — keep | A model/session/thread/process identity cannot advance Product authority, DDO reducer state, Issue/PR lifecycle, merge, closure, or human acceptance. | DDO WorkerResultV2 and chain validator enforce the distinction (`app/builderops/delivery_orchestration_contracts.py:3364-3389,3617-3665`); broader mapper coverage is incomplete. |
+| LLM-BOUNDARY-08 | MUST | Exists — keep | Resume reuses the same semantic input and start-once identity only after current authority/readback validation; a new repair attempt gets a new authorized identity. | Model Inquiry lineage and DDO idempotency provide local enforcement (`app/builderops/model_inquiry_runner.py:797-850`; `app/builderops/delivery_orchestration_contracts.py:3304-3358`); Product/eval lack a universal rule. |
+| LLM-BOUNDARY-09 | MUST | Violated today | Structured output is validated against a named local schema before domain acceptance; prompt-only JSON is not sufficient. | Constrained completion and Model Inquiry validate; `ReasoningFacade.structured/tool_use` parse without the same validator (`app/components/reasoning/facade.py:272-385`). |
+| LLM-BOUNDARY-10 | MUST | Exists — keep | A model result remains candidate cognition/provenance until its domain owner admits it; it cannot directly mutate durable human knowledge or governance state. | DDO authority and Product domain boundaries support this (`docs/SYSTEM_BREAKDOWN_STRUCTURE.md:1292-1306`; `app/builderops/delivery_orchestration_contracts.py:3617-3665`); every new mapper still needs a test. |
+| LLM-BOUNDARY-11 | GATE | Violated today | Provider/model allowlists equal the declared census projection; no new workflow, skill, script, or adapter literal selects a concrete target outside configuration. | ADR-0064 names the equality test (`docs/adr/ADR-0064-model-access-substrate.md:134-139`); Product/launcher/verification drift candidates are anchored at `app/llm/adapter.py:14`; `scripts/model_inquiry_subscription_adapter.py:34-71`; `app/dispatcher/verification_consumer.py:2721-2743`. |
+| LLM-BOUNDARY-12 | GATE | New | Static transport census proves every effective provider/process call is behind an approved adapter, with explicit exemptions only for legacy migration and never for active Builder paths. | Existing import tests are partial (`tests/architecture/test_llm_contract_kernel.py:22-149`); no complete cross-surface census gate is present. |
+| LLM-BOUNDARY-13 | GATE | New | Every mapper has contract tests for identity, failure, fallback, degradation, schema, receipt linkage, and unknown-version failure. | Builder kernel/adapter tests exist (`tests/architecture/test_llm_contract_kernel.py:107-149`; `tests/builderops/test_model_inquiry_adapters.py:67-147`); cross-runtime mapper tests are absent. |
+| LLM-BOUNDARY-14 | GATE | Exists — keep | Worker adapters preserve `WorkerContextPack`/`WorkerInvocation` authority and return `WorkerResultV2`; carrier variation cannot change conformance or delivery authority. | DDO contract and tests are named in #4167 (`app/builderops/delivery_orchestration_contracts.py:3217-3389`; `tests/builderops/test_delivery_orchestration_contracts.py`). |
+| LLM-BOUNDARY-15 | GATE | New | Active Builder carrier policy is resolved once by the governed dispatcher/capability contract; skills and prompts do not add provider/model ladders. | Live #5205 owns the Codex-only writeback (`https://github.com/RasmusTho/agentic-pkm-mvp/issues/5205`); this audit does not duplicate it. |
+| LLM-BOUNDARY-16 | DOCTOR | New | Reconcile invocation census against adapter registry, provider census, and owner-doc declared entrypoints; report missing, duplicate, direct, or unreachable seams. | No single doctor spans Product, Builder, eval, scripts, and graph entrypoints; the existing kernel test is deliberately narrower (`tests/architecture/test_llm_contract_kernel.py:22-103`). |
+| LLM-BOUNDARY-17 | DOCTOR | Violated today | Reconcile every terminal model/worker attempt to its request hash, effective identity, failure/fallback state, domain receipt, and current authority chain. | Model Inquiry and DDO provide local reconciliation (`app/builderops/model_inquiry_runner.py:570-688`; `app/builderops/delivery_orchestration_contracts.py:3462-3540`); Product telemetry/eval lack a common doctor. |
+| LLM-BOUNDARY-18 | DOCTOR | Exists — keep | Detect provenance fields being consumed as authority inputs, including model/session/thread/process identifiers used to select scope or lifecycle. | DDO validator is a strong local guard (`app/builderops/delivery_orchestration_contracts.py:3617-3665`); cross-system data-flow detection is absent. |
+| LLM-BOUNDARY-19 | DOCTOR | New | Detect stale compatibility wording and classify non-active provider/role references as current, historical, compatibility-only, design provenance, or separately governed. | #5203/#5205 are the current owner routes; current main still contains transition language (`scripts/model_inquiry_subscription_adapter.py:34-71`; `docs/BUILDEROPS_MODEL_INQUIRY/MODEL_TURN_ADAPTERS.md:12-15`). |
 
 ## 8. Compatibility and migration strategy
 
@@ -408,12 +456,17 @@ The eventual implementation specification should require these layers:
 - **Migration shadow traffic:** dual execution would risk cost, nondeterminism, and duplicate effects.
   Prefer injected adapters and replayable fixtures before any live comparison.
 
-Owner decisions still needed only if existing routes do not settle them:
+Owner decisions still needed only if existing routes do not settle them. Their disposition is explicit:
 
-1. whether a future Product/Builder mapper should expose one shared receipt reference vocabulary or
-   only shared failure/schema primitives;
-2. which Product legacy transport is retired first after the reflection bridge; and
-3. whether eval belongs in the same capability census or remains a separate OEF-owned consumer.
+1. **Deferred to the ADR-0063/64 implementation specification:** whether a future Product/Builder
+   mapper should expose one shared receipt-reference vocabulary or only shared failure/schema
+   primitives. No implementation choice is made here.
+2. **Deferred to Product LLM owner review:** which Product legacy transport is retired first after
+   the reflection bridge. `docs/LLM_ROUTING.md` and Product code remain authoritative until a
+   bounded migration slice is accepted.
+3. **Requires an owner decision at the OEF/Builder boundary:** whether eval belongs in the same
+   capability census or remains a separate OEF-owned consumer. Until decided, eval stays separate
+   and no common-census claim is made.
 
 ## 11. Explicit non-goals
 
@@ -446,6 +499,23 @@ The audit found existing, active authority rather than a missing backlog contain
 | #5205 active Builder carrier Codex-only | Owns active carrier policy and current-vs-historical compatibility wording. | **Existing owner route:** this audit records the dependency and does not claim completion. |
 | Product routing/embedding owner docs | Own current runtime semantics, precedence, identity, and fallback. | **Preserve:** migrate through compatibility adapters and domain tests. |
 | `docs/testing/invariant-tests.md` | Existing invariant registry, though its current enforcement labels predate the MUST/GATE/DOCTOR research vocabulary. | **Deferred implementation detail:** extend the registry when a governed slice is accepted; do not fork it now. |
+
+### 12.1 Live authority and overlap snapshot
+
+Read back at `2026-08-30T11:25:35Z`, against `origin/main` SHA
+`b1b71f205ff57da2df99a6747102066e5e74b350`:
+
+| Object | Live state | Authority meaning | Disposition for this audit |
+| --- | --- | --- | --- |
+| PR #5201 | Open, mergeable; head `94fa629fcb09c7ce617517133d1876fc1dc559cf` | Earlier/narrower Model Inquiry routing audit and its `DOCS_INDEX` mutation. | Preserve as collision authority; do not duplicate or expand it. |
+| PR #5202 | Open, blocked; head `be9b190f0b14c8b3b91097ad79f8217f9398b31f` | Unrelated DevUI docs-authoring change that also mutates `DOCS_INDEX`. | Preserve scope; its shared index mutation blocks a parallel docs PR. |
+| Issue #5177 | Open, `agent:blocked` epic | General Builder execution-routing owner. | Coordinate; no new routing epic or Issue. |
+| Issue #5203 | Open, `agent:in-progress` | Model Inquiry single-target semantics. | Existing owner route; no duplicate role/target contract. |
+| Issue #5205 | Open, `agent:in-progress` | Active Builder carrier Codex-only policy. | Existing owner route; no duplicate carrier mutation. |
+
+The local audit branch has no PR. Publication remains fail-closed until the shared `DOCS_INDEX.md`
+overlap is resolved and the audit remains demonstrably non-duplicative against #5201. This table is
+an observation, not a lifecycle mutation or a claim that any listed PR/Issue is complete.
 
 No new PromotionIntent was created because this pass produced supporting architecture evidence and
 the existing owner decisions/issues already cover the immediate transitions. If the owner accepts a
