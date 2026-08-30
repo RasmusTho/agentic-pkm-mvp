@@ -373,6 +373,10 @@ def normalize_github_issue(
         extra={
             "labels": labels,
             "url": str(html_url) if html_url is not None else None,
+            # A caller that obtained the bounded REST comment projection may
+            # pass it through unchanged. The normal ready-only dispatcher does
+            # not fetch blocker comments and remains a strict pickup path.
+            "comments": payload.get("comments") if isinstance(payload.get("comments"), list) else [],
         },
     )
 

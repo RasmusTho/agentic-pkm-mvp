@@ -165,6 +165,13 @@ def test_sync_state_carries_labels_and_url() -> None:
     assert bare.sync_state["url"] is None
 
 
+def test_normalize_carries_rest_comment_projection_without_changing_ready_pickup() -> None:
+    comment = {"body": "```yaml\nreceipt: blocker_action.v1\naction: action:wait-dependency\nowner: builder-system-maintenance\nnext_action: wait\nunblocks_when: dependency closes\ndependency_refs: []\nreview_at: null\nlast_verified_at: 2026-08-30T11:00:00Z\n```"}
+    task = normalize_github_issue({**SAMPLE_ISSUE_BLOCKED, "comments": [comment]}, REPO)
+    assert task.sync_state["comments"] == [comment]
+    assert task.status == "blocked"
+
+
 def test_github_issue_task_id_single_source_format_pinned() -> None:
     """The repo-qualified task id has exactly one implementation with a pinned
     byte format, including the doubled ``--`` owner/repo separator that keeps

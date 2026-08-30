@@ -27,7 +27,15 @@ def main() -> int:
     result = subprocess.run(command, text=True, capture_output=True, check=False)
     if result.returncode:
         raise RuntimeError(result.stderr.strip())
-    print(json.dumps(intake(json.loads(result.stdout)), indent=2, sort_keys=True))
+    issues = json.loads(result.stdout)
+    for issue in issues:
+        labels = {str(label.get("name") if isinstance(label, dict) else label) for label in issue.get("labels", [])}
+        if labels & {"agent:blocked", "agent:needs-human"}:
+            comments = subprocess.run(["gh", "api", f"repos/{owner}/{name}/issues/{issue['number']}/comments", "--method", "GET", "-F", "per_page=100"], text=True, capture_output=True, check=False)
+            if comments.returncode:
+                raise RuntimeError(comments.stderr.strip())
+            issue["comments"] = json.loads(comments.stdout)
+    print(json.dumps(intake(issues), indent=2, sort_keys=True))
     return 0
 
 

@@ -14,6 +14,7 @@ from app.builderops.cockpit_github_plane import fetch_github_live
 from app.builderops.cockpit_registry import BANDS, RUNG_ORDER, build_registry
 from app.dispatcher.models import TaskRecord
 from app.dispatcher.store import SqliteStore
+from app.dispatcher.sync_github import normalize_github_issue
 
 
 def _now() -> str:
@@ -126,12 +127,22 @@ def test_band_derivation_fail_closed(tmp_path: Path) -> None:
 
 def test_registry_exposes_canonical_blocker_action_without_promoting_authority(tmp_path: Path) -> None:
     store, db_path = _make_store(tmp_path)
-    store.upsert_task(_task(status="blocked", issue_number=71, sync_state={"labels": ["agent:blocked", "action:wait-dependency"]}))
+    receipt = "```yaml\nreceipt: blocker_action.v1\naction: action:wait-dependency\nowner: builder-system-maintenance\nnext_action: wait for Issue #72\nunblocks_when: Issue #72 closes\ndependency_refs: []\nreview_at: null\nlast_verified_at: 2026-08-30T11:00:00Z\n```"
+    store.upsert_task(_task(status="blocked", issue_number=71, sync_state={"labels": ["agent:blocked", "action:wait-dependency"], "comments": [{"body": receipt}]}))
     payload = _registry(db_path, tmp_path)
     item = _band(payload, "working")["items"][0]
     assert item["blocker_action"] == "action:wait-dependency"
-    assert item["next_action"] is None
-    assert item["next_action_evidence"] == "issue comment blocker_action.v1; read-only projection"
+    assert item["next_action"] == "wait for Issue #72"
+    assert item["next_action_evidence"] == "issue comment blocker_action.v1"
+
+
+def test_registry_uses_dispatcher_rest_comment_projection(tmp_path: Path) -> None:
+    store, db_path = _make_store(tmp_path)
+    receipt = "```yaml\nreceipt: blocker_action.v1\naction: action:wait-dependency\nowner: builder-system-maintenance\nnext_action: wait for dependency\nunblocks_when: dependency closes\ndependency_refs: []\nreview_at: null\nlast_verified_at: 2026-08-30T11:00:00Z\n```"
+    task = normalize_github_issue({"number": 72, "title": "blocked", "state": "open", "labels": [{"name": "agent:blocked"}, {"name": "action:wait-dependency"}], "comments": [{"body": receipt}]}, "RasmusTho/agentic-pkm-mvp")
+    store.upsert_task(task)
+    item = _band(_registry(db_path, tmp_path), "working")["items"][0]
+    assert item["next_action"] == "wait for dependency"
 
 
 def test_chain_derivation_failure_does_not_expose_exception_details(

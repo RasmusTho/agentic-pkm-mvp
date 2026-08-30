@@ -8,6 +8,7 @@ their own bounded, auditable write boundary.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Any, Iterable
 
 BLOCKED_ACTIONS = frozenset({
@@ -26,6 +27,51 @@ LEGACY_HUMAN_ACTIONS = {
     "human:operator": "action:human-operation",
     "human:acceptance": "action:human-acceptance",
 }
+
+RECEIPT_FIELDS = ("action", "owner", "next_action", "unblocks_when", "dependency_refs", "review_at", "last_verified_at")
+
+
+def _valid_timestamp(value: object) -> bool:
+    if not isinstance(value, str) or not value.endswith("Z"):
+        return False
+    try:
+        datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    return True
+
+
+def parse_blocker_action_receipt(comment: object) -> dict[str, object] | None:
+    """Parse the deliberately small YAML receipt subset from one REST comment."""
+    body = comment.get("body", "") if isinstance(comment, dict) else str(comment)
+    if "receipt: blocker_action.v1" not in body:
+        return None
+    values: dict[str, object] = {"dependency_refs": []}
+    for line in body.splitlines():
+        if ":" not in line:
+            continue
+        key, value = line.strip().split(":", 1)
+        if key in RECEIPT_FIELDS or key == "receipt":
+            values[key] = value.strip()
+    if values.get("dependency_refs") == "[]":
+        values["dependency_refs"] = []
+    action = values.get("action")
+    if action not in ACTION_LABELS or any(not isinstance(values.get(key), str) or not values[key] for key in ("owner", "next_action", "unblocks_when")) or not _valid_timestamp(values.get("last_verified_at")):
+        return None
+    return values
+
+
+def latest_receipt(comments: Iterable[object]) -> dict[str, object] | None:
+    receipts = [receipt for item in comments if (receipt := parse_blocker_action_receipt(item))]
+    return receipts[-1] if receipts else None
+
+
+def receipt_for_action(action: str, *, now: datetime | None = None) -> dict[str, object]:
+    """Produce a valid, explicit maintenance receipt without inventing cause."""
+    if action not in ACTION_LABELS:
+        raise ValueError(f"unknown blocker action: {action}")
+    stamp = (now or datetime.now(timezone.utc)).astimezone(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+    return {"receipt": "blocker_action.v1", "action": action, "owner": "builder-system-maintenance", "next_action": "verify and repair the live Issue contract before pickup", "unblocks_when": "fresh authority evidence establishes a valid transition", "dependency_refs": [], "review_at": "null", "last_verified_at": stamp}
 
 
 def label_names(issue: dict[str, Any]) -> set[str]:
@@ -65,15 +111,21 @@ def intake(issues: Iterable[dict[str, Any]]) -> dict[str, Any]:
         if not labels & {"agent:blocked", "agent:needs-human"}:
             continue
         verdict = classify(labels, open_issue=str(issue.get("state", "open")).lower() == "open")
+        receipt = latest_receipt(issue.get("comments", []))
         item = {
             "issue_number": issue.get("number"), "title": issue.get("title"),
             "state": issue.get("state", "open"), "action": verdict.action,
-            "owner": issue.get("blocker_action", {}).get("owner") if isinstance(issue.get("blocker_action"), dict) else None,
-            "next_action": issue.get("blocker_action", {}).get("next_action") if isinstance(issue.get("blocker_action"), dict) else None,
+            "owner": receipt.get("owner") if receipt else None,
+            "next_action": receipt.get("next_action") if receipt else None,
+            "receipt_freshness": receipt.get("last_verified_at") if receipt else None,
             "claim_posture": "read-only; never claims implementation work",
         }
-        if verdict.errors:
+        if verdict.errors or receipt is None:
+            if receipt is None:
+                item.setdefault("errors", []).append("missing_or_invalid_blocker_action_receipt")
             item["errors"] = list(verdict.errors)
+            if receipt is None:
+                item["errors"].append("missing_or_invalid_blocker_action_receipt")
             drift.append(item)
         elif verdict.action:
             queues[verdict.action].append(item)
