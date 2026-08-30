@@ -48,10 +48,51 @@ def _seed_object(*, title: str, source_ref: str, text: str, origin: str = "vault
     return str(object_id)
 
 
-@pytest.mark.xfail(
-    reason="Current baseline supports retrieval, but not a strong orientation surface for active/waiting/background restart flows.",
-    strict=False,
-)
+def _seed_orientation_pack(tmp_path: Path) -> dict[str, Path]:
+    """Seed the bounded indexed read surface used by the return-orientation UAT."""
+
+    active_note = tmp_path / "Projects" / "atlas-migration.md"
+    waiting_note = tmp_path / "Projects" / "atlas-waiting.md"
+    source_note = tmp_path / "Sources" / "vendor-memo.md"
+    unrelated_note = tmp_path / "Garden" / "seedlings.md"
+    get_hybrid_store().set_documents(
+        [
+            {
+                "doc_id": "atlas-active",
+                "source_ref": str(active_note),
+                "text": (
+                    "Atlas migration is the active project. Current focus: migrate the API gateway. "
+                    "Next step: draft the migration checklist and schedule the rollout review."
+                ),
+                "payload": {"uuid": "atlas-active", "title": "Atlas Migration", "origin": "vault", "plane": "vault", "orientation_role": "active"},
+            },
+            {
+                "doc_id": "atlas-waiting",
+                "source_ref": str(waiting_note),
+                "text": (
+                    "Atlas migration waiting item. Blocked pending finance approval and vendor confirmation. "
+                    "Do not treat this as the next action."
+                ),
+                "payload": {"uuid": "atlas-waiting", "title": "Atlas Waiting", "origin": "vault", "plane": "vault", "orientation_role": "waiting"},
+            },
+            {
+                "doc_id": "atlas-source",
+                "source_ref": str(source_note),
+                "text": "Vendor migration memo for Atlas. Confirms gateway deprecation window and required cutover steps.",
+                "payload": {"uuid": "atlas-source", "title": "Vendor Memo", "origin": "vault", "plane": "vault", "orientation_role": "supporting"},
+            },
+            {
+                "doc_id": "unrelated-garden",
+                "source_ref": str(unrelated_note),
+                "text": "Garden seedlings note about watering tomatoes and spring soil temperature.",
+                "payload": {"uuid": "unrelated-garden", "title": "Seedlings", "origin": "vault", "plane": "vault", "orientation_role": "background"},
+            },
+        ]
+    )
+    ask_route._HYBRID_WARMED = True
+    return {"active": active_note, "waiting": waiting_note, "source": source_note, "unrelated": unrelated_note}
+
+
 def test_human_uat_return_after_interruption_orientation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """
     Human-need target from docs/plans/SCENARIO_ACCEPTANCE_MATRIX.md §2.
@@ -61,39 +102,7 @@ def test_human_uat_return_after_interruption_orientation(tmp_path: Path, monkeyp
     """
     _reset_runtime_state(monkeypatch)
 
-    active_note = tmp_path / "Projects" / "atlas-migration.md"
-    waiting_note = tmp_path / "Projects" / "atlas-waiting.md"
-    source_note = tmp_path / "Sources" / "vendor-memo.md"
-    unrelated_note = tmp_path / "Garden" / "seedlings.md"
-
-    _seed_object(
-        title="Atlas Migration",
-        source_ref=str(active_note),
-        text=(
-            "Atlas migration is the active project. Current focus: migrate the API gateway. "
-            "Next step: draft the migration checklist and schedule the rollout review."
-        ),
-    )
-    _seed_object(
-        title="Atlas Waiting",
-        source_ref=str(waiting_note),
-        text=(
-            "Atlas migration waiting item. Blocked pending finance approval and vendor confirmation. "
-            "Do not treat this as the next action."
-        ),
-    )
-    _seed_object(
-        title="Vendor Memo",
-        source_ref=str(source_note),
-        text=(
-            "Vendor migration memo for Atlas. Confirms gateway deprecation window and required cutover steps."
-        ),
-    )
-    _seed_object(
-        title="Seedlings",
-        source_ref=str(unrelated_note),
-        text="Garden seedlings note about watering tomatoes and spring soil temperature.",
-    )
+    paths = _seed_orientation_pack(tmp_path)
 
     client = TestClient(app)
     resp = client.post(
@@ -106,10 +115,42 @@ def test_human_uat_return_after_interruption_orientation(tmp_path: Path, monkeyp
     sources = data.get("sources") or []
     source_paths = {src.get("path") for src in sources if src.get("path")}
 
-    assert str(active_note) in source_paths
-    assert str(waiting_note) in source_paths
-    assert str(source_note) in source_paths
-    assert str(unrelated_note) not in source_paths
+    assert str(paths["active"]) in source_paths
+    assert str(paths["waiting"]) in source_paths
+    assert str(paths["source"]) in source_paths
+    assert str(paths["unrelated"]) not in source_paths
+    orientation_by_path = {source["path"]: source["orientation"] for source in sources}
+    assert orientation_by_path[str(paths["active"])] == "active"
+    assert orientation_by_path[str(paths["waiting"])] == "waiting"
+    assert orientation_by_path[str(paths["source"])] == "supporting"
+
+
+def test_human_uat_orientation_preserves_source_provenance(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _reset_runtime_state(monkeypatch)
+    paths = _seed_orientation_pack(tmp_path)
+
+    response = TestClient(app).post("/api/ask", json={"question": "Help me resume the Atlas migration."})
+    assert response.status_code == 200, response.text
+
+    sources_by_path = {source["path"]: source for source in response.json()["sources"]}
+    for path in (paths["active"], paths["waiting"], paths["source"]):
+        source = sources_by_path[str(path)]
+        assert source["uuid"]
+        assert source["origin"] == "vault"
+        assert source["plane"] == "vault"
+        assert source["path"] == str(path)
+
+
+def test_human_uat_orientation_is_read_only(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _reset_runtime_state(monkeypatch)
+    _seed_orientation_pack(tmp_path)
+    before_objects = get_object_store()._objects.copy()
+
+    response = TestClient(app).post("/api/ask", json={"question": "What was I doing in the Atlas migration?"})
+
+    assert response.status_code == 200, response.text
+    assert get_object_store()._objects == before_objects
+    assert not list(tmp_path.rglob("*")), "orientation must not materialize vault artifacts"
 
 
 @pytest.mark.xfail(
