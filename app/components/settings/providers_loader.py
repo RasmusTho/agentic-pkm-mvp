@@ -107,7 +107,7 @@ class ModelInquiryTargetIntent(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    capability_tier: str = Field(min_length=1)
+    capability_tier: Literal["economy", "standard", "frontier"]
     reasoning_effort: Literal["minimal", "low", "medium", "high", "xhigh"]
     determinism_required: bool
     output_schema_ref: str = Field(min_length=1)
