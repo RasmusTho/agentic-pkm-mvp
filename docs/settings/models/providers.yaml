@@ -142,9 +142,9 @@ runtime_channels:
       terra: {capability_tier: terra, provider: openai, model: gpt-5.6-terra, reasoning_effort: medium, requires: [structured_output, native_tools]}
       sol: {capability_tier: sol, provider: openai, model: gpt-5.6-sol, reasoning_effort: high, requires: [structured_output, native_tools]}
   model_inquiry:
-    dev: {acceptance_mode: single_target, capability_tier: sol, perspectives: [synthesis, verification], operational_transport: codex_subscription}
-    test: {acceptance_mode: single_target, capability_tier: sol, perspectives: [synthesis, verification], operational_transport: codex_subscription}
-    prod: {acceptance_mode: single_target, capability_tier: sol, perspectives: [synthesis, verification], operational_transport: codex_subscription}
+    dev: {acceptance_mode: single_target, capability_tier: sol, perspectives: [synthesis, verification], operational_transport: codex_subscription, target_intent: {capability_tier: frontier, reasoning_effort: xhigh, determinism_required: false, output_schema_ref: builderops.model-turn-response.v1, independence: none, fallback_requirement: fallback_forbidden, side_effect_class: advisory_review}}
+    test: {acceptance_mode: single_target, capability_tier: sol, perspectives: [synthesis, verification], operational_transport: codex_subscription, target_intent: {capability_tier: frontier, reasoning_effort: xhigh, determinism_required: false, output_schema_ref: builderops.model-turn-response.v1, independence: none, fallback_requirement: fallback_forbidden, side_effect_class: advisory_review}}
+    prod: {acceptance_mode: single_target, capability_tier: sol, perspectives: [synthesis, verification], operational_transport: codex_subscription, target_intent: {capability_tier: frontier, reasoning_effort: xhigh, determinism_required: false, output_schema_ref: builderops.model-turn-response.v1, independence: none, fallback_requirement: fallback_forbidden, side_effect_class: advisory_review}}
   design_agent_profiles:
     dev:
       - {design_agent_id: claude-design-via-claude-code, role: design.claude, capability_tier: frontier, provider: anthropic, model: claude-fable-5, credential_identifier: anthropic.api-key, requires: [structured_output, system_prompt_channel]}

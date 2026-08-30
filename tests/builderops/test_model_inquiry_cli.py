@@ -895,17 +895,7 @@ def test_inquiry_run_uses_operational_subscription_fallback(
             "channel": "dev",
             "consumer": "builderops-model-inquiry",
             "acceptance_mode": "single_target",
-            "capability_tier": "sol",
             "perspectives": ["synthesis", "verification"],
-            "target_intent": {
-                "capability_tier": "frontier",
-                "reasoning_effort": "xhigh",
-                "determinism_required": False,
-                "output_schema_ref": "builderops.model-turn-response.v1",
-                "independence": "none",
-                "fallback_requirement": "fallback_forbidden",
-                "side_effect_class": "advisory_review",
-            },
         }
     )
     result = CliRunner().invoke(

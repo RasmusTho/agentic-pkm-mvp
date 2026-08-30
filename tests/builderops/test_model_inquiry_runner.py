@@ -234,6 +234,35 @@ def test_legacy_inquiry_is_readable_but_not_reactivated_by_sol_path(tmp_path: Pa
     assert trace["turns"] == []
 
 
+def test_single_target_never_enters_operational_fallback(tmp_path: Path) -> None:
+    """A command failure cannot turn active-v2 into a second-adapter attempt."""
+    service, _ = _start(tmp_path, "inq_single_target_no_fallback", acceptance_mode="single_target")
+
+    class FailedCommand(LocalCommandAdapter):
+        def execute(self, request: Mapping[str, Any]) -> AdapterResult:
+            raise AdapterExecutionError("configured target failed", failure_class="command_exit_nonzero")
+
+    class AlternateCommand(LocalCommandAdapter):
+        calls = 0
+
+        def execute(self, request: Mapping[str, Any]) -> AdapterResult:
+            self.calls += 1
+            return AdapterResult(_response("draft"))
+
+    alternate = AlternateCommand("alternate", "configured", "configured-model", ("fixture",))
+    result = ModelInquiryRunner(
+        service,
+        {
+            "synthesis": FailedCommand("primary", "configured", "configured-model", ("fixture",)),
+            "verification": alternate,
+        },
+        allow_operational_fallback=True,
+    ).run("inq_single_target_no_fallback", max_rounds=1)
+
+    assert result["outcome"] == "provider_error"
+    assert alternate.calls == 0
+
+
 def test_single_target_max_round_terminal_is_readable_and_resume_is_idempotent(
     tmp_path: Path,
 ) -> None:
@@ -958,7 +987,7 @@ def test_adapter_failures_and_bad_config_are_terminal_without_secret_leak(tmp_pa
     inquiry_id = "inq_runner_bad_config"
     service, _ = _start(tmp_path, inquiry_id)
     config = intent_config()
-    config["target_intent"]["capability_tier"] = "economy"
+    config["target_intent"] = {"capability_tier": "economy"}
     result = ModelInquiryRunner(
         service, env={INQUIRY_INTENT_CONFIG_ENV: json.dumps(config)}
     ).run(inquiry_id, max_rounds=1)

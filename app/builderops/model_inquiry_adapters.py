@@ -20,7 +20,6 @@ import requests  # type: ignore[import-untyped]  # third-party lib ships no type
 from app.builderops.model_access_resolver import (
     BuilderModelAccessResolver,
     DeclaredCredentialUnavailableError,
-    MODEL_INQUIRY_OPERATIONAL_TRANSPORT,
     MODEL_INQUIRY_RESOLUTION_GROUP,
     MODEL_INQUIRY_ROLE,
     ModelAccessResolutionError,
@@ -99,9 +98,7 @@ _CONFIG_FIELDS = frozenset(
         "channel",
         "consumer",
         "acceptance_mode",
-        "capability_tier",
         "perspectives",
-        "target_intent",
     }
 )
 
@@ -363,9 +360,7 @@ class InquiryRoleIntentConfig:
     channel: str
     consumer: str
     acceptance_mode: str
-    capability_tier: str
     perspectives: tuple[str, ...]
-    request: ModelResolutionRequest
 
 
 def load_inquiry_intent(
@@ -403,35 +398,17 @@ def parse_inquiry_intent(payload: Any) -> InquiryRoleIntentConfig:
         raise BuilderOpsValidationError(
             "inquiry intent must declare the supported explicit acceptance mode"
         )
-    capability_tier = str(payload["capability_tier"])
     perspectives = payload["perspectives"]
-    if capability_tier != "sol" or perspectives != list(PERSPECTIVE_NAMES):
+    if perspectives != list(PERSPECTIVE_NAMES):
         raise BuilderOpsValidationError(
-            "inquiry intent must bind configured Sol and the ordered neutral perspectives"
+            "inquiry intent must bind the ordered neutral perspectives"
         )
-    intent_payload = payload["target_intent"]
-    if not isinstance(intent_payload, dict) or set(intent_payload) != _INTENT_FIELDS:
-        raise BuilderOpsValidationError(
-            "inquiry target intent must declare exactly the neutral fields"
-        )
-    try:
-        request = ModelResolutionRequest(
-            intent=ModelAccessIntent(**intent_payload),
-            role_profile=MODEL_INQUIRY_ROLE,
-            resolution_group_id=MODEL_INQUIRY_RESOLUTION_GROUP,
-        )
-    except ValueError as exc:
-        raise BuilderOpsValidationError(
-            "inquiry target intent is not a valid neutral intent"
-        ) from exc
     return InquiryRoleIntentConfig(
         runtime=str(payload["runtime"]),
         channel=str(payload["channel"]),
         consumer=str(payload["consumer"]),
         acceptance_mode=acceptance_mode,
-        capability_tier=capability_tier,
         perspectives=tuple(perspectives),
-        request=request,
     )
 
 
@@ -464,14 +441,18 @@ def resolve_inquiry_target(
     profile = selected.model_inquiry_profile(config.channel)
     if (
         profile.acceptance_mode != config.acceptance_mode
-        or profile.capability_tier != config.capability_tier
         or tuple(profile.perspectives) != config.perspectives
     ):
         raise ModelAccessResolutionError(
             "inquiry intent does not match the configured Model Inquiry profile"
         )
+    request = ModelResolutionRequest(
+        intent=ModelAccessIntent(**profile.target_intent.model_dump()),
+        role_profile=MODEL_INQUIRY_ROLE,
+        resolution_group_id=MODEL_INQUIRY_RESOLUTION_GROUP,
+    )
     resolution = selected.resolve(
-        config.request,
+        request,
         runtime=config.runtime,
         channel=config.channel,
         consumer=config.consumer,
@@ -531,7 +512,7 @@ def load_adapter_descriptors(
             "available": True,
             "role_identity": perspective,
             "acceptance_mode": config.acceptance_mode,
-            "capability_tier": config.capability_tier,
+            "capability_tier": selected.model_inquiry_profile(config.channel).capability_tier,
             "kind": HTTP_ADAPTER_KIND,
             "adapter_id": resolution.adapter_id,
             "provider": resolution.provider,
@@ -637,13 +618,6 @@ def load_operational_subscription_adapters(
     if not bridge.is_file():
         raise AdapterUnavailableError("operational subscription bridge is unavailable")
     selected, config, resolution = resolve_inquiry_target(source, resolver=resolver)
-    if (
-        selected.model_inquiry_profile(config.channel).operational_transport
-        != MODEL_INQUIRY_OPERATIONAL_TRANSPORT
-    ):
-        raise ModelAccessResolutionError(
-            "Model Inquiry operational transport is not compatible with the subscription bridge"
-        )
     return {
         perspective: LocalCommandAdapter(
             adapter_id=f"{resolution.adapter_id}-subscription",
@@ -662,6 +636,26 @@ def load_operational_subscription_adapters(
         )
         for perspective in config.perspectives
     }
+
+
+def load_operational_adapters(
+    env: Mapping[str, str] | None = None,
+    *,
+    resolver: BuilderModelAccessResolver | None = None,
+) -> dict[str, ModelTurnAdapter]:
+    """Load exactly the declared operational transport for the resolved capability.
+
+    Adding a future transport means registering an adapter loader here; a census
+    value alone cannot silently select the subscription bridge or an API path.
+    """
+    source = dict(os.environ if env is None else env)
+    selected, config, _resolution = resolve_inquiry_target(source, resolver=resolver)
+    transport = selected.model_inquiry_profile(config.channel).operational_transport
+    loaders = {"codex_subscription": load_operational_subscription_adapters}
+    loader = loaders.get(transport)
+    if loader is None:
+        raise AdapterUnavailableError("declared Model Inquiry transport has no enabled adapter")
+    return loader(source, resolver=selected)
 
 
 def sanitized_adapter_identity(adapter: ModelTurnAdapter) -> dict[str, str]:
@@ -940,6 +934,7 @@ __all__ = [
     "sanitized_adapter_failure",
     "load_adapter_descriptors",
     "load_adapters",
+    "load_operational_adapters",
     "load_inquiry_intent",
     "parse_inquiry_intent",
     "resolve_inquiry_target",
