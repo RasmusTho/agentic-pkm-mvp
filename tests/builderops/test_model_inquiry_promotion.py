@@ -309,6 +309,38 @@ def test_single_target_promotion_preserves_issue_contract_verification(
         gateway.promote("inq_single_target_promotion")
 
 
+def test_provider_error_is_not_issue_ready_or_promotable(tmp_path: Path) -> None:
+    vault = tmp_path / "provider-error" / "vault"
+    vault.mkdir(parents=True)
+    service = ModelInquiryService(vault)
+    refs = [{"ref_type": "github_issue", "ref": "#5203"}]
+    service.start(
+        question="Do not promote a failed configured target.",
+        workflow="governed-model-inquiry",
+        acceptance_mode="single_target",
+        inquiry_id="inq_single_target_provider_error",
+        source_refs=refs,
+    )
+    class FailedTarget(ProposalAdapter):
+        def execute(self, request: Mapping[str, Any]) -> AdapterResult:
+            raise AdapterExecutionError("configured target failed", failure_class="command_exit_nonzero")
+
+    result = ModelInquiryRunner(
+        service,
+        {
+            "synthesis": FailedTarget("synthesis"),
+            "verification": ProposalAdapter("verification"),
+        },
+    ).run("inq_single_target_provider_error", max_rounds=1)
+    assert result["outcome"] == "provider_error"
+    gateway = ModelInquiryPromotionGateway(service, client=FakeIssueClient())
+
+    evaluated = gateway.evaluate("inq_single_target_provider_error")
+    assert evaluated["readiness"]["outcome"] != "issue_ready"
+    with pytest.raises(ModelInquiryPromotionError):
+        gateway.promote("inq_single_target_provider_error")
+
+
 def test_degraded_consensus_is_not_issue_ready(tmp_path: Path) -> None:
     vault = tmp_path / "degraded" / "vault"
     vault.mkdir(parents=True)
