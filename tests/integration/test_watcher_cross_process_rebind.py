@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+import time
 
 import pytest
 
@@ -710,6 +711,7 @@ def test_settings05_parent_acceptance(
 
     runtime, _vault_a, vault_b, config_path = _fixture(tmp_path, monkeypatch)
     monkeypatch.setenv("SETTINGS_REBIND_WAIT_TIMEOUT_SECONDS", "15")
+    monkeypatch.setenv("WATCHER_TICK_SLEEP_SECONDS", "0.05")
     monkeypatch.setattr(
         "app.settings.ingestion.ingest_settings",
         lambda **_kwargs: None,
@@ -731,7 +733,7 @@ def test_settings05_parent_acceptance(
             "--config",
             str(config_path),
             "--max-ticks",
-            "100",
+            "600",
         ],
         cwd=repo_root,
         env=process_env,
@@ -739,11 +741,18 @@ def test_settings05_parent_acceptance(
         stderr=subprocess.PIPE,
         text=True,
     )
+    stdout = stderr = ""
     try:
         selected = VaultManager().select_vault(vault_b)
         assert selected.active_vault_path == str(vault_b)
         post_commit = vault_b / "post-commit.md"
         post_commit.write_text("visible after the durable commit\n", encoding="utf-8")
+        deadline = time.monotonic() + 20
+        while time.monotonic() < deadline:
+            record = runtime.open_settings_rebind_store().read()
+            if record.phase == "committed" and str(post_commit) in _event_paths(tmp_path):
+                break
+            time.sleep(0.05)
         stdout, stderr = process.communicate(timeout=30)
     finally:
         if process.poll() is None:
