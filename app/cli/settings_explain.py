@@ -16,6 +16,7 @@ from app.settings.watcher_settings import invalid_allowed_actions, load_watcher_
 from app.settings.runtime import get_settings_bundle
 from app.settings.ingestion import (
     STATE_NO_VAULT,
+    get_compiled_generation_watcher_and_tuning_origin,
     get_compiled_generation_tts_origin,
     get_settings_ingestion_state,
 )
@@ -75,13 +76,21 @@ def build_settings_explain_payload() -> dict[str, Any]:
     invalid_actions = invalid_allowed_actions(watcher_settings, allowed_action_ids)
     write_guard = DEFAULT_CONTRACT.evaluate()
     _, ask_prompt_origin = resolve_ask_system_prompt()
-    tts_settings = get_settings_bundle().tts
+    settings_bundle = get_settings_bundle()
+    tts_settings = settings_bundle.tts
+    watcher_and_tuning = settings_bundle.watcher_and_tuning
     # Explain the source that compiled the active bundle (or retained the
     # last-valid bundle), never a convenient repository-relative file.
     ingestion_state = get_settings_ingestion_state()
     tts_origin = ingestion_state.tts_origin
     if ingestion_state.state == STATE_NO_VAULT:
         tts_origin = get_compiled_generation_tts_origin() or tts_origin
+    watcher_and_tuning_origin = ingestion_state.watcher_and_tuning_origin
+    if ingestion_state.state == STATE_NO_VAULT:
+        watcher_and_tuning_origin = (
+            get_compiled_generation_watcher_and_tuning_origin()
+            or watcher_and_tuning_origin
+        )
     settings_provider = None
     settings_model = None
     settings_base_url = None
@@ -192,6 +201,38 @@ def build_settings_explain_payload() -> dict[str, Any]:
             "fallback_policy": {"value": tts_settings.fallback_policy, "origin": tts_origin, "tier": active_settings_profile()},
             "legacy_env_overrides": {
                 key: "deprecated" for key in ("TTS_SV_VOICE", "TTS_EN_US_VOICE", "TTS_EN_GB_VOICE", "TTS_ALLOW_BROWSER_FALLBACK", "TTS_ALLOW_CLOUD_FALLBACK") if os.getenv(key) is not None
+            },
+        },
+        "watchers": {
+            "debounce_ms": {
+                "value": watcher_and_tuning.debounce_ms,
+                "origin": watcher_and_tuning_origin,
+                "tier": active_settings_profile(),
+            },
+            "rate_limit_per_min": {
+                "value": watcher_and_tuning.rate_limit_per_min,
+                "origin": watcher_and_tuning_origin,
+                "tier": active_settings_profile(),
+            },
+            "backoff_seconds": {
+                "value": watcher_and_tuning.backoff_seconds,
+                "origin": watcher_and_tuning_origin,
+                "tier": active_settings_profile(),
+            },
+            "tick_sleep_seconds": {
+                "value": watcher_and_tuning.tick_sleep_seconds,
+                "origin": watcher_and_tuning_origin,
+                "tier": active_settings_profile(),
+            },
+            "connect_relatedness_floor": {
+                "value": watcher_and_tuning.connect_relatedness_floor,
+                "origin": watcher_and_tuning_origin,
+                "tier": active_settings_profile(),
+            },
+            "contradiction_floor": {
+                "value": watcher_and_tuning.contradiction_floor,
+                "origin": watcher_and_tuning_origin,
+                "tier": active_settings_profile(),
             },
         },
         "prompts": {"ask.system_prompt": {"origin": ask_prompt_origin}},

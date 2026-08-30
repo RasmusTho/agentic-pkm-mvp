@@ -91,7 +91,7 @@ def watcher_once() -> None:
     configure_json_logging()
     _validate_settings_or_exit()
     try:
-        cfg = WatcherConfig.from_env()
+        cfg = WatcherConfig.from_env(ingest_selected_vault=True)
     except ValueError as exc:
         raise click.ClickException(str(exc)) from exc
 
