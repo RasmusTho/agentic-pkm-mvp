@@ -110,7 +110,10 @@ def test_joined_watcher_safe_enablement_receipt(
             encoding="utf-8",
         )
 
-        summary = run_vault_test_flow(vault_root=vault_root)
+        summary = run_vault_test_flow(
+            vault_root=vault_root,
+            tick_log_path=tmp_path / mode / "watcher_tick.jsonl",
+        )
         watcher_run_log = tmp_path / mode / "watcher_run.jsonl"
         watcher_run_records = [
             json.loads(line)
@@ -141,11 +144,16 @@ def test_joined_watcher_safe_enablement_receipt(
         assert status.writes_allowed is settings["write_guard"]["writes_allowed"]
         assert status.write_guard_mode == settings["write_guard"]["mode"]
         assert int(summary.watcher["panel_skipped_policy"] or 0) >= 1
+        assert status.last_tick_panel_candidates == int(initial_payload["panel_candidates"])
+        assert status.last_tick_panel_skipped_policy == int(initial_payload["panel_skipped_policy"])
+        assert status.last_tick_panel_skipped_auto_exec == int(initial_payload["panel_skipped_auto_exec"])
 
         if mode == "emit-only":
             assert int(summary.watcher["panel_skipped_auto_exec"] or 0) >= 1
+            assert status.last_tick_panel_skipped_auto_exec >= 1
         else:
             assert int(summary.watcher["panel_promotions"] or 0) >= 1
+            assert status.last_tick_panel_skipped_auto_exec == 0
 
 
 # ---------------------------------------------------------------------------
