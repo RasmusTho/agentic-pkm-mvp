@@ -237,6 +237,7 @@ def run_tick(
     *,
     now: float | None = None,
 ) -> dict[str, object]:
+    cfg.reload_tunables_from_settings()
     now = now if now is not None else time.time()
     tick_start = now
     state.ticks_run += 1
