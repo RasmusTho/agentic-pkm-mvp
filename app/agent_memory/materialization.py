@@ -246,9 +246,16 @@ def _stable_materialization_id(
     vault_context: VaultContext,
     channel: str,
 ) -> str:
+    vault_identity = vault_context.active_vault_id
+    if not vault_identity:
+        if not vault_context.active_vault_path:
+            raise MemoryMaterializationError(
+                "vault identity is required for stable materialization"
+            )
+        vault_identity = f"path:{Path(vault_context.active_vault_path).expanduser().resolve()}"
     identity = (
         f"agent-memory-materialization:{kind}:"
-        f"{vault_context.active_vault_id}:{channel}:{entry.candidate_id}"
+        f"{vault_identity}:{channel}:{entry.candidate_id}"
     )
     return uuid5(NAMESPACE_URL, identity).hex
 
