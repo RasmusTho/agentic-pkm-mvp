@@ -5,6 +5,8 @@ authority: Orientation signal meaning, producer precedence, and the retrieval/AS
 status: Contract only; no runtime projection is delivered by this document
 ---
 
+State: Target-state Product/Runtime contract; no runtime projection is delivered.
+
 # Orientation Signal Projection Contract
 
 ## Purpose and boundary
