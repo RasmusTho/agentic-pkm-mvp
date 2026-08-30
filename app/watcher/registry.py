@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import time
+from bisect import bisect_right
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from datetime import timezone, datetime
@@ -25,6 +26,7 @@ from app.agents.panel_agent.policy import (
 from app.events.schema import OutboxEvent
 from app.events.types import INGEST_VAULT_CHANGED, PANEL_SCAN_REQUESTED
 from app.knowledge.errors import KnowledgeWriteConflict
+from app.knowledge.multiwriter import is_conflict_artifact
 from app.knowledge.write_ops import read_note_text_with_version
 from app.knowledge.write_ops import write_note_from_absolute
 from app.journaling.review import process_journal_reviews_tick
@@ -43,7 +45,7 @@ from app.settings.locations import LEGACY_COMPILED_DIR
 from app.settings.panel_actions import PanelActionMapping, load_panel_action_mappings
 from app.settings.tiering import resolve_dev_lab_env_typed, resolve_dev_lab_env_value
 from app.settings.watcher_settings import load_watcher_settings, resolve_auto_exec_enabled
-from app.vault.manager import VaultManager
+from app.vault.manager import VaultManager, is_vault_root, nearest_enclosing_vault_root
 from app.vault.manager import iter_vault_markdown_files
 from app.vault.paths import resolve_vault_system_dir_rel_or_default
 from app.vault.layout import load_layout
@@ -220,19 +222,14 @@ def _apply_guardrails_registry(cfg: RegistryConfig, state: WatcherState, summary
         "bad_tick_backoff_seconds": cfg.bad_tick_backoff_seconds,
     }
     summary["thresholds"] = thresholds
-    scanned = int(summary.get("scanned_files", 0))
-    bytes_read = int(summary.get("bytes_read", 0))
-    elapsed = int(summary.get("tick_ms", 0))
     errors = int(summary.get("errors_in_tick", 0))
+    scan_in_progress = bool(summary.get("scan_in_progress", state.scan_in_progress))
+    progress = int(summary.get("scan_progress_entries", 0))
     bad_reason: str | None = None
-    if scanned >= cfg.max_scanned_files_per_tick:
-        bad_reason = "too_many_files"
-    elif bytes_read >= cfg.max_bytes_read_per_tick:
-        bad_reason = "too_many_bytes"
-    elif elapsed >= cfg.max_elapsed_ms_per_tick:
-        bad_reason = "too_slow"
-    elif errors:
+    if errors:
         bad_reason = "errors"
+    elif scan_in_progress and progress <= 0:
+        bad_reason = "no_progress"
     if bad_reason:
         state.bad_ticks += 1
         summary["bad_tick"] = True
@@ -243,12 +240,15 @@ def _apply_guardrails_registry(cfg: RegistryConfig, state: WatcherState, summary
         if state.bad_ticks >= cfg.max_bad_ticks:
             summary["stop_tripped"] = True
             _trip_stop_file(cfg, summary)
+        state.observation_status = "degraded"
     else:
         state.bad_ticks = 0
         summary["bad_tick"] = False
         summary["bad_tick_reason"] = None
         state.dynamic_sleep_seconds = None
         summary["chosen_sleep_seconds"] = cfg.tick_sleep_seconds
+        state.observation_status = "catch-up" if scan_in_progress else "healthy-idle"
+    summary["observation_status"] = state.observation_status
 
 
 def _finalize_spec_tick(
@@ -264,6 +264,13 @@ def _finalize_spec_tick(
     summary["elapsed_ms"] = summary["tick_ms"]
     summary.setdefault("tick_start_ts", _now_iso_from_timestamp(tick_start))
     summary.setdefault("chosen_sleep_seconds", state.dynamic_sleep_seconds or cfg.tick_sleep_seconds)
+    summary.setdefault("scan_in_progress", state.scan_in_progress)
+    summary.setdefault("continuation_reason", state.continuation_reason)
+    if bool(summary.get("kill_switch")) or bool(summary.get("backoff_active")):
+        state.observation_status = "degraded"
+    if state.scope_status != "ok":
+        state.observation_status = "degraded"
+    summary.setdefault("observation_status", state.observation_status)
     try:
         _log_tick_diagnostics_registry(cfg, summary, scan_root, watcher_name)
         _emit_registry_watcher_run_event(cfg, summary, watcher_name)
@@ -717,6 +724,17 @@ def _state_path(state_dir: Path, name: str) -> Path:
     return state_dir / f"watcher_state_{safe}.json"
 
 
+def _observation_store_path(checkpoint_path: Path) -> Path:
+    return checkpoint_path.with_suffix(".observations.sqlite3")
+
+
+def _load_registry_state(checkpoint_path: Path) -> WatcherState:
+    return WatcherState.load_registry(
+        checkpoint_path,
+        _observation_store_path(checkpoint_path),
+    )
+
+
 def _build_watchers_payload(
     specs: Iterable[WatcherSpec],
     states: Mapping[str, WatcherState],
@@ -736,7 +754,12 @@ def _build_watchers_payload(
             "rate_limited_total": state.rate_limited,
             "enqueue_failures_total": state.enqueue_failures_total,
             "scope_status": state.scope_status,
+            "observation_status": state.observation_status,
+            "scan_in_progress": state.scan_in_progress,
+            "scan_generation": state.scan_generation,
         }
+        if state.continuation_reason:
+            payload[spec.name]["continuation_reason"] = state.continuation_reason
         if state.last_trace_id:
             payload[spec.name]["last_trace_id"] = state.last_trace_id
         if state.last_emitted_event_at is not None:
@@ -752,9 +775,11 @@ def _overall_watcher_status(states: Mapping[str, WatcherState]) -> str:
     health surfaces can distinguish "running and seeing files" from "running
     and blind" (#2988).
     """
-    if any(state.scope_status != "ok" for state in states.values()):
+    if any(state.observation_status == "degraded" for state in states.values()):
         return "degraded"
-    return "running"
+    if any(state.scan_in_progress for state in states.values()):
+        return "catch-up"
+    return "healthy-idle"
 
 
 def _warn_once_per_minute(state: WatcherState, message: str, *, now: float) -> None:
@@ -1045,6 +1070,148 @@ def _invalidate_settings_generation(
         )
 
 
+def _normalized_scan_roots(vault_root: Path, scan_roots: Iterable[Path]) -> list[Path]:
+    """Return deterministic, non-overlapping roots owned by ``vault_root``."""
+
+    try:
+        selected_real = vault_root.resolve()
+    except OSError:
+        return []
+    candidates: list[Path] = []
+    for root in scan_roots:
+        try:
+            root_real = root.resolve()
+            root_real.relative_to(selected_real)
+        except (OSError, ValueError):
+            continue
+        if root_real != selected_real and (
+            nearest_enclosing_vault_root(root_real, search_root=selected_real)
+            != selected_real
+        ):
+            continue
+        if any(root_real == existing or root_real.is_relative_to(existing) for existing in candidates):
+            continue
+        candidates = [existing for existing in candidates if not existing.is_relative_to(root_real)]
+        candidates.append(root_real)
+    return sorted(candidates, key=lambda path: path.relative_to(selected_real).as_posix())
+
+
+def _scan_identity(vault_root: Path, scan_roots: Iterable[Path], scope_glob: str) -> str:
+    roots = [path.relative_to(vault_root.resolve()).as_posix() for path in scan_roots]
+    encoded = json.dumps(
+        {"vault": str(vault_root.resolve()), "roots": roots, "scope": scope_glob},
+        sort_keys=True,
+    )
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+def _begin_or_resume_scan(
+    state: WatcherState,
+    *,
+    vault_root: Path,
+    scan_roots: list[Path],
+    scope_glob: str,
+) -> None:
+    identity = _scan_identity(vault_root, scan_roots, scope_glob)
+    if state.scan_in_progress and state.scan_identity == identity:
+        return
+    state.scan_generation += 1
+    state.scan_identity = identity
+    state.scan_root_index = 0
+    state.scan_stack = []
+    state.scan_scope_matched_files = 0
+    state.scan_in_progress = True
+    state.continuation_reason = None
+
+
+def _next_incremental_markdown(
+    *,
+    vault_root: Path,
+    scan_roots: list[Path],
+    scope_glob: str,
+    state: WatcherState,
+    summary: dict[str, object],
+    deadline: float,
+    directory_cache: dict[str, tuple[list[str], list[Path]]],
+) -> tuple[tuple[Path, float, Path] | None, bool]:
+    """Advance the durable DFS cursor and return one eligible markdown file.
+
+    ``bool`` is true only when every configured root drained. Cursor progress is
+    recorded before descending/yielding, so a restart resumes after the last
+    directory entry rather than replaying the root prefix.
+    """
+
+    selected_real = vault_root.resolve()
+    while state.scan_root_index < len(scan_roots):
+        if time.monotonic() >= deadline:
+            return None, False
+        root = scan_roots[state.scan_root_index]
+        if not state.scan_stack:
+            try:
+                root_rel = root.relative_to(selected_real).as_posix()
+            except ValueError:
+                state.scan_root_index += 1
+                continue
+            state.scan_stack = [{"dir": root_rel, "after": ""}]
+
+        frame = state.scan_stack[-1]
+        directory = selected_real / frame["dir"]
+        cached = directory_cache.get(frame["dir"])
+        if cached is None:
+            try:
+                entries = sorted(directory.iterdir(), key=lambda path: path.name)
+            except OSError:
+                state.errors += 1
+                state.scan_stack.pop()
+                continue
+            cached = ([entry.name for entry in entries], entries)
+            directory_cache[frame["dir"]] = cached
+        names, entries = cached
+        candidate_index = bisect_right(names, frame.get("after", ""))
+        if candidate_index >= len(entries):
+            state.scan_stack.pop()
+            if not state.scan_stack:
+                state.scan_root_index += 1
+            continue
+        candidate = entries[candidate_index]
+
+        frame["after"] = candidate.name
+        summary["scan_progress_entries"] = int(summary.get("scan_progress_entries", 0)) + 1
+        if candidate.name.startswith("."):
+            continue
+        if candidate.is_dir():
+            if candidate.is_symlink() or is_vault_root(candidate):
+                continue
+            try:
+                child_rel = candidate.relative_to(selected_real).as_posix()
+            except ValueError:
+                continue
+            state.scan_stack.append({"dir": child_rel, "after": ""})
+            continue
+        if not candidate.name.endswith(".md") or not candidate.is_file():
+            continue
+        if is_conflict_artifact(candidate.name):
+            continue
+        try:
+            rel = candidate.relative_to(selected_real)
+            if candidate.is_symlink():
+                real = candidate.resolve()
+                real.relative_to(selected_real)
+                if nearest_enclosing_vault_root(real, search_root=selected_real) != selected_real:
+                    continue
+            mtime = candidate.stat().st_mtime
+        except (OSError, ValueError):
+            state.errors += 1
+            continue
+        if not _matches_scope(rel, scope_glob) and not is_settings_source_path(rel):
+            continue
+        return (rel, mtime, candidate), False
+
+    state.scan_in_progress = False
+    state.scan_stack = []
+    return None, True
+
+
 def _collect_changed_entries(
     cfg: RegistryConfig,
     spec: WatcherSpec,
@@ -1057,17 +1224,50 @@ def _collect_changed_entries(
 ) -> tuple[list[ChangedEntry], list[str]]:
     changed_entries: list[ChangedEntry] = []
     scanned_paths: list[str] = []
-    for rel, mtime, path in _scan_markdown_many(cfg.vault_path, scan_roots, spec.scope_glob):
+    roots = _normalized_scan_roots(cfg.vault_path, scan_roots)
+    _begin_or_resume_scan(
+        state,
+        vault_root=cfg.vault_path,
+        scan_roots=roots,
+        scope_glob=spec.scope_glob,
+    )
+    deadline = time.monotonic() + (cfg.max_elapsed_ms_per_tick / 1000.0)
+    directory_cache: dict[str, tuple[list[str], list[Path]]] = {}
+    while int(summary["scanned_files"]) < cfg.max_scanned_files_per_tick:
+        if int(summary["bytes_read"]) >= cfg.max_bytes_read_per_tick:
+            state.continuation_reason = "byte_budget"
+            break
+        if time.monotonic() >= deadline:
+            state.continuation_reason = "elapsed_budget"
+            break
+        next_file, exhausted = _next_incremental_markdown(
+            vault_root=cfg.vault_path,
+            scan_roots=roots,
+            scope_glob=spec.scope_glob,
+            state=state,
+            summary=summary,
+            deadline=deadline,
+            directory_cache=directory_cache,
+        )
+        if next_file is None:
+            if not exhausted:
+                state.continuation_reason = "elapsed_budget"
+            break
+        rel, mtime, path = next_file
         summary["scanned_files"] = int(summary["scanned_files"]) + 1
         # Settings sources are scanned outside a narrow content scope so their
         # runtime configuration can reload.  They must not, however, make a
         # blind content scope look healthy.
         if _matches_scope(rel, spec.scope_glob):
             summary["scope_matched_files"] = int(summary.get("scope_matched_files", 0)) + 1
+            state.scan_scope_matched_files += 1
         rel_str = str(rel)
         scanned_paths.append(rel_str)
-        last_mtime = state.last_mtime(rel_str)
-        previous_hash = state.last_hash(rel_str)
+        previous_file_state = state.file_entry(rel_str) or {}
+        last_mtime_value = previous_file_state.get("mtime")
+        last_mtime = float(last_mtime_value) if last_mtime_value is not None else None
+        previous_hash_value = previous_file_state.get("hash")
+        previous_hash = str(previous_hash_value) if previous_hash_value is not None else None
         if (
             last_mtime is not None
             and last_mtime == mtime
@@ -1077,6 +1277,11 @@ def _collect_changed_entries(
             continue
         hashed = _hash_file(path)
         if hashed is None:
+            # A transient read failure is a real degraded tick, but the file
+            # was observed. Mark it in this generation so deletion
+            # reconciliation cannot misclassify it as removed.
+            state.errors += 1
+            state.update_file_state(rel_str)
             continue
         digest, read_bytes = hashed
         summary["hashed_files"] = int(summary["hashed_files"]) + 1
@@ -1087,7 +1292,11 @@ def _collect_changed_entries(
         settings_delta = handle_settings_detected_delta(
             vault_root=cfg.vault_path,
             rel_path=rel,
-            previous_values=state.last_settings_runtime_values(rel_str),
+            previous_values=(
+                dict(previous_file_state["settings_runtime_values"])
+                if isinstance(previous_file_state.get("settings_runtime_values"), dict)
+                else None
+            ),
             observed_digest=digest,
             observed_missing=False,
         )
@@ -1115,26 +1324,34 @@ def _collect_changed_entries(
             continue
         if is_settings_source_path(rel):
             # Settings markdown is runtime control input, never ordinary vault
-            # content.  Record it as seen for every spec, reload it only once
-            # per registry tick, then keep it out of panel/ingest emissions.
-            state.update_file_state(rel_str, mtime=mtime, content_hash=digest)
-            if handled_settings_sources:
+            # content. Reload it only once per registry tick, and advance each
+            # spec's observation only after that reload succeeds. A failed
+            # reload must remain retryable on the next scan generation.
+            if handled_settings_sources is not None and rel in handled_settings_sources:
+                state.update_file_state(rel_str, mtime=mtime, content_hash=digest)
                 continue
-            if handled_settings_sources is not None:
-                handled_settings_sources.add(rel)
             source_delta = handle_settings_source_delta(
                 rel_path=rel,
                 vault_root=cfg.vault_path,
             )
-            if source_delta.reloaded:
+            source_reload_succeeded = source_delta.reloaded and not source_delta.errors
+            if source_reload_succeeded:
                 summary["settings_source_reloads_in_tick"] = (
                     int(summary.get("settings_source_reloads_in_tick", 0)) + 1
                 )
+                state.update_file_state(rel_str, mtime=mtime, content_hash=digest)
+                if handled_settings_sources is not None:
+                    handled_settings_sources.add(rel)
             if source_delta.errors:
                 state.errors += len(source_delta.errors)
                 summary["settings_source_errors_in_tick"] = int(
                     summary.get("settings_source_errors_in_tick", 0)
                 ) + len(source_delta.errors)
+            elif not source_reload_succeeded:
+                state.errors += 1
+                summary["settings_source_errors_in_tick"] = int(
+                    summary.get("settings_source_errors_in_tick", 0)
+                ) + 1
             continue
         if is_settings_control_path(
             rel,
@@ -1160,6 +1377,20 @@ def _collect_changed_entries(
                 rel_str=rel_str,
                 values=settings_delta_state_values(settings_delta) or {},
             )
+        if int(summary["bytes_read"]) >= cfg.max_bytes_read_per_tick:
+            state.continuation_reason = "byte_budget"
+            break
+        if time.monotonic() >= deadline:
+            state.continuation_reason = "elapsed_budget"
+            break
+    if state.scan_in_progress and state.continuation_reason is None:
+        state.continuation_reason = "file_budget"
+    if not state.scan_in_progress:
+        state.continuation_reason = None
+    summary["scan_in_progress"] = state.scan_in_progress
+    summary["scan_generation"] = state.scan_generation
+    summary["scan_progress_entries"] = int(summary.get("scan_progress_entries", 0))
+    summary["continuation_reason"] = state.continuation_reason
     return changed_entries, scanned_paths
 
 
@@ -1217,8 +1448,9 @@ def _emit_changed_entry(
     process_panel_notes_inline: bool,
 ) -> str | None:
     rel_path = str(entry.rel_path)
-    last_seen = state.last_seen(rel_path)
-    previous_file_state = dict(state.files[rel_path]) if rel_path in state.files else None
+    previous_file_state = state.file_entry(rel_path)
+    last_seen_value = (previous_file_state or {}).get("last_seen")
+    last_seen = float(last_seen_value) if last_seen_value is not None else None
     required_db = (
         spec.emit_event in {PANEL_SCAN_REQUESTED, INGEST_VAULT_CHANGED}
         and _db_outbox_required()
@@ -1272,10 +1504,7 @@ def _emit_changed_entry(
         # compensating JSONL sink propagates here with NEITHER sink written.
         # Rolling back only for required delivery dropped that observation
         # permanently once `_finalize_spec_tick` saved the advanced cursor.
-        if previous_file_state is None:
-            state.files.pop(rel_path, None)
-        else:
-            state.files[rel_path] = previous_file_state
+        state.restore_file_state(rel_path, previous_file_state)
         raise
     if not trace_id:
         return None
@@ -1485,6 +1714,15 @@ def _run_spec_tick(
         return _finalize_spec_tick(cfg, state, summary, tick_start, None, spec.name)
 
     active_states = states or {spec.name: state}
+    scan_checkpoint = {
+        "scan_in_progress": state.scan_in_progress,
+        "scan_generation": state.scan_generation,
+        "scan_identity": state.scan_identity,
+        "scan_root_index": state.scan_root_index,
+        "scan_stack": [dict(frame) for frame in state.scan_stack],
+        "scan_scope_matched_files": state.scan_scope_matched_files,
+        "continuation_reason": state.continuation_reason,
+    }
     changed_entries, scanned_paths = _collect_changed_entries(
         cfg,
         spec,
@@ -1494,9 +1732,16 @@ def _run_spec_tick(
         states=active_states,
         handled_settings_sources=handled_settings_sources,
     )
+    scan_completed = not state.scan_in_progress
+    scan_clean = state.errors == errors_before
+    missing_paths = (
+        state.paths_unseen_in_generation(scanned_paths)
+        if scan_completed and scan_clean
+        else set()
+    )
     removed_runtime_gating_owner_files = sorted(
         Path(path)
-        for path in state.files.keys() - set(scanned_paths)
+        for path in missing_paths
         if is_runtime_gating_owner_path(Path(path))
     )
     pending_runtime_gating_deletions: set[str] = set()
@@ -1530,11 +1775,11 @@ def _run_spec_tick(
                 pending_runtime_gating_deletions.add(rel_str)
             else:
                 for active_state in active_states.values():
-                    active_state.files.pop(rel_str, None)
+                    active_state.remove_file(rel_str)
 
     removed_settings_sources = sorted(
         Path(path)
-        for path in state.files.keys() - set(scanned_paths)
+        for path in missing_paths
         if is_settings_source_path(Path(path))
     )
     if removed_settings_sources:
@@ -1558,7 +1803,7 @@ def _run_spec_tick(
                     removed_delta.errors
                 )
 
-    if int(summary.get("scope_matched_files", 0)) == 0:
+    if scan_completed and state.scan_scope_matched_files == 0:
         # The scope glob's directory exists, but the tick matched zero
         # content files — the watcher is running but blind (#2988). Settings
         # sources may still be scanned/reloaded outside that content scope.
@@ -1571,9 +1816,11 @@ def _run_spec_tick(
             now=now,
             interval=cfg.summary_interval,
         )
-    else:
+    elif scan_completed:
         state.scope_status = "ok"
         summary["scope_status"] = "ok"
+    else:
+        summary["scope_status"] = state.scope_status
 
     summary["changed_in_tick"] = len(changed_entries)
     state.changed_detected += len(changed_entries)
@@ -1588,6 +1835,7 @@ def _run_spec_tick(
         action_mappings = load_panel_action_mappings()
         panel_auto_exec_enabled = _auto_exec_enabled(cfg.vault_path)
 
+    delivery_failed = False
     for entry in changed_entries:
         try:
             trace_id = _emit_changed_entry(
@@ -1608,7 +1856,19 @@ def _run_spec_tick(
             state.errors += 1
             state.backoff_until = now + spec.backoff_seconds
             summary["backoff_active"] = True
+            delivery_failed = True
             break
+
+    if delivery_failed:
+        state.scan_in_progress = bool(scan_checkpoint["scan_in_progress"])
+        state.scan_generation = int(scan_checkpoint["scan_generation"])
+        state.scan_identity = scan_checkpoint["scan_identity"]  # type: ignore[assignment]
+        state.scan_root_index = int(scan_checkpoint["scan_root_index"])
+        state.scan_stack = [dict(frame) for frame in scan_checkpoint["scan_stack"]]  # type: ignore[arg-type]
+        state.scan_scope_matched_files = int(scan_checkpoint["scan_scope_matched_files"])
+        state.continuation_reason = scan_checkpoint["continuation_reason"]  # type: ignore[assignment]
+        summary["scan_in_progress"] = state.scan_in_progress
+        summary["continuation_reason"] = state.continuation_reason
 
     summary["emitted_in_tick"] = emitted_in_tick
     summary["intents_emitted"] = state.intents_emitted
@@ -1622,7 +1882,11 @@ def _run_spec_tick(
     elapsed_ms = max(int((time.time() - tick_start) * 1000), 0)
     summary["tick_ms"] = elapsed_ms
     _apply_guardrails_registry(cfg, state, summary)
-    state.prune_files([*scanned_paths, *pending_runtime_gating_deletions])
+    if scan_completed and scan_clean and not delivery_failed:
+        if state._observation_store is not None:
+            state.prune_unseen_generation(retain=pending_runtime_gating_deletions)
+        else:
+            state.prune_files([*scanned_paths, *pending_runtime_gating_deletions])
 
     return _finalize_spec_tick(cfg, state, summary, tick_start, scan_roots[0] if scan_roots else None, spec.name)
 
@@ -1630,7 +1894,7 @@ def _run_spec_tick(
 def run_registry_once(config_path: Path) -> dict[str, dict[str, object]]:
     cfg = load_registry_config(config_path)
     states = {
-        spec.name: WatcherState.load(_state_path(cfg.state_dir, spec.name))
+        spec.name: _load_registry_state(_state_path(cfg.state_dir, spec.name))
         for spec in cfg.specs
     }
     now = time.time()
@@ -1683,7 +1947,7 @@ def run_registry_forever(config_path: Path, *, max_ticks: int | None = None) -> 
     except Exception as exc:  # pragma: no cover - defensive; ingestion degrades
         logger.warning("Settings ingestion at registry watcher startup failed: %s", exc)
     states = {
-        spec.name: WatcherState.load(_state_path(cfg.state_dir, spec.name))
+        spec.name: _load_registry_state(_state_path(cfg.state_dir, spec.name))
         for spec in cfg.specs
     }
     tick_limit = max_ticks if max_ticks is not None and max_ticks > 0 else None

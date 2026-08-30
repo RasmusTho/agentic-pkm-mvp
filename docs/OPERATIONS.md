@@ -342,10 +342,11 @@ Watcher auto-exec enablement rule:
 - `WATCHER_AUTO_EXEC=1` arms panel auto-exec; per-note opt-out remains `ai_panel_auto_run: never`.
 - `PANEL_PROACTIVE_ASSIST=0|1` controls proactive panel creation.
 - `WATCHER_STOP_FILE` pauses scanning when present.
-- Registry watcher state is pruned back to the active scope on each tick so stale file history does not accumulate indefinitely.
+- `WATCHER_MAX_SCANNED_FILES_PER_TICK`, `WATCHER_MAX_BYTES_READ_PER_TICK`, and `WATCHER_MAX_ELAPSED_MS_PER_TICK` bound each registry tick. A boundary reports `catch-up` and resumes from the durable deterministic cursor on the next tick; do not raise these limits merely to fit a large vault into one tick.
+- Registry checkpoint JSON stays bounded to cursor/counter metadata. Per-file observations are stored in an adjacent SQLite sidecar under `WATCHER_STATE_DIR`; deletion reconciliation and stale observation pruning run only after a clean full scan generation drains.
 
 ### Watcher caveats
-- The registry watcher remains polling/snapshot-based; no OS file-event hooks are used.
+- The registry watcher remains polling-based; each observation generation walks the configured scope incrementally across bounded ticks. No OS file-event hooks are used.
 - Paths with spaces are supported; wrap vault paths in quotes.
 - When using iCloud/Obsidian sync, keep scopes conservative and rely on debounce/backoff guardrails.
 - Do not use the legacy snapshot watcher for runtime start-system flows.
