@@ -77,9 +77,11 @@ closure always route through `verification-and-closure`; lifecycle correction ro
 
 For issue-free work, do not invent or derive an Issue. Assess the current branch/worktree, any
 governance or docs PR, and the deliverable named by the request. Route unfinished work through
-`resume-work` or `publish-pr` as appropriate. A standalone analysis may close only after its result
-is delivered and the `.codex/skills/README.md` BuilderOps analysis checkpoint is satisfied, or the
-material is genuinely trivial to lose.
+`resume-work` or `publish-pr` as appropriate. When a standalone analysis is itself the terminal
+response's deliverable, that response is the delivery act; do not create a circular requirement
+that it must be delivered before closeout. It may close only when the result is complete and the
+`.codex/skills/README.md` BuilderOps analysis checkpoint is satisfied, or the material is genuinely
+trivial to lose.
 
 ## Action gate
 

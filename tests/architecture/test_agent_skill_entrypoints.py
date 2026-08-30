@@ -59,6 +59,8 @@ def test_builder_closeout_gate_contract_is_discoverable_and_fail_closed() -> Non
     normalized_skill = " ".join(skill.split())
     assert "never establishes Issue/PR delivery" in normalized_skill
     assert "blocked | needs-human | handoff" in normalized_skill
+    assert "terminal response's deliverable" in normalized_skill
+    assert "do not create a circular requirement" in normalized_skill
     assert "`klart`" in skill_index
     assert ".codex/skills/klart/SKILL.md" in roles
     assert "must never\nself-attest `done`" in roles
