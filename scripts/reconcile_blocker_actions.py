@@ -13,7 +13,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from app.builderops.blocker_actions import ACTION_LABELS, LEGACY_HUMAN_ACTIONS, classify, label_names, receipt_for_action
+from app.builderops.blocker_actions import ACTION_LABELS, LEGACY_HUMAN_ACTIONS, classify, label_names, parse_blocker_action_receipt, receipt_for_action
 
 
 def plan(issue: dict[str, Any]) -> dict[str, Any]:
@@ -58,8 +58,7 @@ def _mutate_label(repo: str, endpoint: str, *, add: str | None = None, remove: s
         _api(repo, f"{endpoint}/labels/{remove}", method="DELETE")
 
 
-def _receipt_text(action: str) -> str:
-    receipt = receipt_for_action(action)
+def _receipt_text(receipt: dict[str, object]) -> str:
     lines = ["```yaml"] + [f"{key}: {value if key != 'dependency_refs' else '[]'}" for key, value in receipt.items()] + ["```", "", "Bounded migration receipt; it does not infer an underlying blocker cause or claim implementation work."]
     return "\n".join(lines)
 
@@ -99,7 +98,16 @@ def apply_plan(repo: str, owner: str, name: str, item: dict[str, Any]) -> dict[s
         raise RuntimeError(f"post-apply drift for issue #{item['issue']}: {final_verdict.errors}")
     if item["changes"]:
         action = final_verdict.action or "action:repair-contract"
-        _api(repo, f"{endpoint}/comments", method="POST", payload={"body": _receipt_text(action)})
+        receipt = receipt_for_action(action)
+        created = _api(repo, f"{endpoint}/comments", method="POST", payload={"body": _receipt_text(receipt)})
+        comments = _api(repo, f"{endpoint}/comments?per_page=100")
+        created_id = created.get("id") if isinstance(created, dict) else None
+        exact_receipt = next((parse_blocker_action_receipt(comment) for comment in comments if isinstance(comment, dict) and comment.get("id") == created_id), None)
+        if exact_receipt != receipt:
+            raise RuntimeError(f"receipt readback mismatch for issue #{item['issue']}")
+        terminal = _api(repo, endpoint)
+        if _labels(terminal) != _labels(final) or classify(_labels(terminal), open_issue=True).errors:
+            raise RuntimeError(f"post-receipt lifecycle/action drift for issue #{item['issue']}")
     return {"issue": item["issue"], "labels": sorted(_labels(final)), "action": final_verdict.action}
 
 

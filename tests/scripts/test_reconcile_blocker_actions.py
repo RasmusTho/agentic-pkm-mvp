@@ -56,9 +56,18 @@ def test_apply_uses_narrow_writes_and_verifies_readback(monkeypatch) -> None:
         {"number": 1, "state": "open", "labels": ["agent:blocked"]},
         {"number": 1, "state": "open", "labels": ["agent:blocked", "action:repair-contract"]},
         {"number": 1, "state": "open", "labels": ["agent:blocked", "action:repair-contract"]},
+        {"number": 1, "state": "open", "labels": ["agent:blocked", "action:repair-contract"]},
+        {"number": 1, "state": "open", "labels": ["agent:blocked", "action:repair-contract"]},
     ])
+    posted_body = None
     def fake_api(repo, endpoint, *, method="GET", payload=None):
+        nonlocal posted_body
         calls.append((endpoint, method, payload))
+        if method == "POST" and endpoint.endswith("/comments"):
+            posted_body = payload["body"]
+            return {"id": 9}
+        if method == "GET" and "comments?" in endpoint:
+            return [{"id": 9, "body": posted_body}]
         if method == "GET": return next(reads)
         return None
     monkeypatch.setattr("scripts.reconcile_blocker_actions._api", fake_api)
@@ -66,6 +75,27 @@ def test_apply_uses_narrow_writes_and_verifies_readback(monkeypatch) -> None:
     assert result["action"] == "action:repair-contract"
     assert any(method == "POST" and endpoint.endswith("/labels") for endpoint, method, _ in calls)
     assert not any(method == "PATCH" for _, method, _ in calls)
+
+
+def test_apply_aborts_when_posted_receipt_cannot_be_read_back(monkeypatch) -> None:
+    item = plan({"number": 1, "state": "open", "labels": ["agent:blocked"]})
+    reads = iter([
+        {"number": 1, "state": "open", "labels": ["agent:blocked"]},
+        {"number": 1, "state": "open", "labels": ["agent:blocked"]},
+        {"number": 1, "state": "open", "labels": ["agent:blocked", "action:repair-contract"]},
+        {"number": 1, "state": "open", "labels": ["agent:blocked", "action:repair-contract"]},
+    ])
+    def fake_api(repo, endpoint, *, method="GET", payload=None):
+        if method == "POST" and endpoint.endswith("/comments"):
+            return {"id": 9}
+        if method == "POST" and endpoint.endswith("/labels"):
+            return None
+        if method == "GET" and "comments?" in endpoint:
+            return []
+        return next(reads)
+    monkeypatch.setattr("scripts.reconcile_blocker_actions._api", fake_api)
+    with pytest.raises(RuntimeError, match="receipt readback mismatch"):
+        apply_plan("o/r", "o", "r", item)
 
 
 def test_intake_parses_real_comment_receipt_and_rejects_invalid_placeholder() -> None:

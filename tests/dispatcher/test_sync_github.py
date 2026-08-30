@@ -225,6 +225,35 @@ def test_essential_source_remains_ready_only_when_action_labels_exist() -> None:
     assert task.status == "ready"
 
 
+def test_pull_sync_projects_blocker_comment_records_without_making_them_pickable(tmp_store: SqliteStore) -> None:
+    receipt = {"body": "```yaml\nreceipt: blocker_action.v1\naction: action:wait-dependency\nowner: builder-system-maintenance\nnext_action: wait\nunblocks_when: dependency closes\ndependency_refs: []\nreview_at: null\nlast_verified_at: 2026-08-30T11:00:00Z\n```"}
+    blocked = {**SAMPLE_ISSUE_BLOCKED, "comments": [receipt], "labels": [{"name": "agent:blocked"}, {"name": "action:wait-dependency"}]}
+    source = _mock_source([SAMPLE_ISSUE_HIGH], open_issues=[blocked])
+    adapter = PullSyncAdapter(store=tmp_store, source=source)
+    upserted = adapter.pull(REPO)
+    assert [task.issue_number for task in upserted] == [101]
+    projected = tmp_store.get_task(_tid(104))
+    assert projected is not None and projected.status == "blocked"
+    assert projected.sync_state["comments"] == [receipt]
+
+
+def test_rest_open_issue_source_fetches_comments_only_for_nonactive_actions(monkeypatch) -> None:
+    import json
+    source = GhCliIssueSource()
+    calls: list[str] = []
+    def fake_run(command, **kwargs):
+        endpoint = command[2]
+        calls.append(endpoint)
+        payload = ([{"number": 1, "title": "blocked", "state": "open", "labels": [{"name": "agent:blocked"}]}, {"number": 2, "title": "ready", "state": "open", "labels": [{"name": "agent:ready"}]}] if endpoint.endswith("/issues") else [])
+        return MagicMock(returncode=0, stdout=json.dumps(payload), stderr="")
+    monkeypatch.setattr("subprocess.run", fake_run)
+    source.list_open_issues(REPO)
+    comments = source.fetch_blocker_comments(REPO, 1)
+    assert comments == []
+    assert "issues/1/comments" in calls[-1]
+    assert all("issues/2/comments" not in call for call in calls)
+
+
 def test_normalize_github_issue_low_priority() -> None:
     task = normalize_github_issue(SAMPLE_ISSUE_LOW, REPO)
     assert task.priority == "low"

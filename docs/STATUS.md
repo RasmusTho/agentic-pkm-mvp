@@ -732,6 +732,11 @@ Platform-side governance applied:
   `scripts/issue_pickup_claim.sh` routes a missing-task claim failure after such a sync to
   explicit GitHub-label-only fallback guidance (see
   `docs/AGENT_ISSUE_DISPATCHER.md :: Kill-Switch Partial Sync (#4606)`)
+- Blocked/needs-human action intake is a separate bounded REST read path: it fetches only those
+  Issues' comments, accepts a latest valid `blocker_action.v1` receipt as projection evidence, and
+  keeps normal implementation pickup strictly `agent:ready` only. The matching targeted migration
+  re-reads each Issue before a narrow label write, verifies label and receipt readback, and fails
+  closed on claim or lifecycle drift; no action intake has claim authority.
 - the verification-dispatch integration line now fails closed on exact-head, authoritative
   `github-actions` required-check evidence, preserves review/repair budgets across restart, and
   rejects ambiguous legacy active-plus-terminal authority chains. Host rollout remains disabled
