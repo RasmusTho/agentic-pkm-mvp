@@ -638,6 +638,23 @@ def test_committed_inquiry_intent_config_is_provider_free_and_value_free() -> No
     )
 
 
+def test_owner_docs_keep_capability_contract_separate_from_current_codex_profile() -> None:
+    """Parent acceptance must not turn today's profile into workflow authority."""
+    readme = Path("docs/BUILDEROPS_MODEL_INQUIRY/README.md").read_text(encoding="utf-8")
+    adapters = Path(
+        "docs/BUILDEROPS_MODEL_INQUIRY/MODEL_TURN_ADAPTERS.md"
+    ).read_text(encoding="utf-8")
+
+    for document in (readme, adapters):
+        assert "provider-neutral capability/configuration boundary" in document
+        assert "current Codex-only operational profile" in document
+        assert "provider/model changes remain" in document
+        assert "configuration-only" in document
+        assert "Fable/GPT references are" in document
+        assert "compatibility/provenance only" in document
+        assert "permanently configured as a Sol single-target" not in document
+
+
 def test_expired_interactive_session_is_not_a_generic_command_failure() -> None:
     adapter = LocalCommandAdapter(
         adapter_id="interactive-session",

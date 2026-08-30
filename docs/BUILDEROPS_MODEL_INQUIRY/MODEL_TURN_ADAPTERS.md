@@ -9,10 +9,12 @@ depends_on: [PRE_TICKET_INQUIRY_RECORDS.md]
 can_parallelize_with: []
 ---
 
-State: Implemented. Model Inquiry is permanently configured as explicit
-`single_target` acceptance over the `sol` Builder capability. The concrete provider/model remains
+State: Implemented. Model Inquiry uses explicit `single_target` acceptance through a
+provider-neutral capability/configuration boundary. The current Codex-only operational profile is
 declared in `docs/settings/models/providers.yaml`; inquiry intent and perspective code never choose
-that concrete target. The host-local subscription session is the sanctioned operational auth path.
+that concrete target. Future provider/model changes remain configuration-only, and Fable/GPT
+references are compatibility/provenance only. The host-local subscription session is the sanctioned
+operational auth path.
 
 # Model Turn Adapters
 
@@ -23,8 +25,15 @@ provider/model selection in the Builder Model Access resolver.
 
 ## Contract
 
+The contract keeps capability and acceptance semantics separate from operational selection: the
+provider-neutral capability/configuration boundary resolves the current Codex-only operational
+profile. Future provider/model changes remain configuration-only. Fable/GPT references are
+compatibility/provenance only, so compatibility reads cannot reactivate provider selection,
+transport selection, or the acceptance target.
+
 The caller supplies `BUILDEROPS_INQUIRY_ROLE_INTENT_JSON`, a provider-free document containing the
-runtime, channel, consumer, explicit `single_target` acceptance mode, `sol` capability, ordered
+runtime, channel, consumer, explicit `single_target` acceptance mode, a Model Inquiry capability,
+ordered
 neutral perspectives (`synthesis`, `verification`), and the neutral turn intent. It contains no
 provider, model, endpoint, credential, command, or host field. The committed example is
 `config/builderops/model_inquiry_role_intent.example.json`.
@@ -35,7 +44,7 @@ and logical credential identifier from declared sources, verifies capabilities, 
 credential only at the transport boundary. The API adapter and the subscription bridge receive the
 same resolved target; neither performs a second target selection.
 
-The census binds Model Inquiry to the configured `sol` execution profile and declares the compatible
+The census binds Model Inquiry to the configured execution profile and declares the compatible
 `codex_subscription` operational transport in every Builder channel. The model ID may therefore
 change in configuration without changing this workflow, its perspectives, or its acceptance
 semantics; an incompatible transport is rejected before execution. General capability routing and
@@ -59,10 +68,10 @@ fingerprints, a failed second adapter, or a fallback. A provider failure, malfor
 missing credential, or persistence failure remains a typed terminal failure and cannot be promoted.
 
 The operational subscription bridge is the declared `codex_subscription` transport for the current
-Sol capability. It receives the resolver-selected model and never selects another provider/model.
+configured capability. It receives the resolver-selected model and never selects another provider/model.
 Active v2 single-target execution does not use a second same-identity adapter as fallback; a
 provider/command failure is terminal for that target. Legacy v1 records remain readable and
-deterministic, but legacy execution is not reactivated through the permanent Sol path. The desktop
+deterministic, but legacy execution is not reactivated through the current configured path. The desktop
 launcher invokes the host-local launcher once; it does not retry the inquiry.
 
 ## Credentials and host boundary
@@ -113,7 +122,7 @@ scripts/builderops_cli.sh builderops inquiry run <inquiry-id> --max-rounds 5 --j
 - [x] The runner durably terminates at acceptance, maximum rounds, provider refusal, malformed
   output, unavailable provider, provider error, or persistence failure. Verify:
   `tests/builderops/test_model_inquiry_runner.py::test_runner_records_all_terminal_conditions`.
-- [x] The configured Sol capability is resolved once and shared by API and subscription adapters;
+- [x] The configured Model Inquiry capability is resolved once and shared by API and subscription adapters;
   inquiry code contains no concrete target selection. Verify:
   `tests/settings/test_provider_census.py::test_model_inquiry_profiles_bind_configured_capability`
   and `tests/builderops/test_model_inquiry_adapters.py::test_model_inquiry_has_no_hardcoded_target_selection`.

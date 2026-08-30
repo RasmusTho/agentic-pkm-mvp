@@ -1,12 +1,14 @@
-State: BMI-01 through BMI-05 are implemented; Model Inquiry acceptance is permanently configured
-as a Sol single-target run, and parent end-to-end acceptance remains pending. The
-configured remote host owns its subscription session and host-specific launcher settings. Under
-ADR-0064's 2026-07-30 owner-cost ruling, that subscription-backed session is the sanctioned
-operational auth for host-local Builder model inquiry. The provider-free intent, declared
-provider-API adapters, and high-reasoning policy remain versioned for any future metered path, but
-their API-key identifiers are intentionally unprovisioned and currently fail closed as
-`credential_unavailable`. The Model Inquiry subscription exception is never a CKM source or
-fallback.
+State: BMI-01 through BMI-05 are implemented; parent acceptance remains pending under #3288. The
+durable Model Inquiry contract uses a provider-neutral capability/configuration boundary: the
+current Codex-only operational profile is selected by declared configuration, while future
+provider/model changes remain configuration-only. Fable/GPT references are
+compatibility/provenance only and cannot select an active route. The configured remote host owns
+its subscription session and host-specific launcher settings. Under ADR-0064's 2026-07-30
+owner-cost ruling, that subscription-backed session is the sanctioned operational auth for
+host-local Builder model inquiry. The provider-free intent, declared provider-API adapters, and
+high-reasoning policy remain versioned for any future metered path, but their API-key identifiers
+are intentionally unprovisioned and currently fail closed as `credential_unavailable`. The Model
+Inquiry subscription exception is never a CKM source or fallback.
 Doc role: Specification directory
 Authority: Defines the BuilderOps pre-ticket model-inquiry capability and its task decomposition. BuilderOps Vault authority remains owned by ADR-0010.
 Owner: BuilderOps governance
@@ -17,7 +19,7 @@ Source of truth: ADR-0010, BuilderOps Vault contracts, and this directory for ta
 # BuilderOps Model Inquiry
 
 BuilderOps Model Inquiry turns one development question into a bounded, pre-ticket collaboration
-between two neutral review perspectives over one configured Sol target. It stores the question, context packets, model turns, synthesis,
+between two neutral review perspectives over one resolver-selected target. It stores the question, context packets, model turns, synthesis,
 readiness outcome, and promotion evidence in the BuilderOps plane. It does not make a GitHub Issue
 until the result is executable work.
 
@@ -30,9 +32,14 @@ its advisory claim files never guarantee exclusive ownership.
 
 ## Scope
 
+The inquiry intent and workflow roles stay provider-neutral. A single declared capability/configuration
+boundary resolves the current Codex-only operational profile. Future provider/model changes remain
+configuration-only; Fable/GPT references are compatibility/provenance only and never reactivate a
+provider, transport, or acceptance target.
+
 - one command/API request creates an `inquiry_id` before any ticket or Issue exists;
 - the neutral `synthesis` and `verification` perspectives receive structured context packets over
-  the same configured Sol target; this is explicit single-target acceptance, not independent
+  the same resolver-selected target; this is explicit single-target acceptance, not independent
   consensus and not a fallback claim;
 - every model turn is traceable to its input artifacts, model identity, run, and content hash;
 - a deterministic readiness gate decides `issue_ready`, `needs_input`, or `not_ready`;
@@ -58,7 +65,7 @@ BMI-02 stores its durable record graph under
 
 BMI-03 adds `builderops inquiry run`. Its `--dry-run` mode is deterministic and read-only;
 provider-enabled mode uses explicit neutral perspective adapters, strict response validation,
-durable terminal receipts, and one target resolved from the configured Sol capability. The
+durable terminal receipts, and one target resolved from the configured Model Inquiry capability. The
 subscription path may retry an eligible failed command for that same resolved target, but it never
 selects a second provider/model or claims independent consensus.
 
@@ -68,7 +75,7 @@ perspective adapters, subscription session, and durable artifacts; its authentic
 remain outside Git. The current host-local operational path uses the sanctioned subscription-backed
 session through `yggdrasil-model-inquiry` under the owner-cost ruling. The versioned provider-API
 path remains a separate dormant mechanism under `yggdrasil-model-inquiry-provider-api`:
-it submits provider-free intent, resolves the configured Sol capability through the Builder census, and requires
+it submits provider-free intent, resolves the configured Model Inquiry capability through the Builder census, and requires
 explicit `xhigh` reasoning, but intentionally absent metered credentials produce a durable typed
 `credential_unavailable` receipt before any adapter call. That failure does not select a subscription
 or cross-provider fallback. The explicit Model Inquiry subscription exception is confined to this
@@ -106,7 +113,7 @@ is delivered. No task is ready to make a Product/Runtime write.
 5. **Traceability survives partial failure.** Each completed turn is persisted before a successor
    call. A worker restart can resume from the latest committed turn without replaying an accepted
    provider call. Duplicate command retries use idempotency keys. Legacy v1 records remain readable;
-   only the v2 permanent Sol path is executable after the migration boundary.
+   only the v2 current configured path is executable after the migration boundary.
 
 Partial failure examples:
 
@@ -114,7 +121,7 @@ Partial failure examples:
   an untraceable run.
 - If a provider call succeeds but receipt persistence fails, the run remains incomplete and the
   provider output is not treated as an accepted turn.
-- If the configured Sol target is unavailable, the run ends with a typed provider failure and cannot
+- If the configured target is unavailable, the run ends with a typed provider failure and cannot
   be promoted. A successful run ends `single_target_acceptance` with `independence: false`; it never
   becomes `consensus` merely because both neutral perspectives agree.
 - If the models reach their round limit without a common accepted artifact hash, the inquiry ends
