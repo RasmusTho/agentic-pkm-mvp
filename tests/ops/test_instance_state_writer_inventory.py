@@ -546,6 +546,25 @@ def test_collision_error_names_both_domains(tmp_path):
     assert str(shared_root) not in message
 
 
+def test_nested_roots_collide_across_domains(tmp_path):
+    parent_root = tmp_path / "parent-vault"
+    child_root = parent_root / "child-vault"
+    child_root.mkdir(parents=True)
+    records = [
+        writer_inventory.LegacyOwnerRecord("dev", str(child_root), source="config_env"),
+        writer_inventory.LegacyOwnerRecord("prod", str(parent_root), source="config_env"),
+    ]
+
+    with pytest.raises(InventoryError, match="collide across domains") as excinfo:
+        writer_inventory._normalize_legacy_owners(records)
+
+    message = str(excinfo.value)
+    assert "domain_a=dev" in message
+    assert "domain_b=prod" in message
+    assert str(parent_root) not in message
+    assert str(child_root) not in message
+
+
 def test_inventory_errors_never_emit_raw_paths(tmp_path):
     """No emitted error, log line, or receipt may contain a raw host path,
     vault name, or operator name. This asserts against the strings the

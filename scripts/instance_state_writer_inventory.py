@@ -1052,12 +1052,12 @@ def _normalize_legacy_owners(
                 continue
             if (
                 left_primary == right_primary
-                or left_primary in right_ancestors
-                or right_primary in left_ancestors
+                or f"path:{right.root}" in left_ancestors
+                or f"path:{left.root}" in right_ancestors
             ):
                 shared_id = (
                     left_primary
-                    if left_primary == right_primary or left_primary in right_ancestors
+                    if left_primary == right_primary
                     else right_primary
                 )
                 raise InventoryError(
