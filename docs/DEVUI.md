@@ -639,8 +639,10 @@ reviewed `yggdrasil-constrained-reuse.v1` receipt only after #4834 has merged st
 must map every visual and interaction decision to exact shipped Cockpit patterns and accepted token
 declarations, list every allowed layout or interaction transformation, normalize external font
 imports to a hash-bound local-system-font/no-egress subset, and cover the complete state and
-accessibility matrix with zero novel visual language. This governance change does not accept #4746.
-#4746 remains blocked until those fixtures exist and one such receipt passes independent review.
+accessibility matrix with zero novel visual language. The exact-reuse route described here was
+accepted by #4746 for the merged #4836 shell on 2026-08-30, after the required independent review
+and exact-ref browser evidence. This section remains a pre-handoff hypothesis and does not itself
+carry the receipt.
 
 If any proposed or final delta is novel, mixed, or unknown, or lies outside the reviewed reuse
 envelope, the live Yggdrasil design-system gate remains mandatory. Only that live route may revise
@@ -717,7 +719,8 @@ delivered by #4841: `127.0.0.1:8113` loopback host publication, local-Host/no-fo
 an exact two-GET allowlist, and a fresh upstream request with no client identity or credentials.
 The read endpoint is `http://127.0.0.1:8113/devui/overview`; #4841 is transport only: it adds no
 page or asset route, and port `18000` remains direct API health/version diagnostics.
-#4836 must consume this transport unchanged, and #4833 must verify its published candidate.
+#4836 must consume this transport unchanged; #4833 must verify its published candidate. The merged
+shell is verified by #4748 at final post-merge `main`.
 
 The #4836 implementation candidate packages `/devui/overview`,
 `/devui/focus?subject=...`, and their same-origin assets in the committed
@@ -730,17 +733,17 @@ effect-free, storage-free, and render source text as text rather than markup. Th
 `yggdrasil-constrained-reuse.v1` manifest binds its complete subtree inventory and Git tree to exact
 shipped Cockpit/token source objects and a closed transform set.
 
-This is candidate truth, not delivered or accepted UI truth. #4836 remains pre-merge until #4746
-independently accepts the exact constrained-reuse candidate and #4833/#4842 records exact-ref
-browser/accessibility proof for the published candidate head. Until those receipts and merge exist,
-the “Not delivered now” shell statements below remain authoritative.
+PR #5157 has now delivered the connected read-only shell in the repository, after #4746 accepted
+the exact constrained-reuse candidate and #4833/#4842 supplied exact-ref browser/accessibility
+evidence for its pre-merge head. This is delivered repository truth, not production-deployed or
+owner-accepted UI truth. #4748 must still rerun the exact-ref proof at final post-merge `main`, and
+#4749 owns the later deployment and owner-pilot gates.
 
-Not delivered now: one devUI shell; request/preview/authenticated approval in one owner experience;
-PostgreSQL authority cutover; full live run controls; receipt-to-CKM reassessment in the unified
-surface; Focus browser UI, capability-subject route, and Overview-to-Focus
-navigation; provider conversation runtime; authenticated command preview/Start/Hold;
-the Builder System Control lens; visual shell; owner pilot and tried-by-owner acceptance; and
-ADR-0065 dispositions.
+Not delivered now: request/preview/authenticated approval in one owner experience; PostgreSQL
+authority cutover; full live run controls; receipt-to-CKM reassessment in the unified surface;
+provider conversation runtime; authenticated command preview/Start/Hold; the Builder System
+Control lens; production deployment; owner pilot and tried-by-owner acceptance; and ADR-0065
+dispositions.
 
 The target turns the current cockpits and Signboard from competing owner destinations into internal
 providers: Direction B stays an exportable/static evidence fallback, BuilderOps Cockpit supplies
