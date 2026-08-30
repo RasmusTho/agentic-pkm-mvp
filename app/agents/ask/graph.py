@@ -50,6 +50,19 @@ DEFAULT_PROVISIONAL_RECALL_RECEIPTS_PATH = Path(
 _ASK_LAST_ACTIVE_LOADED_ATTR = "_ask_recall_last_active_loaded"
 
 
+def is_return_orientation_query(query: str) -> bool:
+    """Identify the bounded return-after-interruption read path."""
+
+    normalized = query.casefold()
+    return "interrupt" in normalized or "returning" in normalized or "resume" in normalized
+
+
+def is_background_orientation_evidence(payload: dict[str, Any]) -> bool:
+    """Use the canonical indexed evidence role; never a fixture-only orientation flag."""
+
+    return payload.get("evidence_role") == "background"
+
+
 def _active_scope(state: AgentState) -> str | None:
     """This turn's active scope: the explicit per-request binding, else the ambient default.
 
@@ -139,6 +152,15 @@ def _rerank_node(state: AgentState, *, ask_settings) -> AgentState:
 
     top_k_llm = max(1, int(ask_settings.max_context_docs or 10))
     state.hits = sorted_hits[:top_k_llm]
+    if is_return_orientation_query(state.query):
+        # This must happen before recall/answer nodes assemble the ContextEnvelope,
+        # evaluate synthesis admission, or generate an answer. Keeping background
+        # material out of `state.hits` therefore also keeps source attribution aligned.
+        state.hits = [
+            hit
+            for hit in state.hits
+            if not is_background_orientation_evidence(hit.payload)
+        ]
     return state
 
 

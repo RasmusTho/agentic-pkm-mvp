@@ -8,7 +8,7 @@ from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import JSONResponse
 from pydantic import AliasChoices, BaseModel, Field
 
-from app.agents.ask.graph import run_ask_graph
+from app.agents.ask.graph import is_background_orientation_evidence, run_ask_graph
 from app.agents.ask.utils import get_ask_settings
 from app.components.llm.fabric import LLMBackendTimeout
 from app.events.models import new_trace_id
@@ -186,9 +186,8 @@ def _capture_intent_suggestion(transcript: str) -> str | None:
 def _orientation_of(payload: dict[str, Any], path: str | None) -> Literal["active", "waiting", "supporting", "background"]:
     """Derive a bounded, read-only orientation label from retrieved evidence."""
 
-    declared = payload.get("orientation_role")
-    if declared in {"active", "waiting", "supporting", "background"}:
-        return declared
+    if is_background_orientation_evidence(payload):
+        return "background"
     normalized_path = (path or "").casefold()
     if "/sources/" in normalized_path or normalized_path.startswith("sources/"):
         return "supporting"
@@ -224,11 +223,6 @@ def _to_source(hit: Any) -> AskSource:
     )
 
 
-def _is_return_orientation_question(question: str) -> bool:
-    normalized = question.casefold()
-    return "interrupt" in normalized or "returning" in normalized or "resume" in normalized
-
-
 @router.post("/ask", response_model=AskResponse)
 async def ask(req: AskRequest, request: Request) -> AskResponse:
     if not _HYBRID_WARMED:
@@ -260,8 +254,6 @@ async def ask(req: AskRequest, request: Request) -> AskResponse:
     latency_ms = int((time.perf_counter() - start) * 1000)
     record_ask_query(float(latency_ms))
     sources = [_to_source(hit) for hit in top_hits]
-    if _is_return_orientation_question(req.question):
-        sources = [source for source in sources if source.orientation != "background"]
     recalled = [
         RecallAttribution(
             memory_id=exp.artifact_id,

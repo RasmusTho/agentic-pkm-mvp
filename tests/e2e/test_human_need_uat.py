@@ -7,6 +7,7 @@ from uuid import uuid4
 import pytest
 from fastapi.testclient import TestClient
 
+from app.agents.ask import graph as ask_graph
 from app.api.app import app
 from app.api.routes import ask as ask_route
 from app.retrieval.hybrid import get_store as get_hybrid_store
@@ -64,7 +65,13 @@ def _seed_orientation_pack(tmp_path: Path) -> dict[str, Path]:
                     "Atlas migration is the active project. Current focus: migrate the API gateway. "
                     "Next step: draft the migration checklist and schedule the rollout review."
                 ),
-                "payload": {"uuid": "atlas-active", "title": "Atlas Migration", "origin": "vault", "plane": "vault", "orientation_role": "active"},
+                "payload": {
+                    "uuid": "atlas-active",
+                    "title": "Atlas Migration",
+                    "origin": "vault",
+                    "plane": "vault",
+                    "evidence_role": "evidence",
+                },
             },
             {
                 "doc_id": "atlas-waiting",
@@ -73,24 +80,80 @@ def _seed_orientation_pack(tmp_path: Path) -> dict[str, Path]:
                     "Atlas migration waiting item. Blocked pending finance approval and vendor confirmation. "
                     "Do not treat this as the next action."
                 ),
-                "payload": {"uuid": "atlas-waiting", "title": "Atlas Waiting", "origin": "vault", "plane": "vault", "orientation_role": "waiting"},
+                "payload": {
+                    "uuid": "atlas-waiting",
+                    "title": "Atlas Waiting",
+                    "origin": "vault",
+                    "plane": "vault",
+                    "evidence_role": "evidence",
+                },
             },
             {
                 "doc_id": "atlas-source",
                 "source_ref": str(source_note),
                 "text": "Vendor migration memo for Atlas. Confirms gateway deprecation window and required cutover steps.",
-                "payload": {"uuid": "atlas-source", "title": "Vendor Memo", "origin": "vault", "plane": "vault", "orientation_role": "supporting"},
+                "payload": {
+                    "uuid": "atlas-source",
+                    "title": "Vendor Memo",
+                    "origin": "vault",
+                    "plane": "vault",
+                    "evidence_role": "reference",
+                },
             },
             {
                 "doc_id": "unrelated-garden",
                 "source_ref": str(unrelated_note),
                 "text": "Garden seedlings note about watering tomatoes and spring soil temperature.",
-                "payload": {"uuid": "unrelated-garden", "title": "Seedlings", "origin": "vault", "plane": "vault", "orientation_role": "background"},
+                "payload": {
+                    "uuid": "unrelated-garden",
+                    "title": "Seedlings",
+                    "origin": "vault",
+                    "plane": "vault",
+                    "evidence_role": "background",
+                },
             },
         ]
     )
     ask_route._HYBRID_WARMED = True
     return {"active": active_note, "waiting": waiting_note, "source": source_note, "unrelated": unrelated_note}
+
+
+def test_human_uat_orientation_classifies_production_indexed_background(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _reset_runtime_state(monkeypatch)
+    paths = _seed_orientation_pack(tmp_path)
+
+    response = TestClient(app).post("/api/ask", json={"question": "What indexed material is available?"})
+    assert response.status_code == 200, response.text
+
+    sources_by_path = {source["path"]: source for source in response.json()["sources"]}
+    assert sources_by_path[str(paths["unrelated"])]["orientation"] == "background"
+
+
+def test_human_uat_orientation_filters_background_before_synthesis(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _reset_runtime_state(monkeypatch)
+    paths = _seed_orientation_pack(tmp_path)
+    captured: dict[str, str] = {}
+
+    def _fake_llm_answer(question: str, context: str, _ask_settings: object) -> tuple[str, dict[str, str]]:
+        captured["context"] = context
+        return "Synthesized orientation.", {"provider": "mock"}
+
+    monkeypatch.setattr(ask_graph, "llm_answer", _fake_llm_answer)
+    response = TestClient(app).post(
+        "/api/ask",
+        json={"question": "I am returning to the Atlas migration after interruption. What was I doing?"},
+    )
+    assert response.status_code == 200, response.text
+
+    payload = response.json()
+    returned_source_ids = {source["uuid"] for source in payload["sources"]}
+    assert str(paths["unrelated"]) not in {source["path"] for source in payload["sources"]}
+    assert "Seedlings" not in captured["context"]
+    assert set(payload["synthesis_source_ids"]).issubset(returned_source_ids)
 
 
 def test_human_uat_return_after_interruption_orientation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
