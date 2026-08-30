@@ -36,6 +36,7 @@ class PromotionReceiptRow:
     timestamp: str
     artifact_uuid: str | None
     artifact_path: str | None
+    vault_id: str | None
     transition_family: str | None
     target_maturity: str | None
     review_state: str | None
@@ -189,6 +190,7 @@ def _project_transition_applied(
             timestamp=timestamp,
             artifact_uuid=artifact_uuid,
             artifact_path=artifact_path,
+            vault_id=first_str(payload.get("vault_id")),
             transition_family=first_str(payload.get("transition_family"), "promotion"),
             target_maturity=target_maturity,
             review_state=first_str(outcome.get("review_state")),

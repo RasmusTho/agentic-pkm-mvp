@@ -184,6 +184,15 @@ def _active_recall_vault_root() -> Path | None:
     return None
 
 
+def _active_recall_vault_id(vault_root: Path | None) -> str | None:
+    if vault_root is None:
+        return None
+    context = get_vault_manager().context
+    if context.status == "selected" and context.active_vault_id:
+        return context.active_vault_id
+    return f"path:{vault_root.expanduser().resolve()}"
+
+
 def _source_artifact_path(candidate: RecallCandidate, vault_root: Path | None) -> Path | None:
     if not candidate.artifact_path:
         return None
@@ -202,11 +211,15 @@ def _recall_node(
     vault_root = _active_recall_vault_root()
     # The same scope retrieval used for this turn (#2921), under the same precedence rule.
     active_scope = _active_scope(state)
+    active_vault_id = (
+        _active_recall_vault_id(vault_root) if active_scope is not None else None
+    )
     candidates = retrieve_relevant_promoted(
         state.query,
         k=RECALL_TOP_K,
         vault_root=vault_root,
         active_scope_id=active_scope,
+        active_vault_id=active_vault_id,
     )
     provisional = (
         retrieve_relevant_provisional(

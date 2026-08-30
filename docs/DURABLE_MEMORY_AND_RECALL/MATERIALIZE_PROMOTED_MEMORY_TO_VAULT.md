@@ -46,11 +46,14 @@ decision.)
 **Scope producer invariant.** A semantic candidate must carry an explicit `scope_id` before
 materialization. The materializer refuses a missing or invalid binding before any artifact or
 transition receipt is written. It serializes the persisted `PROMOTE` decision from nonterminal state
-through note and receipt creation to the terminal transition, requiring the in-memory candidate and
-persisted decision to carry the same immutable scope. This allows one successful materializer and
-prevents a revoked, repeated, or competing materializer from writing. The persisted binding is
+through a durable `materializing` reservation, note and receipt creation, and the terminal
+transition. The reservation binds the immutable scope, candidate digest, and original reviewer
+authority; once it exists, reject/revise cannot replace the decision after an indeterminate external
+write. This allows one successful materializer and prevents a revoked, changed, repeated, or
+competing materializer from writing. The persisted binding is
 written to both note and receipt; legacy unscoped artifacts remain unchanged. Bound recall denies
-unscoped artifacts fail closed; unbound recall retains its existing behavior.
+unscoped artifacts fail closed and requires scope, candidate, artifact UUID, and selected vault to
+match the applied receipt; unbound recall retains its existing behavior.
 
 Late failures are resumed idempotently. The materialization identity is stable per
 vault/channel/candidate. A retry validates and reuses an existing applied receipt plus its

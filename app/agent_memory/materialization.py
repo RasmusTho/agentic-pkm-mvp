@@ -11,8 +11,10 @@ import yaml
 
 from app.agent_memory.candidate import MemoryType, validated_memory_scope_id
 from app.agent_memory.review_decision_store import (
+    ReviewDecisionRecord,
     ReviewDecisionStore,
     ReviewDecisionStoreError,
+    review_candidate_digest,
 )
 from app.agent_memory.review_queue import ReviewDecision, ReviewEntry, ReviewStatus
 from app.events.types import PROMOTION_TRANSITION_APPLIED
@@ -92,6 +94,7 @@ def materialize_promoted_memory(
             vault_context=vault_context,
             channel=channel,
             expected_scope_id=requested_scope_id,
+            expected_candidate_digest=review_candidate_digest(entry),
         ) as persisted:
             persisted_scope_id = persisted.scope_id
             if persisted_scope_id is None:
@@ -104,6 +107,8 @@ def materialize_promoted_memory(
                 vault_root=vault_root,
                 outbox_path=outbox_path,
                 scope_id=persisted_scope_id,
+                persisted=persisted,
+                vault_id=_materialization_vault_identity(vault_context),
             )
             if recovered_receipt is not None:
                 artifact_path = recovered_receipt.artifact_path
@@ -113,6 +118,7 @@ def materialize_promoted_memory(
                     memory_dir=memory_dir,
                     entry=entry,
                     scope_id=persisted_scope_id,
+                    persisted=persisted,
                 )
                 if recovered_note is None:
                     artifact_uuid = _stable_materialization_id(
@@ -135,6 +141,7 @@ def materialize_promoted_memory(
                                 entry,
                                 artifact_uuid=artifact_uuid,
                                 scope_id=persisted_scope_id,
+                                persisted=persisted,
                             ),
                             vault_root=vault_root,
                         )
@@ -150,6 +157,7 @@ def materialize_promoted_memory(
                             scope_id=persisted_scope_id,
                             status="failed",
                             error=str(exc),
+                            decided_by=persisted.decided_by,
                         )
                         raise MemoryMaterializationError(
                             f"memory materialization failed; receipt={failed_receipt_id}"
@@ -168,6 +176,7 @@ def materialize_promoted_memory(
                     scope_id=persisted_scope_id,
                     status="applied",
                     receipt_id=receipt_id,
+                    decided_by=persisted.decided_by,
                 )
                 recovered_receipt = _recover_applied_receipt(
                     receipt_id,
@@ -175,6 +184,8 @@ def materialize_promoted_memory(
                     vault_root=vault_root,
                     outbox_path=outbox_path,
                     scope_id=persisted_scope_id,
+                    persisted=persisted,
+                    vault_id=_materialization_vault_identity(vault_context),
                 )
                 if recovered_receipt is None:
                     raise MemoryMaterializationError(
@@ -182,6 +193,12 @@ def materialize_promoted_memory(
                     )
     except ReviewDecisionStoreError as exc:
         raise MemoryMaterializationError(str(exc)) from exc
+    except MemoryMaterializationError:
+        raise
+    except Exception as exc:
+        raise MemoryMaterializationError(
+            "memory materialization interrupted; retry will reconcile durable effects"
+        ) from exc
 
     return MemoryMaterializationResult(
         status="materialized",
@@ -246,18 +263,22 @@ def _stable_materialization_id(
     vault_context: VaultContext,
     channel: str,
 ) -> str:
-    vault_identity = vault_context.active_vault_id
-    if not vault_identity:
-        if not vault_context.active_vault_path:
-            raise MemoryMaterializationError(
-                "vault identity is required for stable materialization"
-            )
-        vault_identity = f"path:{Path(vault_context.active_vault_path).expanduser().resolve()}"
+    vault_identity = _materialization_vault_identity(vault_context)
     identity = (
         f"agent-memory-materialization:{kind}:"
         f"{vault_identity}:{channel}:{entry.candidate_id}"
     )
     return uuid5(NAMESPACE_URL, identity).hex
+
+
+def _materialization_vault_identity(vault_context: VaultContext) -> str:
+    if vault_context.active_vault_id:
+        return vault_context.active_vault_id
+    if not vault_context.active_vault_path:
+        raise MemoryMaterializationError(
+            "vault identity is required for stable materialization"
+        )
+    return f"path:{Path(vault_context.active_vault_path).expanduser().resolve()}"
 
 
 def _recover_applied_receipt(
@@ -267,6 +288,8 @@ def _recover_applied_receipt(
     vault_root: Path,
     outbox_path: Path | None,
     scope_id: str,
+    persisted: ReviewDecisionRecord,
+    vault_id: str,
 ) -> PromotionReceiptRow | None:
     result = query_promotion_receipts(
         PromotionReceiptQuery(receipt_or_source_event_id=receipt_id),
@@ -283,6 +306,7 @@ def _recover_applied_receipt(
     row = matches[0]
     if (
         row.outcome_status != "applied"
+        or row.vault_id != vault_id
         or row.basis.get("candidate_id") != entry.candidate_id
         or row.basis.get("scope_id") != scope_id
         or row.artifact_uuid is None
@@ -301,6 +325,7 @@ def _recover_applied_receipt(
         entry,
         artifact_uuid=row.artifact_uuid,
         scope_id=scope_id,
+        persisted=persisted,
     ):
         raise MemoryMaterializationError(
             "persisted memory materialization artifact content changed"
@@ -314,6 +339,7 @@ def _find_materialized_note(
     memory_dir: str,
     entry: ReviewEntry,
     scope_id: str,
+    persisted: ReviewDecisionRecord,
 ) -> tuple[str, str] | None:
     root = vault_root / _safe_rel_path(memory_dir)
     if not root.exists():
@@ -332,6 +358,7 @@ def _find_materialized_note(
             entry,
             artifact_uuid=identity[2],
             scope_id=scope_id,
+            persisted=persisted,
         ):
             raise MemoryMaterializationError(
                 "candidate-bound recovery artifact content changed"
@@ -401,6 +428,7 @@ def _render_memory_note(
     *,
     artifact_uuid: str,
     scope_id: str,
+    persisted: ReviewDecisionRecord,
 ) -> str:
     candidate = entry.candidate
     frontmatter = {
@@ -415,8 +443,8 @@ def _render_memory_note(
         "inferred": candidate.inferred,
         "generated_by": candidate.generated_by,
         "derived_from": candidate.derived_from,
-        "decided_by": entry.decided_by,
-        "decided_at": _iso(entry.decided_at),
+        "decided_by": persisted.decided_by,
+        "decided_at": _iso(persisted.decided_at),
     }
     body = candidate.content or candidate.title
     yaml_block = yaml.safe_dump(frontmatter, sort_keys=True, allow_unicode=False).strip()
@@ -436,6 +464,7 @@ def _append_promotion_receipt(
     status: str,
     error: str | None = None,
     receipt_id: str | None = None,
+    decided_by: str | None = None,
 ) -> str:
     receipt_id = receipt_id or uuid4().hex
     timestamp = _iso(datetime.now(timezone.utc))
@@ -444,7 +473,7 @@ def _append_promotion_receipt(
         "intent_event_id": f"memory-promote:{entry.candidate_id}",
         "source_event": f"memory-promote:{entry.candidate_id}",
         "trace_id": trace_id,
-        "vault_id": vault_context.active_vault_id,
+        "vault_id": _materialization_vault_identity(vault_context),
         "channel": channel,
         "artifact_uuid": artifact_uuid,
         "artifact_path": artifact_path,
@@ -455,7 +484,7 @@ def _append_promotion_receipt(
             "mode": "governed_execution",
             "component": MEMORY_MATERIALIZATION_SOURCE,
             "executor": MEMORY_MATERIALIZATION_SOURCE,
-            "requested_by": entry.decided_by,
+            "requested_by": decided_by or entry.decided_by,
         },
         "basis": {
             "source_event": f"memory-promote:{entry.candidate_id}",

@@ -12,6 +12,7 @@ from app.agent_memory.review_decision_store import (
     ReviewDecisionStore,
     ReviewDecisionStoreError,
     _default_db_path,
+    review_candidate_digest,
 )
 from app.agent_memory.review_queue import MemoryCandidateReviewQueue, ReviewDecision
 from app.vault.manager import VaultContext
@@ -273,6 +274,7 @@ def test_materialization_transaction_serializes_competing_writers(
             vault_context=vault,
             channel="test",
             expected_scope_id=candidate.scope_id,
+            expected_candidate_digest=review_candidate_digest(decided),
         ):
             first_entered.set()
             assert release_first.wait(timeout=2)
@@ -284,6 +286,7 @@ def test_materialization_transaction_serializes_competing_writers(
             vault_context=vault,
             channel="test",
             expected_scope_id=candidate.scope_id,
+            expected_candidate_digest=review_candidate_digest(decided),
         ):
             second_entered.set()
 

@@ -11,7 +11,10 @@ from app.agent_memory.materialization import (
     MemoryMaterializationError,
     materialize_promoted_memory,
 )
-from app.agent_memory.review_decision_store import ReviewDecisionStore
+from app.agent_memory.review_decision_store import (
+    ReviewDecisionStore,
+    ReviewDecisionStoreError,
+)
 from app.agent_memory.review_queue import MemoryCandidateReviewQueue, ReviewDecision
 from app.receipts.promotion_receipts import query_promotion_receipts
 from app.vault.manager import VaultContext
@@ -295,7 +298,7 @@ def test_retry_reconciles_applied_receipt_after_late_query_failure(
         "query_promotion_receipts",
         fail_post_append_query,
     )
-    with pytest.raises(RuntimeError, match="post-append query failure"):
+    with pytest.raises(MemoryMaterializationError, match="interrupted"):
         materialize_promoted_memory(
             entry,
             vault_context=vault,
@@ -307,17 +310,50 @@ def test_retry_reconciles_applied_receipt_after_late_query_failure(
 
     assert len(list(vault_root.rglob("*.md"))) == 1
     assert len(outbox.read_text(encoding="utf-8").splitlines()) == 1
-    assert store.get_decision(
+    interrupted = store.get_decision(
         entry.candidate_id, vault_context=vault, channel="test"
-    ).terminal is False
+    )
+    assert interrupted.terminal is False
+    assert interrupted.materializing is True
+
+    changed_candidate = entry.candidate.model_copy(
+        update={"content": "Changed candidate content after restart."}
+    )
+    changed_queue = MemoryCandidateReviewQueue()
+    changed_queue.enqueue(changed_candidate)
+    changed_retry = changed_queue.decide(
+        changed_candidate.candidate_id,
+        ReviewDecision.PROMOTE,
+        decided_by="companion-ui:restart-reviewer",
+    )
+    with pytest.raises(ReviewDecisionStoreError, match="content cannot change"):
+        store.record_decision(
+            changed_retry,
+            vault_context=vault,
+            channel="test",
+        )
 
     monkeypatch.setattr(
         materialization_module,
         "query_promotion_receipts",
         original_query,
     )
+    retry_queue = MemoryCandidateReviewQueue()
+    retry_queue.enqueue(entry.candidate)
+    retry_entry = retry_queue.decide(
+        entry.candidate_id,
+        ReviewDecision.PROMOTE,
+        decided_by="companion-ui:restart-reviewer",
+        notes="Retry after restart.",
+    )
+    persisted_retry = store.record_decision(
+        retry_entry,
+        vault_context=vault,
+        channel="test",
+    )
+    assert persisted_retry.decided_by == "companion-ui:reviewer"
     result = materialize_promoted_memory(
-        entry,
+        retry_entry,
         vault_context=vault,
         channel="test",
         decision_store=store,
@@ -328,9 +364,11 @@ def test_retry_reconciles_applied_receipt_after_late_query_failure(
     assert result.status == "materialized"
     assert len(list(vault_root.rglob("*.md"))) == 1
     assert len(outbox.read_text(encoding="utf-8").splitlines()) == 1
-    assert store.get_decision(
+    completed = store.get_decision(
         entry.candidate_id, vault_context=vault, channel="test"
-    ).terminal is True
+    )
+    assert completed.terminal is True
+    assert completed.materializing is False
 
 
 def test_retry_reuses_candidate_note_after_receipt_append_failure(
@@ -357,7 +395,7 @@ def test_retry_reuses_candidate_note_after_receipt_append_failure(
         "_append_promotion_receipt",
         fail_receipt_append,
     )
-    with pytest.raises(RuntimeError, match="receipt append failure"):
+    with pytest.raises(MemoryMaterializationError, match="interrupted"):
         materialize_promoted_memory(
             entry,
             vault_context=vault,
@@ -370,17 +408,38 @@ def test_retry_reuses_candidate_note_after_receipt_append_failure(
     first_note = next(vault_root.rglob("*.md"))
     first_body = first_note.read_text(encoding="utf-8")
     assert not outbox.exists()
-    assert store.get_decision(
+    interrupted = store.get_decision(
         entry.candidate_id, vault_context=vault, channel="test"
-    ).terminal is False
+    )
+    assert interrupted.terminal is False
+    assert interrupted.materializing is True
+
+    rejection_queue = MemoryCandidateReviewQueue()
+    rejection_queue.enqueue(entry.candidate)
+    rejection = rejection_queue.decide(
+        entry.candidate_id,
+        ReviewDecision.REJECT,
+        decided_by="companion-ui:restart-reviewer",
+    )
+    with pytest.raises(ReviewDecisionStoreError, match="in progress"):
+        store.record_decision(rejection, vault_context=vault, channel="test")
 
     monkeypatch.setattr(
         materialization_module,
         "_append_promotion_receipt",
         original_append,
     )
+    retry_queue = MemoryCandidateReviewQueue()
+    retry_queue.enqueue(entry.candidate)
+    retry_entry = retry_queue.decide(
+        entry.candidate_id,
+        ReviewDecision.PROMOTE,
+        decided_by="companion-ui:restart-reviewer",
+        notes="Retry after restart.",
+    )
+    store.record_decision(retry_entry, vault_context=vault, channel="test")
     result = materialize_promoted_memory(
-        entry,
+        retry_entry,
         vault_context=vault,
         channel="test",
         decision_store=store,
@@ -392,9 +451,11 @@ def test_retry_reuses_candidate_note_after_receipt_append_failure(
     assert first_note.read_text(encoding="utf-8") == first_body
     assert len(list(vault_root.rglob("*.md"))) == 1
     assert len(outbox.read_text(encoding="utf-8").splitlines()) == 1
-    assert store.get_decision(
+    completed = store.get_decision(
         entry.candidate_id, vault_context=vault, channel="test"
-    ).terminal is True
+    )
+    assert completed.terminal is True
+    assert completed.materializing is False
 
 
 def test_blocked_materialization_keeps_promotion_actionable(tmp_path: Path) -> None:

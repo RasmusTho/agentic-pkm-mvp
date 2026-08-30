@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import sqlite3
@@ -14,7 +15,7 @@ from app.agent_memory.review_queue import ReviewDecision, ReviewEntry
 from app.vault.manager import VaultContext
 
 REVIEW_DECISION_RECEIPT_KIND = "agent_memory.review_decision"
-REVIEW_DECISION_STORE_VERSION = 2
+REVIEW_DECISION_STORE_VERSION = 3
 _UNSET = object()
 
 
@@ -34,6 +35,8 @@ class ReviewDecisionRecord:
     revision_of: str | None = None
     generated_by: str | None = None
     derived_from: str | None = None
+    candidate_digest: str | None = None
+    materializing: bool = False
 
 
 class ReviewDecisionStoreError(ValueError):
@@ -84,6 +87,7 @@ class ReviewDecisionStore:
             revision_of=entry.revision_of,
             generated_by=entry.generated_by,
             derived_from=entry.derived_from,
+            candidate_digest=review_candidate_digest(entry),
         )
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
@@ -104,6 +108,19 @@ class ReviewDecisionStore:
                 if existing.scope_id != record.scope_id:
                     raise ReviewDecisionStoreError(
                         "candidate scope cannot change across review decisions"
+                    )
+                if (
+                    existing.candidate_digest is not None
+                    and existing.candidate_digest != record.candidate_digest
+                ):
+                    raise ReviewDecisionStoreError(
+                        "candidate content cannot change across review decisions"
+                    )
+                if existing.materializing:
+                    if record.outcome is ReviewDecision.PROMOTE:
+                        return existing
+                    raise ReviewDecisionStoreError(
+                        "review decision cannot change while materialization is in progress"
                     )
             conn.execute(
                 """
@@ -235,6 +252,7 @@ class ReviewDecisionStore:
         vault_context: VaultContext,
         channel: str,
         expected_scope_id: str,
+        expected_candidate_digest: str,
     ) -> Iterator[ReviewDecisionRecord]:
         """Serialize one promoted decision through artifact write and terminalization."""
 
@@ -268,6 +286,58 @@ class ReviewDecisionStore:
                 raise ReviewDecisionStoreError(
                     "candidate.scope_id does not match the persisted review decision"
                 )
+            if record.candidate_digest != expected_candidate_digest:
+                raise ReviewDecisionStoreError(
+                    "candidate content does not match the persisted review decision"
+                )
+            if not record.materializing:
+                materializing_record = replace(record, materializing=True)
+                conn.execute(
+                    """
+                    UPDATE agent_memory_review_decisions
+                    SET payload = ?
+                    WHERE vault_id = ? AND channel = ? AND candidate_id = ?
+                      AND outcome = ? AND terminal = 0
+                    """,
+                    (
+                        json.dumps(
+                            _record_payload(materializing_record),
+                            sort_keys=True,
+                            separators=(",", ":"),
+                        ),
+                        record.vault_id,
+                        record.channel,
+                        record.candidate_id,
+                        ReviewDecision.PROMOTE.value,
+                    ),
+                )
+                conn.commit()
+                conn.execute("BEGIN IMMEDIATE")
+                resumed_row = conn.execute(
+                    """
+                    SELECT payload
+                    FROM agent_memory_review_decisions
+                    WHERE vault_id = ? AND channel = ? AND candidate_id = ?
+                    """,
+                    (record.vault_id, record.channel, record.candidate_id),
+                ).fetchone()
+                if resumed_row is None:
+                    raise ReviewDecisionStoreError(
+                        "materializing review decision disappeared"
+                    )
+                record = _record_from_payload(json.loads(resumed_row["payload"]))
+                if record.terminal or record.outcome is not ReviewDecision.PROMOTE:
+                    raise ReviewDecisionStoreError(
+                        "promote decision changed before materialization resumed"
+                    )
+                if (
+                    record.scope_id != expected_scope_id
+                    or record.candidate_digest != expected_candidate_digest
+                    or not record.materializing
+                ):
+                    raise ReviewDecisionStoreError(
+                        "materialization authority changed before resume"
+                    )
 
             try:
                 yield record
@@ -275,7 +345,7 @@ class ReviewDecisionStore:
                 conn.rollback()
                 raise
 
-            terminal_record = replace(record, terminal=True)
+            terminal_record = replace(record, terminal=True, materializing=False)
             updated = conn.execute(
                 """
                 UPDATE agent_memory_review_decisions
@@ -384,6 +454,8 @@ def _record_payload(record: ReviewDecisionRecord) -> dict[str, Any]:
         "revision_of": record.revision_of,
         "generated_by": record.generated_by,
         "derived_from": record.derived_from,
+        "candidate_digest": record.candidate_digest,
+        "materializing": record.materializing,
     }
 
 
@@ -403,7 +475,15 @@ def _record_from_payload(payload: dict[str, Any]) -> ReviewDecisionRecord:
         revision_of=payload.get("revision_of"),
         generated_by=payload.get("generated_by"),
         derived_from=payload.get("derived_from"),
+        candidate_digest=payload.get("candidate_digest"),
+        materializing=bool(payload.get("materializing", False)),
     )
+
+
+def review_candidate_digest(entry: ReviewEntry) -> str:
+    payload = entry.candidate.model_dump(mode="json")
+    canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
 __all__ = [
@@ -411,4 +491,5 @@ __all__ = [
     "ReviewDecisionRecord",
     "ReviewDecisionStore",
     "ReviewDecisionStoreError",
+    "review_candidate_digest",
 ]

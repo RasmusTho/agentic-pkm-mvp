@@ -72,6 +72,7 @@ def read_promoted_memories(
     outbox_path: str | Path | None = None,
     records: Iterable[dict[str, Any]] | None = None,
     memory_dir: str = DEFAULT_MEMORY_DIR,
+    active_vault_id: str | None = None,
 ) -> list[PromotedMemory]:
     """Read materialized promoted memories back into frozen promotion artifacts."""
 
@@ -90,6 +91,7 @@ def read_promoted_memories(
             row,
             vault_root=resolved_root,
             memory_dir=memory_dir,
+            active_vault_id=active_vault_id,
         )
         if promoted is not None:
             memories.append(promoted)
@@ -105,6 +107,7 @@ def retrieve_relevant_promoted(
     records: Iterable[dict[str, Any]] | None = None,
     memory_dir: str = DEFAULT_MEMORY_DIR,
     active_scope_id: str | None = None,
+    active_vault_id: str | None = None,
 ) -> list[RecallCandidate]:
     """Return a scarce, relevance-ranked subset of scope-eligible promoted memories.
 
@@ -117,6 +120,8 @@ def retrieve_relevant_promoted(
         return []
     query_tokens = _tokens(query)
     if not query_tokens:
+        return []
+    if active_scope_id is not None and active_vault_id is None:
         return []
 
     resolved_root = _resolve_vault_root(vault_root)
@@ -134,6 +139,7 @@ def retrieve_relevant_promoted(
             row,
             vault_root=resolved_root,
             memory_dir=memory_dir,
+            active_vault_id=active_vault_id,
         )
         if promoted_with_scope is None:
             continue
@@ -211,11 +217,13 @@ def _promoted_from_row(
     *,
     vault_root: Path,
     memory_dir: str,
+    active_vault_id: str | None,
 ) -> PromotedMemory | None:
     promoted_with_scope = _promoted_from_row_with_scope(
         row,
         vault_root=vault_root,
         memory_dir=memory_dir,
+        active_vault_id=active_vault_id,
     )
     return promoted_with_scope[0] if promoted_with_scope is not None else None
 
@@ -225,6 +233,7 @@ def _promoted_from_row_with_scope(
     *,
     vault_root: Path,
     memory_dir: str,
+    active_vault_id: str | None,
 ) -> tuple[PromotedMemory, str | None] | None:
     if not row.artifact_path:
         return None
@@ -238,15 +247,26 @@ def _promoted_from_row_with_scope(
     frontmatter, body = load_frontmatter(raw)
     if not _is_agent_promoted_memory(frontmatter, row=row, memory_dir=memory_dir):
         return None
-    title, content = _title_and_content(body, fallback=note_path.stem)
-    candidate_id = _first_str(
-        frontmatter.get("promoted_from_candidate_id"),
-        row.artifact_linkage.get("candidate_id"),
-        row.basis.get("candidate_id"),
-        row.artifact_uuid,
-    )
-    if not candidate_id:
+    if active_vault_id is not None and row.vault_id != active_vault_id:
         return None
+    note_candidate_id = _first_str(frontmatter.get("promoted_from_candidate_id"))
+    basis_candidate_id = _first_str(row.basis.get("candidate_id"))
+    linkage_candidate_id = _first_str(row.artifact_linkage.get("candidate_id"))
+    note_artifact_uuid = _first_str(frontmatter.get("uuid"))
+    if (
+        note_candidate_id is None
+        or basis_candidate_id != note_candidate_id
+        or linkage_candidate_id != note_candidate_id
+        or note_artifact_uuid is None
+        or row.artifact_uuid != note_artifact_uuid
+    ):
+        return None
+    note_scope_id = validated_memory_scope_id(frontmatter.get("scope_id"))
+    receipt_scope_id = validated_memory_scope_id(row.basis.get("scope_id"))
+    if note_scope_id != receipt_scope_id:
+        return None
+    title, content = _title_and_content(body, fallback=note_path.stem)
+    candidate_id = note_candidate_id
     decided_at = _parse_datetime(
         _first_str(frontmatter.get("decided_at"), row.timestamp)
     )
@@ -263,7 +283,7 @@ def _promoted_from_row_with_scope(
         source_refs=source_refs,
         derived_from=_first_str(frontmatter.get("derived_from")),
         generated_by=_first_str(frontmatter.get("generated_by")),
-        scope_id=validated_memory_scope_id(frontmatter.get("scope_id")),
+        scope_id=note_scope_id,
         content=content,
         observed_at=decided_at,
     )
