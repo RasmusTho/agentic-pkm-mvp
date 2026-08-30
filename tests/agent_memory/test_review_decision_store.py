@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
 from pathlib import Path
+from threading import Event
 
 import pytest
 
@@ -10,6 +12,7 @@ from app.agent_memory.review_decision_store import (
     ReviewDecisionStore,
     ReviewDecisionStoreError,
     _default_db_path,
+    review_candidate_digest,
 )
 from app.agent_memory.review_queue import MemoryCandidateReviewQueue, ReviewDecision
 from app.vault.manager import VaultContext
@@ -33,6 +36,7 @@ def _candidate(*, title: str = "Observed user preference") -> MemoryCandidate:
         source_refs=["session:2026-06-13T09:00:00Z", "note:preferences.md"],
         derived_from="conversation:abc123",
         generated_by="companion_agent",
+        scope_id="scope:private/personal",
     )
 
 
@@ -66,6 +70,7 @@ def test_decisions_survive_restart(tmp_path: Path) -> None:
     assert record.candidate_id == candidate.candidate_id
     assert record.outcome is ReviewDecision.REJECT
     assert record.terminal is True
+    assert record.scope_id == candidate.scope_id
 
 
 def test_decision_store_is_vault_scoped(tmp_path: Path) -> None:
@@ -137,3 +142,165 @@ def test_decision_record_preserves_provenance(tmp_path: Path) -> None:
     assert record.generated_by == "companion_agent"
     assert record.derived_from == "conversation:abc123"
     assert record.terminal is False
+
+
+def test_persisted_candidate_scope_is_immutable(tmp_path: Path) -> None:
+    store = ReviewDecisionStore(tmp_path / "review_decisions.sqlite3")
+    vault = _vault("vault-a", tmp_path / "vault-a")
+    candidate = _candidate()
+    queue = MemoryCandidateReviewQueue()
+    queue.enqueue(candidate)
+    decided = queue.decide(
+        candidate.candidate_id,
+        ReviewDecision.PROMOTE,
+        decided_by="companion-ui:reviewer",
+    )
+    store.record_decision(decided, vault_context=vault, channel="test")
+
+    replacement = candidate.model_copy(update={"scope_id": "scope:work/project-a"})
+    replacement_queue = MemoryCandidateReviewQueue()
+    replacement_queue.enqueue(replacement)
+    replacement_decision = replacement_queue.decide(
+        replacement.candidate_id,
+        ReviewDecision.PROMOTE,
+        decided_by="companion-ui:reviewer",
+    )
+
+    with pytest.raises(ReviewDecisionStoreError, match="scope cannot change"):
+        store.record_decision(
+            replacement_decision,
+            vault_context=vault,
+            channel="test",
+        )
+
+    persisted = store.get_decision(
+        candidate.candidate_id,
+        vault_context=vault,
+        channel="test",
+    )
+    assert persisted is not None
+    assert persisted.scope_id == "scope:private/personal"
+    assert persisted.terminal is False
+
+
+def test_terminal_transition_compares_persisted_scope(tmp_path: Path) -> None:
+    store = ReviewDecisionStore(tmp_path / "review_decisions.sqlite3")
+    vault = _vault("vault-a", tmp_path / "vault-a")
+    candidate = _candidate()
+    queue = MemoryCandidateReviewQueue()
+    queue.enqueue(candidate)
+    decided = queue.decide(
+        candidate.candidate_id,
+        ReviewDecision.PROMOTE,
+        decided_by="companion-ui:reviewer",
+    )
+    store.record_decision(decided, vault_context=vault, channel="test")
+
+    with pytest.raises(ReviewDecisionStoreError, match="scope changed"):
+        store.mark_terminal(
+            candidate.candidate_id,
+            vault_context=vault,
+            channel="test",
+            expected_scope_id="scope:work/project-a",
+        )
+
+    persisted = store.get_decision(
+        candidate.candidate_id,
+        vault_context=vault,
+        channel="test",
+    )
+    assert persisted is not None
+    assert persisted.scope_id == "scope:private/personal"
+    assert persisted.terminal is False
+
+
+def test_terminal_decision_cannot_be_reopened_or_terminalized_twice(
+    tmp_path: Path,
+) -> None:
+    store = ReviewDecisionStore(tmp_path / "review_decisions.sqlite3")
+    vault = _vault("vault-a", tmp_path / "vault-a")
+    candidate = _candidate()
+    queue = MemoryCandidateReviewQueue()
+    queue.enqueue(candidate)
+    decided = queue.decide(
+        candidate.candidate_id,
+        ReviewDecision.PROMOTE,
+        decided_by="companion-ui:reviewer",
+    )
+    store.record_decision(decided, vault_context=vault, channel="test")
+    store.mark_terminal(
+        candidate.candidate_id,
+        vault_context=vault,
+        channel="test",
+        expected_scope_id=candidate.scope_id,
+        expected_outcome=ReviewDecision.PROMOTE,
+    )
+
+    with pytest.raises(ReviewDecisionStoreError, match="cannot be replaced"):
+        store.record_decision(decided, vault_context=vault, channel="test")
+    with pytest.raises(ReviewDecisionStoreError, match="already terminal"):
+        store.mark_terminal(
+            candidate.candidate_id,
+            vault_context=vault,
+            channel="test",
+            expected_scope_id=candidate.scope_id,
+            expected_outcome=ReviewDecision.PROMOTE,
+        )
+
+
+def test_materialization_transaction_serializes_competing_writers(
+    tmp_path: Path,
+) -> None:
+    store = ReviewDecisionStore(tmp_path / "review_decisions.sqlite3")
+    vault = _vault("vault-a", tmp_path / "vault-a")
+    candidate = _candidate()
+    queue = MemoryCandidateReviewQueue()
+    queue.enqueue(candidate)
+    decided = queue.decide(
+        candidate.candidate_id,
+        ReviewDecision.PROMOTE,
+        decided_by="companion-ui:reviewer",
+    )
+    store.record_decision(decided, vault_context=vault, channel="test")
+    assert candidate.scope_id is not None
+    first_entered = Event()
+    release_first = Event()
+    second_started = Event()
+    second_entered = Event()
+
+    def first_writer() -> None:
+        with store.promotion_materialization_transaction(
+            candidate.candidate_id,
+            vault_context=vault,
+            channel="test",
+            expected_scope_id=candidate.scope_id,
+            expected_candidate_digest=review_candidate_digest(decided),
+        ):
+            first_entered.set()
+            assert release_first.wait(timeout=2)
+
+    def competing_writer() -> None:
+        second_started.set()
+        with store.promotion_materialization_transaction(
+            candidate.candidate_id,
+            vault_context=vault,
+            channel="test",
+            expected_scope_id=candidate.scope_id,
+            expected_candidate_digest=review_candidate_digest(decided),
+        ):
+            second_entered.set()
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        first = executor.submit(first_writer)
+        assert first_entered.wait(timeout=2)
+        second = executor.submit(competing_writer)
+        assert second_started.wait(timeout=2)
+        with pytest.raises(FutureTimeoutError):
+            second.result(timeout=0.1)
+        assert not second_entered.is_set()
+        release_first.set()
+        first.result(timeout=2)
+        with pytest.raises(ReviewDecisionStoreError, match="already terminal"):
+            second.result(timeout=2)
+
+    assert not second_entered.is_set()

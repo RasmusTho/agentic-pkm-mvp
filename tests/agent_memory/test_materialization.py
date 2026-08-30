@@ -50,6 +50,7 @@ def _promoted_entry(store: ReviewDecisionStore, vault: VaultContext):
         source_refs=["note:source.md", "session:2026-06-14T10:00:00Z"],
         derived_from="vault:source.md",
         generated_by="companion_agent",
+        scope_id="scope:test/default-outbox",
     )
     queue.enqueue(candidate)
     entry = queue.decide(

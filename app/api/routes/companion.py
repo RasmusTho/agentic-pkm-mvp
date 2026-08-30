@@ -28,7 +28,11 @@ from app.chat.reflection_conversation import (
     build_evening_reflection_offer,
     load_reflection_settings,
 )
-from app.agent_memory.candidate import MemoryCandidate, MemoryType
+from app.agent_memory.candidate import (
+    MemoryCandidate,
+    MemoryType,
+    validated_memory_scope_id,
+)
 from app.agent_memory.materialization import (
     MemoryMaterializationError,
     MemoryMaterializationResult,
@@ -41,7 +45,11 @@ from app.agent_memory.promotion import (
     reject as reject_memory_candidate,
     revise as revise_memory_candidate,
 )
-from app.agent_memory.review_decision_store import ReviewDecisionStore
+from app.agent_memory.review_decision_store import (
+    ReviewDecisionRecord,
+    ReviewDecisionStore,
+    ReviewDecisionStoreError,
+)
 from app.agent_memory.review_queue import (
     MemoryCandidateReviewQueue,
     ReviewDecision,
@@ -5029,6 +5037,33 @@ def _memory_review_decide(
         ) from exc
 
 
+def _memory_review_record_decision(
+    store: ReviewDecisionStore,
+    entry: ReviewEntry,
+    *,
+    vault_context: VaultContext,
+    channel: str,
+    queue: MemoryCandidateReviewQueue,
+    original_entry: ReviewEntry,
+    revision_candidate_id: str | None = None,
+) -> ReviewDecisionRecord:
+    try:
+        return store.record_decision(
+            entry,
+            vault_context=vault_context,
+            channel=channel,
+        )
+    except ReviewDecisionStoreError as exc:
+        queue.rollback_persistence_refusal(
+            original_entry,
+            revision_candidate_id=revision_candidate_id,
+        )
+        raise HTTPException(
+            status_code=409,
+            detail={"error": "review_decision_conflict", "message": str(exc)},
+        ) from exc
+
+
 def _memory_review_revision_candidate(
     entry: ReviewEntry, payload: MemoryReviewRevisionPayload | None
 ) -> MemoryCandidate:
@@ -5050,6 +5085,7 @@ def _memory_review_revision_candidate(
         source_refs=list(original.source_refs),
         derived_from=original.derived_from,
         generated_by=original.generated_by,
+        scope_id=original.scope_id,
         correction_of=original.candidate_id,
     )
 
@@ -5106,6 +5142,27 @@ def post_memory_review_decision(
             ),
         )
 
+    if (
+        req.action == "accept"
+        and entry.candidate.memory_type is MemoryType.SEMANTIC_MEMORY
+        and validated_memory_scope_id(entry.scope_id) is None
+    ):
+        # A semantic promotion without an explicit scope can never be
+        # materialized or safely admitted to bound recall. Refuse before the
+        # queue transition and durable decision write so the candidate remains
+        # actionable instead of becoming a permanently non-materializable
+        # accepted decision.
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": "promotion_refused",
+                "message": (
+                    "semantic promotion requires a valid candidate.scope_id; "
+                    "no review decision was recorded"
+                ),
+            },
+        )
+
     vault_context = _memory_review_vault_context()
     selection_required = _memory_review_selection_required_response(vault_context)
     if selection_required is not None:
@@ -5140,12 +5197,22 @@ def post_memory_review_decision(
             reviewed_by=req.reviewed_by,
             notes=req.notes,
         )
-        decision_store.record_decision(
+        persisted_decision = _memory_review_record_decision(
+            decision_store,
             decided,
             vault_context=vault_context,
             channel=channel,
+            queue=queue,
+            original_entry=entry,
         )
-        promoted = promote_memory_candidate(decided)
+        effective_decided = decided.model_copy(
+            update={
+                "decided_by": persisted_decision.decided_by,
+                "decided_at": persisted_decision.decided_at,
+                "decision_notes": persisted_decision.decision_notes,
+            }
+        )
+        promoted = promote_memory_candidate(effective_decided)
         # Materialize the accepted candidate into the vault. For semantic
         # candidates this writes the agent-promoted artifact through WriteGuard,
         # appends the promotion receipt, and marks the stored decision terminal.
@@ -5155,7 +5222,7 @@ def post_memory_review_decision(
         # accept outright.
         try:
             materialization = materialize_promoted_memory(
-                decided,
+                effective_decided,
                 vault_context=vault_context,
                 channel=channel,
                 decision_store=decision_store,
@@ -5197,10 +5264,13 @@ def post_memory_review_decision(
             reviewed_by=req.reviewed_by,
             notes=req.notes,
         )
-        decision_store.record_decision(
+        _memory_review_record_decision(
+            decision_store,
             decided,
             vault_context=vault_context,
             channel=channel,
+            queue=queue,
+            original_entry=entry,
         )
         rejected = reject_memory_candidate(decided)
         return MemoryReviewDecisionResponse(
@@ -5220,10 +5290,14 @@ def post_memory_review_decision(
         notes=req.notes,
         revision=revision_candidate,
     )
-    decision_store.record_decision(
+    _memory_review_record_decision(
+        decision_store,
         decided,
         vault_context=vault_context,
         channel=channel,
+        queue=queue,
+        original_entry=entry,
+        revision_candidate_id=revision_candidate.candidate_id,
     )
     revision_entry = queue.get(revision_candidate.candidate_id)
     revised = revise_memory_candidate(decided, revision_entry)

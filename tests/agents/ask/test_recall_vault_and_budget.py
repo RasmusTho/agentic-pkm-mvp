@@ -188,6 +188,46 @@ def test_recall_vault_falls_back_to_env_when_no_persisted_vault(tmp_path: Path, 
     assert resolved == env_root.resolve()
 
 
+def test_recall_vault_id_loads_matching_persisted_binding_for_env_root(
+    tmp_path: Path, monkeypatch
+) -> None:
+    env_root = tmp_path / "env-vault"
+    env_root.mkdir()
+    monkeypatch.setenv("PKM_ENVIRONMENT", "prod")
+    monkeypatch.setenv("VAULT_ROOT", str(env_root))
+    manager = _RestartedVaultManager(_selected(env_root))
+    monkeypatch.setattr(ask_graph, "get_vault_manager", lambda: manager)
+
+    resolved = ask_graph._active_recall_vault_root()
+    vault_id = ask_graph._active_recall_vault_id(resolved)
+
+    assert resolved == env_root.resolve()
+    assert vault_id == "vault-persisted"
+    assert manager.load_last_active_calls == 1
+
+
+def test_recall_vault_id_rejects_stale_selected_id_for_env_root(
+    tmp_path: Path, monkeypatch
+) -> None:
+    selected_root = tmp_path / "selected-vault"
+    env_root = tmp_path / "env-vault"
+    selected_root.mkdir()
+    env_root.mkdir()
+    monkeypatch.setenv("PKM_ENVIRONMENT", "prod")
+    monkeypatch.setenv("VAULT_ROOT", str(env_root))
+
+    class _StaleSelectedManager:
+        context = _selected(selected_root)
+
+    manager = _StaleSelectedManager()
+    monkeypatch.setattr(ask_graph, "get_vault_manager", lambda: manager)
+    setattr(manager, ask_graph._ASK_LAST_ACTIVE_LOADED_ATTR, True)
+
+    vault_id = ask_graph._active_recall_vault_id(env_root)
+
+    assert vault_id == f"path:{env_root.resolve()}"
+
+
 # --------------------------------------------------------------------------- #
 # AC2: enforce the context budget after using full bodies
 # --------------------------------------------------------------------------- #
