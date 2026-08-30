@@ -98,6 +98,33 @@ def test_apply_aborts_when_posted_receipt_cannot_be_read_back(monkeypatch) -> No
         apply_plan("o/r", "o", "r", item)
 
 
+def test_apply_aborts_when_terminal_lifecycle_drifts_after_receipt(monkeypatch) -> None:
+    item = plan({"number": 1, "state": "open", "labels": ["agent:blocked"]})
+    reads = iter([
+        {"number": 1, "state": "open", "labels": ["agent:blocked"]},
+        {"number": 1, "state": "open", "labels": ["agent:blocked"]},
+        {"number": 1, "state": "open", "labels": ["agent:blocked", "action:repair-contract"]},
+        {"number": 1, "state": "open", "labels": ["agent:blocked", "action:repair-contract"]},
+        {"number": 1, "state": "closed", "labels": ["agent:blocked", "action:repair-contract"]},
+    ])
+    posted_body = None
+
+    def fake_api(repo, endpoint, *, method="GET", payload=None):
+        nonlocal posted_body
+        if method == "POST" and endpoint.endswith("/labels"):
+            return None
+        if method == "POST" and endpoint.endswith("/comments"):
+            posted_body = payload["body"]
+            return {"id": 9}
+        if method == "GET" and "comments?" in endpoint:
+            return [{"id": 9, "body": posted_body}]
+        return next(reads)
+
+    monkeypatch.setattr("scripts.reconcile_blocker_actions._api", fake_api)
+    with pytest.raises(RuntimeError, match="post-receipt lifecycle/action drift"):
+        apply_plan("o/r", "o", "r", item)
+
+
 def test_intake_parses_real_comment_receipt_and_rejects_invalid_placeholder() -> None:
     receipt = receipt_for_action("action:wait-dependency")
     comment = {"body": "```yaml\n" + "\n".join(f"{key}: {value if key != 'dependency_refs' else '[]'}" for key, value in receipt.items()) + "\n```"}

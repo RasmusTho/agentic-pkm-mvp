@@ -106,7 +106,13 @@ def apply_plan(repo: str, owner: str, name: str, item: dict[str, Any]) -> dict[s
         if exact_receipt != receipt:
             raise RuntimeError(f"receipt readback mismatch for issue #{item['issue']}")
         terminal = _api(repo, endpoint)
-        if _labels(terminal) != _labels(final) or classify(_labels(terminal), open_issue=True).errors:
+        terminal_open = str(terminal.get("state", "")).lower() == "open"
+        final_open = str(final.get("state", "")).lower() == "open"
+        if (
+            terminal_open != final_open
+            or _labels(terminal) != _labels(final)
+            or classify(_labels(terminal), open_issue=terminal_open).errors
+        ):
             raise RuntimeError(f"post-receipt lifecycle/action drift for issue #{item['issue']}")
     return {"issue": item["issue"], "labels": sorted(_labels(final)), "action": final_verdict.action}
 
