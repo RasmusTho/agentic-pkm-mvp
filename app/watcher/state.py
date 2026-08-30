@@ -360,6 +360,11 @@ class WatcherState:
         legacy_files = dict(state.files)
         state.files.clear()
         state._observation_store = store
+        if state.observation_identity is None and store.active_identity() is not None:
+            # A missing or malformed checkpoint cannot authorize the sidecar's
+            # relative-path observations. Hide them until the next scan binds
+            # a verified vault identity and replaces the namespace.
+            state.observations_invalidated = True
         if state.observation_identity is not None and store.active_identity() is None:
             store.initialize_identity(state.observation_identity)
         if legacy_files:

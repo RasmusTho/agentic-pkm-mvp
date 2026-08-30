@@ -737,6 +737,25 @@ def test_identity_sidecar_switch_is_replayable_when_checkpoint_fails(
     assert observations.get("notes/new.md") == {"hash": "new"}
 
 
+def test_malformed_checkpoint_cannot_authorize_existing_sidecar(
+    tmp_path: Path,
+) -> None:
+    checkpoint = tmp_path / "watcher_state.json"
+    checkpoint.write_text("not-json", encoding="utf-8")
+    observations = RegistryObservationStore(tmp_path / "observations.sqlite3")
+    observations.replace_identity(
+        "old-identity",
+        {"notes/old.md": ({"hash": "old"}, 1)},
+        (),
+    )
+
+    restarted = WatcherState.load_registry(checkpoint, observations.path)
+
+    assert restarted.observations_invalidated is True
+    assert restarted.file_entry("notes/old.md") is None
+    assert observations.get("notes/old.md") == {"hash": "old"}
+
+
 def test_selected_vault_marker_is_not_treated_as_nested_boundary(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
