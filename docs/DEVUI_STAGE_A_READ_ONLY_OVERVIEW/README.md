@@ -195,8 +195,9 @@ browser evidence plus production evidence. It records each tested SHA and separa
 `evidence_artifact_sha256` inventories: the browser inventory contains the authenticated #4748
 wrapper, its source `manifest.json` emitted and uploaded by `.github/workflows/browser-runtime.yml`,
 and browser bundle; the production inventory contains deployment/health/identity receipts, the
-deployed Playwright journey's trace, screenshots, checksums, and journey manifest, and any used
-disposable-state receipt. Each digest uses RFC 8785 JSON Canonicalization Scheme (JCS), encoded
+deployed Playwright journey's trace, screenshots, checksums, and journey manifest, any used
+disposable-state receipt, and, only when a `pkm-test` supplement is used, that supplement's trace,
+screenshots, checksums, and manifest. Each digest uses RFC 8785 JSON Canonicalization Scheme (JCS), encoded
 as UTF-8 without a BOM and without a trailing newline or other bytes; non-finite numbers and
 non-string path/hash values are invalid. The pilot entry's own rendered inventory manifest is
 excluded from its inventory. Owner-walkthrough output and acknowledgement are authenticated ledger
