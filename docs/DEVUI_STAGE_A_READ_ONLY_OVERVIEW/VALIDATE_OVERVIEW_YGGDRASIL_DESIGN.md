@@ -31,7 +31,8 @@ Parent: #4741
 
 Turn the merged #4834 source-owned **Now** fixture and delivered #4768 Focus API fixture into
 accepted connected Overview → Focus → return guidance without changing server semantics or
-claiming runtime implementation. #4834 is still open and blocked, so this task remains blocked.
+claiming runtime implementation. #4834 is merged and this design gate is closed after #4746
+accepted the constrained-reuse evidence for merged #4836.
 
 ## Scope
 
@@ -167,9 +168,8 @@ connected shell implementation in #4836.
 
 ## Related GitHub Issues
 
-Filed as blocked child [#4746](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4746). Its exact
-serial prerequisites are merged stable #4834 source-owned Now fixtures plus delivered #4768 Focus
-API fixtures. #4745 is not a prerequisite and supplies no fixture; it remains a preserved
-supersession candidate until #4836 delivers equivalent behavior. #4838 establishes the
-constrained-reuse authority but produces no #4746 receipt. #4836 consumes the accepted connected
-evidence, and #4833 owns the later exact-ref browser proof.
+Filed as closed child [#4746](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4746) after its
+accepted constrained-reuse receipt for merged #4836. The exact serial prerequisites were merged
+stable #4834 source-owned Now fixtures plus delivered #4768 Focus API fixtures. #4745 is closed as
+superseded and supplies no fixture. #4838 establishes the constrained-reuse authority, #4836
+consumed the accepted connected evidence, and #4833 owns the later exact-ref browser proof.

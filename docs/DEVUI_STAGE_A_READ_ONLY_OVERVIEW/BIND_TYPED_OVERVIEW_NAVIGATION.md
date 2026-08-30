@@ -129,7 +129,7 @@ not authorized by this child.
 
 ## Related GitHub Issues
 
-Filed as blocked child [#4745](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4745); the exact
-next trigger is #4744 delivery plus the merged admitted local
-[Focus route #4768](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4768) (and a local SoI
-route before any SoI reference is marked available).
+Filed as closed/superseded child [#4745](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4745).
+The canonical connected shell #4836 delivered the bounded typed-navigation behavior after the
+merged admitted local [Focus route #4768](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4768);
+no separate #4745 trigger remains.

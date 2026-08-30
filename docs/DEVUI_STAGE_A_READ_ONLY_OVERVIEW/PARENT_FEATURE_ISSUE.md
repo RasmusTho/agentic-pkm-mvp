@@ -1,5 +1,7 @@
 State: Active blocked validation hub #4741; ARO-01 is closed with its withdrawal recorded, ARO-02
-is closed/superseded, ARO-03/#4744 is closed and delivered, and ARO-04–08 remain blocked. Recovery
+is closed/superseded, ARO-03/#4744 is closed and delivered, ARO-04/#4745 and ARO-06/#4747 are
+closed as superseded by #4836, ARO-05/#4746 is closed after its accepted constrained-reuse receipt,
+ARO-07/#4748 is closed after exact final-main proof, and ARO-08/#4749 remains blocked. Recovery
 children #4834, #4836, #4838, and #4841 preserve the serial connected-shell path.
 Doc role: Parent feature issue contract
 Authority: The capability README owns stable scope and order. The live GitHub parent owns backlog and validation state after filing.
@@ -7,27 +9,25 @@ Owner: Builder System governance
 Temporal class: Active validation contract
 Review cadence: Event-driven
 Source of truth: GitHub owns live child/receipt state; this document owns the acceptance path.
-Last reviewed: 2026-08-12
-Last verified against: `origin/main` `a4e79f77909f93e1a313d9f10907e6ed8aeb72a6` and live GitHub
-state for #4741–#4749, #4768, #4833, #4834, #4836, #4838, and #4841; the delivery ledger below
-records the exact PR heads and merge commits it cites.
+Last reviewed: 2026-08-30
+Last verified against: `origin/main` `34c5c933e8bd72da117a0f6e0e1b9a05d1123bd3` and live GitHub
+state for #4741–#4749, #4768, #4833, #4834, #4835, #4836, #4838, #4841, and #4857; the delivery
+ledger below records the exact PR heads, merge commits, and proof receipt it cites.
 
 # Parent feature issue — devUI Stage A Read-Only Overview
 
 ## Context
 
 The pure `devui-overview-view.v1` composer, admitted direct-loopback Overview GET route, and Focus
-API route are delivered. The current producer chain still lacks a selectable source-owned **Now**
-subject until #4834 merges; **Needs you** and **Ready to try** remain withdrawn. The old #4745
-binder and #4747 Overview-only shell remain preserved supersession candidates while the recovery
-path produces one connected Overview → visual Focus → return journey through #4746 and #4836. The
-parent coordinates validation only; it is never ready work and claims no deployed or accepted UI.
-#4841 additionally delivers the narrow production Companion transport for the existing two read
-APIs only; it supplies neither a page nor a visual destination.
-The #4836 branch may publish a committed connected-shell candidate for those reads before its
-pre-merge gates. That candidate is not delivery: #4746 must accept its exact
-`yggdrasil-constrained-reuse.v1` inventory/source/transform binding and #4833/#4842 must prove the
-published exact ref in a browser before merge or child closure.
+API route are delivered. Delivered #4834 maps trusted Cockpit `working` items into source-owned
+**Now** candidates; **Needs you** and **Ready to try** remain withdrawn. The connected shell is delivered by
+#4836 after #4746 accepted its exact `yggdrasil-constrained-reuse.v1` binding, and its candidate was
+verified by #4833/#4842 before merge. The separate #4748 receipt then authenticated the exact
+five-node browser/accessibility proof at final post-merge `main` `M=c7c57300f2ec241778061078e7ad585454f0b880`.
+The parent coordinates validation only; without implementing any slice or claiming either design
+receipt as a runtime capability, it is never ready work and claims no deployed or accepted UI.
+#4841 supplies the narrow production Companion transport for the existing two read APIs only;
+it supplies neither a page nor a visual destination.
 
 ## Scope
 
@@ -58,8 +58,9 @@ published exact ref in a browser before merge or child closure.
 - Human knowledge impact: none
 - Memory impact: no Product/Runtime or user-memory impact
 - Retrieval/context impact: no new retrieval or context store
-- Sync/deployment impact: the future ARO-08 consumes an existing Demerzel production deployment
-  receipt only (`pkm-prod`, `PKM_ENVIRONMENT=prod`, Midgård); it does not deploy or promote
+- Sync/deployment impact: the future ARO-08 consumes an existing receipt for the VM-102 Dev System
+  (`builder-system`) and its governed external read dependencies; it does not deploy, promote, or
+  import Product Runtime state
 - External boundary impact: none for independently reviewed exact shipped reuse; governed live
   Yggdrasil design handoff for novel, mixed, unknown, extension, or out-of-envelope work
 - New or changed contract: source-owned Now serialization plus one connected Overview/Focus visual
@@ -72,8 +73,9 @@ published exact ref in a browser before merge or child closure.
 
 - The delivered composer in `app/builderops/devui_overview.py` is excluded.
 - ARO-01 is closed with its withdrawal recorded; ARO-02 is closed/superseded; ARO-03/#4744 is
-  closed and delivered; ARO-04 through ARO-08 and recovery children remain blocked by their exact
-  serial dependencies.
+  closed and delivered; ARO-04/#4745 and ARO-06/#4747 are closed as superseded; ARO-05/#4746 and
+  ARO-07/#4748 are closed after their separate accepted evidence gates; and ARO-08/#4749 remains
+  blocked on its own serial pilot prerequisites.
 - No downstream child becomes ready from this specification or its merge alone.
 - Connected visual work waits for stable #4834 plus delivered #4768 and one accepted applicable
   receipt from #4746: either `yggdrasil-constrained-reuse.v1` or
@@ -84,9 +86,13 @@ published exact ref in a browser before merge or child closure.
   admission unchanged. Port `18000` remains direct diagnostics, never a browser page origin.
 - No technical label/state, provider metadata, or terminal delivery fact substitutes for explicit
   canonical category or receipt-backed `ready_to_try` evidence.
-- ARO-08 remains serially blocked after #4748 until the repaired source contract, Demerzel
-  authentication/access, #4747 server-supplied Focus selectors, receipt-sourced deployed URL/SHA,
-  and disposable-state classification are all available. It never invents a URL or deployed SHA.
+- ARO-08 remains serially blocked after #4748 until the repaired #4857 source contract, the fresh
+  exact-main #4748 proof matching current deployed `main`, the boolean-only #4835 prerequisite,
+  Demerzel authentication/access, #4836 server-supplied Focus selectors, receipt-sourced deployed
+  URL/SHA, and applicable main-tracking deployment/operator evidence are all available. If the
+  pilot uses a `pkm-test` supplement, its disposable-state classification is also required; the
+  production-only path has no supplemental-state prerequisite. It never invents a URL or deployed
+  SHA, and no parent label or closed historical receipt removes these blockers.
 
 ## Acceptance Criteria
 
@@ -98,15 +104,22 @@ published exact ref in a browser before merge or child closure.
   - Verify: `tests/api/test_devui_api.py :: test_overview_route_is_local_get_only_and_preserves_typed_destinations`
 - [ ] The accepted applicable design evidence and browser suite cover the complete connected
       state/accessibility matrix without browser classification or persistence.
-  - Verify: `tests/companion_ui/test_devui_overview_journeys.py :: test_overview_accessibility_and_layout_matrix`
+  - Verify: `tests/companion_ui/test_devui_overview_journeys.py::test_real_gateway_overview_focus_return_journey_preserves_subject_context_and_sha`
+  - Verify: `tests/companion_ui/test_devui_overview_journeys.py::test_focus_api_failure_renders_honest_visual_error_without_url_probing`
+  - Verify: `tests/companion_ui/test_devui_overview_journeys.py::test_connected_shell_freezes_server_identity_selector_and_aria_contract`
+  - Verify: `tests/companion_ui/test_devui_overview_journeys.py::test_connected_shell_renders_full_server_state_matrix_without_reclassification`
+  - Verify: `tests/companion_ui/test_devui_overview_journeys.py::test_gateway_shell_is_safe_accessible_no_egress_and_effect_free`
 - [ ] The owner pilot records exact SHA, source conditions, answers, reconstruction steps, and a
       pass/fail disposition for all three zones; it proves the receipt-sourced deployed SHA across
-      CI/review/deploy receipt, `/version`, `/api/health.version`, and gateway marker, then records
-      the disposable-state Overview → server-supplied Focus → return Playwright journey with zero
-      effects, errors, storage, or unauthorized writes and durable trace/screenshot/checksum/
-      manifest evidence plus owner acknowledgement. Its ledger alone binds the pre-merge #4836
-      candidate artifact and the distinct final-M #4748 artifact by recomputable evidence-artifact
-      digests; neither strict browser receipt carries a cross-run reference.
+      CI/review/deploy receipt, `/version`, `/api/health.version`, and gateway marker, and always
+      runs the deployed Overview → server-supplied Focus → return Playwright journey with zero
+      effects, errors, storage, or unauthorized writes. If a `pkm-test` supplement is used, it
+      additionally records its disposable-state matrix and durable trace/screenshot/checksum/
+      manifest evidence. If no supplement is used, the production-only evidence records the
+      applicable final-M proof and that no test state was created. The pilot ledger records the
+      owner acknowledgement on both the supplemented and production-only paths. It may preserve
+      candidate provenance when available, but readiness does not require a
+      candidate-to-final cross-run binding.
   - Verify: runtime receipt: devui-stage-a-read-only-owner-pilot.v1
 - [ ] Current-state owner docs change only after all capability receipts support the claim.
   - Verify: doc writeback at `docs/DEVUI.md :: Current state and target`
@@ -146,11 +159,11 @@ published exact ref in a browser before merge or child closure.
 | ARO-01 — Authorize Overview Source Facts | [#4742](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4742) | closed; withdrawal recorded by PR #4751 | No current source owns either Overview fact |
 | ARO-02 — Enrich Overview Producer Facts | [#4743](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4743) | closed / superseded | The ARO-01 no-source withdrawal leaves no producer facts to enrich; a future source contract requires a new governed slice |
 | ARO-03 — Expose Local Overview GET Route | [#4744](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4744) | closed / delivered | PR #4772 proves the admitted direct-loopback route → live composition → delivered no-candidate composer |
-| ARO-04 — Bind Typed Overview Navigation | [#4745](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4745) | `agent:blocked`; preserved supersession candidate | #4834 and #4836 now own the source-subject and connected-shell recovery; preserve until equivalent delivery is independently verified |
-| ARO-05 — Validate Connected Overview and Focus Yggdrasil Evidence | [#4746](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4746) | `agent:blocked` | merged stable #4834 plus delivered #4768 fixtures, then one independently accepted applicable receipt after #4838 |
-| ARO-06 — Render Read-Only Overview Shell | [#4747](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4747) | `agent:blocked`; preserved supersession candidate | combined shell #4836 consumes accepted #4746 evidence and preserves #4747 until equivalent delivery is independently verified |
-| ARO-07 — Prove Browser and Accessibility | [#4748](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4748) | `agent:blocked` | exact-ref proof mechanism #4833 validates the published #4836 candidate before merge; reconcile #4748 only after equivalent proof |
-| ARO-08 — Run Read-Only Owner Pilot | [#4749](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4749) | `agent:blocked` | serially after #4748: repaired pilot contract, Demerzel prod access, #4747 selectors, receipt-sourced deployed URL/SHA, and disposable-state classification |
+| ARO-04 — Bind Typed Overview Navigation | [#4745](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4745) | closed / superseded | Delivered through the canonical connected shell #4836 / PR #5157; no separate successor is required |
+| ARO-05 — Validate Connected Overview and Focus Yggdrasil Evidence | [#4746](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4746) | closed / accepted constrained reuse | Accepted exact `yggdrasil-constrained-reuse.v1` evidence for the merged #4836 candidate |
+| ARO-06 — Render Read-Only Overview Shell | [#4747](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4747) | closed / superseded | Delivered through the canonical connected shell #4836 / PR #5157; no separate successor is required |
+| ARO-07 — Prove Browser and Accessibility | [#4748](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4748) | closed / exact-main proof | Authenticated #4833 exact five-node receipt at final post-merge `main` `M=c7c57300f2ec241778061078e7ad585454f0b880` |
+| ARO-08 — Run Read-Only Owner Pilot | [#4749](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4749) | `agent:blocked` | serially after #4748 and #4857: boolean-only #4835 prerequisite, Demerzel prod access, applicable main-tracking deployment/operator evidence for current deployed `M` with a matching fresh #4748 exact-main proof, receipt-sourced deployed URL/SHA, and conditional disposable-state classification; the historical `c7c57300f2ec241778061078e7ad585454f0b880` proof is valid only while `main` still equals it, and owner evidence acknowledgement is pilot output |
 
 <!-- builderops:epic-delivery-ledger v1 epic=#4741 -->
 Ledger authority: coordination evidence only; live GitHub Issues/PRs/CI win.
@@ -160,11 +173,11 @@ Ledger authority: coordination evidence only; live GitHub Issues/PRs/CI win.
 | #4742 ARO-01 | closed / withdrawal recorded | #4751 | head `d8c90761cbf9d32cf10c9471b6092466b91fad5c`; merge `bf2f034279c394c03529323a1a1509c756e5a0b3` | merged receipt | no current source owns either Overview fact | preserve explicit withdrawals |
 | #4743 ARO-02 | closed / superseded | #4751 withdrawal evidence | head `d8c90761cbf9d32cf10c9471b6092466b91fad5c`; merge `bf2f034279c394c03529323a1a1509c756e5a0b3` | no producer delivery | no current source facts to enrich | create a new governed slice only after a source contract exists |
 | #4744 ARO-03 | closed / delivered | #4772; supporting #4789 and #4792 | #4772 head `7b1f83d4a0b6bdd75071959c41146c70012a29d2`; merge `24371d8bf3289dad631c2986f44865794897f32c`. #4789 head `c5f4fab08d58b5efb8d52a457bfa9eaf555824bd`; merge `989a8d73d52b75c3a038ba1d3f93c78e03d98065`. #4792 head `031dbfaa2d6d474bf02e5d778ffb252f0879ae97`; merge `a7f945cb591f24c4f5d85d048187f92a8ed91211` | route delivered; contract/CI-selection and `Via`-admission recoveries merged | none | preserve receipt in parent acceptance |
-| #4745 ARO-04 | open / blocked; preserved supersession candidate | #4771 external Focus prerequisite | head `e6f0289636b47841a3505b4eaa851b7cff9d4774`; merge `9f554f2c8e2266365875ba5765a4af23e43692e8` | Focus prerequisite delivered; binder not delivered | #4834/#4836 recovery path | preserve until equivalent #4836 behavior is independently verified |
-| #4746 ARO-05 | open / blocked | #4838 / PR #4845 governs receipt authority only | no #4746 receipt | not started | merged stable #4834 plus delivered #4768 fixtures; then applicable governed evidence | classify the complete scope; accept independently reviewed `yggdrasil-constrained-reuse.v1` for exact reuse or genuine `yggdrasil-design-handoff.v1` for novel/mixed/unknown work; this ledger claims neither |
-| #4747 ARO-06 | open / blocked; preserved supersession candidate | none | none | not started | accepted #4746 evidence plus #4834/#4841 for combined #4836 | preserve until equivalent #4836 shell is independently verified |
-| #4748 ARO-07 | open / blocked | #4833 recovery mechanism open | none | not started | published #4836 candidate | require exact-ref browser evidence before #4836 merge; reconcile legacy child only after equivalent proof |
-| #4749 ARO-08 | open / blocked | none | none | not started | #4748 plus repaired pilot contract, Demerzel access, #4747 selectors, receipt-sourced production URL/SHA, and disposable-state classification | run the zero-effect production pilot only after every prerequisite receipt; POST-PASS current-state writeback is separate |
+| #4745 ARO-04 | closed / superseded | #5157 | candidate head `47e56110adbdae30548cd313a66b4e2d26311f7e`; merge `b79d8778b8d49233bad22335d393efa12712e040` | merged receipt | typed-navigation behavior delivered in the canonical connected shell | preserve the closed predecessor as superseded history |
+| #4746 ARO-05 | closed / accepted constrained reuse | #5157 / #4746 receipt | candidate head `47e56110adbdae30548cd313a66b4e2d26311f7e`; merge `b79d8778b8d49233bad22335d393efa12712e040` | accepted `yggdrasil-constrained-reuse.v1` receipt | design/provenance gate complete | preserve the accepted receipt; #4748 remains a separate final-main proof |
+| #4747 ARO-06 | closed / superseded | #5157 | candidate head `47e56110adbdae30548cd313a66b4e2d26311f7e`; merge `b79d8778b8d49233bad22335d393efa12712e040` | merged shell receipt | shell delivered in the canonical connected path | preserve the closed predecessor as superseded history |
+| #4748 ARO-07 | closed / exact-main proof | #4833 receipt; closure comment on #4748 | final `M=c7c57300f2ec241778061078e7ad585454f0b880`; #4833 run `33304261671` | authenticated exact five-node `devui-stage-a-exact-sha-state-matrix.v1` receipt | browser/accessibility proof complete; no deployment claim | preserve proof-only boundary; #4749 owns production pilot |
+| #4749 ARO-08 | open / blocked | none | no pilot run | awaiting #4857, boolean-only #4835 prerequisite, deployment identity, and applicable main-tracking deployment/operator evidence for current deployed `M` with a matching fresh #4748 proof | run production-only or conditionally supplemented pilot only after every applicable receipt; owner evidence acknowledgement is produced on PASS; POST-PASS current-state writeback is separate |
 <!-- /builderops:epic-delivery-ledger -->
 
 ## Verification Path
@@ -172,8 +185,9 @@ Ledger authority: coordination evidence only; live GitHub Issues/PRs/CI win.
 Each child or governed recovery replacement resolves every named Verify target on its PR and posts
 a compact exact-SHA receipt to the parent. Before #4746 readiness, re-read merged #4834, delivered
 #4768, and the accepted #4838 receipt authority; validate its one actual receipt without inferring
-the other route. #4833 verifies the published #4836 candidate at its exact ref before merge. ARO-08
-additionally takes its deployed URL/SHA only from shell/browser/deployment receipts and records
+the other route. #4833 verified the published #4836 candidate at its exact ref before merge, and
+#4748 subsequently verified the merged final-main SHA. ARO-08 additionally takes its deployed
+URL/SHA only from shell/browser/deployment receipts and records
 every required identity/effect proof in the structured owner-pilot ledger.
 Before #4836 pickup, re-read merged #4841 and bind its current transport regression evidence;
 #4833 verifies the published #4836 candidate at its exact ref before merge.
