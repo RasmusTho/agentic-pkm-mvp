@@ -34,7 +34,8 @@ from app.builderops.model_inquiry_contract import (
 )
 from app.builderops.models import BuilderOpsValidationError
 
-ROLES = ("fable", "gpt_codex")
+LEGACY_ROLES = ("fable", "gpt_codex")
+PERSPECTIVES = ("synthesis", "verification")
 FALLBACK_ADAPTER_FAILURE_CLASSES = frozenset(
     {
         "command_exit_nonzero",
@@ -72,6 +73,7 @@ class ModelInquiryRunner:
     def plan(self, inquiry_id: str, *, max_rounds: int) -> dict[str, Any]:
         _validate_max_rounds(max_rounds)
         trace = self.service.trace(inquiry_id)
+        roles = _inquiry_roles(trace)
         context = _initial_context(trace)
         descriptors = load_adapter_descriptors(self._env, resolver=self._resolver)
         draft_requests = [
@@ -82,15 +84,17 @@ class ModelInquiryRunner:
                 round_index=0,
                 input_refs=["question"],
                 reviewed_refs=[],
-                adapter_identity=descriptors[role],
+                adapter_identity=_descriptor_for_role(descriptors, role),
                 context_hash=context["context_hash"],
             )
-            for role in ROLES
+            for role in roles
         ]
-        unavailable = [role for role in ROLES if not descriptors[role].get("available")]
+        unavailable = [
+            role for role in roles if not _descriptor_for_role(descriptors, role).get("available")
+        ]
         planned_reviews = []
         for round_index in range(max_rounds):
-            for role in ROLES:
+            for role in roles:
                 basis = {
                     "schema": "builderops.model-turn-request-plan.v1",
                     "inquiry_id": inquiry_id,
@@ -98,7 +102,7 @@ class ModelInquiryRunner:
                     "phase": "review",
                     "round_index": round_index,
                     "context_hash": context["context_hash"],
-                    "adapter_identity": descriptors[role],
+                    "adapter_identity": _descriptor_for_role(descriptors, role),
                     "system_prompt_hash": canonical_hash(model_turn_system_prompt(role)),
                     "input_basis": "latest persisted role artifacts",
                 }
@@ -148,6 +152,7 @@ class ModelInquiryRunner:
         _validate_max_rounds(max_rounds)
         with self.service.inquiry_runner_lock(inquiry_id):
             trace = self.service.trace(inquiry_id)
+            roles = _inquiry_roles(trace)
             terminal = _terminal_run_receipt(trace)
             if terminal is not None:
                 return self._finalize_terminal(inquiry_id, terminal, replayed=True)
@@ -155,7 +160,10 @@ class ModelInquiryRunner:
                 if self._adapters is not None:
                     adapters = self._adapters
                 elif operational_subscription_requested(self._env):
-                    adapters = load_operational_subscription_adapters(self._env)
+                    adapters = load_operational_subscription_adapters(
+                        self._env,
+                        resolver=self._resolver,
+                    )
                 else:
                     adapters = load_adapters(self._env, resolver=self._resolver)
             except CredentialUnavailableError as exc:
@@ -163,21 +171,24 @@ class ModelInquiryRunner:
                 # ambient environment, and no other provider is attempted.
                 return self._credential_failure(inquiry_id, trace, exc)
             except (AdapterUnavailableError, BuilderOpsValidationError):
+                # v1 records remain readable, but the retired Fable/GPT execution
+                # path is deliberately not reactivated by the permanent Sol route.
                 return self._configuration_failure(
                     inquiry_id,
                     trace,
                 )
-            if set(adapters) != set(ROLES):
+            if set(adapters) != set(roles):
                 return self._configuration_failure(
                     inquiry_id,
                     trace,
                 )
             context_hash = _initial_context(trace)["context_hash"]
             candidate_adapters = {
-                role: self._candidate_adapters(adapters, role=role) for role in ROLES
+                role: self._candidate_adapters(adapters, role=role, roles=roles)
+                for role in roles
             }
             drafts: list[TurnExecution] = []
-            for role in ROLES:
+            for role in roles:
                 execution = self._execute_turn(
                     inquiry_id,
                     role=role,
@@ -195,7 +206,7 @@ class ModelInquiryRunner:
             latest_refs = [item.turn["turn_id"] for item in drafts]
             for round_index in range(max_rounds):
                 reviews: list[TurnExecution] = []
-                for role in ROLES:
+                for role in roles:
                     execution = self._execute_turn(
                         inquiry_id,
                         role=role,
@@ -228,6 +239,10 @@ class ModelInquiryRunner:
                             {"classification": "consensus hash does not name a persisted artifact"},
                             trace,
                         )
+                    # Synthesis is persisted before the terminal receipt because
+                    # that receipt carries its artifact hash. If the process dies
+                    # in this gap, resume sees the immutable synthesis and closes
+                    # the terminal link without replaying provider turns.
                     self.service.commit_synthesis(
                         inquiry_id,
                         content=accepted_turn["content"],
@@ -235,6 +250,26 @@ class ModelInquiryRunner:
                         source_refs=trace["source_refs"],
                     )
                     terminal_trace = self.service.trace(inquiry_id)
+                    if _single_target_mode(trace):
+                        target = sanitized_adapter_identity(adapters[roles[0]])
+                        fingerprint = canonical_hash(target)
+                        return self._terminate(
+                            inquiry_id,
+                            "single_target_acceptance",
+                            {
+                                "acceptance_mode": "single_target",
+                                "independence": False,
+                                "round_index": round_index,
+                                "accepted_artifact_hash": consensus_hash,
+                                "target_fingerprints": [fingerprint],
+                                "effective_targets": [target],
+                                "context_hash": context_hash,
+                                "synthesis_artifact_hash": terminal_trace["synthesis"][
+                                    "artifact_hash"
+                                ],
+                            },
+                            terminal_trace,
+                        )
                     degraded = _fallback_was_used(reviews)
                     return self._terminate(
                         inquiry_id,
@@ -605,6 +640,7 @@ class ModelInquiryRunner:
         adapters: Mapping[str, ModelTurnAdapter],
         *,
         role: str,
+        roles: tuple[str, ...],
     ) -> tuple[ModelTurnAdapter, ...]:
         primary = adapters[role]
         if not all(isinstance(adapter, LocalCommandAdapter) for adapter in adapters.values()):
@@ -614,7 +650,7 @@ class ModelInquiryRunner:
             allow_fallback = True
         if not allow_fallback:
             return (primary,)
-        alternate_role = next(candidate for candidate in ROLES if candidate != role)
+        alternate_role = next(candidate for candidate in roles if candidate != role)
         alternate = adapters[alternate_role]
         primary_identity = sanitized_adapter_identity(primary)
         alternate_identity = sanitized_adapter_identity(alternate)
@@ -711,6 +747,34 @@ def _initial_context(trace: Mapping[str, Any]) -> dict[str, Any]:
     return {"packet": packet, "context_hash": canonical_hash(packet)}
 
 
+def _single_target_mode(trace: Mapping[str, Any]) -> bool:
+    inquiry = trace.get("inquiry")
+    return (
+        isinstance(inquiry, Mapping)
+        and inquiry.get("acceptance_mode") == "single_target"
+    )
+
+
+def _inquiry_roles(trace: Mapping[str, Any]) -> tuple[str, ...]:
+    return PERSPECTIVES if _single_target_mode(trace) else LEGACY_ROLES
+
+
+def _descriptor_for_role(
+    descriptors: Mapping[str, Mapping[str, Any]],
+    role: str,
+) -> Mapping[str, Any]:
+    descriptor = descriptors.get(role)
+    if descriptor is not None:
+        return descriptor
+    # A legacy inquiry can still be planned for read-only compatibility while
+    # the provider-neutral descriptor surface only exposes current perspectives.
+    return {
+        "role": role,
+        "available": False,
+        "reason": "inquiry intent not configured",
+    }
+
+
 def _terminal_run_receipt(trace: Mapping[str, Any]) -> dict[str, Any] | None:
     return next(
         (
@@ -776,7 +840,7 @@ def _fallback_was_used(reviews: Sequence[TurnExecution]) -> bool:
         )
         for item in reviews
     }
-    return len(effective_targets) != len(ROLES)
+    return len(effective_targets) != len(LEGACY_ROLES)
 
 
 def _safe_provider_request_id(value: str | None) -> str | None:

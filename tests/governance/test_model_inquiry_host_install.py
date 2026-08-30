@@ -7,10 +7,12 @@ import shlex
 import subprocess
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 import scripts.install_model_inquiry_host as host_installer
+import scripts.model_inquiry_role_adapter as role_adapter
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -67,13 +69,33 @@ def test_installer_creates_both_role_entrypoints_and_exact_retry_is_noop(
     first_payload = json.loads(first.stdout)
     second_payload = json.loads(second.stdout)
     assert first_payload["roles"] == {
+        "synthesis": {
+            "entrypoint": "synthesis-model-inquiry-role",
+            "status": "installed",
+        },
+        "verification": {
+            "entrypoint": "verification-model-inquiry-role",
+            "status": "installed",
+        },
+    }
+    assert second_payload["roles"] == {
+        "synthesis": {
+            "entrypoint": "synthesis-model-inquiry-role",
+            "status": "unchanged",
+        },
+        "verification": {
+            "entrypoint": "verification-model-inquiry-role",
+            "status": "unchanged",
+        },
+    }
+    assert first_payload["compatibility_aliases"] == {
         "fable": {"entrypoint": "fable-model-inquiry-role", "status": "installed"},
         "gpt_codex": {
             "entrypoint": "codex-model-inquiry-role",
             "status": "installed",
         },
     }
-    assert second_payload["roles"] == {
+    assert second_payload["compatibility_aliases"] == {
         "fable": {"entrypoint": "fable-model-inquiry-role", "status": "unchanged"},
         "gpt_codex": {
             "entrypoint": "codex-model-inquiry-role",
@@ -446,6 +468,8 @@ def test_installed_entrypoints_bind_exact_role_and_versioned_adapter(
     assert result.returncode == 0, result.stderr
 
     expected = {
+        "synthesis-model-inquiry-role": "synthesis",
+        "verification-model-inquiry-role": "verification",
         "fable-model-inquiry-role": "fable",
         "codex-model-inquiry-role": "gpt_codex",
     }
@@ -473,6 +497,33 @@ def test_installed_entrypoints_bind_exact_role_and_versioned_adapter(
     assert "model_inquiry_subscription_adapter" not in launcher
 
 
+def test_legacy_role_names_are_explicit_adapter_compatibility_aliases(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[str, object]] = []
+
+    class FakeAdapter:
+        def __init__(self, perspective: str) -> None:
+            self.perspective = perspective
+
+        def execute(self, request: object) -> SimpleNamespace:
+            calls.append((self.perspective, request))
+            return SimpleNamespace(response_text=self.perspective)
+
+    monkeypatch.setattr(
+        role_adapter,
+        "load_adapters",
+        lambda: {
+            "synthesis": FakeAdapter("synthesis"),
+            "verification": FakeAdapter("verification"),
+        },
+    )
+
+    assert role_adapter.run_role("fable", {"turn": 1}) == "synthesis"
+    assert role_adapter.run_role("gpt_codex", {"turn": 2}) == "verification"
+    assert calls == [("synthesis", {"turn": 1}), ("verification", {"turn": 2})]
+
+
 def test_installed_entrypoints_retain_selected_interpreter_path(tmp_path: Path) -> None:
     bin_dir = tmp_path / "bin"
     selected_python = tmp_path / "selected-python"
@@ -495,7 +546,12 @@ def test_installed_entrypoints_retain_selected_interpreter_path(tmp_path: Path) 
     )
 
     assert result.returncode == 0, result.stderr
-    for entrypoint in ("fable-model-inquiry-role", "codex-model-inquiry-role"):
+    for entrypoint in (
+        "synthesis-model-inquiry-role",
+        "verification-model-inquiry-role",
+        "fable-model-inquiry-role",
+        "codex-model-inquiry-role",
+    ):
         content = (bin_dir / entrypoint).read_text(encoding="utf-8")
         assert str(selected_python) in content
         executed = subprocess.run([str(bin_dir / entrypoint)], check=False)
@@ -538,6 +594,18 @@ def test_check_mode_is_sanitized_read_only_and_complete(tmp_path: Path) -> None:
             "status": "available",
         },
         "roles": {
+            "synthesis": {
+                "entrypoint": "synthesis-model-inquiry-role",
+                "entrypoint_status": "available",
+                "credential_resolution": "host-secret-contract",
+            },
+            "verification": {
+                "entrypoint": "verification-model-inquiry-role",
+                "entrypoint_status": "available",
+                "credential_resolution": "host-secret-contract",
+            },
+        },
+        "compatibility_aliases": {
             "fable": {
                 "entrypoint": "fable-model-inquiry-role",
                 "entrypoint_status": "available",
@@ -579,12 +647,18 @@ def test_check_mode_is_sanitized_read_only_and_complete(tmp_path: Path) -> None:
 
     assert missing_from_path.returncode == 1
     missing_payload = json.loads(missing_from_path.stdout)
-    assert missing_payload["roles"]["fable"] == {
+    assert missing_payload["roles"]["synthesis"] == {
+        "entrypoint": "synthesis-model-inquiry-role",
+        "entrypoint_status": "unavailable",
+        "credential_resolution": "host-secret-contract",
+    }
+    assert missing_payload["roles"]["verification"]["entrypoint_status"] == "unavailable"
+    assert missing_payload["compatibility_aliases"]["fable"] == {
         "entrypoint": "fable-model-inquiry-role",
         "entrypoint_status": "unavailable",
         "credential_resolution": "host-secret-contract",
     }
-    assert missing_payload["roles"]["gpt_codex"]["entrypoint_status"] == "unavailable"
+    assert missing_payload["compatibility_aliases"]["gpt_codex"]["entrypoint_status"] == "unavailable"
 
 
 def test_check_rejects_conflicting_command_at_provider_api_name(
@@ -619,8 +693,10 @@ def test_check_rejects_conflicting_command_at_provider_api_name(
         "lineage": "repo-owned-declared-credential",
         "status": "unavailable",
     }
-    assert payload["roles"]["fable"]["entrypoint_status"] == "available"
-    assert payload["roles"]["gpt_codex"]["entrypoint_status"] == "available"
+    assert payload["roles"]["synthesis"]["entrypoint_status"] == "available"
+    assert payload["roles"]["verification"]["entrypoint_status"] == "available"
+    assert payload["compatibility_aliases"]["fable"]["entrypoint_status"] == "available"
+    assert payload["compatibility_aliases"]["gpt_codex"]["entrypoint_status"] == "available"
 
 
 def test_partial_install_is_retained_for_exact_retry(
@@ -649,7 +725,18 @@ def test_partial_install_is_retained_for_exact_retry(
 
     retry = _install(bin_dir)
     assert retry.returncode == 0, retry.stderr
-    assert json.loads(retry.stdout)["roles"] == {
+    retry_payload = json.loads(retry.stdout)
+    assert retry_payload["roles"] == {
+        "synthesis": {
+            "entrypoint": "synthesis-model-inquiry-role",
+            "status": "unchanged",
+        },
+        "verification": {
+            "entrypoint": "verification-model-inquiry-role",
+            "status": "unchanged",
+        },
+    }
+    assert retry_payload["compatibility_aliases"] == {
         "fable": {"entrypoint": "fable-model-inquiry-role", "status": "unchanged"},
         "gpt_codex": {
             "entrypoint": "codex-model-inquiry-role",
@@ -717,6 +804,16 @@ def test_concurrent_exact_writer_produces_truthful_unchanged_receipt(
     )
 
     assert receipt["roles"] == {
+        "synthesis": {
+            "entrypoint": "synthesis-model-inquiry-role",
+            "status": "unchanged",
+        },
+        "verification": {
+            "entrypoint": "verification-model-inquiry-role",
+            "status": "unchanged",
+        },
+    }
+    assert receipt["compatibility_aliases"] == {
         "fable": {"entrypoint": "fable-model-inquiry-role", "status": "unchanged"},
         "gpt_codex": {
             "entrypoint": "codex-model-inquiry-role",
@@ -981,7 +1078,7 @@ def test_check_revalidates_earlier_wrapper_after_later_discovery(
     assert payload["ok"] is False
     roles = payload["roles"]
     assert isinstance(roles, dict)
-    fable = roles["fable"]
+    fable = payload["compatibility_aliases"]["fable"]
     assert isinstance(fable, dict)
     assert fable["entrypoint_status"] == "unavailable"
 
@@ -1090,7 +1187,12 @@ def test_headless_entrypoints_do_not_require_subscription_session(
     assert "model_inquiry_subscription_adapter" not in adapter_source
     assert "subprocess" not in adapter_source
     assert "shutil.which" not in adapter_source
-    for wrapper_name in ("fable-model-inquiry-role", "codex-model-inquiry-role"):
+    for wrapper_name in (
+        "synthesis-model-inquiry-role",
+        "verification-model-inquiry-role",
+        "fable-model-inquiry-role",
+        "codex-model-inquiry-role",
+    ):
         content = (bin_dir / wrapper_name).read_text(encoding="utf-8")
         assert host_installer.VERSIONED_ADAPTER_NAME in content
         assert "credential-resolution=host-secret-contract" in content
@@ -1124,20 +1226,26 @@ def test_headless_entrypoints_do_not_require_subscription_session(
     intent = (
         REPO_ROOT / "config" / "builderops" / "model_inquiry_role_intent.example.json"
     ).read_text(encoding="utf-8")
-    executed = subprocess.run(
-        [str(bin_dir / "fable-model-inquiry-role")],
-        input=json.dumps({"phase": "draft", "system_prompt": "x"}),
-        env={
-            "PATH": str(bin_dir),
-            "HOME": str(tmp_path),
-            "BUILDEROPS_INQUIRY_ROLE_INTENT_JSON": intent,
-        },
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    for role_entrypoint in (
+        "synthesis-model-inquiry-role",
+        "verification-model-inquiry-role",
+        "fable-model-inquiry-role",
+        "codex-model-inquiry-role",
+    ):
+        executed = subprocess.run(
+            [str(bin_dir / role_entrypoint)],
+            input=json.dumps({"phase": "draft", "system_prompt": "x"}),
+            env={
+                "PATH": str(bin_dir),
+                "HOME": str(tmp_path),
+                "BUILDEROPS_INQUIRY_ROLE_INTENT_JSON": intent,
+            },
+            capture_output=True,
+            text=True,
+            check=False,
+        )
 
-    assert executed.returncode == 78, executed.stderr
-    assert "anthropic.api-key" in executed.stderr
-    assert "ANTHROPIC_API_KEY" not in executed.stderr
-    assert executed.stdout == ""
+        assert executed.returncode == 78, executed.stderr
+        assert "openai.api-key" in executed.stderr
+        assert "ANTHROPIC_API_KEY" not in executed.stderr
+        assert executed.stdout == ""

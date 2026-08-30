@@ -40,10 +40,13 @@ unprovisioned. This Model Inquiry-only subscription path is never a CKM
 credential source or fallback.
 
 The repository also owns the distinct dormant provider-API launcher
-`yggdrasil-model-inquiry-provider-api` plus two stable provider-API role commands:
-`fable-model-inquiry-role` and `codex-model-inquiry-role`. They preserve the
-declared-credential mechanism for any future metered path, but they are not the
-current operational auth and do not replace or retire the sanctioned
+`yggdrasil-model-inquiry-provider-api` plus two neutral provider-API role commands:
+`synthesis-model-inquiry-role` and `verification-model-inquiry-role`. They preserve the
+declared-credential mechanism for any future metered path and do not select a provider or model.
+For already-provisioned hosts, the installer also retains the historical
+`fable-model-inquiry-role` and `codex-model-inquiry-role` names as explicitly labelled
+compatibility aliases for those neutral perspectives. They are not the current
+operational auth and do not replace or retire the sanctioned
 subscription bridge or its `yggdrasil-model-inquiry` launcher. Install or verify
 these owner-only wrappers only to validate that versioned mechanism against the
 current repository checkout:
@@ -56,8 +59,8 @@ python3 "$repo_root/scripts/install_model_inquiry_host.py" install \
   --python "$repo_root/.venv/bin/python3"
 ```
 
-The operation is idempotent. An exact rerun reports the provider-API launcher and both role
-entrypoints as `unchanged`; an unrelated existing file, subscription command
+The operation is idempotent. An exact rerun reports the provider-API launcher, both neutral role
+entrypoints, and their compatibility aliases as `unchanged`; an unrelated existing file, subscription command
 occupying one of these provider-API wrapper names, symlinked bin directory, or
 unsafe permissions fails closed and must be inspected rather than overwritten.
 The installer does not inspect, overwrite, or declare stale the separately

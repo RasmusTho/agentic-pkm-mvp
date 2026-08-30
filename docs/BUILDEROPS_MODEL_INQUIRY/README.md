@@ -1,4 +1,5 @@
-State: BMI-01 through BMI-05 are implemented; parent end-to-end acceptance remains pending. The
+State: BMI-01 through BMI-05 are implemented; Model Inquiry acceptance is permanently configured
+as a Sol single-target run, and parent end-to-end acceptance remains pending. The
 configured remote host owns its subscription session and host-specific launcher settings. Under
 ADR-0064's 2026-07-30 owner-cost ruling, that subscription-backed session is the sanctioned
 operational auth for host-local Builder model inquiry. The provider-free intent, declared
@@ -16,7 +17,7 @@ Source of truth: ADR-0010, BuilderOps Vault contracts, and this directory for ta
 # BuilderOps Model Inquiry
 
 BuilderOps Model Inquiry turns one development question into a bounded, pre-ticket collaboration
-between Fable and GPT/Codex. It stores the question, context packets, model turns, synthesis,
+between two neutral review perspectives over one configured Sol target. It stores the question, context packets, model turns, synthesis,
 readiness outcome, and promotion evidence in the BuilderOps plane. It does not make a GitHub Issue
 until the result is executable work.
 
@@ -30,7 +31,9 @@ its advisory claim files never guarantee exclusive ownership.
 ## Scope
 
 - one command/API request creates an `inquiry_id` before any ticket or Issue exists;
-- Fable and GPT/Codex receive structured context packets and review each other's artifacts;
+- the neutral `synthesis` and `verification` perspectives receive structured context packets over
+  the same configured Sol target; this is explicit single-target acceptance, not independent
+  consensus and not a fallback claim;
 - every model turn is traceable to its input artifacts, model identity, run, and content hash;
 - a deterministic readiness gate decides `issue_ready`, `needs_input`, or `not_ready`;
 - only an accepted promotion path may create a GitHub Issue through REST;
@@ -54,19 +57,18 @@ BMI-02 stores its durable record graph under
 `resume` only returns a restart plan until BMI-03 supplies bounded provider execution.
 
 BMI-03 adds `builderops inquiry run`. Its `--dry-run` mode is deterministic and read-only;
-provider-enabled mode uses explicit per-role adapters, strict response validation, durable terminal
-receipts, and no provider fallback on the declared provider-API path. The sanctioned subscription
-path may use the other already-configured subscription adapter as one bounded alternate candidate
-inside the same runner invocation; every failed candidate and actual effective target remains in
-the trace.
+provider-enabled mode uses explicit neutral perspective adapters, strict response validation,
+durable terminal receipts, and one target resolved from the configured Sol capability. The
+subscription path may retry an eligible failed command for that same resolved target, but it never
+selects a second provider/model or claims independent consensus.
 
 BMI-04 adds Codex and portable Claude bridge skills that transfer the question to a configured
-remote-host launcher. The configured remote host owns the BuilderOps command, configured role
-adapters, subscription session, and durable artifacts; its authentication and launcher-path settings
+remote-host launcher. The configured remote host owns the BuilderOps command, configured neutral
+perspective adapters, subscription session, and durable artifacts; its authentication and launcher-path settings
 remain outside Git. The current host-local operational path uses the sanctioned subscription-backed
 session through `yggdrasil-model-inquiry` under the owner-cost ruling. The versioned provider-API
 path remains a separate dormant mechanism under `yggdrasil-model-inquiry-provider-api`:
-it submits provider-free intent, resolves distinct targets through the Builder census, and requires
+it submits provider-free intent, resolves the configured Sol capability through the Builder census, and requires
 explicit `xhigh` reasoning, but intentionally absent metered credentials produce a durable typed
 `credential_unavailable` receipt before any adapter call. That failure does not select a subscription
 or cross-provider fallback. The explicit Model Inquiry subscription exception is confined to this
@@ -94,14 +96,17 @@ is delivered. No task is ready to make a Product/Runtime write.
 4. **Bounded autonomy.** Provider refusal, exhausted candidates, exhausted rounds, or unresolved
    blocking questions terminally record `needs_input` or `not_ready`; no model invents missing
    requirements to reach Issue-ready. An eligible unavailable, timed-out, empty, or malformed
-   subscription turn may try the one alternate configured adapter. Explicit refusal, unsafe output,
-   credential or session failure, and persistence failure never fall back. The owner-controlled
+   subscription turn may try the one alternate configured adapter only on legacy/compatibility
+   paths with distinct effective targets. Active v2 single-target execution has no same-identity
+   alternate; explicit refusal, unsafe output, credential or session failure, and persistence
+   failure never fall back. The owner-controlled
    host launcher selects this fixed bridge only with
    `BUILDEROPS_MODEL_INQUIRY_OPERATIONAL_SUBSCRIPTION=1`; that boolean cannot name targets or
    secrets, and the provider-API launcher refuses to start if it is present or inherited.
 5. **Traceability survives partial failure.** Each completed turn is persisted before a successor
    call. A worker restart can resume from the latest committed turn without replaying an accepted
-   provider call. Duplicate command retries use idempotency keys.
+   provider call. Duplicate command retries use idempotency keys. Legacy v1 records remain readable;
+   only the v2 permanent Sol path is executable after the migration boundary.
 
 Partial failure examples:
 
@@ -109,9 +114,9 @@ Partial failure examples:
   an untraceable run.
 - If a provider call succeeds but receipt persistence fails, the run remains incomplete and the
   provider output is not treated as an accepted turn.
-- If one subscription provider/model is unavailable but the other completes both complementary logical
-  lanes, the report ends `degraded_consensus`. It retains each effective provider/model identity and
-  cannot satisfy independent-consensus readiness or promotion.
+- If the configured Sol target is unavailable, the run ends with a typed provider failure and cannot
+  be promoted. A successful run ends `single_target_acceptance` with `independence: false`; it never
+  becomes `consensus` merely because both neutral perspectives agree.
 - If the models reach their round limit without a common accepted artifact hash, the inquiry ends
   `not_ready` and produces no Issue.
 
@@ -133,10 +138,13 @@ Partial failure examples:
   desktop-launch JSON result without fallback or retry; operational desktop skills never invoke
   that mechanism. Verify:
   `tests/governance/test_start_model_inquiry_skill.py::test_local_launcher_emits_terminal_provider_error_json`.
-- [x] The operational subscription runner can use one configured adapter for both complementary
-  lanes after a bounded, sanitized failure, while reporting `degraded_consensus` and refusing Issue
-  promotion. Verify:
-  `tests/builderops/test_model_inquiry_runner.py::test_single_available_adapter_completes_truthful_degraded_consensus`.
+- [x] The operational subscription runner uses one resolved target for both neutral perspectives and
+  records truthful single-target acceptance. Verify:
+  `tests/builderops/test_model_inquiry_runner.py::test_single_target_acceptance_is_truthful_and_receipted`.
+- [x] The configured Model Inquiry profile binds the Sol capability without provider/model selection
+  in the inquiry intent, and API/subscription adapters consume the same resolved target. Verify:
+  `tests/settings/test_provider_census.py::test_model_inquiry_profiles_bind_configured_capability`
+  and `tests/builderops/test_model_inquiry_adapters.py::test_subscription_adapter_uses_resolved_target_profile`.
 
 ## Relationship To GitHub Issues
 

@@ -19,6 +19,16 @@ MODEL_TURN_SYSTEM_PROMPT = (
     "builderops.model-inquiry-issue-proposal.v1 with exact fields schema_version, title, and body."
 )
 MODEL_TURN_ROLE_PROMPTS = {
+    "synthesis": (
+        "Inquiry perspective: synthesis. Build one coherent bounded option, connect "
+        "cross-system consequences, and make assumptions explicit."
+    ),
+    "verification": (
+        "Inquiry perspective: verification. Challenge assumptions, test credible failure "
+        "and recovery cases, and require bounded verification evidence."
+    ),
+    # Read compatibility for v1 inquiry manifests only. These labels no longer
+    # select a provider, model, credential, or transport target.
     "fable": (
         "Inquiry lane role: context and systems synthesizer. Identify the domain lens most "
         "relevant to the supplied question, such as architecture, data, UX, operations, or "

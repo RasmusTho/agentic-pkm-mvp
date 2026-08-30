@@ -8,6 +8,7 @@ import json
 import os
 import subprocess
 import sys
+import sysconfig
 import tempfile
 from pathlib import Path
 from typing import Any, Mapping, Sequence
@@ -15,6 +16,16 @@ from typing import Any, Mapping, Sequence
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
+
+# Host-secret bootstrap deliberately runs with an isolated HOME.  A host
+# ``sitecustomize`` used for Keychain/transport fault injection can leave the
+# interpreter's configured purelib off ``sys.path``; restore that interpreter
+# configuration before importing the contract kernel, without naming a host
+# or environment-specific site-packages path.
+_INTERPRETER_PURELIB = sysconfig.get_paths().get("purelib")
+if _INTERPRETER_PURELIB and Path(_INTERPRETER_PURELIB).is_dir():
+    if _INTERPRETER_PURELIB not in sys.path:
+        sys.path.append(_INTERPRETER_PURELIB)
 
 from app.builderops.model_inquiry import (
     ModelInquiryService,
@@ -35,7 +46,7 @@ from app.builderops.models import BuilderOpsValidationError
 from app.ops.host_secret_bootstrap import HOST_SECRET_BOOTSTRAP_FAILURE_REF
 from scripts.install_model_inquiry_host import CREDENTIAL_RESOLUTION
 
-WORKFLOW = "fable-gpt-architecture"
+WORKFLOW = "governed-model-inquiry"
 SOURCE_REF = "desktop_skill:start-model-inquiry"
 CREDENTIAL_UNAVAILABLE_EXIT_CODE = 1
 INVALID_TYPED_TERMINAL_EXIT_CODE = 2
@@ -110,7 +121,7 @@ def launch(
     question = question.strip()
     if not question:
         raise LauncherError("question must not be empty")
-    source_env = dict(os.environ if env is None else env)
+    source_env = _with_interpreter_purelib(os.environ if env is None else env)
     if source_env.get(OPERATIONAL_SUBSCRIPTION_MODE_ENV, "").strip():
         raise LauncherError(
             "provider-API launcher refuses operational subscription mode"
@@ -137,6 +148,8 @@ def launch(
                 str(question_file),
                 "--workflow",
                 WORKFLOW,
+                "--acceptance-mode",
+                "single_target",
                 "--source-ref",
                 SOURCE_REF,
                 "--created-by",
@@ -177,6 +190,18 @@ def launch(
     diagnostic = _desktop_diagnostic(completed.get("details"))
     if diagnostic is not None:
         result["diagnostic"] = diagnostic
+    return result
+
+
+def _with_interpreter_purelib(env: Mapping[str, str]) -> dict[str, str]:
+    """Keep child BuilderOps commands on the same interpreter dependency path."""
+    result = dict(env)
+    if not _INTERPRETER_PURELIB or not Path(_INTERPRETER_PURELIB).is_dir():
+        return result
+    configured = [entry for entry in result.get("PYTHONPATH", "").split(os.pathsep) if entry]
+    if _INTERPRETER_PURELIB not in configured:
+        configured.append(_INTERPRETER_PURELIB)
+    result["PYTHONPATH"] = os.pathsep.join(configured)
     return result
 
 

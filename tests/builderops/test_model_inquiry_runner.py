@@ -39,13 +39,19 @@ from tests.builderops.inquiry_intent import (
 )
 
 
-def _start(tmp_path: Path, inquiry_id: str) -> tuple[ModelInquiryService, Path]:
+def _start(
+    tmp_path: Path,
+    inquiry_id: str,
+    *,
+    acceptance_mode: str | None = None,
+) -> tuple[ModelInquiryService, Path]:
     vault = tmp_path / inquiry_id
     vault.mkdir()
     service = ModelInquiryService(vault)
     service.start(
         question=f"Question for {inquiry_id}",
         workflow="fable-gpt-architecture",
+        acceptance_mode=acceptance_mode,
         inquiry_id=inquiry_id,
         source_refs=[{"ref_type": "github_issue", "ref": "#3291"}],
     )
@@ -80,6 +86,185 @@ def _scripted(role: str, responses: list[str]) -> ScriptedAdapter:
         responses=responses,
         calls=[],
     )
+
+
+def test_single_target_acceptance_is_truthful_and_receipted(tmp_path: Path) -> None:
+    vault = tmp_path / "single-target"
+    vault.mkdir()
+    service = ModelInquiryService(vault)
+    service.start(
+        question="Choose the bounded implementation.",
+        workflow="governed-model-inquiry",
+        acceptance_mode="single_target",
+        inquiry_id="inq_single_target",
+        source_refs=[{"ref_type": "github_issue", "ref": "#5203"}],
+    )
+    reviewed = ["draft-synthesis", "draft-verification"]
+
+    class SameTargetAdapter(ScriptedAdapter):
+        pass
+
+    adapters = {
+        perspective: SameTargetAdapter(
+            adapter_id="configured-sol-subscription",
+            provider="configured-provider",
+            model="configured-sol-model",
+            responses=[
+                _response("draft"),
+                _response("accept", reviewed=reviewed, accepted_hash=None),
+            ],
+            calls=[],
+        )
+        for perspective in ("synthesis", "verification")
+    }
+
+    # Each accept response must bind one persisted draft hash. Scripted responses
+    # are replaced after the drafts exist so the test follows the production graph.
+    for perspective, adapter in adapters.items():
+        original_execute = adapter.execute
+
+        def execute(request: Mapping[str, Any], *, _original=original_execute) -> AdapterResult:
+            if request["phase"] == "review":
+                return AdapterResult(
+                    _response(
+                        "accept",
+                        reviewed=list(request["reviewed_artifact_refs"]),
+                        accepted_hash=str(request["input_artifacts"][0]["artifact_hash"]),
+                    )
+                )
+            return _original(request)
+
+        adapter.execute = execute  # type: ignore[method-assign]
+
+    result = ModelInquiryRunner(service, adapters).run(
+        "inq_single_target", max_rounds=1
+    )
+
+    assert result["outcome"] == "single_target_acceptance"
+    trace = ModelInquiryService(vault).trace("inq_single_target")
+    terminal = next(
+        item
+        for item in trace["receipts"]
+        if item["event_type"] == "inquiry_run_terminal"
+    )
+    details = terminal["details"]
+    assert details["acceptance_mode"] == "single_target"
+    assert details["independence"] is False
+    assert len(details["target_fingerprints"]) == 1
+    assert details["effective_targets"] == [
+        {
+            "adapter_id": "configured-sol-subscription",
+            "provider": "configured-provider",
+            "model": "configured-sol-model",
+        }
+    ]
+    assert details["context_hash"]
+    assert details["synthesis_artifact_hash"] == trace["synthesis"]["artifact_hash"]
+    assert all(turn["context_hash"] == details["context_hash"] for turn in trace["turns"])
+    assert terminal["outcome"] != "consensus"
+
+
+def test_single_target_acceptance_recovers_after_synthesis_before_terminal(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service, _ = _start(tmp_path, "inq_single_target_terminal_gap", acceptance_mode="single_target")
+    adapters = {
+        perspective: ScriptedAdapter(
+            adapter_id="configured-sol-subscription",
+            provider="configured-provider",
+            model="configured-sol-model",
+            responses=[_response("draft"), _response("accept")],
+            calls=[],
+        )
+        for perspective in ("synthesis", "verification")
+    }
+    for adapter in adapters.values():
+        original_execute = adapter.execute
+
+        def execute(request: Mapping[str, Any], *, _original=original_execute) -> AdapterResult:
+            if request["phase"] == "review":
+                return AdapterResult(
+                    _response(
+                        "accept",
+                        reviewed=list(request["reviewed_artifact_refs"]),
+                        accepted_hash=str(request["input_artifacts"][0]["artifact_hash"]),
+                    )
+                )
+            return _original(request)
+
+        adapter.execute = execute  # type: ignore[method-assign]
+
+    original_terminal = service.commit_run_terminal_receipt
+
+    def crash_before_terminal(*_args: Any, **_kwargs: Any) -> dict[str, Any]:
+        raise KeyboardInterrupt("simulated crash after synthesis")
+
+    monkeypatch.setattr(service, "commit_run_terminal_receipt", crash_before_terminal)
+    with pytest.raises(KeyboardInterrupt, match="simulated crash"):
+        ModelInquiryRunner(service, adapters).run("inq_single_target_terminal_gap", max_rounds=1)
+
+    partial = service.trace("inq_single_target_terminal_gap")
+    assert partial["synthesis"] is not None
+    assert not any(item["event_type"] == "inquiry_run_terminal" for item in partial["receipts"])
+
+    monkeypatch.setattr(service, "commit_run_terminal_receipt", original_terminal)
+    result = ModelInquiryRunner(service, adapters).run(
+        "inq_single_target_terminal_gap", max_rounds=1
+    )
+    assert result["outcome"] == "single_target_acceptance"
+    recovered = service.trace("inq_single_target_terminal_gap")
+    terminal = next(
+        item for item in recovered["receipts"] if item["event_type"] == "inquiry_run_terminal"
+    )
+    assert terminal["details"]["synthesis_artifact_hash"] == recovered["synthesis"]["artifact_hash"]
+
+
+def test_legacy_inquiry_is_readable_but_not_reactivated_by_sol_path(tmp_path: Path) -> None:
+    service, _ = _start(tmp_path, "inq_legacy_read_only")
+    assert service.trace("inq_legacy_read_only")["inquiry"]["schema"] == (
+        "builderops.model-inquiry.v1"
+    )
+
+    result = ModelInquiryRunner(service, env={}).run("inq_legacy_read_only", max_rounds=1)
+
+    assert result["outcome"] == "provider_unavailable"
+    trace = service.trace("inq_legacy_read_only")
+    assert trace["inquiry"]["schema"] == "builderops.model-inquiry.v1"
+    assert trace["turns"] == []
+
+
+def test_single_target_max_round_terminal_is_readable_and_resume_is_idempotent(
+    tmp_path: Path,
+) -> None:
+    service, _ = _start(
+        tmp_path,
+        "inq_single_target_max_rounds",
+        acceptance_mode="single_target",
+    )
+    reviewed = ["draft-synthesis", "draft-verification"]
+    adapters = {
+        perspective: _scripted(
+            perspective,
+            [_response("draft"), _response("revise", reviewed=reviewed)],
+        )
+        for perspective in ("synthesis", "verification")
+    }
+    runner = ModelInquiryRunner(service, adapters)
+
+    first = runner.run("inq_single_target_max_rounds", max_rounds=1)
+    trace = service.trace("inq_single_target_max_rounds")
+    calls_after_first_run = sum(len(adapter.calls) for adapter in adapters.values())
+    second = runner.run("inq_single_target_max_rounds", max_rounds=1)
+
+    assert first["outcome"] == "max_rounds_exhausted"
+    assert second["terminal_receipt_id"] == first["terminal_receipt_id"]
+    assert sum(len(adapter.calls) for adapter in adapters.values()) == calls_after_first_run
+    assert trace["inquiry"]["acceptance_mode"] == "single_target"
+    assert {turn["role"] for turn in trace["turns"]} == {
+        "synthesis",
+        "verification",
+    }
 
 
 def test_independent_drafts_share_context_hash(tmp_path: Path) -> None:
@@ -134,23 +319,45 @@ def test_dry_run_performs_no_adapter_call_and_writes_nothing(
     assert first["unavailable_roles"] == ["fable", "gpt_codex"]
     assert {path.relative_to(vault): path.read_bytes() for path in vault.rglob("*") if path.is_file()} == before
 
-    # A fully provisioned, resolvable configuration still performs no call and
-    # writes nothing, and a mock identity is still refused as a provider role.
+    # A fully provisioned, resolvable single-target configuration still performs
+    # no call and writes nothing, and a mock identity is still refused.
+    single_vault = tmp_path / "single-target-dry"
+    single_vault.mkdir()
+    single_service = ModelInquiryService(single_vault)
+    single_service.start(
+        question="Question for the single-target dry run",
+        workflow="governed-model-inquiry",
+        acceptance_mode="single_target",
+        inquiry_id="inq_runner_single_dry",
+        source_refs=[{"ref_type": "github_issue", "ref": "#5203"}],
+    )
+    unconfigured_single_target = ModelInquiryRunner(single_service, env={}).run(
+        "inq_runner_single_dry", max_rounds=2, dry_run=True
+    )
+    assert unconfigured_single_target["unavailable_roles"] == [
+        "synthesis",
+        "verification",
+    ]
+    assert set(unconfigured_single_target["adapter_descriptors"]) == {
+        "synthesis",
+        "verification",
+    }
+
     provisioned = ModelInquiryRunner(
-        service, env=provisioned_env(tmp_path / "secrets")
-    ).run("inq_runner_dry", max_rounds=2, dry_run=True)
+        single_service, env=provisioned_env(tmp_path / "secrets")
+    ).run("inq_runner_single_dry", max_rounds=2, dry_run=True)
     assert provisioned["unavailable_roles"] == []
-    assert provisioned["adapter_descriptors"]["fable"]["available"] is True
+    assert provisioned["adapter_descriptors"]["synthesis"]["available"] is True
 
     mocked = ModelInquiryRunner(
-        service,
+        single_service,
         env=provisioned_env(tmp_path / "secrets"),
         resolver=resolver_for_targets(
             tmp_path / "mock-census",
             {"fable": ("mock", "mock-chat"), "gpt_codex": ("mock", "mock-chat")},
         ),
-    ).run("inq_runner_dry", max_rounds=2, dry_run=True)
-    assert mocked["unavailable_roles"] == ["fable", "gpt_codex"]
+    ).run("inq_runner_single_dry", max_rounds=2, dry_run=True)
+    assert mocked["unavailable_roles"] == ["synthesis", "verification"]
     assert all(
         "mock" in descriptor["reason"]
         for descriptor in mocked["adapter_descriptors"].values()
@@ -751,7 +958,7 @@ def test_adapter_failures_and_bad_config_are_terminal_without_secret_leak(tmp_pa
     inquiry_id = "inq_runner_bad_config"
     service, _ = _start(tmp_path, inquiry_id)
     config = intent_config()
-    config["roles"]["fable"]["capability_tier"] = "economy"
+    config["target_intent"]["capability_tier"] = "economy"
     result = ModelInquiryRunner(
         service, env={INQUIRY_INTENT_CONFIG_ENV: json.dumps(config)}
     ).run(inquiry_id, max_rounds=1)
@@ -815,7 +1022,9 @@ def test_production_inquiry_resolves_provider_free_intent_through_builder_census
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    service, vault = _start(tmp_path, "inq_runner_declared")
+    service, vault = _start(
+        tmp_path, "inq_runner_declared", acceptance_mode="single_target"
+    )
     calls = _provider_transport(monkeypatch)
     env = provisioned_env(tmp_path / "secrets")
 
@@ -826,13 +1035,12 @@ def test_production_inquiry_resolves_provider_free_intent_through_builder_census
 
     result = ModelInquiryRunner(service, env=env).run("inq_runner_declared", max_rounds=1)
 
-    assert result["outcome"] == "consensus"
+    assert result["outcome"] == "single_target_acceptance"
     turns = service.trace("inq_runner_declared")["turns"]
-    assert {turn["provider"] for turn in turns} == {"anthropic", "openai"}
-    assert {turn["model"] for turn in turns} == {"claude-fable-5", "gpt-5.6-sol"}
+    assert {turn["provider"] for turn in turns} == {"openai"}
+    assert {turn["model"] for turn in turns} == {"gpt-5.6-sol"}
     assert all(turn["provider_request_id"] for turn in turns)
     assert {call["url"] for call in calls} == {
-        "https://api.anthropic.com/v1/messages",
         "https://api.openai.com/v1/chat/completions",
     }
     persisted = "".join(
@@ -846,42 +1054,28 @@ def test_production_inquiry_resolves_distinct_effective_targets_for_role_group(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    service, _ = _start(tmp_path, "inq_runner_distinct")
-    calls = _provider_transport(monkeypatch)
+    service, _ = _start(
+        tmp_path, "inq_runner_distinct", acceptance_mode="single_target"
+    )
+    _provider_transport(monkeypatch)
 
     ModelInquiryRunner(
         service, env=provisioned_env(tmp_path / "secrets")
     ).run("inq_runner_distinct", max_rounds=1)
     turns = service.trace("inq_runner_distinct")["turns"]
     targets = {(turn["provider"], turn["model"], turn["adapter_id"]) for turn in turns}
-    assert len(targets) == 2
-    assert len({turn["adapter_id"] for turn in turns}) == 2
+    assert len(targets) == 1
+    assert len({turn["adapter_id"] for turn in turns}) == 1
 
-    collided_service, collided_vault = _start(tmp_path, "inq_runner_collided")
-    calls.clear()
-    collided = ModelInquiryRunner(
-        collided_service,
-        env=provisioned_env(tmp_path / "secrets"),
-        resolver=resolver_for_targets(
-            tmp_path / "collided-census",
-            {
-                "fable": ("anthropic", "claude-fable-5"),
-                "gpt_codex": ("anthropic", "claude-fable-5"),
-            },
-        ),
-    ).run("inq_runner_collided", max_rounds=1)
-
-    assert collided["outcome"] == "provider_unavailable"
-    assert calls == []
-    assert collided_service.trace("inq_runner_collided")["turns"] == []
-    assert not list((collided_vault / "model-inquiries" / "inq_runner_collided" / "turns").glob("*"))
 
 
 def test_absent_credential_fails_closed_as_credential_unavailable(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    service, vault = _start(tmp_path, "inq_runner_no_credential")
+    service, vault = _start(
+        tmp_path, "inq_runner_no_credential", acceptance_mode="single_target"
+    )
     posts = _forbid_provider_calls(monkeypatch)
     spawned: list[list[str]] = []
     monkeypatch.setattr(
@@ -896,7 +1090,7 @@ def test_absent_credential_fails_closed_as_credential_unavailable(
     assert result["outcome"] == "provider_error"
     diagnostic = result["details"]["diagnostic"]
     assert diagnostic["adapter_failure_class"] == "credential_unavailable"
-    assert diagnostic["credential_identity_ref"] == "anthropic.api-key"
+    assert diagnostic["credential_identity_ref"] == "openai.api-key"
     assert "adapter_exit_code" not in diagnostic
     # No fallback: no provider transport, no subscription CLI, no second provider.
     assert posts == []
@@ -921,6 +1115,101 @@ def test_absent_credential_fails_closed_as_credential_unavailable(
         "credential_unavailable"
     )
     assert posts == []
+
+
+@pytest.mark.parametrize(
+    ("failure_class", "expected_outcome"),
+    [
+        ("command_exit_nonzero", "provider_error"),
+    ],
+)
+def test_single_target_typed_failure_is_readable_and_resume_is_idempotent(
+    tmp_path: Path,
+    failure_class: str,
+    expected_outcome: str,
+) -> None:
+    inquiry_id = f"inq_single_target_{failure_class}"
+    service, _ = _start(tmp_path, inquiry_id, acceptance_mode="single_target")
+    adapters = {
+        "synthesis": FailingAdapter(
+            adapter_id=f"{failure_class}-adapter",
+            failure_class=failure_class,
+        ),
+        "verification": _scripted("verification", [_response("draft")]),
+    }
+    runner = ModelInquiryRunner(service, adapters)
+
+    first = runner.run(inquiry_id, max_rounds=1)
+    trace = service.trace(inquiry_id)
+    second = runner.run(inquiry_id, max_rounds=1)
+
+    assert first["outcome"] == expected_outcome
+    assert second["terminal_receipt_id"] == first["terminal_receipt_id"]
+    assert trace["inquiry"]["acceptance_mode"] == "single_target"
+    assert any(
+        receipt["event_type"] == "inquiry_provider_attempt_terminal"
+        for receipt in trace["receipts"]
+    )
+
+
+def test_single_target_malformed_output_is_readable_and_resume_is_idempotent(
+    tmp_path: Path,
+) -> None:
+    inquiry_id = "inq_single_target_malformed_output"
+    service, _ = _start(tmp_path, inquiry_id, acceptance_mode="single_target")
+    runner = ModelInquiryRunner(
+        service,
+        {
+            "synthesis": _scripted("synthesis", ["not-json"]),
+            "verification": _scripted("verification", [_response("draft")]),
+        },
+    )
+
+    first = runner.run(inquiry_id, max_rounds=1)
+    trace = service.trace(inquiry_id)
+    second = runner.run(inquiry_id, max_rounds=1)
+
+    assert first["outcome"] == "malformed_output"
+    assert second["terminal_receipt_id"] == first["terminal_receipt_id"]
+    assert trace["inquiry"]["acceptance_mode"] == "single_target"
+
+
+def test_single_target_provider_refusal_is_readable_and_resume_is_idempotent(
+    tmp_path: Path,
+) -> None:
+    inquiry_id = "inq_single_target_provider_refused"
+    service, _ = _start(tmp_path, inquiry_id, acceptance_mode="single_target")
+    runner = ModelInquiryRunner(
+        service,
+        {
+            "synthesis": _scripted("synthesis", [_response("refuse")]),
+            "verification": _scripted("verification", [_response("draft")]),
+        },
+    )
+
+    first = runner.run(inquiry_id, max_rounds=1)
+    trace = service.trace(inquiry_id)
+    second = runner.run(inquiry_id, max_rounds=1)
+
+    assert first["outcome"] == "provider_refused"
+    assert second["terminal_receipt_id"] == first["terminal_receipt_id"]
+    assert trace["inquiry"]["acceptance_mode"] == "single_target"
+
+
+def test_single_target_configuration_failure_is_readable_and_resume_is_idempotent(
+    tmp_path: Path,
+) -> None:
+    inquiry_id = "inq_single_target_configuration_failure"
+    service, _ = _start(tmp_path, inquiry_id, acceptance_mode="single_target")
+    runner = ModelInquiryRunner(service, env={})
+
+    first = runner.run(inquiry_id, max_rounds=1)
+    trace = service.trace(inquiry_id)
+    second = runner.run(inquiry_id, max_rounds=1)
+
+    assert first["outcome"] == "provider_unavailable"
+    assert second["terminal_receipt_id"] == first["terminal_receipt_id"]
+    assert trace["inquiry"]["acceptance_mode"] == "single_target"
 
 
 def test_auth_failure_class_survives_persistence_revalidation(tmp_path: Path) -> None:

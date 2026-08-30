@@ -268,9 +268,9 @@ else:
     payload = json.loads(result.stdout)
     assert payload["final_state"] == "provider_error"
     assert payload["diagnostic"] == {
-        "adapter_id": "anthropic-claude-fable-5",
+        "adapter_id": "openai-gpt-5.6-sol",
         "adapter_failure_class": "credential_unavailable",
-        "credential_identity_ref": "anthropic.api-key",
+        "credential_identity_ref": "openai.api-key",
     }
     trace = ModelInquiryService(vault).trace(payload["inquiry_id"])
     assert trace["turns"] == []
@@ -294,12 +294,11 @@ def test_subscription_adapter_uses_high_reasoning_profile(monkeypatch) -> None:
     spec.loader.exec_module(module)
     monkeypatch.setattr(module.shutil, "which", lambda name: f"/fixtures/{name}")
 
-    fable_argv = module.build_argv("fable", "system prompt")
-    codex_argv = module.build_argv("gpt_codex", "system prompt")
+    sol_argv = module.build_argv("configured-sol-model")
 
     assert module.COMMAND_TIMEOUT_SECONDS == 1200
-    assert fable_argv[fable_argv.index("--effort") + 1] == "xhigh"
-    assert codex_argv[codex_argv.index("-c") + 1] == 'model_reasoning_effort="xhigh"'
+    assert sol_argv[sol_argv.index("-c") + 1] == 'model_reasoning_effort="xhigh"'
+    assert sol_argv[sol_argv.index("--model") + 1] == "configured-sol-model"
 
 
 def test_subscription_adapter_uses_safe_timeout_exit(monkeypatch) -> None:
@@ -315,9 +314,10 @@ def test_subscription_adapter_uses_safe_timeout_exit(monkeypatch) -> None:
     )
 
     with pytest.raises(SystemExit) as raised:
-        module.run_role(
+        module.run_perspective(
             {"system_prompt": "system", "reviewed_artifact_refs": [], "phase": "draft"},
-            "fable",
+            "synthesis",
+            "configured-sol-model",
         )
 
     assert raised.value.code == module.TIMEOUT_EXIT_CODE
@@ -437,7 +437,7 @@ def test_skill_preflight_reports_missing_dependencies(tmp_path: Path) -> None:
         check=False,
     )
     assert missing_adapters.returncode == 2
-    assert "inquiry role intent is not configured" in missing_adapters.stderr
+    assert "inquiry intent is not configured" in missing_adapters.stderr
     assert not (vault / "model-inquiries").exists()
 
     missing_credential = subprocess.run(
@@ -453,7 +453,7 @@ def test_skill_preflight_reports_missing_dependencies(tmp_path: Path) -> None:
         check=False,
     )
     assert missing_credential.returncode == 2
-    assert "anthropic.api-key" in missing_credential.stderr
+    assert "openai.api-key" in missing_credential.stderr
     assert not (vault / "model-inquiries").exists()
 
 
@@ -475,10 +475,9 @@ def test_desktop_preflight_resolves_declared_roles_without_a_session(
 
     result = preflight_dependencies(env, command_cwd=REPO_ROOT)
 
-    assert set(result["adapters"]) == {"fable", "gpt_codex"}
+    assert set(result["adapters"]) == {"synthesis", "verification"}
     assert result["credential_resolution"] == "host-secret-contract"
     assert {identity["provider"] for identity in result["adapters"].values()} == {
-        "anthropic",
         "openai",
     }
     assert not (vault / "model-inquiries").exists()
@@ -486,7 +485,7 @@ def test_desktop_preflight_resolves_declared_roles_without_a_session(
 
     # A mock policy target is refused rather than silently substituted, and a
     # declared credential that is absent fails closed instead of degrading.
-    with pytest.raises(CredentialUnavailableError, match="anthropic.api-key"):
+    with pytest.raises(CredentialUnavailableError, match="openai.api-key"):
         preflight_dependencies(
             {key: value for key, value in env.items() if "HOST_SECRET" not in key},
             command_cwd=REPO_ROOT,

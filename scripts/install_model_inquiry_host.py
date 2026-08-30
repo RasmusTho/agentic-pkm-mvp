@@ -26,9 +26,9 @@ TRUSTED_REPO_ROOT = Path(__file__).resolve().parents[1]
 # subscription launcher is deliberately outside this installer and retains the
 # distinct ``yggdrasil-model-inquiry`` identity under ADR-0064's owner ruling.
 VERSIONED_ADAPTER_NAME = "model_inquiry_role_adapter.py"
-VERSIONED_ADAPTER_SHA256 = "51510b1e8095f322ec410cf073bdb534b5e8a690e18cfa34c82eff91222aae77"
+VERSIONED_ADAPTER_SHA256 = "bb2d56176387d3be23f4453ff2ce779d879a9f53659c7b52d7da62517aa735db"
 VERSIONED_LAUNCHER_NAME = "start_model_inquiry.py"
-VERSIONED_LAUNCHER_SHA256 = "fe6995608ab2c434a62e3eea3b763c5857297af6a2b969ef2bd6be16817c9bd6"
+VERSIONED_LAUNCHER_SHA256 = "8efbbc1a35462334d4a6895660385ea087b2c5253f19541b4434632ce9b703e8"
 FIXED_LAUNCHER_NAME = "yggdrasil-model-inquiry-provider-api"
 CREDENTIAL_RESOLUTION = "host-secret-contract"
 LAUNCHER_LINEAGE = "repo-owned-declared-credential"
@@ -41,9 +41,18 @@ class RoleSpec:
 
 
 ROLE_SPECS = (
+    RoleSpec("synthesis", "synthesis-model-inquiry-role"),
+    RoleSpec("verification", "verification-model-inquiry-role"),
+)
+
+# These names are retained only so an already-provisioned host can be
+# reinstalled without losing its historical command surface. They are not
+# inquiry roles and are never exposed as the primary role map.
+COMPATIBILITY_ROLE_SPECS = (
     RoleSpec("fable", "fable-model-inquiry-role"),
     RoleSpec("gpt_codex", "codex-model-inquiry-role"),
 )
+ALL_ROLE_SPECS = ROLE_SPECS + COMPATIBILITY_ROLE_SPECS
 
 
 class HostInstallError(RuntimeError):
@@ -342,7 +351,7 @@ def _expected_wrappers(*, checkout: Checkout, python: Path) -> dict[RoleSpec, st
             adapter=checkout.adapter,
             adapter_sha256=checkout.adapter_sha256,
         )
-        for spec in ROLE_SPECS
+        for spec in ALL_ROLE_SPECS
     }
     _assert_checkout_authority(checkout)
     return wrappers
@@ -527,6 +536,10 @@ def install(*, repo_root: Path, bin_dir: Path, python: Path) -> dict[str, object
             spec.role: {"entrypoint": spec.entrypoint, "status": states[spec]}
             for spec in ROLE_SPECS
         },
+        "compatibility_aliases": {
+            spec.role: {"entrypoint": spec.entrypoint, "status": states[spec]}
+            for spec in COMPATIBILITY_ROLE_SPECS
+        },
     }
 
 
@@ -647,7 +660,14 @@ def check(
             "lineage": LAUNCHER_LINEAGE,
             "status": "available" if launcher_available else "unavailable",
         },
-        "roles": roles,
+        "roles": {
+            spec.role: roles[spec.role]
+            for spec in ROLE_SPECS
+        },
+        "compatibility_aliases": {
+            spec.role: roles[spec.role]
+            for spec in COMPATIBILITY_ROLE_SPECS
+        },
     }
 
 

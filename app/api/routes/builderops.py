@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
@@ -54,6 +54,7 @@ class ReceiptAppendRequest(BuilderOpsCreateBase):
 class InquiryStartRequest(BaseModel):
     question: str
     workflow: str
+    acceptance_mode: Literal["single_target"] = "single_target"
     inquiry_id: str | None = None
     source_refs: list[dict[str, Any]] = Field(min_length=1)
     created_by: dict[str, Any] | str | None = None
