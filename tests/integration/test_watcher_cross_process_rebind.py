@@ -379,6 +379,54 @@ def test_prepare_ack_refuses_incomplete_registry_scan(
     assert not _revision_receipt_path(tmp_path, 1).exists()
 
 
+def test_rebind_waits_for_budgeted_scan_before_ack_or_completion(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime, vault_a, _vault_b, config_path = _fixture(tmp_path, monkeypatch)
+    for index in range(8):
+        (vault_a / f"pre-budget-{index}.md").write_text(
+            f"pre-budget {index}\n", encoding="utf-8"
+        )
+
+    monkeypatch.setenv("WATCHER_MAX_SCANNED_FILES_PER_TICK", "1")
+    with pytest.raises(RegistryError, match="settings rebind watcher scan was incomplete"):
+        registry.run_registry_once(config_path)
+
+    assert runtime.open_settings_rebind_store().read().phase == "prepared"
+    assert not _revision_receipt_path(tmp_path, 1).exists()
+
+    monkeypatch.setenv("WATCHER_MAX_SCANNED_FILES_PER_TICK", "500")
+    registry.run_registry_once(config_path)
+    acknowledged = load_settings_rebind_watcher_receipt(
+        _revision_receipt_path(tmp_path, 1)
+    )
+    assert acknowledged.stage == "acknowledged"
+
+    _commit(runtime)
+    for index in range(8):
+        (vault_a / f"post-budget-{index}.md").write_text(
+            f"post-budget {index}\n", encoding="utf-8"
+        )
+
+    monkeypatch.setenv("WATCHER_MAX_SCANNED_FILES_PER_TICK", "1")
+    with pytest.raises(RegistryError, match="settings rebind watcher scan was incomplete"):
+        registry.run_registry_once(config_path)
+
+    assert runtime.open_settings_rebind_store().read().phase == "committed"
+    still_acknowledged = load_settings_rebind_watcher_receipt(
+        _revision_receipt_path(tmp_path, 1)
+    )
+    assert still_acknowledged.stage == "acknowledged"
+
+    monkeypatch.setenv("WATCHER_MAX_SCANNED_FILES_PER_TICK", "500")
+    registry.run_registry_once(config_path)
+    completed = load_settings_rebind_watcher_receipt(
+        _revision_receipt_path(tmp_path, 1)
+    )
+    assert completed.stage == "completed"
+
+
 def test_rebind_receipt_buffer_is_bounded_to_current_revision_observation_window(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
