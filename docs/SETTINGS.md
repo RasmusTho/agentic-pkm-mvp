@@ -51,8 +51,11 @@ Vault selection and the separately deployed watcher use the protected
 the old watcher root is acknowledged and drained, and selection plus binding
 are committed in one registry generation. The watcher then resumes on the
 candidate root, after which the Settings Spine reloads exactly once for the
-committed revision. `WATCHER_VAULT_PATH` remains a startup/bootstrap input,
-while health reads the durable phase and desired / applied / reload revisions;
+committed revision after durable completion. If a process dies after the
+idempotent reload callback but before its completion marker is written,
+recovery may replay that callback; the marker prevents a second reload after
+completion. `WATCHER_VAULT_PATH` remains a startup/bootstrap input, while
+health reads the durable phase and desired / applied / reload revisions;
 compiled display fields never choose a binding. Only one compatibility watcher
 root is active at a time. Generic multi-vault lifecycle supervision remains
 owned by the later MVR handoff.

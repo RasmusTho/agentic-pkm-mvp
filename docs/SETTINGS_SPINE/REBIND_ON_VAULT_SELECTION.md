@@ -56,7 +56,10 @@ Those substrate and registry responsibilities are owned by MVR-01:
 - Activates the production compatibility picker transaction only after the durable record and watcher
   reconciler are proven. The picker closes and drains compatibility-mutation ingress, prepares the
   revision, waits for watcher quiescence (or durable `no_lifecycle`), commits selection and binding,
-  then resumes the watcher and invokes the SETTINGS-01 reload path exactly once. `VaultChangedEvent`
+  then resumes the watcher and invokes the SETTINGS-01 reload path exactly once after durable
+  completion. If a process dies after the idempotent reload callback but before the completion
+  marker is written, recovery may replay that same callback; the durable marker prevents a second
+  reload after completion. `VaultChangedEvent`
   remains an optional same-process wake-up hint, never cross-process delivery authority.
 - Recovers pre-commit failure by cancelling and resuming A before ingress reopens. Post-commit recovery
   rolls forward while ingress remains blocked until the old-root scan/buffer drain and resume finish.
