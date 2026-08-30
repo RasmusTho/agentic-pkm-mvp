@@ -17,25 +17,49 @@ concurrency:
 permissions:
   contents: read
   pull-requests: read
-  repository-projects: write
 
 jobs:
   project-pr-projection:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Detect board automation App configuration
+        id: project-app-config
+        shell: bash
+        env:
+          PROJECT_APP_ID: ${{ secrets.PROJECT_APP_ID }}
+          PROJECT_APP_PRIVATE_KEY: ${{ secrets.PROJECT_APP_PRIVATE_KEY }}
+        run: |
+          if [[ -n "$PROJECT_APP_ID" && -n "$PROJECT_APP_PRIVATE_KEY" ]]; then
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Create board automation App token
+        id: project-app-token
+        if: ${{ steps.project-app-config.outputs.configured == 'true' }}
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ secrets.PROJECT_APP_ID }}
+          private-key: ${{ secrets.PROJECT_APP_PRIVATE_KEY }}
+          owner: Yggdrasil-PKM
+          permission-organization-projects: write
+          permission-issues: read
+          permission-pull-requests: read
       - name: Project PR stage projection
         # Stage-change events are deterministic: ready -> Review,
         # draft -> In Progress, closed (merged or unmerged) -> Done. The closed
         # trigger makes terminal projection event-driven instead of relying on
         # the best-effort daily reconcile scan.
         env:
-          # GITHUB_TOKEN cannot write to a user-owned ProjectV2 board; a PAT/App
-          # token with Projects read/write is required. Falls back to the default
-          # token (graceful no-op) when PROJECT_TOKEN is unset.
-          GH_TOKEN: ${{ secrets.PROJECT_TOKEN || secrets.GITHUB_TOKEN }}
+          # The App installation token isolates board automation from interactive
+          # agent quota. Falls back to GITHUB_TOKEN (graceful no-op) when the App
+          # secrets are absent.
+          GH_TOKEN: ${{ steps.project-app-token.outputs.token || secrets.GITHUB_TOKEN }}
+          REPO_GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           python3 scripts/project_status.py \
             --repo "${{ github.repository }}" \
+            --owner "Yggdrasil-PKM" \
             --pr "${{ github.event.pull_request.number }}" \
             --action "${{ github.event.action }}"

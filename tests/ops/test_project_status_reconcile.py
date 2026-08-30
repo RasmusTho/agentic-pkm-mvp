@@ -801,6 +801,8 @@ def test_scan_item_list_fetches_updated_at_from_graphql(monkeypatch) -> None:
 
     def fake_run_gh(*args: str) -> str:
         commands.append(args)
+        if args[:2] == ("api", "users/RasmusTho"):
+            return '{"type":"User"}'
         return reconcile_project_status.json.dumps(
             {
                 "data": {
@@ -851,11 +853,164 @@ def test_scan_item_list_fetches_updated_at_from_graphql(monkeypatch) -> None:
             "status": "Ready",
         }
     ]
-    assert commands[0][:2] == ("api", "graphql")
+    assert commands[0][:2] == ("api", "users/RasmusTho")
+    assert commands[1][:2] == ("api", "graphql")
+    assert "user(login: $owner)" in commands[1][3]
+
+
+def test_scan_item_list_reads_organization_project(monkeypatch) -> None:
+    commands: list[tuple[str, ...]] = []
+
+    def fake_run_gh(*args: str) -> str:
+        commands.append(args)
+        if args[:2] == ("api", "users/Yggdrasil-PKM"):
+            return '{"type":"Organization"}'
+        return reconcile_project_status.json.dumps(
+            {
+                "data": {
+                    "organization": {
+                        "projectV2": {
+                            "items": {
+                                "pageInfo": {
+                                    "hasNextPage": False,
+                                    "endCursor": None,
+                                },
+                                "nodes": [],
+                            }
+                        }
+                    },
+                    "user": None,
+                }
+            }
+        )
+
+    monkeypatch.setattr(reconcile_project_status, "run_gh", fake_run_gh)
+
+    assert reconcile_project_status.list_project_items_for_scan("Yggdrasil-PKM", 1) == []
+    assert commands[0][:2] == ("api", "users/Yggdrasil-PKM")
+    assert "organization(login: $owner)" in commands[1][3]
+    assert "user(login: $owner)" not in commands[1][3]
+    assert len(commands) == 2
+
+
+def test_scan_item_list_uses_typed_query_for_legacy_user_project(monkeypatch) -> None:
+    commands: list[tuple[str, ...]] = []
+
+    def fake_run_gh(*args: str) -> str:
+        commands.append(args)
+        if args[:2] == ("api", "users/RasmusTho"):
+            return '{"type":"User"}'
+        return reconcile_project_status.json.dumps(
+            {
+                "data": {
+                    "user": {
+                        "projectV2": {
+                            "items": {
+                                "pageInfo": {"hasNextPage": False, "endCursor": None},
+                                "nodes": [],
+                            }
+                        }
+                    }
+                }
+            }
+        )
+
+    monkeypatch.setattr(reconcile_project_status, "run_gh", fake_run_gh)
+
+    assert reconcile_project_status.list_project_items_for_scan("RasmusTho", 1) == []
+    assert len(commands) == 2
+    assert commands[0][:2] == ("api", "users/RasmusTho")
+    assert "organization(login: $owner)" not in commands[1][3]
+    assert "user(login: $owner)" in commands[1][3]
+
+
+def test_run_gh_uses_repository_token_for_issue_reads(monkeypatch) -> None:
+    calls: list[dict[str, object]] = []
+
+    def fake_run(_command, **kwargs):
+        calls.append(kwargs)
+        return subprocess.CompletedProcess([], 0, stdout="{}", stderr="")
+
+    monkeypatch.setenv("REPO_GH_TOKEN", "repository-token")
+    monkeypatch.setattr(reconcile_project_status.subprocess, "run", fake_run)
+
+    reconcile_project_status.run_gh("issue", "view", "2680")
+
+    assert calls[0]["env"]["GH_TOKEN"] == "repository-token"
+
+
+def test_project_status_forwards_explicit_organization_owner(monkeypatch) -> None:
+    calls: list[list[str]] = []
+
+    def fake_run(command, **_kwargs):
+        calls.append(command)
+        return subprocess.CompletedProcess(command, 0)
+
+    monkeypatch.setattr(project_status.subprocess, "run", fake_run)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "project_status",
+            "--repo",
+            "RasmusTho/agentic-pkm-mvp",
+            "--owner",
+            "Yggdrasil-PKM",
+            "--pr",
+            "5193",
+            "--action",
+            "ready_for_review",
+        ],
+    )
+
+    assert project_status.main() == 0
+    assert calls == [
+        [
+            sys.executable,
+            "scripts/reconcile_project_status.py",
+            "--repo",
+            "RasmusTho/agentic-pkm-mvp",
+            "--owner",
+            "Yggdrasil-PKM",
+            "--pr",
+            "5193",
+            "--status",
+            "Review",
+        ]
+    ]
+
+
+def test_project_status_defaults_owner_to_repository_owner(monkeypatch) -> None:
+    calls: list[list[str]] = []
+
+    def fake_run(command, **_kwargs):
+        calls.append(command)
+        return subprocess.CompletedProcess(command, 0)
+
+    monkeypatch.setattr(project_status.subprocess, "run", fake_run)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "project_status",
+            "--repo",
+            "RasmusTho/agentic-pkm-mvp",
+            "--pr",
+            "5193",
+            "--action",
+            "ready_for_review",
+        ],
+    )
+
+    assert project_status.main() == 0
+    assert "--owner" in calls[0]
+    assert calls[0][calls[0].index("--owner") + 1] == "RasmusTho"
 
 
 def test_scan_item_list_fails_loud_without_updated_at(monkeypatch) -> None:
     def fake_run_gh(*_args: str) -> str:
+        if _args[:2] == ("api", "users/RasmusTho"):
+            return '{"type":"User"}'
         return reconcile_project_status.json.dumps(
             {
                 "data": {

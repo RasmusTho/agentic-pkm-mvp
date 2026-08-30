@@ -13,6 +13,38 @@ Owner contract:
   - `.github/workflows/project-status-reconcile.yml`
 - Platform-side pieces are now applied for labels, Project fields, required views, lifecycle automation, and branch protection. Required status checks (`smoke`, `smoke-docker`, `pr-contract`) were added to `stable` on 2026-05-10 (issue #844, PR #853).
 
+## token-isolation
+
+The optional Project board workflows use the GitHub App **Agentic PKM Board Automation** when its
+two Actions secrets are configured:
+
+- `PROJECT_APP_ID` — the numeric GitHub App ID.
+- `PROJECT_APP_PRIVATE_KEY` — the complete PEM private-key contents, including the begin/end lines.
+
+The target Project is the organization-owned `Yggdrasil-PKM` project, not the legacy personal
+project with the same title. The App must be installed on the `Yggdrasil-PKM` organization with
+the organization Projects permission `write`; repository-project permission is not sufficient for
+this target. The three workflows request that organization installation explicitly and generate a
+short-lived installation token, then pass it to the board projection script as `GH_TOKEN`. The
+repository remains user-owned, so repository Issue/PR reads use the per-run `GITHUB_TOKEN` through
+`REPO_GH_TOKEN`. The private key is never stored in the repository. If either App secret is absent,
+token creation is skipped and `secrets.GITHUB_TOKEN` is used for both paths; the board script keeps
+its existing graceful no-op behavior when a usable Project credential is unavailable. `PROJECT_TOKEN`
+is retained as a legacy repository secret for rollback/inspection only and is not read by these
+workflows.
+
+Live target verification on 2026-08-29: `Yggdrasil-PKM` Project `#1`, node ID
+`PVT_kwDOEzoj4s4Bh2sR`, title `Agent Delivery Control Plane`, currently exists but is blank. Its
+fields, views, and lifecycle automation still need to be configured to match the repository
+contract before this projection is considered operational. The App installation and permission
+grant are platform-side prerequisites and are not claimed by this repository change.
+
+| Token / identity | Workload | Authority boundary |
+| --- | --- | --- |
+| `PROJECT_APP_ID` + `PROJECT_APP_PRIVATE_KEY` → organization App installation token | `project-status-reconcile.yml`, `project-pr-opened.yml`, `project-pr-stage-change.yml` | Organization Project writes; isolated App quota |
+| `GITHUB_TOKEN` | Ordinary repository-owned Actions governance, plus Issue/PR reads and the documented fallback for the optional board workflows | Per-workflow repository token; no organization Project write authority |
+| Interactive `gh` authentication | Claude/Codex agent issue, PR, and delivery operations | Separate human/agent identity and quota from the board App |
+
 ## Exact label set
 
 Keep only these labels for the delivery control plane taxonomy:

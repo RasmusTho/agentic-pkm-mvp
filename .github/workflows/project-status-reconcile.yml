@@ -27,7 +27,6 @@ permissions:
   contents: read
   issues: read
   pull-requests: read
-  repository-projects: write
 
 jobs:
   reconcile-issue:
@@ -35,15 +34,40 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Detect board automation App configuration
+        id: project-app-config
+        shell: bash
+        env:
+          PROJECT_APP_ID: ${{ secrets.PROJECT_APP_ID }}
+          PROJECT_APP_PRIVATE_KEY: ${{ secrets.PROJECT_APP_PRIVATE_KEY }}
+        run: |
+          if [[ -n "$PROJECT_APP_ID" && -n "$PROJECT_APP_PRIVATE_KEY" ]]; then
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Create board automation App token
+        id: project-app-token
+        if: ${{ steps.project-app-config.outputs.configured == 'true' }}
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ secrets.PROJECT_APP_ID }}
+          private-key: ${{ secrets.PROJECT_APP_PRIVATE_KEY }}
+          owner: Yggdrasil-PKM
+          permission-organization-projects: write
+          permission-issues: read
+          permission-pull-requests: read
       - name: Reconcile issue project status
         env:
-          # GITHUB_TOKEN cannot write to a user-owned ProjectV2 board; a PAT/App
-          # token with Projects read/write is required. Falls back to the default
-          # token (graceful no-op) when PROJECT_TOKEN is unset.
-          GH_TOKEN: ${{ secrets.PROJECT_TOKEN || secrets.GITHUB_TOKEN }}
+          # The App installation token isolates board automation from interactive
+          # agent quota. Falls back to GITHUB_TOKEN (graceful no-op) when the App
+          # secrets are absent.
+          GH_TOKEN: ${{ steps.project-app-token.outputs.token || secrets.GITHUB_TOKEN }}
+          REPO_GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           python3 scripts/reconcile_project_status.py \
             --repo "${{ github.repository }}" \
+            --owner "Yggdrasil-PKM" \
             --issue "${{ github.event.issue.number }}"
 
   reconcile-scan:
@@ -63,13 +87,38 @@ jobs:
           key: project-status-reconcile-scan-watermark-${{ github.run_id }}
           restore-keys: |
             project-status-reconcile-scan-watermark-
+      - name: Detect board automation App configuration
+        id: project-app-config
+        shell: bash
+        env:
+          PROJECT_APP_ID: ${{ secrets.PROJECT_APP_ID }}
+          PROJECT_APP_PRIVATE_KEY: ${{ secrets.PROJECT_APP_PRIVATE_KEY }}
+        run: |
+          if [[ -n "$PROJECT_APP_ID" && -n "$PROJECT_APP_PRIVATE_KEY" ]]; then
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Create board automation App token
+        id: project-app-token
+        if: ${{ steps.project-app-config.outputs.configured == 'true' }}
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ secrets.PROJECT_APP_ID }}
+          private-key: ${{ secrets.PROJECT_APP_PRIVATE_KEY }}
+          owner: Yggdrasil-PKM
+          permission-organization-projects: write
+          permission-issues: read
+          permission-pull-requests: read
       - name: Reconcile existing project items
         env:
-          # GITHUB_TOKEN cannot write to a user-owned ProjectV2 board; a PAT/App
-          # token with Projects read/write is required. Falls back to the default
-          # token (graceful no-op) when PROJECT_TOKEN is unset.
-          GH_TOKEN: ${{ secrets.PROJECT_TOKEN || secrets.GITHUB_TOKEN }}
+          # The App installation token isolates board automation from interactive
+          # agent quota. Falls back to GITHUB_TOKEN (graceful no-op) when the App
+          # secrets are absent.
+          GH_TOKEN: ${{ steps.project-app-token.outputs.token || secrets.GITHUB_TOKEN }}
+          REPO_GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           python3 scripts/reconcile_project_status.py \
             --repo "${{ github.repository }}" \
+            --owner "Yggdrasil-PKM" \
             --scan

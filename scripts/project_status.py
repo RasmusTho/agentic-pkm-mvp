@@ -47,6 +47,7 @@ _LIVE_STATE_DERIVED_ACTIONS = frozenset({"closed"})
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--repo", required=True, help="owner/repo")
+    parser.add_argument("--owner", help="Project owner; defaults to repo owner")
     parser.add_argument("--pr", type=int, required=True, help="Pull request number")
     parser.add_argument("--action", required=True, help="GitHub pull_request action")
     parser.add_argument("--draft", help="True when the PR is currently a draft")
@@ -56,11 +57,14 @@ def main() -> int:
     # Validate the action maps to a status (raises on unsupported actions) even
     # when we will not forward an explicit override.
     status = desired_status(args.action, draft)
+    owner = args.owner or args.repo.split("/", 1)[0]
     cmd = [
         sys.executable,
         "scripts/reconcile_project_status.py",
         "--repo",
         args.repo,
+        "--owner",
+        owner,
         "--pr",
         str(args.pr),
     ]
