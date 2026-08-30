@@ -51,7 +51,7 @@ def _valid_owner(value: object) -> bool:
 
 def parse_blocker_action_receipt(comment: object) -> dict[str, object] | None:
     """Parse the deliberately small YAML receipt subset from one REST comment."""
-    body = comment.get("body", "") if isinstance(comment, dict) else str(comment)
+    body = (comment.get("body") or "") if isinstance(comment, dict) else str(comment)
     if "receipt: blocker_action.v1" not in body:
         return None
     values: dict[str, object] = {"dependency_refs": []}
