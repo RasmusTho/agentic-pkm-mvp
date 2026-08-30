@@ -29,8 +29,8 @@ routes to the current full path so unrelated history cannot ride with the planne
 
 Route every other case without trying to coerce it into the command:
 
-- existing-PR update or review repair -> `pr-integration` and the existing-PR scope-revalidation
-  path in `docs/development/PR_HOT_PATH.md`;
+- existing-PR update or review repair -> `pr-integration` and the exact
+  `PR-Level Scope Revalidation Gate` in `docs/development/PR_HOT_PATH.md`;
 - multi-Issue PR -> `docs/development/PR_HOT_PATH.md :: Multi-Issue PR Scope` and the current full
   verification path;
 - issue-free docs/governance publication or Direct Repair -> the matching current lane contract in

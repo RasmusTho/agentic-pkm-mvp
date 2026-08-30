@@ -243,12 +243,11 @@ def test_pr_template_includes_builderops_routing_receipt() -> None:
 
 
 def test_publication_surfaces_require_governing_issue_identity() -> None:
-    template = _read(".github/pull_request_template.md")
-    publish_skill = _read(".codex/skills/publish-pr/SKILL.md")
+    publication_adapter = _read("app/builderops/publication.py")
 
-    assert "Governing-Issue: #" in template
-    assert "Governing-Issue: #<ISSUE_NUMBER>" in publish_skill
-    assert "Fixes #<ISSUE_NUMBER>" in publish_skill
+    assert 'plan.add_argument("--governing-issue", type=int, required=True)' in publication_adapter
+    assert 'values.get("issue_number") != request.governing_issue' in publication_adapter
+    assert 'argv.extend(["--issue-number", str(values["issue_number"])])' in publication_adapter
 
 
 def test_canonical_agent_rules_allow_open_multi_issue_governor() -> None:

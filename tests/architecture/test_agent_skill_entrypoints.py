@@ -591,10 +591,15 @@ def test_pr_scope_circuit_breaker_is_shared_across_delivery_skills() -> None:
     canonical = "PR-Level Scope Revalidation Gate"
     for path in (
         ".codex/skills/issue-to-code/SKILL.md",
-        ".codex/skills/publish-pr/SKILL.md",
         ".codex/skills/verification-and-closure/SKILL.md",
     ):
         assert canonical in _read(path)
+    publish_router = _section_between(
+        _read(".codex/skills/publish-pr/SKILL.md"),
+        "## Supported path and exception routing",
+        "## Publication preflight",
+    )
+    assert canonical in publish_router
     assert "## PR-Level Scope Revalidation Gate" in _read(
         "docs/development/AUTONOMOUS_REVIEW_REPAIR_GATE_CONTRACTS.md"
     )

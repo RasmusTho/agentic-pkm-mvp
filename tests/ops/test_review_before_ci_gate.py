@@ -28,6 +28,7 @@ from scripts.review_before_ci_gate import (
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 PUBLISH_PR_SKILL = REPO_ROOT / ".codex/skills/publish-pr/SKILL.md"
+PUBLICATION_ADAPTER = REPO_ROOT / "app/builderops/publication.py"
 ISSUE_TO_CODE_SKILL = REPO_ROOT / ".codex/skills/issue-to-code/SKILL.md"
 VERIFICATION_SKILL = REPO_ROOT / ".codex/skills/verification-and-closure/SKILL.md"
 REVIEW_REPAIR_CONTRACT = REPO_ROOT / "docs/development/AUTONOMOUS_REVIEW_REPAIR_GATE_CONTRACTS.md"
@@ -2188,34 +2189,33 @@ def test_cli_fails_until_review_gate_is_complete(
 
 
 def test_publish_pr_skill_runs_review_gate_before_push() -> None:
-    text = PUBLISH_PR_SKILL.read_text(encoding="utf-8")
+    text = PUBLICATION_ADAPTER.read_text(encoding="utf-8")
+    apply_body = text.split("def apply_publication_plan(", maxsplit=1)[1].split(
+        "\ndef _validate_request", maxsplit=1
+    )[0]
+    review_gate = text.split("def _run_review_gate(", maxsplit=1)[1].split(
+        "\ndef _resolve_existing_pr", maxsplit=1
+    )[0]
 
-    assert "Review-Before-CI Gate" in text
-    assert "scripts/review_before_ci_gate.py" in text
-    assert text.index("Review-Before-CI Gate") < text.index("### Step 5: Push Branch")
-    focused = text.index("Run focused local checks")
-    independent_review = text.index("fresh independent high-capability review", focused)
-    validation = text.index("run the proportionate validation", independent_review)
-    renewed_gate = text.index("Re-run the branch-truth pre-push gate", validation)
-    push = text.index("Push only after all four preceding steps pass", renewed_gate)
-    assert focused < independent_review < validation < renewed_gate < push
-    assert "A repo-wide full suite is not automatic" in text
-    assert "Governance-only changes default to targeted" in text
+    assert "scripts/review_before_ci_gate.py" in review_gate
+    assert apply_body.index("_run_review_gate(") < apply_body.index("push = runner.run(")
 
 
 def test_mechanism_convergence_contract_is_wired_across_delivery_skills() -> None:
     agents = AGENTS.read_text(encoding="utf-8")
     issue_to_code = ISSUE_TO_CODE_SKILL.read_text(encoding="utf-8")
     publish_pr = PUBLISH_PR_SKILL.read_text(encoding="utf-8")
+    publication_adapter = PUBLICATION_ADAPTER.read_text(encoding="utf-8")
     verification = VERIFICATION_SKILL.read_text(encoding="utf-8")
     contract = REVIEW_REPAIR_CONTRACT.read_text(encoding="utf-8")
 
     assert "## Mechanism Convergence Gate" in contract
     assert "mechanism/convergence review before an expensive" in agents
     assert "risk-convergence form" in issue_to_code
-    assert "TCD_RISK_SURFACES" in publish_pr
-    assert "implementation, governance, or direct-repair work" in publish_pr
-    assert "implementation, governance, or direct repair" in publish_pr
+    assert "Mechanism Convergence Gate" in publish_pr
+    assert "RISK_SURFACES = frozenset" in publication_adapter
+    assert '"--risk-surface"' in publication_adapter
+    assert "scripts/review_before_ci_gate.py" in publication_adapter
     assert "Low-convergence circuit breaker" in verification
     assert "credential-durability" in verification
     assert "state-machine surfaces" in verification
