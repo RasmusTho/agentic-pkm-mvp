@@ -34,6 +34,7 @@ from app.expansion.connect import (
     run_connect_pass,
 )
 from app.retrieval.capability import RetrievalHit, RetrievalRequest, RetrievalResponse
+from app.settings.models import SettingsBundle, WatcherAndTuningSettings
 from app.write_guard import WriteGuard
 
 
@@ -176,6 +177,34 @@ def test_connect_finding_class_is_in_closed_connect_set() -> None:
     assert FindingClass.CONNECT_RELATED_UNLINKED in CONNECT_FINDING_CLASSES
     assert FindingClass.CONNECT_THEMATIC_LINK in CONNECT_FINDING_CLASSES
     assert FindingClass.CONNECT_CLUSTER_EMERGENCE in CONNECT_FINDING_CLASSES
+
+
+def test_configured_floor_is_honored_through_settings_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    vault_root = tmp_path / "vault"
+    vault_root.mkdir()
+    _write_note(vault_root, "a.md", _panel_note("uuid-a", "Related alpha beta.\n\n"))
+    _write_note(vault_root, "b.md", _panel_note("uuid-b", "Related alpha beta.\n\n"))
+    hits = [
+        _hit("a", uuid="uuid-a", text="Related alpha beta.", source_ref="a.md", score=0.5),
+        _hit("b", uuid="uuid-b", text="Related alpha beta.", source_ref="b.md", score=0.5),
+    ]
+    bundle = SettingsBundle(
+        watcher_and_tuning=WatcherAndTuningSettings(connect_relatedness_floor=0.45)
+    )
+    monkeypatch.setenv("PKM_SETTINGS_PROFILE", "lab")
+    monkeypatch.setattr("app.expansion.connect.get_settings_bundle", lambda: bundle)
+
+    report = run_connect_pass(
+        vault_root=vault_root,
+        queries=["related alpha beta"],
+        write_guard=_allow_all_guard(),
+        outbox_path=tmp_path / "outbox.jsonl",
+        retrieve_fn=_fake_retrieve(hits),
+    )
+
+    assert len(report.findings) == 2
 
 
 # ---------------------------------------------------------------------------

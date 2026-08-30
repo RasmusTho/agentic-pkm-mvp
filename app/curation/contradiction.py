@@ -86,6 +86,8 @@ from app.expansion.connect import (
     default_declined_ledger,
 )
 from app.retrieval.capability import RetrievalRequest, RetrievalResponse, retrieve
+from app.settings.runtime import get_settings_bundle
+from app.settings.tiering import is_lab_profile
 from app.write_guard import DEFAULT_WRITE_GUARD, WriteGuard
 
 # Offline curation task kind (spec §4, §6: "an offline curation task kind
@@ -106,6 +108,12 @@ _DEFAULT_MAX_FINDINGS_PER_NOTE = 3
 _DEFAULT_MAX_FINDINGS_TOTAL = 25
 _DEFAULT_RETRIEVAL_K = 8
 _DEFAULT_CONTRADICTION_FLOOR = 0.4
+
+
+def _contradiction_floor_from_settings() -> float:
+    if not is_lab_profile():
+        return _DEFAULT_CONTRADICTION_FLOOR
+    return get_settings_bundle().watcher_and_tuning.contradiction_floor
 
 
 class UnresolvableContradictionCitationError(ValueError):
@@ -183,6 +191,7 @@ class ContradictionPassConfig:
     max_findings_per_note: int = _DEFAULT_MAX_FINDINGS_PER_NOTE
     max_findings_total: int = _DEFAULT_MAX_FINDINGS_TOTAL
     retrieval_k: int = _DEFAULT_RETRIEVAL_K
+    contradiction_floor: float = _DEFAULT_CONTRADICTION_FLOOR
     cross_scope_grants: tuple[CrossScopeFlow, ...] = ()
     declined_ledger: DeclinedLedgerPort = field(default_factory=default_declined_ledger)
 
@@ -321,7 +330,7 @@ def run_contradiction_pass(
     Explicit-invocation only: this function has no scheduler/tick binding.
     Callers (the CLI) decide when to invoke it.
     """
-    config = config or ContradictionPassConfig()
+    config = config or ContradictionPassConfig(contradiction_floor=_contradiction_floor_from_settings())
     vault_root = Path(vault_root).expanduser().resolve()
 
     seen_finding_ids: set[str] = set()
@@ -333,7 +342,7 @@ def run_contradiction_pass(
 
     for query in queries:
         response = retrieve_fn(RetrievalRequest(query=query, k=config.retrieval_k))
-        hits = [hit for hit in response.hits if hit.score >= _DEFAULT_CONTRADICTION_FLOOR]
+        hits = [hit for hit in response.hits if hit.score >= config.contradiction_floor]
         claims = [_claim_from_hit(hit, anchor_scope=None) for hit in hits]
 
         for i in range(len(claims)):

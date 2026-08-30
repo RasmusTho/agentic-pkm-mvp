@@ -91,6 +91,8 @@ from typing import TYPE_CHECKING, Any, Callable, Protocol
 from app.curation.findings import CurationFinding, FindingClass, LanguageVerdict, track_for_class
 from app.curation.proposal_writer import write_curation_proposals
 from app.retrieval.capability import RetrievalRequest, RetrievalResponse, retrieve
+from app.settings.runtime import get_settings_bundle
+from app.settings.tiering import is_lab_profile
 from app.write_guard import DEFAULT_WRITE_GUARD, WriteGuard
 
 if TYPE_CHECKING:
@@ -110,6 +112,12 @@ _DEFAULT_MAX_FINDINGS_PER_NOTE = 3
 _DEFAULT_MAX_FINDINGS_TOTAL = 25
 _DEFAULT_RETRIEVAL_K = 8
 _DEFAULT_RELATEDNESS_FLOOR = 0.55
+
+
+def _relatedness_floor_from_settings() -> float:
+    if not is_lab_profile():
+        return _DEFAULT_RELATEDNESS_FLOOR
+    return get_settings_bundle().watcher_and_tuning.connect_relatedness_floor
 
 
 class DeclinedLedgerPort(Protocol):
@@ -389,7 +397,7 @@ def run_connect_pass(
     discipline (already-linked exclusion, scope pairing, caps, idempotency)
     on top of what retrieval already returned.
     """
-    config = config or ConnectPassConfig()
+    config = config or ConnectPassConfig(relatedness_floor=_relatedness_floor_from_settings())
     vault_root = Path(vault_root).expanduser().resolve()
     link_map = _existing_link_paths(vault_root)
 

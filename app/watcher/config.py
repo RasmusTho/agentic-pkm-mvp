@@ -34,7 +34,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from app.settings.env_defaults import env_str
-from app.settings.tiering import resolve_dev_lab_env_typed
+from app.settings.runtime import get_settings_bundle, subscribe_settings
+from app.settings.tiering import is_lab_profile, resolve_dev_lab_env_typed
 from app.settings.watcher_settings import load_watcher_settings
 from app.vault.manager import VaultManager
 from app.watcher.heartbeat import DEFAULT_HEARTBEAT_PATH, resolve_heartbeat_path
@@ -143,6 +144,29 @@ class WatcherConfig:
     max_bad_ticks: int = 10
     bad_tick_backoff_seconds: float = 2.0
 
+    def reload_tunables_from_settings(self) -> None:
+        """Refresh lab-tier tunables from the currently compiled spine bundle.
+
+        The existing settings-source watcher reload publishes a new bundle (or
+        retains the last-valid bundle on invalid input).  Applying it here
+        keeps a long-running watcher on that single reload path.
+        """
+        settings = get_settings_bundle().watcher_and_tuning
+        if not is_lab_profile():
+            return
+        self.debounce_ms = resolve_dev_lab_env_typed(
+            "WATCHER_DEBOUNCE_MS", default=str(settings.debounce_ms), parser=_parse_int_factory(fallback=settings.debounce_ms), logger=logger
+        )
+        self.rate_limit_per_min = resolve_dev_lab_env_typed(
+            "WATCHER_RATE_LIMIT_PER_MIN", default=str(settings.rate_limit_per_min), parser=_parse_int_factory(fallback=settings.rate_limit_per_min), logger=logger
+        )
+        self.backoff_seconds = resolve_dev_lab_env_typed(
+            "WATCHER_BACKOFF_SECONDS", default=str(settings.backoff_seconds), parser=_parse_int_factory(fallback=settings.backoff_seconds), logger=logger
+        )
+        self.tick_sleep_seconds = resolve_dev_lab_env_typed(
+            "WATCHER_TICK_SLEEP_SECONDS", default=str(settings.tick_sleep_seconds), parser=_parse_float_factory(fallback=settings.tick_sleep_seconds), logger=logger
+        )
+
     @classmethod
     def from_env(cls) -> "WatcherConfig":
         enable = _as_bool(env_str("WATCHER_ENABLE"))
@@ -168,34 +192,10 @@ class WatcherConfig:
             scope_source,
         )
 
-        debounce_ms = resolve_dev_lab_env_typed(
-            "WATCHER_DEBOUNCE_MS",
-            default="1500",
-            parser=_parse_int_factory(fallback=1500),
-            logger=logger,
-        )
-        rate_limit_per_min = resolve_dev_lab_env_typed(
-            "WATCHER_RATE_LIMIT_PER_MIN",
-            default="30",
-            parser=_parse_int_factory(fallback=30),
-            logger=logger,
-        )
-        backoff_seconds = resolve_dev_lab_env_typed(
-            "WATCHER_BACKOFF_SECONDS",
-            default="10",
-            parser=_parse_int_factory(fallback=10),
-            logger=logger,
-        )
         outbox_env = os.getenv("INDEX_OUTBOX_PATH") or str(watcher_settings.paths.index_outbox)
         state_path = Path(os.getenv("WATCHER_STATE_PATH") or watcher_settings.paths.watcher_state).expanduser()
         stop_file = Path(os.getenv("WATCHER_STOP_FILE") or watcher_settings.paths.watcher_stop_file).expanduser()
         heartbeat_path = resolve_heartbeat_path()
-        tick_sleep_seconds = resolve_dev_lab_env_typed(
-            "WATCHER_TICK_SLEEP_SECONDS",
-            default="1.0",
-            parser=_parse_float_factory(fallback=1.0),
-            logger=logger,
-        )
         tick_log_env = os.getenv("WATCHER_TICK_LOG_PATH")
         tick_log_path = Path(tick_log_env).expanduser() if tick_log_env else watcher_settings.paths.watcher_tick_log
         max_scanned_files_per_tick = _as_int(os.getenv("WATCHER_MAX_SCANNED_FILES_PER_TICK"), fallback=500)
@@ -204,19 +204,15 @@ class WatcherConfig:
         max_bad_ticks = _as_int(os.getenv("WATCHER_MAX_BAD_TICKS"), fallback=10)
         bad_tick_backoff_seconds = _as_float(os.getenv("WATCHER_BAD_TICK_BACKOFF_SECONDS"), fallback=2.0)
 
-        return cls(
+        config = cls(
             enable=enable,
             vault_path=vault_path,
             scope_glob=scope_glob,
-            debounce_ms=debounce_ms,
-            rate_limit_per_min=rate_limit_per_min,
-            backoff_seconds=backoff_seconds,
             state_path=state_path,
             stop_file=stop_file,
             outbox_path=Path(outbox_env).expanduser(),
             heartbeat_path=heartbeat_path,
             summary_interval=_as_int(os.getenv("WATCHER_SUMMARY_INTERVAL"), fallback=60),
-            tick_sleep_seconds=tick_sleep_seconds,
             tick_log_path=tick_log_path.expanduser(),
             max_scanned_files_per_tick=max_scanned_files_per_tick,
             max_bytes_read_per_tick=max_bytes_read_per_tick,
@@ -224,6 +220,13 @@ class WatcherConfig:
             max_bad_ticks=max_bad_ticks,
             bad_tick_backoff_seconds=bad_tick_backoff_seconds,
         )
+        config.reload_tunables_from_settings()
+        # The existing Settings Spine signal reloads the compiled bundle. Bind
+        # this long-running watcher config to that signal instead of adding a
+        # watcher-specific source reader; ``run_tick`` also refreshes as a
+        # defensive catch-up for manually constructed configs in tests/tools.
+        subscribe_settings(lambda _bundle: config.reload_tunables_from_settings(), replay=False)
+        return config
 
 
 __all__ = ["WatcherConfig"]
