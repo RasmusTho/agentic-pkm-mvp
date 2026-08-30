@@ -30,9 +30,17 @@ from app.dispatcher.verified_merge import (
     prepare_verified_merge,
 )
 from tests.dispatcher.builderops_verification_fakes import FakeBuilderOpsClient
-from tests.dispatcher.verification_helpers import HEAD, REPO, request
+from tests.dispatcher.verification_helpers import (
+    HEAD,
+    REPO,
+    admitted_verified_attempt_receipt,
+    request,
+)
 
 BASE = "b" * 40
+MECHANISM_PATH_SHA = hashlib.sha256(
+    b"app/dispatcher/verification_agent_loop.py"
+).hexdigest()
 NEXT_BASE = "c" * 40
 
 
@@ -354,8 +362,14 @@ def claimed_run(
         "gpt-5.6-sol",
         "high",
         {"head_sha": HEAD},
-        "passed",
-        {"head_sha": HEAD},
+        "launched",
+        admitted_verified_attempt_receipt(
+            ledger,
+            run.run_id,
+            "verification-session",
+            holder="verification-host",
+            lease_id=claimed.lease_id,
+        ),
         holder="verification-host",
         lease_id=claimed.lease_id,
         idempotency_key="pre-merge-verification",
@@ -426,8 +440,14 @@ def test_merge_ready_containment_matches_durable_verification_attempt() -> None:
         "gpt-5.6-sol",
         "high",
         {"head_sha": HEAD},
-        "passed",
-        {"head_sha": HEAD},
+            "launched",
+            admitted_verified_attempt_receipt(
+                ledger,
+                run.run_id,
+                "verification-session",
+                holder="verification-host",
+                lease_id=claimed.lease_id,
+            ),
         holder="verification-host",
         lease_id=claimed.lease_id,
         idempotency_key="contained-verification",
@@ -521,6 +541,7 @@ def test_blocking_review_wins_atomic_merge_intent_race() -> None:
         reasoning_effort="xhigh",
         context={"head_sha": HEAD},
         outcome="blocking",
+        mechanism_path_sha256=[MECHANISM_PATH_SHA],
     )
     repository = RepositoryAuthority()
 

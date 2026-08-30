@@ -8,7 +8,12 @@ import pytest
 
 import app.dispatcher.verification_dispatch as verification_dispatch
 from app.dispatcher.verification_dispatch import VerificationDispatchLedger
-from tests.dispatcher.verification_helpers import HEAD, ledger, request
+from tests.dispatcher.verification_helpers import (
+    HEAD,
+    admitted_verified_attempt_receipt,
+    ledger,
+    request,
+)
 
 
 NEW_HEAD = "b" * 40
@@ -76,8 +81,14 @@ def _record_closure_evidence(
         "gpt-5.6-sol",
         "xhigh",
         {"head_sha": HEAD},
-        "verified",
-        {"head_sha": HEAD},
+        "launched",
+        admitted_verified_attempt_receipt(
+            state,
+            run_id,
+            "coordinator",
+            holder="host",
+            lease_id=lease_id,
+        ),
         holder="host",
         lease_id=lease_id,
     )

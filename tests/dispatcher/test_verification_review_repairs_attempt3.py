@@ -12,13 +12,19 @@ from app.dispatcher.verification_consumer import (
 from tests.dispatcher.test_verification_consumer import (
     _closure_evidence,
     _merge_comments,
+    _repair_compare,
     Auth,
     Launcher,
     eligible_pr,
     green_checks,
     merged_pr,
 )
-from tests.dispatcher.verification_helpers import HEAD, ledger, request
+from tests.dispatcher.verification_helpers import (
+    HEAD,
+    admitted_verified_attempt_receipt,
+    ledger,
+    request,
+)
 
 
 NEW_HEAD = "b" * 40
@@ -44,7 +50,13 @@ def _running_loop(tmp_path):
         "high",
         {"head_sha": HEAD},
         "launched",
-        {"head_sha": HEAD},
+        admitted_verified_attempt_receipt(
+            state,
+            run.run_id,
+            "01900000-0000-7000-8000-000000000022",
+            holder="host",
+            lease_id=claimed.lease_id,
+        ),
         holder="host",
         lease_id=claimed.lease_id,
     )
@@ -172,6 +184,9 @@ class StaticTruth:
     def checks(self, repository, head_sha):
         self.checked_heads.append(head_sha)
         return green_checks(self.head)
+
+    def compare(self, repository, base_head_sha, repaired_head_sha):
+        return _repair_compare(base_head_sha, repaired_head_sha)
 
     def pull_request_comments(self, repository, pr_number):
         return _merge_comments(self.pull_request(repository, pr_number))

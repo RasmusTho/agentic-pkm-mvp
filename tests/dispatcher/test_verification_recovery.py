@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import hashlib
+
+import app.dispatcher.verification_consumer as verification_consumer
 import app.dispatcher.cli as dispatcher_cli
 import pytest
 
@@ -10,6 +13,7 @@ from app.dispatcher.verification_consumer import (
     context_pack,
 )
 from app.dispatcher.verification_dispatch import (
+    VerificationDispatchLedger,
     VerificationSubscriptionBusy,
     _authenticated_verification_request,
     _live_observed_verification_request,
@@ -23,15 +27,77 @@ from tests.dispatcher.test_verification_consumer import (
     GREEN,
     Launcher,
     Truth,
+    green_checks,
     _merge_comments,
     _merge_plan,
     _open_neutralized_recovery_evidence,
     eligible_pr,
     merged_pr,
 )
-from tests.dispatcher.verification_helpers import HEAD, REPO, request
+from tests.dispatcher.verification_helpers import (
+    HEAD,
+    REPO,
+    admitted_verified_attempt_receipt,
+    ledger,
+    request,
+)
+
+MECHANISM_PATH_SHA = hashlib.sha256(
+    b"app/dispatcher/verification_agent_loop.py"
+).hexdigest()
 
 NEXT_HEAD = "b" * 40
+
+
+class RepairReceiptLauncher(Launcher):
+    def __init__(self, truth: Truth, repaired_head: str) -> None:
+        super().__init__()
+        self.truth = truth
+        self.repaired_head = repaired_head
+
+    def launch(self, context_pack, **kwargs):
+        self.calls.append((context_pack, kwargs.get("resume_session_id")))
+        session_id = "01900000-0000-7000-8000-000000000777"
+        if callback := kwargs.get("on_thread_started"):
+            callback(session_id)
+        self.truth.pr = eligible_pr(
+            head={"ref": "branch", "sha": self.repaired_head}
+        )
+        pending = green_checks(self.repaired_head)
+        pending[0]["id"] = 2001
+        pending[0]["check_suite"] = {"id": 2001}
+        workflow = pending[0]["workflow_run"]
+        assert isinstance(workflow, dict)
+        workflow.update(
+            {
+                "id": 3001,
+                "check_suite_id": 2001,
+            }
+        )
+        pending[0]["status"] = "in_progress"
+        pending[0]["conclusion"] = None
+        self.truth.check_rows = pending
+        return session_id, {
+            "verdict": "blocked",
+            "head_sha": self.repaired_head,
+            "summary": "repair published; current-head checks are pending",
+            "receipt_ids": ["repair-crash-window"],
+            "retry_after": None,
+            "review_events": [
+                {
+                    "kind": "repair",
+                    "session_id": "repair-crash-window",
+                    "capability": "gpt-5.6-terra",
+                    "reasoning_effort": "high",
+                    "outcome": "fixed",
+                    "finding_id": "repair-crash-recovery",
+                    "failure_domain": "review_code_correctness",
+                    "mechanism_id": "repair-postlaunch-fence",
+                    "strongest": False,
+                }
+            ],
+            "human_exception": None,
+        }
 
 
 def test_restart_resumes_from_api_receipts_without_duplicate_attempt() -> None:
@@ -50,8 +116,14 @@ def test_restart_resumes_from_api_receipts_without_duplicate_attempt() -> None:
         "gpt-5.6-sol",
         "high",
         {"head_sha": HEAD},
-        "passed",
-        {"head_sha": HEAD},
+        "launched",
+        admitted_verified_attempt_receipt(
+            first,
+            run.run_id,
+            "session-1",
+            holder="verification-host",
+            lease_id=claimed.lease_id,
+        ),
         holder="verification-host",
         lease_id=claimed.lease_id,
         idempotency_key="verification-success",
@@ -88,8 +160,14 @@ def test_restart_resumes_from_api_receipts_without_duplicate_attempt() -> None:
         "gpt-5.6-sol",
         "high",
         {"head_sha": HEAD},
-        "passed",
-        {"head_sha": HEAD},
+        "launched",
+        admitted_verified_attempt_receipt(
+            restarted,
+            run.run_id,
+            "session-1",
+            holder="verification-host",
+            lease_id=claimed.lease_id,
+        ),
         holder="verification-host",
         lease_id=claimed.lease_id,
         idempotency_key="verification-success",
@@ -598,6 +676,169 @@ def test_unknown_model_effect_restart_resumes_same_session_after_reconciliation(
     assert len(first_launcher.calls) == 1
 
 
+@pytest.mark.parametrize("backend", ("sqlite", "builderops"))
+@pytest.mark.parametrize(
+    "checkpoint",
+    ("receipt_persisted", "h2_observed", "head_rebound", "before_event_batch"),
+)
+def test_repair_postlaunch_crash_windows_resume_without_relaunch(
+    tmp_path,
+    monkeypatch,
+    backend: str,
+    checkpoint: str,
+) -> None:
+    api = FakeBuilderOpsClient() if backend == "builderops" else None
+    outbox = FakeVerificationOutbox(api) if api is not None else None
+    state = (
+        BuilderOpsVerificationLedger(
+            api,
+            repository=REPO,
+            effect_outbox=outbox,
+        )
+        if api is not None
+        else ledger(tmp_path / checkpoint)
+    )
+    run = state.ingest(request())
+    truth = Truth(eligible_pr(), green_checks(HEAD))
+    launcher = RepairReceiptLauncher(truth, NEXT_HEAD)
+    consumer = VerificationConsumer(
+        state,
+        truth,
+        Auth(),
+        launcher,
+        holder="crashing-host",
+    )
+
+    with monkeypatch.context() as scoped:
+        if checkpoint == "receipt_persisted":
+            original = state.record_attempt
+
+            def crash_after_receipt(*args, **kwargs):
+                result = original(*args, **kwargs)
+                if args[1] == "verification":
+                    raise SystemExit("crash after durable receipt")
+                return result
+
+            scoped.setattr(state, "record_attempt", crash_after_receipt)
+        elif checkpoint == "h2_observed":
+            original = verification_consumer._github_repair_transition_evidence
+
+            def crash_after_observation(*args, **kwargs):
+                original(*args, **kwargs)
+                raise SystemExit("crash after H2 comparison")
+
+            scoped.setattr(
+                verification_consumer,
+                "_github_repair_transition_evidence",
+                crash_after_observation,
+            )
+        elif checkpoint == "head_rebound":
+            original = state.rebind_head
+
+            def crash_after_rebind(*args, **kwargs):
+                original(*args, **kwargs)
+                raise SystemExit("crash after head rebind")
+
+            scoped.setattr(state, "rebind_head", crash_after_rebind)
+        else:
+            original = state.record_attempt_batch
+
+            def crash_before_batch(*args, **kwargs):
+                raise SystemExit("crash before event batch")
+
+            scoped.setattr(state, "record_attempt_batch", crash_before_batch)
+
+        with pytest.raises(SystemExit, match="crash"):
+            consumer.consume(request())
+
+    if api is None:
+        with state.store._connect() as conn:
+            conn.execute(
+                "UPDATE verification_runs SET lease_expires_at="
+                "'2000-01-01T00:00:00+00:00' WHERE run_id=?",
+                (run.run_id,),
+            )
+            conn.commit()
+        restarted_state = VerificationDispatchLedger(state.store)
+    else:
+        task = api.tasks[run.run_id]
+        assert task["lease"] is not None
+        task["lease"]["expires_at"] = "2000-01-01T00:00:00+00:00"
+        assert outbox is not None
+        for claim in outbox.claims.values():
+            claim["expires_at"] = "2000-01-01T00:00:00+00:00"
+        restarted_state = BuilderOpsVerificationLedger(
+            api,
+            repository=REPO,
+            effect_outbox=outbox,
+        )
+
+    recovery_launcher = Launcher()
+    recovered = VerificationConsumer(
+        restarted_state,
+        truth,
+        Auth(),
+        recovery_launcher,
+        holder="recovery-host",
+    ).recover(run.run_id)
+
+    assert recovered.status == "backoff"
+    assert recovered.current_head_sha == NEXT_HEAD
+    assert recovery_launcher.calls == []
+    kinds = [row["kind"] for row in restarted_state.attempts(run.run_id)]
+    assert kinds.count("verification") == 1
+    assert kinds.count("standard_repair") == 1
+
+
+def test_builderops_repair_recovery_accepts_completed_effect_binding(
+    monkeypatch,
+) -> None:
+    api = FakeBuilderOpsClient()
+    outbox = FakeVerificationOutbox(api)
+    state = BuilderOpsVerificationLedger(
+        api,
+        repository=REPO,
+        effect_outbox=outbox,
+    )
+    run = state.ingest(request())
+    truth = Truth(eligible_pr(), green_checks(HEAD))
+    launcher = RepairReceiptLauncher(truth, NEXT_HEAD)
+    consumer = VerificationConsumer(
+        state, truth, Auth(), launcher, holder="crashing-host"
+    )
+    original = state.finish_effect
+
+    def crash_after_effect(*args, **kwargs):
+        original(*args, **kwargs)
+        raise SystemExit("crash after effect completion")
+
+    with monkeypatch.context() as scoped:
+        scoped.setattr(state, "finish_effect", crash_after_effect)
+        with pytest.raises(SystemExit, match="effect completion"):
+            consumer.consume(request())
+
+    task = api.tasks[run.run_id]
+    assert task["lease"] is not None
+    task["lease"]["expires_at"] = "2000-01-01T00:00:00+00:00"
+    restarted = BuilderOpsVerificationLedger(
+        api,
+        repository=REPO,
+        effect_outbox=outbox,
+    )
+    recovery_launcher = Launcher()
+    recovered = VerificationConsumer(
+        restarted,
+        truth,
+        Auth(),
+        recovery_launcher,
+        holder="recovery-host",
+    ).recover(run.run_id)
+
+    assert recovered.status == "backoff"
+    assert recovered.current_head_sha == NEXT_HEAD
+    assert recovery_launcher.calls == []
+
+
 def test_pre_thread_start_crash_dead_letters_without_relaunch() -> None:
     api = CrashBeforeFirstTaskCompletionClient()
     outbox = FakeVerificationOutbox(api)
@@ -919,6 +1160,7 @@ def test_api_ledger_low_convergence_still_needs_one_fresh_review() -> None:
         reasoning_effort="xhigh",
         context=context,
         outcome="blocking",
+        mechanism_path_sha256=[MECHANISM_PATH_SHA],
     )
     loop.repair(
         finding_id="F2",
@@ -953,8 +1195,14 @@ def test_api_ledger_late_blocking_review_revokes_merge_readiness() -> None:
         "gpt-5.6-sol",
         "high",
         {"head_sha": HEAD},
-        "passed",
-        {"head_sha": HEAD},
+        "launched",
+        admitted_verified_attempt_receipt(
+            ledger,
+            run.run_id,
+            "verification-session",
+            holder="verification-host",
+            lease_id=claimed.lease_id,
+        ),
         holder="verification-host",
         lease_id=claimed.lease_id,
         idempotency_key="late-blocker-verification",
@@ -993,6 +1241,7 @@ def test_api_ledger_late_blocking_review_revokes_merge_readiness() -> None:
         reasoning_effort="xhigh",
         context=context,
         outcome="blocking",
+        mechanism_path_sha256=[MECHANISM_PATH_SHA],
     )
 
     assert ledger.closure_ready(run.run_id) is False
@@ -1105,8 +1354,14 @@ def test_attempt_commit_preserves_effect_identity_until_reconciliation() -> None
         "gpt-5.6-sol",
         "high",
         {"head_sha": HEAD},
-        "passed",
-        {"head_sha": HEAD},
+        "launched",
+        admitted_verified_attempt_receipt(
+            first,
+            run.run_id,
+            "session-after-effect",
+            holder="verification-host",
+            lease_id=claimed.lease_id,
+        ),
         holder="verification-host",
         lease_id=claimed.lease_id,
         idempotency_key="attempt-after-effect",

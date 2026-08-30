@@ -157,7 +157,48 @@ The dispatcher is an operational coordination layer, not a lifecycle replacement
   xhigh reasoning at any round. Every additional substantive repair still requires a fresh
   independent blocking review of the preceding repair. Capability escalation and evidence-based
   convergence are key-local; monotonic attempt history, policy version, and bindings persist across
-  restart, head rebind, and takeover. A round may continue only with measurable progress, while
+  restart, head rebind, and takeover. Before launching another workspace-writing closer for a
+  previously blocked finding/domain/mechanism key, the consumer derives a typed
+  `repair_progress_intent.v1` from durable attempt/review history plus the fresh exact-head check
+  frontier, commits it under the active task lease, and re-reads that exact receipt. A second or
+  later repair history that lacks prior server-derived progress is rejected before launch. The
+  closer may echo only the admitted intent id; after launch the consumer re-reads GitHub, keeps the
+  prior reviewed head H1 distinct from the repaired head H2, requires an untruncated linear GitHub
+  compare from H1 to H2, and path-blinds the server-reported changed-file/blob projection. The
+  independent blocking review emits a sorted path-hash projection for the specific mechanism; the
+  consumer admits it only as a non-empty subset of GitHub's authenticated prior repair transition.
+  Both ledger adapters enforce that projection on direct and atomic-batch writes and keep it
+  immutable within one reused blocking-review session. Once that repair anchor has a blocking
+  review, any other review for the anchor requires an intervening repair, so neither a clean row nor
+  a fresh blocking row can launder or replace the durable mechanism authority before progress exists.
+  Clean review receipts are unbound: both adapters reject failure identity and mechanism paths on
+  direct and atomic-batch writes, matching the receipt consumer's schema boundary.
+  Atomic-batch metadata is producer-reserved. Direct writes cannot predeclare a future batch, and
+  each planned item must carry its deterministic attempt id before persistence. Replay is a no-op
+  only when every persisted index has that same id and declared size for the exact batch on both
+  adapters.
+  Closure-eligible verification anchors carry a digest bound to the consumer's already validated
+  and sanitized closer receipt. Public schema/sanitizer validation returns only an inert mapping;
+  the consumer then crosses a private ledger admission boundary that registers the exact capability
+  object against run, repository, PR, pre-launch head, coordinator session, holder, lease, and
+  receipt digest. Direct construction, subclassing, post-validation mutation, or copying a valid
+  seal onto another object lacks that ledger-local registry identity and fails before either adapter
+  writes. Direct and batch APIs cannot mint that producer capability from an arbitrary mapping, and
+  every review must name the latest eligible repair/verification anchor and
+  current head before persistence. Only successful `verified` or already-delivered receipts receive
+  that authority; blocked, needs-human, retry, rate-limit, and launch-failure attempts remain audit
+  evidence and cannot become closure anchors.
+  Progress must change at least one path from that reviewed projection and must also present a new authenticated
+  check-run/workflow-run execution frontier; changing only the selected head label, touching only an
+  unrelated path, or reproducing the same mechanism blob/check executions is non-progress. The
+  consumer commits `repair_progress_evidence.v1` with the repair event, and the ledger independently
+  rebuilds that evidence and rejects stale leases, altered bindings, or reused mechanism/validation
+  state. The durable verification receipt, coordinator session, admitted intent set, H1/H2 compare,
+  and model-effect reconciliation also form a post-launch recovery fence: a crash before or after
+  H2 rebind resumes event application from that receipt without launching the closer again. The same
+  direct, atomic-batch, replay, restart, head-rebind, and takeover invariants apply to the SQLite
+  compatibility ledger and the production BuilderOps API ledger. A round may continue only with
+  that measurable progress evidence, while
   documented non-progress, technical impasse, scope expansion, or authority conflict routes through
   the existing escalation classifier. Attempt count alone does not create a Human Exception.
 - Completion never relies on coordinator receipt ids or review-event prose alone. The fresh exact-head
@@ -294,7 +335,10 @@ The dispatcher is an operational coordination layer, not a lifecycle replacement
   receipt for safe resume/replay. A pending delivered receipt bypasses the ordinary open-only intake
   gate on retry, but can complete only through a fresh authenticated exact-head merged/check read.
   When that receipt proves a repaired head, replay requires its durable repair event and performs
-  the same exact-lease/live-PR-fenced head rebind before applying events or terminal state; the
+  the same exact-lease/live-PR-fenced head rebind before applying events or terminal state. It also
+  requires the persisted pre-launch head and freshly rebuilds the bounded GitHub head transition
+  plus authenticated check-execution digest before ledger mutation; missing or unverifiable replay
+  evidence fails closed. The
   requested-head audit stays immutable while current and verified heads converge on the merged
   receipt head. Its event batch remains exact-replay idempotent.
   Persisted pending receipts are untrusted replay input: the consumer reloads the canonical schema

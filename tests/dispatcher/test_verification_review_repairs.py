@@ -12,7 +12,16 @@ from app.dispatcher.verification_consumer import (
     VerificationConsumer,
 )
 from tests.dispatcher.test_verification_consumer import GREEN, Auth, Launcher, Truth, eligible_pr
-from tests.dispatcher.verification_helpers import HEAD, ledger, request
+from tests.dispatcher.verification_helpers import (
+    HEAD,
+    admitted_verified_attempt_receipt,
+    ledger,
+    request,
+)
+
+MECHANISM_PATH_SHA = hashlib.sha256(
+    b"app/dispatcher/verification_agent_loop.py"
+).hexdigest()
 
 
 def test_subscription_slot_allows_only_one_active_pr_chain(tmp_path) -> None:
@@ -166,6 +175,7 @@ def test_low_convergence_requires_one_fresh_final_clean_review(tmp_path) -> None
         reasoning_effort="high",
         context=context,
         outcome="blocking",
+        mechanism_path_sha256=[MECHANISM_PATH_SHA],
     )
     loop.repair(
         finding_id="F2",
@@ -201,8 +211,15 @@ def test_one_clean_review_closes_a_converged_delivery(tmp_path) -> None:
         "terra",
         "high",
         {"head": run.head_sha},
-        "passed",
-        {"head_sha": run.head_sha},
+        "launched",
+        admitted_verified_attempt_receipt(
+            state,
+            run.run_id,
+            "verification-1",
+            holder="host",
+            lease_id=claimed.lease_id,
+            head=run.head_sha,
+        ),
         holder="host",
         lease_id=claimed.lease_id,
     )
@@ -226,7 +243,14 @@ def test_authenticated_two_round_declaration_remains_compatible(tmp_path) -> Non
     context = {"head": run.head_sha}
     state.record_attempt(
         run.run_id, "verification", "verification-1", "terra", "high",
-        context, "passed", {"head_sha": run.head_sha}, holder="host",
+        context, "launched", admitted_verified_attempt_receipt(
+            state,
+            run.run_id,
+            "verification-1",
+            holder="host",
+            lease_id=claimed.lease_id,
+            head=run.head_sha,
+        ), holder="host",
         lease_id=claimed.lease_id,
     )
     loop.review(
@@ -252,8 +276,15 @@ def test_late_blocking_review_revokes_sqlite_adapter_closure(tmp_path) -> None:
         "terra",
         "high",
         {"head": run.head_sha},
-        "passed",
-        {"head_sha": run.head_sha},
+        "launched",
+        admitted_verified_attempt_receipt(
+            state,
+            run.run_id,
+            "verification-1",
+            holder="host",
+            lease_id=claimed.lease_id,
+            head=run.head_sha,
+        ),
         holder="host",
         lease_id=claimed.lease_id,
     )
@@ -283,6 +314,7 @@ def test_late_blocking_review_revokes_sqlite_adapter_closure(tmp_path) -> None:
         reasoning_effort="xhigh",
         context=context,
         outcome="blocking",
+        mechanism_path_sha256=[MECHANISM_PATH_SHA],
     )
 
     assert not loop.closure_ready()
@@ -311,7 +343,14 @@ def test_v2_request_retains_conservative_two_review_requirement(tmp_path) -> Non
     context = {"head": run.head_sha}
     state.record_attempt(
         run.run_id, "verification", "verification-1", "terra", "high",
-        context, "passed", {"head_sha": run.head_sha}, holder="host",
+        context, "launched", admitted_verified_attempt_receipt(
+            state,
+            run.run_id,
+            "verification-1",
+            holder="host",
+            lease_id=claimed.lease_id,
+            head=run.head_sha,
+        ), holder="host",
         lease_id=claimed.lease_id,
     )
     loop.review(
@@ -344,7 +383,14 @@ def test_two_blockers_in_one_round_still_require_only_one_fresh_final_review(tmp
     context = {"head": run.head_sha}
     state.record_attempt(
         run.run_id, "verification", "verification-1", "terra", "high",
-        context, "passed", {"head_sha": run.head_sha}, holder="host",
+        context, "launched", admitted_verified_attempt_receipt(
+            state,
+            run.run_id,
+            "verification-1",
+            holder="host",
+            lease_id=claimed.lease_id,
+            head=run.head_sha,
+        ), holder="host",
         lease_id=claimed.lease_id,
     )
     loop.apply_events(
@@ -359,6 +405,7 @@ def test_two_blockers_in_one_round_still_require_only_one_fresh_final_review(tmp
                 "reasoning_effort": "high",
                 "outcome": "blocking",
                 "strongest": None,
+                "mechanism_path_sha256": [MECHANISM_PATH_SHA],
             }
             for finding_id in ("F-1", "F-2")
         ],
@@ -393,6 +440,7 @@ def test_cross_mechanism_blocker_does_not_trigger_low_convergence(tmp_path) -> N
         finding_id="F-B1", failure_domain="static_quality",
         mechanism_id="mechanism-b", session_id="review-b1", capability="terra",
         reasoning_effort="high", context=context, outcome="blocking",
+        mechanism_path_sha256=[MECHANISM_PATH_SHA],
     )
     loop.repair(
         finding_id="F-A2", failure_domain="review_code_correctness",

@@ -27,6 +27,7 @@ from app.builderops.control_plane.client import (
 from app.dispatcher.verification_dispatch import (
     ACTIVE_STATES,
     REPAIR_ATTEMPT_KINDS,
+    REPAIR_INTENT_ATTEMPT_KIND,
     REPAIR_BUDGET_POLICY_LEGACY,
     REPAIR_BUDGET_POLICY_MECHANISM,
     TERMINAL_STATES,
@@ -35,7 +36,17 @@ from app.dispatcher.verification_dispatch import (
     VerificationSubscriptionBusy,
     _CanonicalVerificationChainToken,
     _LiveObservedVerificationRequest,
+    _ValidatedVerificationAttemptReceipt,
+    _VerificationReceiptAdmissionRegistry,
+    _verification_anchor_is_eligible,
     _attempt_plan,
+    _is_exact_event_batch_replay,
+    _latest_closure_anchor,
+    _persisted_attempt_receipt,
+    _project_verification_receipt_authority,
+    _reject_reserved_event_batch_metadata,
+    _validated_attempt_receipt_for_persistence,
+    _validate_review_session_reuse,
     _canonical_request_projection,
     _current_head_replay_authority_matches,
     _live_takeover_authority_matches,
@@ -43,6 +54,7 @@ from app.dispatcher.verification_dispatch import (
     _request_closing_authority,
     _request_final_review_rounds,
     _validate_request,
+    _verification_receipt_admission_binding,
 )
 from app.dispatcher.linux_containment import (
     validated_linux_containment_receipt,
@@ -243,6 +255,9 @@ class BuilderOpsVerificationLedger:
         self.client = client
         self.repository = repository.lower()
         self.effect_outbox = effect_outbox
+        self._verification_receipt_admissions = (
+            _VerificationReceiptAdmissionRegistry()
+        )
         self._effect_claims: dict[str, Mapping[str, object]] = {}
         self._unknown_effects: set[str] = set()
         self.envelope = {
@@ -252,6 +267,36 @@ class BuilderOpsVerificationLedger:
             "source_refs": [source_ref],
             "schema_version": 1,
         }
+
+    def _admit_validated_verification_receipt(
+        self,
+        run_id: str,
+        session_id: str,
+        receipt: Mapping[str, object],
+        *,
+        holder: str,
+        lease_id: str,
+    ) -> _ValidatedVerificationAttemptReceipt:
+        """Bind one schema/sanitizer result to this run's live producer lease."""
+        snapshot = self._snapshot(run_id)
+        self._assert_lease(snapshot, holder, lease_id)
+        run = _run_from_snapshot(snapshot)
+        if run.status not in ACTIVE_STATES:
+            raise ValueError("verification receipt admission authority mismatch")
+        binding = _verification_receipt_admission_binding(
+            run_id=run_id,
+            repository=run.repository,
+            pr_number=run.pr_number,
+            head_sha=run.current_head_sha,
+            session_id=session_id,
+            holder=holder,
+            lease_id=lease_id,
+            receipt=receipt,
+        )
+        return self._verification_receipt_admissions.issue(
+            receipt,
+            binding=binding,
+        )
 
     def _snapshot(self, run_id: str) -> dict[str, object]:
         try:
@@ -584,6 +629,7 @@ class BuilderOpsVerificationLedger:
         if (
             snapshot.get("state") != "claimed"
             or lease is None
+            or lease.get("holder") != holder
             or _lease_id(lease) != lease_id
         ):
             raise ValueError("verification API lease ownership mismatch")
@@ -888,14 +934,16 @@ class BuilderOpsVerificationLedger:
                 for event in payload["batch_events"]:
                     if not isinstance(event, Mapping):
                         raise ValueError("BuilderOps verification attempt batch is malformed")
-                    result.append(dict(event))
+                    result.append(
+                        _project_verification_receipt_authority(dict(event))
+                    )
             else:
                 attempt = dict(payload)
                 if "containment" in attempt:
                     validated_linux_containment_receipt(
                         attempt["containment"]
                     )
-                result.append(attempt)
+                result.append(_project_verification_receipt_authority(attempt))
         return result
 
     def record_attempt(
@@ -914,12 +962,41 @@ class BuilderOpsVerificationLedger:
         idempotency_key: str | None = None,
         containment_receipt: Mapping[str, object] | None = None,
     ) -> int:
-        if kind not in {*REPAIR_ATTEMPT_KINDS, "review", "verification"}:
+        if kind not in {
+            *REPAIR_ATTEMPT_KINDS,
+            REPAIR_INTENT_ATTEMPT_KIND,
+            "review",
+            "verification",
+        }:
             raise ValueError("invalid verification attempt kind")
+        _reject_reserved_event_batch_metadata(receipt)
         snapshot = self._snapshot(run_id)
         lease = self._assert_lease(snapshot, holder, lease_id)
         run = _run_from_snapshot(snapshot)
         attempts = self.attempts(run_id)
+        producer_authorized = False
+        if kind == "verification" and receipt is not None:
+            producer_authorized = (
+                self._verification_receipt_admissions.authorizes(
+                    receipt,
+                    binding=_verification_receipt_admission_binding(
+                        run_id=run_id,
+                        repository=run.repository,
+                        pr_number=run.pr_number,
+                        head_sha=run.current_head_sha,
+                        session_id=session_id,
+                        holder=holder,
+                        lease_id=lease_id,
+                        receipt=receipt,
+                    ),
+                )
+            )
+        persisted_receipt = _validated_attempt_receipt_for_persistence(
+            kind=kind,
+            outcome=outcome,
+            receipt=receipt,
+            producer_authorized=producer_authorized,
+        )
         if idempotency_key:
             replay_attempt_id = "vattempt-" + _digest(
                 run_id, idempotency_key
@@ -933,7 +1010,11 @@ class BuilderOpsVerificationLedger:
                 None,
             )
             if replay is not None:
-                expected_receipt = dict(receipt) if receipt is not None else None
+                expected_receipt = (
+                    dict(persisted_receipt)
+                    if persisted_receipt is not None
+                    else None
+                )
                 expected_containment = (
                     validated_linux_containment_receipt(
                         containment_receipt
@@ -947,7 +1028,7 @@ class BuilderOpsVerificationLedger:
                     or replay.get("capability") != capability
                     or replay.get("reasoning_effort") != reasoning_effort
                     or replay.get("outcome") != outcome
-                    or replay.get("receipt") != expected_receipt
+                    or _persisted_attempt_receipt(replay) != expected_receipt
                     or replay.get("containment") != expected_containment
                 ):
                     raise ValueError("verification attempt replay conflicts")
@@ -956,13 +1037,24 @@ class BuilderOpsVerificationLedger:
                     raise ValueError(
                         "verification attempt replay ordinal is malformed"
                     )
+                if kind == "verification":
+                    self._verification_receipt_admissions.retire(receipt)
                 return ordinal
+        _validate_review_session_reuse(
+            attempts,
+            kind=kind,
+            session_id=session_id,
+            outcome=outcome,
+            receipt=receipt,
+            policy=run.repair_budget_policy,
+        )
         ordinal, finding_id, failure_domain, mechanism_id = _attempt_plan(
             attempts,
             kind=kind,
             outcome=outcome,
             receipt=receipt,
             policy=run.repair_budget_policy,
+            current_head_sha=run.current_head_sha,
         )
         identity = idempotency_key or _digest(
             run_id, kind, session_id, ordinal, receipt, _now()
@@ -982,7 +1074,11 @@ class BuilderOpsVerificationLedger:
             "finding_id": finding_id,
             "failure_domain": failure_domain,
             "mechanism_id": mechanism_id,
-            "receipt": dict(receipt) if receipt is not None else None,
+            "receipt": (
+                dict(persisted_receipt)
+                if persisted_receipt is not None
+                else None
+            ),
         }
         if containment_receipt is not None:
             document["containment"] = validated_linux_containment_receipt(
@@ -1000,6 +1096,8 @@ class BuilderOpsVerificationLedger:
                 snapshot.get("version"), "task version"
             ),
         )
+        if kind == "verification":
+            self._verification_receipt_admissions.retire(receipt)
         return ordinal
 
     def record_attempt_batch(
@@ -1016,37 +1114,84 @@ class BuilderOpsVerificationLedger:
         holder: str,
         lease_id: str,
     ) -> int:
+        if (
+            not isinstance(batch_id, str)
+            or not batch_id
+            or not isinstance(batch_size, int)
+            or isinstance(batch_size, bool)
+            or batch_size <= 0
+        ):
+            raise ValueError("verification event batch identity is required")
         snapshot = self._snapshot(run_id)
         lease = self._assert_lease(snapshot, holder, lease_id)
         run = _run_from_snapshot(snapshot)
         if run.current_head_sha != expected_head_sha:
             raise ValueError("verification event batch head changed")
-        prior = self.attempts(run_id)
-        for row in prior:
-            prior_receipt = row.get("receipt")
-            if (
-                isinstance(prior_receipt, Mapping)
-                and prior_receipt.get("event_batch_id") == batch_id
-            ):
-                return 0
-
         def attempt_id(index: int) -> str:
             return "vattempt-" + _digest(run_id, batch_id, index)[:16]
+
+        prior = self.attempts(run_id)
+        if _is_exact_event_batch_replay(
+            prior,
+            batch_id=batch_id,
+            batch_size=batch_size,
+            attempt_id_for=attempt_id,
+        ):
+            return 0
 
         planned = [dict(item) for item in planner(prior, attempt_id)]
         if len(planned) != batch_size:
             raise ValueError("verification event batch plan size mismatch")
         working: builtins.list[dict[str, object]] = builtins.list(prior)
+        admitted_receipts: builtins.list[Mapping[str, object]] = []
         for index, item in enumerate(planned):
+            if item.get("attempt_id") != attempt_id(index):
+                raise ValueError("verification event batch attempt id is malformed")
             receipt = item.get("receipt")
             if not isinstance(receipt, Mapping):
                 raise ValueError("verification event batch receipt is malformed")
+            _reject_reserved_event_batch_metadata(receipt)
+            item_kind = str(item["kind"])
+            item_session_id = str(item["session_id"])
+            producer_authorized = False
+            if item_kind == "verification":
+                producer_authorized = (
+                    self._verification_receipt_admissions.authorizes(
+                        receipt,
+                        binding=_verification_receipt_admission_binding(
+                            run_id=run_id,
+                            repository=run.repository,
+                            pr_number=run.pr_number,
+                            head_sha=run.current_head_sha,
+                            session_id=item_session_id,
+                            holder=holder,
+                            lease_id=lease_id,
+                            receipt=receipt,
+                        ),
+                    )
+                )
+                admitted_receipts.append(receipt)
+            persisted_receipt = _validated_attempt_receipt_for_persistence(
+                kind=item_kind,
+                outcome=str(item["outcome"]),
+                receipt=receipt,
+                producer_authorized=producer_authorized,
+            )
+            _validate_review_session_reuse(
+                working,
+                kind=item_kind,
+                session_id=item_session_id,
+                outcome=str(item["outcome"]),
+                receipt=receipt,
+                policy=run.repair_budget_policy,
+            )
             ordinal, finding_id, failure_domain, mechanism_id = _attempt_plan(
                 working,
                 kind=str(item["kind"]),
                 outcome=str(item["outcome"]),
                 receipt=receipt,
                 policy=run.repair_budget_policy,
+                current_head_sha=run.current_head_sha,
             )
             if item.get("ordinal") != ordinal:
                 raise ValueError("verification event batch ordinal is malformed")
@@ -1056,7 +1201,11 @@ class BuilderOpsVerificationLedger:
                     "failure_domain": failure_domain,
                     "mechanism_id": mechanism_id,
                     "receipt": {
-                        **dict(receipt),
+                        **(
+                            dict(persisted_receipt)
+                            if persisted_receipt is not None
+                            else {}
+                        ),
                         "event_batch_id": batch_id,
                         "event_batch_index": index,
                         "event_batch_size": batch_size,
@@ -1076,6 +1225,8 @@ class BuilderOpsVerificationLedger:
                 snapshot.get("version"), "task version"
             ),
         )
+        for admitted_receipt in admitted_receipts:
+            self._verification_receipt_admissions.retire(admitted_receipt)
         return len(planned)
 
     def repair_budget_projection(self, run_id: str) -> dict[str, object]:
@@ -1149,22 +1300,17 @@ class BuilderOpsVerificationLedger:
         if run is None:
             return False
         attempts = self.attempts(run_id)
-        repairs = [
-            row
-            for row in attempts
-            if row.get("kind") in {"standard_repair", "escalated_repair"}
-        ]
-        verifications = [
-            row for row in attempts if row.get("kind") == "verification"
-        ]
-        if not repairs and not verifications:
+        anchor = _latest_closure_anchor(
+            attempts, current_head_sha=run.current_head_sha
+        )
+        if anchor is None:
             return False
-        anchor = (repairs[-1] if repairs else verifications[-1]).get("attempt_id")
+        anchor_id = anchor.get("attempt_id")
         try:
             self._selected_clean_review_rounds(
                 run,
                 attempts,
-                anchor_id=anchor,
+                anchor_id=anchor_id,
             )
         except ValueError:
             return False
@@ -1223,17 +1369,11 @@ class BuilderOpsVerificationLedger:
         self, run: VerificationRun
     ) -> dict[str, object]:
         attempts = self.attempts(run.run_id)
-        repairs = [
-            row
-            for row in attempts
-            if row.get("kind") in {"standard_repair", "escalated_repair"}
-        ]
-        verifications = [
-            row for row in attempts if row.get("kind") == "verification"
-        ]
-        if not repairs and not verifications:
+        anchor = _latest_closure_anchor(
+            attempts, current_head_sha=run.current_head_sha
+        )
+        if anchor is None:
             raise ValueError("merge readiness has no verification anchor")
-        anchor = repairs[-1] if repairs else verifications[-1]
         anchor_id = anchor.get("attempt_id")
         required = self._required_clean_review_rounds(run, attempts)
         selected = self._selected_clean_review_rounds(
@@ -1269,7 +1409,14 @@ class BuilderOpsVerificationLedger:
             raise ValueError(
                 "merge readiness has no current-head verification attempt"
             )
-        containment = candidates[-1].get("containment")
+        latest = candidates[-1]
+        if not _verification_anchor_is_eligible(
+            latest, current_head_sha=run.current_head_sha
+        ):
+            raise ValueError(
+                "merge readiness latest verification lacks producer authority"
+            )
+        containment = latest.get("containment")
         if containment is None:
             return None
         return validated_linux_containment_receipt(containment)
