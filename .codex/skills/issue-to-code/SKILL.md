@@ -301,8 +301,10 @@ If work becomes blocked before or during implementation:
    gh issue view #<N> --repo "$REPO" --json state,labels,comments
    ```
 
-**Use `agent:blocked`** when blocked by dependency or setup.  
-**Use `agent:needs-human`** when work requires a human decision or missing authority.
+Use `agent:blocked` with exactly one blocked `action:*` label when dependency or setup blocks work.
+Use `agent:needs-human` with exactly one human `action:*` label only for a real authority boundary.
+Post the `blocker_action.v1` receipt from `_shared/BLOCKER_ACTION_CONTRACT.md`; terminal closure
+removes every action label.
 
 ### Action: Open Draft PR (Work In Progress)
 

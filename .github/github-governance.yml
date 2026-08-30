@@ -39,6 +39,17 @@ labels:
     - agent:blocked
     - agent:needs-human
     - agent:in-progress
+  action:
+    - action:repair-contract
+    - action:wait-dependency
+    - action:restore-environment
+    - action:wait-external
+    - action:review-at
+    - action:human-decision
+    - action:human-authorization
+    - action:human-access
+    - action:human-operation
+    - action:human-acceptance
   state:
     - state:known-defect
   lane:

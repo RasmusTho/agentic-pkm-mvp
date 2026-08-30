@@ -62,6 +62,7 @@ from app.builderops.cockpit_github_plane import (
     default_github_reader,
     fetch_github_live,
 )
+from app.builderops.blocker_actions import receipt_for_context
 
 logger = logging.getLogger(__name__)
 
@@ -89,6 +90,7 @@ BANDS: tuple[tuple[str, str], ...] = (
 # that used to live here is gone, because "ready" is not "forgotten" — a fresh
 # unclaimed ready issue is in progress, and forgotten requires a stall.
 _NEEDS_HUMAN_LABEL = "agent:needs-human"
+_ACTION_PREFIX = "action:"
 
 # Locked rung order for the evidence spine.
 RUNG_ORDER: tuple[str, ...] = (
@@ -432,6 +434,30 @@ def _sync_labels(sync_state: str | None) -> list[str]:
     return []
 
 
+def _blocker_action(labels: list[str]) -> str | None:
+    """Expose a subtype only; the live Issue remains its authority."""
+    actions = sorted(label for label in labels if label.startswith(_ACTION_PREFIX))
+    return actions[0] if len(actions) == 1 else None
+
+
+def _sync_blocker_receipt(sync_state: str | None) -> dict[str, object] | None:
+    if not sync_state:
+        return None
+    try:
+        payload = json.loads(sync_state)
+    except json.JSONDecodeError:
+        return None
+    labels = payload.get("labels")
+    comments = payload.get("comments")
+    if not isinstance(labels, list) or not isinstance(comments, list):
+        return None
+    _, receipt = receipt_for_context(
+        (str(label) for label in labels), comments,
+        open_issue=str(payload.get("state", "open")).lower() == "open",
+    )
+    return receipt
+
+
 def _sync_url(sync_state: str | None) -> str | None:
     if not sync_state:
         return None
@@ -678,6 +704,7 @@ def _build_item(
     now: datetime | None = None,
 ) -> dict[str, Any]:
     labels = _sync_labels(task.get("sync_state"))
+    blocker_receipt = _sync_blocker_receipt(task.get("sync_state"))
     mirror_url = _sync_url(task.get("sync_state"))
     mirror_watermark = _sync_last_pull_at(task.get("sync_state"))
     issue_number = task.get("issue_number")
@@ -753,6 +780,9 @@ def _build_item(
         "claimed_by": task.get("claimed_by"),
         "linked_pr": linked_pr,
         "labels": labels,
+        "blocker_action": blocker_receipt.get("action") if blocker_receipt else _blocker_action(labels),
+        "next_action": blocker_receipt.get("next_action") if blocker_receipt else None,
+        "next_action_evidence": "issue comment blocker_action.v1" if blocker_receipt else "receipt unavailable; read-only projection",
         # BOPS-COCKPIT-03 (#4450, decision Q5): labels/url are mirror-derived
         # fields; they name the mirror's own `sync_state.last_pull_at`
         # watermark here, never the dispatcher-store SQLite read instant the

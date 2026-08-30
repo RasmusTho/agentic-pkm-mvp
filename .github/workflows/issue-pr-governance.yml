@@ -22,6 +22,9 @@ jobs:
             const issue = context.payload.issue;
             const labels = (issue.labels || []).map(label => label.name);
             const agentLabels = labels.filter(name => name.startsWith("agent:"));
+            const actionLabels = labels.filter(name => name.startsWith("action:"));
+            const blockedActions = new Set(["action:repair-contract", "action:wait-dependency", "action:restore-environment", "action:wait-external", "action:review-at"]);
+            const humanActions = new Set(["action:human-decision", "action:human-authorization", "action:human-access", "action:human-operation", "action:human-acceptance"]);
             if (agentLabels.length > 1) {
               core.setFailed(`Issue must not carry more than one agent label at once: ${agentLabels.join(", ")}`);
               return;
@@ -35,6 +38,23 @@ jobs:
                   name,
                 });
               }
+            }
+            if (issue.state === "closed" && actionLabels.length) {
+              for (const name of actionLabels) {
+                await github.rest.issues.removeLabel({owner: context.repo.owner, repo: context.repo.repo, issue_number: issue.number, name});
+              }
+              return;
+            }
+            if (issue.state !== "closed") {
+              const lifecycle = labels.filter(name => name === "agent:blocked" || name === "agent:needs-human");
+              if (lifecycle.length === 1 && actionLabels.length !== 1) {
+                core.setFailed("Open blocked/needs-human Issue must carry exactly one action:* label"); return;
+              }
+              if (lifecycle.length === 0 && actionLabels.length) {
+                core.setFailed("action:* labels require agent:blocked or agent:needs-human"); return;
+              }
+              if (lifecycle[0] === "agent:blocked" && actionLabels.length === 1 && !blockedActions.has(actionLabels[0])) core.setFailed("agent:blocked requires a canonical blocked action:* label");
+              if (lifecycle[0] === "agent:needs-human" && actionLabels.length === 1 && !humanActions.has(actionLabels[0])) core.setFailed("agent:needs-human requires a canonical human action:* label");
             }
 
   issue-shape:

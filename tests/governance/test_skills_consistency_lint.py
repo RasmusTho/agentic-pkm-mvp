@@ -71,6 +71,12 @@ def test_skills_consistency_lint_passes() -> None:
     assert errors == [], "skills consistency lint reported errors:\n" + "\n".join(errors)
 
 
+def test_blocker_action_taxonomy_is_linted() -> None:
+    from scripts.lint_skills_consistency import CANONICAL_LABELS
+    assert "action:human-acceptance" in CANONICAL_LABELS
+    assert "action:repair-contract" in CANONICAL_LABELS
+
+
 def test_seeded_clean_tree_passes(tmp_path: Path) -> None:
     assert run_lint(_seed_tree(tmp_path)) == []
 

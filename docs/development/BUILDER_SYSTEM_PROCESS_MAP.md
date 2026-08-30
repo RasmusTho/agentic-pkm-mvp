@@ -354,6 +354,11 @@ L2 subprocess; it does not waive CI, review, verification, release, or safety ga
 canonical authority conditions applies, use `agent:blocked` or the workflow's technical recovery
 state rather than `agent:needs-human`.
 
+Every non-active lifecycle state also names exactly one canonical `action:*` next-action subtype
+and a `blocker_action.v1` receipt. The subtype routes maintenance, dependency, environment,
+external, review-trigger, and human queues without claiming implementation work; it never replaces
+the Human Exception authority classifier.
+
 ### View 3 — information, evidence, and representation architecture
 
 This view classifies artifacts and state; it is not a fourth process hierarchy. These surfaces must

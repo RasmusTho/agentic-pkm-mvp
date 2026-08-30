@@ -17,6 +17,7 @@ import re
 import uuid
 from typing import Any, Protocol
 
+from app.builderops.blocker_actions import receipt_for_context
 from app.dispatcher.models import EventRecord, SyncState, TaskRecord
 from app.dispatcher.store import DispatcherStore
 from app.dispatcher.github_call_logger import (
@@ -283,6 +284,8 @@ _LABEL_PRIORITY: dict[str, str] = {
 _LABEL_STATUS: dict[str, str] = {
     "agent:ready": "ready",
     "agent:blocked": "blocked",
+    "agent:needs-human": "blocked",
+    "agent:in-progress": "in_progress",
 }
 
 
@@ -365,6 +368,13 @@ def normalize_github_issue(
     # GraphQL-shaped payloads carry the browser URL as ``url``.
     html_url = payload.get("html_url") or payload.get("url") or None
 
+    comments: list[object] = []
+    comments_payload = payload.get("comments")
+    if isinstance(comments_payload, list):
+        comments.extend(comments_payload)
+    blocker_verdict, _ = receipt_for_context(
+        labels, comments, open_issue=str(payload.get("state", "open")).lower() == "open"
+    )
     sync_state = SyncState(
         last_pull_at=now,
         source_version=payload.get("updatedAt") or payload.get("updated_at"),
@@ -372,7 +382,13 @@ def normalize_github_issue(
         sync_note=None,
         extra={
             "labels": labels,
+            "state": payload.get("state", "open"),
             "url": str(html_url) if html_url is not None else None,
+            # A caller that obtained the bounded REST comment projection may
+            # pass it through unchanged. The normal ready-only dispatcher does
+            # not fetch blocker comments and remains a strict pickup path.
+            "comments": comments,
+            "blocker_action_drift": list(blocker_verdict.errors),
         },
     )
 
@@ -647,7 +663,11 @@ class GhCliIssueSource:
         page = 1
         while page <= OPEN_ISSUES_MAX_PAGES:
             raw_page = self._fetch_open_issues_raw_page(owner, name, page)
-            issues.extend(self._normalize_open_issue_node(node) for node in raw_page if not node.get("pull_request"))
+            for node in raw_page:
+                if node.get("pull_request"):
+                    continue
+                issue = self._normalize_open_issue_node(node)
+                issues.append(issue)
             if len(raw_page) < OPEN_ISSUES_PAGE_SIZE:
                 return issues
             page += 1
@@ -707,6 +727,19 @@ class GhCliIssueSource:
         if not isinstance(payload, list):
             raise RuntimeError("gh api open issues returned a non-list payload")
         return payload
+
+    def fetch_blocker_comments(self, repo: str, issue_number: int) -> list[dict[str, Any]]:
+        """Fetch bounded REST comments only for non-active action projection."""
+        import json
+        import subprocess
+        owner, _, name = repo.partition("/")
+        result = subprocess.run(["gh", "api", f"repos/{owner}/{name}/issues/{issue_number}/comments", "--method", "GET", "-F", "per_page=100"], capture_output=True, text=True, check=False)
+        if result.returncode != 0:
+            raise RuntimeError(f"gh api blocker comments failed: {result.stderr}")
+        comments = json.loads(result.stdout)
+        if not isinstance(comments, list):
+            raise RuntimeError("gh api blocker comments returned a non-list payload")
+        return comments
 
     @staticmethod
     def _normalize_open_issue_node(node: dict[str, Any]) -> dict[str, Any]:
@@ -896,6 +929,27 @@ class PullSyncAdapter:
                     ready_issue_numbers.add(number)
             except Exception as exc:
                 skipped.append(f"issue={issue.get('number', '?')}: {exc}")
+
+        # Non-active action records feed Cockpit and read-only maintenance
+        # projection only. They never enter ready_issue_numbers or pickup.
+        if open_issues_available:
+            comment_reader = getattr(self._source, "fetch_blocker_comments", None)
+            for issue in open_issues:
+                labels = set(_label_names(issue))
+                if not labels & {"agent:blocked", "agent:needs-human"}:
+                    continue
+                try:
+                    if callable(comment_reader):
+                        comments = comment_reader(repo, int(issue["number"]))
+                        if isinstance(comments, list):
+                            issue = {**issue, "comments": comments}
+                    task = normalize_github_issue(issue, repo, now=pull_at)
+                    existing = self._store.get_task(task.task_id)
+                    if existing is not None and existing.status in {"claimed", "in_progress"}:
+                        continue
+                    self._store.upsert_task(task)
+                except Exception as exc:
+                    skipped.append(f"blocker issue={issue.get('number', '?')}: {exc}")
 
         reconciled = self._reconcile_stale_ready(
             repo=repo,
