@@ -92,7 +92,7 @@ class SettingsRebindRecord:
             "lifecyclePosture": self.lifecycle_posture,
             "priorBindingId": self.prior_binding_id,
             "candidateBindingId": self.candidate_binding_id,
-            "reloadRevision": self.reload_revision,
+            "reloadRevision": 0 if self.reload_revision is None else self.reload_revision,
         }
         payload["checksum"] = _checksum(payload)
         return payload
