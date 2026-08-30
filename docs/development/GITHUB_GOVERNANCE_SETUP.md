@@ -33,11 +33,12 @@ its existing graceful no-op behavior when a usable Project credential is unavail
 is retained as a legacy repository secret for rollback/inspection only and is not read by these
 workflows.
 
-Live target verification on 2026-08-29: `Yggdrasil-PKM` Project `#1`, node ID
-`PVT_kwDOEzoj4s4Bh2sR`, title `Agent Delivery Control Plane`, currently exists but is blank. Its
-fields, views, and lifecycle automation still need to be configured to match the repository
-contract before this projection is considered operational. The App installation and permission
-grant are platform-side prerequisites and are not claimed by this repository change.
+Live target verification on 2026-08-30: `Yggdrasil-PKM` Project `#1`, node ID
+`PVT_kwDOEzoj4s4Bh2sR`, title `Agent Delivery Control Plane`, exists with the governed Status
+options, `Agent State` field, `Kanban` view, and `Agent Queue` view. The App is installed on the
+organization with Organization Projects read/write, and hosted run `33296569143` proved a live
+App-token write by moving issue #2680 from `Backlog` to `In Progress`. These platform-side setup
+steps are complete for the configured organization-owned target.
 
 | Token / identity | Workload | Authority boundary |
 | --- | --- | --- |
