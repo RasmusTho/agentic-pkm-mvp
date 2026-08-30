@@ -4,6 +4,7 @@ import json
 import os
 import sqlite3
 import tempfile
+from copy import deepcopy
 from dataclasses import dataclass, field
 from pathlib import Path
 from collections.abc import Iterable, Mapping
@@ -342,6 +343,23 @@ class WatcherState:
                 os.unlink(temporary)
             except FileNotFoundError:
                 pass
+
+    def checkpoint_observations(
+        self,
+    ) -> tuple[dict[str, tuple[dict[str, Any], int]], set[str]]:
+        """Capture uncommitted observation changes for tick rollback."""
+
+        return deepcopy(self._pending_observations), set(self._pending_deletes)
+
+    def restore_observations(
+        self,
+        checkpoint: tuple[dict[str, tuple[dict[str, Any], int]], set[str]],
+    ) -> None:
+        """Restore pending observations after a failed delivery transaction."""
+
+        pending_observations, pending_deletes = checkpoint
+        self._pending_observations = deepcopy(pending_observations)
+        self._pending_deletes = set(pending_deletes)
 
     def file_entry(self, rel_path: str) -> dict[str, Any] | None:
         if self._observation_store is not None:

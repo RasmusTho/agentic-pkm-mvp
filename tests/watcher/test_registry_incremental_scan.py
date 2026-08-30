@@ -6,7 +6,7 @@ import pytest
 
 from app.watcher import registry
 from app.watcher.settings_delta import SettingsDeltaResult, SettingsSourceDeltaResult
-from app.watcher.state import WatcherState
+from app.watcher.state import RegistryObservationStore, WatcherState
 
 
 def _write_note(root: Path, rel_path: str, body: str = "note\n") -> Path:
@@ -512,3 +512,82 @@ def test_directory_listing_failure_blocks_generation_reconciliation(
 
     assert recovered["observation_status"] == "healthy-idle"
     assert recovered_state.file_entry("notes/retained.md") is None
+
+
+def test_scan_root_resolution_failure_is_durable_and_identity_is_safe(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cfg, _spec, vault = _make_cfg(tmp_path)
+    root = vault / "notes"
+    root.mkdir()
+    state = WatcherState()
+    original_resolve = Path.resolve
+
+    def fail_root_resolve(path: Path, *args: object, **kwargs: object) -> Path:
+        if path == root:
+            raise OSError("root temporarily unavailable")
+        return original_resolve(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "resolve", fail_root_resolve)
+    roots = registry._normalized_scan_roots(vault, [root], state=state)
+
+    assert roots == []
+    assert state.scan_generation_had_error is True
+    registry._begin_or_resume_scan(
+        state,
+        vault_root=vault,
+        scan_roots=roots,
+        scope_glob=cfg.scope_glob,
+    )
+    assert state.scan_in_progress is True
+
+
+def test_observation_sidecar_is_applied_before_checkpoint_payload(
+    tmp_path: Path,
+) -> None:
+    checkpoint = tmp_path / "watcher_state.json"
+    observations = RegistryObservationStore(tmp_path / "observations.sqlite3")
+    state = WatcherState(_observation_store=observations)
+    state.update_file_state(
+        "notes/one.md",
+        content_hash="digest",
+        seen_at=1_700_008_000.0,
+    )
+
+    state.save(checkpoint)
+
+    assert observations.get("notes/one.md") == {
+        "hash": "digest",
+        "last_seen": 1_700_008_000.0,
+    }
+    assert '"observation_store": "observations.sqlite3"' in checkpoint.read_text()
+
+
+def test_disabled_registry_tick_reports_degraded_instead_of_healthy_idle(
+    tmp_path: Path,
+) -> None:
+    cfg, spec, _vault = _make_cfg(tmp_path)
+    cfg.enable = False
+
+    summary = registry._run_spec_tick(
+        cfg,
+        spec,
+        WatcherState(),
+        now=1_700_009_000.0,
+        states=None,
+        handled_settings_sources=set(),
+    )
+
+    assert summary["disabled"] is True
+    assert summary["observation_status"] == "degraded"
+
+
+def test_registry_writer_lock_rejects_concurrent_entrypoint(
+    tmp_path: Path,
+) -> None:
+    state_dir = tmp_path / "state"
+
+    with registry._registry_writer_lock(state_dir):
+        with pytest.raises(RuntimeError, match="writer already active"):
+            with registry._registry_writer_lock(state_dir):
+                pass

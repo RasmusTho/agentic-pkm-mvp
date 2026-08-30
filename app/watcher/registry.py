@@ -1160,9 +1160,12 @@ def _normalized_scan_roots(
             _record_scan_error(state)
             continue
         if root_real != selected_real and (
-            nearest_enclosing_vault_root(root_real, search_root=selected_real)
-            != selected_real
+            (enclosing := nearest_enclosing_vault_root(root_real, search_root=selected_real))
+            is None
+            or enclosing != selected_real
         ):
+            if enclosing is None:
+                _record_scan_error(state)
             continue
         if any(root_real == existing or root_real.is_relative_to(existing) for existing in candidates):
             continue
@@ -1172,9 +1175,20 @@ def _normalized_scan_roots(
 
 
 def _scan_identity(vault_root: Path, scan_roots: Iterable[Path], scope_glob: str) -> str:
-    roots = [path.relative_to(vault_root.resolve()).as_posix() for path in scan_roots]
+    try:
+        vault_real = vault_root.resolve()
+    except OSError:
+        roots = []
+        vault_real = vault_root
+    else:
+        roots = []
+        for path in scan_roots:
+            try:
+                roots.append(path.resolve().relative_to(vault_real).as_posix())
+            except (OSError, ValueError):
+                continue
     encoded = json.dumps(
-        {"vault": str(vault_root.resolve()), "roots": roots, "scope": scope_glob},
+        {"vault": str(vault_real), "roots": roots, "scope": scope_glob},
         sort_keys=True,
     )
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
@@ -1776,6 +1790,8 @@ def _run_spec_tick(
 
     if not cfg.enable:
         summary["disabled"] = True
+        state.observation_status = "degraded"
+        summary["observation_status"] = state.observation_status
         return _finalize_spec_tick(cfg, state, summary, tick_start, None, spec.name)
 
     if cfg.stop_file.exists():
@@ -1816,6 +1832,10 @@ def _run_spec_tick(
         return _finalize_spec_tick(cfg, state, summary, tick_start, None, spec.name)
 
     active_states = states or {spec.name: state}
+    observation_checkpoints = {
+        name: active_state.checkpoint_observations()
+        for name, active_state in active_states.items()
+    }
     scan_checkpoint = {
         "scan_in_progress": state.scan_in_progress,
         "scan_generation": state.scan_generation,
@@ -1977,6 +1997,8 @@ def _run_spec_tick(
         state.scan_scope_matched_files = int(scan_checkpoint["scan_scope_matched_files"])
         state.scan_generation_had_error = bool(scan_checkpoint["scan_generation_had_error"])
         state.continuation_reason = scan_checkpoint["continuation_reason"]  # type: ignore[assignment]
+        for name, active_state in active_states.items():
+            active_state.restore_observations(observation_checkpoints[name])
         summary["scan_in_progress"] = state.scan_in_progress
         summary["continuation_reason"] = state.continuation_reason
 
