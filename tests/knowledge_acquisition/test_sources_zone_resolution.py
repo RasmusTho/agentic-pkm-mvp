@@ -106,3 +106,19 @@ def test_current_sources_producers_use_resolved_selected_vault_root(
     finally:
         reset_memory_observation_log()
         reset_memory_cursor_store()
+
+
+def test_malformed_sources_setting_denies_panel_agent_mutation(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.delenv("VAULT_SOURCES_DIR_REL", raising=False)
+    settings_dir = tmp_path / "settings"
+    settings_dir.mkdir()
+    (settings_dir / "system-settings.md").write_text(
+        "---\npaths:\n  sources_dir_rel: []\n---\n",
+        encoding="utf-8",
+    )
+
+    assert watcher_panel_writeback_allowed(
+        "Sources/panel.md", vault_root=tmp_path
+    ) is False
