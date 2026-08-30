@@ -62,12 +62,25 @@ CANONICAL_LABELS = [
     "type:task",
     "type:bug",
     "type:refactor",
+    "type:epic",
+    "type:feature",
     "prio:high",
     "prio:med",
     "prio:low",
     "agent:ready",
     "agent:blocked",
     "agent:needs-human",
+    "agent:in-progress",
+    "action:repair-contract",
+    "action:wait-dependency",
+    "action:restore-environment",
+    "action:wait-external",
+    "action:review-at",
+    "action:human-decision",
+    "action:human-authorization",
+    "action:human-access",
+    "action:human-operation",
+    "action:human-acceptance",
 ]
 
 # Backticked kebab-case tokens that are not skill names. A token not listed
@@ -104,7 +117,7 @@ RETIRED_PHRASE = "Do not batch to end of task"
 
 KEBAB_TOKEN_RE = re.compile(r"`([a-z][a-z0-9]*(?:-[a-z0-9]+)+)`")
 ROUTING_ENTRY_RE = re.compile(r"^- `([a-z][a-z0-9-]+)`\s*$", re.MULTILINE)
-LABEL_ITEM_RE = re.compile(r"^\s*[-*]\s+`((?:type|prio|agent):[a-z-]+)`\s*\|?\s*$")
+LABEL_ITEM_RE = re.compile(r"^\s*[-*]\s+`((?:type|prio|agent|action):[a-z-]+)`\s*\|?\s*$")
 BLOCK_SCALAR_DESCRIPTION_RE = re.compile(r"^[|>](?:[+-]?\d*|\d+[+-]?)$")
 BASH_FENCE_RE = re.compile(r"^\s*```(?:bash|sh)\s*$", re.IGNORECASE)
 BASH4_ONLY_CONSTRUCTS: tuple[tuple[str, re.Pattern[str]], ...] = (

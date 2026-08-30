@@ -165,6 +165,13 @@ def test_sync_state_carries_labels_and_url() -> None:
     assert bare.sync_state["url"] is None
 
 
+def test_normalize_carries_rest_comment_projection_without_changing_ready_pickup() -> None:
+    comment = {"body": "```yaml\nreceipt: blocker_action.v1\naction: action:wait-dependency\nowner: builder\nnext_action: wait\nunblocks_when: dependency closes\ndependency_refs: []\nreview_at: null\nlast_verified_at: 2026-08-30T11:00:00Z\n```"}
+    task = normalize_github_issue({**SAMPLE_ISSUE_BLOCKED, "comments": [comment]}, REPO)
+    assert task.sync_state["comments"] == [comment]
+    assert task.status == "blocked"
+
+
 def test_github_issue_task_id_single_source_format_pinned() -> None:
     """The repo-qualified task id has exactly one implementation with a pinned
     byte format, including the doubled ``--`` owner/repo separator that keeps
@@ -209,6 +216,54 @@ def test_normalize_github_issue_blocked_status() -> None:
     task = normalize_github_issue(SAMPLE_ISSUE_BLOCKED, REPO)
     assert task.status == "blocked"
     assert task.priority == "med"
+
+
+def test_essential_source_remains_ready_only_when_action_labels_exist() -> None:
+    source = inspect.getsource(GhCliIssueSource.list_issues)
+    assert "labels=agent:ready" in source
+    task = normalize_github_issue({**SAMPLE_ISSUE_HIGH, "labels": [{"name": "agent:ready"}, {"name": "action:wait-dependency"}]}, REPO)
+    assert task.status == "ready"
+
+
+def test_pull_sync_projects_blocker_comment_records_without_making_them_pickable(tmp_store: SqliteStore) -> None:
+    receipt = {"body": "```yaml\nreceipt: blocker_action.v1\naction: action:wait-dependency\nowner: builder\nnext_action: wait\nunblocks_when: dependency closes\ndependency_refs: []\nreview_at: null\nlast_verified_at: 2026-08-30T11:00:00Z\n```"}
+    blocked = {**SAMPLE_ISSUE_BLOCKED, "comments": [receipt], "labels": [{"name": "agent:blocked"}, {"name": "action:wait-dependency"}]}
+    source = _mock_source([SAMPLE_ISSUE_HIGH], open_issues=[blocked])
+    adapter = PullSyncAdapter(store=tmp_store, source=source)
+    upserted = adapter.pull(REPO)
+    assert [task.issue_number for task in upserted] == [101]
+    projected = tmp_store.get_task(_tid(104))
+    assert projected is not None and projected.status == "blocked"
+    assert projected.sync_state["comments"] == [receipt]
+
+
+def test_pull_sync_records_receipt_action_drift_for_cockpit_without_pickup(tmp_store: SqliteStore) -> None:
+    receipt = {"body": "```yaml\nreceipt: blocker_action.v1\naction: action:human-decision\nowner: builder\nnext_action: ask owner\nunblocks_when: owner decides\ndependency_refs: []\nreview_at: null\nlast_verified_at: 2026-08-30T11:00:00Z\n```"}
+    blocked = {**SAMPLE_ISSUE_BLOCKED, "comments": [receipt], "labels": [{"name": "agent:blocked"}, {"name": "action:wait-dependency"}]}
+    source = _mock_source([SAMPLE_ISSUE_HIGH], open_issues=[blocked])
+    adapter = PullSyncAdapter(store=tmp_store, source=source)
+
+    assert [task.issue_number for task in adapter.pull(REPO)] == [101]
+    projected = tmp_store.get_task(_tid(104))
+    assert projected is not None
+    assert projected.sync_state["blocker_action_drift"] == ["receipt_action_mismatch"]
+
+
+def test_rest_open_issue_source_fetches_comments_only_for_nonactive_actions(monkeypatch) -> None:
+    import json
+    source = GhCliIssueSource()
+    calls: list[str] = []
+    def fake_run(command, **kwargs):
+        endpoint = command[2]
+        calls.append(endpoint)
+        payload = ([{"number": 1, "title": "blocked", "state": "open", "labels": [{"name": "agent:blocked"}]}, {"number": 2, "title": "ready", "state": "open", "labels": [{"name": "agent:ready"}]}] if endpoint.endswith("/issues") else [])
+        return MagicMock(returncode=0, stdout=json.dumps(payload), stderr="")
+    monkeypatch.setattr("subprocess.run", fake_run)
+    source.list_open_issues(REPO)
+    comments = source.fetch_blocker_comments(REPO, 1)
+    assert comments == []
+    assert "issues/1/comments" in calls[-1]
+    assert all("issues/2/comments" not in call for call in calls)
 
 
 def test_normalize_github_issue_low_priority() -> None:

@@ -5,6 +5,9 @@ description: "Route confirmed bugs to a bounded GitHub Issue or the deterministi
 
 # Bug To Issue
 
+If a bug cannot be ready, pair `agent:blocked` or `agent:needs-human` with exactly one compatible
+`action:*` label and `blocker_action.v1` receipt from `_shared/BLOCKER_ACTION_CONTRACT.md`.
+
 ## Overview
 
 Turn a discovered bug into either:

@@ -5,8 +5,13 @@ Owner: Runtime / current-state SoT
 Temporal class: operational
 Review cadence: weekly
 Source of truth: mixed
-Last reviewed: 2026-08-29
+Last reviewed: 2026-08-30
 Last live runtime verification: 2026-08-22 (new-host topology; see `docs/ENVIRONMENTS.md`)
+Last verified against (blocker-action projection candidate): PR #5206,
+`app/dispatcher/sync_github.py`, `app/builderops/cockpit_registry.py`,
+`scripts/reconcile_blocker_actions.py`, and focused local validation on 2026-08-30; current-head CI
+and merge remain pending.
+
 Last verified against (SQ-04 candidate): PR #5174, `app/standing_questions/evidence_matching.py`,
 `app/standing_questions/answer_refresh.py`, and focused Standing Questions tests on 2026-08-29;
 live test-channel and owner-UAT evidence remain absent.
@@ -732,6 +737,12 @@ Platform-side governance applied:
   `scripts/issue_pickup_claim.sh` routes a missing-task claim failure after such a sync to
   explicit GitHub-label-only fallback guidance (see
   `docs/AGENT_ISSUE_DISPATCHER.md :: Kill-Switch Partial Sync (#4606)`)
+- Candidate PR #5206 defines a separate bounded REST action-intake path for blocked/needs-human
+  Issues: it fetches only those Issues' comments and accepts a latest valid `blocker_action.v1`
+  receipt as projection evidence. Current implementation pickup remains strictly `agent:ready` only.
+  The candidate's targeted migration re-reads each Issue before a narrow label write, verifies label
+  and receipt readback, and fails closed on claim or lifecycle drift; no action intake has claim
+  authority. It is not shipped until current-head CI and merge complete.
 - the verification-dispatch integration line now fails closed on exact-head, authoritative
   `github-actions` required-check evidence, preserves review/repair budgets across restart, and
   rejects ambiguous legacy active-plus-terminal authority chains. Host rollout remains disabled

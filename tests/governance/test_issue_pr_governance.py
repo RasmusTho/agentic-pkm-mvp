@@ -209,6 +209,20 @@ def _read_workflow() -> str:
     )
 
 
+def test_issue_agent_label_guard_enforces_blocker_action_compatibility() -> None:
+    workflow = _read_workflow()
+    assert "Open blocked/needs-human Issue must carry exactly one action:* label" in workflow
+    assert "agent:blocked requires a canonical blocked action:* label" in workflow
+    assert "agent:needs-human requires a canonical human action:* label" in workflow
+
+
+def test_issue_agent_label_guard_removes_terminal_action_labels() -> None:
+    workflow = _read_workflow()
+    assert 'name.startsWith("action:")' in workflow
+    assert 'issue.state === "closed" && actionLabels.length' in workflow
+    assert "await github.rest.issues.removeLabel" in workflow
+
+
 def _sbs_impact_warnings(body: str, changed_files: list[str]) -> list[str]:
     workflow = _read_workflow()
     checker = workflow.split("// sbs-impact-consistency:start", 1)[1].split(
