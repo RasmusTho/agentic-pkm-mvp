@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+import app.agent_memory.materialization as materialization_module
 from app.agent_memory.candidate import MemoryCandidate, MemoryType
 from app.agent_memory.materialization import (
     MemoryMaterializationError,
@@ -263,6 +264,137 @@ def test_duplicate_materializer_refuses_after_terminal_success(tmp_path: Path) -
         outbox_path=outbox,
     )
     assert [row.outcome_status for row in receipts.rows] == ["applied"]
+
+
+def test_retry_reconciles_applied_receipt_after_late_query_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    vault = _vault(tmp_path / "vault")
+    vault_root = Path(vault.active_vault_path)
+    vault_root.mkdir()
+    store = ReviewDecisionStore(tmp_path / "review_decisions.sqlite3")
+    outbox = tmp_path / "outbox.jsonl"
+    entry = _promoted(
+        _candidate(candidate_id="candidate-late-query"),
+        store=store,
+        vault=vault,
+    )
+    original_query = materialization_module.query_promotion_receipts
+    query_calls = 0
+
+    def fail_post_append_query(*args, **kwargs):
+        nonlocal query_calls
+        query_calls += 1
+        if query_calls == 2:
+            raise RuntimeError("injected post-append query failure")
+        return original_query(*args, **kwargs)
+
+    monkeypatch.setattr(
+        materialization_module,
+        "query_promotion_receipts",
+        fail_post_append_query,
+    )
+    with pytest.raises(RuntimeError, match="post-append query failure"):
+        materialize_promoted_memory(
+            entry,
+            vault_context=vault,
+            channel="test",
+            decision_store=store,
+            write_guard=_allowing_guard(),
+            outbox_path=outbox,
+        )
+
+    assert len(list(vault_root.rglob("*.md"))) == 1
+    assert len(outbox.read_text(encoding="utf-8").splitlines()) == 1
+    assert store.get_decision(
+        entry.candidate_id, vault_context=vault, channel="test"
+    ).terminal is False
+
+    monkeypatch.setattr(
+        materialization_module,
+        "query_promotion_receipts",
+        original_query,
+    )
+    result = materialize_promoted_memory(
+        entry,
+        vault_context=vault,
+        channel="test",
+        decision_store=store,
+        write_guard=_allowing_guard(),
+        outbox_path=outbox,
+    )
+
+    assert result.status == "materialized"
+    assert len(list(vault_root.rglob("*.md"))) == 1
+    assert len(outbox.read_text(encoding="utf-8").splitlines()) == 1
+    assert store.get_decision(
+        entry.candidate_id, vault_context=vault, channel="test"
+    ).terminal is True
+
+
+def test_retry_reuses_candidate_note_after_receipt_append_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    vault = _vault(tmp_path / "vault")
+    vault_root = Path(vault.active_vault_path)
+    vault_root.mkdir()
+    store = ReviewDecisionStore(tmp_path / "review_decisions.sqlite3")
+    outbox = tmp_path / "outbox.jsonl"
+    entry = _promoted(
+        _candidate(candidate_id="candidate-late-append"),
+        store=store,
+        vault=vault,
+    )
+    original_append = materialization_module._append_promotion_receipt
+
+    def fail_receipt_append(*args, **kwargs):
+        raise RuntimeError("injected receipt append failure")
+
+    monkeypatch.setattr(
+        materialization_module,
+        "_append_promotion_receipt",
+        fail_receipt_append,
+    )
+    with pytest.raises(RuntimeError, match="receipt append failure"):
+        materialize_promoted_memory(
+            entry,
+            vault_context=vault,
+            channel="test",
+            decision_store=store,
+            write_guard=_allowing_guard(),
+            outbox_path=outbox,
+        )
+
+    first_note = next(vault_root.rglob("*.md"))
+    first_body = first_note.read_text(encoding="utf-8")
+    assert not outbox.exists()
+    assert store.get_decision(
+        entry.candidate_id, vault_context=vault, channel="test"
+    ).terminal is False
+
+    monkeypatch.setattr(
+        materialization_module,
+        "_append_promotion_receipt",
+        original_append,
+    )
+    result = materialize_promoted_memory(
+        entry,
+        vault_context=vault,
+        channel="test",
+        decision_store=store,
+        write_guard=_allowing_guard(),
+        outbox_path=outbox,
+    )
+
+    assert result.artifact_path == first_note.relative_to(vault_root).as_posix()
+    assert first_note.read_text(encoding="utf-8") == first_body
+    assert len(list(vault_root.rglob("*.md"))) == 1
+    assert len(outbox.read_text(encoding="utf-8").splitlines()) == 1
+    assert store.get_decision(
+        entry.candidate_id, vault_context=vault, channel="test"
+    ).terminal is True
 
 
 def test_blocked_materialization_keeps_promotion_actionable(tmp_path: Path) -> None:

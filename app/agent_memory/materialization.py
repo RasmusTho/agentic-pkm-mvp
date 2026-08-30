@@ -1,12 +1,11 @@
 from __future__ import annotations
 
-import json
 import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any
-from uuid import uuid4
+from uuid import NAMESPACE_URL, uuid4, uuid5
 
 import yaml
 
@@ -18,7 +17,12 @@ from app.agent_memory.review_decision_store import (
 from app.agent_memory.review_queue import ReviewDecision, ReviewEntry, ReviewStatus
 from app.events.types import PROMOTION_TRANSITION_APPLIED
 from app.knowledge.write_ops import write_note_relative
-from app.receipts.promotion_receipts import query_promotion_receipts
+from app.receipts.promotion_receipts import (
+    PromotionReceiptQuery,
+    PromotionReceiptRow,
+    query_promotion_receipts,
+)
+from app.services.outbox import append_jsonl_record
 from app.vault.manager import VaultContext
 from app.write_guard import DEFAULT_WRITE_GUARD, WriteGuard
 
@@ -69,14 +73,19 @@ def materialize_promoted_memory(
     requested_scope_id = _require_scope_binding(entry)
 
     vault_root = _vault_root(vault_context)
-    artifact_uuid = uuid4().hex
-    artifact_path = _unique_memory_path(
-        vault_root=vault_root,
-        memory_dir=memory_dir,
-        title=entry.title,
-        candidate_id=entry.candidate_id,
+    receipt_id = _stable_materialization_id(
+        "receipt",
+        entry=entry,
+        vault_context=vault_context,
+        channel=channel,
     )
-    trace_id = uuid4().hex
+    trace_id = _stable_materialization_id(
+        "trace",
+        entry=entry,
+        vault_context=vault_context,
+        channel=channel,
+    )
+    artifact_path: str | None = None
     try:
         with decision_store.promotion_materialization_transaction(
             entry.candidate_id,
@@ -89,19 +98,66 @@ def materialize_promoted_memory(
                 raise MemoryMaterializationError(
                     "persisted promote decision has no scope binding"
                 )
-            try:
-                write_guard.assert_writes_allowed(MEMORY_MATERIALIZATION_ACTION)
-                write_note_relative(
-                    artifact_path,
-                    _render_memory_note(
-                        entry,
-                        artifact_uuid=artifact_uuid,
-                        scope_id=persisted_scope_id,
-                    ),
+            recovered_receipt = _recover_applied_receipt(
+                receipt_id,
+                entry=entry,
+                vault_root=vault_root,
+                outbox_path=outbox_path,
+                scope_id=persisted_scope_id,
+            )
+            if recovered_receipt is not None:
+                artifact_path = recovered_receipt.artifact_path
+            else:
+                recovered_note = _find_materialized_note(
                     vault_root=vault_root,
+                    memory_dir=memory_dir,
+                    entry=entry,
+                    scope_id=persisted_scope_id,
                 )
-            except Exception as exc:
-                receipt_id = _append_promotion_receipt(
+                if recovered_note is None:
+                    artifact_uuid = _stable_materialization_id(
+                        "artifact",
+                        entry=entry,
+                        vault_context=vault_context,
+                        channel=channel,
+                    )
+                    artifact_path = _unique_memory_path(
+                        vault_root=vault_root,
+                        memory_dir=memory_dir,
+                        title=entry.title,
+                        candidate_id=entry.candidate_id,
+                    )
+                    try:
+                        write_guard.assert_writes_allowed(MEMORY_MATERIALIZATION_ACTION)
+                        write_note_relative(
+                            artifact_path,
+                            _render_memory_note(
+                                entry,
+                                artifact_uuid=artifact_uuid,
+                                scope_id=persisted_scope_id,
+                            ),
+                            vault_root=vault_root,
+                        )
+                    except Exception as exc:
+                        failed_receipt_id = _append_promotion_receipt(
+                            outbox_path,
+                            entry=entry,
+                            vault_context=vault_context,
+                            channel=channel,
+                            artifact_uuid=artifact_uuid,
+                            artifact_path=artifact_path,
+                            trace_id=trace_id,
+                            scope_id=persisted_scope_id,
+                            status="failed",
+                            error=str(exc),
+                        )
+                        raise MemoryMaterializationError(
+                            f"memory materialization failed; receipt={failed_receipt_id}"
+                        ) from exc
+                else:
+                    artifact_uuid, artifact_path = recovered_note
+
+                _append_promotion_receipt(
                     outbox_path,
                     entry=entry,
                     vault_context=vault_context,
@@ -110,30 +166,20 @@ def materialize_promoted_memory(
                     artifact_path=artifact_path,
                     trace_id=trace_id,
                     scope_id=persisted_scope_id,
-                    status="failed",
-                    error=str(exc),
+                    status="applied",
+                    receipt_id=receipt_id,
                 )
-                raise MemoryMaterializationError(
-                    f"memory materialization failed; receipt={receipt_id}"
-                ) from exc
-
-            receipt_id = _append_promotion_receipt(
-                outbox_path,
-                entry=entry,
-                vault_context=vault_context,
-                channel=channel,
-                artifact_uuid=artifact_uuid,
-                artifact_path=artifact_path,
-                trace_id=trace_id,
-                scope_id=persisted_scope_id,
-                status="applied",
-            )
-            result = query_promotion_receipts(
-                vault_root=vault_root,
-                outbox_path=outbox_path or DEFAULT_MATERIALIZATION_RECEIPTS_PATH,
-            )
-            if not any(row.receipt_id == receipt_id for row in result.rows):
-                raise MemoryMaterializationError("materialization receipt was not queryable")
+                recovered_receipt = _recover_applied_receipt(
+                    receipt_id,
+                    entry=entry,
+                    vault_root=vault_root,
+                    outbox_path=outbox_path,
+                    scope_id=persisted_scope_id,
+                )
+                if recovered_receipt is None:
+                    raise MemoryMaterializationError(
+                        "materialization receipt was not queryable"
+                    )
     except ReviewDecisionStoreError as exc:
         raise MemoryMaterializationError(str(exc)) from exc
 
@@ -193,6 +239,156 @@ def _unique_memory_path(
     return candidate.as_posix()
 
 
+def _stable_materialization_id(
+    kind: str,
+    *,
+    entry: ReviewEntry,
+    vault_context: VaultContext,
+    channel: str,
+) -> str:
+    identity = (
+        f"agent-memory-materialization:{kind}:"
+        f"{vault_context.active_vault_id}:{channel}:{entry.candidate_id}"
+    )
+    return uuid5(NAMESPACE_URL, identity).hex
+
+
+def _recover_applied_receipt(
+    receipt_id: str,
+    *,
+    entry: ReviewEntry,
+    vault_root: Path,
+    outbox_path: Path | None,
+    scope_id: str,
+) -> PromotionReceiptRow | None:
+    result = query_promotion_receipts(
+        PromotionReceiptQuery(receipt_or_source_event_id=receipt_id),
+        vault_root=vault_root,
+        outbox_path=outbox_path or DEFAULT_MATERIALIZATION_RECEIPTS_PATH,
+    )
+    matches = [row for row in result.rows if row.receipt_id == receipt_id]
+    if not matches:
+        return None
+    if len(matches) != 1:
+        raise MemoryMaterializationError(
+            "multiple applied receipts exist for one memory materialization"
+        )
+    row = matches[0]
+    if (
+        row.outcome_status != "applied"
+        or row.basis.get("candidate_id") != entry.candidate_id
+        or row.basis.get("scope_id") != scope_id
+        or row.artifact_uuid is None
+        or row.artifact_path is None
+    ):
+        raise MemoryMaterializationError(
+            "persisted memory materialization receipt conflicts with review authority"
+        )
+    artifact_file = _resolve_existing_vault_path(vault_root, row.artifact_path)
+    identity = _read_materialized_note_identity(artifact_file)
+    if identity != (entry.candidate_id, scope_id, row.artifact_uuid):
+        raise MemoryMaterializationError(
+            "persisted memory materialization receipt does not match its artifact"
+        )
+    if artifact_file.read_text(encoding="utf-8") != _render_memory_note(
+        entry,
+        artifact_uuid=row.artifact_uuid,
+        scope_id=scope_id,
+    ):
+        raise MemoryMaterializationError(
+            "persisted memory materialization artifact content changed"
+        )
+    return row
+
+
+def _find_materialized_note(
+    *,
+    vault_root: Path,
+    memory_dir: str,
+    entry: ReviewEntry,
+    scope_id: str,
+) -> tuple[str, str] | None:
+    root = vault_root / _safe_rel_path(memory_dir)
+    if not root.exists():
+        return None
+    _resolve_existing_vault_path(vault_root, root.relative_to(vault_root).as_posix())
+    matches: list[tuple[str, str]] = []
+    for path in root.rglob("*.md"):
+        identity = _read_materialized_note_identity(path)
+        if identity is None or identity[:2] != (entry.candidate_id, scope_id):
+            continue
+        safe_path = _resolve_existing_vault_path(
+            vault_root,
+            path.relative_to(vault_root).as_posix(),
+        )
+        if safe_path.read_text(encoding="utf-8") != _render_memory_note(
+            entry,
+            artifact_uuid=identity[2],
+            scope_id=scope_id,
+        ):
+            raise MemoryMaterializationError(
+                "candidate-bound recovery artifact content changed"
+            )
+        matches.append((identity[2], path.relative_to(vault_root).as_posix()))
+    if len(matches) > 1:
+        raise MemoryMaterializationError(
+            "multiple vault artifacts exist for one memory candidate"
+        )
+    return matches[0] if matches else None
+
+
+def _resolve_existing_vault_path(vault_root: Path, relative_path: str) -> Path:
+    safe_relative = _safe_rel_path(relative_path)
+    lexical_root = vault_root.resolve()
+    lexical_path = lexical_root / safe_relative
+    current = lexical_root
+    for part in PurePosixPath(safe_relative).parts:
+        current = current / part
+        if current.is_symlink():
+            raise MemoryMaterializationError(
+                "materialization recovery artifact may not traverse a symlink"
+            )
+    try:
+        resolved = lexical_path.resolve(strict=True)
+    except OSError as exc:
+        raise MemoryMaterializationError(
+            "materialization recovery artifact is missing"
+        ) from exc
+    if not resolved.is_relative_to(lexical_root):
+        raise MemoryMaterializationError(
+            "materialization recovery artifact must stay inside the vault"
+        )
+    return resolved
+
+
+def _read_materialized_note_identity(path: Path) -> tuple[str, str, str] | None:
+    try:
+        body = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeError):
+        return None
+    if not body.startswith("---\n"):
+        return None
+    try:
+        _, raw_frontmatter, _ = body.split("---\n", 2)
+        frontmatter = yaml.safe_load(raw_frontmatter)
+    except (ValueError, yaml.YAMLError):
+        return None
+    if not isinstance(frontmatter, dict):
+        return None
+    candidate_id = frontmatter.get("promoted_from_candidate_id")
+    scope_id = frontmatter.get("scope_id")
+    artifact_uuid = frontmatter.get("uuid")
+    if (
+        frontmatter.get("agent_promoted") is not True
+        or frontmatter.get("artifact_type") != "semantic_memory"
+        or not isinstance(candidate_id, str)
+        or not isinstance(scope_id, str)
+        or not isinstance(artifact_uuid, str)
+    ):
+        return None
+    return candidate_id, scope_id, artifact_uuid
+
+
 def _render_memory_note(
     entry: ReviewEntry,
     *,
@@ -232,8 +428,9 @@ def _append_promotion_receipt(
     scope_id: str,
     status: str,
     error: str | None = None,
+    receipt_id: str | None = None,
 ) -> str:
-    receipt_id = uuid4().hex
+    receipt_id = receipt_id or uuid4().hex
     timestamp = _iso(datetime.now(timezone.utc))
     payload: dict[str, Any] = {
         "receipt_id": receipt_id,
@@ -283,9 +480,7 @@ def _append_promotion_receipt(
         "payload": payload,
     }
     path = outbox_path or DEFAULT_MATERIALIZATION_RECEIPTS_PATH
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("a", encoding="utf-8") as handle:
-        handle.write(json.dumps(record, sort_keys=True, separators=(",", ":")) + "\n")
+    append_jsonl_record(path, record, require_event_id=True)
     return receipt_id
 
 

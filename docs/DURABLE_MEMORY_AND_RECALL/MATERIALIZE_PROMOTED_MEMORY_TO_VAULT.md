@@ -52,6 +52,11 @@ prevents a revoked, repeated, or competing materializer from writing. The persis
 written to both note and receipt; legacy unscoped artifacts remain unchanged. Bound recall denies
 unscoped artifacts fail closed; unbound recall retains its existing behavior.
 
+Late failures are resumed idempotently. The materialization identity is stable per
+vault/channel/candidate. A retry validates and reuses an existing applied receipt plus its
+candidate-bound note, or an unreceipted candidate-bound note when receipt append was interrupted.
+Conflicting or multiple recovery artifacts fail closed instead of producing another note or receipt.
+
 ## Concretely
 
 ```
@@ -98,6 +103,8 @@ receipt → durable artifact, never silent persistence") and the writing-surface
   permits only one successful materializer.
   Verify: `tests/agent_memory/test_memory_materialization.py::test_materialization_refuses_intervening_same_scope_rejection`
   Verify: `tests/agent_memory/test_memory_materialization.py::test_duplicate_materializer_refuses_after_terminal_success`
+  Verify: `tests/agent_memory/test_memory_materialization.py::test_retry_reconciles_applied_receipt_after_late_query_failure`
+  Verify: `tests/agent_memory/test_memory_materialization.py::test_retry_reuses_candidate_note_after_receipt_append_failure`
 - [ ] Non-semantic promotions (episodic/working/preference) do not materialize a vault artifact.
   Verify: `tests/agent_memory/test_memory_materialization.py::test_non_semantic_promotion_does_not_materialize`
 
