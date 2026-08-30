@@ -301,6 +301,8 @@ def _finalize_spec_tick(
         state.observation_status = "degraded"
     if state.scope_status != "ok":
         state.observation_status = "degraded"
+    if state.checkpoint_load_error:
+        state.observation_status = "degraded"
     summary.setdefault("observation_status", state.observation_status)
     try:
         _log_tick_diagnostics_registry(cfg, summary, scan_root, watcher_name)
@@ -2009,7 +2011,9 @@ def _run_spec_tick(
         summary["scan_identity_recheck_failed"] = True
     scan_completed = not state.scan_in_progress
     scan_clean = (
-        state.errors == errors_before and not state.scan_generation_had_error
+        state.errors == errors_before
+        and not state.scan_generation_had_error
+        and not state.checkpoint_load_error
     )
     missing_paths = (
         state.paths_unseen_in_generation(scanned_paths)
@@ -2192,8 +2196,22 @@ def _run_spec_tick(
     # cleanliness so a failed settings reload cannot authorize pruning the
     # stale observation before the source can be retried on a later tick.
     scan_clean = (
-        state.errors == errors_before and not state.scan_generation_had_error
+        state.errors == errors_before
+        and not state.scan_generation_had_error
+        and not state.checkpoint_load_error
     )
+    recovering_from_checkpoint_error = (
+        scan_completed
+        and state.checkpoint_load_error
+        and state.errors == errors_before
+        and not state.scan_generation_had_error
+        and not delivery_failed
+    )
+    if recovering_from_checkpoint_error:
+        # One clean full generation has rebuilt the cursor and sidecar, but
+        # this recovery tick still cannot reconcile rows from the discarded
+        # checkpoint. Permit reconciliation only on the next clean generation.
+        state.checkpoint_load_error = False
     if scan_completed and scan_clean and not delivery_failed:
         # Delivery and guardrail bookkeeping can take long enough for the
         # selected vault to be replaced. Revalidate immediately before prune;

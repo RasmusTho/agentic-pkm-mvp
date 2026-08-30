@@ -287,6 +287,7 @@ class WatcherState:
     continuation_reason: str | None = None
     observations_invalidated: bool = False
     observation_identity: str | None = None
+    checkpoint_load_error: bool = False
     _observation_store: RegistryObservationStore | None = field(
         default=None, repr=False, compare=False
     )
@@ -302,7 +303,12 @@ class WatcherState:
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
         except Exception:
-            return cls()
+            return cls(
+                errors=1,
+                scan_generation_had_error=True,
+                observation_status="degraded",
+                checkpoint_load_error=True,
+            )
         state = cls(
             files=_sanitize_files(data.get("files")),
             changed_detected=int(data.get("changed_detected") or 0),
@@ -345,6 +351,7 @@ class WatcherState:
                 if data.get("observation_identity")
                 else (str(data["scan_identity"]) if data.get("scan_identity") else None)
             ),
+            checkpoint_load_error=bool(data.get("checkpoint_load_error", False)),
         )
         observation_name = data.get("observation_store")
         if isinstance(observation_name, str) and observation_name:
@@ -446,6 +453,7 @@ class WatcherState:
             "continuation_reason": self.continuation_reason,
             "observations_invalidated": self.observations_invalidated,
             "observation_identity": self.observation_identity,
+            "checkpoint_load_error": self.checkpoint_load_error,
             "observation_store": (
                 self._observation_store.path.name
                 if self._observation_store is not None

@@ -759,6 +759,9 @@ def test_malformed_checkpoint_cannot_authorize_existing_sidecar(
     restarted = WatcherState.load_registry(checkpoint, observations.path)
 
     assert restarted.observations_invalidated is True
+    assert restarted.checkpoint_load_error is True
+    assert restarted.observation_status == "degraded"
+    assert restarted.errors == 1
     assert restarted.file_entry("notes/old.md") is None
     assert observations.get("notes/old.md") == {"hash": "old"}
 
