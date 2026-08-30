@@ -31,7 +31,8 @@ Parent: #4741
 
 Turn the merged #4834 source-owned **Now** fixture and delivered #4768 Focus API fixture into
 accepted connected Overview → Focus → return guidance without changing server semantics or
-claiming runtime implementation. #4834 is still open and blocked, so this task remains blocked.
+claiming runtime implementation. #4834 is merged and this design gate is closed after #4746
+accepted the constrained-reuse evidence for merged #4836.
 
 ## Scope
 

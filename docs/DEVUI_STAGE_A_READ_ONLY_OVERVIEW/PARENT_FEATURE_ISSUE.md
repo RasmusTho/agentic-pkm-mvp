@@ -10,7 +10,7 @@ Temporal class: Active validation contract
 Review cadence: Event-driven
 Source of truth: GitHub owns live child/receipt state; this document owns the acceptance path.
 Last reviewed: 2026-08-30
-Last verified against: `origin/main` `b1b71f205ff57da2df99a6747102066e5e74b350` and live GitHub
+Last verified against: `origin/main` `7d324d0bb7db060dc38be3a1a2139c551c85447b` and live GitHub
 state for #4741–#4749, #4768, #4833, #4834, #4835, #4836, #4838, #4841, and #4857; the delivery
 ledger below records the exact PR heads, merge commits, and proof receipt it cites.
 
@@ -19,8 +19,8 @@ ledger below records the exact PR heads, merge commits, and proof receipt it cit
 ## Context
 
 The pure `devui-overview-view.v1` composer, admitted direct-loopback Overview GET route, and Focus
-API route are delivered. The current producer chain still lacks a selectable source-owned **Now**
-subject; **Needs you** and **Ready to try** remain withdrawn. The connected shell is delivered by
+API route are delivered. Delivered #4834 maps trusted Cockpit `working` items into source-owned
+**Now** candidates; **Needs you** and **Ready to try** remain withdrawn. The connected shell is delivered by
 #4836 after #4746 accepted its exact `yggdrasil-constrained-reuse.v1` binding, and its candidate was
 verified by #4833/#4842 before merge. The separate #4748 receipt then authenticated the exact
 five-node browser/accessibility proof at final post-merge `main` `M=c7c57300f2ec241778061078e7ad585454f0b880`.
@@ -103,13 +103,14 @@ it supplies neither a page nor a visual destination.
   - Verify: `tests/companion_ui/test_devui_overview_journeys.py :: test_overview_accessibility_and_layout_matrix`
 - [ ] The owner pilot records exact SHA, source conditions, answers, reconstruction steps, and a
       pass/fail disposition for all three zones; it proves the receipt-sourced deployed SHA across
-      CI/review/deploy receipt, `/version`, `/api/health.version`, and gateway marker. If a
-      `pkm-test` supplement is used, it records the disposable-state Overview → server-supplied
-      Focus → return Playwright journey with zero effects, errors, storage, or unauthorized writes
-      and durable trace/screenshot/checksum/manifest evidence plus owner acknowledgement. If no
-      supplement is used, the production-only evidence records the applicable final-M proof and
-      that no test state was created. The pilot ledger may preserve candidate provenance when
-      available, but readiness does not require a candidate-to-final cross-run binding.
+      CI/review/deploy receipt, `/version`, `/api/health.version`, and gateway marker, and always
+      runs the deployed Overview → server-supplied Focus → return Playwright journey with zero
+      effects, errors, storage, or unauthorized writes. If a `pkm-test` supplement is used, it
+      additionally records its disposable-state matrix and durable trace/screenshot/checksum/
+      manifest evidence plus owner acknowledgement. If no supplement is used, the production-only
+      evidence records the applicable final-M proof and that no test state was created. The pilot
+      ledger may preserve candidate provenance when available, but readiness does not require a
+      candidate-to-final cross-run binding.
   - Verify: runtime receipt: devui-stage-a-read-only-owner-pilot.v1
 - [ ] Current-state owner docs change only after all capability receipts support the claim.
   - Verify: doc writeback at `docs/DEVUI.md :: Current state and target`

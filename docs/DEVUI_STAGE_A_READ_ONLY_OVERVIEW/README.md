@@ -10,7 +10,7 @@ Temporal class: Strategic target state with an explicit delivered-input ledger
 Review cadence: Event-driven
 Source of truth: Owner documents own intended behavior; source systems and receipts own facts; GitHub, Git, CI, and merged code own delivery truth.
 Last reviewed: 2026-08-30
-Last verified against: `origin/main` `b1b71f205ff57da2df99a6747102066e5e74b350`, live GitHub
+Last verified against: `origin/main` `7d324d0bb7db060dc38be3a1a2139c551c85447b`, live GitHub
 state for #4741, #4742–#4749, #4768, #4786, #4834, #4835, #4836, #4838, #4841, and #4857, and
 merged PRs #4751, #4771, #4772, #4789, #4792, #4900, #4901, #5157, and #5200.
 
@@ -144,8 +144,10 @@ authority and genuine acknowledgements.
       durable acceptance, or dependency on opening standalone subsystem UIs. It runs only on the
       receipt-sourced VM-102 Dev System deployment and selected environment identity (`pkm-prod`, `PKM_ENVIRONMENT=prod`, Midgård),
       proves the deployed SHA across CI/review/deploy receipt, `/version`, `/api/health.version`,
-      and gateway marker, and records the disposable-state Overview → server-supplied Focus →
-      return journey with zero effects/errors/storage/unauthorized writes and durable evidence.
+      and gateway marker, and always records the deployed Overview → server-supplied Focus → return
+      journey with zero effects/errors/storage/unauthorized writes and durable evidence. If a
+      `pkm-test` supplement is used, it additionally records the disposable-state matrix; the
+      production-only path does not create test state.
 
 ## Relationship to GitHub issues
 
