@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-
-class RegistryError(RuntimeError):
-    """Base class for fail-closed registry errors."""
+from app.instance.errors import RegistryError
 
 
 class CapabilityNotReadyError(RegistryError):
