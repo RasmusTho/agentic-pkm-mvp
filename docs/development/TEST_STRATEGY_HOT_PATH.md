@@ -72,8 +72,9 @@ The goal is to keep docs-only and governance/skill PRs cheap while preserving di
   `test_staged_backup_failure_surfaces_underlying_cause`,
   `test_inconsistent_registry_ledger_still_fails_closed`), so a backup/ownership verification defect
   fails the changing PR instead of first turning `main`'s post-merge smoke red. The CI fixture seeds
-  its adopted binding through the same `/tmp` path mounted into both `worker` and
-  `instance-state-init`; `tests/architecture/test_ci_smoke_contract.py::test_vaultwide_smoke_seeds_adopted_fixture_with_same_path_identity`
+  its adopted binding through the same `/tmp` path mounted into `watcher` and
+  `instance-state-init`; the final fixture starts that same single `watcher` owner, rather than
+  additional consumers with overlapping live ownership. `tests/architecture/test_ci_smoke_contract.py::test_vaultwide_smoke_seeds_adopted_fixture_with_same_path_identity`
   protects that mount/seed contract without weakening genuine ledger inconsistency rejection. The
   docker-compose integration itself (mounts, launcher sequence, seeded vault) remains post-merge-only
   coverage.
