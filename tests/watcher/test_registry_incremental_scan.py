@@ -583,6 +583,49 @@ def test_active_generation_keeps_root_resolution_failure_when_identity_resets(
     assert summary["scan_generation_had_error"] is True
 
 
+def test_identity_failure_is_degraded_without_clearing_sidecar_observations(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cfg, spec, vault = _make_cfg(tmp_path)
+    observations = RegistryObservationStore(tmp_path / "observations.sqlite3")
+    observations.put(
+        "notes/old.md",
+        {"hash": "old", "mtime": 1_700_009_350.0},
+        generation=3,
+    )
+    state = WatcherState(
+        _observation_store=observations,
+        scan_in_progress=True,
+        scan_generation=3,
+        scan_identity="previous-identity",
+    )
+    original_stat = Path.stat
+
+    def fail_vault_stat(path: Path, *args: object, **kwargs: object):
+        if path == vault:
+            raise OSError("vault identity temporarily unavailable")
+        return original_stat(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "stat", fail_vault_stat)
+    registry._begin_or_resume_scan(
+        state,
+        vault_root=vault,
+        scan_roots=[vault],
+        scope_glob=spec.scope_glob,
+    )
+
+    assert state.scan_generation == 4
+    assert state.scan_generation_had_error is True
+    assert observations.get("notes/old.md") == {
+        "hash": "old",
+        "mtime": 1_700_009_350.0,
+    }
+    assert state.file_entry("notes/old.md") == {
+        "hash": "old",
+        "mtime": 1_700_009_350.0,
+    }
+
+
 def test_selected_vault_marker_is_not_treated_as_nested_boundary(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

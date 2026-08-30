@@ -1174,7 +1174,13 @@ def _normalized_scan_roots(
     return sorted(candidates, key=lambda path: path.relative_to(selected_real).as_posix())
 
 
-def _scan_identity(vault_root: Path, scan_roots: Iterable[Path], scope_glob: str) -> str:
+def _scan_identity(
+    vault_root: Path,
+    scan_roots: Iterable[Path],
+    scope_glob: str,
+    *,
+    state: WatcherState | None = None,
+) -> str:
     """Identify the concrete vault and roots behind a resumable scan.
 
     Paths alone are not sufficient: an operator can replace a vault at the same
@@ -1184,7 +1190,10 @@ def _scan_identity(vault_root: Path, scan_roots: Iterable[Path], scope_glob: str
     unrelated content.
     """
 
+    identity_had_error = False
+
     def path_identity(path: Path, *, relative_to: Path | None = None) -> dict[str, object]:
+        nonlocal identity_had_error
         try:
             resolved = path.resolve()
             identity = resolved.stat()
@@ -1199,6 +1208,7 @@ def _scan_identity(vault_root: Path, scan_roots: Iterable[Path], scope_glob: str
             }
             return record
         except (OSError, ValueError) as exc:
+            identity_had_error = True
             return {
                 "path": str(path),
                 "error": type(exc).__name__,
@@ -1207,6 +1217,7 @@ def _scan_identity(vault_root: Path, scan_roots: Iterable[Path], scope_glob: str
     try:
         vault_real = vault_root.resolve()
     except OSError:
+        identity_had_error = True
         vault_real = vault_root
     marker = vault_real / "settings" / "vault.md"
     marker_record: dict[str, object]
@@ -1222,6 +1233,7 @@ def _scan_identity(vault_root: Path, scan_roots: Iterable[Path], scope_glob: str
     except FileNotFoundError:
         marker_record = {"exists": False}
     except OSError as exc:
+        identity_had_error = True
         marker_record = {"error": type(exc).__name__}
     roots = [
         path_identity(path, relative_to=vault_real)
@@ -1236,6 +1248,8 @@ def _scan_identity(vault_root: Path, scan_roots: Iterable[Path], scope_glob: str
         },
         sort_keys=True,
     )
+    if identity_had_error and state is not None:
+        _record_scan_error(state)
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
 
@@ -1247,10 +1261,21 @@ def _begin_or_resume_scan(
     scope_glob: str,
     preserve_generation_error: bool = False,
 ) -> None:
-    identity = _scan_identity(vault_root, scan_roots, scope_glob)
+    errors_before_identity = state.errors
+    identity = _scan_identity(
+        vault_root,
+        scan_roots,
+        scope_glob,
+        state=state,
+    )
+    identity_had_error = state.errors > errors_before_identity
     if state.scan_in_progress and state.scan_identity == identity:
         return
-    if state.scan_identity is not None and state.scan_identity != identity:
+    if (
+        state.scan_identity is not None
+        and state.scan_identity != identity
+        and not identity_had_error
+    ):
         # A path can be reused for a replacement vault. Relative-path keys in
         # the sidecar are not sufficient authority in that case: retaining
         # them would let the replacement inherit hashes/last-seen state from a
@@ -1261,7 +1286,7 @@ def _begin_or_resume_scan(
     state.scan_root_index = 0
     state.scan_stack = []
     state.scan_scope_matched_files = 0
-    state.scan_generation_had_error = preserve_generation_error
+    state.scan_generation_had_error = preserve_generation_error or identity_had_error
     state.scan_in_progress = True
     state.continuation_reason = None
 
