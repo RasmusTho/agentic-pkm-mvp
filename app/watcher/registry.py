@@ -160,21 +160,23 @@ def _now_iso_from_timestamp(value: float) -> str:
     return datetime.fromtimestamp(value, tz=timezone.utc).isoformat().replace("+00:00", "Z")
 
 
-def _log_tick_diagnostics_registry(
-    cfg: RegistryConfig,
+def write_tick_diagnostics(
+    tick_log_path: Path,
     summary: dict[str, object],
     scan_root: Path | None,
     watcher_name: str,
+    *,
+    scope_glob: str = "",
 ) -> None:
     payload: dict[str, object | None] = {
-        "timestamp": summary.get("tick_start_ts"),
+        "timestamp": summary.get("tick_start_ts") or datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         "watcher_name": watcher_name,
-        "scope_glob": summary.get("scope_glob") or cfg.scope_glob,
+        "scope_glob": summary.get("scope_glob") or scope_glob,
         "scan_root": str(scan_root) if scan_root is not None else None,
-        "scanned_files": summary.get("scanned_files", 0),
+        "scanned_files": summary.get("scanned_files", summary.get("changed", 0)),
         "hashed_files": summary.get("hashed_files", 0),
         "bytes_read": summary.get("bytes_read", 0),
-        "changed_files": summary.get("changed_in_tick", 0),
+        "changed_files": summary.get("changed_in_tick", summary.get("changed", 0)),
         "emitted_events": summary.get("emitted_in_tick", 0),
         "elapsed_ms": summary.get("tick_ms"),
         "panel_candidates": summary.get("panel_candidates", 0),
@@ -188,12 +190,27 @@ def _log_tick_diagnostics_registry(
         "stop_reason": summary.get("stop_reason"),
     }
     try:
-        cfg.tick_log_path.parent.mkdir(parents=True, exist_ok=True)
-        with cfg.tick_log_path.open("a", encoding="utf-8") as handle:
+        tick_log_path.parent.mkdir(parents=True, exist_ok=True)
+        with tick_log_path.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(payload, ensure_ascii=False))
             handle.write("\n")
     except Exception:
         return
+
+
+def _log_tick_diagnostics_registry(
+    cfg: RegistryConfig,
+    summary: dict[str, object],
+    scan_root: Path | None,
+    watcher_name: str,
+) -> None:
+    write_tick_diagnostics(
+        cfg.tick_log_path,
+        summary,
+        scan_root,
+        watcher_name,
+        scope_glob=cfg.scope_glob,
+    )
 
 
 def _trip_stop_file(cfg: RegistryConfig, summary: dict[str, object]) -> None:
