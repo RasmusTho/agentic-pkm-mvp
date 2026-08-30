@@ -1,7 +1,7 @@
 State: Accepted target-state breakdown with blocked validation parent #4741; ARO-01 is closed with
 its withdrawal recorded, ARO-03 is delivered as the direct-loopback local route, ARO-05/#4746 and
-ARO-06/#4836 are delivered, ARO-07/#4748 is delivered with exact final-main evidence, and ARO-04,
-ARO-08/#4749 remain blocked; Focus-route prerequisite #4768, source-owned Now producer #4834, and
+ARO-06/#4836 are delivered, ARO-07/#4748 is delivered with exact final-main evidence, and ARO-04 is
+superseded while ARO-08/#4749 remains blocked; Focus-route prerequisite #4768, source-owned Now producer #4834, and
 production transport #4841 are delivered.
 Doc role: Capability specification and source-authorized task decomposition for the remaining read-only devUI Stage A Overview.
 Authority: `docs/DEVUI.md` owns owner experience and Overview semantics; `docs/plans/DEVUI_IMPLEMENTATION.md` owns Stage A order. This directory owns only the bounded delivery contracts and validation path.
@@ -10,7 +10,7 @@ Temporal class: Strategic target state with an explicit delivered-input ledger
 Review cadence: Event-driven
 Source of truth: Owner documents own intended behavior; source systems and receipts own facts; GitHub, Git, CI, and merged code own delivery truth.
 Last reviewed: 2026-08-30
-Last verified against: `origin/main` `dfb834202bda9b3f49f867782ffeb707ee885271`, live GitHub
+Last verified against: `origin/main` `b1b71f205ff57da2df99a6747102066e5e74b350`, live GitHub
 state for #4741, #4742–#4749, #4768, #4786, #4834, #4835, #4836, #4838, #4841, and #4857, and
 merged PRs #4751, #4771, #4772, #4789, #4792, #4900, #4901, #5157, and #5200.
 
@@ -27,7 +27,7 @@ production-validation steps. No current producer exposes the canonical source fa
 **Needs you** or **Ready to try**. #4834 delivers source-owned **Now** candidates from the trusted
 Cockpit `working` payload only; the connected shell is delivered, but exact browser proof and
 production acceptance remain separate authorities. ARO-07/#4748 is now proven at final post-merge
-main `M=dfb834202bda9b3f49f867782ffeb707ee885271`; ARO-08/#4749 still requires the independent VM-102
+main `M=c7c57300f2ec241778061078e7ad585454f0b880`; ARO-08/#4749 still requires the independent VM-102
 deployment, promotion, production observation, and owner-evidence gates.
 
 #4841 supplies only the production loopback-published Companion transport for the existing two
@@ -154,8 +154,8 @@ hub. ARO-01 is [#4742](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4742)
 withdrawal recorded by PR #4751; ARO-02 / [#4743](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4743)
 is superseded by that no-source decision, and ARO-03 / [#4744](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4744)
 is delivered as the no-candidate local projection route; its contract and route-test selection were
-reconciled by merged PR #4789. ARO-04 remains
-[#4745](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4745), and
+reconciled by merged PR #4789. ARO-04 /
+[#4745](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4745) is closed as superseded, and
 [#4748](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4748) is closed after its authenticated
 exact-main proof, while ARO-08 /
 [#4749](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4749) remains `agent:blocked`. ARO-08

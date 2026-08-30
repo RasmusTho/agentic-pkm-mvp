@@ -12,12 +12,14 @@ Review cadence: Event-driven
 Source of truth: This document owns the owner experience. Accepted ADRs and linked capability
 specifications own the mechanisms; live GitHub, CI, dispatcher, and receipt evidence owns delivery
 truth.
-Last reviewed: 2026-08-12
-Last verified against: `origin/main` `a4e79f77909f93e1a313d9f10907e6ed8aeb72a6`, live GitHub state
-for #4746, #4768, #4834, and #4838, the merged withdrawal receipt in PR #4751, the admitted local
-Focus route in PR #4771, the admitted direct-loopback Overview route in PR #4772, the ARO-03
-contract and route-test-selection recovery in PR #4789, and the `Via`-transit admission repair in
-PR #4792; ADR-0057,
+Last reviewed: 2026-08-30
+Last verified against: `origin/main` `b1b71f205ff57da2df99a6747102066e5e74b350`, live GitHub state
+for #4741, #4742–#4749, #4768, #4833, #4834, #4835, #4836, #4838, #4841, and #4857, the merged
+withdrawal receipt in PR #4751, the admitted local Focus route in PR #4771, the admitted
+direct-loopback Overview route in PR #4772, the ARO-03 contract and route-test-selection recovery
+in PR #4789, the `Via`-transit admission repair in PR #4792, the merged #4835 prerequisite in PR
+#4901, the merged connected shell in PR #5157, the owner-doc promotion in PR #5200, and the final-
+main #4748 proof receipt; ADR-0057,
 ADR-0062, ADR-0064, ADR-0065, the CKM and BuilderOps Cockpit owner contracts, the Deterministic
 Delivery Orchestration specification, the merged Builder System process clarification in PR #4692,
 the advisory Builder System devUI execution audit in PR #4689, and the merged Focus and Conversation
@@ -719,8 +721,8 @@ delivered by #4841: `127.0.0.1:8113` loopback host publication, local-Host/no-fo
 an exact two-GET allowlist, and a fresh upstream request with no client identity or credentials.
 The read endpoint is `http://127.0.0.1:8113/devui/overview`; #4841 is transport only: it adds no
 page or asset route, and port `18000` remains direct API health/version diagnostics.
-#4836 must consume this transport unchanged; #4833 must verify its published candidate. The merged
-shell is verified by #4748 at final post-merge `main`.
+The #4836 must consume this transport unchanged contract was satisfied; the #4833 must verify its published candidate requirement was met, and the merged shell was verified by #4748 at final post-merge `main`
+`M=c7c57300f2ec241778061078e7ad585454f0b880`.
 
 The #4836 implementation candidate packages `/devui/overview`,
 `/devui/focus?subject=...`, and their same-origin assets in the committed
@@ -733,10 +735,11 @@ effect-free, storage-free, and render source text as text rather than markup. Th
 `yggdrasil-constrained-reuse.v1` manifest binds its complete subtree inventory and Git tree to exact
 shipped Cockpit/token source objects and a closed transform set.
 
-PR #5157 has now delivered the connected read-only shell in the repository, after #4746 accepted
-the exact constrained-reuse candidate and #4833/#4842 supplied exact-ref browser/accessibility
-evidence for its pre-merge head. This is delivered repository truth, not production-deployed or
-owner-accepted UI truth. #4748 must still rerun the exact-ref proof at final post-merge `main`, and
+PR #5157 delivered the connected read-only shell in the repository after #4746 accepted the exact
+constrained-reuse candidate and #4833/#4842 supplied exact-ref browser/accessibility evidence for
+its pre-merge head. PR #5200 recorded that delivered owner-doc truth, and #4748 subsequently
+authenticated the exact five-node proof at final post-merge `main` `M=c7c57300f2ec241778061078e7ad585454f0b880`.
+This remains delivered repository/proof truth, not production-deployed or owner-accepted UI truth;
 #4749 owns the later deployment and owner-pilot gates.
 
 Not delivered now: request/preview/authenticated approval in one owner experience; PostgreSQL
