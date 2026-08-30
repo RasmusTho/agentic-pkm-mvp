@@ -115,16 +115,30 @@ def _receipt_text(receipt: dict[str, object]) -> str:
 
 
 def _comments(repo: str, endpoint: str) -> list[dict[str, Any]]:
-    comments = _api(repo, f"{endpoint}/comments?per_page=100")
-    if not isinstance(comments, list):
-        raise RuntimeError("comment readback did not return a list")
-    return [comment for comment in comments if isinstance(comment, dict)]
+    """Read every comment page so latest receipt evidence cannot be truncated."""
+    result: list[dict[str, Any]] = []
+    page = 1
+    while True:
+        comments = _api(repo, f"{endpoint}/comments?per_page=100&page={page}")
+        if not isinstance(comments, list):
+            raise RuntimeError("comment readback did not return a list")
+        result.extend(comment for comment in comments if isinstance(comment, dict))
+        if len(comments) < 100:
+            return result
+        page += 1
 
 
 def _current_receipt_state(live: dict[str, Any], comments: list[dict[str, Any]]) -> tuple[str, list[str], str | None]:
     return _receipt_disposition(
         _labels(live), comments, open_issue=str(live.get("state", "")).lower() == "open"
     )
+
+
+def required_action_labels(plans: list[dict[str, Any]]) -> set[str]:
+    """Return only canonical labels an apply batch will actually add."""
+    return {
+        change["add"] for item in plans for change in item["changes"] if change["add"] in ACTION_LABELS
+    }
 
 
 def apply_plan(repo: str, owner: str, name: str, item: dict[str, Any]) -> dict[str, Any]:
@@ -174,6 +188,9 @@ def apply_plan(repo: str, owner: str, name: str, item: dict[str, Any]) -> dict[s
         raise RuntimeError(f"post-apply drift for issue #{item['issue']}: {final_verdict.errors}")
     final_comments = _comments(repo, endpoint)
     final_disposition, final_receipt_errors, action = _current_receipt_state(final, final_comments)
+    expected_not_applicable = not set(item["after"]) & ({"agent:blocked", "agent:needs-human"} | ACTION_LABELS)
+    if final_disposition == "not_applicable" and expected_not_applicable and _labels(final) == set(item["after"]):
+        return {"issue": item["issue"], "labels": sorted(_labels(final)), "action": None, "disposition": "not_applicable"}
     if final_disposition == "receipt_current":
         return {"issue": item["issue"], "labels": sorted(_labels(final)), "action": action, "disposition": "receipt_current"}
     if final_disposition != "receipt_repair" or not action:
@@ -214,10 +231,13 @@ def main() -> int:
     plans = [plan(issue, _comments(args.repo, f"repos/{owner}/{name}/issues/{issue['number']}")) for issue in issues]
     if args.apply:
         # Label creation is deterministic and idempotent.  It is intentionally
-        # limited to the canonical family; no legacy or unrelated label is deleted.
-        existing = _api(args.repo, f"repos/{owner}/{name}/labels?per_page=100")
-        existing_names = {str(label.get("name")) for label in existing}
-        for label in sorted(ACTION_LABELS - existing_names):
+        # limited to action labels that this bounded batch will actually add.
+        required_labels = required_action_labels(plans)
+        existing_names: set[str] = set()
+        if required_labels:
+            existing = _api(args.repo, f"repos/{owner}/{name}/labels?per_page=100")
+            existing_names = {str(label.get("name")) for label in existing}
+        for label in sorted(required_labels - existing_names):
             _api(args.repo, f"repos/{owner}/{name}/labels", method="POST", payload={"name": label, "color": "bfdadc", "description": "Canonical next action for a non-active Issue"})
         for item in plans:
             apply_plan(args.repo, owner, name, item)

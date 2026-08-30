@@ -1,5 +1,5 @@
 from app.builderops.blocker_actions import LEGACY_HUMAN_ACTIONS, intake, parse_blocker_action_receipt, receipt_for_action
-from scripts.reconcile_blocker_actions import apply_plan, plan
+from scripts.reconcile_blocker_actions import apply_plan, plan, required_action_labels
 import subprocess
 import sys
 from pathlib import Path
@@ -63,7 +63,7 @@ def _receipt_repair_api(labels: list[str], comments: list[dict[str, object]], ca
 
     def fake_api(repo, endpoint, *, method="GET", payload=None):
         calls.append((endpoint, method, payload))
-        if endpoint.endswith("/comments?per_page=100"):
+        if "/comments?per_page=100&page=" in endpoint:
             return list(comments)
         if endpoint.endswith("/comments") and method == "POST":
             comments.append({"id": 9, "body": payload["body"]})
@@ -93,6 +93,38 @@ def test_plan_keeps_valid_current_receipt_as_idempotent_noop() -> None:
     assert result["disposition"] == "receipt_current"
     assert result["changes"] == []
     assert not result["receipt_errors"]
+
+
+def test_plan_uses_newest_receipt_marker_before_validation() -> None:
+    labels = ["agent:blocked", "action:wait-dependency"]
+    valid = {"body": _receipt_body("action:wait-dependency")}
+    invalid = {"body": "```yaml\nreceipt: blocker_action.v1\nowner: builder\n```"}
+    assert plan({"number": 1, "state": "open", "labels": labels}, [valid, invalid])["disposition"] == "receipt_repair"
+    assert plan({"number": 1, "state": "open", "labels": labels}, [invalid, valid])["disposition"] == "receipt_current"
+
+
+def test_apply_reads_second_comment_page_and_retry_does_not_duplicate_receipt(monkeypatch) -> None:
+    labels = ["agent:blocked", "action:wait-dependency"]
+    pages = [{"id": index, "body": "ordinary comment"} for index in range(100)]
+    pages.append({"id": 101, "body": _receipt_body("action:wait-dependency")})
+    item = plan({"number": 1, "state": "open", "labels": labels}, pages)
+    calls: list[tuple] = []
+
+    def fake_api(repo, endpoint, *, method="GET", payload=None):
+        calls.append((endpoint, method, payload))
+        if endpoint.endswith("page=1"):
+            return pages[:100]
+        if endpoint.endswith("page=2"):
+            return pages[100:]
+        if endpoint.endswith("/issues/1"):
+            return {"number": 1, "state": "open", "labels": labels}
+        raise AssertionError((endpoint, method, payload))
+
+    monkeypatch.setattr("scripts.reconcile_blocker_actions._api", fake_api)
+    result = apply_plan("o/r", "o", "r", item)
+    assert result["disposition"] == "receipt_current"
+    assert any(endpoint.endswith("page=2") for endpoint, _, _ in calls)
+    assert not any(endpoint.endswith("/comments") and method == "POST" for endpoint, method, _ in calls)
 
 
 def test_apply_receipt_only_recovery_is_label_free_and_fully_read_back(monkeypatch) -> None:
@@ -135,6 +167,65 @@ def test_receipt_only_readback_failure_is_not_reported_as_success(monkeypatch) -
     monkeypatch.setattr("scripts.reconcile_blocker_actions._api", _receipt_repair_api(labels, [], calls, unreadable_exact=True))
     with pytest.raises(RuntimeError, match="receipt readback mismatch"):
         apply_plan("o/r", "o", "r", item)
+
+
+def test_action_only_cleanup_finishes_not_applicable_after_readback(monkeypatch) -> None:
+    item = plan({"number": 1, "state": "open", "labels": ["action:wait-dependency"]}, [])
+    state = {"labels": ["action:wait-dependency"]}
+
+    def fake_api(repo, endpoint, *, method="GET", payload=None):
+        if "/comments?per_page=100&page=" in endpoint:
+            return []
+        if endpoint.endswith("/labels/action:wait-dependency") and method == "DELETE":
+            state["labels"] = []
+            return None
+        if endpoint.endswith("/issues/1"):
+            return {"number": 1, "state": "open", "labels": state["labels"]}
+        raise AssertionError((endpoint, method, payload))
+
+    monkeypatch.setattr("scripts.reconcile_blocker_actions._api", fake_api)
+    assert apply_plan("o/r", "o", "r", item)["disposition"] == "not_applicable"
+
+
+def test_unexpected_not_applicable_state_fails_closed(monkeypatch) -> None:
+    labels = ["agent:blocked", "action:wait-dependency"]
+    item = plan({"number": 1, "state": "open", "labels": labels}, [])
+    reads = iter([
+        {"number": 1, "state": "open", "labels": labels},
+        {"number": 1, "state": "open", "labels": []},
+    ])
+
+    def fake_api(repo, endpoint, *, method="GET", payload=None):
+        if "/comments?per_page=100&page=" in endpoint:
+            return []
+        if endpoint.endswith("/issues/1"):
+            return next(reads)
+        raise AssertionError((endpoint, method, payload))
+
+    monkeypatch.setattr("scripts.reconcile_blocker_actions._api", fake_api)
+    with pytest.raises(RuntimeError, match="post-apply receipt drift"):
+        apply_plan("o/r", "o", "r", item)
+
+
+def test_main_skips_label_bootstrap_for_receipt_only_batch(monkeypatch) -> None:
+    from scripts import reconcile_blocker_actions
+
+    labels = ["agent:blocked", "action:wait-dependency"]
+    comments: list[dict[str, object]] = []
+    calls: list[tuple] = []
+    monkeypatch.setattr(reconcile_blocker_actions, "_api", _receipt_repair_api(labels, comments, calls))
+    monkeypatch.setattr(sys, "argv", ["reconcile_blocker_actions.py", "--repo", "o/r", "--issue", "1", "--apply"])
+    assert reconcile_blocker_actions.main() == 0
+    assert not any(endpoint == "repos/o/r/labels?per_page=100" for endpoint, _, _ in calls)
+    assert not any(endpoint == "repos/o/r/labels" for endpoint, _, _ in calls)
+
+
+def test_mixed_batch_bootstraps_only_actual_label_additions() -> None:
+    receipt_only = plan({"number": 1, "state": "open", "labels": ["agent:blocked", "action:wait-dependency"]}, [])
+    add_action = plan({"number": 2, "state": "open", "labels": ["agent:blocked"]}, [])
+    cleanup_only = plan({"number": 3, "state": "open", "labels": ["action:wait-dependency"]}, [])
+    assert required_action_labels([receipt_only, cleanup_only]) == set()
+    assert required_action_labels([receipt_only, add_action, cleanup_only]) == {"action:repair-contract"}
 
 
 def test_report_distinguishes_receipt_repair_current_and_drift() -> None:
