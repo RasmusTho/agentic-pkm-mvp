@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 
 from app.cli.settings_explain import _redact_payload, build_settings_explain_payload, emit_settings_explain
+from app.settings.ingestion import SettingsIngestionState
+from app.settings.models import SettingsBundle, WatcherAndTuningSettings
 
 
 def test_settings_explain_surfaces_explicit_environment(monkeypatch, tmp_path) -> None:
@@ -90,6 +92,45 @@ def test_settings_explain_includes_watcher_gate_and_allowlist(monkeypatch, tmp_p
     assert "watcher_heartbeat" in watcher["paths"]
     assert "worker_heartbeat" in watcher["paths"]
     assert "write_guard" in watcher
+
+
+def test_settings_explain_includes_watcher_and_tuning_provenance(monkeypatch) -> None:
+    bundle = SettingsBundle(
+        watcher_and_tuning=WatcherAndTuningSettings(
+            debounce_ms=125,
+            rate_limit_per_min=7,
+            backoff_seconds=3,
+            tick_sleep_seconds=0.25,
+            connect_relatedness_floor=0.45,
+            contradiction_floor=0.3,
+        )
+    )
+    monkeypatch.setattr("app.cli.settings_explain.get_settings_bundle", lambda: bundle)
+    monkeypatch.setattr(
+        "app.cli.settings_explain.get_settings_ingestion_state",
+        lambda: SettingsIngestionState(
+            state="ok", source="vault", watcher_and_tuning_origin="vault-shared"
+        ),
+    )
+    monkeypatch.setenv("PKM_SETTINGS_PROFILE", "lab")
+
+    payload = build_settings_explain_payload()
+
+    assert payload["watchers"]["debounce_ms"] == {
+        "value": 125,
+        "origin": "vault-shared",
+        "tier": "lab",
+    }
+    assert payload["watchers"]["connect_relatedness_floor"] == {
+        "value": 0.45,
+        "origin": "vault-shared",
+        "tier": "lab",
+    }
+    assert payload["watchers"]["contradiction_floor"] == {
+        "value": 0.3,
+        "origin": "vault-shared",
+        "tier": "lab",
+    }
 
 
 def test_settings_explain_respects_explicit_database_override(monkeypatch, tmp_path) -> None:

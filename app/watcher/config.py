@@ -34,6 +34,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from app.settings.env_defaults import env_str
+from app.settings.ingestion import ingest_settings
 from app.settings.runtime import get_settings_bundle, subscribe_settings
 from app.settings.tiering import is_lab_profile, resolve_dev_lab_env_typed
 from app.settings.watcher_settings import load_watcher_settings
@@ -168,7 +169,7 @@ class WatcherConfig:
         )
 
     @classmethod
-    def from_env(cls) -> "WatcherConfig":
+    def from_env(cls, *, ingest_selected_vault: bool = False) -> "WatcherConfig":
         enable = _as_bool(env_str("WATCHER_ENABLE"))
         vault_raw = (os.getenv("WATCHER_VAULT_PATH") or "").strip()
         if enable and not vault_raw:
@@ -181,6 +182,21 @@ class WatcherConfig:
         if enable and not _validate_watcher_vault(vault_path):
             enable = False
         watcher_settings = load_watcher_settings(vault_path)
+        if ingest_selected_vault and enable:
+            # The one-shot CLI does not enter ``run_forever`` and therefore
+            # cannot rely on its startup ingestion.  Resolve this selected
+            # vault before the first tunable read below.
+            state = ingest_settings(
+                reason="watcher_once_startup",
+                vault_root=vault_path,
+                publish_signal=False,
+            )
+            if state.state not in {"ok", "no_vault"}:
+                logger.warning(
+                    "watcher one-shot settings ingestion degraded state=%s error=%s",
+                    state.state,
+                    state.error,
+                )
 
         scope_env = (os.getenv("WATCHER_SCOPE_GLOB") or "").strip()
         scope_source = "env:WATCHER_SCOPE_GLOB" if scope_env else "default:vaultwide"

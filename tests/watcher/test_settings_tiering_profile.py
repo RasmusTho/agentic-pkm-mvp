@@ -8,6 +8,7 @@ import pytest
 from app.watcher.config import WatcherConfig
 from app.watcher.registry import RegistryConfig, WatcherSpec
 from app.settings import compiler
+from app.settings.ingestion import SettingsIngestionState
 from app.settings.models import SettingsBundle, WatcherAndTuningSettings
 from tests.helpers.vault_settings import initialize_test_vault
 
@@ -160,3 +161,32 @@ def test_watcher_tunables_reach_startup_and_reload_from_settings(
         4,
         0.5,
     )
+
+
+def test_one_shot_ingests_selected_vault_before_tunable_resolution(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    vault = initialize_test_vault(tmp_path / "vault")
+    events: list[str] = []
+    monkeypatch.setenv("PKM_SETTINGS_PROFILE", "lab")
+    monkeypatch.setenv("WATCHER_ENABLE", "1")
+    monkeypatch.setenv("WATCHER_VAULT_PATH", str(vault))
+    monkeypatch.setattr(
+        "app.watcher.config.ingest_settings",
+        lambda **kwargs: (
+            events.append(f"ingest:{kwargs['vault_root']}")
+            or SettingsIngestionState(state="ok", source="vault")
+        ),
+    )
+    monkeypatch.setattr(
+        "app.watcher.config.get_settings_bundle",
+        lambda: events.append("resolve") or SettingsBundle(),
+    )
+    monkeypatch.setattr(
+        "app.watcher.config.subscribe_settings", lambda callback, *, replay: None
+    )
+
+    WatcherConfig.from_env(ingest_selected_vault=True)
+
+    assert events[0] == f"ingest:{vault}"
+    assert "resolve" in events[1:]

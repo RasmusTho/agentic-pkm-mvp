@@ -84,7 +84,7 @@ from __future__ import annotations
 
 import hashlib
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Protocol
 
@@ -182,7 +182,7 @@ class ConnectPassConfig:
     max_findings_per_note: int = _DEFAULT_MAX_FINDINGS_PER_NOTE
     max_findings_total: int = _DEFAULT_MAX_FINDINGS_TOTAL
     retrieval_k: int = _DEFAULT_RETRIEVAL_K
-    relatedness_floor: float = _DEFAULT_RELATEDNESS_FLOOR
+    relatedness_floor: float | None = None
     cross_scope_grants: tuple[CrossScopeFlow, ...] = ()
     declined_ledger: DeclinedLedgerPort = field(default_factory=default_declined_ledger)
 
@@ -397,7 +397,11 @@ def run_connect_pass(
     discipline (already-linked exclusion, scope pairing, caps, idempotency)
     on top of what retrieval already returned.
     """
-    config = config or ConnectPassConfig(relatedness_floor=_relatedness_floor_from_settings())
+    config = config or ConnectPassConfig()
+    if config.relatedness_floor is None:
+        config = replace(config, relatedness_floor=_relatedness_floor_from_settings())
+    relatedness_floor = config.relatedness_floor
+    assert relatedness_floor is not None
     vault_root = Path(vault_root).expanduser().resolve()
     link_map = _existing_link_paths(vault_root)
 
@@ -412,7 +416,7 @@ def run_connect_pass(
 
     for query in queries:
         response = retrieve_fn(RetrievalRequest(query=query, k=config.retrieval_k))
-        hits = [hit for hit in response.hits if hit.score >= config.relatedness_floor]
+        hits = [hit for hit in response.hits if hit.score >= relatedness_floor]
         candidates = [_candidate_from_hit(hit, anchor_scope=None) for hit in hits]
 
         for i in range(len(candidates)):

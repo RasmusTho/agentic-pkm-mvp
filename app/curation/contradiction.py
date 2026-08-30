@@ -74,7 +74,7 @@ posture):
 from __future__ import annotations
 
 import hashlib
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Callable
 
@@ -191,7 +191,7 @@ class ContradictionPassConfig:
     max_findings_per_note: int = _DEFAULT_MAX_FINDINGS_PER_NOTE
     max_findings_total: int = _DEFAULT_MAX_FINDINGS_TOTAL
     retrieval_k: int = _DEFAULT_RETRIEVAL_K
-    contradiction_floor: float = _DEFAULT_CONTRADICTION_FLOOR
+    contradiction_floor: float | None = None
     cross_scope_grants: tuple[CrossScopeFlow, ...] = ()
     declined_ledger: DeclinedLedgerPort = field(default_factory=default_declined_ledger)
 
@@ -330,7 +330,11 @@ def run_contradiction_pass(
     Explicit-invocation only: this function has no scheduler/tick binding.
     Callers (the CLI) decide when to invoke it.
     """
-    config = config or ContradictionPassConfig(contradiction_floor=_contradiction_floor_from_settings())
+    config = config or ContradictionPassConfig()
+    if config.contradiction_floor is None:
+        config = replace(config, contradiction_floor=_contradiction_floor_from_settings())
+    contradiction_floor = config.contradiction_floor
+    assert contradiction_floor is not None
     vault_root = Path(vault_root).expanduser().resolve()
 
     seen_finding_ids: set[str] = set()
@@ -342,7 +346,7 @@ def run_contradiction_pass(
 
     for query in queries:
         response = retrieve_fn(RetrievalRequest(query=query, k=config.retrieval_k))
-        hits = [hit for hit in response.hits if hit.score >= config.contradiction_floor]
+        hits = [hit for hit in response.hits if hit.score >= contradiction_floor]
         claims = [_claim_from_hit(hit, anchor_scope=None) for hit in hits]
 
         for i in range(len(claims)):

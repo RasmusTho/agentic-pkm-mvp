@@ -66,6 +66,7 @@ class SettingsIngestionState:
     # explain output bound to the same selected source that produced the active
     # (or retained last-valid) bundle.
     tts_origin: str = "registry default"
+    watcher_and_tuning_origin: str = "registry default"
 
     def to_payload(self) -> dict[str, Any]:
         # The reload signal deliberately carries only cross-process invalidation
@@ -153,9 +154,49 @@ def _compiled_generation_tts_origin() -> str | None:
     return "vault-shared"
 
 
+def _compiled_generation_source_origin(
+    *, source_name: str, runtime_name: str
+) -> str | None:
+    """Recover provenance for one compiled settings source in a fresh process.
+
+    The runtime projection and its source manifest describe the published
+    generation.  The source's current presence is enough to distinguish a
+    vault-authored setting from a removed source while retaining provenance
+    after a malformed replacement, matching the TTS explain contract.
+    """
+    source_dir = _selected_settings_source_dir()
+    manifest_path = runtime.RUNTIME / "sources.json"
+    if (
+        source_dir is None
+        or not (runtime.RUNTIME / runtime_name).is_file()
+        or not manifest_path.is_file()
+    ):
+        return None
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        expected = manifest["sources"]
+        if manifest.get("version") != 1 or not isinstance(expected, dict):
+            return None
+        sources = resolve_compiled_sources(source_dir.parent)
+        source = sources.get(Path(source_name))
+        if expected.get(source_name) is None or source is None:
+            return None
+        return "vault-shared"
+    except (OSError, TypeError, ValueError, KeyError):
+        return None
+
+
 def get_compiled_generation_tts_origin() -> str | None:
     """Return provenance only when the published generation matches its sources."""
     return _compiled_generation_tts_origin()
+
+
+def get_compiled_generation_watcher_and_tuning_origin() -> str | None:
+    """Return the published watcher/tuning source provenance, if present."""
+    return _compiled_generation_source_origin(
+        source_name="watcher_and_tuning.md",
+        runtime_name="watcher_and_tuning.yaml",
+    )
 
 
 def get_settings_ingestion_state() -> SettingsIngestionState:
@@ -173,6 +214,7 @@ def get_settings_ingestion_state() -> SettingsIngestionState:
                 loaded_at=prior.loaded_at,
                 error=signal.error,
                 tts_origin=prior.tts_origin,
+                watcher_and_tuning_origin=prior.watcher_and_tuning_origin,
             )
         )
     with _STATE_LOCK:
@@ -264,9 +306,19 @@ def ingest_settings(
                 if Path("tts.md") in compiled_sources
                 else "registry default"
             )
+            watcher_and_tuning_origin = (
+                "vault-shared"
+                if Path("watcher_and_tuning.md") in compiled_sources
+                else "registry default"
+            )
         else:
             compiler.compile_all(auto_heal=False, vault_dir=sources_dir)
             tts_origin = "vault-shared" if (sources_dir / "tts.md").exists() else "registry default"
+            watcher_and_tuning_origin = (
+                "vault-shared"
+                if (sources_dir / "watcher_and_tuning.md").exists()
+                else "registry default"
+            )
         reload_settings_bundle()
     except Exception as exc:
         if had_valid:
@@ -276,6 +328,7 @@ def ingest_settings(
                 loaded_at=prior.loaded_at,
                 error=str(exc),
                 tts_origin=prior.tts_origin,
+                watcher_and_tuning_origin=prior.watcher_and_tuning_origin,
             )
         else:
             # No last-valid bundle to fall back to: boot on defaults, but say so
@@ -296,6 +349,7 @@ def ingest_settings(
         source="vault",
         loaded_at=_now_iso(),
         tts_origin=tts_origin,
+        watcher_and_tuning_origin=watcher_and_tuning_origin,
     )
     _set_state(result)
     if publish_signal:
@@ -312,5 +366,6 @@ __all__ = [
     "ingest_settings",
     "get_settings_ingestion_state",
     "get_compiled_generation_tts_origin",
+    "get_compiled_generation_watcher_and_tuning_origin",
     "reset_settings_ingestion_state",
 ]

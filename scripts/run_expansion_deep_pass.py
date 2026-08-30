@@ -86,7 +86,7 @@ class PassCaps:
     connect_max_findings_per_note: int
     connect_max_findings_total: int
     connect_retrieval_k: int
-    connect_relatedness_floor: float
+    connect_relatedness_floor: float | None
     cluster_min_size: int
     cluster_max_clusters: int
     contradiction_max_findings_per_note: int
@@ -485,7 +485,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--connect-max-findings-per-note", type=int, default=3)
     parser.add_argument("--connect-max-findings-total", type=int, default=25)
     parser.add_argument("--connect-retrieval-k", type=int, default=8)
-    parser.add_argument("--connect-relatedness-floor", type=float, default=0.55)
+    parser.add_argument(
+        "--connect-relatedness-floor",
+        type=float,
+        default=None,
+        help="Relatedness floor; defaults to the active Settings Spine value.",
+    )
     parser.add_argument("--cluster-min-size", type=int, default=3)
     parser.add_argument("--cluster-max-clusters", type=int, default=10)
     parser.add_argument("--contradiction-max-findings-per-note", type=int, default=3)

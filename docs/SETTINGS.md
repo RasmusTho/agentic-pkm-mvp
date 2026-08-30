@@ -33,8 +33,8 @@ contents are never merged.
 Compiler:
 - `python -m app.cli settings compile`
 
-Runtime settings cover the panel action catalog, watcher policy, and compiled runtime bundles under `runtime/settings/`.
-Today, `python -m app.cli settings-explain` is a narrow operator-facing diagnostics surface for environment/database state plus panel-action and watcher provenance/gating; it is not a full dump of every compiled runtime YAML.
+Runtime settings cover the panel action catalog, watcher policy, watcher cadence, and curation/expansion tuning under `runtime/settings/`.
+`python -m app.cli settings-explain` is a narrow operator-facing diagnostics surface for environment/database state plus panel-action and watcher provenance/gating; it also reports the effective watcher/tuning values with their compiled source origin and active tier. It is not a full dump of every compiled runtime YAML.
 Compiled bundle files such as `runtime/settings/llm_routing.yaml` remain the direct artifact for the broader runtime payload, while `python -m app.cli settings-validate` checks registries, panel/watcher source artifacts, and any compiled-runtime unresolved-secret sentinels visible locally.
 They also include task-specific LLM routing policy via `<vault>/settings/llm_routing.md` -> `runtime/settings/llm_routing.yaml`.
 The provider-neutral reasoning path and `settings-explain` resolve the same compiled
@@ -73,6 +73,8 @@ High-impact examples:
   - watcher performance-tuning knobs
   - pipeline/decider/orchestrator/reasoning feature flags
   - `HEALTH_THRESHOLDS_*` env-var threshold overrides (see `docs/HEALTH.md`)
+  - `watchers.debounce_ms`, `watchers.rate_limit_per_min`, `watchers.backoff_seconds`, `watchers.tick_sleep_seconds`
+  - `watchers.connect_relatedness_floor`, `watchers.contradiction_floor`
 
 Target behavior:
 - operator mode should read/apply only operator-facing settings

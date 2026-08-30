@@ -2,7 +2,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from app.curation.contradiction import _contradiction_floor_from_settings, run_contradiction_pass
+from app.curation.contradiction import (
+    ContradictionPassConfig,
+    _contradiction_floor_from_settings,
+    run_contradiction_pass,
+)
 from app.expansion.connect import _relatedness_floor_from_settings
 from app.retrieval.capability import RetrievalHit, RetrievalResponse
 from app.settings.models import SettingsBundle, WatcherAndTuningSettings
@@ -92,6 +96,7 @@ def test_configured_contradiction_floor_is_honored_through_production_pass(
     report = run_contradiction_pass(
         vault_root=vault,
         queries=["deadline"],
+        config=ContradictionPassConfig(max_findings_per_note=2, max_findings_total=25),
         write_guard=WriteGuard(snapshot_fn=lambda: {"state": "healthy", "reason": None}),
         outbox_path=tmp_path / "outbox.jsonl",
         materialize=False,

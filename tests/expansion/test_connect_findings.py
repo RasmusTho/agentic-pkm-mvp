@@ -199,6 +199,7 @@ def test_configured_floor_is_honored_through_settings_path(
     report = run_connect_pass(
         vault_root=vault_root,
         queries=["related alpha beta"],
+        config=ConnectPassConfig(max_findings_per_note=2, max_findings_total=25),
         write_guard=_allow_all_guard(),
         outbox_path=tmp_path / "outbox.jsonl",
         retrieve_fn=_fake_retrieve(hits),
