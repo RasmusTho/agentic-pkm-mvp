@@ -166,9 +166,10 @@ without adding any cross-run field to `devui-overview-browser-accessibility.v1`.
 ## How to Verify (Pre-Merge)
 
 - Confirm every strict prerequisite, including #4748 at `M`, the repaired source contract, the
-  boolean-only #4835 prerequisite, Demerzel access, the receipt-sourced URL/SHA, and promotion
-  acknowledgement. If a `pkm-test` supplement is used, also confirm its approved disposable-state
-  classification; otherwise record the production-only path explicitly.
+  boolean-only #4835 prerequisite, Demerzel access, applicable main-tracking deployment/operator
+  evidence for exactly `M`, and the receipt-sourced URL/SHA. If a `pkm-test` supplement is used,
+  also confirm its approved disposable-state classification; otherwise record the production-only
+  path explicitly.
 - Run the five named pilot checks and the Overview → Focus → return Playwright journey.
 - Post the owner-acknowledged structured result and any blockers to the parent; do not repair them
   here. Only a PASS may trigger a separate current-state owner-doc writeback decision.

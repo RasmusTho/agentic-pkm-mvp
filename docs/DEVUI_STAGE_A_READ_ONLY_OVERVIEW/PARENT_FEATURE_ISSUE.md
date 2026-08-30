@@ -10,7 +10,7 @@ Temporal class: Active validation contract
 Review cadence: Event-driven
 Source of truth: GitHub owns live child/receipt state; this document owns the acceptance path.
 Last reviewed: 2026-08-30
-Last verified against: `origin/main` `53d7aa76b4b9184600c16f33cccb0e8bd9bee4a3` and live GitHub
+Last verified against: `origin/main` `34c5c933e8bd72da117a0f6e0e1b9a05d1123bd3` and live GitHub
 state for #4741–#4749, #4768, #4833, #4834, #4835, #4836, #4838, #4841, and #4857; the delivery
 ledger below records the exact PR heads, merge commits, and proof receipt it cites.
 
@@ -24,8 +24,9 @@ API route are delivered. Delivered #4834 maps trusted Cockpit `working` items in
 #4836 after #4746 accepted its exact `yggdrasil-constrained-reuse.v1` binding, and its candidate was
 verified by #4833/#4842 before merge. The separate #4748 receipt then authenticated the exact
 five-node browser/accessibility proof at final post-merge `main` `M=c7c57300f2ec241778061078e7ad585454f0b880`.
-The parent coordinates validation only; it is never ready work and claims no deployed or accepted
-UI. #4841 supplies the narrow production Companion transport for the existing two read APIs only;
+The parent coordinates validation only; without implementing any slice or claiming either design
+receipt as a runtime capability, it is never ready work and claims no deployed or accepted UI.
+#4841 supplies the narrow production Companion transport for the existing two read APIs only;
 it supplies neither a page nor a visual destination.
 
 ## Scope

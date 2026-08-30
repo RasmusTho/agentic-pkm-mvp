@@ -10,7 +10,7 @@ Temporal class: Strategic target state with an explicit delivered-input ledger
 Review cadence: Event-driven
 Source of truth: Owner documents own intended behavior; source systems and receipts own facts; GitHub, Git, CI, and merged code own delivery truth.
 Last reviewed: 2026-08-30
-Last verified against: `origin/main` `53d7aa76b4b9184600c16f33cccb0e8bd9bee4a3`, live GitHub
+Last verified against: `origin/main` `34c5c933e8bd72da117a0f6e0e1b9a05d1123bd3`, live GitHub
 state for #4741, #4742–#4749, #4768, #4786, #4834, #4835, #4836, #4838, #4841, and #4857, and
 merged PRs #4751, #4771, #4772, #4789, #4792, #4900, #4901, #5157, and #5200.
 
