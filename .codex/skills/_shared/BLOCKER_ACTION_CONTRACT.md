@@ -35,7 +35,6 @@ write, leave labels untouched, read back and parse the exact created comment, th
 lifecycle/action context. A valid current receipt is a no-op; historical invalid comments remain
 immutable evidence. The recovery neither infers an underlying blocker cause nor makes the Issue
 pickup eligible.
-
 Read the complete paginated Issue-comment stream. The newest comment carrying the receipt marker is
 the governing candidate: a malformed newer marker is invalid evidence and must trigger repair rather
 than being hidden by an older valid receipt.
