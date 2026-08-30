@@ -10,7 +10,7 @@ Temporal class: Strategic target state with an explicit delivered-input ledger
 Review cadence: Event-driven
 Source of truth: Owner documents own intended behavior; source systems and receipts own facts; GitHub, Git, CI, and merged code own delivery truth.
 Last reviewed: 2026-08-30
-Last verified against: `origin/main` `c7c57300f2ec241778061078e7ad585454f0b880`, live GitHub
+Last verified against: `origin/main` `dfb834202bda9b3f49f867782ffeb707ee885271`, live GitHub
 state for #4741, #4742–#4749, #4768, #4786, #4834, #4835, #4836, #4838, #4841, and #4857, and
 merged PRs #4751, #4771, #4772, #4789, #4792, #4900, #4901, #5157, and #5200.
 
@@ -27,7 +27,7 @@ production-validation steps. No current producer exposes the canonical source fa
 **Needs you** or **Ready to try**. #4834 delivers source-owned **Now** candidates from the trusted
 Cockpit `working` payload only; the connected shell is delivered, but exact browser proof and
 production acceptance remain separate authorities. ARO-07/#4748 is now proven at final post-merge
-main `M=c7c57300f2ec241778061078e7ad585454f0b880`; ARO-08/#4749 still requires the independent VM-102
+main `M=dfb834202bda9b3f49f867782ffeb707ee885271`; ARO-08/#4749 still requires the independent VM-102
 deployment, promotion, production observation, and owner-evidence gates.
 
 #4841 supplies only the production loopback-published Companion transport for the existing two
