@@ -98,6 +98,31 @@ def test_apply_aborts_when_posted_receipt_cannot_be_read_back(monkeypatch) -> No
         apply_plan("o/r", "o", "r", item)
 
 
+def test_apply_aborts_when_posted_receipt_action_mismatches_live_label(monkeypatch) -> None:
+    item = plan({"number": 1, "state": "open", "labels": ["agent:blocked"]})
+    reads = iter([
+        {"number": 1, "state": "open", "labels": ["agent:blocked"]},
+        {"number": 1, "state": "open", "labels": ["agent:blocked"]},
+        {"number": 1, "state": "open", "labels": ["agent:blocked", "action:repair-contract"]},
+        {"number": 1, "state": "open", "labels": ["agent:blocked", "action:repair-contract"]},
+    ])
+    wrong = receipt_for_action("action:human-decision")
+    wrong_body = "```yaml\n" + "\n".join(f"{key}: {value if key != 'dependency_refs' else '[]'}" for key, value in wrong.items()) + "\n```"
+
+    def fake_api(repo, endpoint, *, method="GET", payload=None):
+        if method == "POST" and endpoint.endswith("/comments"):
+            return {"id": 9}
+        if method == "POST" and endpoint.endswith("/labels"):
+            return None
+        if method == "GET" and "comments?" in endpoint:
+            return [{"id": 9, "body": wrong_body}]
+        return next(reads)
+
+    monkeypatch.setattr("scripts.reconcile_blocker_actions._api", fake_api)
+    with pytest.raises(RuntimeError, match="receipt readback mismatch"):
+        apply_plan("o/r", "o", "r", item)
+
+
 def test_apply_aborts_when_terminal_lifecycle_drifts_after_receipt(monkeypatch) -> None:
     item = plan({"number": 1, "state": "open", "labels": ["agent:blocked"]})
     reads = iter([

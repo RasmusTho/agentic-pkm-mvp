@@ -74,6 +74,23 @@ def latest_receipt(comments: Iterable[object]) -> dict[str, object] | None:
     return receipts[-1] if receipts else None
 
 
+def receipt_for_context(
+    labels: Iterable[str], comments: Iterable[object], *, open_issue: bool
+) -> tuple[ActionVerdict, dict[str, object] | None]:
+    """Return receipt evidence only when it binds to the exact live action state."""
+    labels = set(labels)
+    verdict = classify(labels, open_issue=open_issue)
+    receipt = latest_receipt(comments)
+    errors = list(verdict.errors)
+    if receipt is None:
+        if labels & ({"agent:blocked", "agent:needs-human"} | ACTION_LABELS):
+            errors.append("missing_or_invalid_blocker_action_receipt")
+    elif receipt["action"] != verdict.action:
+        errors.append("receipt_action_mismatch")
+    bound_verdict = ActionVerdict(verdict.action, tuple(errors))
+    return bound_verdict, receipt if not bound_verdict.errors else None
+
+
 def receipt_for_action(action: str, *, now: datetime | None = None) -> dict[str, object]:
     """Produce a valid, explicit maintenance receipt without inventing cause."""
     if action not in ACTION_LABELS:
@@ -118,8 +135,10 @@ def intake(issues: Iterable[dict[str, Any]]) -> dict[str, Any]:
         labels = label_names(issue)
         if not labels & {"agent:blocked", "agent:needs-human"}:
             continue
-        verdict = classify(labels, open_issue=str(issue.get("state", "open")).lower() == "open")
-        receipt = latest_receipt(issue.get("comments", []))
+        verdict, receipt = receipt_for_context(
+            labels, issue.get("comments", []),
+            open_issue=str(issue.get("state", "open")).lower() == "open",
+        )
         item = {
             "issue_number": issue.get("number"), "title": issue.get("title"),
             "state": issue.get("state", "open"), "action": verdict.action,
@@ -128,12 +147,8 @@ def intake(issues: Iterable[dict[str, Any]]) -> dict[str, Any]:
             "receipt_freshness": receipt.get("last_verified_at") if receipt else None,
             "claim_posture": "read-only; never claims implementation work",
         }
-        if verdict.errors or receipt is None:
-            if receipt is None:
-                item.setdefault("errors", []).append("missing_or_invalid_blocker_action_receipt")
+        if verdict.errors:
             item["errors"] = list(verdict.errors)
-            if receipt is None:
-                item["errors"].append("missing_or_invalid_blocker_action_receipt")
             drift.append(item)
         elif verdict.action:
             queues[verdict.action].append(item)

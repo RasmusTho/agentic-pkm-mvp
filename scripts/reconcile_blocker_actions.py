@@ -13,7 +13,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from app.builderops.blocker_actions import ACTION_LABELS, LEGACY_HUMAN_ACTIONS, classify, label_names, parse_blocker_action_receipt, receipt_for_action
+from app.builderops.blocker_actions import ACTION_LABELS, LEGACY_HUMAN_ACTIONS, classify, label_names, receipt_for_action, receipt_for_context
 
 
 def plan(issue: dict[str, Any]) -> dict[str, Any]:
@@ -102,8 +102,12 @@ def apply_plan(repo: str, owner: str, name: str, item: dict[str, Any]) -> dict[s
         created = _api(repo, f"{endpoint}/comments", method="POST", payload={"body": _receipt_text(receipt)})
         comments = _api(repo, f"{endpoint}/comments?per_page=100")
         created_id = created.get("id") if isinstance(created, dict) else None
-        exact_receipt = next((parse_blocker_action_receipt(comment) for comment in comments if isinstance(comment, dict) and comment.get("id") == created_id), None)
-        if exact_receipt != receipt:
+        exact_comment = next((comment for comment in comments if isinstance(comment, dict) and comment.get("id") == created_id), None)
+        receipt_verdict, exact_receipt = receipt_for_context(
+            _labels(final), [exact_comment] if exact_comment else [],
+            open_issue=str(final.get("state", "")).lower() == "open",
+        )
+        if exact_receipt != receipt or receipt_verdict.errors:
             raise RuntimeError(f"receipt readback mismatch for issue #{item['issue']}")
         terminal = _api(repo, endpoint)
         terminal_open = str(terminal.get("state", "")).lower() == "open"
@@ -111,7 +115,7 @@ def apply_plan(repo: str, owner: str, name: str, item: dict[str, Any]) -> dict[s
         if (
             terminal_open != final_open
             or _labels(terminal) != _labels(final)
-            or classify(_labels(terminal), open_issue=terminal_open).errors
+            or receipt_for_context(_labels(terminal), [exact_comment] if exact_comment else [], open_issue=terminal_open)[0].errors
         ):
             raise RuntimeError(f"post-receipt lifecycle/action drift for issue #{item['issue']}")
     return {"issue": item["issue"], "labels": sorted(_labels(final)), "action": final_verdict.action}

@@ -155,6 +155,17 @@ def test_registry_rejects_noncanonical_receipt_owner(tmp_path: Path) -> None:
     assert item["next_action_evidence"] == "receipt unavailable; read-only projection"
 
 
+def test_registry_rejects_cross_family_receipt_action(tmp_path: Path) -> None:
+    store, db_path = _make_store(tmp_path)
+    receipt = "```yaml\nreceipt: blocker_action.v1\naction: action:human-decision\nowner: builder\nnext_action: ask owner\nunblocks_when: owner decides\ndependency_refs: []\nreview_at: null\nlast_verified_at: 2026-08-30T11:00:00Z\n```"
+    task = normalize_github_issue({"number": 74, "title": "blocked", "state": "open", "labels": [{"name": "agent:blocked"}, {"name": "action:wait-dependency"}], "comments": [{"body": receipt}]}, "RasmusTho/agentic-pkm-mvp")
+    store.upsert_task(task)
+    item = _band(_registry(db_path, tmp_path), "working")["items"][0]
+    assert item["blocker_action"] == "action:wait-dependency"
+    assert item["next_action"] is None
+    assert item["next_action_evidence"] == "receipt unavailable; read-only projection"
+
+
 def test_chain_derivation_failure_does_not_expose_exception_details(
     tmp_path: Path,
     monkeypatch,

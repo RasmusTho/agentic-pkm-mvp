@@ -62,7 +62,7 @@ from app.builderops.cockpit_github_plane import (
     default_github_reader,
     fetch_github_live,
 )
-from app.builderops.blocker_actions import latest_receipt
+from app.builderops.blocker_actions import receipt_for_context
 
 logger = logging.getLogger(__name__)
 
@@ -447,8 +447,15 @@ def _sync_blocker_receipt(sync_state: str | None) -> dict[str, object] | None:
         payload = json.loads(sync_state)
     except json.JSONDecodeError:
         return None
+    labels = payload.get("labels")
     comments = payload.get("comments")
-    return latest_receipt(comments) if isinstance(comments, list) else None
+    if not isinstance(labels, list) or not isinstance(comments, list):
+        return None
+    _, receipt = receipt_for_context(
+        (str(label) for label in labels), comments,
+        open_issue=str(payload.get("state", "open")).lower() == "open",
+    )
+    return receipt
 
 
 def _sync_url(sync_state: str | None) -> str | None:

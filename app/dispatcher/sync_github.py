@@ -17,6 +17,7 @@ import re
 import uuid
 from typing import Any, Protocol
 
+from app.builderops.blocker_actions import receipt_for_context
 from app.dispatcher.models import EventRecord, SyncState, TaskRecord
 from app.dispatcher.store import DispatcherStore
 from app.dispatcher.github_call_logger import (
@@ -367,6 +368,10 @@ def normalize_github_issue(
     # GraphQL-shaped payloads carry the browser URL as ``url``.
     html_url = payload.get("html_url") or payload.get("url") or None
 
+    comments = payload.get("comments") if isinstance(payload.get("comments"), list) else []
+    blocker_verdict, _ = receipt_for_context(
+        labels, comments, open_issue=str(payload.get("state", "open")).lower() == "open"
+    )
     sync_state = SyncState(
         last_pull_at=now,
         source_version=payload.get("updatedAt") or payload.get("updated_at"),
@@ -374,11 +379,13 @@ def normalize_github_issue(
         sync_note=None,
         extra={
             "labels": labels,
+            "state": payload.get("state", "open"),
             "url": str(html_url) if html_url is not None else None,
             # A caller that obtained the bounded REST comment projection may
             # pass it through unchanged. The normal ready-only dispatcher does
             # not fetch blocker comments and remains a strict pickup path.
-            "comments": payload.get("comments") if isinstance(payload.get("comments"), list) else [],
+            "comments": comments,
+            "blocker_action_drift": list(blocker_verdict.errors),
         },
     )
 

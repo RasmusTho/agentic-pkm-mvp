@@ -237,6 +237,18 @@ def test_pull_sync_projects_blocker_comment_records_without_making_them_pickable
     assert projected.sync_state["comments"] == [receipt]
 
 
+def test_pull_sync_records_receipt_action_drift_for_cockpit_without_pickup(tmp_store: SqliteStore) -> None:
+    receipt = {"body": "```yaml\nreceipt: blocker_action.v1\naction: action:human-decision\nowner: builder\nnext_action: ask owner\nunblocks_when: owner decides\ndependency_refs: []\nreview_at: null\nlast_verified_at: 2026-08-30T11:00:00Z\n```"}
+    blocked = {**SAMPLE_ISSUE_BLOCKED, "comments": [receipt], "labels": [{"name": "agent:blocked"}, {"name": "action:wait-dependency"}]}
+    source = _mock_source([SAMPLE_ISSUE_HIGH], open_issues=[blocked])
+    adapter = PullSyncAdapter(store=tmp_store, source=source)
+
+    assert [task.issue_number for task in adapter.pull(REPO)] == [101]
+    projected = tmp_store.get_task(_tid(104))
+    assert projected is not None
+    assert projected.sync_state["blocker_action_drift"] == ["receipt_action_mismatch"]
+
+
 def test_rest_open_issue_source_fetches_comments_only_for_nonactive_actions(monkeypatch) -> None:
     import json
     source = GhCliIssueSource()
