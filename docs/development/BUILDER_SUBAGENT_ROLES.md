@@ -103,6 +103,12 @@ gets a fresh `slice_implementer` context even in a serial queue. Only determinis
 `inline-local-cheaper` work remains in the root coordinator. Raw worker transcripts and logs remain
 issue-local; the coordinator consumes durable refs and the compact receipt.
 
+Before a worker returns a terminal handoff receipt, goes idle, or otherwise stops, it must run the
+central `.codex/skills/klart/SKILL.md` closeout gate. The gate may route remaining work through the
+owning workflow skill or produce a truthful handoff, but its recommendation does not change the
+handoff contract: `final_state` remains only `blocked | needs-human | handoff`; a worker must never
+self-attest `done`.
+
 The dry-run helper for generating these packets is:
 
 `python3 -m app.builderops builderops epic-run-state dispatch-plan --epic-issue-number <N> --run-id <safe-id> --candidates-file <file> --json`
