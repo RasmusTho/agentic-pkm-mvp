@@ -79,12 +79,12 @@ def is_return_orientation_query(query: str) -> bool:
 def orientation_of(payload: dict[str, Any], path: str | None, text: str | None = None) -> OrientationRole:
     """Derive orientation from situational signals, independent of admissibility metadata."""
 
-    explicit_orientation = payload.get("orientation")
-    if explicit_orientation in _ORIENTATION_ROLES:
-        return explicit_orientation
     normalized_path = (path or "").casefold()
     if "/sources/" in normalized_path or normalized_path.startswith("sources/"):
         return "supporting"
+    explicit_orientation = payload.get("orientation")
+    if explicit_orientation in _ORIENTATION_ROLES:
+        return explicit_orientation
     searchable_text = " ".join(
         str(payload.get(key) or "") for key in ("title", "text", "content")
     )
