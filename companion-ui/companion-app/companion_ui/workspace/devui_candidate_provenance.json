@@ -1,0 +1,91 @@
+{
+  "schema": "yggdrasil-constrained-reuse.v1",
+  "issue": 4836,
+  "source": {
+    "commit": "339ec73ef93fb8af96a6dd7b1d739c147f5f69ea",
+    "tree": "ef95b6424f25b09eab0fc82fc248f44039a605f9",
+    "objects": {
+      "app/web/static/cockpit.html": "f908c9043d0c9361ffc5e43d9c475770bb2a2bc8",
+      "app/web/static/cockpit.css": "63a0f8ef81d3f6fbbabc8c2e85460716ed5a6ec2",
+      "app/web/static/cockpit.js": "6a51c15179e2b67779e9ea0e2f0615da2e81f9b8",
+      "app/web/static/colors_and_type.css": "17fe326b415aee53791fd8ddaf43f7312b199bb7"
+    }
+  },
+  "candidate": {
+    "subtree": "companion-ui/companion-app/companion_ui/workspace/devui_candidate",
+      "tree": "d15c3c015a844781b83ba46eadef7deda645fcfe",
+    "inventory": {
+      "devui.css": "2d6e19e1f427d186bed8fc4391739baeda724737",
+      "focus.html": "0bc461c6105f069702f4d4187b2c08f86e2661d8",
+      "focus.js": "21946448a21f416653f8e08a393e17c6afff624f",
+      "overview.html": "9b9ff9f58e6fb92b13396d234578eb8aa2c3adf7",
+      "overview.js": "4dc939b1a3657c74b3ffa7ae3baae9c6a7000f5e"
+    }
+  },
+  "transform_allowlist": [
+    "content_binding",
+    "interaction_binding",
+    "layout_reflow",
+    "local_system_font_no_egress_normalization"
+  ],
+  "bindings": [
+    {
+      "candidate_files": ["overview.html", "focus.html"],
+      "source_path": "app/web/static/cockpit.html",
+      "source_patterns": ["<section class=\"claim\" id=\"claim\">", "<section class=\"void refuse\">", "<span class=\"btn btn-out\""],
+      "candidate_patterns": {
+        "overview.html": ["class=\"claim\"", "class=\"band primary\"", "class=\"void refuse\""],
+        "focus.html": ["class=\"claim\"", "class=\"btn btn-out\"", "class=\"void refuse\""]
+      },
+      "shared_patterns": {
+        "overview.html": ["class=\"claim\"", "class=\"void refuse\""],
+        "focus.html": ["class=\"claim\"", "class=\"btn btn-out\"", "class=\"void refuse\""]
+      },
+      "transforms": ["content_binding", "layout_reflow"]
+    },
+    {
+      "candidate_files": ["devui.css"],
+      "source_path": "app/web/static/cockpit.css",
+      "source_patterns": [".claim{", ".band{", ".card{", ".body{", ".rungs{", ".btn-out{", ".void.refuse{"],
+      "candidate_patterns": {
+        "devui.css": [".claim{", ".band{", ".card{", ".body{", ".rungs{", ".btn-out{", ".void.refuse{"]
+      },
+      "shared_patterns": {
+        "devui.css": [".claim{", ".band{", ".card{", ".body{", ".rungs{", ".btn-out{", ".void.refuse{"]
+      },
+      "transforms": ["layout_reflow"]
+    },
+    {
+      "candidate_files": ["devui.css"],
+      "source_path": "app/web/static/colors_and_type.css",
+      "source_patterns": ["--bg-base:", "--font-ui:", "--space-4:", "--radius-sm:"],
+      "candidate_patterns": {
+        "devui.css": ["--bg-base:", "--font-ui:", "--space-4:", "--radius-sm:"]
+      },
+      "shared_patterns": {
+        "devui.css": ["--bg-base:", "--font-ui:", "--space-4:", "--radius-sm:"]
+      },
+      "transforms": ["local_system_font_no_egress_normalization"]
+    },
+    {
+      "candidate_files": ["overview.js", "focus.js"],
+      "source_path": "app/web/static/cockpit.js",
+      "source_patterns": ["function esc(value) {", "function cardMarkup(item) {", "function bandMarkup(band) {", "fetch(\"/api/cockpit/registry\", { cache: \"no-store\" })"],
+      "candidate_patterns": {
+        "overview.js": ["function text(parent, tag, value, className) {", "node.textContent =", "function verifiedFocusHref(item) {", "fetch(\"/api/devui/overview\", {method: \"GET\", cache: \"no-store\"})"],
+        "focus.js": ["function text(parent, tag, value, className) {", "node.textContent =", "fetch(`/api/devui/focus?subject=${encodeURIComponent(subject)}`, {method: \"GET\", cache: \"no-store\"})"]
+      },
+      "shared_patterns": {
+        "overview.js": ["document.createElement(", "textContent =", "fetch(", "\"no-store\""],
+        "focus.js": ["document.createElement(", "textContent =", "fetch(", "\"no-store\""]
+      },
+      "transforms": ["content_binding", "interaction_binding"]
+    }
+  ],
+  "safety": {
+    "network_gets": ["/api/devui/overview", "/api/devui/focus?subject=<exact-subject>"],
+    "durable_state": [],
+    "mutating_methods": [],
+    "external_origins": []
+  }
+}

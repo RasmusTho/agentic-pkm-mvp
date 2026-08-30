@@ -719,6 +719,22 @@ The read endpoint is `http://127.0.0.1:8113/devui/overview`; #4841 is transport 
 page or asset route, and port `18000` remains direct API health/version diagnostics.
 #4836 must consume this transport unchanged, and #4833 must verify its published candidate.
 
+The #4836 implementation candidate packages `/devui/overview`,
+`/devui/focus?subject=...`, and their same-origin assets in the committed
+`companion-ui/companion-app/companion_ui/workspace/devui_candidate` subtree. The pages are served
+by the production Companion gateway only after the same local-Host/no-forwarded admission as the
+two API reads. They add no FastAPI presentation route and do not widen the exact API allowlist.
+Overview follows only the server-supplied typed Focus locator; Focus performs one fresh read for
+that exact subject; return performs a fresh Overview read. Both pages are no-store, CSP-confined,
+effect-free, storage-free, and render source text as text rather than markup. The candidate's
+`yggdrasil-constrained-reuse.v1` manifest binds its complete subtree inventory and Git tree to exact
+shipped Cockpit/token source objects and a closed transform set.
+
+This is candidate truth, not delivered or accepted UI truth. #4836 remains pre-merge until #4746
+independently accepts the exact constrained-reuse candidate and #4833/#4842 records exact-ref
+browser/accessibility proof for the published candidate head. Until those receipts and merge exist,
+the “Not delivered now” shell statements below remain authoritative.
+
 Not delivered now: one devUI shell; request/preview/authenticated approval in one owner experience;
 PostgreSQL authority cutover; full live run controls; receipt-to-CKM reassessment in the unified
 surface; Focus browser UI, capability-subject route, and Overview-to-Focus
