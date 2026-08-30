@@ -1,4 +1,4 @@
-State: Advisory architecture-research snapshot, 2026-08-30. Evidence baseline: immutable `origin/main` at `b1b71f205ff57da2df99a6747102066e5e74b350`, retrieved at `2026-08-30T10:46:02Z`. No implementation, backlog Issue, credential, provider, or host mutation was performed.
+State: Advisory architecture-research snapshot, 2026-08-30. Evidence baseline: immutable `origin/main` at `3625c3276b71e7396cca39f7a2732ddd603a9b55`, retrieved at `2026-08-30T11:35:43Z`. No implementation, backlog Issue, credential, provider, or host mutation was performed.
 Doc role: Reference (architecture audit snapshot)
 Authority: Evidence-based architectural analysis only. Current Product behavior remains owned by `docs/LLM_ROUTING.md`, `docs/LLM.md`, `docs/ARCHITECTURE.md`, and code. Builder delivery authority remains owned by the Builder System process map, DDO contracts, dispatcher/verification contracts, GitHub, CI, and exact-head evidence. Accepted ADRs and owner decisions supersede this audit on disagreement.
 Owner: CES / Product LLM / Builder System boundary
@@ -29,9 +29,10 @@ The pass used the following method:
 - reconciled against live open Issues without creating or changing one; and
 - classified each finding as accepted, deferred, or requiring an owner decision.
 
-The default-ref recheck before synthesis was performed at `2026-08-30T11:25:35Z` and returned the
-same `origin/main` SHA `b1b71f205ff57da2df99a6747102066e5e74b350`. The local audit commit is based on
-that SHA; the later audit-only commit does not claim to change the source snapshot.
+The current-source refresh and default-ref recheck were performed at `2026-08-30T11:35:43Z` and
+returned `origin/main` SHA `3625c3276b71e7396cca39f7a2732ddd603a9b55`. The local audit branch was
+rebased onto that SHA before this refresh; the audit-only commits do not claim to change the source
+snapshot.
 
 No bounded explorer briefs were dispatched. The work was coordinator-only: the source set was
 already named, the repository is large but the independent explorer context would duplicate the
@@ -171,7 +172,7 @@ uses. “Receipt” means a durable or contract-shaped evidence object, not mere
 | Builder Model Inquiry host launcher | The subscription bridge constructs role-specific external commands in `scripts/model_inquiry_subscription_adapter.py:38-71`. | Session/role/adapter identity is provenance; the runner owns durable inquiry authority. | Timeout and expired-session exit codes are distinct; malformed/empty output fails. The current source still contains role-specific concrete target literals at `scripts/model_inquiry_subscription_adapter.py:34-35`, and a non-Codex compatibility role. This is an observed current-vs-request divergence, not an authorization to run or modify that route. |
 | Builder CKM semantic association | CKM now submits provider-free intent to `BuilderModelAccessResolver`, resolves declared census capability, and constructs `HttpModelAdapter` (`app/builderops/ckm/semantic.py:184-275`). | CKM proposal/evidence edge is projection/candidate evidence; provider/model is retained as provenance. | `fallback_forbidden`, no mock/degraded route, missing credential, invalid response, and adapter failure produce zero edges or typed unavailable outcomes (`app/builderops/ckm/semantic.py:223-337`). CKM has no delivery authority. |
 | Builder design-agent registry | Domain design IDs map to provider-free role profiles; resolver selects a target and an already-constructed `ModelTurnAdapter` (`app/builderops/design_agent_adapters.py:99-132,216-330`). | Sanitized availability descriptors and adapter identity are provenance; design-run contracts own the artifact. | Exact selection, no implicit fallback, interactive-only unavailability, identity mismatch, and absent headless adapter are explicit (`app/builderops/design_agent_adapters.py:150-281`). Some domain identifiers remain compatibility/provenance and are not evidence that a route is active. |
-| Builder worker dispatch/DDO | `WorkerContextPack` and `WorkerInvocation` bind run/plan/effect/Issue/head/context hash and start-once identity; a carrier executes and returns `WorkerResultV2` (`app/builderops/delivery_orchestration_contracts.py:3217-3389`). | `WorkerCarrierEnvelope` contains opaque carrier/provider/model/session/usage/provenance IDs and is explicitly never delivery authority; `validate_worker_authority_chain` resolves the exact chain (`app/builderops/delivery_orchestration_contracts.py:3364-3389,3617-3665`). | Same invocation cannot start twice; terminal runtime observations bind a result; pause/resume/supersession remain reducer/GOV decisions. Current active-carrier policy is separately being made explicit by live #5205. |
+| Builder worker dispatch/DDO | `WorkerContextPack` and `WorkerInvocation` bind run/plan/effect/Issue/head/context hash and start-once identity; a carrier executes and returns `WorkerResultV2` (`app/builderops/delivery_orchestration_contracts.py:3217-3389`). | `WorkerCarrierEnvelope` contains opaque carrier/provider/model/session/usage/provenance IDs and is explicitly never delivery authority; `validate_worker_authority_chain` resolves the exact chain (`app/builderops/delivery_orchestration_contracts.py:3364-3389,3617-3665`). | Same invocation cannot start twice; terminal runtime observations bind a result; pause/resume/supersession remain reducer/GOV decisions. Current main explicitly declares the active Builder carrier Codex-only; compatibility/provider fields remain provenance (`docs/development/BUILDER_SYSTEM_PROCESS_MAP.md:613-621`). |
 | Builder verification closer | `CodexExecLauncher` reads a role adapter, launches a contained `codex exec`, streams strict receipts, heartbeats authority, kills residual process trees, and rejects missing containment/thread/schema identity (`app/dispatcher/verification_consumer.py:2697-2763,2846-2885,3068-3415`). | Verification receipt/thread identity is operational provenance; GitHub PR/CI/review/merge remain delivery authority. | Rate limit, authority loss, execution, containment, missing thread, and invalid receipt are distinct failures. Resume is explicit session/verification recovery, not provider fallback. The launcher currently validates a concrete adapter contract in code (`app/dispatcher/verification_consumer.py:2721-2743`), creating a duplicated selection seam. |
 | Skills and agent TOML adapters | Skills route work and TCD; `.codex/agents/*.toml` select execution roles and effort. `deliver-issue-set` and process-map target contract say concrete model IDs belong in configuration/census, not workflow contracts (`.codex/skills/README.md:64-128`; `docs/development/BUILDER_SYSTEM_PROCESS_MAP.md:849-875`). | Skill/agent selection is workflow provenance; Issue/branch/PR/CI/review receipts remain authority. | No skill may silently alter lifecycle/verification authority. Existing role config literals are an inventory item for config-time resolution, not a reason to embed IDs in the new kernel. |
 
@@ -249,9 +250,9 @@ verification-adapter validation (`app/dispatcher/verification_consumer.py:2721-2
 `.codex/agents/*.toml` also carries execution-role model configuration. These are separate kinds of
 selection, but they are not one census-backed resolution path.
 
-Disposition: **accepted inventory item**. No new artifact repeats any concrete model ID. Active
-Builder worker carrier/model policy is separately governed by #5205; Model Inquiry target semantics
-are separately governed by #5203.
+Disposition: **accepted inventory item**. No new artifact repeats any concrete model ID. The active
+Builder carrier policy is explicit in current main and covered by its Codex-only governance test;
+Model Inquiry target semantics remain separately governed by open #5203.
 
 ### F7 — Medium: “agent invocation” is wider than “model invocation”
 
@@ -263,17 +264,16 @@ authority is actually held.
 Disposition: **accepted boundary clarification**. Use a model-turn adapter beneath agent/runtime
 contracts, and an explicit runtime-owned mapper above it.
 
-### F8 — Medium: live “Codex-only” posture is not yet uniform across historical/compatibility surfaces
+### F8 — Medium: active Codex-only policy does not erase historical/compatibility surfaces
 
-Live Issue #5205 explicitly makes the active Builder worker carrier Codex-only. Live Issue #5203
-separately changes Model Inquiry from its historical two-role arrangement to a configured single-target
-mode. The current main snapshot still contains the older role-specific subscription bridge and
-non-Codex compatibility language. This is not evidence that another active carrier should be
-authenticated or invoked.
+Current main explicitly declares the active Builder worker carrier Codex-only and rejects unsupported
+runtime targets/hints. Open #5203 separately changes Model Inquiry from its historical two-role
+arrangement to a configured single-target mode. The current source still contains the older
+role-specific subscription bridge and non-Codex compatibility language, which are not evidence that
+another active carrier should be authenticated or invoked.
 
-Disposition: **owner decision already routed to existing Issues**, not a new audit Issue. Until those
-contracts merge, classify the older surfaces as compatibility/current transition evidence and do not
-claim uniform Codex-only operation from this audit alone.
+Disposition: **accepted current-state clarification**, not a new audit Issue. Keep the active policy
+and compatibility classification separate; preserve #5203 as the existing Model Inquiry owner route.
 
 ## 6. Desired boundary
 
@@ -379,7 +379,7 @@ read-only reconciliation.
 | LLM-BOUNDARY-12 | GATE | New | Static transport census proves every effective provider/process call is behind an approved adapter, with explicit exemptions only for legacy migration and never for active Builder paths. | Existing import tests are partial (`tests/architecture/test_llm_contract_kernel.py:22-149`); no complete cross-surface census gate is present. |
 | LLM-BOUNDARY-13 | GATE | New | Every mapper has contract tests for identity, failure, fallback, degradation, schema, receipt linkage, and unknown-version failure. | Builder kernel/adapter tests exist (`tests/architecture/test_llm_contract_kernel.py:107-149`; `tests/builderops/test_model_inquiry_adapters.py:67-147`); cross-runtime mapper tests are absent. |
 | LLM-BOUNDARY-14 | GATE | Exists — keep | Worker adapters preserve `WorkerContextPack`/`WorkerInvocation` authority and return `WorkerResultV2`; carrier variation cannot change conformance or delivery authority. | DDO contract and tests are named in #4167 (`app/builderops/delivery_orchestration_contracts.py:3217-3389`; `tests/builderops/test_delivery_orchestration_contracts.py`). |
-| LLM-BOUNDARY-15 | GATE | New | Active Builder carrier policy is resolved once by the governed dispatcher/capability contract; skills and prompts do not add provider/model ladders. | Live #5205 owns the Codex-only writeback (`https://github.com/RasmusTho/agentic-pkm-mvp/issues/5205`); this audit does not duplicate it. |
+| LLM-BOUNDARY-15 | GATE | Exists — keep | Active Builder carrier policy is resolved once by the governed dispatcher/capability contract; skills and prompts do not add provider/model ladders. | Current main declares `ACTIVE_WORKER_RUNTIME = "codex"`, rejects unsupported runtime targets/hints, and has a Codex-only governance test (`app/builderops/epic_dispatch.py:86-86,295-295,1102-1106,1402-1408`; `tests/governance/test_codex_only_builder_runtime.py:12-23`). |
 | LLM-BOUNDARY-16 | DOCTOR | New | Reconcile invocation census against adapter registry, provider census, and owner-doc declared entrypoints; report missing, duplicate, direct, or unreachable seams. | No single doctor spans Product, Builder, eval, scripts, and graph entrypoints; the existing kernel test is deliberately narrower (`tests/architecture/test_llm_contract_kernel.py:22-103`). |
 | LLM-BOUNDARY-17 | DOCTOR | Violated today | Reconcile every terminal model/worker attempt to its request hash, effective identity, failure/fallback state, domain receipt, and current authority chain. | Model Inquiry and DDO provide local reconciliation (`app/builderops/model_inquiry_runner.py:570-688`; `app/builderops/delivery_orchestration_contracts.py:3462-3540`); Product telemetry/eval lack a common doctor. |
 | LLM-BOUNDARY-18 | DOCTOR | Exists — keep | Detect provenance fields being consumed as authority inputs, including model/session/thread/process identifiers used to select scope or lifecycle. | DDO validator is a strong local guard (`app/builderops/delivery_orchestration_contracts.py:3617-3665`); cross-system data-flow detection is absent. |
@@ -401,8 +401,9 @@ Migration should be additive and seam-by-seam:
    validators. Preserve each caller's current domain outcome: unknown, no-link, extraction failure,
    planner fallback, attribution failure, or hard error.
 5. **Builder bridge.** Keep Model Inquiry, CKM, and design-agent adapters on Builder-owned resolver
-   and secret/receipt paths. Do not route them through Product settings or Product health. Apply the
-   single-target and Codex-only decisions through existing #5203 and #5205 contracts.
+   and secret/receipt paths. Do not route them through Product settings or Product health. Preserve
+   the Codex-only carrier policy now present in main, and complete the single-target Model Inquiry
+   transition through existing #5203 without duplicating either owner route.
 6. **Worker bridge.** Define one mapper from a reducer-authorized `WorkerInvocation` to a model-turn
    request, and one mapper from the normalized result to `WorkerResultV2`. Keep carrier envelope
    fields opaque and preserve the full authority chain.
@@ -444,8 +445,10 @@ The eventual implementation specification should require these layers:
   vocabulary and runtime-owned decisions.
 - **Provenance laundering:** a valid provider request ID or thread identity may look authoritative.
   DDO's opaque carrier envelope and exact chain validator are the precedent.
-- **False Codex-only claim:** current main contains transition/compatibility surfaces. #5203 and
-  #5205 are the correct closure paths; this audit does not infer their completion.
+- **False Codex-only claim:** current main now explicitly declares the active Builder carrier
+  Codex-only, but transition/compatibility surfaces remain and do not become active policy merely by
+  containing historical provider or role references. The audit does not infer closure of related
+  Issues from the source commit.
 - **Census fragmentation:** Product registry, embedding registry, Builder provider census, role TOML,
   launcher code, and eval config have different scopes. A single physical registry would transfer
   authority; a shared descriptor shape plus separate registries is safer.
@@ -481,8 +484,9 @@ This audit does not:
 - merge chat, embedding, reranking, TTS, STT, tool, and agent semantics into one transport;
 - replace dispatcher, A2A, LangGraph, DDO, verification/closure, GitHub, CI, or exact-head authority;
 - make CKM, retrieval, evaluation, telemetry, a model session, or a dashboard authoritative;
-- claim that the desired boundary, uniform Codex-only posture, live provider capability, or owner
-  acceptance is shipped; or
+- claim that the desired boundary, live provider capability, or owner acceptance is shipped. The
+  current active Builder carrier Codex-only policy is explicit in main, but that does not prove the
+  desired neutral boundary is delivered; or
 - create a GitHub Issue or directly turn this audit into implementation scope.
 
 ## 12. Existing-work reconciliation and disposition
@@ -496,22 +500,22 @@ The audit found existing, active authority rather than a missing backlog contain
 | DDO worker contracts / #4167 | Already binds Worker authority separately from carrier provenance and gives the correct worker bridge. | **Accepted / reuse:** no second worker invocation contract. |
 | #5177 Execution Routing | Owns Builder capability selection/TCD routing and explicitly keeps concrete identities out of workflow contracts. | **Accepted / coordinate:** general routing remains there. |
 | #5203 Model Inquiry single-target | Owns current Model Inquiry role/target/receipt transition. | **Existing owner route:** do not duplicate or mutate from this audit. |
-| #5205 active Builder carrier Codex-only | Owns active carrier policy and current-vs-historical compatibility wording. | **Existing owner route:** this audit records the dependency and does not claim completion. |
+| #5205 active Builder carrier Codex-only | Former owner route for active carrier policy and current-vs-historical compatibility wording; the corresponding Codex-only policy is now present in main. | **Accepted / current main:** preserve the closed Issue as lifecycle evidence; do not duplicate its policy. |
 | Product routing/embedding owner docs | Own current runtime semantics, precedence, identity, and fallback. | **Preserve:** migrate through compatibility adapters and domain tests. |
 | `docs/testing/invariant-tests.md` | Existing invariant registry, though its current enforcement labels predate the MUST/GATE/DOCTOR research vocabulary. | **Deferred implementation detail:** extend the registry when a governed slice is accepted; do not fork it now. |
 
 ### 12.1 Live authority and overlap snapshot
 
-Read back at `2026-08-30T11:29:26Z`, against `origin/main` SHA
-`b1b71f205ff57da2df99a6747102066e5e74b350`:
+Read back at `2026-08-30T11:35:43Z`, against `origin/main` SHA
+`3625c3276b71e7396cca39f7a2732ddd603a9b55`:
 
 | Object | Live state | Authority meaning | Disposition for this audit |
 | --- | --- | --- | --- |
-| PR #5201 | Open, mergeable; head `236f862480c461f97432257a68b8c7d321cb9ea2` | Earlier/narrower Model Inquiry routing audit and its `DOCS_INDEX` mutation. | Preserve as collision authority; do not duplicate or expand it. |
-| PR #5202 | Open, mergeable; head `be9b190f0b14c8b3b91097ad79f8217f9398b31f` | Unrelated DevUI docs-authoring change that also mutates `DOCS_INDEX`. | Preserve scope; its shared index mutation blocks a parallel docs PR. |
+| PR #5201 | Open, dirty; head `236f862480c461f97432257a68b8c7d321cb9ea2` | Earlier/narrower Model Inquiry routing audit and its `DOCS_INDEX` mutation. | Preserve as collision authority; do not duplicate or expand it. |
+| PR #5202 | Open, dirty; head `be9b190f0b14c8b3b91097ad79f8217f9398b31f` | Unrelated DevUI docs-authoring change that also mutates `DOCS_INDEX`. | Preserve scope; its shared index mutation blocks a parallel docs PR. |
 | Issue #5177 | Open, `agent:blocked` epic | General Builder execution-routing owner. | Coordinate; no new routing epic or Issue. |
 | Issue #5203 | Open, `agent:in-progress` | Model Inquiry single-target semantics. | Existing owner route; no duplicate role/target contract. |
-| Issue #5205 | Open, `agent:in-progress` | Active Builder carrier Codex-only policy. | Existing owner route; no duplicate carrier mutation. |
+| Issue #5205 | Closed | Active Builder carrier Codex-only policy; now reflected in current main. | Preserve lifecycle truth; no duplicate carrier mutation. |
 
 The local audit branch has no PR. Both overlapping PRs remain open, so publication remains fail-closed
 until the shared `DOCS_INDEX.md` overlap is resolved and the audit remains demonstrably
