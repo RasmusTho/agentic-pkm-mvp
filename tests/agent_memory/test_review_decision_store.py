@@ -139,3 +139,73 @@ def test_decision_record_preserves_provenance(tmp_path: Path) -> None:
     assert record.generated_by == "companion_agent"
     assert record.derived_from == "conversation:abc123"
     assert record.terminal is False
+
+
+def test_persisted_candidate_scope_is_immutable(tmp_path: Path) -> None:
+    store = ReviewDecisionStore(tmp_path / "review_decisions.sqlite3")
+    vault = _vault("vault-a", tmp_path / "vault-a")
+    candidate = _candidate()
+    queue = MemoryCandidateReviewQueue()
+    queue.enqueue(candidate)
+    decided = queue.decide(
+        candidate.candidate_id,
+        ReviewDecision.PROMOTE,
+        decided_by="companion-ui:reviewer",
+    )
+    store.record_decision(decided, vault_context=vault, channel="test")
+
+    replacement = candidate.model_copy(update={"scope_id": "scope:work/project-a"})
+    replacement_queue = MemoryCandidateReviewQueue()
+    replacement_queue.enqueue(replacement)
+    replacement_decision = replacement_queue.decide(
+        replacement.candidate_id,
+        ReviewDecision.PROMOTE,
+        decided_by="companion-ui:reviewer",
+    )
+
+    with pytest.raises(ReviewDecisionStoreError, match="scope cannot change"):
+        store.record_decision(
+            replacement_decision,
+            vault_context=vault,
+            channel="test",
+        )
+
+    persisted = store.get_decision(
+        candidate.candidate_id,
+        vault_context=vault,
+        channel="test",
+    )
+    assert persisted is not None
+    assert persisted.scope_id == "scope:private/personal"
+    assert persisted.terminal is False
+
+
+def test_terminal_transition_compares_persisted_scope(tmp_path: Path) -> None:
+    store = ReviewDecisionStore(tmp_path / "review_decisions.sqlite3")
+    vault = _vault("vault-a", tmp_path / "vault-a")
+    candidate = _candidate()
+    queue = MemoryCandidateReviewQueue()
+    queue.enqueue(candidate)
+    decided = queue.decide(
+        candidate.candidate_id,
+        ReviewDecision.PROMOTE,
+        decided_by="companion-ui:reviewer",
+    )
+    store.record_decision(decided, vault_context=vault, channel="test")
+
+    with pytest.raises(ReviewDecisionStoreError, match="scope changed"):
+        store.mark_terminal(
+            candidate.candidate_id,
+            vault_context=vault,
+            channel="test",
+            expected_scope_id="scope:work/project-a",
+        )
+
+    persisted = store.get_decision(
+        candidate.candidate_id,
+        vault_context=vault,
+        channel="test",
+    )
+    assert persisted is not None
+    assert persisted.scope_id == "scope:private/personal"
+    assert persisted.terminal is False

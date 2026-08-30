@@ -282,19 +282,32 @@ def test_scope_bound_promoted_recall_excludes_private_memory(tmp_path: Path) -> 
     memory_dir = vault_root / "Agent Memory"
     memory_dir.mkdir(parents=True)
     records = []
-    for candidate_id, scope_id, title in (
-        ("candidate-work", "scope-work", "Work deployment posture"),
-        ("candidate-private", "scope-private", "Private deployment posture"),
-        ("candidate-legacy", None, "Legacy deployment posture"),
+    for candidate_id, authority_line, title in (
+        ("candidate-work", "scope_id: scope-work\n", "Work deployment posture"),
+        (
+            "candidate-private",
+            "scope_id: scope-private\n",
+            "Private deployment posture",
+        ),
+        ("candidate-legacy", "", "Legacy deployment posture"),
+        (
+            "candidate-domain-only",
+            "domain: scope-work\n",
+            "Domain-only deployment posture",
+        ),
+        (
+            "candidate-invalid-scope",
+            "scope_id: 'invalid scope'\n",
+            "Invalid-scope deployment posture",
+        ),
     ):
         artifact_path = f"Agent Memory/{candidate_id}.md"
-        scope_line = f"scope_id: {scope_id}\n" if scope_id else ""
         (vault_root / artifact_path).write_text(
             "---\n"
             "artifact_type: semantic_memory\n"
             "agent_promoted: true\n"
             f"promoted_from_candidate_id: {candidate_id}\n"
-            f"{scope_line}"
+            f"{authority_line}"
             "decided_by: companion-ui:reviewer\n"
             "decided_at: '2026-06-13T09:00:00Z'\n"
             "---\n\n"
@@ -339,6 +352,7 @@ def test_scope_bound_promoted_recall_excludes_private_memory(tmp_path: Path) -> 
 
     unbound = retrieve_relevant_promoted(
         "deployment posture",
+        k=10,
         vault_root=vault_root,
         records=records,
     )
@@ -347,8 +361,21 @@ def test_scope_bound_promoted_recall_excludes_private_memory(tmp_path: Path) -> 
         "candidate-work",
         "candidate-private",
         "candidate-legacy",
+        "candidate-domain-only",
+        "candidate-invalid-scope",
     }
     assert {item.applied_scope_id for item in unbound} == {None}
+    unbound_by_id = {
+        item.promoted.candidate.candidate_id: item
+        for item in unbound
+    }
+    for candidate_id in (
+        "candidate-legacy",
+        "candidate-domain-only",
+        "candidate-invalid-scope",
+    ):
+        assert unbound_by_id[candidate_id].memory_scope_id is None
+        assert unbound_by_id[candidate_id].promoted.candidate.scope_id is None
 
 
 def test_materialized_scope_drives_bound_recall_admission(tmp_path: Path) -> None:

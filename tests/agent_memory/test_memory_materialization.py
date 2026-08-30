@@ -149,6 +149,46 @@ def test_semantic_materialization_requires_scope_before_write(tmp_path: Path) ->
     assert record.terminal is False
 
 
+def test_materialization_requires_entry_scope_to_match_persisted_decision(
+    tmp_path: Path,
+) -> None:
+    vault = _vault(tmp_path / "vault")
+    Path(vault.active_vault_path).mkdir()
+    store = ReviewDecisionStore(tmp_path / "review_decisions.sqlite3")
+    outbox = tmp_path / "outbox.jsonl"
+    candidate = _candidate(candidate_id="candidate-scope-cas")
+    _promoted(candidate, store=store, vault=vault)
+
+    stale_candidate = candidate.model_copy(update={"scope_id": "scope:test/other"})
+    queue = MemoryCandidateReviewQueue()
+    queue.enqueue(stale_candidate)
+    stale_entry = queue.decide(
+        stale_candidate.candidate_id,
+        ReviewDecision.PROMOTE,
+        decided_by="companion-ui:reviewer",
+        notes="Stale in-memory review entry.",
+    )
+
+    with pytest.raises(MemoryMaterializationError, match="persisted review decision"):
+        materialize_promoted_memory(
+            stale_entry,
+            vault_context=vault,
+            channel="test",
+            decision_store=store,
+            write_guard=_allowing_guard(),
+            outbox_path=outbox,
+        )
+
+    assert not list(Path(vault.active_vault_path).rglob("*.md"))
+    assert not outbox.exists()
+    record = store.get_decision(
+        candidate.candidate_id, vault_context=vault, channel="test"
+    )
+    assert record is not None
+    assert record.scope_id == "scope:test/materialization"
+    assert record.terminal is False
+
+
 def test_blocked_materialization_keeps_promotion_actionable(tmp_path: Path) -> None:
     vault = _vault(tmp_path / "vault")
     Path(vault.active_vault_path).mkdir()

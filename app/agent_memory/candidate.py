@@ -1,11 +1,23 @@
 from __future__ import annotations
 
+import re
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Optional
 from uuid import uuid4
 
 from pydantic import BaseModel, Field, model_validator
+
+MEMORY_SCOPE_ID_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._:/-]*$"
+_MEMORY_SCOPE_ID_RE = re.compile(MEMORY_SCOPE_ID_PATTERN)
+
+
+def validated_memory_scope_id(value: object) -> str | None:
+    """Return one explicit valid scope binding; never infer or coerce authority."""
+
+    if not isinstance(value, str) or _MEMORY_SCOPE_ID_RE.fullmatch(value) is None:
+        return None
+    return value
 
 
 class ReviewState(str, Enum):
@@ -78,7 +90,7 @@ class MemoryCandidate(BaseModel):
         default=None,
         min_length=1,
         max_length=128,
-        pattern=r"^[A-Za-z0-9][A-Za-z0-9._:/-]*$",
+        pattern=MEMORY_SCOPE_ID_PATTERN,
     )
 
     content: Optional[str] = None

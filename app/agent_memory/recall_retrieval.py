@@ -9,7 +9,13 @@ from typing import Any, Iterable
 from scripts.yaml_roundtrip import load_frontmatter
 
 from app.config.paths import VaultRootMisconfiguredError, resolve_optional_vault_root
-from app.agent_memory.candidate import ActivationPolicy, MemoryCandidate, MemoryType, ReviewState
+from app.agent_memory.candidate import (
+    ActivationPolicy,
+    MemoryCandidate,
+    MemoryType,
+    ReviewState,
+    validated_memory_scope_id,
+)
 from app.agent_memory.materialization import (
     DEFAULT_MATERIALIZATION_RECEIPTS_PATH,
     DEFAULT_MEMORY_DIR,
@@ -257,7 +263,7 @@ def _promoted_from_row_with_scope(
         source_refs=source_refs,
         derived_from=_first_str(frontmatter.get("derived_from")),
         generated_by=_first_str(frontmatter.get("generated_by")),
-        scope_id=_first_str(frontmatter.get("scope_id"), frontmatter.get("domain")),
+        scope_id=validated_memory_scope_id(frontmatter.get("scope_id")),
         content=content,
         observed_at=decided_at,
     )

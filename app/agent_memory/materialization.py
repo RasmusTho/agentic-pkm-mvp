@@ -62,7 +62,12 @@ def materialize_promoted_memory(
             receipt_id=None,
             terminal=True,
         )
-    _require_scope_binding(entry)
+    persisted_scope_id = _require_scope_binding(
+        entry,
+        decision_store=decision_store,
+        vault_context=vault_context,
+        channel=channel,
+    )
 
     vault_root = _vault_root(vault_context)
     artifact_uuid = uuid4().hex
@@ -77,7 +82,11 @@ def materialize_promoted_memory(
         write_guard.assert_writes_allowed(MEMORY_MATERIALIZATION_ACTION)
         write_note_relative(
             artifact_path,
-            _render_memory_note(entry, artifact_uuid=artifact_uuid),
+            _render_memory_note(
+                entry,
+                artifact_uuid=artifact_uuid,
+                scope_id=persisted_scope_id,
+            ),
             vault_root=vault_root,
         )
     except Exception as exc:
@@ -89,6 +98,7 @@ def materialize_promoted_memory(
             artifact_uuid=artifact_uuid,
             artifact_path=artifact_path,
             trace_id=trace_id,
+            scope_id=persisted_scope_id,
             status="failed",
             error=str(exc),
         )
@@ -104,6 +114,7 @@ def materialize_promoted_memory(
         artifact_uuid=artifact_uuid,
         artifact_path=artifact_path,
         trace_id=trace_id,
+        scope_id=persisted_scope_id,
         status="applied",
     )
     result = query_promotion_receipts(
@@ -116,6 +127,7 @@ def materialize_promoted_memory(
         entry.candidate_id,
         vault_context=vault_context,
         channel=channel,
+        expected_scope_id=persisted_scope_id,
     )
     return MemoryMaterializationResult(
         status="materialized",
@@ -130,11 +142,33 @@ def _require_promoted(entry: ReviewEntry) -> None:
         raise MemoryMaterializationError("entry must carry a promote decision")
 
 
-def _require_scope_binding(entry: ReviewEntry) -> None:
+def _require_scope_binding(
+    entry: ReviewEntry,
+    *,
+    decision_store: ReviewDecisionStore,
+    vault_context: VaultContext,
+    channel: str,
+) -> str:
     if entry.scope_id is None:
         raise MemoryMaterializationError(
             "semantic memory materialization requires candidate.scope_id"
         )
+    persisted = decision_store.get_decision(
+        entry.candidate_id,
+        vault_context=vault_context,
+        channel=channel,
+    )
+    if persisted is None or persisted.outcome is not ReviewDecision.PROMOTE:
+        raise MemoryMaterializationError(
+            "semantic memory materialization requires a persisted promote decision"
+        )
+    if persisted.terminal:
+        raise MemoryMaterializationError("semantic memory decision is already terminal")
+    if persisted.scope_id != entry.scope_id:
+        raise MemoryMaterializationError(
+            "candidate.scope_id does not match the persisted review decision"
+        )
+    return persisted.scope_id
 
 
 def _vault_root(context: VaultContext) -> Path:
@@ -171,7 +205,12 @@ def _unique_memory_path(
     return candidate.as_posix()
 
 
-def _render_memory_note(entry: ReviewEntry, *, artifact_uuid: str) -> str:
+def _render_memory_note(
+    entry: ReviewEntry,
+    *,
+    artifact_uuid: str,
+    scope_id: str,
+) -> str:
     candidate = entry.candidate
     frontmatter = {
         "uuid": artifact_uuid,
@@ -180,7 +219,7 @@ def _render_memory_note(entry: ReviewEntry, *, artifact_uuid: str) -> str:
         "agent_promoted": True,
         "labels": ["agent-promoted-memory"],
         "promoted_from_candidate_id": candidate.candidate_id,
-        "scope_id": candidate.scope_id,
+        "scope_id": scope_id,
         "source_refs": list(candidate.source_refs),
         "inferred": candidate.inferred,
         "generated_by": candidate.generated_by,
@@ -202,6 +241,7 @@ def _append_promotion_receipt(
     artifact_uuid: str,
     artifact_path: str,
     trace_id: str,
+    scope_id: str,
     status: str,
     error: str | None = None,
 ) -> str:
@@ -229,7 +269,7 @@ def _append_promotion_receipt(
             "source_event": f"memory-promote:{entry.candidate_id}",
             "intent_type": "agent_memory_materialization",
             "candidate_id": entry.candidate_id,
-            "scope_id": entry.scope_id,
+            "scope_id": scope_id,
             "inferred": entry.inferred,
             "source_refs": list(entry.source_refs),
         },

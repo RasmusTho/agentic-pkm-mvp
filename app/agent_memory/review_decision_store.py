@@ -13,6 +13,7 @@ from app.vault.manager import VaultContext
 
 REVIEW_DECISION_RECEIPT_KIND = "agent_memory.review_decision"
 REVIEW_DECISION_STORE_VERSION = 2
+_UNSET = object()
 
 
 @dataclass(frozen=True)
@@ -78,6 +79,21 @@ class ReviewDecisionStore:
             derived_from=entry.derived_from,
         )
         with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            existing_row = conn.execute(
+                """
+                SELECT payload
+                FROM agent_memory_review_decisions
+                WHERE vault_id = ? AND channel = ? AND candidate_id = ?
+                """,
+                (record.vault_id, record.channel, record.candidate_id),
+            ).fetchone()
+            if existing_row is not None:
+                existing = _record_from_payload(json.loads(existing_row["payload"]))
+                if existing.scope_id != record.scope_id:
+                    raise ReviewDecisionStoreError(
+                        "candidate scope cannot change across review decisions"
+                    )
             conn.execute(
                 """
                 INSERT INTO agent_memory_review_decisions (
@@ -151,31 +167,43 @@ class ReviewDecisionStore:
         *,
         vault_context: VaultContext,
         channel: str,
+        expected_scope_id: str | None | object = _UNSET,
     ) -> ReviewDecisionRecord:
-        record = self.get_decision(
-            candidate_id,
-            vault_context=vault_context,
-            channel=channel,
-        )
-        if record is None:
-            raise ReviewDecisionStoreError("cannot mark missing decision terminal")
-        terminal_record = ReviewDecisionRecord(
-            vault_id=record.vault_id,
-            channel=record.channel,
-            candidate_id=record.candidate_id,
-            outcome=record.outcome,
-            decided_by=record.decided_by,
-            decided_at=record.decided_at,
-            source_refs=record.source_refs,
-            scope_id=record.scope_id,
-            receipt_kind=record.receipt_kind,
-            terminal=True,
-            decision_notes=record.decision_notes,
-            revision_of=record.revision_of,
-            generated_by=record.generated_by,
-            derived_from=record.derived_from,
-        )
+        vault_id = _vault_id(vault_context)
+        safe_channel = _safe_str(channel)
         with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                """
+                SELECT payload
+                FROM agent_memory_review_decisions
+                WHERE vault_id = ? AND channel = ? AND candidate_id = ?
+                """,
+                (vault_id, safe_channel, _safe_str(candidate_id)),
+            ).fetchone()
+            if row is None:
+                raise ReviewDecisionStoreError("cannot mark missing decision terminal")
+            record = _record_from_payload(json.loads(row["payload"]))
+            if expected_scope_id is not _UNSET and record.scope_id != expected_scope_id:
+                raise ReviewDecisionStoreError(
+                    "persisted candidate scope changed before terminal transition"
+                )
+            terminal_record = ReviewDecisionRecord(
+                vault_id=record.vault_id,
+                channel=record.channel,
+                candidate_id=record.candidate_id,
+                outcome=record.outcome,
+                decided_by=record.decided_by,
+                decided_at=record.decided_at,
+                source_refs=record.source_refs,
+                scope_id=record.scope_id,
+                receipt_kind=record.receipt_kind,
+                terminal=True,
+                decision_notes=record.decision_notes,
+                revision_of=record.revision_of,
+                generated_by=record.generated_by,
+                derived_from=record.derived_from,
+            )
             conn.execute(
                 """
                 UPDATE agent_memory_review_decisions
