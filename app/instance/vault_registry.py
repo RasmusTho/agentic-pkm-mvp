@@ -805,6 +805,99 @@ class VaultRegistryStore:
             self._write_locked(updated)
             return updated
 
+    def commit_settings_rebind_selection(
+        self,
+        *,
+        desired_revision: int,
+        selection: KnownVaultRef,
+        _capability: _StorageMutationCapability | None = None,
+    ) -> RegistrySnapshot:
+        """Commit rebind state and last-active selection in one registry generation.
+
+        This is the SETTINGS-05C foreground commit seam.  The watcher has
+        already acknowledged the prepared revision (or the caller has
+        durably recorded ``no_lifecycle``); neither the compatibility binding
+        nor the picker history may be advanced independently afterward.
+        """
+
+        _require_storage_mutation_capability(_capability)
+        from app.instance.settings_rebind import SettingsRebindRecord
+
+        with self._locked():
+            self._assert_no_scalar_rollback_session_locked()
+            current = self._read_current_locked(recover=True)
+            if current.settings_rebind is None:
+                raise RegistryError("settings rebind record is not installed")
+            rebind = SettingsRebindRecord.from_payload(current.settings_rebind)
+            if rebind.phase not in {"prepared", "no_lifecycle"} or rebind.desired_revision != desired_revision:
+                raise RegistryError(
+                    "settings rebind selection commit requires the matching prepared/no_lifecycle revision"
+                )
+            candidate_id = rebind.candidate_binding_id
+            if candidate_id is None:
+                raise RegistryError("settings rebind selection commit has no candidate binding")
+            registration = current.registrations.get(candidate_id)
+            if registration is None:
+                raise RegistryError("settings rebind candidate binding is not registered")
+            try:
+                selection_path = Path(selection.path).expanduser().resolve(strict=True)
+                registration_path = Path(registration.path).expanduser().resolve(strict=True)
+            except OSError as exc:
+                raise RegistryError("settings rebind candidate path is unavailable") from exc
+            if (
+                selection.ref != registration.ref
+                or selection_path != registration_path
+                or (
+                    registration.vault_id is not None
+                    and selection.vault_id not in (None, registration.vault_id)
+                )
+                or (
+                    registration.local_instance_id is not None
+                    and selection.local_instance_id
+                    not in (None, registration.local_instance_id)
+                )
+            ):
+                raise RegistryError("settings rebind selection identity does not match candidate")
+            registrations = copy.deepcopy(current.registrations)
+            registrations[candidate_id] = VaultRegistration(
+                vault_binding_id=registration.vault_binding_id,
+                ref=registration.ref,
+                path=registration.path,
+                vault_id=registration.vault_id,
+                local_instance_id=registration.local_instance_id,
+                vault_name=selection.vault_name,
+                last_opened_at=selection.last_opened_at,
+                extensions=copy.deepcopy(registration.extensions),
+            )
+            committed = replace(
+                rebind,
+                applied_revision=rebind.desired_revision,
+                phase="no_lifecycle" if rebind.phase == "no_lifecycle" else "committed",
+                lifecycle_posture=(
+                    "no_lifecycle" if rebind.phase == "no_lifecycle" else "watcher"
+                ),
+            )
+            next_revision = current.revision + 1
+            extensions = copy.deepcopy(current.extensions)
+            if current.authority == REGISTRY_AUTHORITY_ACTIVE:
+                scalar_floor = extensions.get("scalarRollback")
+                if not isinstance(scalar_floor, dict):
+                    raise RegistryError("active registry scalar rollback floor is invalid")
+                extensions["scalarRollback"] = {
+                    **scalar_floor,
+                    "forkRegistryRevision": next_revision,
+                }
+            updated = replace(
+                current,
+                revision=next_revision,
+                last_active_vault_ref=registration.ref,
+                registrations=registrations,
+                settings_rebind=committed.as_payload(),
+                extensions=extensions,
+            )
+            self._write_locked(updated)
+            return updated
+
     def remove_registration(
         self,
         vault_binding_id: str,

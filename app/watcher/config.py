@@ -1,28 +1,20 @@
 """Watcher runtime configuration.
 
-HTTP-vs-background split rationale (#2476)
-------------------------------------------
-The watcher resolves its vault via ``WATCHER_VAULT_PATH`` (not ``VAULT_ROOT``)
-and builds a throwaway ``VaultManager`` to validate the path.  This is an
-*intentional* HTTP-vs-background split, not a split-brain bug:
+HTTP-vs-background binding rationale (#2476, #3119, SETTINGS-05C)
+-----------------------------------------------------------------
+The watcher remains a separately deployed process and ``WATCHER_VAULT_PATH``
+remains its bootstrap adapter.  The old "document the split, do not converge"
+posture is superseded for the one compatibility lifecycle by SETTINGS-05C:
+the picker writes a protected ``settings_rebind.v1`` prepare, the watcher
+acknowledges a healthy old-root scan, and only the locked commit lets the
+watcher adopt the candidate binding.  This avoids sharing the HTTP process's
+in-memory ``VaultManager`` state while making the two processes follow one
+durable binding.  The watcher changes its in-memory root only after its
+post-commit drain/resume receipt; no multi-active lifecycle is implied.
 
-1. The watcher is a background process with an independent lifecycle — it does
-   not participate in the HTTP vault-selection state machine managed by
-   ``VaultManager`` singleton + ``AppLocalSettingsStore``.
-2. ``WATCHER_VAULT_PATH`` lets operators bind the watcher to a vault
-   independently of the user-facing ``VAULT_ROOT`` / selection flow (e.g. a
-   fixed mount path inside a container).
-3. Converging onto ``resolve_active_vault_root`` (the HTTP-path canonical
-   resolver) would require the watcher to call back into the FastAPI process or
-   share the in-memory singleton — coupling a background daemon to an HTTP
-   runtime boundary that it must not own.
-4. Converging onto ``resolve_optional_vault_root`` would remove the
-   ``WATCHER_VAULT_PATH`` override capability and the VaultManager validation
-   step that checks settings-level ``enable_vault_watcher``.
-
-Verdict: document the split, do not converge.  The watcher vault binding is
-governed by ``WATCHER_VAULT_PATH``; the HTTP path is governed by
-``VAULT_ROOT`` + selection.  Both read from independent source-binding slots.
+Health reads the durable phase/revision and heartbeat together.  A missing,
+invalid, or incomplete handoff remains visibly degraded; a display-only
+runtime settings field never selects a vault.
 """
 
 from __future__ import annotations

@@ -2388,11 +2388,13 @@ def run_registry_once(
     )
     summaries["journal_review"] = _run_journal_review_tick(cfg)
     if reconciler is not None and rebind_cycle is not None:
-        reconciler.finish_cycle(
+        receipt = reconciler.finish_cycle(
             rebind_cycle,
             summaries=summaries,
             states=states,
         )
+        if receipt is not None and receipt.stage == "completed":
+            cfg.vault_path = reconciler.candidate_vault_path(rebind_cycle.record)
     enqueue_failures_total = sum(state.enqueue_failures_total for state in states.values())
     write_registry_heartbeat(
         path=cfg.heartbeat_path,
@@ -2466,11 +2468,13 @@ def run_registry_forever(
         )
         summaries["journal_review"] = _run_journal_review_tick(cfg)
         if reconciler is not None and rebind_cycle is not None:
-            reconciler.finish_cycle(
+            receipt = reconciler.finish_cycle(
                 rebind_cycle,
                 summaries=summaries,
                 states=states,
             )
+            if receipt is not None and receipt.stage == "completed":
+                cfg.vault_path = reconciler.candidate_vault_path(rebind_cycle.record)
         enqueue_failures_total = sum(state.enqueue_failures_total for state in states.values())
         write_registry_heartbeat(
             path=cfg.heartbeat_path,

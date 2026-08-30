@@ -479,10 +479,91 @@ class VaultManager:
         previous = self._context
         context = self.validate_vault(vault_path)
         if remember and context.status in {"selected", "uninitialized", "invalid", "missing"}:
-            self._remember_context(context, vault_path)
+            rebind_selection = self._settings_rebind_selection(context, vault_path)
+            if rebind_selection is None:
+                self._remember_context(context, vault_path)
+            else:
+                activation, registration, known = rebind_selection
+                activation.activate(
+                    selection=known,
+                    candidate_binding_id=registration.vault_binding_id,
+                    candidate_root=Path(registration.path),
+                )
         self._context = context
         self._emit_changed(previous, context)
         return context
+
+    def _settings_rebind_selection(
+        self,
+        context: VaultContext,
+        vault_path: Path,
+    ) -> tuple[Any, Any, KnownVaultRef] | None:
+        """Return the SETTINGS-05C activation inputs when the floor is installed."""
+
+        if context.status != "selected":
+            return None
+        registry_value = os.getenv("INSTANCE_VAULT_REGISTRY_PATH", "").strip()
+        if not registry_value:
+            return None
+        from app.instance.filesystem_identity import (
+            resolve_filesystem_root_identity,
+            same_filesystem_root,
+        )
+        from app.instance.settings_rebind import SettingsRebindActivation
+        from app.instance.vault_registry import VaultRegistryStore
+
+        registry = VaultRegistryStore(Path(registry_value).expanduser().resolve(strict=False))
+        snapshot = registry.load()
+        if snapshot.settings_rebind is None:
+            return None
+        target_identity = resolve_filesystem_root_identity(vault_path)
+        registration = next(
+            (
+                item
+                for item in snapshot.registrations.values()
+                if same_filesystem_root(
+                    resolve_filesystem_root_identity(item.path), target_identity
+                )
+            ),
+            None,
+        )
+        if registration is None:
+            if snapshot.authority != "active":
+                raise ValueError(
+                    "SETTINGS-05C cannot select an unregistered vault before registry authority cutover"
+                )
+            ownership_value = os.getenv("INSTANCE_OWNERSHIP_ROOT", "").strip()
+            if not ownership_value:
+                raise ValueError(
+                    "SETTINGS-05C requires INSTANCE_OWNERSHIP_ROOT to register a selected vault"
+                )
+            from app.instance.runtime import _load_active_registry_runtime
+
+            runtime = _load_active_registry_runtime(
+                registry_path=registry.path,
+                ownership_root=Path(ownership_value).expanduser().resolve(strict=False),
+                channel=os.getenv("PKM_ENVIRONMENT", "dev"),
+            )
+            registration = runtime.production_register(vault_path, producer="picker")
+            snapshot = registry.load()
+        current_record = SettingsRebindActivation(registry).store.read()
+        if current_record.candidate_binding_id == registration.vault_binding_id:
+            # The durable watcher already follows this binding.  Persisting
+            # last-active metadata remains a normal compatibility write.
+            return None
+        known = KnownVaultRef(
+            ref=registration.ref,
+            path=registration.path,
+            vault_id=registration.vault_id or context.active_vault_id,
+            vault_name=context.active_vault_name,
+            local_instance_id=registration.local_instance_id or context.local_instance_id,
+            last_opened_at=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        )
+        return (
+            SettingsRebindActivation.from_environment(registry),
+            registration,
+            known,
+        )
 
     def validate_vault(self, vault_path: Path) -> VaultContext:
         # Lazy import: see the constructor's comment on the write_guard cycle.

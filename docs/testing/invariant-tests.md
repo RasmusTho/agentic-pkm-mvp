@@ -90,6 +90,24 @@ declarative-schema-impossible and therefore live here as the source of truth.
   `docs/SETTINGS_SPINE/CANONICALIZE_SETTINGS_LOCATION.md`.
 - **Related issues:** #3156, #3161.
 
+### vault_selection_rebinds_consumers
+
+- **Purpose:** The legacy compatibility picker and separately deployed watcher follow one
+  protected `settings_rebind.v1` prepare/acknowledge/commit/drain/resume transaction.
+- **Protected principle:** No candidate-root effect before commit; no success before the
+  durable commit; the watcher changes roots only after its post-commit receipt.
+- **Expected failure mode:** stale or malformed phase/revision, unhealthy A scan, lost watcher
+  receipt, or a reload failure is visible and never silently redirects work to B.
+- **Current enforcement:** runtime tests in
+  `tests/watcher/test_ingest_binding_follows_selection.py` and
+  `tests/integration/test_watcher_cross_process_rebind.py`; health exposes phase and revisions.
+- **Runtime test path:** `tests/watcher/test_ingest_binding_follows_selection.py`;
+  `tests/integration/test_watcher_cross_process_rebind.py`.
+- **Related docs / contracts / ADRs:** `docs/SETTINGS.md :: Authority`;
+  `docs/SETTINGS_SPINE/REBIND_ON_VAULT_SELECTION.md`;
+  `docs/MULTI_VAULT_RUNTIME/BIND_BACKGROUND_LIFECYCLES.md :: Compatibility lifecycle`.
+- **Related issues:** #3156, #3163, #4969.
+
 ### inv_ef1_public_private_seam
 
 - **Purpose:** The public repository carries no secret-shaped values, and every retained personal binding has an owned, per-artifact INV-EF1 register row rather than an unreviewed baseline exception.

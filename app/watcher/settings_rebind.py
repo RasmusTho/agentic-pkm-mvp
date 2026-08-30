@@ -481,6 +481,18 @@ class DormantSettingsRebindReconciler:
         _write_receipt(self._receipt_path(cycle.record), completed)
         return completed
 
+    def candidate_vault_path(self, record: SettingsRebindRecord) -> Path:
+        """Resolve the committed candidate for the next watcher tick."""
+
+        candidate = self._required_binding(
+            record.candidate_binding_id,
+            name="candidate",
+        )
+        registration = self._registry.load().registrations.get(candidate)
+        if registration is None:
+            raise RegistryError("settings rebind candidate watcher binding is missing")
+        return Path(registration.path)
+
     def _receipt_path(self, record: SettingsRebindRecord) -> Path:
         return settings_rebind_watcher_receipt_path(
             self.state_dir,
