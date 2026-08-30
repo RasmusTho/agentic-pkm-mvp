@@ -12,7 +12,13 @@ import pytest
 
 import app.dispatcher.verification_dispatch as verification_dispatch
 from app.dispatcher.verification_contract import MAX_CLOSING_ISSUES
-from app.dispatcher.verification_dispatch import VerificationDispatchLedger, VerificationRun
+from app.dispatcher.verification_dispatch import (
+    REPAIR_INTENT_ATTEMPT_KIND,
+    VerificationDispatchLedger,
+    VerificationRun,
+    build_repair_transition_evidence,
+    plan_repair_progress_intents,
+)
 from tests.dispatcher.verification_helpers import (
     b4e2310_pre_trust_request,
     downgrade_verification_schema_to_v3,
@@ -25,6 +31,26 @@ from app.dispatcher.store import SqliteStore
 
 CLAIM_PRE_LOCK = "2030-01-01T00:00:00.000000+00:00"
 CLAIM_POST_LOCK = "2030-01-01T00:00:20.000000+00:00"
+MECHANISM_PATH_SHA = hashlib.sha256(
+    b"app/dispatcher/verification_dispatch.py"
+).hexdigest()
+
+
+def _repair_transition(base_head: str, repaired_head: str) -> dict[str, object]:
+    path = "app/dispatcher/verification_dispatch.py"
+    return build_repair_transition_evidence(
+        base_head_sha=base_head,
+        repaired_head_sha=repaired_head,
+        commits=[repaired_head],
+        files=[
+            {
+                "path_sha256": hashlib.sha256(path.encode()).hexdigest(),
+                "previous_path_sha256": None,
+                "status": "modified",
+                "blob_sha": repaired_head,
+            }
+        ],
+    )
 
 
 def test_attempt_recording_remains_lease_fenced_without_numeric_repair_cap(
@@ -80,9 +106,9 @@ def test_attempt_recording_remains_lease_fenced_without_numeric_repair_cap(
         {
             "finding_id": "F1",
             "failure_domain": "review_code_correctness",
-            "mechanism_id": "parser",
-            "head_sha": run.head_sha,
-        },
+                "mechanism_id": "parser",
+                "head_sha": run.head_sha,
+            },
         holder="host",
         lease_id=claimed.lease_id,
         idempotency_key="repair-1",
@@ -94,43 +120,100 @@ def test_repair_progress_receipt_is_lease_fenced_and_replay_safe(tmp_path) -> No
     run = state.ingest(request())
     claimed = state.claim(run.run_id, "host")
     first = state.record_attempt(
-        run.run_id, "standard_repair", "fix-1", "terra", "high", {"head": run.head_sha},
-        "fixed", {"finding_id": "F1", "failure_domain": "review_code_correctness",
-                  "mechanism_id": "parser", "head_sha": run.head_sha},
-        holder="host", lease_id=claimed.lease_id,
+        run.run_id,
+        "standard_repair",
+        "fix-1",
+        "terra",
+        "high",
+        {"head": run.head_sha},
+        "fixed",
+        {
+            "finding_id": "F1",
+            "failure_domain": "review_code_correctness",
+            "mechanism_id": "parser",
+            "head_sha": run.head_sha,
+            "transition_evidence": _repair_transition(
+                "0" * 40, run.head_sha
+            ),
+        },
+        holder="host",
+        lease_id=claimed.lease_id,
     )
     assert first == 1
     first_attempt = state.attempts(run.run_id)[-1]
-    with pytest.raises(ValueError, match="fresh blocking review"):
-        state.record_attempt(
-            run.run_id, "standard_repair", "fix-2", "terra", "high", {}, "fixed",
-            {"finding_id": "F1", "failure_domain": "review_code_correctness", "mechanism_id": "parser",
-             "head_sha": run.head_sha, "progress_evidence": {"prior_attempt_id": first_attempt["attempt_id"],
-             "prior_review_attempt_id": "missing", "reviewed_head_sha": run.head_sha,
-             "mechanism_state_change": "parser state narrowed", "validation_delta": "new focused proof"}},
-            holder="host", lease_id=claimed.lease_id,
-        )
     state.record_attempt(
-        run.run_id, "review", "review-1", "terra", "high", {"head": run.head_sha}, "blocking",
-        {"reviewed_attempt_id": first_attempt["attempt_id"], "finding_id": "F1",
-         "failure_domain": "review_code_correctness", "mechanism_id": "parser", "head_sha": run.head_sha},
-        holder="host", lease_id=claimed.lease_id,
+        run.run_id,
+        "review",
+        "review-1",
+        "terra",
+        "high",
+        {"head": run.head_sha},
+        "blocking",
+        {
+            "reviewed_attempt_id": first_attempt["attempt_id"],
+            "finding_id": "F1",
+            "failure_domain": "review_code_correctness",
+            "mechanism_id": "parser",
+            "head_sha": run.head_sha,
+            "mechanism_path_sha256": [MECHANISM_PATH_SHA],
+        },
+        holder="host",
+        lease_id=claimed.lease_id,
     )
-    attempts = state.attempts(run.run_id)
-    progress = {"prior_attempt_id": first_attempt["attempt_id"], "prior_review_attempt_id": attempts[-1]["attempt_id"], "reviewed_head_sha": run.head_sha,
-                "mechanism_state_change": "parser state narrowed", "validation_delta": "new focused proof"}
-    receipt = {"finding_id": "F1", "failure_domain": "review_code_correctness", "mechanism_id": "parser",
-               "head_sha": run.head_sha, "progress_evidence": progress}
+    intent = plan_repair_progress_intents(
+        state.attempts(run.run_id),
+        current_head_sha=run.head_sha,
+        validation_sha256="a" * 64,
+    )[0]
     with pytest.raises(ValueError, match="ownership mismatch"):
-        state.record_attempt(run.run_id, "standard_repair", "fix-2", "terra", "high", {}, "fixed", receipt,
-                             holder="host", lease_id="wrong")
-    assert state.record_attempt(run.run_id, "standard_repair", "fix-2", "terra", "high", {}, "fixed", receipt,
-                                holder="host", lease_id=claimed.lease_id, idempotency_key="progress-2") == 2
-    assert state.record_attempt(run.run_id, "standard_repair", "fix-2", "terra", "high", {}, "fixed", receipt,
-                                holder="host", lease_id=claimed.lease_id, idempotency_key="progress-2") == 2
-    assert state.attempts(run.run_id)[-1]["receipt"] == receipt
+        state.record_attempt(
+            run.run_id,
+            REPAIR_INTENT_ATTEMPT_KIND,
+            str(intent["intent_id"]),
+            "deterministic",
+            "none",
+            {},
+            "admitted",
+            intent,
+            holder="host",
+            lease_id="wrong",
+            idempotency_key=str(intent["intent_id"]),
+        )
+    assert (
+        state.record_attempt(
+            run.run_id,
+            REPAIR_INTENT_ATTEMPT_KIND,
+            str(intent["intent_id"]),
+            "deterministic",
+            "none",
+            {},
+            "admitted",
+            intent,
+            holder="host",
+            lease_id=claimed.lease_id,
+            idempotency_key=str(intent["intent_id"]),
+        )
+        == 1
+    )
+    assert (
+        state.record_attempt(
+            run.run_id,
+            REPAIR_INTENT_ATTEMPT_KIND,
+            str(intent["intent_id"]),
+            "deterministic",
+            "none",
+            {},
+            "admitted",
+            intent,
+            holder="host",
+            lease_id=claimed.lease_id,
+            idempotency_key=str(intent["intent_id"]),
+        )
+        == 1
+    )
+    assert state.attempts(run.run_id)[-1]["receipt"] == intent
     reloaded = VerificationDispatchLedger(state.store)
-    assert reloaded.attempts(run.run_id)[-1]["receipt"] == receipt
+    assert reloaded.attempts(run.run_id)[-1]["receipt"] == intent
 
 
 def _canonical_v1_request(*, supporting_issues: list[int]) -> dict[str, object]:

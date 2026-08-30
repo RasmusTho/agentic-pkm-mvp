@@ -6,7 +6,13 @@ import hashlib
 import json
 from typing import Callable, Mapping, Sequence
 
-from app.dispatcher.verification_dispatch import VerificationDispatchLedger
+from app.dispatcher.verification_dispatch import (
+    REPAIR_BUDGET_POLICY_MECHANISM,
+    VerificationDispatchLedger,
+    build_repair_progress_evidence,
+    validated_repair_transition_evidence,
+    validated_mechanism_path_projection,
+)
 
 
 HUMAN_EXCEPTION_FAILURE_CLASSES = frozenset(
@@ -121,69 +127,21 @@ class VerificationAgentLoop:
         failure_domain: str,
         mechanism_id: str,
         head_sha: str,
-        progress_evidence: Mapping[str, object] | None,
+        progress_intent_id: str | None,
+        validation_sha256: str | None,
+        transition_evidence: Mapping[str, object] | None,
     ) -> dict[str, object] | None:
-        """Bind a repeated repair to concrete progress on its prior repair."""
-        def identity(row: Mapping[str, object], field: str) -> object:
-            receipt = row.get("receipt")
-            return row.get(field) or (
-                receipt.get(field) if isinstance(receipt, Mapping) else None
-            )
-
-        prior_repairs = [
-            row
-            for row in attempts
-            if row["kind"] in {"standard_repair", "escalated_repair"}
-            and identity(row, "finding_id") == finding_id
-            and identity(row, "failure_domain") == failure_domain
-            and identity(row, "mechanism_id") == mechanism_id
-        ]
-        if not prior_repairs:
-            return None
-        if not isinstance(progress_evidence, Mapping):
-            raise ValueError(
-                "repeated repair requires durable progress evidence"
-            )
-        required = {
-            "prior_attempt_id",
-            "prior_review_attempt_id",
-            "reviewed_head_sha",
-            "mechanism_state_change",
-            "validation_delta",
-        }
-        if set(progress_evidence) != required:
-            raise ValueError("repair progress evidence is malformed")
-        progress_values = [progress_evidence[field] for field in required]
-        if any(
-            not isinstance(value, str) or not value.strip() for value in progress_values
-        ):
-            raise ValueError("repair progress evidence is malformed")
-        prior = prior_repairs[-1]
-        prior_reviews = [
-            row
-            for row in attempts
-            if row["kind"] == "review"
-            and row["outcome"] == "blocking"
-            and row.get("finding_id") == finding_id
-            and row.get("failure_domain") == failure_domain
-            and row.get("mechanism_id") == mechanism_id
-            and isinstance(row.get("receipt"), Mapping)
-            and identity(row, "reviewed_attempt_id") == prior["attempt_id"]
-        ]
-        if not prior_reviews:
-            raise ValueError("repeated repair requires a fresh blocking review")
-        prior_review = prior_reviews[-1]
-        prior_review_receipt = prior_review.get("receipt")
-        assert isinstance(prior_review_receipt, Mapping)
-        if (
-            progress_evidence["prior_attempt_id"] != prior["attempt_id"]
-            or progress_evidence["prior_review_attempt_id"] != prior_review["attempt_id"]
-            or progress_evidence["reviewed_head_sha"]
-            != prior_review_receipt.get("head_sha")
-            or prior_review_receipt.get("head_sha") != head_sha
-        ):
-            raise ValueError("repair progress evidence is not bound to the prior reviewed repair")
-        return dict(progress_evidence)
+        """Bind a repeated repair to a fenced server-derived intent."""
+        return build_repair_progress_evidence(
+            attempts,
+            finding_id=finding_id,
+            failure_domain=failure_domain,
+            mechanism_id=mechanism_id,
+            repaired_head_sha=head_sha,
+            progress_intent_id=progress_intent_id,
+            validation_sha256=validation_sha256,
+            transition_evidence=transition_evidence,
+        )
 
     def repair(
         self,
@@ -197,7 +155,9 @@ class VerificationAgentLoop:
         context: Mapping[str, object],
         outcome: str,
         strongest: bool = False,
-        progress_evidence: Mapping[str, object] | None = None,
+        progress_intent_id: str | None = None,
+        validation_sha256: str | None = None,
+        transition_evidence: Mapping[str, object] | None = None,
     ) -> int:
         if not finding_id:
             raise ValueError("repair requires a stable finding id")
@@ -224,7 +184,9 @@ class VerificationAgentLoop:
             failure_domain=failure_domain,
             mechanism_id=mechanism_id,
             head_sha=self._head(),
-            progress_evidence=progress_evidence,
+            progress_intent_id=progress_intent_id,
+            validation_sha256=validation_sha256,
+            transition_evidence=transition_evidence,
         )
         receipt: dict[str, object] = {
             "finding_id": finding_id,
@@ -234,6 +196,10 @@ class VerificationAgentLoop:
         }
         if progress_receipt is not None:
             receipt["progress_evidence"] = progress_receipt
+        if transition_evidence is not None:
+            receipt["transition_evidence"] = validated_repair_transition_evidence(
+                transition_evidence
+            )
         ordinal = self.ledger.record_attempt(
             self.run_id,
             "escalated_repair" if strongest else "standard_repair",
@@ -254,12 +220,16 @@ class VerificationAgentLoop:
         finding_id: str | None = None,
         failure_domain: str | None = None,
         mechanism_id: str | None = None,
+        mechanism_path_sha256: Sequence[str] | None = None,
         session_id: str,
         capability: str,
         reasoning_effort: str,
         context: Mapping[str, object],
         outcome: str,
     ) -> int:
+        run = self.ledger.get(self.run_id)
+        if run is None:
+            raise ValueError("verification run not found")
         attempts = self.ledger.attempts(self.run_id)
         repairs = [row for row in attempts if row["kind"] in {"standard_repair", "escalated_repair"}]
         verifications = [row for row in attempts if row["kind"] == "verification"]
@@ -275,13 +245,30 @@ class VerificationAgentLoop:
         normalized = outcome.lower()
         if normalized not in {"blocking", "clean"}:
             raise ValueError("review outcome must be blocking or clean")
+        mechanism_paths = (
+            validated_mechanism_path_projection(list(mechanism_path_sha256))
+            if mechanism_path_sha256 is not None
+            else None
+        )
+        if (
+            normalized == "blocking"
+            and run.repair_budget_policy == REPAIR_BUDGET_POLICY_MECHANISM
+            and mechanism_paths is None
+        ):
+            raise ValueError("blocking review requires a mechanism path projection")
+        if mechanism_paths is not None and normalized != "blocking":
+            raise ValueError("only a blocking review may bind mechanism paths")
+        last_review_receipt = reviews[-1].get("receipt") if reviews else None
         same_blocking_round = bool(
             reviews
             and reviews[-1]["outcome"] == "blocking"
             and normalized == "blocking"
             and reviews[-1]["session_id"] == session_id
-            and reviews[-1]["failure_domain"] == failure_domain
-            and reviews[-1]["mechanism_id"] == mechanism_id
+            and isinstance(last_review_receipt, Mapping)
+            and last_review_receipt.get("failure_domain") == failure_domain
+            and last_review_receipt.get("mechanism_id") == mechanism_id
+            and last_review_receipt.get("mechanism_path_sha256")
+            == mechanism_paths
         )
         if reviews and reviews[-1]["outcome"] == "blocking" and not same_blocking_round:
             raise ValueError("blocking review requires repair before another review")
@@ -302,6 +289,7 @@ class VerificationAgentLoop:
                 "finding_id": finding_id,
                 "failure_domain": failure_domain,
                 "mechanism_id": mechanism_id,
+                "mechanism_path_sha256": mechanism_paths,
             },
             holder=self.holder,
             lease_id=self.lease_id,
@@ -317,7 +305,10 @@ class VerificationAgentLoop:
         """Atomically persist one replay-safe coordinator event batch."""
         if not events:
             return
-        head_sha = self._head()
+        run = self.ledger.get(self.run_id)
+        if run is None:
+            raise ValueError("verification run not found")
+        head_sha = run.head_sha
         context_hash = hashlib.sha256(
             json.dumps(
                 dict(context),
@@ -385,16 +376,32 @@ class VerificationAgentLoop:
                         raise ValueError(
                             "escalated repair must use the configured strongest capability"
                         )
-                    progress_evidence = event.get("progress_evidence")
+                    progress_intent_id = event.get("progress_intent_id")
+                    validation_sha256 = context.get(
+                        "progress_validation_sha256"
+                    )
+                    transition_evidence = context.get(
+                        "repair_transition_evidence"
+                    )
                     progress_receipt = self._progress_receipt(
                         working,
                         finding_id=finding_id,
                         failure_domain=str(failure_domain),
                         mechanism_id=str(mechanism_id),
                         head_sha=head_sha,
-                        progress_evidence=(
-                            progress_evidence
-                            if isinstance(progress_evidence, Mapping)
+                        progress_intent_id=(
+                            str(progress_intent_id)
+                            if progress_intent_id is not None
+                            else None
+                        ),
+                        validation_sha256=(
+                            str(validation_sha256)
+                            if validation_sha256 is not None
+                            else None
+                        ),
+                        transition_evidence=(
+                            transition_evidence
+                            if isinstance(transition_evidence, Mapping)
                             else None
                         ),
                     )
@@ -408,6 +415,12 @@ class VerificationAgentLoop:
                     }
                     if progress_receipt is not None:
                         receipt["progress_evidence"] = progress_receipt
+                    if isinstance(transition_evidence, Mapping):
+                        receipt["transition_evidence"] = (
+                            validated_repair_transition_evidence(
+                                transition_evidence
+                            )
+                        )
                 elif event_kind == "review":
                     normalized = outcome.lower()
                     if normalized not in {"blocking", "clean"}:
@@ -444,6 +457,8 @@ class VerificationAgentLoop:
                         == event.get("failure_domain")
                         and last_review_receipt.get("mechanism_id")
                         == event.get("mechanism_id")
+                        and last_review_receipt.get("mechanism_path_sha256")
+                        == event.get("mechanism_path_sha256")
                     )
                     reused_session = any(
                         row["session_id"] == session_id for row in working
@@ -454,6 +469,29 @@ class VerificationAgentLoop:
                         raise ValueError("blocking review requires repair before another review")
                     if len(reviews) >= 2 and normalized == "clean":
                         raise ValueError("independent clean re-review budget is complete")
+                    event_mechanism_paths = event.get(
+                        "mechanism_path_sha256"
+                    )
+                    mechanism_paths = (
+                        validated_mechanism_path_projection(
+                            list(event_mechanism_paths)
+                        )
+                        if isinstance(event_mechanism_paths, list)
+                        else None
+                    )
+                    if (
+                        normalized == "blocking"
+                        and run.repair_budget_policy
+                        == REPAIR_BUDGET_POLICY_MECHANISM
+                        and mechanism_paths is None
+                    ):
+                        raise ValueError(
+                            "blocking review requires a mechanism path projection"
+                        )
+                    if mechanism_paths is not None and normalized != "blocking":
+                        raise ValueError(
+                            "only a blocking review may bind mechanism paths"
+                        )
                     kind = "review"
                     outcome = normalized
                     ordinal = sum(row["kind"] == kind for row in working) + 1
@@ -464,6 +502,7 @@ class VerificationAgentLoop:
                         "finding_id": event.get("finding_id"),
                         "failure_domain": event.get("failure_domain"),
                         "mechanism_id": event.get("mechanism_id"),
+                        "mechanism_path_sha256": mechanism_paths,
                     }
                 else:
                     raise ValueError("unknown verification review event kind")

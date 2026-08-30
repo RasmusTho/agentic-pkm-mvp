@@ -12,6 +12,7 @@ from app.dispatcher.verification_consumer import (
 from tests.dispatcher.test_verification_consumer import (
     _closure_evidence,
     _merge_comments,
+    _repair_compare,
     Auth,
     Launcher,
     eligible_pr,
@@ -172,6 +173,9 @@ class StaticTruth:
     def checks(self, repository, head_sha):
         self.checked_heads.append(head_sha)
         return green_checks(self.head)
+
+    def compare(self, repository, base_head_sha, repaired_head_sha):
+        return _repair_compare(base_head_sha, repaired_head_sha)
 
     def pull_request_comments(self, repository, pr_number):
         return _merge_comments(self.pull_request(repository, pr_number))

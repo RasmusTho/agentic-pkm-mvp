@@ -18,7 +18,12 @@ Check CI status and resolve the local review gate per the skill (the Codex verdi
 Every repair or blocking-review event must carry one closed failure_domain and one stable
 mechanism_id. Reuse the same finding/domain/mechanism binding throughout the run; do not mint a
 new mechanism merely to disguise non-convergence. Clean reviews carry no failure binding. Continue
-repairs only with measurable progress; attempt count alone is never a Human Exception.
+repairs only with measurable progress; attempt count alone is never a Human Exception. Every
+blocking-review event for a repair mechanism must also carry `mechanism_path_sha256`: the sorted,
+unique SHA-256 digests of the UTF-8 repository-relative paths that the finding actually binds. Select
+only the mechanism-specific paths inspected by that independent review, not every file in the repair
+diff; repair and clean-review events carry null. The host consumer authenticates that projection
+against GitHub's observed repair transition before it can authorize another workspace-writing launch.
 Do not merge unless the loaded skill's prerequisites are satisfied.
 When the immutable dispatch context sets `merge_execution_mode` to
 `host_fenced_executor`, do not merge, edit/neutralize/restore the PR body, close Issues, change
