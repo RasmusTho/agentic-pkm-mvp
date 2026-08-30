@@ -51,7 +51,7 @@ def _valid_owner(value: object) -> bool:
 
 def parse_blocker_action_receipt(comment: object) -> dict[str, object] | None:
     """Parse the deliberately small YAML receipt subset from one REST comment."""
-    body = comment.get("body", "") if isinstance(comment, dict) else str(comment)
+    body = (comment.get("body") or "") if isinstance(comment, dict) else str(comment)
     if "receipt: blocker_action.v1" not in body:
         return None
     values: dict[str, object] = {"dependency_refs": []}
@@ -69,9 +69,21 @@ def parse_blocker_action_receipt(comment: object) -> dict[str, object] | None:
     return values
 
 
+def is_blocker_action_receipt_marker(comment: object) -> bool:
+    """Return whether a comment claims to be a blocker-action receipt."""
+    body = (comment.get("body") or "") if isinstance(comment, dict) else str(comment)
+    return "receipt: blocker_action.v1" in body
+
+
 def latest_receipt(comments: Iterable[object]) -> dict[str, object] | None:
-    receipts = [receipt for item in comments if (receipt := parse_blocker_action_receipt(item))]
-    return receipts[-1] if receipts else None
+    """Validate the newest receipt-bearing marker, never an older valid one.
+
+    A later malformed marker is durable evidence of an incomplete/invalid
+    authority write.  Treating it as invisible would let an older receipt mask
+    the drift and make a repair no-op.
+    """
+    markers = [item for item in comments if is_blocker_action_receipt_marker(item)]
+    return parse_blocker_action_receipt(markers[-1]) if markers else None
 
 
 def receipt_for_context(

@@ -94,6 +94,11 @@ An open `agent:blocked` Issue must have exactly one blocked `action:*` label; an
 `agent:needs-human` Issue must have exactly one human `action:*` label. The corresponding
 `blocker_action.v1` Issue comment names owner, next action, evidence, unblock condition and optional
 review trigger. Status remains a projection; action labels never make an Issue pickup eligible.
+When valid lifecycle/action labels already exist but that receipt is absent, invalid, or mismatched,
+the bounded reconciler may append one successor receipt only after reading every comment page and
+verifying the exact created comment and terminal context. The newest receipt-bearing marker governs;
+an invalid newer marker cannot be hidden by an older valid one. This repair never mutates labels or
+bootstraps repository labels unless the selected batch has a separate planned action-label addition.
 
 ## Project contract
 

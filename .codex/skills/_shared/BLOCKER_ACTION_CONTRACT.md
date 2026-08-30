@@ -25,3 +25,16 @@ unverified action evidence.
 Open `agent:blocked` uses exactly one blocked `action:*`; open `agent:needs-human` uses exactly
 one human `action:*`. Before `agent:ready`, re-read the evidence, remove the action label, and do
 not infer a cause from a legacy coarse state. On terminal closure remove every `action:*` label.
+
+## Receipt-only recovery
+
+When the open Issue's lifecycle and exactly one compatible action label are already valid but its
+latest context-bound receipt is absent, invalid, or names a different action, maintenance may append
+one successor `blocker_action.v1` receipt. It must re-read live labels and comments before the
+write, leave labels untouched, read back and parse the exact created comment, then re-read terminal
+lifecycle/action context. A valid current receipt is a no-op; historical invalid comments remain
+immutable evidence. The recovery neither infers an underlying blocker cause nor makes the Issue
+pickup eligible.
+Read the complete paginated Issue-comment stream. The newest comment carrying the receipt marker is
+the governing candidate: a malformed newer marker is invalid evidence and must trigger repair rather
+than being hidden by an older valid receipt.
