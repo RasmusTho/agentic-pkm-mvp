@@ -1,6 +1,7 @@
 State: Accepted target-state breakdown with blocked validation parent #4741; ARO-01 is closed with
-its withdrawal recorded, ARO-03 is delivered as the direct-loopback local route, and ARO-04–08
-remain blocked; Focus-route prerequisite #4768 and source-owned Now producer #4834 are delivered.
+its withdrawal recorded, ARO-03 is delivered as the direct-loopback local route, ARO-05/#4746 and
+ARO-06/#4836 are delivered, and ARO-04, ARO-07, and ARO-08 remain blocked; Focus-route prerequisite
+#4768 and source-owned Now producer #4834 are delivered.
 Doc role: Capability specification and source-authorized task decomposition for the remaining read-only devUI Stage A Overview.
 Authority: `docs/DEVUI.md` owns owner experience and Overview semantics; `docs/plans/DEVUI_IMPLEMENTATION.md` owns Stage A order. This directory owns only the bounded delivery contracts and validation path.
 Owner: Builder System governance
@@ -55,9 +56,9 @@ claim; it is never treated as an empty, healthy, or deployed state.
 | `devui-overview-view.v1` | Pure composer in `app/builderops/devui_overview.py`, including hostile cross-field validation and typed root-reference preservation | **Excluded from this breakdown; do not duplicate or reopen** |
 | Cockpit producer | #4834 maps only trusted, countable `working` items to source-ordered **Now** candidates with stable GitHub identity and separate Cockpit evidence | Owner-question facts remain separately source-owned or honestly withdrawn; `agent:needs-human`, delivery, and readiness are not admitted |
 | Delivery evidence | Delivery, merge, closure, and terminal verification facts exist independently | A source-owned, receipt-backed `ready_to_try` fact, or an honest withdrawal |
-| API | Local-only GET `/api/devui/composition`, delivered direct-loopback Overview/Focus reads, and #4841's production Companion exact two-GET transport; no devUI mutation or page route | Typed navigation only after actual local destinations are governed |
+| API | Local-only GET `/api/devui/composition`, delivered direct-loopback Overview/Focus reads, and #4841's production Companion exact two-GET transport; merged #4836 adds only the governed read-only Companion page/asset routes | Typed navigation only after actual local destinations are governed |
 | Navigation | Composer validates typed root references | Resolvable local Focus and optional SoI destinations without joins |
-| Visual shell | #4836 candidate packages the connected read-only shell and exact constrained-reuse manifest; it is not delivered or accepted | #4746 exact-candidate acceptance, #4833/#4842 exact-ref browser proof, merge, deployment receipt, owner pilot |
+| Visual shell | #4836 delivered the connected read-only shell and exact constrained-reuse manifest; it is not production-deployed or owner-accepted | #4748 exact-ref proof at final `main`, deployment receipt, owner pilot |
 
 ## Authority-resolution gate
 
@@ -91,8 +92,8 @@ changes none of the withdrawal conclusions for **Needs you** or **Ready to try**
 | 2 | ARO-02 — Enrich Overview Producer Facts | Superseded #4743 | The accepted no-source decision leaves no producer facts to enrich; a future source contract requires a new governed slice |
 | 3 | ARO-03 — Expose the Local Overview GET Route | Delivered #4744 and #4834 recovery | The route rebuilds the production composition once, derives only trusted Cockpit `working` inputs, and calls the delivered composer |
 | 4 | ARO-04 — Bind Typed Overview Navigation | `agent:blocked` | ARO-03 plus delivered #4768 local Focus route and an optional local SoI destination |
-| 5 | ARO-05 — Validate Connected Overview and Focus Yggdrasil Evidence #4746 | `agent:blocked` | Merged stable #4834 source-owned Now fixtures plus delivered #4768 Focus API fixtures, then either an independently reviewed `yggdrasil-constrained-reuse.v1` exact-reuse receipt or a passing live Yggdrasil Design Handoff Receipt for novel, mixed, or unknown scope |
-| 6 | ARO-06 — Render the Read-Only Overview Shell | `agent:blocked` | Accepted ARO-05 design evidence and merged ARO-03/04 |
+| 5 | ARO-05 — Validate Connected Overview and Focus Yggdrasil Evidence #4746 | Delivered and closed after exact constrained-reuse receipt | Merged stable #4834 source-owned Now fixtures plus delivered #4768 Focus API fixtures, with independently reviewed `yggdrasil-constrained-reuse.v1` receipt |
+| 6 | ARO-06 — Render the Read-Only Overview Shell | Delivered by merged #4836 | Accepted ARO-05 design evidence and merged ARO-03/04 |
 | 7 | ARO-07 — Prove Overview Browser and Accessibility States | `agent:blocked` | ARO-06 merged at an exact testable SHA |
 | 8 | ARO-08 — Run the Read-Only Owner Pilot | `agent:blocked` | #4748 receipt, repaired pilot contract, VM-102 Dev System health/deploy receipts, #4747 selectors, receipt-sourced deployed URL/SHA, and disposable-state classification |
 
@@ -152,27 +153,28 @@ hub. ARO-01 is [#4742](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4742)
 withdrawal recorded by PR #4751; ARO-02 / [#4743](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4743)
 is superseded by that no-source decision, and ARO-03 / [#4744](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4744)
 is delivered as the no-candidate local projection route; its contract and route-test selection were
-reconciled by merged PR #4789. ARO-04 through ARO-08 remain
-[#4745](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4745) through
+reconciled by merged PR #4789. ARO-04, ARO-07, and ARO-08 remain
+[#4745](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4745), and
+[#4748](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4748) through
 [#4749](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4749) (`agent:blocked`). ARO-08 is a
 future executable production pilot only: its actual URL/SHA must be sourced later from #4747,
 #4748, and deployment receipts, and it must not imply that deployment or owner validation happened.
 The separate
 [Focus-route prerequisite #4768](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4768) is
-delivered by PR #4771. Connected handoff #4746 remains blocked until the delivered source-owned Now
-producer #4834 is merged stable and one applicable governed receipt passes independent review. This governance change
-does not accept #4746 or produce its receipt. GitHub owns backlog state; this directory owns the
-stable breakdown and validation path.
+delivered by PR #4771. Connected handoff #4746 is closed after accepting the exact constrained-reuse
+receipt for merged #4836; #4748 remains the later exact-ref proof at final post-merge `main`.
+GitHub owns backlog state; this directory owns the stable breakdown and validation path.
 
 Production transport prerequisite [#4841](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4841)
 is consumed only by the source-authorized connected shell
 [#4836](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4836) and does not itself deliver that shell.
-The #4836 candidate subtree is
+The merged #4836 subtree is
 `companion-ui/companion-app/companion_ui/workspace/devui_candidate`; its manifest binds the complete
 Git inventory, exact shipped Cockpit/token source objects, and closed transformations. Its
 Companion-owned page/assets repeat #4841 admission, preserve the exact two API GET allowlist, and
 carry no-store/CSP/no-egress/effect-free browser constraints. This ledger records candidate scope
-only; #4746 and #4833/#4842 remain the live pre-merge acceptance authorities.
+only as delivered repository scope; #4748 remains the exact-ref proof authority at final post-merge
+`main`, and #4749 remains the deployment/owner-pilot authority.
 
 ## Delivery evidence
 

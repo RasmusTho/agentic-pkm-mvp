@@ -67,9 +67,9 @@
   page/asset, or browser fallback. The #4836 candidate adds only Companion-owned
   `/devui/overview`, `/devui/focus?subject=...`, and `/devui/assets/*` presentation routes behind
   the same gateway admission. It does not add a FastAPI presentation route or widen the exact two
-  API GETs. The complete candidate asset inventory is Git-tree-bound by its
-  `yggdrasil-constrained-reuse.v1` manifest and remains candidate—not delivered—until its live
-  pre-merge design and exact-ref browser gates pass.
+API GETs. The complete delivered asset inventory is Git-tree-bound by its
+`yggdrasil-constrained-reuse.v1` manifest; production deployment and owner acceptance remain
+separate later gates.
 
 ## Control-action register
 
