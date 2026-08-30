@@ -5,6 +5,9 @@ description: "Convert retrospective learnings from BuilderOps LearningSignal rec
 
 # Learning To Issue
 
+When an intake is blocked or needs human, add one compatible `action:*` label and the
+`blocker_action.v1` receipt from `_shared/BLOCKER_ACTION_CONTRACT.md`.
+
 Convert retrospective learnings into bounded, verifiable GitHub Issues that match the repo's canonical issue contract.
 
 This is the maintenance-learning intake lane. It is distinct from `docs-to-issue` (which converts active SoT docs into product-feature backlog) and from `capture-learning` (which creates a BuilderOps `LearningSignal`).

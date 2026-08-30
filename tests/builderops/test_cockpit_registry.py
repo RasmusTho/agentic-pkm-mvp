@@ -124,6 +124,16 @@ def test_band_derivation_fail_closed(tmp_path: Path) -> None:
     assert flawed_item["why_now"] == "blocked: upstream"
 
 
+def test_registry_exposes_canonical_blocker_action_without_promoting_authority(tmp_path: Path) -> None:
+    store, db_path = _make_store(tmp_path)
+    store.upsert_task(_task(status="blocked", issue_number=71, sync_state={"labels": ["agent:blocked", "action:wait-dependency"]}))
+    payload = _registry(db_path, tmp_path)
+    item = _band(payload, "working")["items"][0]
+    assert item["blocker_action"] == "action:wait-dependency"
+    assert item["next_action"] is None
+    assert item["next_action_evidence"] == "issue comment blocker_action.v1; read-only projection"
+
+
 def test_chain_derivation_failure_does_not_expose_exception_details(
     tmp_path: Path,
     monkeypatch,

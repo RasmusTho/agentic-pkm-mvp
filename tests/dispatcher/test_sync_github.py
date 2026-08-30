@@ -211,6 +211,13 @@ def test_normalize_github_issue_blocked_status() -> None:
     assert task.priority == "med"
 
 
+def test_essential_source_remains_ready_only_when_action_labels_exist() -> None:
+    source = inspect.getsource(GhCliIssueSource.list_issues)
+    assert "labels=agent:ready" in source
+    task = normalize_github_issue({**SAMPLE_ISSUE_HIGH, "labels": [{"name": "agent:ready"}, {"name": "action:wait-dependency"}]}, REPO)
+    assert task.status == "ready"
+
+
 def test_normalize_github_issue_low_priority() -> None:
     task = normalize_github_issue(SAMPLE_ISSUE_LOW, REPO)
     assert task.priority == "low"

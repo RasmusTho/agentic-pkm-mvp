@@ -89,6 +89,7 @@ BANDS: tuple[tuple[str, str], ...] = (
 # that used to live here is gone, because "ready" is not "forgotten" — a fresh
 # unclaimed ready issue is in progress, and forgotten requires a stall.
 _NEEDS_HUMAN_LABEL = "agent:needs-human"
+_ACTION_PREFIX = "action:"
 
 # Locked rung order for the evidence spine.
 RUNG_ORDER: tuple[str, ...] = (
@@ -432,6 +433,12 @@ def _sync_labels(sync_state: str | None) -> list[str]:
     return []
 
 
+def _blocker_action(labels: list[str]) -> str | None:
+    """Expose a subtype only; the live Issue remains its authority."""
+    actions = sorted(label for label in labels if label.startswith(_ACTION_PREFIX))
+    return actions[0] if len(actions) == 1 else None
+
+
 def _sync_url(sync_state: str | None) -> str | None:
     if not sync_state:
         return None
@@ -753,6 +760,9 @@ def _build_item(
         "claimed_by": task.get("claimed_by"),
         "linked_pr": linked_pr,
         "labels": labels,
+        "blocker_action": _blocker_action(labels),
+        "next_action": None,
+        "next_action_evidence": "issue comment blocker_action.v1; read-only projection",
         # BOPS-COCKPIT-03 (#4450, decision Q5): labels/url are mirror-derived
         # fields; they name the mirror's own `sync_state.last_pull_at`
         # watermark here, never the dispatcher-store SQLite read instant the

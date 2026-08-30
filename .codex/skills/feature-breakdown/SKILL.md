@@ -5,6 +5,9 @@ description: "Break a docs-defined capability into a specification directory wit
 
 # Feature Breakdown
 
+When a generated child is non-active, assign its compatible `action:*` subtype and
+`blocker_action.v1` receipt from `_shared/BLOCKER_ACTION_CONTRACT.md`, never a coarse state alone.
+
 Use this skill when a docs-defined capability is too large for one implementation issue or when the work needs post-merge validation before owner docs should claim it as supported.
 
 ## Repository target

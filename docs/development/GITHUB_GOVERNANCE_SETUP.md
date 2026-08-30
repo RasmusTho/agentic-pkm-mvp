@@ -62,6 +62,16 @@ Keep only these labels for the delivery control plane taxonomy:
 - `agent:blocked`
 - `agent:needs-human`
 - `agent:in-progress`
+- `action:repair-contract`
+- `action:wait-dependency`
+- `action:restore-environment`
+- `action:wait-external`
+- `action:review-at`
+- `action:human-decision`
+- `action:human-authorization`
+- `action:human-access`
+- `action:human-operation`
+- `action:human-acceptance`
 - `state:known-defect`
 - `lane:governance`
 
@@ -79,6 +89,11 @@ second registry to orphan committed defect authority.
 `lane:governance` is the one additive lane label. Apply it to governance-lane Issues and PRs in
 addition to their canonical type, priority, and agent-state labels; never apply it to the Known
 Defects registry container itself.
+
+An open `agent:blocked` Issue must have exactly one blocked `action:*` label; an open
+`agent:needs-human` Issue must have exactly one human `action:*` label. The corresponding
+`blocker_action.v1` Issue comment names owner, next action, evidence, unblock condition and optional
+review trigger. Status remains a projection; action labels never make an Issue pickup eligible.
 
 ## Project contract
 

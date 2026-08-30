@@ -5,6 +5,9 @@ description: "Yggdrasil profile for owner escalations: use the repo-local decisi
 
 # Owner Decision Brief
 
+An owner escalation applies exactly one compatible `action:human-*` label and the shared
+`blocker_action.v1` receipt (`_shared/BLOCKER_ACTION_CONTRACT.md`); it is not a generic blocker.
+
 This is a thin Yggdrasil profile for the repo-local `decision-quality` skill. It applies whenever a
 repository workflow is about to ask the owner for a decision: an `agent:needs-human` label, an
 operator acknowledgment, an inline question, or an open question in an Issue or PR.
