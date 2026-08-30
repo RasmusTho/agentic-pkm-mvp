@@ -97,7 +97,8 @@ The final outcome is reduced truthful reconstruction, which repository tests alo
 - Human knowledge impact: none
 - Memory impact: none
 - Retrieval/context impact: receipt-sourced production URL with optional disposable test-only state
-- Sync/deployment impact: consumes an existing Demerzel production deployment receipt; performs no deployment
+- Sync/deployment impact: consumes existing VM-102 Dev System qualification/deployment/health receipts
+  for `devui_projection` and its governed external read dependencies; performs no deployment
 - External boundary impact: named owner walkthrough
 - New or changed contract: final owner-pilot receipt
 - Owner-doc impact: supplies evidence for later current-state reconciliation
