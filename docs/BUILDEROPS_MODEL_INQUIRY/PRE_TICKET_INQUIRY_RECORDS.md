@@ -24,7 +24,7 @@ GitHub Issue during start or resume.
 ## Concretely
 
 ```bash
-scripts/builderops_cli.sh builderops inquiry start --question-file question.md --workflow fable-gpt-architecture --json
+scripts/builderops_cli.sh builderops inquiry start --question-file question.md --workflow governed-model-inquiry --acceptance-mode single_target --json
 scripts/builderops_cli.sh builderops inquiry trace inq_20260709_example --json
 scripts/builderops_cli.sh builderops inquiry resume inq_20260709_example --json
 ```

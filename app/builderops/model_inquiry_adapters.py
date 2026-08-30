@@ -20,6 +20,9 @@ import requests  # type: ignore[import-untyped]  # third-party lib ships no type
 from app.builderops.model_access_resolver import (
     BuilderModelAccessResolver,
     DeclaredCredentialUnavailableError,
+    MODEL_INQUIRY_OPERATIONAL_TRANSPORT,
+    MODEL_INQUIRY_RESOLUTION_GROUP,
+    MODEL_INQUIRY_ROLE,
     ModelAccessResolutionError,
 )
 from app.builderops.model_inquiry_contract import canonical_hash, canonical_json
@@ -36,8 +39,10 @@ from llm_contract import (
 )
 
 INQUIRY_INTENT_CONFIG_ENV = "BUILDEROPS_INQUIRY_ROLE_INTENT_JSON"
-INQUIRY_INTENT_SCHEMA = "builderops.model-inquiry-role-intent.v1"
-ROLE_NAMES = ("fable", "gpt_codex")
+INQUIRY_INTENT_SCHEMA = "builderops.model-inquiry-intent.v2"
+PERSPECTIVE_NAMES = ("synthesis", "verification")
+LEGACY_ROLES = ("fable", "gpt_codex")
+ACCEPTANCE_MODES = frozenset({"single_target"})
 SUBSCRIPTION_ADAPTER_TIMEOUT_EXIT_CODE = 124
 SUBSCRIPTION_ADAPTER_SESSION_EXPIRED_EXIT_CODE = 125
 CLEANUP_TIMEOUT_SECONDS = 2.0
@@ -88,7 +93,16 @@ _INTENT_FIELDS = frozenset(
     }
 )
 _CONFIG_FIELDS = frozenset(
-    {"schema", "runtime", "channel", "consumer", "resolution_group_id", "roles"}
+    {
+        "schema",
+        "runtime",
+        "channel",
+        "consumer",
+        "acceptance_mode",
+        "capability_tier",
+        "perspectives",
+        "target_intent",
+    }
 )
 
 
@@ -343,13 +357,15 @@ class HttpModelAdapter:
 
 @dataclass(frozen=True)
 class InquiryRoleIntentConfig:
-    """One parsed, provider-free inquiry-role intent configuration."""
+    """One parsed, provider-free single-target inquiry configuration."""
 
     runtime: str
     channel: str
     consumer: str
-    resolution_group_id: str
-    requests: tuple[ModelResolutionRequest, ...]
+    acceptance_mode: str
+    capability_tier: str
+    perspectives: tuple[str, ...]
+    request: ModelResolutionRequest
 
 
 def load_inquiry_intent(
@@ -357,8 +373,8 @@ def load_inquiry_intent(
 ) -> InquiryRoleIntentConfig | None:
     """Parse the value-free inquiry-role intent configuration, or return None.
 
-    The configuration declares only the seven neutral intent fields per role,
-    the role independence requirement, and channel/consumer references. Provider,
+    The configuration declares only one capability, acceptance mode, ordered
+    perspectives, one neutral target intent, and channel/consumer references. Provider,
     model, transport target, credential value, environment-variable name, and
     host references are structurally refused here, before any resolution runs.
     """
@@ -382,38 +398,40 @@ def parse_inquiry_intent(payload: Any) -> InquiryRoleIntentConfig:
         raise BuilderOpsValidationError("inquiry role intent fields are invalid")
     if payload["schema"] != INQUIRY_INTENT_SCHEMA:
         raise BuilderOpsValidationError("inquiry role intent schema is unsupported")
-    roles = payload["roles"]
-    if not isinstance(roles, dict) or set(roles) != set(ROLE_NAMES):
+    acceptance_mode = str(payload["acceptance_mode"])
+    if acceptance_mode not in ACCEPTANCE_MODES:
         raise BuilderOpsValidationError(
-            "inquiry role intent must declare exactly the independent review roles"
+            "inquiry intent must declare the supported explicit acceptance mode"
         )
-    group_id = str(payload["resolution_group_id"])
-    requests: list[ModelResolutionRequest] = []
-    for role in ROLE_NAMES:
-        intent_payload = roles[role]
-        if not isinstance(intent_payload, dict) or set(intent_payload) != _INTENT_FIELDS:
-            raise BuilderOpsValidationError(
-                f"inquiry role intent for {role} must declare exactly the neutral fields"
-            )
-        try:
-            intent = ModelAccessIntent(**intent_payload)
-            requests.append(
-                ModelResolutionRequest(
-                    intent=intent,
-                    role_profile=role,
-                    resolution_group_id=group_id,
-                )
-            )
-        except ValueError as exc:
-            raise BuilderOpsValidationError(
-                f"inquiry role intent for {role} is not a valid neutral intent"
-            ) from exc
+    capability_tier = str(payload["capability_tier"])
+    perspectives = payload["perspectives"]
+    if capability_tier != "sol" or perspectives != list(PERSPECTIVE_NAMES):
+        raise BuilderOpsValidationError(
+            "inquiry intent must bind configured Sol and the ordered neutral perspectives"
+        )
+    intent_payload = payload["target_intent"]
+    if not isinstance(intent_payload, dict) or set(intent_payload) != _INTENT_FIELDS:
+        raise BuilderOpsValidationError(
+            "inquiry target intent must declare exactly the neutral fields"
+        )
+    try:
+        request = ModelResolutionRequest(
+            intent=ModelAccessIntent(**intent_payload),
+            role_profile=MODEL_INQUIRY_ROLE,
+            resolution_group_id=MODEL_INQUIRY_RESOLUTION_GROUP,
+        )
+    except ValueError as exc:
+        raise BuilderOpsValidationError(
+            "inquiry target intent is not a valid neutral intent"
+        ) from exc
     return InquiryRoleIntentConfig(
         runtime=str(payload["runtime"]),
         channel=str(payload["channel"]),
         consumer=str(payload["consumer"]),
-        resolution_group_id=group_id,
-        requests=tuple(requests),
+        acceptance_mode=acceptance_mode,
+        capability_tier=capability_tier,
+        perspectives=tuple(perspectives),
+        request=request,
     )
 
 
@@ -432,24 +450,33 @@ def _reject_forbidden_intent_keys(value: Any) -> None:
             _reject_forbidden_intent_keys(nested)
 
 
-def resolve_inquiry_roles(
+def resolve_inquiry_target(
     env: Mapping[str, str] | None = None,
     *,
     resolver: BuilderModelAccessResolver | None = None,
-) -> tuple[BuilderModelAccessResolver, dict[str, ResolvedModelAccess]]:
-    """Resolve both inquiry roles as one group through Builder census policy."""
+) -> tuple[BuilderModelAccessResolver, InquiryRoleIntentConfig, ResolvedModelAccess]:
+    """Resolve the configured inquiry capability once through Builder census policy."""
     source = dict(os.environ if env is None else env)
     config = load_inquiry_intent(source)
     if config is None:
-        raise AdapterUnavailableError("inquiry role intent is not configured")
+        raise AdapterUnavailableError("inquiry intent is not configured")
     selected = resolver or BuilderModelAccessResolver.from_declared_sources(env=source)
-    resolutions = selected.resolve_group(
-        config.requests,
+    profile = selected.model_inquiry_profile(config.channel)
+    if (
+        profile.acceptance_mode != config.acceptance_mode
+        or profile.capability_tier != config.capability_tier
+        or tuple(profile.perspectives) != config.perspectives
+    ):
+        raise ModelAccessResolutionError(
+            "inquiry intent does not match the configured Model Inquiry profile"
+        )
+    resolution = selected.resolve(
+        config.request,
         runtime=config.runtime,
         channel=config.channel,
         consumer=config.consumer,
     )
-    return selected, {resolution.request.role_profile: resolution for resolution in resolutions}
+    return selected, config, resolution
 
 
 def load_adapter_descriptors(
@@ -459,27 +486,52 @@ def load_adapter_descriptors(
 ) -> dict[str, dict[str, Any]]:
     """Project the resolved role targets into sanitized, value-free descriptors."""
     source = dict(os.environ if env is None else env)
+    if load_inquiry_intent(source) is None:
+        return {
+            perspective: {
+                "role": perspective,
+                "available": False,
+                "reason": "inquiry intent not configured",
+            }
+            for perspective in PERSPECTIVE_NAMES
+        }
     try:
-        selected, resolutions = resolve_inquiry_roles(source, resolver=resolver)
+        selected, config, resolution = resolve_inquiry_target(source, resolver=resolver)
     except AdapterUnavailableError:
         return {
-            role: {"role": role, "available": False, "reason": "inquiry role intent not configured"}
-            for role in ROLE_NAMES
+            perspective: {
+                "role": perspective,
+                "available": False,
+                "reason": "inquiry intent not configured",
+            }
+            for perspective in PERSPECTIVE_NAMES
         }
     except ModelAccessResolutionError as exc:
-        return {role: {"role": role, "available": False, "reason": str(exc)} for role in ROLE_NAMES}
+        return {
+            perspective: {
+                "role": perspective,
+                "available": False,
+                "reason": str(exc),
+            }
+            for perspective in PERSPECTIVE_NAMES
+        }
     descriptors: dict[str, dict[str, Any]] = {}
-    for role in ROLE_NAMES:
-        resolution = resolutions[role]
+    for perspective in config.perspectives:
         try:
             endpoint = selected.endpoint_for(resolution)
         except ModelAccessResolutionError as exc:
-            descriptors[role] = {"role": role, "available": False, "reason": str(exc)}
+            descriptors[perspective] = {
+                "role": perspective,
+                "available": False,
+                "reason": str(exc),
+            }
             continue
-        descriptors[role] = {
-            "role": role,
+        descriptors[perspective] = {
+            "role": perspective,
             "available": True,
-            "role_identity": resolution.request.role_profile,
+            "role_identity": perspective,
+            "acceptance_mode": config.acceptance_mode,
+            "capability_tier": config.capability_tier,
             "kind": HTTP_ADAPTER_KIND,
             "adapter_id": resolution.adapter_id,
             "provider": resolution.provider,
@@ -494,30 +546,15 @@ def load_adapter_descriptors(
                 }
             ),
         }
-        if descriptors[role]["role_identity"] != role:
-            descriptors[role]["available"] = False
-            descriptors[role]["reason"] = f"role_identity must explicitly attest {role}"
-        if str(descriptors[role]["provider"]).lower() in {"mock", "fake", "deterministic"}:
-            descriptors[role]["available"] = False
-            descriptors[role]["reason"] = "provider-enabled roles cannot use a mock identity"
-    available_ids = [
-        str(descriptors[role].get("adapter_id"))
-        for role in ROLE_NAMES
-        if descriptors[role].get("available")
-    ]
-    if len(available_ids) != len(set(available_ids)):
-        for role in ROLE_NAMES:
-            descriptors[role]["available"] = False
-            descriptors[role]["reason"] = "role adapters must use distinct adapter_id values"
-    fingerprints = [
-        str(descriptors[role].get("target_fingerprint"))
-        for role in ROLE_NAMES
-        if descriptors[role].get("available")
-    ]
-    if len(fingerprints) != len(set(fingerprints)):
-        for role in ROLE_NAMES:
-            descriptors[role]["available"] = False
-            descriptors[role]["reason"] = "role adapters must use distinct runtime targets"
+        if str(descriptors[perspective]["provider"]).lower() in {
+            "mock",
+            "fake",
+            "deterministic",
+        }:
+            descriptors[perspective]["available"] = False
+            descriptors[perspective]["reason"] = (
+                "provider-enabled perspectives cannot use a mock identity"
+            )
     return descriptors
 
 
@@ -534,39 +571,33 @@ def load_adapters(
     subscription CLI, another provider, or a mock identity.
     """
     source = dict(os.environ if env is None else env)
-    selected, resolutions = resolve_inquiry_roles(source, resolver=resolver)
+    selected, config, resolution = resolve_inquiry_target(source, resolver=resolver)
     failure_ref = source.get(HOST_SECRET_BOOTSTRAP_FAILURE_REF, "").strip()
     if failure_ref:
-        matches = [
-            resolution
-            for resolution in resolutions.values()
-            if resolution.credential_identity_ref == failure_ref
-        ]
-        if len(matches) != 1:
+        if resolution.credential_identity_ref != failure_ref:
             raise AdapterUnavailableError(
-                "host secret bootstrap failure handoff does not name one resolved role"
+                "host secret bootstrap failure handoff does not name the resolved target"
             )
         raise CredentialUnavailableError(
-            adapter_id=matches[0].adapter_id,
+            adapter_id=resolution.adapter_id,
             credential_identity_ref=failure_ref,
         )
     descriptors = load_adapter_descriptors(source, resolver=selected)
     adapters: dict[str, ModelTurnAdapter] = {}
-    for role in ROLE_NAMES:
-        descriptor = descriptors[role]
+    try:
+        api_key = selected.credential_value(resolution)
+    except DeclaredCredentialUnavailableError as exc:
+        raise CredentialUnavailableError(
+            adapter_id=resolution.adapter_id,
+            credential_identity_ref=exc.credential_identity_ref,
+        ) from None
+    for perspective in config.perspectives:
+        descriptor = descriptors[perspective]
         if not descriptor.get("available"):
             raise AdapterUnavailableError(
-                f"{role}: {descriptor.get('reason', 'adapter unavailable')}"
+                f"{perspective}: {descriptor.get('reason', 'adapter unavailable')}"
             )
-        resolution = resolutions[role]
-        try:
-            api_key = selected.credential_value(resolution)
-        except DeclaredCredentialUnavailableError as exc:
-            raise CredentialUnavailableError(
-                adapter_id=resolution.adapter_id,
-                credential_identity_ref=exc.credential_identity_ref,
-            ) from None
-        adapters[role] = HttpModelAdapter(
+        adapters[perspective] = HttpModelAdapter(
             adapter_id=resolution.adapter_id,
             provider=resolution.provider,
             model=resolution.model,
@@ -592,8 +623,10 @@ def operational_subscription_requested(env: Mapping[str, str] | None = None) -> 
 
 def load_operational_subscription_adapters(
     env: Mapping[str, str] | None = None,
+    *,
+    resolver: BuilderModelAccessResolver | None = None,
 ) -> dict[str, ModelTurnAdapter]:
-    """Build the fixed Model Inquiry-only host subscription adapter pair."""
+    """Build both perspectives over the one resolved host subscription target."""
     source = dict(os.environ if env is None else env)
     if not operational_subscription_requested(source):
         raise BuilderOpsValidationError("operational subscription mode is not enabled")
@@ -603,20 +636,31 @@ def load_operational_subscription_adapters(
     bridge = Path(__file__).resolve().parents[2] / "scripts" / "model_inquiry_subscription_adapter.py"
     if not bridge.is_file():
         raise AdapterUnavailableError("operational subscription bridge is unavailable")
-    targets = {
-        "fable": ("anthropic", "claude-fable-5"),
-        "gpt_codex": ("openai", "gpt-5.6-sol"),
-    }
+    selected, config, resolution = resolve_inquiry_target(source, resolver=resolver)
+    if (
+        selected.model_inquiry_profile(config.channel).operational_transport
+        != MODEL_INQUIRY_OPERATIONAL_TRANSPORT
+    ):
+        raise ModelAccessResolutionError(
+            "Model Inquiry operational transport is not compatible with the subscription bridge"
+        )
     return {
-        role: LocalCommandAdapter(
-            adapter_id=f"{role}-subscription",
-            provider=provider,
-            model=model,
-            argv=(sys.executable, str(bridge), "--role", role),
+        perspective: LocalCommandAdapter(
+            adapter_id=f"{resolution.adapter_id}-subscription",
+            provider=resolution.provider,
+            model=resolution.model,
+            argv=(
+                sys.executable,
+                str(bridge),
+                "--perspective",
+                perspective,
+                "--model",
+                resolution.model,
+            ),
             timeout_seconds=MODEL_INQUIRY_SUBSCRIPTION_TIMEOUT_SECONDS,
             environment={"HOME": home},
         )
-        for role, (provider, model) in targets.items()
+        for perspective in config.perspectives
     }
 
 
@@ -882,6 +926,7 @@ __all__ = [
     "ADAPTER_FAILURE_CLASSES",
     "INQUIRY_INTENT_CONFIG_ENV",
     "INQUIRY_INTENT_SCHEMA",
+    "PERSPECTIVE_NAMES",
     "AdapterExecutionError",
     "AdapterResult",
     "AdapterUnavailableError",
@@ -897,6 +942,6 @@ __all__ = [
     "load_adapters",
     "load_inquiry_intent",
     "parse_inquiry_intent",
-    "resolve_inquiry_roles",
+    "resolve_inquiry_target",
     "sanitized_adapter_identity",
 ]

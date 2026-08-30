@@ -24,6 +24,7 @@ from app.builderops.model_inquiry_adapters import (
     ScriptedAdapter,
     load_adapter_descriptors,
     load_adapters,
+    load_operational_subscription_adapters,
     sanitized_adapter_failure,
 )
 from app.builderops.models import BuilderOpsValidationError
@@ -62,6 +63,69 @@ def _response() -> dict[str, object]:
         "reviewed_artifact_refs": [],
         "accepted_artifact_hash": None,
     }
+
+
+def test_single_target_intent_uses_neutral_perspectives() -> None:
+    assert COMMITTED_INTENT_CONFIG["acceptance_mode"] == "single_target"
+    assert COMMITTED_INTENT_CONFIG["capability_tier"] == "sol"
+    assert COMMITTED_INTENT_CONFIG["perspectives"] == ["synthesis", "verification"]
+    assert "roles" not in COMMITTED_INTENT_CONFIG
+
+    descriptors = load_adapter_descriptors(intent_env())
+
+    assert set(descriptors) == {"synthesis", "verification"}
+    assert {item["role_identity"] for item in descriptors.values()} == {
+        "synthesis",
+        "verification",
+    }
+    assert {item["target_fingerprint"] for item in descriptors.values()}.__len__() == 1
+    assert {item["provider"] for item in descriptors.values()}.__len__() == 1
+    assert {item["model"] for item in descriptors.values()}.__len__() == 1
+    assert all(item["acceptance_mode"] == "single_target" for item in descriptors.values())
+
+
+def test_subscription_adapter_uses_resolved_target_profile() -> None:
+    env = {
+        **intent_env(),
+        "BUILDEROPS_MODEL_INQUIRY_OPERATIONAL_SUBSCRIPTION": "1",
+        "HOME": "/tmp/model-inquiry-home",
+    }
+    descriptors = load_adapter_descriptors(env)
+    adapters = load_operational_subscription_adapters(env)
+
+    assert set(adapters) == {"synthesis", "verification"}
+    for perspective, adapter in adapters.items():
+        descriptor = descriptors[perspective]
+        assert (adapter.provider, adapter.model) == (
+            descriptor["provider"],
+            descriptor["model"],
+        )
+        argv = list(adapter.argv)
+        assert argv[argv.index("--model") + 1] == descriptor["model"]
+        assert argv[argv.index("--perspective") + 1] == perspective
+        assert "--role" not in argv
+        assert not any(value in {"fable", "gpt_codex"} for value in argv)
+
+
+def test_model_inquiry_has_no_hardcoded_target_selection() -> None:
+    scoped = [
+        Path("app/builderops/model_inquiry_adapters.py"),
+        Path("app/builderops/model_inquiry_contract.py"),
+        Path("app/builderops/model_inquiry_runner.py"),
+        Path("app/builderops/model_inquiry_promotion.py"),
+        Path("scripts/model_inquiry_subscription_adapter.py"),
+        Path("scripts/start_model_inquiry.py"),
+        COMMITTED_INTENT_PATH,
+    ]
+    joined = "\n".join(path.read_text(encoding="utf-8") for path in scoped)
+
+    assert "claude-fable-5" not in joined
+    assert "gpt-5.6-sol" not in joined
+    bridge = Path("scripts/model_inquiry_subscription_adapter.py").read_text(
+        encoding="utf-8"
+    )
+    assert 'if role == "fable"' not in bridge
+    assert 'if role == "gpt_codex"' not in bridge
 
 
 def test_local_command_adapter_is_bounded_and_secret_safe(tmp_path: Path) -> None:
@@ -140,7 +204,7 @@ def test_local_command_adapter_is_bounded_and_secret_safe(tmp_path: Path) -> Non
         model="configured-model",
         endpoint="https://api.anthropic.com/v1/messages",
         api_key="credential-sentinel",
-        intent=ModelAccessIntent(**COMMITTED_INTENT_CONFIG["roles"]["fable"]),
+        intent=ModelAccessIntent(**COMMITTED_INTENT_CONFIG["target_intent"]),
     )
     assert "credential-sentinel" not in json.dumps(
         adapters_module.sanitized_adapter_identity(http_adapter)
@@ -382,7 +446,7 @@ def test_local_command_adapter_maps_subscription_timeout_exit_to_timeout() -> No
     assert raised.value.exit_code == 124
 
 
-def test_provider_enabled_roles_require_distinct_non_mock_attestation(
+def test_single_target_requires_non_mock_attestation(
     tmp_path: Path,
 ) -> None:
     mock_resolver = resolver_for_targets(
@@ -393,25 +457,9 @@ def test_provider_enabled_roles_require_distinct_non_mock_attestation(
     assert [item["available"] for item in mocked.values()] == [False, False]
     assert all("mock" in item["reason"] for item in mocked.values())
 
-    collided_resolver = resolver_for_targets(
-        tmp_path / "collided",
-        {
-            "fable": ("anthropic", "claude-fable-5"),
-            "gpt_codex": ("anthropic", "claude-fable-5"),
-        },
-    )
-    collided = load_adapter_descriptors(intent_env(), resolver=collided_resolver)
-    assert [item["available"] for item in collided.values()] == [False, False]
-    assert all("distinct_effective_target" in item["reason"] for item in collided.values())
-    with pytest.raises(BuilderOpsValidationError, match="distinct_effective_target"):
-        load_adapters(intent_env(), resolver=collided_resolver)
-
     resolved = load_adapter_descriptors(intent_env())
-    assert resolved["fable"]["adapter_id"] != resolved["gpt_codex"]["adapter_id"]
-    assert (
-        resolved["fable"]["target_fingerprint"]
-        != resolved["gpt_codex"]["target_fingerprint"]
-    )
+    assert {item["adapter_id"] for item in resolved.values()}.__len__() == 1
+    assert {item["target_fingerprint"] for item in resolved.values()}.__len__() == 1
 
 
 def test_role_credentials_resolve_through_the_host_secret_contract(
@@ -419,25 +467,23 @@ def test_role_credentials_resolve_through_the_host_secret_contract(
 ) -> None:
     contract = load_host_secret_contract(CONTRACT_PATH)
     descriptors = load_adapter_descriptors(intent_env())
-    for role in ("fable", "gpt_codex"):
-        assert contract.required_secrets_for_role(
-            consumer="builderops-model-inquiry", role=role
-        ) == (descriptors[role]["credential_identity_ref"],)
+    assert contract.required_secrets_for_role(
+        consumer="builderops-model-inquiry", role="model_inquiry"
+    ) == (descriptors["synthesis"]["credential_identity_ref"],)
 
     secret_file = runtime_secret_file(tmp_path)
     adapters = load_adapters(
         {**intent_env(), HOST_SECRET_RUNTIME_ENV_FILE: str(secret_file)}
     )
-    assert set(adapters) == {"fable", "gpt_codex"}
-    for role, binding in (("fable", "ANTHROPIC_API_KEY"), ("gpt_codex", "OPENAI_API_KEY")):
-        adapter = adapters[role]
+    assert set(adapters) == {"synthesis", "verification"}
+    for adapter in adapters.values():
         assert isinstance(adapter, HttpModelAdapter)
-        assert adapter.api_key == DECLARED_TEST_CREDENTIALS[binding]
+        assert adapter.api_key == DECLARED_TEST_CREDENTIALS["OPENAI_API_KEY"]
 
     # The same values in ambient process environment are not a credential source.
     with pytest.raises(CredentialUnavailableError) as ambient:
         load_adapters({**intent_env(), **DECLARED_TEST_CREDENTIALS})
-    assert ambient.value.credential_identity_ref == "anthropic.api-key"
+    assert ambient.value.credential_identity_ref == "openai.api-key"
     assert ambient.value.failure_class == "credential_unavailable"
 
     # A malformed declared value fails closed rather than reaching a provider.
@@ -447,13 +493,13 @@ def test_role_credentials_resolve_through_the_host_secret_contract(
     )
     with pytest.raises(CredentialUnavailableError) as invalid:
         load_adapters({**intent_env(), HOST_SECRET_RUNTIME_ENV_FILE: str(malformed)})
-    assert invalid.value.credential_identity_ref == "anthropic.api-key"
+    assert invalid.value.credential_identity_ref == "openai.api-key"
 
     # Caller configuration may not name a credential, its environment binding,
     # a provider, a model, or a transport target.
     for forbidden in ("api_key_env", "provider", "model", "endpoint", "argv"):
         payload = intent_config()
-        payload["roles"]["fable"][forbidden] = "declared-elsewhere"
+        payload["target_intent"][forbidden] = "declared-elsewhere"
         with pytest.raises(BuilderOpsValidationError):
             load_adapter_descriptors(
                 {INQUIRY_INTENT_CONFIG_ENV: json.dumps(payload)}
@@ -491,13 +537,11 @@ def test_provider_payloads_preserve_declared_xhigh_effort(
     adapters = load_adapters(provisioned_env(tmp_path))
     request = {"system_prompt": "bounded", "phase": "draft"}
 
-    adapters["fable"].execute(request)
-    adapters["gpt_codex"].execute(request)
+    adapters["synthesis"].execute(request)
+    adapters["verification"].execute(request)
 
-    anthropic = next(body for body in posted if "output_config" in body)
-    openai = next(body for body in posted if "reasoning_effort" in body)
-    assert anthropic["output_config"] == {"effort": "xhigh"}
-    assert openai["reasoning_effort"] == "xhigh"
+    assert len(posted) == 2
+    assert all(body["reasoning_effort"] == "xhigh" for body in posted)
 
 
 @pytest.mark.parametrize(
@@ -515,14 +559,14 @@ def test_unsupported_model_inquiry_intent_is_refused_before_adapter_creation(
     reason: str,
 ) -> None:
     payload = intent_config()
-    payload["roles"]["fable"][field] = value
+    payload["target_intent"][field] = value
 
     descriptors = load_adapter_descriptors(
         {INQUIRY_INTENT_CONFIG_ENV: json.dumps(payload)}
     )
 
-    assert not descriptors["fable"]["available"]
-    assert reason in descriptors["fable"]["reason"]
+    assert not descriptors["synthesis"]["available"]
+    assert reason in descriptors["synthesis"]["reason"]
 
 
 def test_production_resolver_ignores_ambient_census_override(
@@ -536,8 +580,7 @@ def test_production_resolver_ignores_ambient_census_override(
     monkeypatch.setenv("PROVIDER_CENSUS_PATH", str(ambient))
 
     production = load_adapter_descriptors(intent_env())
-    assert production["fable"]["provider"] == "anthropic"
-    assert production["gpt_codex"]["provider"] == "openai"
+    assert {item["provider"] for item in production.values()} == {"openai"}
 
     # Tests retain an explicit dependency-injection seam; ambient state is
     # never that seam.
@@ -571,9 +614,8 @@ def test_committed_inquiry_intent_config_is_provider_free_and_value_free() -> No
         "command",
     ):
         assert forbidden not in lowered, forbidden
-    assert set(COMMITTED_INTENT_CONFIG["roles"]) == {"fable", "gpt_codex"}
-    for intent in COMMITTED_INTENT_CONFIG["roles"].values():
-        assert set(intent) == {
+    intent = COMMITTED_INTENT_CONFIG["target_intent"]
+    assert set(intent) == {
             "capability_tier",
             "reasoning_effort",
             "determinism_required",
@@ -582,17 +624,14 @@ def test_committed_inquiry_intent_config_is_provider_free_and_value_free() -> No
             "fallback_requirement",
             "side_effect_class",
         }
-        assert intent["independence"] == "distinct_effective_target"
-        assert intent["fallback_requirement"] == "fallback_forbidden"
+    assert intent["independence"] == "none"
+    assert intent["fallback_requirement"] == "fallback_forbidden"
 
     # It validates through the production resolver path and yields the declared
     # census targets, which the committed document itself never names.
     descriptors = load_adapter_descriptors(intent_env())
-    assert [descriptors[role]["available"] for role in ("fable", "gpt_codex")] == [
-        True,
-        True,
-    ]
-    assert descriptors["fable"]["provider"] != descriptors["gpt_codex"]["provider"]
+    assert [descriptors[role]["available"] for role in ("synthesis", "verification")] == [True, True]
+    assert {descriptor["provider"] for descriptor in descriptors.values()} == {"openai"}
     assert all(
         descriptor["credential_identity_ref"].endswith(".api-key")
         for descriptor in descriptors.values()
@@ -649,7 +688,7 @@ def test_production_http_adapters_use_extended_xhigh_deadline(
 ) -> None:
     adapters = load_adapters(provisioned_env(tmp_path / "secrets"))
 
-    assert set(adapters) == {"fable", "gpt_codex"}
+    assert set(adapters) == {"synthesis", "verification"}
     assert all(isinstance(adapter, HttpModelAdapter) for adapter in adapters.values())
     assert {
         adapter.timeout_seconds

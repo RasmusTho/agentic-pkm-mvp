@@ -21,10 +21,11 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from app.builderops.model_inquiry_adapters import (  # noqa: E402
-    ROLE_NAMES,
     AdapterExecutionError,
     AdapterUnavailableError,
     CredentialUnavailableError,
+    LEGACY_ROLES,
+    PERSPECTIVE_NAMES,
     load_adapters,
 )
 from app.builderops.models import BuilderOpsValidationError  # noqa: E402
@@ -32,6 +33,8 @@ from app.builderops.models import BuilderOpsValidationError  # noqa: E402
 CREDENTIAL_UNAVAILABLE_EXIT_CODE = 1
 CONFIGURATION_EXIT_CODE = 2
 EXECUTION_EXIT_CODE = 3
+ROLE_NAMES = (*PERSPECTIVE_NAMES, *LEGACY_ROLES)
+LEGACY_ROLE_ALIASES = dict(zip(LEGACY_ROLES, PERSPECTIVE_NAMES))
 
 
 def run_role(role: str, request: object) -> str:
@@ -41,7 +44,8 @@ def run_role(role: str, request: object) -> str:
     if not isinstance(request, dict):
         raise BuilderOpsValidationError("role adapter request must be a JSON object")
     adapters = load_adapters()
-    return adapters[role].execute(request).response_text
+    perspective = LEGACY_ROLE_ALIASES.get(role, role)
+    return adapters[perspective].execute(request).response_text
 
 
 def _parser() -> argparse.ArgumentParser:

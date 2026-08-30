@@ -90,13 +90,15 @@ class BuilderExecutionProfile(TierMapping):
     reasoning_effort: Literal["minimal", "low", "medium", "high", "xhigh"]
 
 
-class RoleProfile(TierMapping):
+class ModelInquiryProfile(BaseModel):
+    """Provider-free acceptance and capability binding for Model Inquiry."""
+
     model_config = ConfigDict(extra="forbid")
 
-    role: str = Field(min_length=1)
-    capability_tier: str = Field(min_length=1)
-    credential_identifier: str = Field(min_length=1)
-    resolution_group: str = Field(min_length=1)
+    acceptance_mode: Literal["single_target"]
+    capability_tier: Literal["sol"]
+    perspectives: list[Literal["synthesis", "verification"]]
+    operational_transport: Literal["codex_subscription"]
 
 
 class DesignAgentProfile(TierMapping):
@@ -108,13 +110,6 @@ class DesignAgentProfile(TierMapping):
     credential_identifier: str = Field(min_length=1)
 
 
-class ResolutionGroup(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    id: str = Field(min_length=1)
-    independence: Literal["distinct_effective_target"]
-
-
 class RuntimeChannelMappings(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -123,11 +118,10 @@ class RuntimeChannelMappings(BaseModel):
     builder_execution: dict[str, dict[str, BuilderExecutionProfile]] = Field(
         default_factory=dict
     )
-    model_inquiry_profiles: dict[str, list[RoleProfile]] = Field(default_factory=dict)
+    model_inquiry: dict[str, ModelInquiryProfile] = Field(default_factory=dict)
     design_agent_profiles: dict[str, list[DesignAgentProfile]] = Field(
         default_factory=dict
     )
-    resolution_groups: list[ResolutionGroup] = Field(default_factory=list)
 
 
 class ProviderCensus(BaseModel):
@@ -158,11 +152,6 @@ class ProviderCensus(BaseModel):
         )
         mappings.extend(
             profile
-            for profiles in self.runtime_channels.model_inquiry_profiles.values()
-            for profile in profiles
-        )
-        mappings.extend(
-            profile
             for profiles in self.runtime_channels.design_agent_profiles.values()
             for profile in profiles
         )
@@ -177,21 +166,31 @@ class ProviderCensus(BaseModel):
                         f"Provider census mapping {mapping.provider}/{mapping.model} lacks {capability}"
                     )
             if (
-                isinstance(mapping, (RoleProfile, DesignAgentProfile))
+                isinstance(mapping, DesignAgentProfile)
                 and mapping.credential_identifier not in provider.credential_identifiers
             ):
                 raise ValueError(
                     f"Provider census role profile {mapping.role} uses undeclared credential "
                     f"{mapping.credential_identifier}"
                 )
-        groups = {group.id: group for group in self.runtime_channels.resolution_groups}
-        if set(groups) != {"model-inquiry-independent-review"}:
-            raise ValueError("Provider census must define exactly model-inquiry-independent-review")
-        if groups["model-inquiry-independent-review"].independence != "distinct_effective_target":
-            raise ValueError("Model Inquiry review group must require distinct_effective_target")
-        for profiles in self.runtime_channels.model_inquiry_profiles.values():
-            if {profile.resolution_group for profile in profiles} != {"model-inquiry-independent-review"}:
-                raise ValueError("Model Inquiry profiles must reference the independent-review group")
+        if set(self.runtime_channels.model_inquiry) != set(
+            self.runtime_channels.builder_execution
+        ):
+            raise ValueError(
+                "Model Inquiry profiles must cover every Builder execution channel"
+            )
+        for channel, profile in self.runtime_channels.model_inquiry.items():
+            if profile.perspectives != ["synthesis", "verification"]:
+                raise ValueError(
+                    "Model Inquiry must declare the ordered neutral perspectives"
+                )
+            execution_profile = self.runtime_channels.builder_execution[channel].get(
+                profile.capability_tier
+            )
+            if execution_profile is None:
+                raise ValueError(
+                    "Model Inquiry capability has no Builder execution profile"
+                )
         expected_design_roles = {
             "claude-design-via-claude-code": "design.claude",
             "codex": "design.codex",

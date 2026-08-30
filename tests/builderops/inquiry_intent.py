@@ -91,26 +91,27 @@ def census_with_role_targets(
     directory: Path,
     targets: dict[str, tuple[str, str]],
 ) -> Path:
-    """Write a census whose Model Inquiry role profiles point at *targets*.
+    """Write a census whose configured Sol capability points at one test target.
 
     Used to prove that a colliding or non-provider policy mapping is refused by
     the resolver before any model call, without touching the shipped census.
     """
     directory.mkdir(parents=True, exist_ok=True)
     payload = yaml.safe_load(CENSUS_PATH.read_text(encoding="utf-8"))
+    provider_id, model = next(iter(targets.values()))
     providers = {provider["id"]: provider for provider in payload["providers"]}
-    for role, (provider_id, _model) in targets.items():
-        provider = providers[provider_id]
-        credential = _credential_for(provider_id)
-        if credential not in (provider.get("credential_identifiers") or []):
-            provider.setdefault("credential_identifiers", []).append(credential)
-        del role
-    for profiles in payload["runtime_channels"]["model_inquiry_profiles"].values():
-        for profile in profiles:
-            provider_id, model = targets[profile["role"]]
-            profile["provider"] = provider_id
-            profile["model"] = model
-            profile["credential_identifier"] = _credential_for(provider_id)
+    provider = providers[provider_id]
+    credential = _credential_for(provider_id)
+    if credential not in (provider.get("credential_identifiers") or []):
+        provider.setdefault("credential_identifiers", []).append(credential)
+    for profiles in payload["runtime_channels"]["builder_execution"].values():
+        profiles["sol"].update(
+            {
+                "provider": provider_id,
+                "model": model,
+                "requires": [],
+            }
+        )
     path = directory / "providers.yaml"
     path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
     return path
@@ -124,13 +125,11 @@ def contract_with_role_targets(
     directory.mkdir(parents=True, exist_ok=True)
     payload = json.loads(CONTRACT_PATH.read_text(encoding="utf-8"))
     declared = {secret["logical_id"] for secret in payload["secrets"]}
+    provider_id, _model = next(iter(targets.values()))
     for consumer in payload["consumers"]:
-        if not consumer["role_requirements"]:
+        if consumer["consumer"] != "builderops-model-inquiry":
             continue
-        requirements = {
-            role: [_credential_for(provider_id)]
-            for role, (provider_id, _model) in targets.items()
-        }
+        requirements = {"model_inquiry": [_credential_for(provider_id)]}
         for secrets in requirements.values():
             for secret in secrets:
                 if secret not in declared:

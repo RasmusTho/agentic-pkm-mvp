@@ -861,6 +861,7 @@ def test_inquiry_run_uses_operational_subscription_fallback(
     service.start(
         question="Use the available subscription lane",
         workflow="fable-gpt-architecture",
+        acceptance_mode="single_target",
         inquiry_id="inq_test_cli_subscription_fallback",
         source_refs=[{"ref_type": "github_issue", "ref": "#4713"}],
     )
@@ -887,6 +888,26 @@ def test_inquiry_run_uses_operational_subscription_fallback(
         )
 
     monkeypatch.setattr(LocalCommandAdapter, "execute", execute)
+    env[INQUIRY_INTENT_CONFIG_ENV] = json.dumps(
+        {
+            "schema": "builderops.model-inquiry-intent.v2",
+            "runtime": "builder",
+            "channel": "dev",
+            "consumer": "builderops-model-inquiry",
+            "acceptance_mode": "single_target",
+            "capability_tier": "sol",
+            "perspectives": ["synthesis", "verification"],
+            "target_intent": {
+                "capability_tier": "frontier",
+                "reasoning_effort": "xhigh",
+                "determinism_required": False,
+                "output_schema_ref": "builderops.model-turn-response.v1",
+                "independence": "none",
+                "fallback_requirement": "fallback_forbidden",
+                "side_effect_class": "advisory_review",
+            },
+        }
+    )
     result = CliRunner().invoke(
         builderops_root,
         [
@@ -903,9 +924,9 @@ def test_inquiry_run_uses_operational_subscription_fallback(
     )
 
     assert result.exit_code == 0, result.output
-    assert json.loads(result.output)["outcome"] == "degraded_consensus"
-    assert ("anthropic", "fable", "draft") in calls
-    assert ("openai", "fable", "draft") in calls
+    assert json.loads(result.output)["outcome"] == "single_target_acceptance"
+    assert set(call[0] for call in calls) == {"openai"}
+    assert {call[1] for call in calls} == {"synthesis", "verification"}
 
 
 def test_inquiry_start_honors_group_db_path_without_host_ack(tmp_path: Path) -> None:

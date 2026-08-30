@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
-"""Run one subscription-authenticated Model Inquiry role with a bounded high-effort profile."""
+"""Run one configured subscription-authenticated Model Inquiry perspective."""
 
 from __future__ import annotations
 
 import argparse
 import json
-import os
 import re
 import shutil
 import subprocess
@@ -31,44 +30,23 @@ SESSION_EXPIRED_MARKERS = (
     "unauthorized",
     "invalid credentials",
 )
-FABLE_MODEL = "claude-fable-5"
-CODEX_MODEL = "gpt-5.6-sol"
+PERSPECTIVES = ("synthesis", "verification")
 
 
-def build_argv(role: str, strict_prompt: str) -> list[str]:
-    if role == "fable":
-        return [
-            _command_path("claude"),
-            "-p",
-            "--no-session-persistence",
-            "--model",
-            FABLE_MODEL,
-            "--effort",
-            "xhigh",
-            "--output-format",
-            "text",
-            "--permission-mode",
-            "bypassPermissions",
-            "--system-prompt",
-            strict_prompt,
-            "--tools",
-            "",
-        ]
-    if role == "gpt_codex":
-        return [
-            _command_path("codex"),
-            "exec",
-            "--ephemeral",
-            "--skip-git-repo-check",
-            "-c",
-            'model_reasoning_effort="xhigh"',
-            "--model",
-            CODEX_MODEL,
-            "--sandbox",
-            "read-only",
-            "-",
-        ]
-    raise ValueError("INQUIRY_ROLE must be fable or gpt_codex")
+def build_argv(model: str) -> list[str]:
+    return [
+        _command_path("codex"),
+        "exec",
+        "--ephemeral",
+        "--skip-git-repo-check",
+        "-c",
+        'model_reasoning_effort="xhigh"',
+        "--model",
+        model,
+        "--sandbox",
+        "read-only",
+        "-",
+    ]
 
 
 def _command_path(name: str) -> str:
@@ -78,7 +56,11 @@ def _command_path(name: str) -> str:
     return path
 
 
-def run_role(request: Mapping[str, Any], role: str) -> dict[str, Any]:
+def run_perspective(
+    request: Mapping[str, Any],
+    perspective: str,
+    model: str,
+) -> dict[str, Any]:
     strict_prompt = (
         str(request["system_prompt"])
         + " Return exactly these top-level keys and no others: schema_version, stance, content, "
@@ -90,12 +72,15 @@ def run_role(request: Mapping[str, Any], role: str) -> dict[str, Any]:
         "the reviewed input artifacts. content must be a plain string, never a nested JSON issue "
         "proposal."
     )
-    prompt = json.dumps(request, ensure_ascii=False, sort_keys=True)
-    if role == "gpt_codex":
-        prompt = strict_prompt + "\nCanonical request JSON:\n" + prompt
+    prompt = (
+        strict_prompt
+        + f"\nInquiry perspective: {perspective}."
+        + "\nCanonical request JSON:\n"
+        + json.dumps(request, ensure_ascii=False, sort_keys=True)
+    )
     try:
         result = subprocess.run(
-            build_argv(role, strict_prompt),
+            build_argv(model),
             input=prompt,
             text=True,
             capture_output=True,
@@ -139,11 +124,18 @@ def _response_from_text(text: str) -> dict[str, Any]:
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--role", choices=("fable", "gpt_codex"))
+    parser.add_argument("--perspective", required=True, choices=PERSPECTIVES)
+    parser.add_argument("--model", required=True)
     args = parser.parse_args()
     request = json.load(sys.stdin)
-    role = args.role or os.environ.get("INQUIRY_ROLE", "")
-    print(json.dumps(run_role(request, role), ensure_ascii=False, sort_keys=True), flush=True)
+    print(
+        json.dumps(
+            run_perspective(request, args.perspective, args.model),
+            ensure_ascii=False,
+            sort_keys=True,
+        ),
+        flush=True,
+    )
     return 0
 
 

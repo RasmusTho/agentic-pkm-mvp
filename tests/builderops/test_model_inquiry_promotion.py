@@ -198,6 +198,117 @@ def _consensus_service(
     return service
 
 
+def _single_target_service(
+    tmp_path: Path,
+    *,
+    issue_body: str | None = None,
+) -> ModelInquiryService:
+    vault = tmp_path / "single-target-vault"
+    vault.mkdir(parents=True)
+    service = ModelInquiryService(vault)
+    service.start(
+        question="Create a bounded single-target promotion contract",
+        workflow="governed-model-inquiry",
+        acceptance_mode="single_target",
+        inquiry_id="inq_single_target_promotion",
+        source_refs=[{"ref_type": "github_issue", "ref": "#5203"}],
+    )
+    adapters = {
+        perspective: ProposalAdapter(perspective, issue_body=issue_body)
+        for perspective in ("synthesis", "verification")
+    }
+    for adapter in adapters.values():
+        adapter.adapter_id = "configured-sol-subscription"
+        adapter.provider = "configured-provider"
+        adapter.model = "configured-sol-model"
+    result = ModelInquiryRunner(service, adapters).run(
+        "inq_single_target_promotion", max_rounds=1
+    )
+    assert result["outcome"] == "single_target_acceptance"
+    return service
+
+
+def test_single_target_acceptance_is_issue_ready_and_promotable(
+    tmp_path: Path,
+) -> None:
+    service = _single_target_service(tmp_path)
+    client = FakeIssueClient()
+    gateway = ModelInquiryPromotionGateway(
+        service,
+        repository="Example/Repo",
+        client=client,
+    )
+
+    evaluated = gateway.evaluate("inq_single_target_promotion")
+    assert evaluated["readiness"]["outcome"] == "issue_ready"
+    promoted = gateway.promote("inq_single_target_promotion")
+    assert promoted["receipt"]["action"] == "promoted"
+
+    trace = service.trace("inq_single_target_promotion", include_delivery=True)
+    terminal = next(
+        item
+        for item in trace["receipts"]
+        if item["event_type"] == "inquiry_run_terminal"
+    )
+    readiness_receipt = next(
+        item
+        for item in trace["receipts"]
+        if item["event_type"] == "inquiry_readiness_terminal"
+    )
+    promotion_receipt = promoted["receipt"]
+    assert readiness_receipt["run_terminal_receipt_hash"] == terminal["artifact_hash"]
+    assert readiness_receipt["synthesis_artifact_hash"] == trace["synthesis"]["artifact_hash"]
+    assert promotion_receipt["run_terminal_receipt_hash"] == terminal["artifact_hash"]
+    assert promotion_receipt["readiness_artifact_hash"] == trace["readiness"]["artifact_hash"]
+    assert promotion_receipt["synthesis_artifact_hash"] == trace["synthesis"]["artifact_hash"]
+
+
+def test_single_target_rejects_consensus_terminal_before_promotion(tmp_path: Path) -> None:
+    vault = tmp_path / "single-target-consensus" / "vault"
+    vault.mkdir(parents=True)
+    service = ModelInquiryService(vault)
+    refs = [{"ref_type": "github_issue", "ref": "#5203"}]
+    service.start(
+        question="Do not reclassify one target as consensus",
+        workflow="governed-model-inquiry",
+        acceptance_mode="single_target",
+        inquiry_id="inq_single_target_consensus_rejected",
+        source_refs=refs,
+    )
+
+    with pytest.raises(BuilderOpsValidationError, match="cannot persist a consensus"):
+        service.commit_run_terminal_receipt(
+            "inq_single_target_consensus_rejected",
+            outcome="consensus",
+            details={"accepted_artifact_hash": "not-persisted", "round_index": 0},
+            source_refs=refs,
+        )
+
+    assert not (
+        vault
+        / "inq_single_target_consensus_rejected"
+        / "receipts"
+        / "inquiry-run-terminal.json"
+    ).exists()
+
+
+def test_single_target_promotion_preserves_issue_contract_verification(
+    tmp_path: Path,
+) -> None:
+    invalid_body = _issue_body().replace(
+        " Verify: `tests/builderops/test_model_inquiry_promotion.py::test_promote_creates_issue_and_receipt`",
+        "",
+    )
+    service = _single_target_service(tmp_path, issue_body=invalid_body)
+    gateway = ModelInquiryPromotionGateway(service)
+
+    evaluated = gateway.evaluate("inq_single_target_promotion")
+
+    assert evaluated["readiness"]["outcome"] != "issue_ready"
+    with pytest.raises(ModelInquiryPromotionError):
+        gateway.promote("inq_single_target_promotion")
+
+
 def test_degraded_consensus_is_not_issue_ready(tmp_path: Path) -> None:
     vault = tmp_path / "degraded" / "vault"
     vault.mkdir(parents=True)
