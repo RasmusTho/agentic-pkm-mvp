@@ -355,11 +355,13 @@ class SettingsRebindActivation:
                 desired_revision=prepared.desired_revision
             )
 
-        _activation_fault_point("commit")
         committed = self.store.commit_selection(
             desired_revision=prepared.desired_revision,
             selection=selection,
         )
+        # A commit fault is post-commit: recovery must observe the durable B
+        # binding and roll forward, matching the watcher transaction seam.
+        _activation_fault_point("commit")
 
         # This is deliberately the existing production SETTINGS-01 call site,
         # not a second settings loader.  A malformed source leaves the durable

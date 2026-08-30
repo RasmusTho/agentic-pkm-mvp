@@ -491,6 +491,18 @@ WRITE_FRONTMATTER_SITE_CLASSIFICATION: dict[tuple[str, int], str] = {
         "_atomic_private_write, "
         "not the vault-content seam."
     ),
+    ("app/instance/vault_registry.py", 2838): (
+        "out_of_scope: AppLocalSettingsStore persists the app-local device "
+        "registry outside the vault content plane Sigma, not a Human Knowledge "
+        "Artifact. Line drifted after SETTINGS-05C added the durable selection "
+        "activation path above this existing app-local write."
+    ),
+    ("app/vault/manager.py", 924): (
+        "guarded: _ensure_frontmatter_id asserts the vault.identity_heal "
+        "write guard immediately before this call. Line drifted after "
+        "SETTINGS-05C added the selection activation path above the existing "
+        "identity-heal write."
+    ),
 }
 
 # ``MarkdownSettingsStore.write_missing`` is a distinct O_EXCL vault-write

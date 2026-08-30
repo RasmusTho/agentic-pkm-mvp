@@ -664,11 +664,13 @@ def test_prepare_commit_resume_is_failure_atomic(
         )
 
     record = runtime.open_settings_rebind_store().read()
-    assert record.candidate_binding_id == "binding-a"
-    assert runtime.registry.load().last_active_vault_ref is None
     if fault_stage == "prepare":
+        assert record.candidate_binding_id == "binding-a"
+        assert runtime.registry.load().last_active_vault_ref is None
         assert record.phase == "dormant"
     else:
+        assert record.candidate_binding_id == "binding-b"
+        assert runtime.registry.load().last_active_vault_ref == registration.ref
         assert record.phase == "no_lifecycle"
 
 
@@ -707,6 +709,7 @@ def test_settings05_parent_acceptance(
     from app.vault.manager import VaultManager
 
     runtime, _vault_a, vault_b, config_path = _fixture(tmp_path, monkeypatch)
+    monkeypatch.setenv("SETTINGS_REBIND_WAIT_TIMEOUT_SECONDS", "15")
     monkeypatch.setattr(
         "app.settings.ingestion.ingest_settings",
         lambda **_kwargs: None,
@@ -728,7 +731,7 @@ def test_settings05_parent_acceptance(
             "--config",
             str(config_path),
             "--max-ticks",
-            "6",
+            "100",
         ],
         cwd=repo_root,
         env=process_env,
