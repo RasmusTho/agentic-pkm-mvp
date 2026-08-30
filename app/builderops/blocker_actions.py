@@ -41,6 +41,10 @@ def _valid_timestamp(value: object) -> bool:
     return True
 
 
+def _valid_owner(value: object) -> bool:
+    return value in {"builder", "owner"} or (isinstance(value, str) and value.startswith("external:") and len(value) > len("external:"))
+
+
 def parse_blocker_action_receipt(comment: object) -> dict[str, object] | None:
     """Parse the deliberately small YAML receipt subset from one REST comment."""
     body = comment.get("body", "") if isinstance(comment, dict) else str(comment)
@@ -56,7 +60,7 @@ def parse_blocker_action_receipt(comment: object) -> dict[str, object] | None:
     if values.get("dependency_refs") == "[]":
         values["dependency_refs"] = []
     action = values.get("action")
-    if action not in ACTION_LABELS or any(not isinstance(values.get(key), str) or not values[key] for key in ("owner", "next_action", "unblocks_when")) or not _valid_timestamp(values.get("last_verified_at")):
+    if action not in ACTION_LABELS or not _valid_owner(values.get("owner")) or any(not isinstance(values.get(key), str) or not values[key] for key in ("next_action", "unblocks_when")) or not _valid_timestamp(values.get("last_verified_at")):
         return None
     return values
 
@@ -71,7 +75,7 @@ def receipt_for_action(action: str, *, now: datetime | None = None) -> dict[str,
     if action not in ACTION_LABELS:
         raise ValueError(f"unknown blocker action: {action}")
     stamp = (now or datetime.now(timezone.utc)).astimezone(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
-    return {"receipt": "blocker_action.v1", "action": action, "owner": "builder-system-maintenance", "next_action": "verify and repair the live Issue contract before pickup", "unblocks_when": "fresh authority evidence establishes a valid transition", "dependency_refs": [], "review_at": "null", "last_verified_at": stamp}
+    return {"receipt": "blocker_action.v1", "action": action, "owner": "builder", "next_action": "verify and repair the live Issue contract before pickup", "unblocks_when": "fresh authority evidence establishes a valid transition", "dependency_refs": [], "review_at": "null", "last_verified_at": stamp}
 
 
 def label_names(issue: dict[str, Any]) -> set[str]:

@@ -166,7 +166,7 @@ def test_sync_state_carries_labels_and_url() -> None:
 
 
 def test_normalize_carries_rest_comment_projection_without_changing_ready_pickup() -> None:
-    comment = {"body": "```yaml\nreceipt: blocker_action.v1\naction: action:wait-dependency\nowner: builder-system-maintenance\nnext_action: wait\nunblocks_when: dependency closes\ndependency_refs: []\nreview_at: null\nlast_verified_at: 2026-08-30T11:00:00Z\n```"}
+    comment = {"body": "```yaml\nreceipt: blocker_action.v1\naction: action:wait-dependency\nowner: builder\nnext_action: wait\nunblocks_when: dependency closes\ndependency_refs: []\nreview_at: null\nlast_verified_at: 2026-08-30T11:00:00Z\n```"}
     task = normalize_github_issue({**SAMPLE_ISSUE_BLOCKED, "comments": [comment]}, REPO)
     assert task.sync_state["comments"] == [comment]
     assert task.status == "blocked"
@@ -226,7 +226,7 @@ def test_essential_source_remains_ready_only_when_action_labels_exist() -> None:
 
 
 def test_pull_sync_projects_blocker_comment_records_without_making_them_pickable(tmp_store: SqliteStore) -> None:
-    receipt = {"body": "```yaml\nreceipt: blocker_action.v1\naction: action:wait-dependency\nowner: builder-system-maintenance\nnext_action: wait\nunblocks_when: dependency closes\ndependency_refs: []\nreview_at: null\nlast_verified_at: 2026-08-30T11:00:00Z\n```"}
+    receipt = {"body": "```yaml\nreceipt: blocker_action.v1\naction: action:wait-dependency\nowner: builder\nnext_action: wait\nunblocks_when: dependency closes\ndependency_refs: []\nreview_at: null\nlast_verified_at: 2026-08-30T11:00:00Z\n```"}
     blocked = {**SAMPLE_ISSUE_BLOCKED, "comments": [receipt], "labels": [{"name": "agent:blocked"}, {"name": "action:wait-dependency"}]}
     source = _mock_source([SAMPLE_ISSUE_HIGH], open_issues=[blocked])
     adapter = PullSyncAdapter(store=tmp_store, source=source)

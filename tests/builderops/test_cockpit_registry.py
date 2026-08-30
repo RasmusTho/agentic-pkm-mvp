@@ -127,7 +127,7 @@ def test_band_derivation_fail_closed(tmp_path: Path) -> None:
 
 def test_registry_exposes_canonical_blocker_action_without_promoting_authority(tmp_path: Path) -> None:
     store, db_path = _make_store(tmp_path)
-    receipt = "```yaml\nreceipt: blocker_action.v1\naction: action:wait-dependency\nowner: builder-system-maintenance\nnext_action: wait for Issue #72\nunblocks_when: Issue #72 closes\ndependency_refs: []\nreview_at: null\nlast_verified_at: 2026-08-30T11:00:00Z\n```"
+    receipt = "```yaml\nreceipt: blocker_action.v1\naction: action:wait-dependency\nowner: builder\nnext_action: wait for Issue #72\nunblocks_when: Issue #72 closes\ndependency_refs: []\nreview_at: null\nlast_verified_at: 2026-08-30T11:00:00Z\n```"
     store.upsert_task(_task(status="blocked", issue_number=71, sync_state={"labels": ["agent:blocked", "action:wait-dependency"], "comments": [{"body": receipt}]}))
     payload = _registry(db_path, tmp_path)
     item = _band(payload, "working")["items"][0]
@@ -138,7 +138,7 @@ def test_registry_exposes_canonical_blocker_action_without_promoting_authority(t
 
 def test_registry_uses_dispatcher_rest_comment_projection(tmp_path: Path) -> None:
     store, db_path = _make_store(tmp_path)
-    receipt = "```yaml\nreceipt: blocker_action.v1\naction: action:wait-dependency\nowner: builder-system-maintenance\nnext_action: wait for dependency\nunblocks_when: dependency closes\ndependency_refs: []\nreview_at: null\nlast_verified_at: 2026-08-30T11:00:00Z\n```"
+    receipt = "```yaml\nreceipt: blocker_action.v1\naction: action:wait-dependency\nowner: builder\nnext_action: wait for dependency\nunblocks_when: dependency closes\ndependency_refs: []\nreview_at: null\nlast_verified_at: 2026-08-30T11:00:00Z\n```"
     task = normalize_github_issue({"number": 72, "title": "blocked", "state": "open", "labels": [{"name": "agent:blocked"}, {"name": "action:wait-dependency"}], "comments": [{"body": receipt}]}, "RasmusTho/agentic-pkm-mvp")
     store.upsert_task(task)
     item = _band(_registry(db_path, tmp_path), "working")["items"][0]

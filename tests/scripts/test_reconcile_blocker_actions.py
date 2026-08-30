@@ -1,4 +1,4 @@
-from app.builderops.blocker_actions import LEGACY_HUMAN_ACTIONS, intake, receipt_for_action
+from app.builderops.blocker_actions import LEGACY_HUMAN_ACTIONS, intake, parse_blocker_action_receipt, receipt_for_action
 from scripts.reconcile_blocker_actions import apply_plan, plan
 import subprocess
 import sys
@@ -130,6 +130,13 @@ def test_intake_parses_real_comment_receipt_and_rejects_invalid_placeholder() ->
     comment = {"body": "```yaml\n" + "\n".join(f"{key}: {value if key != 'dependency_refs' else '[]'}" for key, value in receipt.items()) + "\n```"}
     payload = intake([{"number": 1, "state": "open", "labels": ["agent:blocked", "action:wait-dependency"], "comments": [comment]}])
     item = payload["queues"]["action:wait-dependency"][0]
-    assert item["owner"] == "builder-system-maintenance"
+    assert item["owner"] == "builder"
     assert item["next_action"]
     assert not payload["drift"]
+
+
+def test_receipt_parser_rejects_noncanonical_owner() -> None:
+    receipt = receipt_for_action("action:wait-dependency")
+    receipt["owner"] = "builder-system-maintenance"
+    body = "```yaml\n" + "\n".join(f"{key}: {value if key != 'dependency_refs' else '[]'}" for key, value in receipt.items()) + "\n```"
+    assert parse_blocker_action_receipt({"body": body}) is None
