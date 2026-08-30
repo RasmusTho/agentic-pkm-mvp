@@ -659,10 +659,13 @@ that fallback. Never infer either mode from an earlier lease, database existence
 After merging and delivering work, scan for issues blocked by the delivered Issue. Before unblocking
 each dependent, re-read its live Issue body, state, labels, and dependency evidence; do not unblock
 an Issue carrying `agent:needs-human`; form the prospective post-unblock label set by replacing
-`agent:blocked` with `agent:ready`; run the strict issue-readiness validation against that current
-body and prospective label set; and verify that this delivery actually satisfied the named
-dependency. Only then make the explicit lifecycle mutation and read it back. Do not unblock from a
-stale dependency graph, an earlier readiness report, or a successful merge alone.
+`agent:blocked` with `agent:ready` and removing every `action:*` label; run the strict
+issue-readiness validation against that current body and prospective label set; and verify that this
+delivery actually satisfied the named dependency. Only then make the explicit lifecycle mutation,
+remove the action subtype, and read both changes back. The previous `blocker_action.v1` comment
+remains immutable historical evidence; it does not authorize retaining an action label on ready
+work. Do not unblock from a stale dependency graph, an earlier readiness report, or a successful
+merge alone.
 
 ## Optional Project Projection
 
