@@ -85,8 +85,10 @@ it supplies neither a page nor a visual destination.
 - No technical label/state, provider metadata, or terminal delivery fact substitutes for explicit
   canonical category or receipt-backed `ready_to_try` evidence.
 - ARO-08 remains serially blocked after #4748 until the repaired source contract, Demerzel
-  authentication/access, #4747 server-supplied Focus selectors, receipt-sourced deployed URL/SHA,
-  and disposable-state classification are all available. It never invents a URL or deployed SHA.
+  authentication/access, #4747 server-supplied Focus selectors, and receipt-sourced deployed
+  URL/SHA are available. If the pilot uses a `pkm-test` supplement, its disposable-state
+  classification is also required; the production-only path has no supplemental-state
+  prerequisite. It never invents a URL or deployed SHA.
 
 ## Acceptance Criteria
 
@@ -101,12 +103,13 @@ it supplies neither a page nor a visual destination.
   - Verify: `tests/companion_ui/test_devui_overview_journeys.py :: test_overview_accessibility_and_layout_matrix`
 - [ ] The owner pilot records exact SHA, source conditions, answers, reconstruction steps, and a
       pass/fail disposition for all three zones; it proves the receipt-sourced deployed SHA across
-      CI/review/deploy receipt, `/version`, `/api/health.version`, and gateway marker, then records
-      the disposable-state Overview → server-supplied Focus → return Playwright journey with zero
-      effects, errors, storage, or unauthorized writes and durable trace/screenshot/checksum/
-      manifest evidence plus owner acknowledgement. Its ledger alone binds the pre-merge #4836
-      candidate artifact and the distinct final-M #4748 artifact by recomputable evidence-artifact
-      digests; neither strict browser receipt carries a cross-run reference.
+      CI/review/deploy receipt, `/version`, `/api/health.version`, and gateway marker. If a
+      `pkm-test` supplement is used, it records the disposable-state Overview → server-supplied
+      Focus → return Playwright journey with zero effects, errors, storage, or unauthorized writes
+      and durable trace/screenshot/checksum/manifest evidence plus owner acknowledgement. If no
+      supplement is used, the production-only evidence records the applicable final-M proof and
+      that no test state was created. The pilot ledger may preserve candidate provenance when
+      available, but readiness does not require a candidate-to-final cross-run binding.
   - Verify: runtime receipt: devui-stage-a-read-only-owner-pilot.v1
 - [ ] Current-state owner docs change only after all capability receipts support the claim.
   - Verify: doc writeback at `docs/DEVUI.md :: Current state and target`
