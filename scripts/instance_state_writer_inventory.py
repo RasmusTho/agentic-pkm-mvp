@@ -1070,8 +1070,9 @@ def _normalize_legacy_owners(
                 "channel_id": record.channel_id,
                 "root": record.root,
                 "identity": primary,
+                "ancestor_identities": sorted(ancestors),
             }
-            for record, primary, _ in ordered
+            for record, primary, ancestors in ordered
         ],
     )
 

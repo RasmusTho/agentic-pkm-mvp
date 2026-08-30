@@ -4,6 +4,7 @@ import hashlib
 import hmac
 import json
 import os
+import re
 import shutil
 import stat
 import tempfile
@@ -32,6 +33,7 @@ _DEPLOYMENT_COMPATIBILITY_BLOCK_SCHEMA = (
     "agentic-pkm.host-deployment-compatibility-block.v1"
 )
 _LEGACY_INVENTORY_SCHEMA = "agentic-pkm.legacy-owner-inventory.v1"
+_LEGACY_OWNER_IDENTITY_RE = re.compile(r"^inode:[0-9]+:[0-9]+$")
 _QUIESCENCE_INVENTORY_SCHEMA = "agentic-pkm.host-deployment-quiescence.v2"
 _FINAL_EXPORT_SEAL = os.urandom(32)
 
@@ -987,9 +989,29 @@ class InstanceStateBackup:
                 "canonical global live-owner inventory is invalid: the drained "
                 "owner receipt carries no owners list"
             )
+        source_evidence = owner_payload.get("source_evidence")
+        identity_rows = (
+            source_evidence.get("owner_identities")
+            if isinstance(source_evidence, dict)
+            else None
+        )
+        if (
+            not require_materialized_owner_roots
+            and (not isinstance(identity_rows, list) or len(identity_rows) != len(raw_owners))
+        ):
+            raise InstanceStatePreflightError(
+                "canonical global live-owner inventory is invalid: "
+                "host identity evidence is incomplete"
+            )
+        if not isinstance(identity_rows, list):
+            identity_rows = [None] * len(raw_owners)
         owners: list[LegacyOwner] = []
-        for index, item in enumerate(raw_owners):
-            if not isinstance(item, dict):
+        for index, (item, identity_row) in enumerate(
+            zip(raw_owners, identity_rows, strict=True)
+        ):
+            if not isinstance(item, dict) or (
+                not require_materialized_owner_roots and not isinstance(identity_row, dict)
+            ):
                 raise InstanceStatePreflightError(
                     "canonical global live-owner inventory is invalid: "
                     f"owners[{index}] is not an owner entry"
@@ -1007,18 +1029,46 @@ class InstanceStateBackup:
                     "canonical global live-owner inventory is invalid: "
                     f"owners[{index}].root is missing or not absolute"
                 )
-            root = Path(raw_root).expanduser().resolve(strict=False)
+            root = (
+                Path(raw_root).expanduser().resolve(strict=False)
+                if require_materialized_owner_roots
+                else Path(raw_root)
+            )
+            root_identity: str | None = None
+            ancestor_identities: tuple[str, ...] = ()
+            if not require_materialized_owner_roots:
+                assert isinstance(identity_row, dict)
+                root_identity = str(identity_row.get("identity") or "").strip()
+                raw_ancestors = identity_row.get("ancestor_identities")
+                if (
+                    identity_row.get("channel_id") != channel_id
+                    or identity_row.get("root") != raw_root
+                    or _LEGACY_OWNER_IDENTITY_RE.fullmatch(root_identity) is None
+                    or not isinstance(raw_ancestors, list)
+                    or not raw_ancestors
+                    or any(
+                        not isinstance(value, str)
+                        or _LEGACY_OWNER_IDENTITY_RE.fullmatch(value) is None
+                        for value in raw_ancestors
+                    )
+                    or len(set(raw_ancestors)) != len(raw_ancestors)
+                    or root_identity in raw_ancestors
+                ):
+                    raise InstanceStatePreflightError(
+                        "canonical global live-owner inventory is invalid: "
+                        f"owners[{index}] host identity evidence is invalid"
+                    )
+                ancestor_identities = tuple(raw_ancestors)
             if not require_materialized_owner_roots and not binding_id:
                 # Deployment-finish verifies a host-produced receipt in a
                 # mount-blind scratch namespace. Recover a binding only from
                 # one exact normalized path match in the staged registry;
                 # aliases and ambiguity remain fail-closed.
-                normalized_root = str(root)
+                normalized_root = raw_root
                 matches = [
                     registration.vault_binding_id
                     for registration in registry.registrations.values()
-                    if str(Path(registration.path).expanduser().resolve(strict=False))
-                    == normalized_root
+                    if str(registration.path) == normalized_root
                 ]
                 if not matches and skip_unadopted_owners:
                     # A fresh channel volume may be verified before its
@@ -1054,7 +1104,15 @@ class InstanceStateBackup:
                     ):
                         binding_id = registration.vault_binding_id
                         break
-            owners.append(LegacyOwner(channel_id, binding_id, root))
+            owners.append(
+                LegacyOwner(
+                    channel_id,
+                    binding_id,
+                    root,
+                    root_identity,
+                    ancestor_identities,
+                )
+            )
         try:
             # Config-derived inventories (materialized-roots mode) may name
             # candidates the ledger never adopted after legacy bootstrap

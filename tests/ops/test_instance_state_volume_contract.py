@@ -38,6 +38,7 @@ from app.instance.runtime import (
     _deployment_fence_path,
     _deployment_lease_path,
     _finish_instance_state_deployment,
+    _load_legacy_owner_inventory,
     _recover_lost_ownership_lease,
     _preflight_runtime,
     _prove_instance_state_quiescence,
@@ -80,13 +81,19 @@ def _legacy_owner_inventory_payload(
         if root.is_dir():
             metadata = os.stat(root)
             identity = f"inode:{metadata.st_dev}:{metadata.st_ino}"
+            ancestor_identities = sorted(
+                f"inode:{os.stat(ancestor).st_dev}:{os.stat(ancestor).st_ino}"
+                for ancestor in root.resolve().parents
+            )
         else:
             identity = f"missing:{hashlib.sha256(str(root).encode()).hexdigest()}"
+            ancestor_identities = []
         owner_identities.append(
             {
                 "channel_id": owner["channel_id"],
                 "root": owner["root"],
                 "identity": identity,
+                "ancestor_identities": ancestor_identities,
             }
         )
     source_evidence = {
@@ -3326,13 +3333,74 @@ def test_v2_inventory_proof_is_accepted_by_the_production_proof_consumer(tmp_pat
         controller_pid=controller_pid,
         controller_start_token=controller_token,
     )
-    inventory = _write_empty_quiescence_inventory(
+    host_only_root = tmp_path / "host-only-vault"
+    host_only_root.mkdir()
+    quiescence_inventory = _write_empty_quiescence_inventory(
         host_global_root=ownership
     )
     proof = _prove_instance_state_quiescence(
-        channel="prod", host_global_root=ownership, inventory_path=inventory
+        channel="prod",
+        host_global_root=ownership,
+        inventory_path=quiescence_inventory,
     )
-    proof.require_valid(channel_id="prod")
+    inventory = ownership / "legacy-owner-inventory.json"
+    inventory.write_text(
+        json.dumps(
+            _legacy_owner_inventory_payload(
+                [{"channel_id": "prod", "root": str(host_only_root)}]
+            )
+        ),
+        encoding="utf-8",
+    )
+    os.chmod(inventory, 0o600)
+    proof = _bind_legacy_owner_inventory_to_proof(
+        inventory_path=inventory,
+        quiescence_proof=proof,
+        channel="prod",
+        host_global_root=ownership,
+    )
+    host_only_root.rmdir()
+    layout = InstanceStateLayout.for_channel(state, "prod")
+    layout.ensure()
+    owners = _load_legacy_owner_inventory(
+        inventory,
+        registry=VaultRegistryStore(layout.registry_path).load(),
+        channel="prod",
+        quiescence_proof=proof,
+    )
+    assert [(owner.channel_id, owner.root) for owner in owners] == [
+        ("prod", host_only_root)
+    ]
+    assert owners[0].root_identity.startswith("inode:")
+    assert owners[0].ancestor_identities
+
+    before = {
+        path.relative_to(tmp_path): path.read_bytes()
+        for root in (state, ownership)
+        for path in root.rglob("*")
+        if path.is_file() and path != inventory
+    }
+    forged = json.loads(inventory.read_text(encoding="utf-8"))
+    forged["source_evidence"]["owner_identities"][0]["identity"] = "inode:1:2"
+    inventory.write_text(json.dumps(forged), encoding="utf-8")
+    os.chmod(inventory, 0o600)
+    with pytest.raises(
+        InstanceStatePreflightError,
+        match="complete drained legacy-owner inventory is required",
+    ):
+        _load_legacy_owner_inventory(
+            inventory,
+            registry=VaultRegistryStore(layout.registry_path).load(),
+            channel="prod",
+            quiescence_proof=proof,
+        )
+    after = {
+        path.relative_to(tmp_path): path.read_bytes()
+        for root in (state, ownership)
+        for path in root.rglob("*")
+        if path.is_file() and path != inventory
+    }
+    assert after == before
 
 
 def test_registry_volume_and_preflight_cover_all_consumers(tmp_path) -> None:
@@ -5034,13 +5102,16 @@ def test_staged_backup_binds_materialized_owner_after_root_leaves_scratch_view(
     payloads = runtime.ledger.capture_backup_artifacts(
         capture_registry_artifacts=runtime.registry.capture_backup_artifacts,
     )
+    owner_payload = _legacy_owner_inventory_payload(
+        [{"channel_id": "prod", "root": str(vault_root)}]
+    )
     shutil.rmtree(vault_root)
 
     staged_ledger, owners = InstanceStateBackup(
         layout, runtime.ledger
     )._verify_staged_backup(
         payloads=payloads,
-        owner_payload={"owners": [{"channel_id": "prod", "root": str(vault_root)}]},
+        owner_payload=owner_payload,
         require_materialized_owner_roots=False,
     )
 
@@ -5168,9 +5239,7 @@ def test_staged_backup_failure_surfaces_underlying_cause(
             backup_root=host_global_root / "backups" / "dev" / "latest",
         )
     message = str(excinfo.value)
-    assert "backup registry/ledger consistency verification failed" in message
-    assert "canonical global live-owner inventory is invalid" in message
-    assert expected_field in message
+    assert message == "legacy-owner inventory entries are invalid"
     # The failure must keep the restart fence installed.
     assert _deployment_fence_path(host_global_root, "dev").is_file()
 
