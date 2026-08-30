@@ -35,6 +35,7 @@ RISK_SURFACES = frozenset(
 )
 REPOSITORY_RE = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\Z")
 GIT_SHA_RE = re.compile(r"[0-9a-f]{40,64}\Z")
+GITHUB_HOST = "github.com"
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
@@ -350,6 +351,8 @@ def apply_publication_plan(
             [
                 "gh",
                 "api",
+                "--hostname",
+                GITHUB_HOST,
                 "--method",
                 "POST",
                 f"repos/{normalized['repository']}/git/refs",
@@ -443,7 +446,7 @@ def apply_publication_plan(
                 "pr",
                 "create",
                 "--repo",
-                normalized["repository"],
+                f"{GITHUB_HOST}/{normalized['repository']}",
                 "--base",
                 normalized["git"]["base_ref"],
                 "--head",
@@ -626,7 +629,6 @@ def _path_state(executor: CommandExecutor, cwd: Path, path: str, base_sha: str) 
                     "kind": "symlink",
                     "size": len(encoded),
                     "sha256": hashlib.sha256(encoded).hexdigest(),
-                    "target": target,
                 }
             )
         else:
@@ -643,7 +645,7 @@ def _path_state(executor: CommandExecutor, cwd: Path, path: str, base_sha: str) 
 def _content_binding(state: Mapping[str, Any]) -> dict[str, Any]:
     return {
         key: state.get(key)
-        for key in ("path", "kind", "mode", "size", "sha256", "target", "base_entry")
+        for key in ("path", "kind", "mode", "size", "sha256", "base_entry")
         if key in state
     }
 
@@ -712,7 +714,15 @@ def _read_remote_identities(
 def _read_github_ref(executor: CommandExecutor, cwd: Path, repository: str, ref: str) -> str:
     result = _checked(
         executor,
-        ["gh", "api", "--method", "GET", f"repos/{repository}/git/ref/heads/{ref}"],
+        [
+            "gh",
+            "api",
+            "--hostname",
+            GITHUB_HOST,
+            "--method",
+            "GET",
+            f"repos/{repository}/git/ref/heads/{ref}",
+        ],
         cwd,
     )
     try:
@@ -779,7 +789,15 @@ def _read_issue(
 ) -> dict[str, Any]:
     result = _checked(
         executor,
-        ["gh", "api", "--method", "GET", f"repos/{repository}/issues/{issue_number}"],
+        [
+            "gh",
+            "api",
+            "--hostname",
+            GITHUB_HOST,
+            "--method",
+            "GET",
+            f"repos/{repository}/issues/{issue_number}",
+        ],
         cwd,
     )
     try:
@@ -862,6 +880,8 @@ def _read_pr_history(
         [
             "gh",
             "api",
+            "--hostname",
+            GITHUB_HOST,
             "--method",
             "GET",
             f"repos/{repository}/pulls",

@@ -33,6 +33,8 @@ BASE_BLOB = "1" * 40
 STAGED_BLOB = "2" * 40
 REPOSITORY = "RasmusTho/agentic-pkm-mvp"
 BRANCH = "codex/publication-test"
+GITHUB_HOST = "github.com"
+HOST_QUALIFIED_REPOSITORY = f"{GITHUB_HOST}/{REPOSITORY}"
 BODY_INPUTS = {
     "lane": "governance",
     "issue_number": 5230,
@@ -84,6 +86,25 @@ def _issue() -> dict[str, object]:
         "labels": [{"name": "agent:in-progress"}, {"name": "lane:governance"}],
         "html_url": "https://github.com/RasmusTho/agentic-pkm-mvp/issues/5230",
     }
+
+
+def _is_gh_api_call(call: Sequence[str], method: str | None = None) -> bool:
+    args = tuple(call)
+    if args[:4] != ("gh", "api", "--hostname", GITHUB_HOST):
+        return False
+    return method is None or args[4:6] == ("--method", method)
+
+
+def _assert_gh_call_is_host_bound(call: tuple[str, ...]) -> None:
+    if _is_gh_api_call(call):
+        assert call[2:4] == ("--hostname", GITHUB_HOST)
+        assert call[4] == "--method"
+        return
+    if call[:3] == ("gh", "pr", "create"):
+        repository_index = call.index("--repo") + 1
+        assert call[repository_index] == HOST_QUALIFIED_REPOSITORY
+        return
+    raise AssertionError(f"unrecognized gh call: {call}")
 
 
 class FakeExecutor:
@@ -244,8 +265,8 @@ class FakeExecutor:
             self.last_successful_effect = "push"
             return self._result(args, stdout="pushed\n")
 
-        if args[:4] == ("gh", "api", "--method", "GET"):
-            endpoint = args[4]
+        if _is_gh_api_call(args, "GET"):
+            endpoint = args[6]
             if endpoint.endswith("/issues/5230"):
                 unavailable = self.post_success_readback_failures.get(
                     (self.last_successful_effect or "", "issue")
@@ -279,8 +300,8 @@ class FakeExecutor:
                         stderr="PR readback failed",
                     )
                 return self._result(args, stdout=json.dumps(self.prs))
-        if args[:4] == ("gh", "api", "--method", "POST"):
-            endpoint = args[4]
+        if _is_gh_api_call(args, "POST"):
+            endpoint = args[6]
             if endpoint.endswith("/git/refs"):
                 failed = self._failure("reserve", args)
                 if failed:
@@ -346,10 +367,10 @@ class GitHubFakeExecutor:
         self.calls.append(tuple(argv))
         if argv[:3] == ["git", "remote", "get-url"]:
             return CommandResult(tuple(argv), 0, f"https://github.com/{REPOSITORY}.git\n", "")
-        if argv[:4] == ["gh", "api", "--method", "GET"]:
-            if str(argv[4]).endswith("/issues/5230"):
+        if _is_gh_api_call(argv, "GET"):
+            if str(argv[6]).endswith("/issues/5230"):
                 payload: object = _issue()
-            elif str(argv[4]).endswith("/git/ref/heads/main"):
+            elif str(argv[6]).endswith("/git/ref/heads/main"):
                 payload = {
                     "ref": "refs/heads/main",
                     "object": {
@@ -466,7 +487,9 @@ def test_publication_plan_is_canonical_hash_bound_and_read_only(
         "head": _run("git", "rev-parse", "HEAD", cwd=repo),
     }
     assert after == before
-    assert all(call[3] == "GET" for call in executor.calls if call and call[0] == "gh")
+    assert all(
+        _is_gh_api_call(call, "GET") for call in executor.calls if call and call[0] == "gh"
+    )
     pr_reads = [call for call in executor.calls if call and call[-1] == "per_page=2"]
     assert pr_reads
     assert all("state=all" in call for call in pr_reads)
@@ -494,6 +517,29 @@ def test_publication_plan_binds_effective_push_repository_before_github_reads(
 
     assert raised.value.outcome == "drift"
     assert not any(call and call[0] == "gh" for call in executor.calls)
+
+
+def test_publication_pins_every_github_read_and_effect_when_gh_host_is_hostile(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("GH_HOST", "redirect.invalid")
+    (tmp_path / "feature.txt").write_text("new\n", encoding="utf-8")
+    executor = FakeExecutor(tmp_path)
+
+    plan = build_publication_plan(_request(tmp_path), executor=executor)
+    apply_publication_plan(
+        plan,
+        expected_plan_sha256=plan["plan_sha256"],
+        executor=executor,
+    )
+
+    gh_calls = [call for call in executor.calls if call and call[0] == "gh"]
+    assert gh_calls
+    assert any(call[:2] == ("gh", "api") and "GET" in call for call in gh_calls)
+    assert any(call[:2] == ("gh", "api") and "POST" in call for call in gh_calls)
+    assert any(call[:3] == ("gh", "pr", "create") for call in gh_calls)
+    for call in gh_calls:
+        _assert_gh_call_is_host_bound(call)
 
 
 def test_publication_cli_never_emits_raw_credential_remote_url(
@@ -542,6 +588,43 @@ def test_publication_cli_never_emits_raw_credential_remote_url(
     assert "https://" not in captured.err
 
 
+def test_publication_hashes_symlink_target_without_serializing_it_and_detects_drift(
+    tmp_path: Path,
+) -> None:
+    secret_target = "https://user:publication-secret@github.com/private/repo.git"
+    symlink = tmp_path / "feature.txt"
+    symlink.symlink_to(secret_target)
+    executor = FakeExecutor(tmp_path)
+
+    plan = build_publication_plan(_request(tmp_path), executor=executor)
+
+    path_state = plan["git"]["path_states"][0]
+    encoded_target = secret_target.encode("utf-8")
+    assert path_state["kind"] == "symlink"
+    assert path_state["size"] == len(encoded_target)
+    assert path_state["sha256"] == hashlib.sha256(encoded_target).hexdigest()
+    assert "target" not in path_state
+    assert secret_target not in canonical_json(plan)
+
+    symlink.unlink()
+    symlink.symlink_to(f"{secret_target}-changed")
+    executor.calls.clear()
+    with pytest.raises(PublicationRefusal, match="planned content drift") as raised:
+        apply_publication_plan(
+            plan,
+            expected_plan_sha256=plan["plan_sha256"],
+            executor=executor,
+        )
+
+    assert raised.value.outcome == "drift"
+    assert not any(
+        call[:2] in {("git", "add"), ("git", "commit"), ("git", "push")}
+        or call[:3] == ("gh", "pr", "create")
+        or (call[:2] == ("gh", "api") and "POST" in call)
+        for call in executor.calls
+    )
+
+
 @pytest.mark.parametrize(
     "fetch_url",
     [
@@ -579,7 +662,7 @@ def test_publication_plan_refuses_disagreeing_live_main_authorities(
     assert not any(
         call[:2] in {("git", "add"), ("git", "commit"), ("git", "push")}
         or call[:3] == ("gh", "pr", "create")
-        or (call[:4] == ("gh", "api", "--method", "POST"))
+        or _is_gh_api_call(call, "POST")
         for call in executor.calls
     )
 
@@ -692,7 +775,7 @@ def test_publication_apply_revalidates_drift_and_orders_existing_gates(tmp_path:
         "reserve": next(
             i
             for i, call in enumerate(executor.calls)
-            if call[:4] == ("gh", "api", "--method", "POST")
+            if _is_gh_api_call(call, "POST")
         ),
         "push": next(i for i, call in enumerate(executor.calls) if call[:2] == ("git", "push")),
         "pr_create": next(
@@ -723,7 +806,7 @@ def test_publication_effects_are_monotonic_and_never_force_delete_or_reset(
     effects = [
         call
         for call in executor.calls
-        if call[:4] == ("gh", "api", "--method", "POST")
+        if _is_gh_api_call(call, "POST")
         or call[:2] == ("git", "push")
         or call[:3] == ("gh", "pr", "create")
     ]
@@ -751,7 +834,7 @@ def test_publication_reconciles_create_ref_nonzero_after_effect(tmp_path: Path) 
     assert receipt["outcome"] == "success"
     assert receipt["reconciled"] is True
     assert executor.remote_head == COMMIT_SHA
-    assert sum(call[:4] == ("gh", "api", "--method", "POST") for call in executor.calls) == 1
+    assert sum(_is_gh_api_call(call, "POST") for call in executor.calls) == 1
 
 
 def test_publication_create_ref_nonzero_without_effect_is_retryable(
@@ -841,7 +924,7 @@ def test_publication_resumes_from_exact_base_reservation(tmp_path: Path) -> None
     )
 
     assert receipt["reconciled"] is True
-    assert not any(call[:4] == ("gh", "api", "--method", "POST") for call in executor.calls)
+    assert not any(_is_gh_api_call(call, "POST") for call in executor.calls)
     assert sum(call[:2] == ("git", "push") for call in executor.calls) == 1
 
 
@@ -856,7 +939,7 @@ def test_publication_stops_when_main_drifts_before_reservation(tmp_path: Path) -
 
     assert raised.value.outcome == "drift"
     assert not any(
-        call[:4] == ("gh", "api", "--method", "POST")
+        _is_gh_api_call(call, "POST")
         or call[:2] == ("git", "push")
         or call[:3] == ("gh", "pr", "create")
         for call in executor.calls
@@ -938,7 +1021,7 @@ def test_publication_classifies_empty_or_delayed_pr_readback_as_unknown(
         call
         for call in executor.calls[effect_position + 1 :]
         if call[:2] == ("git", "ls-remote")
-        or (call[:4] == ("gh", "api", "--method", "GET") and call[4].endswith("/pulls"))
+        or (_is_gh_api_call(call, "GET") and call[6].endswith("/pulls"))
     ]
     assert len(post_effect_readbacks) == 3
 
@@ -1109,7 +1192,7 @@ def test_publication_refuses_exact_closed_or_merged_pr_history(
 
     assert raised.value.outcome == "terminal"
     assert not any(
-        call[:4] == ("gh", "api", "--method", "POST")
+        _is_gh_api_call(call, "POST")
         or call[:2] == ("git", "push")
         or call[:3] == ("gh", "pr", "create")
         for call in executor.calls
