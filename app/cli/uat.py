@@ -625,6 +625,7 @@ def run_vault_test_flow(
     consume_promotions: bool = True,
     assert_expectations: bool = False,
     assert_mode: UATAssertMode = "bootstrap",
+    tick_log_path: Path | None = None,
 ) -> UATSummary:
     resolved_root = vault_root.expanduser().resolve()
     scope = resolved_root / target_subdir
@@ -651,6 +652,7 @@ def run_vault_test_flow(
             max_notes=max_notes,
             force=force,
             outbox_path=outbox_path,
+            tick_log_path=tick_log_path,
         )
     finally:
         if original_scope is None:

@@ -110,20 +110,24 @@ def test_joined_watcher_safe_enablement_receipt(
             encoding="utf-8",
         )
 
-        summary = run_vault_test_flow(vault_root=vault_root)
-        watcher_tick_log = tmp_path / mode / "watcher_tick.jsonl"
-        watcher_tick_log.write_text(
-            json.dumps(
-                {
-                    "timestamp": "2026-08-28T00:00:00Z",
-                    "panel_candidates": summary.watcher["panel_candidates"],
-                    "panel_skipped_policy": summary.watcher["panel_skipped_policy"],
-                    "panel_skipped_auto_exec": summary.watcher["panel_skipped_auto_exec"],
-                }
-            )
-            + "\n",
-            encoding="utf-8",
+        summary = run_vault_test_flow(
+            vault_root=vault_root,
+            tick_log_path=tmp_path / mode / "watcher_tick.jsonl",
         )
+        watcher_run_log = tmp_path / mode / "watcher_run.jsonl"
+        watcher_run_records = [
+            json.loads(line)
+            for line in watcher_run_log.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+        assert len(watcher_run_records) >= 2
+        initial_run = watcher_run_records[0]
+        assert initial_run["event"] == "watcher.run"
+        assert initial_run["source"]["trigger"] == "vault_watcher_run"
+        initial_payload = initial_run["payload"]
+        assert initial_payload["panel_candidates"] == summary.watcher["panel_candidates"]
+        assert initial_payload["panel_skipped_policy"] == summary.watcher["panel_skipped_policy"]
+        assert initial_payload["panel_skipped_auto_exec"] == summary.watcher["panel_skipped_auto_exec"]
         settings = build_settings_explain_payload()["watcher_settings"]
         status = get_system_status().watcher_automation
 
@@ -140,7 +144,9 @@ def test_joined_watcher_safe_enablement_receipt(
         assert status.writes_allowed is settings["write_guard"]["writes_allowed"]
         assert status.write_guard_mode == settings["write_guard"]["mode"]
         assert int(summary.watcher["panel_skipped_policy"] or 0) >= 1
-        assert status.last_tick_panel_skipped_policy >= 1
+        assert status.last_tick_panel_candidates == int(initial_payload["panel_candidates"])
+        assert status.last_tick_panel_skipped_policy == int(initial_payload["panel_skipped_policy"])
+        assert status.last_tick_panel_skipped_auto_exec == int(initial_payload["panel_skipped_auto_exec"])
 
         if mode == "emit-only":
             assert int(summary.watcher["panel_skipped_auto_exec"] or 0) >= 1
