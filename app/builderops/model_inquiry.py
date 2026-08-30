@@ -38,7 +38,8 @@ from app.builderops.vault_queue import (
     _trusted_vault_root,
 )
 
-INQUIRY_SCHEMA = "builderops.model-inquiry.v1"
+LEGACY_INQUIRY_SCHEMA = "builderops.model-inquiry.v1"
+INQUIRY_SCHEMA = "builderops.model-inquiry.v2"
 QUESTION_SCHEMA = "builderops.model-inquiry-question.v1"
 TURN_SCHEMA = "builderops.model-inquiry-turn.v1"
 SYNTHESIS_SCHEMA = "builderops.model-inquiry-synthesis.v1"
@@ -52,6 +53,7 @@ READINESS_OUTCOMES = frozenset({"issue_ready", "needs_input", "not_ready"})
 TERMINAL_TURN_OUTCOMES = frozenset({"accepted", "completed", "failed", "not_ready", "refused"})
 RUN_TERMINAL_OUTCOMES = frozenset(
     {
+        "single_target_acceptance",
         "consensus",
         "degraded_consensus",
         "max_rounds_exhausted",
@@ -113,6 +115,7 @@ class ModelInquiryService:
         *,
         question: str,
         workflow: str,
+        acceptance_mode: str | None = None,
         source_refs: list[dict[str, Any]],
         created_by: Mapping[str, Any] | str | None = None,
         inquiry_id: str | None = None,
@@ -152,8 +155,10 @@ class ModelInquiryService:
         )
         manifest_path = directory / "manifest.json"
         manifest_existing = self._read_optional(manifest_path)
+        if acceptance_mode not in {None, "single_target"}:
+            raise BuilderOpsValidationError("unsupported inquiry acceptance_mode")
         manifest = {
-            "schema": INQUIRY_SCHEMA,
+            "schema": INQUIRY_SCHEMA if acceptance_mode else LEGACY_INQUIRY_SCHEMA,
             "inquiry_id": inquiry_id,
             "workflow": workflow,
             "question_artifact_id": "question",
@@ -167,6 +172,14 @@ class ModelInquiryService:
                 fallback=question_payload["created_at"],
             ),
         }
+        if acceptance_mode:
+            manifest.update(
+                {
+                    "acceptance_mode": acceptance_mode,
+                    "perspectives": ["synthesis", "verification"],
+                    "independence": False,
+                }
+            )
         manifest["artifact_hash"] = _artifact_hash(manifest)
         self._write_immutable(
             manifest_path,
@@ -396,6 +409,22 @@ class ModelInquiryService:
             synthesis=trace["synthesis"],
             readiness=readiness,
         )
+        run_terminal = next(
+            (
+                receipt
+                for receipt in trace["receipts"]
+                if receipt.get("event_type") == "inquiry_run_terminal"
+            ),
+            None,
+        )
+        synthesis = trace.get("synthesis")
+        requires_linkage = trace["inquiry"].get("acceptance_mode") == "single_target"
+        if requires_linkage and outcome == "issue_ready" and (
+            not isinstance(run_terminal, dict) or not isinstance(synthesis, dict)
+        ):
+            raise BuilderOpsValidationError(
+                "readiness receipt requires terminal and synthesis evidence"
+            )
         path = directory / "receipts" / "readiness-terminal.json"
         existing = self._read_optional(path)
         occurred_at = _existing_timestamp(existing, fallback=readiness["created_at"])
@@ -426,6 +455,10 @@ class ModelInquiryService:
                 "updated_at": occurred_at,
             }
         )
+        if isinstance(run_terminal, dict):
+            receipt["run_terminal_receipt_hash"] = run_terminal["artifact_hash"]
+        if isinstance(synthesis, dict):
+            receipt["synthesis_artifact_hash"] = synthesis["artifact_hash"]
         receipt["artifact_hash"] = _artifact_hash(receipt)
         return self._write_immutable(path, receipt, label="immutable readiness receipt")
 
@@ -445,6 +478,9 @@ class ModelInquiryService:
         directory = self._require_inquiry(inquiry_id)
         readiness = self._read_required(directory / "readiness.json")
         synthesis = self._read_required(directory / "synthesis.json")
+        run_terminal = self._read_optional(
+            directory / "receipts" / "inquiry-run-terminal.json"
+        )
         path = directory / "promotion-intent.json"
         existing = self._read_optional(path)
         actor_ref = normalize_actor(actor)
@@ -465,12 +501,15 @@ class ModelInquiryService:
             "created_by": actor_ref,
             "created_at": _existing_timestamp(existing),
         }
+        if isinstance(run_terminal, dict):
+            payload["run_terminal_receipt_hash"] = run_terminal["artifact_hash"]
         payload["artifact_hash"] = _artifact_hash(payload)
         self._validate_promotion_intent(
             payload,
             inquiry_id=inquiry_id,
             readiness=readiness,
             synthesis=synthesis,
+            run_terminal=run_terminal,
         )
         return self._write_immutable(path, payload, label="immutable promotion intent")
 
@@ -538,6 +577,8 @@ class ModelInquiryService:
                 "source_refs": source_refs,
                 "created_by": actor_ref,
                 "promotion_intent_artifact_hash": intent["artifact_hash"],
+                "readiness_artifact_hash": intent["readiness_artifact_hash"],
+                "synthesis_artifact_hash": intent["synthesis_artifact_hash"],
                 "promotion_marker": intent["promotion_marker"],
                 "github_issue_number": issue_number,
                 "github_issue_url": issue_url,
@@ -545,6 +586,8 @@ class ModelInquiryService:
                 "updated_at": occurred_at,
             }
         )
+        if "run_terminal_receipt_hash" in intent:
+            receipt["run_terminal_receipt_hash"] = intent["run_terminal_receipt_hash"]
         receipt["artifact_hash"] = _artifact_hash(receipt)
         return self._write_immutable(path, receipt, label="immutable promotion receipt")
 
@@ -717,8 +760,21 @@ class ModelInquiryService:
         if outcome not in RUN_TERMINAL_OUTCOMES:
             raise BuilderOpsValidationError(f"unsupported inquiry run outcome: {outcome}")
         validate_source_refs(source_refs)
-        sanitized = _validate_receipt_details(details)
         directory = self._require_inquiry(inquiry_id)
+        manifest = self._read_required(directory / "manifest.json")
+        acceptance_mode = manifest.get("acceptance_mode")
+        if acceptance_mode == "single_target" and outcome in {
+            "consensus",
+            "degraded_consensus",
+        }:
+            raise BuilderOpsValidationError(
+                "single-target inquiry cannot persist a consensus terminal"
+            )
+        if acceptance_mode != "single_target" and outcome == "single_target_acceptance":
+            raise BuilderOpsValidationError(
+                "single-target acceptance requires a v2 inquiry manifest"
+            )
+        sanitized = _validate_receipt_details(details)
         path = directory / "receipts" / "inquiry-run-terminal.json"
         existing = self._read_optional(path)
         occurred_at = _existing_timestamp(existing)
@@ -776,6 +832,7 @@ class ModelInquiryService:
         )
         receipts = self._read_receipts(
             directory,
+            manifest=manifest,
             readiness=readiness,
             readiness_input_artifacts=readiness_inputs,
             promotion_intent=promotion_intent,
@@ -788,8 +845,16 @@ class ModelInquiryService:
                 inquiry_id=inquiry_id,
                 readiness=readiness,
                 synthesis=synthesis,
+                run_terminal=next(
+                    (
+                        receipt
+                        for receipt in receipts
+                        if receipt.get("event_type") == "inquiry_run_terminal"
+                    ),
+                    None,
+                ),
             )
-        self._validate_run_terminal_semantics(receipts, turns, synthesis)
+        self._validate_run_terminal_semantics(manifest, receipts, turns, synthesis)
         source_refs = _dedupe_source_refs(
             manifest.get("source_refs", []),
             question.get("source_refs", []),
@@ -838,6 +903,7 @@ class ModelInquiryService:
         inquiry_id: str,
         readiness: dict[str, Any] | None,
         synthesis: dict[str, Any] | None,
+        run_terminal: dict[str, Any] | None,
     ) -> None:
         if (
             intent.get("schema") != PROMOTION_INTENT_SCHEMA
@@ -849,6 +915,12 @@ class ModelInquiryService:
             or synthesis is None
             or intent.get("readiness_artifact_hash") != readiness.get("artifact_hash")
             or intent.get("synthesis_artifact_hash") != synthesis.get("artifact_hash")
+        ):
+            raise BuilderOpsValidationError("invalid inquiry promotion intent")
+        if "run_terminal_receipt_hash" in intent and (
+            run_terminal is None
+            or intent.get("run_terminal_receipt_hash")
+            != run_terminal.get("artifact_hash")
         ):
             raise BuilderOpsValidationError("invalid inquiry promotion intent")
         if not isinstance(intent.get("title"), str) or not intent["title"].strip():
@@ -1135,6 +1207,7 @@ class ModelInquiryService:
         self,
         directory: Path,
         *,
+        manifest: Mapping[str, Any] | None = None,
         readiness: Mapping[str, Any] | None = None,
         readiness_input_artifacts: list[dict[str, str]] | None = None,
         promotion_intent: Mapping[str, Any] | None = None,
@@ -1146,6 +1219,14 @@ class ModelInquiryService:
             (path, self._read_required(path)) for path in sorted(receipts_dir.glob("*.json"))
         ]
         receipts = [receipt for _, receipt in receipt_files]
+        run_terminal = next(
+            (
+                receipt
+                for receipt in receipts
+                if receipt.get("event_type") == "inquiry_run_terminal"
+            ),
+            None,
+        )
         seen_ids: set[str] = set()
         run_terminal_count = 0
         for path, receipt in receipt_files:
@@ -1170,8 +1251,10 @@ class ModelInquiryService:
                     directory.name,
                     path,
                     receipt,
+                    manifest,
                     readiness,
                     readiness_input_artifacts,
+                    run_terminal,
                 )
             elif receipt.get("event_type") == "inquiry_promotion_terminal":
                 _validate_promotion_terminal_receipt(
@@ -1193,8 +1276,15 @@ class ModelInquiryService:
         receipts: list[dict[str, Any]],
         inquiry_id: str,
     ) -> None:
-        if manifest.get("schema") != INQUIRY_SCHEMA or manifest.get("inquiry_id") != inquiry_id:
+        schema = manifest.get("schema")
+        if schema not in {LEGACY_INQUIRY_SCHEMA, INQUIRY_SCHEMA} or manifest.get("inquiry_id") != inquiry_id:
             raise BuilderOpsValidationError("invalid inquiry manifest")
+        if schema == INQUIRY_SCHEMA and (
+            manifest.get("acceptance_mode") != "single_target"
+            or manifest.get("perspectives") != ["synthesis", "verification"]
+            or manifest.get("independence") is not False
+        ):
+            raise BuilderOpsValidationError("invalid single-target inquiry manifest")
         _validate_artifact_hash(manifest, label="manifest")
         if question.get("schema") != QUESTION_SCHEMA or question.get("inquiry_id") != inquiry_id:
             raise BuilderOpsValidationError("invalid inquiry question artifact")
@@ -1395,6 +1485,7 @@ class ModelInquiryService:
 
     def _validate_run_terminal_semantics(
         self,
+        manifest: dict[str, Any],
         receipts: list[dict[str, Any]],
         turns: list[dict[str, Any]],
         synthesis: dict[str, Any] | None,
@@ -1411,6 +1502,26 @@ class ModelInquiryService:
             return
         outcome = terminal["outcome"]
         details = terminal["details"]
+        acceptance_mode = manifest.get("acceptance_mode")
+        if acceptance_mode == "single_target" and outcome in {
+            "consensus",
+            "degraded_consensus",
+        }:
+            raise BuilderOpsValidationError(
+                "single-target inquiry cannot contain a consensus terminal"
+            )
+        if acceptance_mode != "single_target" and outcome == "single_target_acceptance":
+            raise BuilderOpsValidationError(
+                "single-target acceptance requires a v2 inquiry manifest"
+            )
+        if outcome == "single_target_acceptance":
+            self._validate_single_target_acceptance(
+                manifest,
+                details,
+                turns,
+                synthesis,
+            )
+            return
         if outcome in {"consensus", "degraded_consensus"}:
             accepted_hash = details.get("accepted_artifact_hash")
             round_index = details.get("round_index")
@@ -1508,6 +1619,90 @@ class ModelInquiryService:
         ]
         if len(attempts) != 1:
             raise BuilderOpsValidationError("failure terminal is not linked to one provider attempt")
+
+    def _validate_single_target_acceptance(
+        self,
+        manifest: dict[str, Any],
+        details: dict[str, Any],
+        turns: list[dict[str, Any]],
+        synthesis: dict[str, Any] | None,
+    ) -> None:
+        if manifest.get("schema") != INQUIRY_SCHEMA:
+            raise BuilderOpsValidationError("single-target terminal requires a v2 manifest")
+        expected_fields = {
+            "acceptance_mode",
+            "independence",
+            "round_index",
+            "accepted_artifact_hash",
+            "target_fingerprints",
+            "effective_targets",
+            "context_hash",
+            "synthesis_artifact_hash",
+        }
+        round_index = details.get("round_index")
+        accepted_hash = details.get("accepted_artifact_hash")
+        accepted_turn = next(
+            (turn for turn in turns if turn.get("artifact_hash") == accepted_hash),
+            None,
+        )
+        accept_turns = [
+            turn
+            for turn in turns
+            if turn.get("phase") == "review"
+            and turn.get("round_index") == round_index
+            and turn.get("stance") == "accept"
+            and turn.get("accepted_artifact_hash") == accepted_hash
+        ]
+        target_fingerprints = {
+            canonical_hash(
+                {
+                    "adapter_id": turn.get("adapter_id"),
+                    "provider": turn.get("provider"),
+                    "model": turn.get("model"),
+                }
+            )
+            for turn in accept_turns
+        }
+        effective_targets = sorted(
+            {
+                (
+                    str(turn.get("adapter_id")),
+                    str(turn.get("provider")),
+                    str(turn.get("model")),
+                )
+                for turn in accept_turns
+            }
+        )
+        context_hashes = {turn.get("context_hash") for turn in turns}
+        if (
+            set(details) != expected_fields
+            or details.get("acceptance_mode") != "single_target"
+            or details.get("independence") is not False
+            or not isinstance(round_index, int)
+            or isinstance(round_index, bool)
+            or round_index < 0
+            or len(accept_turns) != 2
+            or {turn.get("role") for turn in accept_turns}
+            != {"synthesis", "verification"}
+            or len(target_fingerprints) != 1
+            or details.get("target_fingerprints") != sorted(target_fingerprints)
+            or details.get("effective_targets")
+            != [
+                {"adapter_id": item[0], "provider": item[1], "model": item[2]}
+                for item in effective_targets
+            ]
+            or len(effective_targets) != 1
+            or len(context_hashes) != 1
+            or details.get("context_hash") != next(iter(context_hashes), None)
+            or accepted_turn is None
+            or synthesis is None
+            or synthesis.get("input_artifact_refs") != [accepted_turn["turn_id"]]
+            or synthesis.get("content") != accepted_turn["content"]
+            or details.get("synthesis_artifact_hash") != synthesis.get("artifact_hash")
+        ):
+            raise BuilderOpsValidationError(
+                "single-target terminal is not linked to the accepted graph"
+            )
 
     def _require_within_vault(self, candidate: Path, *, label: str) -> None:
         try:
@@ -1872,12 +2067,26 @@ def _validate_readiness_terminal_receipt(
     inquiry_id: str,
     path: Path,
     receipt: Mapping[str, Any],
+    manifest: Mapping[str, Any] | None,
     readiness: Mapping[str, Any] | None,
     input_artifacts: list[dict[str, str]] | None,
+    run_terminal: Mapping[str, Any] | None,
 ) -> None:
     if readiness is None or input_artifacts is None:
         raise BuilderOpsValidationError("readiness receipt has no loaded readiness evidence")
+    synthesis_hash = next(
+        (
+            item.get("artifact_hash")
+            for item in input_artifacts
+            if item.get("artifact_id") == "synthesis"
+        ),
+        None,
+    )
     outcome = readiness.get("outcome")
+    requires_linkage = (
+        isinstance(manifest, Mapping)
+        and manifest.get("acceptance_mode") == "single_target"
+    )
     expected_target = [
         {
             "ref_type": "builderops_inquiry",
@@ -1897,6 +2106,24 @@ def _validate_readiness_terminal_receipt(
         or outcome not in READINESS_OUTCOMES
     ):
         raise BuilderOpsValidationError("invalid inquiry readiness terminal receipt")
+    if outcome == "issue_ready":
+        if requires_linkage and run_terminal is None:
+            raise BuilderOpsValidationError("invalid inquiry readiness terminal receipt")
+        if requires_linkage and (
+            receipt.get("run_terminal_receipt_hash") != run_terminal.get("artifact_hash")
+            or receipt.get("synthesis_artifact_hash") != synthesis_hash
+        ):
+            raise BuilderOpsValidationError("invalid inquiry readiness terminal receipt")
+    else:
+        if "run_terminal_receipt_hash" in receipt and (
+            run_terminal is None
+            or receipt.get("run_terminal_receipt_hash") != run_terminal.get("artifact_hash")
+        ):
+            raise BuilderOpsValidationError("invalid inquiry readiness terminal receipt")
+        if "synthesis_artifact_hash" in receipt and receipt.get(
+            "synthesis_artifact_hash"
+        ) != synthesis_hash:
+            raise BuilderOpsValidationError("invalid inquiry readiness terminal receipt")
 
 
 def _validate_promotion_terminal_receipt(
@@ -1915,6 +2142,10 @@ def _validate_promotion_terminal_receipt(
         or receipt.get("idempotency_key") != f"inquiry:{inquiry_id}:promotion:github_issue"
         or receipt.get("action") != "promoted"
         or receipt.get("promotion_intent_artifact_hash") != intent.get("artifact_hash")
+        or receipt.get("readiness_artifact_hash")
+        != intent.get("readiness_artifact_hash")
+        or receipt.get("synthesis_artifact_hash")
+        != intent.get("synthesis_artifact_hash")
         or receipt.get("promotion_marker") != intent.get("promotion_marker")
         or receipt.get("source_refs") != intent.get("source_refs")
         or isinstance(issue_number, bool)
@@ -1938,6 +2169,11 @@ def _validate_promotion_terminal_receipt(
             intent.get("target_repository"),
             issue_number,
         )
+    ):
+        raise BuilderOpsValidationError("invalid inquiry promotion terminal receipt")
+    if "run_terminal_receipt_hash" in intent and (
+        receipt.get("run_terminal_receipt_hash")
+        != intent.get("run_terminal_receipt_hash")
     ):
         raise BuilderOpsValidationError("invalid inquiry promotion terminal receipt")
 

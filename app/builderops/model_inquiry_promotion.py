@@ -171,7 +171,7 @@ class ModelInquiryPromotionGateway:
         try:
             proposal = _validated_issue_proposal(trace)
         except ModelInquiryPromotionError as exc:
-            outcome = "not_ready" if "consensus terminal" in str(exc) else "needs_input"
+            outcome = "not_ready" if "accepted terminal" in str(exc) else "needs_input"
             input_refs = (
                 ["synthesis"]
                 if isinstance(trace.get("synthesis"), dict)
@@ -198,7 +198,7 @@ class ModelInquiryPromotionGateway:
         readiness = self.service.commit_readiness(
             inquiry_id,
             outcome="issue_ready",
-            rationale="Consensus proposal satisfies the canonical Issue contract.",
+            rationale="Accepted proposal satisfies the canonical Issue contract.",
             input_artifact_refs=["synthesis"],
             source_refs=list(trace["source_refs"]),
         )
@@ -234,6 +234,7 @@ class ModelInquiryPromotionGateway:
                 inquiry_id=inquiry_id,
                 readiness_hash=str(readiness["artifact_hash"]),
                 synthesis_hash=str(trace["synthesis"]["artifact_hash"]),
+                terminal_hash=_run_terminal_hash(trace),
                 title=proposal.title,
                 body=proposal.body,
             )
@@ -307,8 +308,22 @@ def _validated_issue_proposal(trace: Mapping[str, Any]) -> ValidatedIssueProposa
         ),
         None,
     )
-    if terminal is None or terminal.get("outcome") != "consensus":
-        raise ModelInquiryPromotionError("issue promotion requires a consensus terminal receipt")
+    if terminal is None or terminal.get("outcome") not in {
+        "consensus",
+        "single_target_acceptance",
+    }:
+        raise ModelInquiryPromotionError(
+            "issue promotion requires a consensus terminal receipt; accepted terminal required"
+        )
+    manifest = trace.get("inquiry")
+    if (
+        isinstance(manifest, Mapping)
+        and manifest.get("acceptance_mode") == "single_target"
+        and terminal.get("outcome") != "single_target_acceptance"
+    ):
+        raise ModelInquiryPromotionError(
+            "single-target issue promotion requires a single_target_acceptance terminal"
+        )
     synthesis = trace.get("synthesis")
     if not isinstance(synthesis, dict):
         raise ModelInquiryPromotionError("issue promotion requires a synthesis artifact")
@@ -358,6 +373,7 @@ def _promotion_marker(
     inquiry_id: str,
     readiness_hash: str,
     synthesis_hash: str,
+    terminal_hash: str,
     title: str,
     body: str,
 ) -> str:
@@ -368,11 +384,26 @@ def _promotion_marker(
             "inquiry_id": inquiry_id,
             "readiness_artifact_hash": readiness_hash,
             "synthesis_artifact_hash": synthesis_hash,
+            "run_terminal_receipt_hash": terminal_hash,
             "title": title,
             "body": body,
         }
     )
     return f"<!-- builderops-inquiry-promotion:{inquiry_id}:{digest} -->"
+
+
+def _run_terminal_hash(trace: Mapping[str, Any]) -> str:
+    terminal = next(
+        (
+            receipt
+            for receipt in trace.get("receipts", [])
+            if receipt.get("event_type") == "inquiry_run_terminal"
+        ),
+        None,
+    )
+    if not isinstance(terminal, Mapping):
+        raise ModelInquiryPromotionError("promotion requires terminal evidence")
+    return str(terminal["artifact_hash"])
 
 
 def _validated_issue_response(
@@ -417,6 +448,7 @@ def _promotion_result(
         "issue_number": receipt["github_issue_number"],
         "issue_url": receipt["github_issue_url"],
         "receipt_id": receipt["id"],
+        "receipt": dict(receipt),
         "reconciled": reconciled,
     }
 
