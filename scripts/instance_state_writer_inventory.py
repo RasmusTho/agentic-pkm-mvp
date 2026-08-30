@@ -1013,13 +1013,15 @@ def _owner_identity_material(root: Path, *, domain: str, source: str) -> tuple[s
     ancestors: set[str] = set()
     for ancestor in resolved.parents:
         try:
-            ancestor_metadata = os.stat(ancestor)
+            os.stat(ancestor)
         except OSError as exc:
             raise InventoryError(
                 "legacy owner ancestor identity is unavailable: "
                 f"domain={domain} source={source} id={redacted_id}"
             ) from exc
-        ancestors.add(f"inode:{ancestor_metadata.st_dev}:{ancestor_metadata.st_ino}")
+        # Root identity is inode-bound, but the parent chain is path-bound so
+        # the authenticated lease remains portable across container mounts.
+        ancestors.add(f"path:{ancestor}")
     return primary, frozenset(ancestors)
 
 

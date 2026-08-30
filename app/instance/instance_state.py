@@ -33,7 +33,7 @@ _DEPLOYMENT_COMPATIBILITY_BLOCK_SCHEMA = (
     "agentic-pkm.host-deployment-compatibility-block.v1"
 )
 _LEGACY_INVENTORY_SCHEMA = "agentic-pkm.legacy-owner-inventory.v1"
-_LEGACY_OWNER_IDENTITY_RE = re.compile(r"^inode:[0-9]+:[0-9]+$")
+_LEGACY_OWNER_IDENTITY_RE = re.compile(r"^(?:inode:[0-9]+:[0-9]+|path:/.*)$")
 _QUIESCENCE_INVENTORY_SCHEMA = "agentic-pkm.host-deployment-quiescence.v2"
 _FINAL_EXPORT_SEAL = os.urandom(32)
 

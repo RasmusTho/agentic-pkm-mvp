@@ -1475,7 +1475,7 @@ def _roll_forward_scalar_rollback(
 _DEPLOYMENT_FENCE_SCHEMA = "agentic-pkm.instance-state-deployment-fence.v1"
 _LEGACY_INVENTORY_SCHEMA = "agentic-pkm.legacy-owner-inventory.v1"
 _LEGACY_INVENTORY_SOURCE_DIGEST_RE = re.compile(r"^[0-9a-f]{64}$")
-_LEGACY_OWNER_IDENTITY_RE = re.compile(r"^inode:[0-9]+:[0-9]+$")
+_LEGACY_OWNER_IDENTITY_RE = re.compile(r"^(?:inode:[0-9]+:[0-9]+|path:/.*)$")
 _DEPLOYMENT_LEASE_SCHEMA = "agentic-pkm.host-deployment-lease.v3"
 _DEPLOYMENT_COMPATIBILITY_BLOCK_SCHEMA = (
     "agentic-pkm.host-deployment-compatibility-block.v1"

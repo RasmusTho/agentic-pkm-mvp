@@ -82,8 +82,7 @@ def _legacy_owner_inventory_payload(
             metadata = os.stat(root)
             identity = f"inode:{metadata.st_dev}:{metadata.st_ino}"
             ancestor_identities = sorted(
-                f"inode:{os.stat(ancestor).st_dev}:{os.stat(ancestor).st_ino}"
-                for ancestor in root.resolve().parents
+                f"path:{ancestor}" for ancestor in root.resolve().parents
             )
         else:
             identity = f"missing:{hashlib.sha256(str(root).encode()).hexdigest()}"
