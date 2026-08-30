@@ -49,6 +49,16 @@ Default rule:
 - relevant repo-standard checks that cover the changed surface must be current, even when GitHub branch protection does not require them
 - failing checks that cover the changed surface are hard stops until fixed, rerun green, or explicitly classified as unrelated by evidence; `Unit tests (not pg)` is a hard stop when red on an app/test/runtime-affecting PR
 
+## Publication Routing
+
+`.codex/skills/publish-pr/SKILL.md` owns the publication decision. Its normal command is restricted
+to a new single-Issue Tier 1/2 PR targeting `main`, with strict credential-free fetch/push repository
+identity, one live base SHA, an absent head branch, and empty all-state PR history. Every existing-PR,
+non-`main`, pre-existing-commit, remote-head/history, multi-Issue, special-lane, high-risk, or
+ambiguous-readback case routes to `.codex/skills/publish-pr/FULL_PATH.md :: Procedure`; that file is
+the canonical full-path publication owner. Neither route owns merge, Issue closure, release, or
+deployment.
+
 ## PR Body Preparation
 
 `scripts/pr_body_generator.py` is the authoritative body constructor for implementation,

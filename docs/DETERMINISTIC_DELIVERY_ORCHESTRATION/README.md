@@ -96,7 +96,7 @@ coordination:
 | Plan compiler | Pure scope resolution, readiness checks, dependency waves, exclusions, and typed rejection | Claims, launches, GitHub writes | Planning rules |
 | Delivery reducer | Allowed state transitions and next-effect decisions | Provider execution or authority mutation | State-machine policy |
 | Effect adapters | Claim, worker correlation, CI/review wait, merge/closure calls | Deciding whether an effect is allowed | External integration |
-| Local publication adapter | Hash-bound read-only planning plus guarded commit/push/new-PR application for the normal single-Issue Tier 1/2 path | Durable orchestration, existing-PR/full-path delivery, merge, closure, deploy, or retry after ambiguous readback | Reduce ordinary V3.3 publication context while preserving Git/GitHub authority |
+| Local publication adapter | Hash-bound read-only planning plus guarded `absent -> base-reserved -> exact-commit -> exact-PR` application for the normal single-Issue Tier 1/2 `main` path | Durable orchestration, existing-PR/full-path delivery, merge, closure, deploy, or retry after ambiguous readback | Reduce ordinary V3.3 publication context while preserving Git/GitHub authority |
 | BuilderOps journal/outbox binding | Fencing, idempotency, repo-scoped delivery-lane lease, attempt/effect durability, unknown-state reconciliation | GitHub delivery authority or a second delivery state machine | Crash safety and concurrency |
 | CKM bridge | Draft, preview, authenticated initiation handoff, and receipt projection | Delivery execution or static cockpit mutation | Operator overview and initiation |
 | TCD/acceptance harness | Baseline, pilot metrics, fault tests, and capability acceptance | Runtime scheduling | Evidence and rollout |
@@ -109,10 +109,14 @@ migration cost. Until then, canonical initiation bytes may be transported by a b
 envelope but no transport or storage shape becomes contract authority.
 
 The delivered local `builder.publication-plan.v1` / `builder.publication-receipt.v1` seam is an
-enabling V3.3 effect adapter, not DDO-05 or a new reducer child. It reconstructs partial progress from
-the exact local commit, remote head, and open PR, and returns typed drift/`unknown` before a blind
-retry. This reduces D11 coordination/context exposure and makes D12 publication evidence explicit,
-but adds no journal, queue, fence, devUI control, merge, closure, or crash-safe unattended guarantee.
+enabling V3.3 effect adapter, not DDO-05 or a new reducer child. It binds credential-free effective
+fetch/push repository identities plus local, fetch, and GitHub `main` to one base SHA; reconstructs
+partial progress from the exact local commit, base reservation, remote head, and all-state PR
+history; and returns typed terminal/drift/`unknown` before a blind retry. GitHub REST create-ref is a
+transient atomic branch reservation at the authenticated base, followed only by an ordinary
+non-force fast-forward push. This reduces D11 coordination/context exposure and makes D12
+publication evidence explicit, but adds no durable journal, queue, repo-scoped lane fence, devUI
+control, merge, closure, or crash-safe unattended guarantee.
 
 ## Deterministic, agentic, and owner decisions
 

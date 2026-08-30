@@ -28,6 +28,7 @@ from scripts.review_before_ci_gate import (
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 PUBLISH_PR_SKILL = REPO_ROOT / ".codex/skills/publish-pr/SKILL.md"
+PUBLISH_PR_FULL_PATH = REPO_ROOT / ".codex/skills/publish-pr/FULL_PATH.md"
 PUBLICATION_ADAPTER = REPO_ROOT / "app/builderops/publication.py"
 ISSUE_TO_CODE_SKILL = REPO_ROOT / ".codex/skills/issue-to-code/SKILL.md"
 VERIFICATION_SKILL = REPO_ROOT / ".codex/skills/verification-and-closure/SKILL.md"
@@ -2188,17 +2189,40 @@ def test_cli_fails_until_review_gate_is_complete(
     assert json.loads(capsys.readouterr().out)["may_handoff_to_ci"] is True
 
 
-def test_publish_pr_skill_runs_review_gate_before_push() -> None:
+def test_publish_pr_runs_review_gate_before_reservation_and_push() -> None:
     text = PUBLICATION_ADAPTER.read_text(encoding="utf-8")
     apply_body = text.split("def apply_publication_plan(", maxsplit=1)[1].split(
         "\ndef _validate_request", maxsplit=1
     )[0]
     review_gate = text.split("def _run_review_gate(", maxsplit=1)[1].split(
-        "\ndef _resolve_existing_pr", maxsplit=1
+        "\ndef _transition_readback", maxsplit=1
     )[0]
 
     assert "scripts/review_before_ci_gate.py" in review_gate
-    assert apply_body.index("_run_review_gate(") < apply_body.index("push = runner.run(")
+    positions = [
+        apply_body.index("_run_review_gate("),
+        apply_body.index("reserve = runner.run("),
+        apply_body.index("push = runner.run("),
+        apply_body.index("create = runner.run("),
+    ]
+    assert positions == sorted(positions)
+    assert '"state=all"' in text
+    assert '"per_page=2"' in text
+    assert '"--force"' not in apply_body
+    assert '"--delete"' not in apply_body
+
+
+def test_publish_pr_full_path_contract_is_stable_and_fail_closed() -> None:
+    skill = PUBLISH_PR_SKILL.read_text(encoding="utf-8")
+    full_path = PUBLISH_PR_FULL_PATH.read_text(encoding="utf-8")
+
+    assert ".codex/skills/publish-pr/FULL_PATH.md :: Procedure" in skill
+    assert "## Procedure" in full_path
+    assert "effective fetch and push repository identities" in full_path
+    assert "all-state PR history" in full_path
+    assert "Do not rebase" in full_path
+    assert "ordinary non-force push" in full_path
+    assert "no blind retry or alternate transport" in full_path
 
 
 def test_mechanism_convergence_contract_is_wired_across_delivery_skills() -> None:

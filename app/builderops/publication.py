@@ -34,6 +34,7 @@ RISK_SURFACES = frozenset(
     }
 )
 REPOSITORY_RE = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\Z")
+GIT_SHA_RE = re.compile(r"[0-9a-f]{40,64}\Z")
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
@@ -95,9 +96,7 @@ class SubprocessExecutor:
 class PublicationCommandError(RuntimeError):
     def __init__(self, result: CommandResult) -> None:
         self.result = result
-        super().__init__(
-            f"command exited {result.returncode}: {' '.join(result.argv)}"
-        )
+        super().__init__(f"publication command exited {result.returncode}")
 
 
 class PublicationRefusal(RuntimeError):
@@ -123,6 +122,24 @@ class PublicationRequest:
     commit_message: str
     pr_title: str
     pr_body_inputs: Mapping[str, Any]
+
+
+@dataclass(frozen=True)
+class PublicationAuthoritySnapshot:
+    """Credential-free authority bound to one normal-path publication."""
+
+    fetch_identity: Mapping[str, str]
+    push_identity: Mapping[str, str]
+    base_ref: str
+    base_sha: str
+
+    def as_mapping(self) -> dict[str, Any]:
+        return {
+            "fetch_identity": dict(self.fetch_identity),
+            "push_identity": dict(self.push_identity),
+            "base_ref": self.base_ref,
+            "base_sha": self.base_sha,
+        }
 
 
 def canonical_json(value: Any) -> str:
@@ -157,9 +174,6 @@ def build_publication_plan(
     branch = _git_text(runner, actual_worktree, "branch", "--show-current")
     if branch != request.branch:
         raise PublicationRefusal("drift", "branch does not match requested publication branch")
-    origin_url = _git_text(runner, actual_worktree, "remote", "get-url", "origin")
-    if _repository_from_origin(origin_url) != request.repository:
-        raise PublicationRefusal("drift", "origin repository does not match requested repository")
     base_remote_ref = f"origin/{request.base_ref}"
     base_sha = _git_text(runner, actual_worktree, "rev-parse", base_remote_ref)
     head_sha = _git_text(runner, actual_worktree, "rev-parse", "HEAD")
@@ -168,6 +182,14 @@ def build_publication_plan(
             "unsupported",
             "normal new-PR plan requires HEAD to equal the bound base",
         )
+    authority = _read_authority_snapshot(
+        runner,
+        actual_worktree,
+        request.repository,
+        request.base_ref,
+    )
+    if authority.base_sha != base_sha:
+        raise PublicationRefusal("drift", "local base changed while building the plan")
 
     intended_paths = _normalize_paths(request.intended_paths, actual_worktree)
     unstaged, staged, untracked = _changed_path_sets(runner, actual_worktree)
@@ -179,9 +201,7 @@ def build_publication_plan(
             "drift",
             "planned paths do not exactly match the dirty working-tree paths",
         )
-    path_states = [
-        _path_state(runner, actual_worktree, path, base_sha) for path in intended_paths
-    ]
+    path_states = [_path_state(runner, actual_worktree, path, base_sha) for path in intended_paths]
     issue = _read_issue(runner, actual_worktree, request.repository, request.governing_issue)
     _require_publishable_issue(issue, request.governing_issue)
     remote_head = _read_remote_head(runner, actual_worktree, request.branch)
@@ -189,9 +209,10 @@ def build_publication_plan(
         raise PublicationRefusal(
             "unsupported", "normal new-PR plan requires an absent remote publication branch"
         )
-    if _read_open_prs(runner, actual_worktree, request.repository, request.branch, request.base_ref):
+    if _read_pr_history(runner, actual_worktree, request.repository, request.branch):
         raise PublicationRefusal(
-            "unsupported", "normal new-PR plan requires no open PR for the publication branch"
+            "unsupported",
+            "normal new-PR plan requires empty all-state PR history for the publication branch",
         )
     pr_body_inputs = json.loads(canonical_json(request.pr_body_inputs))
     _validate_pr_body_inputs(request, pr_body_inputs)
@@ -207,13 +228,13 @@ def build_publication_plan(
         "risk_assessment_complete": request.risk_assessment_complete,
         "review_gate_complete": request.review_gate_complete,
         "governing_issue": issue,
+        "authority": authority.as_mapping(),
         "git": {
             "branch": request.branch,
             "base_ref": request.base_ref,
             "base_remote_ref": base_remote_ref,
             "base_sha": base_sha,
             "head_sha": head_sha,
-            "origin_url": origin_url,
             "intended_paths": list(intended_paths),
             "path_states": path_states,
             "remote_head": None,
@@ -246,26 +267,30 @@ def apply_publication_plan(
     runner = executor or SubprocessExecutor()
     normalized = _validated_plan(plan, expected_plan_sha256)
     worktree = Path(normalized["worktree"])
+    authority = _assert_authority_unchanged(runner, worktree, normalized)
     local_state, commit_sha = _observe_local_state(runner, worktree, normalized)
     _assert_issue_unchanged(runner, worktree, normalized)
     remote_head = _read_remote_head(runner, worktree, normalized["git"]["branch"])
-    prs = _read_open_prs(
+    prs = _read_pr_history(
         runner,
         worktree,
         normalized["repository"],
         normalized["git"]["branch"],
-        normalized["git"]["base_ref"],
     )
     reconciled = local_state == "committed"
-    existing = _resolve_existing_pr(normalized, prs, commit_sha)
+    existing = _resolve_pr_history(normalized, prs, commit_sha)
     if existing is not None:
         if local_state != "committed" or commit_sha is None or remote_head != commit_sha:
             raise PublicationRefusal("unknown", "exact PR exists without exact local/remote commit")
-        return _receipt(normalized, commit_sha, existing, reconciled=True)
-    if prs:
-        raise PublicationRefusal("unknown", "open PR state is ambiguous or does not match the plan")
-    if remote_head is not None and (local_state != "committed" or remote_head != commit_sha):
-        raise PublicationRefusal("unknown", "remote branch head does not match the planned result")
+        return _receipt(normalized, authority, commit_sha, existing, reconciled=True)
+    if local_state != "committed" and remote_head is not None:
+        raise PublicationRefusal(
+            "unknown", "remote reservation exists without the exact local publication commit"
+        )
+    if remote_head not in {None, normalized["authority"]["base_sha"], commit_sha}:
+        raise PublicationRefusal(
+            "unknown", "remote branch is outside the publication state machine"
+        )
 
     if local_state != "committed":
         _run_workspace_gate(runner, worktree, normalized)
@@ -273,16 +298,12 @@ def apply_publication_plan(
         state_before_stage, _ = _observe_local_state(runner, worktree, normalized)
         if state_before_stage not in {"uncommitted", "staged"}:
             raise PublicationRefusal("drift", "local state changed before staging")
-        stage = runner.run(
-            ["git", "add", "--", *normalized["git"]["intended_paths"]], cwd=worktree
-        )
+        stage = runner.run(["git", "add", "--", *normalized["git"]["intended_paths"]], cwd=worktree)
         if stage.returncode != 0:
             raise PublicationCommandError(stage)
         _assert_staged_plan(runner, worktree, normalized)
         _assert_issue_unchanged(runner, worktree, normalized)
-        commit = runner.run(
-            ["git", "commit", "-m", normalized["commit"]["message"]], cwd=worktree
-        )
+        commit = runner.run(["git", "commit", "-m", normalized["commit"]["message"]], cwd=worktree)
         if commit.returncode != 0:
             try:
                 state_after_failure, observed_commit = _observe_local_state(
@@ -297,40 +318,88 @@ def apply_publication_plan(
         else:
             local_state, commit_sha = _observe_local_state(runner, worktree, normalized)
             if local_state != "committed" or commit_sha is None:
-                raise PublicationRefusal("unknown", "commit command succeeded without exact readback")
+                raise PublicationRefusal(
+                    "unknown", "commit command succeeded without exact readback"
+                )
 
     if commit_sha is None:
         raise PublicationRefusal("unknown", "publication commit identity is unavailable")
     _run_review_gate(runner, worktree, normalized)
-    regenerated_body = _generate_pr_body(
-        runner, worktree, normalized["pr"]["body_inputs"]
-    )
+    regenerated_body = _generate_pr_body(runner, worktree, normalized["pr"]["body_inputs"])
     if (
         regenerated_body != normalized["pr"]["body"]
         or _sha256_text(regenerated_body) != normalized["pr"]["body_sha256"]
     ):
         raise PublicationRefusal("drift", "generated PR body drifted from the plan")
 
-    _assert_issue_unchanged(runner, worktree, normalized)
-    state_before_push, checked_commit = _observe_local_state(runner, worktree, normalized)
-    if state_before_push != "committed" or checked_commit != commit_sha:
-        raise PublicationRefusal("drift", "local commit drifted before push")
     _run_workspace_gate(runner, worktree, normalized)
-    remote_head = _read_remote_head(runner, worktree, normalized["git"]["branch"])
-    prs = _read_open_prs(
-        runner,
-        worktree,
-        normalized["repository"],
-        normalized["git"]["branch"],
-        normalized["git"]["base_ref"],
-    )
-    existing = _resolve_existing_pr(normalized, prs, commit_sha)
-    if existing is not None and remote_head == commit_sha:
-        return _receipt(normalized, commit_sha, existing, reconciled=True)
-    if prs or (remote_head is not None and remote_head != commit_sha):
-        raise PublicationRefusal("unknown", "publication state became ambiguous before push")
-    push_may_have_succeeded = remote_head == commit_sha
+    authority, remote_head, prs = _transition_readback(runner, worktree, normalized, commit_sha)
+    existing = _resolve_pr_history(normalized, prs, commit_sha)
+    if existing is not None:
+        if remote_head != commit_sha:
+            raise PublicationRefusal("unknown", "exact PR exists without exact remote commit")
+        return _receipt(normalized, authority, commit_sha, existing, reconciled=True)
+    base_sha = normalized["authority"]["base_sha"]
+    if remote_head not in {None, base_sha, commit_sha}:
+        raise PublicationRefusal(
+            "unknown", "remote branch is outside the publication state machine"
+        )
+
     if remote_head is None:
+        reserve = runner.run(
+            [
+                "gh",
+                "api",
+                "--method",
+                "POST",
+                f"repos/{normalized['repository']}/git/refs",
+                "-f",
+                f"ref=refs/heads/{normalized['git']['branch']}",
+                "-f",
+                f"sha={base_sha}",
+            ],
+            cwd=worktree,
+        )
+        try:
+            authority, remote_head, prs = _transition_readback(
+                runner, worktree, normalized, commit_sha
+            )
+        except PublicationCommandError:
+            raise PublicationRefusal(
+                "unknown", "reservation outcome lacks immediate complete readback"
+            ) from None
+        existing = _resolve_pr_history(normalized, prs, commit_sha)
+        if existing is not None:
+            if remote_head != commit_sha:
+                raise PublicationRefusal("unknown", "exact PR exists without exact remote commit")
+            return _receipt(normalized, authority, commit_sha, existing, reconciled=True)
+        if remote_head not in {None, base_sha, commit_sha}:
+            raise PublicationRefusal(
+                "unknown", "reservation raced with a conflicting remote branch state"
+            )
+        if reserve.returncode != 0:
+            if remote_head is None:
+                raise PublicationCommandError(reserve)
+            reconciled = True
+        elif remote_head is None:
+            raise PublicationRefusal(
+                "unknown", "reservation command succeeded without exact remote readback"
+            )
+
+    if remote_head == base_sha:
+        authority, remote_head, prs = _transition_readback(runner, worktree, normalized, commit_sha)
+        existing = _resolve_pr_history(normalized, prs, commit_sha)
+        if existing is not None:
+            raise PublicationRefusal("unknown", "PR appeared before the exact commit transition")
+        if remote_head != base_sha:
+            if remote_head == commit_sha:
+                reconciled = True
+            else:
+                raise PublicationRefusal(
+                    "unknown", "remote branch moved before the exact commit transition"
+                )
+
+    if remote_head == base_sha:
         push = runner.run(
             [
                 "git",
@@ -340,49 +409,33 @@ def apply_publication_plan(
             ],
             cwd=worktree,
         )
-        push_may_have_succeeded = True
-        if push.returncode != 0:
-            try:
-                observed_remote = _read_remote_head(
-                    runner, worktree, normalized["git"]["branch"]
-                )
-            except PublicationCommandError:
-                raise PublicationRefusal(
-                    "unknown",
-                    "push failed and immediate remote readback was unavailable",
-                ) from None
-            if observed_remote is None:
-                raise PublicationRefusal(
-                    "unknown",
-                    "push failed and immediate readback did not prove the remote state",
-                )
-            if observed_remote != commit_sha:
-                raise PublicationRefusal("unknown", "push failed with a conflicting remote head")
-            reconciled = True
-
-    try:
-        _assert_issue_unchanged(runner, worktree, normalized)
-        observed_remote = _read_remote_head(
-            runner, worktree, normalized["git"]["branch"]
-        )
-        prs = _read_open_prs(
-            runner,
-            worktree,
-            normalized["repository"],
-            normalized["git"]["branch"],
-            normalized["git"]["base_ref"],
-        )
-    except PublicationCommandError:
-        if push_may_have_succeeded:
+        try:
+            authority, remote_head, prs = _transition_readback(
+                runner, worktree, normalized, commit_sha
+            )
+        except PublicationCommandError:
             raise PublicationRefusal(
-                "unknown", "post-push publication readback was unavailable"
+                "unknown", "push outcome lacks immediate complete readback"
             ) from None
-        raise
-    if observed_remote != commit_sha:
-        raise PublicationRefusal("unknown", "remote branch readback is not the exact commit")
-    existing = _resolve_existing_pr(normalized, prs, commit_sha)
-    if existing is None and prs:
-        raise PublicationRefusal("unknown", "PR state became ambiguous before creation")
+        existing = _resolve_pr_history(normalized, prs, commit_sha)
+        if push.returncode != 0:
+            if remote_head == base_sha:
+                raise PublicationCommandError(push)
+            if remote_head != commit_sha:
+                raise PublicationRefusal("unknown", "push raced with a conflicting remote head")
+            reconciled = True
+        elif remote_head != commit_sha:
+            raise PublicationRefusal("unknown", "push succeeded without exact remote readback")
+        if existing is not None:
+            raise PublicationRefusal("unknown", "PR appeared during the exact commit transition")
+
+    if remote_head != commit_sha:
+        raise PublicationRefusal("unknown", "remote branch is not the exact publication commit")
+
+    authority, remote_head, prs = _transition_readback(runner, worktree, normalized, commit_sha)
+    if remote_head != commit_sha:
+        raise PublicationRefusal("unknown", "remote branch moved before PR creation")
+    existing = _resolve_pr_history(normalized, prs, commit_sha)
     if existing is None:
         create = runner.run(
             [
@@ -404,47 +457,41 @@ def apply_publication_plan(
         )
         if create.returncode != 0:
             try:
-                prs = _read_open_prs(
-                    runner,
-                    worktree,
-                    normalized["repository"],
-                    normalized["git"]["branch"],
-                    normalized["git"]["base_ref"],
+                authority, remote_head, prs = _transition_readback(
+                    runner, worktree, normalized, commit_sha
                 )
             except PublicationCommandError:
                 raise PublicationRefusal(
                     "unknown",
                     "PR create failed and immediate readback was unavailable",
                 ) from None
-            existing = _resolve_existing_pr(normalized, prs, commit_sha)
+            if remote_head != commit_sha:
+                raise PublicationRefusal("unknown", "remote branch moved during PR creation")
+            existing = _resolve_pr_history(normalized, prs, commit_sha)
             if existing is None:
-                if not prs:
-                    raise PublicationRefusal(
-                        "unknown",
-                        "PR create failed and immediate readback did not prove the outcome",
-                    )
-                raise PublicationRefusal("unknown", "PR create failed with ambiguous readback")
+                raise PublicationRefusal(
+                    "unknown", "PR create failed and immediate readback did not prove the outcome"
+                )
             reconciled = True
 
     try:
-        final_remote = _read_remote_head(
-            runner, worktree, normalized["git"]["branch"]
-        )
-        final_prs = _read_open_prs(
-            runner,
-            worktree,
-            normalized["repository"],
-            normalized["git"]["branch"],
-            normalized["git"]["base_ref"],
+        authority, final_remote, final_prs = _transition_readback(
+            runner, worktree, normalized, commit_sha
         )
     except PublicationCommandError:
         raise PublicationRefusal(
             "unknown", "final publication readback was unavailable after external effect"
         ) from None
-    final_pr = _resolve_existing_pr(normalized, final_prs, commit_sha)
+    final_pr = _resolve_pr_history(normalized, final_prs, commit_sha)
     if final_remote != commit_sha or final_pr is None or len(final_prs) != 1:
         raise PublicationRefusal("unknown", "publication effects lack one exact final readback")
-    return _receipt(normalized, commit_sha, final_pr, reconciled=reconciled)
+    return _receipt(
+        normalized,
+        authority,
+        commit_sha,
+        final_pr,
+        reconciled=reconciled,
+    )
 
 
 def _validate_request(request: PublicationRequest) -> None:
@@ -470,6 +517,8 @@ def _validate_request(request: PublicationRequest) -> None:
         raise PublicationRefusal("unsupported", "governing Issue must be positive")
     if not request.branch.strip() or not request.base_ref.strip():
         raise PublicationRefusal("unsupported", "branch and base ref are required")
+    if request.base_ref != "main":
+        raise PublicationRefusal("unsupported", "the normal publication path is restricted to main")
     if not request.intended_paths:
         raise PublicationRefusal("unsupported", "at least one intended path is required")
     if not request.commit_message.strip() or not request.pr_title.strip():
@@ -526,9 +575,7 @@ def _nul_paths(raw: str) -> set[str]:
     return {item for item in raw.split("\0") if item}
 
 
-def _changed_path_sets(
-    executor: CommandExecutor, cwd: Path
-) -> tuple[set[str], set[str], set[str]]:
+def _changed_path_sets(executor: CommandExecutor, cwd: Path) -> tuple[set[str], set[str], set[str]]:
     unstaged = _nul_paths(
         _checked(
             executor,
@@ -553,9 +600,7 @@ def _changed_path_sets(
     return unstaged, staged, untracked
 
 
-def _path_state(
-    executor: CommandExecutor, cwd: Path, path: str, base_sha: str
-) -> dict[str, Any]:
+def _path_state(executor: CommandExecutor, cwd: Path, path: str, base_sha: str) -> dict[str, Any]:
     absolute = cwd / path
     state: dict[str, Any] = {"path": path}
     try:
@@ -567,7 +612,11 @@ def _path_state(
         if stat.S_ISREG(metadata.st_mode):
             content = absolute.read_bytes()
             state.update(
-                {"kind": "file", "size": len(content), "sha256": hashlib.sha256(content).hexdigest()}
+                {
+                    "kind": "file",
+                    "size": len(content),
+                    "sha256": hashlib.sha256(content).hexdigest(),
+                }
             )
         elif stat.S_ISLNK(metadata.st_mode):
             target = os.readlink(absolute)
@@ -599,14 +648,130 @@ def _content_binding(state: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
-def _repository_from_origin(origin_url: str) -> str:
-    match = re.search(
-        r"(?:github\.com[:/])(?P<repo>[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+?)(?:\.git)?\Z",
-        origin_url,
+def _remote_identity(raw: str, *, role: str) -> dict[str, str]:
+    lines = [line for line in raw.splitlines() if line]
+    if len(lines) != 1 or lines[0] != lines[0].strip():
+        raise PublicationRefusal(
+            "unsupported", f"origin {role} authority must contain one canonical URL"
+        )
+    value = lines[0]
+    patterns = (
+        (
+            "https",
+            re.compile(
+                r"https://github\.com/(?P<repo>[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(?:\.git)?)\Z"
+            ),
+        ),
+        (
+            "ssh",
+            re.compile(r"git@github\.com:(?P<repo>[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(?:\.git)?)\Z"),
+        ),
+        (
+            "ssh",
+            re.compile(
+                r"ssh://git@github\.com/(?P<repo>[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(?:\.git)?)\Z"
+            ),
+        ),
     )
-    if not match:
-        raise PublicationRefusal("unsupported", "origin is not a canonical GitHub repository URL")
-    return match.group("repo")
+    for transport, pattern in patterns:
+        match = pattern.fullmatch(value)
+        if match is None:
+            continue
+        repository = match.group("repo")
+        if repository.endswith(".git"):
+            repository = repository[:-4]
+        if REPOSITORY_RE.fullmatch(repository):
+            return {
+                "host": "github.com",
+                "repository": repository,
+                "transport": transport,
+            }
+    raise PublicationRefusal(
+        "unsupported", f"origin {role} authority is not a canonical credential-free GitHub URL"
+    )
+
+
+def _read_remote_identities(
+    executor: CommandExecutor, cwd: Path, repository: str
+) -> tuple[dict[str, str], dict[str, str]]:
+    fetch_result = executor.run(["git", "remote", "get-url", "--all", "origin"], cwd=cwd)
+    push_result = executor.run(["git", "remote", "get-url", "--push", "--all", "origin"], cwd=cwd)
+    if fetch_result.returncode != 0 or push_result.returncode != 0:
+        raise PublicationRefusal("unknown", "origin authority could not be read")
+    fetch = _remote_identity(fetch_result.stdout, role="fetch")
+    push = _remote_identity(push_result.stdout, role="push")
+    if fetch["repository"] != repository:
+        raise PublicationRefusal("drift", "origin fetch repository does not match the request")
+    if push["repository"] != repository:
+        raise PublicationRefusal("drift", "origin push repository does not match the request")
+    if fetch["repository"] != push["repository"]:
+        raise PublicationRefusal("drift", "origin fetch and push repositories differ")
+    return fetch, push
+
+
+def _read_github_ref(executor: CommandExecutor, cwd: Path, repository: str, ref: str) -> str:
+    result = _checked(
+        executor,
+        ["gh", "api", "--method", "GET", f"repos/{repository}/git/ref/heads/{ref}"],
+        cwd,
+    )
+    try:
+        payload = json.loads(result.stdout)
+    except json.JSONDecodeError as exc:
+        raise PublicationRefusal("unknown", "GitHub base ref readback was not JSON") from exc
+    sha = _nested(payload, "object", "sha") if isinstance(payload, Mapping) else None
+    if (
+        not isinstance(payload, Mapping)
+        or payload.get("ref") != f"refs/heads/{ref}"
+        or _nested(payload, "object", "type") != "commit"
+        or not isinstance(sha, str)
+        or not GIT_SHA_RE.fullmatch(sha)
+    ):
+        raise PublicationRefusal("unknown", "GitHub base ref readback was malformed")
+    return sha
+
+
+def _read_authority_snapshot(
+    executor: CommandExecutor,
+    cwd: Path,
+    repository: str,
+    base_ref: str,
+) -> PublicationAuthoritySnapshot:
+    if base_ref != "main":
+        raise PublicationRefusal("unsupported", "the normal publication path is restricted to main")
+    fetch, push = _read_remote_identities(executor, cwd, repository)
+    local_sha = _git_text(executor, cwd, "rev-parse", "origin/main")
+    fetch_sha = _read_remote_head(executor, cwd, "main")
+    github_sha = _read_github_ref(executor, cwd, repository, "main")
+    if (
+        not GIT_SHA_RE.fullmatch(local_sha)
+        or fetch_sha is None
+        or local_sha != fetch_sha
+        or local_sha != github_sha
+    ):
+        raise PublicationRefusal(
+            "drift", "local, fetch, and GitHub main authority do not name one exact commit"
+        )
+    return PublicationAuthoritySnapshot(
+        fetch_identity=fetch,
+        push_identity=push,
+        base_ref="main",
+        base_sha=local_sha,
+    )
+
+
+def _assert_authority_unchanged(
+    executor: CommandExecutor, cwd: Path, plan: Mapping[str, Any]
+) -> PublicationAuthoritySnapshot:
+    snapshot = _read_authority_snapshot(
+        executor,
+        cwd,
+        str(plan["repository"]),
+        str(plan["git"]["base_ref"]),
+    )
+    if snapshot.as_mapping() != plan.get("authority"):
+        raise PublicationRefusal("drift", "publication authority drift")
+    return snapshot
 
 
 def _read_issue(
@@ -641,7 +806,6 @@ def _read_issue(
         "title": payload.get("title"),
         "body_sha256": _sha256_text(body),
         "labels": sorted(label_names),
-        "url": payload.get("html_url"),
     }
 
 
@@ -653,9 +817,7 @@ def _require_publishable_issue(issue: Mapping[str, Any], expected_number: int) -
         raise PublicationRefusal("drift", "governing Issue is not actively claimed")
 
 
-def _assert_issue_unchanged(
-    executor: CommandExecutor, cwd: Path, plan: Mapping[str, Any]
-) -> None:
+def _assert_issue_unchanged(executor: CommandExecutor, cwd: Path, plan: Mapping[str, Any]) -> None:
     issue = _read_issue(
         executor,
         cwd,
@@ -667,9 +829,7 @@ def _assert_issue_unchanged(
     _require_publishable_issue(issue, int(plan["governing_issue"]["number"]))
 
 
-def _read_remote_head(
-    executor: CommandExecutor, cwd: Path, branch: str
-) -> str | None:
+def _read_remote_head(executor: CommandExecutor, cwd: Path, branch: str) -> str | None:
     result = _checked(
         executor,
         ["git", "ls-remote", "--heads", "origin", f"refs/heads/{branch}"],
@@ -681,19 +841,21 @@ def _read_remote_head(
     if len(lines) != 1:
         raise PublicationRefusal("unknown", "remote branch readback was not unique")
     parts = lines[0].split()
-    if len(parts) != 2 or parts[1] != f"refs/heads/{branch}" or not re.fullmatch(r"[0-9a-f]{40,64}", parts[0]):
+    if (
+        len(parts) != 2
+        or parts[1] != f"refs/heads/{branch}"
+        or not re.fullmatch(r"[0-9a-f]{40,64}", parts[0])
+    ):
         raise PublicationRefusal("unknown", "remote branch readback was malformed")
     return parts[0]
 
 
-def _read_open_prs(
+def _read_pr_history(
     executor: CommandExecutor,
     cwd: Path,
     repository: str,
     branch: str,
-    base_ref: str,
 ) -> list[dict[str, Any]]:
-    del base_ref
     owner = repository.split("/", 1)[0]
     result = _checked(
         executor,
@@ -704,11 +866,11 @@ def _read_open_prs(
             "GET",
             f"repos/{repository}/pulls",
             "-f",
-            "state=open",
+            "state=all",
             "-f",
             f"head={owner}:{branch}",
             "-f",
-            "per_page=100",
+            "per_page=2",
         ],
         cwd,
     )
@@ -721,9 +883,7 @@ def _read_open_prs(
     return [dict(item) for item in payload]
 
 
-def _generate_pr_body(
-    executor: CommandExecutor, cwd: Path, values: Mapping[str, Any]
-) -> str:
+def _generate_pr_body(executor: CommandExecutor, cwd: Path, values: Mapping[str, Any]) -> str:
     argv = [sys.executable, str(REPO_ROOT / "scripts/pr_body_generator.py")]
     argv.extend(["--lane", str(values.get("lane", ""))])
     if values.get("issue_number") is not None:
@@ -767,10 +927,50 @@ def _validated_plan(plan: Mapping[str, Any], expected_hash: str) -> dict[str, An
         raise PublicationRefusal("drift", "publication plan lacks bound risk assessment completion")
     if normalized.get("review_gate_complete") is not True:
         raise PublicationRefusal("drift", "publication plan lacks bound review gate completion")
-    if normalized.get("lane") not in SUPPORTED_LANES or normalized.get("tier") not in SUPPORTED_TIERS:
+    if (
+        normalized.get("lane") not in SUPPORTED_LANES
+        or normalized.get("tier") not in SUPPORTED_TIERS
+    ):
         raise PublicationRefusal("unsupported", "publication plan is outside the supported path")
-    body = normalized.get("pr", {}).get("body")
-    if not isinstance(body, str) or _sha256_text(body) != normalized.get("pr", {}).get("body_sha256"):
+    repository = normalized.get("repository")
+    authority = normalized.get("authority")
+    git = normalized.get("git")
+    pr = normalized.get("pr")
+    if not isinstance(repository, str) or not REPOSITORY_RE.fullmatch(repository):
+        raise PublicationRefusal("drift", "publication plan repository is malformed")
+    if not isinstance(authority, Mapping) or set(authority) != {
+        "fetch_identity",
+        "push_identity",
+        "base_ref",
+        "base_sha",
+    }:
+        raise PublicationRefusal("drift", "publication authority binding is malformed")
+    for role in ("fetch_identity", "push_identity"):
+        identity = authority.get(role)
+        if (
+            not isinstance(identity, Mapping)
+            or set(identity) != {"host", "repository", "transport"}
+            or identity.get("host") != "github.com"
+            or identity.get("repository") != repository
+            or identity.get("transport") not in {"https", "ssh"}
+        ):
+            raise PublicationRefusal("drift", f"publication {role} binding is malformed")
+    if (
+        authority.get("base_ref") != "main"
+        or not isinstance(authority.get("base_sha"), str)
+        or not GIT_SHA_RE.fullmatch(authority["base_sha"])
+        or not isinstance(git, Mapping)
+        or "origin_url" in git
+        or git.get("base_ref") != "main"
+        or git.get("base_remote_ref") != "origin/main"
+        or git.get("base_sha") != authority.get("base_sha")
+        or git.get("head_sha") != authority.get("base_sha")
+        or not isinstance(pr, Mapping)
+        or pr.get("base_ref") != "main"
+    ):
+        raise PublicationRefusal("drift", "publication main authority binding is inconsistent")
+    body = pr.get("body")
+    if not isinstance(body, str) or _sha256_text(body) != pr.get("body_sha256"):
         raise PublicationRefusal("drift", "publication plan PR body digest mismatch")
     return normalized
 
@@ -783,9 +983,10 @@ def _observe_local_state(
         raise PublicationRefusal("drift", "worktree drift")
     if _git_text(executor, cwd, "branch", "--show-current") != plan["git"]["branch"]:
         raise PublicationRefusal("drift", "branch drift")
-    if _git_text(executor, cwd, "remote", "get-url", "origin") != plan["git"]["origin_url"]:
-        raise PublicationRefusal("drift", "origin drift")
-    if _git_text(executor, cwd, "rev-parse", plan["git"]["base_remote_ref"]) != plan["git"]["base_sha"]:
+    if (
+        _git_text(executor, cwd, "rev-parse", plan["git"]["base_remote_ref"])
+        != plan["authority"]["base_sha"]
+    ):
         raise PublicationRefusal("drift", "base ref drift")
     current_head = _git_text(executor, cwd, "rev-parse", "HEAD")
     unstaged, staged, untracked = _changed_path_sets(executor, cwd)
@@ -795,25 +996,36 @@ def _observe_local_state(
         if dirty != planned_paths or not staged.issubset(planned_paths):
             raise PublicationRefusal("drift", "planned local paths drifted before commit")
         for expected in plan["git"]["path_states"]:
-            observed = _path_state(
-                executor, cwd, expected["path"], plan["git"]["base_sha"]
-            )
+            observed = _path_state(executor, cwd, expected["path"], plan["git"]["base_sha"])
             if _content_binding(observed) != _content_binding(expected):
                 raise PublicationRefusal("drift", f"planned content drift: {expected['path']}")
-        state = "staged" if staged == planned_paths and not (unstaged | untracked) else "uncommitted"
+        state = (
+            "staged" if staged == planned_paths and not (unstaged | untracked) else "uncommitted"
+        )
         return state, None
     if dirty:
         raise PublicationRefusal("drift", "working tree is dirty after publication commit")
     parents = _git_text(executor, cwd, "rev-list", "--parents", "-n", "1", "HEAD").split()
-    if parents != [current_head, plan["git"]["head_sha"]]:
+    if parents != [current_head, plan["authority"]["base_sha"]]:
         raise PublicationRefusal("drift", "publication commit parent does not match the plan")
-    message = _checked(executor, ["git", "show", "-s", "--format=%B", "HEAD"], cwd).stdout.rstrip("\n")
+    message = _checked(executor, ["git", "show", "-s", "--format=%B", "HEAD"], cwd).stdout.rstrip(
+        "\n"
+    )
     if message != plan["commit"]["message"]:
         raise PublicationRefusal("drift", "publication commit message does not match the plan")
     committed_paths = _nul_paths(
         _checked(
             executor,
-            ["git", "diff-tree", "--no-commit-id", "--name-only", "-r", "-z", "--no-renames", "HEAD"],
+            [
+                "git",
+                "diff-tree",
+                "--no-commit-id",
+                "--name-only",
+                "-r",
+                "-z",
+                "--no-renames",
+                "HEAD",
+            ],
             cwd,
         ).stdout
     )
@@ -826,9 +1038,7 @@ def _observe_local_state(
     return "committed", current_head
 
 
-def _assert_staged_plan(
-    executor: CommandExecutor, cwd: Path, plan: Mapping[str, Any]
-) -> None:
+def _assert_staged_plan(executor: CommandExecutor, cwd: Path, plan: Mapping[str, Any]) -> None:
     unstaged, staged, untracked = _changed_path_sets(executor, cwd)
     if staged != set(plan["git"]["intended_paths"]) or unstaged or untracked:
         raise PublicationRefusal("drift", "staged paths do not exactly match the plan")
@@ -838,9 +1048,7 @@ def _assert_staged_plan(
             raise PublicationRefusal("drift", f"staged content drift: {expected['path']}")
 
 
-def _run_workspace_gate(
-    executor: CommandExecutor, cwd: Path, plan: Mapping[str, Any]
-) -> None:
+def _run_workspace_gate(executor: CommandExecutor, cwd: Path, plan: Mapping[str, Any]) -> None:
     _checked(
         executor,
         [
@@ -849,15 +1057,15 @@ def _run_workspace_gate(
             plan["git"]["branch"],
             "--expected-worktree",
             plan["worktree"],
+            "--base-branch",
+            "main",
             "--allow-dirty",
         ],
         cwd,
     )
 
 
-def _run_review_gate(
-    executor: CommandExecutor, cwd: Path, plan: Mapping[str, Any]
-) -> None:
+def _run_review_gate(executor: CommandExecutor, cwd: Path, plan: Mapping[str, Any]) -> None:
     argv = [
         sys.executable,
         str(REPO_ROOT / "scripts/review_before_ci_gate.py"),
@@ -876,35 +1084,67 @@ def _run_review_gate(
     _checked(executor, argv, cwd)
 
 
-def _resolve_existing_pr(
+def _transition_readback(
+    executor: CommandExecutor,
+    cwd: Path,
+    plan: Mapping[str, Any],
+    commit_sha: str,
+) -> tuple[PublicationAuthoritySnapshot, str | None, list[dict[str, Any]]]:
+    authority = _assert_authority_unchanged(executor, cwd, plan)
+    _assert_issue_unchanged(executor, cwd, plan)
+    local_state, observed_commit = _observe_local_state(executor, cwd, plan)
+    if local_state != "committed" or observed_commit != commit_sha:
+        raise PublicationRefusal(
+            "drift", "local publication commit drifted before an external transition"
+        )
+    remote_head = _read_remote_head(executor, cwd, plan["git"]["branch"])
+    prs = _read_pr_history(
+        executor,
+        cwd,
+        plan["repository"],
+        plan["git"]["branch"],
+    )
+    return authority, remote_head, prs
+
+
+def _resolve_pr_history(
     plan: Mapping[str, Any], prs: Sequence[Mapping[str, Any]], commit_sha: str | None
 ) -> dict[str, Any] | None:
     if not prs:
         return None
     if len(prs) != 1 or commit_sha is None:
-        return None
+        raise PublicationRefusal("unknown", "all-state PR history is not uniquely reconcilable")
     pr = dict(prs[0])
     expected = {
-        "state": "open",
         "title": plan["pr"]["title"],
         "body": plan["pr"]["body"],
         "base_repo": plan["repository"],
         "base_ref": plan["git"]["base_ref"],
+        "base_sha": plan["authority"]["base_sha"],
         "head_repo": plan["repository"],
         "head_ref": plan["git"]["branch"],
         "head_sha": commit_sha,
     }
     observed = {
-        "state": str(pr.get("state", "")).lower(),
         "title": pr.get("title"),
         "body": pr.get("body") or "",
         "base_repo": _nested(pr, "base", "repo", "full_name"),
         "base_ref": _nested(pr, "base", "ref"),
+        "base_sha": _nested(pr, "base", "sha"),
         "head_repo": _nested(pr, "head", "repo", "full_name"),
         "head_ref": _nested(pr, "head", "ref"),
         "head_sha": _nested(pr, "head", "sha"),
     }
-    return pr if observed == expected else None
+    if observed != expected:
+        raise PublicationRefusal("unknown", "all-state PR history does not match the plan")
+    state = str(pr.get("state", "")).lower()
+    if state == "open" and pr.get("merged_at") is None:
+        return pr
+    if state == "closed" or pr.get("merged_at") is not None:
+        raise PublicationRefusal(
+            "terminal", "publication branch has exact closed or merged PR history"
+        )
+    raise PublicationRefusal("unknown", "all-state PR history has an unknown lifecycle state")
 
 
 def _nested(value: Mapping[str, Any], *keys: str) -> Any:
@@ -918,6 +1158,7 @@ def _nested(value: Mapping[str, Any], *keys: str) -> Any:
 
 def _receipt(
     plan: Mapping[str, Any],
+    authority: PublicationAuthoritySnapshot,
     commit_sha: str,
     pr: Mapping[str, Any],
     *,
@@ -932,6 +1173,7 @@ def _receipt(
         "worktree": plan["worktree"],
         "branch": plan["git"]["branch"],
         "commit_sha": commit_sha,
+        "authority": authority.as_mapping(),
         "remote": {
             "repository": plan["repository"],
             "ref": f"refs/heads/{plan['git']['branch']}",
@@ -939,12 +1181,12 @@ def _receipt(
         },
         "pr": {
             "number": pr.get("number"),
-            "url": pr.get("html_url"),
             "state": str(pr.get("state", "")).lower(),
             "title": pr.get("title"),
             "body_sha256": _sha256_text(str(pr.get("body") or "")),
             "base_repository": _nested(pr, "base", "repo", "full_name"),
             "base_ref": _nested(pr, "base", "ref"),
+            "base_sha": _nested(pr, "base", "sha"),
             "head_repository": _nested(pr, "head", "repo", "full_name"),
             "head_ref": _nested(pr, "head", "ref"),
             "head_sha": _nested(pr, "head", "sha"),
@@ -961,7 +1203,7 @@ def _parser() -> argparse.ArgumentParser:
     plan.add_argument("--repository", required=True)
     plan.add_argument("--worktree", type=Path, default=Path.cwd())
     plan.add_argument("--branch", required=True)
-    plan.add_argument("--base-ref", default="main")
+    plan.add_argument("--base-ref", choices=("main",), default="main")
     plan.add_argument("--path", action="append", dest="paths", required=True)
     plan.add_argument("--lane", choices=sorted(SUPPORTED_LANES), required=True)
     plan.add_argument("--tier", type=int, choices=sorted(SUPPORTED_TIERS), required=True)
@@ -1020,8 +1262,8 @@ def cli_main(
                     "ok": False,
                     "outcome": "command-failed",
                     "returncode": exc.result.returncode,
-                    "argv": list(exc.result.argv),
-                    "stderr": exc.result.stderr,
+                    "argv_sha256": _sha256_text(canonical_json(list(exc.result.argv))),
+                    "stderr_sha256": _sha256_text(exc.result.stderr),
                 }
             ),
             file=sys.stderr,
@@ -1034,7 +1276,9 @@ def cli_main(
         )
         return 4 if exc.outcome == "unknown" else 3
     except (OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
-        print(canonical_json({"ok": False, "outcome": "invalid", "reason": str(exc)}), file=sys.stderr)
+        print(
+            canonical_json({"ok": False, "outcome": "invalid", "reason": str(exc)}), file=sys.stderr
+        )
         return 2
     print(canonical_json(result))
     return 0
@@ -1043,6 +1287,7 @@ def cli_main(
 __all__ = [
     "CommandResult",
     "PublicationCommandError",
+    "PublicationAuthoritySnapshot",
     "PublicationRefusal",
     "PublicationRequest",
     "SubprocessExecutor",

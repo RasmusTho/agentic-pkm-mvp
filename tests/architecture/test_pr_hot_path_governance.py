@@ -250,6 +250,18 @@ def test_publication_surfaces_require_governing_issue_identity() -> None:
     assert 'argv.extend(["--issue-number", str(values["issue_number"])])' in publication_adapter
 
 
+def test_pr_hot_path_names_canonical_full_path_publication_owner() -> None:
+    hot_path = _read("docs/development/PR_HOT_PATH.md")
+    publish_skill = _read(".codex/skills/publish-pr/SKILL.md")
+    full_path = _read(".codex/skills/publish-pr/FULL_PATH.md")
+
+    citation = ".codex/skills/publish-pr/FULL_PATH.md :: Procedure"
+    assert citation in hot_path
+    assert citation in publish_skill
+    assert "## Procedure" in full_path
+    assert "canonical full-path publication owner" in hot_path
+
+
 def test_canonical_agent_rules_allow_open_multi_issue_governor() -> None:
     agents = _read("AGENTS.md")
     normalized_agents = " ".join(agents.split())

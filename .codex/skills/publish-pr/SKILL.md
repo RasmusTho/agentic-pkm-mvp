@@ -20,14 +20,16 @@ workflows. Never publish unrelated changes or bypass a failed command.
 
 ## Supported path and exception routing
 
-The command path supports only a **new, open, single-Issue Tier 1/2 PR** in the `implementation`,
+The command path supports only a **new, single-Issue Tier 1/2 PR targeting `main`** in the `implementation`,
 `docs-authoring`, or `governance` lane, with `Final-Review-Rounds: 0`, no declared high-risk surface,
-no remote publication branch, and no open PR for the head branch. It preserves Git, GitHub, the
-governing Issue, branch protection, PR checks, and generated PR-body rules as authority. At plan
-time `HEAD` must equal the bound `origin/<base-ref>` exactly; a branch with any pre-existing commit
-routes to the current full path so unrelated history cannot ride with the planned dirty paths.
+no remote publication branch, and empty all-state PR history for the head branch. It binds one
+credential-free canonical fetch/push repository identity plus one live `main` SHA agreed by local
+`origin/main`, remote fetch readback, and GitHub REST. At plan time `HEAD` must equal that base
+exactly; a branch with any pre-existing commit routes to the full path so unrelated history cannot
+ride with the planned dirty paths.
 
-Route every other case without trying to coerce it into the command:
+`.codex/skills/publish-pr/FULL_PATH.md :: Procedure` is the canonical full-path publication owner.
+Route every unsupported case there without trying to coerce it into the normal command:
 
 - existing-PR update or review repair -> `pr-integration` and the exact
   `PR-Level Scope Revalidation Gate` in `docs/development/PR_HOT_PATH.md`;
@@ -50,9 +52,11 @@ Route every other case without trying to coerce it into the command:
 
 ## Publication preflight — live open-PR overlap re-check
 
-The normal plan reads all open PRs for the exact head branch and refuses any existing or ambiguous
-match. Unsupported publication paths must perform their owning workflow's equivalent live overlap
-read immediately before creation; an earlier analysis snapshot is not collision evidence.
+The normal plan reads open, closed, and merged PR history for the exact head branch and refuses any
+history. Apply accepts only empty history or one uniquely reconcilable exact open PR; exact
+closed/merged history is terminal and mismatch/duplicates are `unknown`. Full-path publication must
+perform the equivalent live all-state read immediately before creation; an earlier snapshot is not
+collision evidence.
 
 ## Normal plan/apply
 
@@ -79,9 +83,10 @@ python3 scripts/publication.py plan \
 The two completion flags are explicit caller attestations, not defaults; supply them only after the
 named local prerequisites have actually completed. `plan` is read-only. It emits canonical
 `builder.publication-plan.v1` JSON whose
-`plan_sha256` binds repository, canonical worktree, branch, base/head, exact paths and content,
-Issue authority, lane/risk inputs, commit intent, title, generated body, and body digest. Inspect the
-plan and retain its exact hash; any unsupported state or drift routes through the exception list.
+`plan_sha256` binds strict fetch/push repository identities, canonical worktree, branch, live `main`
+SHA, exact paths and content, Issue authority, lane/risk inputs, commit intent, title, generated
+body, and body digest. Raw remote URLs are neither retained nor emitted. Inspect the plan and retain
+its exact hash; any unsupported state or drift routes through the exception list.
 
 Apply only that exact plan:
 
@@ -91,12 +96,14 @@ python3 scripts/publication.py apply \
   --expected-plan-sha256 <64-hex-plan-sha256>
 ```
 
-`apply` revalidates bound local and GitHub state before each effect, stages only planned paths,
-commits, runs the existing workspace/review/PR-body gates, pushes without force, creates one PR, and
-reads back exact remote and PR identity as `builder.publication-receipt.v1`. It reconciles a unique
-exact local commit, remote head, or PR after interruption. Conflicting or ambiguous state returns a
-typed `unknown`/drift result before retry; the plan and receipt are reconstructable evidence, never
-a ledger or lifecycle authority.
+`apply` stages only planned paths, creates a sole-parent publication commit, and runs the existing
+workspace/review/PR-body gates. Before every external transition it revalidates the strict authority,
+sole parent, Issue, remote state, and all-state PR history. External state advances monotonically as
+`absent -> base-reserved -> exact-commit -> exact-PR`: GitHub REST create-ref atomically reserves the
+branch at the bound base, then an ordinary non-force fast-forward push publishes the exact commit.
+Exact readback produces `builder.publication-receipt.v1`; interruption is reconciled only inside
+those states. Conflict, terminal history, or ambiguous readback stops before another effect. The
+plan and receipt remain reconstructable evidence, never a ledger or lifecycle authority.
 
 Every command exit status is authoritative. Do not mask it, manually recreate a receipt, stage
 additional paths, force-push, delete refs, or continue after typed refusal.
@@ -107,6 +114,6 @@ After exact receipt readback, use `pr-integration` only for a concrete readiness
 attachment, branch-drift, or review-repair need. Otherwise hand the PR directly to
 `verification-and-closure`. Publication does not make the Issue or delivery Done.
 
-Report branch, commit, PR URL, plan/receipt hashes, validation, BuilderOps routing, and the next
+Report branch, commit, PR number, plan/receipt hashes, validation, BuilderOps routing, and the next
 owner workflow. On a plan divergence, invoke `capture-learning`; never append new operational state
 to `docs/learning-log.md`.
