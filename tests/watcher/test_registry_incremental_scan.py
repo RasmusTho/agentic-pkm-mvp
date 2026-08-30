@@ -676,6 +676,41 @@ def test_identity_replacement_during_tick_blocks_reconciliation(
     assert summary["observation_status"] == "degraded"
 
 
+def test_oversized_resumed_root_cursor_blocks_reconciliation(
+    tmp_path: Path,
+) -> None:
+    cfg, spec, vault = _make_cfg(tmp_path, max_files=10)
+    observations = RegistryObservationStore(tmp_path / "observations.sqlite3")
+    identity = registry._scan_identity(vault, [vault], spec.scope_glob)
+    observations.replace_identity(
+        identity,
+        {"notes/retained.md": ({"hash": "old"}, 3)},
+        (),
+    )
+    state = WatcherState(
+        _observation_store=observations,
+        scan_in_progress=True,
+        scan_generation=3,
+        scan_identity=identity,
+        observation_identity=identity,
+        scan_root_index=2,
+    )
+
+    summary = registry._run_spec_tick(
+        cfg,
+        spec,
+        state,
+        now=1_700_009_425.0,
+        states={spec.name: state},
+        handled_settings_sources=set(),
+    )
+
+    assert summary["observation_status"] == "degraded"
+    assert state.scan_generation_had_error is True
+    assert summary["errors_in_tick"] == 1
+    assert observations.get("notes/retained.md") == {"hash": "old"}
+
+
 def test_identity_replacement_immediately_before_prune_blocks_reconciliation(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

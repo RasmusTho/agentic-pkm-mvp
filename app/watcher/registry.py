@@ -1277,6 +1277,11 @@ def _begin_or_resume_scan(
         and previous_identity == identity
         and not identity_had_error
     ):
+        if not 0 <= state.scan_root_index < len(scan_roots):
+            _record_scan_error(state)
+            state.scan_in_progress = False
+            state.scan_stack = []
+            state.continuation_reason = "invalid_scan_cursor"
         return
     if (
         previous_identity is not None
