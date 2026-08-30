@@ -493,8 +493,8 @@ Lead with the human summary, then include a section only when it has content —
 6. Blockers And Non-Executable Items (reason and next action per item, stop conditions)
 7. Maintenance And Follow-Ups (issues needing maintenance or breakdown, owner-doc and source-anchor notes)
 
-For any non-trivial set, include one `tcd_plan` using the canonical fields in `AGENTS.md :: Total
-Cost of Development`. Record each child's execution context (`inline_deterministic` or
+For any non-trivial set, include one `tcd_plan` using the canonical fields in
+`docs/development/TOTAL_COST_OF_DEVELOPMENT.md :: Output blocks`. Record each child's execution context (`inline_deterministic` or
 `fresh_issue_agent`), helper budget, estimated/proxy context cost, and the separate serial-vs-
 concurrent scheduling decision. Do not restate the model ladder or duplicate the full block schema in
 this skill.

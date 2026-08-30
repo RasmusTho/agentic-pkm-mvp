@@ -334,7 +334,7 @@ On a plan divergence (you did something unexpected, or discovered an earlier art
 7. Evidence Surface
 8. Execution Order
 9. GitHub Receipts
-10. TCD Plan — for a non-trivial breakdown, emit a `tcd_plan` (fields and policy per `AGENTS.md :: Total Cost of Development`; do not restate them here); a single bounded task needs only a one-line capability note, not the full block. Tie complexity, verification difficulty, defect blast radius, execution context, issue-local helper budget, context-cost estimate, scheduling (`can_parallelize_with`), and review gate to the slice cuts and per-AC verification depth decided above, and record the cheapest acceptable capability per child task so downstream `issue-to-code` routes model and reasoning honestly.
+10. TCD Plan — for a non-trivial breakdown, emit a `tcd_plan` using `docs/development/TOTAL_COST_OF_DEVELOPMENT.md :: Output blocks`; a single bounded task needs only a one-line capability note, not the full block. Tie complexity, verification difficulty, defect blast radius, execution context, issue-local helper budget, context-cost estimate, scheduling (`can_parallelize_with`), and review gate to the slice cuts and per-AC verification depth decided above, and record the cheapest acceptable capability per child task so downstream `issue-to-code` routes model and reasoning honestly.
 
 When creating issues, include:
 
