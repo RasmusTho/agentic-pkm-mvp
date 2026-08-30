@@ -75,8 +75,18 @@ printf 'tmpfs 100 10 90 10%% /tmp\\n'
     )
 
 
-def test_local_wal_guard_accepts_postgresql_disabled_archive_mode(tmp_path: Path) -> None:
-    result = _run_local_wal_guard(tmp_path, archive_mode="(disabled)")
+def test_local_wal_guard_accepts_postgresql_disabled_archive_command(
+    tmp_path: Path,
+) -> None:
+    result = _run_local_wal_guard(
+        tmp_path, archive_mode="off", archive_command="(disabled)"
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_local_wal_guard_accepts_empty_archive_command(tmp_path: Path) -> None:
+    result = _run_local_wal_guard(tmp_path, archive_mode="off")
 
     assert result.returncode == 0, result.stdout + result.stderr
 
