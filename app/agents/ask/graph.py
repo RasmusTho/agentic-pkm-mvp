@@ -184,6 +184,34 @@ def _active_recall_vault_root() -> Path | None:
     return None
 
 
+def _active_recall_vault_id(vault_root: Path | None) -> str | None:
+    if vault_root is None:
+        return None
+    resolved_root = vault_root.expanduser().resolve()
+    manager = get_vault_manager()
+    context = manager.context
+    if (
+        context.status == "selected"
+        and context.active_vault_id
+        and context.active_vault_path
+        and Path(context.active_vault_path).expanduser().resolve() == resolved_root
+    ):
+        return context.active_vault_id
+    if context.status != "selected" and not getattr(
+        manager, _ASK_LAST_ACTIVE_LOADED_ATTR, False
+    ):
+        context = manager.load_last_active()
+        setattr(manager, _ASK_LAST_ACTIVE_LOADED_ATTR, context.status == "selected")
+        if (
+            context.status == "selected"
+            and context.active_vault_id
+            and context.active_vault_path
+            and Path(context.active_vault_path).expanduser().resolve() == resolved_root
+        ):
+            return context.active_vault_id
+    return f"path:{resolved_root}"
+
+
 def _source_artifact_path(candidate: RecallCandidate, vault_root: Path | None) -> Path | None:
     if not candidate.artifact_path:
         return None
@@ -200,9 +228,18 @@ def _recall_node(
     citation_reference: str | None = None,
 ) -> AgentState:
     vault_root = _active_recall_vault_root()
-    candidates = retrieve_relevant_promoted(state.query, k=RECALL_TOP_K, vault_root=vault_root)
     # The same scope retrieval used for this turn (#2921), under the same precedence rule.
     active_scope = _active_scope(state)
+    active_vault_id = (
+        _active_recall_vault_id(vault_root) if active_scope is not None else None
+    )
+    candidates = retrieve_relevant_promoted(
+        state.query,
+        k=RECALL_TOP_K,
+        vault_root=vault_root,
+        active_scope_id=active_scope,
+        active_vault_id=active_vault_id,
+    )
     provisional = (
         retrieve_relevant_provisional(
             state.query,
@@ -239,6 +276,7 @@ def _recall_node(
             why_now=candidate.reason,
             receipt_path=receipt_path,
             source_artifact_path=_source_artifact_path(candidate, vault_root),
+            applied_scope_id=candidate.applied_scope_id,
         )
         if guarded.may_answer:
             recalled.append(guarded.explanation)

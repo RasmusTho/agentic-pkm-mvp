@@ -22,6 +22,10 @@ from fastapi.testclient import TestClient
 
 import app.api.routes.companion as companion_module
 from app.agent_memory.candidate import MemoryCandidate, MemoryType
+from app.agent_memory.review_decision_store import (
+    ReviewDecisionStore,
+    review_candidate_digest,
+)
 from app.agent_memory.review_queue import (
     MemoryCandidateReviewQueue,
     ReviewDecision,
@@ -62,6 +66,7 @@ def _candidate(**overrides: Any) -> MemoryCandidate:
         source_refs=["session:2026-06-01T09:00:00Z"],
         derived_from="conversation:abc123",
         generated_by="companion_agent",
+        scope_id="scope:private/personal",
     )
     fields.update(overrides)
     return MemoryCandidate(**fields)
@@ -238,6 +243,7 @@ def test_reject_and_revise_are_receipted_review_outcomes_not_promotions(
     assert revision_entry.status is ReviewStatus.PENDING
     assert revision_entry.revision_of == to_revise.candidate_id
     assert revision_entry.title == "Narrowed candidate"
+    assert revision_entry.scope_id == to_revise.scope_id
 
     # Neither reject nor revise is a promotion: nothing became recallable
     # authoritative memory.
@@ -246,6 +252,61 @@ def test_reject_and_revise_are_receipted_review_outcomes_not_promotions(
     # The pending revision is back on the read surface for its own review.
     read = client.get("/api/companion/memory/review-queue").json()
     assert [c["candidate_id"] for c in read["candidates"]] == [revision_id]
+
+
+def test_materializing_store_conflict_restores_pending_api_queue_state(
+    client: TestClient,
+    queue: MemoryCandidateReviewQueue,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    candidate = _candidate(title="Materialization recovery candidate")
+    vault_context = companion_module._memory_review_vault_context()
+    store = ReviewDecisionStore(tmp_path / "review_decisions.sqlite3")
+    seed_queue = MemoryCandidateReviewQueue()
+    seed_queue.enqueue(candidate)
+    promoted = seed_queue.decide(
+        candidate.candidate_id,
+        ReviewDecision.PROMOTE,
+        decided_by="reviewer:original",
+    )
+    store.record_decision(promoted, vault_context=vault_context, channel="test")
+    with pytest.raises(RuntimeError, match="injected crash"):
+        with store.promotion_materialization_transaction(
+            candidate.candidate_id,
+            vault_context=vault_context,
+            channel="test",
+            expected_scope_id=candidate.scope_id,
+            expected_candidate_digest=review_candidate_digest(promoted),
+        ):
+            raise RuntimeError("injected crash")
+    assert store.get_decision(
+        candidate.candidate_id,
+        vault_context=vault_context,
+        channel="test",
+    ).materializing is True
+    monkeypatch.setattr(companion_module, "_memory_review_decision_store", lambda: store)
+    queue.enqueue(candidate)
+
+    rejected = client.post(
+        _decision_url(candidate.candidate_id),
+        json={"action": "reject", "reviewed_by": "reviewer:restart"},
+    )
+    assert rejected.status_code == 409
+    assert queue.get(candidate.candidate_id).status is ReviewStatus.PENDING
+    assert [entry.candidate_id for entry in queue.pending()] == [candidate.candidate_id]
+
+    revised = client.post(
+        _decision_url(candidate.candidate_id),
+        json={
+            "action": "revise",
+            "reviewed_by": "reviewer:restart",
+            "revision": {"title": "Unauthorized revision"},
+        },
+    )
+    assert revised.status_code == 409
+    assert queue.get(candidate.candidate_id).status is ReviewStatus.PENDING
+    assert [entry.candidate_id for entry in queue.pending()] == [candidate.candidate_id]
 
 
 def test_defer_is_non_terminal_and_unreceipted(
