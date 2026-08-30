@@ -220,6 +220,22 @@ def test_budget_boundary_is_catch_up_and_real_failure_still_trips_stop(
         assert summary["bad_tick"] is False
         assert summary["observation_status"] == "catch-up"
 
+    state.scan_generation_had_error = True
+    summary = {
+        "scanned_files": 1,
+        "bytes_read": 0,
+        "tick_ms": 0,
+        "errors_in_tick": 0,
+        "scan_in_progress": True,
+        "scan_progress_entries": 1,
+        "scan_generation_had_error": True,
+    }
+    registry._apply_guardrails_registry(cfg, state, summary)
+    assert summary["bad_tick"] is False
+    assert summary["observation_status"] == "degraded"
+    assert state.bad_ticks == 0
+    assert not cfg.stop_file.exists()
+
     failing_cfg, failing_spec, failing_vault = _make_cfg(
         tmp_path / "failure", max_files=10, max_bad_ticks=2
     )
@@ -445,3 +461,54 @@ def test_deleted_settings_source_reload_failure_preserves_observation_for_retry(
     assert attempts == 3
     assert recovered["observation_status"] == "healthy-idle"
     assert recovered_state.file_entry("settings/global.md") is None
+
+
+def test_directory_listing_failure_blocks_generation_reconciliation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cfg, spec, vault = _make_cfg(tmp_path, max_files=10)
+    note = _write_note(vault, "notes/retained.md", body="must be reconciled safely")
+    monkeypatch.setattr(registry, "_emit_watch_event", lambda **_: "trace-ok")
+
+    state, _ = _run_until_drained(
+        cfg, spec, _load_state(cfg, spec), start=1_700_007_000.0
+    )
+    assert state.file_entry("notes/retained.md") is not None
+    note.unlink()
+
+    original_iterdir = Path.iterdir
+    failed_once = False
+
+    def fail_notes_listing(path: Path):
+        nonlocal failed_once
+        if path == vault / "notes" and not failed_once:
+            failed_once = True
+            raise OSError("directory temporarily unavailable")
+        return original_iterdir(path)
+
+    monkeypatch.setattr(Path, "iterdir", fail_notes_listing)
+    failed = registry._run_spec_tick(
+        cfg,
+        spec,
+        state,
+        now=1_700_007_100.0,
+        states={spec.name: state},
+        handled_settings_sources=set(),
+    )
+    failed_state = _load_state(cfg, spec)
+
+    assert failed["observation_status"] == "degraded"
+    assert failed_state.file_entry("notes/retained.md") is not None
+
+    recovered = registry._run_spec_tick(
+        cfg,
+        spec,
+        failed_state,
+        now=1_700_007_101.0,
+        states={spec.name: failed_state},
+        handled_settings_sources=set(),
+    )
+    recovered_state = _load_state(cfg, spec)
+
+    assert recovered["observation_status"] == "healthy-idle"
+    assert recovered_state.file_entry("notes/retained.md") is None

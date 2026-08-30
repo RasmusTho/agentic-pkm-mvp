@@ -1,16 +1,21 @@
 from __future__ import annotations
 
 import errno
+import fcntl
 import hashlib
 import json
 import logging
 import os
+import stat as stat_module
 import time
 from bisect import bisect_right
 from collections.abc import Iterable, Mapping
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import timezone, datetime
+from functools import wraps
 from pathlib import Path
+from typing import Any, Callable, Iterator
 from uuid import uuid4
 
 import yaml
@@ -45,7 +50,7 @@ from app.settings.locations import LEGACY_COMPILED_DIR
 from app.settings.panel_actions import PanelActionMapping, load_panel_action_mappings
 from app.settings.tiering import resolve_dev_lab_env_typed, resolve_dev_lab_env_value
 from app.settings.watcher_settings import load_watcher_settings, resolve_auto_exec_enabled
-from app.vault.manager import VaultManager, is_vault_root, nearest_enclosing_vault_root
+from app.vault.manager import VaultManager, nearest_enclosing_vault_root
 from app.vault.manager import iter_vault_markdown_files
 from app.vault.paths import resolve_vault_system_dir_rel_or_default
 from app.vault.layout import load_layout
@@ -240,6 +245,9 @@ def _apply_guardrails_registry(cfg: RegistryConfig, state: WatcherState, summary
     }
     summary["thresholds"] = thresholds
     errors = int(summary.get("errors_in_tick", 0))
+    scan_generation_had_error = bool(
+        summary.get("scan_generation_had_error", state.scan_generation_had_error)
+    )
     scan_in_progress = bool(summary.get("scan_in_progress", state.scan_in_progress))
     progress = int(summary.get("scan_progress_entries", 0))
     bad_reason: str | None = None
@@ -264,7 +272,13 @@ def _apply_guardrails_registry(cfg: RegistryConfig, state: WatcherState, summary
         summary["bad_tick_reason"] = None
         state.dynamic_sleep_seconds = None
         summary["chosen_sleep_seconds"] = cfg.tick_sleep_seconds
-        state.observation_status = "catch-up" if scan_in_progress else "healthy-idle"
+        state.observation_status = (
+            "degraded"
+            if scan_generation_had_error
+            else "catch-up"
+            if scan_in_progress
+            else "healthy-idle"
+        )
     summary["observation_status"] = state.observation_status
 
 
@@ -294,6 +308,35 @@ def _finalize_spec_tick(
     finally:
         state.save(_state_path(cfg.state_dir, watcher_name))
     return summary
+
+
+@contextmanager
+def _registry_writer_lock(state_dir: Path) -> Iterator[None]:
+    """Serialize registry entrypoints that share checkpoint/sidecar state."""
+
+    state_dir.mkdir(parents=True, exist_ok=True)
+    lock_path = state_dir / ".registry-writer.lock"
+    with lock_path.open("a+") as lock_handle:
+        try:
+            fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            raise RuntimeError(
+                f"registry writer already active for state directory: {state_dir}"
+            ) from exc
+        try:
+            yield
+        finally:
+            fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN)
+
+
+def _single_registry_writer(func: Callable[..., Any]) -> Callable[..., Any]:
+    @wraps(func)
+    def locked_entrypoint(config_path: Path, *args: Any, **kwargs: Any) -> Any:
+        cfg = load_registry_config(config_path)
+        with _registry_writer_lock(cfg.state_dir):
+            return func(config_path, *args, **kwargs)
+
+    return locked_entrypoint
 
 
 def _emit_registry_watcher_run_event(
@@ -1087,19 +1130,34 @@ def _invalidate_settings_generation(
         )
 
 
-def _normalized_scan_roots(vault_root: Path, scan_roots: Iterable[Path]) -> list[Path]:
+def _record_scan_error(state: WatcherState, count: int = 1) -> None:
+    state.errors += count
+    state.scan_generation_had_error = True
+
+
+def _normalized_scan_roots(
+    vault_root: Path,
+    scan_roots: Iterable[Path],
+    *,
+    state: WatcherState,
+) -> list[Path]:
     """Return deterministic, non-overlapping roots owned by ``vault_root``."""
 
     try:
         selected_real = vault_root.resolve()
     except OSError:
+        _record_scan_error(state)
         return []
     candidates: list[Path] = []
     for root in scan_roots:
         try:
             root_real = root.resolve()
             root_real.relative_to(selected_real)
-        except (OSError, ValueError):
+        except OSError:
+            _record_scan_error(state)
+            continue
+        except ValueError:
+            _record_scan_error(state)
             continue
         if root_real != selected_real and (
             nearest_enclosing_vault_root(root_real, search_root=selected_real)
@@ -1137,6 +1195,7 @@ def _begin_or_resume_scan(
     state.scan_root_index = 0
     state.scan_stack = []
     state.scan_scope_matched_files = 0
+    state.scan_generation_had_error = False
     state.scan_in_progress = True
     state.continuation_reason = None
 
@@ -1158,7 +1217,13 @@ def _next_incremental_markdown(
     directory entry rather than replaying the root prefix.
     """
 
-    selected_real = vault_root.resolve()
+    try:
+        selected_real = vault_root.resolve()
+    except OSError:
+        _record_scan_error(state)
+        state.scan_in_progress = False
+        state.scan_stack = []
+        return None, True
     while state.scan_root_index < len(scan_roots):
         if time.monotonic() >= deadline:
             return None, False
@@ -1178,7 +1243,7 @@ def _next_incremental_markdown(
             try:
                 entries = sorted(directory.iterdir(), key=lambda path: path.name)
             except OSError:
-                state.errors += 1
+                _record_scan_error(state)
                 state.scan_stack.pop()
                 continue
             cached = ([entry.name for entry in entries], entries)
@@ -1196,8 +1261,27 @@ def _next_incremental_markdown(
         summary["scan_progress_entries"] = int(summary.get("scan_progress_entries", 0)) + 1
         if candidate.name.startswith("."):
             continue
-        if candidate.is_dir():
-            if candidate.is_symlink() or is_vault_root(candidate):
+        try:
+            candidate_lstat = candidate.lstat()
+            candidate_is_symlink = stat_module.S_ISLNK(candidate_lstat.st_mode)
+            candidate_stat = candidate.stat() if candidate_is_symlink else candidate_lstat
+        except OSError:
+            _record_scan_error(state)
+            continue
+        candidate_is_dir = stat_module.S_ISDIR(candidate_stat.st_mode)
+        candidate_is_file = stat_module.S_ISREG(candidate_stat.st_mode)
+        if candidate_is_dir:
+            if candidate_is_symlink:
+                continue
+            marker = candidate.joinpath("settings", "vault.md")
+            try:
+                marker_is_file = stat_module.S_ISREG(marker.stat().st_mode)
+            except FileNotFoundError:
+                marker_is_file = False
+            except OSError:
+                _record_scan_error(state)
+                continue
+            if marker_is_file:
                 continue
             try:
                 child_rel = candidate.relative_to(selected_real).as_posix()
@@ -1205,7 +1289,7 @@ def _next_incremental_markdown(
                 continue
             state.scan_stack.append({"dir": child_rel, "after": ""})
             continue
-        if not candidate.name.endswith(".md") or not candidate.is_file():
+        if not candidate.name.endswith(".md") or not candidate_is_file:
             continue
         if is_conflict_artifact(candidate.name):
             continue
@@ -1218,7 +1302,7 @@ def _next_incremental_markdown(
                     continue
             mtime = candidate.stat().st_mtime
         except (OSError, ValueError):
-            state.errors += 1
+            _record_scan_error(state)
             continue
         if not _matches_scope(rel, scope_glob) and not is_settings_source_path(rel):
             continue
@@ -1241,7 +1325,7 @@ def _collect_changed_entries(
 ) -> tuple[list[ChangedEntry], list[str]]:
     changed_entries: list[ChangedEntry] = []
     scanned_paths: list[str] = []
-    roots = _normalized_scan_roots(cfg.vault_path, scan_roots)
+    roots = _normalized_scan_roots(cfg.vault_path, scan_roots, state=state)
     _begin_or_resume_scan(
         state,
         vault_root=cfg.vault_path,
@@ -1297,7 +1381,7 @@ def _collect_changed_entries(
             # A transient read failure is a real degraded tick, but the file
             # was observed. Mark it in this generation so deletion
             # reconciliation cannot misclassify it as removed.
-            state.errors += 1
+            _record_scan_error(state)
             state.update_file_state(rel_str)
             continue
         digest, read_bytes = hashed
@@ -1318,7 +1402,7 @@ def _collect_changed_entries(
             observed_missing=False,
         )
         if settings_delta.errors:
-            state.errors += len(settings_delta.errors)
+            _record_scan_error(state, len(settings_delta.errors))
             summary["settings_write_errors_in_tick"] = int(summary.get("settings_write_errors_in_tick", 0)) + len(
                 settings_delta.errors
             )
@@ -1360,12 +1444,12 @@ def _collect_changed_entries(
                 if handled_settings_sources is not None:
                     handled_settings_sources.add(rel)
             if source_delta.errors:
-                state.errors += len(source_delta.errors)
+                _record_scan_error(state, len(source_delta.errors))
                 summary["settings_source_errors_in_tick"] = int(
                     summary.get("settings_source_errors_in_tick", 0)
                 ) + len(source_delta.errors)
             elif not source_reload_succeeded:
-                state.errors += 1
+                _record_scan_error(state)
                 summary["settings_source_errors_in_tick"] = int(
                     summary.get("settings_source_errors_in_tick", 0)
                 ) + 1
@@ -1406,6 +1490,7 @@ def _collect_changed_entries(
         state.continuation_reason = None
     summary["scan_in_progress"] = state.scan_in_progress
     summary["scan_generation"] = state.scan_generation
+    summary["scan_generation_had_error"] = state.scan_generation_had_error
     summary["scan_progress_entries"] = int(summary.get("scan_progress_entries", 0))
     summary["continuation_reason"] = state.continuation_reason
     return changed_entries, scanned_paths
@@ -1738,6 +1823,7 @@ def _run_spec_tick(
         "scan_root_index": state.scan_root_index,
         "scan_stack": [dict(frame) for frame in state.scan_stack],
         "scan_scope_matched_files": state.scan_scope_matched_files,
+        "scan_generation_had_error": state.scan_generation_had_error,
         "continuation_reason": state.continuation_reason,
     }
     changed_entries, scanned_paths = _collect_changed_entries(
@@ -1750,7 +1836,9 @@ def _run_spec_tick(
         handled_settings_sources=handled_settings_sources,
     )
     scan_completed = not state.scan_in_progress
-    scan_clean = state.errors == errors_before
+    scan_clean = (
+        state.errors == errors_before and not state.scan_generation_had_error
+    )
     missing_paths = (
         state.paths_unseen_in_generation(scanned_paths)
         if scan_completed and scan_clean
@@ -1887,6 +1975,7 @@ def _run_spec_tick(
         state.scan_root_index = int(scan_checkpoint["scan_root_index"])
         state.scan_stack = [dict(frame) for frame in scan_checkpoint["scan_stack"]]  # type: ignore[arg-type]
         state.scan_scope_matched_files = int(scan_checkpoint["scan_scope_matched_files"])
+        state.scan_generation_had_error = bool(scan_checkpoint["scan_generation_had_error"])
         state.continuation_reason = scan_checkpoint["continuation_reason"]  # type: ignore[assignment]
         summary["scan_in_progress"] = state.scan_in_progress
         summary["continuation_reason"] = state.continuation_reason
@@ -1895,6 +1984,7 @@ def _run_spec_tick(
     summary["intents_emitted"] = state.intents_emitted
     summary["errors"] = state.errors
     summary["errors_in_tick"] = state.errors - errors_before
+    summary["scan_generation_had_error"] = state.scan_generation_had_error
     summary["rate_limited"] = state.rate_limited
     summary["enqueue_failures_total"] = state.enqueue_failures_total
     summary["scan_root"] = ",".join(str(root) for root in scan_roots)
@@ -1906,7 +1996,9 @@ def _run_spec_tick(
     # Deletion handlers run after the initial clean-scan decision. Recompute
     # cleanliness so a failed settings reload cannot authorize pruning the
     # stale observation before the source can be retried on a later tick.
-    scan_clean = state.errors == errors_before
+    scan_clean = (
+        state.errors == errors_before and not state.scan_generation_had_error
+    )
     if scan_completed and scan_clean and not delivery_failed:
         if state._observation_store is not None:
             state.prune_unseen_generation(
@@ -1925,6 +2017,7 @@ def _run_spec_tick(
     return _finalize_spec_tick(cfg, state, summary, tick_start, scan_roots[0] if scan_roots else None, spec.name)
 
 
+@_single_registry_writer
 def run_registry_once(config_path: Path) -> dict[str, dict[str, object]]:
     cfg = load_registry_config(config_path)
     states = {
@@ -1966,6 +2059,7 @@ def run_registry_once(config_path: Path) -> dict[str, dict[str, object]]:
     return summaries
 
 
+@_single_registry_writer
 def run_registry_forever(config_path: Path, *, max_ticks: int | None = None) -> None:
     cfg = load_registry_config(config_path)
     # `watcher run` is the production entrypoint.  Compile its bound vault at

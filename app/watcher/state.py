@@ -207,6 +207,7 @@ class WatcherState:
     scan_root_index: int = 0
     scan_stack: list[dict[str, str]] = field(default_factory=list)
     scan_scope_matched_files: int = 0
+    scan_generation_had_error: bool = False
     observation_status: str = "healthy-idle"
     continuation_reason: str | None = None
     _observation_store: RegistryObservationStore | None = field(
@@ -254,6 +255,7 @@ class WatcherState:
                 if isinstance(frame, dict)
             ],
             scan_scope_matched_files=int(data.get("scan_scope_matched_files") or 0),
+            scan_generation_had_error=bool(data.get("scan_generation_had_error", False)),
             observation_status=str(data.get("observation_status") or "healthy-idle"),
             continuation_reason=(
                 str(data["continuation_reason"])
@@ -318,6 +320,7 @@ class WatcherState:
             "scan_root_index": self.scan_root_index,
             "scan_stack": self.scan_stack,
             "scan_scope_matched_files": self.scan_scope_matched_files,
+            "scan_generation_had_error": self.scan_generation_had_error,
             "observation_status": self.observation_status,
             "continuation_reason": self.continuation_reason,
             "observation_store": (
