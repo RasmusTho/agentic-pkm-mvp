@@ -187,10 +187,29 @@ def _active_recall_vault_root() -> Path | None:
 def _active_recall_vault_id(vault_root: Path | None) -> str | None:
     if vault_root is None:
         return None
-    context = get_vault_manager().context
-    if context.status == "selected" and context.active_vault_id:
+    resolved_root = vault_root.expanduser().resolve()
+    manager = get_vault_manager()
+    context = manager.context
+    if (
+        context.status == "selected"
+        and context.active_vault_id
+        and context.active_vault_path
+        and Path(context.active_vault_path).expanduser().resolve() == resolved_root
+    ):
         return context.active_vault_id
-    return f"path:{vault_root.expanduser().resolve()}"
+    if context.status != "selected" and not getattr(
+        manager, _ASK_LAST_ACTIVE_LOADED_ATTR, False
+    ):
+        context = manager.load_last_active()
+        setattr(manager, _ASK_LAST_ACTIVE_LOADED_ATTR, context.status == "selected")
+        if (
+            context.status == "selected"
+            and context.active_vault_id
+            and context.active_vault_path
+            and Path(context.active_vault_path).expanduser().resolve() == resolved_root
+        ):
+            return context.active_vault_id
+    return f"path:{resolved_root}"
 
 
 def _source_artifact_path(candidate: RecallCandidate, vault_root: Path | None) -> Path | None:

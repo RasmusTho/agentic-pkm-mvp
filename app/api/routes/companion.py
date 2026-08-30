@@ -5039,6 +5039,9 @@ def _memory_review_record_decision(
     *,
     vault_context: VaultContext,
     channel: str,
+    queue: MemoryCandidateReviewQueue,
+    original_entry: ReviewEntry,
+    revision_candidate_id: str | None = None,
 ) -> ReviewDecisionRecord:
     try:
         return store.record_decision(
@@ -5047,6 +5050,10 @@ def _memory_review_record_decision(
             channel=channel,
         )
     except ReviewDecisionStoreError as exc:
+        queue.rollback_persistence_refusal(
+            original_entry,
+            revision_candidate_id=revision_candidate_id,
+        )
         raise HTTPException(
             status_code=409,
             detail={"error": "review_decision_conflict", "message": str(exc)},
@@ -5170,6 +5177,8 @@ def post_memory_review_decision(
             decided,
             vault_context=vault_context,
             channel=channel,
+            queue=queue,
+            original_entry=entry,
         )
         effective_decided = decided.model_copy(
             update={
@@ -5235,6 +5244,8 @@ def post_memory_review_decision(
             decided,
             vault_context=vault_context,
             channel=channel,
+            queue=queue,
+            original_entry=entry,
         )
         rejected = reject_memory_candidate(decided)
         return MemoryReviewDecisionResponse(
@@ -5259,6 +5270,9 @@ def post_memory_review_decision(
         decided,
         vault_context=vault_context,
         channel=channel,
+        queue=queue,
+        original_entry=entry,
+        revision_candidate_id=revision_candidate.candidate_id,
     )
     revision_entry = queue.get(revision_candidate.candidate_id)
     revised = revise_memory_candidate(decided, revision_entry)

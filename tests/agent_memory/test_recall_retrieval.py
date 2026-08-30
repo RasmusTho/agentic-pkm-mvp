@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -502,6 +503,46 @@ def test_bound_recall_rejects_receipt_from_another_vault(tmp_path: Path) -> None
         outbox_path=outbox,
         active_scope_id="scope-work",
         active_vault_id="vault-b",
+    ) == []
+
+
+@pytest.mark.parametrize(
+    ("field", "conflicting_value"),
+    (
+        ("artifact_uuid", "conflicting-artifact-uuid"),
+        ("artifact_path", "Agent Memory/conflicting-artifact.md"),
+    ),
+)
+def test_bound_recall_rejects_conflicting_receipt_artifact_identity(
+    tmp_path: Path,
+    field: str,
+    conflicting_value: str,
+) -> None:
+    vault_root = tmp_path / "vault"
+    vault_root.mkdir()
+    vault = _vault(vault_root)
+    store = ReviewDecisionStore(tmp_path / "review_decisions.sqlite3")
+    outbox = tmp_path / "outbox.jsonl"
+    _materialize(
+        _candidate(
+            "candidate-receipt-conflict",
+            title="Work deployment posture",
+            content="Deployment posture details.",
+            scope_id="scope-work",
+        ),
+        vault=vault,
+        store=store,
+        outbox=outbox,
+    )
+    record = json.loads(outbox.read_text(encoding="utf-8"))
+    record["payload"][field] = conflicting_value
+
+    assert retrieve_relevant_promoted(
+        "deployment posture",
+        vault_root=vault_root,
+        records=[record],
+        active_scope_id="scope-work",
+        active_vault_id="vault-a",
     ) == []
 
 

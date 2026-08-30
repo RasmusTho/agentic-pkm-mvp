@@ -54,6 +54,10 @@ competing materializer from writing. The persisted binding is
 written to both note and receipt; legacy unscoped artifacts remain unchanged. Bound recall denies
 unscoped artifacts fail closed and requires scope, candidate, artifact UUID, and selected vault to
 match the applied receipt; unbound recall retains its existing behavior.
+The selected vault ID is trusted only when its selected path equals the root used for recall, and
+receipt top-level artifact identity must agree with its linkage fields. If a reject or revise races
+with a durable `materializing` reservation, the store refuses it and the API restores the original
+pending queue entry (including removal of any speculative revision) before returning a conflict.
 
 Late failures are resumed idempotently. The materialization identity is stable per
 vault/channel/candidate. A retry validates and reuses an existing applied receipt plus its

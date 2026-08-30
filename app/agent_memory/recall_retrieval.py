@@ -252,6 +252,14 @@ def _promoted_from_row_with_scope(
     note_candidate_id = _first_str(frontmatter.get("promoted_from_candidate_id"))
     basis_candidate_id = _first_str(row.basis.get("candidate_id"))
     linkage_candidate_id = _first_str(row.artifact_linkage.get("candidate_id"))
+    linkage_artifact_uuid = _first_str(
+        row.artifact_linkage.get("artifact_uuid"),
+        row.artifact_linkage.get("note_uuid"),
+    )
+    linkage_artifact_path = _first_str(
+        row.artifact_linkage.get("artifact_path"),
+        row.artifact_linkage.get("note_path"),
+    )
     note_artifact_uuid = _first_str(frontmatter.get("uuid"))
     if (
         note_candidate_id is None
@@ -259,6 +267,8 @@ def _promoted_from_row_with_scope(
         or linkage_candidate_id != note_candidate_id
         or note_artifact_uuid is None
         or row.artifact_uuid != note_artifact_uuid
+        or linkage_artifact_uuid != row.artifact_uuid
+        or linkage_artifact_path != row.artifact_path
     ):
         return None
     note_scope_id = validated_memory_scope_id(frontmatter.get("scope_id"))

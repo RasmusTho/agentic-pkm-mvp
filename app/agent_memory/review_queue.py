@@ -296,6 +296,27 @@ class MemoryCandidateReviewQueue:
         self._entries[candidate_id] = reverted
         return reverted
 
+    def rollback_persistence_refusal(
+        self,
+        original: ReviewEntry,
+        *,
+        revision_candidate_id: str | None = None,
+    ) -> None:
+        """Restore the pending queue state after the durable store refuses."""
+
+        current = self.get(original.candidate_id)
+        if current.status is ReviewStatus.PENDING:
+            raise ReviewQueueError(
+                f"cannot roll back a pending decision: {original.candidate_id}"
+            )
+        if original.status is not ReviewStatus.PENDING or original.decision is not None:
+            raise ReviewQueueError(
+                f"rollback authority is not pending: {original.candidate_id}"
+            )
+        self._entries[original.candidate_id] = original
+        if revision_candidate_id is not None:
+            self._entries.pop(revision_candidate_id, None)
+
     def recallable_for_working_context(self) -> list[ReviewEntry]:
         """Entries authorized for working-context recall.
 
