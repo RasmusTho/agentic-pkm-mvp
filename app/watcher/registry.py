@@ -138,8 +138,10 @@ def _scan_markdown_many(
     scan_roots: Iterable[Path],
     scope_glob: str,
     *,
-    summary: dict[str, object],
+    summary: dict[str, object] | None = None,
 ) -> Iterable[tuple[Path, float, Path]]:
+    if summary is None:
+        summary = {}
     seen: set[Path] = set()
     for scan_root in scan_roots:
         for path in iter_vault_markdown_files(
@@ -2161,8 +2163,11 @@ def _run_spec_tick(
     committed_observations: dict[str, dict[str, dict[str, Any] | None]] = {}
     for entry in changed_entries:
         rel_path = str(entry.rel_path)
+        previous_file_state_raw = state.file_entry(rel_path)
         previous_file_state = (
-            dict(state.files[rel_path]) if rel_path in state.files else None
+            dict(previous_file_state_raw)
+            if previous_file_state_raw is not None
+            else None
         )
         try:
             trace_id = _emit_changed_entry(
@@ -2195,17 +2200,14 @@ def _run_spec_tick(
                         ),
                     )
                 ):
-                    if previous_file_state is None:
-                        state.files.pop(rel_path, None)
-                    else:
-                        state.files[rel_path] = previous_file_state
+                    state.restore_file_state(rel_path, previous_file_state)
                     summary["rebind_unemitted_observations"] = int(
                         summary["rebind_unemitted_observations"]
                     ) + 1
                 continue
             observations = summary["rebind_observations"]
             assert isinstance(observations, list)
-            emitted_state = state.files.get(rel_path) or {}
+            emitted_state = state.file_entry(rel_path) or {}
             observations.append(
                 {
                     "relative_path": rel_path,

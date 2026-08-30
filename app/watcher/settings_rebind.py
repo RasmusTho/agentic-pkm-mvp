@@ -18,7 +18,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Mapping
 
-from app.instance._storage_boundary import RegistryError
+from app.instance.errors import RegistryError
 from app.instance.filesystem_identity import (
     resolve_filesystem_root_identity,
     same_filesystem_root,
@@ -629,7 +629,8 @@ class DormantSettingsRebindReconciler:
         # per-file observation cursor but before the prepare acknowledgement is
         # written. Reconstruct that same buffer from the state file on restart.
         for watcher, state in states.items():
-            for relative_path, item in state.files.items():
+            for relative_path in state.file_paths():
+                item = state.file_entry(relative_path) or {}
                 if item.get("rebind_revision") != desired_revision:
                     continue
                 content_hash = item.get("hash")
