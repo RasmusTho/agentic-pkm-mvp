@@ -10,11 +10,25 @@ function text(parent, tag, value, className) {
   return node;
 }
 
+function providerStates(parent, value) {
+  const states = Array.isArray(value && value.provider_states) ? value.provider_states : [];
+  states.forEach((state) => {
+    const section = document.createElement("section");
+    section.className = "provider-state";
+    section.dataset.providerRole = String(state.role || "");
+    text(section, "h3", state.role || "Provider");
+    rows(section, state);
+    parent.appendChild(section);
+  });
+}
+
 function matrix(parent, value) {
+  providerStates(parent, value);
+  const axes = AXES.filter((axis) => Object.prototype.hasOwnProperty.call(value || {}, axis));
+  if (!axes.length) return;
   const grid = document.createElement("div");
   grid.className = "matrix";
-  AXES.forEach((axis) => {
-    if (!Object.prototype.hasOwnProperty.call(value || {}, axis)) return;
+  axes.forEach((axis) => {
     const cell = document.createElement("div");
     cell.className = "axis";
     cell.dataset.axis = axis;
@@ -94,10 +108,9 @@ fetch("/api/devui/overview", {method: "GET", cache: "no-store"}).then(async (res
   if (!response.ok) throw new Error(`Overview read failed (${response.status}).`);
   const payload = await response.json();
   const shell = document.querySelector('[data-testid="overview-shell"]');
-  shell.dataset.serverState = String(payload.state || "unclassified");
+  shell.dataset.serverState = "loaded";
   const trust = document.querySelector('[data-testid="overview-trust-matrix"]');
   matrix(trust, payload.trust_frame || {});
-  rows(trust, payload.trust_frame || {});
   renderZone("overview-now", payload.now || []);
   renderZone("overview-needs-you", payload.needs_you || []);
   renderZone("overview-ready-to-try", payload.ready_to_try || []);

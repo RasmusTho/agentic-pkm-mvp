@@ -13,7 +13,11 @@ from app.api.routes.cockpit import read_registry as read_cockpit_registry
 from app.builderops.ckm.query_service import CkmQueryService
 from app.builderops.config import load_paths as load_builderops_paths
 from app.builderops.devui_composition import compose_owner_snapshot
-from app.builderops.devui_focus import FocusContractError, compose_focus_view
+from app.builderops.devui_focus import (
+    CONTRACT_VERSION as FOCUS_CONTRACT_VERSION,
+    FocusContractError,
+    compose_focus_view,
+)
 from app.builderops.devui_focus_inputs import FocusInputError, read_focus_inputs
 from app.builderops.devui_overview import compose_overview_view
 from app.builderops.devui_overview_inputs import derive_overview_inputs
@@ -132,7 +136,7 @@ def _bind_visual_focus_targets(
                     "source_type": "devui_focus_route",
                     "source_id": subject,
                     "locator": f"/devui/focus?subject={quote(subject, safe='')}",
-                    "version": "devui-focus-view.v1",
+                    "version": FOCUS_CONTRACT_VERSION,
                 },
                 "status": "available",
                 "limitation": None,

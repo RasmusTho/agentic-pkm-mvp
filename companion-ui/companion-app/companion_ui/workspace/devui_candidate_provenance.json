@@ -13,13 +13,13 @@
   },
   "candidate": {
     "subtree": "companion-ui/companion-app/companion_ui/workspace/devui_candidate",
-      "tree": "b4eaa676b5a98059c759578d3d35b49dd23e57c8",
+      "tree": "d15c3c015a844781b83ba46eadef7deda645fcfe",
     "inventory": {
-      "devui.css": "91ae6db29c0d06afca91baac66d7b7eb50f6406d",
+      "devui.css": "2d6e19e1f427d186bed8fc4391739baeda724737",
       "focus.html": "0bc461c6105f069702f4d4187b2c08f86e2661d8",
       "focus.js": "21946448a21f416653f8e08a393e17c6afff624f",
       "overview.html": "9b9ff9f58e6fb92b13396d234578eb8aa2c3adf7",
-      "overview.js": "a627c30b5af7ff0469c045d57428a7cb40ec068d"
+      "overview.js": "4dc939b1a3657c74b3ffa7ae3baae9c6a7000f5e"
     }
   },
   "transform_allowlist": [

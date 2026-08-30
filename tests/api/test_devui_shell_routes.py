@@ -45,7 +45,7 @@ def test_real_now_subject_gets_only_verified_visual_focus_target(monkeypatch) ->
                 "source_type": "devui_focus_route",
                 "source_id": subject,
                 "locator": "/devui/focus?subject=github%3ARasmusTho%2Fagentic-pkm-mvp%234836",
-                "version": "devui-focus-view.v1",
+                "version": "focus-view.v1",
             },
             "status": "available",
             "limitation": None,

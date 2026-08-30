@@ -77,7 +77,7 @@ def _overview() -> dict[str, Any]:
                     "source_type": "devui_focus_route",
                     "source_id": SUBJECT,
                     "locator": FOCUS_PATH,
-                    "version": "devui-focus-view.v1",
+                    "version": "focus-view.v1",
                 },
                 "status": "available",
                 "limitation": None,
@@ -89,13 +89,18 @@ def _overview() -> dict[str, Any]:
         "contract_version": "devui-overview-view.v1",
         "authority": "projection_only",
         "composed_at": "2026-08-28T10:00:00+00:00",
-        "state": "degraded",
         "trust_frame": {
-            "availability": "available",
-            "freshness": "stale",
-            "completeness": "partial",
-            "cardinality": "nonempty",
-            "linkage": "linked",
+            "provider_states": [
+                {
+                    "role": "work",
+                    "provider": "builderops_cockpit",
+                    "status": "available",
+                    "authority": "read_time_join",
+                    "captured_at": "2026-08-28T10:00:00+00:00",
+                    "snapshot": {"watermark": "work:42"},
+                    "completeness": {"state": "complete"},
+                }
+            ],
             "limitations": ["One provider is stale."],
         },
         "now": [candidate],
@@ -119,7 +124,7 @@ def _focus() -> dict[str, Any]:
         "limitation": None,
     }
     return {
-        "contract_version": "devui-focus-view.v1",
+            "contract_version": "focus-view.v1",
         "authority": "projection_only",
         "composed_at": "2026-08-28T10:00:00+00:00",
         "state": "ready",
@@ -312,15 +317,9 @@ def test_connected_shell_renders_full_server_state_matrix_without_reclassificati
             page.goto(base_url + "/devui/overview")
             page.wait_for_selector('[data-testid="overview-load-state"][data-state="loaded"]')
             matrix = page.locator('[data-testid="overview-trust-frame"]')
-            for axis, value in (
-                ("availability", "available"),
-                ("freshness", "stale"),
-                ("completeness", "partial"),
-                ("cardinality", "nonempty"),
-                ("linkage", "linked"),
-            ):
-                assert matrix.locator(f'[data-axis="{axis}"]').get_attribute("data-value") == value
-            assert page.locator('[data-testid="overview-shell"]').get_attribute("data-server-state") == "degraded"
+            assert matrix.locator('[data-provider-role="work"]').count() == 1
+            assert matrix.locator('[data-provider-role="work"]').get_by_text("available").count() == 1
+            assert page.locator('[data-testid="overview-shell"]').get_attribute("data-server-state") == "loaded"
             _EVIDENCE.record_pass(
                 "test_connected_shell_renders_full_server_state_matrix_without_reclassification",
                 page_errors=page_errors,

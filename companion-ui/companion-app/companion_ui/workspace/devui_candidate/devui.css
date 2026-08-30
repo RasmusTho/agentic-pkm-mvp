@@ -16,6 +16,7 @@ body{background:var(--bg-base);color:var(--fg-1);min-height:100vh;font-family:va
 .trust-frame h2,.surface h2,.limitations h2{font-size:var(--text-sm);letter-spacing:var(--tracking-wide);text-transform:uppercase;color:var(--fg-2);font-weight:var(--weight-medium);margin-bottom:var(--space-3)}
 .matrix{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:var(--space-2)}
 .axis{border:1px solid var(--border);background:var(--bg-raised);padding:var(--space-2) var(--space-3);min-width:0}
+.provider-state{border:1px solid var(--border);background:var(--bg-raised);padding:var(--space-3);margin-bottom:var(--space-3)}.provider-state h3{font-size:var(--text-sm);font-weight:var(--weight-medium);color:var(--fg-2);margin-bottom:var(--space-2)}
 .axis b,.axis span{display:block;overflow-wrap:anywhere}.axis b{font-size:var(--text-xs);color:var(--fg-2)}.axis span{font-family:var(--font-mono);font-size:var(--text-xs)}
 .overview-grid{display:grid;grid-template-columns:minmax(0,2fr) minmax(280px,1fr);gap:var(--space-6)}
 .overview-rail{min-width:0}.band{margin-bottom:var(--space-8)}
