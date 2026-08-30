@@ -502,19 +502,20 @@ The audit found existing, active authority rather than a missing backlog contain
 
 ### 12.1 Live authority and overlap snapshot
 
-Read back at `2026-08-30T11:25:35Z`, against `origin/main` SHA
+Read back at `2026-08-30T11:29:26Z`, against `origin/main` SHA
 `b1b71f205ff57da2df99a6747102066e5e74b350`:
 
 | Object | Live state | Authority meaning | Disposition for this audit |
 | --- | --- | --- | --- |
-| PR #5201 | Open, mergeable; head `94fa629fcb09c7ce617517133d1876fc1dc559cf` | Earlier/narrower Model Inquiry routing audit and its `DOCS_INDEX` mutation. | Preserve as collision authority; do not duplicate or expand it. |
-| PR #5202 | Open, blocked; head `be9b190f0b14c8b3b91097ad79f8217f9398b31f` | Unrelated DevUI docs-authoring change that also mutates `DOCS_INDEX`. | Preserve scope; its shared index mutation blocks a parallel docs PR. |
+| PR #5201 | Open, mergeable; head `236f862480c461f97432257a68b8c7d321cb9ea2` | Earlier/narrower Model Inquiry routing audit and its `DOCS_INDEX` mutation. | Preserve as collision authority; do not duplicate or expand it. |
+| PR #5202 | Open, mergeable; head `be9b190f0b14c8b3b91097ad79f8217f9398b31f` | Unrelated DevUI docs-authoring change that also mutates `DOCS_INDEX`. | Preserve scope; its shared index mutation blocks a parallel docs PR. |
 | Issue #5177 | Open, `agent:blocked` epic | General Builder execution-routing owner. | Coordinate; no new routing epic or Issue. |
 | Issue #5203 | Open, `agent:in-progress` | Model Inquiry single-target semantics. | Existing owner route; no duplicate role/target contract. |
 | Issue #5205 | Open, `agent:in-progress` | Active Builder carrier Codex-only policy. | Existing owner route; no duplicate carrier mutation. |
 
-The local audit branch has no PR. Publication remains fail-closed until the shared `DOCS_INDEX.md`
-overlap is resolved and the audit remains demonstrably non-duplicative against #5201. This table is
+The local audit branch has no PR. Both overlapping PRs remain open, so publication remains fail-closed
+until the shared `DOCS_INDEX.md` overlap is resolved and the audit remains demonstrably
+non-duplicative against #5201. This table is
 an observation, not a lifecycle mutation or a claim that any listed PR/Issue is complete.
 
 No new PromotionIntent was created because this pass produced supporting architecture evidence and
