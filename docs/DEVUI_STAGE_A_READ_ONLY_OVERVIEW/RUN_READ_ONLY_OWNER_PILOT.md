@@ -124,11 +124,15 @@ The final `devui-stage-a-read-only-owner-pilot.v1` ledger is the only cross-run 
 It records the separate final-M #4748 browser artifact and the independent production evidence; it
 does not revive or require a pre-merge candidate artifact. Each evidence entry records its exact
 Git SHA, its own canonical archive manifest, and `evidence_artifact_sha256`: the SHA-256 of a
-canonical UTF-8 JSON object mapping every archived relative artifact path to that entry's file
-SHA-256, with keys sorted lexicographically and no trailing newline. The `browser` entry inventory
-is exactly the authenticated `devui-stage-a-exact-sha-state-matrix.v1` wrapper receipt, the strict
-browser receipt, JUnit result, Playwright trace, and every screenshot, but not its own rendered
-manifest. The `production` entry has a separate inventory of the applicable
+canonical JSON object mapping every archived relative artifact path to that entry's file SHA-256.
+The digest bytes are the RFC 8785 JSON Canonicalization Scheme (JCS) serialization of that object,
+encoded as UTF-8 without a BOM and with no trailing newline or other bytes; producers and verifiers
+reject non-finite JSON numbers and any non-string path/hash value. The `browser` entry inventory is
+exactly the authenticated `devui-stage-a-exact-sha-state-matrix.v1` wrapper receipt, its strict
+browser receipt, the source `manifest.json` emitted and uploaded by
+`.github/workflows/browser-runtime.yml`, JUnit result, Playwright trace, and every screenshot. It
+excludes only the pilot ledger entry's own rendered inventory manifest. The `production` entry has
+a separate inventory of the applicable
 VM-102 qualification/deployment/health receipts, receipt-sourced gateway and API identity
 observations, and any explicitly used disposable-state receipt; it never imports browser-bundle
 files, owner-walkthrough output, owner acknowledgement, or the final owner-pilot ledger. The
@@ -151,7 +155,7 @@ adding any cross-run field to `devui-overview-browser-accessibility.v1`.
   - Verify: runtime receipt: devui-stage-a-read-only-owner-pilot.v1
 - [ ] The ledger binds the distinct final-M #4748 browser evidence and production evidence. Each
       entry has a recomputable `evidence_artifact_sha256` over its own canonical inventory: the
-      browser entry contains the authenticated wrapper plus only browser-bundle artifacts, while the production entry contains
+      browser entry contains the authenticated wrapper, source manifest, and only browser-bundle artifacts, while the production entry contains
       only production/owner evidence and any used disposable-state receipt. Each entry fails closed
       when its archived artifact set is missing or mismatched; the strict #4748 receipt does not
       reference a candidate receipt.

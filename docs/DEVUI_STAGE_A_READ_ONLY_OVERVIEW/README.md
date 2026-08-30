@@ -192,10 +192,14 @@ is not reusable after `main` advances. If ARO-08 later becomes executable, its
 `devui-stage-a-read-only-owner-pilot.v1` ledger is the sole binding authority for the exact-M
 browser evidence plus production evidence. It records each tested SHA and separate recomputable
 `evidence_artifact_sha256` inventories: the browser inventory contains the authenticated #4748
-wrapper and browser bundle, while the production inventory contains deployment/health/identity
-receipts and any used disposable-state receipt. Owner-walkthrough output and acknowledgement are
-authenticated ledger fields but are explicitly excluded from the production digest. Missing or
-mismatched artifacts fail closed. #4836 and #4748 repository/proof delivery are complete; deployment and
+wrapper, its source `manifest.json` emitted and uploaded by `.github/workflows/browser-runtime.yml`,
+and browser bundle; the production inventory contains deployment/health/identity receipts and any
+used disposable-state receipt. Each digest uses RFC 8785 JSON Canonicalization Scheme (JCS), encoded
+as UTF-8 without a BOM and without a trailing newline or other bytes; non-finite numbers and
+non-string path/hash values are invalid. The pilot entry's own rendered inventory manifest is
+excluded from its inventory. Owner-walkthrough output and acknowledgement are authenticated ledger
+fields but are explicitly excluded from the production digest. Missing or mismatched artifacts fail
+closed. #4836 and #4748 repository/proof delivery are complete; deployment and
 owner validation have not run.
 
 ## Governing and supporting sources
