@@ -123,11 +123,13 @@ The goal is to keep docs-only and governance/skill PRs cheap while preserving di
   field or prerequisite reference inside the later strict #4748 receipt. #4748 runs its own distinct
   final-M browser proof and produces a separate self-describing
   `devui-overview-browser-accessibility.v1` receipt/artifact at M. Only the downstream
-  `devui-stage-a-read-only-owner-pilot.v1` ledger may bind the candidate and final artifacts: it
-  records each exact tested SHA and an `evidence_artifact_sha256` derived from the canonical archived
-  artifact inventory, then fails closed on a missing or mismatched artifact/digest. Consequently,
-  ordinary unit CI, a local screenshot, a post-merge run, a matching Git SHA, or either strict
-  receipt alone cannot substitute for the required cross-run binding.
+  `devui-stage-a-read-only-owner-pilot.v1` ledger is the later cross-run evidence authority: it
+  records the exact final-M tested SHA and applicable deployed evidence with an
+  `evidence_artifact_sha256` derived from the canonical archived artifact inventory. Candidate
+  provenance may be preserved when available, but a candidate-to-final cross-run binding is not a
+  prerequisite for the production-only path. Consequently, ordinary unit CI, a local screenshot,
+  a post-merge run, or a matching Git SHA cannot substitute for the applicable final-M or deployed
+  evidence required by the pilot contract.
 
 ## Check Levels
 
