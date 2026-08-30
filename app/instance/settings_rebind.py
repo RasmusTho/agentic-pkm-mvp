@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Mapping
 
 from app.instance._storage_boundary import (
@@ -160,7 +160,12 @@ def provisional_binding_id(value: object) -> str | None:
 
 
 class SettingsRebindStore:
-    """Read-only facade for the durable dormant SETTINGS-05A record."""
+    """Narrow facade for the durable dormant SETTINGS-05 record.
+
+    SETTINGS-05B may only consume an existing revision or acknowledge that no
+    watcher lifecycle exists.  It cannot prepare a revision, choose a binding,
+    or commit a candidate binding.
+    """
 
     def __init__(self, registry: VaultRegistryStore) -> None:
         self._registry = registry
@@ -170,6 +175,56 @@ class SettingsRebindStore:
         if value is None:
             raise RegistryError("settings rebind record is not installed")
         return SettingsRebindRecord.from_payload(value)
+
+    def acknowledge_no_lifecycle(
+        self,
+        *,
+        desired_revision: int,
+    ) -> SettingsRebindRecord:
+        """Complete one already-prepared revision as intentionally unwatched."""
+
+        from app.instance._storage_boundary import _STORAGE_MUTATION_CAPABILITY
+
+        snapshot = self._registry.load()
+        if snapshot.settings_rebind is None:
+            raise RegistryError("settings rebind record is not installed")
+        current = SettingsRebindRecord.from_payload(snapshot.settings_rebind)
+        if current.phase == "no_lifecycle":
+            if current.desired_revision != desired_revision:
+                raise RegistryError("settings rebind no_lifecycle revision mismatch")
+            return current
+        if current.phase != "prepared":
+            raise RegistryError(
+                "settings rebind no_lifecycle acknowledgement requires a prepared revision"
+            )
+        if current.desired_revision != desired_revision:
+            raise RegistryError("settings rebind prepared revision changed before acknowledgement")
+        acknowledged = replace(
+            current,
+            applied_revision=current.desired_revision,
+            phase="no_lifecycle",
+            lifecycle_posture="no_lifecycle",
+        )
+        updated = self._registry.set_settings_rebind_state(
+            acknowledged.as_payload(),
+            expected_revision=snapshot.revision,
+            _capability=_STORAGE_MUTATION_CAPABILITY,
+        )
+        return SettingsRebindRecord.from_payload(updated.settings_rebind)
+
+    def reconcile_no_lifecycle(self) -> SettingsRebindRecord:
+        """Converge an absent watcher without preparing or committing a revision."""
+
+        current = self.read()
+        if current.phase in {"dormant", "no_lifecycle"}:
+            return current
+        if current.phase == "prepared":
+            return self.acknowledge_no_lifecycle(
+                desired_revision=current.desired_revision,
+            )
+        raise RegistryError(
+            "absent watcher cannot reconcile a committed settings rebind revision"
+        )
 
 
 def _install_dormant_settings_rebind(
