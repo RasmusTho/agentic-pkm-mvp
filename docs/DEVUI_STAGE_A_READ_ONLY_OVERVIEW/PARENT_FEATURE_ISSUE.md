@@ -85,11 +85,13 @@ it supplies neither a page nor a visual destination.
   admission unchanged. Port `18000` remains direct diagnostics, never a browser page origin.
 - No technical label/state, provider metadata, or terminal delivery fact substitutes for explicit
   canonical category or receipt-backed `ready_to_try` evidence.
-- ARO-08 remains serially blocked after #4748 until the repaired source contract, Demerzel
-  authentication/access, #4836 server-supplied Focus selectors, and receipt-sourced deployed
-  URL/SHA are available. If the pilot uses a `pkm-test` supplement, its disposable-state
-  classification is also required; the production-only path has no supplemental-state
-  prerequisite. It never invents a URL or deployed SHA.
+- ARO-08 remains serially blocked after #4748 until the repaired #4857 source contract, the fresh
+  exact-main #4748 proof matching current deployed `main`, the boolean-only #4835 prerequisite,
+  Demerzel authentication/access, #4836 server-supplied Focus selectors, receipt-sourced deployed
+  URL/SHA, and applicable main-tracking deployment/operator evidence are all available. If the
+  pilot uses a `pkm-test` supplement, its disposable-state classification is also required; the
+  production-only path has no supplemental-state prerequisite. It never invents a URL or deployed
+  SHA, and no parent label or closed historical receipt removes these blockers.
 
 ## Acceptance Criteria
 
