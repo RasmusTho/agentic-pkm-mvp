@@ -702,6 +702,79 @@ def test_prepare_commit_resume_is_failure_atomic(
         assert reloads == [vault_b]
 
 
+def test_reload_callback_success_before_marker_allows_one_idempotent_replay(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A marker-write crash replays once, then durable completion suppresses retries."""
+    from app.instance.settings_rebind import SettingsRebindActivation
+
+    vault_a = tmp_path / "vault-a"
+    vault_b = tmp_path / "vault-b"
+    initialize_test_vault(vault_a)
+    initialize_test_vault(vault_b)
+    runtime = _runtime(tmp_path)
+    _register(runtime, binding_id="binding-a", vault_root=vault_a)
+    _register(runtime, binding_id="binding-b", vault_root=vault_b)
+    _install_dormant_settings_rebind(
+        runtime.registry,
+        binding_id="binding-a",
+        _capability=STORAGE_MUTATION_CAPABILITY,
+    )
+    monkeypatch.setenv("WATCHER_ENABLE", "0")
+    reloads: list[Path] = []
+    monkeypatch.setattr(
+        "app.settings.ingestion.ingest_settings",
+        lambda **kwargs: reloads.append(Path(kwargs["vault_root"])),
+    )
+    registration = runtime.registry.load().registrations["binding-b"]
+    selection = KnownVaultRef(
+        ref=registration.ref,
+        path=registration.path,
+        vault_id=registration.vault_id,
+        vault_name=registration.vault_name,
+        local_instance_id=registration.local_instance_id,
+        last_opened_at="2026-08-30T00:00:00Z",
+    )
+    activation = SettingsRebindActivation.from_environment(runtime.registry)
+    original_write_locked = runtime.registry._write_locked
+    tripped = False
+
+    def fail_marker_write(snapshot: object) -> None:
+        nonlocal tripped
+        payload = getattr(snapshot, "settings_rebind", None)
+        if isinstance(payload, dict) and payload.get("reloadRevision") == 1 and not tripped:
+            tripped = True
+            raise RuntimeError("simulated marker write crash")
+        original_write_locked(snapshot)
+
+    monkeypatch.setattr(runtime.registry, "_write_locked", fail_marker_write)
+    with pytest.raises(RuntimeError, match="simulated marker write crash"):
+        activation.activate(
+            selection=selection,
+            candidate_binding_id="binding-b",
+            candidate_root=vault_b,
+        )
+    assert reloads == [vault_b]
+    assert runtime.open_settings_rebind_store().read().reload_revision == 0
+
+    monkeypatch.setattr(runtime.registry, "_write_locked", original_write_locked)
+    activation.activate(
+        selection=selection,
+        candidate_binding_id="binding-b",
+        candidate_root=vault_b,
+    )
+    assert reloads == [vault_b, vault_b]
+    assert runtime.open_settings_rebind_store().read().reload_revision == 1
+
+    activation.activate(
+        selection=selection,
+        candidate_binding_id="binding-b",
+        candidate_root=vault_b,
+    )
+    assert reloads == [vault_b, vault_b]
+
+
 def test_committed_revision_survives_event_loss_and_process_restart(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
