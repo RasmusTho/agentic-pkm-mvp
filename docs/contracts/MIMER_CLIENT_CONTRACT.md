@@ -286,9 +286,10 @@ The owner has ruled that direct filesystem vault writes by external clients are 
 Sensor-captured material has its own vault zone, separate from the human's quick-capture inbox and
 from human-authored notes. The default relative root is `Sources/`, with user-relevant default
 subfolders `Sources/Voice memos/`, `Sources/Video & podcasts/`, and `Sources/Articles/`. These are
-**settings-resolved defaults**, not fixed paths: the setting key follows the existing
-`inbox_dir_rel` convention, and its concrete settings/UI enactment remains follow-on work. Clients
-and writers therefore must not hardcode the displayed names.
+**settings-resolved defaults**, not fixed paths: the root is resolved from `paths.sources_dir_rel`
+with the same selected-vault and environment precedence as `inbox_dir_rel` (and
+`VAULT_SOURCES_DIR_REL` is the one-release bootstrap override). The packaged default is `Sources/`.
+Clients and writers therefore must not hardcode the displayed names.
 
 Only Heimdal-side sensor/acquisition writers create material notes in this zone. App agents and the
 capture endpoint are excluded; human edits are allowed but never required. Sources notes are

@@ -22,7 +22,8 @@ from app.context_bundles.schema import (
     IncludedItem,
     ItemProvenance,
 )
-from app.knowledge_acquisition.candidate_writeback import ARTIFACT_CLASS, DEFAULT_SOURCES_DIR
+from app.knowledge_acquisition.candidate_writeback import ARTIFACT_CLASS
+from app.vault.paths import get_vault_sources_dir_rel
 from app.receipts.decision_receipt_log import decisions_receipts_dir, iter_decision_receipts
 from app.services.commitment_persistence import commitment_artifact_path, load_commitments
 from app.vault.manager import VaultContext
@@ -192,7 +193,7 @@ def _read_captures(
     vault_root: Path, for_date: date
 ) -> tuple[list[DayContextItem], list[IncludedItem]]:
     paired: list[tuple[DayContextItem, IncludedItem]] = []
-    sources_dir = vault_root / DEFAULT_SOURCES_DIR
+    sources_dir = vault_root / get_vault_sources_dir_rel(vault_root)
     if not sources_dir.exists():
         return [], []
     for path in sorted(sources_dir.glob("*.md")):

@@ -72,7 +72,6 @@ from app.knowledge_acquisition.pipeline_defaults import (
 )
 from app.knowledge_acquisition.replay import CANDIDATE_STAGE, CANDIDATE_STAGE_VERSION
 from app.knowledge_acquisition.source_bundle import (
-    DEFAULT_YOUTUBE_ATTACHMENT_ROOT,
     SourceBundleError,
     materialize_youtube_source_bundle,
 )
@@ -272,7 +271,7 @@ def acquire_youtube(
     conn: Any = None,
     env: Mapping[str, str] | None = None,
     fetch_fn: Callable[[str], youtube_plugin.FetchOutcome] | None = None,
-    youtube_attachment_root: str = DEFAULT_YOUTUBE_ATTACHMENT_ROOT,
+    youtube_attachment_root: str | None = None,
 ) -> AcquisitionReceipt:
     """Acquire a NEW YouTube URL end-to-end: fetch -> persist raw -> normalize -> extract ->
     assemble_candidate -> write_candidate_note, emitting one KA-06 stage event per transition.

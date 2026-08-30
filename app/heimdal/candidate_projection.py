@@ -71,6 +71,7 @@ from app.heimdal.quarantine import (
 )
 from app.knowledge.write_ops import write_note_relative
 from app.vault.manager import VaultContext
+from app.vault.paths import get_vault_sources_dir_rel
 from app.write_guard import DEFAULT_WRITE_GUARD, WriteGuard, WritesBlockedError
 
 #: This module's OWN cursor identity in the A2 per-consumer cursor store --
@@ -359,7 +360,7 @@ def write_candidate_note(
     *,
     vault_context: VaultContext,
     write_guard: WriteGuard = DEFAULT_WRITE_GUARD,
-    candidates_dir: str = DEFAULT_CANDIDATES_DIR,
+    candidates_dir: str | None = None,
 ) -> CandidateWriteResult:
     """The governed vault-write call site for Heimdal candidates.
 
@@ -370,6 +371,8 @@ def write_candidate_note(
     a crash that loses the candidate.
     """
     vault_root = _vault_root(vault_context)
+    if candidates_dir is None:
+        candidates_dir = f"{get_vault_sources_dir_rel(vault_root)}/Heimdal"
     artifact_path = candidate_note_path(candidate, candidates_dir=candidates_dir)
 
     candidate_path = vault_root / artifact_path
@@ -659,7 +662,7 @@ def write_reading_candidate_note(
     *,
     vault_context: VaultContext,
     write_guard: WriteGuard = DEFAULT_WRITE_GUARD,
-    candidates_dir: str = DEFAULT_READING_CANDIDATES_DIR,
+    candidates_dir: str | None = None,
 ) -> CandidateWriteResult:
     """Governed WriteGuard-gated write for a reading candidate (never companion capture).
 
@@ -669,6 +672,8 @@ def write_reading_candidate_note(
     overwrite of an existing (possibly human-reviewed) note at that path.
     """
     vault_root = _vault_root(vault_context)
+    if candidates_dir is None:
+        candidates_dir = f"{get_vault_sources_dir_rel(vault_root)}/Reading/Karakeep"
     artifact_path = reading_candidate_note_path(candidate, candidates_dir=candidates_dir)
     candidate_path = vault_root / artifact_path
 
@@ -804,8 +809,8 @@ def project_pending_candidates(
     vault_context: VaultContext,
     consumer_id: str = CANDIDATE_CONSUMER_ID,
     write_guard: WriteGuard = DEFAULT_WRITE_GUARD,
-    candidates_dir: str = DEFAULT_CANDIDATES_DIR,
-    reading_candidates_dir: str = DEFAULT_READING_CANDIDATES_DIR,
+    candidates_dir: str | None = None,
+    reading_candidates_dir: str | None = None,
     limit: Optional[int] = None,
     advance: bool = True,
 ) -> List[CandidateWriteResult]:
@@ -830,7 +835,12 @@ def project_pending_candidates(
     # The cursor is a durability acknowledgement: do not begin a batch unless a
     # selected, existing vault can hold its candidates. This happens before
     # writes so a restart can replay the complete unread batch safely.
-    _vault_root(vault_context)
+    vault_root = _vault_root(vault_context)
+    sources_dir = get_vault_sources_dir_rel(vault_root)
+    if candidates_dir is None:
+        candidates_dir = f"{sources_dir}/Heimdal"
+    if reading_candidates_dir is None:
+        reading_candidates_dir = f"{sources_dir}/Reading/Karakeep"
     rows = read_observations_for_consumer(consumer_id, limit=limit)
     planned = _plan_writes(rows)
 

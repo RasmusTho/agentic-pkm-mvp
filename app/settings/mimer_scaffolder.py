@@ -8,6 +8,7 @@ from app.knowledge.write_ops import write_note_from_absolute
 from app.settings.default_vault_layout import load_default_vault_layout
 from app.settings.locations import CANONICAL_SETTINGS_DIR_NAME
 from app.vault.layout import ensure_vault_layout_report
+from app.vault.paths import resolve_vault_sources_dir_rel
 from app.write_guard import DEFAULT_WRITE_GUARD, WriteGuard
 
 # Bootstrap action asserted at the scaffold seam. It is a member of the write
@@ -46,6 +47,7 @@ class MimerScaffolder:
                 created.append(path)
             path.mkdir(parents=True, exist_ok=True)
 
+        sources_dir_rel = resolve_vault_sources_dir_rel(mimer_root_dir / "Mimer").value
         mimer_subdirs = [
             "Index",
             "Workspace",
@@ -53,7 +55,7 @@ class MimerScaffolder:
             "Projects",
             "Domains",
             "Corpus",
-            "Sources",
+            sources_dir_rel,
             "Ontology",
             "Taxonomy",
             "Canon",

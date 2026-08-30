@@ -5,6 +5,8 @@ import re
 from pathlib import Path
 from typing import Any, Mapping
 
+from app.vault.paths import get_vault_sources_dir_rel
+
 from app.knowledge.multiwriter import NoteClass, WriteOperation, classify_note
 
 AutoRunMode = str  # "manual" | "watcher" | "never"
@@ -133,9 +135,17 @@ def watcher_panel_writeback_allowed(
     relative_path: Path | str,
     *,
     vault_root: Path | str,
-    sources_root_rel: Path | str = "Sources",
+    sources_root_rel: Path | str | None = None,
 ) -> bool:
     """Limit mutation-capable watcher runs to canonical rewritten note paths."""
+
+    if sources_root_rel is None:
+        try:
+            sources_root_rel = get_vault_sources_dir_rel(Path(vault_root))
+        except Exception:
+            # A malformed Sources setting must fail closed for app-agent
+            # mutation rather than redirecting policy to the packaged default.
+            return False
 
     path = Path(relative_path)
     if path.is_absolute() or ".." in path.parts:

@@ -22,6 +22,7 @@ from app.knowledge.write_ops import create_candidate_note_once
 from app.knowledge_acquisition.candidate_writeback import Candidate
 from app.knowledge_acquisition.extraction_persistence import PersistedTranscript
 from app.vault.manager import VaultContext
+from app.vault.paths import get_vault_sources_dir_rel
 from app.write_guard import DEFAULT_WRITE_GUARD, WriteGuard, WritesBlockedError
 
 DEFAULT_YOUTUBE_ATTACHMENT_ROOT = "Sources/YouTube/_attachments"
@@ -61,11 +62,13 @@ def materialize_youtube_source_bundle(
     *,
     vault_context: VaultContext,
     write_guard: WriteGuard = DEFAULT_WRITE_GUARD,
-    youtube_attachment_root: str = DEFAULT_YOUTUBE_ATTACHMENT_ROOT,
+    youtube_attachment_root: str | None = None,
 ) -> SourceBundleResult:
     """Create immutable transcript and manifest members beneath a stable source folder."""
-    root = validate_youtube_attachment_root(youtube_attachment_root)
     vault_root = _vault_root(vault_context)
+    if youtube_attachment_root is None:
+        youtube_attachment_root = f"{get_vault_sources_dir_rel(vault_root)}/YouTube/_attachments"
+    root = validate_youtube_attachment_root(youtube_attachment_root)
     source_key = _source_key(candidate.item_ref)
     version_key = _version_key(candidate.content_identity, transcript.extensions.get("stage_version"))
     source_folder = (PurePosixPath(root) / source_key).as_posix()

@@ -85,7 +85,6 @@ from app.knowledge_acquisition.pipeline_defaults import (
 )
 from app.knowledge_acquisition.raw_record import RawRecordIntegrityError, get_raw_record
 from app.knowledge_acquisition.source_bundle import (
-    DEFAULT_YOUTUBE_ATTACHMENT_ROOT,
     SourceBundleError,
     materialize_youtube_source_bundle,
 )
@@ -253,7 +252,7 @@ def run_replay(
     assert_no_source_egress: bool = True,
     trace_id: str | None = None,
     conn: Any = None,
-    youtube_attachment_root: str = DEFAULT_YOUTUBE_ATTACHMENT_ROOT,
+    youtube_attachment_root: str | None = None,
 ) -> ReplayReceipt:
     """Replay every derived level from an existing `raw` record and return a typed receipt.
 
