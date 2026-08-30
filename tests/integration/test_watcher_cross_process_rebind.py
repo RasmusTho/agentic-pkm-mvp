@@ -760,7 +760,10 @@ def test_settings05_parent_acceptance(
         if process.poll() is None:
             process.kill()
             process.communicate(timeout=5)
-    assert process.returncode == 0, stdout + stderr
+    # The long-lived child is intentionally terminated after the durable
+    # commit/event observation; a naturally exhausted max-ticks run is also
+    # accepted.
+    assert process.returncode in {0, -15}, stdout + stderr
     record = runtime.open_settings_rebind_store().read()
     assert record.phase == "committed"
     assert record.desired_revision == record.applied_revision == 1
