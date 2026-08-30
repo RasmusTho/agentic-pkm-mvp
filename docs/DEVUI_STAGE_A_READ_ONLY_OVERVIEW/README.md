@@ -190,9 +190,10 @@ run and makes no production claim. `M` must be the current `main` promotion ref 
 receipt-sourced deployment; the historical #4748 run at `c7c57300f2ec241778061078e7ad585454f0b880`
 is not reusable after `main` advances. If ARO-08 later becomes executable, its
 `devui-stage-a-read-only-owner-pilot.v1` ledger is the sole binding authority for the exact-M
-browser evidence plus production evidence. It records each tested SHA and a recomputable
-`evidence_artifact_sha256` over the canonical archived artifact inventory; missing or mismatched
-artifacts fail closed. #4836 and #4748 repository/proof delivery are complete; deployment and
+browser evidence plus production evidence. It records each tested SHA and separate recomputable
+`evidence_artifact_sha256` inventories: the browser inventory contains the browser bundle, while the
+production inventory contains deployment/health/owner evidence and any used disposable-state
+receipt. Missing or mismatched artifacts fail closed. #4836 and #4748 repository/proof delivery are complete; deployment and
 owner validation have not run.
 
 ## Governing and supporting sources
