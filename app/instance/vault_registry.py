@@ -13,7 +13,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Iterable, Iterator, Mapping, Protocol, cast
+from typing import TYPE_CHECKING, Any, Callable, Iterable, Iterator, Mapping, Protocol, cast
 from uuid import uuid4
 
 import yaml
@@ -534,6 +534,55 @@ class VaultRegistryStore:
                 current,
                 revision=next_revision,
                 settings_rebind=requested.as_payload(),
+                extensions=extensions,
+            )
+            self._write_locked(updated)
+            return updated
+
+    def complete_settings_rebind_reload(
+        self,
+        *,
+        desired_revision: int,
+        reload_callback: Callable[[], object],
+        _capability: _StorageMutationCapability | None = None,
+    ) -> RegistrySnapshot:
+        """Run one reload under the registry lock and durably record completion."""
+
+        _require_storage_mutation_capability(_capability)
+        with self._locked():
+            self._assert_no_scalar_rollback_session_locked()
+            current = self._read_current_locked(recover=True)
+            if current.settings_rebind is None:
+                raise RegistryError("settings rebind record is not installed")
+            rebind = SettingsRebindRecord.from_payload(current.settings_rebind)
+            if rebind.desired_revision != desired_revision:
+                raise RegistryError("settings rebind reload revision does not match durable authority")
+            if rebind.phase not in {"committed", "no_lifecycle"}:
+                raise RegistryError("settings rebind reload requires a committed revision")
+            if rebind.reload_revision == desired_revision:
+                return current
+            if rebind.reload_revision not in {None, 0}:
+                raise RegistryError("settings rebind reload revision cannot advance from an unexpected value")
+
+            # The lock prevents concurrent same-target callers from repeating
+            # the side effect.  If the process dies in the callback, the marker
+            # remains pending and a later caller retries from durable truth.
+            reload_callback()
+            completed = replace(rebind, reload_revision=desired_revision)
+            next_revision = current.revision + 1
+            extensions = copy.deepcopy(current.extensions)
+            if current.authority == REGISTRY_AUTHORITY_ACTIVE:
+                scalar_floor = extensions.get("scalarRollback")
+                if not isinstance(scalar_floor, dict):
+                    raise RegistryError("active registry scalar rollback floor is invalid")
+                extensions["scalarRollback"] = {
+                    **scalar_floor,
+                    "forkRegistryRevision": next_revision,
+                }
+            updated = replace(
+                current,
+                revision=next_revision,
+                settings_rebind=completed.as_payload(),
                 extensions=extensions,
             )
             self._write_locked(updated)

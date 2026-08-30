@@ -49,12 +49,13 @@ explain payload reports the effective identity and origin.
 Vault selection and the separately deployed watcher use the protected
 `settings_rebind.v1` compatibility transaction. A picker change is prepared,
 the old watcher root is acknowledged and drained, and selection plus binding
-are committed in one registry generation before the Settings Spine reloads.
-The watcher then resumes on the candidate root. `WATCHER_VAULT_PATH` remains a
-startup/bootstrap input, while health reads the durable phase and desired /
-applied revisions; compiled display fields never choose a binding. Only one
-compatibility watcher root is active at a time. Generic multi-vault lifecycle
-supervision remains owned by the later MVR handoff.
+are committed in one registry generation. The watcher then resumes on the
+candidate root, after which the Settings Spine reloads exactly once for the
+committed revision. `WATCHER_VAULT_PATH` remains a startup/bootstrap input,
+while health reads the durable phase and desired / applied / reload revisions;
+compiled display fields never choose a binding. Only one compatibility watcher
+root is active at a time. Generic multi-vault lifecycle supervision remains
+owned by the later MVR handoff.
 
 Settings tiering guidance (operator-facing vs dev/lab-only), inventory, and migration targets are described below.
 Runtime profile switch for tier enforcement: `PKM_SETTINGS_PROFILE=operator|lab` (default `operator`).

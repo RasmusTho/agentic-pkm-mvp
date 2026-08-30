@@ -6,7 +6,7 @@ import os
 import time
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import TYPE_CHECKING, Mapping
+from typing import TYPE_CHECKING, Callable, Mapping
 
 from app.instance._storage_boundary import (
     RegistryError,
@@ -284,25 +284,19 @@ class SettingsRebindStore:
         )
         return SettingsRebindRecord.from_payload(updated.settings_rebind)
 
-    def mark_reload_completed(self, *, desired_revision: int) -> SettingsRebindRecord:
-        """Durably mark the SETTINGS-01 reload for one committed revision."""
+    def reload_once(
+        self,
+        *,
+        desired_revision: int,
+        reload_callback: Callable[[], object],
+    ) -> SettingsRebindRecord:
+        """Run and durably record one SETTINGS-01 reload under the store lock."""
 
         from app.instance._storage_boundary import _STORAGE_MUTATION_CAPABILITY
 
-        snapshot = self._registry.load()
-        current = self.read()
-        if current.desired_revision != desired_revision:
-            raise RegistryError("settings rebind reload revision does not match durable authority")
-        if current.phase not in {"committed", "no_lifecycle"}:
-            raise RegistryError("settings rebind reload requires a committed revision")
-        if current.reload_revision == desired_revision:
-            return current
-        if current.reload_revision not in {None, 0}:
-            raise RegistryError("settings rebind reload revision cannot advance from an unexpected value")
-        updated = replace(current, reload_revision=desired_revision)
-        stored = self._registry.set_settings_rebind_state(
-            updated.as_payload(),
-            expected_revision=snapshot.revision,
+        stored = self._registry.complete_settings_rebind_reload(
+            desired_revision=desired_revision,
+            reload_callback=reload_callback,
             _capability=_STORAGE_MUTATION_CAPABILITY,
         )
         return SettingsRebindRecord.from_payload(stored.settings_rebind)
@@ -436,9 +430,8 @@ class SettingsRebindActivation:
         # binding and roll forward, matching the watcher transaction seam.
         _activation_fault_point("commit")
 
-        committed = self._reload_if_needed(committed, candidate_root)
-
         self._wait_for_completed_if_enabled(committed)
+        committed = self._reload_if_needed(committed, candidate_root)
         return committed
 
     def _wait_for_completed_if_enabled(self, record: SettingsRebindRecord) -> None:
@@ -462,17 +455,21 @@ class SettingsRebindActivation:
         if record.reload_revision == record.desired_revision:
             return record
         # This is deliberately the existing production SETTINGS-01 call site,
-        # not a second settings loader.  A malformed source leaves the durable
-        # commit visible and is surfaced by the ingestion health state.
+        # not a second settings loader.  The registry lock serializes this
+        # side effect with same-target callers and records completion durably.
         from app.settings.ingestion import ingest_settings
 
         _activation_fault_point("reload")
-        ingest_settings(
-            reason="vault_selection_rebind",
-            vault_root=candidate_root,
-            publish_signal=False,
+        completed = self.store.reload_once(
+            desired_revision=record.desired_revision,
+            reload_callback=lambda: ingest_settings(
+                reason="vault_selection_rebind",
+                vault_root=candidate_root,
+                publish_signal=False,
+            ),
         )
-        return self.store.mark_reload_completed(desired_revision=record.desired_revision)
+        _activation_fault_point("reload_complete")
+        return completed
 
     @property
     def watcher_enabled(self) -> bool:

@@ -621,7 +621,7 @@ def test_direct_filesystem_write_between_scan_and_commit_is_receipted_under_old_
     assert all(path.startswith(str(vault_a)) for path in _event_paths(tmp_path))
 
 
-@pytest.mark.parametrize("fault_stage", ["prepare", "commit", "reload"])
+@pytest.mark.parametrize("fault_stage", ["prepare", "commit", "reload", "reload_complete"])
 def test_prepare_commit_resume_is_failure_atomic(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -682,14 +682,18 @@ def test_prepare_commit_resume_is_failure_atomic(
         assert record.candidate_binding_id == "binding-b"
         assert runtime.registry.load().last_active_vault_ref == registration.ref
         assert record.phase == "no_lifecycle"
-        assert record.reload_revision == 0
-        activation.activate(
-            selection=selection,
-            candidate_binding_id="binding-b",
-            candidate_root=vault_b,
-        )
-        assert reloads == [vault_b]
-        assert runtime.open_settings_rebind_store().read().reload_revision == 1
+        if fault_stage == "reload_complete":
+            assert record.reload_revision == 1
+            assert reloads == [vault_b]
+        else:
+            assert record.reload_revision == 0
+            activation.activate(
+                selection=selection,
+                candidate_binding_id="binding-b",
+                candidate_root=vault_b,
+            )
+            assert reloads == [vault_b]
+            assert runtime.open_settings_rebind_store().read().reload_revision == 1
         activation.activate(
             selection=selection,
             candidate_binding_id="binding-b",
@@ -766,7 +770,11 @@ def test_same_target_prepared_selection_finishes_durable_commit(
 
     runtime, _vault_a, vault_b, _config_path = _fixture(tmp_path, monkeypatch)
     monkeypatch.setenv("WATCHER_ENABLE", "0")
-    monkeypatch.setattr("app.settings.ingestion.ingest_settings", lambda **_kwargs: None)
+    reloads: list[Path] = []
+    monkeypatch.setattr(
+        "app.settings.ingestion.ingest_settings",
+        lambda **kwargs: reloads.append(Path(kwargs["vault_root"])),
+    )
 
     selected = VaultManager().select_vault(vault_b)
 
@@ -789,7 +797,11 @@ def test_concurrent_same_target_callers_wait_for_commit_and_resume(
         monkeypatch,
         prepare=False,
     )
-    monkeypatch.setattr("app.settings.ingestion.ingest_settings", lambda **_kwargs: None)
+    reloads: list[Path] = []
+    monkeypatch.setattr(
+        "app.settings.ingestion.ingest_settings",
+        lambda **kwargs: reloads.append(Path(kwargs["vault_root"])),
+    )
     registration = runtime.registry.load().registrations["binding-b"]
     selection = KnownVaultRef(
         ref=registration.ref,
@@ -851,6 +863,7 @@ def test_concurrent_same_target_callers_wait_for_commit_and_resume(
     assert not errors
     assert len(results) == 2
     assert {result.phase for result in results} == {"committed"}
+    assert reloads == [vault_b]
 
 
 def test_settings05_parent_acceptance(
