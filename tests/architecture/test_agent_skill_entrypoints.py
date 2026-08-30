@@ -75,6 +75,37 @@ def test_builder_closeout_gate_contract_is_discoverable_and_fail_closed() -> Non
     assert "| .codex/skills/klart/SKILL.md |" in docs_index
 
 
+def test_klart_requires_exact_swedish_closeout_response_contract() -> None:
+    agents = _read("AGENTS.md")
+    skill_index = _read(".codex/skills/README.md")
+    skill = _read(".codex/skills/klart/SKILL.md")
+    docs_index = _read("docs/DOCS_INDEX.md")
+
+    assert "disable-model-invocation: true" not in skill
+    assert "platform-level response interceptor" in skill
+    assert "cannot\nmechanically rewrite" in skill
+
+    headings = [
+        "### Rekommendation",
+        "### Trådhantering",
+        "### Mål",
+        "### Statusverifiering",
+        "### Klart",
+        "### Kvar",
+        "### Åtgärd",
+        "### Nästa steg",
+        "### Värde",
+        "### Risk vid avslut",
+    ]
+    positions = [skill.index(heading) for heading in headings]
+    assert positions == sorted(positions)
+    assert all(skill.count(heading) == 1 for heading in headings)
+    assert "exact Swedish ten-heading terminal response contract" in " ".join(skill_index.split())
+    assert "exactly these" in agents
+    assert "platform-level response interceptor" in agents
+    assert "| .codex/skills/klart/SKILL.md |" in docs_index
+
+
 def test_shared_issue_contract_requires_duplicate_search_before_issue_creation() -> None:
     contract = _read(".codex/skills/_shared/ISSUE_CONTRACT.md")
     self_sufficiency = " ".join(
