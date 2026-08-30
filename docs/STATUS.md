@@ -7,10 +7,11 @@ Review cadence: weekly
 Source of truth: mixed
 Last reviewed: 2026-08-30
 Last live runtime verification: 2026-08-22 (new-host topology; see `docs/ENVIRONMENTS.md`)
-Last verified against (blocker-action projection candidate): PR #5206,
+Last verified against (blocker-action projection): merged PR #5206 (merge commit
+`53d7aa76b4b9184600c16f33cccb0e8bd9bee4a3`, closing issue #5204),
 `app/dispatcher/sync_github.py`, `app/builderops/cockpit_registry.py`,
-`scripts/reconcile_blocker_actions.py`, and focused local validation on 2026-08-30; current-head CI
-and merge remain pending.
+`scripts/reconcile_blocker_actions.py`, and current-head CI on 2026-08-30. The bounded action-label
+migration remains report-only by default and requires its own fresh targeted authority before apply.
 
 Last verified against (SQ-04 candidate): PR #5174, `app/standing_questions/evidence_matching.py`,
 `app/standing_questions/answer_refresh.py`, and focused Standing Questions tests on 2026-08-29;
@@ -737,12 +738,11 @@ Platform-side governance applied:
   `scripts/issue_pickup_claim.sh` routes a missing-task claim failure after such a sync to
   explicit GitHub-label-only fallback guidance (see
   `docs/AGENT_ISSUE_DISPATCHER.md :: Kill-Switch Partial Sync (#4606)`)
-- Candidate PR #5206 defines a separate bounded REST action-intake path for blocked/needs-human
-  Issues: it fetches only those Issues' comments and accepts a latest valid `blocker_action.v1`
-  receipt as projection evidence. Current implementation pickup remains strictly `agent:ready` only.
-  The candidate's targeted migration re-reads each Issue before a narrow label write, verifies label
-  and receipt readback, and fails closed on claim or lifecycle drift; no action intake has claim
-  authority. It is not shipped until current-head CI and merge complete.
+- Merged PR #5206 defines a separate bounded REST action-intake path for blocked/needs-human Issues:
+  it fetches only those Issues' comments and accepts a latest valid `blocker_action.v1` receipt as
+  projection evidence. Current implementation pickup remains strictly `agent:ready` only. The
+  targeted migration re-reads each Issue before a narrow label write, verifies label and receipt
+  readback, and fails closed on claim or lifecycle drift; no action intake has claim authority.
 - the verification-dispatch integration line now fails closed on exact-head, authoritative
   `github-actions` required-check evidence, preserves review/repair budgets across restart, and
   rejects ambiguous legacy active-plus-terminal authority chains. Host rollout remains disabled
