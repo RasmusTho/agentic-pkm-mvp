@@ -275,6 +275,11 @@ def test_model_inquiry_secret_contract_is_exact_and_value_free() -> None:
     assert contract.required_secrets_for_role(
         consumer="builderops-model-inquiry", role="model_inquiry"
     ) == ("openai.api-key",)
+    for retired_role in ("fable", "gpt_codex"):
+        with pytest.raises(UndeclaredSecretConsumerError):
+            contract.required_secrets_for_role(
+                consumer="builderops-model-inquiry", role=retired_role
+            )
     assert contract.required_secrets_for_role(
         consumer="builderops-ckm-semantic", role="ckm_semantic"
     ) == ("openai.api-key",)

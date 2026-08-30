@@ -9,13 +9,16 @@ model-inquiry path`). MAS-01..05 stay delivered as merged code; the parent live-
 as acceptance gates. MAS-06 closed the authority leak through a Builder-owned, `fallback_forbidden`
 path that fails closed while the declared metered credentials remain intentionally absent and never
 substitutes the sanctioned Model Inquiry subscription session.
+PR #5213 / issue #5203 amend the active Model Inquiry profile to one configured Sol target used by
+two neutral perspectives with `single_target_acceptance` and `independence: false`; the historical
+two-role provider-API profile remains compatibility evidence only.
 Doc role: Capability specification (feature-breakdown lane)
 Authority: Owns the task decomposition, execution order, cross-task invariants, and acceptance path for the model access substrate. Subordinate to `docs/adr/ADR-0064-model-access-substrate.md` (the decision), `docs/adr/ADR-0063-shared-llm-contract-kernel.md` (contract seam and fallback vocabulary), ADR-0062 (Builder credential/process separation), `docs/LOCAL_SECRET_PROVISIONING/README.md` (host secret boundary and INV-HSP-1..4), and `docs/MIMER_CAPABILITY_HARDENING/RUNTIME_MODEL_POSTURE.md` (provider census and egress posture). Owner docs win on disagreement.
 Owner: Architecture spine / LLM boundary
 Temporal class: strategic
 Review cadence: event-driven (task merge, ADR amendment, or a change in the CKM orchestration question)
 Source of truth: this directory for task shape and acceptance; ADR-0064 for the decision; `docs/audits/MODEL_ACCESS_SUBSTRATE_2026-07-27.md` for the evidence baseline
-Last reviewed: 2026-07-30
+Last reviewed: 2026-08-30
 
 # Model Access Substrate
 
@@ -29,6 +32,9 @@ declared metered credential is unavailable. CKM now uses the Builder-owned resol
 `fallback_forbidden`, and produces a visible zero-edge skip in that expected unavailable state. The
 neutral seam enables later CI, scheduled-job, and verification-closer migrations; this Phase 1 does
 not deliver those consumers. No active provider-backed CKM inference is claimed.
+Host-local Model Inquiry now resolves one configured Sol capability for both neutral review
+perspectives. That active path records non-independent single-target acceptance and never treats
+legacy role separation as permission to choose an alternate target.
 
 Three mechanisms existed unfinished, and this capability completed them rather than designing a
 fourth:
@@ -66,9 +72,10 @@ Every task inherits these. A task specification that breaks one is wrong.
 2. **No mock, fake, deterministic, or dry-run route may be presented as provider execution.**
    `app/builderops/model_inquiry_adapters.py:329-331` marks such a role unavailable; the guard must
    survive every relocation in this capability.
-3. **Distinct adapter id and distinct runtime-target fingerprint per independent role.**
-   `app/builderops/model_inquiry_adapters.py:332-349`. Role independence is a correctness property of
-   adversarial review, not an implementation detail of the current module.
+3. **Acceptance identity is explicit.** Historical consensus records require distinct adapter ids
+   and runtime-target fingerprints for independent roles. Active v2 records resolve one configured
+   target, record `single_target_acceptance` with `independence: false`, and have no alternate or
+   fallback target.
 4. **The closed failure vocabulary keeps its double validation.**
    `app/builderops/model_inquiry_adapters.py:26-36` classifies at the adapter;
    `app/builderops/model_inquiry.py:1977-2068` re-validates independently at the persistence boundary.
@@ -146,9 +153,9 @@ These hold *across* task boundaries. Each task names the ones it must preserve.
 - **INV-MAS-3 — one failure vocabulary, two validators.** The adapter-side classification and the
   independent persistence-boundary re-validation both remain. They read one vocabulary source, so a
   member added in one place cannot be missing in the other.
-- **INV-MAS-4 — role independence survives relocation.** After every move in this capability, two
-  independent roles still require distinct `adapter_id` values and distinct runtime-target
-  fingerprints, asserted where the descriptors are actually loaded, not on a copy of the guard.
+- **INV-MAS-4 — acceptance identity survives relocation.** Historical independent-role records keep
+  their distinct adapter/target validation. Active v2 execution keeps one configured target across
+  both neutral perspectives, records non-independence, and cannot enter a legacy fallback chain.
 - **INV-MAS-5 — no silent substitution.** No cross-provider fallback, no mock identity presented as a
   provider, no dry-run presented as execution, and no degradation without `degraded: true` plus a
   reason.

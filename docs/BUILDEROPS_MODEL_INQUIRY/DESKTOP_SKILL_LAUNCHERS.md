@@ -1,6 +1,6 @@
 ---
 name: Desktop Skill Launchers
-description: Package thin Codex and Claude desktop launchers that delegate inquiries to the configured host runner.
+description: Package an active Codex launcher and retain the Claude compatibility launcher, both delegating without target selection.
 task_id: BMI-04
 source_anchor: docs/BUILDEROPS_MODEL_INQUIRY/README.md :: Scope
 parent_capability: BuilderOps Model Inquiry
@@ -13,12 +13,14 @@ can_parallelize_with: []
 
 ## Purpose
 
-Let an operator begin the same inquiry from Codex Desktop or Claude Desktop without putting the
-orchestrator inside either chat history or configuring providers in the local workspace.
+Let an operator begin the active inquiry from Codex Desktop, while retaining the Claude Desktop
+package as a historical compatibility front end, without putting the orchestrator inside either
+chat history or configuring providers in the local workspace.
 
 ## What This Task Does
 
-Create a repo-local `start-model-inquiry` skill and a portable Claude custom-skill package. Both
+Create the repo-local `start-model-inquiry` Codex skill and retain a portable Claude custom-skill
+compatibility package. Neither is routing authority. Both
 write the question verbatim to a mode-`0600` local Markdown file. Remote callers copy it to
 `Tailscale_macmini:/tmp/model-inquiry-question.md`, then run exactly:
 
@@ -32,6 +34,12 @@ are host-specific operator configuration and stay outside Git. Neither desktop s
 environment, configures providers, handles authentication material, or reimplements orchestration
 in prompt prose. Under ADR-0064's 2026-07-30 owner-cost ruling,
 `yggdrasil-model-inquiry` is the operational host-local subscription launcher.
+
+The host resolves the configured Sol capability once for active v2 execution. Both neutral
+perspectives use that same target and a successful run records `single_target_acceptance` with
+`independence: false`. A failed target is non-promotable: neither desktop package may choose a
+second provider/model, reactivate a retired role, or enter a compatibility fallback chain. Legacy
+consensus and degraded records remain readable for historical traceability only.
 
 The repo-local Codex skill also supports a caller already running on the configured inquiry host. Before
 any connection attempt or lock mutation, it expands the fixed `Tailscale_macmini` alias with
@@ -80,9 +88,11 @@ or reclassify the launcher outcome.
 
 The operational `yggdrasil-model-inquiry` launcher is host-owned and outside the provider-API
 installer. The repository separately preserves a dormant declared-credential mechanism under the
-distinct `yggdrasil-model-inquiry-provider-api` name plus the two durable role entrypoints. The
+distinct `yggdrasil-model-inquiry-provider-api` name plus the durable neutral
+`synthesis-model-inquiry-role` and `verification-model-inquiry-role` entrypoints. The
 repository-owned `scripts/install_model_inquiry_host.py` routine installs and checks only those
-three provider-API wrappers. It must not inspect, overwrite, retire, or claim readiness for the
+three provider-API wrappers; retired provider-named role wrappers are not installed. It must not
+inspect, overwrite, retire, or claim readiness for the
 sanctioned subscription launcher or bridge. Desktop skills never invoke the dormant provider-API
 identity.
 
@@ -124,6 +134,10 @@ other.
   `tests/architecture/test_agent_skill_entrypoints.py::test_model_inquiry_local_host_route_is_identity_gated_and_fail_closed`.
 - [x] Desktop packages accept only an exit-zero terminal JSON response from the sanctioned
   subscription launcher and preserve staging after every nonzero/ambiguous result. Verify:
+  `tests/governance/test_start_model_inquiry_skill.py::test_desktop_skills_route_to_macmini_launcher`.
+- [x] Active v2 desktop launches leave target selection to the host, use one configured Sol target
+  for both neutral perspectives, report `independence: false`, and never route to a second
+  provider/model or compatibility fallback. Verify:
   `tests/governance/test_start_model_inquiry_skill.py::test_desktop_skills_route_to_macmini_launcher`.
 
 ## How to Verify (Pre-Merge)

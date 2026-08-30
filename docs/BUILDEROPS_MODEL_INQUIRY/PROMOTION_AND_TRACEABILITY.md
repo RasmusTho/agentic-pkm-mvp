@@ -30,7 +30,7 @@ scripts/builderops_cli.sh builderops inquiry trace inq_20260709_example --includ
 
 The accepted model response carries a strict `builderops.model-inquiry-issue-proposal.v1` JSON
 string with `title` and `body`. Evaluation validates that exact body against the canonical Issue
-section contract, per-criterion `Verify:` markers, source-anchor resolution, consensus lineage, and
+section contract, per-criterion `Verify:` markers, source-anchor resolution, accepted terminal lineage, and
 empty final blocking questions. A preterminal evaluation is read-only and fails loudly, so it cannot
 freeze an in-progress inquiry. After a terminal run, the evaluator persists `issue_ready`,
 `needs_input`, or `not_ready` in `readiness.json` plus a hash-bound readiness terminal receipt.
@@ -53,7 +53,7 @@ until host identity becomes an explicit configuration and receipt field.
 
 ## Why This Matters
 
-Model consensus is not authority. The output must become a bounded Issue with explicit acceptance
+Model output is not authority. The output must become a bounded Issue with explicit acceptance
 criteria and source anchors before any implementation agent can claim it.
 
 ## Acceptance Criteria
@@ -83,12 +83,16 @@ criteria and source anchors before any implementation agent can claim it.
 BMI-05 adds these immutable files under
 `$BUILDEROPS_VAULT_ROOT/model-inquiries/<inquiry_id>/`:
 
-- `promotion-intent.json` — exact repository, title, marked Issue body, readiness/synthesis hashes,
-  and source refs, persisted before REST;
+- `promotion-intent.json` — exact repository, title, marked Issue body, run-terminal,
+  readiness, and synthesis hashes plus source refs, persisted before REST. Active v2 records require
+  all three linkage hashes; legacy records that predate a later field remain readable, while any
+  linkage field they do contain must still match the immutable graph;
 - `receipts/readiness-terminal.json` — binds the terminal `issue_ready`, `needs_input`, or
   `not_ready` result to the readiness artifact and its exact input artifact hashes;
-- `receipts/promotion-github-issue.json` — binds the PromotionIntent hash and deterministic marker
-  to the created/reconciled Issue;
+- `receipts/promotion-github-issue.json` — binds the PromotionIntent hash, deterministic marker,
+  run-terminal, readiness, and synthesis hashes to the created/reconciled Issue. Active v2 receipts
+  require every linkage field; legacy receipts may omit later fields but may not forge a field that
+  is present;
 - `receipts/delivery-<ref-hash>.json` — append-only PR, verification-receipt, and owner-doc links.
 
 SQLite remains local and is not the durable promotion authority for model inquiries. The generic

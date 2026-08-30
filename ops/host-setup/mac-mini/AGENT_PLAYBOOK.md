@@ -43,13 +43,12 @@ The repository also owns the distinct dormant provider-API launcher
 `yggdrasil-model-inquiry-provider-api` plus two neutral provider-API role commands:
 `synthesis-model-inquiry-role` and `verification-model-inquiry-role`. They preserve the
 declared-credential mechanism for any future metered path and do not select a provider or model.
-For already-provisioned hosts, the installer also retains the historical
-`fable-model-inquiry-role` and `codex-model-inquiry-role` names as explicitly labelled
-compatibility aliases for those neutral perspectives. They are not the current
-operational auth and do not replace or retire the sanctioned
-subscription bridge or its `yggdrasil-model-inquiry` launcher. Install or verify
-these owner-only wrappers only to validate that versioned mechanism against the
-current repository checkout:
+The historical `fable-model-inquiry-role` and `codex-model-inquiry-role` names are retired:
+the installer never creates or maps them, and either name blocks install and check until an
+operator inspects and explicitly removes the stale entrypoint. The neutral provider-API commands
+are not the current operational auth and do not replace or retire the sanctioned subscription
+bridge or its `yggdrasil-model-inquiry` launcher. Install or verify these owner-only wrappers only
+to validate that versioned mechanism against the current repository checkout:
 
 ```bash
 repo_root="$(git rev-parse --show-toplevel)"
@@ -59,10 +58,11 @@ python3 "$repo_root/scripts/install_model_inquiry_host.py" install \
   --python "$repo_root/.venv/bin/python3"
 ```
 
-The operation is idempotent. An exact rerun reports the provider-API launcher, both neutral role
-entrypoints, and their compatibility aliases as `unchanged`; an unrelated existing file, subscription command
-occupying one of these provider-API wrapper names, symlinked bin directory, or
-unsafe permissions fails closed and must be inspected rather than overwritten.
+The operation is idempotent. An exact rerun reports the provider-API launcher and both neutral role
+entrypoints as `unchanged`. An unrelated existing file, a subscription command occupying one of
+these provider-API wrapper names, either retired provider-named entrypoint, a symlinked bin
+directory, or unsafe permissions fails closed and must be inspected rather than overwritten. The
+installer never removes a retired entrypoint.
 The installer does not inspect, overwrite, or declare stale the separately
 sanctioned subscription launcher or bridge.
 If an I/O failure interrupts the two-role install, an exact first wrapper may

@@ -41,7 +41,6 @@ from llm_contract import (
 INQUIRY_INTENT_CONFIG_ENV = "BUILDEROPS_INQUIRY_ROLE_INTENT_JSON"
 INQUIRY_INTENT_SCHEMA = "builderops.model-inquiry-intent.v2"
 PERSPECTIVE_NAMES = ("synthesis", "verification")
-LEGACY_ROLES = ("fable", "gpt_codex")
 ACCEPTANCE_MODES = frozenset({"single_target"})
 SUBSCRIPTION_ADAPTER_TIMEOUT_EXIT_CODE = 124
 SUBSCRIPTION_ADAPTER_SESSION_EXPIRED_EXIT_CODE = 125
@@ -483,9 +482,11 @@ def load_adapter_descriptors(
     env: Mapping[str, str] | None = None,
     *,
     resolver: BuilderModelAccessResolver | None = None,
+    roles: tuple[str, ...] | None = None,
 ) -> dict[str, dict[str, Any]]:
     """Project the resolved role targets into sanitized, value-free descriptors."""
     source = dict(os.environ if env is None else env)
+    requested_roles = roles or PERSPECTIVE_NAMES
     if load_inquiry_intent(source) is None:
         return {
             perspective: {
@@ -493,7 +494,7 @@ def load_adapter_descriptors(
                 "available": False,
                 "reason": "inquiry intent not configured",
             }
-            for perspective in PERSPECTIVE_NAMES
+            for perspective in requested_roles
         }
     try:
         selected, config, resolution = resolve_inquiry_target(source, resolver=resolver)
@@ -504,7 +505,7 @@ def load_adapter_descriptors(
                 "available": False,
                 "reason": "inquiry intent not configured",
             }
-            for perspective in PERSPECTIVE_NAMES
+            for perspective in requested_roles
         }
     except ModelAccessResolutionError as exc:
         return {
@@ -513,7 +514,16 @@ def load_adapter_descriptors(
                 "available": False,
                 "reason": str(exc),
             }
-            for perspective in PERSPECTIVE_NAMES
+            for perspective in requested_roles
+        }
+    if tuple(config.perspectives) != requested_roles:
+        return {
+            role: {
+                "role": role,
+                "available": False,
+                "reason": "inquiry roles do not match the configured Model Inquiry profile",
+            }
+            for role in requested_roles
         }
     descriptors: dict[str, dict[str, Any]] = {}
     for perspective in config.perspectives:

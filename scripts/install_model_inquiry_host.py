@@ -26,7 +26,7 @@ TRUSTED_REPO_ROOT = Path(__file__).resolve().parents[1]
 # subscription launcher is deliberately outside this installer and retains the
 # distinct ``yggdrasil-model-inquiry`` identity under ADR-0064's owner ruling.
 VERSIONED_ADAPTER_NAME = "model_inquiry_role_adapter.py"
-VERSIONED_ADAPTER_SHA256 = "bb2d56176387d3be23f4453ff2ce779d879a9f53659c7b52d7da62517aa735db"
+VERSIONED_ADAPTER_SHA256 = "2e4c2379f1fc7ed216900eb84bdc6d1687e7a766ffddd0c6829cf2ab3fabd35b"
 VERSIONED_LAUNCHER_NAME = "start_model_inquiry.py"
 VERSIONED_LAUNCHER_SHA256 = "8efbbc1a35462334d4a6895660385ea087b2c5253f19541b4434632ce9b703e8"
 FIXED_LAUNCHER_NAME = "yggdrasil-model-inquiry-provider-api"
@@ -44,15 +44,10 @@ ROLE_SPECS = (
     RoleSpec("synthesis", "synthesis-model-inquiry-role"),
     RoleSpec("verification", "verification-model-inquiry-role"),
 )
-
-# These names are retained only so an already-provisioned host can be
-# reinstalled without losing its historical command surface. They are not
-# inquiry roles and are never exposed as the primary role map.
-COMPATIBILITY_ROLE_SPECS = (
-    RoleSpec("fable", "fable-model-inquiry-role"),
-    RoleSpec("gpt_codex", "codex-model-inquiry-role"),
+RETIRED_ROLE_ENTRYPOINTS = (
+    "fable-model-inquiry-role",
+    "codex-model-inquiry-role",
 )
-ALL_ROLE_SPECS = ROLE_SPECS + COMPATIBILITY_ROLE_SPECS
 
 
 class HostInstallError(RuntimeError):
@@ -351,7 +346,7 @@ def _expected_wrappers(*, checkout: Checkout, python: Path) -> dict[RoleSpec, st
             adapter=checkout.adapter,
             adapter_sha256=checkout.adapter_sha256,
         )
-        for spec in ALL_ROLE_SPECS
+        for spec in ROLE_SPECS
     }
     _assert_checkout_authority(checkout)
     return wrappers
@@ -386,6 +381,16 @@ def _entrypoint_matches(directory_fd: int, name: str, expected: str) -> bool:
         )
     except UnicodeError:
         return False
+
+
+def _entrypoint_exists(directory_fd: int, name: str) -> bool:
+    try:
+        os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+    except FileNotFoundError:
+        return False
+    except OSError as exc:
+        raise HostInstallError(f"unable to inspect entrypoint: {name}") from exc
+    return True
 
 
 def _install_no_overwrite(
@@ -463,6 +468,11 @@ def install(*, repo_root: Path, bin_dir: Path, python: Path) -> dict[str, object
             destination_identity,
             label="bin directory",
         )
+        for entrypoint in RETIRED_ROLE_ENTRYPOINTS:
+            if _entrypoint_exists(directory_fd, entrypoint):
+                raise HostInstallError(
+                    f"retired entrypoint requires explicit removal: {entrypoint}"
+                )
         states: dict[RoleSpec, str] = {}
         for spec, content in wrappers.items():
             try:
@@ -515,6 +525,11 @@ def install(*, repo_root: Path, bin_dir: Path, python: Path) -> dict[str, object
             raise HostInstallError(
                 f"entrypoint changed during installation: {FIXED_LAUNCHER_NAME}"
             )
+        for entrypoint in RETIRED_ROLE_ENTRYPOINTS:
+            if _entrypoint_exists(directory_fd, entrypoint):
+                raise HostInstallError(
+                    f"retired entrypoint appeared during installation: {entrypoint}"
+                )
         _assert_directory_identity(
             destination,
             destination_identity,
@@ -535,10 +550,6 @@ def install(*, repo_root: Path, bin_dir: Path, python: Path) -> dict[str, object
         "roles": {
             spec.role: {"entrypoint": spec.entrypoint, "status": states[spec]}
             for spec in ROLE_SPECS
-        },
-        "compatibility_aliases": {
-            spec.role: {"entrypoint": spec.entrypoint, "status": states[spec]}
-            for spec in COMPATIBILITY_ROLE_SPECS
         },
     }
 
@@ -565,6 +576,7 @@ def check(
         destination_identity = None
     command_path = path if path is not None else os.environ.get("PATH", os.defpath)
     roles: dict[str, object] = {}
+    retired_entrypoints: dict[str, str] = {}
     ok = directory_fd is not None
     launcher_available = False
     try:
@@ -575,6 +587,13 @@ def check(
                 destination_identity,
                 label="bin directory",
             )
+        for entrypoint in RETIRED_ROLE_ENTRYPOINTS:
+            present = directory_fd is not None and _entrypoint_exists(
+                directory_fd,
+                entrypoint,
+            )
+            retired_entrypoints[entrypoint] = "present" if present else "absent"
+            ok = ok and not present
         for spec, content in wrappers.items():
             discovered = shutil.which(spec.entrypoint, path=command_path)
             expected_path = destination / spec.entrypoint
@@ -643,6 +662,10 @@ def check(
             )
             if not launcher_available:
                 ok = False
+            for entrypoint in RETIRED_ROLE_ENTRYPOINTS:
+                present = _entrypoint_exists(directory_fd, entrypoint)
+                retired_entrypoints[entrypoint] = "present" if present else "absent"
+                ok = ok and not present
             _assert_directory_identity(
                 destination,
                 destination_identity,
@@ -660,14 +683,8 @@ def check(
             "lineage": LAUNCHER_LINEAGE,
             "status": "available" if launcher_available else "unavailable",
         },
-        "roles": {
-            spec.role: roles[spec.role]
-            for spec in ROLE_SPECS
-        },
-        "compatibility_aliases": {
-            spec.role: roles[spec.role]
-            for spec in COMPATIBILITY_ROLE_SPECS
-        },
+        "roles": roles,
+        "retired_entrypoints": retired_entrypoints,
     }
 
 

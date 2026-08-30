@@ -73,7 +73,7 @@ def _response(
 
 
 @dataclass
-class _ConsensusAdapter:
+class _SingleTargetAdapter:
     adapter_id: str
     provider: str
     model: str
@@ -102,8 +102,12 @@ def test_terminal_run_writes_human_readable_markdown_report(tmp_path: Path) -> N
         source_refs=[{"ref_type": "github_issue", "ref": "#3540"}],
     )
     adapters = {
-        role: _ConsensusAdapter(f"{role}-adapter", role, f"{role}-model")
-        for role in ("fable", "gpt_codex")
+        perspective: _SingleTargetAdapter(
+            "configured-sol-subscription",
+            "configured-provider",
+            "configured-sol-model",
+        )
+        for perspective in ("synthesis", "verification")
     }
 
     result = ModelInquiryRunner(service, adapters).run("inq_test_markdown_report", max_rounds=1)
@@ -113,11 +117,11 @@ def test_terminal_run_writes_human_readable_markdown_report(tmp_path: Path) -> N
     rendered = report.read_text(encoding="utf-8")
     assert "# Model inquiry — inq_test_markdown_report" in rendered
     assert "Which boundary should own durable human knowledge?" in rendered
-    assert "### 0. fable — draft" in rendered
-    assert "### 3. gpt_codex — review" in rendered
+    assert "### 0. synthesis — draft" in rendered
+    assert "### 3. verification — review" in rendered
     assert "## Shared synthesis" in rendered
     assert "## Run result" in rendered
-    assert "Outcome: **consensus**" in rendered
+    assert "Outcome: **single_target_acceptance**" in rendered
 
     ModelInquiryPromotionGateway(service).evaluate("inq_test_markdown_report")
     service.write_human_readable_report("inq_test_markdown_report")
@@ -136,8 +140,12 @@ def test_markdown_report_is_deterministic_and_derived(tmp_path: Path) -> None:
         source_refs=[{"ref_type": "github_issue", "ref": "#3540"}],
     )
     adapters = {
-        role: _ConsensusAdapter(f"{role}-adapter", role, f"{role}-model")
-        for role in ("fable", "gpt_codex")
+        perspective: _SingleTargetAdapter(
+            "configured-sol-subscription",
+            "configured-provider",
+            "configured-sol-model",
+        )
+        for perspective in ("synthesis", "verification")
     }
     result = ModelInquiryRunner(service, adapters).run(
         "inq_test_markdown_deterministic", max_rounds=1
@@ -182,9 +190,9 @@ def test_markdown_report_fences_untrusted_question_and_model_text(tmp_path: Path
     )
     service.commit_turn(
         "inq_test_markdown_untrusted",
-        turn_id="draft-fable",
+        turn_id="draft-synthesis",
         sequence=0,
-        role="fable",
+        role="synthesis",
         content=response,
         input_artifact_refs=["question"],
         source_refs=[{"ref_type": "github_issue", "ref": "#3540"}],
@@ -209,8 +217,13 @@ def test_markdown_report_fences_untrusted_synthesis_and_readiness(tmp_path: Path
     )
     content = "# Synthesis heading\n\n<script>bad</script>\n```"
     adapters = {
-        role: _ConsensusAdapter(f"{role}-adapter", role, f"{role}-model", content)
-        for role in ("fable", "gpt_codex")
+        perspective: _SingleTargetAdapter(
+            "configured-sol-subscription",
+            "configured-provider",
+            "configured-sol-model",
+            content,
+        )
+        for perspective in ("synthesis", "verification")
     }
 
     result = ModelInquiryRunner(service, adapters).run(
@@ -220,7 +233,7 @@ def test_markdown_report_fences_untrusted_synthesis_and_readiness(tmp_path: Path
     report = service.write_human_readable_report("inq_test_markdown_synthesis_untrusted")
 
     rendered = report.read_text(encoding="utf-8")
-    assert result["outcome"] == "consensus"
+    assert result["outcome"] == "single_target_acceptance"
     assert "## Shared synthesis" in rendered
     assert "````" in rendered
     assert "# Synthesis heading" in rendered
@@ -844,7 +857,7 @@ def test_inquiry_run_dry_run_uses_common_runner(tmp_path: Path) -> None:
     assert result.exit_code == 0, result.output
     payload = json.loads(result.output)
     assert payload["dry_run"] is True
-    assert payload["unavailable_roles"] == ["fable", "gpt_codex"]
+    assert payload["unavailable_roles"] == ["synthesis", "verification"]
     assert ModelInquiryService.from_env(env).trace("inq_test_cli_run") == before
 
 

@@ -85,6 +85,16 @@ _INQUIRY_LOCKS_GUARD = threading.Lock()
 _INQUIRY_LOCKS: dict[str, threading.RLock] = {}
 
 
+def is_active_inquiry_manifest(manifest: Mapping[str, Any]) -> bool:
+    """Return whether a manifest names the sole executable/promotable inquiry contract."""
+    return (
+        manifest.get("schema") == INQUIRY_SCHEMA
+        and manifest.get("acceptance_mode") == "single_target"
+        and manifest.get("perspectives") == ["synthesis", "verification"]
+        and manifest.get("independence") is False
+    )
+
+
 class ModelInquiryService:
     """Persist immutable inquiry artifacts in the configured shared BuilderOps vault."""
 
@@ -115,7 +125,7 @@ class ModelInquiryService:
         *,
         question: str,
         workflow: str,
-        acceptance_mode: str | None = None,
+        acceptance_mode: str = "single_target",
         source_refs: list[dict[str, Any]],
         created_by: Mapping[str, Any] | str | None = None,
         inquiry_id: str | None = None,
@@ -126,6 +136,10 @@ class ModelInquiryService:
         validate_source_refs(source_refs)
         actor = normalize_actor(created_by)
         inquiry_id = _safe_id(inquiry_id or _new_inquiry_id(), "inquiry_id")
+        if acceptance_mode != "single_target":
+            raise BuilderOpsValidationError(
+                "new model inquiries must use single_target acceptance"
+            )
         directory = self._inquiry_dir(inquiry_id, create=True)
         question_path = directory / "question.json"
         question_existing = self._read_optional(question_path)
@@ -155,10 +169,8 @@ class ModelInquiryService:
         )
         manifest_path = directory / "manifest.json"
         manifest_existing = self._read_optional(manifest_path)
-        if acceptance_mode not in {None, "single_target"}:
-            raise BuilderOpsValidationError("unsupported inquiry acceptance_mode")
         manifest = {
-            "schema": INQUIRY_SCHEMA if acceptance_mode else LEGACY_INQUIRY_SCHEMA,
+            "schema": INQUIRY_SCHEMA,
             "inquiry_id": inquiry_id,
             "workflow": workflow,
             "question_artifact_id": "question",
@@ -172,14 +184,13 @@ class ModelInquiryService:
                 fallback=question_payload["created_at"],
             ),
         }
-        if acceptance_mode:
-            manifest.update(
-                {
-                    "acceptance_mode": acceptance_mode,
-                    "perspectives": ["synthesis", "verification"],
-                    "independence": False,
-                }
-            )
+        manifest.update(
+            {
+                "acceptance_mode": acceptance_mode,
+                "perspectives": ["synthesis", "verification"],
+                "independence": False,
+            }
+        )
         manifest["artifact_hash"] = _artifact_hash(manifest)
         self._write_immutable(
             manifest_path,
@@ -204,6 +215,7 @@ class ModelInquiryService:
         provider_metadata: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         safe_inquiry_id = _safe_id(inquiry_id, "inquiry_id")
+        self._require_active_inquiry(safe_inquiry_id)
         lock = _inquiry_lock(self._vault_root, safe_inquiry_id)
         with lock:
             with self._inquiry_process_lock(safe_inquiry_id):
@@ -238,7 +250,7 @@ class ModelInquiryService:
         _validate_artifact_refs(input_artifact_refs)
         validate_source_refs(source_refs)
         normalized_provider_metadata = _validate_provider_metadata(provider_metadata)
-        directory = self._require_inquiry(inquiry_id)
+        directory, _ = self._require_active_inquiry(inquiry_id)
         # Sequence is the atomic reservation key. Two concurrent writers for the
         # same successor slot therefore contend on one no-overwrite pathname.
         path = directory / "turns" / f"{sequence:06d}.json"
@@ -329,7 +341,7 @@ class ModelInquiryService:
         content = _nonempty(content, "synthesis content")
         _validate_artifact_refs(input_artifact_refs)
         validate_source_refs(source_refs)
-        directory = self._require_inquiry(inquiry_id)
+        directory, _ = self._require_active_inquiry(inquiry_id)
         path = directory / "synthesis.json"
         existing = self._read_optional(path)
         payload = {
@@ -360,7 +372,7 @@ class ModelInquiryService:
         rationale = _nonempty(rationale, "readiness rationale")
         _validate_artifact_refs(input_artifact_refs)
         validate_source_refs(source_refs)
-        directory = self._require_inquiry(inquiry_id)
+        directory, _ = self._require_active_inquiry(inquiry_id)
         path = directory / "readiness.json"
         existing = self._read_optional(path)
         content_hash = _content_hash(
@@ -393,8 +405,8 @@ class ModelInquiryService:
     ) -> dict[str, Any]:
         inquiry_id = _safe_id(inquiry_id, "inquiry_id")
         validate_source_refs(source_refs)
+        directory, _ = self._require_active_inquiry(inquiry_id)
         trace = self.trace(inquiry_id)
-        directory = self._require_inquiry(inquiry_id)
         readiness = trace.get("readiness")
         if not isinstance(readiness, dict):
             raise BuilderOpsValidationError("readiness receipt requires readiness evidence")
@@ -475,7 +487,7 @@ class ModelInquiryService:
     ) -> dict[str, Any]:
         inquiry_id = _safe_id(inquiry_id, "inquiry_id")
         validate_source_refs(source_refs)
-        directory = self._require_inquiry(inquiry_id)
+        directory, manifest = self._require_active_inquiry(inquiry_id)
         readiness = self._read_required(directory / "readiness.json")
         synthesis = self._read_required(directory / "synthesis.json")
         run_terminal = self._read_optional(
@@ -510,6 +522,7 @@ class ModelInquiryService:
             readiness=readiness,
             synthesis=synthesis,
             run_terminal=run_terminal,
+            manifest=manifest,
         )
         return self._write_immutable(path, payload, label="immutable promotion intent")
 
@@ -532,7 +545,7 @@ class ModelInquiryService:
         ):
             raise BuilderOpsValidationError("GitHub issue number must be positive")
         validate_source_refs(source_refs)
-        directory = self._require_inquiry(inquiry_id)
+        directory, _ = self._require_active_inquiry(inquiry_id)
         persisted_intent = self._read_required(directory / "promotion-intent.json")
         if dict(intent) != persisted_intent:
             raise BuilderOpsValidationError("promotion receipt intent does not match persisted intent")
@@ -608,7 +621,7 @@ class ModelInquiryService:
                 f"delivery ref_type must be one of: {', '.join(sorted(allowed))}"
             )
         validate_source_refs(source_refs)
-        directory = self._require_inquiry(inquiry_id)
+        directory, _ = self._require_active_inquiry(inquiry_id)
         ref_hash = canonical_hash(ref)[:24]
         path = directory / "receipts" / f"delivery-{ref_hash}.json"
         existing = self._read_optional(path)
@@ -657,7 +670,7 @@ class ModelInquiryService:
             raise BuilderOpsValidationError(f"unsupported terminal turn outcome: {outcome}")
         validate_source_refs(source_refs)
         actor_ref = normalize_actor(actor)
-        directory = self._require_inquiry(inquiry_id)
+        directory, _ = self._require_active_inquiry(inquiry_id)
         turn = next(
             (item for item in self._read_turns(directory, inquiry_id) if item["turn_id"] == turn_id),
             None,
@@ -712,7 +725,7 @@ class ModelInquiryService:
         outcome = _safe_id(outcome, "provider attempt outcome")
         validate_source_refs(source_refs)
         sanitized = _validate_receipt_details(details)
-        directory = self._require_inquiry(inquiry_id)
+        directory, _ = self._require_active_inquiry(inquiry_id)
         path = directory / "receipts" / f"attempt-{adapter_request_id}.json"
         existing = self._read_optional(path)
         occurred_at = _existing_timestamp(existing)
@@ -760,8 +773,7 @@ class ModelInquiryService:
         if outcome not in RUN_TERMINAL_OUTCOMES:
             raise BuilderOpsValidationError(f"unsupported inquiry run outcome: {outcome}")
         validate_source_refs(source_refs)
-        directory = self._require_inquiry(inquiry_id)
-        manifest = self._read_required(directory / "manifest.json")
+        directory, manifest = self._require_active_inquiry(inquiry_id)
         acceptance_mode = manifest.get("acceptance_mode")
         if acceptance_mode == "single_target" and outcome in {
             "consensus",
@@ -845,6 +857,7 @@ class ModelInquiryService:
                 inquiry_id=inquiry_id,
                 readiness=readiness,
                 synthesis=synthesis,
+                manifest=manifest,
                 run_terminal=next(
                     (
                         receipt
@@ -886,8 +899,8 @@ class ModelInquiryService:
     def write_human_readable_report(self, inquiry_id: str) -> Path:
         """Write the mutable Markdown projection after a terminal inquiry run."""
         inquiry_id = _safe_id(inquiry_id, "inquiry_id")
+        directory, _ = self._require_active_inquiry(inquiry_id)
         trace = self.trace(inquiry_id)
-        directory = self._require_inquiry(inquiry_id)
         path = directory / "report.md"
         self._write_derived_text(
             path,
@@ -904,6 +917,7 @@ class ModelInquiryService:
         readiness: dict[str, Any] | None,
         synthesis: dict[str, Any] | None,
         run_terminal: dict[str, Any] | None,
+        manifest: Mapping[str, Any],
     ) -> None:
         if (
             intent.get("schema") != PROMOTION_INTENT_SCHEMA
@@ -917,7 +931,14 @@ class ModelInquiryService:
             or intent.get("synthesis_artifact_hash") != synthesis.get("artifact_hash")
         ):
             raise BuilderOpsValidationError("invalid inquiry promotion intent")
-        if "run_terminal_receipt_hash" in intent and (
+        requires_linkage = manifest.get("acceptance_mode") == "single_target"
+        if requires_linkage and (
+            run_terminal is None
+            or intent.get("run_terminal_receipt_hash")
+            != run_terminal.get("artifact_hash")
+        ):
+            raise BuilderOpsValidationError("invalid inquiry promotion intent")
+        if not requires_linkage and "run_terminal_receipt_hash" in intent and (
             run_terminal is None
             or intent.get("run_terminal_receipt_hash")
             != run_terminal.get("artifact_hash")
@@ -1078,6 +1099,21 @@ class ModelInquiryService:
             raise BuilderOpsValidationError(f"model inquiry not found: {inquiry_id}")
         return directory
 
+    def _require_active_inquiry(
+        self,
+        inquiry_id: str,
+    ) -> tuple[Path, dict[str, Any]]:
+        directory = self._require_inquiry(inquiry_id)
+        manifest = self._read_required(directory / "manifest.json")
+        if manifest.get("inquiry_id") != inquiry_id:
+            raise BuilderOpsValidationError("model inquiry manifest binding mismatch")
+        _validate_artifact_hash(manifest, label="manifest")
+        if not is_active_inquiry_manifest(manifest):
+            raise BuilderOpsValidationError(
+                "legacy or invalid model inquiry records are read-only and cannot be mutated"
+            )
+        return directory, manifest
+
     @contextmanager
     def _inquiry_process_lock(self, inquiry_id: str) -> Iterator[None]:
         with self._named_inquiry_lock(inquiry_id, ".turn-commit.lock", "turn commit"):
@@ -1102,7 +1138,7 @@ class ModelInquiryService:
         filename: str,
         label: str,
     ) -> Iterator[None]:
-        directory = self._require_inquiry(inquiry_id)
+        directory, _ = self._require_active_inquiry(inquiry_id)
         path = directory / filename
         self._validate_artifact_parent(path)
         if path.is_symlink():
@@ -1207,7 +1243,7 @@ class ModelInquiryService:
         self,
         directory: Path,
         *,
-        manifest: Mapping[str, Any] | None = None,
+        manifest: Mapping[str, Any],
         readiness: Mapping[str, Any] | None = None,
         readiness_input_artifacts: list[dict[str, str]] | None = None,
         promotion_intent: Mapping[str, Any] | None = None,
@@ -2450,4 +2486,4 @@ def _dedupe_source_refs(*groups: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return result
 
 
-__all__ = ["ModelInquiryService"]
+__all__ = ["ModelInquiryService", "is_active_inquiry_manifest"]

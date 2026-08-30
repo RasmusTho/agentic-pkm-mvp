@@ -83,11 +83,10 @@ The repository-owned installer and host launchers remain governed by their exist
 launcher supplies the resolved model to `scripts/model_inquiry_subscription_adapter.py`; the bridge
 accepts neutral perspective names and has no role-specific provider/model branch. Host credentials,
 subscription-session state, and launcher paths stay outside Git.
-The installed provider-API command names are the neutral
-`synthesis-model-inquiry-role` and `verification-model-inquiry-role` entrypoints. The installer
-also retains `fable-model-inquiry-role` and `codex-model-inquiry-role` as explicitly labelled
-compatibility aliases for already-provisioned hosts; the adapter maps those historical names to
-the neutral `synthesis` and `verification` perspectives before loading the shared resolved target.
+The dormant provider-API installer exposes only the neutral
+`synthesis-model-inquiry-role` and `verification-model-inquiry-role` commands. Retired
+provider-named command aliases are rejected and block a clean installer readback until an operator
+removes the stale entrypoint explicitly; they are never mapped into the active target.
 
 ## Concretely
 

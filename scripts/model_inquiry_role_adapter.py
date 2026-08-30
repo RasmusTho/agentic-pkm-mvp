@@ -24,7 +24,6 @@ from app.builderops.model_inquiry_adapters import (  # noqa: E402
     AdapterExecutionError,
     AdapterUnavailableError,
     CredentialUnavailableError,
-    LEGACY_ROLES,
     PERSPECTIVE_NAMES,
     load_adapters,
 )
@@ -33,24 +32,19 @@ from app.builderops.models import BuilderOpsValidationError  # noqa: E402
 CREDENTIAL_UNAVAILABLE_EXIT_CODE = 1
 CONFIGURATION_EXIT_CODE = 2
 EXECUTION_EXIT_CODE = 3
-ROLE_NAMES = (*PERSPECTIVE_NAMES, *LEGACY_ROLES)
-LEGACY_ROLE_ALIASES = dict(zip(LEGACY_ROLES, PERSPECTIVE_NAMES))
-
-
 def run_role(role: str, request: object) -> str:
     """Execute one turn for *role* and return the provider response text."""
-    if role not in ROLE_NAMES:
-        raise BuilderOpsValidationError("--role must name a declared inquiry role")
+    if role not in PERSPECTIVE_NAMES:
+        raise BuilderOpsValidationError("--role must name a neutral inquiry perspective")
     if not isinstance(request, dict):
         raise BuilderOpsValidationError("role adapter request must be a JSON object")
     adapters = load_adapters()
-    perspective = LEGACY_ROLE_ALIASES.get(role, role)
-    return adapters[perspective].execute(request).response_text
+    return adapters[role].execute(request).response_text
 
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--role", required=True, choices=ROLE_NAMES)
+    parser.add_argument("--role", required=True, choices=PERSPECTIVE_NAMES)
     return parser
 
 

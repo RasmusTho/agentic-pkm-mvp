@@ -21,6 +21,12 @@ ruling on the model-inquiry path`). The delivered code stays merged as the requi
 any future metered path. The owner has declined credential provisioning, so it is not a pending
 prerequisite.
 
+**Current amendment (PR #5213 / issue #5203):** the active host-local inquiry does not execute a
+Fable/GPT independent group. It submits provider-free Sol capability intent, resolves one target,
+runs two neutral perspectives against that identity, records `single_target_acceptance` with
+`independence: false`, and has no retired-role or cross-provider fallback. The historical
+provider-API wrappers below remain dormant compatibility mechanisms.
+
 # Resolve Model Inquiry Credentials Through Contract
 
 ## Purpose
@@ -35,6 +41,8 @@ later and controlling operational ruling: metered keys remain intentionally unpr
 existing subscription session is sanctioned only for host-local Builder Model Inquiry. Therefore
 the mechanism below is retained for a possible future metered path, not promoted as current host
 authentication and not a parent-acceptance gate.
+The active subscription-backed path resolves its configured Sol capability once; it does not reuse
+the historical role pair as routing or independence authority.
 
 Model inquiry is chosen as the first beneficiary because it is the smaller, already-adapter-shaped
 consumer: `HttpModelAdapter` (`app/builderops/model_inquiry_adapters.py:175-278`) is fully implemented
@@ -43,25 +51,19 @@ and is unexercised. Switching to it is a configuration and resolution change, no
 
 ## What this task does
 
-1. Implement a Builder-owned `ModelAccessResolver` behind the neutral protocol. It accepts the two
-   neutral role-profile requests as one `model-inquiry-independent-review` group with
-   `(runtime="builder", channel, consumer)`, applies Builder policy, resolves exclusively through the
-   exact MAS-01 role/tier mappings, verifies capabilities and distinct effective targets, and resolves
-   credential identities through the host-secret contract. Provider/model are outputs, never caller
-   fields.
-2. Resolve each role adapter's credential through that resolver at descriptor-load time.
-   `HttpModelAdapter` takes `api_key` as an injected field and reads no environment itself, so
-   `load_adapter_descriptors` no longer accepts provider/model/`api_key_env` from inquiry caller
-   configuration or ambient environment.
-3. Preserve distinct installed provider-API entrypoints. The host installer owns the dormant
-   `yggdrasil-model-inquiry-provider-api` launcher plus both role wrappers and pins their repo
-   launcher/adapter content. It does not install, inspect, overwrite, or retire the sanctioned
-   `yggdrasil-model-inquiry` subscription launcher. Both `xhigh` provider-API roles retain the
-   extended 1200-second per-role request deadline.
-4. Replace the provider-bearing `BUILDEROPS_INQUIRY_ADAPTERS_JSON` mechanism with a value-free
-   inquiry-role intent configuration. The committed example contains the seven neutral intent fields,
-   role independence requirement, channel/consumer references, and no provider, model, credential
-   value, environment-variable name, host path, or host identifier.
+1. Keep caller intent provider- and model-free. The Builder resolver maps the declared Sol
+   capability for the runtime/channel once, and both neutral perspectives consume that same
+   effective target with explicit non-independence.
+2. Keep credential/session resolution behind the host-owned boundary. The active subscription path
+   shares one configured credential/session identity; no role-specific credential can reactivate a
+   retired target.
+3. Preserve the distinct installed provider-API entrypoints as dormant compatibility mechanisms.
+   They expose only neutral `synthesis` and `verification` entrypoints over the one resolved target;
+   retired provider-named roles are rejected and are never candidates for active v2 fallback or
+   launcher substitution.
+4. Keep the committed inquiry intent value-free, provider-free, model-free, and host-identifier-free.
+   Active v2 configuration declares `single_target`; it does not declare role independence or an
+   alternate target.
 5. Emit the real failure class. A declared credential that is absent or unusable produces
    `credential_unavailable`, and an expired session on a still-permitted interactive path produces
    `session_expired`, instead of both collapsing into `command_exit_nonzero`. The canonical launcher
@@ -84,9 +86,10 @@ ruling.
 ```
 # on the configured inquiry host, over a fresh non-interactive session:
 $ ssh <configured inquiry host> 'yggdrasil-model-inquiry-provider-api --inquiry <id> --json'
-{"final_state": "completed", "rounds": 2, "roles": {
-   "fable":     {"provider": "anthropic", "provider_request_id": "req_...", "adapter_id": "fable-primary"},
-   "gpt_codex": {"provider": "openai",    "provider_request_id": "resp_...", "adapter_id": "codex-primary"}}}
+{"final_state": "completed", "outcome": "single_target_acceptance", "independence": false,
+ "rounds": 2, "roles": {
+   "synthesis":    {"provider": "<resolved>", "model": "<resolved>", "adapter_id": "<resolved>"},
+   "verification": {"provider": "<same>",     "model": "<same>",     "adapter_id": "<same>"}}}
 
 # with the declared credential absent from the Keychain:
 $ ssh <configured inquiry host> 'yggdrasil-model-inquiry-provider-api --inquiry <id> --json'
@@ -121,10 +124,11 @@ required.
 - [ ] The production Model Inquiry call site submits only provider-free intent and the Builder
       resolver selects provider/model from the census runtime/channel mapping after capability checks.
       Verify: `tests/builderops/test_model_inquiry_runner.py::test_production_inquiry_resolves_provider_free_intent_through_builder_census`
-- [ ] The production two-role call resolves the neutral `fable` and `gpt_codex` role profiles as one
-      independent group with distinct effective targets; a colliding policy mapping fails before any
-      model call.
-      Verify: `tests/builderops/test_model_inquiry_runner.py::test_production_inquiry_resolves_distinct_effective_targets_for_role_group`
+- [ ] The production active profile resolves one configured Sol target for both neutral
+      perspectives, declares `single_target`, records `independence: false`, and never enters the
+      historical role fallback chain.
+      Verify: `tests/settings/test_provider_census.py::test_model_inquiry_profiles_are_single_target_and_provider_free`
+      Verify: `tests/builderops/test_model_inquiry_runner.py::test_single_target_never_enters_operational_fallback`
 - [ ] No installed provider-API entrypoint requires or occupies the sanctioned subscription
       launcher's identity, asserted where the installer builds its distinct dormant entrypoints.
       Verify: `tests/governance/test_model_inquiry_host_install.py::test_headless_entrypoints_do_not_require_subscription_session`
@@ -137,9 +141,10 @@ required.
       ambient environment, or to any other provider.
       Verify: `tests/builderops/test_model_inquiry_runner.py::test_absent_credential_fails_closed_as_credential_unavailable`
       Verify: `tests/governance/test_start_model_inquiry_skill.py::test_launcher_fails_closed_on_an_absent_declared_credential`
-- [ ] The two roles still require distinct `adapter_id` values and distinct runtime-target
-      fingerprints, and a configuration that collapses them is refused.
-      Verify: `tests/builderops/test_model_inquiry_adapters.py::test_provider_enabled_roles_require_distinct_non_mock_attestation`
+- [ ] Historical provider-API roles still validate distinct identities when read, while active v2
+      descriptor loading accepts only the configured single target and cannot reactivate the legacy
+      pair.
+      Verify: `tests/builderops/test_model_inquiry_runner.py::test_dry_run_with_legacy_roles_and_v2_profile_is_unavailable`
 - [ ] A mock, fake, or deterministic identity is still refused as a provider-enabled role, and dry-run
       still performs no adapter call and creates no vault or receipt file.
       Verify: `tests/builderops/test_model_inquiry_runner.py::test_dry_run_performs_no_adapter_call_and_writes_nothing`
@@ -172,8 +177,9 @@ required.
 
 INV-MAS-2 (credentials only through the contract) is exercised for the first time here. INV-MAS-3 — the
 auth failure classes are emitted and must survive the persistence-boundary re-validation. INV-MAS-4 —
-role independence must hold with both roles now on HTTP transports. INV-MAS-5 — no cross-provider
-fallback, no mock as provider, no silent degradation. Seam A is closed here on the model-inquiry side:
+historical distinct-target validation remains readable, while active v2 uses one target with explicit
+non-independence and no fallback. INV-MAS-5 — no cross-provider fallback, no mock as provider, no
+silent degradation. Seam A is closed here on the model-inquiry side:
 a declared identifier with no host value fails closed rather than reverting to the old path.
 
 INV-MAS-6 no longer applies from this task onward; this is the intended first behaviour change.
@@ -184,8 +190,8 @@ CKM's migration, which is MAS-06 and follows the delivered MAS-05 mechanism rath
 provider receipt. The verification closer's duplicated
 model literals at `app/dispatcher/verification_consumer.py:2325-2341`, which is migration step 6. The
 brokered-session backend, which ADR-0064 permits but does not build. Provisioning credential values,
-which the owner has explicitly declined. Changing the response or consensus contract, the round limits, or the
-independent-review requirements. Product resolver migration.
+which the owner has explicitly declined. General Product resolver migration, changing round limits,
+or adding another active model target.
 
 ## Related docs
 

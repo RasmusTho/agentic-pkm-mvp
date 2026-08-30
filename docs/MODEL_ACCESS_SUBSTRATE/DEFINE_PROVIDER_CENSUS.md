@@ -9,7 +9,8 @@ depends_on: []
 can_parallelize_with: []
 ---
 
-State: Authored task specification (child issue #4287, filed 2026-07-29). Delivers R4-1, which was
+State: Delivered historical task specification (child issue #4287, filed 2026-07-29), amended by
+PR #5213 / issue #5203 for the active configured-Sol single-target profile. Delivers R4-1, which was
 specified on 2026-07-05 and never decomposed into an issue.
 
 # Define Provider Census
@@ -45,17 +46,13 @@ row plus a secret declaration" true instead of aspirational.
 5. Validate that each tier mapping references a declared provider/model with the capabilities
    required by that mapping. Resolution policy remains owned by the named runtime; the census only
    makes the selectable set and capabilities explicit.
-6. Declare the exact Phase 1 Builder Model Inquiry resolution profiles for every `dev`, `test`, and
-   `prod` channel:
-   - role profile `fable`, tier `frontier`, resolves to provider `anthropic`, model ref
-     `claude-fable-5`, logical credential `anthropic.api-key`, and requires structured output plus a
-     system-prompt channel;
-   - role profile `gpt_codex`, tier `frontier`, resolves to provider `openai`, model ref
-     `gpt-5.6-sol`, logical credential `openai.api-key`, and requires structured output.
-   Both profiles belong to one `model-inquiry-independent-review` resolution group whose
-   `independence=distinct_effective_target`; the pair must resolve to distinct
-   `(provider, model, effective_identity)` tuples. These mappings are Builder policy data, not caller
-   provider choices. Product mappings remain separate and unchanged.
+6. Declare the active Builder Model Inquiry resolution profile for every `dev`, `test`, and `prod`
+   channel as `acceptance_mode: single_target`, capability tier `sol`, with synthesis and
+   verification perspectives on the same Codex subscription target. The profile contains no
+   provider or model identifier; the Builder Sol capability mapping resolves the effective target
+   once. The inquiry records `independence: false`, and retired Fable/GPT role profiles are not an
+   active alternate or fallback. These mappings are Builder policy data, not caller provider
+   choices. Product mappings remain separate and unchanged.
 7. Write back `docs/LLM.md :: Providers (Current)` so it points at the census as the single source
    rather than restating the set in prose.
 
@@ -137,10 +134,10 @@ a surface that cannot tell whether it is consistent.
 - [ ] Every runtime/channel capability-tier mapping resolves to a declared provider/model whose
       capability flags satisfy the mapping, while Product and Builder mappings remain separate.
       Verify: `tests/settings/test_provider_census.py::test_runtime_channel_tier_mappings_reference_capable_declared_models`
-- [ ] The exact two Builder inquiry role profiles exist for all three channels, use the declared
-      Anthropic/OpenAI model and credential refs above, and the independent-review group resolves to
-      distinct effective targets without caller provider/model fields.
-      Verify: `tests/settings/test_provider_census.py::test_model_inquiry_role_profiles_are_exact_distinct_and_provider_free`
+- [ ] Every Builder inquiry channel binds the configured Sol capability, and the active profile is
+      provider-free, model-free, single-target, and explicit about non-independence.
+      Verify: `tests/settings/test_provider_census.py::test_model_inquiry_profiles_bind_configured_capability`
+      Verify: `tests/settings/test_provider_census.py::test_model_inquiry_profiles_are_single_target_and_provider_free`
 - [ ] `docs/LLM.md` names the census as the single provider source instead of restating the set.
       Verify: doc writeback at `docs/LLM.md :: Providers (Current)`
 - [ ] `docs/MIMER_CAPABILITY_HARDENING/RUNTIME_MODEL_POSTURE.md` records R4-1 as delivered by this task.

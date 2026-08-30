@@ -7,12 +7,10 @@ import shlex
 import subprocess
 import sys
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 
 import scripts.install_model_inquiry_host as host_installer
-import scripts.model_inquiry_role_adapter as role_adapter
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -69,36 +67,16 @@ def test_installer_creates_both_role_entrypoints_and_exact_retry_is_noop(
     first_payload = json.loads(first.stdout)
     second_payload = json.loads(second.stdout)
     assert first_payload["roles"] == {
-        "synthesis": {
-            "entrypoint": "synthesis-model-inquiry-role",
-            "status": "installed",
-        },
+        "synthesis": {"entrypoint": "synthesis-model-inquiry-role", "status": "installed"},
         "verification": {
             "entrypoint": "verification-model-inquiry-role",
             "status": "installed",
         },
     }
     assert second_payload["roles"] == {
-        "synthesis": {
-            "entrypoint": "synthesis-model-inquiry-role",
-            "status": "unchanged",
-        },
+        "synthesis": {"entrypoint": "synthesis-model-inquiry-role", "status": "unchanged"},
         "verification": {
             "entrypoint": "verification-model-inquiry-role",
-            "status": "unchanged",
-        },
-    }
-    assert first_payload["compatibility_aliases"] == {
-        "fable": {"entrypoint": "fable-model-inquiry-role", "status": "installed"},
-        "gpt_codex": {
-            "entrypoint": "codex-model-inquiry-role",
-            "status": "installed",
-        },
-    }
-    assert second_payload["compatibility_aliases"] == {
-        "fable": {"entrypoint": "fable-model-inquiry-role", "status": "unchanged"},
-        "gpt_codex": {
-            "entrypoint": "codex-model-inquiry-role",
             "status": "unchanged",
         },
     }
@@ -115,7 +93,7 @@ def test_installer_creates_both_role_entrypoints_and_exact_retry_is_noop(
     assert host_installer.FIXED_LAUNCHER_NAME == "yggdrasil-model-inquiry-provider-api"
     assert (bin_dir / "yggdrasil-model-inquiry-provider-api").is_file()
     assert not (bin_dir / "yggdrasil-model-inquiry").exists()
-    for name in ("fable-model-inquiry-role", "codex-model-inquiry-role"):
+    for name in ("synthesis-model-inquiry-role", "verification-model-inquiry-role"):
         path = bin_dir / name
         assert path.is_file()
         assert path.stat().st_mode & 0o777 == 0o700
@@ -124,7 +102,7 @@ def test_installer_creates_both_role_entrypoints_and_exact_retry_is_noop(
 def test_installer_rejects_conflicting_or_unsafe_destinations(tmp_path: Path) -> None:
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
-    conflicting = bin_dir / "fable-model-inquiry-role"
+    conflicting = bin_dir / "synthesis-model-inquiry-role"
     conflicting.write_text("unrelated host command\n", encoding="utf-8")
     conflicting.chmod(0o700)
 
@@ -133,7 +111,7 @@ def test_installer_rejects_conflicting_or_unsafe_destinations(tmp_path: Path) ->
     assert conflict.returncode == 2
     assert "conflicting entrypoint" in conflict.stderr
     assert conflicting.read_text(encoding="utf-8") == "unrelated host command\n"
-    assert not (bin_dir / "codex-model-inquiry-role").exists()
+    assert not (bin_dir / "verification-model-inquiry-role").exists()
 
     stale_launcher_bin = tmp_path / "stale-launcher-bin"
     stale_launcher_bin.mkdir()
@@ -151,8 +129,8 @@ def test_installer_rejects_conflicting_or_unsafe_destinations(tmp_path: Path) ->
         in stale_conflict.stderr
     )
     assert "fable-subscription-cli" in stale_launcher.read_text(encoding="utf-8")
-    assert not (stale_launcher_bin / "fable-model-inquiry-role").exists()
-    assert not (stale_launcher_bin / "codex-model-inquiry-role").exists()
+    assert not (stale_launcher_bin / "synthesis-model-inquiry-role").exists()
+    assert not (stale_launcher_bin / "verification-model-inquiry-role").exists()
 
     real_bin = tmp_path / "real-bin"
     real_bin.mkdir()
@@ -178,13 +156,13 @@ def test_installer_rejects_conflicting_or_unsafe_destinations(tmp_path: Path) ->
     symlink_target_bin.mkdir()
     unrelated = tmp_path / "unrelated-command"
     unrelated.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
-    (symlink_target_bin / "fable-model-inquiry-role").symlink_to(unrelated)
+    (symlink_target_bin / "synthesis-model-inquiry-role").symlink_to(unrelated)
     symlink_target = _install(symlink_target_bin)
 
     assert symlink_target.returncode == 2
     assert "conflicting entrypoint" in symlink_target.stderr
-    assert (symlink_target_bin / "fable-model-inquiry-role").is_symlink()
-    assert not (symlink_target_bin / "codex-model-inquiry-role").exists()
+    assert (symlink_target_bin / "synthesis-model-inquiry-role").is_symlink()
+    assert not (symlink_target_bin / "verification-model-inquiry-role").exists()
 
     missing_checkout = _run_installer(
         "install",
@@ -216,6 +194,82 @@ def test_installer_rejects_conflicting_or_unsafe_destinations(tmp_path: Path) ->
     assert "trusted installer checkout" in foreign_checkout.stderr
     assert not (tmp_path / "fake-checkout-bin").exists()
 
+
+def test_installer_upgrade_fails_closed_on_retired_role_entrypoint(
+    tmp_path: Path,
+) -> None:
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    retired = bin_dir / "fable-model-inquiry-role"
+    retired.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    retired.chmod(0o700)
+
+    installed = _install(bin_dir)
+
+    assert installed.returncode == 2
+    assert (
+        "retired entrypoint requires explicit removal: fable-model-inquiry-role"
+        in installed.stderr
+    )
+    assert retired.read_text(encoding="utf-8") == "#!/bin/sh\nexit 0\n"
+    assert not (bin_dir / "synthesis-model-inquiry-role").exists()
+    assert not (bin_dir / "verification-model-inquiry-role").exists()
+
+    checked = _run_installer(
+        "check",
+        "--repo-root",
+        str(REPO_ROOT),
+        "--bin-dir",
+        str(bin_dir),
+        "--python",
+        sys.executable,
+        env={**os.environ, "PATH": str(bin_dir)},
+    )
+    payload = json.loads(checked.stdout)
+    assert checked.returncode == 1
+    assert payload["retired_entrypoints"]["fable-model-inquiry-role"] == "present"
+
+
+def test_installer_final_readback_catches_concurrent_retired_entrypoint(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bin_dir = tmp_path / "bin"
+    original_install = host_installer._install_no_overwrite
+    injected = False
+
+    def install_and_inject_retired(
+        directory_fd: int,
+        name: str,
+        content: str,
+    ) -> bool:
+        nonlocal injected
+        result = original_install(directory_fd, name, content)
+        if not injected:
+            retired = bin_dir / "fable-model-inquiry-role"
+            retired.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            retired.chmod(0o700)
+            injected = True
+        return result
+
+    monkeypatch.setattr(
+        host_installer,
+        "_install_no_overwrite",
+        install_and_inject_retired,
+    )
+
+    with pytest.raises(
+        host_installer.HostInstallError,
+        match="retired entrypoint appeared during installation: fable-model-inquiry-role",
+    ):
+        host_installer.install(
+            repo_root=REPO_ROOT,
+            bin_dir=bin_dir,
+            python=Path(sys.executable),
+        )
+
+    assert injected is True
+    assert (bin_dir / "fable-model-inquiry-role").is_file()
 
 def test_installer_rejects_dirty_tracked_adapter(
     tmp_path: Path,
@@ -268,7 +322,7 @@ def test_installer_does_not_require_git_on_host(tmp_path: Path) -> None:
     )
 
     assert result.returncode == 0, result.stderr
-    assert (bin_dir / "fable-model-inquiry-role").is_file()
+    assert (bin_dir / "synthesis-model-inquiry-role").is_file()
 
 
 def test_new_bin_directory_is_durably_linked_from_parent(
@@ -470,8 +524,6 @@ def test_installed_entrypoints_bind_exact_role_and_versioned_adapter(
     expected = {
         "synthesis-model-inquiry-role": "synthesis",
         "verification-model-inquiry-role": "verification",
-        "fable-model-inquiry-role": "fable",
-        "codex-model-inquiry-role": "gpt_codex",
     }
     adapter = str((REPO_ROOT / "scripts" / host_installer.VERSIONED_ADAPTER_NAME).resolve())
     adapter_sha256 = hashlib.sha256(Path(adapter).read_bytes()).hexdigest()
@@ -497,33 +549,6 @@ def test_installed_entrypoints_bind_exact_role_and_versioned_adapter(
     assert "model_inquiry_subscription_adapter" not in launcher
 
 
-def test_legacy_role_names_are_explicit_adapter_compatibility_aliases(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    calls: list[tuple[str, object]] = []
-
-    class FakeAdapter:
-        def __init__(self, perspective: str) -> None:
-            self.perspective = perspective
-
-        def execute(self, request: object) -> SimpleNamespace:
-            calls.append((self.perspective, request))
-            return SimpleNamespace(response_text=self.perspective)
-
-    monkeypatch.setattr(
-        role_adapter,
-        "load_adapters",
-        lambda: {
-            "synthesis": FakeAdapter("synthesis"),
-            "verification": FakeAdapter("verification"),
-        },
-    )
-
-    assert role_adapter.run_role("fable", {"turn": 1}) == "synthesis"
-    assert role_adapter.run_role("gpt_codex", {"turn": 2}) == "verification"
-    assert calls == [("synthesis", {"turn": 1}), ("verification", {"turn": 2})]
-
-
 def test_installed_entrypoints_retain_selected_interpreter_path(tmp_path: Path) -> None:
     bin_dir = tmp_path / "bin"
     selected_python = tmp_path / "selected-python"
@@ -546,12 +571,7 @@ def test_installed_entrypoints_retain_selected_interpreter_path(tmp_path: Path) 
     )
 
     assert result.returncode == 0, result.stderr
-    for entrypoint in (
-        "synthesis-model-inquiry-role",
-        "verification-model-inquiry-role",
-        "fable-model-inquiry-role",
-        "codex-model-inquiry-role",
-    ):
+    for entrypoint in ("synthesis-model-inquiry-role", "verification-model-inquiry-role"):
         content = (bin_dir / entrypoint).read_text(encoding="utf-8")
         assert str(selected_python) in content
         executed = subprocess.run([str(bin_dir / entrypoint)], check=False)
@@ -593,6 +613,10 @@ def test_check_mode_is_sanitized_read_only_and_complete(tmp_path: Path) -> None:
             "lineage": "repo-owned-declared-credential",
             "status": "available",
         },
+        "retired_entrypoints": {
+            "codex-model-inquiry-role": "absent",
+            "fable-model-inquiry-role": "absent",
+        },
         "roles": {
             "synthesis": {
                 "entrypoint": "synthesis-model-inquiry-role",
@@ -601,18 +625,6 @@ def test_check_mode_is_sanitized_read_only_and_complete(tmp_path: Path) -> None:
             },
             "verification": {
                 "entrypoint": "verification-model-inquiry-role",
-                "entrypoint_status": "available",
-                "credential_resolution": "host-secret-contract",
-            },
-        },
-        "compatibility_aliases": {
-            "fable": {
-                "entrypoint": "fable-model-inquiry-role",
-                "entrypoint_status": "available",
-                "credential_resolution": "host-secret-contract",
-            },
-            "gpt_codex": {
-                "entrypoint": "codex-model-inquiry-role",
                 "entrypoint_status": "available",
                 "credential_resolution": "host-secret-contract",
             },
@@ -653,12 +665,6 @@ def test_check_mode_is_sanitized_read_only_and_complete(tmp_path: Path) -> None:
         "credential_resolution": "host-secret-contract",
     }
     assert missing_payload["roles"]["verification"]["entrypoint_status"] == "unavailable"
-    assert missing_payload["compatibility_aliases"]["fable"] == {
-        "entrypoint": "fable-model-inquiry-role",
-        "entrypoint_status": "unavailable",
-        "credential_resolution": "host-secret-contract",
-    }
-    assert missing_payload["compatibility_aliases"]["gpt_codex"]["entrypoint_status"] == "unavailable"
 
 
 def test_check_rejects_conflicting_command_at_provider_api_name(
@@ -695,8 +701,6 @@ def test_check_rejects_conflicting_command_at_provider_api_name(
     }
     assert payload["roles"]["synthesis"]["entrypoint_status"] == "available"
     assert payload["roles"]["verification"]["entrypoint_status"] == "available"
-    assert payload["compatibility_aliases"]["fable"]["entrypoint_status"] == "available"
-    assert payload["compatibility_aliases"]["gpt_codex"]["entrypoint_status"] == "available"
 
 
 def test_partial_install_is_retained_for_exact_retry(
@@ -707,7 +711,7 @@ def test_partial_install_is_retained_for_exact_retry(
     real_install = host_installer._install_no_overwrite
 
     def fail_second_role(directory_fd: int, name: str, content: str) -> bool:
-        if name == "codex-model-inquiry-role":
+        if name == "verification-model-inquiry-role":
             raise host_installer.HostInstallError("injected second-role failure")
         return real_install(directory_fd, name, content)
 
@@ -719,27 +723,16 @@ def test_partial_install_is_retained_for_exact_retry(
             python=Path(sys.executable),
         )
 
-    assert (bin_dir / "fable-model-inquiry-role").is_file()
-    assert not (bin_dir / "codex-model-inquiry-role").exists()
+    assert (bin_dir / "synthesis-model-inquiry-role").is_file()
+    assert not (bin_dir / "verification-model-inquiry-role").exists()
     monkeypatch.undo()
 
     retry = _install(bin_dir)
     assert retry.returncode == 0, retry.stderr
-    retry_payload = json.loads(retry.stdout)
-    assert retry_payload["roles"] == {
-        "synthesis": {
-            "entrypoint": "synthesis-model-inquiry-role",
-            "status": "unchanged",
-        },
+    assert json.loads(retry.stdout)["roles"] == {
+        "synthesis": {"entrypoint": "synthesis-model-inquiry-role", "status": "unchanged"},
         "verification": {
             "entrypoint": "verification-model-inquiry-role",
-            "status": "unchanged",
-        },
-    }
-    assert retry_payload["compatibility_aliases"] == {
-        "fable": {"entrypoint": "fable-model-inquiry-role", "status": "unchanged"},
-        "gpt_codex": {
-            "entrypoint": "codex-model-inquiry-role",
             "status": "installed",
         },
     }
@@ -804,19 +797,9 @@ def test_concurrent_exact_writer_produces_truthful_unchanged_receipt(
     )
 
     assert receipt["roles"] == {
-        "synthesis": {
-            "entrypoint": "synthesis-model-inquiry-role",
-            "status": "unchanged",
-        },
+        "synthesis": {"entrypoint": "synthesis-model-inquiry-role", "status": "unchanged"},
         "verification": {
             "entrypoint": "verification-model-inquiry-role",
-            "status": "unchanged",
-        },
-    }
-    assert receipt["compatibility_aliases"] == {
-        "fable": {"entrypoint": "fable-model-inquiry-role", "status": "unchanged"},
-        "gpt_codex": {
-            "entrypoint": "codex-model-inquiry-role",
             "status": "unchanged",
         },
     }
@@ -830,7 +813,7 @@ def test_concurrent_conflicting_writer_fails_closed(
     real_install = host_installer._install_no_overwrite
 
     def conflicting_writer_wins(directory_fd: int, name: str, content: str) -> bool:
-        if name == "fable-model-inquiry-role":
+        if name == "synthesis-model-inquiry-role":
             fd = os.open(
                 name,
                 os.O_WRONLY | os.O_CREAT | os.O_EXCL,
@@ -855,10 +838,10 @@ def test_concurrent_conflicting_writer_fails_closed(
             python=Path(sys.executable),
         )
 
-    assert (bin_dir / "fable-model-inquiry-role").read_text(encoding="utf-8") == (
+    assert (bin_dir / "synthesis-model-inquiry-role").read_text(encoding="utf-8") == (
         "unrelated concurrent command\n"
     )
-    assert not (bin_dir / "codex-model-inquiry-role").exists()
+    assert not (bin_dir / "verification-model-inquiry-role").exists()
 
 
 def test_install_rejects_bin_directory_replacement(
@@ -892,8 +875,8 @@ def test_install_rejects_bin_directory_replacement(
 
     assert replaced
     assert not list(bin_dir.iterdir())
-    assert (detached_bin / "fable-model-inquiry-role").is_file()
-    assert (detached_bin / "codex-model-inquiry-role").is_file()
+    assert (detached_bin / "synthesis-model-inquiry-role").is_file()
+    assert (detached_bin / "verification-model-inquiry-role").is_file()
 
 
 def test_check_rejects_bin_directory_replacement_during_path_discovery(
@@ -913,8 +896,8 @@ def test_check_rejects_bin_directory_replacement_during_path_discovery(
             bin_dir.rename(detached_bin)
             bin_dir.mkdir()
             for name in (
-                "fable-model-inquiry-role",
-                "codex-model-inquiry-role",
+                "synthesis-model-inquiry-role",
+                "verification-model-inquiry-role",
                 "claude",
                 "codex",
                 "yggdrasil-model-inquiry-provider-api",
@@ -934,8 +917,8 @@ def test_check_rejects_bin_directory_replacement_during_path_discovery(
         )
 
     assert replaced
-    assert (detached_bin / "fable-model-inquiry-role").is_file()
-    assert (bin_dir / "fable-model-inquiry-role").read_text(encoding="utf-8") == (
+    assert (detached_bin / "synthesis-model-inquiry-role").is_file()
+    assert (bin_dir / "synthesis-model-inquiry-role").read_text(encoding="utf-8") == (
         "#!/bin/sh\nexit 0\n"
     )
 
@@ -997,10 +980,10 @@ def test_install_revalidates_all_wrappers_before_success(
         name: str,
         content: str,
     ) -> bool:
-        if name == "codex-model-inquiry-role":
-            os.unlink("fable-model-inquiry-role", dir_fd=directory_fd)
+        if name == "verification-model-inquiry-role":
+            os.unlink("synthesis-model-inquiry-role", dir_fd=directory_fd)
             fd = os.open(
-                "fable-model-inquiry-role",
+                "synthesis-model-inquiry-role",
                 os.O_WRONLY | os.O_CREAT | os.O_EXCL,
                 0o700,
                 dir_fd=directory_fd,
@@ -1026,7 +1009,7 @@ def test_install_revalidates_all_wrappers_before_success(
             python=Path(sys.executable),
         )
 
-    assert (bin_dir / "fable-model-inquiry-role").read_text(encoding="utf-8") == (
+    assert (bin_dir / "synthesis-model-inquiry-role").read_text(encoding="utf-8") == (
         "unrelated replacement\n"
     )
 
@@ -1054,9 +1037,9 @@ def test_check_revalidates_earlier_wrapper_after_later_discovery(
         path: str | None = None,
     ) -> str | None:
         nonlocal replaced
-        if command == "codex-model-inquiry-role" and not replaced:
+        if command == "verification-model-inquiry-role" and not replaced:
             replaced = True
-            fable = bin_dir / "fable-model-inquiry-role"
+            fable = bin_dir / "synthesis-model-inquiry-role"
             fable.unlink()
             fable.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
             fable.chmod(0o700)
@@ -1078,7 +1061,7 @@ def test_check_revalidates_earlier_wrapper_after_later_discovery(
     assert payload["ok"] is False
     roles = payload["roles"]
     assert isinstance(roles, dict)
-    fable = payload["compatibility_aliases"]["fable"]
+    fable = roles["synthesis"]
     assert isinstance(fable, dict)
     assert fable["entrypoint_status"] == "unavailable"
 
@@ -1187,12 +1170,7 @@ def test_headless_entrypoints_do_not_require_subscription_session(
     assert "model_inquiry_subscription_adapter" not in adapter_source
     assert "subprocess" not in adapter_source
     assert "shutil.which" not in adapter_source
-    for wrapper_name in (
-        "synthesis-model-inquiry-role",
-        "verification-model-inquiry-role",
-        "fable-model-inquiry-role",
-        "codex-model-inquiry-role",
-    ):
+    for wrapper_name in ("synthesis-model-inquiry-role", "verification-model-inquiry-role"):
         content = (bin_dir / wrapper_name).read_text(encoding="utf-8")
         assert host_installer.VERSIONED_ADAPTER_NAME in content
         assert "credential-resolution=host-secret-contract" in content
@@ -1229,8 +1207,6 @@ def test_headless_entrypoints_do_not_require_subscription_session(
     for role_entrypoint in (
         "synthesis-model-inquiry-role",
         "verification-model-inquiry-role",
-        "fable-model-inquiry-role",
-        "codex-model-inquiry-role",
     ):
         executed = subprocess.run(
             [str(bin_dir / role_entrypoint)],
@@ -1244,8 +1220,34 @@ def test_headless_entrypoints_do_not_require_subscription_session(
             text=True,
             check=False,
         )
-
         assert executed.returncode == 78, executed.stderr
         assert "openai.api-key" in executed.stderr
         assert "ANTHROPIC_API_KEY" not in executed.stderr
         assert executed.stdout == ""
+
+
+def test_role_adapter_cli_exposes_only_neutral_perspectives() -> None:
+    adapter = REPO_ROOT / "scripts" / host_installer.VERSIONED_ADAPTER_NAME
+
+    help_result = subprocess.run(
+        [sys.executable, str(adapter), "--help"],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert help_result.returncode == 0, help_result.stderr
+    assert "{synthesis,verification}" in help_result.stdout
+    assert "fable" not in help_result.stdout
+    assert "gpt_codex" not in help_result.stdout
+
+    retired_role = subprocess.run(
+        [sys.executable, str(adapter), "--role", "fable"],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert retired_role.returncode == 2
+    assert "invalid choice" in retired_role.stderr
+    assert "Traceback" not in retired_role.stderr

@@ -49,7 +49,7 @@ its advisory claim files never guarantee exclusive ownership.
 | [External BuilderOps Vault Configuration](EXTERNAL_BUILDEROPS_VAULT_CONFIGURATION.md) | BMI-01 | Explicit shared artifact-root configuration with local SQLite and shared advisory claims. |
 | [Pre-Ticket Inquiry Records](PRE_TICKET_INQUIRY_RECORDS.md) | BMI-02 | Durable inquiry/run/turn records, CLI/API entrypoint, and trace query. |
 | [Model Turn Adapters](MODEL_TURN_ADAPTERS.md) | BMI-03 | Structured command/API adapter contract, retries, and bounded adversarial loop. |
-| [Desktop Skill Launchers](DESKTOP_SKILL_LAUNCHERS.md) | BMI-04 | Codex and Claude Desktop skill packages that delegate to the configured remote-host inquiry launcher. |
+| [Desktop Skill Launchers](DESKTOP_SKILL_LAUNCHERS.md) | BMI-04 | The active Codex skill and retained Claude compatibility package delegate to the configured remote-host inquiry launcher without selecting a target. |
 | [Promotion And Traceability](PROMOTION_AND_TRACEABILITY.md) | BMI-05 | Readiness gate, PromotionIntent, Issue creation, and delivery lineage. |
 
 BMI-02 stores its durable record graph under
@@ -62,8 +62,9 @@ durable terminal receipts, and one target resolved from the configured Sol capab
 subscription path may retry an eligible failed command for that same resolved target, but it never
 selects a second provider/model or claims independent consensus.
 
-BMI-04 adds Codex and portable Claude bridge skills that transfer the question to a configured
-remote-host launcher. The configured remote host owns the BuilderOps command, configured neutral
+BMI-04 adds the active Codex bridge skill and retains the portable Claude package as a historical
+compatibility front end. Both transfer the question to a configured remote-host launcher without
+selecting a provider, model, or alternate target. The configured remote host owns the BuilderOps command, configured neutral
 perspective adapters, subscription session, and durable artifacts; its authentication and launcher-path settings
 remain outside Git. The current host-local operational path uses the sanctioned subscription-backed
 session through `yggdrasil-model-inquiry` under the owner-cost ruling. The versioned provider-API
@@ -105,8 +106,10 @@ is delivered. No task is ready to make a Product/Runtime write.
    secrets, and the provider-API launcher refuses to start if it is present or inherited.
 5. **Traceability survives partial failure.** Each completed turn is persisted before a successor
    call. A worker restart can resume from the latest committed turn without replaying an accepted
-   provider call. Duplicate command retries use idempotency keys. Legacy v1 records remain readable;
-   only the v2 permanent Sol path is executable after the migration boundary.
+   provider call. Duplicate command retries use idempotency keys. New inquiries default to the v2
+   permanent Sol path. Legacy v1 records remain available only to `trace`/readback: planning,
+   dry-run, execution, readiness evaluation, and promotion reject them before locks, writes, or
+   model calls.
 
 Partial failure examples:
 
@@ -145,6 +148,10 @@ Partial failure examples:
   in the inquiry intent, and API/subscription adapters consume the same resolved target. Verify:
   `tests/settings/test_provider_census.py::test_model_inquiry_profiles_bind_configured_capability`
   and `tests/builderops/test_model_inquiry_adapters.py::test_subscription_adapter_uses_resolved_target_profile`.
+- [x] Desktop launchers preserve the active v2 single-target contract: the host resolves one Sol
+  target, both neutral perspectives use that identity, acceptance records `independence: false`,
+  and no launcher chooses a second provider/model or compatibility fallback. Verify:
+  `tests/governance/test_start_model_inquiry_skill.py::test_desktop_skills_route_to_macmini_launcher`.
 
 ## Relationship To GitHub Issues
 

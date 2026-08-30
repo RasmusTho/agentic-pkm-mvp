@@ -101,9 +101,11 @@ These are the capability-level criteria. Per-task criteria live in the task spec
 - [x] The production inquiry caller submits provider-free intent and resolves provider/model through
       the Builder runtime/channel census mapping after capability checks.
       Verify: `tests/builderops/test_model_inquiry_runner.py::test_production_inquiry_resolves_provider_free_intent_through_builder_census`
-- [x] The two neutral inquiry roles resolve as one independent group to distinct effective targets,
-      and a colliding mapping is refused before provider execution.
-      Verify: `tests/builderops/test_model_inquiry_runner.py::test_production_inquiry_resolves_distinct_effective_targets_for_role_group`
+- [x] The active inquiry profile resolves one configured Sol target for both neutral perspectives,
+      records `independence: false`, and never enters the retired role fallback chain. The historical
+      distinct-target criterion remains prior delivery evidence, not current routing authority.
+      Verify: `tests/settings/test_provider_census.py::test_model_inquiry_profiles_are_single_target_and_provider_free`
+      Verify: `tests/builderops/test_model_inquiry_runner.py::test_single_target_never_enters_operational_fallback`
 - [x] CKM resolves its semantic-association model through a Builder-side adapter, and a Product policy
       fallback cannot execute the Builder task.
       Verify: `tests/builderops/ckm/test_semantic.py::test_product_fallback_cannot_execute_builder_task`

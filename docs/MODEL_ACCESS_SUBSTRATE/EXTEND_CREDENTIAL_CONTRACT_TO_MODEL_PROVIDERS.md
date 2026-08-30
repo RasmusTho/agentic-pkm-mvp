@@ -9,9 +9,10 @@ depends_on: [MAKE_BUILDER_TO_PRODUCT_LLM_DEPENDENCY_VISIBLE.md]
 can_parallelize_with: []
 ---
 
-State: Implemented. Delivered by PR #4345 (issue #4289, 2026-07-29). Sibling extension of the
-delivered Local Secret Provisioning mechanism; **not** a re-filing of HSP-02, which is closed (#3846 /
-PR #4008).
+State: Implemented. Delivered by PR #4345 (issue #4289, 2026-07-29) and amended by PR #5213 /
+issue #5203 for the active single-target Model Inquiry consumer. Sibling extension of the delivered
+Local Secret Provisioning mechanism; **not** a re-filing of HSP-02, which is closed (#3846 / PR
+#4008). Provider declarations remain inventory; they are not active role-routing authority.
 
 # Extend Credential Contract To Model Providers
 
@@ -41,13 +42,15 @@ snapshot. This task updates only the newly expanded model-provider scope.
 
 ## What this task does
 
-1. Declare exactly these value-free entries in `config/secrets/host_secret_contract.json`, each for
-   channels `dev`, `test`, and `prod` and consumer `builderops-model-inquiry`:
+1. Declare value-free provider credential inventory in `config/secrets/host_secret_contract.json`.
+   The active `builderops-model-inquiry` consumer receives only `openai.api-key` through role
+   `model_inquiry` for channels `dev`, `test`, and `prod`; retired `fable` and `gpt_codex` role grants
+   are rejected. The historical declarations remain available to other explicitly declared
+   consumers and dormant mechanisms:
    - logical secret `openai.api-key`, child binding `OPENAI_API_KEY`, kind `api-key`;
    - logical secret `anthropic.api-key`, child binding `ANTHROPIC_API_KEY`, kind `api-key`.
-   The `gpt_codex` inquiry role requires `openai.api-key`; the `fable` role requires
-   `anthropic.api-key`. No value or host path enters the file. CKM/design-agent consumers receive no
-   grant in this task.
+   No value or host path enters the file. The active inquiry grant does not authorize a second target
+   or fallback. Design-agent consumers receive no grant in this task.
 2. Replace `_INITIAL_CHANNELS`, `_INITIAL_CONSUMER`, and `_INITIAL_SECRET`
    (`app/ops/host_secret_contract.py:16-18`) with declared data plus a **strict identifier grammar**.
    The v1 loader's value-free/anti-smuggling property is structural and semantic: top-level, secret,
@@ -141,8 +144,9 @@ workflows green-on-absent would leave the decision undelivered.
 - [ ] Model-provider identifiers are declared in `config/secrets/host_secret_contract.json` and resolve
       as data, with no channel, consumer, or secret name hardcoded in `app/ops/host_secret_contract.py`.
       Verify: `tests/ops/test_host_secret_contract.py::test_model_provider_identifiers_are_declared_data`
-- [ ] The exact OpenAI and Anthropic identifiers, child bindings, `api-key` validator, channel set,
-      consumer, and two-role requirements match this specification.
+- [ ] The OpenAI/Anthropic inventory, child bindings, `api-key` validator, and channel set match this
+      specification; the active Model Inquiry consumer grants only role `model_inquiry` with
+      `openai.api-key` and rejects retired role requirements.
       Verify: `tests/ops/test_host_secret_contract.py::test_model_inquiry_secret_contract_is_exact_and_value_free`
 - [ ] A declared identifier whose Keychain value is absent or malformed fails the consuming process
       closed, before it starts, naming only the logical identifier and never the value.

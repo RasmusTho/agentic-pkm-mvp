@@ -9,6 +9,7 @@ from app.builderops.model_access_resolver import BuilderModelAccessResolver
 from app.builderops.model_inquiry import (
     CREDENTIAL_ATTEMPT_REQUEST_ID,
     ModelInquiryService,
+    is_active_inquiry_manifest,
 )
 from app.builderops.model_inquiry_adapters import (
     AdapterExecutionError,
@@ -73,9 +74,14 @@ class ModelInquiryRunner:
     def plan(self, inquiry_id: str, *, max_rounds: int) -> dict[str, Any]:
         _validate_max_rounds(max_rounds)
         trace = self.service.trace(inquiry_id)
+        _require_executable_inquiry(trace)
         roles = _inquiry_roles(trace)
         context = _initial_context(trace)
-        descriptors = load_adapter_descriptors(self._env, resolver=self._resolver)
+        descriptors = load_adapter_descriptors(
+            self._env,
+            resolver=self._resolver,
+            roles=roles,
+        )
         draft_requests = [
             self._request_packet(
                 trace,
@@ -150,12 +156,14 @@ class ModelInquiryRunner:
         if dry_run:
             return self.plan(inquiry_id, max_rounds=max_rounds)
         _validate_max_rounds(max_rounds)
+        _require_executable_inquiry(self.service.trace(inquiry_id))
         with self.service.inquiry_runner_lock(inquiry_id):
             trace = self.service.trace(inquiry_id)
-            roles = _inquiry_roles(trace)
             terminal = _terminal_run_receipt(trace)
             if terminal is not None:
                 return self._finalize_terminal(inquiry_id, terminal, replayed=True)
+            _require_executable_inquiry(trace)
+            roles = _inquiry_roles(trace)
             try:
                 if self._adapters is not None:
                     adapters = self._adapters
@@ -182,9 +190,24 @@ class ModelInquiryRunner:
                     inquiry_id,
                     trace,
                 )
+            if _single_target_mode(trace) and len(
+                {
+                    canonical_hash(sanitized_adapter_identity(adapter))
+                    for adapter in adapters.values()
+                }
+            ) != 1:
+                return self._configuration_failure(
+                    inquiry_id,
+                    trace,
+                )
             context_hash = _initial_context(trace)["context_hash"]
             candidate_adapters = {
-                role: self._candidate_adapters(adapters, role=role, roles=roles)
+                role: self._candidate_adapters(
+                    adapters,
+                    role=role,
+                    roles=roles,
+                    single_target=_single_target_mode(trace),
+                )
                 for role in roles
             }
             drafts: list[TurnExecution] = []
@@ -641,8 +664,11 @@ class ModelInquiryRunner:
         *,
         role: str,
         roles: tuple[str, ...],
+        single_target: bool,
     ) -> tuple[ModelTurnAdapter, ...]:
         primary = adapters[role]
+        if single_target:
+            return (primary,)
         if not all(isinstance(adapter, LocalCommandAdapter) for adapter in adapters.values()):
             return (primary,)
         allow_fallback = self._allow_operational_fallback
@@ -749,10 +775,14 @@ def _initial_context(trace: Mapping[str, Any]) -> dict[str, Any]:
 
 def _single_target_mode(trace: Mapping[str, Any]) -> bool:
     inquiry = trace.get("inquiry")
-    return (
-        isinstance(inquiry, Mapping)
-        and inquiry.get("acceptance_mode") == "single_target"
-    )
+    return isinstance(inquiry, Mapping) and is_active_inquiry_manifest(inquiry)
+
+
+def _require_executable_inquiry(trace: Mapping[str, Any]) -> None:
+    if not _single_target_mode(trace):
+        raise BuilderOpsValidationError(
+            "legacy model inquiry records are read-only and cannot be executed"
+        )
 
 
 def _inquiry_roles(trace: Mapping[str, Any]) -> tuple[str, ...]:
@@ -766,8 +796,8 @@ def _descriptor_for_role(
     descriptor = descriptors.get(role)
     if descriptor is not None:
         return descriptor
-    # A legacy inquiry can still be planned for read-only compatibility while
-    # the provider-neutral descriptor surface only exposes current perspectives.
+    # Defensive fallback for malformed current descriptor maps. Legacy records
+    # are rejected before planning reaches this projection helper.
     return {
         "role": role,
         "available": False,

@@ -39,11 +39,30 @@ from tests.builderops.inquiry_intent import (
 )
 
 
+def _downgrade_manifest_to_legacy(vault: Path, inquiry_id: str) -> None:
+    manifest_path = vault / "model-inquiries" / inquiry_id / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["schema"] = "builderops.model-inquiry.v1"
+    for field in ("acceptance_mode", "perspectives", "independence", "artifact_hash"):
+        manifest.pop(field, None)
+    manifest["artifact_hash"] = canonical_hash(manifest)
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+
+def _hybrid_manifest_to_legacy(vault: Path, inquiry_id: str) -> None:
+    manifest_path = vault / "model-inquiries" / inquiry_id / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["schema"] = "builderops.model-inquiry.v1"
+    manifest.pop("artifact_hash", None)
+    manifest["artifact_hash"] = canonical_hash(manifest)
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+
 def _start(
     tmp_path: Path,
     inquiry_id: str,
     *,
-    acceptance_mode: str | None = None,
+    acceptance_mode: str | None = "single_target",
 ) -> tuple[ModelInquiryService, Path]:
     vault = tmp_path / inquiry_id
     vault.mkdir()
@@ -51,10 +70,12 @@ def _start(
     service.start(
         question=f"Question for {inquiry_id}",
         workflow="fable-gpt-architecture",
-        acceptance_mode=acceptance_mode,
+        acceptance_mode="single_target",
         inquiry_id=inquiry_id,
         source_refs=[{"ref_type": "github_issue", "ref": "#3291"}],
     )
+    if acceptance_mode is None:
+        _downgrade_manifest_to_legacy(vault, inquiry_id)
     return service, vault
 
 
@@ -80,9 +101,9 @@ def _response(
 
 def _scripted(role: str, responses: list[str]) -> ScriptedAdapter:
     return ScriptedAdapter(
-        adapter_id=f"{role}-adapter",
-        provider=role,
-        model=f"{role}-model",
+        adapter_id="configured-sol-adapter",
+        provider="configured-provider",
+        model="configured-sol-model",
         responses=responses,
         calls=[],
     )
@@ -221,17 +242,200 @@ def test_single_target_acceptance_recovers_after_synthesis_before_terminal(
 
 
 def test_legacy_inquiry_is_readable_but_not_reactivated_by_sol_path(tmp_path: Path) -> None:
-    service, _ = _start(tmp_path, "inq_legacy_read_only")
+    rejected_vault = tmp_path / "rejected-legacy-start"
+    rejected_vault.mkdir()
+    rejected_service = ModelInquiryService(rejected_vault)
+    with pytest.raises(BuilderOpsValidationError, match="must use single_target"):
+        rejected_service.start(
+            question="Do not mint a new v1 inquiry",
+            workflow="governed-model-inquiry",
+            acceptance_mode=None,  # type: ignore[arg-type]
+            inquiry_id="inq_rejected_legacy_start",
+            source_refs=[{"ref_type": "github_issue", "ref": "#5203"}],
+        )
+    assert not list(rejected_vault.rglob("*"))
+
+    default_vault = tmp_path / "default-v2"
+    default_vault.mkdir()
+    default_service = ModelInquiryService(default_vault)
+    default_service.start(
+        question="New inquiries use the active contract",
+        workflow="governed-model-inquiry",
+        inquiry_id="inq_default_v2",
+        source_refs=[{"ref_type": "github_issue", "ref": "#5203"}],
+    )
+    default_manifest = default_service.trace("inq_default_v2")["inquiry"]
+    assert default_manifest["schema"] == "builderops.model-inquiry.v2"
+    assert default_manifest["acceptance_mode"] == "single_target"
+
+    hybrid_service, hybrid_vault = _start(tmp_path, "inq_hybrid_v1_read_only")
+    _hybrid_manifest_to_legacy(hybrid_vault, "inq_hybrid_v1_read_only")
+    hybrid_trace = hybrid_service.trace("inq_hybrid_v1_read_only")
+    assert hybrid_trace["inquiry"]["acceptance_mode"] == "single_target"
+    with pytest.raises(BuilderOpsValidationError, match="legacy.*read-only"):
+        ModelInquiryRunner(hybrid_service, env={}).plan(
+            "inq_hybrid_v1_read_only",
+            max_rounds=1,
+        )
+    with pytest.raises(BuilderOpsValidationError, match="legacy.*read-only"):
+        ModelInquiryRunner(hybrid_service, env={}).run(
+            "inq_hybrid_v1_read_only",
+            max_rounds=1,
+            dry_run=True,
+        )
+
+    default_manifest_path = (
+        default_vault / "model-inquiries" / "inq_default_v2" / "manifest.json"
+    )
+    corrupted_manifest = json.loads(
+        default_manifest_path.read_text(encoding="utf-8")
+    )
+    corrupted_manifest["artifact_hash"] = "0" * 64
+    default_manifest_path.write_text(
+        json.dumps(corrupted_manifest),
+        encoding="utf-8",
+    )
+    corrupt_before = {
+        path.relative_to(default_vault): path.read_bytes()
+        for path in default_vault.rglob("*")
+        if path.is_file()
+    }
+    with pytest.raises(BuilderOpsValidationError, match="manifest artifact hash mismatch"):
+        default_service.commit_readiness(
+            "inq_default_v2",
+            outcome="not_ready",
+            rationale="Corrupt manifest must fail before writes.",
+            input_artifact_refs=["question"],
+            source_refs=[{"ref_type": "github_issue", "ref": "#5203"}],
+        )
+    with pytest.raises(BuilderOpsValidationError, match="manifest artifact hash mismatch"):
+        with default_service.inquiry_runner_lock("inq_default_v2"):
+            pytest.fail("corrupt-manifest lock unexpectedly acquired")
+    assert {
+        path.relative_to(default_vault): path.read_bytes()
+        for path in default_vault.rglob("*")
+        if path.is_file()
+    } == corrupt_before
+
+    service, vault = _start(
+        tmp_path,
+        "inq_legacy_read_only",
+        acceptance_mode=None,
+    )
     assert service.trace("inq_legacy_read_only")["inquiry"]["schema"] == (
         "builderops.model-inquiry.v1"
     )
+    before = {
+        path.relative_to(vault): path.read_bytes()
+        for path in vault.rglob("*")
+        if path.is_file()
+    }
+    adapters = {
+        "fable": _scripted("fable", [_response("draft")]),
+        "gpt_codex": _scripted("gpt_codex", [_response("draft")]),
+    }
 
-    result = ModelInquiryRunner(service, env={}).run("inq_legacy_read_only", max_rounds=1)
+    with pytest.raises(BuilderOpsValidationError, match="legacy.*read-only"):
+        ModelInquiryRunner(service, adapters).run("inq_legacy_read_only", max_rounds=1)
+    with pytest.raises(BuilderOpsValidationError, match="legacy.*read-only"):
+        ModelInquiryRunner(service, env={}).run(
+            "inq_legacy_read_only",
+            max_rounds=1,
+            dry_run=True,
+        )
 
-    assert result["outcome"] == "provider_unavailable"
+    source_refs = [{"ref_type": "github_issue", "ref": "#3291"}]
+    mutations = (
+        lambda: service.commit_turn(
+            "inq_legacy_read_only",
+            turn_id="legacy-turn",
+            sequence=0,
+            role="fable",
+            content="No legacy write",
+            input_artifact_refs=["question"],
+            source_refs=source_refs,
+        ),
+        lambda: service.commit_synthesis(
+            "inq_legacy_read_only",
+            content="No legacy synthesis",
+            input_artifact_refs=["question"],
+            source_refs=source_refs,
+        ),
+        lambda: service.commit_readiness(
+            "inq_legacy_read_only",
+            outcome="not_ready",
+            rationale="Legacy is trace-only.",
+            input_artifact_refs=["question"],
+            source_refs=source_refs,
+        ),
+        lambda: service.commit_readiness_receipt(
+            "inq_legacy_read_only",
+            source_refs=source_refs,
+        ),
+        lambda: service.commit_promotion_intent(
+            "inq_legacy_read_only",
+            repository="example/repo",
+            marker=f"<!-- builderops-inquiry-promotion:inq_legacy_read_only:{'d' * 64} -->",
+            title="No legacy promotion",
+            issue_body="Legacy is trace-only.",
+            source_refs=source_refs,
+        ),
+        lambda: service.commit_promotion_receipt(
+            "inq_legacy_read_only",
+            intent={},
+            issue_number=1,
+            issue_url="https://github.com/example/repo/issues/1",
+            issue_created_at="2026-08-30T12:00:00Z",
+            source_refs=source_refs,
+        ),
+        lambda: service.commit_delivery_reference(
+            "inq_legacy_read_only",
+            delivery_ref={
+                "ref_type": "owner_doc",
+                "ref": "docs/BUILDEROPS_MODEL_INQUIRY/README.md",
+            },
+            source_refs=source_refs,
+        ),
+        lambda: service.commit_terminal_turn_receipt(
+            "inq_legacy_read_only",
+            turn_id="legacy-turn",
+            outcome="accepted",
+            source_refs=source_refs,
+        ),
+        lambda: service.commit_provider_attempt_receipt(
+            "inq_legacy_read_only",
+            adapter_request_id="legacy-attempt",
+            outcome="provider_error",
+            details={"classification": "must not persist"},
+            source_refs=source_refs,
+        ),
+        lambda: service.commit_run_terminal_receipt(
+            "inq_legacy_read_only",
+            outcome="provider_error",
+            details={"classification": "must not persist"},
+            source_refs=source_refs,
+        ),
+        lambda: service.write_human_readable_report("inq_legacy_read_only"),
+    )
+    for mutation in mutations:
+        with pytest.raises(BuilderOpsValidationError, match="legacy.*read-only"):
+            mutation()
+
+    for lock in (service.inquiry_runner_lock, service.inquiry_promotion_lock):
+        with pytest.raises(BuilderOpsValidationError, match="legacy.*read-only"):
+            with lock("inq_legacy_read_only"):
+                pytest.fail("legacy lock unexpectedly acquired")
+
     trace = service.trace("inq_legacy_read_only")
     assert trace["inquiry"]["schema"] == "builderops.model-inquiry.v1"
     assert trace["turns"] == []
+    assert not adapters["fable"].calls
+    assert not adapters["gpt_codex"].calls
+    assert {
+        path.relative_to(vault): path.read_bytes()
+        for path in vault.rglob("*")
+        if path.is_file()
+    } == before
 
 
 def test_single_target_max_round_terminal_is_readable_and_resume_is_idempotent(
@@ -269,11 +473,11 @@ def test_single_target_max_round_terminal_is_readable_and_resume_is_idempotent(
 
 def test_independent_drafts_share_context_hash(tmp_path: Path) -> None:
     service, _ = _start(tmp_path, "inq_runner_context")
-    reviewed = ["draft-fable", "draft-gpt_codex"]
-    fable = _scripted("fable", [_response("draft"), _response("revise", reviewed=reviewed)])
-    gpt = _scripted("gpt_codex", [_response("draft"), _response("revise", reviewed=reviewed)])
+    reviewed = ["draft-synthesis", "draft-verification"]
+    fable = _scripted("synthesis", [_response("draft"), _response("revise", reviewed=reviewed)])
+    gpt = _scripted("verification", [_response("draft"), _response("revise", reviewed=reviewed)])
 
-    result = ModelInquiryRunner(service, {"fable": fable, "gpt_codex": gpt}).run(
+    result = ModelInquiryRunner(service, {"synthesis": fable, "verification": gpt}).run(
         "inq_runner_context", max_rounds=1
     )
 
@@ -281,17 +485,17 @@ def test_independent_drafts_share_context_hash(tmp_path: Path) -> None:
     assert fable.calls[0]["context_hash"] == gpt.calls[0]["context_hash"]
     assert fable.calls[0]["input_artifacts"][0]["artifact_id"] == "question"
     assert gpt.calls[0]["input_artifacts"][0]["artifact_id"] == "question"
-    assert "draft-gpt_codex" not in json.dumps(fable.calls[0])
-    assert "draft-fable" not in json.dumps(gpt.calls[0])
+    assert "draft-verification" not in json.dumps(fable.calls[0])
+    assert "draft-synthesis" not in json.dumps(gpt.calls[0])
 
 
 def test_review_turn_uses_persisted_inputs_and_validates_output(tmp_path: Path) -> None:
     service, _ = _start(tmp_path, "inq_runner_review")
-    reviewed = ["draft-fable", "draft-gpt_codex"]
-    fable = _scripted("fable", [_response("draft"), _response("revise", reviewed=reviewed)])
-    gpt = _scripted("gpt_codex", [_response("draft"), "{\"stance\":\"revise\"}"])
+    reviewed = ["draft-synthesis", "draft-verification"]
+    fable = _scripted("synthesis", [_response("draft"), _response("revise", reviewed=reviewed)])
+    gpt = _scripted("verification", [_response("draft"), "{\"stance\":\"revise\"}"])
 
-    result = ModelInquiryRunner(service, {"fable": fable, "gpt_codex": gpt}).run(
+    result = ModelInquiryRunner(service, {"synthesis": fable, "verification": gpt}).run(
         "inq_runner_review", max_rounds=1
     )
 
@@ -300,7 +504,7 @@ def test_review_turn_uses_persisted_inputs_and_validates_output(tmp_path: Path) 
     assert review_request["reviewed_artifact_refs"] == reviewed
     assert [item["artifact_id"] for item in review_request["input_artifacts"]] == reviewed
     assert all(item["artifact_hash"] for item in review_request["input_artifacts"])
-    assert not any(turn["turn_id"] == "review-000-gpt_codex" for turn in service.trace("inq_runner_review")["turns"])
+    assert not any(turn["turn_id"] == "review-000-verification" for turn in service.trace("inq_runner_review")["turns"])
 
 
 def test_dry_run_performs_no_adapter_call_and_writes_nothing(
@@ -316,7 +520,7 @@ def test_dry_run_performs_no_adapter_call_and_writes_nothing(
     second = runner.run("inq_runner_dry", max_rounds=2, dry_run=True)
 
     assert json.dumps(first, sort_keys=True) == json.dumps(second, sort_keys=True)
-    assert first["unavailable_roles"] == ["fable", "gpt_codex"]
+    assert first["unavailable_roles"] == ["synthesis", "verification"]
     assert {path.relative_to(vault): path.read_bytes() for path in vault.rglob("*") if path.is_file()} == before
 
     # A fully provisioned, resolvable single-target configuration still performs
@@ -354,7 +558,7 @@ def test_dry_run_performs_no_adapter_call_and_writes_nothing(
         env=provisioned_env(tmp_path / "secrets"),
         resolver=resolver_for_targets(
             tmp_path / "mock-census",
-            {"fable": ("mock", "mock-chat"), "gpt_codex": ("mock", "mock-chat")},
+            {"synthesis": ("mock", "mock-chat"), "verification": ("mock", "mock-chat")},
         ),
     ).run("inq_runner_single_dry", max_rounds=2, dry_run=True)
     assert mocked["unavailable_roles"] == ["synthesis", "verification"]
@@ -408,9 +612,9 @@ class ConsensusAdapter:
 
 @dataclass
 class FailingAdapter:
-    adapter_id: str = "failing"
-    provider: str = "fixture"
-    model: str = "fixture"
+    adapter_id: str = "configured-sol-adapter"
+    provider: str = "configured-provider"
+    model: str = "configured-sol-model"
     failure_class: str = "command_exit_nonzero"
 
     def execute(self, request: Mapping[str, Any]) -> AdapterResult:
@@ -475,9 +679,9 @@ class LocalCommandFixtureAdapter(LocalCommandAdapter):
 
     def __init__(self, delegate: Any) -> None:
         super().__init__(
-            adapter_id=delegate.adapter_id,
-            provider=delegate.provider,
-            model=delegate.model,
+            adapter_id="configured-sol-adapter",
+            provider="configured-provider",
+            model="configured-sol-model",
             argv=("fixture-local-command",),
         )
         object.__setattr__(self, "delegate", delegate)
@@ -488,17 +692,17 @@ class LocalCommandFixtureAdapter(LocalCommandAdapter):
 
 def _subscription_adapters(first: Any, second: Any) -> dict[str, LocalCommandAdapter]:
     return {
-        "fable": LocalCommandFixtureAdapter(first),
-        "gpt_codex": LocalCommandFixtureAdapter(second),
+        "synthesis": LocalCommandFixtureAdapter(first),
+        "verification": LocalCommandFixtureAdapter(second),
     }
 
 
 @dataclass
 class UnexpectedSecretAdapter:
     provider_request_secret: bool = False
-    adapter_id: str = "unexpected"
-    provider: str = "fixture"
-    model: str = "fixture"
+    adapter_id: str = "configured-sol-adapter"
+    provider: str = "configured-provider"
+    model: str = "configured-sol-model"
 
     def execute(self, request: Mapping[str, Any]) -> AdapterResult:
         if self.provider_request_secret:
@@ -509,10 +713,16 @@ class UnexpectedSecretAdapter:
 def test_runner_records_all_terminal_conditions(tmp_path: Path) -> None:
     service, _ = _start(tmp_path, "inq_runner_consensus")
     adapters = {
-        role: ConsensusAdapter(role, role, f"{role}-model", []) for role in ("fable", "gpt_codex")
+        role: ConsensusAdapter(
+            "configured-sol-adapter",
+            "configured-provider",
+            "configured-sol-model",
+            [],
+        )
+        for role in ("synthesis", "verification")
     }
     consensus = ModelInquiryRunner(service, adapters).run("inq_runner_consensus", max_rounds=1)
-    assert consensus["outcome"] == "consensus"
+    assert consensus["outcome"] == "single_target_acceptance"
 
     cases = {
         "provider_refused": (_response("refuse"), _response("draft")),
@@ -524,8 +734,8 @@ def test_runner_records_all_terminal_conditions(tmp_path: Path) -> None:
         result = ModelInquiryRunner(
             case_service,
             {
-                "fable": _scripted("fable", [fable_response]),
-                "gpt_codex": _scripted("gpt_codex", [gpt_response]),
+                "synthesis": _scripted("synthesis", [fable_response]),
+                "verification": _scripted("verification", [gpt_response]),
             },
         ).run(inquiry_id, max_rounds=1)
         assert result["outcome"] == outcome
@@ -537,14 +747,14 @@ def test_runner_records_all_terminal_conditions(tmp_path: Path) -> None:
     assert unavailable["outcome"] == "provider_unavailable"
 
     error_service, _ = _start(tmp_path, "inq_runner_error")
-    gpt_after_fable_failure = _scripted("gpt_codex", [_response("draft")])
+    gpt_after_fable_failure = _scripted("verification", [_response("draft")])
     provider_error = ModelInquiryRunner(
         error_service,
-        {"fable": FailingAdapter(), "gpt_codex": gpt_after_fable_failure},
+        {"synthesis": FailingAdapter(), "verification": gpt_after_fable_failure},
     ).run("inq_runner_error", max_rounds=1)
     assert provider_error["outcome"] == "provider_error"
     assert provider_error["details"]["diagnostic"] == {
-        "adapter_id": "failing",
+        "adapter_id": "configured-sol-adapter",
         "adapter_failure_class": "command_exit_nonzero",
         "adapter_exit_code": 17,
     }
@@ -585,23 +795,62 @@ def test_single_available_adapter_completes_truthful_degraded_consensus(
         allow_operational_fallback=True,
     ).run("inq_runner_degraded", max_rounds=1)
 
-    assert result["outcome"] == "degraded_consensus"
-    assert result["details"]["degradation_reason"] == "operational adapter fallback used"
+    assert result["outcome"] == "provider_error"
     trace = ModelInquiryService(vault).trace("inq_runner_degraded")
-    assert len(trace["turns"]) == 4
-    assert {turn["adapter_id"] for turn in trace["turns"]} == {"sol-adapter"}
-    assert {turn["provider"] for turn in trace["turns"]} == {"openai"}
-    assert {turn["model"] for turn in trace["turns"]} == {"gpt-5.6-sol"}
+    assert trace["turns"] == []
     attempts = [
         receipt
         for receipt in trace["receipts"]
         if receipt["event_type"] == "inquiry_provider_attempt_terminal"
     ]
-    assert len(attempts) == 2
+    assert len(attempts) == 1
     assert {attempt["details"]["candidate_adapter_id"] for attempt in attempts} == {
-        "fable-adapter"
+        "configured-sol-adapter"
     }
-    assert {call["phase"] for call in fable.calls} == {"draft", "review"}
+    assert [call["phase"] for call in fable.calls] == ["draft"]
+    assert sol.calls == []
+
+
+def test_single_target_never_enters_operational_fallback(tmp_path: Path) -> None:
+    service, vault = _start(
+        tmp_path,
+        "inq_runner_single_target_no_fallback",
+        acceptance_mode="single_target",
+    )
+    failed = CountingFailureAdapter(
+        "configured-sol-primary",
+        "configured-provider",
+        "configured-sol-model",
+        [],
+    )
+    alternate = ConsensusAdapter(
+        "forbidden-alternate",
+        "other-provider",
+        "other-model",
+        [],
+    )
+    adapters = {
+        "synthesis": LocalCommandFixtureAdapter(failed),
+        "verification": LocalCommandFixtureAdapter(alternate),
+    }
+
+    result = ModelInquiryRunner(
+        service,
+        adapters,
+        allow_operational_fallback=True,
+    ).run("inq_runner_single_target_no_fallback", max_rounds=1)
+
+    assert result["outcome"] == "provider_error"
+    assert len(failed.calls) == 1
+    assert alternate.calls == []
+    trace = ModelInquiryService(vault).trace("inq_runner_single_target_no_fallback")
+    assert trace["turns"] == []
+    terminal = next(
+        item
+        for item in trace["receipts"]
+        if item["event_type"] == "inquiry_run_terminal"
+    )
+    assert terminal["outcome"] == "provider_error"
 
 
 def test_local_command_subscription_adapters_enable_fallback_automatically(
@@ -644,13 +893,11 @@ print(json.dumps(payload))
 
     result = ModelInquiryRunner(
         service,
-        {"fable": fable, "gpt_codex": sol},
+        {"synthesis": fable, "verification": sol},
     ).run("inq_runner_local_command_fallback", max_rounds=1)
 
-    assert result["outcome"] == "degraded_consensus"
-    assert {turn["adapter_id"] for turn in service.trace(result["inquiry_id"])["turns"]} == {
-        "sol-local"
-    }
+    assert result["outcome"] == "provider_unavailable"
+    assert service.trace(result["inquiry_id"])["turns"] == []
 
 
 def test_explicit_fallback_flag_cannot_enable_non_subscription_adapters(
@@ -662,33 +909,38 @@ def test_explicit_fallback_flag_cannot_enable_non_subscription_adapters(
 
     result = ModelInquiryRunner(
         service,
-        {"fable": primary, "gpt_codex": alternate},
+        {"synthesis": primary, "verification": alternate},
         allow_operational_fallback=True,
     ).run("inq_runner_non_subscription_boundary", max_rounds=1)
 
-    assert result["outcome"] == "provider_error"
-    assert len(primary.calls) == 1
+    assert result["outcome"] == "provider_unavailable"
+    assert primary.calls == []
     assert alternate.calls == []
 
 
 def test_role_focused_prompts_are_distinct_and_hashed_per_candidate(tmp_path: Path) -> None:
     service, _ = _start(tmp_path, "inq_runner_role_prompts")
-    fable = CountingFailureAdapter("fable-adapter", "anthropic", "claude-fable-5", [])
-    sol = ConsensusAdapter("sol-adapter", "openai", "gpt-5.6-sol", [])
+    reviewed = ["draft-synthesis", "draft-verification"]
+    synthesis = _scripted(
+        "synthesis", [_response("draft"), _response("revise", reviewed=reviewed)]
+    )
+    verification = _scripted(
+        "verification", [_response("draft"), _response("revise", reviewed=reviewed)]
+    )
 
     ModelInquiryRunner(
         service,
-        _subscription_adapters(fable, sol),
+        {"synthesis": synthesis, "verification": verification},
         allow_operational_fallback=True,
     ).run("inq_runner_role_prompts", max_rounds=1)
 
-    fable_lane = next(call for call in sol.calls if call["role"] == "fable")
-    codex_lane = next(call for call in sol.calls if call["role"] == "gpt_codex")
-    assert fable_lane["system_prompt"] == model_turn_system_prompt("fable")
-    assert codex_lane["system_prompt"] == model_turn_system_prompt("gpt_codex")
+    fable_lane = synthesis.calls[0]
+    codex_lane = verification.calls[0]
+    assert fable_lane["system_prompt"] == model_turn_system_prompt("synthesis")
+    assert codex_lane["system_prompt"] == model_turn_system_prompt("verification")
     assert fable_lane["system_prompt"] != codex_lane["system_prompt"]
-    assert "most relevant to the supplied question" in fable_lane["system_prompt"]
-    assert "most relevant to the supplied question" in codex_lane["system_prompt"]
+    assert "Build one coherent bounded option" in fable_lane["system_prompt"]
+    assert "Challenge assumptions" in codex_lane["system_prompt"]
     assert fable_lane["request_hash"] != codex_lane["request_hash"]
     assert fable_lane["adapter_identity"] == codex_lane["adapter_identity"]
 
@@ -703,21 +955,10 @@ def test_candidate_fallback_is_durable_bounded_and_resume_safe(tmp_path: Path) -
         allow_operational_fallback=True,
     )
 
-    with pytest.raises(KeyboardInterrupt):
-        runner.run("inq_runner_fallback_resume", max_rounds=1)
-    interrupted = service.trace("inq_runner_fallback_resume")
-    assert not any(
-        receipt["event_type"] == "inquiry_run_terminal"
-        for receipt in interrupted["receipts"]
-    )
+    result = runner.run("inq_runner_fallback_resume", max_rounds=1)
+    assert result["outcome"] == "provider_error"
     assert len(primary.calls) == 1
-
-    resumed = runner.run("inq_runner_fallback_resume", max_rounds=1)
-    assert resumed["outcome"] == "degraded_consensus"
-    assert [(call["role"], call["phase"]) for call in primary.calls] == [
-        ("fable", "draft"),
-        ("fable", "review"),
-    ]
+    assert alternate.calls == []
 
     bounded_service, _ = _start(tmp_path, "inq_runner_fallback_bounded")
     first = CountingFailureAdapter("first", "anthropic", "claude-fable-5", [])
@@ -729,14 +970,14 @@ def test_candidate_fallback_is_durable_bounded_and_resume_safe(tmp_path: Path) -
     ).run("inq_runner_fallback_bounded", max_rounds=1)
     assert bounded["outcome"] == "provider_error"
     assert len(first.calls) == 1
-    assert len(second.calls) == 1
+    assert second.calls == []
 
 
 def test_refusal_and_persistence_failure_do_not_fallback(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     refusal_service, _ = _start(tmp_path, "inq_runner_no_refusal_fallback")
-    refusal = _scripted("fable", [_response("refuse")])
+    refusal = _scripted("synthesis", [_response("refuse")])
     unused = ConsensusAdapter("sol-adapter", "openai", "gpt-5.6-sol", [])
     refused = ModelInquiryRunner(
         refusal_service,
@@ -800,17 +1041,15 @@ def test_recovered_distinct_targets_remain_genuine_consensus(tmp_path: Path) -> 
         allow_operational_fallback=True,
     ).run("inq_runner_recovered_consensus", max_rounds=1)
 
-    assert result["outcome"] == "consensus"
+    assert result["outcome"] == "provider_error"
     trace = service.trace("inq_runner_recovered_consensus")
     review_targets = {
         (turn["adapter_id"], turn["provider"], turn["model"])
         for turn in trace["turns"]
         if turn["phase"] == "review"
     }
-    assert review_targets == {
-        ("fable-adapter", "anthropic", "claude-fable-5"),
-        ("sol-adapter", "openai", "gpt-5.6-sol"),
-    }
+    assert review_targets == set()
+    assert sol.calls == []
     assert any(
         receipt["event_type"] == "inquiry_provider_attempt_terminal"
         for receipt in trace["receipts"]
@@ -824,11 +1063,13 @@ def test_distinct_adapter_ids_for_same_model_remain_degraded(tmp_path: Path) -> 
 
     result = ModelInquiryRunner(
         service,
-        _subscription_adapters(first, second),
+        {"synthesis": first, "verification": second},
         allow_operational_fallback=True,
     ).run("inq_runner_same_model_ids", max_rounds=1)
 
-    assert result["outcome"] == "degraded_consensus"
+    assert result["outcome"] == "provider_unavailable"
+    assert first.calls == []
+    assert second.calls == []
 
 
 def test_legacy_failed_attempt_is_not_retried_on_resume(tmp_path: Path) -> None:
@@ -855,7 +1096,7 @@ def test_legacy_failed_attempt_is_not_retried_on_resume(tmp_path: Path) -> None:
     )
     legacy_hash = model_turn_request_hash(
         inquiry_id=inquiry_id,
-        role="fable",
+        role="synthesis",
         phase="draft",
         round_index=0,
         context_hash=context_hash,
@@ -898,16 +1139,17 @@ def test_legacy_failed_attempt_is_not_retried_on_resume(tmp_path: Path) -> None:
         allow_operational_fallback=True,
     ).run(inquiry_id, max_rounds=1)
 
-    assert result["outcome"] == "degraded_consensus"
-    assert [call["phase"] for call in primary.calls] == ["review"]
+    assert result["outcome"] == "provider_error"
+    assert [call["phase"] for call in primary.calls] == ["draft"]
+    assert alternate.calls == []
 
 
 def test_resume_and_persistence_failure_fail_closed(tmp_path: Path, monkeypatch) -> None:
     service, _ = _start(tmp_path, "inq_runner_resume")
-    reviewed = ["draft-fable", "draft-gpt_codex"]
+    reviewed = ["draft-synthesis", "draft-verification"]
     adapters = {
-        "fable": _scripted("fable", [_response("draft"), _response("revise", reviewed=reviewed)]),
-        "gpt_codex": _scripted("gpt_codex", [_response("draft"), _response("revise", reviewed=reviewed)]),
+        "synthesis": _scripted("synthesis", [_response("draft"), _response("revise", reviewed=reviewed)]),
+        "verification": _scripted("verification", [_response("draft"), _response("revise", reviewed=reviewed)]),
     }
     runner = ModelInquiryRunner(service, adapters)
     first = runner.run("inq_runner_resume", max_rounds=1)
@@ -928,9 +1170,9 @@ def test_resume_and_persistence_failure_fail_closed(tmp_path: Path, monkeypatch)
         return original(*args, **kwargs)
 
     monkeypatch.setattr(failure_service, "commit_turn", fail_first_commit)
-    fable = _scripted("fable", [_response("draft")])
-    gpt = _scripted("gpt_codex", [_response("draft")])
-    failed = ModelInquiryRunner(failure_service, {"fable": fable, "gpt_codex": gpt}).run(
+    fable = _scripted("synthesis", [_response("draft")])
+    gpt = _scripted("verification", [_response("draft")])
+    failed = ModelInquiryRunner(failure_service, {"synthesis": fable, "verification": gpt}).run(
         "inq_runner_persist_fail", max_rounds=1
     )
     assert failed["outcome"] == "persistence_failed"
@@ -948,7 +1190,7 @@ def test_adapter_failures_and_bad_config_are_terminal_without_secret_leak(tmp_pa
         service, vault = _start(tmp_path, inquiry_id)
         result = ModelInquiryRunner(
             service,
-            {"fable": adapter, "gpt_codex": _scripted("gpt_codex", [_response("draft")])},
+            {"synthesis": adapter, "verification": _scripted("verification", [_response("draft")])},
         ).run(inquiry_id, max_rounds=1)
         assert result["outcome"] == "provider_error"
         assert "credential-sentinel" not in "".join(
@@ -1132,7 +1374,6 @@ def test_single_target_typed_failure_is_readable_and_resume_is_idempotent(
     service, _ = _start(tmp_path, inquiry_id, acceptance_mode="single_target")
     adapters = {
         "synthesis": FailingAdapter(
-            adapter_id=f"{failure_class}-adapter",
             failure_class=failure_class,
         ),
         "verification": _scripted("verification", [_response("draft")]),
@@ -1217,8 +1458,8 @@ def test_auth_failure_class_survives_persistence_revalidation(tmp_path: Path) ->
     result = ModelInquiryRunner(
         service,
         {
-            "fable": FailingAdapter(failure_class="credential_unavailable"),
-            "gpt_codex": _scripted("gpt_codex", [_response("draft")]),
+            "synthesis": FailingAdapter(failure_class="credential_unavailable"),
+            "verification": _scripted("verification", [_response("draft")]),
         },
     ).run("inq_runner_auth_failure", max_rounds=1)
 
@@ -1314,8 +1555,13 @@ class StaleConsensusAdapter:
 def test_consensus_cannot_accept_stale_historical_artifact(tmp_path: Path) -> None:
     service, _ = _start(tmp_path, "inq_runner_stale_consensus")
     adapters = {
-        role: StaleConsensusAdapter(role, role, f"{role}-model", [])
-        for role in ("fable", "gpt_codex")
+        role: StaleConsensusAdapter(
+            "configured-sol-adapter",
+            "configured-provider",
+            "configured-sol-model",
+            [],
+        )
+        for role in ("synthesis", "verification")
     }
     result = ModelInquiryRunner(service, adapters).run(
         "inq_runner_stale_consensus", max_rounds=2
@@ -1326,11 +1572,16 @@ def test_consensus_cannot_accept_stale_historical_artifact(tmp_path: Path) -> No
 def test_max_round_terminal_cannot_override_proven_consensus(tmp_path: Path) -> None:
     service, vault = _start(tmp_path, "inq_runner_false_max")
     adapters = {
-        role: ConsensusAdapter(role, role, f"{role}-model", [])
-        for role in ("fable", "gpt_codex")
+        role: ConsensusAdapter(
+            "configured-sol-adapter",
+            "configured-provider",
+            "configured-sol-model",
+            [],
+        )
+        for role in ("synthesis", "verification")
     }
     result = ModelInquiryRunner(service, adapters).run("inq_runner_false_max", max_rounds=1)
-    assert result["outcome"] == "consensus"
+    assert result["outcome"] == "single_target_acceptance"
     path = (
         vault
         / "model-inquiries"

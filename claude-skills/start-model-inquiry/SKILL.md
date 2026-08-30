@@ -1,6 +1,6 @@
 ---
 name: start-model-inquiry
-description: Run a durable pre-ticket Fable and GPT/Codex model inquiry through the configured sanctioned host-local subscription launcher when a development question needs independent model review before ticket creation.
+description: Run a durable pre-ticket single-target Model Inquiry through the configured sanctioned host-local subscription launcher when a development question needs structured model review before ticket creation.
 ---
 
 # Start Model Inquiry
@@ -71,18 +71,21 @@ The response is a durable Model Inquiry artifact only. It does not satisfy the w
 credential evidence. Never accept or promote historical inquiry
 `inq_20260730T075136Z_b73ed0da`.
 
-The configured remote launcher owns the high-reasoning profile and extended per-role deadline for
-both independent roles. Do not lower or override that profile from the desktop skill, and do not
-move its model or adapter configuration into the local workspace.
+The configured remote launcher owns the configured Sol capability, high-reasoning profile, and
+extended deadline for both neutral perspectives (`synthesis` and `verification`). This compatibility
+package does not select a provider or concrete model. Do not lower or override the resolved profile
+from the desktop skill, and do not move its model or adapter configuration into the local workspace.
 
 ## Failure Handling
 
-The desktop skill never retries a provider or starts a second inquiry. Within the one fixed launcher
-invocation, the sanctioned operational runner may try the other already-configured subscription
-adapter after an eligible, durably receipted candidate failure. Its two logical lanes carry
-complementary question-focused roles. If one effective target fills both lanes, the valid terminal
-result is `degraded_consensus`; report it as degraded and never treat it as independent-model or
-promotion evidence.
+The desktop skill never retries a target or starts a second inquiry. Within the one fixed launcher
+invocation, the sanctioned operational runner uses the same resolver-selected target for the
+neutral `synthesis` and `verification` perspectives. A successful v2 run terminates as
+`single_target_acceptance` with `independence=false`; it is never independent consensus. The active
+single-target route does not select a second provider/model or use a same-identity fallback. A
+target, session, output-validation, or persistence failure remains a typed terminal failure and is
+not promotion evidence. Historical `consensus` and `degraded_consensus` artifacts remain readable
+only through the legacy compatibility path; this package does not reactivate that path.
 
 - If `scp` fails after acquiring the lock, run the pre-launch remote cleanup first, then report the
   original failure. Include any cleanup failure without masking the original error.
@@ -95,12 +98,13 @@ promotion evidence.
   whether the remote launcher completed; do not make that decision from this skill.
 - Do not re-run the inquiry to recover a missing response. It may already have durable artifacts on
   the configured remote host.
-- Do not retry a provider from the desktop skill, inspect credentials, or route around the
-  sanctioned host launcher. Its bounded internal candidate chain is the only fallback authority.
+- Do not retry a target from the desktop skill, inspect credentials, or route around the
+  sanctioned host launcher. The active single-target route has no fallback authority.
 - Do not overlap invocations that use the fixed remote question path; acquire and release its
   exclusive remote lock around each launch.
 - Do not inspect or recover an inquiry from the vault as a substitute for the launcher's response.
-- Do not substitute an in-chat Fable/GPT exchange or silently use one model for both roles.
+- Do not substitute an in-chat exchange, add a second target, or reclassify two perspectives over
+  one target as independent consensus.
 
 ## Boundaries
 

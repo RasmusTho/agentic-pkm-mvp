@@ -11,6 +11,7 @@ from app.builderops.model_inquiry import ModelInquiryService
 from app.builderops.model_inquiry_contract import (
     ISSUE_PROPOSAL_SCHEMA_VERSION,
     RESPONSE_SCHEMA_VERSION,
+    canonical_hash,
 )
 from app.builderops.model_inquiry_promotion import (
     GhApiIssueClient,
@@ -20,9 +21,7 @@ from app.builderops.model_inquiry_promotion import (
 from app.builderops.models import BuilderOpsValidationError
 from app.builderops.model_inquiry_runner import ModelInquiryRunner
 from app.builderops.model_inquiry_adapters import (
-    AdapterExecutionError,
     AdapterResult,
-    LocalCommandAdapter,
 )
 
 
@@ -180,7 +179,8 @@ def _consensus_service(
     service = ModelInquiryService(vault)
     service.start(
         question="Create a bounded promotion contract",
-        workflow="fable-gpt-architecture",
+        workflow="governed-model-inquiry",
+        acceptance_mode="single_target",
         inquiry_id="inq_promotion_test",
         source_refs=[{"ref_type": "github_issue", "ref": "#3293"}],
     )
@@ -191,10 +191,14 @@ def _consensus_service(
             issue_body=issue_body,
             proposal_override=proposal_override,
         )
-        for role in ("fable", "gpt_codex")
+        for role in ("synthesis", "verification")
     }
+    for adapter in adapters.values():
+        adapter.adapter_id = "configured-sol-subscription"
+        adapter.provider = "configured-provider"
+        adapter.model = "configured-sol-model"
     result = ModelInquiryRunner(service, adapters).run("inq_promotion_test", max_rounds=1)
-    assert result["outcome"] == "consensus"
+    assert result["outcome"] == "single_target_acceptance"
     return service
 
 
@@ -262,6 +266,43 @@ def test_single_target_acceptance_is_issue_ready_and_promotable(
     assert promotion_receipt["readiness_artifact_hash"] == trace["readiness"]["artifact_hash"]
     assert promotion_receipt["synthesis_artifact_hash"] == trace["synthesis"]["artifact_hash"]
 
+    inquiry_path = (
+        tmp_path
+        / "single-target-vault"
+        / "model-inquiries"
+        / "inq_single_target_promotion"
+    )
+    intent_path = inquiry_path / "promotion-intent.json"
+    receipt_path = inquiry_path / "receipts" / "promotion-github-issue.json"
+    original_intent = json.loads(intent_path.read_text(encoding="utf-8"))
+    original_receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+
+    incomplete_intent = dict(original_intent)
+    incomplete_intent.pop("run_terminal_receipt_hash")
+    incomplete_intent.pop("artifact_hash")
+    incomplete_intent["artifact_hash"] = canonical_hash(incomplete_intent)
+    incomplete_receipt = dict(original_receipt)
+    incomplete_receipt.pop("run_terminal_receipt_hash")
+    incomplete_receipt["promotion_intent_artifact_hash"] = incomplete_intent[
+        "artifact_hash"
+    ]
+    incomplete_receipt.pop("artifact_hash")
+    incomplete_receipt["artifact_hash"] = canonical_hash(incomplete_receipt)
+    intent_path.write_text(json.dumps(incomplete_intent), encoding="utf-8")
+    receipt_path.write_text(json.dumps(incomplete_receipt), encoding="utf-8")
+    with pytest.raises(BuilderOpsValidationError, match="promotion intent"):
+        service.trace("inq_single_target_promotion", include_delivery=True)
+
+    intent_path.write_text(json.dumps(original_intent), encoding="utf-8")
+    receipt_path.write_text(json.dumps(original_receipt), encoding="utf-8")
+    incomplete = json.loads(receipt_path.read_text(encoding="utf-8"))
+    incomplete.pop("readiness_artifact_hash")
+    incomplete.pop("artifact_hash")
+    incomplete["artifact_hash"] = canonical_hash(incomplete)
+    receipt_path.write_text(json.dumps(incomplete), encoding="utf-8")
+    with pytest.raises(BuilderOpsValidationError, match="promotion terminal receipt"):
+        service.trace("inq_single_target_promotion", include_delivery=True)
+
 
 def test_single_target_rejects_consensus_terminal_before_promotion(tmp_path: Path) -> None:
     vault = tmp_path / "single-target-consensus" / "vault"
@@ -319,48 +360,57 @@ def test_degraded_consensus_is_not_issue_ready(tmp_path: Path) -> None:
         inquiry_id="inq_degraded_promotion",
         source_refs=[{"ref_type": "github_issue", "ref": "#4713"}],
     )
+    directory = vault / "model-inquiries" / "inq_degraded_promotion"
+    manifest_path = directory / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["schema"] = "builderops.model-inquiry.v1"
+    manifest.pop("artifact_hash", None)
+    manifest["artifact_hash"] = canonical_hash(manifest)
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    before = {
+        path.relative_to(vault): path.read_bytes()
+        for path in vault.rglob("*")
+        if path.is_file()
+    }
 
-    class FailedFable(ProposalAdapter):
-        def execute(self, request: Mapping[str, Any]) -> AdapterResult:
-            raise AdapterExecutionError(
-                "provider unavailable",
-                failure_class="command_exit_nonzero",
-                exit_code=17,
-            )
-
-    class LocalCommandProposalAdapter(LocalCommandAdapter):
-        def __init__(self, delegate: ProposalAdapter) -> None:
-            super().__init__(
-                adapter_id=delegate.adapter_id,
-                provider=delegate.provider,
-                model=delegate.model,
-                argv=("fixture-local-command",),
-            )
-            object.__setattr__(self, "delegate", delegate)
-
-        def execute(self, request: Mapping[str, Any]) -> AdapterResult:
-            return self.delegate.execute(request)
-
-    result = ModelInquiryRunner(
-        service,
-        {
-            "fable": LocalCommandProposalAdapter(FailedFable("fable")),
-            "gpt_codex": LocalCommandProposalAdapter(ProposalAdapter("gpt_codex")),
-        },
-        allow_operational_fallback=True,
-    ).run("inq_degraded_promotion", max_rounds=1)
-    assert result["outcome"] == "degraded_consensus"
-
+    client = FakeIssueClient()
     gateway = ModelInquiryPromotionGateway(
         service,
         repository="example/repo",
-        client=FakeIssueClient(),
+        client=client,
     )
-    evaluation = gateway.evaluate("inq_degraded_promotion")
-    assert evaluation["readiness"]["outcome"] == "not_ready"
-    assert "consensus terminal" in evaluation["readiness"]["rationale"]
-    with pytest.raises(ModelInquiryPromotionError, match="consensus terminal receipt"):
+    with pytest.raises(ModelInquiryPromotionError, match="legacy.*read-only"):
+        gateway.evaluate("inq_degraded_promotion")
+    with pytest.raises(ModelInquiryPromotionError, match="legacy.*read-only"):
         gateway.promote("inq_degraded_promotion")
+    with pytest.raises(BuilderOpsValidationError, match="legacy.*read-only"):
+        service.commit_promotion_intent(
+            "inq_degraded_promotion",
+            repository="example/repo",
+            marker=f"<!-- builderops-inquiry-promotion:inq_degraded_promotion:{'c' * 64} -->",
+            title="Rejected legacy promotion",
+            issue_body="Legacy records are trace-only.",
+            source_refs=[{"ref_type": "github_issue", "ref": "#4713"}],
+        )
+    with pytest.raises(BuilderOpsValidationError, match="legacy.*read-only"):
+        service.commit_promotion_receipt(
+            "inq_degraded_promotion",
+            intent={},
+            issue_number=1,
+            issue_url="https://github.com/example/repo/issues/1",
+            issue_created_at="2026-08-30T12:00:00Z",
+            source_refs=[{"ref_type": "github_issue", "ref": "#4713"}],
+        )
+    assert client.create_calls == 0
+    assert service.trace("inq_degraded_promotion")["readiness"] is None
+    assert not (directory / "promotion-intent.json").exists()
+    assert not (directory / "receipts" / "promotion-github-issue.json").exists()
+    assert not (directory / ".inquiry-promotion.lock").exists()
+    assert {
+        path.relative_to(vault): path.read_bytes()
+        for path in vault.rglob("*")
+        if path.is_file()
+    } == before
 
 
 def test_issue_promotion_requires_ready_receipt(tmp_path: Path) -> None:

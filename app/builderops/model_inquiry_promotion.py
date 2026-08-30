@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping, Protocol, Sequence
 
-from app.builderops.model_inquiry import ModelInquiryService
+from app.builderops.model_inquiry import ModelInquiryService, is_active_inquiry_manifest
 from app.builderops.model_inquiry_contract import (
     canonical_hash,
     github_issue_url_matches,
@@ -156,6 +156,7 @@ class ModelInquiryPromotionGateway:
         actor: Mapping[str, Any] | str | None = None,
     ) -> dict[str, Any]:
         trace = self.service.trace(inquiry_id)
+        _require_promotable_manifest(trace)
         terminal = next(
             (
                 receipt
@@ -171,7 +172,7 @@ class ModelInquiryPromotionGateway:
         try:
             proposal = _validated_issue_proposal(trace)
         except ModelInquiryPromotionError as exc:
-            outcome = "not_ready" if "accepted terminal" in str(exc) else "needs_input"
+            outcome = "not_ready" if "terminal" in str(exc) else "needs_input"
             input_refs = (
                 ["synthesis"]
                 if isinstance(trace.get("synthesis"), dict)
@@ -225,8 +226,11 @@ class ModelInquiryPromotionGateway:
             raise ModelInquiryPromotionError(
                 "issue promotion requires an explicit repository and REST client"
             )
+        trace = self.service.trace(inquiry_id, include_delivery=True)
+        _require_promotable_manifest(trace)
         with self.service.inquiry_promotion_lock(inquiry_id):
             trace = self.service.trace(inquiry_id, include_delivery=True)
+            _require_promotable_manifest(trace)
             proposal = _validated_issue_proposal(trace)
             readiness = _require_readiness_evidence(trace)
             marker = _promotion_marker(
@@ -300,6 +304,7 @@ class ModelInquiryPromotionGateway:
 
 
 def _validated_issue_proposal(trace: Mapping[str, Any]) -> ValidatedIssueProposal:
+    _require_promotable_manifest(trace)
     terminal = next(
         (
             receipt
@@ -308,21 +313,9 @@ def _validated_issue_proposal(trace: Mapping[str, Any]) -> ValidatedIssueProposa
         ),
         None,
     )
-    if terminal is None or terminal.get("outcome") not in {
-        "consensus",
-        "single_target_acceptance",
-    }:
+    if terminal is None or terminal.get("outcome") != "single_target_acceptance":
         raise ModelInquiryPromotionError(
-            "issue promotion requires a consensus terminal receipt; accepted terminal required"
-        )
-    manifest = trace.get("inquiry")
-    if (
-        isinstance(manifest, Mapping)
-        and manifest.get("acceptance_mode") == "single_target"
-        and terminal.get("outcome") != "single_target_acceptance"
-    ):
-        raise ModelInquiryPromotionError(
-            "single-target issue promotion requires a single_target_acceptance terminal"
+            "issue promotion requires a single_target_acceptance terminal receipt"
         )
     synthesis = trace.get("synthesis")
     if not isinstance(synthesis, dict):
@@ -348,6 +341,14 @@ def _validated_issue_proposal(trace: Mapping[str, Any]) -> ValidatedIssueProposa
             f"issue proposal has unresolved source anchors: {anchor_errors[0]}"
         )
     return ValidatedIssueProposal(title=proposal.title, body=proposal.body)
+
+
+def _require_promotable_manifest(trace: Mapping[str, Any]) -> None:
+    manifest = trace.get("inquiry")
+    if not isinstance(manifest, Mapping) or not is_active_inquiry_manifest(manifest):
+        raise ModelInquiryPromotionError(
+            "legacy model inquiry records are read-only and cannot be evaluated or promoted"
+        )
 
 
 def _require_readiness_evidence(trace: Mapping[str, Any]) -> Mapping[str, Any]:

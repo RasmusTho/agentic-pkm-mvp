@@ -29,6 +29,81 @@ from tests.builderops.inquiry_intent import (
 )
 
 
+class _SameTargetAdapter:
+    adapter_id = "configured-sol-subscription"
+    provider = "configured-provider"
+    model = "configured-sol-model"
+
+    def execute(self, request: Mapping[str, Any]) -> AdapterResult:
+        if request["phase"] == "draft":
+            return AdapterResult(_credential_trace_response("draft"))
+        return AdapterResult(
+            _credential_trace_response(
+                "accept",
+                reviewed=list(request["reviewed_artifact_refs"]),
+                accepted_hash=str(request["input_artifacts"][0]["artifact_hash"]),
+            )
+        )
+
+
+def _run_single_target_acceptance(service: ModelInquiryService, inquiry_id: str) -> None:
+    ModelInquiryRunner(
+        service,
+        {
+            "synthesis": _SameTargetAdapter(),
+            "verification": _SameTargetAdapter(),
+        },
+    ).run(inquiry_id, max_rounds=1)
+
+
+def _downgrade_manifest_to_legacy(vault: Path, inquiry_id: str) -> None:
+    directory = vault / "model-inquiries" / inquiry_id
+    manifest_path = directory / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["schema"] = "builderops.model-inquiry.v1"
+    for field in ("acceptance_mode", "perspectives", "independence", "artifact_hash"):
+        manifest.pop(field, None)
+    manifest["artifact_hash"] = canonical_hash(manifest)
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+
+def _downgrade_completed_promotion_to_legacy(
+    vault: Path,
+    inquiry_id: str,
+) -> dict[str, Any]:
+    directory = vault / "model-inquiries" / inquiry_id
+    (directory / "receipts" / "inquiry-run-terminal.json").unlink()
+    _downgrade_manifest_to_legacy(vault, inquiry_id)
+
+    readiness_path = directory / "receipts" / "readiness-terminal.json"
+    readiness_receipt = json.loads(readiness_path.read_text(encoding="utf-8"))
+    readiness_receipt.pop("run_terminal_receipt_hash", None)
+    readiness_receipt.pop("artifact_hash")
+    readiness_receipt["artifact_hash"] = canonical_hash(readiness_receipt)
+    readiness_path.write_text(json.dumps(readiness_receipt), encoding="utf-8")
+
+    intent_path = directory / "promotion-intent.json"
+    intent = json.loads(intent_path.read_text(encoding="utf-8"))
+    intent.pop("run_terminal_receipt_hash", None)
+    intent.pop("artifact_hash")
+    intent["artifact_hash"] = canonical_hash(intent)
+    intent_path.write_text(json.dumps(intent), encoding="utf-8")
+
+    promotion_path = directory / "receipts" / "promotion-github-issue.json"
+    promotion = json.loads(promotion_path.read_text(encoding="utf-8"))
+    for field in (
+        "run_terminal_receipt_hash",
+        "readiness_artifact_hash",
+        "synthesis_artifact_hash",
+        "artifact_hash",
+    ):
+        promotion.pop(field, None)
+    promotion["promotion_intent_artifact_hash"] = intent["artifact_hash"]
+    promotion["artifact_hash"] = canonical_hash(promotion)
+    promotion_path.write_text(json.dumps(promotion), encoding="utf-8")
+    return intent
+
+
 def test_trace_links_question_turns_and_synthesis(tmp_path: Path) -> None:
     vault = tmp_path / "shared-vault"
     vault.mkdir()
@@ -107,16 +182,12 @@ def test_trace_includes_delivery_refs(tmp_path: Path) -> None:
     refs = [{"ref_type": "github_issue", "ref": "#3293"}]
     service.start(
         question="Trace delivery references",
-        workflow="fable-gpt-architecture",
+        workflow="governed-model-inquiry",
         inquiry_id="inq_test_delivery",
         source_refs=refs,
     )
-    synthesis = service.commit_synthesis(
-        "inq_test_delivery",
-        content="Issue proposal",
-        input_artifact_refs=["question"],
-        source_refs=refs,
-    )
+    _run_single_target_acceptance(service, "inq_test_delivery")
+    synthesis = service.trace("inq_test_delivery")["synthesis"]
     readiness = service.commit_readiness(
         "inq_test_delivery",
         outcome="issue_ready",
@@ -157,6 +228,13 @@ def test_trace_includes_delivery_refs(tmp_path: Path) -> None:
             source_refs=refs,
         )
 
+    promotion_path = (
+        vault
+        / "model-inquiries"
+        / "inq_test_delivery"
+        / "receipts"
+        / "promotion-github-issue.json"
+    )
     trace = service.trace("inq_test_delivery", include_delivery=True)
 
     assert trace["readiness"] == readiness
@@ -177,13 +255,6 @@ def test_trace_includes_delivery_refs(tmp_path: Path) -> None:
         {"ref_type": "verification_receipt", "ref": "receipt-701"},
     ]
 
-    promotion_path = (
-        vault
-        / "model-inquiries"
-        / "inq_test_delivery"
-        / "receipts"
-        / "promotion-github-issue.json"
-    )
     forged = json.loads(promotion_path.read_text(encoding="utf-8"))
     forged["github_issue_url"] = "https://attacker.example/issues/700"
     forged.pop("artifact_hash")
@@ -201,16 +272,11 @@ def test_trace_accepts_legacy_promotion_receipt_without_v2_linkage(tmp_path: Pat
     refs = [{"ref_type": "github_issue", "ref": "#3399"}]
     service.start(
         question="Read a legacy promoted inquiry",
-        workflow="fable-gpt-architecture",
+        workflow="governed-model-inquiry",
         inquiry_id="inq_test_legacy_promotion",
         source_refs=refs,
     )
-    service.commit_synthesis(
-        "inq_test_legacy_promotion",
-        content="Legacy issue proposal",
-        input_artifact_refs=["question"],
-        source_refs=refs,
-    )
+    _run_single_target_acceptance(service, "inq_test_legacy_promotion")
     service.commit_readiness(
         "inq_test_legacy_promotion",
         outcome="issue_ready",
@@ -237,25 +303,15 @@ def test_trace_accepts_legacy_promotion_receipt_without_v2_linkage(tmp_path: Pat
         source_refs=refs,
     )
 
-    promotion_path = (
-        vault
-        / "model-inquiries"
-        / "inq_test_legacy_promotion"
-        / "receipts"
-        / "promotion-github-issue.json"
+    legacy_intent = _downgrade_completed_promotion_to_legacy(
+        vault,
+        "inq_test_legacy_promotion",
     )
-    legacy_receipt = json.loads(promotion_path.read_text(encoding="utf-8"))
-    legacy_receipt.pop("readiness_artifact_hash")
-    legacy_receipt.pop("synthesis_artifact_hash")
-    legacy_receipt["artifact_hash"] = canonical_hash(
-        {key: value for key, value in legacy_receipt.items() if key != "artifact_hash"}
-    )
-    promotion_path.write_text(json.dumps(legacy_receipt), encoding="utf-8")
 
     trace = service.trace("inq_test_legacy_promotion", include_delivery=True)
 
     assert trace["inquiry"]["schema"] == "builderops.model-inquiry.v1"
-    assert trace["promotion_intent"] == intent
+    assert trace["promotion_intent"] == legacy_intent
 
 
 def test_trace_rejects_tampered_derived_artifact(tmp_path: Path) -> None:
@@ -364,16 +420,16 @@ def test_trace_includes_provider_request_id_and_output_hash(tmp_path: Path) -> N
             }
         )
 
-    reviewed = ["draft-fable", "draft-gpt_codex"]
+    reviewed = ["draft-synthesis", "draft-verification"]
     adapters = {
         role: ScriptedAdapter(
-            adapter_id=f"{role}-adapter",
-            provider=role,
-            model=f"{role}-model",
+            adapter_id="configured-sol-subscription",
+            provider="configured-provider",
+            model="configured-sol-model",
             responses=[response("draft", []), response("revise", reviewed)],
             calls=[],
         )
-        for role in ("fable", "gpt_codex")
+        for role in ("synthesis", "verification")
     }
     ModelInquiryRunner(service, adapters).run("inq_test_provider_trace", max_rounds=1)
 
@@ -393,23 +449,25 @@ def test_trace_includes_provider_request_id_and_output_hash(tmp_path: Path) -> N
         assert turn["source_refs"] == refs
 
 
-def test_degraded_consensus_report_exposes_effective_targets(tmp_path: Path) -> None:
+def test_single_target_failure_report_does_not_claim_degraded_consensus(
+    tmp_path: Path,
+) -> None:
     vault = tmp_path / "shared-vault-degraded-report"
     vault.mkdir()
     service = ModelInquiryService(vault)
     service.start(
-        question="Keep a report when Fable is unavailable",
-        workflow="fable-gpt-architecture",
+        question="Keep a report when the configured target is unavailable",
+        workflow="governed-model-inquiry",
         inquiry_id="inq_test_degraded_report",
         source_refs=[{"ref_type": "github_issue", "ref": "#4713"}],
     )
 
-    class UnavailableFable(LocalCommandAdapter):
+    class UnavailableTarget(LocalCommandAdapter):
         def __init__(self) -> None:
             super().__init__(
-                adapter_id="fable-adapter",
-                provider="anthropic",
-                model="claude-fable-5",
+                adapter_id="configured-sol-subscription",
+                provider="configured-provider",
+                model="configured-sol-model",
                 argv=("fixture-local-command",),
             )
 
@@ -420,12 +478,12 @@ def test_degraded_consensus_report_exposes_effective_targets(tmp_path: Path) -> 
                 exit_code=17,
             )
 
-    class AvailableSol(LocalCommandAdapter):
+    class AvailableSameTarget(LocalCommandAdapter):
         def __init__(self) -> None:
             super().__init__(
-                adapter_id="sol-adapter",
-                provider="openai",
-                model="gpt-5.6-sol",
+                adapter_id="configured-sol-subscription",
+                provider="configured-provider",
+                model="configured-sol-model",
                 argv=("fixture-local-command",),
             )
 
@@ -442,14 +500,17 @@ def test_degraded_consensus_report_exposes_effective_targets(tmp_path: Path) -> 
 
     result = ModelInquiryRunner(
         service,
-        {"fable": UnavailableFable(), "gpt_codex": AvailableSol()},
+        {
+            "synthesis": UnavailableTarget(),
+            "verification": AvailableSameTarget(),
+        },
         allow_operational_fallback=True,
     ).run("inq_test_degraded_report", max_rounds=1)
 
     report = Path(result["human_readable_report"]).read_text(encoding="utf-8")
-    assert result["outcome"] == "degraded_consensus"
-    assert report.count("Effective target: `openai` / `gpt-5.6-sol`") == 4
-    assert "Outcome: **degraded_consensus**" in report
+    assert result["outcome"] == "provider_error"
+    assert "degraded_consensus" not in report
+    assert "Outcome: **provider_error**" in report
 
 
 def test_trace_recomputes_provider_context_and_request_hashes(tmp_path: Path) -> None:
@@ -587,6 +648,7 @@ def test_trace_accepts_legacy_prompt_lineage_after_role_prompts(tmp_path: Path) 
             "accepted_artifact_hash": None,
         },
     )
+    _downgrade_manifest_to_legacy(vault, "inq_test_legacy_prompt")
 
     trace = ModelInquiryService(vault).trace("inq_test_legacy_prompt")
     assert trace["turns"][0]["request_hash"] == request_hash
@@ -605,14 +667,14 @@ def test_trace_accepts_legacy_prompt_lineage_after_role_prompts(tmp_path: Path) 
         responses=[_credential_trace_response("draft")],
         calls=[],
     )
-    resumed = ModelInquiryRunner(
-        service,
-        {"fable": fable, "gpt_codex": gpt},
-    ).run("inq_test_legacy_prompt", max_rounds=1)
+    with pytest.raises(BuilderOpsValidationError, match="legacy.*read-only"):
+        ModelInquiryRunner(
+            service,
+            {"fable": fable, "gpt_codex": gpt},
+        ).run("inq_test_legacy_prompt", max_rounds=1)
 
-    assert resumed["outcome"] == "malformed_output"
-    assert [call["phase"] for call in fable.calls] == ["review"]
-    assert [call["phase"] for call in gpt.calls] == ["draft"]
+    assert not fable.calls
+    assert not gpt.calls
 
 
 def test_trace_rejects_forged_canonical_run_terminal_receipt(tmp_path: Path) -> None:
@@ -710,7 +772,10 @@ def test_trace_rejects_forged_canonical_run_terminal_receipt(tmp_path: Path) -> 
         / "inquiry-run-terminal.json"
     )
     exact_path.write_text(json.dumps(exact), encoding="utf-8")
-    with pytest.raises(BuilderOpsValidationError, match="invalid round_index"):
+    with pytest.raises(
+        BuilderOpsValidationError,
+        match="single-target inquiry cannot contain a consensus terminal",
+    ):
         exact_service.trace("inq_test_false_consensus")
 
     failure_vault = tmp_path / "shared-vault-false-failure"
