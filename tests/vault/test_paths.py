@@ -11,8 +11,10 @@ from app.vault.paths import (
     VaultPathResolutionError,
     VaultPathResolver,
     get_vault_inbox_dir_rel,
+    get_vault_sources_dir_rel,
     get_vault_runtime_dir_rel,
     get_vault_system_dir_rel,
+    resolve_vault_sources_dir_rel,
     resolve_vault_system_dir_rel_or_default,
 )
 
@@ -71,6 +73,7 @@ def _write_settings(
     inbox: str,
     runtime: str,
     system: str,
+    sources: str | None = None,
     include_paths: bool = True,
     include_top_level: bool = False,
 ) -> None:
@@ -95,6 +98,8 @@ def _write_settings(
                 f"  system_dir_rel: {system}",
             ]
         )
+        if sources is not None:
+            lines.append(f"  sources_dir_rel: {sources!r}")
     if include_top_level:
         lines.extend(
             [
@@ -206,6 +211,46 @@ def test_paths_env_overrides_settings(monkeypatch, tmp_path: Path) -> None:
     assert get_vault_inbox_dir_rel(tmp_path) == "EnvInbox"
     assert get_vault_runtime_dir_rel(tmp_path) == "EnvRuntime"
     assert get_vault_system_dir_rel(tmp_path) == "EnvSystem"
+
+
+def test_sources_dir_rel_resolves_env_settings_and_default(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.delenv("VAULT_SOURCES_DIR_REL", raising=False)
+
+    assert get_vault_sources_dir_rel(tmp_path) == "Sources"
+
+    _write_settings(
+        tmp_path,
+        inbox="Inbox",
+        runtime="System/Runtime",
+        system="System",
+        sources="ConfiguredSources",
+    )
+    assert get_vault_sources_dir_rel(tmp_path) == "ConfiguredSources"
+
+    monkeypatch.setenv("VAULT_SOURCES_DIR_REL", "EnvSources")
+    assert get_vault_sources_dir_rel(tmp_path) == "EnvSources"
+
+
+def test_sources_dir_rel_rejects_unsafe_values(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    for unsafe in ("", "/tmp/escape", "../outside", "Sources/../outside", "Sources\\nested"):
+        monkeypatch.setenv("VAULT_SOURCES_DIR_REL", unsafe)
+        with pytest.raises(ValueError, match="sources_dir_rel"):
+            resolve_vault_sources_dir_rel(tmp_path)
+
+    monkeypatch.delenv("VAULT_SOURCES_DIR_REL")
+    _write_settings(
+        tmp_path,
+        inbox="Inbox",
+        runtime="System/Runtime",
+        system="System",
+        sources="",
+    )
+    with pytest.raises(ValueError, match="sources_dir_rel"):
+        resolve_vault_sources_dir_rel(tmp_path)
 
 
 def test_paths_use_at_settings_when_present(monkeypatch, tmp_path: Path) -> None:

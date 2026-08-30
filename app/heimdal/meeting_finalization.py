@@ -68,6 +68,7 @@ from app.instance.scalar_binding_runtime import resolve_scalar_binding_runtime
 from app.knowledge.write_ops import create_candidate_note_once
 from app.outbox.events import INDEX_OUTBOX_PATH
 from app.services import outbox as outbox_service
+from app.vault.paths import get_vault_sources_dir_rel
 
 logger = logging.getLogger(__name__)
 
@@ -146,8 +147,13 @@ def _parse_ts(value: Any) -> datetime:
     return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
 
 
-def meetings_dir_rel() -> str:
-    return (os.environ.get(_MEETINGS_DIR_ENV) or "").strip() or MEETINGS_DIR_DEFAULT
+def meetings_dir_rel(vault_root: Path | None = None) -> str:
+    configured = (os.environ.get(_MEETINGS_DIR_ENV) or "").strip()
+    if configured:
+        return configured
+    if vault_root is not None:
+        return f"{get_vault_sources_dir_rel(vault_root)}/Meetings"
+    return MEETINGS_DIR_DEFAULT
 
 
 def resolve_vault_root() -> Optional[Path]:
@@ -739,7 +745,7 @@ def finalize_session(
     supersedes = previous.state_sha256 if previous else None
 
     short = state_sha256[:8]
-    base = f"{meetings_dir_rel()}/{_session_path_component(session_id)}"
+    base = f"{meetings_dir_rel(vault_root)}/{_session_path_component(session_id)}"
     artifact_refs = {
         "transcript": f"{base}/transcript-{short}.md",
         "analysis": f"{base}/analysis-{short}.md",
