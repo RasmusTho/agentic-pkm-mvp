@@ -38,7 +38,7 @@ from app.services.outbox import (
     self_owned_write_would_skip,
 )
 from app.services.vault_sync import delete_note
-from app.watcher.registry import db_outbox_required
+from app.watcher.registry import db_outbox_required, write_tick_diagnostics
 from app.settings.panel_actions import PanelActionMapping, load_panel_action_mappings
 from app.settings.watcher_settings import load_watcher_settings, resolve_auto_exec_enabled
 from app.objects import ObjectStore, canonical_event_identity, resolve_canonical_object_id
@@ -695,7 +695,9 @@ def run_watcher_tick(
     max_notes: int,
     force: bool,
     outbox_path: Path | None = None,
+    tick_log_path: Path | None = None,
 ) -> tuple[Summary, list[str]]:
+    tick_start = time.time()
     try:
         import app.agents.panel.agent as panel_agent
 
@@ -786,6 +788,19 @@ def run_watcher_tick(
                     else:
                         refreshed.pop(rel_path, None)
                 save_snapshot(watcher.snapshot_path, refreshed)
+        if tick_log_path is not None:
+            tick_summary = dict(summary)
+            tick_summary["tick_start_ts"] = datetime.fromtimestamp(
+                tick_start, tz=timezone.utc
+            ).isoformat().replace("+00:00", "Z")
+            tick_summary["tick_ms"] = max(int((time.time() - tick_start) * 1000), 0)
+            write_tick_diagnostics(
+                Path(tick_log_path),
+                tick_summary,
+                vault_root,
+                "vault_watcher_run",
+                scope_glob=os.environ.get("WATCHER_SCOPE_GLOB", ""),
+            )
         _emit_run_event(
             summary,
             vault_root=vault_root,
