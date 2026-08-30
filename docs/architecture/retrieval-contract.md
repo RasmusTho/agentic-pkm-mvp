@@ -93,6 +93,10 @@ in the content-free `denied_or_escalated_candidates` list.
    `allowed_operations` but also the canonical `source_roles_allowed`, `authority_states_allowed`, and
    `evidence_roles_allowed` filters from [cross-scope-flow](cross-scope-flow.md) — so a consumer can
    never apply an operation grant to the wrong source role, authority state, or evidence role.
+10. **Orientation is an intent-specific, derived projection after admission.** It may explain
+    ordering or a situational frame, but may not change a candidate's admissibility, evidence role,
+    citation permission, or durable metadata. Its producer precedence and degradation boundary are
+    owned by `docs/CONCEPTS/ORIENTATION_SIGNAL_PROJECTION_CONTRACT.md`.
 
 ## 4. Schema requirements
 
@@ -117,6 +121,7 @@ in the content-free `denied_or_escalated_candidates` list.
 - [Metadata bundle](metadata-bundle.md) — what each candidate carries
 - [Context envelope](context-envelope.md) — composes results/bundles into bounded agent context
 - [Existing RCA `ContextBundle`](../contracts/CONTEXT_BUNDLE.md)
+- [Orientation signal projection contract](../CONCEPTS/ORIENTATION_SIGNAL_PROJECTION_CONTRACT.md)
 - [Traceability matrix](traceability-matrix.md)
 - [Boundary charters](../boundaries/README.md) — [RCA](../boundaries/RCA.md), [GOV](../boundaries/GOV.md), [SIP](../boundaries/SIP.md), [WSP](../boundaries/WSP.md), [CAO](../boundaries/CAO.md), [OEF](../boundaries/OEF.md)
 - Schema: [`schemas/retrieval-result.schema.json`](../../schemas/retrieval-result.schema.json) · shared defs [`schemas/_defs.schema.json`](../../schemas/_defs.schema.json)
