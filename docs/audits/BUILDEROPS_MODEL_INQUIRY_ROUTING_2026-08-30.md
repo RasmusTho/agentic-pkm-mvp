@@ -114,41 +114,6 @@ Existing #5177 Phase 0/1 artifacts are reused. No duplicate routing epic or para
 parent is proposed. #3288 must receive a contract/readback update only when the bounded child has
 actually delivered the new acceptance mode.
 
-## Dependency-ordered implementation backlog
-
-The following is an advisory, reconciled backlog. It is not implementation authority until an
-accepted BuilderOps PromotionIntent names the target Issue/ref.
-
-1. **Model Inquiry profile and schema refactor**
-   - Define neutral perspective roles, explicit `acceptance_mode`, and a single configured target
-     profile for Sol; preserve a versioned compatibility reader for existing records.
-   - `Verify:` provider-free intent parsing, census resolution, role/profile binding, and legacy
-     records all fail closed or migrate deterministically.
-
-2. **Runner, trace, and promotion semantics**
-   - Add a truthful single-target terminal/readiness/promotion path; retain degraded consensus for
-     accidental fallback and retain consensus only for distinct effective targets.
-   - `Verify:` focused runner and promotion tests prove same-target deliberate acceptance, outage
-     fallback refusal, target fingerprint binding, and receipt round-trip.
-
-3. **Adapter and bridge consolidation**
-   - Remove role-to-provider/model branches from the operational bridge; invoke through the resolved
-     profile and make the subscription path use the same target/identity contract as API adapters.
-   - `Verify:` static checks find no concrete Model Inquiry model IDs in workflow/bridge code and
-     an actual Sol launch emits sanitized inquiry, turn, trace, readiness, and promotion receipts.
-
-4. **Shared Builder routing cleanup under #5177**
-   - Replace residual model-ID defaults (including the verification loop) with capability/profile
-     resolution and reconcile dispatch mappings with the canonical routing contract.
-   - `Verify:` routing tests cover capability-to-config resolution, no model-specific workflow
-     forks, and unchanged verification authority.
-
-5. **Live acceptance and closure**
-   - Re-read #3288, exact implementation head, CI, review, BuilderOps receipts, and current host
-     route; run one real Sol inquiry only after the host launcher ambiguity is reconciled.
-   - `Verify:` #3288's `Verify:` marker links the complete inquiry/trace/readiness/promotion receipt
-     chain and fresh verification-and-closure readback. No `Done` or closure claim before that.
-
 ## Open authority/dependency
 
 The prior real launcher attempt on the configured host ended with exit `0`, empty stdout, and a
