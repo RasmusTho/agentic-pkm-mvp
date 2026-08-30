@@ -91,6 +91,14 @@ class RegistryObservationStore:
                 )
                 """
             )
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS observation_metadata (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL
+                )
+                """
+            )
 
     def _connect(self) -> sqlite3.Connection:
         return sqlite3.connect(self.path, timeout=5.0)
@@ -114,6 +122,22 @@ class RegistryObservationStore:
             rows = connection.execute("SELECT path FROM file_observations").fetchall()
         return {str(row[0]) for row in rows}
 
+    def active_identity(self) -> str | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT value FROM observation_metadata WHERE key = 'identity'"
+            ).fetchone()
+        if row is None or not row[0]:
+            return None
+        return str(row[0])
+
+    def initialize_identity(self, identity: str) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                "INSERT OR IGNORE INTO observation_metadata(key, value) VALUES ('identity', ?)",
+                (identity,),
+            )
+
     def put(self, rel_path: str, entry: Mapping[str, Any], generation: int) -> None:
         encoded = json.dumps(dict(entry), sort_keys=True, separators=(",", ":"))
         with self._connect() as connection:
@@ -132,10 +156,54 @@ class RegistryObservationStore:
         self,
         upserts: Mapping[str, tuple[Mapping[str, Any], int]],
         deletes: Iterable[str],
+        *,
+        active_identity: str | None = None,
     ) -> None:
         """Commit one tick's observation changes as a single transaction."""
 
         with self._connect() as connection:
+            if active_identity is not None:
+                connection.execute(
+                    """
+                    INSERT INTO observation_metadata(key, value) VALUES ('identity', ?)
+                    ON CONFLICT(key) DO UPDATE SET value = excluded.value
+                    """,
+                    (active_identity,),
+                )
+            for rel_path in sorted(set(deletes)):
+                connection.execute(
+                    "DELETE FROM file_observations WHERE path = ?", (rel_path,)
+                )
+            for rel_path, (entry, generation) in sorted(upserts.items()):
+                encoded = json.dumps(dict(entry), sort_keys=True, separators=(",", ":"))
+                connection.execute(
+                    """
+                    INSERT INTO file_observations(path, entry_json, scan_generation)
+                    VALUES (?, ?, ?)
+                    ON CONFLICT(path) DO UPDATE SET
+                        entry_json = excluded.entry_json,
+                        scan_generation = excluded.scan_generation
+                    """,
+                    (rel_path, encoded, generation),
+                )
+
+    def replace_identity(
+        self,
+        active_identity: str,
+        upserts: Mapping[str, tuple[Mapping[str, Any], int]],
+        deletes: Iterable[str],
+    ) -> None:
+        """Switch the sidecar namespace and apply new observations atomically."""
+
+        with self._connect() as connection:
+            connection.execute("DELETE FROM file_observations")
+            connection.execute(
+                """
+                INSERT INTO observation_metadata(key, value) VALUES ('identity', ?)
+                ON CONFLICT(key) DO UPDATE SET value = excluded.value
+                """,
+                (active_identity,),
+            )
             for rel_path in sorted(set(deletes)):
                 connection.execute(
                     "DELETE FROM file_observations WHERE path = ?", (rel_path,)
@@ -218,6 +286,7 @@ class WatcherState:
     observation_status: str = "healthy-idle"
     continuation_reason: str | None = None
     observations_invalidated: bool = False
+    observation_identity: str | None = None
     _observation_store: RegistryObservationStore | None = field(
         default=None, repr=False, compare=False
     )
@@ -271,6 +340,11 @@ class WatcherState:
                 else None
             ),
             observations_invalidated=bool(data.get("observations_invalidated", False)),
+            observation_identity=(
+                str(data["observation_identity"])
+                if data.get("observation_identity")
+                else (str(data["scan_identity"]) if data.get("scan_identity") else None)
+            ),
         )
         observation_name = data.get("observation_store")
         if isinstance(observation_name, str) and observation_name:
@@ -286,6 +360,8 @@ class WatcherState:
         legacy_files = dict(state.files)
         state.files.clear()
         state._observation_store = store
+        if state.observation_identity is not None and store.active_identity() is None:
+            store.initialize_identity(state.observation_identity)
         if legacy_files:
             generation = max(state.scan_generation, 0)
             for rel_path, entry in legacy_files.items():
@@ -297,15 +373,32 @@ class WatcherState:
         path.parent.mkdir(parents=True, exist_ok=True)
         if self._observation_store is not None:
             if self.observations_invalidated:
-                # Identity invalidation is deferred until this same durable
-                # save boundary. Delivery rollback can therefore restore the
-                # flag without needing an in-memory copy of the sidecar.
-                self._observation_store.clear()
+                # Switch the sidecar namespace before publishing the new
+                # checkpoint. An older checkpoint sees the identity mismatch
+                # and hides the new rows if the process dies in between.
+                identity = self.observation_identity or self.scan_identity
+                if identity is None:
+                    raise RuntimeError("cannot invalidate observations without an identity")
+                self._observation_store.replace_identity(
+                    identity,
+                    self._pending_observations,
+                    self._pending_deletes,
+                )
                 self.observations_invalidated = False
-            if self._pending_observations or self._pending_deletes:
+                self._pending_observations.clear()
+                self._pending_deletes.clear()
+            identity = self.observation_identity or self.scan_identity
+            if (
+                (self._pending_observations or self._pending_deletes)
+                and not self.observations_invalidated
+            ) or (
+                identity is not None
+                and self._observation_store.active_identity() != identity
+            ):
                 self._observation_store.apply(
                     self._pending_observations,
                     self._pending_deletes,
+                    active_identity=identity,
                 )
                 self._pending_observations.clear()
                 self._pending_deletes.clear()
@@ -338,6 +431,7 @@ class WatcherState:
             "observation_status": self.observation_status,
             "continuation_reason": self.continuation_reason,
             "observations_invalidated": self.observations_invalidated,
+            "observation_identity": self.observation_identity,
             "observation_store": (
                 self._observation_store.path.name
                 if self._observation_store is not None
@@ -397,7 +491,10 @@ class WatcherState:
             pending = self._pending_observations.get(rel_path)
             if pending is not None:
                 return dict(pending[0])
-            if self.observations_invalidated:
+            if self.observations_invalidated or (
+                self.observation_identity is not None
+                and self._observation_store.active_identity() != self.observation_identity
+            ):
                 return None
             return self._observation_store.get(rel_path)
         entry = self.files.get(rel_path)
@@ -405,7 +502,10 @@ class WatcherState:
 
     def file_paths(self) -> set[str]:
         if self._observation_store is not None:
-            if self.observations_invalidated:
+            if self.observations_invalidated or (
+                self.observation_identity is not None
+                and self._observation_store.active_identity() != self.observation_identity
+            ):
                 return set(self._pending_observations) - self._pending_deletes
             return (
                 self._observation_store.paths()
@@ -499,7 +599,10 @@ class WatcherState:
 
     def paths_unseen_in_generation(self, scanned_paths: Iterable[str]) -> set[str]:
         if self._observation_store is not None:
-            if self.observations_invalidated:
+            if self.observations_invalidated or (
+                self.observation_identity is not None
+                and self._observation_store.active_identity() != self.observation_identity
+            ):
                 return set()
             unseen = self._observation_store.paths_not_seen_in(self.scan_generation)
             for rel_path, (_entry, generation) in self._pending_observations.items():

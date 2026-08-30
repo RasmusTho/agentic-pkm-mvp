@@ -1298,6 +1298,8 @@ def _begin_or_resume_scan(
         and (identity_had_error or preserve_generation_error)
         else identity
     )
+    if not identity_had_error and not preserve_generation_error:
+        state.observation_identity = state.scan_identity
     state.scan_root_index = 0
     state.scan_stack = []
     state.scan_scope_matched_files = 0
@@ -1967,6 +1969,7 @@ def _run_spec_tick(
         "scan_scope_matched_files": state.scan_scope_matched_files,
         "scan_generation_had_error": state.scan_generation_had_error,
         "continuation_reason": state.continuation_reason,
+        "observation_identity": state.observation_identity,
     }
     changed_entries, scanned_paths = _collect_changed_entries(
         cfg,
@@ -2139,6 +2142,7 @@ def _run_spec_tick(
         state.scan_scope_matched_files = int(scan_checkpoint["scan_scope_matched_files"])
         state.scan_generation_had_error = bool(scan_checkpoint["scan_generation_had_error"])
         state.continuation_reason = scan_checkpoint["continuation_reason"]  # type: ignore[assignment]
+        state.observation_identity = scan_checkpoint["observation_identity"]  # type: ignore[assignment]
         for name, active_state in active_states.items():
             active_state.restore_observations(observation_checkpoints[name])
         summary["scan_in_progress"] = state.scan_in_progress
@@ -2163,6 +2167,36 @@ def _run_spec_tick(
     scan_clean = (
         state.errors == errors_before and not state.scan_generation_had_error
     )
+    if scan_completed and scan_clean and not delivery_failed:
+        # Delivery and guardrail bookkeeping can take long enough for the
+        # selected vault to be replaced. Revalidate immediately before prune;
+        # the earlier check only authorizes deriving the deletion candidates.
+        final_identity_errors = state.errors
+        final_recheck_roots = _normalized_scan_roots(
+            cfg.vault_path,
+            scan_roots,
+            state=state,
+        )
+        final_identity = _scan_identity(
+            cfg.vault_path,
+            final_recheck_roots,
+            spec.scope_glob,
+            state=state,
+        )
+        if state.errors == final_identity_errors and state.scan_identity != final_identity:
+            _record_scan_error(state)
+            summary["scan_identity_changed_before_prune"] = True
+        elif state.errors > final_identity_errors:
+            summary["scan_identity_recheck_before_prune_failed"] = True
+        if state.errors != errors_before or state.scan_generation_had_error:
+            state.observation_status = "degraded"
+            summary["observation_status"] = state.observation_status
+        summary["errors"] = state.errors
+        summary["errors_in_tick"] = state.errors - errors_before
+        summary["scan_generation_had_error"] = state.scan_generation_had_error
+        scan_clean = (
+            state.errors == errors_before and not state.scan_generation_had_error
+        )
     if scan_completed and scan_clean and not delivery_failed:
         if state._observation_store is not None:
             state.prune_unseen_generation(

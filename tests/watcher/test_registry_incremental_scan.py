@@ -676,6 +676,67 @@ def test_identity_replacement_during_tick_blocks_reconciliation(
     assert summary["observation_status"] == "degraded"
 
 
+def test_identity_replacement_immediately_before_prune_blocks_reconciliation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cfg, spec, vault = _make_cfg(tmp_path, max_files=10)
+    _write_note(vault, "notes/current.md", body="current")
+    observations = RegistryObservationStore(tmp_path / "observations.sqlite3")
+    observations.put("notes/deleted.md", {"hash": "old"}, generation=0)
+    identities = iter(("identity", "identity", "replacement"))
+    monkeypatch.setattr(
+        registry, "_scan_identity", lambda *_args, **_kwargs: next(identities)
+    )
+    monkeypatch.setattr(registry, "_emit_watch_event", lambda **_: "trace-ok")
+    state = WatcherState(_observation_store=observations)
+
+    summary = registry._run_spec_tick(
+        cfg,
+        spec,
+        state,
+        now=1_700_009_450.0,
+        states={spec.name: state},
+        handled_settings_sources=set(),
+    )
+
+    assert summary["scan_identity_changed_before_prune"] is True
+    assert summary["observation_status"] == "degraded"
+    assert observations.get("notes/deleted.md") == {"hash": "old"}
+
+
+def test_identity_sidecar_switch_is_replayable_when_checkpoint_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    checkpoint = tmp_path / "watcher_state.json"
+    observations = RegistryObservationStore(tmp_path / "observations.sqlite3")
+    old_state = WatcherState(
+        _observation_store=observations,
+        scan_identity="old-identity",
+        observation_identity="old-identity",
+    )
+    old_state.update_file_state("notes/old.md", content_hash="old")
+    old_state.save(checkpoint)
+
+    state = WatcherState.load_registry(checkpoint, observations.path)
+    state.reset_observations_for_new_identity()
+    state.observation_identity = "new-identity"
+    state.scan_identity = "new-identity"
+    state.update_file_state("notes/new.md", content_hash="new")
+
+    def fail_replace(*_args: object, **_kwargs: object) -> None:
+        raise OSError("checkpoint unavailable")
+
+    monkeypatch.setattr(watcher_state.os, "replace", fail_replace)
+    with pytest.raises(OSError, match="checkpoint unavailable"):
+        state.save(checkpoint)
+
+    restarted = WatcherState.load_registry(checkpoint, observations.path)
+    assert restarted.file_entry("notes/old.md") is None
+    assert restarted.file_entry("notes/new.md") is None
+    assert observations.active_identity() == "new-identity"
+    assert observations.get("notes/new.md") == {"hash": "new"}
+
+
 def test_selected_vault_marker_is_not_treated_as_nested_boundary(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
