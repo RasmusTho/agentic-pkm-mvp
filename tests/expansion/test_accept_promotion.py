@@ -192,6 +192,25 @@ def test_unchecked_draft_is_never_materialized(tmp_path: Path) -> None:
     assert not [r for r in _outbox_records(outbox_path) if r["event"] == CREATE_ACCEPTED_EVENT]
 
 
+def test_checked_unrelated_task_does_not_authorize_acceptance(tmp_path: Path) -> None:
+    vault_root, draft_path, outbox_path = _stage_draft(tmp_path)
+    text = draft_path.read_text(encoding="utf-8")
+    draft_path.write_text("- [x] unrelated human task\n" + text, encoding="utf-8")
+
+    before = {p.relative_to(vault_root) for p in vault_root.rglob("*.md")}
+    with pytest.raises(DraftNotAcceptedError):
+        accept_draft(
+            draft_path,
+            vault_root=vault_root,
+            outbox_path=outbox_path,
+            destination="notes/should-not-exist.md",
+            write_guard=_allow_all_guard(),
+        )
+
+    assert {p.relative_to(vault_root) for p in vault_root.rglob("*.md")} == before
+    assert not (vault_root / "notes/should-not-exist.md").exists()
+
+
 # --- authority_transition / WriteGuard: gated by the named action -------------
 
 

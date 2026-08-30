@@ -21,6 +21,7 @@ from app.expansion.accept import DraftNotAcceptedError, accept_draft
 from app.expansion.connect import run_connect_pass
 from app.expansion.create import CreateRequest, OutputKind, SourceInput, run_create_pass
 from app.retrieval.capability import RetrievalRequest, retrieve
+from app.stores import get_vector_index
 from scripts.yaml_roundtrip import load_frontmatter
 
 
@@ -242,6 +243,12 @@ def test_connect_is_candidate_only_and_unchecked(uat_context: UatContext) -> Non
     )
     assert report.findings, "live test-channel retrieval produced no Connect candidate"
     assert all(finding.track.value == "propose" for finding in report.findings)
+    expected_pair = frozenset(source.object_id for source in uat_context.sources)
+    logical_pairs = {
+        frozenset(finding.note_uuid for finding in report.findings if finding.finding_id == finding_id)
+        for finding_id in {finding.finding_id for finding in report.findings}
+    }
+    assert expected_pair in logical_pairs, "Connect did not produce a finding for the selected source pair"
 
     changed = [path for path, original in before.items() if path.read_text(encoding="utf-8") != original]
     assert changed, "Connect did not materialize its governed candidate checkbox"
@@ -272,8 +279,14 @@ def test_create_stages_resolvable_sources_and_excludes_draft_from_retrieval(uat_
     assert frontmatter["authority_state"] == "proposal"
     assert frontmatter["sources"] == [source.object_id for source in uat_context.sources]
     assert "- [ ] Accept this draft" in draft.read_text(encoding="utf-8")
-    retrieval = retrieve(RetrievalRequest(query=uat_context.connect_query, k=20))
     draft_rel = draft.relative_to(uat_context.vault_root).as_posix()
+    indexed_drafts = {
+        str(row.get("source_ref") or "")
+        for row in get_vector_index().all_rows()
+        if str(row.get("source_ref") or "") in {draft_rel, str(draft), f"_system/{draft_rel}"}
+    }
+    assert not indexed_drafts, "test-channel durable index contains the staged draft"
+    retrieval = retrieve(RetrievalRequest(query=uat_context.connect_query, k=20))
     assert all(hit.source_ref != draft_rel for hit in retrieval.hits)
     uat_context.record(technical_phase="create_staged", draft_path=report.draft_path, create_receipt_id=report.receipt_id)
 

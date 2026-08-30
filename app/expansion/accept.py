@@ -82,6 +82,7 @@ ADR; ``docs/testing/invariant-tests.md`` names these invariants):
 from __future__ import annotations
 
 import hashlib
+import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -159,8 +160,21 @@ def _iso(dt: datetime) -> str:
 
 
 def _is_checked(text: str) -> bool:
-    """True iff the draft's acceptance checkbox has been checked by a human."""
-    return "- [x]" in text or "- [X]" in text
+    """True iff the dedicated expansion acceptance checkbox is checked.
+
+    Other checked task items may be human content inside an edited draft; they
+    must never authorize canonical materialization.  Match the exact checkbox
+    emitted by Create, at a line boundary, so only that governed control can
+    mint acceptance authority.
+    """
+    return (
+        re.search(
+            r"(?m)^[ \t]*-[ \t]*\[[xX]\][ \t]+Accept this draft into the vault "
+            r"\(draft [^)]+\)[ \t]*$",
+            text,
+        )
+        is not None
+    )
 
 
 @dataclass(frozen=True)
