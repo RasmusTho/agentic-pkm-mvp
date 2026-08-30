@@ -300,6 +300,11 @@ def test_scope_bound_promoted_recall_excludes_private_memory(tmp_path: Path) -> 
             "scope_id: 'invalid scope'\n",
             "Invalid-scope deployment posture",
         ),
+        (
+            "candidate-overlength-scope",
+            f"scope_id: {'s' * 129}\n",
+            "Overlength-scope deployment posture",
+        ),
     ):
         artifact_path = f"Agent Memory/{candidate_id}.md"
         (vault_root / artifact_path).write_text(
@@ -363,6 +368,7 @@ def test_scope_bound_promoted_recall_excludes_private_memory(tmp_path: Path) -> 
         "candidate-legacy",
         "candidate-domain-only",
         "candidate-invalid-scope",
+        "candidate-overlength-scope",
     }
     assert {item.applied_scope_id for item in unbound} == {None}
     unbound_by_id = {
@@ -373,6 +379,7 @@ def test_scope_bound_promoted_recall_excludes_private_memory(tmp_path: Path) -> 
         "candidate-legacy",
         "candidate-domain-only",
         "candidate-invalid-scope",
+        "candidate-overlength-scope",
     ):
         assert unbound_by_id[candidate_id].memory_scope_id is None
         assert unbound_by_id[candidate_id].promoted.candidate.scope_id is None

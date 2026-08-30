@@ -3,11 +3,13 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
-from dataclasses import dataclass
+from contextlib import contextmanager
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
+from app.agent_memory.candidate import validated_memory_scope_id
 from app.agent_memory.review_queue import ReviewDecision, ReviewEntry
 from app.vault.manager import VaultContext
 
@@ -62,6 +64,11 @@ class ReviewDecisionStore:
         channel = _safe_str(channel)
         if not channel:
             raise ReviewDecisionStoreError("channel is required")
+        if (
+            entry.scope_id is not None
+            and validated_memory_scope_id(entry.scope_id) is None
+        ):
+            raise ReviewDecisionStoreError("candidate scope is invalid")
 
         record = ReviewDecisionRecord(
             vault_id=vault_id,
@@ -90,6 +97,10 @@ class ReviewDecisionStore:
             ).fetchone()
             if existing_row is not None:
                 existing = _record_from_payload(json.loads(existing_row["payload"]))
+                if existing.terminal:
+                    raise ReviewDecisionStoreError(
+                        "terminal review decisions cannot be replaced"
+                    )
                 if existing.scope_id != record.scope_id:
                     raise ReviewDecisionStoreError(
                         "candidate scope cannot change across review decisions"
@@ -168,6 +179,7 @@ class ReviewDecisionStore:
         vault_context: VaultContext,
         channel: str,
         expected_scope_id: str | None | object = _UNSET,
+        expected_outcome: ReviewDecision | None = None,
     ) -> ReviewDecisionRecord:
         vault_id = _vault_id(vault_context)
         safe_channel = _safe_str(channel)
@@ -184,26 +196,17 @@ class ReviewDecisionStore:
             if row is None:
                 raise ReviewDecisionStoreError("cannot mark missing decision terminal")
             record = _record_from_payload(json.loads(row["payload"]))
+            if record.terminal:
+                raise ReviewDecisionStoreError("decision is already terminal")
             if expected_scope_id is not _UNSET and record.scope_id != expected_scope_id:
                 raise ReviewDecisionStoreError(
                     "persisted candidate scope changed before terminal transition"
                 )
-            terminal_record = ReviewDecisionRecord(
-                vault_id=record.vault_id,
-                channel=record.channel,
-                candidate_id=record.candidate_id,
-                outcome=record.outcome,
-                decided_by=record.decided_by,
-                decided_at=record.decided_at,
-                source_refs=record.source_refs,
-                scope_id=record.scope_id,
-                receipt_kind=record.receipt_kind,
-                terminal=True,
-                decision_notes=record.decision_notes,
-                revision_of=record.revision_of,
-                generated_by=record.generated_by,
-                derived_from=record.derived_from,
-            )
+            if expected_outcome is not None and record.outcome is not expected_outcome:
+                raise ReviewDecisionStoreError(
+                    "persisted decision outcome changed before terminal transition"
+                )
+            terminal_record = replace(record, terminal=True)
             conn.execute(
                 """
                 UPDATE agent_memory_review_decisions
@@ -223,6 +226,81 @@ class ReviewDecisionStore:
             )
             conn.commit()
         return terminal_record
+
+    @contextmanager
+    def promotion_materialization_transaction(
+        self,
+        candidate_id: str,
+        *,
+        vault_context: VaultContext,
+        channel: str,
+        expected_scope_id: str,
+    ) -> Iterator[ReviewDecisionRecord]:
+        """Serialize one promoted decision through artifact write and terminalization."""
+
+        vault_id = _vault_id(vault_context)
+        safe_channel = _safe_str(channel)
+        safe_candidate_id = _safe_str(candidate_id)
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                """
+                SELECT payload
+                FROM agent_memory_review_decisions
+                WHERE vault_id = ? AND channel = ? AND candidate_id = ?
+                """,
+                (vault_id, safe_channel, safe_candidate_id),
+            ).fetchone()
+            if row is None:
+                raise ReviewDecisionStoreError(
+                    "semantic memory materialization requires a persisted decision"
+                )
+            record = _record_from_payload(json.loads(row["payload"]))
+            if record.outcome is not ReviewDecision.PROMOTE:
+                raise ReviewDecisionStoreError(
+                    "semantic memory materialization requires a persisted promote decision"
+                )
+            if record.terminal:
+                raise ReviewDecisionStoreError(
+                    "semantic memory decision is already terminal"
+                )
+            if record.scope_id != expected_scope_id:
+                raise ReviewDecisionStoreError(
+                    "candidate.scope_id does not match the persisted review decision"
+                )
+
+            try:
+                yield record
+            except Exception:
+                conn.rollback()
+                raise
+
+            terminal_record = replace(record, terminal=True)
+            updated = conn.execute(
+                """
+                UPDATE agent_memory_review_decisions
+                SET terminal = 1, payload = ?
+                WHERE vault_id = ? AND channel = ? AND candidate_id = ?
+                  AND outcome = ? AND terminal = 0
+                """,
+                (
+                    json.dumps(
+                        _record_payload(terminal_record),
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    ),
+                    record.vault_id,
+                    record.channel,
+                    record.candidate_id,
+                    ReviewDecision.PROMOTE.value,
+                ),
+            )
+            if updated.rowcount != 1:
+                conn.rollback()
+                raise ReviewDecisionStoreError(
+                    "promote decision changed before terminal transition"
+                )
+            conn.commit()
 
     def _connect(self) -> sqlite3.Connection:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)

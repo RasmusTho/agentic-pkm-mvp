@@ -10,8 +10,11 @@ from uuid import uuid4
 
 import yaml
 
-from app.agent_memory.candidate import MemoryType
-from app.agent_memory.review_decision_store import ReviewDecisionStore
+from app.agent_memory.candidate import MemoryType, validated_memory_scope_id
+from app.agent_memory.review_decision_store import (
+    ReviewDecisionStore,
+    ReviewDecisionStoreError,
+)
 from app.agent_memory.review_queue import ReviewDecision, ReviewEntry, ReviewStatus
 from app.events.types import PROMOTION_TRANSITION_APPLIED
 from app.knowledge.write_ops import write_note_relative
@@ -55,6 +58,7 @@ def materialize_promoted_memory(
             entry.candidate_id,
             vault_context=vault_context,
             channel=channel,
+            expected_outcome=ReviewDecision.PROMOTE,
         )
         return MemoryMaterializationResult(
             status="not_semantic",
@@ -62,12 +66,7 @@ def materialize_promoted_memory(
             receipt_id=None,
             terminal=True,
         )
-    persisted_scope_id = _require_scope_binding(
-        entry,
-        decision_store=decision_store,
-        vault_context=vault_context,
-        channel=channel,
-    )
+    requested_scope_id = _require_scope_binding(entry)
 
     vault_root = _vault_root(vault_context)
     artifact_uuid = uuid4().hex
@@ -79,56 +78,65 @@ def materialize_promoted_memory(
     )
     trace_id = uuid4().hex
     try:
-        write_guard.assert_writes_allowed(MEMORY_MATERIALIZATION_ACTION)
-        write_note_relative(
-            artifact_path,
-            _render_memory_note(
-                entry,
-                artifact_uuid=artifact_uuid,
-                scope_id=persisted_scope_id,
-            ),
-            vault_root=vault_root,
-        )
-    except Exception as exc:
-        receipt_id = _append_promotion_receipt(
-            outbox_path,
-            entry=entry,
+        with decision_store.promotion_materialization_transaction(
+            entry.candidate_id,
             vault_context=vault_context,
             channel=channel,
-            artifact_uuid=artifact_uuid,
-            artifact_path=artifact_path,
-            trace_id=trace_id,
-            scope_id=persisted_scope_id,
-            status="failed",
-            error=str(exc),
-        )
-        raise MemoryMaterializationError(
-            f"memory materialization failed; receipt={receipt_id}"
-        ) from exc
+            expected_scope_id=requested_scope_id,
+        ) as persisted:
+            persisted_scope_id = persisted.scope_id
+            if persisted_scope_id is None:
+                raise MemoryMaterializationError(
+                    "persisted promote decision has no scope binding"
+                )
+            try:
+                write_guard.assert_writes_allowed(MEMORY_MATERIALIZATION_ACTION)
+                write_note_relative(
+                    artifact_path,
+                    _render_memory_note(
+                        entry,
+                        artifact_uuid=artifact_uuid,
+                        scope_id=persisted_scope_id,
+                    ),
+                    vault_root=vault_root,
+                )
+            except Exception as exc:
+                receipt_id = _append_promotion_receipt(
+                    outbox_path,
+                    entry=entry,
+                    vault_context=vault_context,
+                    channel=channel,
+                    artifact_uuid=artifact_uuid,
+                    artifact_path=artifact_path,
+                    trace_id=trace_id,
+                    scope_id=persisted_scope_id,
+                    status="failed",
+                    error=str(exc),
+                )
+                raise MemoryMaterializationError(
+                    f"memory materialization failed; receipt={receipt_id}"
+                ) from exc
 
-    receipt_id = _append_promotion_receipt(
-        outbox_path,
-        entry=entry,
-        vault_context=vault_context,
-        channel=channel,
-        artifact_uuid=artifact_uuid,
-        artifact_path=artifact_path,
-        trace_id=trace_id,
-        scope_id=persisted_scope_id,
-        status="applied",
-    )
-    result = query_promotion_receipts(
-        vault_root=vault_root,
-        outbox_path=outbox_path or DEFAULT_MATERIALIZATION_RECEIPTS_PATH,
-    )
-    if not any(row.receipt_id == receipt_id for row in result.rows):
-        raise MemoryMaterializationError("materialization receipt was not queryable")
-    decision_store.mark_terminal(
-        entry.candidate_id,
-        vault_context=vault_context,
-        channel=channel,
-        expected_scope_id=persisted_scope_id,
-    )
+            receipt_id = _append_promotion_receipt(
+                outbox_path,
+                entry=entry,
+                vault_context=vault_context,
+                channel=channel,
+                artifact_uuid=artifact_uuid,
+                artifact_path=artifact_path,
+                trace_id=trace_id,
+                scope_id=persisted_scope_id,
+                status="applied",
+            )
+            result = query_promotion_receipts(
+                vault_root=vault_root,
+                outbox_path=outbox_path or DEFAULT_MATERIALIZATION_RECEIPTS_PATH,
+            )
+            if not any(row.receipt_id == receipt_id for row in result.rows):
+                raise MemoryMaterializationError("materialization receipt was not queryable")
+    except ReviewDecisionStoreError as exc:
+        raise MemoryMaterializationError(str(exc)) from exc
+
     return MemoryMaterializationResult(
         status="materialized",
         artifact_path=artifact_path,
@@ -142,33 +150,13 @@ def _require_promoted(entry: ReviewEntry) -> None:
         raise MemoryMaterializationError("entry must carry a promote decision")
 
 
-def _require_scope_binding(
-    entry: ReviewEntry,
-    *,
-    decision_store: ReviewDecisionStore,
-    vault_context: VaultContext,
-    channel: str,
-) -> str:
-    if entry.scope_id is None:
+def _require_scope_binding(entry: ReviewEntry) -> str:
+    scope_id = validated_memory_scope_id(entry.scope_id)
+    if scope_id is None:
         raise MemoryMaterializationError(
-            "semantic memory materialization requires candidate.scope_id"
+            "semantic memory materialization requires a valid candidate.scope_id"
         )
-    persisted = decision_store.get_decision(
-        entry.candidate_id,
-        vault_context=vault_context,
-        channel=channel,
-    )
-    if persisted is None or persisted.outcome is not ReviewDecision.PROMOTE:
-        raise MemoryMaterializationError(
-            "semantic memory materialization requires a persisted promote decision"
-        )
-    if persisted.terminal:
-        raise MemoryMaterializationError("semantic memory decision is already terminal")
-    if persisted.scope_id != entry.scope_id:
-        raise MemoryMaterializationError(
-            "candidate.scope_id does not match the persisted review decision"
-        )
-    return persisted.scope_id
+    return scope_id
 
 
 def _vault_root(context: VaultContext) -> Path:

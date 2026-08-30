@@ -189,6 +189,82 @@ def test_materialization_requires_entry_scope_to_match_persisted_decision(
     assert record.terminal is False
 
 
+def test_materialization_refuses_intervening_same_scope_rejection(tmp_path: Path) -> None:
+    vault = _vault(tmp_path / "vault")
+    Path(vault.active_vault_path).mkdir()
+    store = ReviewDecisionStore(tmp_path / "review_decisions.sqlite3")
+    outbox = tmp_path / "outbox.jsonl"
+    candidate = _candidate(candidate_id="candidate-revoked")
+    stale_promote = _promoted(candidate, store=store, vault=vault)
+
+    replacement_queue = MemoryCandidateReviewQueue()
+    replacement_queue.enqueue(candidate)
+    rejection = replacement_queue.decide(
+        candidate.candidate_id,
+        ReviewDecision.REJECT,
+        decided_by="companion-ui:reviewer",
+        notes="Promotion authority revoked before materialization.",
+    )
+    store.record_decision(rejection, vault_context=vault, channel="test")
+
+    with pytest.raises(MemoryMaterializationError, match="persisted promote decision"):
+        materialize_promoted_memory(
+            stale_promote,
+            vault_context=vault,
+            channel="test",
+            decision_store=store,
+            write_guard=_allowing_guard(),
+            outbox_path=outbox,
+        )
+
+    assert not list(Path(vault.active_vault_path).rglob("*.md"))
+    assert not outbox.exists()
+    record = store.get_decision(
+        candidate.candidate_id, vault_context=vault, channel="test"
+    )
+    assert record is not None
+    assert record.outcome is ReviewDecision.REJECT
+    assert record.terminal is True
+
+
+def test_duplicate_materializer_refuses_after_terminal_success(tmp_path: Path) -> None:
+    vault = _vault(tmp_path / "vault")
+    Path(vault.active_vault_path).mkdir()
+    store = ReviewDecisionStore(tmp_path / "review_decisions.sqlite3")
+    outbox = tmp_path / "outbox.jsonl"
+    entry = _promoted(
+        _candidate(candidate_id="candidate-single-writer"),
+        store=store,
+        vault=vault,
+    )
+
+    first = materialize_promoted_memory(
+        entry,
+        vault_context=vault,
+        channel="test",
+        decision_store=store,
+        write_guard=_allowing_guard(),
+        outbox_path=outbox,
+    )
+    with pytest.raises(MemoryMaterializationError, match="already terminal"):
+        materialize_promoted_memory(
+            entry,
+            vault_context=vault,
+            channel="test",
+            decision_store=store,
+            write_guard=_allowing_guard(),
+            outbox_path=outbox,
+        )
+
+    assert first.artifact_path is not None
+    assert len(list(Path(vault.active_vault_path).rglob("*.md"))) == 1
+    receipts = query_promotion_receipts(
+        vault_root=Path(vault.active_vault_path),
+        outbox_path=outbox,
+    )
+    assert [row.outcome_status for row in receipts.rows] == ["applied"]
+
+
 def test_blocked_materialization_keeps_promotion_actionable(tmp_path: Path) -> None:
     vault = _vault(tmp_path / "vault")
     Path(vault.active_vault_path).mkdir()

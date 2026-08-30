@@ -44,10 +44,13 @@ review while no artifact exists. (Non-semantic promotions need no artifact and a
 decision.)
 
 **Scope producer invariant.** A semantic candidate must carry an explicit `scope_id` before
-materialization. The materializer refuses a missing binding before any artifact or transition
-receipt is written, persists the same binding in the note and receipt on success, and leaves legacy
-unscoped artifacts unchanged. Bound recall denies unscoped artifacts fail closed; unbound recall
-retains its existing behavior.
+materialization. The materializer refuses a missing or invalid binding before any artifact or
+transition receipt is written. It serializes the persisted `PROMOTE` decision from nonterminal state
+through note and receipt creation to the terminal transition, requiring the in-memory candidate and
+persisted decision to carry the same immutable scope. This allows one successful materializer and
+prevents a revoked, repeated, or competing materializer from writing. The persisted binding is
+written to both note and receipt; legacy unscoped artifacts remain unchanged. Bound recall denies
+unscoped artifacts fail closed; unbound recall retains its existing behavior.
 
 ## Concretely
 
@@ -87,10 +90,14 @@ receipt → durable artifact, never silent persistence") and the writing-surface
 - [ ] The materialized note carries provenance and an agent-promoted label and does not overwrite an
   existing human-authored note.
   Verify: `tests/agent_memory/test_memory_materialization.py::test_materialized_note_preserves_provenance_and_human_authorship`
-- [ ] Semantic materialization refuses a missing candidate scope before writing, while successful
-  materialization persists that scope into the artifact and receipt.
+- [ ] Semantic materialization refuses a missing or invalid candidate scope before writing, while
+  successful materialization persists the immutable decision scope into the artifact and receipt.
   Verify: `tests/agent_memory/test_memory_materialization.py::test_semantic_materialization_requires_scope_before_write`
   Verify: `tests/agent_memory/test_materialization_live_path.py::test_accept_materializes_and_marks_terminal`
+- [ ] Materialization requires a current nonterminal `PROMOTE` for the same persisted scope and
+  permits only one successful materializer.
+  Verify: `tests/agent_memory/test_memory_materialization.py::test_materialization_refuses_intervening_same_scope_rejection`
+  Verify: `tests/agent_memory/test_memory_materialization.py::test_duplicate_materializer_refuses_after_terminal_success`
 - [ ] Non-semantic promotions (episodic/working/preference) do not materialize a vault artifact.
   Verify: `tests/agent_memory/test_memory_materialization.py::test_non_semantic_promotion_does_not_materialize`
 
