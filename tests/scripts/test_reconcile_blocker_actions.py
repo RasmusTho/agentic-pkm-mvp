@@ -137,6 +137,14 @@ def test_intake_parses_real_comment_receipt_and_rejects_invalid_placeholder() ->
 
 def test_receipt_parser_rejects_noncanonical_owner() -> None:
     receipt = receipt_for_action("action:wait-dependency")
-    receipt["owner"] = "builder-system-maintenance"
+    for owner in ("", "builder-system-maintenance", "external:", "external:bad name", "external:UPPER"):
+        receipt["owner"] = owner
+        body = "```yaml\n" + "\n".join(f"{key}: {value if key != 'dependency_refs' else '[]'}" for key, value in receipt.items()) + "\n```"
+        assert parse_blocker_action_receipt({"body": body}) is None
+
+
+def test_receipt_parser_accepts_canonical_external_owner() -> None:
+    receipt = receipt_for_action("action:wait-dependency")
+    receipt["owner"] = "external:github-bot_1"
     body = "```yaml\n" + "\n".join(f"{key}: {value if key != 'dependency_refs' else '[]'}" for key, value in receipt.items()) + "\n```"
-    assert parse_blocker_action_receipt({"body": body}) is None
+    assert parse_blocker_action_receipt({"body": body}) == receipt

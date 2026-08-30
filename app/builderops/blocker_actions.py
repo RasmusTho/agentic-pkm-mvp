@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
+import re
 from typing import Any, Iterable
 
 BLOCKED_ACTIONS = frozenset({
@@ -29,6 +30,7 @@ LEGACY_HUMAN_ACTIONS = {
 }
 
 RECEIPT_FIELDS = ("action", "owner", "next_action", "unblocks_when", "dependency_refs", "review_at", "last_verified_at")
+_EXTERNAL_OWNER = re.compile(r"external:[a-z0-9][a-z0-9._-]*\Z")
 
 
 def _valid_timestamp(value: object) -> bool:
@@ -42,7 +44,9 @@ def _valid_timestamp(value: object) -> bool:
 
 
 def _valid_owner(value: object) -> bool:
-    return value in {"builder", "owner"} or (isinstance(value, str) and value.startswith("external:") and len(value) > len("external:"))
+    return value in {"builder", "owner"} or (
+        isinstance(value, str) and _EXTERNAL_OWNER.fullmatch(value) is not None
+    )
 
 
 def parse_blocker_action_receipt(comment: object) -> dict[str, object] | None:

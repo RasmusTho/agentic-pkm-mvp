@@ -10,6 +10,10 @@ You are invoked at the end of `verification-and-closure`, after a PR has merged.
 You act on the answer. You do not ask the user to classify, attest, or unblock.
 This is a cold-path maintenance check, not a hot-path implementation step.
 
+If a post-merge follow-up is ever classified as `agent:blocked` or `agent:needs-human`, apply
+`_shared/BLOCKER_ACTION_CONTRACT.md`: use one compatible canonical `action:*` label and a valid
+`blocker_action.v1` receipt. This skill does not assign either lifecycle by default.
+
 ## The one question
 
 For the merged PR, read:

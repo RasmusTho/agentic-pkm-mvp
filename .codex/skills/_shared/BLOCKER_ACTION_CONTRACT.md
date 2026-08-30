@@ -18,6 +18,10 @@ review_at: null
 last_verified_at: RFC3339 timestamp
 ```
 
+`owner` is exactly `builder`, `owner`, or `external:<name>`, where `<name>` is a non-empty lowercase
+identifier matching `[a-z0-9][a-z0-9._-]*`. Consumers reject every other value rather than projecting
+unverified action evidence.
+
 Open `agent:blocked` uses exactly one blocked `action:*`; open `agent:needs-human` uses exactly
 one human `action:*`. Before `agent:ready`, re-read the evidence, remove the action label, and do
 not infer a cause from a legacy coarse state. On terminal closure remove every `action:*` label.

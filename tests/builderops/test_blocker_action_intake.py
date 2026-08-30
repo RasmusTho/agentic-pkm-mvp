@@ -1,3 +1,7 @@
+import json
+import subprocess
+import sys
+
 from app.builderops.blocker_actions import intake, receipt_for_action
 
 
@@ -19,3 +23,29 @@ def test_report_surface_is_rest_oriented_and_read_only() -> None:
     script = (Path(__file__).resolve().parents[2] / "scripts/report_blocker_actions.py").read_text()
     assert '"gh", "api"' in script
     assert "claim" not in script.lower().replace("read-only", "")
+
+
+def test_report_entrypoint_rejects_noncanonical_owner_receipts(monkeypatch, capsys) -> None:
+    from scripts import report_blocker_actions
+
+    invalid = """```yaml
+receipt: blocker_action.v1
+action: action:wait-dependency
+owner: builder-system-maintenance
+next_action: wait
+unblocks_when: dependency closes
+dependency_refs: []
+review_at: null
+last_verified_at: 2026-08-30T11:00:00Z
+```"""
+    responses = iter([
+        subprocess.CompletedProcess([], 0, json.dumps([{"number": 71, "state": "open", "labels": [{"name": "agent:blocked"}, {"name": "action:wait-dependency"}]}]), ""),
+        subprocess.CompletedProcess([], 0, json.dumps([{"body": invalid}]), ""),
+    ])
+    monkeypatch.setattr(report_blocker_actions.subprocess, "run", lambda *args, **kwargs: next(responses))
+    monkeypatch.setattr(sys, "argv", ["report_blocker_actions.py", "--repo", "o/r"])
+
+    assert report_blocker_actions.main() == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["drift"][0]["owner"] is None
+    assert payload["drift"][0]["next_action"] is None

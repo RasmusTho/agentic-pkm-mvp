@@ -6,7 +6,7 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 def test_operational_skills_reference_canonical_blocker_action_contract() -> None:
-    for skill in ("issue-to-code", "issue-maintenance-change-control", "owner-decision-brief", "deliver-issue-set", "feature-breakdown", "bug-to-issue", "docs-to-issue", "learning-to-issue", "verification-and-closure"):
+    for skill in ("issue-to-code", "issue-maintenance-change-control", "owner-decision-brief", "deliver-issue-set", "feature-breakdown", "bug-to-issue", "docs-to-issue", "learning-to-issue", "post-merge-owner-doc", "verification-and-closure"):
         text = (ROOT / ".codex" / "skills" / skill / "SKILL.md").read_text()
         assert "BLOCKER_ACTION_CONTRACT.md" in text
 
