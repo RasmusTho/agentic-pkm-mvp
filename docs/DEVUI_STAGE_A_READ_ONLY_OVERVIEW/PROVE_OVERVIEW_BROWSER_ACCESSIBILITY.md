@@ -30,17 +30,21 @@ Produce the hostile-state browser and accessibility receipt required before owne
 Parent: #4741
 
 Produce the exact-SHA browser/accessibility receipt required before an owner pilot, without repairing
-application behavior outside the shell issue's bounded scope.
+application behavior outside the shell issue's bounded scope. The proof consumes one frozen final
+post-merge `main` SHA `M` containing delivered #4835 and #4836; it is not a production or owner-
+acceptance receipt.
 
 ## Scope
 
-- Run the complete hostile source-state and identity-continuity matrix at one exact SHA.
+- Run the complete hostile source-state and identity-continuity matrix at one exact final-main SHA.
 - Prove responsive, keyboard, screen-reader, print, JavaScript-off, and no-effect behavior.
 - Archive the bounded receipt/screenshots; route discovered defects to separate repair Issues.
-- Keep `devui-overview-browser-accessibility.v1` self-describing for that one exact tested run. It
-  carries no candidate/final linkage and never references a different browser receipt or artifact.
-  The downstream `devui-stage-a-read-only-owner-pilot.v1` ledger, not this receipt, later binds the
-  pre-merge #4836 candidate artifact and the separate final-M #4748 artifact.
+- Authenticate the merged #4833 workflow run, artifact identity/digest, manifest, exact five-node
+  JUnit inventory, browser URL/network/status observations, traces, screenshots, and per-node
+  assertion inventory in one wrapper receipt, `devui-stage-a-exact-sha-state-matrix.v1`.
+- Keep the source `devui-overview-browser-accessibility.v1` receipt self-describing for its own
+  exact tested run. The downstream `devui-stage-a-read-only-owner-pilot.v1` ledger later binds
+  this final-M artifact to independent production evidence; neither receipt claims deployment.
 
 ## What This Task Does
 
@@ -73,7 +77,7 @@ Static happy-path screenshots cannot prove source-state honesty or access to the
 - Derived/rebuildable impact: validates the rebuildable shell
 - Human knowledge impact: none
 - Memory impact: none
-- Retrieval/context impact: fixed local source fixtures
+- Retrieval/context impact: exact-source browser artifact and closed-set node inventory
 - Sync/deployment impact: CI/browser validation only
 - External boundary impact: none
 - New or changed contract: exact-SHA browser/accessibility receipt
@@ -89,29 +93,35 @@ separately and blocks this proof; this validation task does not absorb its repai
 
 ## Acceptance Criteria
 
-- [ ] Desktop, narrow, 200% zoom, keyboard, screen-reader naming/focus order, print, and
-      JavaScript-off journeys pass at one exact SHA.
-  - Verify: `tests/companion_ui/test_devui_overview_journeys.py :: test_overview_accessibility_and_layout_matrix`
-- [ ] Complete-empty, partial, stale, missing, refused, unsupported, unlinked, many-at-once, and
-      mixed-provider fixtures retain distinct source semantics.
-  - Verify: `tests/companion_ui/test_devui_overview_journeys.py :: test_overview_source_state_matrix`
-- [ ] One selected subject preserves identical zone, source, evidence, limitation, and typed-root
-      identity from glance through inspect and navigation.
-  - Verify: `tests/companion_ui/test_devui_overview_journeys.py :: test_overview_identity_survives_all_information_depths`
-- [ ] Hostile browser instrumentation proves no write request, credential, local/session storage,
-      IndexedDB, service-worker cache, or browser classification.
-  - Verify: `tests/companion_ui/test_devui_overview_journeys.py :: test_overview_browser_has_no_effect_or_reclassification`
-- [ ] Receipt names exact SHA, fixture versions, token SHA-256, screenshots, accessibility results,
-      failures, and unresolved visual questions.
-  - Verify: runtime receipt: devui-overview-browser-accessibility.v1
+- [ ] The exact five required #4833 nodeids execute once each at the frozen final-main `M`; the
+      required, collected, and executed sets are equal, with no missing, renamed, duplicate,
+      skipped, failed, or ambiguous entry.
+  - Verify: `devui-stage-a-exact-sha-state-matrix.v1`, exact five-node JUnit/manifest inventory
+- [ ] The real gateway Overview → server-owned visual Focus → return journey preserves subject and
+      evidence continuity; browser interception, raw JSON visual substitution, and browser-built
+      navigation are absent.
+  - Verify: `tests/companion_ui/test_devui_overview_journeys.py::test_real_gateway_overview_focus_return_journey_preserves_subject_context_and_sha`
+- [ ] Focus refusal, timeout, 404, HTTP/status failure, malformed response, request failure, page
+      error, and console error paths render honest visual error state without alternate probes.
+  - Verify: `tests/companion_ui/test_devui_overview_journeys.py::test_focus_api_failure_renders_honest_visual_error_without_url_probing`
+- [ ] Exact Overview/Focus selectors, semantic/ARIA bindings, server identity, and transport-only
+      `loading|loaded|error` state remain frozen; the full source-state matrix is not reclassified.
+  - Verify: exact selector/state nodeids in `devui-stage-a-exact-sha-state-matrix.v1`
+- [ ] Desktop, narrow, 200% zoom, keyboard, screen-reader/focus order, print, JavaScript-off,
+      no-effect, no-egress, trace, screenshot, and checksum evidence pass with empty failure and
+      unresolved-question lists.
+  - Verify: `devui-stage-a-exact-sha-state-matrix.v1`
 
 ## How to Verify (Pre-Merge)
 
-- Run the complete Overview browser module and exact focused API/producer regression modules.
-- Attach deterministic screenshot and accessibility artifacts to the exact-head receipt.
+- Authenticate final `main` `M` and the merged #4833 workflow before dispatch.
+- Dispatch #4833 against exactly `M`; reject any artifact whose closed-set required node inventory
+  differs from the five nodeids defined by #4748.
+- Independently re-download and hash the artifact, then validate JUnit, receipt, manifest, trace,
+  screenshot, URL/network/status, page/console-error, and per-node assertion inventories together.
 - Run `git diff --check`.
-- Do not add a candidate-receipt reference to the #4748 receipt. If a future owner pilot uses this
-  evidence, it must bind this run's archived artifact through its own ledger contract.
+- Do not commit the wrapper receipt. Post it on #4748. A future owner pilot must bind this run's
+  archived artifact through its own ledger contract and may not infer production acceptance.
 
 ## Suggested Validation
 
@@ -138,5 +148,5 @@ separately and blocks this proof; this validation task does not absorb its repai
 
 ## Related GitHub Issues
 
-Filed as blocked child [#4748](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4748) on an exact
-merged #4747 shell SHA.
+Filed as [#4748](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4748); delivered and closed
+after the authenticated `devui-stage-a-exact-sha-state-matrix.v1` receipt at final-main `M`.
