@@ -122,14 +122,19 @@ alone.
 
 The final `devui-stage-a-read-only-owner-pilot.v1` ledger is the only cross-run binding authority.
 It records the separate final-M #4748 browser artifact and the independent production evidence; it
-does not revive or require a pre-merge candidate artifact. For each artifact it records its exact Git SHA, its
-canonical archive manifest, and `evidence_artifact_sha256`: the SHA-256 of a canonical UTF-8 JSON
-object mapping every archived relative artifact path to that file's SHA-256, with keys sorted
-lexicographically and no trailing newline. The object includes the strict browser receipt, JUnit
-result, Playwright trace, and every screenshot, but not its own rendered manifest. Missing files,
-duplicate paths, a malformed digest, or a digest that does not recompute from the archived files
-fail the pilot closed. This identity distinguishes materially different reruns at one Git SHA
-without adding any cross-run field to `devui-overview-browser-accessibility.v1`.
+does not revive or require a pre-merge candidate artifact. Each evidence entry records its exact
+Git SHA, its own canonical archive manifest, and `evidence_artifact_sha256`: the SHA-256 of a
+canonical UTF-8 JSON object mapping every archived relative artifact path to that entry's file
+SHA-256, with keys sorted lexicographically and no trailing newline. The `browser` entry inventory
+is exactly the strict browser receipt, JUnit result, Playwright trace, and every screenshot, but not
+its own rendered manifest. The `production` entry has a separate inventory of the applicable
+VM-102 qualification/deployment/health receipts, receipt-sourced gateway and API identity
+observations, owner-walkthrough result, and any explicitly used disposable-state receipt; it never
+imports browser-bundle files. Each inventory is enumerated by its own manifest, has unique relative
+paths, and excludes the rendered manifest that contains its digest. Missing files, duplicate paths,
+a malformed digest, or a digest that does not recompute from that entry's archived files fail the
+pilot closed. This identity distinguishes materially different reruns at one Git SHA without
+adding any cross-run field to `devui-overview-browser-accessibility.v1`.
 
 ## Acceptance Criteria
 
@@ -141,8 +146,11 @@ without adding any cross-run field to `devui-overview-browser-accessibility.v1`.
       conditions, elapsed reconstruction steps, and pass/fail disposition.
   - Verify: runtime receipt: devui-stage-a-read-only-owner-pilot.v1
 - [ ] The ledger binds the distinct final-M #4748 browser evidence and production evidence. Each
-      entry has a recomputable `evidence_artifact_sha256` and fails closed when its archived artifact
-      set is missing or mismatched; the strict #4748 receipt does not reference a candidate receipt.
+      entry has a recomputable `evidence_artifact_sha256` over its own canonical inventory: the
+      browser entry contains only browser-bundle artifacts, while the production entry contains
+      only production/owner evidence and any used disposable-state receipt. Each entry fails closed
+      when its archived artifact set is missing or mismatched; the strict #4748 receipt does not
+      reference a candidate receipt.
   - Verify: runtime receipt: devui-stage-a-read-only-owner-pilot.v1
 - [ ] The owner identifies every degraded/withdrawn state without reading it as empty, healthy,
       decided, delivered, or ready.
