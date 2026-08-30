@@ -30,7 +30,12 @@ from app.dispatcher.verified_merge import (
     prepare_verified_merge,
 )
 from tests.dispatcher.builderops_verification_fakes import FakeBuilderOpsClient
-from tests.dispatcher.verification_helpers import HEAD, REPO, request
+from tests.dispatcher.verification_helpers import (
+    HEAD,
+    REPO,
+    admitted_verified_attempt_receipt,
+    request,
+)
 
 BASE = "b" * 40
 MECHANISM_PATH_SHA = hashlib.sha256(
@@ -357,8 +362,14 @@ def claimed_run(
         "gpt-5.6-sol",
         "high",
         {"head_sha": HEAD},
-        "passed",
-        {"head_sha": HEAD},
+        "launched",
+        admitted_verified_attempt_receipt(
+            ledger,
+            run.run_id,
+            "verification-session",
+            holder="verification-host",
+            lease_id=claimed.lease_id,
+        ),
         holder="verification-host",
         lease_id=claimed.lease_id,
         idempotency_key="pre-merge-verification",
@@ -429,8 +440,14 @@ def test_merge_ready_containment_matches_durable_verification_attempt() -> None:
         "gpt-5.6-sol",
         "high",
         {"head_sha": HEAD},
-        "passed",
-        {"head_sha": HEAD},
+            "launched",
+            admitted_verified_attempt_receipt(
+                ledger,
+                run.run_id,
+                "verification-session",
+                holder="verification-host",
+                lease_id=claimed.lease_id,
+            ),
         holder="verification-host",
         lease_id=claimed.lease_id,
         idempotency_key="contained-verification",

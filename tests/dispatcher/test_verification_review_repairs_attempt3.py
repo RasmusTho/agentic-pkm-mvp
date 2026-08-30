@@ -19,7 +19,12 @@ from tests.dispatcher.test_verification_consumer import (
     green_checks,
     merged_pr,
 )
-from tests.dispatcher.verification_helpers import HEAD, ledger, request
+from tests.dispatcher.verification_helpers import (
+    HEAD,
+    admitted_verified_attempt_receipt,
+    ledger,
+    request,
+)
 
 
 NEW_HEAD = "b" * 40
@@ -45,7 +50,13 @@ def _running_loop(tmp_path):
         "high",
         {"head_sha": HEAD},
         "launched",
-        {"head_sha": HEAD},
+        admitted_verified_attempt_receipt(
+            state,
+            run.run_id,
+            "01900000-0000-7000-8000-000000000022",
+            holder="host",
+            lease_id=claimed.lease_id,
+        ),
         holder="host",
         lease_id=claimed.lease_id,
     )

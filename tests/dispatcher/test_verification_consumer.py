@@ -47,7 +47,14 @@ from app.dispatcher.verified_merge import (
     build_verified_merge_phase,
     prepare_verified_merge,
 )
-from tests.dispatcher.verification_helpers import HEAD, REPO, ledger, request
+from tests.dispatcher.verification_helpers import (
+    HEAD,
+    REPO,
+    admit_verification_receipt,
+    ledger,
+    request,
+    verified_attempt_receipt,
+)
 from tests.dispatcher.builderops_verification_fakes import (
     FakeBuilderOpsClient,
     FakeVerificationOutbox,
@@ -5198,7 +5205,7 @@ def test_exact_terminal_receipt_replay_preserves_closure_anchor(tmp_path) -> Non
     run = state.ingest(request())
     claimed = state.claim(run.run_id, "host")
     state.start(run.run_id, "host", claimed.lease_id, "01900000-0000-7000-8000-000000000009", {})
-    receipt = {"verdict": "delivered", "head_sha": HEAD, "summary": "clean"}
+    receipt = verified_attempt_receipt(verdict="delivered", summary="clean")
     key = verification_attempt_idempotency_key(
         "01900000-0000-7000-8000-000000000009", "gpt-5.6-sol", "xhigh", receipt
     )
@@ -5221,9 +5228,17 @@ def test_exact_terminal_receipt_replay_preserves_closure_anchor(tmp_path) -> Non
     )
 
     for context in ({"head_sha": HEAD}, {"head_sha": "b" * 40}):
+        admitted = admit_verification_receipt(
+            state,
+            run.run_id,
+            "01900000-0000-7000-8000-000000000009",
+            receipt,
+            holder="host",
+            lease_id=claimed.lease_id,
+        )
         state.record_attempt(
             run.run_id, "verification", "01900000-0000-7000-8000-000000000009", "gpt-5.6-sol", "xhigh",
-            context, "launched", receipt, holder="host", lease_id=claimed.lease_id,
+            context, "launched", admitted, holder="host", lease_id=claimed.lease_id,
             idempotency_key=key,
         )
         loop.apply_events(events, context={"head_sha": HEAD})
@@ -5238,15 +5253,30 @@ def test_changed_terminal_receipt_does_not_deduplicate_verification_anchor(tmp_p
     state = ledger(tmp_path)
     run = state.ingest(request())
     claimed = state.claim(run.run_id, "host")
-    first = {"verdict": "delivered", "head_sha": HEAD, "summary": "first"}
-    changed = {**first, "summary": "changed"}
+    first = verified_attempt_receipt(
+        verdict="delivered", summary="first", receipt_id="first-review"
+    )
+    changed = verified_attempt_receipt(
+        verdict="delivered", summary="changed", receipt_id="changed-review"
+    )
 
-    for receipt in (first, changed):
+    for session_id, receipt in (
+        ("01900000-0000-7000-8000-000000000009", first),
+        ("01900000-0000-7000-8000-000000000010", changed),
+    ):
+        admitted = admit_verification_receipt(
+            state,
+            run.run_id,
+            session_id,
+            receipt,
+            holder="host",
+            lease_id=claimed.lease_id,
+        )
         state.record_attempt(
-            run.run_id, "verification", "01900000-0000-7000-8000-000000000009", "gpt-5.6-sol", "xhigh",
-            {}, "launched", receipt, holder="host", lease_id=claimed.lease_id,
+            run.run_id, "verification", session_id, "gpt-5.6-sol", "xhigh",
+            {}, "launched", admitted, holder="host", lease_id=claimed.lease_id,
             idempotency_key=verification_attempt_idempotency_key(
-                "01900000-0000-7000-8000-000000000009", "gpt-5.6-sol", "xhigh", receipt
+                session_id, "gpt-5.6-sol", "xhigh", receipt
             ),
         )
 

@@ -463,12 +463,13 @@ def _record_exhausted_chain(
     )
     claimed = state.claim(run.run_id, "head-a-host")
     lease_id = claimed.lease_id or ""
+    chain_head = run.current_head_sha
     state.start(
         run.run_id,
         "head-a-host",
         lease_id,
         "01900000-0000-7000-8000-000000000102",
-        {"head_sha": HEAD},
+        {"head_sha": chain_head},
     )
     for index, kind in enumerate(
         ("standard_repair", "standard_repair", "escalated_repair", "escalated_repair"),
@@ -480,31 +481,37 @@ def _record_exhausted_chain(
             f"repair-session-{index}",
             "gpt-5.6-sol" if kind == "escalated_repair" else "gpt-5.6-terra",
             "xhigh" if kind == "escalated_repair" else "high",
-            {"head_sha": HEAD},
+            {"head_sha": chain_head},
             "repaired",
             {
                 "finding_id": f"finding-{index}",
                 "failure_domain": "review_code_correctness",
                 "mechanism_id": "legacy-exhausted-chain",
-                "head_sha": HEAD,
+                "head_sha": chain_head,
             },
             holder="head-a-host",
             lease_id=lease_id,
         )
+    repair_anchor = state.attempts(run.run_id)[-1]["attempt_id"]
+    mechanism_path_sha = hashlib.sha256(
+        b"app/dispatcher/verification_dispatch.py"
+    ).hexdigest()
     for index in range(1, 3):
         state.record_attempt(
             run.run_id,
             "review",
-            f"review-session-{index}",
+            "review-session-1",
             "gpt-5.6-sol",
             "xhigh",
-            {"head_sha": HEAD},
-            "blocking" if index == 1 else "clean",
+            {"head_sha": chain_head},
+            "blocking",
             {
+                "reviewed_attempt_id": repair_anchor,
                 "finding_id": f"review-finding-{index}",
                 "failure_domain": "review_code_correctness",
                 "mechanism_id": "legacy-exhausted-chain",
-                "head_sha": HEAD,
+                "head_sha": chain_head,
+                "mechanism_path_sha256": [mechanism_path_sha],
             },
             holder="head-a-host",
             lease_id=lease_id,

@@ -34,7 +34,13 @@ from tests.dispatcher.test_verification_consumer import (
     eligible_pr,
     merged_pr,
 )
-from tests.dispatcher.verification_helpers import HEAD, REPO, ledger, request
+from tests.dispatcher.verification_helpers import (
+    HEAD,
+    REPO,
+    admitted_verified_attempt_receipt,
+    ledger,
+    request,
+)
 
 MECHANISM_PATH_SHA = hashlib.sha256(
     b"app/dispatcher/verification_agent_loop.py"
@@ -110,8 +116,14 @@ def test_restart_resumes_from_api_receipts_without_duplicate_attempt() -> None:
         "gpt-5.6-sol",
         "high",
         {"head_sha": HEAD},
-        "passed",
-        {"head_sha": HEAD},
+        "launched",
+        admitted_verified_attempt_receipt(
+            first,
+            run.run_id,
+            "session-1",
+            holder="verification-host",
+            lease_id=claimed.lease_id,
+        ),
         holder="verification-host",
         lease_id=claimed.lease_id,
         idempotency_key="verification-success",
@@ -148,8 +160,14 @@ def test_restart_resumes_from_api_receipts_without_duplicate_attempt() -> None:
         "gpt-5.6-sol",
         "high",
         {"head_sha": HEAD},
-        "passed",
-        {"head_sha": HEAD},
+        "launched",
+        admitted_verified_attempt_receipt(
+            restarted,
+            run.run_id,
+            "session-1",
+            holder="verification-host",
+            lease_id=claimed.lease_id,
+        ),
         holder="verification-host",
         lease_id=claimed.lease_id,
         idempotency_key="verification-success",
@@ -1177,8 +1195,14 @@ def test_api_ledger_late_blocking_review_revokes_merge_readiness() -> None:
         "gpt-5.6-sol",
         "high",
         {"head_sha": HEAD},
-        "passed",
-        {"head_sha": HEAD},
+        "launched",
+        admitted_verified_attempt_receipt(
+            ledger,
+            run.run_id,
+            "verification-session",
+            holder="verification-host",
+            lease_id=claimed.lease_id,
+        ),
         holder="verification-host",
         lease_id=claimed.lease_id,
         idempotency_key="late-blocker-verification",
@@ -1330,8 +1354,14 @@ def test_attempt_commit_preserves_effect_identity_until_reconciliation() -> None
         "gpt-5.6-sol",
         "high",
         {"head_sha": HEAD},
-        "passed",
-        {"head_sha": HEAD},
+        "launched",
+        admitted_verified_attempt_receipt(
+            first,
+            run.run_id,
+            "session-after-effect",
+            holder="verification-host",
+            lease_id=claimed.lease_id,
+        ),
         holder="verification-host",
         lease_id=claimed.lease_id,
         idempotency_key="attempt-after-effect",

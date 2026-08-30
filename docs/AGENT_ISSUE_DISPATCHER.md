@@ -167,6 +167,27 @@ The dispatcher is an operational coordination layer, not a lifecycle replacement
   compare from H1 to H2, and path-blinds the server-reported changed-file/blob projection. The
   independent blocking review emits a sorted path-hash projection for the specific mechanism; the
   consumer admits it only as a non-empty subset of GitHub's authenticated prior repair transition.
+  Both ledger adapters enforce that projection on direct and atomic-batch writes and keep it
+  immutable within one reused blocking-review session. Once that repair anchor has a blocking
+  review, any other review for the anchor requires an intervening repair, so neither a clean row nor
+  a fresh blocking row can launder or replace the durable mechanism authority before progress exists.
+  Clean review receipts are unbound: both adapters reject failure identity and mechanism paths on
+  direct and atomic-batch writes, matching the receipt consumer's schema boundary.
+  Atomic-batch metadata is producer-reserved. Direct writes cannot predeclare a future batch, and
+  each planned item must carry its deterministic attempt id before persistence. Replay is a no-op
+  only when every persisted index has that same id and declared size for the exact batch on both
+  adapters.
+  Closure-eligible verification anchors carry a digest bound to the consumer's already validated
+  and sanitized closer receipt. Public schema/sanitizer validation returns only an inert mapping;
+  the consumer then crosses a private ledger admission boundary that registers the exact capability
+  object against run, repository, PR, pre-launch head, coordinator session, holder, lease, and
+  receipt digest. Direct construction, subclassing, post-validation mutation, or copying a valid
+  seal onto another object lacks that ledger-local registry identity and fails before either adapter
+  writes. Direct and batch APIs cannot mint that producer capability from an arbitrary mapping, and
+  every review must name the latest eligible repair/verification anchor and
+  current head before persistence. Only successful `verified` or already-delivered receipts receive
+  that authority; blocked, needs-human, retry, rate-limit, and launch-failure attempts remain audit
+  evidence and cannot become closure anchors.
   Progress must change at least one path from that reviewed projection and must also present a new authenticated
   check-run/workflow-run execution frontier; changing only the selected head label, touching only an
   unrelated path, or reproducing the same mechanism blob/check executions is non-progress. The

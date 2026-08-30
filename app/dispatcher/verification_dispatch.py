@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import builtins
 import hashlib
+import hmac
 import json
 import re
+import secrets
 import sqlite3
 import uuid
 from dataclasses import dataclass
@@ -132,6 +134,131 @@ _LEGACY_RECOVERY_EXCEPTION_FIELDS = (
 
 class _AuthenticatedVerificationRequest(dict[str, object]):
     """In-process capability minted only after GitHub producer/source authentication."""
+
+
+_VERIFICATION_RECEIPT_CAPABILITY_KEY = secrets.token_bytes(32)
+
+
+class _ValidatedVerificationAttemptReceipt(dict[str, object]):
+    """Sealed in-process capability minted after closer receipt validation.
+
+    Direct construction and mutation cannot create durable producer authority:
+    persistence rechecks an HMAC over the exact canonical payload.
+    """
+
+    __validation_seal: str
+
+    def __init__(self, *_args: object, **_kwargs: object) -> None:
+        raise TypeError(
+            "validated verification receipts are minted by consumer validation"
+        )
+
+    @classmethod
+    def _from_validated(
+        cls, payload: Mapping[str, object]
+    ) -> _ValidatedVerificationAttemptReceipt:
+        instance = dict.__new__(cls)
+        dict.__init__(instance, payload)
+        instance.__validation_seal = hmac.new(
+            _VERIFICATION_RECEIPT_CAPABILITY_KEY,
+            _json(dict(instance)).encode(),
+            hashlib.sha256,
+        ).hexdigest()
+        return instance
+
+    def _has_valid_validation_seal(self) -> bool:
+        observed = getattr(self, "_ValidatedVerificationAttemptReceipt__validation_seal", None)
+        if type(self) is not _ValidatedVerificationAttemptReceipt or not isinstance(
+            observed, str
+        ):
+            return False
+        expected = hmac.new(
+            _VERIFICATION_RECEIPT_CAPABILITY_KEY,
+            _json(dict(self)).encode(),
+            hashlib.sha256,
+        ).hexdigest()
+        return hmac.compare_digest(observed, expected)
+
+
+@dataclass(frozen=True)
+class _VerificationReceiptAdmissionBinding:
+    run_id: str
+    repository: str
+    pr_number: int
+    head_sha: str
+    session_id: str
+    holder: str
+    lease_id: str
+    receipt_sha256: str
+
+
+class _VerificationReceiptAdmissionRegistry:
+    """Ledger-local, identity-bound authority for one validated closer receipt."""
+
+    def __init__(self) -> None:
+        self._issued: dict[
+            int,
+            tuple[
+                _ValidatedVerificationAttemptReceipt,
+                _VerificationReceiptAdmissionBinding,
+            ],
+        ] = {}
+
+    def issue(
+        self,
+        receipt: Mapping[str, object],
+        *,
+        binding: _VerificationReceiptAdmissionBinding,
+    ) -> _ValidatedVerificationAttemptReceipt:
+        capability = _ValidatedVerificationAttemptReceipt._from_validated(receipt)
+        self._issued[id(capability)] = (capability, binding)
+        return capability
+
+    def authorizes(
+        self,
+        receipt: Mapping[str, object] | None,
+        *,
+        binding: _VerificationReceiptAdmissionBinding,
+    ) -> bool:
+        if not isinstance(receipt, _ValidatedVerificationAttemptReceipt):
+            return False
+        issued = self._issued.get(id(receipt))
+        return bool(
+            issued is not None
+            and issued[0] is receipt
+            and issued[1] == binding
+            and receipt._has_valid_validation_seal()
+        )
+
+    def retire(self, receipt: Mapping[str, object] | None) -> None:
+        if receipt is None:
+            return
+        issued = self._issued.get(id(receipt))
+        if issued is not None and issued[0] is receipt:
+            self._issued.pop(id(receipt), None)
+
+
+def _verification_receipt_admission_binding(
+    *,
+    run_id: str,
+    repository: str,
+    pr_number: int,
+    head_sha: str,
+    session_id: str,
+    holder: str,
+    lease_id: str,
+    receipt: Mapping[str, object],
+) -> _VerificationReceiptAdmissionBinding:
+    return _VerificationReceiptAdmissionBinding(
+        run_id=run_id,
+        repository=repository.lower(),
+        pr_number=pr_number,
+        head_sha=head_sha,
+        session_id=session_id,
+        holder=holder,
+        lease_id=lease_id,
+        receipt_sha256=hashlib.sha256(_json(dict(receipt)).encode()).hexdigest(),
+    )
 
 
 @dataclass(frozen=True)
@@ -1147,7 +1274,7 @@ def _run(row: sqlite3.Row) -> VerificationRun:
 
 
 def _attempt(row: sqlite3.Row) -> dict[str, object]:
-    return {
+    return _project_verification_receipt_authority({
         "attempt_id": row["attempt_id"],
         "kind": row["attempt_kind"],
         "ordinal": row["ordinal"],
@@ -1159,7 +1286,7 @@ def _attempt(row: sqlite3.Row) -> dict[str, object]:
         "failure_domain": row["failure_domain"],
         "mechanism_id": row["mechanism_id"],
         "receipt": _load(row["receipt_json"]),
-    }
+    })
 
 
 def _validated_attempt_identity(
@@ -1184,6 +1311,14 @@ def _validated_attempt_identity(
     finding = receipt.get("finding_id") if receipt is not None else None
     domain = receipt.get("failure_domain") if receipt is not None else None
     mechanism = receipt.get("mechanism_id") if receipt is not None else None
+    if kind == "review" and outcome == "clean":
+        if any(value is not None for value in (finding, domain, mechanism)):
+            raise ValueError("clean review cannot carry a failure binding")
+        if (
+            receipt is not None
+            and receipt.get("mechanism_path_sha256") is not None
+        ):
+            raise ValueError("only a blocking review may bind mechanism paths")
     identity = (finding, domain, mechanism)
     identity_present = any(value is not None for value in identity)
     requires_identity = kind in REPAIR_ATTEMPT_KINDS or (
@@ -1195,6 +1330,14 @@ def _validated_attempt_identity(
         raise ValueError(
             "repair and blocking review require a stable finding, failure domain, "
             "and mechanism binding"
+        )
+    if (
+        policy == REPAIR_BUDGET_POLICY_MECHANISM
+        and kind == "review"
+        and outcome == "blocking"
+    ):
+        validated_mechanism_path_projection(
+            receipt.get("mechanism_path_sha256") if receipt is not None else None
         )
     if not identity_present:
         return None, None, None
@@ -1221,6 +1364,160 @@ def _validated_attempt_identity(
 def _attempt_receipt_value(row: Mapping[str, object], field: str) -> object:
     receipt = row.get("receipt")
     return receipt.get(field) if isinstance(receipt, Mapping) else None
+
+
+_EVENT_BATCH_RECEIPT_FIELDS = frozenset(
+    {"event_batch_id", "event_batch_index", "event_batch_size"}
+)
+_VERIFICATION_RECEIPT_AUTHORITY_FIELD = "verification_receipt_sha256"
+_NONCLOSING_VERIFICATION_OUTCOMES = frozenset({"rate_limited", "launch_failed"})
+_CLOSURE_ELIGIBLE_VERIFICATION_VERDICTS = frozenset({"verified", "delivered"})
+
+
+def _project_verification_receipt_authority(
+    attempt: dict[str, object],
+) -> dict[str, object]:
+    receipt = attempt.get("receipt")
+    if not isinstance(receipt, Mapping):
+        return attempt
+    projected = dict(receipt)
+    authority = projected.pop(_VERIFICATION_RECEIPT_AUTHORITY_FIELD, None)
+    attempt["receipt"] = projected
+    if authority is not None:
+        attempt[_VERIFICATION_RECEIPT_AUTHORITY_FIELD] = authority
+    return attempt
+
+
+def _persisted_attempt_receipt(
+    attempt: Mapping[str, object],
+) -> Mapping[str, object] | None:
+    receipt = attempt.get("receipt")
+    if not isinstance(receipt, Mapping):
+        return None
+    authority = attempt.get(_VERIFICATION_RECEIPT_AUTHORITY_FIELD)
+    return (
+        {**dict(receipt), _VERIFICATION_RECEIPT_AUTHORITY_FIELD: authority}
+        if authority is not None
+        else receipt
+    )
+
+
+def _reject_reserved_event_batch_metadata(
+    receipt: Mapping[str, object] | None,
+) -> None:
+    if receipt is not None and _EVENT_BATCH_RECEIPT_FIELDS.intersection(receipt):
+        raise ValueError("verification event batch metadata is producer-reserved")
+
+
+def _validated_attempt_receipt_for_persistence(
+    *,
+    kind: str,
+    outcome: str,
+    receipt: Mapping[str, object] | None,
+    producer_authorized: bool = False,
+) -> Mapping[str, object] | None:
+    if receipt is not None and _VERIFICATION_RECEIPT_AUTHORITY_FIELD in receipt:
+        raise ValueError("verification receipt authority is producer-reserved")
+    if kind != "verification":
+        return receipt
+    if outcome in _NONCLOSING_VERIFICATION_OUTCOMES:
+        return receipt
+    if (
+        outcome != "launched"
+        or not isinstance(receipt, _ValidatedVerificationAttemptReceipt)
+        or not receipt._has_valid_validation_seal()
+        or not producer_authorized
+    ):
+        raise ValueError(
+            "verification attempt requires a validated closer receipt"
+        )
+    canonical = dict(receipt)
+    if canonical.get("verdict") not in _CLOSURE_ELIGIBLE_VERIFICATION_VERDICTS:
+        return canonical
+    return {
+        **canonical,
+        _VERIFICATION_RECEIPT_AUTHORITY_FIELD: _progress_digest(canonical),
+    }
+
+
+def _verification_anchor_is_eligible(
+    row: Mapping[str, object], *, current_head_sha: str
+) -> bool:
+    receipt = row.get("receipt")
+    if row.get("outcome") != "launched" or not isinstance(receipt, Mapping):
+        return False
+    authority = row.get(_VERIFICATION_RECEIPT_AUTHORITY_FIELD)
+    canonical = dict(receipt)
+    return (
+        receipt.get("head_sha") == current_head_sha
+        and receipt.get("verdict") in _CLOSURE_ELIGIBLE_VERIFICATION_VERDICTS
+        and isinstance(authority, str)
+        and authority == _progress_digest(canonical)
+    )
+
+
+def _latest_attempt_anchor(
+    attempts: Sequence[Mapping[str, object]],
+) -> Mapping[str, object] | None:
+    anchors = [
+        row
+        for row in attempts
+        if row.get("kind") in {*REPAIR_ATTEMPT_KINDS, "verification"}
+    ]
+    return anchors[-1] if anchors else None
+
+
+def _latest_closure_anchor(
+    attempts: Sequence[Mapping[str, object]], *, current_head_sha: str
+) -> Mapping[str, object] | None:
+    latest = _latest_attempt_anchor(attempts)
+    if latest is None:
+        return None
+    if latest.get("kind") == "verification" and not _verification_anchor_is_eligible(
+        latest, current_head_sha=current_head_sha
+    ):
+        return None
+    return latest
+
+
+def _is_exact_event_batch_replay(
+    attempts: Sequence[Mapping[str, object]],
+    *,
+    batch_id: str,
+    batch_size: int,
+    attempt_id_for: Callable[[int], str],
+) -> bool:
+    replay_rows = [
+        row
+        for row in attempts
+        if isinstance(_attempt_receipt_value(row, "event_batch_id"), str)
+        and _attempt_receipt_value(row, "event_batch_id") == batch_id
+    ]
+    if not replay_rows:
+        return False
+    if len(replay_rows) != batch_size:
+        raise ValueError("verification event batch is partially persisted")
+    seen_indexes: set[int] = set()
+    for row in replay_rows:
+        index = _attempt_receipt_value(row, "event_batch_index")
+        size = _attempt_receipt_value(row, "event_batch_size")
+        if (
+            not isinstance(index, int)
+            or isinstance(index, bool)
+            or index < 0
+            or index >= batch_size
+            or index in seen_indexes
+            or not isinstance(size, int)
+            or isinstance(size, bool)
+            or size != batch_size
+            or row.get("attempt_id") != attempt_id_for(index)
+        ):
+            raise ValueError("verification event batch is partially persisted")
+        seen_indexes.add(index)
+    if seen_indexes != set(range(batch_size)):
+        raise ValueError("verification event batch is partially persisted")
+    return True
+
 
 def _progress_digest(value: object) -> str:
     return hashlib.sha256(_json(value).encode()).hexdigest()
@@ -1249,6 +1546,74 @@ def validated_mechanism_path_projection(value: object) -> list[str]:
             "blocking review lacks a canonical mechanism path projection"
         )
     return [str(path_sha) for path_sha in value]
+
+
+def _validate_review_session_reuse(
+    attempts: Sequence[Mapping[str, object]],
+    *,
+    kind: str,
+    session_id: str,
+    outcome: str,
+    receipt: Mapping[str, object] | None,
+    policy: str,
+) -> None:
+    """Keep direct ledger writes on the loop's same-round identity fence."""
+    reused = [row for row in attempts if row.get("session_id") == session_id]
+    if kind == "verification":
+        if policy == REPAIR_BUDGET_POLICY_MECHANISM and reused:
+            raise ValueError(
+                "verification session replay requires the exact idempotency key"
+            )
+        return
+    if kind != "review":
+        return
+    candidate_paths = (
+        validated_mechanism_path_projection(
+            receipt.get("mechanism_path_sha256") if receipt is not None else None
+        )
+        if policy == REPAIR_BUDGET_POLICY_MECHANISM and outcome == "blocking"
+        else (
+            receipt.get("mechanism_path_sha256")
+            if receipt is not None
+            else None
+        )
+    )
+    same_blocking_round = bool(
+        reused
+        and outcome == "blocking"
+        and receipt is not None
+        and all(
+            row.get("kind") == "review"
+            and row.get("outcome") == "blocking"
+            and isinstance(row.get("receipt"), Mapping)
+            and _attempt_receipt_value(row, "reviewed_attempt_id")
+            == receipt.get("reviewed_attempt_id")
+            and _attempt_receipt_value(row, "head_sha")
+            == receipt.get("head_sha")
+            and _attempt_receipt_value(row, "failure_domain")
+            == receipt.get("failure_domain")
+            and _attempt_receipt_value(row, "mechanism_id")
+            == receipt.get("mechanism_id")
+            and _attempt_receipt_value(row, "mechanism_path_sha256")
+            == candidate_paths
+            for row in reused
+        )
+    )
+    if reused and not same_blocking_round:
+        raise ValueError("independent re-review requires a fresh session")
+    if receipt is not None:
+        anchor_reviews = [
+            row
+            for row in attempts
+            if row.get("kind") == "review"
+            and _attempt_receipt_value(row, "reviewed_attempt_id")
+            == receipt.get("reviewed_attempt_id")
+        ]
+        if (
+            any(row.get("outcome") == "blocking" for row in anchor_reviews)
+            and not same_blocking_round
+        ):
+            raise ValueError("blocking review requires repair before another review")
 
 
 def build_repair_transition_evidence(
@@ -1659,6 +2024,24 @@ def _attempt_plan(
         )
         ordinal = sum(row.get("kind") == REPAIR_INTENT_ATTEMPT_KIND for row in attempts) + 1
         return ordinal, intent_finding, intent_domain, intent_mechanism
+    if kind == "review":
+        if not isinstance(receipt, Mapping):
+            raise ValueError("review requires an anchor receipt")
+        latest = _latest_attempt_anchor(attempts)
+        if latest is None:
+            raise ValueError("review requires a recorded verification or repair")
+        if (
+            policy == REPAIR_BUDGET_POLICY_MECHANISM
+            and latest.get("kind") == "verification"
+            and not _verification_anchor_is_eligible(
+                latest, current_head_sha=current_head_sha
+            )
+        ):
+            raise ValueError("review verification anchor lacks producer authority")
+        if receipt.get("reviewed_attempt_id") != latest.get("attempt_id"):
+            raise ValueError("review is not bound to the latest eligible anchor")
+        if receipt.get("head_sha") != current_head_sha:
+            raise ValueError("review is not bound to the current head")
     finding, domain, mechanism = _validated_attempt_identity(
         attempts,
         kind=kind,
@@ -1722,7 +2105,43 @@ class VerificationDispatchLedger:
 
     def __init__(self, store: SqliteStore) -> None:
         self.store = store
+        self._verification_receipt_admissions = (
+            _VerificationReceiptAdmissionRegistry()
+        )
         self.store.initialize()
+
+    def _admit_validated_verification_receipt(
+        self,
+        run_id: str,
+        session_id: str,
+        receipt: Mapping[str, object],
+        *,
+        holder: str,
+        lease_id: str,
+    ) -> _ValidatedVerificationAttemptReceipt:
+        """Bind one schema/sanitizer result to this run's live producer lease."""
+        run = self.get(run_id)
+        if (
+            run is None
+            or run.status not in ACTIVE_STATES
+            or run.claimed_by != holder
+            or run.lease_id != lease_id
+        ):
+            raise ValueError("verification receipt admission authority mismatch")
+        binding = _verification_receipt_admission_binding(
+            run_id=run_id,
+            repository=run.repository,
+            pr_number=run.pr_number,
+            head_sha=run.current_head_sha,
+            session_id=session_id,
+            holder=holder,
+            lease_id=lease_id,
+            receipt=receipt,
+        )
+        return self._verification_receipt_admissions.issue(
+            receipt,
+            binding=binding,
+        )
 
     def canonical_chain_token(
         self, request: Mapping[str, object]
@@ -2569,6 +2988,7 @@ class VerificationDispatchLedger:
         }
         if kind not in allowed:
             raise ValueError("invalid verification attempt kind")
+        _reject_reserved_event_batch_metadata(receipt)
         context_hash = hashlib.sha256(_json(dict(context)).encode()).hexdigest()
         attempt_id = (
             "vattempt-"
@@ -2588,6 +3008,29 @@ class VerificationDispatchLedger:
                 or owner["lease_expires_at"] <= now
             ):
                 raise ValueError("verification attempt ownership mismatch")
+            producer_authorized = False
+            if kind == "verification" and receipt is not None:
+                producer_authorized = (
+                    self._verification_receipt_admissions.authorizes(
+                        receipt,
+                        binding=_verification_receipt_admission_binding(
+                            run_id=run_id,
+                            repository=str(owner["repository"]),
+                            pr_number=int(owner["pr_number"]),
+                            head_sha=str(owner["current_head_sha"]),
+                            session_id=session_id,
+                            holder=holder,
+                            lease_id=lease_id,
+                            receipt=receipt,
+                        ),
+                    )
+                )
+            persisted_receipt = _validated_attempt_receipt_for_persistence(
+                kind=kind,
+                outcome=outcome,
+                receipt=receipt,
+                producer_authorized=producer_authorized,
+            )
             if idempotency_key:
                 existing = conn.execute(
                     "SELECT * FROM verification_attempts WHERE attempt_id=?",
@@ -2601,7 +3044,12 @@ class VerificationDispatchLedger:
                         or row["capability"] != capability
                         or row["reasoning_effort"] != reasoning_effort
                         or row["outcome"] != outcome
-                        or row["receipt"] != (dict(receipt) if receipt else None)
+                        or _persisted_attempt_receipt(row)
+                        != (
+                            dict(persisted_receipt)
+                            if persisted_receipt is not None
+                            else None
+                        )
                     ):
                         raise ValueError("verification attempt replay conflicts")
                     replay_ordinal = row["ordinal"]
@@ -2610,32 +3058,18 @@ class VerificationDispatchLedger:
                     ):
                         raise ValueError("verification attempt replay ordinal is malformed")
                     conn.commit()
+                    if kind == "verification":
+                        self._verification_receipt_admissions.retire(receipt)
                     return replay_ordinal
-            if kind == "review":
-                reused_rows = conn.execute(
-                    "SELECT * FROM verification_attempts WHERE run_id=? AND session_id=? "
-                    "ORDER BY created_at, attempt_id",
-                    (run_id, session_id),
-                ).fetchall()
-                reused = [_attempt(row) for row in reused_rows]
-                same_blocking_round = bool(
-                    outcome == "blocking"
-                    and receipt is not None
-                    and reused
-                    and all(
-                        row["kind"] == "review"
-                        and row["outcome"] == "blocking"
-                        and isinstance(row["receipt"], Mapping)
-                        and row["receipt"].get("reviewed_attempt_id")
-                        == receipt.get("reviewed_attempt_id")
-                        and row["failure_domain"] == receipt.get("failure_domain")
-                        and row["mechanism_id"] == receipt.get("mechanism_id")
-                        for row in reused
-                    )
-                )
-                if reused and not same_blocking_round:
-                    raise ValueError("independent re-review requires a fresh session")
             attempts = self._attempts(conn, run_id)
+            _validate_review_session_reuse(
+                attempts,
+                kind=kind,
+                session_id=session_id,
+                outcome=outcome,
+                receipt=receipt,
+                policy=owner["repair_budget_policy"],
+            )
             ordinal, finding_id, failure_domain, mechanism_id = _attempt_plan(
                 attempts,
                 kind=kind,
@@ -2656,10 +3090,17 @@ class VerificationDispatchLedger:
                     attempt_id, run_id, kind, ordinal,
                     session_id, capability, reasoning_effort, context_hash, outcome,
                     finding_id, failure_domain, mechanism_id,
-                    _json(dict(receipt)) if receipt else None, now,
+                    (
+                        _json(dict(persisted_receipt))
+                        if persisted_receipt is not None
+                        else None
+                    ),
+                    now,
                 ),
             )
             conn.commit()
+        if kind == "verification":
+            self._verification_receipt_admissions.retire(receipt)
         return ordinal
 
     def record_attempt_batch(
@@ -2682,7 +3123,13 @@ class VerificationDispatchLedger:
         ownership loss, head change, or later insert conflict rolls the entire
         batch back, so recovery never observes a prefix of the final receipt.
         """
-        if not batch_id or batch_size <= 0:
+        if (
+            not isinstance(batch_id, str)
+            or not batch_id
+            or not isinstance(batch_size, int)
+            or isinstance(batch_size, bool)
+            or batch_size <= 0
+        ):
             raise ValueError("verification event batch identity is required")
 
         def attempt_id(index: int) -> str:
@@ -2709,26 +3156,12 @@ class VerificationDispatchLedger:
                 (run_id,),
             ).fetchall()
             attempts = [_attempt(row) for row in rows]
-            replay_rows = [
-                row
-                for row in attempts
-                if isinstance(row["receipt"], Mapping)
-                and row["receipt"].get("event_batch_id") == batch_id
-            ]
-            if replay_rows:
-                indexes = {
-                    row["receipt"].get("event_batch_index")
-                    for row in replay_rows
-                    if isinstance(row["receipt"], Mapping)
-                }
-                sizes = {
-                    row["receipt"].get("event_batch_size")
-                    for row in replay_rows
-                    if isinstance(row["receipt"], Mapping)
-                }
-                expected_indexes = set(range(batch_size))
-                if indexes != expected_indexes or sizes != {batch_size}:
-                    raise ValueError("verification event batch is partially persisted")
+            if _is_exact_event_batch_replay(
+                attempts,
+                batch_id=batch_id,
+                batch_size=batch_size,
+                attempt_id_for=attempt_id,
+            ):
                 conn.commit()
                 return 0
 
@@ -2737,10 +3170,48 @@ class VerificationDispatchLedger:
                 raise ValueError("verification event batch plan size mismatch")
             working = list(attempts)
             validated: builtins.list[dict[str, object]] = []
-            for item in planned:
+            admitted_receipts: builtins.list[Mapping[str, object]] = []
+            for index, item in enumerate(planned):
+                if item.get("attempt_id") != attempt_id(index):
+                    raise ValueError("verification event batch attempt id is malformed")
                 item_receipt = item["receipt"]
                 if not isinstance(item_receipt, Mapping):
                     raise ValueError("verification event batch receipt is malformed")
+                _reject_reserved_event_batch_metadata(item_receipt)
+                item_kind = str(item["kind"])
+                item_session_id = str(item["session_id"])
+                producer_authorized = False
+                if item_kind == "verification":
+                    producer_authorized = (
+                        self._verification_receipt_admissions.authorizes(
+                            item_receipt,
+                            binding=_verification_receipt_admission_binding(
+                                run_id=run_id,
+                                repository=str(owner["repository"]),
+                                pr_number=int(owner["pr_number"]),
+                                head_sha=str(owner["current_head_sha"]),
+                                session_id=item_session_id,
+                                holder=holder,
+                                lease_id=lease_id,
+                                receipt=item_receipt,
+                            ),
+                        )
+                    )
+                    admitted_receipts.append(item_receipt)
+                persisted_receipt = _validated_attempt_receipt_for_persistence(
+                    kind=item_kind,
+                    outcome=str(item["outcome"]),
+                    receipt=item_receipt,
+                    producer_authorized=producer_authorized,
+                )
+                _validate_review_session_reuse(
+                    working,
+                    kind=item_kind,
+                    session_id=item_session_id,
+                    outcome=str(item["outcome"]),
+                    receipt=item_receipt,
+                    policy=owner["repair_budget_policy"],
+                )
                 ordinal, finding_id, failure_domain, mechanism_id = _attempt_plan(
                     working,
                     kind=str(item["kind"]),
@@ -2757,6 +3228,7 @@ class VerificationDispatchLedger:
                         "finding_id": finding_id,
                         "failure_domain": failure_domain,
                         "mechanism_id": mechanism_id,
+                        "receipt": persisted_receipt,
                     }
                 )
                 working.append(projected)
@@ -2803,6 +3275,8 @@ class VerificationDispatchLedger:
                     ),
                 )
             conn.commit()
+        for admitted_receipt in admitted_receipts:
+            self._verification_receipt_admissions.retire(admitted_receipt)
         return len(validated)
 
     def _attempts(
@@ -2905,11 +3379,12 @@ class VerificationDispatchLedger:
         self, conn: sqlite3.Connection, run_id: str, current_head_sha: str
     ) -> bool:
         attempts = self._attempts(conn, run_id)
-        repairs = [row for row in attempts if row["kind"] in {"standard_repair", "escalated_repair"}]
-        verifications = [row for row in attempts if row["kind"] == "verification"]
-        if not repairs and not verifications:
+        anchor = _latest_closure_anchor(
+            attempts, current_head_sha=current_head_sha
+        )
+        if anchor is None:
             return False
-        final_anchor = (repairs[-1] if repairs else verifications[-1])["attempt_id"]
+        final_anchor = anchor["attempt_id"]
         reviews = [
             row for row in attempts
             if row["kind"] == "review"

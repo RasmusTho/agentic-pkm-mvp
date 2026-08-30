@@ -5573,6 +5573,21 @@ class VerificationConsumer:
         )
         if not attempt_already_durable:
             try:
+                attempt_idempotency_key = verification_attempt_idempotency_key(
+                    session_id,
+                    config.model,
+                    config.reasoning_effort,
+                    receipt,
+                )
+                admitted_receipt = (
+                    self.ledger._admit_validated_verification_receipt(
+                        claimed.run_id,
+                        session_id,
+                        receipt,
+                        holder=self.holder,
+                        lease_id=lease_id,
+                    )
+                )
                 self.ledger.record_attempt(
                     claimed.run_id,
                     "verification",
@@ -5581,15 +5596,10 @@ class VerificationConsumer:
                     config.reasoning_effort,
                     pack,
                     "rate_limited" if structured_rate_limit else "launched",
-                    receipt,
+                    admitted_receipt,
                     holder=self.holder,
                     lease_id=lease_id,
-                    idempotency_key=verification_attempt_idempotency_key(
-                        session_id,
-                        config.model,
-                        config.reasoning_effort,
-                        receipt,
-                    ),
+                    idempotency_key=attempt_idempotency_key,
                     containment_receipt=containment_receipt,
                 )
             except Exception:

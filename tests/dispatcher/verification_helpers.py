@@ -6,12 +6,147 @@ import json
 import sqlite3
 
 from app.dispatcher.store import SqliteStore
-from app.dispatcher.verification_dispatch import VerificationDispatchLedger
+from app.dispatcher.verification_consumer import (
+    CANONICAL_RECEIPT_SCHEMA_PATH,
+    load_and_validate_verification_closer_receipt,
+)
+from app.dispatcher.verification_dispatch import (
+    VerificationDispatchLedger,
+)
 from scripts.build_verification_dispatch_request import build_request
 
 
 HEAD = "a" * 40
 REPO = "RasmusTho/agentic-pkm-mvp"
+
+
+def verified_attempt_receipt(
+    head: str = HEAD,
+    *,
+    verdict: str = "verified",
+    summary: str = "verified fixture",
+    receipt_id: str = "fixture-receipt",
+) -> dict[str, object]:
+    """Canonical validated producer capability for ledger fixture seeding."""
+    review_events: list[dict[str, object]] = []
+    receipt_ids = [receipt_id]
+    if verdict in {"verified", "delivered"}:
+        receipt_ids = [receipt_id]
+        review_events = [
+            {
+                "kind": "review",
+                "session_id": receipt_id,
+                "capability": "gpt-5.6-sol",
+                "reasoning_effort": "xhigh",
+                "outcome": "clean",
+                "finding_id": None,
+                "failure_domain": None,
+                "mechanism_id": None,
+                "progress_intent_id": None,
+                "mechanism_path_sha256": None,
+                "strongest": True,
+            }
+        ]
+    human_exception: dict[str, object] | None = None
+    if verdict == "needs_human":
+        human_exception = {
+            "failure_class": "authority-critical",
+            "original_intent": "verify the fixture",
+            "current_state": "authority is unavailable",
+            "tried_actions": ["checked fixture authority"],
+            "evidence": ["fixture evidence"],
+            "why_unsafe": "continuation lacks authority",
+            "options": [
+                {
+                    "id": "stop",
+                    "label": "Stop",
+                    "consequence": "preserve the safe state",
+                },
+                {
+                    "id": "continue",
+                    "label": "Continue",
+                    "consequence": "accept the authority risk",
+                },
+            ],
+            "no_action_option": "stop",
+            "recommended_option": "stop",
+            "recommendation_rationale": "authority is required",
+            "consequence_of_doing_nothing": "the run remains safely stopped",
+        }
+    receipt = load_and_validate_verification_closer_receipt(
+        {
+            "verdict": verdict,
+            "head_sha": head,
+            "summary": summary,
+            "receipt_ids": receipt_ids,
+            "retry_after": None,
+            "review_events": review_events,
+            "human_exception": human_exception,
+        },
+        CANONICAL_RECEIPT_SCHEMA_PATH,
+        trusted_repository=REPO,
+        trusted_evidence_urls=frozenset(),
+    )
+    return dict(receipt)
+
+
+def validated_attempt_receipt(
+    payload: dict[str, object],
+) -> dict[str, object]:
+    """Validate a fixture through the real schema/sanitizer producer path."""
+    receipt = load_and_validate_verification_closer_receipt(
+        payload,
+        CANONICAL_RECEIPT_SCHEMA_PATH,
+        trusted_repository=REPO,
+        trusted_evidence_urls=frozenset(),
+    )
+    return dict(receipt)
+
+
+def admit_verification_receipt(
+    state,
+    run_id: str,
+    session_id: str,
+    receipt: dict[str, object],
+    *,
+    holder: str,
+    lease_id: str,
+):
+    """Use the ledger-private run/lease admission boundary in fixtures."""
+    return state._admit_validated_verification_receipt(
+        run_id,
+        session_id,
+        receipt,
+        holder=holder,
+        lease_id=lease_id,
+    )
+
+
+def admitted_verified_attempt_receipt(
+    state,
+    run_id: str,
+    session_id: str,
+    *,
+    holder: str,
+    lease_id: str,
+    head: str = HEAD,
+    verdict: str = "verified",
+    summary: str = "verified fixture",
+    receipt_id: str = "fixture-receipt",
+):
+    return admit_verification_receipt(
+        state,
+        run_id,
+        session_id,
+        verified_attempt_receipt(
+            head,
+            verdict=verdict,
+            summary=summary,
+            receipt_id=receipt_id,
+        ),
+        holder=holder,
+        lease_id=lease_id,
+    )
 
 
 def downgrade_verification_schema_to_v3(conn: sqlite3.Connection) -> None:

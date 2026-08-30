@@ -20,6 +20,7 @@ class FakeBuilderOpsClient:
         self.attempt_rows: dict[str, list[dict[str, Any]]] = {}
         self.calls: list[tuple[str, dict[str, Any]]] = []
         self._fence = 0
+        self._claim_holders: dict[str, str] = {}
 
     def _call(self, name: str, values: dict[str, Any]) -> None:
         self.calls.append((name, values))
@@ -86,11 +87,21 @@ class FakeBuilderOpsClient:
     def claim_task(self, **values: Any) -> dict[str, Any]:
         self._call("claim_task", values)
         task = self.tasks[values["task_id"]]
+        requested_holder = values["request"]["run"]["claimed_by"]
+        if requested_holder is None:
+            requested_holder = self._claim_holders.get(values["task_id"])
+        if not isinstance(requested_holder, str) or not requested_holder:
+            raise ValueError("verification claim requires a holder")
+        self._claim_holders[values["task_id"]] = requested_holder
         self._fence += 1
         lease = {
             "repository": values["envelope"]["repository"],
             "resource_id": values["task_id"],
-            "holder": "verification-host",
+            # The real control plane derives this from the authenticated
+            # credential principal.  The transport double has no auth layer,
+            # so mirror the ledger's requested principal instead of granting
+            # every claim to one unrelated hard-coded identity.
+            "holder": requested_holder,
             "fencing_token": self._fence,
             "expires_at": (
                 datetime.now(timezone.utc)

@@ -17,6 +17,22 @@ dispatcher request/receipt schemas, and BuilderOps control-plane contracts remai
   failure domain, mechanism id, the blocking review's typed mechanism-path projection authenticated
   as a non-empty subset of the prior GitHub repair transition, the corresponding server-reported
   blob states, and authenticated check-run/workflow-run execution frontier.
+- Direct and atomic-batch writes on both durable adapters require the canonical non-empty projection
+  and cannot replace it while reusing one blocking-review session or by inserting clean/fresh review
+  rows against the same repair anchor before another repair. Clean receipts reject both failure
+  binding and mechanism paths at the shared adapter validation boundary, in parity with the consumer.
+- Direct writes cannot inject producer-reserved atomic-batch identity/index/size fields. SQLite and
+  BuilderOps require each planned row's deterministic batch attempt id before persistence, then
+  accept replay only for a complete index set whose ids and size match the exact batch, preventing
+  false or permanently unreplayable writes from suppressing a blocking review.
+- A verification attempt becomes closure-eligible only when the receipt consumer has minted the
+  validated-receipt capability through the private run/producer admission boundary; public
+  schema/sanitizer validation returns an inert mapping. The ledger-local registry binds the exact
+  object to run/repository/PR/pre-launch-head/session/holder/lease plus receipt digest, and rejects
+  direct construction, subclassing, mutation, or copied seals before persisting its durable content
+  digest. Reviews bind
+  the actual latest eligible anchor and current head. Only successful verified/delivered verdicts
+  receive this authority, closing synthetic and failed-verdict verification/review paths.
 - A repeated repair is admissible only after GitHub reports a distinct repaired head H2, an
   untruncated linear H1...H2 comparison that changes a path selected by the independent blocking
   review for this specific mechanism, and a new

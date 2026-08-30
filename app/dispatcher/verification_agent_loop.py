@@ -9,6 +9,7 @@ from typing import Callable, Mapping, Sequence
 from app.dispatcher.verification_dispatch import (
     REPAIR_BUDGET_POLICY_MECHANISM,
     VerificationDispatchLedger,
+    _latest_attempt_anchor,
     build_repair_progress_evidence,
     validated_repair_transition_evidence,
     validated_mechanism_path_projection,
@@ -231,11 +232,9 @@ class VerificationAgentLoop:
         if run is None:
             raise ValueError("verification run not found")
         attempts = self.ledger.attempts(self.run_id)
-        repairs = [row for row in attempts if row["kind"] in {"standard_repair", "escalated_repair"}]
-        verifications = [row for row in attempts if row["kind"] == "verification"]
-        if not repairs and not verifications:
+        latest = _latest_attempt_anchor(attempts)
+        if latest is None:
             raise ValueError("review requires a recorded verification or repair")
-        latest = repairs[-1] if repairs else verifications[-1]
         reviews = [
             row for row in attempts
             if row["kind"] == "review"
@@ -425,17 +424,9 @@ class VerificationAgentLoop:
                     normalized = outcome.lower()
                     if normalized not in {"blocking", "clean"}:
                         raise ValueError("review outcome must be blocking or clean")
-                    repairs = [
-                        row
-                        for row in working
-                        if row["kind"] in {"standard_repair", "escalated_repair"}
-                    ]
-                    verifications = [
-                        row for row in working if row["kind"] == "verification"
-                    ]
-                    if not repairs and not verifications:
+                    latest = _latest_attempt_anchor(working)
+                    if latest is None:
                         raise ValueError("review requires a recorded verification or repair")
-                    latest = repairs[-1] if repairs else verifications[-1]
                     reviews = [
                         row
                         for row in working

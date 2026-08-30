@@ -27,7 +27,14 @@ from tests.dispatcher.test_verification_consumer import (
     _merge_comments,
 )
 from tests.dispatcher.builderops_verification_fakes import FakeBuilderOpsClient
-from tests.dispatcher.verification_helpers import HEAD, REPO, ledger, request
+from tests.dispatcher.verification_helpers import (
+    HEAD,
+    REPO,
+    admit_verification_receipt,
+    ledger,
+    request,
+    validated_attempt_receipt,
+)
 
 
 REPAIRED_HEAD = "b" * 40
@@ -139,7 +146,14 @@ def _pending_delivered_run(
         "xhigh",
         {"head_sha": HEAD},
         "launched",
-        receipt,
+        admit_verification_receipt(
+            state,
+            run.run_id,
+            "01900000-0000-7000-8000-000000000051",
+            validated_attempt_receipt(receipt),
+            holder="original-host",
+            lease_id=claimed.lease_id or "",
+        ),
         holder="original-host",
         lease_id=claimed.lease_id or "",
     )
