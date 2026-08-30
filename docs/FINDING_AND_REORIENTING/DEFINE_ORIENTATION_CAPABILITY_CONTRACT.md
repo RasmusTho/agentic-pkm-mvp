@@ -52,6 +52,15 @@ Boundary with resurfacing:
 - Resurfacing brings something back into view without a user-initiated moment. Orientation is triggered by a user-initiated return to work. The user is present; they just do not have a query yet.
 - Orientation is about the user's state, not about the changing relevance of individual artifacts. A situational frame is not a salience event.
 
+### Derived signal contract
+
+The exact read-only producer precedence, provenance, degradation, and retrieval/ASK seam for an
+orientation frame are owned by
+`docs/CONCEPTS/ORIENTATION_SIGNAL_PROJECTION_CONTRACT.md`. That contract keeps active/waiting/
+supporting/background/unknown as request-time projection states, not durable fields or artifact
+semantics. It does not change this capability's query-absent trigger or make orientation a retrieval
+result.
+
 ## Why This Matters
 
 Pillar 7 of `docs/plans/V60_ARCHITECTURE_TARGET.md` is explicit: "findability does not masquerade as orientation." The current v6.0 target doc carries that boundary in the active changes list and retrieval migration stages: retrieval, orientation, and resurfacing are separate capabilities, and ranking explanations must not masquerade as orientation or salience. Pillar 7A's companion rule is now carried in the capability model: capabilities are reusable building blocks, not broad-authority agents. Delta 7 restates the transition from retrieval-as-orientation to explicit retrieval/orientation/resurfacing separation. Without this contract, orientation keeps getting built as "a better ASK response" and keeps failing, because ASK assumes a question already exists — the one thing the orientation user precisely does not have. This task is how orientation becomes its own capability instead of an unnamed expectation that ASK will "also do orientation somehow."
@@ -96,7 +105,9 @@ If orientation is not specified:
 ## Out of Scope
 
 - Choosing which interaction surface renders orientation output. That is `INTERACTION_SURFACES_AND_AUTHORITY`.
-- Specifying exact signals, weights, or thresholds for building the situational frame. Signal lists may reference `DOCUMENT_SALIENCE_AS_DERIVED.md` at a conceptual level only.
+- Choosing signal weights or thresholds for building the situational frame. The bounded producer
+  families and precedence are owned by `docs/CONCEPTS/ORIENTATION_SIGNAL_PROJECTION_CONTRACT.md`;
+  salience remains conceptual/derived under `DOCUMENT_SALIENCE_AS_DERIVED.md`.
 - Any modification to `app/retrieval/*`, `app/agents/ask/*`, or any other code.
 - Defining retrieval or resurfacing behavior.
 - Fixing Finding 2.
@@ -109,6 +120,7 @@ If orientation is not specified:
 - `docs/CONCEPTS/USER_NEEDS_MODEL.md` :: §Recovering orientation
 - `docs/HUMAN-FLOWS.md` :: Retrieve and re-orient
 - `docs/CONCEPTS/SALIENCE_AND_ATTENTIONAL_RELEVANCE_CONTRACT.md`
+- `docs/CONCEPTS/ORIENTATION_SIGNAL_PROJECTION_CONTRACT.md`
 - Sibling task files in this directory.
 
 ## Related GitHub Issues

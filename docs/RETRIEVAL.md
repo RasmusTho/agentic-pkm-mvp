@@ -244,6 +244,15 @@ Interpretation:
 - `payload` is retrieval metadata, not the canonical meaning of the artifact.
 
 ## Delta / Known Limits
+
+### Derived orientation-signal boundary (contract only)
+
+The current hybrid retrieval path does not claim an active/waiting/supporting/background filter.
+`docs/CONCEPTS/ORIENTATION_SIGNAL_PROJECTION_CONTRACT.md` defines the future read-only seam:
+admissibility precedes any orientation projection; generic vault notes and path zones do not establish
+orientation; and an unknown/degraded signal cannot be silently used as a background exclusion.
+Ordinary ASK retrieval remains governed by its existing scope, ranking, and citation behavior until a
+separate implementation issue delivers the projection.
 - This retrieval store is in-memory; it is not a durable vector DB.
 - Rerank defaults to disabled (`RERANK_ENABLE` unset/false).
 - Relation/provenance inputs and view-freshness diagnostics are carried as optional metadata only.
