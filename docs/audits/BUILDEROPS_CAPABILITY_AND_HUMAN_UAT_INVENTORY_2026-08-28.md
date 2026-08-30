@@ -46,9 +46,13 @@ duplicate #4710, #4741, #4748, #4749, #4826, #4169, #3788, or #4375.
 | CKM seed/assessment/gap/projection tests | Provenance, freshness, assessment dimensions, gap detection, and projection non-authority | Capability evidence inputs and diagnostic projection | CKM cannot choose Issues, mutate lifecycle, or replace human acceptance. |
 | BCP/TIA specs and parent Issues #3788/#4375 | PostgreSQL authority, cutover, temporal-intention and recovery target contracts | Future/high-risk capability validation backlog | These are not delivered runtime capabilities; browser UAT is insufficient proof. |
 
-## 3. Evidence model to use in reporting
+## 3. Evidence fields observed in this snapshot
 
-Report the following as independent fields, never as a single maturity score:
+The snapshot recorded the following independent fields; it did not create a repository-wide
+reporting contract or maturity score. Current reporting requirements are owned by the linked plan
+documents:
+`docs/plans/HUMAN_NEED_UAT_STRATEGY.md :: Human-need acceptance` and
+`docs/plans/SCENARIO_ACCEPTANCE_MATRIX.md :: Coverage and reporting`.
 
 1. `documented` — the human outcome and intended capability have an authoritative source.
 2. `specified` — the capability contract, boundary, invariants, and acceptance path are explicit.
@@ -59,10 +63,10 @@ Report the following as independent fields, never as a single maturity score:
 7. `owner_tried` — the owner genuinely exercised the receipt-backed result.
 8. `owner_accepted` — the owner explicitly accepted the bounded result through the authorized path.
 
-The first five can be evidenced by repository and delivery artifacts. The last three cannot be
-inferred from CI, merge, deployment, or a browser screenshot. The SoI Evidence View already models
-the same principle through source-owned identities, named denominators, independent source-state
-axes, and explicit withdrawal of unsupported claims.
+For the snapshot, the first five were evidenced by repository and delivery artifacts where
+available. The last three were not inferred from CI, merge, deployment, or a browser screenshot.
+The SoI Evidence View already models the same principle through source-owned identities, named
+denominators, independent source-state axes, and explicit withdrawal of unsupported claims.
 
 ## 4. Human-flow inventory and test posture
 
