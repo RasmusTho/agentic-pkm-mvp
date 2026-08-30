@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import time
 import re
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import JSONResponse
@@ -115,6 +115,7 @@ class AskSource(BaseModel):
     plane: str
     zone: str | None = None
     path: str | None = None
+    orientation: Literal["active", "waiting", "supporting", "background"] = "active"
 
 
 class RecallAttribution(BaseModel):
@@ -182,6 +183,21 @@ def _capture_intent_suggestion(transcript: str) -> str | None:
     return None
 
 
+def _orientation_of(payload: dict[str, Any], path: str | None) -> Literal["active", "waiting", "supporting", "background"]:
+    """Derive a bounded, read-only orientation label from retrieved evidence."""
+
+    declared = payload.get("orientation_role")
+    if declared in {"active", "waiting", "supporting", "background"}:
+        return declared
+    normalized_path = (path or "").casefold()
+    if "/sources/" in normalized_path or normalized_path.startswith("sources/"):
+        return "supporting"
+    text = " ".join(str(payload.get(key) or "") for key in ("title", "text", "content")).casefold()
+    if any(token in text for token in ("waiting", "deferred", "blocked")):
+        return "waiting"
+    return "active"
+
+
 def _to_source(hit: Any) -> AskSource:
     raw: dict[str, Any]
     if hasattr(hit, "model_dump"):
@@ -204,7 +220,13 @@ def _to_source(hit: Any) -> AskSource:
         plane=plane,
         zone=zone,
         path=str(path) if path else None,
+        orientation=_orientation_of(payload, str(path) if path else None),
     )
+
+
+def _is_return_orientation_question(question: str) -> bool:
+    normalized = question.casefold()
+    return "interrupt" in normalized or "returning" in normalized or "resume" in normalized
 
 
 @router.post("/ask", response_model=AskResponse)
@@ -238,6 +260,8 @@ async def ask(req: AskRequest, request: Request) -> AskResponse:
     latency_ms = int((time.perf_counter() - start) * 1000)
     record_ask_query(float(latency_ms))
     sources = [_to_source(hit) for hit in top_hits]
+    if _is_return_orientation_question(req.question):
+        sources = [source for source in sources if source.orientation != "background"]
     recalled = [
         RecallAttribution(
             memory_id=exp.artifact_id,

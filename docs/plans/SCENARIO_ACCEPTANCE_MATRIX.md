@@ -172,7 +172,7 @@ The system should help the user re-orient to current commitments, relevant artif
 
 ### Validation posture
 
-- current implementation posture: `partial`
+- current implementation posture: bounded `/api/ask` orientation retrieval is available; owner acceptance remains pending
 - test posture: `non-blocking acceptance` moving toward `nightly`
 - observable signals:
   - the user can recover the relevant note/source set for a previously active thread of work
