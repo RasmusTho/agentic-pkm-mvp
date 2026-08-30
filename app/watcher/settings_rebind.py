@@ -371,9 +371,9 @@ class DormantSettingsRebindReconciler:
                 receipt=None,
             )
         self._validate_record_bindings(record)
-        self._validate_old_root(snapshot, record, cfg)
-        receipt = self._load_matching_receipt(record)
         if record.phase == "prepared":
+            self._validate_old_root(snapshot, record, cfg)
+            receipt = self._load_matching_receipt(record)
             if receipt is not None and receipt.stage != "acknowledged":
                 raise RegistryError(
                     "prepared settings rebind has an invalid watcher receipt stage"
@@ -381,10 +381,17 @@ class DormantSettingsRebindReconciler:
             return RebindCycle(record=record, mode="prepared", receipt=receipt)
         if record.phase != "committed":
             raise RegistryError("settings rebind watcher phase is unsupported")
+        receipt = self._load_matching_receipt(record)
         if receipt is None:
             raise RegistryError(
                 "committed settings rebind has no durable watcher acknowledgement"
             )
+        if receipt.stage == "completed":
+            # The foreground loop updates cfg.vault_path to the candidate after
+            # completing a transition.  A completed receipt is stable state,
+            # not another old-root transition to validate on the next tick.
+            return RebindCycle(record=record, mode="stable", receipt=receipt)
+        self._validate_old_root(snapshot, record, cfg)
         _rebind_fault_point("commit")
         return RebindCycle(record=record, mode="committed", receipt=receipt)
 

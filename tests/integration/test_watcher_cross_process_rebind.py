@@ -152,6 +152,7 @@ def _fixture(
     monkeypatch: pytest.MonkeyPatch,
     *,
     enabled: bool = True,
+    prepare: bool = True,
 ) -> tuple[InstanceRegistryRuntime, Path, Path, Path]:
     vault_a = tmp_path / "vault-a"
     vault_b = tmp_path / "vault-b"
@@ -180,7 +181,8 @@ def _fixture(
     outbox_path = tmp_path / "index-outbox.jsonl"
     if outbox_path.exists():
         outbox_path.unlink()
-    _prepare(runtime)
+    if prepare:
+        _prepare(runtime)
     return runtime, vault_a, vault_b, config_path
 
 
@@ -709,7 +711,18 @@ def test_settings05_parent_acceptance(
     """The production API seam and the separate watcher converge end-to-end."""
     from app.vault.manager import VaultManager
 
-    runtime, _vault_a, vault_b, config_path = _fixture(tmp_path, monkeypatch)
+    runtime, _vault_a, vault_b, config_path = _fixture(
+        tmp_path,
+        monkeypatch,
+        prepare=False,
+    )
+    # This acceptance test exercises the production picker as the prepare
+    # producer, so begin from the durable A binding rather than the prepared
+    # B revision used by the watcher-only scenarios above.
+    monkeypatch.setenv(
+        "WATCHER_STATE_DIR",
+        str(tmp_path / "acceptance-watcher-state"),
+    )
     monkeypatch.setenv("SETTINGS_REBIND_WAIT_TIMEOUT_SECONDS", "15")
     monkeypatch.setenv("WATCHER_TICK_SLEEP_SECONDS", "0.05")
     monkeypatch.setattr(
