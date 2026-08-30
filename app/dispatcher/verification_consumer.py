@@ -3654,7 +3654,11 @@ def _checks_rejection(
     if not checks:
         return "missing_checks"
     required_checks = {"Unit tests (not pg)": ".github/workflows/ci-smoke.yaml"}
-    latest: dict[
+    latest_executed: dict[
+        tuple[str, str],
+        tuple[tuple[int, str, int], Mapping[str, object]],
+    ] = {}
+    latest_skipped: dict[
         tuple[str, str],
         tuple[tuple[int, str, int], Mapping[str, object]],
     ] = {}
@@ -3723,8 +3727,17 @@ def _checks_rejection(
             str(check.get("started_at") or check.get("completed_at") or ""),
             index,
         )
-        if key not in latest or rank > latest[key][0]:
-            latest[key] = (rank, check)
+        selected = (
+            latest_skipped
+            if _is_skipped_conclusion(check.get("conclusion"))
+            else latest_executed
+        )
+        if key not in selected or rank > selected[key][0]:
+            selected[key] = (rank, check)
+    latest = {
+        key: latest_executed.get(key) or latest_skipped[key]
+        for key in latest_executed.keys() | latest_skipped.keys()
+    }
     for required_name in required_checks:
         candidates = [
             check
@@ -3746,6 +3759,10 @@ def _checks_rejection(
         }:
             return "checks_not_green"
     return None
+
+
+def _is_skipped_conclusion(value: object) -> bool:
+    return isinstance(value, str) and value.lower() == "skipped"
 
 
 def _context_pack_from_authority(
