@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+import threading
 import time
 
 import pytest
@@ -754,6 +755,82 @@ def test_same_target_prepared_selection_finishes_durable_commit(
     assert record.phase == "no_lifecycle"
     assert record.candidate_binding_id == "binding-b"
     assert record.desired_revision == record.applied_revision == 1
+
+
+def test_concurrent_same_target_callers_wait_for_commit_and_resume(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Both same-target callers remain blocked until the protected transition resumes."""
+    from app.instance.settings_rebind import SettingsRebindActivation
+
+    runtime, _vault_a, vault_b, _config_path = _fixture(
+        tmp_path,
+        monkeypatch,
+        prepare=False,
+    )
+    monkeypatch.setattr("app.settings.ingestion.ingest_settings", lambda **_kwargs: None)
+    registration = runtime.registry.load().registrations["binding-b"]
+    selection = KnownVaultRef(
+        ref=registration.ref,
+        path=registration.path,
+        vault_id=registration.vault_id,
+        vault_name=registration.vault_name,
+        local_instance_id=registration.local_instance_id,
+        last_opened_at="2026-08-30T00:00:00Z",
+    )
+    acknowledge_barrier = threading.Barrier(2)
+    resume_event = threading.Event()
+    results: list[SettingsRebindRecord] = []
+    errors: list[BaseException] = []
+
+    def wait_for_stage(
+        _activation: SettingsRebindActivation,
+        _record: SettingsRebindRecord,
+        *,
+        required_stage: str,
+    ) -> None:
+        if required_stage == "acknowledged":
+            acknowledge_barrier.wait(timeout=5)
+        else:
+            assert resume_event.wait(timeout=5)
+
+    monkeypatch.setattr(SettingsRebindActivation, "_wait_for_stage", wait_for_stage)
+
+    def run_activation() -> None:
+        try:
+            result = SettingsRebindActivation(
+                runtime.registry,
+                watcher_state_dir=tmp_path / "watcher-state",
+                watcher_enabled=True,
+            ).activate(
+                selection=selection,
+                candidate_binding_id="binding-b",
+                candidate_root=vault_b,
+            )
+            results.append(result)
+        except BaseException as exc:  # pragma: no cover - asserted below
+            errors.append(exc)
+
+    threads = [threading.Thread(target=run_activation) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    try:
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            if runtime.open_settings_rebind_store().read().phase == "committed":
+                break
+            time.sleep(0.01)
+        assert runtime.open_settings_rebind_store().read().phase == "committed"
+        assert results == []
+    finally:
+        resume_event.set()
+        for thread in threads:
+            thread.join(timeout=5)
+
+    assert not errors
+    assert len(results) == 2
+    assert {result.phase for result in results} == {"committed"}
 
 
 def test_settings05_parent_acceptance(

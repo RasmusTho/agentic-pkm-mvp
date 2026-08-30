@@ -354,12 +354,15 @@ class SettingsRebindActivation:
             # only success receipt the losing request may return.
             observed = self.store.read()
             if (
-                observed.phase == "committed"
+                observed.phase in {"prepared", "committed"}
                 and observed.candidate_binding_id == candidate_binding_id
             ):
-                self._wait_for_completed_if_enabled(observed)
-                return observed
-            raise
+                if observed.phase == "committed":
+                    self._wait_for_completed_if_enabled(observed)
+                    return observed
+                prepared = observed
+            else:
+                raise
         if prepared.phase != "prepared":
             return prepared
 
