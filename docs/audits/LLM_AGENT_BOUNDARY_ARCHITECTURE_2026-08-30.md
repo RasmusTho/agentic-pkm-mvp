@@ -53,6 +53,20 @@ tcd_plan:
   issue_local_helper_budget: 0
   context_cost:
     measurement: estimated
+    input_tokens: unknown(not separately measured)
+    agent_starts: 1
+    context_pack_bytes: unknown(not separately measured)
+    compactions: unknown(not separately measured)
+  recommended_capability:
+    workflow_or_skill: architecture-research
+    model_family: configuration-resolved Codex capability
+    reasoning_effort: high
+    tools: git exact-SHA inspection, GitHub REST reads, repository search
+    github_context_required: true
+  cheapest_acceptable_path: Coordinator-only evidence synthesis from one pinned main snapshot; no explorer fan-out.
+  escalation_triggers: Contradictory owner contracts, a source snapshot change, or an authority boundary that cannot be reconciled from existing records.
+  deescalation_triggers: A bounded docs-only update with one owner surface and locally verifiable citations.
+  review_gate: Docs ownership and current-state claim review, followed by docs guard and focused architecture/governance tests.
 ```
 
 ## 2. Research questions
@@ -365,9 +379,9 @@ read-only reconciliation.
 
 | ID | Category | Status | Invariant | Current evidence / enforcement gap |
 | --- | --- | --- | --- | --- |
-| LLM-BOUNDARY-01 | MUST | Violated today | Caller intent contains no provider, model, endpoint, credential value, host path, or session handle. | Builder intent enforces this (`app/builderops/model_inquiry_adapters.py:355-432`); Product/eval settings paths still expose provider/model selection (`app/services/llm.py:315-364`; `app/eval/llm_client.py:18-71`). |
+| LLM-BOUNDARY-01 | MUST | Exists — keep | Caller intent contains no provider, model, endpoint, credential value, host path, or session handle. | Builder `ModelAccessIntent` and Product `LLMTaskIntent` requests are provider-free (`app/builderops/model_inquiry_adapters.py:355-432`; `llm_contract/__init__.py:70-79`; `app/components/llm/router.py:15-22`). Product/eval settings still expose runtime transport selection (`app/services/llm.py:315-364`; `app/eval/llm_client.py:18-71`), which is inventory for LLM-BOUNDARY-11 rather than a caller-intent violation. |
 | LLM-BOUNDARY-02 | MUST | Violated today | Only an adapter executes provider HTTP, provider SDK, or model-process transport; direct call sites fail the boundary review. | Product legacy HTTP and reflection direct call are present (`app/services/llm.py:78-312`; `app/chat/reflection_conversation.py:271-285`). |
-| LLM-BOUNDARY-03 | MUST | Exists — keep | Resolution is immutable and records selected/effective identity, adapter, capabilities, runtime/channel/consumer scope, and degraded state. | Builder `ResolvedModelAccess` covers the pattern (`llm_contract/__init__.py:101-123`; `app/builderops/model_access_resolver.py:137-182`); Product `LLMRoute` remains a separate policy object (`app/components/llm/fabric.py:41-73`). |
+| LLM-BOUNDARY-03 | MUST | Violated today | Resolution is immutable and records selected/effective identity, adapter, capabilities, runtime/channel/consumer scope, and degraded state. | Builder `ResolvedModelAccess` records the request, selected/effective identity, adapter, capabilities, credential reference, and degradation (`llm_contract/__init__.py:101-123`), but `runtime`/`channel`/`consumer` are resolver arguments and are not retained in that resolved value (`app/builderops/model_access_resolver.py:125-182`). Product `LLMRoute` remains a separate policy object (`app/components/llm/fabric.py:41-73`); a future mapper must retain needed scope at a handoff. |
 | LLM-BOUNDARY-04 | MUST | Violated today | A typed failure or empty/invalid result cannot be normalized as successful cognition. | Strong in constrained completion (`app/components/llm/constrained.py:138-177`) and Model Inquiry (`app/builderops/model_inquiry_runner.py:570-688`); reasoning/planner/QA fallback paths differ (`app/components/reasoning/facade.py:477-500`; `app/planner/provider.py:296-305`). |
 | LLM-BOUNDARY-05 | MUST | Exists — keep | Fallback executes only when an owning runtime has declared and selected the allowed fallback requirement; substrate never chooses. | ADR-0063/0064 define this (`docs/adr/ADR-0063-shared-llm-contract-kernel.md:102-116`; `docs/adr/ADR-0064-model-access-substrate.md:141-148`); domain fallbacks remain separate. |
 | LLM-BOUNDARY-06 | MUST | Exists — keep | Credential values, raw auth headers, provider error bodies, and secret-bearing environment values never enter prompts, artifacts, logs, or receipts. | Builder redaction/minimal-env tests pass in the inspected suite (`tests/builderops/test_model_inquiry_adapters.py:67-147`); Product transport/logging remains incomplete (`app/services/llm.py:484-495`). |
