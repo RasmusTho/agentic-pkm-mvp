@@ -36,6 +36,7 @@ from .models import (
     ReviewerSettings,
     SettingsBundle,
     TTSSettings,
+    WatcherAndTuningSettings,
     YggdrasilPaths,
     EmbeddingProfiles,
 )
@@ -525,6 +526,27 @@ def compile_all(
     if "tts" in file_paths:
         _update_reference(file_paths["tts"], "TTS", bundle.tts, writeback_allowed(file_paths["tts"]), vault_root=resolved_vault_root)
 
+    watcher_and_tuning_payload = _merge_sections(file_sections.get("watcher_and_tuning", {}))
+    watcher_and_tuning_model, watcher_and_tuning_canonical, watcher_and_tuning_fixed = _hydrate_model(
+        payload=watcher_and_tuning_payload, model_cls=WatcherAndTuningSettings
+    )
+    bundle.watcher_and_tuning = watcher_and_tuning_model
+    if watcher_and_tuning_fixed and "watcher_and_tuning" in file_paths and writeback_allowed(file_paths["watcher_and_tuning"]):
+        writeback_settings_block(
+            file_paths["watcher_and_tuning"],
+            watcher_and_tuning_canonical,
+            previous=watcher_and_tuning_payload,
+            vault_root=resolved_vault_root,
+        )
+    if "watcher_and_tuning" in file_paths:
+        _update_reference(
+            file_paths["watcher_and_tuning"],
+            "Watcher and tuning",
+            bundle.watcher_and_tuning,
+            writeback_allowed(file_paths["watcher_and_tuning"]),
+            vault_root=resolved_vault_root,
+        )
+
     yggdrasil_payload = _merge_sections(file_sections.get("yggdrasil", {}))
     if yggdrasil_payload:
         ygg_model, ygg_canonical, ygg_fixed = _hydrate_model(
@@ -598,6 +620,7 @@ def compile_all(
         dump(staged_runtime, "providers.yaml", bundle.providers.model_dump())
         dump(staged_runtime, "llm_routing.yaml", bundle.llm_routing.model_dump())
         dump(staged_runtime, "tts.yaml", bundle.tts.model_dump())
+        dump(staged_runtime, "watcher_and_tuning.yaml", bundle.watcher_and_tuning.model_dump())
         dump(staged_runtime, "instance.yaml", bundle.instance.model_dump())
         if bundle.yggdrasil_paths is not None:
             dump(staged_runtime, "yggdrasil.yaml", bundle.yggdrasil_paths.model_dump())

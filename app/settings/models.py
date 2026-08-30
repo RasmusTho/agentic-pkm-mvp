@@ -400,6 +400,22 @@ class TTSSettings(BaseModel):
     )
 
 
+class WatcherAndTuningSettings(BaseModel):
+    """Lab-tier watcher cadence and offline curation/expansion thresholds.
+
+    Operator profile deliberately retains the historical defaults.  The values
+    are still compiled and explainable there, but consumers apply them only
+    after the explicit lab-profile opt-in.
+    """
+
+    debounce_ms: int = Field(default=1500, ge=0)
+    rate_limit_per_min: int = Field(default=30, ge=1)
+    backoff_seconds: int = Field(default=10, ge=0)
+    tick_sleep_seconds: float = Field(default=1.0, gt=0)
+    connect_relatedness_floor: float = Field(default=0.55, ge=0.0, le=1.0)
+    contradiction_floor: float = Field(default=0.4, ge=0.0, le=1.0)
+
+
 class QaSettings(AgentBase):
     search_k: int = Field(default=8, description="Documents retrieved before filtering.")
     context_docs: int = Field(default=5, description="Documents kept in the final answer context.")
@@ -513,6 +529,7 @@ class SettingsBundle(BaseModel):
     embedding_profiles: EmbeddingProfiles = Field(default_factory=EmbeddingProfiles)
     retrieval_tuning: RetrievalTuning = Field(default_factory=RetrievalTuning)
     tts: TTSSettings = Field(default_factory=TTSSettings)
+    watcher_and_tuning: WatcherAndTuningSettings = Field(default_factory=WatcherAndTuningSettings)
     agents: Dict[str, Any] = Field(default_factory=dict)
     yggdrasil_paths: Optional[YggdrasilPaths] = None
     instance: InstanceSettings = Field(default_factory=InstanceSettings)

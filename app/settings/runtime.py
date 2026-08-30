@@ -23,6 +23,7 @@ from .models import (
     EmbeddingProfiles,
     RetrievalTuning,
     TTSSettings,
+    WatcherAndTuningSettings,
     YggdrasilPaths,
 )
 from app.config.environment import active_environment
@@ -83,6 +84,9 @@ def _build_bundle() -> SettingsBundle:
             runtime_dir / "retrieval_tuning.yaml", setting_name="retrieval_tuning.yaml"
         )
         tts_yaml = _read_typed_mapping_yaml(runtime_dir / "tts.yaml", setting_name="tts.yaml")
+        watcher_and_tuning_yaml = _read_typed_mapping_yaml(
+            runtime_dir / "watcher_and_tuning.yaml", setting_name="watcher_and_tuning.yaml"
+        )
         instance_yaml = _read_yaml(runtime_dir / "instance.yaml")
         yggdrasil_yaml = _read_yaml(runtime_dir / "yggdrasil.yaml")
         agents_dir = runtime_dir / "agents"
@@ -133,6 +137,7 @@ def _build_bundle() -> SettingsBundle:
         embedding_profiles=embedding_profiles,
         retrieval_tuning=retrieval_tuning,
         tts=TTSSettings(**tts_yaml),
+        watcher_and_tuning=WatcherAndTuningSettings(**watcher_and_tuning_yaml),
         agents=agents,
         yggdrasil_paths=yggdrasil_paths,
         instance=instance_settings,
