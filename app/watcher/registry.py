@@ -1175,20 +1175,65 @@ def _normalized_scan_roots(
 
 
 def _scan_identity(vault_root: Path, scan_roots: Iterable[Path], scope_glob: str) -> str:
+    """Identify the concrete vault and roots behind a resumable scan.
+
+    Paths alone are not sufficient: an operator can replace a vault at the same
+    pathname while a checkpoint still contains a cursor and observations from
+    the old tree. Include filesystem identity and the selected vault marker so
+    that such a replacement starts a fresh generation instead of reconciling
+    unrelated content.
+    """
+
+    def path_identity(path: Path, *, relative_to: Path | None = None) -> dict[str, object]:
+        try:
+            resolved = path.resolve()
+            identity = resolved.stat()
+            record: dict[str, object] = {
+                "path": (
+                    resolved.relative_to(relative_to).as_posix()
+                    if relative_to is not None
+                    else str(resolved)
+                ),
+                "dev": int(identity.st_dev),
+                "ino": int(identity.st_ino),
+            }
+            return record
+        except (OSError, ValueError) as exc:
+            return {
+                "path": str(path),
+                "error": type(exc).__name__,
+            }
+
     try:
         vault_real = vault_root.resolve()
     except OSError:
-        roots = []
         vault_real = vault_root
-    else:
-        roots = []
-        for path in scan_roots:
-            try:
-                roots.append(path.resolve().relative_to(vault_real).as_posix())
-            except (OSError, ValueError):
-                continue
+    marker = vault_real / "settings" / "vault.md"
+    marker_record: dict[str, object]
+    try:
+        marker_identity = marker.stat()
+        marker_record = {
+            "dev": int(marker_identity.st_dev),
+            "ino": int(marker_identity.st_ino),
+            "size": int(marker_identity.st_size),
+            "mtime_ns": int(marker_identity.st_mtime_ns),
+            "sha256": hashlib.sha256(marker.read_bytes()).hexdigest(),
+        }
+    except FileNotFoundError:
+        marker_record = {"exists": False}
+    except OSError as exc:
+        marker_record = {"error": type(exc).__name__}
+    roots = [
+        path_identity(path, relative_to=vault_real)
+        for path in scan_roots
+    ]
     encoded = json.dumps(
-        {"vault": str(vault_real), "roots": roots, "scope": scope_glob},
+        {
+            "vault": path_identity(vault_real),
+            "marker": marker_record,
+            "roots": roots,
+            "scope": scope_glob,
+        },
         sort_keys=True,
     )
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
@@ -1265,17 +1310,21 @@ def _next_incremental_markdown(
             _record_scan_error(state)
             state.scan_stack.pop()
             continue
-        try:
-            nested_marker = directory / "settings" / "vault.md"
-            if stat_module.S_ISREG(nested_marker.stat().st_mode):
+        # The selected root is itself expected to carry this marker. Only a
+        # marker strictly below it is a nested-vault boundary; treating the
+        # root marker as nested would recreate the root frame forever in every
+        # production vault.
+        if resolved_directory != selected_real:
+            enclosing = nearest_enclosing_vault_root(
+                resolved_directory, search_root=selected_real
+            )
+            if enclosing is None:
+                _record_scan_error(state)
                 state.scan_stack.pop()
                 continue
-        except FileNotFoundError:
-            pass
-        except OSError:
-            _record_scan_error(state)
-            state.scan_stack.pop()
-            continue
+            if enclosing != selected_real:
+                state.scan_stack.pop()
+                continue
         cached = directory_cache.get(frame["dir"])
         if cached is None:
             try:

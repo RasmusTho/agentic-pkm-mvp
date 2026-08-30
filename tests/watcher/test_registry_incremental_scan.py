@@ -544,6 +544,98 @@ def test_scan_root_resolution_failure_is_durable_and_identity_is_safe(
     assert state.scan_generation_had_error is True
 
 
+def test_selected_vault_marker_is_not_treated_as_nested_boundary(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cfg, spec, vault = _make_cfg(tmp_path, max_files=2)
+    _write_note(
+        vault,
+        "settings/vault.md",
+        body="---\nschema: design-handoff.vault.v1\nvaultId: selected\n---\n",
+    )
+    _write_note(vault, "notes/visible.md", body="selected vault content")
+    monkeypatch.setattr(registry, "_emit_watch_event", lambda **_: "trace-ok")
+
+    state, summaries = _run_until_drained(
+        cfg, spec, _load_state(cfg, spec), start=1_700_009_000.0
+    )
+
+    assert state.file_entry("notes/visible.md") is not None
+    assert any(summary["observation_status"] == "healthy-idle" for summary in summaries)
+    assert not cfg.stop_file.exists()
+
+
+def test_scan_identity_changes_when_vault_is_replaced_at_same_path(tmp_path: Path) -> None:
+    cfg, spec, vault = _make_cfg(tmp_path)
+    _write_note(vault, "settings/vault.md", body="vaultId: old\n")
+    old_roots = registry._normalized_scan_roots(vault, [vault], state=WatcherState())
+    old_identity = registry._scan_identity(vault, old_roots, spec.scope_glob)
+    state = WatcherState(
+        scan_in_progress=True,
+        scan_generation=7,
+        scan_identity=old_identity,
+        scan_stack=[{"dir": "notes", "after": "old.md"}],
+    )
+
+    replacement = tmp_path / "vault-old"
+    vault.rename(replacement)
+    vault.mkdir()
+    _write_note(vault, "settings/vault.md", body="vaultId: replacement\n")
+    new_roots = registry._normalized_scan_roots(vault, [vault], state=state)
+    new_identity = registry._scan_identity(vault, new_roots, spec.scope_glob)
+
+    registry._begin_or_resume_scan(
+        state,
+        vault_root=cfg.vault_path,
+        scan_roots=new_roots,
+        scope_glob=spec.scope_glob,
+    )
+
+    assert new_identity != old_identity
+    assert state.scan_generation == 8
+    assert state.scan_stack == []
+    assert state.scan_identity == new_identity
+
+
+def test_resumed_scan_revalidates_ancestor_vault_boundary(
+    tmp_path: Path,
+) -> None:
+    _cfg, spec, vault = _make_cfg(tmp_path)
+    notes = vault / "notes"
+    notes.mkdir()
+    replacement = vault / "private-vault"
+    _write_note(
+        replacement,
+        "settings/vault.md",
+        body="---\nschema: design-handoff.vault.v1\nvaultId: private\n---\n",
+    )
+    _write_note(replacement, "subdir/secret.md", body="must not be traversed")
+    state = WatcherState(
+        scan_in_progress=True,
+        scan_generation=1,
+        scan_identity=registry._scan_identity(vault, [vault], spec.scope_glob),
+        scan_stack=[{"dir": "notes/subdir", "after": ""}],
+    )
+    notes.rmdir()
+    notes.symlink_to(replacement, target_is_directory=True)
+
+    next_file, exhausted = registry._next_incremental_markdown(
+        vault_root=vault,
+        scan_roots=[vault],
+        scope_glob=spec.scope_glob,
+        state=state,
+        summary={"scan_progress_entries": 0},
+        deadline=float("inf"),
+        directory_cache={},
+    )
+
+    assert next_file is None
+    assert exhausted is True
+    assert state.errors == 0
+    assert state.file_entry("notes/subdir/secret.md") is None
+    assert state.scan_generation_had_error is False
+
+
 def test_resumed_scan_stack_revalidates_changed_boundary(
     tmp_path: Path,
 ) -> None:
