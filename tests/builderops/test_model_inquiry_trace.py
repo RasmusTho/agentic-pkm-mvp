@@ -736,6 +736,7 @@ def test_trace_never_contains_credential_material(
     service.start(
         question="Prove credential material stays out of durable state",
         workflow="fable-gpt-architecture",
+        acceptance_mode="single_target",
         inquiry_id="inq_test_credential_trace",
         source_refs=source_refs,
     )
@@ -778,7 +779,7 @@ def test_trace_never_contains_credential_material(
     result = ModelInquiryRunner(
         service, env=provisioned_env(tmp_path / "secrets")
     ).run("inq_test_credential_trace", max_rounds=1)
-    assert result["outcome"] == "consensus"
+    assert result["outcome"] == "single_target_acceptance"
 
     trace = ModelInquiryService(vault).trace("inq_test_credential_trace")
     serialized = json.dumps(trace, sort_keys=True)
@@ -810,7 +811,7 @@ def test_trace_never_contains_credential_material(
         "inq_test_credential_absent"
     )
     assert absent["details"]["diagnostic"]["credential_identity_ref"] == (
-        "anthropic.api-key"
+        "openai.api-key"
     )
     absent_serialized = json.dumps(absent_trace, sort_keys=True)
     for credential in DECLARED_TEST_CREDENTIALS.values():

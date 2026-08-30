@@ -1487,6 +1487,12 @@ def design_run_result(
     type=click.Path(exists=True, dir_okay=False, path_type=Path),
 )
 @click.option("--workflow", required=True)
+@click.option(
+    "--acceptance-mode",
+    type=click.Choice(["single_target"]),
+    default="single_target",
+    show_default=True,
+)
 @click.option("--inquiry-id", default=None)
 @click.option("--source-ref", multiple=True)
 @click.option("--created-by", default=None)
@@ -1496,6 +1502,7 @@ def inquiry_start(
     ctx: click.Context,
     question_file: Path,
     workflow: str,
+    acceptance_mode: str,
     inquiry_id: str | None,
     source_ref: tuple[str, ...],
     created_by: str | None,
@@ -1511,6 +1518,7 @@ def inquiry_start(
         payload = _model_inquiry_service(ctx).start(
             question=question,
             workflow=workflow,
+            acceptance_mode=acceptance_mode,
             inquiry_id=inquiry_id,
             source_refs=refs,
             created_by=_parse_actor(created_by),

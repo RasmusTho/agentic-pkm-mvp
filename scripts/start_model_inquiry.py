@@ -35,7 +35,7 @@ from app.builderops.models import BuilderOpsValidationError
 from app.ops.host_secret_bootstrap import HOST_SECRET_BOOTSTRAP_FAILURE_REF
 from scripts.install_model_inquiry_host import CREDENTIAL_RESOLUTION
 
-WORKFLOW = "fable-gpt-architecture"
+WORKFLOW = "governed-model-inquiry"
 SOURCE_REF = "desktop_skill:start-model-inquiry"
 CREDENTIAL_UNAVAILABLE_EXIT_CODE = 1
 INVALID_TYPED_TERMINAL_EXIT_CODE = 2
@@ -137,6 +137,8 @@ def launch(
                 str(question_file),
                 "--workflow",
                 WORKFLOW,
+                "--acceptance-mode",
+                "single_target",
                 "--source-ref",
                 SOURCE_REF,
                 "--created-by",

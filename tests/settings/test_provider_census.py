@@ -128,25 +128,30 @@ def test_builder_execution_profiles_cover_supported_capability_tiers() -> None:
             _assert_mapping(census, profile)
 
 
-def test_model_inquiry_role_profiles_are_exact_distinct_and_provider_free() -> None:
+def test_model_inquiry_profiles_bind_configured_capability() -> None:
     census = _census()
-    expected = {
-        "fable": ("anthropic", "claude-fable-5", "anthropic.api-key", {"structured_output", "system_prompt_channel"}),
-        "gpt_codex": ("openai", "gpt-5.6-sol", "openai.api-key", {"structured_output"}),
-    }
-    for profiles in census.runtime_channels.model_inquiry_profiles.values():
-        assert {profile.role for profile in profiles} == set(expected)
-        targets = set()
-        for profile in profiles:
-            provider, model, credential, capabilities = expected[profile.role]
-            assert (profile.provider, profile.model, profile.credential_identifier, profile.requires) == (provider, model, credential, capabilities)
-            _assert_mapping(census, profile)
-            declared = next(item for item in census.provider(profile.provider).models if item.id == profile.model)
-            targets.add((profile.provider, profile.model, declared.effective_identity))
-        assert len(targets) == 2
-    assert census.runtime_channels.resolution_groups[0].independence == "distinct_effective_target"
-    assert [group.id for group in census.runtime_channels.resolution_groups] == ["model-inquiry-independent-review"]
-    assert all(profile.resolution_group == "model-inquiry-independent-review" for profiles in census.runtime_channels.model_inquiry_profiles.values() for profile in profiles)
+
+    assert set(census.runtime_channels.model_inquiry) == {"dev", "test", "prod"}
+    for channel, profile in census.runtime_channels.model_inquiry.items():
+        assert profile.acceptance_mode == "single_target"
+        assert profile.capability_tier == "sol"
+        assert profile.perspectives == ["synthesis", "verification"]
+        assert profile.operational_transport == "codex_subscription"
+        resolved = census.runtime_channels.builder_execution[channel][
+            profile.capability_tier
+        ]
+        _assert_mapping(census, resolved)
+    assert not hasattr(census.runtime_channels, "model_inquiry_profiles")
+    assert not hasattr(census.runtime_channels, "resolution_groups")
+
+
+def test_model_inquiry_profiles_are_single_target_and_provider_free() -> None:
+    census = _census()
+    for profile in census.runtime_channels.model_inquiry.values():
+        assert profile.acceptance_mode == "single_target"
+        assert profile.capability_tier == "sol"
+        assert profile.perspectives == ["synthesis", "verification"]
+        assert profile.operational_transport == "codex_subscription"
     caller = Path("app/builderops/model_inquiry.py").read_text(encoding="utf-8")
     assert "claude-fable-5" not in caller
     assert "gpt-5.6-sol" not in caller

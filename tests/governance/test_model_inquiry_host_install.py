@@ -1138,6 +1138,6 @@ def test_headless_entrypoints_do_not_require_subscription_session(
     )
 
     assert executed.returncode == 78, executed.stderr
-    assert "anthropic.api-key" in executed.stderr
+    assert "openai.api-key" in executed.stderr
     assert "ANTHROPIC_API_KEY" not in executed.stderr
     assert executed.stdout == ""

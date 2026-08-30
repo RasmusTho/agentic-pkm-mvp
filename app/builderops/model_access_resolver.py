@@ -20,10 +20,11 @@ from pathlib import Path
 
 from app.builderops.models import BuilderOpsValidationError
 from app.components.settings.providers_loader import (
+    BuilderExecutionProfile,
     DesignAgentProfile,
+    ModelInquiryProfile,
     ProviderCensus,
     ProviderEntry,
-    RoleProfile,
     TierMapping,
     load_provider_census,
 )
@@ -50,7 +51,9 @@ CKM_SEMANTIC_RESOLUTION_GROUP = "ckm-semantic-association"
 CKM_SEMANTIC_ROLE = "ckm_semantic"
 DESIGN_AGENT_CONSUMER = "builderops-design-run"
 MODEL_INQUIRY_CONSUMER = "builderops-model-inquiry"
-MODEL_INQUIRY_RESOLUTION_GROUP = "model-inquiry-independent-review"
+MODEL_INQUIRY_RESOLUTION_GROUP = "model-inquiry-single-target"
+MODEL_INQUIRY_ROLE = "model_inquiry"
+MODEL_INQUIRY_OPERATIONAL_TRANSPORT = "codex_subscription"
 NON_PROVIDER_IDENTITIES = frozenset({"mock", "fake", "deterministic", "test"})
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -64,6 +67,7 @@ _CAPABILITY_FIELDS = (
     "deterministic_execution",
 )
 _MODEL_INQUIRY_REASONING_EFFORT = "xhigh"
+_MODEL_INQUIRY_ACCESS_CLASS = "frontier"
 _MODEL_INQUIRY_DETERMINISM_REQUIRED = False
 _MODEL_INQUIRY_OUTPUT_SCHEMA_REF = "builderops.model-turn-response.v1"
 _MODEL_INQUIRY_SIDE_EFFECT_CLASS = "advisory_review"
@@ -138,6 +142,13 @@ class BuilderModelAccessResolver:
                 channel=channel,
                 consumer=consumer,
             )
+        if consumer == MODEL_INQUIRY_CONSUMER:
+            return self._resolve_model_inquiry(
+                request,
+                runtime=runtime,
+                channel=channel,
+                consumer=consumer,
+            )
         return self.resolve_group(
             [request],
             runtime=runtime,
@@ -164,21 +175,22 @@ class BuilderModelAccessResolver:
                 channel=channel,
                 consumer=consumer,
             )
-        self._require_builder_authority(runtime=runtime, consumer=consumer)
-        profiles = self._channel_profiles(channel)
-        resolutions = tuple(
-            self._resolve_one(request, profiles=profiles, channel=channel, consumer=consumer)
-            for request in request_tuple
+        if consumer != MODEL_INQUIRY_CONSUMER or len(request_tuple) != 1:
+            raise ModelAccessResolutionError(
+                "Model Inquiry resolution requires exactly one configured target request"
+            )
+        resolutions = (
+            self._resolve_model_inquiry(
+                request_tuple[0],
+                runtime=runtime,
+                channel=channel,
+                consumer=consumer,
+            ),
         )
         try:
             validated = validate_resolved_group(request_tuple, resolutions)
         except ValueError as exc:
             raise ModelAccessResolutionError(str(exc)) from exc
-        adapter_ids = [item.adapter_id for item in validated]
-        if len(set(adapter_ids)) != len(adapter_ids):
-            raise ModelAccessResolutionError(
-                "resolved group requires distinct adapter_id values"
-            )
         return validated
 
     def _resolve_design_group(
@@ -534,34 +546,31 @@ class BuilderModelAccessResolver:
                 "Builder resolver refuses an undeclared model access consumer"
             )
 
-    def _channel_profiles(self, channel: str) -> dict[str, RoleProfile]:
-        profiles = self.census.runtime_channels.model_inquiry_profiles.get(channel)
-        if not profiles:
+    def model_inquiry_profile(self, channel: str) -> ModelInquiryProfile:
+        profile = self.census.runtime_channels.model_inquiry.get(channel)
+        if profile is None:
             raise ModelAccessResolutionError(
                 "declared census has no Model Inquiry profile for the requested channel"
             )
-        by_role: dict[str, RoleProfile] = {}
-        for profile in profiles:
-            if profile.role in by_role:
-                raise ModelAccessResolutionError(
-                    "declared census repeats a Model Inquiry role profile"
-                )
-            by_role[profile.role] = profile
-        return by_role
+        return profile
 
-    def _resolve_one(
+    def _resolve_model_inquiry(
         self,
         request: ModelResolutionRequest,
         *,
-        profiles: Mapping[str, RoleProfile],
+        runtime: str,
         channel: str,
         consumer: str,
     ) -> ResolvedModelAccess:
-        role = request.role_profile
-        profile = profiles.get(role)
-        if profile is None:
+        self._require_builder_authority(runtime=runtime, consumer=consumer)
+        profile = self.model_inquiry_profile(channel)
+        if request.role_profile != MODEL_INQUIRY_ROLE:
             raise ModelAccessResolutionError(
-                f"declared census has no profile for role: {role}"
+                "Builder Model Inquiry policy requires the neutral target role"
+            )
+        if request.resolution_group_id != MODEL_INQUIRY_RESOLUTION_GROUP:
+            raise ModelAccessResolutionError(
+                "Builder Model Inquiry policy requires the single-target resolution group"
             )
         intent = request.intent
         if intent.fallback_requirement != "fallback_forbidden":
@@ -569,9 +578,9 @@ class BuilderModelAccessResolver:
                 "Builder Model Inquiry policy forbids any fallback requirement other than "
                 "fallback_forbidden"
             )
-        if intent.capability_tier != profile.capability_tier:
+        if intent.capability_tier != _MODEL_INQUIRY_ACCESS_CLASS:
             raise ModelAccessResolutionError(
-                "declared intent capability tier does not match the census role profile"
+                "Builder Model Inquiry policy requires the frontier access class"
             )
         if intent.reasoning_effort != _MODEL_INQUIRY_REASONING_EFFORT:
             raise ModelAccessResolutionError(
@@ -589,40 +598,28 @@ class BuilderModelAccessResolver:
             raise ModelAccessResolutionError(
                 "Builder Model Inquiry policy permits advisory review only"
             )
-        if request.resolution_group_id != profile.resolution_group:
+        if intent.independence != "none":
             raise ModelAccessResolutionError(
-                "declared intent resolution group does not match the census role profile"
+                "Builder Model Inquiry single-target policy forbids independence claims"
             )
-        group = next(
-            (
-                item
-                for item in self.census.runtime_channels.resolution_groups
-                if item.id == profile.resolution_group
-            ),
-            None,
+        target = self._builder_execution_profile(
+            channel=channel,
+            capability_tier=profile.capability_tier,
         )
-        if group is None:
-            raise ModelAccessResolutionError(
-                "declared census has no matching resolution group"
-            )
-        if intent.independence != group.independence:
-            raise ModelAccessResolutionError(
-                "declared intent independence does not match the census resolution group"
-            )
-        provider = self._provider(profile.provider)
+        provider = self._provider(target.provider)
         if provider.id.lower() in NON_PROVIDER_IDENTITIES or provider.tier == "test":
             raise ModelAccessResolutionError(
                 "provider-enabled roles cannot resolve a mock identity"
             )
-        model = next((item for item in provider.models if item.id == profile.model), None)
+        model = next((item for item in provider.models if item.id == target.model), None)
         if model is None:
             raise ModelAccessResolutionError(
-                "declared census profile references an undeclared model"
+                "declared Builder execution profile references an undeclared model"
             )
         capabilities = self._capabilities(provider, model.capabilities)
         missing = sorted(
             capability
-            for capability in profile.requires
+            for capability in target.requires
             if not getattr(capabilities, capability)
         )
         if missing:
@@ -630,10 +627,8 @@ class BuilderModelAccessResolver:
                 "declared target does not satisfy census-required capabilities: "
                 + ", ".join(missing)
             )
-        credential = self._credential_identity(
-            profile,
+        credential = self._model_inquiry_credential_identity(
             provider,
-            role=role,
             channel=channel,
             consumer=consumer,
         )
@@ -662,22 +657,24 @@ class BuilderModelAccessResolver:
         )
         return ModelCapabilities(**resolved, embedding_dimension=dimension)
 
-    def _credential_identity(
+    def _model_inquiry_credential_identity(
         self,
-        profile: RoleProfile,
         provider: ProviderEntry,
         *,
-        role: str,
         channel: str,
         consumer: str,
     ) -> str:
-        credential = profile.credential_identifier
-        if credential not in provider.credential_identifiers:
+        credentials = tuple(provider.credential_identifiers)
+        if len(credentials) != 1:
             raise ModelAccessResolutionError(
-                "declared census role profile uses an undeclared provider credential"
+                "configured Model Inquiry provider must expose one credential identity"
             )
+        credential = credentials[0]
         try:
-            required = self.contract.required_secrets_for_role(consumer=consumer, role=role)
+            required = self.contract.required_secrets_for_role(
+                consumer=consumer,
+                role=MODEL_INQUIRY_ROLE,
+            )
             self.contract.require_declared(
                 channel=channel,
                 consumer=consumer,
@@ -685,13 +682,31 @@ class BuilderModelAccessResolver:
             )
         except UndeclaredSecretConsumerError as exc:
             raise ModelAccessResolutionError(
-                "host secret contract does not declare this role credential"
+                "host secret contract does not declare the Model Inquiry credential"
             ) from exc
         if required != (credential,):
             raise ModelAccessResolutionError(
-                "host secret contract role requirement does not match the census credential"
+                "host secret contract Model Inquiry requirement does not match the target"
             )
         return credential
+
+    def _builder_execution_profile(
+        self,
+        *,
+        channel: str,
+        capability_tier: str,
+    ) -> BuilderExecutionProfile:
+        channel_mapping = self.census.runtime_channels.builder_execution.get(channel)
+        if not channel_mapping:
+            raise ModelAccessResolutionError(
+                "declared census has no Builder execution mapping for the requested channel"
+            )
+        profile = channel_mapping.get(capability_tier)
+        if profile is None or profile.capability_tier != capability_tier:
+            raise ModelAccessResolutionError(
+                "declared census has no matching Builder execution capability"
+            )
+        return profile
 
     def _provider(self, provider_id: str) -> ProviderEntry:
         try:
@@ -710,6 +725,8 @@ __all__ = [
     "DESIGN_AGENT_CONSUMER",
     "MODEL_INQUIRY_CONSUMER",
     "MODEL_INQUIRY_RESOLUTION_GROUP",
+    "MODEL_INQUIRY_ROLE",
+    "MODEL_INQUIRY_OPERATIONAL_TRANSPORT",
     "BuilderModelAccessResolver",
     "DeclaredCredentialUnavailableError",
     "ModelAccessResolutionError",
