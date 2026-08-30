@@ -62,6 +62,7 @@ def materialize_promoted_memory(
             receipt_id=None,
             terminal=True,
         )
+    _require_scope_binding(entry)
 
     vault_root = _vault_root(vault_context)
     artifact_uuid = uuid4().hex
@@ -129,6 +130,13 @@ def _require_promoted(entry: ReviewEntry) -> None:
         raise MemoryMaterializationError("entry must carry a promote decision")
 
 
+def _require_scope_binding(entry: ReviewEntry) -> None:
+    if entry.scope_id is None:
+        raise MemoryMaterializationError(
+            "semantic memory materialization requires candidate.scope_id"
+        )
+
+
 def _vault_root(context: VaultContext) -> Path:
     if not context.active_vault_path:
         raise MemoryMaterializationError("vault_context.active_vault_path is required")
@@ -172,6 +180,7 @@ def _render_memory_note(entry: ReviewEntry, *, artifact_uuid: str) -> str:
         "agent_promoted": True,
         "labels": ["agent-promoted-memory"],
         "promoted_from_candidate_id": candidate.candidate_id,
+        "scope_id": candidate.scope_id,
         "source_refs": list(candidate.source_refs),
         "inferred": candidate.inferred,
         "generated_by": candidate.generated_by,
@@ -220,6 +229,7 @@ def _append_promotion_receipt(
             "source_event": f"memory-promote:{entry.candidate_id}",
             "intent_type": "agent_memory_materialization",
             "candidate_id": entry.candidate_id,
+            "scope_id": entry.scope_id,
             "inferred": entry.inferred,
             "source_refs": list(entry.source_refs),
         },

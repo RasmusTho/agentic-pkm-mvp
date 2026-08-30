@@ -185,6 +185,7 @@ def route_admitted_memory_to_review_queue(
     queue: MemoryCandidateReviewQueue,
     *,
     memory_type: MemoryType,
+    scope_id: str,
     title: Optional[str] = None,
     content: Optional[str] = None,
 ) -> ReviewEntry:
@@ -215,6 +216,7 @@ def route_admitted_memory_to_review_queue(
         source_refs=_source_ids(artifact.source_refs),
         derived_from=artifact.artifact_id,
         generated_by=artifact.generated_by,
+        scope_id=scope_id,
         content=content if content is not None else _artifact_content(artifact),
         inferred=artifact.inferred,
     )

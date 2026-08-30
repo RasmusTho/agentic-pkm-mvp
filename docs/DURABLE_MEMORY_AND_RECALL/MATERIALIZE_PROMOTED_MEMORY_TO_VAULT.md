@@ -25,7 +25,8 @@ existing authority path: `proposal → WriteGuard → receipt → vault artifact
 
 - is written through `app/write_guard.py` (a vault-internal write, consistent with the owner's
   "all vault-internal writes pass WriteGuard" rule) and the companion-note / knowledge write path;
-- carries provenance frontmatter (source_refs, generated_by, promoted-from candidate id, decided_by);
+- carries provenance frontmatter (source_refs, generated_by, promoted-from candidate id, decided_by)
+  plus the candidate's explicit `scope_id` binding;
 - is labeled as agent-promoted material, distinct from and never overriding human-authored notes;
 - has a corresponding promotion receipt (`app/receipts/promotion_receipts.py`) — the receipt is the
   accountability record, the note is the durable semantic surface.
@@ -41,6 +42,12 @@ promotion stays **actionable**: the candidate remains in (or returns to) the pen
 is re-attempted when writes are allowed again. A promoted candidate must never be suppressed from
 review while no artifact exists. (Non-semantic promotions need no artifact and are terminal on
 decision.)
+
+**Scope producer invariant.** A semantic candidate must carry an explicit `scope_id` before
+materialization. The materializer refuses a missing binding before any artifact or transition
+receipt is written, persists the same binding in the note and receipt on success, and leaves legacy
+unscoped artifacts unchanged. Bound recall denies unscoped artifacts fail closed; unbound recall
+retains its existing behavior.
 
 ## Concretely
 
@@ -80,6 +87,10 @@ receipt → durable artifact, never silent persistence") and the writing-surface
 - [ ] The materialized note carries provenance and an agent-promoted label and does not overwrite an
   existing human-authored note.
   Verify: `tests/agent_memory/test_memory_materialization.py::test_materialized_note_preserves_provenance_and_human_authorship`
+- [ ] Semantic materialization refuses a missing candidate scope before writing, while successful
+  materialization persists that scope into the artifact and receipt.
+  Verify: `tests/agent_memory/test_memory_materialization.py::test_semantic_materialization_requires_scope_before_write`
+  Verify: `tests/agent_memory/test_materialization_live_path.py::test_accept_materializes_and_marks_terminal`
 - [ ] Non-semantic promotions (episodic/working/preference) do not materialize a vault artifact.
   Verify: `tests/agent_memory/test_memory_materialization.py::test_non_semantic_promotion_does_not_materialize`
 

@@ -37,6 +37,7 @@ def _candidate(
     content: str,
     source_refs: list[str] | None = None,
     inferred: bool = False,
+    scope_id: str = "scope:work/project-alpha",
 ) -> MemoryCandidate:
     return MemoryCandidate(
         candidate_id=candidate_id,
@@ -47,6 +48,7 @@ def _candidate(
         source_refs=source_refs or [f"note:{candidate_id}.md", "session:2026-06-13T09:00:00Z"],
         derived_from=f"vault:{candidate_id}.md",
         generated_by="companion_agent",
+        scope_id=scope_id,
     )
 
 
@@ -101,6 +103,7 @@ def test_reads_promoted_memory_from_durable_set(tmp_path: Path) -> None:
     assert promoted.candidate.content == candidate.content
     assert promoted.candidate.source_refs == candidate.source_refs
     assert promoted.candidate.inferred is False
+    assert promoted.candidate.scope_id == candidate.scope_id
     assert promoted.decided_by == "companion-ui:reviewer"
     assert (vault_root / artifact_path).exists()
 
@@ -331,6 +334,7 @@ def test_scope_bound_promoted_recall_excludes_private_memory(tmp_path: Path) -> 
 
     assert [item.promoted.candidate.candidate_id for item in scoped] == ["candidate-work"]
     assert scoped[0].memory_scope_id == "scope-work"
+    assert scoped[0].promoted.candidate.scope_id == "scope-work"
     assert scoped[0].applied_scope_id == "scope-work"
 
     unbound = retrieve_relevant_promoted(
@@ -345,6 +349,44 @@ def test_scope_bound_promoted_recall_excludes_private_memory(tmp_path: Path) -> 
         "candidate-legacy",
     }
     assert {item.applied_scope_id for item in unbound} == {None}
+
+
+def test_materialized_scope_drives_bound_recall_admission(tmp_path: Path) -> None:
+    vault_root = tmp_path / "vault"
+    vault_root.mkdir()
+    vault = _vault(vault_root)
+    store = ReviewDecisionStore(tmp_path / "review_decisions.sqlite3")
+    outbox = tmp_path / "outbox.jsonl"
+    _materialize(
+        _candidate(
+            "candidate-work-materialized",
+            title="Work deployment posture",
+            content="Deployment posture details.",
+            scope_id="scope-work",
+        ),
+        vault=vault,
+        store=store,
+        outbox=outbox,
+    )
+
+    admitted = retrieve_relevant_promoted(
+        "deployment posture",
+        vault_root=vault_root,
+        outbox_path=outbox,
+        active_scope_id="scope-work",
+    )
+    denied = retrieve_relevant_promoted(
+        "deployment posture",
+        vault_root=vault_root,
+        outbox_path=outbox,
+        active_scope_id="scope-private",
+    )
+
+    assert [item.promoted.candidate.candidate_id for item in admitted] == [
+        "candidate-work-materialized"
+    ]
+    assert admitted[0].memory_scope_id == "scope-work"
+    assert denied == []
 
 
 def test_pure_and_safe_on_empty(tmp_path: Path) -> None:

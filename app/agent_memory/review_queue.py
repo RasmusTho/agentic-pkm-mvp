@@ -90,6 +90,10 @@ class ReviewEntry(BaseModel):
         return self.candidate.generated_by
 
     @property
+    def scope_id(self) -> Optional[str]:
+        return self.candidate.scope_id
+
+    @property
     def proposed_memory_type(self) -> MemoryType:
         return self.candidate.memory_type
 

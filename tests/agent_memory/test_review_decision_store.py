@@ -33,6 +33,7 @@ def _candidate(*, title: str = "Observed user preference") -> MemoryCandidate:
         source_refs=["session:2026-06-13T09:00:00Z", "note:preferences.md"],
         derived_from="conversation:abc123",
         generated_by="companion_agent",
+        scope_id="scope:private/personal",
     )
 
 
@@ -66,6 +67,7 @@ def test_decisions_survive_restart(tmp_path: Path) -> None:
     assert record.candidate_id == candidate.candidate_id
     assert record.outcome is ReviewDecision.REJECT
     assert record.terminal is True
+    assert record.scope_id == candidate.scope_id
 
 
 def test_decision_store_is_vault_scoped(tmp_path: Path) -> None:

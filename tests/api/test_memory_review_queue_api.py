@@ -62,6 +62,7 @@ def _candidate(**overrides: Any) -> MemoryCandidate:
         source_refs=["session:2026-06-01T09:00:00Z"],
         derived_from="conversation:abc123",
         generated_by="companion_agent",
+        scope_id="scope:private/personal",
     )
     fields.update(overrides)
     return MemoryCandidate(**fields)
@@ -238,6 +239,7 @@ def test_reject_and_revise_are_receipted_review_outcomes_not_promotions(
     assert revision_entry.status is ReviewStatus.PENDING
     assert revision_entry.revision_of == to_revise.candidate_id
     assert revision_entry.title == "Narrowed candidate"
+    assert revision_entry.scope_id == to_revise.scope_id
 
     # Neither reject nor revise is a promotion: nothing became recallable
     # authoritative memory.

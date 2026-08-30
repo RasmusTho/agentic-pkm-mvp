@@ -74,6 +74,12 @@ class MemoryCandidate(BaseModel):
     source_refs: list[str] = Field(default_factory=list)
     derived_from: Optional[str] = None
     generated_by: Optional[str] = None
+    scope_id: Optional[str] = Field(
+        default=None,
+        min_length=1,
+        max_length=128,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9._:/-]*$",
+    )
 
     content: Optional[str] = None
     confidence: Optional[str] = None

@@ -257,6 +257,7 @@ def _promoted_from_row_with_scope(
         source_refs=source_refs,
         derived_from=_first_str(frontmatter.get("derived_from")),
         generated_by=_first_str(frontmatter.get("generated_by")),
+        scope_id=_first_str(frontmatter.get("scope_id"), frontmatter.get("domain")),
         content=content,
         observed_at=decided_at,
     )
@@ -270,7 +271,7 @@ def _promoted_from_row_with_scope(
             decision_notes=_first_str(frontmatter.get("decision_notes")),
             promoted_at=promoted_at,
         ),
-        _first_str(frontmatter.get("scope_id"), frontmatter.get("domain")),
+        candidate.scope_id,
     )
 
 

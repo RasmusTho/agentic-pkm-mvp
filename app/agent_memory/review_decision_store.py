@@ -12,7 +12,7 @@ from app.agent_memory.review_queue import ReviewDecision, ReviewEntry
 from app.vault.manager import VaultContext
 
 REVIEW_DECISION_RECEIPT_KIND = "agent_memory.review_decision"
-REVIEW_DECISION_STORE_VERSION = 1
+REVIEW_DECISION_STORE_VERSION = 2
 
 
 @dataclass(frozen=True)
@@ -24,6 +24,7 @@ class ReviewDecisionRecord:
     decided_by: str
     decided_at: datetime
     source_refs: tuple[str, ...]
+    scope_id: str | None = None
     receipt_kind: str = REVIEW_DECISION_RECEIPT_KIND
     terminal: bool = False
     decision_notes: str | None = None
@@ -69,6 +70,7 @@ class ReviewDecisionStore:
             decided_by=entry.decided_by,
             decided_at=entry.decided_at.astimezone(timezone.utc),
             source_refs=tuple(entry.source_refs),
+            scope_id=entry.scope_id,
             terminal=entry.decision in {ReviewDecision.REJECT, ReviewDecision.REVISE},
             decision_notes=entry.decision_notes,
             revision_of=entry.revision_of,
@@ -165,6 +167,7 @@ class ReviewDecisionStore:
             decided_by=record.decided_by,
             decided_at=record.decided_at,
             source_refs=record.source_refs,
+            scope_id=record.scope_id,
             receipt_kind=record.receipt_kind,
             terminal=True,
             decision_notes=record.decision_notes,
@@ -270,6 +273,7 @@ def _record_payload(record: ReviewDecisionRecord) -> dict[str, Any]:
         "decided_at": _iso(record.decided_at),
         "terminal": record.terminal,
         "source_refs": list(record.source_refs),
+        "scope_id": record.scope_id,
         "decision_notes": record.decision_notes,
         "revision_of": record.revision_of,
         "generated_by": record.generated_by,
@@ -286,6 +290,7 @@ def _record_from_payload(payload: dict[str, Any]) -> ReviewDecisionRecord:
         decided_by=str(payload["decided_by"]),
         decided_at=_parse_iso(str(payload["decided_at"])),
         source_refs=tuple(str(ref) for ref in payload.get("source_refs", [])),
+        scope_id=payload.get("scope_id"),
         receipt_kind=str(payload.get("receipt_kind") or REVIEW_DECISION_RECEIPT_KIND),
         terminal=bool(payload.get("terminal", False)),
         decision_notes=payload.get("decision_notes"),

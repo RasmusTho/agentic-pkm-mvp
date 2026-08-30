@@ -41,6 +41,7 @@ def _candidate(
         source_refs=["note:source.md", "session:2026-06-13T09:00:00Z"],
         derived_from="vault:source.md",
         generated_by="companion_agent",
+        scope_id="scope:test/materialization",
     )
 
 
@@ -121,6 +122,33 @@ def test_blocked_writes_prevent_materialization(tmp_path: Path) -> None:
     assert not list(Path(vault.active_vault_path).rglob("*.md"))
 
 
+def test_semantic_materialization_requires_scope_before_write(tmp_path: Path) -> None:
+    vault = _vault(tmp_path / "vault")
+    Path(vault.active_vault_path).mkdir()
+    store = ReviewDecisionStore(tmp_path / "review_decisions.sqlite3")
+    outbox = tmp_path / "outbox.jsonl"
+    candidate = _candidate().model_copy(update={"scope_id": None})
+    entry = _promoted(candidate, store=store, vault=vault)
+
+    with pytest.raises(MemoryMaterializationError, match="candidate.scope_id"):
+        materialize_promoted_memory(
+            entry,
+            vault_context=vault,
+            channel="test",
+            decision_store=store,
+            write_guard=_allowing_guard(),
+            outbox_path=outbox,
+        )
+
+    assert not list(Path(vault.active_vault_path).rglob("*.md"))
+    assert not outbox.exists()
+    record = store.get_decision(
+        candidate.candidate_id, vault_context=vault, channel="test"
+    )
+    assert record is not None
+    assert record.terminal is False
+
+
 def test_blocked_materialization_keeps_promotion_actionable(tmp_path: Path) -> None:
     vault = _vault(tmp_path / "vault")
     Path(vault.active_vault_path).mkdir()
@@ -179,6 +207,7 @@ def test_materialized_note_preserves_provenance_and_human_authorship(tmp_path: P
     body = (vault_root / result.artifact_path).read_text(encoding="utf-8")
     assert "agent-promoted-memory" in body
     assert "promoted_from_candidate_id: candidate-" in body
+    assert "scope_id: scope:test/materialization" in body
     assert "companion-ui:reviewer" in body
     assert "note:source.md" in body
     assert "The user explicitly prefers design docs before code." in body

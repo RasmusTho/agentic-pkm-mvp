@@ -25,6 +25,7 @@ def _candidate(*, applied_scope_id: str | None = None) -> RecallCandidate:
             inferred=False,
             content="Deploy through the work release checklist.",
             source_refs=["note:work.md"],
+            scope_id="scope-work",
         ),
         decided_by="companion-ui:reviewer",
         decided_at=datetime.now(timezone.utc),

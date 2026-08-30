@@ -5050,6 +5050,7 @@ def _memory_review_revision_candidate(
         source_refs=list(original.source_refs),
         derived_from=original.derived_from,
         generated_by=original.generated_by,
+        scope_id=original.scope_id,
         correction_of=original.candidate_id,
     )
 

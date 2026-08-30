@@ -13,6 +13,7 @@ Source authority:
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any
 
@@ -49,6 +50,7 @@ def _semantic_candidate(**overrides: Any) -> MemoryCandidate:
         source_refs=["note:source.md", "session:2026-06-14T09:00:00Z"],
         derived_from="vault:source.md",
         generated_by="companion_agent",
+        scope_id="scope:work/project-alpha",
     )
     fields.update(overrides)
     return MemoryCandidate(**fields)
@@ -107,7 +109,10 @@ def test_accept_materializes_and_marks_terminal(
     assert artifact.exists()
     body = artifact.read_text(encoding="utf-8")
     assert "agent-promoted-memory" in body
+    assert "scope_id: scope:work/project-alpha" in body
     assert "The user keeps design docs ahead of code." in body
+    receipt = json.loads(receipts_path.read_text(encoding="utf-8"))
+    assert receipt["payload"]["basis"]["scope_id"] == "scope:work/project-alpha"
 
     # The stored review decision is terminal.
     record = store.get_decision(
