@@ -309,6 +309,37 @@ class WatcherState:
                 observation_status="degraded",
                 checkpoint_load_error=True,
             )
+        if not isinstance(data, dict):
+            return cls(
+                errors=1,
+                scan_generation_had_error=True,
+                observation_status="degraded",
+                checkpoint_load_error=True,
+            )
+        try:
+            for field_name in (
+                "changed_detected",
+                "intents_emitted",
+                "ticks_run",
+                "errors",
+                "rate_limited",
+                "enqueue_failures_total",
+                "bad_ticks",
+                "outbox_offset",
+                "scan_generation",
+                "scan_root_index",
+                "scan_scope_matched_files",
+            ):
+                value = data.get(field_name)
+                if value:
+                    int(value)
+        except (TypeError, ValueError):
+            return cls(
+                errors=1,
+                scan_generation_had_error=True,
+                observation_status="degraded",
+                checkpoint_load_error=True,
+            )
         state = cls(
             files=_sanitize_files(data.get("files")),
             changed_detected=int(data.get("changed_detected") or 0),

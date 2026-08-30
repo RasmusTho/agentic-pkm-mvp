@@ -744,11 +744,12 @@ def test_identity_sidecar_switch_is_replayable_when_checkpoint_fails(
     assert observations.get("notes/new.md") == {"hash": "new"}
 
 
+@pytest.mark.parametrize("raw_checkpoint", ["not-json", "[]", '{"ticks_run": "invalid"}'])
 def test_malformed_checkpoint_cannot_authorize_existing_sidecar(
-    tmp_path: Path,
+    tmp_path: Path, raw_checkpoint: str
 ) -> None:
     checkpoint = tmp_path / "watcher_state.json"
-    checkpoint.write_text("not-json", encoding="utf-8")
+    checkpoint.write_text(raw_checkpoint, encoding="utf-8")
     observations = RegistryObservationStore(tmp_path / "observations.sqlite3")
     observations.replace_identity(
         "old-identity",
