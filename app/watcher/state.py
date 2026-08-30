@@ -408,7 +408,6 @@ class WatcherState:
         observation_name = data.get("observation_store")
         if isinstance(observation_name, str) and observation_name:
             observation_path = path.parent / Path(observation_name).name
-            state.files.clear()
             state._observation_store = RegistryObservationStore(observation_path)
         return state
 

@@ -2027,6 +2027,8 @@ def _run_spec_tick(
         states=active_states,
         handled_settings_sources=handled_settings_sources,
     )
+    if state.scan_generation_had_error:
+        _mark_scan_incomplete(summary, reason="scan")
     # A vault can be replaced while a long budgeted tick is running. Recheck
     # the concrete identity immediately before deriving deletion candidates;
     # a start-of-tick identity is not authority for pruning a different tree.

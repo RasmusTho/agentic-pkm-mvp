@@ -127,6 +127,8 @@ def _configure_watcher(
         "STORE_BACKEND": "memory",
         "WATCHER_ENABLE": "1" if enabled else "0",
         "WATCHER_VAULT_PATH": str(vault_a),
+        "WATCHER_DEBOUNCE_MS": "0",
+        "WATCHER_RATE_LIMIT_PER_MIN": "1000",
         "WATCHER_STATE_DIR": str(root / "watcher-state"),
         "WATCHER_HEARTBEAT_PATH": str(root / "watcher-heartbeat.json"),
         "WATCHER_STOP_FILE": str(root / "watcher.stop"),
