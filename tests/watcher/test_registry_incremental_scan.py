@@ -744,7 +744,20 @@ def test_identity_sidecar_switch_is_replayable_when_checkpoint_fails(
     assert observations.get("notes/new.md") == {"hash": "new"}
 
 
-@pytest.mark.parametrize("raw_checkpoint", ["not-json", "[]", '{"ticks_run": "invalid"}'])
+@pytest.mark.parametrize(
+    "raw_checkpoint",
+    [
+        "not-json",
+        "[]",
+        '{"ticks_run": "invalid"}',
+        '{"ticks_run": null}',
+        '{"ticks_run": false}',
+        '{"scan_root_index": -1}',
+        '{"scan_generation": -1}',
+        '{"outbox_offset": -1}',
+        '{"ticks_run": 1e309}',
+    ],
+)
 def test_malformed_checkpoint_cannot_authorize_existing_sidecar(
     tmp_path: Path, raw_checkpoint: str
 ) -> None:

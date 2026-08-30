@@ -68,6 +68,17 @@ def _sanitize_rate_window(raw: list[float] | Any) -> list[float]:
     return cleaned
 
 
+def _checkpoint_counter(data: Mapping[str, Any], field_name: str) -> int:
+    """Load a persisted non-negative integer without coercing bad shapes."""
+
+    if field_name not in data:
+        return 0
+    value = data[field_name]
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise ValueError(f"invalid checkpoint counter: {field_name}")
+    return value
+
+
 class RegistryObservationStore:
     """Durable, incrementally updated registry observations.
 
@@ -317,23 +328,23 @@ class WatcherState:
                 checkpoint_load_error=True,
             )
         try:
-            for field_name in (
-                "changed_detected",
-                "intents_emitted",
-                "ticks_run",
-                "errors",
-                "rate_limited",
-                "enqueue_failures_total",
-                "bad_ticks",
-                "outbox_offset",
-                "scan_generation",
-                "scan_root_index",
-                "scan_scope_matched_files",
-            ):
-                value = data.get(field_name)
-                if value:
-                    int(value)
-        except (TypeError, ValueError):
+            counters = {
+                field_name: _checkpoint_counter(data, field_name)
+                for field_name in (
+                    "changed_detected",
+                    "intents_emitted",
+                    "ticks_run",
+                    "errors",
+                    "rate_limited",
+                    "enqueue_failures_total",
+                    "bad_ticks",
+                    "outbox_offset",
+                    "scan_generation",
+                    "scan_root_index",
+                    "scan_scope_matched_files",
+                )
+            }
+        except (TypeError, ValueError, OverflowError):
             return cls(
                 errors=1,
                 scan_generation_had_error=True,
@@ -342,33 +353,33 @@ class WatcherState:
             )
         state = cls(
             files=_sanitize_files(data.get("files")),
-            changed_detected=int(data.get("changed_detected") or 0),
-            intents_emitted=int(data.get("intents_emitted") or 0),
-            ticks_run=int(data.get("ticks_run") or 0),
-            errors=int(data.get("errors") or 0),
-            rate_limited=int(data.get("rate_limited") or 0),
-            enqueue_failures_total=int(data.get("enqueue_failures_total") or 0),
+            changed_detected=counters["changed_detected"],
+            intents_emitted=counters["intents_emitted"],
+            ticks_run=counters["ticks_run"],
+            errors=counters["errors"],
+            rate_limited=counters["rate_limited"],
+            enqueue_failures_total=counters["enqueue_failures_total"],
             backoff_until=_sanitize_ts(data.get("backoff_until")),
             last_summary_at=_sanitize_ts(data.get("last_summary_at")),
             last_stop_warning=_sanitize_ts(data.get("last_stop_warning")),
             rate_window=_sanitize_rate_window(data.get("rate_window")),
             last_trace_id=data.get("last_trace_id"),
-            bad_ticks=int(data.get("bad_ticks") or 0),
-            outbox_offset=int(data.get("outbox_offset") or 0),
+            bad_ticks=counters["bad_ticks"],
+            outbox_offset=counters["outbox_offset"],
             dynamic_sleep_seconds=_sanitize_ts(data.get("dynamic_sleep_seconds")),
             last_emitted_event_at=_sanitize_ts(data.get("last_emitted_event_at")),
             scope_status=str(data.get("scope_status") or "ok"),
             last_scope_warning=_sanitize_ts(data.get("last_scope_warning")),
             scan_in_progress=bool(data.get("scan_in_progress", False)),
-            scan_generation=int(data.get("scan_generation") or 0),
+            scan_generation=counters["scan_generation"],
             scan_identity=(str(data["scan_identity"]) if data.get("scan_identity") else None),
-            scan_root_index=int(data.get("scan_root_index") or 0),
+            scan_root_index=counters["scan_root_index"],
             scan_stack=[
                 {"dir": str(frame.get("dir") or ""), "after": str(frame.get("after") or "")}
                 for frame in (data.get("scan_stack") or [])
                 if isinstance(frame, dict)
             ],
-            scan_scope_matched_files=int(data.get("scan_scope_matched_files") or 0),
+            scan_scope_matched_files=counters["scan_scope_matched_files"],
             scan_generation_had_error=bool(data.get("scan_generation_had_error", False)),
             observation_status=str(data.get("observation_status") or "healthy-idle"),
             continuation_reason=(
