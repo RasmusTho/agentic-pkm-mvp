@@ -33,8 +33,11 @@ Parent: #4741
 After all prerequisites are receipted, verify on one exact deployed SHA and naturally observed
 production state that the owner can answer **What should I understand now?**, **Where is my
 authority actually needed?**, and **What is truly ready to try?** without opening standalone
-source UIs or creating a durable acceptance state. `M` is the final post-merge `main` SHA containing
-delivered #4835 and #4836; a PR head, pre-merge candidate, or older proof SHA is not `M`.
+source UIs or creating a durable acceptance state. `M` is the exact current `main` SHA deployed for
+this pilot, containing delivered #4835 and #4836; a PR head, pre-merge candidate, or older proof SHA
+is not `M`. The historical #4748 proof at `c7c57300f2ec241778061078e7ad585454f0b880` remains
+valid only when the receipt-sourced deployment and current `main` still equal that SHA; after `main`
+advances, #4748 must supply a fresh exact-main proof for the new `M`.
 
 This is a future executable pilot contract, not evidence that the shell has been deployed or that a
 pilot has passed. The live URL and deployed SHA are intentionally absent until the #4748 and
@@ -106,7 +109,8 @@ promote, restart, or mutate production. Any defect, source-authority gap, design
 journey, identity mismatch, effect, error, storage use, or unauthorized write is returned to its
 owning blocked contract and blocks the pilot.
 
-Prerequisites are strict and serial: (1) #4748 delivery and its fresh exact-main receipt at `M`;
+Prerequisites are strict and serial: (1) #4748 delivery and its fresh exact-main receipt matching
+the current deployed `main` SHA `M`;
 (2) this repaired source contract; (3) Demerzel authentication and the boolean-only #4835
 credential-presence prerequisite; (4) the deployed #4836 route and server-supplied Focus selectors;
 (5) applicable main-tracking deployment/operator evidence for exactly `M`; (6) the
@@ -165,7 +169,7 @@ without adding any cross-run field to `devui-overview-browser-accessibility.v1`.
 
 ## How to Verify (Pre-Merge)
 
-- Confirm every strict prerequisite, including #4748 at `M`, the repaired source contract, the
+- Confirm every strict prerequisite, including #4748 at the current deployed `M`, the repaired source contract, the
   boolean-only #4835 prerequisite, Demerzel access, applicable main-tracking deployment/operator
   evidence for exactly `M`, and the receipt-sourced URL/SHA. If a `pkm-test` supplement is used,
   also confirm its approved disposable-state classification; otherwise record the production-only

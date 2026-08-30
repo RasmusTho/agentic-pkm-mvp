@@ -739,6 +739,8 @@ PR #5157 delivered the connected read-only shell in the repository after #4746 a
 constrained-reuse candidate and #4833/#4842 supplied exact-ref browser/accessibility evidence for
 its pre-merge head. PR #5200 recorded that delivered owner-doc truth, and #4748 subsequently
 authenticated the exact five-node proof at final post-merge `main` `M=c7c57300f2ec241778061078e7ad585454f0b880`.
+That `M` is historical proof authority; any later owner pilot must use a fresh #4748 proof matching
+the current `main` promotion ref and the receipt-sourced deployed SHA.
 This remains delivered repository/proof truth, not production-deployed or owner-accepted UI truth;
 #4749 owns the later deployment and owner-pilot gates.
 

@@ -95,7 +95,7 @@ changes none of the withdrawal conclusions for **Needs you** or **Ready to try**
 | 5 | ARO-05 — Validate Connected Overview and Focus Yggdrasil Evidence #4746 | Delivered and closed after exact constrained-reuse receipt | Merged stable #4834 source-owned Now fixtures plus delivered #4768 Focus API fixtures, with independently reviewed `yggdrasil-constrained-reuse.v1` receipt |
 | 6 | ARO-06 — Render the Read-Only Overview Shell | Delivered by merged #4836 | Accepted ARO-05 design evidence and merged ARO-03/04 |
 | 7 | ARO-07 — Prove Overview Browser and Accessibility States | Delivered and closed #4748 | Exact five-node #4833 artifact and `devui-stage-a-exact-sha-state-matrix.v1` receipt at final post-merge `main` `M` |
-| 8 | ARO-08 — Run the Read-Only Owner Pilot | `agent:blocked` | #4857 repaired contract, #4835 boolean-only prerequisite, #4748-at-`M` receipt, VM-102 Dev System health/deploy receipts, applicable main-tracking deployment/operator evidence for exactly `M`, receipt-sourced deployed URL/SHA, and conditional disposable-state classification when `pkm-test` is used; separate owner evidence acknowledgement is pilot output |
+| 8 | ARO-08 — Run the Read-Only Owner Pilot | `agent:blocked` | #4857 repaired contract, #4835 boolean-only prerequisite, a fresh #4748 exact-main receipt matching the current deployed `main` SHA `M`, VM-102 Dev System health/deploy receipts, applicable main-tracking deployment/operator evidence for `M`, receipt-sourced deployed URL/SHA, and conditional disposable-state classification when `pkm-test` is used; the historical `c7c57300f2ec241778061078e7ad585454f0b880` proof is valid only while `main` still equals it; separate owner evidence acknowledgement is pilot output |
 
 No task is `agent:ready` at filing. The parent is a blocked validation hub and never becomes a
 pickup issue. #4748 is a completed proof receipt, while #4749 remains blocked on external runtime
@@ -186,7 +186,9 @@ post-merge `main`, and #4749 remains the deployment/owner-pilot authority.
 The browser-evidence sequence is serial: the exact-ref #4836 candidate artifact was produced before
 merge; #4748 then ran at final `main` `M` and posted the authenticated
 `devui-stage-a-exact-sha-state-matrix.v1` receipt. Its artifact is self-describing only for that
-run and makes no production claim. If ARO-08 later becomes executable, its
+run and makes no production claim. `M` must be the current `main` promotion ref used by the
+receipt-sourced deployment; the historical #4748 run at `c7c57300f2ec241778061078e7ad585454f0b880`
+is not reusable after `main` advances. If ARO-08 later becomes executable, its
 `devui-stage-a-read-only-owner-pilot.v1` ledger is the sole binding authority for the exact-M
 browser evidence plus production evidence. It records each tested SHA and a recomputable
 `evidence_artifact_sha256` over the canonical archived artifact inventory; missing or mismatched
