@@ -383,3 +383,65 @@ def test_settings_source_reload_failure_keeps_observation_retryable(
     assert attempts == 2
     assert second["observation_status"] == "healthy-idle"
     assert recovered.file_entry("settings/global.md")["hash"] == registry._hash_file(source)[0]
+
+
+def test_deleted_settings_source_reload_failure_preserves_observation_for_retry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cfg, spec, vault = _make_cfg(tmp_path, max_files=10)
+    source = _write_note(vault, "settings/global.md", body="# settings\n")
+    monkeypatch.setattr(
+        registry,
+        "handle_settings_detected_delta",
+        lambda **_: SettingsDeltaResult(values=None),
+    )
+    attempts = 0
+
+    def reload_settings(
+        *, rel_path: Path, vault_root: Path | None = None
+    ) -> SettingsSourceDeltaResult:
+        nonlocal attempts
+        assert rel_path == Path("settings/global.md")
+        assert vault_root == vault
+        attempts += 1
+        if attempts == 2:
+            return SettingsSourceDeltaResult(
+                is_source=True,
+                reloaded=False,
+                errors=("settings source temporarily unavailable",),
+            )
+        return SettingsSourceDeltaResult(is_source=True, reloaded=True)
+
+    monkeypatch.setattr(registry, "handle_settings_source_delta", reload_settings)
+    monkeypatch.setattr(registry, "_emit_watch_event", lambda **_: "trace-ok")
+
+    state, _ = _run_until_drained(cfg, spec, _load_state(cfg, spec), start=1_700_006_000.0)
+    assert state.file_entry("settings/global.md") is not None
+    source.unlink()
+
+    failed = registry._run_spec_tick(
+        cfg,
+        spec,
+        state,
+        now=1_700_006_100.0,
+        states={spec.name: state},
+        handled_settings_sources=set(),
+    )
+    failed_state = _load_state(cfg, spec)
+
+    assert failed["observation_status"] == "degraded"
+    assert failed_state.file_entry("settings/global.md") is not None
+
+    recovered = registry._run_spec_tick(
+        cfg,
+        spec,
+        failed_state,
+        now=1_700_006_101.0,
+        states={spec.name: failed_state},
+        handled_settings_sources=set(),
+    )
+    recovered_state = _load_state(cfg, spec)
+
+    assert attempts == 3
+    assert recovered["observation_status"] == "healthy-idle"
+    assert recovered_state.file_entry("settings/global.md") is None

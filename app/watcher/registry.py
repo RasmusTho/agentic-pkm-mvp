@@ -1799,6 +1799,7 @@ def _run_spec_tick(
         for path in missing_paths
         if is_settings_source_path(Path(path))
     )
+    pending_settings_source_deletions: set[str] = set()
     if removed_settings_sources:
         summary["settings_source_deletions_in_tick"] = len(
             removed_settings_sources
@@ -1818,6 +1819,9 @@ def _run_spec_tick(
                 state.errors += len(removed_delta.errors)
                 summary["settings_source_errors_in_tick"] = len(
                     removed_delta.errors
+                )
+                pending_settings_source_deletions.add(
+                    str(removed_settings_sources[0])
                 )
 
     if scan_completed and state.scan_scope_matched_files == 0:
@@ -1899,11 +1903,24 @@ def _run_spec_tick(
     elapsed_ms = max(int((time.time() - tick_start) * 1000), 0)
     summary["tick_ms"] = elapsed_ms
     _apply_guardrails_registry(cfg, state, summary)
+    # Deletion handlers run after the initial clean-scan decision. Recompute
+    # cleanliness so a failed settings reload cannot authorize pruning the
+    # stale observation before the source can be retried on a later tick.
+    scan_clean = state.errors == errors_before
     if scan_completed and scan_clean and not delivery_failed:
         if state._observation_store is not None:
-            state.prune_unseen_generation(retain=pending_runtime_gating_deletions)
+            state.prune_unseen_generation(
+                retain=pending_runtime_gating_deletions
+                | pending_settings_source_deletions
+            )
         else:
-            state.prune_files([*scanned_paths, *pending_runtime_gating_deletions])
+            state.prune_files(
+                [
+                    *scanned_paths,
+                    *pending_runtime_gating_deletions,
+                    *pending_settings_source_deletions,
+                ]
+            )
 
     return _finalize_spec_tick(cfg, state, summary, tick_start, scan_roots[0] if scan_roots else None, spec.name)
 
