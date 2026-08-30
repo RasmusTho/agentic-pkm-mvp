@@ -112,6 +112,7 @@ def test_handoff_routes_to_review_queue_without_promoting() -> None:
         handoff,
         queue,
         memory_type=MemoryType.EPISODIC_MEMORY,
+        scope_id="scope:work/project-alpha",
     )
 
     assert entry.status is ReviewStatus.PENDING
@@ -123,6 +124,7 @@ def test_handoff_routes_to_review_queue_without_promoting() -> None:
     assert entry.candidate.derived_from == handoff.admitted_artifact.artifact_id
     assert entry.candidate.generated_by == "knowledge_compiler"
     assert entry.candidate.source_refs == ["note:source"]
+    assert entry.candidate.scope_id == "scope:work/project-alpha"
     assert queue.pending() == [entry]
     assert queue.recallable_for_working_context() == []
 

@@ -601,6 +601,15 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
         "memory_retrieval",
         (
             "app/memory/",
+            # Promoted and provisional agent-memory recall is consumed by the
+            # memory/retrieval suites. Keep this runtime package owned so a
+            # recall-boundary change cannot fail CI selection as unowned.
+            "app/agent_memory/",
+            # Review admission is the producer seam that hands an approved
+            # candidate to promoted-memory materialization. Its persisted
+            # scope/candidate authority must stay on the same acceptance
+            # surface as the consumer that later admits the memory to recall.
+            "app/knowledge_compilation/review_admission.py",
             "app/retrieval/",
             "app/index/",
             # Index rebuild is the memory-retrieval CLI producer for the
@@ -625,6 +634,7 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
         ),
         (
             "tests/agent_memory",
+            "tests/knowledge_compilation/test_review_admission_handoff.py",
             "tests/retrieval",
             "tests/index",
             "tests/indexer",

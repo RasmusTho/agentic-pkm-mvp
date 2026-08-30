@@ -36,6 +36,7 @@ class PromotionReceiptRow:
     timestamp: str
     artifact_uuid: str | None
     artifact_path: str | None
+    vault_id: str | None
     transition_family: str | None
     target_maturity: str | None
     review_state: str | None
@@ -144,24 +145,45 @@ def _project_transition_applied(
     if not isinstance(artifact_linkage, dict):
         return None, "missing_artifact_linkage"
 
-    artifact_uuid = first_str(
+    top_level_artifact_uuid = first_str(
         payload.get("artifact_uuid"),
         payload.get("note_uuid"),
         nested(payload, "note", "uuid"),
+    )
+    linkage_artifact_uuid = first_str(
         artifact_linkage.get("artifact_uuid"),
         artifact_linkage.get("note_uuid"),
     )
-    artifact_path = normalize_note_path(
+    if (
+        top_level_artifact_uuid
+        and linkage_artifact_uuid
+        and top_level_artifact_uuid != linkage_artifact_uuid
+    ):
+        return None, "conflicting_artifact_uuid"
+    artifact_uuid = top_level_artifact_uuid or linkage_artifact_uuid
+    top_level_artifact_path = normalize_note_path(
         first_str(
             payload.get("artifact_path"),
             payload.get("note_path"),
             payload.get("path"),
             nested(payload, "note", "path"),
+        ),
+        vault_root=vault_root,
+    )
+    linkage_artifact_path = normalize_note_path(
+        first_str(
             artifact_linkage.get("artifact_path"),
             artifact_linkage.get("note_path"),
         ),
         vault_root=vault_root,
     )
+    if (
+        top_level_artifact_path
+        and linkage_artifact_path
+        and top_level_artifact_path != linkage_artifact_path
+    ):
+        return None, "conflicting_artifact_path"
+    artifact_path = top_level_artifact_path or linkage_artifact_path
     if not artifact_uuid and not artifact_path:
         return None, "missing_artifact_identity"
 
@@ -189,6 +211,7 @@ def _project_transition_applied(
             timestamp=timestamp,
             artifact_uuid=artifact_uuid,
             artifact_path=artifact_path,
+            vault_id=first_str(payload.get("vault_id")),
             transition_family=first_str(payload.get("transition_family"), "promotion"),
             target_maturity=target_maturity,
             review_state=first_str(outcome.get("review_state")),
