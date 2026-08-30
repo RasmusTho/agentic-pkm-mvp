@@ -130,8 +130,10 @@ is exactly the authenticated `devui-stage-a-exact-sha-state-matrix.v1` wrapper r
 browser receipt, JUnit result, Playwright trace, and every screenshot, but not its own rendered
 manifest. The `production` entry has a separate inventory of the applicable
 VM-102 qualification/deployment/health receipts, receipt-sourced gateway and API identity
-observations, owner-walkthrough result, and any explicitly used disposable-state receipt; it never
-imports browser-bundle files. Each inventory is enumerated by its own manifest, has unique relative
+observations, and any explicitly used disposable-state receipt; it never imports browser-bundle
+files or the final owner-pilot ledger. The owner-walkthrough result and acknowledgement are
+recorded by the ledger but are not inputs to its production digest. Each inventory is enumerated by
+its own manifest, has unique relative
 paths, and excludes the rendered manifest that contains its digest. Missing files, duplicate paths,
 a malformed digest, or a digest that does not recompute from that entry's archived files fail the
 pilot closed. This identity distinguishes materially different reruns at one Git SHA without
