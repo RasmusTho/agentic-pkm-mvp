@@ -257,10 +257,9 @@ def test_model_inquiry_secret_contract_is_exact_and_value_free() -> None:
         {
             "consumer": "builderops-model-inquiry",
             "channels": ["dev", "test", "prod"],
-            "secrets": ["openai.api-key", "anthropic.api-key"],
+            "secrets": ["openai.api-key"],
             "role_requirements": {
-                "gpt_codex": ["openai.api-key"],
-                "fable": ["anthropic.api-key"],
+                "model_inquiry": ["openai.api-key"],
             },
         },
         {
@@ -274,11 +273,8 @@ def test_model_inquiry_secret_contract_is_exact_and_value_free() -> None:
     ]
     assert all("design" not in item["consumer"] for item in payload["consumers"])
     assert contract.required_secrets_for_role(
-        consumer="builderops-model-inquiry", role="gpt_codex"
+        consumer="builderops-model-inquiry", role="model_inquiry"
     ) == ("openai.api-key",)
-    assert contract.required_secrets_for_role(
-        consumer="builderops-model-inquiry", role="fable"
-    ) == ("anthropic.api-key",)
     assert contract.required_secrets_for_role(
         consumer="builderops-ckm-semantic", role="ckm_semantic"
     ) == ("openai.api-key",)

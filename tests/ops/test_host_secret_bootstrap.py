@@ -195,9 +195,7 @@ def test_missing_model_provider_secret_fails_consumer_closed(
 ) -> None:
     launched = False
 
-    def lookup(_service: str, account: str) -> str:
-        if account.endswith(":anthropic.api-key"):
-            return _ANTHROPIC_KEY
+    def lookup(_service: str, _account: str) -> str:
         if missing_or_malformed is None:
             raise OSError("keychain item is absent")
         return missing_or_malformed
@@ -229,9 +227,7 @@ def test_model_provider_failure_can_reach_typed_receipt_consumer(
 ) -> None:
     observed_env: dict[str, str] = {}
 
-    def lookup(_service: str, account: str) -> str:
-        if account.endswith(":anthropic.api-key"):
-            return _ANTHROPIC_KEY
+    def lookup(_service: str, _account: str) -> str:
         raise OSError("keychain item is absent")
 
     def runner(_command: list[str], env: dict[str, str]) -> int:
@@ -369,8 +365,6 @@ def test_model_consumer_gets_only_allowlisted_values(tmp_path: Path) -> None:
         requested_accounts.append(account)
         if account.endswith(":openai.api-key"):
             return _OPENAI_KEY
-        if account.endswith(":anthropic.api-key"):
-            return _ANTHROPIC_KEY
         pytest.fail(f"unexpected account lookup: {account}")
 
     observed_path: Path | None = None
@@ -380,7 +374,6 @@ def test_model_consumer_gets_only_allowlisted_values(tmp_path: Path) -> None:
         observed_path = Path(env["HOST_SECRET_RUNTIME_ENV_FILE"])
         assert set(env).isdisjoint({"OPENAI_API_KEY", "ANTHROPIC_API_KEY", "HEIMDAL_RAW_STORE_KEY"})
         assert observed_path.read_text(encoding="utf-8") == (
-            f"ANTHROPIC_API_KEY={_ANTHROPIC_KEY}\n"
             f"OPENAI_API_KEY={_OPENAI_KEY}\n"
         )
         return 0
@@ -397,7 +390,6 @@ def test_model_consumer_gets_only_allowlisted_values(tmp_path: Path) -> None:
         == 0
     )
     assert requested_accounts == [
-        "dev:builderops-model-inquiry:anthropic.api-key",
         "dev:builderops-model-inquiry:openai.api-key",
     ]
     assert observed_path is not None and not observed_path.exists()
@@ -406,9 +398,7 @@ def test_model_consumer_gets_only_allowlisted_values(tmp_path: Path) -> None:
 def test_model_provider_secret_is_never_disclosed(tmp_path: Path) -> None:
     leaked_value = "model-provider-secret-" + ("z" * 32)
 
-    def lookup(_service: str, account: str) -> str:
-        if account.endswith(":anthropic.api-key"):
-            return _ANTHROPIC_KEY
+    def lookup(_service: str, _account: str) -> str:
         raise OSError(f"lookup denied for {leaked_value}")
 
     with pytest.raises(HostSecretBootstrapError) as error:
