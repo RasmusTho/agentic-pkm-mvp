@@ -334,7 +334,7 @@ def _single_registry_writer(func: Callable[..., Any]) -> Callable[..., Any]:
     def locked_entrypoint(config_path: Path, *args: Any, **kwargs: Any) -> Any:
         cfg = load_registry_config(config_path)
         with _registry_writer_lock(cfg.state_dir):
-            return func(config_path, *args, **kwargs)
+            return func(config_path, *args, _loaded_config=cfg, **kwargs)
 
     return locked_entrypoint
 
@@ -1200,6 +1200,7 @@ def _begin_or_resume_scan(
     vault_root: Path,
     scan_roots: list[Path],
     scope_glob: str,
+    preserve_generation_error: bool = False,
 ) -> None:
     identity = _scan_identity(vault_root, scan_roots, scope_glob)
     if state.scan_in_progress and state.scan_identity == identity:
@@ -1209,7 +1210,7 @@ def _begin_or_resume_scan(
     state.scan_root_index = 0
     state.scan_stack = []
     state.scan_scope_matched_files = 0
-    state.scan_generation_had_error = False
+    state.scan_generation_had_error = preserve_generation_error
     state.scan_in_progress = True
     state.continuation_reason = None
 
@@ -1252,6 +1253,29 @@ def _next_incremental_markdown(
 
         frame = state.scan_stack[-1]
         directory = selected_real / frame["dir"]
+        try:
+            resolved_directory = directory.resolve()
+            resolved_directory.relative_to(selected_real)
+            directory_stat = directory.lstat()
+        except (OSError, ValueError):
+            _record_scan_error(state)
+            state.scan_stack.pop()
+            continue
+        if stat_module.S_ISLNK(directory_stat.st_mode) or not stat_module.S_ISDIR(directory_stat.st_mode):
+            _record_scan_error(state)
+            state.scan_stack.pop()
+            continue
+        try:
+            nested_marker = directory / "settings" / "vault.md"
+            if stat_module.S_ISREG(nested_marker.stat().st_mode):
+                state.scan_stack.pop()
+                continue
+        except FileNotFoundError:
+            pass
+        except OSError:
+            _record_scan_error(state)
+            state.scan_stack.pop()
+            continue
         cached = directory_cache.get(frame["dir"])
         if cached is None:
             try:
@@ -1339,12 +1363,18 @@ def _collect_changed_entries(
 ) -> tuple[list[ChangedEntry], list[str]]:
     changed_entries: list[ChangedEntry] = []
     scanned_paths: list[str] = []
+    errors_before_root_normalization = state.errors
+    scan_was_in_progress = state.scan_in_progress
     roots = _normalized_scan_roots(cfg.vault_path, scan_roots, state=state)
+    preflight_generation_error = (
+        not scan_was_in_progress and state.errors > errors_before_root_normalization
+    )
     _begin_or_resume_scan(
         state,
         vault_root=cfg.vault_path,
         scan_roots=roots,
         scope_glob=spec.scope_glob,
+        preserve_generation_error=preflight_generation_error,
     )
     deadline = time.monotonic() + (cfg.max_elapsed_ms_per_tick / 1000.0)
     directory_cache: dict[str, tuple[list[str], list[Path]]] = {}
@@ -2040,8 +2070,12 @@ def _run_spec_tick(
 
 
 @_single_registry_writer
-def run_registry_once(config_path: Path) -> dict[str, dict[str, object]]:
-    cfg = load_registry_config(config_path)
+def run_registry_once(
+    config_path: Path,
+    *,
+    _loaded_config: RegistryConfig | None = None,
+) -> dict[str, dict[str, object]]:
+    cfg = _loaded_config or load_registry_config(config_path)
     states = {
         spec.name: _load_registry_state(_state_path(cfg.state_dir, spec.name))
         for spec in cfg.specs
@@ -2082,8 +2116,13 @@ def run_registry_once(config_path: Path) -> dict[str, dict[str, object]]:
 
 
 @_single_registry_writer
-def run_registry_forever(config_path: Path, *, max_ticks: int | None = None) -> None:
-    cfg = load_registry_config(config_path)
+def run_registry_forever(
+    config_path: Path,
+    *,
+    max_ticks: int | None = None,
+    _loaded_config: RegistryConfig | None = None,
+) -> None:
+    cfg = _loaded_config or load_registry_config(config_path)
     # `watcher run` is the production entrypoint.  Compile its bound vault at
     # boot just as API and worker do; the registry config is authoritative for
     # this process and need not depend on VAULT_ROOT being set separately.
