@@ -71,7 +71,7 @@ is not an owner decision; only its explicit authority categories may create `age
   evidence instead of re-implementing.
 - Use subagents only when independent bounded work lowers TCD. The owning agent retains scope,
   writes, lifecycle, and receipt authority.
-- Run host-global suites through `scripts/run_with_host_lease.py`; do not busy-poll shared resources.
+- Run host-global suites through `scripts/run_with_host_lease.py`; Chat reservations and process census are advisory only; do not busy-poll shared resources.
 
 Cleanup, lifecycle, lease, and CI-wait mechanics live in their owning skills/shared contracts.
 
@@ -87,7 +87,7 @@ the rolling Known Defects registry Issue #4172; P3 is informational. `bug-to-iss
 
 - Tier 1/2 single-Issue or issue-free work uses required current-head CI plus self-verified `Verify:`
   targets. Tier 3, multi-Issue, and auth/security/data/migration/concurrency/payments/external-API work
-  also uses the full independent review and verified-merge path.
+  also uses the full independent review and verified-merge path, with mechanism/convergence review before an expensive proof cycle.
 - Build the most boring solution that satisfies the contract. New ledgers, registries, abstractions,
   provider layers, or enterprise patterns require explicit demand and must replace something or have
   a review date.
@@ -126,8 +126,8 @@ their owner docs may use the Governance lane. Product/runtime behavior requires 
 
 - GitHub Issues are the normal implementation contract. Read the full Issue; bind work to its Scope,
   Constraints, Source Anchors, Acceptance Criteria, Out of Scope, and resolvable inline `Verify:`
-  targets. Strictly valid `agent:ready` is required before claim; active work becomes `In Progress`
-  and the claim wrapper must remove `agent:ready`.
+  targets. Use strictly valid `agent:ready` before claim; active work becomes `In Progress`, and the claim wrapper must remove `agent:ready`.
+  Pickup proceeds without requiring GitHub Project Status.
 - Before creating or normalizing a governance or contract Issue, search the same artifact or symptom
   in open Issues, recently merged PRs, and closed Issues. Use GitHub CLI/REST search; do not require
   GraphQL or ProjectV2 operations.
@@ -136,7 +136,7 @@ their owner docs may use the Governance lane. Product/runtime behavior requires 
   see `docs/development/PR_HOT_PATH.md :: Multi-Issue PR Scope`.
 - Verify every exact closing Issue. A distinct open parent is checked as the issue-set contract;
   unfinished feature criteria do not block delivery of verified children.
-- Verification binds to the current head and mutable contract/body/check configuration. Green CI
+- Verification binds to the current head, mutable authority digest/version and contract/body/check configuration, and late-change supersession; rerun affected evidence. Green CI
   alone is not a merge receipt. The full path must neutralize mutable body closers, use a fixed
   non-closing message, explicitly close the authenticated issue set, reject race-added refs, include
   restoring the authenticated body, and preserve a durable receipt; see `verification-and-closure`.
@@ -149,7 +149,7 @@ their owner docs may use the Governance lane. Product/runtime behavior requires 
 
 The dispatcher is an optional collision guard, not lifecycle authority. Use only
 `scripts/issue_pickup_claim.sh` through `issue-to-code`; never reconstruct its claim/label handshake.
-GitHub Issue state and labels remain durable truth; Project Status is optional projection.
+GitHub Issue state, blocked-state, and review-handoff labels remain durable truth; Project Status is optional projection.
 
 ## Builder-session closeout gate
 
