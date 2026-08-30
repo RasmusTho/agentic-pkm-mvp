@@ -231,11 +231,11 @@ or design-provenance material and do not authorize invocation.
 | `publish-pr` | unaffected | Owns publication truth, independent of worker capability. |
 | `resume-work` | principle-only | Resumes the same authority and may reapply TCD without inventing a route. |
 | `rollback-promotion` | unaffected | Executes governed release recovery. |
-| `start-model-inquiry` | separate boundary | Retains its separate role-specific model-access contract; it is not the active issue-worker carrier. |
+| `start-model-inquiry` | unaffected | Retains its separate role-specific model-access contract; it is not the active issue-worker carrier. |
 | `temporal-doc-governance` | principle-only | Uses TCD normally; temporal authority routing is unchanged. |
 | `verification-and-closure` | principle-only | Verification capability may vary under TCD, but routing cannot weaken its gates. |
 | `verify-promotion` | unaffected | Verifies release-channel state independently of execution routing. |
-| `yggdrasil-design-handoff` | separate boundary | Retains its governed design/provenance boundary; it does not activate a Claude worker route. |
+| `yggdrasil-design-handoff` | unaffected | Retains its governed design/provenance boundary; it does not activate a Claude worker route. |
 
 ## Connected execution paths
 
