@@ -5,6 +5,9 @@ description: "Review, plan, make ready, and deliver an epic, parent feature issu
 
 # Deliver Issue Set
 
+Blocked and needs-human candidates must carry the compatible `action:*` subtype and
+`blocker_action.v1` receipt defined in `_shared/BLOCKER_ACTION_CONTRACT.md`; they remain non-pickup.
+
 Use this skill when asked to review, plan, make ready, or deliver an epic, parent feature issue, Kanban/Project lane, or larger set of issues that should move through agent pickup.
 
 The goal is to produce an executable implementation plan and, when requested, deliver the full epic or all in-scope Kanban/Project issues that can truthfully be delivered. When the ready pool is too small, repair or create bounded ready issues using the repo's existing backlog workflows.

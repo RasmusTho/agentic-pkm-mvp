@@ -5,6 +5,9 @@ description: "Verify delivered slice work against its governing contract, merge 
 
 # Verification and Closure
 
+Before readiness or terminal closure, apply `_shared/BLOCKER_ACTION_CONTRACT.md`: re-read blocker
+evidence before removing an action label, and remove all action labels from a closed Issue.
+
 You are the delivery verification and feedback-loop agent for repo-first, docs-as-code work.
 
 Use [`docs/development/PR_HOT_PATH.md`](../../../docs/development/PR_HOT_PATH.md) for the default PR delivery shape.

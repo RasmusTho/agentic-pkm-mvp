@@ -20,6 +20,16 @@ own copies.
 | `agent:ready` | bounded, testable, unblocked, and strictly validated — safe for agent pickup without requiring Project Status |
 | `agent:blocked` | dependency unresolved, including parent validation hubs waiting on child slices |
 | `agent:needs-human` | requires a named human decision, tradeoff, missing input, or authority question |
+| `action:repair-contract` | blocked: next action is truthful contract/maintenance repair, not an inferred cause |
+| `action:wait-dependency` | blocked: wait for named dependency evidence |
+| `action:restore-environment` | blocked: restore a named local/host/service environment |
+| `action:wait-external` | blocked: wait for a named external system or party |
+| `action:review-at` | blocked: re-evaluate at a named review trigger |
+| `action:human-decision` | needs human: owner decision required |
+| `action:human-authorization` | needs human: authorization required |
+| `action:human-access` | needs human: access grant or credential action required |
+| `action:human-operation` | needs human: operator action required |
+| `action:human-acceptance` | needs human: acceptance observation required |
 | `agent:in-progress` | active implementation work under a current claim or delivery handoff |
 | `state:known-defect` | rolling registry Issue containing confirmed deferred P2 defect entries; never an implementation pickup label |
 
@@ -34,6 +44,13 @@ Rules:
   An existing explicit open-Issue `Review` projection is retained. None of these projections
   controls pickup.
 - Closed or delivered Issues must not retain any `agent:*` label.
+- An open `agent:blocked` Issue carries exactly one `action:repair-contract`,
+  `action:wait-dependency`, `action:restore-environment`, `action:wait-external`, or
+  `action:review-at` label. An open `agent:needs-human` Issue carries exactly one
+  `action:human-*` label. Other and terminal states carry no `action:*` label.
+- The durable comment receipt is `blocker_action.v1` with `action`, `owner`,
+  `next_action`, `unblocks_when`, `dependency_refs`, optional `review_at`, and
+  `last_verified_at`. Labels route; the receipt names the evidence and never grants a claim.
 - `state:known-defect` belongs only on the locked rolling Known Defects registry Issue. That
   container also carries `type:bug`, is not an implementation Issue, carries no `agent:*` label,
   remains in `Backlog` if projected, and must never carry `agent:ready`. During explicit Project
