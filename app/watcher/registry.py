@@ -1794,7 +1794,6 @@ def _emit_watch_event(
             trace_id=trace_id,
             payload=payload,
         )
-        append_jsonl_outbox_event(outbox_path, event, default_source="watcher.registry")
         require_db = _db_outbox_required() if required_db is None else required_db
         if require_db and not _has_db_outbox_env():
             raise RuntimeError(
@@ -1804,9 +1803,9 @@ def _emit_watch_event(
             )
         if require_db or _has_db_outbox_env():
             try:
-                # Watcher-run scoped key: (topic, relative path, run-window
-                # fingerprint mtime+hash) — a retried tick dedups, a new file
-                # state produces a new row (I-E1).
+                # Required delivery reaches the durable DB sink first. A DB
+                # failure must not leave a JSONL event that the retry would
+                # append again with a new trace id.
                 write_outbox_event(
                     event,
                     idempotency_key=derive_idempotency_key(
@@ -1825,6 +1824,7 @@ def _emit_watch_event(
                     str(vault_root / rel_path),
                     str(rel_path),
                 )
+        append_jsonl_outbox_event(outbox_path, event, default_source="watcher.registry")
         return trace_id
 
     trace_id = uuid4().hex
@@ -1843,8 +1843,6 @@ def _emit_watch_event(
         "source": "watcher.registry",
         "payload": payload,
     }
-    append_jsonl_outbox_event(outbox_path, event, default_source="watcher.registry")
-
     if spec.emit_event == INGEST_VAULT_CHANGED:
         require_db = _db_outbox_required() if required_db is None else required_db
         if require_db and not _has_db_outbox_env():
@@ -1855,6 +1853,9 @@ def _emit_watch_event(
             )
         if require_db or _has_db_outbox_env():
             try:
+                # Required delivery reaches the durable DB sink first. A DB
+                # failure must not leave a JSONL event that the retry would
+                # append again with a new event id/trace id.
                 insert_object_and_outbox(
                     payload,
                     spec.emit_event,
@@ -1873,6 +1874,9 @@ def _emit_watch_event(
                     str(vault_root / rel_path),
                     str(rel_path),
                 )
+        append_jsonl_outbox_event(outbox_path, event, default_source="watcher.registry")
+        return trace_id
+    append_jsonl_outbox_event(outbox_path, event, default_source="watcher.registry")
     return trace_id
 
 
