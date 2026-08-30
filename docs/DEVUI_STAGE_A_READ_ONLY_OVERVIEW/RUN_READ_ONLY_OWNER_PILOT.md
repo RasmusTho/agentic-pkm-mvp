@@ -146,9 +146,9 @@ without adding any cross-run field to `devui-overview-browser-accessibility.v1`.
 - [ ] Needs-you never presents a technical block and Ready-to-try never follows merge/done/closure
       without the accepted explicit source facts.
   - Verify: runtime receipt: devui-stage-a-read-only-owner-pilot.v1
-- [ ] A Playwright journey follows Overview to a server-supplied visual Focus link and returns while
-      preserving subject/evidence context; no standalone subsystem UI is required for the tested
-      answers.
+- [ ] A deployed Playwright journey always follows Overview to a server-supplied visual Focus link
+      and returns while preserving subject/evidence context, with zero effects, errors, storage,
+      or unauthorized writes; no standalone subsystem UI is required for the tested answers.
   - Verify: runtime receipt: devui-stage-a-read-only-owner-pilot.v1
 - [ ] If a `pkm-test` supplement is used, its disposable state matrix produces no effects, page or
       console errors, browser persistence/storage, or unauthorized writes; traces, screenshots,
