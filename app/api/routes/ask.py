@@ -8,7 +8,7 @@ from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import JSONResponse
 from pydantic import AliasChoices, BaseModel, Field
 
-from app.agents.ask.graph import is_background_orientation_evidence, run_ask_graph
+from app.agents.ask.graph import orientation_of, run_ask_graph
 from app.agents.ask.utils import get_ask_settings
 from app.components.llm.fabric import LLMBackendTimeout
 from app.events.models import new_trace_id
@@ -183,20 +183,6 @@ def _capture_intent_suggestion(transcript: str) -> str | None:
     return None
 
 
-def _orientation_of(payload: dict[str, Any], path: str | None) -> Literal["active", "waiting", "supporting", "background"]:
-    """Derive a bounded, read-only orientation label from retrieved evidence."""
-
-    if is_background_orientation_evidence(payload):
-        return "background"
-    normalized_path = (path or "").casefold()
-    if "/sources/" in normalized_path or normalized_path.startswith("sources/"):
-        return "supporting"
-    text = " ".join(str(payload.get(key) or "") for key in ("title", "text", "content")).casefold()
-    if any(token in text for token in ("waiting", "deferred", "blocked")):
-        return "waiting"
-    return "active"
-
-
 def _to_source(hit: Any) -> AskSource:
     raw: dict[str, Any]
     if hasattr(hit, "model_dump"):
@@ -219,7 +205,11 @@ def _to_source(hit: Any) -> AskSource:
         plane=plane,
         zone=zone,
         path=str(path) if path else None,
-        orientation=_orientation_of(payload, str(path) if path else None),
+        orientation=orientation_of(
+            payload,
+            str(path) if path else None,
+            str(raw.get("text") or raw.get("snippet") or ""),
+        ),
     )
 
 

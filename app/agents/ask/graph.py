@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from pathlib import Path
-from typing import Any, Iterable, List, Optional
+from typing import Any, Iterable, List, Literal, Optional
 
 from langgraph.graph import END, START, StateGraph
 
@@ -48,19 +49,61 @@ DEFAULT_PROVISIONAL_RECALL_RECEIPTS_PATH = Path(
     "runtime/agent_memory/provisional_recall_receipts.jsonl"
 )
 _ASK_LAST_ACTIVE_LOADED_ATTR = "_ask_recall_last_active_loaded"
+OrientationRole = Literal["active", "waiting", "supporting", "background"]
+
+_WAITING_SIGNAL = re.compile(r"\b(?:waiting|deferred|blocked|pending|on[ -]hold)\b")
+_ACTIVE_SIGNAL = re.compile(
+    r"\b(?:active|current\s+focus|next\s+step|in\s+progress|underway)\b"
+)
+_RETURN_ORIENTATION_INTENT = re.compile(
+    r"(?:"
+    r"\bafter\s+(?:an?\s+)?interruption\b|"
+    r"\breturn(?:ing)?\s+(?:to|after)\b|"
+    r"\bresum(?:e|ing)\s+(?:work|the|my|this|where)\b|"
+    r"\bpick\s+(?:up|back)\b"
+    r")"
+)
 
 
 def is_return_orientation_query(query: str) -> bool:
     """Identify the bounded return-after-interruption read path."""
 
-    normalized = query.casefold()
-    return "interrupt" in normalized or "returning" in normalized or "resume" in normalized
+    return bool(_RETURN_ORIENTATION_INTENT.search(query.casefold()))
 
 
-def is_background_orientation_evidence(payload: dict[str, Any]) -> bool:
-    """Use the canonical indexed evidence role; never a fixture-only orientation flag."""
+def orientation_of(payload: dict[str, Any], path: str | None, text: str | None = None) -> OrientationRole:
+    """Derive orientation from situational signals, independent of admissibility metadata."""
 
-    return payload.get("evidence_role") == "background"
+    normalized_path = (path or "").casefold()
+    if "/sources/" in normalized_path or normalized_path.startswith("sources/"):
+        return "supporting"
+    searchable_text = " ".join(
+        str(payload.get(key) or "") for key in ("title", "text", "content")
+    )
+    if text:
+        searchable_text = f"{searchable_text} {text}"
+    searchable_text = searchable_text.casefold()
+    if _WAITING_SIGNAL.search(searchable_text):
+        return "waiting"
+    if _ACTIVE_SIGNAL.search(searchable_text) or payload.get("source_role") in {
+        "work_project",
+        "decision_record",
+    }:
+        return "active"
+    return "background"
+
+
+def is_background_orientation_evidence(
+    payload: dict[str, Any], path: str | None, text: str | None = None
+) -> bool:
+    """Return whether situational orientation marks a candidate as background.
+
+    ``evidence_role`` remains an independent admissibility dimension and is deliberately not
+    consulted here. An active or waiting item may be background-admissible without disappearing
+    from a return-oriented read.
+    """
+
+    return orientation_of(payload, path, text) == "background"
 
 
 def _active_scope(state: AgentState) -> str | None:
@@ -151,16 +194,17 @@ def _rerank_node(state: AgentState, *, ask_settings) -> AgentState:
             pass
 
     top_k_llm = max(1, int(ask_settings.max_context_docs or 10))
-    state.hits = sorted_hits[:top_k_llm]
     if is_return_orientation_query(state.query):
-        # This must happen before recall/answer nodes assemble the ContextEnvelope,
-        # evaluate synthesis admission, or generate an answer. Keeping background
-        # material out of `state.hits` therefore also keeps source attribution aligned.
-        state.hits = [
+        # Filter ranked candidates before taking the context-sized slice. This must happen before
+        # recall/answer nodes assemble the ContextEnvelope, evaluate synthesis admission, or
+        # generate an answer. Keeping background material out of `state.hits` therefore also keeps
+        # source attribution aligned.
+        sorted_hits = [
             hit
-            for hit in state.hits
-            if not is_background_orientation_evidence(hit.payload)
+            for hit in sorted_hits
+            if not is_background_orientation_evidence(hit.payload, hit.path, hit.text or hit.snippet)
         ]
+    state.hits = sorted_hits[:top_k_llm]
     return state
 
 

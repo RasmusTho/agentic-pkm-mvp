@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from types import SimpleNamespace
 from pathlib import Path
 from uuid import uuid4
 
@@ -70,7 +71,7 @@ def _seed_orientation_pack(tmp_path: Path) -> dict[str, Path]:
                     "title": "Atlas Migration",
                     "origin": "vault",
                     "plane": "vault",
-                    "evidence_role": "evidence",
+                    "evidence_role": "background",
                 },
             },
             {
@@ -85,7 +86,7 @@ def _seed_orientation_pack(tmp_path: Path) -> dict[str, Path]:
                     "title": "Atlas Waiting",
                     "origin": "vault",
                     "plane": "vault",
-                    "evidence_role": "evidence",
+                    "evidence_role": "background",
                 },
             },
             {
@@ -154,6 +155,44 @@ def test_human_uat_orientation_filters_background_before_synthesis(
     assert str(paths["unrelated"]) not in {source["path"] for source in payload["sources"]}
     assert "Seedlings" not in captured["context"]
     assert set(payload["synthesis_source_ids"]).issubset(returned_source_ids)
+
+
+def test_human_uat_orientation_filters_before_context_limit(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(ask_graph, "get_reranker", lambda: None)
+    state = ask_graph.AgentState(
+        query="I am returning to the Atlas migration after interruption.",
+        hits=[
+            ask_graph.RetrievedHit(
+                object_id="background-first",
+                score=1.0,
+                ask_score=1.0,
+                path="Garden/seedlings.md",
+                payload={"title": "Seedlings", "evidence_role": "background"},
+            ),
+            ask_graph.RetrievedHit(
+                object_id="active-second",
+                score=0.5,
+                ask_score=0.5,
+                path="Projects/atlas.md",
+                payload={"title": "Atlas", "text": "Current focus: migrate the API gateway."},
+            ),
+        ],
+    )
+
+    result = ask_graph._rerank_node(state, ask_settings=SimpleNamespace(max_context_docs=1))
+    assert [hit.object_id for hit in result.hits] == ["active-second"]
+
+
+def test_human_uat_orientation_does_not_filter_ordinary_ask_substrings(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    for question in ("Please summarize my resume.", "Explain interrupt handling."):
+        _reset_runtime_state(monkeypatch)
+        paths = _seed_orientation_pack(tmp_path / question.replace(" ", "-"))
+
+        response = TestClient(app).post("/api/ask", json={"question": question})
+        assert response.status_code == 200, response.text
+        assert str(paths["unrelated"]) in {source["path"] for source in response.json()["sources"]}
 
 
 def test_human_uat_return_after_interruption_orientation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
