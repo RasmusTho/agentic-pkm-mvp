@@ -108,9 +108,10 @@ it supplies neither a page nor a visual destination.
       runs the deployed Overview → server-supplied Focus → return Playwright journey with zero
       effects, errors, storage, or unauthorized writes. If a `pkm-test` supplement is used, it
       additionally records its disposable-state matrix and durable trace/screenshot/checksum/
-      manifest evidence plus owner acknowledgement. If no supplement is used, the production-only
-      evidence records the applicable final-M proof and that no test state was created. The pilot
-      ledger may preserve candidate provenance when available, but readiness does not require a
+      manifest evidence. If no supplement is used, the production-only evidence records the
+      applicable final-M proof and that no test state was created. The pilot ledger records the
+      owner acknowledgement on both the supplemented and production-only paths. It may preserve
+      candidate provenance when available, but readiness does not require a
       candidate-to-final cross-run binding.
   - Verify: runtime receipt: devui-stage-a-read-only-owner-pilot.v1
 - [ ] Current-state owner docs change only after all capability receipts support the claim.
