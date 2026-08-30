@@ -13,8 +13,7 @@ not govern Product/Runtime agents; their semantics live in `docs/AGENTS.md` and 
    rules` and `:: Canonical entrypoints`. Outside `issue-to-code`, also read the required sections of
    `docs/development/AGENT_OPERATING_PROTOCOL.md` before code guidance.
 
-Conditional reads are selected from the actual diff, not the requested scope. A `FILE :: Section`
-citation means read that section only; see `.codex/skills/_shared/READ_SCOPE.md`.
+Conditional reads are selected from the actual diff, not the requested scope. A `FILE :: Section` citation means read that section only; see `.codex/skills/_shared/READ_SCOPE.md`.
 
 ## Repo-local skill routing
 
@@ -58,9 +57,9 @@ Detailed capability policy and output blocks belong in the selected skill and
 
 ## Agency default
 
-Proceed autonomously with reversible, in-scope work. Ask the owner only for an irreversible,
-external-facing, strategic, or genuinely ambiguous-authority decision. Failed tooling or CI alone is
-not an owner decision. Route real owner asks through `owner-decision-brief`.
+Proceed autonomously with reversible, in-scope work. Ask the owner only for an irreversible, external-facing, strategic,
+or genuinely ambiguous-authority decision. A retry count, a failed local/CI/type check, or a safe technical pause
+is not an owner decision; only its explicit authority categories may create `agent:needs-human`. Route real owner asks through `owner-decision-brief`.
 
 ## Parallel-agent execution
 
@@ -92,7 +91,7 @@ the rolling Known Defects registry Issue #4172; P3 is informational. `bug-to-iss
 - Build the most boring solution that satisfies the contract. New ledgers, registries, abstractions,
   provider layers, or enterprise patterns require explicit demand and must replace something or have
   a review date.
-- Use at most two CI-repair rounds per failure mechanism, then shrink/replan or escalate capability.
+- Use at most two CI-repair rounds per failure mechanism, then shrink/replan or escalate capability; does not cap the separate P0/P1 review-repair loop. Evidence-based convergence and fresh independent re-review govern it.
 
 Exact tiers, supersession, and evidence-reuse mechanics live in
 `docs/development/GOVERNANCE_PROPORTIONALITY.md` and the delivery skills.
