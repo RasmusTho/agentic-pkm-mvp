@@ -173,6 +173,12 @@ class RegistryObservationStore:
                     (generation,),
                 )
 
+    def clear(self) -> None:
+        """Remove observations when their vault identity is no longer valid."""
+
+        with self._connect() as connection:
+            connection.execute("DELETE FROM file_observations")
+
     def paths_not_seen_in(self, generation: int) -> set[str]:
         with self._connect() as connection:
             rows = connection.execute(
@@ -360,6 +366,16 @@ class WatcherState:
         pending_observations, pending_deletes = checkpoint
         self._pending_observations = deepcopy(pending_observations)
         self._pending_deletes = set(pending_deletes)
+
+    def reset_observations_for_new_identity(self) -> None:
+        """Discard observations belonging to a replaced vault/root identity."""
+
+        self._pending_observations.clear()
+        self._pending_deletes.clear()
+        if self._observation_store is not None:
+            self._observation_store.clear()
+        else:
+            self.files.clear()
 
     def file_entry(self, rel_path: str) -> dict[str, Any] | None:
         if self._observation_store is not None:

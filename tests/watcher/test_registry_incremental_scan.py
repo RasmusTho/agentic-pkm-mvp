@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import pytest
 
 from app.watcher import registry
+from app.watcher import state as watcher_state
 from app.watcher.settings_delta import SettingsDeltaResult, SettingsSourceDeltaResult
 from app.watcher.state import RegistryObservationStore, WatcherState
 
@@ -595,6 +597,96 @@ def test_scan_identity_changes_when_vault_is_replaced_at_same_path(tmp_path: Pat
     assert state.scan_generation == 8
     assert state.scan_stack == []
     assert state.scan_identity == new_identity
+
+
+def test_vault_replacement_invalidates_sidecar_observations_even_with_same_path_and_mtime(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cfg, spec, vault = _make_cfg(tmp_path, max_files=10)
+    old_note = _write_note(vault, "notes/replaced.md", body="old vault bytes")
+    old_mtime = old_note.stat().st_mtime
+    emitted: list[str] = []
+    monkeypatch.setattr(
+        registry,
+        "_emit_watch_event",
+        lambda **kwargs: emitted.append(str(kwargs["rel_path"])) or "trace-ok",
+    )
+
+    state, _ = _run_until_drained(
+        cfg, spec, _load_state(cfg, spec), start=1_700_009_200.0
+    )
+    assert emitted == ["notes/replaced.md"]
+
+    archived = tmp_path / "vault-archived"
+    vault.rename(archived)
+    vault.mkdir()
+    replacement_note = _write_note(vault, "notes/replaced.md", body="new vault bytes")
+    os.utime(replacement_note, (old_mtime, old_mtime))
+
+    replacement_summary = registry._run_spec_tick(
+        cfg,
+        spec,
+        state,
+        now=1_700_009_201.0,
+        states={spec.name: state},
+        handled_settings_sources=set(),
+    )
+
+    assert replacement_summary["observation_status"] == "healthy-idle"
+    assert emitted == ["notes/replaced.md", "notes/replaced.md"]
+    assert _load_state(cfg, spec).file_entry("notes/replaced.md")["hash"] == registry._hash_file(
+        replacement_note
+    )[0]
+
+
+def test_sidecar_failure_does_not_publish_checkpoint(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    checkpoint = tmp_path / "watcher_state.json"
+    checkpoint.write_text("old-checkpoint", encoding="utf-8")
+    observations = RegistryObservationStore(tmp_path / "observations.sqlite3")
+    state = WatcherState(_observation_store=observations)
+    state.update_file_state("notes/one.md", content_hash="digest", seen_at=1_700_009_300.0)
+
+    def fail_apply(*_args: object, **_kwargs: object) -> None:
+        raise OSError("sidecar unavailable")
+
+    monkeypatch.setattr(observations, "apply", fail_apply)
+
+    with pytest.raises(OSError, match="sidecar unavailable"):
+        state.save(checkpoint)
+
+    assert checkpoint.read_text(encoding="utf-8") == "old-checkpoint"
+    assert state.file_entry("notes/one.md") == {
+        "hash": "digest",
+        "last_seen": 1_700_009_300.0,
+    }
+
+
+def test_checkpoint_failure_after_sidecar_commit_leaves_replayable_observation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    checkpoint = tmp_path / "watcher_state.json"
+    observations = RegistryObservationStore(tmp_path / "observations.sqlite3")
+    state = WatcherState(_observation_store=observations)
+    state.update_file_state("notes/one.md", content_hash="digest", seen_at=1_700_009_301.0)
+
+    def fail_replace(*_args: object, **_kwargs: object) -> None:
+        raise OSError("checkpoint unavailable")
+
+    monkeypatch.setattr(watcher_state.os, "replace", fail_replace)
+
+    with pytest.raises(OSError, match="checkpoint unavailable"):
+        state.save(checkpoint)
+
+    restarted = WatcherState.load_registry(
+        checkpoint,
+        tmp_path / "observations.sqlite3",
+    )
+    assert restarted.file_entry("notes/one.md") == {
+        "hash": "digest",
+        "last_seen": 1_700_009_301.0,
+    }
 
 
 def test_resumed_scan_revalidates_ancestor_vault_boundary(

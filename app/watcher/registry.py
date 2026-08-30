@@ -1250,6 +1250,12 @@ def _begin_or_resume_scan(
     identity = _scan_identity(vault_root, scan_roots, scope_glob)
     if state.scan_in_progress and state.scan_identity == identity:
         return
+    if state.scan_identity is not None and state.scan_identity != identity:
+        # A path can be reused for a replacement vault. Relative-path keys in
+        # the sidecar are not sufficient authority in that case: retaining
+        # them would let the replacement inherit hashes/last-seen state from a
+        # different vault and suppress its first observation.
+        state.reset_observations_for_new_identity()
     state.scan_generation += 1
     state.scan_identity = identity
     state.scan_root_index = 0
