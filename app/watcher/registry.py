@@ -2166,6 +2166,11 @@ def _run_spec_tick(
             for name, entry_state in state_entries.items():
                 active_states[name].restore_file_state(rel_path, entry_state)
         if committed_observations:
+            # A successful entry establishes the new vault namespace even when
+            # a later entry fails. Keep scan and observation identities aligned
+            # so the retry does not treat the committed prefix as foreign and
+            # emit it a second time.
+            state.scan_identity = delivery_observation_identity
             state.observation_identity = delivery_observation_identity
         summary["scan_in_progress"] = state.scan_in_progress
         summary["continuation_reason"] = state.continuation_reason

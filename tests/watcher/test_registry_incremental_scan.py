@@ -831,6 +831,66 @@ def test_partial_delivery_failure_preserves_successful_observation_for_retry(
     assert emitted == ["notes/a.md", "notes/b.md"]
 
 
+def test_identity_rollover_partial_delivery_keeps_identities_aligned(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cfg, spec, vault = _make_cfg(tmp_path, max_files=10)
+    _write_note(vault, "notes/a.md", body="a")
+    _write_note(vault, "notes/b.md", body="b")
+    observations = RegistryObservationStore(
+        registry._observation_store_path(registry._state_path(cfg.state_dir, spec.name))
+    )
+    observations.replace_identity("old-identity", {}, ())
+    identities = iter(
+        ("new-identity", "new-identity", "new-identity", "new-identity", "new-identity")
+    )
+    monkeypatch.setattr(
+        registry, "_scan_identity", lambda *_args, **_kwargs: next(identities)
+    )
+    attempts = 0
+    emitted: list[str] = []
+
+    def emit(**kwargs: object) -> str:
+        nonlocal attempts
+        attempts += 1
+        rel_path = Path(str(kwargs["rel_path"])).as_posix()
+        if attempts == 2:
+            raise RuntimeError("second delivery temporarily unavailable")
+        emitted.append(rel_path)
+        return f"trace-{attempts}"
+
+    monkeypatch.setattr(registry, "_emit_watch_event", emit)
+    state = WatcherState(
+        _observation_store=observations,
+        scan_identity="old-identity",
+        observation_identity="old-identity",
+    )
+    failed = registry._run_spec_tick(
+        cfg,
+        spec,
+        state,
+        now=1_700_009_485.0,
+        states={spec.name: state},
+        handled_settings_sources=set(),
+    )
+    retried_state = _load_state(cfg, spec)
+    recovered = registry._run_spec_tick(
+        cfg,
+        spec,
+        retried_state,
+        now=1_700_009_486.0,
+        states={spec.name: retried_state},
+        handled_settings_sources=set(),
+    )
+
+    assert failed["observation_status"] == "degraded"
+    assert recovered["observation_status"] == "healthy-idle"
+    assert retried_state.scan_identity == "new-identity"
+    assert retried_state.observation_identity == "new-identity"
+    assert attempts == 3
+    assert emitted == ["notes/a.md", "notes/b.md"]
+
+
 def test_selected_vault_marker_is_not_treated_as_nested_boundary(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
