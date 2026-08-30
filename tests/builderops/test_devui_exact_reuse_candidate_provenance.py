@@ -117,6 +117,29 @@ def test_candidate_tokens_refuse_declaration_added_after_source_commit() -> None
         )
 
 
+def test_candidate_tokens_require_source_value_parity_but_allow_local_fonts() -> None:
+    repo_root = Path(__file__).resolve().parents[2]
+    manifest = _load_manifest(repo_root, revision=None)
+    source = _immutable_source_texts(repo_root, manifest["source"])
+
+    _validate_candidate_tokens(
+        candidate_text=(
+            ":root{--bg-base:#070b12;"
+            "--font-ui:system-ui,-apple-system,sans-serif}"
+        ),
+        token_source=source["app/web/static/colors_and_type.css"],
+    )
+
+    with pytest.raises(
+        DevuiCandidateProvenanceError,
+        match="candidate token value differs from the immutable accepted source: --bg-base",
+    ):
+        _validate_candidate_tokens(
+            candidate_text=":root{--bg-base:#0b0d12}",
+            token_source=source["app/web/static/colors_and_type.css"],
+        )
+
+
 def test_candidate_binding_refuses_forged_candidate_anchor() -> None:
     repo_root = Path(__file__).resolve().parents[2]
     manifest = _load_manifest(repo_root, revision=None)

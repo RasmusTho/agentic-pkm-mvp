@@ -24,6 +24,7 @@ _ALLOWED_TRANSFORMS = {
     "layout_reflow",
     "local_system_font_no_egress_normalization",
 }
+_LOCAL_FONT_TOKENS = {"--font-display", "--font-ui", "--font-mono"}
 _PROHIBITED_BROWSER_CAPABILITIES = (
     "localStorage",
     "sessionStorage",
@@ -187,12 +188,31 @@ def _validate_bindings(
 
 
 def _validate_candidate_tokens(*, candidate_text: str, token_source: str) -> None:
-    source_tokens = set(re.findall(r"(--[a-z0-9-]+)\s*:", token_source))
+    source_declarations = {
+        name: value.strip()
+        for name, value in re.findall(
+            r"(--[a-z0-9-]+)\s*:\s*([^;{}]+)", token_source
+        )
+    }
+    candidate_declarations = {
+        name: value.strip()
+        for name, value in re.findall(
+            r"(--[a-z0-9-]+)\s*:\s*([^;{}]+)", candidate_text
+        )
+    }
+    source_tokens = set(source_declarations)
     candidate_tokens = set(re.findall(r"var\((--[a-z0-9-]+)\)", candidate_text))
     if not candidate_tokens.issubset(source_tokens):
         raise DevuiCandidateProvenanceError(
             "candidate uses a token absent from the immutable accepted source"
         )
+    for name, value in candidate_declarations.items():
+        if name in _LOCAL_FONT_TOKENS:
+            continue
+        if source_declarations.get(name) != value:
+            raise DevuiCandidateProvenanceError(
+                f"candidate token value differs from the immutable accepted source: {name}"
+            )
 
 
 def _validate_browser_safety(candidate_texts: dict[str, str]) -> str:
