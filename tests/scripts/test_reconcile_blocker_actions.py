@@ -23,6 +23,19 @@ def test_legacy_human_labels_map_to_canonical_successors() -> None:
         assert new in result["after"] and old not in result["after"]
 
 
+def test_plan_removes_only_legacy_label_when_exact_successor_is_already_live() -> None:
+    result = plan({"number": 1, "state": "open", "labels": ["agent:needs-human", "human:decision", "action:human-decision"]})
+    assert result["after"] == ["action:human-decision", "agent:needs-human"]
+    assert result["changes"] == [{"remove": "human:decision", "add": ""}]
+    assert not result["errors"]
+
+
+def test_plan_fails_closed_for_legacy_label_with_other_live_successor() -> None:
+    result = plan({"number": 1, "state": "open", "labels": ["agent:needs-human", "human:decision", "action:human-authorization"]})
+    assert result["changes"] == []
+    assert "legacy_successor_conflict" in result["errors"]
+
+
 def test_unclassified_blocked_routes_to_repair_contract_without_cause_inference() -> None:
     result = plan({"number": 1, "state": "open", "labels": ["agent:blocked"]})
     assert result["after"] == ["action:repair-contract", "agent:blocked"]
@@ -75,6 +88,36 @@ def test_apply_uses_narrow_writes_and_verifies_readback(monkeypatch) -> None:
     assert result["action"] == "action:repair-contract"
     assert any(method == "POST" and endpoint.endswith("/labels") for endpoint, method, _ in calls)
     assert not any(method == "PATCH" for _, method, _ in calls)
+
+
+def test_apply_retries_partial_legacy_migration_with_only_safe_removal(monkeypatch) -> None:
+    item = plan({"number": 1, "state": "open", "labels": ["agent:needs-human", "human:decision", "action:human-decision"]})
+    reads = iter([
+        {"number": 1, "state": "open", "labels": item["before"]},
+        {"number": 1, "state": "open", "labels": item["before"]},
+        {"number": 1, "state": "open", "labels": item["after"]},
+        {"number": 1, "state": "open", "labels": item["after"]},
+        {"number": 1, "state": "open", "labels": item["after"]},
+    ])
+    calls = []
+    posted_body = None
+
+    def fake_api(repo, endpoint, *, method="GET", payload=None):
+        nonlocal posted_body
+        calls.append((endpoint, method, payload))
+        if method == "DELETE":
+            return None
+        if method == "POST" and endpoint.endswith("/comments"):
+            posted_body = payload["body"]
+            return {"id": 9}
+        if method == "GET" and "comments?" in endpoint:
+            return [{"id": 9, "body": posted_body}]
+        return next(reads)
+
+    monkeypatch.setattr("scripts.reconcile_blocker_actions._api", fake_api)
+    assert apply_plan("o/r", "o", "r", item)["action"] == "action:human-decision"
+    assert any(method == "DELETE" and endpoint.endswith("/labels/human:decision") for endpoint, method, _ in calls)
+    assert not any(method == "POST" and endpoint.endswith("/labels") for endpoint, method, _ in calls)
 
 
 def test_apply_aborts_when_posted_receipt_cannot_be_read_back(monkeypatch) -> None:

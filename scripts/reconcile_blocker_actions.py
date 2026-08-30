@@ -20,10 +20,20 @@ def plan(issue: dict[str, Any]) -> dict[str, Any]:
     labels = label_names(issue)
     desired = set(labels)
     changes: list[dict[str, str]] = []
+    errors: list[str] = []
     for old, new in LEGACY_HUMAN_ACTIONS.items():
         if old in desired:
-            desired.remove(old); desired.add(new)
-            changes.extend(({"remove": "", "add": new}, {"remove": old, "add": ""}))
+            live_actions = desired & ACTION_LABELS
+            if new in desired:
+                # A prior partial apply already established the exact successor.
+                desired.remove(old)
+                changes.append({"remove": old, "add": ""})
+            elif live_actions:
+                # Never add a second successor over a conflicting live action.
+                errors.append("legacy_successor_conflict")
+            else:
+                desired.remove(old); desired.add(new)
+                changes.extend(({"remove": "", "add": new}, {"remove": old, "add": ""}))
     lifecycle = labels & {"agent:blocked", "agent:needs-human"}
     if labels & ACTION_LABELS and not lifecycle:
         for action in labels & ACTION_LABELS:
@@ -31,7 +41,7 @@ def plan(issue: dict[str, Any]) -> dict[str, Any]:
     elif lifecycle == {"agent:blocked"} and not labels & ACTION_LABELS:
         desired.add("action:repair-contract"); changes.append({"remove": "", "add": "action:repair-contract"})
     verdict = classify(desired, open_issue=str(issue.get("state", "open")).lower() == "open")
-    return {"issue": issue.get("number"), "before": sorted(labels), "after": sorted(desired), "changes": changes, "errors": list(verdict.errors)}
+    return {"issue": issue.get("number"), "before": sorted(labels), "after": sorted(desired), "changes": changes, "errors": errors + list(verdict.errors)}
 
 
 def _api(repo: str, endpoint: str, *, method: str = "GET", payload: Any = None) -> Any:
