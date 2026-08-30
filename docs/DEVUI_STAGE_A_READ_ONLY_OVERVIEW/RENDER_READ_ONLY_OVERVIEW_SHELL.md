@@ -132,5 +132,5 @@ and `tests/companion_ui/test_devui_overview_journeys.py`. No other UI is modifie
 ## Related GitHub Issues
 
 Filed as closed/superseded child [#4747](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4747).
-The canonical connected shell #4836 delivered the bounded read-only behavior after #4744/#4745
-delivery and the accepted #4746 design receipt.
+The canonical connected shell #4836 delivered the bounded read-only behavior after #4744 delivery
+and the accepted #4746 design receipt.

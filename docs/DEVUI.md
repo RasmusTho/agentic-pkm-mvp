@@ -13,7 +13,7 @@ Source of truth: This document owns the owner experience. Accepted ADRs and link
 specifications own the mechanisms; live GitHub, CI, dispatcher, and receipt evidence owns delivery
 truth.
 Last reviewed: 2026-08-30
-Last verified against: `origin/main` `b1b71f205ff57da2df99a6747102066e5e74b350`, live GitHub state
+Last verified against: `origin/main` `53d7aa76b4b9184600c16f33cccb0e8bd9bee4a3`, live GitHub state
 for #4741, #4742–#4749, #4768, #4833, #4834, #4835, #4836, #4838, #4841, and #4857, the merged
 withdrawal receipt in PR #4751, the admitted local Focus route in PR #4771, the admitted
 direct-loopback Overview route in PR #4772, the ARO-03 contract and route-test-selection recovery

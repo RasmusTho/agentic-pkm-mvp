@@ -10,7 +10,7 @@ Temporal class: Strategic target state with an explicit delivered-input ledger
 Review cadence: Event-driven
 Source of truth: Owner documents own intended behavior; source systems and receipts own facts; GitHub, Git, CI, and merged code own delivery truth.
 Last reviewed: 2026-08-30
-Last verified against: `origin/main` `7d324d0bb7db060dc38be3a1a2139c551c85447b`, live GitHub
+Last verified against: `origin/main` `53d7aa76b4b9184600c16f33cccb0e8bd9bee4a3`, live GitHub
 state for #4741, #4742–#4749, #4768, #4786, #4834, #4835, #4836, #4838, #4841, and #4857, and
 merged PRs #4751, #4771, #4772, #4789, #4792, #4900, #4901, #5157, and #5200.
 
@@ -95,7 +95,7 @@ changes none of the withdrawal conclusions for **Needs you** or **Ready to try**
 | 5 | ARO-05 — Validate Connected Overview and Focus Yggdrasil Evidence #4746 | Delivered and closed after exact constrained-reuse receipt | Merged stable #4834 source-owned Now fixtures plus delivered #4768 Focus API fixtures, with independently reviewed `yggdrasil-constrained-reuse.v1` receipt |
 | 6 | ARO-06 — Render the Read-Only Overview Shell | Delivered by merged #4836 | Accepted ARO-05 design evidence and merged ARO-03/04 |
 | 7 | ARO-07 — Prove Overview Browser and Accessibility States | Delivered and closed #4748 | Exact five-node #4833 artifact and `devui-stage-a-exact-sha-state-matrix.v1` receipt at final post-merge `main` `M` |
-| 8 | ARO-08 — Run the Read-Only Owner Pilot | `agent:blocked` | #4857 repaired contract, #4835 boolean-only prerequisite, #4748-at-`M` receipt, VM-102 Dev System health/deploy receipts, acknowledged promotion plan, receipt-sourced deployed URL/SHA, and conditional disposable-state classification when `pkm-test` is used; separate owner evidence acknowledgement is pilot output |
+| 8 | ARO-08 — Run the Read-Only Owner Pilot | `agent:blocked` | #4857 repaired contract, #4835 boolean-only prerequisite, #4748-at-`M` receipt, VM-102 Dev System health/deploy receipts, applicable main-tracking deployment/operator evidence for exactly `M`, receipt-sourced deployed URL/SHA, and conditional disposable-state classification when `pkm-test` is used; separate owner evidence acknowledgement is pilot output |
 
 No task is `agent:ready` at filing. The parent is a blocked validation hub and never becomes a
 pickup issue. #4748 is a completed proof receipt, while #4749 remains blocked on external runtime

@@ -1,6 +1,6 @@
 ---
 name: Run the Read-Only Owner Pilot
-description: Run the future deployed-production owner pilot only after the exact browser-proof, deployment, and disposable-state receipts exist; it records answerability without false authority or durable acceptance.
+description: Run the future deployed-production owner pilot only after the exact browser-proof and applicable deployment receipts exist; if a `pkm-test` supplement is used, its disposable-state receipt is also required. It records answerability without false authority or durable acceptance.
 task_id: ARO-08
 github_issue: 4749
 source_anchor: "docs/DEVUI.md :: Owner-experience acceptance criteria"
@@ -91,7 +91,7 @@ The final outcome is reduced truthful reconstruction, which repository tests alo
 - Derived/rebuildable impact: validates one exact rebuildable shell SHA
 - Human knowledge impact: none
 - Memory impact: none
-- Retrieval/context impact: receipt-sourced production URL with disposable test-only state only
+- Retrieval/context impact: receipt-sourced production URL with optional disposable test-only state
 - Sync/deployment impact: consumes an existing Demerzel production deployment receipt; performs no deployment
 - External boundary impact: named owner walkthrough
 - New or changed contract: final owner-pilot receipt
@@ -109,7 +109,7 @@ owning blocked contract and blocks the pilot.
 Prerequisites are strict and serial: (1) #4748 delivery and its fresh exact-main receipt at `M`;
 (2) this repaired source contract; (3) Demerzel authentication and the boolean-only #4835
 credential-presence prerequisite; (4) the deployed #4836 route and server-supplied Focus selectors;
-(5) a concrete promotion plan for exactly `M` with genuine operator acknowledgement; (6) the
+(5) applicable main-tracking deployment/operator evidence for exactly `M`; (6) the
 receipt-sourced deployed SHA/URL and identity agreement; and (7), only when a `pkm-test`
 supplement is used, an approved disposable-state classification covering its data class, namespace,
 setup, readback, teardown, and absence of foreign rows. A production-only pilot has no
@@ -201,6 +201,6 @@ without adding any cross-run field to `devui-overview-browser-accessibility.v1`.
 
 Filed as blocked child [#4749](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4749) serially
 after #4748. It awaits the repaired contract, Demerzel prod access and boolean-only #4835
-prerequisite, #4836 selectors, #4748's exact-main receipt, an acknowledged promotion plan, and
-receipt-sourced deployed URL/SHA. If the pilot supplements naturally observed `pkm-prod` state
+prerequisite, #4836 selectors, #4748's exact-main receipt, applicable main-tracking
+deployment/operator evidence for exactly `M`, and receipt-sourced deployed URL/SHA. If the pilot supplements naturally observed `pkm-prod` state
 with `pkm-test`, it additionally requires an approved disposable-state classification.
