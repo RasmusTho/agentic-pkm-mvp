@@ -610,16 +610,24 @@ reversible technical choices stay in Issue, Git, PR, review and test evidence. V
 **Ready to try**, owner tried, and owner accepted remain separate. See
 `docs/audits/BUILDER_SYSTEM_INTENT_EVIDENCE_GOVERNANCE_2026-08-10.md`.
 
+### Current active Builder carrier
+
+Codex is the only active Builder worker carrier in the current operating path. Concrete model,
+provider, and generation identity is resolved by the declared capability census and host/session
+configuration at invocation time; it is not selected by skills, scripts, prompts, or worker-role
+prose. Claude/Anthropic references in this process map and its evidence remain historical,
+compatibility-only, or design provenance unless a separately governed current contract activates them.
+
 ### Execution-control composition
 
 The stable work identity is the existing repository, Issue, claim, worktree, PR, and evidence chain.
 Where the governed DDO worker seam is used, `WorkerContextPack` and `WorkerInvocation` bind execution
 to its run, plan, effect, Issue, base-head, context-pack, and runtime-target authority; durable binding
-through worktree, PR, and terminal evidence remains target work. Codex or Claude threads, host
-processes, provider sessions, and runtime observations are provenance and operational evidence only,
-not work or delivery authority. A missing or unread execution source remains explicit `unknown` and
-cannot create, select, advance, duplicate, or close work. This constraint does not claim that global
-multi-host session ingestion is delivered today or that the Builder System is one monolithic service.
+through worktree, PR, and terminal evidence remains target work. Codex sessions, host processes,
+provider sessions, and runtime observations are provenance and operational evidence only, not work or
+delivery authority. A missing or unread execution source remains explicit `unknown` and cannot create,
+select, advance, duplicate, or close work. This constraint does not claim that global multi-host
+session ingestion is delivered today or that the Builder System is one monolithic service.
 
 ## Evidence Legend
 
@@ -671,7 +679,7 @@ Read-only GitHub evidence used:
 | dispatcher | implemented | `app/dispatcher/**`, `docs/AGENT_ISSUE_DISPATCHER.md`, Makefile targets | Queue, claim, lease, heartbeat, completion | GitHub `agent:ready` issues | Local tasks/leases/events | Local dispatcher DB only | [docs/AGENT_ISSUE_DISPATCHER.md:21-36], [Makefile:356-361], [app/dispatcher/cli.py:31-32] |
 | model router | implicit | `AGENTS.md` TCD policy, `.codex/agents/*.toml` | Choose model/reasoning by risk | Task risk/TCD | Model/effort choice | Agent/session config | [AGENTS.md :: Total Cost of Development], [`.codex/agents/slice-implementer.toml`:1-20] |
 | skill router | partially_implemented | `AGENTS.md`, `.codex/skills/README.md` | Route work to workflow skill | Task class | Skill path | Agent behavior | [AGENTS.md :: Repo-local skill routing], [`.codex/skills/README.md`:64-128] |
-| context builder | implemented (dry-run helper) | `docs/DOCS_INDEX.md`, skill first-context sections, `app/builderops/epic_dispatch.py` | Select source docs and owner docs, then emit minimal worker packet | Issue source anchors, docs index, candidate issue facts | Runtime-neutral Codex/Claude context packet | Local JSON output; optional run-state evidence | [AGENTS.md :: Reading order], [`.codex/skills/issue-to-code/SKILL.md`:236-256], [app/builderops/epic_dispatch.py:1] |
+| context builder | implemented (dry-run helper) | `docs/DOCS_INDEX.md`, skill first-context sections, `app/builderops/epic_dispatch.py` | Select source docs and owner docs, then emit minimal worker packet | Issue source anchors, docs index, candidate issue facts | Codex worker packet with carrier-neutral evidence fields | Local JSON output; optional run-state evidence | [AGENTS.md :: Reading order], [`.codex/skills/issue-to-code/SKILL.md`:236-256], [app/builderops/epic_dispatch.py:1] |
 | worktree/branch allocator | partially_implemented | `scripts/agent_workspace_preflight.sh`, branch-truth gate | Detect worktree/branch drift; refuse shared root by default | Branch/worktree | Preflight pass/fail | Local script | [`.codex/skills/_shared/BRANCH_TRUTH_GATE.md`:9-77], [scripts/agent_workspace_preflight.sh:55-61] |
 | claim coordinator | implemented | dispatcher claim + `scripts/issue_pickup_claim.sh` | Claim issue and remove ready label | Ready issue | Lease plus label mutation | Dispatcher + `gh issue edit` | [`.codex/skills/issue-to-code/SKILL.md`:129-175], [scripts/issue_pickup_claim.sh:39-59] |
 | implementation agent | implemented | `issue-to-code`, `slice_implementer` adapter | Execute bounded issue | Ready issue, owner docs | Diff, validation, PR | Local files/PR | [`.codex/skills/issue-to-code/SKILL.md`:236-260], [`.codex/agents/slice-implementer.toml`:1-20] |

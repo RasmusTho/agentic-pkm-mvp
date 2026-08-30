@@ -19,9 +19,10 @@ source root is `~/.local/share/agent-skills`; set `PKM_PORTABLE_SKILLS_DIR` when
 different source root.
 
 `scripts/install_skills.sh` installs both repo-local skills and every registered portable dependency
-into the configured Claude skill directory. It fails closed when a registered source is absent. Codex
-discovers the same portable source root directly. A repo skill may require a portable method only
-when its dependency is registered here and the environment has completed that provisioning step.
+into the legacy compatibility skill directory. It fails closed when a registered source is absent.
+Codex is the only active Builder worker carrier and discovers the same portable source root directly.
+A repo skill may require a portable method only when its dependency is registered here and the
+environment has completed that provisioning step.
 
 ## Workflow map
 
@@ -103,16 +104,16 @@ citation site. `_shared/READ_SCOPE.md` is the canonical protocol, including the 
 - `agentic-pkm`
   - default repo-dev context for code, tests, docs, and SoT reading order in this repository
 - `resume-work`
-  - dev-time recovery for interrupted Codex/Claude/ChatGPT sessions (quota, network, hung command, tool failure, context loss); check resumable orchestration journals/runs before git reconstruction, use git reconstruction as the fallback, keep a lightweight `.codex-tmp/HANDOFF.md`, continue when clear, and escalate only on destructive or contract/SoT ambiguity; not a runtime/product feature
+  - dev-time recovery for interrupted Codex/ChatGPT sessions (quota, network, hung command, tool failure, context loss); historical Claude session records may be reconstructed as provenance but never resumed as an active Builder carrier; check resumable orchestration journals/runs before git reconstruction, use git reconstruction as the fallback, keep a lightweight `.codex-tmp/HANDOFF.md`, continue when clear, and escalate only on destructive or contract/SoT ambiguity; not a runtime/product feature
 - `issue-to-code`
   - implementation entrypoint for bounded GitHub Issue work
   - classifies the issue as Product/Runtime System, Builder System, or boundary work before pickup
   - before coding, use its pickup wrapper to acquire the available dispatcher lease or durable
     GitHub-label-only fallback and remove `agent:ready`
 - `start-model-inquiry`
-  - launch a durable pre-ticket Fable/GPT inquiry exactly once through the sanctioned host-local
-    subscription launcher; the dormant provider-API launcher has a distinct identity, and issue
-    promotion remains a separate governed step
+  - retain the separately governed Model Inquiry contract and launch exactly once through its
+    sanctioned host-local boundary; this is not the active issue-worker carrier path and its
+    provider/auth work is governed separately by #5203
 - `issue-maintenance-change-control`
   - repair stale or false Issue / PR / label state before or during execution, plus optional
     Project projection when explicitly in scope
@@ -122,7 +123,8 @@ citation site. `_shared/READ_SCOPE.md` is the canonical protocol, including the 
 - `docs-governance`
   - decision and routing skill for docs-as-code ownership, anti-sprawl, DOCS_INDEX impact, and narrower docs workflow selection
 - `yggdrasil-design-handoff`
-  - prepare, run, revise, validate, or archive Claude Design and other UI/component handoffs; classify
+  - prepare, run, revise, validate, or archive design handoffs; Claude Design names in this skill are
+    historical/provenance references, not an active Builder worker route; classify
     exact shipped-pattern reuse separately from novel, mixed, and unknown work; only exact reuse may
     use an independently reviewed content-addressed constrained-reuse receipt without generation,
     while every generated or out-of-envelope visual remains fail-closed on live Yggdrasil Design
@@ -197,7 +199,9 @@ Phase 1 keeps one routing-policy seam and does not copy capability or allocation
 workflow. `deliver-issue-set` produces the optional shadow preflight and `issue-to-code` consumes its
 bounded evidence; all other Builder skills either continue to use `AGENTS.md :: Total Cost of
 Development` for their own capability choice or remain outside execution routing. The Product-lane
-`mimer-*` client family is intentionally excluded from this Builder inventory.
+`mimer-*` client family is intentionally excluded from this Builder inventory. The active worker
+carrier for this inventory is Codex; any Claude references elsewhere are compatibility, historical,
+or design-provenance material and do not authorize invocation.
 
 | Skill | Phase 1 disposition | Reason |
 |---|---|---|
@@ -227,11 +231,11 @@ Development` for their own capability choice or remain outside execution routing
 | `publish-pr` | unaffected | Owns publication truth, independent of worker capability. |
 | `resume-work` | principle-only | Resumes the same authority and may reapply TCD without inventing a route. |
 | `rollback-promotion` | unaffected | Executes governed release recovery. |
-| `start-model-inquiry` | unaffected | Retains its separate role-specific model-access contract. |
+| `start-model-inquiry` | separate boundary | Retains its separate role-specific model-access contract; it is not the active issue-worker carrier. |
 | `temporal-doc-governance` | principle-only | Uses TCD normally; temporal authority routing is unchanged. |
 | `verification-and-closure` | principle-only | Verification capability may vary under TCD, but routing cannot weaken its gates. |
 | `verify-promotion` | unaffected | Verifies release-channel state independently of execution routing. |
-| `yggdrasil-design-handoff` | unaffected | Retains its separate governed design/model-access boundary. |
+| `yggdrasil-design-handoff` | separate boundary | Retains its governed design/provenance boundary; it does not activate a Claude worker route. |
 
 ## Connected execution paths
 

@@ -63,7 +63,8 @@ Repo-local workflow helpers live under `.codex/skills/`. They do not replace thi
   `.codex/skills/docs-governance/SKILL.md`
 - Decision support, autonomous decision quality, or decision-support design review:
   `.codex/skills/decision-quality/SKILL.md`
-- Claude Design projects, UI/component prototypes, visual audits, and governed design handoffs:
+- Governed UI/component prototypes, visual audits, and design handoffs (with historical Claude Design
+  provenance kept explicit):
   `.codex/skills/yggdrasil-design-handoff/SKILL.md`
 - Docs-only authoritative spec work:
   `.codex/skills/docs-authoring/SKILL.md`
@@ -160,32 +161,24 @@ every agent start. Delegation is cheaper only when the saved human time, delay, 
 risk exceeds those incremental costs; a fresh context can improve quality while still increasing
 total tokens.
 
-Human time is the dominant term: **R_human = 100 USD/hour** (1 min ≈ 1.67 USD; 10 min ≈ 16.7 USD; 15 min ≈ 25 USD). The owner runs x5 Codex and x5 Claude subscriptions, so budget pressure is **medium-low but not zero**.
+Human time is the dominant term: **R_human = 100 USD/hour** (1 min ≈ 1.67 USD; 10 min ≈ 16.7 USD; 15 min ≈ 25 USD). Available Codex capacity and usage limits are configuration/runtime facts, so budget pressure is **medium-low but not zero**.
 
 Decision rule — spend more capability (stronger model, higher reasoning, more specialized workflow, deeper review) when:
 
 `ΔC_AI_capability  <  100 · ΔT_human(hours)  +  ΔC_rework  +  ΔC_defect  +  ΔC_delay  +  ΔC_coordination`
 
 - Do not under-model: a too-weak model or too-low reasoning is *expensive* through extra iterations and human steering.
-- Do not over-model: Opus/xhigh on trivial, locally verifiable work burns budget and latency for no gain.
+- Do not over-model: high-capability reasoning on trivial, locally verifiable work burns budget and latency for no gain.
 - Optimize for accepted delivery, not the cheapest single run.
 
 Primary optimization order: 1) cut human time, 2) cut rework, 3) cut hidden defects, 4) cut interruptions/delay, 5) cut unnecessary model/reasoning spend.
 
-Model + reasoning policy — Claude:
+Model + reasoning policy — Codex: read the actual repo/session/config for the current Codex model and reasoning level; do not assume hardcoded values. Codex capability tiers (**Sol**, **Terra**, and **Luna**) are durable routing concepts; the concrete model and generation are resolved by the declared configuration/capability census at execution time.
 
-- **Haiku / low effort** — mechanical, low-risk, trivial transforms, easily verifiable output. Never for architecture, unclear requirements, or hidden correctness risk.
-- **Sonnet / medium effort** — DEFAULT for normal development: implementation, refactor, normal debugging, test creation, normal review, docs where quality matters.
-- **Sonnet / high effort** — multiple files, real design choices, unclear test strategy, review with non-trivial risk, or a prior attempt failed.
-- **Opus / high–xhigh effort** — architecture, unclear requirements, high defect cost, hard bugs, risk review, system/agent/workflow design, complex dependencies, or when human review would otherwise be expensive.
-- **Opus + Ultra Code / xhigh–max effort** — complex orchestration, repo-wide design, and security / data / migration / auth / concurrency / payments / external-API work, where the wrong direction costs more than the extra model spend.
-
-Model + reasoning policy — Codex: read the actual repo/session/config for the current Codex model and reasoning level; do not assume hardcoded values. OpenAI model names carry a durable capability tier (**Sol** = highest ceiling, **Terra** = balanced default, **Luna** = fast/cheap; introduced with GPT-5.6) that advances across generations — route by tier the same way the Claude ladder routes by model, resolving the tier to the current generation's model id at config time:
-
-- **Luna / minimal–low reasoning** — mechanical, low-risk, auto-verifiable transforms (mirrors Haiku). Never for architecture, unclear requirements, or hidden correctness risk.
-- **Terra / medium reasoning** — DEFAULT for normal development: implementation, refactor, test fixes, small refactors, normal review (mirrors Sonnet/medium).
+- **Luna / minimal–low reasoning** — mechanical, low-risk, auto-verifiable transforms. Never for architecture, unclear requirements, or hidden correctness risk.
+- **Terra / medium reasoning** — DEFAULT for normal development: implementation, refactor, test fixes, small refactors, normal review.
 - **Terra / high reasoning** — hard debugging, multi-file/multi-layer, test strategy, design trade-offs, risky review (mirrors Sonnet/high).
-- **Sol / high–xhigh reasoning** — architecture, migrations, auth/security/data, concurrency, external APIs, long autonomous tasks, complex orchestration/workflow design, or when human steering would likely exceed 10–15 min (mirrors Opus).
+- **Sol / high–xhigh reasoning** — architecture, migrations, auth/security/data, concurrency, external APIs, long autonomous tasks, complex orchestration/workflow design, or when human steering would likely exceed 10–15 min.
 
 The tier bullets above are authoritative for the reasoning ladder as well (minimal–xhigh, unchanged semantics); do not maintain a separate reasoning table. Propose a Codex model/reasoning change only when TCD justifies it.
 
@@ -424,7 +417,7 @@ Specialist subagents are execution roles, not workflow contracts. Repo-local ski
 
 - Use `docs/development/BUILDER_SUBAGENT_ROLES.md` for the shared role inventory, the skill-to-role routing matrix, the bounded-loop policy, and the handoff-receipt template. Keep that detail in the reference doc, not here.
 - Codex project-scoped custom agents live under `.codex/agents/**` and Codex agent settings in `.codex/config.toml`. They are Codex-specific execution-role adapters and must not duplicate skill contract text; each adapter must explicitly load the skills it needs, because Codex does not auto-discover this repo's `.codex/skills/**`.
-- Claude compatibility stays routed through `AGENTS.md`, `CLAUDE.md`, and the shared role doc. Do not assume Claude consumes Codex TOML, and do not add `.claude/agents/**` adapters without a separate decision.
+- `CLAUDE.md` and Claude-specific historical/design artifacts are compatibility or provenance surfaces only. They are not active Builder worker routes, and no `.claude/agents/**` adapter or Claude/Anthropic authentication path is permitted in the active worker carrier; the separately governed Model Inquiry contract remains outside this carrier boundary.
 - Subagent loops are verifier-driven repair loops only. The one bounded issue-local helper permitted
   by `AGENTS.md :: Parallel-agent execution` is the maximum depth; it cannot spawn again. No generic
   looping agent or broader recursive fan-out.
