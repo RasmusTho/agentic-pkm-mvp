@@ -175,10 +175,11 @@ python3 scripts/ci_stall_classifier.py \
   --now "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 ```
 
-The merge wait, CI handoff resume, and stall classifier use the same per-name
-replacement rule: retain the latest non-skipped execution, and use a skipped
-record only when no execution exists for that check name. This prevents an
-event-inapplicable duplicate from producing false-green coordination evidence.
+The merge wait, CI handoff resume, stall classifier, lifecycle plan, and authenticated merge
+authority all consume the canonical per-name replacement rule in
+[`CI_WAIT_CONTRACT.md` Rule 7](../../.codex/skills/_shared/CI_WAIT_CONTRACT.md). Keep this hot path
+operational: the shared contract prevents an event-inapplicable duplicate from producing
+false-green coordination evidence.
 
 Classifier output is advisory coordination evidence only:
 - `wait`: pending checks are still within the bounded threshold; keep waiting with the REST/backoff

@@ -910,6 +910,26 @@ def test_required_check_accepts_latest_github_actions_rerun() -> None:
     assert _checks_rejection(checks, expected_head_sha=HEAD) is None
 
 
+def test_optional_failed_execution_is_not_masked_by_skipped_duplicate() -> None:
+    optional_failed = {
+        "id": 20,
+        "name": "optional",
+        "status": "completed",
+        "conclusion": "failure",
+        "app": {"id": 999, "slug": "external"},
+    }
+    optional_skipped = {
+        **optional_failed,
+        "id": 21,
+        "conclusion": "skipped",
+    }
+
+    assert _checks_rejection(
+        [_check(check_id=12, conclusion="success"), optional_failed, optional_skipped],
+        expected_head_sha=HEAD,
+    ) == "checks_not_green"
+
+
 def test_required_check_rejects_missing_producer_identity() -> None:
     checks = [_check(check_id=11, conclusion="success", app_slug=None)]
 
