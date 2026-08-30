@@ -1,9 +1,9 @@
 State: Development reference. Builder System governance; not Product/Runtime truth. Not an auto-loaded instruction file.
 # Builder Subagent Roles
 
-Shared, human-readable role map for Codex and Claude Code specialist subagents working on this
-repository. It exists so subagent roles are explicit and discoverable without duplicating workflow
-contracts.
+Shared, human-readable role map for active Codex specialist subagents working on this repository. It
+exists so subagent roles are explicit and discoverable without duplicating workflow contracts.
+Historical Claude compatibility is retained only as provenance; it is not an active Builder route.
 
 ## Purpose
 
@@ -24,9 +24,9 @@ skill.
 - Codex does **not** auto-discover this repo's `.codex/skills/**` (its native skill discovery path is
   `.agents/skills`). Every adapter must therefore name and load the skill files it depends on
   explicitly. Do not rely on implicit skill discovery.
-- Claude Code does not consume Codex TOML as authority. Claude should use this role map together with
-  `AGENTS.md` and the skills. Native `.claude/agents/**` adapters are intentionally **not** added; see
-  Claude compatibility below.
+- The active Builder worker carrier is Codex. `CLAUDE.md` and any Claude-specific role material are
+  compatibility/provenance surfaces only; native `.claude/agents/**` adapters and Claude/Anthropic
+  authentication are not part of current Builder operation.
 - `.codex/agents/` also contains the legacy `docs-guardian.yaml` definition. MAS-03 removed its
   optional credential-gated invocation from `.github/workflows/architecture-ci.yaml`; the retained
   file is not a live CI integration or a specialist delivery role in this map.
@@ -94,10 +94,9 @@ If a task does not match a role, do not invent one: run the matching skill direc
 
 ## Handoff receipt
 
-Every worker receives a minimal runtime-neutral context pack and returns a `subagent_handoff_receipt`
-so the coordinator can act without hidden chat context. Codex and Claude use the same pack and receipt
-schema; differences such as runtime/model hints belong in the invocation metadata, not in duplicate
-workflow contracts.
+Every worker receives a minimal context pack and returns a `subagent_handoff_receipt` so the coordinator
+can act without hidden chat context. The pack and receipt schema remain carrier-neutral for historical
+records and future capability resolution, while current worker invocation is Codex-only.
 
 Fresh context and concurrent scheduling are separate decisions. Every independent non-trivial Issue
 gets a fresh `slice_implementer` context even in a serial queue. Only deterministic or explicitly
@@ -151,12 +150,9 @@ subagent_handoff_receipt:
   context_cost:         # canonical AGENTS.md measurement or named proxy/unknown reason
 ```
 
-## Claude compatibility
+## Historical Claude compatibility
 
-- Use the role names above as prompt-level execution roles for Claude Code subagents.
-- Route Claude through `AGENTS.md`, `CLAUDE.md`, and this doc. Do not treat `.codex/agents/*.toml` as
-  Claude authority — Claude project subagents use `.claude/agents/**` (Markdown + YAML frontmatter), a
-  different format.
-- Do not add `.claude/agents/**` adapters here. Maintaining two parallel role systems raises
-  coordination and rework cost; introduce native Claude adapters only if Claude usage shows enough
-  human-time savings to offset the duplication, as a separate decision.
+The former Claude role route is preserved only so historical handoffs, audits, and compatibility
+documents remain interpretable. It is not an active Builder carrier. Do not launch Claude, read
+Anthropic credentials, or add `.claude/agents/**` adapters from this role map; any future carrier
+requires a separately governed contract and current authority readback.

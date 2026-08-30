@@ -139,6 +139,8 @@ def test_devui_plan_binds_reuse_exit_to_stable_fixtures_and_novel_delta_gate() -
     assert "independent review" in joined
     assert "#4746" in joined
     assert "closed after accepting" in joined_lower
+    assert "Connected handoff #4746 is closed" in joined
+    assert "without implementing any slice or claiming either design receipt" in joined
     assert "novel, mixed, or unknown" in joined
     assert "live Yggdrasil design-system gate" in joined
     assert "#4834 is delivered" not in joined

@@ -445,8 +445,9 @@ If the work spans multiple sub-agents:
 - assign one bounded ready issue per issue agent; never reuse that agent for a sibling Issue
 - state the token/quality rationale for the parallel batch before claiming
 - claim only after the sub-agent handoff is ready
-- build sub-agent handoffs from the same runtime-neutral context-pack schema for Codex and Claude;
-  runtime differences are invocation hints only, not duplicate workflow contracts
+- build sub-agent handoffs from the same carrier-neutral context-pack schema; Codex is the current
+  active carrier and any historical carrier differences are invocation provenance only, not duplicate
+  workflow contracts
 - include the relevant owner docs, `Verify:` ledger, validation commands, and required skills in each handoff
 - pass owner docs and Source Anchors as exact references for the worker to load, not copied full-doc
   content or the full parent narrative
