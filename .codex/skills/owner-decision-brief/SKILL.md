@@ -17,7 +17,7 @@ method, and post-decision activation handoff are the single authoritative decisi
 profile adds repository constraints only; it must not copy, abbreviate, or redefine that method.
 
 The method lives at `.codex/skills/decision-quality/SKILL.md` and `scripts/install_skills.sh`
-installs it together with the other repo-local skills for Claude environments. Successful
+installs it together with the other repo-local skills for legacy compatibility environments. Successful
 provisioning is a precondition for environments that execute this profile.
 
 If `decision-quality` is unavailable, do not reconstruct a local substitute or send a free-form

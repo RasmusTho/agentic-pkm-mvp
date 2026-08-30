@@ -83,6 +83,7 @@ _CAPABILITY_FOR_MODEL_CLASS = {
     "standard": "terra",
     "high-reasoning": "sol",
 }
+ACTIVE_WORKER_RUNTIME = "codex"
 
 
 class CodexIssueSessionLauncher:
@@ -291,7 +292,7 @@ def build_dispatch_plan(
     run_id: str,
     candidates: Iterable[Mapping[str, Any]],
     max_parallel: int = DEFAULT_MAX_PARALLEL,
-    runtime_targets: Iterable[str] = ("codex", "claude"),
+    runtime_targets: Iterable[str] = (ACTIVE_WORKER_RUNTIME,),
     active_leases: Iterable[int | str | Mapping[str, Any]] = (),
     run_state: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
@@ -1098,6 +1099,11 @@ def _normalize_candidate(candidate: Mapping[str, Any]) -> dict[str, Any]:
         raise EpicDispatchError(
             "issue_local_helper_budget=1 requires an explicit issue_local_helper_rationale"
         )
+    runtime_hint = _normalize_optional_string(candidate.get("runtime_hint"))
+    if runtime_hint is not None and runtime_hint != ACTIVE_WORKER_RUNTIME:
+        raise EpicDispatchError(
+            "active Builder worker runtime is Codex-only; runtime_hint must be codex"
+        )
     execution_routing = candidate.get("execution_routing")
     if execution_routing is not None and not isinstance(execution_routing, Mapping):
         raise EpicDispatchError("execution_routing must be an object when supplied")
@@ -1115,7 +1121,7 @@ def _normalize_candidate(candidate: Mapping[str, Any]) -> dict[str, Any]:
         ),
         "task_class": task_class,
         "preferred_path": _normalize_optional_string(candidate.get("preferred_path")),
-        "runtime_hint": _normalize_optional_string(candidate.get("runtime_hint")),
+        "runtime_hint": runtime_hint,
         "scriptable": bool(candidate.get("scriptable", False)),
         "issue_local_helper_budget": issue_local_helper_budget,
         "issue_local_helper_rationale": helper_rationale,
@@ -1393,7 +1399,14 @@ def _normalize_runtime_targets(values: Iterable[str]) -> list[str]:
     runtimes = [_normalize_string(value, "runtime_targets") for value in values]
     if not runtimes:
         raise EpicDispatchError("runtime_targets must not be empty")
-    return list(dict.fromkeys(runtimes))
+    normalized = list(dict.fromkeys(runtimes))
+    unsupported = [runtime for runtime in normalized if runtime != ACTIVE_WORKER_RUNTIME]
+    if unsupported:
+        raise EpicDispatchError(
+            "active Builder worker runtime is Codex-only; unsupported runtime target(s): "
+            + ", ".join(unsupported)
+        )
+    return normalized
 
 
 def _normalize_positive_int(value: Any, field: str) -> int:
