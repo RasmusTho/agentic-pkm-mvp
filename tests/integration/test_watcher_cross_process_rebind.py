@@ -753,6 +753,8 @@ def test_settings05_parent_acceptance(
             if record.phase == "committed" and str(post_commit) in _event_paths(tmp_path):
                 break
             time.sleep(0.05)
+        if process.poll() is None:
+            process.terminate()
         stdout, stderr = process.communicate(timeout=30)
     finally:
         if process.poll() is None:
