@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+import time
 from copy import deepcopy
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
@@ -23,6 +25,63 @@ logger = logging.getLogger(__name__)
 # Health checks must never load the full outbox into memory; it can grow to hundreds of MB.
 # Bound tail reads to this many bytes — enough to capture recent activity for all checks.
 _HEALTH_TAIL_BYTES = 8 * 1024 * 1024  # 8 MB
+
+
+def _watcher_observation_snapshot() -> dict[str, Any]:
+    """Expose registry observation progress independently of outbox health."""
+
+    configured = (os.getenv("WATCHER_HEARTBEAT_PATH") or "").strip()
+    if configured:
+        path = Path(configured).expanduser()
+    else:
+        from app.watcher.heartbeat import resolve_heartbeat_path
+
+        path = resolve_heartbeat_path()
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return {
+            "state": "degraded",
+            "healthy": False,
+            "pending": False,
+            "reason": "watcher heartbeat missing",
+        }
+    except Exception as exc:
+        return {
+            "state": "degraded",
+            "healthy": False,
+            "pending": False,
+            "reason": f"watcher heartbeat malformed ({type(exc).__name__})",
+        }
+    try:
+        heartbeat_ts = float(raw.get("ts"))
+        stale_seconds = float(os.getenv("WATCHER_HEARTBEAT_STALE_SECONDS", "60"))
+    except (TypeError, ValueError):
+        heartbeat_ts = -1.0
+        stale_seconds = 60.0
+    age = time.time() - heartbeat_ts
+    if heartbeat_ts < 0 or age < 0 or age > stale_seconds:
+        return {
+            "state": "degraded",
+            "healthy": False,
+            "pending": False,
+            "reason": "watcher heartbeat is missing a valid fresh timestamp",
+        }
+    reported = str(raw.get("status") or "").strip().lower()
+    if bool(raw.get("paused")) or reported == "degraded":
+        state = "degraded"
+    elif reported == "catch-up":
+        state = "catch-up"
+    elif reported in {"healthy-idle", "running", "ok"}:
+        state = "healthy-idle"
+    else:
+        state = "degraded"
+    return {
+        "state": state,
+        "healthy": state != "degraded",
+        "pending": state == "catch-up",
+        "watchers": raw.get("watchers") if isinstance(raw.get("watchers"), dict) else {},
+    }
 
 
 @dataclass(frozen=True)
@@ -770,6 +829,7 @@ class HealthContract:
         snapshot: dict[str, Any],
     ) -> dict[str, Any]:
         """Publish one canonical full snapshot without waiting on diagnostics."""
+        snapshot.setdefault("watcher_observation", _watcher_observation_snapshot())
         with self._completion_lock:
             if sample_sequence < self._latest_completed_sequence:
                 assert self._latest_completed_snapshot is not None
