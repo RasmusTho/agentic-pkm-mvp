@@ -547,9 +547,13 @@ class VaultManager:
             registration = runtime.production_register(vault_path, producer="picker")
             snapshot = registry.load()
         current_record = SettingsRebindActivation(registry).store.read()
-        if current_record.candidate_binding_id == registration.vault_binding_id:
-            # The durable watcher already follows this binding.  Persisting
-            # last-active metadata remains a normal compatibility write.
+        if (
+            current_record.candidate_binding_id == registration.vault_binding_id
+            and current_record.phase in {"dormant", "no_lifecycle"}
+        ):
+            # A stable record needs only the ordinary compatibility write.  A
+            # prepared or committed same-target record must still flow through
+            # activation so this request waits for commit and watcher resume.
             return None
         known = KnownVaultRef(
             ref=registration.ref,

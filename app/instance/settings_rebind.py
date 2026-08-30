@@ -338,11 +338,28 @@ class SettingsRebindActivation:
         candidate_root: Path,
     ) -> SettingsRebindRecord:
         current = self.store.read()
-        if current.phase == "dormant" and current.candidate_binding_id == candidate_binding_id:
-            return current
+        if current.candidate_binding_id == candidate_binding_id:
+            if current.phase in {"dormant", "no_lifecycle"}:
+                return current
+            if current.phase == "committed":
+                self._wait_for_completed_if_enabled(current)
+                return current
 
         _activation_fault_point("prepare")
-        prepared = self.store.prepare(candidate_binding_id=candidate_binding_id)
+        try:
+            prepared = self.store.prepare(candidate_binding_id=candidate_binding_id)
+        except RegistryError:
+            # Another foreground request may have committed this exact target
+            # between the read above and prepare.  Its durable commit is the
+            # only success receipt the losing request may return.
+            observed = self.store.read()
+            if (
+                observed.phase == "committed"
+                and observed.candidate_binding_id == candidate_binding_id
+            ):
+                self._wait_for_completed_if_enabled(observed)
+                return observed
+            raise
         if prepared.phase != "prepared":
             return prepared
 
@@ -355,10 +372,24 @@ class SettingsRebindActivation:
                 desired_revision=prepared.desired_revision
             )
 
-        committed = self.store.commit_selection(
-            desired_revision=prepared.desired_revision,
-            selection=selection,
-        )
+        try:
+            committed = self.store.commit_selection(
+                desired_revision=prepared.desired_revision,
+                selection=selection,
+            )
+        except RegistryError:
+            # A same-target request can win the lock after both callers have
+            # observed the prepared revision.  Do not report API success until
+            # that winner's commit and watcher resume are durable.
+            observed = self.store.read()
+            if (
+                observed.phase == "committed"
+                and observed.candidate_binding_id == candidate_binding_id
+                and observed.desired_revision == prepared.desired_revision
+            ):
+                self._wait_for_completed_if_enabled(observed)
+                return observed
+            raise
         # A commit fault is post-commit: recovery must observe the durable B
         # binding and roll forward, matching the watcher transaction seam.
         _activation_fault_point("commit")
@@ -375,10 +406,13 @@ class SettingsRebindActivation:
             publish_signal=False,
         )
 
+        self._wait_for_completed_if_enabled(committed)
+        return committed
+
+    def _wait_for_completed_if_enabled(self, record: SettingsRebindRecord) -> None:
         if self.watcher_enabled:
             _activation_fault_point("resume")
-            self._wait_for_stage(committed, required_stage="completed")
-        return committed
+            self._wait_for_stage(record, required_stage="completed")
 
     @property
     def watcher_enabled(self) -> bool:

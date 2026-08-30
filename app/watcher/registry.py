@@ -2356,6 +2356,8 @@ def run_registry_once(
     cfg = _loaded_config or load_registry_config(config_path)
     reconciler = DormantSettingsRebindReconciler.from_config(cfg)
     rebind_cycle = reconciler.begin_cycle(cfg) if reconciler is not None else None
+    if rebind_cycle is not None and rebind_cycle.mode == "stable":
+        cfg.vault_path = reconciler.candidate_vault_path(rebind_cycle.record)
     rebind_observation_revision = (
         rebind_cycle.record.desired_revision
         if rebind_cycle is not None
@@ -2419,6 +2421,12 @@ def run_registry_forever(
 ) -> None:
     cfg = _loaded_config or load_registry_config(config_path)
     reconciler = DormantSettingsRebindReconciler.from_config(cfg)
+    startup_rebind_cycle = reconciler.begin_cycle(cfg) if reconciler is not None else None
+    if startup_rebind_cycle is not None and startup_rebind_cycle.mode == "stable":
+        # A fresh watcher process may still boot from the old environment
+        # binding.  Resolve the completed durable candidate before startup
+        # ingestion or the first scan, so restart cannot observe old-root work.
+        cfg.vault_path = reconciler.candidate_vault_path(startup_rebind_cycle.record)
     # `watcher run` is the production entrypoint.  Compile its bound vault at
     # boot just as API and worker do; the registry config is authoritative for
     # this process and need not depend on VAULT_ROOT being set separately.
@@ -2440,7 +2448,11 @@ def run_registry_forever(
 
     tick = 0
     while True:
-        rebind_cycle = reconciler.begin_cycle(cfg) if reconciler is not None else None
+        rebind_cycle = (
+            startup_rebind_cycle
+            if tick == 0
+            else (reconciler.begin_cycle(cfg) if reconciler is not None else None)
+        )
         rebind_observation_revision = (
             rebind_cycle.record.desired_revision
             if rebind_cycle is not None

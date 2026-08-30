@@ -681,7 +681,7 @@ def test_committed_revision_survives_event_loss_and_process_restart(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    runtime, _vault_a, _vault_b, config_path = _fixture(tmp_path, monkeypatch)
+    runtime, vault_a, vault_b, config_path = _fixture(tmp_path, monkeypatch)
     registry.run_registry_forever(config_path, max_ticks=1)
     _commit(runtime)
     registry.run_registry_forever(config_path, max_ticks=1)
@@ -689,6 +689,38 @@ def test_committed_revision_survives_event_loss_and_process_restart(
     restarted = _runtime(tmp_path)
     assert restarted.open_settings_rebind_store().read().phase == "committed"
     assert load_settings_rebind_watcher_receipt(_revision_receipt_path(tmp_path, 1)).stage == "completed"
+
+    after_restart = vault_b / "after-restart.md"
+    after_restart.write_text("candidate remains authoritative after restart\n", encoding="utf-8")
+    process_env = os.environ.copy()
+    repo_root = Path(__file__).resolve().parents[2]
+    existing_pythonpath = process_env.get("PYTHONPATH")
+    process_env["PYTHONPATH"] = os.pathsep.join(
+        part for part in (str(repo_root), existing_pythonpath) if part
+    )
+    process_env["PYTHONDONTWRITEBYTECODE"] = "1"
+    process = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "app.cli",
+            "watcher",
+            "run",
+            "--config",
+            str(config_path),
+            "--max-ticks",
+            "1",
+        ],
+        cwd=repo_root,
+        env=process_env,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert process.returncode == 0, process.stdout + process.stderr
+    assert str(after_restart) in _event_paths(tmp_path)
+    assert all(path == "" or path.startswith(str(vault_b)) for path in _event_paths(tmp_path))
+    assert str(vault_a) not in _event_paths(tmp_path)
 
 
 def test_disabled_watcher_is_durable_no_lifecycle(
@@ -701,6 +733,26 @@ def test_disabled_watcher_is_durable_no_lifecycle(
     registry.run_registry_once(config_path)
     record = runtime.open_settings_rebind_store().read()
     assert record.phase == "no_lifecycle"
+    assert record.desired_revision == record.applied_revision == 1
+
+
+def test_same_target_prepared_selection_finishes_durable_commit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A picker racing an existing prepared target must not bypass activation."""
+    from app.vault.manager import VaultManager
+
+    runtime, _vault_a, vault_b, _config_path = _fixture(tmp_path, monkeypatch)
+    monkeypatch.setenv("WATCHER_ENABLE", "0")
+    monkeypatch.setattr("app.settings.ingestion.ingest_settings", lambda **_kwargs: None)
+
+    selected = VaultManager().select_vault(vault_b)
+
+    record = runtime.open_settings_rebind_store().read()
+    assert selected.active_vault_path == str(vault_b)
+    assert record.phase == "no_lifecycle"
+    assert record.candidate_binding_id == "binding-b"
     assert record.desired_revision == record.applied_revision == 1
 
 
