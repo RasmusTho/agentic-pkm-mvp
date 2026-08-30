@@ -41,9 +41,10 @@ drains GraphQL to zero and stalls every other agent's reads — a recurring, sys
    non-skipped record per check-run name (ranked by `started_at`, falling back to run id); it falls
    back to the latest skipped record only when that name has no execution. A skipped duplicate from
    an inapplicable event therefore cannot hide a running or failed required execution, while a
-   later executed success still replaces an earlier failure. `epic-run-state lifecycle-plan` reuses
-   that shared selector for terminal dry-runs. A genuinely failed retained record still fails
-   closed.
+   later executed success still replaces an earlier failure. Every production selector that consumes
+   the same check-run evidence, including CI handoff resume and stall classification, must apply this
+   executed-run precedence before deriving a verdict. `epic-run-state lifecycle-plan` reuses that
+   shared selector for terminal dry-runs. A genuinely failed retained record still fails closed.
 8. **A dirty PR schedules no pull_request workflows — absence of a required check is never
    success.** (#4605, LearningSignal `lrn_20260729154323_f134857a`, seen on PR #4354.) When a PR
    is `mergeable_state=dirty`, GitHub cannot compute `refs/pull/<n>/merge`, so the repo's

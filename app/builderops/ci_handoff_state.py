@@ -166,15 +166,33 @@ def pending_check_summary(checks: Iterable[Mapping[str, Any]]) -> list[dict[str,
 def latest_checks_by_name(
     checks: Iterable[Mapping[str, Any]],
 ) -> list[dict[str, Any]]:
-    """Keep the newest GitHub check-run per name using stable run evidence."""
+    """Keep the newest executed check-run per name using stable run evidence.
 
-    latest: dict[str, dict[str, Any]] = {}
+    A skipped run is only a fallback when GitHub has no executed run for that
+    name. This keeps an event-inapplicable duplicate from masking a running or
+    failed execution while preserving successful executed reruns.
+    """
+
+    names: list[str] = []
+    latest_executed: dict[str, dict[str, Any]] = {}
+    latest_skipped: dict[str, dict[str, Any]] = {}
     for check in checks:
         normalized = dict(check)
-        existing = latest.get(normalized["name"])
+        name = normalized["name"]
+        if name not in names:
+            names.append(name)
+        selected = (
+            latest_skipped
+            if normalized.get("conclusion") == "skipped"
+            else latest_executed
+        )
+        existing = selected.get(name)
         if existing is None or _is_check_newer(normalized, existing):
-            latest[normalized["name"]] = normalized
-    return list(latest.values())
+            selected[name] = normalized
+    return [
+        (latest_executed.get(name) or latest_skipped[name])
+        for name in names
+    ]
 
 
 def _is_check_newer(

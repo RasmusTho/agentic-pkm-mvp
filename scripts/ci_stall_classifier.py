@@ -265,12 +265,24 @@ def _normalize_check(value: Any) -> CheckRun:
 
 
 def _latest_by_name(checks: list[CheckRun]) -> list[CheckRun]:
-    latest: dict[str, CheckRun] = {}
+    names: list[str] = []
+    latest_executed: dict[str, CheckRun] = {}
+    latest_skipped: dict[str, CheckRun] = {}
     for check in checks:
-        existing = latest.get(check.name)
+        if check.name not in names:
+            names.append(check.name)
+        selected = (
+            latest_skipped
+            if check.conclusion == "skipped"
+            else latest_executed
+        )
+        existing = selected.get(check.name)
         if existing is None or _check_rank(check) >= _check_rank(existing):
-            latest[check.name] = check
-    return list(latest.values())
+            selected[check.name] = check
+    return [
+        (latest_executed.get(name) or latest_skipped[name])
+        for name in names
+    ]
 
 
 def _check_rank(check: CheckRun) -> tuple[str, int]:
