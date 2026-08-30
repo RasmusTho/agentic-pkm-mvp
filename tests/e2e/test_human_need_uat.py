@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import os
-from types import SimpleNamespace
 from pathlib import Path
+from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
@@ -55,6 +55,7 @@ def _seed_orientation_pack(tmp_path: Path) -> dict[str, Path]:
 
     active_note = tmp_path / "Projects" / "atlas-migration.md"
     waiting_note = tmp_path / "Projects" / "atlas-waiting.md"
+    neutral_note = tmp_path / "Projects" / "atlas-plan.md"
     source_note = tmp_path / "Sources" / "vendor-memo.md"
     unrelated_note = tmp_path / "Garden" / "seedlings.md"
     get_hybrid_store().set_documents(
@@ -90,6 +91,19 @@ def _seed_orientation_pack(tmp_path: Path) -> dict[str, Path]:
                 },
             },
             {
+                "doc_id": "atlas-plan",
+                "source_ref": str(neutral_note),
+                "text": "Atlas migration plan; migrate the gateway.",
+                "payload": {
+                    "uuid": "atlas-plan",
+                    "title": "Atlas Migration Plan",
+                    "origin": "vault",
+                    "plane": "vault",
+                    "source_role": "vault_note",
+                    "evidence_role": "background",
+                },
+            },
+            {
                 "doc_id": "atlas-source",
                 "source_ref": str(source_note),
                 "text": "Vendor migration memo for Atlas. Confirms gateway deprecation window and required cutover steps.",
@@ -116,7 +130,13 @@ def _seed_orientation_pack(tmp_path: Path) -> dict[str, Path]:
         ]
     )
     ask_route._HYBRID_WARMED = True
-    return {"active": active_note, "waiting": waiting_note, "source": source_note, "unrelated": unrelated_note}
+    return {
+        "active": active_note,
+        "waiting": waiting_note,
+        "neutral": neutral_note,
+        "source": source_note,
+        "unrelated": unrelated_note,
+    }
 
 
 def test_human_uat_orientation_classifies_production_indexed_background(
@@ -193,6 +213,35 @@ def test_human_uat_orientation_does_not_filter_ordinary_ask_substrings(
         response = TestClient(app).post("/api/ask", json={"question": question})
         assert response.status_code == 200, response.text
         assert str(paths["unrelated"]) in {source["path"] for source in response.json()["sources"]}
+
+
+def test_human_uat_orientation_preserves_unmarked_production_vault_note(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _reset_runtime_state(monkeypatch)
+    paths = _seed_orientation_pack(tmp_path)
+
+    response = TestClient(app).post(
+        "/api/ask",
+        json={"question": "I am returning to the Atlas migration after interruption."},
+    )
+    assert response.status_code == 200, response.text
+
+    sources_by_path = {source["path"]: source for source in response.json()["sources"]}
+    assert str(paths["neutral"]) in sources_by_path
+    assert sources_by_path[str(paths["neutral"])]["orientation"] == "background"
+
+
+@pytest.mark.parametrize(
+    ("question", "expected"),
+    [
+        ("Where can I pick up my prescription?", False),
+        ("I need to pick up where I left off after interruption.", True),
+        ("I need to pick up the migration work again.", True),
+    ],
+)
+def test_human_uat_orientation_pickup_requires_resumption_context(question: str, expected: bool) -> None:
+    assert ask_graph.is_return_orientation_query(question) is expected
 
 
 def test_human_uat_return_after_interruption_orientation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

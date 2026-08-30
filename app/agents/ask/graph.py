@@ -50,6 +50,7 @@ DEFAULT_PROVISIONAL_RECALL_RECEIPTS_PATH = Path(
 )
 _ASK_LAST_ACTIVE_LOADED_ATTR = "_ask_recall_last_active_loaded"
 OrientationRole = Literal["active", "waiting", "supporting", "background"]
+_ORIENTATION_ROLES = frozenset({"active", "waiting", "supporting", "background"})
 
 _WAITING_SIGNAL = re.compile(r"\b(?:waiting|deferred|blocked|pending|on[ -]hold)\b")
 _ACTIVE_SIGNAL = re.compile(
@@ -60,7 +61,11 @@ _RETURN_ORIENTATION_INTENT = re.compile(
     r"\bafter\s+(?:an?\s+)?interruption\b|"
     r"\breturn(?:ing)?\s+(?:to|after)\b|"
     r"\bresum(?:e|ing)\s+(?:work|the|my|this|where)\b|"
-    r"\bpick\s+(?:up|back)\b"
+    r"\b(?:pick\s+up|pick\s+back(?:\s+up)?)\s+(?:"
+    r"where\s+i\s+left\s+off|"
+    r"after\s+(?:an?\s+)?(?:interruption|break)|"
+    r"(?:my|the|this)\s+(?:[\w-]+\s+){0,3}(?:thread|work|task|project)\s+again"
+    r")\b"
     r")"
 )
 
@@ -74,6 +79,9 @@ def is_return_orientation_query(query: str) -> bool:
 def orientation_of(payload: dict[str, Any], path: str | None, text: str | None = None) -> OrientationRole:
     """Derive orientation from situational signals, independent of admissibility metadata."""
 
+    explicit_orientation = payload.get("orientation")
+    if explicit_orientation in _ORIENTATION_ROLES:
+        return explicit_orientation
     normalized_path = (path or "").casefold()
     if "/sources/" in normalized_path or normalized_path.startswith("sources/"):
         return "supporting"
@@ -100,9 +108,13 @@ def is_background_orientation_evidence(
 
     ``evidence_role`` remains an independent admissibility dimension and is deliberately not
     consulted here. An active or waiting item may be background-admissible without disappearing
-    from a return-oriented read.
+    from a return-oriented read. A production vault note without an explicit orientation is also
+    retained: its neutral ``background`` display state is not sufficient evidence that the note
+    is disposable, and the indexed note body remains the citable read surface.
     """
 
+    if payload.get("source_role") == "vault_note" and payload.get("orientation") not in _ORIENTATION_ROLES:
+        return False
     return orientation_of(payload, path, text) == "background"
 
 
