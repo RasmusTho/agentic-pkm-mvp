@@ -27,3 +27,12 @@ def test_scaffolder_writes_placeholder_via_knowledge_port(tmp_path: Path, monkey
     assert "settings/global.md" in writes
     assert "settings/system-settings.md" in writes
     assert result["created"]
+
+
+def test_scaffolder_uses_configured_sources_root(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("VAULT_SOURCES_DIR_REL", "ConfiguredSources")
+
+    MimerScaffolder(root=tmp_path).scaffold()
+
+    assert (tmp_path / "Mimer" / "ConfiguredSources").is_dir()
+    assert not (tmp_path / "Mimer" / "Sources").exists()

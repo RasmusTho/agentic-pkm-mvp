@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Dict
 
 import yaml
@@ -48,6 +48,9 @@ class NoVaultSelectedError(RuntimeError):
     CWD fallback must now branch on this explicit no-vault signal instead of
     reading or writing under the current working directory (#2384).
     """
+
+
+DEFAULT_SOURCES_DIR_REL = "Sources"
 
 
 class VaultPathResolver:
@@ -147,13 +150,17 @@ def _extract_paths(settings: Dict[str, Any]) -> Dict[str, str]:
     raw = settings.get("paths")
     if isinstance(raw, dict):
         for key, value in raw.items():
-            if isinstance(value, str) and value.strip():
+            if key == "sources_dir_rel" and isinstance(value, str):
                 out[key] = value.strip()
-    for key in ("inbox_dir_rel", "runtime_dir_rel", "system_dir_rel"):
+            elif isinstance(value, str) and value.strip():
+                out[key] = value.strip()
+    for key in ("inbox_dir_rel", "runtime_dir_rel", "system_dir_rel", "sources_dir_rel"):
         if key in out:
             continue
         value = settings.get(key)
-        if isinstance(value, str) and value.strip():
+        if key == "sources_dir_rel" and isinstance(value, str):
+            out[key] = value.strip()
+        elif isinstance(value, str) and value.strip():
             out[key] = value.strip()
     return out
 
@@ -165,6 +172,34 @@ def _paths_data(vault_root: Path) -> Dict[str, str]:
         legacy_paths=(LEGACY_SYSTEM_SETTINGS, LEGACY_COMPILED_DIR / "system-settings.yaml"),
     )
     return _extract_paths(_read_system_settings(settings_path))
+
+
+def _configured_sources_dir_rel(vault_root: Path) -> str | None:
+    """Read the Sources setting strictly so malformed authority cannot fall back."""
+    settings_path = resolve_settings_file(
+        vault_root,
+        "system-settings.md",
+        legacy_paths=(LEGACY_SYSTEM_SETTINGS, LEGACY_COMPILED_DIR / "system-settings.yaml"),
+    )
+    if not settings_path.exists():
+        return None
+    try:
+        settings = read_settings_mapping(settings_path)
+    except Exception as exc:  # noqa: BLE001 - malformed authority must fail loud
+        raise ValueError(f"unable to read Sources path setting from {settings_path}") from exc
+
+    raw_paths = settings.get("paths")
+    if isinstance(raw_paths, dict) and "sources_dir_rel" in raw_paths:
+        value = raw_paths["sources_dir_rel"]
+        if not isinstance(value, str):
+            raise ValueError("paths.sources_dir_rel must be a string")
+        return value
+    if "sources_dir_rel" in settings:
+        value = settings["sources_dir_rel"]
+        if not isinstance(value, str):
+            raise ValueError("sources_dir_rel must be a string")
+        return value
+    return None
 
 
 def resolve_vault_inbox_dir_rel(vault_root: Path) -> VaultPathValue:
@@ -184,6 +219,60 @@ def resolve_vault_inbox_dir_rel(vault_root: Path) -> VaultPathValue:
     raise ValueError(
         "inbox folder could not be resolved. Set VAULT_INBOX_DIR_REL, or ensure vault.layout.md has inbox_folder."
     )
+
+
+def _validate_sources_dir_rel(value: str, *, provenance: str) -> VaultPathValue:
+    raw = value.strip()
+    path = PurePosixPath(raw)
+    if (
+        not raw
+        or "\\" in raw
+        or "\x00" in raw
+        or path.is_absolute()
+        or path.as_posix() != raw
+        or any(part in {"", ".", ".."} for part in path.parts)
+    ):
+        raise ValueError("sources_dir_rel must be a normalized vault-relative path")
+    return VaultPathValue(raw, provenance)
+
+
+def resolve_vault_sources_dir_rel(vault_root: Path) -> VaultPathValue:
+    """Resolve the selected vault's sensor/acquisition Sources root.
+
+    Explicit environment configuration wins, followed by the selected vault's
+    ``system-settings`` paths block, then the packaged default. Unlike the
+    legacy inbox resolver, the Sources root has a safe packaged default so
+    newly initialized vaults can use the acquisition writers immediately.
+    """
+    if "VAULT_SOURCES_DIR_REL" in os.environ:
+        return _validate_sources_dir_rel(
+            os.environ["VAULT_SOURCES_DIR_REL"],
+            provenance="env:VAULT_SOURCES_DIR_REL",
+        )
+
+    configured = _configured_sources_dir_rel(vault_root)
+    if configured is not None:
+        return _validate_sources_dir_rel(
+            configured,
+            provenance="system-settings.yaml:paths.sources_dir_rel",
+        )
+
+    try:
+        from app.settings.default_vault_layout import load_default_vault_layout
+
+        payload = load_default_vault_layout()
+        default_paths = payload.get("paths")
+        if isinstance(default_paths, dict):
+            packaged = default_paths.get("sources_dir_rel")
+            if isinstance(packaged, str) and packaged.strip():
+                return _validate_sources_dir_rel(
+                    packaged,
+                    provenance="default-vault-layout.yaml:paths.sources_dir_rel",
+                )
+    except Exception:
+        pass
+
+    return VaultPathValue(DEFAULT_SOURCES_DIR_REL, "packaged-default:Sources")
 
 
 def resolve_vault_system_dir_rel(vault_root: Path) -> VaultPathValue:
@@ -241,6 +330,11 @@ def resolve_vault_runtime_dir_rel(vault_root: Path) -> VaultPathValue:
 def get_vault_inbox_dir_rel(vault_root: Path | None = None) -> str:
     root = _resolve_vault_root(vault_root)
     return resolve_vault_inbox_dir_rel(root).value
+
+
+def get_vault_sources_dir_rel(vault_root: Path | None = None) -> str:
+    root = _resolve_vault_root(vault_root)
+    return resolve_vault_sources_dir_rel(root).value
 
 
 def get_vault_system_dir_rel(vault_root: Path | None = None) -> str:
@@ -306,9 +400,11 @@ __all__ = [
     "VaultPathResolver",
     "VaultPathValue",
     "get_vault_inbox_dir_rel",
+    "get_vault_sources_dir_rel",
     "get_vault_runtime_dir_rel",
     "get_vault_system_dir_rel",
     "resolve_vault_inbox_dir_rel",
+    "resolve_vault_sources_dir_rel",
     "resolve_vault_runtime_dir_rel",
     "resolve_vault_system_dir_rel",
     "resolve_vault_system_dir_rel_or_default",

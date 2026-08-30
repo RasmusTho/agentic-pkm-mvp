@@ -16,3 +16,4 @@ paths:
   system_dir_rel: "⚙️ System"
   inbox_dir_rel: "📥 Inbox"
   runtime_dir_rel: "⚙️ System/Runtime/Alpha"
+  sources_dir_rel: "Sources"

@@ -66,6 +66,7 @@ from app.knowledge_acquisition.note_renderer import (
 from app.knowledge_acquisition.normalize import has_usable_transcript, normalize
 from app.knowledge_acquisition.normalize import NormalizedTranscript
 from app.vault.manager import VaultContext
+from app.vault.paths import get_vault_sources_dir_rel
 from app.write_guard import DEFAULT_WRITE_GUARD, WriteGuard, WritesBlockedError
 
 CANDIDATE_WRITE_ACTION = "knowledge_acquisition.candidate_writeback"
@@ -470,7 +471,7 @@ def write_candidate_note(
     *,
     vault_context: VaultContext,
     write_guard: WriteGuard = DEFAULT_WRITE_GUARD,
-    sources_dir: str = DEFAULT_SOURCES_DIR,
+    sources_dir: str | None = None,
     proposal_on_existing: bool = False,
 ) -> CandidateWriteResult:
     """The governed vault-write call site: the only place this module touches
@@ -492,6 +493,8 @@ def write_candidate_note(
     versioned proposal companion for a fresh extraction.
     """
     vault_root = _vault_root(vault_context)
+    if sources_dir is None:
+        sources_dir = get_vault_sources_dir_rel(vault_root)
     artifact_path = candidate_note_path(candidate, sources_dir=sources_dir)
 
     try:
