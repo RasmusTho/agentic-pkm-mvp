@@ -455,6 +455,9 @@ def _rotation_authority(
                 "channel_id": channel_id,
                 "root": str(root),
                 "identity": f"inode:{metadata.st_dev}:{metadata.st_ino}",
+                "ancestor_identities": sorted(
+                    f"path:{ancestor}" for ancestor in root.resolve().parents
+                ),
             }
         )
     source_evidence = {
