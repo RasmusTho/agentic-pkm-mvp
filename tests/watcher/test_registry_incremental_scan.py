@@ -552,7 +552,10 @@ def test_active_generation_keeps_root_resolution_failure_when_identity_resets(
     cfg, spec, vault = _make_cfg(tmp_path)
     root = vault / "notes"
     root.mkdir()
+    observations = RegistryObservationStore(tmp_path / "observations.sqlite3")
+    observations.put("notes/old.md", {"hash": "old"}, generation=3)
     state = WatcherState(
+        _observation_store=observations,
         scan_in_progress=True,
         scan_generation=3,
         scan_identity=registry._scan_identity(vault, [root], spec.scope_glob),
@@ -581,6 +584,7 @@ def test_active_generation_keeps_root_resolution_failure_when_identity_resets(
     assert state.scan_generation == 4
     assert state.scan_generation_had_error is True
     assert summary["scan_generation_had_error"] is True
+    assert observations.get("notes/old.md") == {"hash": "old"}
 
 
 def test_identity_failure_is_degraded_without_clearing_sidecar_observations(

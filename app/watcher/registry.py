@@ -1262,6 +1262,7 @@ def _begin_or_resume_scan(
     preserve_generation_error: bool = False,
 ) -> None:
     errors_before_identity = state.errors
+    previous_identity = state.scan_identity
     identity = _scan_identity(
         vault_root,
         scan_roots,
@@ -1269,12 +1270,17 @@ def _begin_or_resume_scan(
         state=state,
     )
     identity_had_error = state.errors > errors_before_identity
-    if state.scan_in_progress and state.scan_identity == identity:
+    if (
+        state.scan_in_progress
+        and previous_identity == identity
+        and not identity_had_error
+    ):
         return
     if (
-        state.scan_identity is not None
-        and state.scan_identity != identity
+        previous_identity is not None
+        and previous_identity != identity
         and not identity_had_error
+        and not preserve_generation_error
     ):
         # A path can be reused for a replacement vault. Relative-path keys in
         # the sidecar are not sufficient authority in that case: retaining
@@ -1282,7 +1288,16 @@ def _begin_or_resume_scan(
         # different vault and suppress its first observation.
         state.reset_observations_for_new_identity()
     state.scan_generation += 1
-    state.scan_identity = identity
+    # Keep the last trusted identity while this generation is based on an
+    # uncertain root/identity measurement. A synthetic error identity would
+    # otherwise look like a verified vault replacement and clear the sidecar
+    # either immediately or on the first recovery tick.
+    state.scan_identity = (
+        previous_identity
+        if previous_identity is not None
+        and (identity_had_error or preserve_generation_error)
+        else identity
+    )
     state.scan_root_index = 0
     state.scan_stack = []
     state.scan_scope_matched_files = 0
