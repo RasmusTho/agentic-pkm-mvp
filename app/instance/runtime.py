@@ -3030,9 +3030,11 @@ def _finish_instance_state_deployment_locked(
             global_live_owners=tuple(owners),
             require_materialized_owner_roots=False,
         )
-    except InstanceStatePreflightError:
+    except InstanceStatePreflightError as exc:
         if established is not None and established.legacy_bootstrap_complete:
-            raise
+            raise InstanceStatePreflightError(
+                f"backup registry/ledger consistency verification failed: {exc}"
+            ) from exc
         try:
             ledger_snapshot = ledger.bootstrap_legacy_owners(
                 owners,

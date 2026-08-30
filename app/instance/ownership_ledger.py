@@ -1919,11 +1919,6 @@ class OwnershipLedger:
     ) -> None:
         """Authenticate v1 owner fields before cross-namespace migration."""
 
-        if not require_materialized_roots:
-            raise LedgerError(
-                "legacy ownership migration requires materialized owner authority"
-            )
-
         live_authority = {
             (owner.channel_id, owner.vault_binding_id): owner
             for owner in global_live_owners
@@ -1934,6 +1929,35 @@ class OwnershipLedger:
         def root_matches(lease: OwnershipLease, root: Path | None) -> bool:
             if root is None:
                 return False
+            if not require_materialized_roots:
+                owner = live_authority.get((lease.channel_id, lease.vault_binding_id))
+                if owner is None or owner.root_identity is None or not owner.ancestor_identities:
+                    return False
+                try:
+                    sealed_root = self._open_root(lease.sealed_root, key)
+                except (LedgerError, UnicodeError, ValueError):
+                    return False
+                ancestor_match = tuple(lease.ancestor_fingerprints) == tuple(
+                    _fingerprint(item, key.secret)
+                    for item in owner.ancestor_identities
+                )
+                if not ancestor_match:
+                    try:
+                        resolved = Path(root).expanduser().resolve(strict=False)
+                        ancestor_match = (
+                            resolve_filesystem_root_identity(resolved).materialized
+                            and self._legacy_ancestor_proof_matches(lease, resolved, key)
+                        )
+                    except (FilesystemIdentityError, OSError, ValueError):
+                        ancestor_match = False
+                return (
+                    sealed_root == str(root)
+                    and hmac.compare_digest(
+                        lease.root_fingerprint,
+                        _fingerprint(owner.root_identity, key.secret),
+                    )
+                    and ancestor_match
+                )
             expected_root = Path(root).expanduser().resolve(strict=False)
             try:
                 sealed_root = Path(self._open_root(lease.sealed_root, key)).resolve(
@@ -2032,6 +2056,11 @@ class OwnershipLedger:
 
         for binding_id, root in registrations.items():
             registered_lease = current.leases.get(binding_id)
+            if not require_materialized_roots and registered_lease is not None:
+                owner = live_authority.get(
+                    (registered_lease.channel_id, registered_lease.vault_binding_id)
+                )
+                root = owner.root if owner is not None else None
             if (
                 registered_lease is None
                 or registered_lease.channel_id != channel_id
