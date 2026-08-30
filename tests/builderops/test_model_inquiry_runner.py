@@ -234,6 +234,39 @@ def test_legacy_inquiry_is_readable_but_not_reactivated_by_sol_path(tmp_path: Pa
     assert trace["turns"] == []
 
 
+def test_single_target_max_round_terminal_is_readable_and_resume_is_idempotent(
+    tmp_path: Path,
+) -> None:
+    service, _ = _start(
+        tmp_path,
+        "inq_single_target_max_rounds",
+        acceptance_mode="single_target",
+    )
+    reviewed = ["draft-synthesis", "draft-verification"]
+    adapters = {
+        perspective: _scripted(
+            perspective,
+            [_response("draft"), _response("revise", reviewed=reviewed)],
+        )
+        for perspective in ("synthesis", "verification")
+    }
+    runner = ModelInquiryRunner(service, adapters)
+
+    first = runner.run("inq_single_target_max_rounds", max_rounds=1)
+    trace = service.trace("inq_single_target_max_rounds")
+    calls_after_first_run = sum(len(adapter.calls) for adapter in adapters.values())
+    second = runner.run("inq_single_target_max_rounds", max_rounds=1)
+
+    assert first["outcome"] == "max_rounds_exhausted"
+    assert second["terminal_receipt_id"] == first["terminal_receipt_id"]
+    assert sum(len(adapter.calls) for adapter in adapters.values()) == calls_after_first_run
+    assert trace["inquiry"]["acceptance_mode"] == "single_target"
+    assert {turn["role"] for turn in trace["turns"]} == {
+        "synthesis",
+        "verification",
+    }
+
+
 def test_independent_drafts_share_context_hash(tmp_path: Path) -> None:
     service, _ = _start(tmp_path, "inq_runner_context")
     reviewed = ["draft-fable", "draft-gpt_codex"]
@@ -1070,6 +1103,101 @@ def test_absent_credential_fails_closed_as_credential_unavailable(
         "credential_unavailable"
     )
     assert posts == []
+
+
+@pytest.mark.parametrize(
+    ("failure_class", "expected_outcome"),
+    [
+        ("command_exit_nonzero", "provider_error"),
+    ],
+)
+def test_single_target_typed_failure_is_readable_and_resume_is_idempotent(
+    tmp_path: Path,
+    failure_class: str,
+    expected_outcome: str,
+) -> None:
+    inquiry_id = f"inq_single_target_{failure_class}"
+    service, _ = _start(tmp_path, inquiry_id, acceptance_mode="single_target")
+    adapters = {
+        "synthesis": FailingAdapter(
+            adapter_id=f"{failure_class}-adapter",
+            failure_class=failure_class,
+        ),
+        "verification": _scripted("verification", [_response("draft")]),
+    }
+    runner = ModelInquiryRunner(service, adapters)
+
+    first = runner.run(inquiry_id, max_rounds=1)
+    trace = service.trace(inquiry_id)
+    second = runner.run(inquiry_id, max_rounds=1)
+
+    assert first["outcome"] == expected_outcome
+    assert second["terminal_receipt_id"] == first["terminal_receipt_id"]
+    assert trace["inquiry"]["acceptance_mode"] == "single_target"
+    assert any(
+        receipt["event_type"] == "inquiry_provider_attempt_terminal"
+        for receipt in trace["receipts"]
+    )
+
+
+def test_single_target_malformed_output_is_readable_and_resume_is_idempotent(
+    tmp_path: Path,
+) -> None:
+    inquiry_id = "inq_single_target_malformed_output"
+    service, _ = _start(tmp_path, inquiry_id, acceptance_mode="single_target")
+    runner = ModelInquiryRunner(
+        service,
+        {
+            "synthesis": _scripted("synthesis", ["not-json"]),
+            "verification": _scripted("verification", [_response("draft")]),
+        },
+    )
+
+    first = runner.run(inquiry_id, max_rounds=1)
+    trace = service.trace(inquiry_id)
+    second = runner.run(inquiry_id, max_rounds=1)
+
+    assert first["outcome"] == "malformed_output"
+    assert second["terminal_receipt_id"] == first["terminal_receipt_id"]
+    assert trace["inquiry"]["acceptance_mode"] == "single_target"
+
+
+def test_single_target_provider_refusal_is_readable_and_resume_is_idempotent(
+    tmp_path: Path,
+) -> None:
+    inquiry_id = "inq_single_target_provider_refused"
+    service, _ = _start(tmp_path, inquiry_id, acceptance_mode="single_target")
+    runner = ModelInquiryRunner(
+        service,
+        {
+            "synthesis": _scripted("synthesis", [_response("refuse")]),
+            "verification": _scripted("verification", [_response("draft")]),
+        },
+    )
+
+    first = runner.run(inquiry_id, max_rounds=1)
+    trace = service.trace(inquiry_id)
+    second = runner.run(inquiry_id, max_rounds=1)
+
+    assert first["outcome"] == "provider_refused"
+    assert second["terminal_receipt_id"] == first["terminal_receipt_id"]
+    assert trace["inquiry"]["acceptance_mode"] == "single_target"
+
+
+def test_single_target_configuration_failure_is_readable_and_resume_is_idempotent(
+    tmp_path: Path,
+) -> None:
+    inquiry_id = "inq_single_target_configuration_failure"
+    service, _ = _start(tmp_path, inquiry_id, acceptance_mode="single_target")
+    runner = ModelInquiryRunner(service, env={})
+
+    first = runner.run(inquiry_id, max_rounds=1)
+    trace = service.trace(inquiry_id)
+    second = runner.run(inquiry_id, max_rounds=1)
+
+    assert first["outcome"] == "provider_unavailable"
+    assert second["terminal_receipt_id"] == first["terminal_receipt_id"]
+    assert trace["inquiry"]["acceptance_mode"] == "single_target"
 
 
 def test_auth_failure_class_survives_persistence_revalidation(tmp_path: Path) -> None:
