@@ -95,6 +95,8 @@ def test_subscription_adapter_uses_resolved_target_profile() -> None:
     }
     descriptors = load_adapter_descriptors(env)
     adapters = load_operational_subscription_adapters(env)
+    resolver = adapters_module.BuilderModelAccessResolver.from_declared_sources(env=env)
+    profile = resolver.model_inquiry_profile("dev")
 
     assert set(adapters) == {"synthesis", "verification"}
     for perspective, adapter in adapters.items():
@@ -108,11 +110,37 @@ def test_subscription_adapter_uses_resolved_target_profile() -> None:
         assert argv[argv.index("--perspective") + 1] == perspective
         assert "--role" not in argv
         assert not any(value in {"fable", "gpt_codex"} for value in argv)
+        assert "--reasoning-effort" in argv
+        assert "xhigh" in argv
+        assert "--output-schema-ref" in argv
+        assert "builderops.model-turn-response.v1" in argv
+
+    # The bridge receives the resolver-selected execution policy; it must not
+    # silently replace a declared reasoning effort or response schema.
+    resolver.census.runtime_channels.model_inquiry["dev"] = profile.model_copy(
+        update={
+            "target_intent": profile.target_intent.model_copy(
+                update={"reasoning_effort": "high"}
+            )
+        }
+    )
+    configured = load_operational_adapters(env, resolver=resolver)
+    configured_argv = configured["synthesis"].argv
+    assert configured_argv[configured_argv.index("--reasoning-effort") + 1] == "high"
+    assert configured["synthesis"].reasoning_effort == "high"
+
+    resolver.census.runtime_channels.model_inquiry["dev"] = profile.model_copy(
+        update={
+            "target_intent": profile.target_intent.model_copy(
+                update={"output_schema_ref": "builderops.future-response.v1"}
+            )
+        }
+    )
+    with pytest.raises(adapters_module.ModelAccessResolutionError, match="response schema"):
+        load_operational_adapters(env, resolver=resolver)
 
     # A declared but unregistered future transport cannot silently reuse the
     # current subscription bridge or the API adapter.
-    resolver = adapters_module.BuilderModelAccessResolver.from_declared_sources(env=env)
-    profile = resolver.model_inquiry_profile("dev")
     resolver.census.runtime_channels.model_inquiry["dev"] = profile.model_copy(
         update={"operational_transport": "future_transport"}
     )

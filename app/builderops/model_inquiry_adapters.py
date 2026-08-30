@@ -170,6 +170,8 @@ class LocalCommandAdapter:
     timeout_seconds: float = 60.0
     max_output_bytes: int = 1_000_000
     environment: Mapping[str, str] | None = None
+    reasoning_effort: str | None = None
+    output_schema_ref: str | None = None
 
     def __post_init__(self) -> None:
         if self.timeout_seconds <= 0:
@@ -618,21 +620,32 @@ def load_operational_subscription_adapters(
     if not bridge.is_file():
         raise AdapterUnavailableError("operational subscription bridge is unavailable")
     selected, config, resolution = resolve_inquiry_target(source, resolver=resolver)
+    target_intent = selected.model_inquiry_profile(config.channel).target_intent
+    if target_intent.output_schema_ref != "builderops.model-turn-response.v1":
+        raise ModelAccessResolutionError(
+            "subscription bridge does not support the declared response schema"
+        )
     return {
         perspective: LocalCommandAdapter(
             adapter_id=f"{resolution.adapter_id}-subscription",
             provider=resolution.provider,
             model=resolution.model,
-            argv=(
-                sys.executable,
-                str(bridge),
-                "--perspective",
-                perspective,
-                "--model",
-                resolution.model,
-            ),
+                argv=(
+                    sys.executable,
+                    str(bridge),
+                    "--perspective",
+                    perspective,
+                    "--model",
+                    resolution.model,
+                    "--reasoning-effort",
+                    target_intent.reasoning_effort,
+                    "--output-schema-ref",
+                    target_intent.output_schema_ref,
+                ),
             timeout_seconds=MODEL_INQUIRY_SUBSCRIPTION_TIMEOUT_SECONDS,
             environment={"HOME": home},
+            reasoning_effort=target_intent.reasoning_effort,
+            output_schema_ref=target_intent.output_schema_ref,
         )
         for perspective in config.perspectives
     }
@@ -659,11 +672,16 @@ def load_operational_adapters(
 
 
 def sanitized_adapter_identity(adapter: ModelTurnAdapter) -> dict[str, str]:
-    return {
+    identity = {
         "adapter_id": adapter.adapter_id,
         "provider": adapter.provider,
         "model": adapter.model,
     }
+    for field in ("reasoning_effort", "output_schema_ref"):
+        value = getattr(adapter, field, None)
+        if isinstance(value, str) and value:
+            identity[field] = value
+    return identity
 
 
 def sanitized_adapter_failure(error: Exception, *, adapter_id: str) -> dict[str, str | int]:
