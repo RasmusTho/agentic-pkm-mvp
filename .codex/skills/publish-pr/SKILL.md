@@ -31,8 +31,8 @@ ride with the planned dirty paths.
 `.codex/skills/publish-pr/FULL_PATH.md :: Procedure` is the canonical full-path publication owner.
 Route every unsupported case there without trying to coerce it into the normal command:
 
-- existing-PR update or review repair -> `pr-integration` and the exact
-  `PR-Level Scope Revalidation Gate` in `docs/development/PR_HOT_PATH.md`;
+- existing-PR update or review repair -> `pr-integration` and
+  `docs/development/AUTONOMOUS_REVIEW_REPAIR_GATE_CONTRACTS.md :: PR-Level Scope Revalidation Gate`;
 - multi-Issue PR -> `docs/development/PR_HOT_PATH.md :: Multi-Issue PR Scope` and the current full
   verification path;
 - issue-free docs/governance publication or Direct Repair -> the matching current lane contract in
@@ -58,7 +58,7 @@ closed/merged history is terminal and mismatch/duplicates are `unknown`. Full-pa
 perform the equivalent live all-state read immediately before creation; an earlier snapshot is not
 collision evidence.
 
-## Normal plan/apply
+## Publication workflow (all steps are executable)
 
 Prepare one JSON object accepted by `scripts/pr_body_generator.py`; it remains the PR-body policy
 owner. Keep the plan file outside the intended commit set.

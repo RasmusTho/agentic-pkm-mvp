@@ -28,8 +28,9 @@ promotion remain with their named skills.
    Treat URL userinfo, multiple effective URLs, fetch/push repository mismatch, stale base, duplicate
    history, or a worktree/lease collision as a hard stop. Never retain or report raw remote URLs.
 2. Bind the intended file set, lane, Issue set, target base, commit intent, PR title/body, TCD risk
-   classification, BuilderOps routing, and owner-doc resolution. Re-run the PR-Level Scope
-   Revalidation Gate for an existing PR. Complete Mechanism Convergence when its trigger applies.
+   classification, BuilderOps routing, and owner-doc resolution. Re-run
+   `docs/development/AUTONOMOUS_REVIEW_REPAIR_GATE_CONTRACTS.md :: PR-Level Scope Revalidation Gate`
+   for an existing PR. Complete Mechanism Convergence when its trigger applies.
 3. Generate and inspect the complete PR body through `scripts/pr_body_generator.py`. Run the
    affected focused checks and `scripts/review_before_ci_gate.py`; a high-risk mechanism receipt must
    name the current local publishable SHA. A failed or stale gate blocks publication.

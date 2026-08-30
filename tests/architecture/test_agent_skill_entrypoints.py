@@ -588,7 +588,10 @@ def test_model_inquiry_subscription_route_is_distinct_from_provider_api_mechanis
 
 
 def test_pr_scope_circuit_breaker_is_shared_across_delivery_skills() -> None:
-    canonical = "PR-Level Scope Revalidation Gate"
+    canonical = (
+        "docs/development/AUTONOMOUS_REVIEW_REPAIR_GATE_CONTRACTS.md :: "
+        "PR-Level Scope Revalidation Gate"
+    )
     for path in (
         ".codex/skills/issue-to-code/SKILL.md",
         ".codex/skills/verification-and-closure/SKILL.md",
@@ -600,6 +603,12 @@ def test_pr_scope_circuit_breaker_is_shared_across_delivery_skills() -> None:
         "## Publication preflight",
     )
     assert canonical in publish_router
+    full_path_procedure = _section_between(
+        _read(".codex/skills/publish-pr/FULL_PATH.md"),
+        "## Procedure",
+        "## Recovery outcomes",
+    )
+    assert canonical in full_path_procedure
     assert "## PR-Level Scope Revalidation Gate" in _read(
         "docs/development/AUTONOMOUS_REVIEW_REPAIR_GATE_CONTRACTS.md"
     )
@@ -615,6 +624,7 @@ def test_publish_pr_full_path_owner_is_exact_and_resolvable() -> None:
     )
 
     assert ".codex/skills/publish-pr/FULL_PATH.md :: Procedure" in router
+    assert "## Publication workflow (all steps are executable)" in skill
     assert full_path.startswith(
         "State: Canonical full-path publication procedure for "
         "`.codex/skills/publish-pr/SKILL.md`."
