@@ -110,8 +110,11 @@ Prerequisites are strict and serial: (1) #4748 delivery and its fresh exact-main
 (2) this repaired source contract; (3) Demerzel authentication and the boolean-only #4835
 credential-presence prerequisite; (4) the deployed #4836 route and server-supplied Focus selectors;
 (5) a concrete promotion plan for exactly `M` with genuine operator acknowledgement; (6) the
-receipt-sourced deployed SHA/URL and identity agreement; and (7) approved disposable-state
-classification. The pilot must not be claimed or made ready from this document alone.
+receipt-sourced deployed SHA/URL and identity agreement; and (7), only when a `pkm-test`
+supplement is used, an approved disposable-state classification covering its data class, namespace,
+setup, readback, teardown, and absence of foreign rows. A production-only pilot has no
+supplemental-state prerequisite. The pilot must not be claimed or made ready from this document
+alone.
 
 The final `devui-stage-a-read-only-owner-pilot.v1` ledger is the only cross-run binding authority.
 It records the separate final-M #4748 browser artifact and the independent production evidence; it
@@ -147,9 +150,11 @@ without adding any cross-run field to `devui-overview-browser-accessibility.v1`.
       preserving subject/evidence context; no standalone subsystem UI is required for the tested
       answers.
   - Verify: runtime receipt: devui-stage-a-read-only-owner-pilot.v1
-- [ ] The disposable test-only state matrix produces no effects, page or console errors, browser
-      persistence/storage, or unauthorized writes; traces, screenshots, checksums, and manifest
-      are durable and bound to the deployed identity.
+- [ ] If a `pkm-test` supplement is used, its disposable state matrix produces no effects, page or
+      console errors, browser persistence/storage, or unauthorized writes; traces, screenshots,
+      checksums, and manifest are durable and bound to the deployed identity. If no supplement is
+      used, the production-only evidence records that the deterministic #4748 matrix supplied the
+      unobserved hostile/degraded states and that no test state was created.
   - Verify: runtime receipt: devui-stage-a-read-only-owner-pilot.v1
 - [ ] The owner explicitly acknowledges the bounded result; the pilot creates no tried/accepted/
       dismissed state, task, command, provider session, or product/runtime write receipt.
@@ -161,8 +166,9 @@ without adding any cross-run field to `devui-overview-browser-accessibility.v1`.
 ## How to Verify (Pre-Merge)
 
 - Confirm every strict prerequisite, including #4748 at `M`, the repaired source contract, the
-  boolean-only #4835 prerequisite, Demerzel access, the receipt-sourced URL/SHA, promotion
-  acknowledgement, and disposable-state classification.
+  boolean-only #4835 prerequisite, Demerzel access, the receipt-sourced URL/SHA, and promotion
+  acknowledgement. If a `pkm-test` supplement is used, also confirm its approved disposable-state
+  classification; otherwise record the production-only path explicitly.
 - Run the five named pilot checks and the Overview → Focus → return Playwright journey.
 - Post the owner-acknowledged structured result and any blockers to the parent; do not repair them
   here. Only a PASS may trigger a separate current-state owner-doc writeback decision.
@@ -195,5 +201,6 @@ without adding any cross-run field to `devui-overview-browser-accessibility.v1`.
 
 Filed as blocked child [#4749](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4749) serially
 after #4748. It awaits the repaired contract, Demerzel prod access and boolean-only #4835
-prerequisite, #4836 selectors, #4748's exact-main receipt, an acknowledged promotion plan,
-receipt-sourced deployed URL/SHA, and disposable-state classification.
+prerequisite, #4836 selectors, #4748's exact-main receipt, an acknowledged promotion plan, and
+receipt-sourced deployed URL/SHA. If the pilot supplements naturally observed `pkm-prod` state
+with `pkm-test`, it additionally requires an approved disposable-state classification.
