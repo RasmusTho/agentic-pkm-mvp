@@ -41,9 +41,18 @@ class RoleSpec:
 
 
 ROLE_SPECS = (
+    RoleSpec("synthesis", "synthesis-model-inquiry-role"),
+    RoleSpec("verification", "verification-model-inquiry-role"),
+)
+
+# These names are retained only so an already-provisioned host can be
+# reinstalled without losing its historical command surface. They are not
+# inquiry roles and are never exposed as the primary role map.
+COMPATIBILITY_ROLE_SPECS = (
     RoleSpec("fable", "fable-model-inquiry-role"),
     RoleSpec("gpt_codex", "codex-model-inquiry-role"),
 )
+ALL_ROLE_SPECS = ROLE_SPECS + COMPATIBILITY_ROLE_SPECS
 
 
 class HostInstallError(RuntimeError):
@@ -342,7 +351,7 @@ def _expected_wrappers(*, checkout: Checkout, python: Path) -> dict[RoleSpec, st
             adapter=checkout.adapter,
             adapter_sha256=checkout.adapter_sha256,
         )
-        for spec in ROLE_SPECS
+        for spec in ALL_ROLE_SPECS
     }
     _assert_checkout_authority(checkout)
     return wrappers
@@ -527,6 +536,10 @@ def install(*, repo_root: Path, bin_dir: Path, python: Path) -> dict[str, object
             spec.role: {"entrypoint": spec.entrypoint, "status": states[spec]}
             for spec in ROLE_SPECS
         },
+        "compatibility_aliases": {
+            spec.role: {"entrypoint": spec.entrypoint, "status": states[spec]}
+            for spec in COMPATIBILITY_ROLE_SPECS
+        },
     }
 
 
@@ -647,7 +660,14 @@ def check(
             "lineage": LAUNCHER_LINEAGE,
             "status": "available" if launcher_available else "unavailable",
         },
-        "roles": roles,
+        "roles": {
+            spec.role: roles[spec.role]
+            for spec in ROLE_SPECS
+        },
+        "compatibility_aliases": {
+            spec.role: roles[spec.role]
+            for spec in COMPATIBILITY_ROLE_SPECS
+        },
     }
 
 
