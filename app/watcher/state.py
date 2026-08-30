@@ -393,13 +393,22 @@ class WatcherState:
                 self._pending_observations.clear()
                 self._pending_deletes.clear()
             identity = self.observation_identity or self.scan_identity
-            if (
-                (self._pending_observations or self._pending_deletes)
-                and not self.observations_invalidated
-            ) or (
+            identity_mismatch = (
                 identity is not None
                 and self._observation_store.active_identity() != identity
-            ):
+            )
+            if identity_mismatch:
+                # A checkpoint can survive a sidecar commit failure (or vice
+                # versa). Never relabel incompatible rows into the current
+                # namespace; replace the namespace before publishing state.
+                self._observation_store.replace_identity(
+                    identity,
+                    self._pending_observations,
+                    self._pending_deletes,
+                )
+                self._pending_observations.clear()
+                self._pending_deletes.clear()
+            elif self._pending_observations or self._pending_deletes:
                 self._observation_store.apply(
                     self._pending_observations,
                     self._pending_deletes,

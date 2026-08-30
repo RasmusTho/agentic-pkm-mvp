@@ -1695,16 +1695,17 @@ def _emit_changed_entry(
         spec.emit_event in {PANEL_SCAN_REQUESTED, INGEST_VAULT_CHANGED}
         and _db_outbox_required()
     )
-    state.update_file_state(rel_path, mtime=entry.mtime, content_hash=entry.digest, seen_at=now)
     if is_settings_control_path(
         entry.rel_path,
         configured_system_dir=resolve_vault_system_dir_rel_or_default(
             cfg.vault_path
         ),
     ):
+        state.update_file_state(rel_path, mtime=entry.mtime, content_hash=entry.digest, seen_at=now)
         return None
     should_skip, reason = _should_skip_changed_entry(spec=spec, state=state, last_seen=last_seen, now=now)
     if should_skip:
+        state.update_file_state(rel_path, mtime=entry.mtime, content_hash=entry.digest, seen_at=now)
         if reason == "rate_limit":
             summary["rate_limited_in_tick"] = int(summary.get("rate_limited_in_tick", 0)) + 1
         return None
@@ -1715,6 +1716,7 @@ def _emit_changed_entry(
         panel_auto_exec_enabled=panel_auto_exec_enabled,
         state=state,
     ):
+        state.update_file_state(rel_path, mtime=entry.mtime, content_hash=entry.digest, seen_at=now)
         return None
     current_mtime = entry.mtime
     current_digest = entry.digest
@@ -1747,6 +1749,7 @@ def _emit_changed_entry(
         state.restore_file_state(rel_path, previous_file_state)
         raise
     if not trace_id:
+        state.update_file_state(rel_path, mtime=current_mtime, content_hash=current_digest, seen_at=now)
         return None
     state.last_trace_id = trace_id
     state.intents_emitted += 1
@@ -2110,6 +2113,8 @@ def _run_spec_tick(
         panel_auto_exec_enabled = _auto_exec_enabled(cfg.vault_path)
 
     delivery_failed = False
+    delivery_observation_identity = state.observation_identity
+    committed_observations: dict[str, dict[str, dict[str, Any] | None]] = {}
     for entry in changed_entries:
         try:
             trace_id = _emit_changed_entry(
@@ -2123,6 +2128,14 @@ def _run_spec_tick(
                 action_mappings=action_mappings,
                 process_panel_notes_inline=process_panel_notes_inline,
             )
+            committed_observations[str(entry.rel_path)] = {
+                name: (
+                    dict(active_state.file_entry(str(entry.rel_path)))
+                    if active_state.file_entry(str(entry.rel_path)) is not None
+                    else None
+                )
+                for name, active_state in active_states.items()
+            }
             if not trace_id:
                 continue
             emitted_in_tick += 1
@@ -2145,6 +2158,11 @@ def _run_spec_tick(
         state.observation_identity = scan_checkpoint["observation_identity"]  # type: ignore[assignment]
         for name, active_state in active_states.items():
             active_state.restore_observations(observation_checkpoints[name])
+        for rel_path, state_entries in committed_observations.items():
+            for name, entry_state in state_entries.items():
+                active_states[name].restore_file_state(rel_path, entry_state)
+        if committed_observations:
+            state.observation_identity = delivery_observation_identity
         summary["scan_in_progress"] = state.scan_in_progress
         summary["continuation_reason"] = state.continuation_reason
 

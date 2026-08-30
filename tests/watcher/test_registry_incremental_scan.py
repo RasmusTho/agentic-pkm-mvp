@@ -682,13 +682,20 @@ def test_identity_replacement_immediately_before_prune_blocks_reconciliation(
     cfg, spec, vault = _make_cfg(tmp_path, max_files=10)
     _write_note(vault, "notes/current.md", body="current")
     observations = RegistryObservationStore(tmp_path / "observations.sqlite3")
-    observations.put("notes/deleted.md", {"hash": "old"}, generation=0)
+    observations.replace_identity(
+        "identity",
+        {"notes/deleted.md": ({"hash": "old"}, 0)},
+        (),
+    )
     identities = iter(("identity", "identity", "replacement"))
     monkeypatch.setattr(
         registry, "_scan_identity", lambda *_args, **_kwargs: next(identities)
     )
     monkeypatch.setattr(registry, "_emit_watch_event", lambda **_: "trace-ok")
-    state = WatcherState(_observation_store=observations)
+    state = WatcherState(
+        _observation_store=observations,
+        observation_identity="identity",
+    )
 
     summary = registry._run_spec_tick(
         cfg,
@@ -754,6 +761,74 @@ def test_malformed_checkpoint_cannot_authorize_existing_sidecar(
     assert restarted.observations_invalidated is True
     assert restarted.file_entry("notes/old.md") is None
     assert observations.get("notes/old.md") == {"hash": "old"}
+
+
+def test_sidecar_identity_mismatch_replaces_foreign_rows_before_apply(
+    tmp_path: Path,
+) -> None:
+    checkpoint = tmp_path / "watcher_state.json"
+    observations = RegistryObservationStore(tmp_path / "observations.sqlite3")
+    observations.replace_identity(
+        "foreign-identity",
+        {"notes/foreign.md": ({"hash": "foreign"}, 1)},
+        (),
+    )
+    state = WatcherState(
+        _observation_store=observations,
+        scan_identity="current-identity",
+        observation_identity="current-identity",
+    )
+    state.update_file_state("notes/current.md", content_hash="current")
+
+    state.save(checkpoint)
+
+    assert observations.active_identity() == "current-identity"
+    assert observations.get("notes/foreign.md") is None
+    assert observations.get("notes/current.md") == {"hash": "current"}
+
+
+def test_partial_delivery_failure_preserves_successful_observation_for_retry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cfg, spec, vault = _make_cfg(tmp_path, max_files=10)
+    _write_note(vault, "notes/a.md", body="a")
+    _write_note(vault, "notes/b.md", body="b")
+    attempts = 0
+    emitted: list[str] = []
+
+    def emit(**kwargs: object) -> str:
+        nonlocal attempts
+        attempts += 1
+        rel_path = Path(str(kwargs["rel_path"])).as_posix()
+        if attempts == 2:
+            raise RuntimeError("second delivery temporarily unavailable")
+        emitted.append(rel_path)
+        return f"trace-{attempts}"
+
+    monkeypatch.setattr(registry, "_emit_watch_event", emit)
+    state = _load_state(cfg, spec)
+    failed = registry._run_spec_tick(
+        cfg,
+        spec,
+        state,
+        now=1_700_009_475.0,
+        states={spec.name: state},
+        handled_settings_sources=set(),
+    )
+    retried_state = _load_state(cfg, spec)
+    recovered = registry._run_spec_tick(
+        cfg,
+        spec,
+        retried_state,
+        now=1_700_009_476.0,
+        states={spec.name: retried_state},
+        handled_settings_sources=set(),
+    )
+
+    assert failed["observation_status"] == "degraded"
+    assert recovered["observation_status"] == "healthy-idle"
+    assert attempts == 3
+    assert emitted == ["notes/a.md", "notes/b.md"]
 
 
 def test_selected_vault_marker_is_not_treated_as_nested_boundary(
