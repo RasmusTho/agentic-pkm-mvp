@@ -134,7 +134,8 @@ browser receipt, the source `manifest.json` emitted and uploaded by
 excludes only the pilot ledger entry's own rendered inventory manifest. The `production` entry has
 a separate inventory of the applicable
 VM-102 qualification/deployment/health receipts, receipt-sourced gateway and API identity
-observations, and any explicitly used disposable-state receipt; it never imports browser-bundle
+observations, the deployed Playwright journey's trace, screenshots, checksums, and journey
+manifest, and any explicitly used disposable-state receipt; it never imports browser-bundle
 files, owner-walkthrough output, owner acknowledgement, or the final owner-pilot ledger. The
 owner-walkthrough result and acknowledgement are recorded and authenticated as ledger fields, but
 are never inputs to the production digest. Each inventory is enumerated by its own manifest, has

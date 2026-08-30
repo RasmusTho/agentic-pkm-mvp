@@ -103,7 +103,11 @@ it supplies neither a page nor a visual destination.
   - Verify: `tests/api/test_devui_api.py :: test_overview_route_is_local_get_only_and_preserves_typed_destinations`
 - [ ] The accepted applicable design evidence and browser suite cover the complete connected
       state/accessibility matrix without browser classification or persistence.
-  - Verify: `tests/companion_ui/test_devui_overview_journeys.py :: test_overview_accessibility_and_layout_matrix`
+  - Verify: `tests/companion_ui/test_devui_overview_journeys.py::test_real_gateway_overview_focus_return_journey_preserves_subject_context_and_sha`
+  - Verify: `tests/companion_ui/test_devui_overview_journeys.py::test_focus_api_failure_renders_honest_visual_error_without_url_probing`
+  - Verify: `tests/companion_ui/test_devui_overview_journeys.py::test_connected_shell_freezes_server_identity_selector_and_aria_contract`
+  - Verify: `tests/companion_ui/test_devui_overview_journeys.py::test_connected_shell_renders_full_server_state_matrix_without_reclassification`
+  - Verify: `tests/companion_ui/test_devui_overview_journeys.py::test_gateway_shell_is_safe_accessible_no_egress_and_effect_free`
 - [ ] The owner pilot records exact SHA, source conditions, answers, reconstruction steps, and a
       pass/fail disposition for all three zones; it proves the receipt-sourced deployed SHA across
       CI/review/deploy receipt, `/version`, `/api/health.version`, and gateway marker, and always
