@@ -51,6 +51,8 @@ Repo-local workflow helpers live under `.codex/skills/`. They do not replace thi
 
 - General repo dev work in this repository:
   `.codex/skills/agentic-pkm/SKILL.md`
+- Mandatory builder-session closeout assessment before a builder session or agent stops:
+  `.codex/skills/klart/SKILL.md`
 - Resume interrupted dev/build work after a session breaks (quota, network, hung command, tool failure, context loss):
   `.codex/skills/resume-work/SKILL.md`
 - GitHub implementation work from a bounded Issue:
@@ -145,6 +147,23 @@ Before editing, classify the change:
 - Keep normative content in the owner document; link instead of duplicating it.
 - Do not turn `AGENTS.md` or `CLAUDE.md` into architecture, index, roadmap, or historical recordkeeping files.
 - Keep builder-agent guidance separate from runtime/system-agent documentation.
+
+### Builder-session closeout gate
+
+Before a development-time builder session or builder agent returns a terminal response, hands off,
+goes idle, or otherwise stops, it must load and run `.codex/skills/klart/SKILL.md`. This gate applies
+only to Builder System work governed by this file; it does not govern Product/Runtime agents.
+
+`klart` owns only the read-only closeout assessment and recommendation. Any securing, publication,
+GitHub or dispatcher lifecycle, merge or closure, or Codex task/thread effect must be routed through
+the workflow skill or tool that owns that effect and must satisfy that owner's authority, verification,
+and stop conditions. One active `klart` invocation owns the closeout attempt; delegated workflow calls
+do not recursively reopen the gate. It performs one fresh assessment after those calls complete.
+
+Only a final `destination: end` recommendation with `secure_first: false` permits an unqualified
+session close. Every other recommendation must be acted on or returned as a truthful handoff or
+blocker. `klart` never establishes Issue/PR delivery and never upgrades a
+`subagent_handoff_receipt.final_state`; live owning authority remains required.
 
 ## Total Cost of Development (capability routing)
 
