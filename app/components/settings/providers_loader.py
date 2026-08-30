@@ -96,9 +96,24 @@ class ModelInquiryProfile(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     acceptance_mode: Literal["single_target"]
-    capability_tier: Literal["sol"]
+    capability_tier: str = Field(min_length=1)
     perspectives: list[Literal["synthesis", "verification"]]
-    operational_transport: Literal["codex_subscription"]
+    operational_transport: str = Field(min_length=1)
+    target_intent: "ModelInquiryTargetIntent"
+
+
+class ModelInquiryTargetIntent(BaseModel):
+    """Declared neutral request policy for one Model Inquiry capability."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    capability_tier: str = Field(min_length=1)
+    reasoning_effort: Literal["minimal", "low", "medium", "high", "xhigh"]
+    determinism_required: bool
+    output_schema_ref: str = Field(min_length=1)
+    independence: Literal["none"]
+    fallback_requirement: Literal["fallback_forbidden"]
+    side_effect_class: Literal["advisory_review"]
 
 
 class DesignAgentProfile(TierMapping):

@@ -18,7 +18,7 @@ from app.builderops.model_inquiry_adapters import (
     ModelTurnAdapter,
     load_adapter_descriptors,
     load_adapters,
-    load_operational_subscription_adapters,
+    load_operational_adapters,
     operational_subscription_requested,
     sanitized_adapter_failure,
     sanitized_adapter_identity,
@@ -160,10 +160,7 @@ class ModelInquiryRunner:
                 if self._adapters is not None:
                     adapters = self._adapters
                 elif operational_subscription_requested(self._env):
-                    adapters = load_operational_subscription_adapters(
-                        self._env,
-                        resolver=self._resolver,
-                    )
+                    adapters = load_operational_adapters(self._env, resolver=self._resolver)
                 else:
                     adapters = load_adapters(self._env, resolver=self._resolver)
             except CredentialUnavailableError as exc:
@@ -184,7 +181,7 @@ class ModelInquiryRunner:
                 )
             context_hash = _initial_context(trace)["context_hash"]
             candidate_adapters = {
-                role: self._candidate_adapters(adapters, role=role, roles=roles)
+                role: ((adapters[role],) if _single_target_mode(trace) else self._candidate_adapters(adapters, role=role, roles=roles))
                 for role in roles
             }
             drafts: list[TurnExecution] = []
