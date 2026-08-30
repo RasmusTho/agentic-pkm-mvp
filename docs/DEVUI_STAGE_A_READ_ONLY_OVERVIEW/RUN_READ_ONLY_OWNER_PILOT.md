@@ -227,5 +227,6 @@ adding any cross-run field to `devui-overview-browser-accessibility.v1`.
 Filed as blocked child [#4749](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4749) serially
 after #4748. It awaits the repaired contract, Demerzel prod access and boolean-only #4835
 prerequisite, #4836 selectors, #4748's exact-main receipt, applicable main-tracking
-deployment/operator evidence for exactly `M`, and receipt-sourced deployed URL/SHA. If the pilot supplements naturally observed `pkm-prod` state
-with `pkm-test`, it additionally requires an approved disposable-state classification.
+deployment/operator evidence for exactly `M`, and receipt-sourced deployed URL/SHA. If the pilot
+supplements the receipt-sourced VM-102 Dev UI evidence with separately authorized `pkm-test` state,
+it additionally requires an approved disposable-state classification.

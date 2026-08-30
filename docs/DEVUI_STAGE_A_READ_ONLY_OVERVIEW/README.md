@@ -143,7 +143,9 @@ authority and genuine acknowledgements.
       unlinked states without browser reclassification.
 - [ ] The owner pilot answers Now, Needs you, and Ready to try without a false decision, readiness,
       durable acceptance, or dependency on opening standalone subsystem UIs. It runs only on the
-      receipt-sourced VM-102 Dev System deployment and selected environment identity (`pkm-prod`, `PKM_ENVIRONMENT=prod`, Midgård),
+      receipt-sourced VM-102 Dev System `devui_projection` deployment and its governed external
+      read-dependency identities; it never uses a Product Runtime `pkm-*` project or vault as VM-102
+      deployment identity,
       proves the deployed SHA across CI/review/deploy receipt, `/version`, `/api/health.version`,
       and gateway marker, and always records the deployed Overview → server-supplied Focus → return
       journey with zero effects/errors/storage/unauthorized writes and durable evidence. If a

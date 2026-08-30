@@ -58,8 +58,9 @@ it supplies neither a page nor a visual destination.
 - Human knowledge impact: none
 - Memory impact: no Product/Runtime or user-memory impact
 - Retrieval/context impact: no new retrieval or context store
-- Sync/deployment impact: the future ARO-08 consumes an existing Demerzel production deployment
-  receipt only (`pkm-prod`, `PKM_ENVIRONMENT=prod`, Midgård); it does not deploy or promote
+- Sync/deployment impact: the future ARO-08 consumes an existing VM-102 Dev System
+  `devui_projection` deployment receipt and governed external read-dependency identity only; it
+  does not use a Product Runtime `pkm-*` project or vault as VM-102 evidence, deploy, or promote
 - External boundary impact: none for independently reviewed exact shipped reuse; governed live
   Yggdrasil design handoff for novel, mixed, unknown, extension, or out-of-envelope work
 - New or changed contract: source-owned Now serialization plus one connected Overview/Focus visual
