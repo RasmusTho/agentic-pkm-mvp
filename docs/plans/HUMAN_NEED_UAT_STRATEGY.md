@@ -62,6 +62,27 @@ Gate posture:
 Failure meaning:
 - target-state gap or partial implementation, not necessarily a regression in the active baseline
 
+## Human-need acceptance
+
+Human-need acceptance is a separate evidence path from implementation, delivery, and baseline
+verification. A green test, merged PR, deployment receipt, or screenshot does not establish that
+the owner tried or accepted a human-facing outcome.
+
+Every parent validation hub or capability receipt must identify one named owner route and keep these
+claims separate:
+
+- implementation posture and current-state support,
+- executable proof and its test posture,
+- composed capability validation,
+- `ready_to_try` readiness for an owner walkthrough,
+- `owner_tried`, meaning a genuine owner observation, and
+- `owner_accepted`, meaning an explicit authorized acknowledgement.
+
+When a capability is not yet supported, record `unsupported`, `unavailable`, `unknown`, or the
+applicable limitation rather than upgrading a slice receipt into a capability or acceptance claim.
+The parent Issue or capability owner carries the evidence spine and next legal action; the owner
+acceptance route remains separate from CI, scenario definition, deployment, and delivery truth.
+
 ## Scenario posture vocabulary
 
 Every major human-need scenario should carry two posture labels.
@@ -99,6 +120,8 @@ When proposing or editing tests:
 - define user-visible success before internal assertions
 - record whether the scenario is `baseline`, `partial`, or `future`
 - choose the gate posture explicitly instead of inheriting smoke by default
+- preserve a traceable source anchor, named proof layer, bounded UAT observation/disposition path,
+  and owning Issue or specification for any executable coverage gap
 
 When proposing implementation work:
 - use human-need acceptance scenarios as system-level TDD pressure

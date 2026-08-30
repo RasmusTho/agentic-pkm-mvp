@@ -57,11 +57,25 @@ When turning scenarios into executable validation, also record:
 - test posture: `smoke`, `nightly`, `non-blocking acceptance`, or `release gate`
 - observable signals: the user-visible assertions or receipts that would count as success
 - minimum executable scenario: the smallest seeded or scripted end-to-end flow that exercises the human need without collapsing it into implementation trivia
+- stable human-outcome source anchor and named proof layer (`unit`, `API`, `data`, `browser`, or `system`)
+- bounded UAT observation and disposition path, with the owning Issue or specification for any executable gap
+- separate `owner_tried` and `owner_accepted` receipt treatment; neither may be inferred from CI, merge, deployment, screenshots, or scenario definition alone
 
 Interpretation rule:
 - the scenario definition remains human-first even when the current runtime can only satisfy part of it
 - if the current implementation only partially supports a scenario, keep the human acceptance target and mark the posture as `partial` rather than rewriting the scenario around the current internals
 - use `docs/plans/HUMAN_NEED_UAT_STRATEGY.md` for the repo-level policy on how these scenarios relate to smoke and release gates
+
+### Coverage and reporting
+
+The matrix is the scenario-level owner for the fields above. A parent validation hub or capability
+receipt should report one row per capability with the human outcome, source owner, implementation
+and test posture, documented/specification revisions, exact implementation and slice-verification
+receipts, composed capability validation, `ready_to_try`, `owner_tried`, `owner_accepted`, and any
+limitations or unavailable evidence. It must also name the next legal action and its owning Issue.
+
+These fields keep scenario definition, executable proof, delivery truth, capability validation, and
+human acceptance distinct while still allowing one evidence spine to connect them.
 
 ## 1. Capture a fleeting thought before it disappears
 
