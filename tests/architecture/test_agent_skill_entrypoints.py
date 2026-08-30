@@ -37,6 +37,34 @@ def test_canonical_agents_entrypoint_routes_to_repo_skill_index() -> None:
     assert "Known Defects registry Issue #4172" in text
 
 
+def test_builder_closeout_gate_contract_is_discoverable_and_fail_closed() -> None:
+    agents = _read("AGENTS.md")
+    skill_index = _read(".codex/skills/README.md")
+    skill = _read(".codex/skills/klart/SKILL.md")
+    roles = _read("docs/development/BUILDER_SUBAGENT_ROLES.md")
+    docs_index = _read("docs/DOCS_INDEX.md")
+
+    assert ".codex/skills/klart/SKILL.md" in agents
+    assert "Before a development-time builder session or builder agent returns a terminal response" in agents
+    assert "does not govern Product/Runtime agents" in agents
+    assert "destination: end" in agents
+    assert "secure_first: false" in agents
+
+    assert "disable-model-invocation: true" not in skill
+    assert "destination: continue_here | existing_successor | new_session_thread | end" in skill
+    assert "secure_first: true | false" in skill
+    assert "read-only closeout assessment" in skill
+    assert "owning workflow skill" in skill
+    assert "do not recursively reopen the gate" in " ".join(skill.split())
+    normalized_skill = " ".join(skill.split())
+    assert "never establishes Issue/PR delivery" in normalized_skill
+    assert "blocked | needs-human | handoff" in normalized_skill
+    assert "`klart`" in skill_index
+    assert ".codex/skills/klart/SKILL.md" in roles
+    assert "must never\nself-attest `done`" in roles
+    assert "| .codex/skills/klart/SKILL.md |" in docs_index
+
+
 def test_shared_issue_contract_requires_duplicate_search_before_issue_creation() -> None:
     contract = _read(".codex/skills/_shared/ISSUE_CONTRACT.md")
     self_sufficiency = " ".join(
