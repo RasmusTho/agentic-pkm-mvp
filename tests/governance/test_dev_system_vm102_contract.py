@@ -1,6 +1,20 @@
 from __future__ import annotations
 
+import copy
+import hashlib
+import json
 from pathlib import Path
+import subprocess
+import sys
+
+import pytest
+from jsonschema import Draft202012Validator
+
+from app.ops.devsystem_vm102_component_inventory import (
+    InventoryValidationError,
+    build_component_inventory_receipt,
+    validate_component_inventory_receipt,
+)
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -19,6 +33,21 @@ COMPONENT_IDS = (
     "tars_proxmox_control",
     "product_runtime",
 )
+
+OWNER_BY_COMPONENT = {
+    "devui_projection": "owner:dev_ui",
+    "builderops_control_plane": "owner:builderops",
+    "builderops_cockpit": "owner:builderops_cockpit",
+    "dispatcher_signboard": "owner:dispatcher_signboard",
+    "ddo": "owner:ddo",
+    "ckm_kvasir": "owner:ckm_kvasir",
+    "focus_conversation_port": "owner:focus_conversation_port",
+    "soi_evidence": "owner:product_runtime",
+    "github_git_ci_delivery": "owner:github_git_ci",
+    "model_service": "owner:model_access_substrate",
+    "tars_proxmox_control": "owner:tars_proxmox",
+    "product_runtime": "owner:product_runtime",
+}
 
 COMPONENT_EXPECTATIONS = {
     "devui_projection": ("VM-102 resident (target)", "`gap`"),
@@ -59,6 +88,100 @@ RECEIPT_CONSUMERS = {
         "../../BUILDEROPS_CONTROL_PLANE/README.md#vm-102-evidence-and-receipt-contract"
     ),
 }
+
+INVENTORY_REFUSALS = (
+    "activation_not_proven",
+    "deployment_not_proven",
+    "health_not_proven",
+    "qualification_not_proven",
+    "residency_not_proven",
+    "rollback_not_proven",
+)
+
+
+def _canonical_digest(value: object) -> str:
+    encoded = json.dumps(
+        value,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _inventory_evidence() -> dict[str, object]:
+    source_ref = (
+        "repo:docs/BUILDEROPS_CONTROL_PLANE/README.md"
+        "#complete-dev-system-vm-102-topology-contract"
+    )
+    components: list[dict[str, object]] = []
+    gaps: list[dict[str, str]] = []
+    for component_id in COMPONENT_IDS:
+        _, documented_state = COMPONENT_EXPECTATIONS[component_id]
+        reconciliation_state = documented_state.strip("`")
+        evidence_code_by_field = {
+            "service_or_project": "service_or_project_not_proven",
+            "source_identity": "source_identity_not_proven",
+            "ingress_auth": "ingress_auth_not_proven",
+            "health_version": "health_version_not_proven",
+            "deployment_lifecycle": "deployment_lifecycle_not_proven",
+            "migration_rollback": "migration_rollback_not_proven",
+        }
+        if reconciliation_state == "external":
+            evidence_code_by_field = {
+                field: code.replace("_not_proven", "_external_dependency")
+                for field, code in evidence_code_by_field.items()
+            }
+        elif reconciliation_state == "excluded":
+            evidence_code_by_field = {
+                field: code.replace("_not_proven", "_not_applicable")
+                for field, code in evidence_code_by_field.items()
+            }
+        components.append(
+            {
+                "component_id": component_id,
+                "placement_class": {
+                    "VM-102 resident (target)": "vm102_resident_target",
+                    "explicit external dependency": "external_dependency",
+                    "intentionally non-runtime": "intentionally_non_runtime",
+                }[COMPONENT_EXPECTATIONS[component_id][0]],
+                "owner": OWNER_BY_COMPONENT[component_id],
+                **{
+                    field: f"{reconciliation_state}:{code}"
+                    for field, code in evidence_code_by_field.items()
+                },
+                "reconciliation_state": reconciliation_state,
+                "evidence_refs": [source_ref],
+            }
+        )
+        if reconciliation_state == "gap":
+            gaps.append(
+                {
+                    "component_id": component_id,
+                    "code": "runtime_evidence_missing",
+                    "detail": "runtime evidence is not supplied by this inventory",
+                }
+            )
+    return {
+        "receipt_type": "devsystem_vm102_component_inventory.v1",
+        "receipt_version": 1,
+        "target_vm": {"vmid": 102, "name": "builder-system"},
+        "observed_at": "2026-08-29T18:00:00Z",
+        "source_refs": [source_ref, "github:issue:5194"],
+        "components": components,
+        "secret_material": "absent",
+        "gaps": gaps,
+        "refusals": list(INVENTORY_REFUSALS),
+        "claims": {
+            "inventory_complete": True,
+            "residency_proven": False,
+            "qualification_proven": False,
+            "activation_proven": False,
+            "deployment_proven": False,
+            "health_proven": False,
+            "rollback_proven": False,
+        },
+    }
 
 
 def _read(relative: str) -> str:
@@ -168,3 +291,214 @@ def test_dev_system_docs_preserve_the_product_runtime_boundary() -> None:
         assert "VM 102" in document
         assert "Product Runtime" in document
         assert "does not" in document or "no live" in document
+
+
+def test_component_inventory_schema_and_validator_enforce_identity_rows_and_digest() -> None:
+    evidence = _inventory_evidence()
+    receipt = build_component_inventory_receipt(evidence)
+
+    validate_component_inventory_receipt(receipt)
+    assert receipt["receipt_type"] == "devsystem_vm102_component_inventory.v1"
+    assert receipt["receipt_version"] == 1
+    assert receipt["target_vm"] == {"vmid": 102, "name": "builder-system"}
+    assert [row["component_id"] for row in receipt["components"]] == list(COMPONENT_IDS)
+    assert receipt["component_inventory_digest"] == _canonical_digest(receipt["components"])
+    assert receipt["claims"] == evidence["claims"]
+    assert all(value is False for key, value in receipt["claims"].items() if key != "inventory_complete")
+
+
+def test_component_inventory_rejects_malformed_and_secret_bearing_evidence() -> None:
+    duplicate = _inventory_evidence()
+    duplicate["components"] = [*duplicate["components"][:-1], duplicate["components"][0]]
+    with pytest.raises(InventoryValidationError):
+        build_component_inventory_receipt(duplicate)
+
+    missing = _inventory_evidence()
+    missing["components"] = missing["components"][:-1]
+    with pytest.raises(InventoryValidationError):
+        build_component_inventory_receipt(missing)
+
+    for field, invalid in (
+        ("target_vm", {"vmid": 103, "name": "builder-system"}),
+        ("observed_at", "2026-08-29 18:00:00"),
+        ("source_refs", ["https://user:password@example.invalid/evidence"]),
+    ):
+        malformed = _inventory_evidence()
+        malformed[field] = invalid
+        with pytest.raises(InventoryValidationError):
+            build_component_inventory_receipt(malformed)
+
+    secret = _inventory_evidence()
+    secret["components"][0]["source_identity"] = "gap: bearer ghp_not-a-real-token"
+    with pytest.raises(InventoryValidationError):
+        build_component_inventory_receipt(secret)
+
+    modern_token = "github_pat_11AA22BB33CC44DD55EE66FF77GG88HH99"
+    opaque_auth = _inventory_evidence()
+    opaque_auth["components"][0]["ingress_auth"] = f"gap:{modern_token}"
+    with pytest.raises(InventoryValidationError):
+        build_component_inventory_receipt(opaque_auth)
+
+    unclassified_credential = _inventory_evidence()
+    unclassified_credential["components"][0]["ingress_auth"] = (
+        "gap:opaque_credential_material_11aa22bb33cc"
+    )
+    with pytest.raises(InventoryValidationError):
+        build_component_inventory_receipt(unclassified_credential)
+
+    opaque_owner = _inventory_evidence()
+    opaque_owner["components"][0]["owner"] = f"owner:{'a' * 48}"
+    with pytest.raises(InventoryValidationError):
+        build_component_inventory_receipt(opaque_owner)
+
+    for unsafe_ref in (
+        f"repo:docs/{'b' * 48}",
+        f"receipt:opaque_credential_material_11aa22bb33cc:{'a' * 64}",
+        f"receipt:deployment_proven:{'a' * 64}",
+    ):
+        cleartext_reference = _inventory_evidence()
+        cleartext_reference["source_refs"].append(unsafe_ref)
+        cleartext_reference["components"][0]["evidence_refs"].append(unsafe_ref)
+        with pytest.raises(InventoryValidationError):
+            build_component_inventory_receipt(cleartext_reference)
+
+    receipt = build_component_inventory_receipt(_inventory_evidence())
+    tampered_digest = copy.deepcopy(receipt)
+    tampered_digest["component_inventory_digest"] = "0" * 64
+    with pytest.raises(InventoryValidationError):
+        validate_component_inventory_receipt(tampered_digest)
+
+    tampered_component_fingerprint = copy.deepcopy(receipt)
+    tampered_component_fingerprint["evidence_fingerprints"][COMPONENT_IDS[0]] = "0" * 64
+    with pytest.raises(InventoryValidationError):
+        validate_component_inventory_receipt(tampered_component_fingerprint)
+
+    tampered_evidence_fingerprint = copy.deepcopy(receipt)
+    tampered_evidence_fingerprint["evidence_fingerprint"] = "0" * 64
+    with pytest.raises(InventoryValidationError):
+        validate_component_inventory_receipt(tampered_evidence_fingerprint)
+
+
+def test_component_inventory_preserves_gaps_and_refuses_false_claims() -> None:
+    evidence = _inventory_evidence()
+    receipt = build_component_inventory_receipt(evidence)
+
+    assert receipt["gaps"] == evidence["gaps"]
+    assert set(receipt["refusals"]) == set(INVENTORY_REFUSALS)
+    for row in receipt["components"]:
+        assert row["reconciliation_state"] in {"gap", "external", "excluded"}
+        for field in (
+            "service_or_project",
+            "source_identity",
+            "ingress_auth",
+            "health_version",
+            "deployment_lifecycle",
+            "migration_rollback",
+        ):
+            assert row[field].startswith(f"{row['reconciliation_state']}:")
+
+    escalated_state = _inventory_evidence()
+    escalated_state["components"][0]["reconciliation_state"] = "resident"
+    with pytest.raises(InventoryValidationError):
+        build_component_inventory_receipt(escalated_state)
+
+    hidden_gap = _inventory_evidence()
+    hidden_gap["components"][0]["deployment_lifecycle"] = "deployed and active"
+    with pytest.raises(InventoryValidationError):
+        build_component_inventory_receipt(hidden_gap)
+
+    for field, contradiction in (
+        ("deployment_lifecycle", "gap:deployed_and_active_on_vm102"),
+        ("health_version", "gap:healthy_at_exact_version_abc123"),
+        ("ingress_auth", "gap:authenticated_ingress_is_ready"),
+        ("service_or_project", "gap:resident_and_qualified_on_vm102"),
+    ):
+        contradictory_gap = _inventory_evidence()
+        contradictory_gap["components"][0][field] = contradiction
+        with pytest.raises(InventoryValidationError):
+            build_component_inventory_receipt(contradictory_gap)
+
+    schema = json.loads(
+        _read("config/platform/devsystem_vm102_component_inventory.v1.schema.json")
+    )
+    schema_contradiction = build_component_inventory_receipt(_inventory_evidence())
+    schema_contradiction["components"][0]["health_version"] = (
+        "gap:healthy_at_exact_version_abc123"
+    )
+    assert list(Draft202012Validator(schema).iter_errors(schema_contradiction))
+
+    for forbidden_code in (
+        "activation_proven",
+        "auth_succeeded",
+        "deployment_proven",
+        "health_proven",
+        "qualification_proven",
+        "residency_proven",
+    ):
+        contradictory_code = _inventory_evidence()
+        contradictory_code["gaps"][0]["code"] = forbidden_code
+        with pytest.raises(InventoryValidationError):
+            build_component_inventory_receipt(contradictory_code)
+
+    false_claim = _inventory_evidence()
+    false_claim["claims"]["deployment_proven"] = True
+    with pytest.raises(InventoryValidationError):
+        build_component_inventory_receipt(false_claim)
+
+
+def test_component_inventory_cli_consumes_only_operator_evidence(tmp_path: Path) -> None:
+    import app.ops.devsystem_vm102_component_inventory as inventory_module
+
+    assert "caller-supplied" in (inventory_module.__doc__ or "")
+    assert "no host access" in (inventory_module.__doc__ or "").lower()
+
+    evidence_path = tmp_path / "operator-evidence.json"
+    evidence_path.write_text(json.dumps(_inventory_evidence()), encoding="utf-8")
+    result = subprocess.run(
+        [sys.executable, "-m", "app.ops.devsystem_vm102_component_inventory", "--evidence", str(evidence_path)],
+        cwd=ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    receipt = json.loads(result.stdout)
+    assert receipt["claims"]["inventory_complete"] is True
+    assert receipt["claims"]["residency_proven"] is False
+    assert receipt["claims"]["deployment_proven"] is False
+
+    absent_path = tmp_path / "absent-evidence.json"
+    absent_path.write_text("{}", encoding="utf-8")
+    absent = subprocess.run(
+        [sys.executable, "-m", "app.ops.devsystem_vm102_component_inventory", "--evidence", str(absent_path)],
+        cwd=ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert absent.returncode == 2
+    assert absent.stdout == ""
+
+    for case, raw_secret, field, value in (
+        (
+            "modern-token",
+            "github_pat_11AA22BB33CC44DD55EE66FF77GG88HH99",
+            "source_identity",
+            "gap:github_pat_11AA22BB33CC44DD55EE66FF77GG88HH99",
+        ),
+        ("opaque-owner", "a" * 48, "owner", f"owner:{'a' * 48}"),
+    ):
+        secret_path = tmp_path / f"{case}-evidence.json"
+        secret_evidence = _inventory_evidence()
+        secret_evidence["components"][0][field] = value
+        secret_path.write_text(json.dumps(secret_evidence), encoding="utf-8")
+        refused = subprocess.run(
+            [sys.executable, "-m", "app.ops.devsystem_vm102_component_inventory", "--evidence", str(secret_path)],
+            cwd=ROOT,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        assert refused.returncode == 2
+        assert raw_secret not in refused.stdout
+        assert raw_secret not in refused.stderr
