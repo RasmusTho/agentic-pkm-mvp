@@ -159,8 +159,10 @@ adding any cross-run field to `devui-overview-browser-accessibility.v1`.
   - Verify: runtime receipt: devui-stage-a-read-only-owner-pilot.v1
 - [ ] The ledger binds the distinct final-M #4748 browser evidence and production evidence. Each
       entry has a recomputable `evidence_artifact_sha256` over its own canonical inventory: the
-      browser entry contains the authenticated wrapper, source manifest, and only browser-bundle artifacts, while the production entry contains
-      only production/owner evidence and any used disposable-state receipt. Each entry fails closed
+      browser entry contains the authenticated wrapper, source manifest, and only browser-bundle
+      artifacts, while the production entry contains applicable production evidence, the deployed
+      journey artifacts, and, when a `pkm-test` supplement is used, its disposable-state receipt
+      plus trace, screenshots, checksums, and manifest. Each entry fails closed
       when its archived artifact set is missing or mismatched; the strict #4748 receipt does not
       reference a candidate receipt.
   - Verify: runtime receipt: devui-stage-a-read-only-owner-pilot.v1
@@ -225,8 +227,7 @@ adding any cross-run field to `devui-overview-browser-accessibility.v1`.
 ## Related GitHub Issues
 
 Filed as blocked child [#4749](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4749) serially
-after #4748. It awaits the repaired contract, Demerzel prod access and boolean-only #4835
+after #4748. It awaits the repaired contract, VM-102 Dev System access and boolean-only #4835
 prerequisite, #4836 selectors, #4748's exact-main receipt, applicable main-tracking
-deployment/operator evidence for exactly `M`, and receipt-sourced deployed URL/SHA. If the pilot
-supplements the receipt-sourced VM-102 Dev UI evidence with separately authorized `pkm-test` state,
-it additionally requires an approved disposable-state classification.
+deployment/operator evidence for exactly `M`, and receipt-sourced deployed URL/SHA. If the pilot supplements naturally observed external read state
+with `pkm-test`, it additionally requires an approved disposable-state classification.
