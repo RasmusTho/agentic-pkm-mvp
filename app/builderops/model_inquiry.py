@@ -2112,13 +2112,14 @@ def _validate_readiness_terminal_receipt(
     ):
         raise BuilderOpsValidationError("invalid inquiry readiness terminal receipt")
     if outcome == "issue_ready":
-        if requires_linkage and run_terminal is None:
-            raise BuilderOpsValidationError("invalid inquiry readiness terminal receipt")
-        if requires_linkage and (
-            receipt.get("run_terminal_receipt_hash") != run_terminal.get("artifact_hash")
-            or receipt.get("synthesis_artifact_hash") != synthesis_hash
-        ):
-            raise BuilderOpsValidationError("invalid inquiry readiness terminal receipt")
+        if requires_linkage:
+            if run_terminal is None:
+                raise BuilderOpsValidationError("invalid inquiry readiness terminal receipt")
+            if (
+                receipt.get("run_terminal_receipt_hash") != run_terminal.get("artifact_hash")
+                or receipt.get("synthesis_artifact_hash") != synthesis_hash
+            ):
+                raise BuilderOpsValidationError("invalid inquiry readiness terminal receipt")
     else:
         if "run_terminal_receipt_hash" in receipt and (
             run_terminal is None
