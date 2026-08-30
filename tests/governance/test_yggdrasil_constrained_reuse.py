@@ -137,8 +137,8 @@ def test_devui_plan_binds_reuse_exit_to_stable_fixtures_and_novel_delta_gate() -
     assert "#4768" in joined
     assert "yggdrasil-constrained-reuse.v1" in joined
     assert "independent review" in joined
-    assert "#4746 remains blocked" in joined
-    assert "does not accept #4746" in joined
+    assert "accepted by #4746 for the merged #4836 shell" in joined
+    assert "#4746 remains blocked" not in joined
     assert "novel, mixed, or unknown" in joined
     assert "live Yggdrasil design-system gate" in joined
     assert "#4834 is delivered" not in joined
