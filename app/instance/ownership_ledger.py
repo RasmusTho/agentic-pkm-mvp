@@ -1934,7 +1934,7 @@ class OwnershipLedger:
                 if owner is None or owner.root_identity is None or not owner.ancestor_identities:
                     return False
                 try:
-                    sealed_root = self._open_root(lease.sealed_root, key)
+                    sealed_root_text = self._open_root(lease.sealed_root, key)
                 except (LedgerError, UnicodeError, ValueError):
                     return False
                 ancestor_match = tuple(lease.ancestor_fingerprints) == tuple(
@@ -1951,7 +1951,7 @@ class OwnershipLedger:
                     except (FilesystemIdentityError, OSError, ValueError):
                         ancestor_match = False
                 return (
-                    sealed_root == str(root)
+                    sealed_root_text == str(root)
                     and hmac.compare_digest(
                         lease.root_fingerprint,
                         _fingerprint(owner.root_identity, key.secret),
