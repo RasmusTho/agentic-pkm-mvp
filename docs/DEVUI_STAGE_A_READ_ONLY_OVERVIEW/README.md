@@ -22,8 +22,9 @@ Complete the remaining read-only Overview path without reimplementing the delive
 `devui-overview-view.v1` composer or allowing a browser, label, terminal delivery state, or merged
 PR to invent owner attention or trial readiness.
 
-The capability remains deliberately blocked for its owner-question, readiness, navigation, and
-production-validation steps. No current producer exposes the canonical source facts needed for
+The capability remains deliberately blocked for its owner-question, readiness, and
+production-validation steps. Merged #4836 supplies the bounded typed-navigation contract; no
+separate navigation delivery slice remains. No current producer exposes the canonical source facts needed for
 **Needs you** or **Ready to try**. #4834 delivers source-owned **Now** candidates from the trusted
 Cockpit `working` payload only; the connected shell is delivered, but exact browser proof and
 production acceptance remain separate authorities. ARO-07/#4748 is now proven at final post-merge
@@ -45,7 +46,7 @@ contract`](../BUILDEROPS_CONTROL_PLANE/README.md).
 
 Stage A cannot replace BuilderOps, GitHub/CI/review/merge/closure, Product Runtime, or TARS/Proxmox
 authority. Its browser and owner-pilot evidence is valid only when bound to the complete-system
-deployment receipts and exact candidate SHA. A missing component or receipt withdraws the affected
+deployment receipts and exact deployed/final-main SHA `M`. A missing component or receipt withdraws the affected
 claim; it is never treated as an empty, healthy, or deployed state.
 
 ## Current-to-target truth
@@ -57,7 +58,7 @@ claim; it is never treated as an empty, healthy, or deployed state.
 | Cockpit producer | #4834 maps only trusted, countable `working` items to source-ordered **Now** candidates with stable GitHub identity and separate Cockpit evidence | Owner-question facts remain separately source-owned or honestly withdrawn; `agent:needs-human`, delivery, and readiness are not admitted |
 | Delivery evidence | Delivery, merge, closure, and terminal verification facts exist independently | A source-owned, receipt-backed `ready_to_try` fact, or an honest withdrawal |
 | API | Local-only GET `/api/devui/composition`, delivered direct-loopback Overview/Focus reads, and #4841's production Companion exact two-GET transport; merged #4836 adds only the governed read-only Companion page/asset routes | Typed navigation only after actual local destinations are governed |
-| Navigation | Composer validates typed root references | Resolvable local Focus and optional SoI destinations without joins |
+| Navigation | Composer validates typed root references; merged #4836 owns the bounded typed-navigation contract | No separate navigation delivery slice; remaining acceptance belongs to the owner-pilot and production gates |
 | Visual shell | #4836 delivered the connected read-only shell and exact constrained-reuse manifest; #4748 has an authenticated exact-main receipt at `M`, but the shell is not production-deployed or owner-accepted | #4749 deployment identity, owner pilot, and separate owner-evidence acknowledgement |
 
 ## Authority-resolution gate
