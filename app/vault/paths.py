@@ -174,6 +174,34 @@ def _paths_data(vault_root: Path) -> Dict[str, str]:
     return _extract_paths(_read_system_settings(settings_path))
 
 
+def _configured_sources_dir_rel(vault_root: Path) -> str | None:
+    """Read the Sources setting strictly so malformed authority cannot fall back."""
+    settings_path = resolve_settings_file(
+        vault_root,
+        "system-settings.md",
+        legacy_paths=(LEGACY_SYSTEM_SETTINGS, LEGACY_COMPILED_DIR / "system-settings.yaml"),
+    )
+    if not settings_path.exists():
+        return None
+    try:
+        settings = read_settings_mapping(settings_path)
+    except Exception as exc:  # noqa: BLE001 - malformed authority must fail loud
+        raise ValueError(f"unable to read Sources path setting from {settings_path}") from exc
+
+    raw_paths = settings.get("paths")
+    if isinstance(raw_paths, dict) and "sources_dir_rel" in raw_paths:
+        value = raw_paths["sources_dir_rel"]
+        if not isinstance(value, str):
+            raise ValueError("paths.sources_dir_rel must be a string")
+        return value
+    if "sources_dir_rel" in settings:
+        value = settings["sources_dir_rel"]
+        if not isinstance(value, str):
+            raise ValueError("sources_dir_rel must be a string")
+        return value
+    return None
+
+
 def resolve_vault_inbox_dir_rel(vault_root: Path) -> VaultPathValue:
     env_value = (os.getenv("VAULT_INBOX_DIR_REL") or "").strip()
     if env_value:
@@ -222,9 +250,8 @@ def resolve_vault_sources_dir_rel(vault_root: Path) -> VaultPathValue:
             provenance="env:VAULT_SOURCES_DIR_REL",
         )
 
-    paths = _paths_data(vault_root)
-    if "sources_dir_rel" in paths:
-        configured = paths["sources_dir_rel"]
+    configured = _configured_sources_dir_rel(vault_root)
+    if configured is not None:
         return _validate_sources_dir_rel(
             configured,
             provenance="system-settings.yaml:paths.sources_dir_rel",

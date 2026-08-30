@@ -252,6 +252,14 @@ def test_sources_dir_rel_rejects_unsafe_values(
     with pytest.raises(ValueError, match="sources_dir_rel"):
         resolve_vault_sources_dir_rel(tmp_path)
 
+    settings_path = tmp_path / "_system" / "settings" / "system-settings.yaml"
+    settings_path.write_text(
+        settings_path.read_text(encoding="utf-8").replace("sources_dir_rel: ''", "sources_dir_rel: []"),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="sources_dir_rel"):
+        resolve_vault_sources_dir_rel(tmp_path)
+
 
 def test_paths_use_at_settings_when_present(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.delenv("VAULT_INBOX_DIR_REL", raising=False)

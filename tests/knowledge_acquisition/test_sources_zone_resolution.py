@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from app.agents.panel_agent.policy import watcher_panel_writeback_allowed
 from app.heimdal.candidate_projection import project_pending_candidates
 from app.heimdal.cursor_store import reset_memory_cursor_store
 from app.heimdal.observation_log import reset_memory_observation_log
@@ -99,6 +100,9 @@ def test_current_sources_producers_use_resolved_selected_vault_root(
         assert any(path and path.startswith("ConfiguredSources/Heimdal/") for path in paths)
         assert any(path and path.startswith("ConfiguredSources/Reading/Karakeep/") for path in paths)
         assert not (Path(vault.active_vault_path) / "Sources").exists()
+        assert watcher_panel_writeback_allowed(
+            "ConfiguredSources/panel.md", vault_root=Path(vault.active_vault_path)
+        ) is False
     finally:
         reset_memory_observation_log()
         reset_memory_cursor_store()
