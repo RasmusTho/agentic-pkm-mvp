@@ -175,6 +175,22 @@ start only when neither the host-global lease nor any channel restart fence exis
 always run the full authenticated runtime preflight; module absence outside explicit rollback fails
 closed.
 
+#### Legacy owner root namespace authority (#4539)
+
+The owner-authorized decision recorded on 2026-08-30 is host-side validation (Option B). The
+Mac/host producer validates legacy-owner roots in the host namespace where those roots actually
+exist, including the existing identity, ancestor, collision, and post-quiescence checks, and emits
+a private receipt bound to the deployment/quiescence proof. The Docker deployment helper consumes
+that bound result and its opaque identity evidence; it does not directly resolve host-only paths or
+re-run `root.is_dir()` inside `instance-state-init`.
+
+This decision keeps the one-shot's small mount set intact. The rejected Option A—adding broad
+`/Users` and `/Volumes` visibility so the container can re-check host paths—would widen deployment
+authority filesystem exposure and is not part of the selected repair. The bounded receipt handoff
+and regression proof shipped in PR #5244 for #5235; this does not claim a live three-channel host
+deployment. Failure remains fail-closed: missing, changed, incomplete, forged, or unbound host
+evidence cannot release the fence or mutate registry/ledger state.
+
 MVR-01C cuts registry authority over only by committing one complete rollback floor into the same
 locked registry generation. That generation names one validated scalar rollback binding, refreshes
 the current legacy projection, records the roll-forward fork revision, and proves both the
