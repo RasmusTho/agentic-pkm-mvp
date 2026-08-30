@@ -621,7 +621,7 @@ def test_direct_filesystem_write_between_scan_and_commit_is_receipted_under_old_
     assert all(path.startswith(str(vault_a)) for path in _event_paths(tmp_path))
 
 
-@pytest.mark.parametrize("fault_stage", ["prepare", "commit"])
+@pytest.mark.parametrize("fault_stage", ["prepare", "commit", "reload"])
 def test_prepare_commit_resume_is_failure_atomic(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -643,6 +643,11 @@ def test_prepare_commit_resume_is_failure_atomic(
     )
     monkeypatch.setenv("WATCHER_ENABLE", "0")
     tripped = False
+    reloads: list[Path] = []
+    monkeypatch.setattr(
+        "app.settings.ingestion.ingest_settings",
+        lambda **kwargs: reloads.append(Path(kwargs["vault_root"])),
+    )
 
     def fail_once(stage: str) -> None:
         nonlocal tripped
@@ -652,17 +657,18 @@ def test_prepare_commit_resume_is_failure_atomic(
 
     monkeypatch.setattr("app.instance.settings_rebind._activation_fault_point", fail_once)
     registration = runtime.registry.load().registrations["binding-b"]
+    selection = KnownVaultRef(
+        ref=registration.ref,
+        path=registration.path,
+        vault_id=registration.vault_id,
+        vault_name=registration.vault_name,
+        local_instance_id=registration.local_instance_id,
+        last_opened_at="2026-08-30T00:00:00Z",
+    )
     activation = SettingsRebindActivation.from_environment(runtime.registry)
     with pytest.raises(RuntimeError, match=f"injected {fault_stage} fault"):
         activation.activate(
-            selection=KnownVaultRef(
-                ref=registration.ref,
-                path=registration.path,
-                vault_id=registration.vault_id,
-                vault_name=registration.vault_name,
-                local_instance_id=registration.local_instance_id,
-                last_opened_at="2026-08-30T00:00:00Z",
-            ),
+            selection=selection,
             candidate_binding_id="binding-b",
             candidate_root=vault_b,
         )
@@ -676,6 +682,20 @@ def test_prepare_commit_resume_is_failure_atomic(
         assert record.candidate_binding_id == "binding-b"
         assert runtime.registry.load().last_active_vault_ref == registration.ref
         assert record.phase == "no_lifecycle"
+        assert record.reload_revision == 0
+        activation.activate(
+            selection=selection,
+            candidate_binding_id="binding-b",
+            candidate_root=vault_b,
+        )
+        assert reloads == [vault_b]
+        assert runtime.open_settings_rebind_store().read().reload_revision == 1
+        activation.activate(
+            selection=selection,
+            candidate_binding_id="binding-b",
+            candidate_root=vault_b,
+        )
+        assert reloads == [vault_b]
 
 
 def test_committed_revision_survives_event_loss_and_process_restart(

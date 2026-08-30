@@ -31,8 +31,10 @@ _FIELDS = {
     "lifecyclePosture",
     "priorBindingId",
     "candidateBindingId",
+    "reloadRevision",
     "checksum",
 }
+_LEGACY_FIELDS = _FIELDS - {"reloadRevision"}
 _PHASE_POSTURES = {
     "dormant": "dormant",
     "prepared": "watcher",
@@ -74,6 +76,7 @@ class SettingsRebindRecord:
     lifecycle_posture: str = "dormant"
     prior_binding_id: str | None = None
     candidate_binding_id: str | None = None
+    reload_revision: int | None = 0
 
     @classmethod
     def dormant(cls, *, binding_id: str | None = None) -> SettingsRebindRecord:
@@ -89,13 +92,14 @@ class SettingsRebindRecord:
             "lifecyclePosture": self.lifecycle_posture,
             "priorBindingId": self.prior_binding_id,
             "candidateBindingId": self.candidate_binding_id,
+            "reloadRevision": self.reload_revision,
         }
         payload["checksum"] = _checksum(payload)
         return payload
 
     @classmethod
     def from_payload(cls, value: object) -> SettingsRebindRecord:
-        if not isinstance(value, dict) or set(value) != _FIELDS:
+        if not isinstance(value, dict) or set(value) not in (_FIELDS, _LEGACY_FIELDS):
             raise RegistryError("settings rebind record has an invalid shape")
         if value.get("schema") != SETTINGS_REBIND_SCHEMA:
             raise RegistryError("settings rebind record has an invalid schema")
@@ -120,6 +124,14 @@ class SettingsRebindRecord:
             raise RegistryError("completed settings rebind revisions must match")
         prior = _binding(value.get("priorBindingId"), name="prior binding")
         candidate = _binding(value.get("candidateBindingId"), name="candidate binding")
+        if "reloadRevision" not in value:
+            # Records written before reload completion became durable are
+            # intentionally treated as unknown and replayed once on retry.
+            reload_revision = None
+        else:
+            reload_revision = _revision(value.get("reloadRevision"), name="reload revision")
+            if reload_revision > applied:
+                raise RegistryError("settings rebind reload revision exceeds applied revision")
         supplied_checksum = value.get("checksum")
         if (
             not isinstance(supplied_checksum, str)
@@ -135,6 +147,7 @@ class SettingsRebindRecord:
             lifecycle_posture=posture,
             prior_binding_id=prior,
             candidate_binding_id=candidate,
+            reload_revision=reload_revision,
         )
 
 
@@ -209,6 +222,7 @@ class SettingsRebindStore:
             lifecycle_posture="watcher",
             prior_binding_id=prior,
             candidate_binding_id=candidate_binding_id,
+            reload_revision=0,
         )
         updated = self._registry.set_settings_rebind_state(
             prepared.as_payload(),
@@ -269,6 +283,29 @@ class SettingsRebindStore:
             _capability=_STORAGE_MUTATION_CAPABILITY,
         )
         return SettingsRebindRecord.from_payload(updated.settings_rebind)
+
+    def mark_reload_completed(self, *, desired_revision: int) -> SettingsRebindRecord:
+        """Durably mark the SETTINGS-01 reload for one committed revision."""
+
+        from app.instance._storage_boundary import _STORAGE_MUTATION_CAPABILITY
+
+        snapshot = self._registry.load()
+        current = self.read()
+        if current.desired_revision != desired_revision:
+            raise RegistryError("settings rebind reload revision does not match durable authority")
+        if current.phase not in {"committed", "no_lifecycle"}:
+            raise RegistryError("settings rebind reload requires a committed revision")
+        if current.reload_revision == desired_revision:
+            return current
+        if current.reload_revision not in {None, 0}:
+            raise RegistryError("settings rebind reload revision cannot advance from an unexpected value")
+        updated = replace(current, reload_revision=desired_revision)
+        stored = self._registry.set_settings_rebind_state(
+            updated.as_payload(),
+            expected_revision=snapshot.revision,
+            _capability=_STORAGE_MUTATION_CAPABILITY,
+        )
+        return SettingsRebindRecord.from_payload(stored.settings_rebind)
 
     def reconcile_no_lifecycle(self) -> SettingsRebindRecord:
         """Converge an absent watcher without preparing or committing a revision."""
@@ -340,10 +377,12 @@ class SettingsRebindActivation:
         current = self.store.read()
         if current.candidate_binding_id == candidate_binding_id:
             if current.phase in {"dormant", "no_lifecycle"}:
+                if current.phase == "no_lifecycle":
+                    return self._reload_if_needed(current, candidate_root)
                 return current
             if current.phase == "committed":
                 self._wait_for_completed_if_enabled(current)
-                return current
+                return self._reload_if_needed(current, candidate_root)
 
         _activation_fault_point("prepare")
         try:
@@ -359,7 +398,7 @@ class SettingsRebindActivation:
             ):
                 if observed.phase == "committed":
                     self._wait_for_completed_if_enabled(observed)
-                    return observed
+                    return self._reload_if_needed(observed, candidate_root)
                 prepared = observed
             else:
                 raise
@@ -391,12 +430,37 @@ class SettingsRebindActivation:
                 and observed.desired_revision == prepared.desired_revision
             ):
                 self._wait_for_completed_if_enabled(observed)
-                return observed
+                return self._reload_if_needed(observed, candidate_root)
             raise
         # A commit fault is post-commit: recovery must observe the durable B
         # binding and roll forward, matching the watcher transaction seam.
         _activation_fault_point("commit")
 
+        committed = self._reload_if_needed(committed, candidate_root)
+
+        self._wait_for_completed_if_enabled(committed)
+        return committed
+
+    def _wait_for_completed_if_enabled(self, record: SettingsRebindRecord) -> None:
+        if self.watcher_enabled:
+            _activation_fault_point("resume")
+            self._wait_for_stage(record, required_stage="completed")
+
+    def _reload_if_needed(
+        self,
+        record: SettingsRebindRecord,
+        candidate_root: Path,
+    ) -> SettingsRebindRecord:
+        # Re-read after any watcher wait or commit race.  A concurrent winner
+        # may have completed the reload while this caller was waiting.
+        current = self.store.read()
+        if (
+            current.desired_revision == record.desired_revision
+            and current.candidate_binding_id == record.candidate_binding_id
+        ):
+            record = current
+        if record.reload_revision == record.desired_revision:
+            return record
         # This is deliberately the existing production SETTINGS-01 call site,
         # not a second settings loader.  A malformed source leaves the durable
         # commit visible and is surfaced by the ingestion health state.
@@ -408,14 +472,7 @@ class SettingsRebindActivation:
             vault_root=candidate_root,
             publish_signal=False,
         )
-
-        self._wait_for_completed_if_enabled(committed)
-        return committed
-
-    def _wait_for_completed_if_enabled(self, record: SettingsRebindRecord) -> None:
-        if self.watcher_enabled:
-            _activation_fault_point("resume")
-            self._wait_for_stage(record, required_stage="completed")
+        return self.store.mark_reload_completed(desired_revision=record.desired_revision)
 
     @property
     def watcher_enabled(self) -> bool:

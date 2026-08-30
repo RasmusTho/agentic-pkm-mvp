@@ -549,7 +549,13 @@ class VaultManager:
         current_record = SettingsRebindActivation(registry).store.read()
         if (
             current_record.candidate_binding_id == registration.vault_binding_id
-            and current_record.phase in {"dormant", "no_lifecycle"}
+            and (
+                current_record.phase == "dormant"
+                or (
+                    current_record.phase == "no_lifecycle"
+                    and current_record.reload_revision == current_record.desired_revision
+                )
+            )
         ):
             # A stable record needs only the ordinary compatibility write.  A
             # prepared or committed same-target record must still flow through

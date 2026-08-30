@@ -505,9 +505,15 @@ class VaultRegistryStore:
                 and requested.applied_revision == existing.applied_revision
                 and requested != existing
             ):
-                raise RegistryError(
-                    "settings rebind state cannot change without a revision advance"
+                reload_only_advance = (
+                    requested.reload_revision == requested.desired_revision
+                    and requested.reload_revision != existing.reload_revision
+                    and replace(requested, reload_revision=existing.reload_revision) == existing
                 )
+                if not reload_only_advance:
+                    raise RegistryError(
+                        "settings rebind state cannot change without a revision advance"
+                    )
             if requested == existing:
                 return current
             self._validate_settings_rebind_binding(current, requested.prior_binding_id)
