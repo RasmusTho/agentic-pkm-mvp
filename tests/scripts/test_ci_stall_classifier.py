@@ -173,6 +173,37 @@ def test_latest_check_run_uses_numeric_id_to_break_timestamp_ties() -> None:
     assert result.checks_considered[0]["id"] == 10
 
 
+def test_skipped_duplicate_does_not_mask_running_or_failed_check() -> None:
+    for status, conclusion, expected_classification in (
+        ("in_progress", None, "wait"),
+        ("completed", "failure", "actionable_failure"),
+    ):
+        result = classify_ci_state(
+            {
+                "check_runs": [
+                    _check(
+                        "pr-contract",
+                        status=status,
+                        conclusion=conclusion,
+                        started_at="2026-08-30T01:00:00Z",
+                        check_id=1,
+                    ),
+                    _check(
+                        "pr-contract",
+                        status="completed",
+                        conclusion="skipped",
+                        started_at="2026-08-30T01:05:00Z",
+                        check_id=2,
+                    ),
+                ]
+            },
+            now="2026-08-30T01:10:00Z",
+        )
+
+        assert result.classification == expected_classification
+        assert result.checks_considered[0]["conclusion"] == conclusion
+
+
 def test_missing_expected_check_reports_missing_attachment() -> None:
     result = classify_ci_state(
         {
