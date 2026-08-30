@@ -797,7 +797,14 @@ class GitHubProtectedRepositoryAuthority:
                 [],
             ).append(row)
         latest_checks = {
-            identity: _latest_github_result(history)
+            identity: _latest_github_result(
+                [
+                    row
+                    for row in history
+                    if not _is_skipped_conclusion(row.get("conclusion"))
+                ]
+                or history
+            )
             for identity, history in check_history.items()
         }
         authenticated_workflow_suites: set[int] = set()
@@ -967,6 +974,10 @@ class GitHubProtectedRepositoryAuthority:
             "merge_commit_message": merge_commit_message,
             "merged_at": pull.get("merged_at"),
         }
+
+
+def _is_skipped_conclusion(value: object) -> bool:
+    return isinstance(value, str) and value.lower() == "skipped"
 
 
 class HostCredentialManifestResolver:

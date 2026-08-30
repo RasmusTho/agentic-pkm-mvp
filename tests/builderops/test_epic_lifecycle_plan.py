@@ -248,6 +248,41 @@ def test_done_plan_uses_latest_check_run_per_name() -> None:
     ]
 
 
+def test_done_plan_skipped_duplicate_does_not_mask_running_execution() -> None:
+    plan = build_lifecycle_transition_plan(
+        transition="done",
+        issue=_issue(state="CLOSED", labels=["type:task"], project_status="Review"),
+        pull_request=_pr(state="CLOSED", merged=True, project_status="Review"),
+        checks=[
+            {
+                "id": 1,
+                "name": "unit",
+                "status": "in_progress",
+                "started_at": "2026-08-30T01:00:00Z",
+            },
+            {
+                "id": 2,
+                "name": "unit",
+                "status": "completed",
+                "conclusion": "skipped",
+                "started_at": "2026-08-30T01:05:00Z",
+            },
+        ],
+        repo="RasmusTho/agentic-pkm-mvp",
+    )
+
+    assert plan["blocked_reasons"] == ["ci-checks-not-green"]
+    assert plan["content"]["checks"] == [
+        {
+            "name": "unit",
+            "status": "IN_PROGRESS",
+            "conclusion": None,
+            "id": 1,
+            "started_at": "2026-08-30T01:00:00Z",
+        }
+    ]
+
+
 @pytest.mark.parametrize(
     ("status", "conclusion", "latest_started_at"),
     [

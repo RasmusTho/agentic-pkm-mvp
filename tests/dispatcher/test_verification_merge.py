@@ -1875,7 +1875,7 @@ def test_live_adapter_rejects_green_push_masking_failed_pr_check() -> None:
             return httpx.Response(
                 200,
                 json={
-                    "total_count": 6,
+                    "total_count": 7,
                     "check_runs": [
                         {
                             "id": 10,
@@ -1901,6 +1901,18 @@ def test_live_adapter_rejects_green_push_masking_failed_pr_check() -> None:
                             "status": "completed",
                             "conclusion": "failure",
                             "completed_at": "2026-07-30T10:00:00Z",
+                            "app": {
+                                "id": 7,
+                                "slug": "github-actions",
+                            },
+                            "check_suite": {"id": 70},
+                        },
+                        {
+                            "id": 16,
+                            "name": "Docs Guard",
+                            "status": "completed",
+                            "conclusion": "skipped",
+                            "completed_at": "2026-07-30T10:03:00Z",
                             "app": {
                                 "id": 7,
                                 "slug": "github-actions",

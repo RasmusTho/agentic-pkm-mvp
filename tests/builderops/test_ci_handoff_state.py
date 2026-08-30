@@ -8,6 +8,7 @@ from click.testing import CliRunner
 from app.builderops.__main__ import _root as builderops_standalone_root
 from app.builderops.ci_handoff_state import (
     build_ci_pending_handoff,
+    latest_checks_by_name,
     plan_ci_handoff_resume,
     record_ci_pending_handoff,
 )
@@ -174,6 +175,100 @@ def test_resume_deduplicates_stale_failed_rerun_checks() -> None:
     assert plan["blocked_reasons"] == []
     check_names = [item["name"] for item in plan["closure_plan_candidate"]["checks"]]
     assert check_names == ["pr-contract", "Unit tests (not pg)"]
+    assert plan["closure_plan_candidate"]["checks"][0]["conclusion"] == "success"
+
+
+def test_plan_ci_handoff_resume_does_not_mask_running_check_with_skipped_duplicate() -> None:
+    handoff = build_ci_pending_handoff(
+        issue_number=5196,
+        pr_number=5171,
+        head_sha="abc123",
+        local_validation=["pytest -q tests/builderops/test_ci_handoff_state.py"],
+        review_state="review-comments-clear",
+        next_closure_action="wait for CI",
+    )
+
+    checks = [
+        {
+            "id": 1,
+            "name": "pr-contract",
+            "status": "in_progress",
+            "started_at": "2026-08-30T01:00:00Z",
+        },
+        {
+            "id": 2,
+            "name": "pr-contract",
+            "status": "completed",
+            "conclusion": "skipped",
+            "started_at": "2026-08-30T01:05:00Z",
+        },
+        {
+            "id": 3,
+            "name": "Unit tests (not pg)",
+            "status": "completed",
+            "conclusion": "success",
+        },
+    ]
+
+    retained = latest_checks_by_name(checks)
+    assert retained[0]["status"] == "in_progress"
+
+    plan = plan_ci_handoff_resume(
+        handoff=handoff,
+        live_pr={"number": 5171, "headRefOid": "abc123"},
+        checks=checks,
+    )
+
+    assert plan["blocked"] is True
+    assert plan["blocked_reasons"] == ["ci-not-terminal"]
+    assert plan["closure_plan_candidate"] is None
+
+
+def test_latest_checks_by_name_prefers_latest_executed_run() -> None:
+    handoff = build_ci_pending_handoff(
+        issue_number=5196,
+        pr_number=5171,
+        head_sha="abc123",
+        local_validation=["pytest -q tests/builderops/test_ci_handoff_state.py"],
+        review_state="review-comments-clear",
+        next_closure_action="merge after green CI",
+    )
+
+    plan = plan_ci_handoff_resume(
+        handoff=handoff,
+        live_pr={"number": 5171, "headRefOid": "abc123"},
+        checks=[
+            {
+                "id": 1,
+                "name": "pr-contract",
+                "status": "completed",
+                "conclusion": "failure",
+                "started_at": "2026-08-30T01:00:00Z",
+            },
+            {
+                "id": 2,
+                "name": "pr-contract",
+                "status": "completed",
+                "conclusion": "success",
+                "started_at": "2026-08-30T01:05:00Z",
+            },
+            {
+                "id": 3,
+                "name": "pr-contract",
+                "status": "completed",
+                "conclusion": "skipped",
+                "started_at": "2026-08-30T01:10:00Z",
+            },
+            {
+                "id": 4,
+                "name": "Unit tests (not pg)",
+                "status": "completed",
+                "conclusion": "success",
+            },
+        ],
+    )
+
+    assert plan["ok"] is True
     assert plan["closure_plan_candidate"]["checks"][0]["conclusion"] == "success"
 
 
