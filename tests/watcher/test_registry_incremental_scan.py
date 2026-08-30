@@ -538,8 +538,42 @@ def test_scan_root_resolution_failure_is_durable_and_identity_is_safe(
         vault_root=vault,
         scan_roots=roots,
         scope_glob=cfg.scope_glob,
+        preserve_generation_error=True,
     )
     assert state.scan_in_progress is True
+    assert state.scan_generation_had_error is True
+
+
+def test_resumed_scan_stack_revalidates_changed_boundary(
+    tmp_path: Path,
+) -> None:
+    cfg, spec, vault = _make_cfg(tmp_path)
+    notes = vault / "notes"
+    notes.mkdir()
+    outside = tmp_path / "outside"
+    _write_note(outside, "secret.md", body="must not be traversed")
+    state = WatcherState()
+    roots = registry._normalized_scan_roots(vault, [vault], state=state)
+    identity = registry._scan_identity(vault, roots, spec.scope_glob)
+    state.scan_in_progress = True
+    state.scan_generation = 1
+    state.scan_identity = identity
+    state.scan_stack = [{"dir": "notes", "after": ""}]
+    notes.rmdir()
+    notes.symlink_to(outside, target_is_directory=True)
+
+    summary = registry._run_spec_tick(
+        cfg,
+        spec,
+        state,
+        now=1_700_009_100.0,
+        states={spec.name: state},
+        handled_settings_sources=set(),
+    )
+
+    assert summary["observation_status"] == "degraded"
+    assert state.scan_generation_had_error is True
+    assert state.file_entry("notes/secret.md") is None
 
 
 def test_observation_sidecar_is_applied_before_checkpoint_payload(
@@ -591,3 +625,30 @@ def test_registry_writer_lock_rejects_concurrent_entrypoint(
         with pytest.raises(RuntimeError, match="writer already active"):
             with registry._registry_writer_lock(state_dir):
                 pass
+
+
+def test_registry_writer_decorator_reuses_locked_config_snapshot(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cfg, _spec, _vault = _make_cfg(tmp_path)
+    loads: list[Path] = []
+
+    def load_config(path: Path) -> registry.RegistryConfig:
+        loads.append(path)
+        return cfg
+
+    monkeypatch.setattr(registry, "load_registry_config", load_config)
+    observed: list[registry.RegistryConfig | None] = []
+
+    @registry._single_registry_writer
+    def entrypoint(
+        _config_path: Path,
+        *,
+        _loaded_config: registry.RegistryConfig | None = None,
+    ) -> None:
+        observed.append(_loaded_config)
+
+    entrypoint(tmp_path / "watchers.yaml")
+
+    assert len(loads) == 1
+    assert observed == [cfg]
