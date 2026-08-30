@@ -1574,6 +1574,11 @@ class ModelInquiryService:
                 or max_rounds > 20
             ):
                 raise BuilderOpsValidationError("max-round terminal has invalid bound")
+            expected_roles = (
+                ("synthesis", "verification")
+                if acceptance_mode == "single_target"
+                else ("fable", "gpt_codex")
+            )
             review_pairs = {
                 (turn.get("round_index"), turn.get("role"))
                 for turn in turns
@@ -1582,7 +1587,7 @@ class ModelInquiryService:
             expected_pairs = {
                 (round_index, role)
                 for round_index in range(max_rounds)
-                for role in ("fable", "gpt_codex")
+                for role in expected_roles
             }
             draft_roles = {
                 turn.get("role") for turn in turns if turn.get("phase") == "draft"
@@ -1599,13 +1604,13 @@ class ModelInquiryService:
                 )
                 accepted_groups.setdefault(key, set()).add(str(turn["role"]))
             proven_consensus = any(
-                roles == {"fable", "gpt_codex"} for roles in accepted_groups.values()
+                roles == set(expected_roles) for roles in accepted_groups.values()
             )
             if (
                 review_pairs != expected_pairs
-                or draft_roles != {"fable", "gpt_codex"}
-                or len(review_turns) != 2 * max_rounds
-                or len(draft_turns) != 2
+                or draft_roles != set(expected_roles)
+                or len(review_turns) != len(expected_roles) * max_rounds
+                or len(draft_turns) != len(expected_roles)
                 or proven_consensus
             ):
                 raise BuilderOpsValidationError("max-round terminal has incomplete review graph")
