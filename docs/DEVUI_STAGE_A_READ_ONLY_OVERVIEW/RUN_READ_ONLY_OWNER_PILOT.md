@@ -45,16 +45,18 @@ deployment receipts supply them.
 
 ## Scope
 
-- Run the three-zone owner walkthrough against the receipt-sourced production deployment: Compose
-  project `pkm-prod`, `PKM_ENVIRONMENT=prod`, and the Midgård prod vault. The current promotion ref
-  is `main`; `stable` is dormant. This task does not promote, deploy, restart, or change either ref.
+- Run the three-zone owner walkthrough against the receipt-sourced VM-102 `devui_projection`
+  service/project and its governed external read dependencies. Do not use a Product Runtime
+  `pkm-*` project or vault as VM-102 deployment evidence. The current promotion ref is `main`;
+  `stable` is dormant. This task does not promote, deploy, restart, or change either ref.
 - Obtain `M` and the exact deployed URL only from the #4748 and deployment receipts. Require SHA
   equality across the CI/review/deploy receipt, gateway marker at `127.0.0.1:8113`, FastAPI
   `/version`, and `/api/health.version` before the journey begins. Port `18000` is diagnostics only.
 - Use the deterministic #4748 matrix as the source of hostile/empty/degraded/error proof. A
-  `pkm-test` supplemental state is allowed only after its data class, namespace, setup, readback,
-  teardown, and absence of foreign rows are proven disposable and isolated; `pkm-prod` is naturally
-  observed and strictly read-only.
+  `pkm-test` supplemental state is allowed only as a separately authorized disposable evidence
+  source, after its data class, namespace, setup, readback, teardown, and absence of foreign rows
+  are proven disposable and isolated; it is never VM-102 deployment identity. The governed external
+  read dependencies are observed strictly read-only.
 - Record answers, evidence path, source conditions, reconstruction steps, Playwright trace,
   screenshots, checksums, manifest, and disposition in the final structured pilot ledger.
 - Return discovered defects/gaps to their owning blocked contract without implementing repairs.
