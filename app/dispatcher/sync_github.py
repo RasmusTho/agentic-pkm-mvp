@@ -368,7 +368,10 @@ def normalize_github_issue(
     # GraphQL-shaped payloads carry the browser URL as ``url``.
     html_url = payload.get("html_url") or payload.get("url") or None
 
-    comments = payload.get("comments") if isinstance(payload.get("comments"), list) else []
+    comments: list[object] = []
+    comments_payload = payload.get("comments")
+    if isinstance(comments_payload, list):
+        comments.extend(comments_payload)
     blocker_verdict, _ = receipt_for_context(
         labels, comments, open_issue=str(payload.get("state", "open")).lower() == "open"
     )
