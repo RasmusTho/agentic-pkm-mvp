@@ -87,11 +87,23 @@ def _heartbeat_status(
     if binding_blocked:
         ok = False
     paused_value = bool(raw.get("paused", False))
+    watcher_degraded = name == "watcher" and (
+        reported_status == "degraded" or paused_value
+    )
+    if watcher_degraded:
+        ok = False
+    observation_status = (
+        reported_status
+        if name == "watcher" and reported_status in {"healthy-idle", "catch-up", "degraded"}
+        else None
+    )
     payload: dict[str, Any] = {
         "ok": ok,
         "detail": (
             f"{name} blocked by pending binding-incompatible outbox rows"
             if binding_blocked
+            else f"{name} degraded (reported={reported_status or 'unknown'}, paused={paused_value})"
+            if watcher_degraded
             else f"{name} running (fresh {freshness:.1f}s, paused={paused_value})"
             if ok
             else f"{name} stale (last seen {freshness:.1f}s ago)"
@@ -102,6 +114,10 @@ def _heartbeat_status(
         "status": (
             "blocked_pending_mvr06"
             if binding_blocked
+            else "degraded"
+            if watcher_degraded
+            else observation_status
+            if ok and observation_status is not None
             else "ok"
             if ok
             else "stale"

@@ -64,9 +64,11 @@ def test_required_db_intent_reaches_both_watcher_producers(
         with pytest.raises(RuntimeError, match="required watcher DB write failed"):
             call()
         assert state.enqueue_failures_total == 1
+        assert not (tmp_path / "outbox.jsonl").exists()
     else:
         assert call()
         assert state.enqueue_failures_total == 0
+        assert len((tmp_path / "outbox.jsonl").read_text(encoding="utf-8").splitlines()) == 1
 
     assert observed == [True]
 

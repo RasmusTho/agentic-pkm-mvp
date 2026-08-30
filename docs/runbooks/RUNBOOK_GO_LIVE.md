@@ -62,7 +62,7 @@ Note: `/api/health` `ok`/`required_ok` count only **required** checks (`_checks_
 
 ## First index / bootstrap ingest
 
-Use `scripts/start_full_system.sh` to bring the full stack up, check that `/app/vault` is mounted inside the api container, and perform the deterministic baseline ingest when the store is empty. Watchers run incrementally and do not sweep the whole vault, so this script explicitly drives the first job, runs the bootstrap `vault-alpha-ingest`, and verifies `/search` plus `/api/ask` before handing off to the live watcher. Re-run it only when you need a fresh baseline, then rely on watcher/worker increments for day-to-day updates.
+Use `scripts/start_full_system.sh` to bring the full stack up, check that `/app/vault` is mounted inside the api container, and perform the deterministic baseline ingest when the store is empty. The registry watcher observes the whole configured scope through bounded, resumable scan generations; it may report `catch-up` over multiple ticks and is not the deterministic first-index completion gate. The script therefore explicitly drives the first job, runs the bootstrap `vault-alpha-ingest`, and verifies `/search` plus `/api/ask` before handing off to the live watcher. Re-run it only when you need a fresh baseline, then rely on watcher/worker observation and delivery for day-to-day updates. During handoff, treat a fresh `healthy-idle` watcher as drained, a fresh `catch-up` watcher as healthy but pending, and `degraded` as an error/pause/no-progress condition to investigate.
 
 ## Stage 0 (Ollama embeddings: current default)
 In the v5.5 baseline, embeddings default to Ollama via `app/llm/embeddings.py`:

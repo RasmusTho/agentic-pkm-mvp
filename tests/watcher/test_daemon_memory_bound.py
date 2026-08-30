@@ -200,7 +200,7 @@ def test_scoped_daemon_updates_heartbeat(tmp_path: Path, monkeypatch: pytest.Mon
     assert heartbeat_calls == [100.0, 101.0]
     heartbeat = json.loads(cfg.heartbeat_path.read_text(encoding="utf-8"))
     assert heartbeat["ts"] == 101.0
-    assert heartbeat["status"] == "running"
+    assert heartbeat["status"] == "healthy-idle"
     assert heartbeat["watchers"][spec.name]["ticks_total"] == 2
 
 
