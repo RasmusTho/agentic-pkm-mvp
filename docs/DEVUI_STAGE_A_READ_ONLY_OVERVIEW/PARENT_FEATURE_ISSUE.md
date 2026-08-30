@@ -85,7 +85,7 @@ it supplies neither a page nor a visual destination.
 - No technical label/state, provider metadata, or terminal delivery fact substitutes for explicit
   canonical category or receipt-backed `ready_to_try` evidence.
 - ARO-08 remains serially blocked after #4748 until the repaired source contract, Demerzel
-  authentication/access, #4747 server-supplied Focus selectors, and receipt-sourced deployed
+  authentication/access, #4836 server-supplied Focus selectors, and receipt-sourced deployed
   URL/SHA are available. If the pilot uses a `pkm-test` supplement, its disposable-state
   classification is also required; the production-only path has no supplemental-state
   prerequisite. It never invents a URL or deployed SHA.
@@ -153,7 +153,7 @@ it supplies neither a page nor a visual destination.
 | ARO-05 — Validate Connected Overview and Focus Yggdrasil Evidence | [#4746](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4746) | closed / accepted constrained reuse | Accepted exact `yggdrasil-constrained-reuse.v1` evidence for the merged #4836 candidate |
 | ARO-06 — Render Read-Only Overview Shell | [#4747](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4747) | closed / superseded | Delivered through the canonical connected shell #4836 / PR #5157; no separate successor is required |
 | ARO-07 — Prove Browser and Accessibility | [#4748](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4748) | closed / exact-main proof | Authenticated #4833 exact five-node receipt at final post-merge `main` `M=c7c57300f2ec241778061078e7ad585454f0b880` |
-| ARO-08 — Run Read-Only Owner Pilot | [#4749](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4749) | `agent:blocked` | serially after #4748 and #4857: boolean-only #4835 prerequisite, Demerzel prod access, acknowledged promotion plan, receipt-sourced deployed URL/SHA, and conditional disposable-state classification |
+| ARO-08 — Run Read-Only Owner Pilot | [#4749](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4749) | `agent:blocked` | serially after #4748 and #4857: boolean-only #4835 prerequisite, Demerzel prod access, acknowledged promotion plan, receipt-sourced deployed URL/SHA, and conditional disposable-state classification; owner evidence acknowledgement is pilot output |
 
 <!-- builderops:epic-delivery-ledger v1 epic=#4741 -->
 Ledger authority: coordination evidence only; live GitHub Issues/PRs/CI win.
@@ -167,7 +167,7 @@ Ledger authority: coordination evidence only; live GitHub Issues/PRs/CI win.
 | #4746 ARO-05 | closed / accepted constrained reuse | #5157 / #4746 receipt | candidate head `47e56110adbdae30548cd313a66b4e2d26311f7e`; merge `b79d8778b8d49233bad22335d393efa12712e040` | accepted `yggdrasil-constrained-reuse.v1` receipt | design/provenance gate complete | preserve the accepted receipt; #4748 remains a separate final-main proof |
 | #4747 ARO-06 | closed / superseded | #5157 | candidate head `47e56110adbdae30548cd313a66b4e2d26311f7e`; merge `b79d8778b8d49233bad22335d393efa12712e040` | merged shell receipt | shell delivered in the canonical connected path | preserve the closed predecessor as superseded history |
 | #4748 ARO-07 | closed / exact-main proof | #4833 receipt; closure comment on #4748 | final `M=c7c57300f2ec241778061078e7ad585454f0b880`; #4833 run `33304261671` | authenticated exact five-node `devui-stage-a-exact-sha-state-matrix.v1` receipt | browser/accessibility proof complete; no deployment claim | preserve proof-only boundary; #4749 owns production pilot |
-| #4749 ARO-08 | open / blocked | none | no pilot run | awaiting #4857, boolean-only #4835 prerequisite, deployment identity, promotion acknowledgement, and owner evidence | run production-only or conditionally supplemented pilot only after every applicable receipt; POST-PASS current-state writeback is separate |
+| #4749 ARO-08 | open / blocked | none | no pilot run | awaiting #4857, boolean-only #4835 prerequisite, deployment identity, and promotion acknowledgement | run production-only or conditionally supplemented pilot only after every applicable receipt; owner evidence acknowledgement is produced on PASS; POST-PASS current-state writeback is separate |
 <!-- /builderops:epic-delivery-ledger -->
 
 ## Verification Path
