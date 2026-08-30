@@ -283,12 +283,11 @@ filesystem exposure of the deployment-authority one-shot and make mount topology
 host producer's already-fenced proof, the authority for this check. It is rejected for this repair;
 the one-shot's intentionally small mount set remains unchanged.
 
-**Current-state boundary:** this is a recorded design decision, not a claim that the repair has
-shipped. The current implementation still serializes host-namespace owner paths and contains a
-container-side materialization check, so the deployment remains blocked at this boundary until the
-bounded implementation contract in #5235 is delivered and verified. #5235 owns only the receipt
-handoff repair; the future Mac Vault Service, multi-vault Settings control plane, and write queue
-remain separate architecture-study work.
+**Current-state boundary:** the bounded receipt handoff repair shipped in PR #5244 for #5235.
+The host producer now emits the bound proof, and the deployment consumer validates that proof
+without materializing host-only roots inside `instance-state-init`; invalid or unbound evidence
+still fails closed. #5235 owns only this receipt handoff repair; the future Mac Vault Service,
+multi-vault Settings control plane, and write queue remain separate architecture-study work.
 
 **Traceability:** #4539 owns this decision and its docs writeback; #5235 is the bounded executable
 implementation issue for the selected host-side receipt approach.

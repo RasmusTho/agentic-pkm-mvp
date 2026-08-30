@@ -186,11 +186,10 @@ re-run `root.is_dir()` inside `instance-state-init`.
 
 This decision keeps the one-shot's small mount set intact. The rejected Option A—adding broad
 `/Users` and `/Volumes` visibility so the container can re-check host paths—would widen deployment
-authority filesystem exposure and is not part of the selected repair. The current code still has the
-old host/container validation mismatch, so this paragraph records the chosen contract rather than
-shipped completion; bounded implementation and regression proof are tracked in #5235. Failure
-remains fail-closed: missing, changed, incomplete, forged, or unbound host evidence cannot release
-the fence or mutate registry/ledger state.
+authority filesystem exposure and is not part of the selected repair. The bounded receipt handoff
+and regression proof shipped in PR #5244 for #5235; this does not claim a live three-channel host
+deployment. Failure remains fail-closed: missing, changed, incomplete, forged, or unbound host
+evidence cannot release the fence or mutate registry/ledger state.
 
 MVR-01C cuts registry authority over only by committing one complete rollback floor into the same
 locked registry generation. That generation names one validated scalar rollback binding, refreshes
