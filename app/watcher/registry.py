@@ -1419,11 +1419,8 @@ def _collect_changed_entries(
     changed_entries: list[ChangedEntry] = []
     scanned_paths: list[str] = []
     errors_before_root_normalization = state.errors
-    scan_was_in_progress = state.scan_in_progress
     roots = _normalized_scan_roots(cfg.vault_path, scan_roots, state=state)
-    preflight_generation_error = (
-        not scan_was_in_progress and state.errors > errors_before_root_normalization
-    )
+    preflight_generation_error = state.errors > errors_before_root_normalization
     _begin_or_resume_scan(
         state,
         vault_root=cfg.vault_path,

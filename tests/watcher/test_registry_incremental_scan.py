@@ -546,6 +546,43 @@ def test_scan_root_resolution_failure_is_durable_and_identity_is_safe(
     assert state.scan_generation_had_error is True
 
 
+def test_active_generation_keeps_root_resolution_failure_when_identity_resets(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cfg, spec, vault = _make_cfg(tmp_path)
+    root = vault / "notes"
+    root.mkdir()
+    state = WatcherState(
+        scan_in_progress=True,
+        scan_generation=3,
+        scan_identity=registry._scan_identity(vault, [root], spec.scope_glob),
+        scan_stack=[{"dir": "notes", "after": ""}],
+    )
+    original_resolve = Path.resolve
+
+    def fail_root_resolve(path: Path, *args: object, **kwargs: object) -> Path:
+        if path == root:
+            raise OSError("root temporarily unavailable")
+        return original_resolve(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "resolve", fail_root_resolve)
+    summary: dict[str, object] = {"scanned_files": 0, "bytes_read": 0}
+
+    registry._collect_changed_entries(
+        cfg,
+        spec,
+        state,
+        summary,
+        scan_roots=[root],
+        states={spec.name: state},
+        handled_settings_sources=set(),
+    )
+
+    assert state.scan_generation == 4
+    assert state.scan_generation_had_error is True
+    assert summary["scan_generation_had_error"] is True
+
+
 def test_selected_vault_marker_is_not_treated_as_nested_boundary(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
