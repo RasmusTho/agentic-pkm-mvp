@@ -1261,6 +1261,7 @@ class ModelInquiryService:
                     directory.name,
                     path,
                     receipt,
+                    manifest,
                     promotion_intent,
                 )
             elif receipt.get("event_type") == "inquiry_delivery_linked":
@@ -2136,6 +2137,7 @@ def _validate_promotion_terminal_receipt(
     inquiry_id: str,
     path: Path,
     receipt: Mapping[str, Any],
+    manifest: Mapping[str, Any] | None,
     intent: Mapping[str, Any] | None,
 ) -> None:
     if intent is None:
@@ -2148,10 +2150,6 @@ def _validate_promotion_terminal_receipt(
         or receipt.get("idempotency_key") != f"inquiry:{inquiry_id}:promotion:github_issue"
         or receipt.get("action") != "promoted"
         or receipt.get("promotion_intent_artifact_hash") != intent.get("artifact_hash")
-        or receipt.get("readiness_artifact_hash")
-        != intent.get("readiness_artifact_hash")
-        or receipt.get("synthesis_artifact_hash")
-        != intent.get("synthesis_artifact_hash")
         or receipt.get("promotion_marker") != intent.get("promotion_marker")
         or receipt.get("source_refs") != intent.get("source_refs")
         or isinstance(issue_number, bool)
@@ -2177,6 +2175,22 @@ def _validate_promotion_terminal_receipt(
         )
     ):
         raise BuilderOpsValidationError("invalid inquiry promotion terminal receipt")
+    if isinstance(manifest, Mapping) and manifest.get("schema") == INQUIRY_SCHEMA:
+        if (
+            receipt.get("readiness_artifact_hash")
+            != intent.get("readiness_artifact_hash")
+            or receipt.get("synthesis_artifact_hash")
+            != intent.get("synthesis_artifact_hash")
+        ):
+            raise BuilderOpsValidationError("invalid inquiry promotion terminal receipt")
+    else:
+        # Pre-v2 promotion receipts are immutable compatibility data and did
+        # not carry the v2 readiness/synthesis linkage. Validate those fields
+        # when an old record happens to contain them, but do not strand a
+        # legacy receipt merely because the fields were added later.
+        for field in ("readiness_artifact_hash", "synthesis_artifact_hash"):
+            if field in receipt and receipt.get(field) != intent.get(field):
+                raise BuilderOpsValidationError("invalid inquiry promotion terminal receipt")
     if "run_terminal_receipt_hash" in intent and (
         receipt.get("run_terminal_receipt_hash")
         != intent.get("run_terminal_receipt_hash")

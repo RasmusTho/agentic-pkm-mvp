@@ -83,6 +83,9 @@ The repository-owned installer and host launchers remain governed by their exist
 launcher supplies the resolved model to `scripts/model_inquiry_subscription_adapter.py`; the bridge
 accepts neutral perspective names and has no role-specific provider/model branch. Host credentials,
 subscription-session state, and launcher paths stay outside Git.
+The retained provider-API command names `fable-model-inquiry-role` and
+`codex-model-inquiry-role` are compatibility aliases only; the installed adapter maps them to the
+neutral `synthesis` and `verification` perspectives before loading the shared resolved target.
 
 ## Concretely
 

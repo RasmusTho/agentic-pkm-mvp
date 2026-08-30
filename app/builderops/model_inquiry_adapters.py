@@ -488,12 +488,12 @@ def load_adapter_descriptors(
     source = dict(os.environ if env is None else env)
     if load_inquiry_intent(source) is None:
         return {
-            role: {
-                "role": role,
+            perspective: {
+                "role": perspective,
                 "available": False,
                 "reason": "inquiry intent not configured",
             }
-            for role in LEGACY_ROLES
+            for perspective in PERSPECTIVE_NAMES
         }
     try:
         selected, config, resolution = resolve_inquiry_target(source, resolver=resolver)

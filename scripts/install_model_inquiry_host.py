@@ -26,7 +26,7 @@ TRUSTED_REPO_ROOT = Path(__file__).resolve().parents[1]
 # subscription launcher is deliberately outside this installer and retains the
 # distinct ``yggdrasil-model-inquiry`` identity under ADR-0064's owner ruling.
 VERSIONED_ADAPTER_NAME = "model_inquiry_role_adapter.py"
-VERSIONED_ADAPTER_SHA256 = "51510b1e8095f322ec410cf073bdb534b5e8a690e18cfa34c82eff91222aae77"
+VERSIONED_ADAPTER_SHA256 = "bb2d56176387d3be23f4453ff2ce779d879a9f53659c7b52d7da62517aa735db"
 VERSIONED_LAUNCHER_NAME = "start_model_inquiry.py"
 VERSIONED_LAUNCHER_SHA256 = "8efbbc1a35462334d4a6895660385ea087b2c5253f19541b4434632ce9b703e8"
 FIXED_LAUNCHER_NAME = "yggdrasil-model-inquiry-provider-api"

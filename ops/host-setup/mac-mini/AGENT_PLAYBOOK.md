@@ -42,8 +42,10 @@ credential source or fallback.
 The repository also owns the distinct dormant provider-API launcher
 `yggdrasil-model-inquiry-provider-api` plus two stable provider-API role commands:
 `fable-model-inquiry-role` and `codex-model-inquiry-role`. They preserve the
-declared-credential mechanism for any future metered path, but they are not the
-current operational auth and do not replace or retire the sanctioned
+declared-credential mechanism for any future metered path. The two role command
+names are compatibility aliases for the neutral `synthesis` and `verification`
+perspectives; they do not select a provider or model. They are not the current
+operational auth and do not replace or retire the sanctioned
 subscription bridge or its `yggdrasil-model-inquiry` launcher. Install or verify
 these owner-only wrappers only to validate that versioned mechanism against the
 current repository checkout:

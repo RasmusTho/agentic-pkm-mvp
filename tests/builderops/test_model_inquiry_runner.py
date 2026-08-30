@@ -331,6 +331,18 @@ def test_dry_run_performs_no_adapter_call_and_writes_nothing(
         inquiry_id="inq_runner_single_dry",
         source_refs=[{"ref_type": "github_issue", "ref": "#5203"}],
     )
+    unconfigured_single_target = ModelInquiryRunner(single_service, env={}).run(
+        "inq_runner_single_dry", max_rounds=2, dry_run=True
+    )
+    assert unconfigured_single_target["unavailable_roles"] == [
+        "synthesis",
+        "verification",
+    ]
+    assert set(unconfigured_single_target["adapter_descriptors"]) == {
+        "synthesis",
+        "verification",
+    }
+
     provisioned = ModelInquiryRunner(
         single_service, env=provisioned_env(tmp_path / "secrets")
     ).run("inq_runner_single_dry", max_rounds=2, dry_run=True)

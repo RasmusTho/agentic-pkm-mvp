@@ -1124,20 +1124,21 @@ def test_headless_entrypoints_do_not_require_subscription_session(
     intent = (
         REPO_ROOT / "config" / "builderops" / "model_inquiry_role_intent.example.json"
     ).read_text(encoding="utf-8")
-    executed = subprocess.run(
-        [str(bin_dir / "fable-model-inquiry-role")],
-        input=json.dumps({"phase": "draft", "system_prompt": "x"}),
-        env={
-            "PATH": str(bin_dir),
-            "HOME": str(tmp_path),
-            "BUILDEROPS_INQUIRY_ROLE_INTENT_JSON": intent,
-        },
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    for role_entrypoint in ("fable-model-inquiry-role", "codex-model-inquiry-role"):
+        executed = subprocess.run(
+            [str(bin_dir / role_entrypoint)],
+            input=json.dumps({"phase": "draft", "system_prompt": "x"}),
+            env={
+                "PATH": str(bin_dir),
+                "HOME": str(tmp_path),
+                "BUILDEROPS_INQUIRY_ROLE_INTENT_JSON": intent,
+            },
+            capture_output=True,
+            text=True,
+            check=False,
+        )
 
-    assert executed.returncode == 78, executed.stderr
-    assert "openai.api-key" in executed.stderr
-    assert "ANTHROPIC_API_KEY" not in executed.stderr
-    assert executed.stdout == ""
+        assert executed.returncode == 78, executed.stderr
+        assert "openai.api-key" in executed.stderr
+        assert "ANTHROPIC_API_KEY" not in executed.stderr
+        assert executed.stdout == ""

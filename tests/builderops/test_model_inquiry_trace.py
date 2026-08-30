@@ -193,6 +193,71 @@ def test_trace_includes_delivery_refs(tmp_path: Path) -> None:
         service.trace("inq_test_delivery", include_delivery=True)
 
 
+def test_trace_accepts_legacy_promotion_receipt_without_v2_linkage(tmp_path: Path) -> None:
+    """Pre-v2 promotion receipts remain readable after v2 linkage was added."""
+    vault = tmp_path / "shared-vault-legacy-promotion"
+    vault.mkdir()
+    service = ModelInquiryService(vault)
+    refs = [{"ref_type": "github_issue", "ref": "#3399"}]
+    service.start(
+        question="Read a legacy promoted inquiry",
+        workflow="fable-gpt-architecture",
+        inquiry_id="inq_test_legacy_promotion",
+        source_refs=refs,
+    )
+    service.commit_synthesis(
+        "inq_test_legacy_promotion",
+        content="Legacy issue proposal",
+        input_artifact_refs=["question"],
+        source_refs=refs,
+    )
+    service.commit_readiness(
+        "inq_test_legacy_promotion",
+        outcome="issue_ready",
+        rationale="Legacy promotion evidence is complete.",
+        input_artifact_refs=["synthesis"],
+        source_refs=refs,
+    )
+    service.commit_readiness_receipt("inq_test_legacy_promotion", source_refs=refs)
+    marker = f"<!-- builderops-inquiry-promotion:inq_test_legacy_promotion:{'b' * 64} -->"
+    intent = service.commit_promotion_intent(
+        "inq_test_legacy_promotion",
+        repository="example/repo",
+        marker=marker,
+        title="Legacy delivery",
+        issue_body=f"Canonical body\n{marker}",
+        source_refs=refs,
+    )
+    service.commit_promotion_receipt(
+        "inq_test_legacy_promotion",
+        intent=intent,
+        issue_number=702,
+        issue_url="https://github.com/example/repo/issues/702",
+        issue_created_at="2026-07-10T12:00:00Z",
+        source_refs=refs,
+    )
+
+    promotion_path = (
+        vault
+        / "model-inquiries"
+        / "inq_test_legacy_promotion"
+        / "receipts"
+        / "promotion-github-issue.json"
+    )
+    legacy_receipt = json.loads(promotion_path.read_text(encoding="utf-8"))
+    legacy_receipt.pop("readiness_artifact_hash")
+    legacy_receipt.pop("synthesis_artifact_hash")
+    legacy_receipt["artifact_hash"] = canonical_hash(
+        {key: value for key, value in legacy_receipt.items() if key != "artifact_hash"}
+    )
+    promotion_path.write_text(json.dumps(legacy_receipt), encoding="utf-8")
+
+    trace = service.trace("inq_test_legacy_promotion", include_delivery=True)
+
+    assert trace["inquiry"]["schema"] == "builderops.model-inquiry.v1"
+    assert trace["promotion_intent"] == intent
+
+
 def test_trace_rejects_tampered_derived_artifact(tmp_path: Path) -> None:
     vault = tmp_path / "shared-vault"
     vault.mkdir()

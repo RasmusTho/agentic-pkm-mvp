@@ -84,12 +84,14 @@ class ModelInquiryRunner:
                 round_index=0,
                 input_refs=["question"],
                 reviewed_refs=[],
-                adapter_identity=descriptors[role],
+                adapter_identity=_descriptor_for_role(descriptors, role),
                 context_hash=context["context_hash"],
             )
             for role in roles
         ]
-        unavailable = [role for role in roles if not descriptors[role].get("available")]
+        unavailable = [
+            role for role in roles if not _descriptor_for_role(descriptors, role).get("available")
+        ]
         planned_reviews = []
         for round_index in range(max_rounds):
             for role in roles:
@@ -100,7 +102,7 @@ class ModelInquiryRunner:
                     "phase": "review",
                     "round_index": round_index,
                     "context_hash": context["context_hash"],
-                    "adapter_identity": descriptors[role],
+                    "adapter_identity": _descriptor_for_role(descriptors, role),
                     "system_prompt_hash": canonical_hash(model_turn_system_prompt(role)),
                     "input_basis": "latest persisted role artifacts",
                 }
@@ -755,6 +757,22 @@ def _single_target_mode(trace: Mapping[str, Any]) -> bool:
 
 def _inquiry_roles(trace: Mapping[str, Any]) -> tuple[str, ...]:
     return PERSPECTIVES if _single_target_mode(trace) else LEGACY_ROLES
+
+
+def _descriptor_for_role(
+    descriptors: Mapping[str, Mapping[str, Any]],
+    role: str,
+) -> Mapping[str, Any]:
+    descriptor = descriptors.get(role)
+    if descriptor is not None:
+        return descriptor
+    # A legacy inquiry can still be planned for read-only compatibility while
+    # the provider-neutral descriptor surface only exposes current perspectives.
+    return {
+        "role": role,
+        "available": False,
+        "reason": "inquiry intent not configured",
+    }
 
 
 def _terminal_run_receipt(trace: Mapping[str, Any]) -> dict[str, Any] | None:
