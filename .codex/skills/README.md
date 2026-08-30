@@ -85,6 +85,11 @@ Do not rely on a human remembering where BuilderOps material belongs.
 
 ## Skill routing
 
+This section is the complete discoverability index for repo-local skills. Every immediate
+`.codex/skills/<name>/SKILL.md` directory must appear here as an exact bullet entry;
+`python3 scripts/lint_skills_consistency.py` enforces directory-to-index completeness. The root
+`AGENTS.md` links here instead of duplicating a second, inevitably partial skill list.
+
 Shared contracts: `.codex/skills/_shared/` holds the canonical contract files that skills reference
 instead of carrying inline copies — `ISSUE_CONTRACT.md` (Issue section list + `Verify:` rule),
 `LABEL_TAXONOMY.md` (canonical labels + narrow `lane:governance` and
@@ -311,9 +316,10 @@ lease check, then keep the rest of execution local and deterministic.
 Capability routing across the whole chain follows `AGENTS.md :: Total Cost of Development`: each
 stage picks the cheapest *acceptable* capability (workflow/skill + model + reasoning effort + context
 discipline + tools + verification + review gate) for the lowest expected total cost per accepted
-delivery. Choose model and reasoning effort actively. Context/input-token accounting, the
+delivery. Choose model and reasoning effort actively. The detailed decision rule and block schemas
+live in `docs/development/TOTAL_COST_OF_DEVELOPMENT.md`; context/input-token accounting, the
 root-coordinator → issue-agent → optional issue-helper hierarchy, escalation/de-escalation triggers,
-and model/reasoning policy live once in `AGENTS.md`, not in each skill.
+and model/reasoning policy are not duplicated in each skill.
 
 The policy attaches to the stages that actually choose capability; it does not change the chain:
 

@@ -382,6 +382,15 @@ def test_lint_detects_seeded_defects(tmp_path: Path) -> None:
     assert any("label taxonomy block diverges" in e for e in errors), errors
 
 
+def test_lint_requires_klart_in_the_complete_routing_index(tmp_path: Path) -> None:
+    root = _seed_tree(tmp_path)
+    _write_skill(root / ".codex" / "skills", "klart")
+
+    errors = run_lint(root)
+
+    assert any("no entry for `klart`" in error for error in errors), errors
+
+
 def test_lint_detects_frontmatter_defects(tmp_path: Path) -> None:
     root = _seed_tree(tmp_path)
     skills_root = root / ".codex" / "skills"

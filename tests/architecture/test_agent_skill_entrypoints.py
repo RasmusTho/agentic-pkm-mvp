@@ -37,6 +37,14 @@ def test_canonical_agents_entrypoint_routes_to_repo_skill_index() -> None:
     assert "Known Defects registry Issue #4172" in text
 
 
+def test_canonical_agents_entrypoint_stays_within_active_instruction_budget() -> None:
+    text = _read("AGENTS.md")
+
+    assert len(text.splitlines()) <= 161
+    assert len(text.split()) <= 2_080
+    assert len(text) <= 15_500
+
+
 def test_builder_closeout_gate_contract_is_discoverable_and_fail_closed() -> None:
     agents = _read("AGENTS.md")
     skill_index = _read(".codex/skills/README.md")
