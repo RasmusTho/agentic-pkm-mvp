@@ -1977,6 +1977,26 @@ def _run_spec_tick(
         states=active_states,
         handled_settings_sources=handled_settings_sources,
     )
+    # A vault can be replaced while a long budgeted tick is running. Recheck
+    # the concrete identity immediately before deriving deletion candidates;
+    # a start-of-tick identity is not authority for pruning a different tree.
+    identity_errors_before_recheck = state.errors
+    recheck_roots = _normalized_scan_roots(
+        cfg.vault_path,
+        scan_roots,
+        state=state,
+    )
+    identity_after_scan = _scan_identity(
+        cfg.vault_path,
+        recheck_roots,
+        spec.scope_glob,
+        state=state,
+    )
+    if state.errors == identity_errors_before_recheck and state.scan_identity != identity_after_scan:
+        _record_scan_error(state)
+        summary["scan_identity_changed_during_tick"] = True
+    elif state.errors > identity_errors_before_recheck:
+        summary["scan_identity_recheck_failed"] = True
     scan_completed = not state.scan_in_progress
     scan_clean = (
         state.errors == errors_before and not state.scan_generation_had_error

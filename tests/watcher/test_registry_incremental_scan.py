@@ -630,6 +630,52 @@ def test_identity_failure_is_degraded_without_clearing_sidecar_observations(
     }
 
 
+def test_identity_invalidation_rolls_back_without_clearing_sidecar(
+    tmp_path: Path,
+) -> None:
+    observations = RegistryObservationStore(tmp_path / "observations.sqlite3")
+    observations.put("notes/old.md", {"hash": "old"}, generation=3)
+    state = WatcherState(
+        _observation_store=observations,
+        scan_identity="old-identity",
+        scan_in_progress=True,
+    )
+    checkpoint = state.checkpoint_observations()
+
+    state.reset_observations_for_new_identity()
+    assert state.observations_invalidated is True
+    assert observations.get("notes/old.md") == {"hash": "old"}
+    assert state.file_entry("notes/old.md") is None
+
+    state.restore_observations(checkpoint)
+    assert state.observations_invalidated is False
+    assert state.file_entry("notes/old.md") == {"hash": "old"}
+    assert observations.get("notes/old.md") == {"hash": "old"}
+
+
+def test_identity_replacement_during_tick_blocks_reconciliation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cfg, spec, vault = _make_cfg(tmp_path, max_files=10)
+    _write_note(vault, "notes/current.md", body="current")
+    identities = iter(("identity-at-start", "identity-after-scan"))
+    monkeypatch.setattr(registry, "_scan_identity", lambda *_args, **_kwargs: next(identities))
+    monkeypatch.setattr(registry, "_emit_watch_event", lambda **_: "trace-ok")
+    state = WatcherState()
+
+    summary = registry._run_spec_tick(
+        cfg,
+        spec,
+        state,
+        now=1_700_009_400.0,
+        states={spec.name: state},
+        handled_settings_sources=set(),
+    )
+
+    assert summary["scan_identity_changed_during_tick"] is True
+    assert summary["observation_status"] == "degraded"
+
+
 def test_selected_vault_marker_is_not_treated_as_nested_boundary(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

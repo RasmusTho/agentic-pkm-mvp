@@ -217,6 +217,7 @@ class WatcherState:
     scan_generation_had_error: bool = False
     observation_status: str = "healthy-idle"
     continuation_reason: str | None = None
+    observations_invalidated: bool = False
     _observation_store: RegistryObservationStore | None = field(
         default=None, repr=False, compare=False
     )
@@ -269,6 +270,7 @@ class WatcherState:
                 if data.get("continuation_reason")
                 else None
             ),
+            observations_invalidated=bool(data.get("observations_invalidated", False)),
         )
         observation_name = data.get("observation_store")
         if isinstance(observation_name, str) and observation_name:
@@ -293,15 +295,20 @@ class WatcherState:
 
     def save(self, path: Path) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
-        if self._observation_store is not None and (
-            self._pending_observations or self._pending_deletes
-        ):
-            self._observation_store.apply(
-                self._pending_observations,
-                self._pending_deletes,
-            )
-            self._pending_observations.clear()
-            self._pending_deletes.clear()
+        if self._observation_store is not None:
+            if self.observations_invalidated:
+                # Identity invalidation is deferred until this same durable
+                # save boundary. Delivery rollback can therefore restore the
+                # flag without needing an in-memory copy of the sidecar.
+                self._observation_store.clear()
+                self.observations_invalidated = False
+            if self._pending_observations or self._pending_deletes:
+                self._observation_store.apply(
+                    self._pending_observations,
+                    self._pending_deletes,
+                )
+                self._pending_observations.clear()
+                self._pending_deletes.clear()
         payload: dict[str, Any] = {
             "files": self.files if self._observation_store is None else {},
             "changed_detected": self.changed_detected,
@@ -330,6 +337,7 @@ class WatcherState:
             "scan_generation_had_error": self.scan_generation_had_error,
             "observation_status": self.observation_status,
             "continuation_reason": self.continuation_reason,
+            "observations_invalidated": self.observations_invalidated,
             "observation_store": (
                 self._observation_store.path.name
                 if self._observation_store is not None
@@ -352,28 +360,33 @@ class WatcherState:
 
     def checkpoint_observations(
         self,
-    ) -> tuple[dict[str, tuple[dict[str, Any], int]], set[str]]:
+    ) -> tuple[dict[str, tuple[dict[str, Any], int]], set[str], bool]:
         """Capture uncommitted observation changes for tick rollback."""
 
-        return deepcopy(self._pending_observations), set(self._pending_deletes)
+        return (
+            deepcopy(self._pending_observations),
+            set(self._pending_deletes),
+            self.observations_invalidated,
+        )
 
     def restore_observations(
         self,
-        checkpoint: tuple[dict[str, tuple[dict[str, Any], int]], set[str]],
+        checkpoint: tuple[dict[str, tuple[dict[str, Any], int]], set[str], bool],
     ) -> None:
         """Restore pending observations after a failed delivery transaction."""
 
-        pending_observations, pending_deletes = checkpoint
+        pending_observations, pending_deletes, observations_invalidated = checkpoint
         self._pending_observations = deepcopy(pending_observations)
         self._pending_deletes = set(pending_deletes)
+        self.observations_invalidated = observations_invalidated
 
     def reset_observations_for_new_identity(self) -> None:
-        """Discard observations belonging to a replaced vault/root identity."""
+        """Invalidate observations belonging to a replaced vault/root identity."""
 
         self._pending_observations.clear()
         self._pending_deletes.clear()
         if self._observation_store is not None:
-            self._observation_store.clear()
+            self.observations_invalidated = True
         else:
             self.files.clear()
 
@@ -384,12 +397,16 @@ class WatcherState:
             pending = self._pending_observations.get(rel_path)
             if pending is not None:
                 return dict(pending[0])
+            if self.observations_invalidated:
+                return None
             return self._observation_store.get(rel_path)
         entry = self.files.get(rel_path)
         return dict(entry) if entry is not None else None
 
     def file_paths(self) -> set[str]:
         if self._observation_store is not None:
+            if self.observations_invalidated:
+                return set(self._pending_observations) - self._pending_deletes
             return (
                 self._observation_store.paths()
                 | set(self._pending_observations)
@@ -482,6 +499,8 @@ class WatcherState:
 
     def paths_unseen_in_generation(self, scanned_paths: Iterable[str]) -> set[str]:
         if self._observation_store is not None:
+            if self.observations_invalidated:
+                return set()
             unseen = self._observation_store.paths_not_seen_in(self.scan_generation)
             for rel_path, (_entry, generation) in self._pending_observations.items():
                 if generation == self.scan_generation:
