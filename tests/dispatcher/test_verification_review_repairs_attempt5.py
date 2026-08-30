@@ -6,6 +6,8 @@ import zipfile
 
 import pytest
 
+from app.dispatcher.verification_api import BuilderOpsVerificationLedger
+from app.dispatcher.verification_agent_loop import VerificationAgentLoop
 from app.dispatcher.verification_consumer import (
     GhCliVerificationSource,
     VerificationConsumer,
@@ -22,7 +24,9 @@ from tests.dispatcher.test_verification_consumer import (
     artifact_request,
     green_checks,
     merged_pr,
+    _merge_comments,
 )
+from tests.dispatcher.builderops_verification_fakes import FakeBuilderOpsClient
 from tests.dispatcher.verification_helpers import HEAD, REPO, ledger, request
 
 
@@ -114,10 +118,19 @@ def _pending_delivered_run(
     state: VerificationDispatchLedger,
     *,
     receipt: dict[str, object] | None = None,
+    persist_launch_context: bool = True,
 ) -> tuple[str, dict[str, object]]:
     run = state.ingest(request())
     claimed = state.claim(run.run_id, "original-host")
     receipt = receipt or _delivered_receipt(REPAIRED_HEAD)
+    if persist_launch_context:
+        state.start(
+            run.run_id,
+            "original-host",
+            claimed.lease_id or "",
+            "01900000-0000-7000-8000-000000000050",
+            {"head_sha": HEAD},
+        )
     state.record_attempt(
         run.run_id,
         "verification",
@@ -147,7 +160,16 @@ def _pending_delivered_run(
 def test_pending_delivered_replay_rebinds_to_merged_receipt_head(tmp_path) -> None:
     state = ledger(tmp_path)
     run_id, _ = _pending_delivered_run(state)
-    truth = Truth(
+
+    class RunBoundTruth(Truth):
+        def pull_request_comments(self, repository, pr_number):
+            return _merge_comments(
+                self._last_pr,
+                repair_budget=state.repair_budget_projection(run_id),
+                run_id=run_id,
+            )
+
+    truth = RunBoundTruth(
         merged_pr(head={"ref": "branch", "sha": REPAIRED_HEAD}),
         green_checks(REPAIRED_HEAD),
     )
@@ -169,6 +191,82 @@ def test_pending_delivered_replay_rebinds_to_merged_receipt_head(tmp_path) -> No
     ]
     for attempt in state.attempts(run_id)[1:]:
         assert attempt["receipt"]["head_sha"] == REPAIRED_HEAD
+
+
+@pytest.mark.parametrize("backend", ("sqlite", "builderops"))
+def test_pending_delivered_repair_replay_rebuilds_authenticated_evidence(
+    tmp_path,
+    monkeypatch,
+    backend: str,
+) -> None:
+    state = (
+        BuilderOpsVerificationLedger(
+            FakeBuilderOpsClient(),
+            repository=REPO,
+        )
+        if backend == "builderops"
+        else ledger(tmp_path)
+    )
+    run_id, _ = _pending_delivered_run(state)
+
+    class RunBoundTruth(Truth):
+        def pull_request_comments(self, repository, pr_number):
+            return _merge_comments(
+                self._last_pr,
+                repair_budget=state.repair_budget_projection(run_id),
+                run_id=run_id,
+            )
+
+    truth = RunBoundTruth(
+        merged_pr(head={"ref": "branch", "sha": REPAIRED_HEAD}),
+        green_checks(REPAIRED_HEAD),
+    )
+    applied_contexts: list[dict[str, object]] = []
+    original_apply = VerificationAgentLoop.apply_events
+
+    def capture_apply(self, events, *, context):
+        applied_contexts.append(dict(context))
+        return original_apply(self, events, context=context)
+
+    monkeypatch.setattr(VerificationAgentLoop, "apply_events", capture_apply)
+
+    completed = VerificationConsumer(
+        state, truth, Auth(), Launcher(), "replay-host"
+    ).consume(request())
+
+    assert completed.status == "completed"
+    assert len(applied_contexts) == 1
+    assert applied_contexts[0]["progress_validation_sha256"]
+    transition = applied_contexts[0]["repair_transition_evidence"]
+    assert isinstance(transition, dict)
+    assert transition["base_head_sha"] == HEAD
+    assert transition["repaired_head_sha"] == REPAIRED_HEAD
+    repair = next(
+        row for row in state.attempts(run_id) if row["kind"] == "standard_repair"
+    )
+    assert repair["receipt"]["transition_evidence"] == transition
+
+
+def test_pending_delivered_repair_replay_fails_without_launch_base_head(
+    tmp_path,
+) -> None:
+    state = ledger(tmp_path)
+    run_id, _ = _pending_delivered_run(
+        state,
+        persist_launch_context=False,
+    )
+    truth = Truth(
+        merged_pr(head={"ref": "branch", "sha": REPAIRED_HEAD}),
+        green_checks(REPAIRED_HEAD),
+    )
+
+    rejected = VerificationConsumer(
+        state, truth, Auth(), Launcher(), "replay-host"
+    ).consume(request())
+
+    assert rejected.status == "failed"
+    assert rejected.stop_reason == "repair_transition_evidence_missing"
+    assert [row["kind"] for row in state.attempts(run_id)] == ["verification"]
 
 
 def test_pending_delivered_replay_rejects_head_change_without_repair_event(

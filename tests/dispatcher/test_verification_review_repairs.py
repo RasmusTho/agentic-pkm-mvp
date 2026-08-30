@@ -14,6 +14,10 @@ from app.dispatcher.verification_consumer import (
 from tests.dispatcher.test_verification_consumer import GREEN, Auth, Launcher, Truth, eligible_pr
 from tests.dispatcher.verification_helpers import HEAD, ledger, request
 
+MECHANISM_PATH_SHA = hashlib.sha256(
+    b"app/dispatcher/verification_agent_loop.py"
+).hexdigest()
+
 
 def test_subscription_slot_allows_only_one_active_pr_chain(tmp_path) -> None:
     state = ledger(tmp_path)
@@ -166,6 +170,7 @@ def test_low_convergence_requires_one_fresh_final_clean_review(tmp_path) -> None
         reasoning_effort="high",
         context=context,
         outcome="blocking",
+        mechanism_path_sha256=[MECHANISM_PATH_SHA],
     )
     loop.repair(
         finding_id="F2",
@@ -283,6 +288,7 @@ def test_late_blocking_review_revokes_sqlite_adapter_closure(tmp_path) -> None:
         reasoning_effort="xhigh",
         context=context,
         outcome="blocking",
+        mechanism_path_sha256=[MECHANISM_PATH_SHA],
     )
 
     assert not loop.closure_ready()
@@ -359,6 +365,7 @@ def test_two_blockers_in_one_round_still_require_only_one_fresh_final_review(tmp
                 "reasoning_effort": "high",
                 "outcome": "blocking",
                 "strongest": None,
+                "mechanism_path_sha256": [MECHANISM_PATH_SHA],
             }
             for finding_id in ("F-1", "F-2")
         ],
@@ -393,6 +400,7 @@ def test_cross_mechanism_blocker_does_not_trigger_low_convergence(tmp_path) -> N
         finding_id="F-B1", failure_domain="static_quality",
         mechanism_id="mechanism-b", session_id="review-b1", capability="terra",
         reasoning_effort="high", context=context, outcome="blocking",
+        mechanism_path_sha256=[MECHANISM_PATH_SHA],
     )
     loop.repair(
         finding_id="F-A2", failure_domain="review_code_correctness",

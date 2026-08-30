@@ -1,9 +1,38 @@
 from __future__ import annotations
 
+import hashlib
+
 import pytest
 
 from app.dispatcher.verification_agent_loop import VerificationAgentLoop
+from app.dispatcher.verification_dispatch import (
+    REPAIR_INTENT_ATTEMPT_KIND,
+    build_repair_transition_evidence,
+    plan_repair_progress_intents,
+)
 from tests.dispatcher.verification_helpers import ledger, request
+
+MECHANISM_PATH = "app/dispatcher/verification_agent_loop.py"
+MECHANISM_PATH_SHA = hashlib.sha256(MECHANISM_PATH.encode()).hexdigest()
+OTHER_MECHANISM_PATH_SHA = hashlib.sha256(
+    b"app/dispatcher/verification_dispatch.py"
+).hexdigest()
+
+
+def _transition(base_head: str, repaired_head: str) -> dict[str, object]:
+    return build_repair_transition_evidence(
+        base_head_sha=base_head,
+        repaired_head_sha=repaired_head,
+        commits=[repaired_head],
+        files=[
+            {
+                "path_sha256": MECHANISM_PATH_SHA,
+                "previous_path_sha256": None,
+                "status": "modified",
+                "blob_sha": repaired_head,
+            }
+        ],
+    )
 
 
 def test_distinct_findings_have_no_numeric_stop_and_require_rereview(
@@ -57,8 +86,108 @@ def test_distinct_findings_have_no_numeric_stop_and_require_rereview(
             reasoning_effort=reasoning,
             context=context,
             outcome="blocking",
+            mechanism_path_sha256=[MECHANISM_PATH_SHA],
         )
 
+
+def test_v2_blocking_review_requires_projection_before_ledger_mutation(
+    tmp_path,
+) -> None:
+    state = ledger(tmp_path)
+    run = state.ingest(request())
+    claimed = state.claim(run.run_id, "host")
+    loop = VerificationAgentLoop(
+        state,
+        run.run_id,
+        holder="host",
+        lease_id=claimed.lease_id,
+    )
+    repair_event = {
+        "kind": "repair",
+        "finding_id": "F1",
+        "failure_domain": "review_code_correctness",
+        "mechanism_id": "parser",
+        "session_id": "repair-1",
+        "capability": "terra",
+        "reasoning_effort": "high",
+        "outcome": "fixed",
+        "strongest": False,
+    }
+    loop.apply_events([repair_event], context={"head": run.head_sha})
+
+    with pytest.raises(ValueError, match="requires a mechanism path projection"):
+        loop.review(
+            finding_id="F1",
+            failure_domain="review_code_correctness",
+            mechanism_id="parser",
+            session_id="review-1",
+            capability="terra",
+            reasoning_effort="high",
+            context={"head": run.head_sha},
+            outcome="blocking",
+        )
+    assert len(state.attempts(run.run_id)) == 1
+
+    blocking_event = {
+        "kind": "review",
+        "finding_id": "F1",
+        "failure_domain": "review_code_correctness",
+        "mechanism_id": "parser",
+        "session_id": "review-1",
+        "capability": "terra",
+        "reasoning_effort": "high",
+        "outcome": "blocking",
+        "strongest": None,
+    }
+    with pytest.raises(ValueError, match="requires a mechanism path projection"):
+        loop.apply_events([blocking_event], context={"head": run.head_sha})
+    assert len(state.attempts(run.run_id)) == 1
+
+
+def test_same_blocking_round_cannot_replace_mechanism_path_projection(
+    tmp_path,
+) -> None:
+    state = ledger(tmp_path)
+    run = state.ingest(request())
+    claimed = state.claim(run.run_id, "host")
+    loop = VerificationAgentLoop(
+        state,
+        run.run_id,
+        holder="host",
+        lease_id=claimed.lease_id,
+    )
+    loop.repair(
+        finding_id="F1",
+        failure_domain="review_code_correctness",
+        mechanism_id="parser",
+        session_id="repair-1",
+        capability="terra",
+        reasoning_effort="high",
+        context={"head": run.head_sha},
+        outcome="fixed",
+    )
+    review = {
+        "finding_id": "F1",
+        "failure_domain": "review_code_correctness",
+        "mechanism_id": "parser",
+        "session_id": "review-round",
+        "capability": "terra",
+        "reasoning_effort": "high",
+        "context": {"head": run.head_sha},
+        "outcome": "blocking",
+    }
+    loop.review(**review, mechanism_path_sha256=[MECHANISM_PATH_SHA])
+
+    with pytest.raises(ValueError, match="blocking review requires repair"):
+        loop.review(
+            **review,
+            mechanism_path_sha256=[OTHER_MECHANISM_PATH_SHA],
+        )
+    attempts = state.attempts(run.run_id)
+    assert len(attempts) == 2
+    assert attempts[-1]["receipt"]["mechanism_path_sha256"] == [
+        MECHANISM_PATH_SHA
+    ]
 
 def test_repeated_non_converging_repair_requires_progress_evidence(tmp_path) -> None:
     state = ledger(tmp_path)
@@ -67,19 +196,36 @@ def test_repeated_non_converging_repair_requires_progress_evidence(tmp_path) -> 
     loop = VerificationAgentLoop(state, run.run_id, holder="host", lease_id=claimed.lease_id)
     context = {"head": run.head_sha}
     loop.repair(
-        finding_id="F1", failure_domain="review_code_correctness", mechanism_id="parser",
-        session_id="fix-1", capability="terra", reasoning_effort="high", context=context,
+        finding_id="F1",
+        failure_domain="review_code_correctness",
+        mechanism_id="parser",
+        session_id="fix-1",
+        capability="terra",
+        reasoning_effort="high",
+        context=context,
         outcome="fixed",
+        transition_evidence=_transition("0" * 40, run.head_sha),
     )
     loop.review(
-        finding_id="F1", failure_domain="review_code_correctness", mechanism_id="parser",
-        session_id="review-1", capability="terra", reasoning_effort="high", context=context,
+        finding_id="F1",
+        failure_domain="review_code_correctness",
+        mechanism_id="parser",
+        session_id="review-1",
+        capability="terra",
+        reasoning_effort="high",
+        context=context,
         outcome="blocking",
+        mechanism_path_sha256=[MECHANISM_PATH_SHA],
     )
-    with pytest.raises(ValueError, match="durable progress evidence"):
+    with pytest.raises(ValueError, match="pre-launch progress intent"):
         loop.repair(
-            finding_id="F1", failure_domain="review_code_correctness", mechanism_id="parser",
-            session_id="fix-2", capability="terra", reasoning_effort="high", context=context,
+            finding_id="F1",
+            failure_domain="review_code_correctness",
+            mechanism_id="parser",
+            session_id="fix-2",
+            capability="terra",
+            reasoning_effort="high",
+            context=context,
             outcome="fixed",
         )
 
@@ -90,33 +236,86 @@ def test_progressing_repair_rounds_have_no_numeric_stop_and_require_rereview(tmp
     claimed = state.claim(run.run_id, "host")
     loop = VerificationAgentLoop(state, run.run_id, holder="host", lease_id=claimed.lease_id)
     context = {"head": run.head_sha}
-    for index in range(6):
-        if index:
-            prior = [
-                row for row in state.attempts(run.run_id)
-                if row["kind"] in {"standard_repair", "escalated_repair"}
-            ][-1]
-            evidence = {
-                "prior_attempt_id": prior["attempt_id"],
-                "prior_review_attempt_id": [
-                    row for row in state.attempts(run.run_id)
-                    if row["kind"] == "review"
-                ][-1]["attempt_id"],
-                "reviewed_head_sha": run.head_sha,
-                "mechanism_state_change": f"narrowed-{index}",
-                "validation_delta": f"covered-{index}",
-            }
-        else:
-            evidence = None
+    loop.repair(
+        finding_id="F1",
+        failure_domain="review_code_correctness",
+        mechanism_id="parser",
+        session_id="fix-0",
+        capability="terra",
+        reasoning_effort="high",
+        context=context,
+        outcome="fixed",
+        transition_evidence=_transition("0" * 40, run.head_sha),
+    )
+    loop.review(
+        finding_id="F1",
+        failure_domain="review_code_correctness",
+        mechanism_id="parser",
+        session_id="review-0",
+        capability="terra",
+        reasoning_effort="high",
+        context=context,
+        outcome="blocking",
+        mechanism_path_sha256=[MECHANISM_PATH_SHA],
+    )
+    for index in range(1, 6):
+        current = state.get(run.run_id)
+        assert current is not None
+        intents = plan_repair_progress_intents(
+            state.attempts(run.run_id),
+            current_head_sha=current.head_sha,
+            validation_sha256=f"{index:064x}",
+        )
+        assert len(intents) == 1
+        intent = intents[0]
+        state.record_attempt(
+            run.run_id,
+            REPAIR_INTENT_ATTEMPT_KIND,
+            str(intent["intent_id"]),
+            "deterministic",
+            "none",
+            {"head": current.head_sha},
+            "admitted",
+            intent,
+            holder="host",
+            lease_id=claimed.lease_id,
+            idempotency_key=str(intent["intent_id"]),
+        )
+        repaired_head = f"{index + 100:040x}"
+        state.rebind_head(
+            run.run_id,
+            repaired_head,
+            expected_head_sha=current.head_sha,
+            observed_repository=run.repository,
+            observed_pr_number=run.pr_number,
+            observed_head_sha=repaired_head,
+            holder="host",
+            lease_id=claimed.lease_id,
+        )
+        context = {"head": repaired_head}
         loop.repair(
-            finding_id="F1", failure_domain="review_code_correctness", mechanism_id="parser",
-            session_id=f"fix-{index}", capability="terra", reasoning_effort="high", context=context,
-            outcome="fixed", progress_evidence=evidence,
+            finding_id="F1",
+            failure_domain="review_code_correctness",
+            mechanism_id="parser",
+            session_id=f"fix-{index}",
+            capability="terra",
+            reasoning_effort="high",
+            context=context,
+            outcome="fixed",
+            progress_intent_id=str(intent["intent_id"]),
+            validation_sha256=f"{index + 200:064x}",
+            transition_evidence=_transition(current.head_sha, repaired_head),
         )
         loop.review(
-            finding_id="F1", failure_domain="review_code_correctness", mechanism_id="parser",
-            session_id=f"review-{index}", capability="terra", reasoning_effort="high", context=context,
+            finding_id="F1",
+            failure_domain="review_code_correctness",
+            mechanism_id="parser",
+            session_id=f"review-{index}",
+            capability="terra",
+            reasoning_effort="high",
+            context=context,
             outcome="blocking",
+            mechanism_path_sha256=[MECHANISM_PATH_SHA],
         )
 
 
@@ -160,6 +359,7 @@ def test_event_batch_allows_repairs_beyond_legacy_two_plus_two_budget(
                     "finding_id": f"F{index}",
                     "failure_domain": "review_code_correctness",
                     "mechanism_id": "parser",
+                    "mechanism_path_sha256": [MECHANISM_PATH_SHA],
                 },
             ]
         )

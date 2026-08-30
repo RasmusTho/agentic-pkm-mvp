@@ -29,6 +29,10 @@ ACTIVE_STATES = frozenset({"claimed", "running"})
 REPAIR_BUDGET_POLICY_LEGACY = "v1"
 REPAIR_BUDGET_POLICY_MECHANISM = "v2"
 REPAIR_ATTEMPT_KINDS = frozenset({"standard_repair", "escalated_repair"})
+REPAIR_INTENT_ATTEMPT_KIND = "repair_intent"
+REPAIR_PROGRESS_INTENT_CONTRACT = "repair_progress_intent.v1"
+REPAIR_PROGRESS_EVIDENCE_CONTRACT = "repair_progress_evidence.v1"
+REPAIR_TRANSITION_EVIDENCE_CONTRACT = "repair_transition_evidence.v1"
 REPAIR_FAILURE_DOMAINS = frozenset(
     {
         "review_code_correctness",
@@ -1218,6 +1222,425 @@ def _attempt_receipt_value(row: Mapping[str, object], field: str) -> object:
     receipt = row.get("receipt")
     return receipt.get(field) if isinstance(receipt, Mapping) else None
 
+def _progress_digest(value: object) -> str:
+    return hashlib.sha256(_json(value).encode()).hexdigest()
+
+
+def _validated_progress_sha(value: object, field: str) -> str:
+    if not isinstance(value, str) or re.fullmatch(r"[0-9a-f]{64}", value) is None:
+        raise ValueError(f"repair progress {field} is malformed")
+    return value
+
+
+def validated_mechanism_path_projection(value: object) -> list[str]:
+    if (
+        not isinstance(value, list)
+        or not value
+        or len(value) > 32
+        or any(
+            not isinstance(path_sha, str)
+            or re.fullmatch(r"[0-9a-f]{64}", path_sha) is None
+            for path_sha in value
+        )
+        or len(set(value)) != len(value)
+        or value != sorted(value)
+    ):
+        raise ValueError(
+            "blocking review lacks a canonical mechanism path projection"
+        )
+    return [str(path_sha) for path_sha in value]
+
+
+def build_repair_transition_evidence(
+    *,
+    base_head_sha: str,
+    repaired_head_sha: str,
+    commits: Sequence[str],
+    files: Sequence[Mapping[str, object]],
+) -> dict[str, object]:
+    """Canonicalize one server-observed H1..H2 repair transition."""
+    if (
+        re.fullmatch(r"[0-9a-f]{40}", base_head_sha) is None
+        or re.fullmatch(r"[0-9a-f]{40}", repaired_head_sha) is None
+        or base_head_sha == repaired_head_sha
+        or not commits
+        or len(commits) > 250
+        or commits[-1] != repaired_head_sha
+        or any(re.fullmatch(r"[0-9a-f]{40}", sha) is None for sha in commits)
+        or len(set(commits)) != len(commits)
+        or not files
+        or len(files) > 299
+    ):
+        raise ValueError("repair transition evidence is malformed")
+    canonical_files: list[dict[str, object]] = []
+    for item in files:
+        required = {
+            "path_sha256",
+            "previous_path_sha256",
+            "status",
+            "blob_sha",
+        }
+        if not isinstance(item, Mapping) or set(item) != required:
+            raise ValueError("repair transition evidence is malformed")
+        path_sha = _validated_progress_sha(item.get("path_sha256"), "path digest")
+        previous = item.get("previous_path_sha256")
+        if previous is not None:
+            previous = _validated_progress_sha(previous, "previous path digest")
+        status = item.get("status")
+        blob_sha = item.get("blob_sha")
+        if (
+            status not in {
+                "added",
+                "modified",
+                "removed",
+                "renamed",
+                "copied",
+                "changed",
+                "unchanged",
+            }
+            or not isinstance(blob_sha, str)
+            or re.fullmatch(r"[0-9a-f]{40}", blob_sha) is None
+        ):
+            raise ValueError("repair transition evidence is malformed")
+        canonical_files.append(
+            {
+                "path_sha256": path_sha,
+                "previous_path_sha256": previous,
+                "status": status,
+                "blob_sha": blob_sha,
+            }
+        )
+    canonical_files.sort(key=lambda item: _json(item))
+    if len({str(item["path_sha256"]) for item in canonical_files}) != len(
+        canonical_files
+    ):
+        raise ValueError("repair transition evidence is ambiguous")
+    projection = {
+        "contract": REPAIR_TRANSITION_EVIDENCE_CONTRACT,
+        "base_head_sha": base_head_sha,
+        "repaired_head_sha": repaired_head_sha,
+        "commits": list(commits),
+        "files": canonical_files,
+    }
+    return {**projection, "state_sha256": _progress_digest(projection)}
+
+
+def validated_repair_transition_evidence(
+    value: object,
+) -> dict[str, object]:
+    if not isinstance(value, Mapping) or set(value) != {
+        "contract",
+        "base_head_sha",
+        "repaired_head_sha",
+        "commits",
+        "files",
+        "state_sha256",
+    }:
+        raise ValueError("repair transition evidence is malformed")
+    commits = value.get("commits")
+    files = value.get("files")
+    if (
+        value.get("contract") != REPAIR_TRANSITION_EVIDENCE_CONTRACT
+        or not isinstance(commits, list)
+        or any(not isinstance(sha, str) for sha in commits)
+        or not isinstance(files, list)
+        or any(not isinstance(item, Mapping) for item in files)
+    ):
+        raise ValueError("repair transition evidence is malformed")
+    rebuilt = build_repair_transition_evidence(
+        base_head_sha=str(value.get("base_head_sha")),
+        repaired_head_sha=str(value.get("repaired_head_sha")),
+        commits=[str(sha) for sha in commits],
+        files=[item for item in files if isinstance(item, Mapping)],
+    )
+    if rebuilt != dict(value):
+        raise ValueError("repair transition evidence is not canonical")
+    return rebuilt
+
+
+def plan_repair_progress_intents(
+    attempts: Sequence[Mapping[str, object]],
+    *,
+    current_head_sha: str,
+    validation_sha256: str,
+) -> list[dict[str, object]]:
+    """Derive repeat-repair admission only from durable server observations."""
+    _validated_progress_sha(validation_sha256, "validation digest")
+    latest_repairs: dict[tuple[str, str, str], Mapping[str, object]] = {}
+    repair_counts: dict[tuple[str, str, str], int] = {}
+    for row in attempts:
+        if row.get("kind") not in REPAIR_ATTEMPT_KINDS:
+            continue
+        key = (
+            str(row.get("finding_id") or ""),
+            str(row.get("failure_domain") or ""),
+            str(row.get("mechanism_id") or ""),
+        )
+        if not all(key):
+            continue
+        latest_repairs[key] = row
+        repair_counts[key] = repair_counts.get(key, 0) + 1
+
+    intents: list[dict[str, object]] = []
+    for key, prior in sorted(latest_repairs.items()):
+        finding, domain, mechanism = key
+        prior_id = prior.get("attempt_id")
+        prior_reviews = [
+            row
+            for row in attempts
+            if row.get("kind") == "review"
+            and row.get("outcome") == "blocking"
+            and row.get("finding_id") == finding
+            and row.get("failure_domain") == domain
+            and row.get("mechanism_id") == mechanism
+            and _attempt_receipt_value(row, "reviewed_attempt_id") == prior_id
+        ]
+        if not prior_reviews:
+            continue
+        prior_review = prior_reviews[-1]
+        reviewed_head = _attempt_receipt_value(prior_review, "head_sha")
+        if reviewed_head != current_head_sha:
+            raise ValueError("repair progress review is not bound to the current head")
+        prior_receipt = prior.get("receipt")
+        progress = (
+            prior_receipt.get("progress_evidence") if isinstance(prior_receipt, Mapping) else None
+        )
+        transition = validated_repair_transition_evidence(
+            prior_receipt.get("transition_evidence")
+            if isinstance(prior_receipt, Mapping)
+            else None
+        )
+        if transition["repaired_head_sha"] != reviewed_head:
+            raise ValueError(
+                "repair transition is not bound to the reviewed head"
+            )
+        if repair_counts[key] > 1 and not isinstance(progress, Mapping):
+            raise ValueError("repeated repair history lacks durable progress evidence")
+        transition_files = transition["files"]
+        assert isinstance(transition_files, list)
+        reviewed_mechanism_paths = validated_mechanism_path_projection(
+            _attempt_receipt_value(
+                prior_review, "mechanism_path_sha256"
+            )
+        )
+        transition_by_path = {
+            str(item["path_sha256"]): item
+            for item in transition_files
+            if isinstance(item, Mapping)
+        }
+        if not set(reviewed_mechanism_paths).issubset(transition_by_path):
+            raise ValueError(
+                "blocking review mechanism paths are not authenticated by the repair transition"
+            )
+        mechanism_path_states = sorted(
+            [
+                {
+                    "path_sha256": str(item["path_sha256"]),
+                    "status": item["status"],
+                    "blob_sha": item["blob_sha"],
+                }
+                for path_sha in reviewed_mechanism_paths
+                for item in [transition_by_path[path_sha]]
+            ],
+            key=_json,
+        )
+        mechanism_state_sha256 = _progress_digest(mechanism_path_states)
+        base = {
+            "contract": REPAIR_PROGRESS_INTENT_CONTRACT,
+            "finding_id": finding,
+            "failure_domain": domain,
+            "mechanism_id": mechanism,
+            "prior_attempt_id": prior_id,
+            "prior_review_attempt_id": prior_review.get("attempt_id"),
+            "reviewed_head_sha": reviewed_head,
+            "mechanism_state_sha256": mechanism_state_sha256,
+            "mechanism_path_states": mechanism_path_states,
+            "validation_sha256": validation_sha256,
+        }
+        intents.append(
+            {
+                **base,
+                "intent_id": "repair-intent-" + _progress_digest(base)[:24],
+            }
+        )
+    return intents
+
+
+def _validate_repair_progress_intent(
+    attempts: Sequence[Mapping[str, object]],
+    *,
+    receipt: Mapping[str, object] | None,
+    current_head_sha: str,
+) -> tuple[str, str, str]:
+    required = {
+        "contract",
+        "intent_id",
+        "finding_id",
+        "failure_domain",
+        "mechanism_id",
+        "prior_attempt_id",
+        "prior_review_attempt_id",
+        "reviewed_head_sha",
+        "mechanism_state_sha256",
+        "mechanism_path_states",
+        "validation_sha256",
+    }
+    if not isinstance(receipt, Mapping) or set(receipt) != required:
+        raise ValueError("repair progress intent is malformed")
+    planned = plan_repair_progress_intents(
+        [row for row in attempts if row.get("kind") != REPAIR_INTENT_ATTEMPT_KIND],
+        current_head_sha=current_head_sha,
+        validation_sha256=_validated_progress_sha(
+            receipt.get("validation_sha256"), "validation digest"
+        ),
+    )
+    matches = [row for row in planned if row.get("intent_id") == receipt.get("intent_id")]
+    if len(matches) != 1 or matches[0] != dict(receipt):
+        raise ValueError("repair progress intent is not server-derived from current history")
+    return (
+        str(receipt["finding_id"]),
+        str(receipt["failure_domain"]),
+        str(receipt["mechanism_id"]),
+    )
+
+
+def build_repair_progress_evidence(
+    attempts: Sequence[Mapping[str, object]],
+    *,
+    finding_id: str,
+    failure_domain: str,
+    mechanism_id: str,
+    repaired_head_sha: str,
+    progress_intent_id: str | None,
+    validation_sha256: str | None,
+    transition_evidence: Mapping[str, object] | None,
+) -> dict[str, object] | None:
+    """Resolve a repeated repair against one durable pre-launch intent."""
+    prior_repairs = [
+        row
+        for row in attempts
+        if row.get("kind") in REPAIR_ATTEMPT_KINDS
+        and row.get("finding_id") == finding_id
+        and row.get("failure_domain") == failure_domain
+        and row.get("mechanism_id") == mechanism_id
+    ]
+    if not prior_repairs:
+        return None
+    if not isinstance(progress_intent_id, str):
+        raise ValueError("repeated repair requires a pre-launch progress intent")
+    intents = [
+        row
+        for row in attempts
+        if row.get("kind") == REPAIR_INTENT_ATTEMPT_KIND
+        and _attempt_receipt_value(row, "intent_id") == progress_intent_id
+    ]
+    if len(intents) != 1:
+        raise ValueError("repair progress intent is missing or ambiguous")
+    intent = intents[0].get("receipt")
+    if not isinstance(intent, Mapping):
+        raise ValueError("repair progress intent is malformed")
+    prior = prior_repairs[-1]
+    prior_reviews = [
+        row
+        for row in attempts
+        if row.get("kind") == "review"
+        and row.get("outcome") == "blocking"
+        and row.get("finding_id") == finding_id
+        and row.get("failure_domain") == failure_domain
+        and row.get("mechanism_id") == mechanism_id
+        and _attempt_receipt_value(row, "reviewed_attempt_id") == prior.get("attempt_id")
+    ]
+    if not prior_reviews:
+        raise ValueError("repeated repair requires a fresh blocking review")
+    prior_review = prior_reviews[-1]
+    reviewed_head_sha = _attempt_receipt_value(prior_review, "head_sha")
+    if (
+        intent.get("contract") != REPAIR_PROGRESS_INTENT_CONTRACT
+        or intent.get("finding_id") != finding_id
+        or intent.get("failure_domain") != failure_domain
+        or intent.get("mechanism_id") != mechanism_id
+        or intent.get("prior_attempt_id") != prior.get("attempt_id")
+        or intent.get("prior_review_attempt_id") != prior_review.get("attempt_id")
+        or intent.get("reviewed_head_sha") != reviewed_head_sha
+    ):
+        raise ValueError("repair progress intent does not bind the prior reviewed repair")
+    if (
+        not isinstance(repaired_head_sha, str)
+        or re.fullmatch(r"[0-9a-f]{40}", repaired_head_sha) is None
+        or repaired_head_sha == reviewed_head_sha
+    ):
+        raise ValueError("repeated repair must advance the reviewed head")
+    validation_after = _validated_progress_sha(validation_sha256, "validation digest")
+    mechanism_before = _validated_progress_sha(
+        intent.get("mechanism_state_sha256"), "mechanism state"
+    )
+    validation_before = _validated_progress_sha(
+        intent.get("validation_sha256"), "validation digest"
+    )
+    transition = validated_repair_transition_evidence(transition_evidence)
+    if (
+        transition["base_head_sha"] != reviewed_head_sha
+        or transition["repaired_head_sha"] != repaired_head_sha
+    ):
+        raise ValueError("repair transition does not bind H1 and H2")
+    prior_states = intent.get("mechanism_path_states")
+    transition_files = transition["files"]
+    if not isinstance(prior_states, list) or not isinstance(transition_files, list):
+        raise ValueError("repair progress mechanism path binding is malformed")
+    prior_by_path = {
+        str(item["path_sha256"]): dict(item)
+        for item in prior_states
+        if isinstance(item, Mapping)
+        and set(item) == {"path_sha256", "status", "blob_sha"}
+    }
+    if len(prior_by_path) != len(prior_states):
+        raise ValueError("repair progress mechanism path binding is malformed")
+    current_by_path = {
+        str(item["path_sha256"]): {
+            "path_sha256": str(item["path_sha256"]),
+            "status": item["status"],
+            "blob_sha": item["blob_sha"],
+        }
+        for item in transition_files
+        if isinstance(item, Mapping)
+    }
+    overlap = set(current_by_path).intersection(prior_by_path)
+    if not overlap:
+        raise ValueError("repair transition does not change the reviewed mechanism")
+    updated_states = {
+        **prior_by_path,
+        **{path: current_by_path[path] for path in overlap},
+    }
+    mechanism_after = _progress_digest(
+        sorted(updated_states.values(), key=_json)
+    )
+    if mechanism_after == mechanism_before or validation_after == validation_before:
+        raise ValueError("repair progress evidence is unchanged")
+    prior_progress = [_attempt_receipt_value(row, "progress_evidence") for row in prior_repairs]
+    if any(
+        isinstance(progress, Mapping)
+        and (
+            progress.get("mechanism_state_after_sha256") == mechanism_after
+            or progress.get("validation_after_sha256") == validation_after
+        )
+        for progress in prior_progress
+    ):
+        raise ValueError("repair progress evidence was already used")
+    return {
+        "contract": REPAIR_PROGRESS_EVIDENCE_CONTRACT,
+        "intent_id": progress_intent_id,
+        "prior_attempt_id": prior.get("attempt_id"),
+        "prior_review_attempt_id": prior_review.get("attempt_id"),
+        "reviewed_head_sha": reviewed_head_sha,
+        "repaired_head_sha": repaired_head_sha,
+        "mechanism_state_before_sha256": mechanism_before,
+        "mechanism_state_after_sha256": mechanism_after,
+        "validation_before_sha256": validation_before,
+        "validation_after_sha256": validation_after,
+        "transition_sha256": mechanism_after,
+    }
+
+
 
 def _attempt_plan(
     attempts: Sequence[Mapping[str, object]],
@@ -1228,6 +1651,14 @@ def _attempt_plan(
     policy: str,
     current_head_sha: str,
 ) -> tuple[int, str | None, str | None, str | None]:
+    if kind == REPAIR_INTENT_ATTEMPT_KIND:
+        intent_finding, intent_domain, intent_mechanism = _validate_repair_progress_intent(
+            attempts,
+            receipt=receipt,
+            current_head_sha=current_head_sha,
+        )
+        ordinal = sum(row.get("kind") == REPAIR_INTENT_ATTEMPT_KIND for row in attempts) + 1
+        return ordinal, intent_finding, intent_domain, intent_mechanism
     finding, domain, mechanism = _validated_attempt_identity(
         attempts,
         kind=kind,
@@ -1247,52 +1678,34 @@ def _attempt_plan(
         ]
         if prior_repairs:
             progress = receipt.get("progress_evidence") if receipt else None
-            required_progress_fields = {
-                "prior_attempt_id",
-                "prior_review_attempt_id",
-                "reviewed_head_sha",
-                "mechanism_state_change",
-                "validation_delta",
-            }
-            if (
-                not isinstance(progress, Mapping)
-                or set(progress) != required_progress_fields
-                or any(
-                    not isinstance(value, str) or not value.strip()
-                    for value in (progress[field] for field in required_progress_fields)
-                )
-            ):
-                raise ValueError(
-                    "repeated repair requires durable progress evidence"
-                )
-            prior = prior_repairs[-1]
-            prior_reviews = [
-                row
-                for row in attempts
-                if row.get("kind") == "review"
-                and row.get("outcome") == "blocking"
-                and row.get("finding_id") == finding
-                and row.get("failure_domain") == domain
-                and row.get("mechanism_id") == mechanism
-                and isinstance(row.get("receipt"), Mapping)
-                and _attempt_receipt_value(row, "reviewed_attempt_id")
-                == prior.get("attempt_id")
-            ]
-            if not prior_reviews:
-                raise ValueError("repeated repair requires a fresh blocking review")
-            prior_review = prior_reviews[-1]
-            prior_review_receipt = prior_review.get("receipt")
-            assert isinstance(prior_review_receipt, Mapping)
-            if (
-                progress["prior_attempt_id"] != prior.get("attempt_id")
-                or progress["prior_review_attempt_id"] != prior_review.get("attempt_id")
-                or progress["reviewed_head_sha"]
-                != prior_review_receipt.get("head_sha")
-                or prior_review_receipt.get("head_sha") != current_head_sha
-            ):
-                raise ValueError(
-                    "repair progress evidence is not bound to the prior reviewed repair"
-                )
+            if not isinstance(progress, Mapping):
+                raise ValueError("repeated repair requires durable progress evidence")
+            transition_candidate = receipt.get("transition_evidence")
+            transition_evidence = (
+                transition_candidate
+                if isinstance(transition_candidate, Mapping)
+                else None
+            )
+            rebuilt = build_repair_progress_evidence(
+                attempts,
+                finding_id=str(finding),
+                failure_domain=str(domain),
+                mechanism_id=str(mechanism),
+                repaired_head_sha=current_head_sha,
+                progress_intent_id=(
+                    str(progress.get("intent_id"))
+                    if progress.get("intent_id") is not None
+                    else None
+                ),
+                validation_sha256=(
+                    str(progress.get("validation_after_sha256"))
+                    if progress.get("validation_after_sha256") is not None
+                    else None
+                ),
+                transition_evidence=transition_evidence,
+            )
+            if rebuilt != dict(progress):
+                raise ValueError("repair progress evidence is not server-derived")
     ordinal = sum(row.get("kind") == kind for row in attempts) + 1
     return ordinal, finding, domain, mechanism
 
@@ -2148,7 +2561,12 @@ class VerificationDispatchLedger:
             raise ValueError(
                 "local verification ledger cannot persist host containment"
             )
-        allowed = {*REPAIR_ATTEMPT_KINDS, "review", "verification"}
+        allowed = {
+            *REPAIR_ATTEMPT_KINDS,
+            REPAIR_INTENT_ATTEMPT_KIND,
+            "review",
+            "verification",
+        }
         if kind not in allowed:
             raise ValueError("invalid verification attempt kind")
         context_hash = hashlib.sha256(_json(dict(context)).encode()).hexdigest()

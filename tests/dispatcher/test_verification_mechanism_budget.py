@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import sqlite3
 from pathlib import Path
@@ -32,6 +33,9 @@ from tests.dispatcher.verification_helpers import HEAD, ledger, request
 
 CODE = "review_code_correctness"
 STATIC = "static_quality"
+MECHANISM_PATH_SHA = hashlib.sha256(
+    b"app/dispatcher/verification_agent_loop.py"
+).hexdigest()
 
 
 def _claimed_loop(tmp_path):
@@ -91,6 +95,7 @@ def _blocking_review(
         reasoning_effort="high",
         context={"head_sha": HEAD},
         outcome="blocking",
+        mechanism_path_sha256=[MECHANISM_PATH_SHA],
     )
 
 
@@ -168,6 +173,7 @@ def test_keyed_convergence_batch_is_atomic_and_replay_safe(tmp_path) -> None:
             "reasoning_effort": "high",
             "outcome": "blocking",
             "strongest": None,
+            "mechanism_path_sha256": [MECHANISM_PATH_SHA],
         },
         {
             "kind": "repair",
@@ -193,6 +199,7 @@ def test_keyed_convergence_batch_is_atomic_and_replay_safe(tmp_path) -> None:
             "reasoning_effort": "high",
             "outcome": "blocking",
             "strongest": None,
+            "mechanism_path_sha256": [MECHANISM_PATH_SHA],
         },
         {
             "kind": "repair",

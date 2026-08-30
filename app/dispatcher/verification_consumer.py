@@ -39,6 +39,7 @@ from app.dispatcher.linux_containment import (
 
 from app.dispatcher.verification_dispatch import (
     CONTRACT_VERSION,
+    REPAIR_INTENT_ATTEMPT_KIND,
     VerificationBackoffPending,
     VerificationDispatchLedger,
     VerificationRun,
@@ -47,6 +48,8 @@ from app.dispatcher.verification_dispatch import (
     _AuthenticatedVerificationRequest,
     _authenticated_verification_request,
     _live_observed_verification_request,
+    build_repair_transition_evidence,
+    plan_repair_progress_intents,
 )
 from app.dispatcher.verification_agent_loop import (
     HUMAN_EXCEPTION_PACKET_FIELDS,
@@ -81,6 +84,10 @@ class LiveTruthSource(Protocol):
     def pull_request(self, repository: str, pr_number: int) -> Mapping[str, object]: ...
 
     def checks(self, repository: str, head_sha: str) -> Sequence[Mapping[str, object]]: ...
+
+    def compare(
+        self, repository: str, base_head_sha: str, repaired_head_sha: str
+    ) -> Mapping[str, object]: ...
 
     def pull_request_comments(
         self, repository: str, pr_number: int
@@ -461,10 +468,23 @@ def validate_verification_closer_receipt(
 ) -> None:
     """Apply provider-safe structural validation plus local semantic invariants."""
 
-    jsonschema.validate(receipt, schema)
-    review_events = receipt.get("review_events")
-    human_exception = receipt.get("human_exception")
-    if receipt.get("verdict") == "needs_human" and (
+    candidate = dict(receipt)
+    raw_events = candidate.get("review_events")
+    if isinstance(raw_events, list):
+        candidate["review_events"] = [
+            {
+                **dict(event),
+                "progress_intent_id": event.get("progress_intent_id"),
+                "mechanism_path_sha256": event.get("mechanism_path_sha256"),
+            }
+            if isinstance(event, Mapping)
+            else event
+            for event in raw_events
+        ]
+    jsonschema.validate(candidate, schema)
+    review_events = candidate.get("review_events")
+    human_exception = candidate.get("human_exception")
+    if candidate.get("verdict") == "needs_human" and (
         not isinstance(human_exception, Mapping)
         or set(human_exception) != HUMAN_EXCEPTION_PACKET_FIELDS
         or not valid_human_exception_packet(human_exception)
@@ -472,11 +492,11 @@ def validate_verification_closer_receipt(
         raise jsonschema.ValidationError(
             "a needs_human receipt requires one complete canonical Human Exception packet"
         )
-    if receipt.get("verdict") != "needs_human" and human_exception is not None:
+    if candidate.get("verdict") != "needs_human" and human_exception is not None:
         raise jsonschema.ValidationError(
             "only a needs_human receipt may carry a Human Exception packet"
         )
-    if receipt.get("verdict") in {"verified", "delivered"} and (
+    if candidate.get("verdict") in {"verified", "delivered"} and (
         not isinstance(review_events, list) or len(review_events) < 1
     ):
         raise jsonschema.ValidationError(
@@ -508,6 +528,34 @@ def validate_verification_closer_receipt(
             raise jsonschema.ValidationError(
                 f"clean review event {index} cannot carry a failure binding"
             )
+        if event.get("kind") == "review" and event.get("progress_intent_id") is not None:
+            raise jsonschema.ValidationError(
+                f"review event {index} cannot carry a repair progress intent"
+            )
+        mechanism_paths = event.get("mechanism_path_sha256")
+        if (
+            event.get("kind") == "review"
+            and event.get("outcome") == "blocking"
+            and not allow_legacy_unbound_repairs
+            and mechanism_paths is None
+        ):
+            raise jsonschema.ValidationError(
+                f"blocking review event {index} requires a mechanism path projection"
+            )
+        if mechanism_paths is not None and (
+            not isinstance(mechanism_paths, list)
+            or mechanism_paths != sorted(mechanism_paths)
+            or len(set(mechanism_paths)) != len(mechanism_paths)
+        ):
+            raise jsonschema.ValidationError(
+                f"event {index} mechanism paths are not canonical"
+            )
+        if mechanism_paths is not None and not (
+            event.get("kind") == "review" and event.get("outcome") == "blocking"
+        ):
+            raise jsonschema.ValidationError(
+                f"event {index} carries mechanism paths outside a blocking review"
+            )
 
 
 def _normalize_v1_review_event(event: Mapping[str, object]) -> dict[str, object]:
@@ -526,6 +574,8 @@ def _normalize_v1_review_event(event: Mapping[str, object]) -> dict[str, object]
         **dict(event),
         "failure_domain": event.get("failure_domain"),
         "mechanism_id": event.get("mechanism_id"),
+        "progress_intent_id": event.get("progress_intent_id"),
+        "mechanism_path_sha256": event.get("mechanism_path_sha256"),
     }
     if event.get("kind") == "review" and event.get("outcome") == "clean":
         normalized["finding_id"] = None
@@ -1832,6 +1882,17 @@ class GhCliVerificationSource:
             checks.append(authenticated)
         return checks
 
+    def compare(
+        self, repository: str, base_head_sha: str, repaired_head_sha: str
+    ) -> Mapping[str, object]:
+        payload = self._json(
+            f"repos/{repository}/compare/{base_head_sha}...{repaired_head_sha}",
+            max_response_bytes=2_000_000,
+        )
+        if not isinstance(payload, Mapping):
+            raise RuntimeError("GitHub compare evidence is malformed")
+        return payload
+
 
 class CoordinatorLauncher(Protocol):
     config: "LaunchConfig"
@@ -2222,6 +2283,8 @@ def _allowlisted_receipt_value(
 def _sanitize_review_event(event: Mapping[str, object]) -> dict[str, object]:
     finding = event.get("finding_id")
     mechanism = event.get("mechanism_id")
+    progress_intent = event.get("progress_intent_id")
+    mechanism_paths = event.get("mechanism_path_sha256")
     return {
         "kind": event["kind"],
         "session_id": _pseudonymous_receipt_identifier(
@@ -2259,6 +2322,25 @@ def _sanitize_review_event(event: Mapping[str, object]) -> dict[str, object]:
         "mechanism_id": (
             _pseudonymous_receipt_identifier(mechanism, prefix="mechanism")
             if mechanism is not None
+            else None
+        ),
+        "progress_intent_id": (
+            progress_intent
+            if isinstance(progress_intent, str)
+            and re.fullmatch(r"repair-intent-[0-9a-f]{24}", progress_intent)
+            else None
+        ),
+        "mechanism_path_sha256": (
+            sorted(mechanism_paths)
+            if isinstance(mechanism_paths, list)
+            and mechanism_paths
+            and len(mechanism_paths) <= 32
+            and len(set(mechanism_paths)) == len(mechanism_paths)
+            and all(
+                isinstance(path_sha, str)
+                and re.fullmatch(r"[0-9a-f]{64}", path_sha)
+                for path_sha in mechanism_paths
+            )
             else None
         ),
         "strongest": event.get("strongest"),
@@ -3765,6 +3847,168 @@ def _is_skipped_conclusion(value: object) -> bool:
     return isinstance(value, str) and value.lower() == "skipped"
 
 
+def _progress_validation_sha256(head_sha: str, checks: Sequence[Mapping[str, object]]) -> str:
+    """Bind authenticated check executions, not the caller-selected head label."""
+    if re.fullmatch(r"[0-9a-f]{40}", head_sha) is None:
+        raise ValueError("progress validation head is malformed")
+    projected: list[dict[str, object]] = []
+    for check in checks:
+        app = check.get("app")
+        suite = check.get("check_suite")
+        workflow = check.get("workflow_run")
+        check_id = check.get("id")
+        app_id = app.get("id") if isinstance(app, Mapping) else None
+        suite_id = suite.get("id") if isinstance(suite, Mapping) else None
+        check_head = check.get("head_sha")
+        workflow_head = (
+            workflow.get("head_sha") if isinstance(workflow, Mapping) else None
+        )
+        if (
+            not isinstance(check_id, int)
+            or isinstance(check_id, bool)
+            or check_id <= 0
+            or not isinstance(app_id, int)
+            or isinstance(app_id, bool)
+            or app_id <= 0
+            or (
+                check_head is not None
+                and check_head != head_sha
+            )
+            or (
+                workflow_head is not None
+                and workflow_head != head_sha
+            )
+        ):
+            raise ValueError("progress validation check evidence is malformed")
+        workflow_projection: dict[str, object] | None = None
+        if isinstance(workflow, Mapping):
+            if (
+                not isinstance(suite_id, int)
+                or isinstance(suite_id, bool)
+                or suite_id <= 0
+                or workflow.get("check_suite_id") != suite_id
+            ):
+                raise ValueError("progress validation workflow evidence is malformed")
+            workflow_projection = {
+                "id": workflow.get("id"),
+                "workflow_id": workflow.get("workflow_id"),
+                "path": workflow.get("path"),
+                "event": workflow.get("event"),
+                "check_suite_id": workflow.get("check_suite_id"),
+                "run_attempt": workflow.get("run_attempt"),
+            }
+        projected.append(
+            {
+                "id": check_id,
+                "name": check.get("name"),
+                "status": check.get("status"),
+                "conclusion": check.get("conclusion"),
+                "app": (
+                    {"id": app.get("id"), "slug": app.get("slug")}
+                    if isinstance(app, Mapping)
+                    else None
+                ),
+                "check_suite_id": suite_id,
+                "workflow_run": workflow_projection,
+            }
+        )
+    projected.sort(
+        key=lambda row: json.dumps(row, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    )
+    return hashlib.sha256(
+        json.dumps(
+            {
+                "contract": "verification_check_execution_frontier.v2",
+                "checks": projected,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+        ).encode()
+    ).hexdigest()
+
+
+def _github_repair_transition_evidence(
+    base_head_sha: str,
+    repaired_head_sha: str,
+    comparison: Mapping[str, object],
+) -> dict[str, object]:
+    """Reduce an untruncated GitHub compare response to path-blinded evidence."""
+    commits = comparison.get("commits")
+    files = comparison.get("files")
+    ahead_by = comparison.get("ahead_by")
+    behind_by = comparison.get("behind_by")
+    total_commits = comparison.get("total_commits")
+    if (
+        comparison.get("status") != "ahead"
+        or not isinstance(ahead_by, int)
+        or isinstance(ahead_by, bool)
+        or ahead_by <= 0
+        or behind_by != 0
+        or not isinstance(total_commits, int)
+        or isinstance(total_commits, bool)
+        or total_commits != ahead_by
+        or not isinstance(commits, list)
+        or len(commits) != total_commits
+        or len(commits) > 250
+        or not isinstance(files, list)
+        or not files
+        or len(files) > 299
+        or _nested(comparison, "base_commit", "sha") != base_head_sha
+    ):
+        raise ValueError("GitHub repair comparison is incomplete or non-linear")
+    commit_shas: list[str] = []
+    for commit in commits:
+        sha = commit.get("sha") if isinstance(commit, Mapping) else None
+        if not isinstance(sha, str):
+            raise ValueError("GitHub repair comparison commit is malformed")
+        commit_shas.append(sha)
+    if not commit_shas or commit_shas[-1] != repaired_head_sha:
+        raise ValueError("GitHub repair comparison does not reach repaired head")
+    canonical_files: list[dict[str, object]] = []
+    for item in files:
+        if not isinstance(item, Mapping):
+            raise ValueError("GitHub repair comparison file is malformed")
+        filename = item.get("filename")
+        previous = item.get("previous_filename")
+        status = item.get("status")
+        blob_sha = item.get("sha")
+        if (
+            not isinstance(filename, str)
+            or not filename
+            or len(filename.encode()) > 4096
+            or (
+                previous is not None
+                and (
+                    not isinstance(previous, str)
+                    or not previous
+                    or len(previous.encode()) > 4096
+                )
+            )
+            or not isinstance(status, str)
+            or not isinstance(blob_sha, str)
+        ):
+            raise ValueError("GitHub repair comparison file is malformed")
+        canonical_files.append(
+            {
+                "path_sha256": hashlib.sha256(filename.encode()).hexdigest(),
+                "previous_path_sha256": (
+                    hashlib.sha256(previous.encode()).hexdigest()
+                    if isinstance(previous, str)
+                    else None
+                ),
+                "status": status,
+                "blob_sha": blob_sha,
+            }
+        )
+    return build_repair_transition_evidence(
+        base_head_sha=base_head_sha,
+        repaired_head_sha=repaired_head_sha,
+        commits=commit_shas,
+        files=canonical_files,
+    )
+
+
 def _context_pack_from_authority(
     run: VerificationRun,
     issue_authority: IssueAuthority,
@@ -4505,9 +4749,51 @@ class VerificationConsumer:
                 holder=self.holder,
                 lease_id=lease_id,
             )
+        review_events = receipt.get("review_events")
+        events = review_events if isinstance(review_events, list) else []
+        repair_events = [
+            event
+            for event in events
+            if isinstance(event, Mapping) and event.get("kind") == "repair"
+        ]
+        persisted_context = run.context_pack
+        packed_head = (
+            persisted_context.get("head_sha")
+            if isinstance(persisted_context, Mapping)
+            else None
+        )
+        repair_base_head = (
+            packed_head
+            if isinstance(packed_head, str)
+            and re.fullmatch(r"[0-9a-f]{40}", packed_head)
+            else None
+        )
+        if repair_events and (
+            repair_base_head is None or repair_base_head == receipt_head
+        ):
+            return self.ledger.terminal(
+                claimed.run_id,
+                "failed",
+                dict(receipt),
+                reason="repair_transition_evidence_missing",
+                holder=self.holder,
+                lease_id=lease_id,
+            )
+        transition_evidence: dict[str, object] | None = None
         try:
             live_pr = self.truth.pull_request(claimed.repository, claimed.pr_number)
             live_checks = self.truth.checks(claimed.repository, receipt_head)
+            if repair_events:
+                assert repair_base_head is not None
+                transition_evidence = _github_repair_transition_evidence(
+                    repair_base_head,
+                    receipt_head,
+                    self.truth.compare(
+                        claimed.repository,
+                        repair_base_head,
+                        receipt_head,
+                    ),
+                )
             rejection = delivered_live_truth_rejection(
                 claimed,
                 live_pr,
@@ -4573,13 +4859,8 @@ class VerificationConsumer:
                 holder=self.holder,
                 lease_id=lease_id,
             )
-        review_events = receipt.get("review_events")
-        events = review_events if isinstance(review_events, list) else []
         changed_head = receipt_head != claimed.head_sha
-        if changed_head and not any(
-            isinstance(event, Mapping) and event.get("kind") == "repair"
-            for event in events
-        ):
+        if changed_head and not repair_events:
             return self.ledger.terminal(
                 claimed.run_id,
                 "failed",
@@ -4617,15 +4898,23 @@ class VerificationConsumer:
         )
         if events:
             try:
+                replay_context = context_pack(
+                    claimed,
+                    live_pr,
+                    repair_budget=self.ledger.repair_budget_projection(
+                        claimed.run_id
+                    ),
+                )
+                replay_context["progress_validation_sha256"] = (
+                    _progress_validation_sha256(receipt_head, live_checks)
+                )
+                if transition_evidence is not None:
+                    replay_context["repair_transition_evidence"] = (
+                        transition_evidence
+                    )
                 loop.apply_events(
                     events,
-                    context=context_pack(
-                        claimed,
-                        live_pr,
-                        repair_budget=self.ledger.repair_budget_projection(
-                            claimed.run_id
-                        ),
-                    ),
+                    context=replay_context,
                 )
             except ValueError as exc:
                 return self._terminal_event_application_failure(
@@ -4798,6 +5087,52 @@ class VerificationConsumer:
             return current
         return self._launch_after_live_fence(claimed)
 
+    def _commit_repair_progress_intents(
+        self,
+        claimed: VerificationRun,
+        checks: Sequence[Mapping[str, object]],
+    ) -> list[dict[str, object]]:
+        lease_id = claimed.lease_id
+        if not lease_id:
+            raise ValueError("claimed verification run has no lease token")
+        validation_sha256 = _progress_validation_sha256(claimed.current_head_sha, checks)
+        intents = plan_repair_progress_intents(
+            self.ledger.attempts(claimed.run_id),
+            current_head_sha=claimed.current_head_sha,
+            validation_sha256=validation_sha256,
+        )
+        for intent in intents:
+            intent_id = str(intent["intent_id"])
+            self.ledger.record_attempt(
+                claimed.run_id,
+                REPAIR_INTENT_ATTEMPT_KIND,
+                intent_id,
+                "deterministic",
+                "none",
+                {
+                    "head_sha": claimed.current_head_sha,
+                    "contract": intent["contract"],
+                },
+                "admitted",
+                intent,
+                holder=self.holder,
+                lease_id=lease_id,
+                idempotency_key=intent_id,
+            )
+        durable = self.ledger.attempts(claimed.run_id)
+        for intent in intents:
+            matches = [
+                row
+                for row in durable
+                if row.get("kind") == REPAIR_INTENT_ATTEMPT_KIND
+                and isinstance(receipt := row.get("receipt"), Mapping)
+                and receipt.get("intent_id") == intent["intent_id"]
+                and receipt == intent
+            ]
+            if len(matches) != 1:
+                raise ValueError("repair progress intent did not survive ledger readback")
+        return intents
+
     def _launch_after_live_fence(
         self,
         claimed: VerificationRun,
@@ -4840,9 +5175,26 @@ class VerificationConsumer:
                 holder=self.holder,
                 lease_id=claimed.lease_id or "",
             )
+        try:
+            repair_progress_intents = self._commit_repair_progress_intents(
+                claimed, checks
+            )
+        except ValueError as exc:
+            return self.ledger.backoff(
+                claimed.run_id,
+                {
+                    "outcome": "blocked",
+                    "reason": "repair_progress_not_admitted",
+                    "error_type": type(exc).__name__,
+                },
+                _retry_at(),
+                holder=self.holder,
+                lease_id=claimed.lease_id or "",
+            )
         return self._launch(
             claimed,
             pr,
+            repair_progress_intents=repair_progress_intents,
             recovered_effect_operation_key=recovered_effect_operation_key,
             recovered_attempt=recovered_attempt,
         )
@@ -4854,6 +5206,7 @@ class VerificationConsumer:
         *,
         pack_override: Mapping[str, object] | None = None,
         merge_authority_repair_budget: Mapping[str, object] | None = None,
+        repair_progress_intents: Sequence[Mapping[str, object]] = (),
         recovered_effect_operation_key: str | None = None,
         recovered_attempt: Mapping[str, object] | None = None,
     ) -> VerificationRun:
@@ -4873,6 +5226,10 @@ class VerificationConsumer:
         )
         if self.host_fenced_merge:
             pack["merge_execution_mode"] = "host_fenced_executor"
+        if repair_progress_intents or "repair_progress_intents" not in pack:
+            pack["repair_progress_intents"] = [
+                dict(intent) for intent in repair_progress_intents
+            ]
 
         def started(session_id: str) -> None:
             safe_session_id = bounded_coordinator_session_id(session_id)
@@ -4985,6 +5342,10 @@ class VerificationConsumer:
                             "workflow_identity": claimed.request.get(
                                 "source_workflow"
                             ),
+                            "repair_progress_intent_ids": [
+                                intent["intent_id"]
+                                for intent in repair_progress_intents
+                            ],
                             "secret_ref": (
                                 "host-secret:builderops/model-session"
                             ),
@@ -5293,16 +5654,40 @@ class VerificationConsumer:
             )
         review_events = receipt.get("review_events")
         events = review_events if isinstance(review_events, list) else []
-        changed_head = receipt_head != claimed.head_sha
-        if changed_head and not any(
-            isinstance(event, Mapping) and event.get("kind") == "repair"
+        repair_events = [
+            event
             for event in events
-        ):
+            if isinstance(event, Mapping) and event.get("kind") == "repair"
+        ]
+        bound_repair_events = [
+            event
+            for event in repair_events
+            if isinstance(event.get("failure_domain"), str)
+            and isinstance(event.get("mechanism_id"), str)
+        ]
+        packed_head = pack.get("head_sha")
+        repair_base_head = (
+            packed_head
+            if isinstance(packed_head, str)
+            and re.fullmatch(r"[0-9a-f]{40}", packed_head)
+            else claimed.head_sha
+        )
+        changed_head = receipt_head != claimed.head_sha
+        if changed_head and not repair_events:
             return self.ledger.terminal(
                 claimed.run_id,
                 "failed",
                 dict(receipt),
                 reason="receipt_head_mismatch",
+                holder=self.holder,
+                lease_id=lease_id,
+            )
+        if bound_repair_events and receipt_head == repair_base_head:
+            return self.ledger.terminal(
+                claimed.run_id,
+                "failed",
+                dict(receipt),
+                reason="repair_head_did_not_advance",
                 holder=self.holder,
                 lease_id=lease_id,
             )
@@ -5326,9 +5711,20 @@ class VerificationConsumer:
                 if merge_authority_repair_budget is not None
                 else self.ledger.repair_budget_projection(claimed.run_id)
             )
+        transition_evidence: dict[str, object] | None = None
         try:
             live_pr = self.truth.pull_request(claimed.repository, claimed.pr_number)
             live_checks = self.truth.checks(claimed.repository, receipt_head)
+            if bound_repair_events:
+                transition_evidence = _github_repair_transition_evidence(
+                    repair_base_head,
+                    receipt_head,
+                    self.truth.compare(
+                        claimed.repository,
+                        repair_base_head,
+                        receipt_head,
+                    ),
+                )
             if verdict == "delivered":
                 assert expected_merge_repair_budget is not None
                 rejection = delivered_live_truth_rejection(
@@ -5396,11 +5792,6 @@ class VerificationConsumer:
             )
         if rejection:
             if transient:
-                repair_events = [
-                    event
-                    for event in events
-                    if isinstance(event, Mapping) and event.get("kind") == "repair"
-                ]
                 if len(repair_events) != len(events):
                     return self.ledger.terminal(
                         claimed.run_id,
@@ -5418,6 +5809,11 @@ class VerificationConsumer:
                             claimed.run_id
                         ),
                     )
+                    pack["progress_validation_sha256"] = (
+                        _progress_validation_sha256(receipt_head, live_checks)
+                    )
+                    if transition_evidence is not None:
+                        pack["repair_transition_evidence"] = transition_evidence
                     try:
                         VerificationAgentLoop(
                             self.ledger,
@@ -5459,6 +5855,11 @@ class VerificationConsumer:
             live_pr,
             repair_budget=self.ledger.repair_budget_projection(claimed.run_id),
         )
+        pack["progress_validation_sha256"] = _progress_validation_sha256(
+            receipt_head, live_checks
+        )
+        if transition_evidence is not None:
+            pack["repair_transition_evidence"] = transition_evidence
         loop = VerificationAgentLoop(
             self.ledger,
             claimed.run_id,
@@ -5550,6 +5951,145 @@ class VerificationConsumer:
                 holder=self.holder, lease_id=lease_id,
             )
 
+    def _durable_repair_recovery(
+        self,
+        run: VerificationRun,
+        observed_head: str,
+    ) -> tuple[Mapping[str, object], str] | None:
+        """Find one receipt that can resume only the post-launch repair fence."""
+        pack = run.context_pack
+        session_id = bounded_coordinator_session_id(
+            run.coordinator_session_id
+        )
+        if not isinstance(pack, Mapping) or session_id is None:
+            return None
+        base_head = pack.get("head_sha")
+        if (
+            not isinstance(base_head, str)
+            or re.fullmatch(r"[0-9a-f]{40}", base_head) is None
+            or base_head == observed_head
+            or run.current_head_sha not in {base_head, observed_head}
+        ):
+            return None
+        packed_intents = pack.get("repair_progress_intents", [])
+        if not isinstance(packed_intents, list):
+            raise ValueError("repair recovery intent projection is malformed")
+        intent_ids = [
+            intent.get("intent_id")
+            for intent in packed_intents
+            if isinstance(intent, Mapping)
+        ]
+        if (
+            len(intent_ids) != len(packed_intents)
+            or any(not isinstance(intent_id, str) for intent_id in intent_ids)
+            or len(set(intent_ids)) != len(intent_ids)
+        ):
+            raise ValueError("repair recovery intent projection is malformed")
+        candidates: list[Mapping[str, object]] = []
+        for attempt in self.ledger.attempts(run.run_id):
+            receipt = attempt.get("receipt")
+            events = (
+                receipt.get("review_events")
+                if isinstance(receipt, Mapping)
+                else None
+            )
+            repair_events = [
+                event
+                for event in events
+                if isinstance(event, Mapping)
+                and event.get("kind") == "repair"
+            ] if isinstance(events, list) else []
+            if (
+                attempt.get("kind") != "verification"
+                or attempt.get("session_id") != session_id
+                or not isinstance(receipt, Mapping)
+                or receipt.get("head_sha") != observed_head
+                or not repair_events
+            ):
+                continue
+            for event in repair_events:
+                progress_intent_id = event.get("progress_intent_id")
+                if (
+                    progress_intent_id is not None
+                    and progress_intent_id not in intent_ids
+                ):
+                    raise ValueError(
+                        "repair recovery receipt exceeds admitted progress intents"
+                    )
+            candidates.append(attempt)
+        if len(candidates) > 1:
+            raise ValueError(
+                "verification run has conflicting durable repair receipts"
+            )
+        return (candidates[0], base_head) if candidates else None
+
+    def _recover_repair_effect(
+        self,
+        run: VerificationRun,
+        attempt: Mapping[str, object],
+        base_head: str,
+        pending: Mapping[str, object] | None,
+    ) -> str | None:
+        """Reconcile the exact H1/session/intent model effect when one exists."""
+        if pending is None:
+            return None
+        operation_key = pending.get("operation_key")
+        pending_payload = pending.get("payload")
+        outbox_intent = pending.get("outbox_intent")
+        outbox_payload = (
+            outbox_intent.get("payload")
+            if isinstance(outbox_intent, Mapping)
+            else None
+        )
+        receipt = attempt.get("receipt")
+        session_id = attempt.get("session_id")
+        pack = run.context_pack
+        assert isinstance(pack, Mapping)
+        packed_intents = pack.get("repair_progress_intents", [])
+        intent_ids = [
+            intent.get("intent_id")
+            for intent in packed_intents
+            if isinstance(intent, Mapping)
+        ] if isinstance(packed_intents, list) else []
+        if (
+            pending.get("effect_type") != "model.verification_coordinator"
+            or not isinstance(operation_key, str)
+            or pending.get("head_sha") != base_head
+            or not isinstance(pending_payload, Mapping)
+            or not isinstance(outbox_payload, Mapping)
+            or dict(pending_payload) != dict(outbox_payload)
+            or pending_payload.get("head_sha") != base_head
+            or pending_payload.get("repair_progress_intent_ids") != intent_ids
+            or not isinstance(receipt, Mapping)
+            or not isinstance(session_id, str)
+        ):
+            raise ValueError("repair recovery effect binding is malformed")
+        status = pending.get("outbox_status")
+        if status in {"claimed", "unknown"}:
+            recover_effect = getattr(self.ledger, "recover_effect", None)
+            if not callable(recover_effect):
+                raise ValueError("repair recovery effect cannot be fenced")
+            recover_effect(
+                operation_key,
+                run_id=run.run_id,
+                effect_type="model.verification_coordinator",
+            )
+            return operation_key
+        if status == "succeeded":
+            evidence = pending.get("reconciliation_evidence")
+            if (
+                not isinstance(evidence, Mapping)
+                or evidence.get("outcome")
+                != "model_receipt_durably_recorded"
+                or evidence.get("head_sha") != receipt.get("head_sha")
+                or evidence.get("session_id") != session_id
+            ):
+                raise ValueError(
+                    "succeeded repair effect lacks its durable receipt binding"
+                )
+            return None
+        raise ValueError("repair recovery effect is not resumable")
+
     def recover(self, run_id: str) -> VerificationRun:
         run = self.ledger.get(run_id)
         pending_reader = getattr(
@@ -5611,7 +6151,8 @@ class VerificationConsumer:
             r"[0-9a-fA-F]{40}", observed_head
         ):
             raise ValueError("verification run is no longer resumable: malformed_pr")
-        if observed_head != run.head_sha:
+        repair_recovery = self._durable_repair_recovery(run, observed_head)
+        if observed_head != run.head_sha and repair_recovery is None:
             raise ValueError("verification run is no longer resumable: stale_head")
         if not _final_review_authority_matches(run, pr.get("body")):
             raise ValueError(
@@ -5622,14 +6163,17 @@ class VerificationConsumer:
             return self._recover_merged_run(run, pr)
         if resolve_neutralized_issue_authority(pr.get("body")) is not None:
             return self._recover_open_neutralized_run(run, pr)
-        checks = self.truth.checks(run.repository, run.head_sha)
+        checks = self.truth.checks(run.repository, observed_head)
         rejection = live_truth_rejection(
             run,
             pr,
             checks,
-            expected_head_sha=run.head_sha,
+            expected_head_sha=observed_head,
         )
-        if rejection:
+        if rejection and not (
+            repair_recovery is not None
+            and rejection in {"missing_checks", "checks_not_green"}
+        ):
             raise ValueError(f"verification run is no longer resumable: {rejection}")
         if not self.auth.check().ok:
             raise ValueError("verification auth preflight failed")
@@ -5641,6 +6185,21 @@ class VerificationConsumer:
             raise VerificationSubscriptionBusy(
                 f"verification run {run_id} did not acquire a fresh "
                 "recovery fence"
+            )
+        if repair_recovery is not None:
+            repair_attempt, base_head = repair_recovery
+            repair_operation_key = self._recover_repair_effect(
+                run,
+                repair_attempt,
+                base_head,
+                pending if isinstance(pending, Mapping) else None,
+            )
+            return self._launch(
+                claimed,
+                pr,
+                pack_override=run.context_pack,
+                recovered_effect_operation_key=repair_operation_key,
+                recovered_attempt=repair_attempt,
             )
         recovered_operation_key: str | None = None
         recovered_attempt: Mapping[str, object] | None = None

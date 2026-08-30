@@ -38,7 +38,10 @@ from app.dispatcher.verification_agent_loop import (
     VerificationAgentLoop,
     valid_human_exception_packet,
 )
-from app.dispatcher.verification_dispatch import _authenticated_verification_request
+from app.dispatcher.verification_dispatch import (
+    _authenticated_verification_request,
+    build_repair_transition_evidence,
+)
 from app.dispatcher.verification_api import BuilderOpsVerificationLedger
 from app.dispatcher.verified_merge import (
     build_verified_merge_phase,
@@ -49,6 +52,51 @@ from tests.dispatcher.builderops_verification_fakes import (
     FakeBuilderOpsClient,
     FakeVerificationOutbox,
 )
+
+
+def _repair_transition(
+    base_head: str,
+    repaired_head: str,
+    *,
+    path: str = "app/dispatcher/verification_dispatch.py",
+) -> dict[str, object]:
+    return build_repair_transition_evidence(
+        base_head_sha=base_head,
+        repaired_head_sha=repaired_head,
+        commits=[repaired_head],
+        files=[
+            {
+                "path_sha256": hashlib.sha256(path.encode()).hexdigest(),
+                "previous_path_sha256": None,
+                "status": "modified",
+                "blob_sha": repaired_head,
+            }
+        ],
+    )
+
+
+def _repair_compare(
+    base_head: str,
+    repaired_head: str,
+    *,
+    path: str = "app/dispatcher/verification_dispatch.py",
+) -> dict[str, object]:
+    return {
+        "status": "ahead",
+        "ahead_by": 1,
+        "behind_by": 0,
+        "total_commits": 1,
+        "base_commit": {"sha": base_head},
+        "commits": [{"sha": repaired_head}],
+        "files": [
+            {
+                "filename": path,
+                "previous_filename": None,
+                "status": "modified",
+                "sha": repaired_head,
+            }
+        ],
+    }
 
 
 def test_consumer_uses_builderops_api_for_durable_state() -> None:
@@ -82,6 +130,115 @@ def test_consumer_uses_builderops_api_for_durable_state() -> None:
     assert all("sqlite" not in name for name in call_names)
 
 
+def test_repeated_nonconverging_repair_is_rejected_before_closer_launch() -> None:
+    api = FakeBuilderOpsClient()
+    durable = BuilderOpsVerificationLedger(api, repository=REPO)
+    run = durable.ingest(request())
+    claimed = durable.claim(run.run_id, "verification-host")
+    assert claimed.claimed_by is not None
+    assert claimed.lease_id is not None
+    loop = VerificationAgentLoop(
+        durable,
+        run.run_id,
+        holder=claimed.claimed_by,
+        lease_id=claimed.lease_id,
+    )
+    binding = {
+        "finding_id": "progress-admission",
+        "failure_domain": "review_code_correctness",
+        "mechanism_id": "verification-repair-progress",
+    }
+    loop.repair(
+        **binding,
+        session_id="repair-1",
+        capability="gpt-5.6-terra",
+        reasoning_effort="high",
+        context={"head": HEAD},
+        outcome="fixed",
+        transition_evidence=_repair_transition("0" * 40, HEAD),
+    )
+    loop.review(
+        **binding,
+        session_id="review-1",
+        capability="gpt-5.6-terra",
+        reasoning_effort="high",
+        context={"head": HEAD},
+        outcome="blocking",
+        mechanism_path_sha256=[
+            hashlib.sha256(
+                b"app/dispatcher/verification_dispatch.py"
+            ).hexdigest()
+        ],
+    )
+
+    malformed_repair_id = "vattempt-malformedrepair"
+    api.attempt_rows[run.run_id].extend(
+        [
+            {
+                "repository": REPO,
+                "task_id": run.run_id,
+                "attempt_id": malformed_repair_id,
+                "state": "standard_repair",
+                "payload": {
+                    "attempt_id": malformed_repair_id,
+                    "kind": "standard_repair",
+                    "ordinal": 2,
+                    "session_id": "repair-2",
+                    "capability": "gpt-5.6-terra",
+                    "reasoning_effort": "high",
+                    "context_hash": "1" * 64,
+                    "outcome": "fixed",
+                    **binding,
+                    "receipt": {**binding, "head_sha": HEAD},
+                },
+                "updated_at": "2026-08-30T10:00:00+00:00",
+            },
+            {
+                "repository": REPO,
+                "task_id": run.run_id,
+                "attempt_id": "vattempt-malformedreview",
+                "state": "review",
+                "payload": {
+                    "attempt_id": "vattempt-malformedreview",
+                    "kind": "review",
+                    "ordinal": 2,
+                    "session_id": "review-2",
+                    "capability": "gpt-5.6-terra",
+                    "reasoning_effort": "high",
+                    "context_hash": "2" * 64,
+                    "outcome": "blocking",
+                    **binding,
+                    "receipt": {
+                        **binding,
+                        "reviewed_attempt_id": malformed_repair_id,
+                        "head_sha": HEAD,
+                        "verdict": "blocking",
+                    },
+                },
+                "updated_at": "2026-08-30T10:00:01+00:00",
+            },
+        ]
+    )
+    launcher = Launcher()
+    consumer = VerificationConsumer(
+        durable,
+        Truth(eligible_pr(), GREEN),
+        Auth(),
+        launcher,
+        holder="verification-host",
+    )
+
+    result = consumer._launch_after_live_fence(claimed)
+
+    assert result.status == "backoff"
+    assert result.terminal_receipt == {
+        "outcome": "blocked",
+        "reason": "repair_progress_not_admitted",
+        "error_type": "ValueError",
+    }
+    assert launcher.calls == []
+
+
 @dataclass
 class Truth:
     pr: dict[str, object]
@@ -98,6 +255,9 @@ class Truth:
 
     def checks(self, repository, head_sha):
         return self.check_rows
+
+    def compare(self, repository, base_head_sha, repaired_head_sha):
+        return _repair_compare(base_head_sha, repaired_head_sha)
 
     def pull_request_comments(self, repository, pr_number):
         return _merge_comments(
@@ -2240,6 +2400,34 @@ def green_checks(head_sha: str = HEAD) -> list[dict[str, object]]:
 
 
 GREEN = green_checks()
+
+
+def test_progress_validation_requires_new_authenticated_check_execution() -> None:
+    repaired_head = "b" * 40
+    before = green_checks(HEAD)
+    relabelled = green_checks(repaired_head)
+
+    before_digest = verification_consumer._progress_validation_sha256(
+        HEAD, before
+    )
+    assert verification_consumer._progress_validation_sha256(
+        repaired_head, relabelled
+    ) == before_digest
+
+    rerun = green_checks(repaired_head)
+    rerun[0]["id"] = 2
+    rerun[0]["check_suite"] = {"id": 2}
+    workflow = rerun[0]["workflow_run"]
+    assert isinstance(workflow, dict)
+    workflow.update({"id": 1002, "check_suite_id": 2})
+    assert verification_consumer._progress_validation_sha256(
+        repaired_head, rerun
+    ) != before_digest
+
+    with pytest.raises(ValueError, match="check evidence is malformed"):
+        verification_consumer._progress_validation_sha256(
+            HEAD, rerun
+        )
 
 
 def artifact_request(**updates: object) -> dict[str, object]:
@@ -4674,7 +4862,7 @@ def test_pending_repair_checks_persist_repair_before_backoff(tmp_path) -> None:
         {
             "id": 2,
             "name": "Unit tests (not pg)",
-            "app": {"slug": "github-actions"},
+            "app": {"id": 7, "slug": "github-actions"},
             **_required_check_authority(new_head, suite_id=2),
             "status": "in_progress",
             "conclusion": None,
@@ -4732,7 +4920,7 @@ def test_supporting_issue_addition_allows_repair_head_rebind_without_budget_rese
         {
             "id": 2,
             "name": "Unit tests (not pg)",
-            "app": {"slug": "github-actions"},
+            "app": {"id": 7, "slug": "github-actions"},
             **_required_check_authority(new_head, suite_id=2),
             "status": "in_progress",
             "conclusion": None,
@@ -4807,7 +4995,7 @@ def test_invalid_pending_repair_event_batch_fails_before_backoff(tmp_path) -> No
         {
             "id": 2,
             "name": "Unit tests (not pg)",
-            "app": {"slug": "github-actions"},
+            "app": {"id": 7, "slug": "github-actions"},
             **_required_check_authority(new_head, suite_id=2),
             "status": "in_progress",
             "conclusion": None,
@@ -4920,7 +5108,7 @@ def test_pending_repair_replay_preserves_two_plus_two_accounting(tmp_path) -> No
         {
             "id": 2,
             "name": "Unit tests (not pg)",
-            "app": {"slug": "github-actions"},
+            "app": {"id": 7, "slug": "github-actions"},
             **_required_check_authority(new_head, suite_id=2),
             "status": "in_progress",
             "conclusion": None,
@@ -5300,7 +5488,7 @@ def test_delivered_receipt_requires_successful_named_unit_typecheck_gate(
                 {
                     "id": 2,
                     "name": "Unit tests (not pg)",
-                    "app": {"slug": "github-actions"},
+                    "app": {"id": 7, "slug": "github-actions"},
                     **_required_check_authority(suite_id=2),
                     "status": status,
                     "conclusion": conclusion,

@@ -33,6 +33,9 @@ from tests.dispatcher.builderops_verification_fakes import FakeBuilderOpsClient
 from tests.dispatcher.verification_helpers import HEAD, REPO, request
 
 BASE = "b" * 40
+MECHANISM_PATH_SHA = hashlib.sha256(
+    b"app/dispatcher/verification_agent_loop.py"
+).hexdigest()
 NEXT_BASE = "c" * 40
 
 
@@ -521,6 +524,7 @@ def test_blocking_review_wins_atomic_merge_intent_race() -> None:
         reasoning_effort="xhigh",
         context={"head_sha": HEAD},
         outcome="blocking",
+        mechanism_path_sha256=[MECHANISM_PATH_SHA],
     )
     repository = RepositoryAuthority()
 
