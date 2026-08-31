@@ -6,7 +6,7 @@ github_issue:
 source_anchor: "AGENTS.md :: Reading order"
 parent_capability: Whole-System Design Principle Routing
 prerequisites: [DSP-02]
-depends_on: [DSP-02]
+depends_on: [RESOLVE_MINIMAL_DESIGN_PACKETS.md]
 can_parallelize_with: []
 ---
 

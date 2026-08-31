@@ -106,7 +106,7 @@ does not make a DB, queue, or index a retained source.
 
 **Disposition:** justified class-specific exception. Keep separate from the rebuildability kernel.
 
-### F5 — Owner-decision conflict: instance-state journal, lease, and backup surfaces
+### F5 — Owner-decision conflict resolved: instance-state journal, lease, and backup surfaces
 
 The current MVR/deployment contract requires private instance state, a crash-recoverable
 transaction journal, a host-global ownership ledger, durable deployment leases/fences, verified
@@ -117,11 +117,11 @@ The implementation has `InstanceStateBackup` and a narrow lost-lease recovery ba
 partial-failure safety rather than Product meaning, but the evidence does not show that their
 recovery lineage can be reconstructed from retained human documents after total loss.
 
-**Disposition:** unresolved operational exception. Do not delete or weaken it in this audit. The
-owner must choose whether these records are (a) explicitly retained operational receipts/state, or
-(b) rebuild-safe state whose loss always yields a fenced, fail-closed bootstrap and re-derivation
-from current source/config/readback. Until chosen, any claim that “all non-document material is
-rebuildable” is incomplete for the MVR deployment boundary.
+**Disposition:** the accepted owner decision in section 8 selects option (b): loss of these records
+starts a new fenced, fail-closed epoch and re-derives only from current source, configuration, and
+owner-native readback. Existing partial-failure safeguards remain in force until the bounded MVR
+contract and implementation slices replace their restore assumptions; this audit does not weaken
+them or claim that transition work has shipped.
 
 ### F6 — Contract/code tension: BuilderOps is rebuildable, but recovery metadata presupposes restore
 
@@ -137,10 +137,11 @@ is evidence that a restored/rebuilt authority needs explicit external-effect rec
 that some recovery metadata cannot be inferred from a blank database without a defined bootstrap
 receipt/readback.
 
-**Disposition:** contract clarification required. Preserve the no-backup-gate rule, but make the
-loss path explicit: fresh DB seed, authority epoch/fence initialization, external GitHub readback,
-and a durable receipt source if `recovery_id`/LSN history is required for accountability. No WAL/DR
-implementation is implied.
+**Disposition:** the accepted owner decision preserves the no-backup-gate rule and selects an
+explicit fresh-bootstrap loss path: fresh DB seed, authority epoch/fence initialization, external
+GitHub readback, and durable document-backed receipts for accountability. The bounded BuilderOps
+slice must reconcile current restore-oriented metadata with that policy. No WAL/DR implementation
+is implied or claimed as shipped by this audit.
 
 ### F7 — Low-risk documentation drift: audit JSONL backup wording
 
@@ -299,17 +300,30 @@ node or central archive authority is proposed.
 
 No Issue, PR, label, Project, receipt, or external publication was created or changed by this audit.
 
-## 8. Decision and continuation
+## 8. Accepted decision and continuation
 
-**Owner decision required:** select the retention/rebuild policy for operational safety state
-(MVR ownership/journals and BuilderOps recovery fence) and state whether GAF's operation binding and
-staged recovery descriptor are retained receipts, rebuild-safe coordination state, or a separate
-explicit exception. This is a genuine authority choice; it should not be inferred from the current
-presence of backup code or from the historical HKA proposal.
+The owner accepted a **new fenced bootstrap epoch** for loss of operational safety lineage:
 
-**Continuation:** after that decision, the next bounded action is a read-only contract/doc
-reconciliation followed by the loss/corruption test kernel. Until then, #5067/#5062 remain blocked
-and no implementation, backup/restore migration, or runtime change is authorized by this artifact.
+- retained human artifacts, companions, and document-backed governance receipts remain continuity
+  authority;
+- machine mirrors and coordination projections rebuild only from declared sources and recipes;
+- loss of MVR ownership/journal or BuilderOps recovery lineage starts inactive, creates a new
+  explicit epoch, reads owner-native or GitHub authority, reconciles, and activates only after
+  convergence; and
+- GAF operation bindings and staged recovery descriptors retain authority only when they remain
+  explicit document-backed receipts for their governed operation. Their existence does not create
+  a general database, queue, index, backup, or restore authority.
+
+The accepted provenance is PromotionIntent `prom_20260831201315_5d56e3a3` and acceptance receipt
+`receipt_20260831201333_74f589be`. Its governed delivery result references are shared epic #5258
+and specification PR #5259; the PromotionIntent remains `accepted` until that PR merges and is then
+eligible for the `promoted` transition with those exact references.
+
+**Continuation:** publish the two bounded specifications, then deliver their serial child ledgers.
+The first ready slice is DSP-01 / #5260. RSC-01 performs the owner-doc reconciliation before any
+loss/corruption implementation. #5067/#5062 remain independently blocked, and this artifact does
+not authorize backup/restore migration, live loss testing, deployment, or runtime changes outside
+the filed child contracts.
 
 ## 9. Audit receipt
 

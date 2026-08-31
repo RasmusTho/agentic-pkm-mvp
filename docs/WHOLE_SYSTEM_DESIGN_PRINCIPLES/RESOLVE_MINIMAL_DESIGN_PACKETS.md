@@ -6,7 +6,7 @@ github_issue:
 source_anchor: "docs/WHOLE_SYSTEM_DESIGN_PRINCIPLES/README.md :: Cross-Task Invariants / Interaction Safety"
 parent_capability: Whole-System Design Principle Routing
 prerequisites: [DSP-01]
-depends_on: [DSP-01]
+depends_on: [ESTABLISH_PRINCIPLE_KERNEL.md]
 can_parallelize_with: []
 ---
 

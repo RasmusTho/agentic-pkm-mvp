@@ -3,10 +3,10 @@ name: Rebuild Product Projections
 description: Reconstruct object, vector, relation, and queue projections from declared retained sources with replay safety.
 task_id: RSC-03
 github_issue:
-source_anchor: "docs/EVENTS.md :: projection rebuild semantics"
+source_anchor: "docs/EVENTS.md :: Outbox consumer contract"
 parent_capability: Rebuildable System Continuity
 prerequisites: [RSC-02]
-depends_on: [RSC-02]
+depends_on: [PROVE_PRODUCT_TOTAL_LOSS.md]
 can_parallelize_with: []
 ---
 

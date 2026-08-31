@@ -6,7 +6,7 @@ github_issue:
 source_anchor: "docs/REBUILDABLE_SYSTEM_CONTINUITY/README.md :: Capability Acceptance"
 parent_capability: Rebuildable System Continuity
 prerequisites: [RSC-04, RSC-06, RSC-07]
-depends_on: [RSC-04, RSC-06, RSC-07]
+depends_on: [DIAGNOSE_MIRROR_CORRUPTION.md, APPLY_MVR_NEW_BOOTSTRAP.md, BOOTSTRAP_BUILDEROPS_FROM_AUTHORITY.md]
 can_parallelize_with: []
 ---
 

@@ -6,7 +6,7 @@ github_issue:
 source_anchor: "docs/WHOLE_SYSTEM_DESIGN_PRINCIPLES/README.md :: Capability Acceptance"
 parent_capability: Whole-System Design Principle Routing
 prerequisites: [DSP-02, DSP-04]
-depends_on: [DSP-02, DSP-04]
+depends_on: [RESOLVE_MINIMAL_DESIGN_PACKETS.md, ENFORCE_OWNED_EFFECT_BOUNDARIES.md]
 can_parallelize_with: []
 ---
 

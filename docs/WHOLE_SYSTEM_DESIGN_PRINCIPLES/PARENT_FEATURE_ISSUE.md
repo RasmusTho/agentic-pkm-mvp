@@ -69,6 +69,12 @@ pickup-ready child. Later
 children are filed after their prerequisite receipt is live; existing overlapping Issues retain
 their own lifecycle authority.
 
+## Verification Path
+
+Each child carries production-path tests or concrete owner-doc/receipt targets. Stateful loss tests
+use isolated fixtures. The terminal child binds exact merged heads, the selected design packet,
+retained-source digests, owner-specific epoch outcomes, and the complete refusal/retry matrix.
+
 ## Validation / Acceptance Path
 
 The epic remains `agent:blocked` with `action:wait-dependency` until both child ledgers and the
@@ -80,3 +86,15 @@ epic to `verification-and-closure`.
 
 - Direct runtime work, host operations, deployment, backup/restore implementation, destructive loss
   testing outside isolated fixtures, or closure of existing independent epics.
+
+## Suggested Validation
+
+- Run every child Issue's exact `Verify:` targets on its current PR head.
+- Run `pytest -q tests/integration/test_rebuildable_system_continuity.py` for terminal acceptance.
+- Re-read child, PR, owner-doc, and shared-epic lifecycle before any terminal claim.
+
+## Source Docs
+
+- `docs/WHOLE_SYSTEM_DESIGN_PRINCIPLES/README.md`
+- `docs/REBUILDABLE_SYSTEM_CONTINUITY/README.md`
+- `docs/audits/REBUILDABILITY_RECOVERY_AUTHORITY_AUDIT_2026-08-31.md`

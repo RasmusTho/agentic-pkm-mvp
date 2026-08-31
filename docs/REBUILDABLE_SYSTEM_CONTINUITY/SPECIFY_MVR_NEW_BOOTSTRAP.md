@@ -3,10 +3,10 @@ name: Specify MVR New Bootstrap
 description: Amend the existing Multi-Vault Runtime contract for loss of journal, lease, ownership, and recovery lineage.
 task_id: RSC-05
 github_issue:
-source_anchor: "docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md :: instance state"
+source_anchor: "docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md :: Multi-vault instance-state rollout boundary"
 parent_capability: Rebuildable System Continuity
 prerequisites: [RSC-01]
-depends_on: [RSC-01]
+depends_on: [RECONCILE_CONTINUITY_AUTHORITY.md]
 can_parallelize_with: []
 ---
 

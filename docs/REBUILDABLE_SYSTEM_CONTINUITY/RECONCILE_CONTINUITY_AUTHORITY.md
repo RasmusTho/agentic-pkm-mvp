@@ -3,10 +3,10 @@ name: Reconcile Continuity Authority
 description: Align owner documents with retained authority, rebuildable mirrors, and fenced new-bootstrap recovery.
 task_id: RSC-01
 github_issue:
-source_anchor: "docs/audits/REBUILDABILITY_RECOVERY_AUTHORITY_AUDIT_2026-08-31.md :: Anchored findings"
+source_anchor: "docs/audits/REBUILDABILITY_RECOVERY_AUTHORITY_AUDIT_2026-08-31.md :: 3. Anchored findings"
 parent_capability: Rebuildable System Continuity
 prerequisites: [DSP-01]
-depends_on: [DSP-01]
+depends_on: [../WHOLE_SYSTEM_DESIGN_PRINCIPLES/ESTABLISH_PRINCIPLE_KERNEL.md]
 can_parallelize_with: []
 ---
 

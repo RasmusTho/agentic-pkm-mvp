@@ -6,7 +6,7 @@ github_issue:
 source_anchor: "docs/audits/REBUILDABILITY_RECOVERY_AUTHORITY_AUDIT_2026-08-31.md :: DOCTOR"
 parent_capability: Rebuildable System Continuity
 prerequisites: [RSC-02, RSC-03]
-depends_on: [RSC-02, RSC-03]
+depends_on: [PROVE_PRODUCT_TOTAL_LOSS.md, REBUILD_PRODUCT_PROJECTIONS.md]
 can_parallelize_with: []
 ---
 

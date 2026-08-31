@@ -6,7 +6,7 @@ github_issue:
 source_anchor: "docs/CONCEPTS/MACHINE_MIRROR_AND_DB_AUTHORITY_CONTRACT.md :: Rebuild semantics"
 parent_capability: Rebuildable System Continuity
 prerequisites: [RSC-01]
-depends_on: [RSC-01]
+depends_on: [RECONCILE_CONTINUITY_AUTHORITY.md]
 can_parallelize_with: []
 ---
 
