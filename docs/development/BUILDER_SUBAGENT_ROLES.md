@@ -109,6 +109,39 @@ owning workflow skill or produce a truthful handoff, but its recommendation does
 handoff contract: `final_state` remains only `blocked | needs-human | handoff`; a worker must never
 self-attest `done`.
 
+A `subagent_handoff_receipt` reports work to a coordinator; it does not by itself transfer Issue
+lifecycle authority. Replacing the sole writer or lifecycle owner requires a durable
+`lifecycle_handoff_receipt.v1` on the governing Issue or PR. It records the Issue, current lifecycle
+owner and session, named successor, branch and base, sole writable worktree, unpublished candidate
+head (or `none`), changed files, current validation and current review/receipt evidence with head or
+time binding, blockers, residual risk, and exactly one next authorized action.
+
+The successor must authenticate those fields against live GitHub and Git/worktree evidence and post
+an acknowledgment before acting. The acknowledgment fences the former lifecycle owner into a
+read-only role: the former owner may supply evidence but may no longer edit, push, publish, merge,
+close, or mutate lifecycle state. Contradictory owners, writable worktrees, candidate heads, or
+review evidence fail closed; newer blocking review evidence supersedes an older publish or closure
+recommendation. Coordination resumes only after the current owner or the normal maintenance/owner
+authority path reconciles one owner, one current candidate head, and one next authorized action.
+
+```yaml
+lifecycle_handoff_receipt.v1:
+  issue:                        # governing Issue number
+  current_lifecycle_owner:      # agent + session currently holding lifecycle authority
+  successor:                    # agent + session proposed to receive authority
+  branch:                       # publication branch
+  base:                         # base ref/SHA used by the candidate
+  writable_worktree:            # sole absolute writable worktree
+  unpublished_candidate_head:   # exact commit SHA or none
+  changed_files:                # bounded intended file set
+  current_validation:           # commands/results bound to the candidate head
+  current_review_receipt_evidence: # review/receipt refs plus observed time or head binding
+  blockers:                     # active blockers or none
+  residual_risk:                # remaining risk
+  next_authorized_action:       # exactly one action
+  successor_acknowledgment:     # live-readback result; absent until transfer is effective
+```
+
 The dry-run helper for generating these packets is:
 
 `python3 -m app.builderops builderops epic-run-state dispatch-plan --epic-issue-number <N> --run-id <safe-id> --candidates-file <file> --json`
