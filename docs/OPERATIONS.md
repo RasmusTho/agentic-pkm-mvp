@@ -349,6 +349,7 @@ Watcher auto-exec enablement rule:
 - The registry watcher remains polling-based; each observation generation walks the configured scope incrementally across bounded ticks. No OS file-event hooks are used.
 - Paths with spaces are supported; wrap vault paths in quotes.
 - When using iCloud/Obsidian sync, keep scopes conservative and rely on debounce/backoff guardrails.
+- A vault-selection rebind is fail closed: a no-lifecycle acknowledgement first stops (or proves absent) the prior watcher; traversal errors and drained scans remain non-terminal until a fresh resumed old-root scan succeeds.
 - Do not use the legacy snapshot watcher for runtime start-system flows.
 - Do not treat lab/dev-only watcher paths as production equivalents.
 
