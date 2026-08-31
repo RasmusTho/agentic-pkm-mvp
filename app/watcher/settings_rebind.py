@@ -23,7 +23,11 @@ from app.instance.filesystem_identity import (
     resolve_filesystem_root_identity,
     same_filesystem_root,
 )
-from app.instance.settings_rebind import SettingsRebindRecord, SettingsRebindStore
+from app.instance.settings_rebind import (
+    SettingsRebindRecord,
+    SettingsRebindStore,
+    validate_settings_rebind_candidate_root,
+)
 from app.instance.vault_registry import RegistrySnapshot, VaultRegistryStore
 
 if TYPE_CHECKING:
@@ -507,22 +511,9 @@ class DormantSettingsRebindReconciler:
         registration = self._registry.load().registrations.get(candidate)
         if registration is None:
             raise RegistryError("settings rebind candidate watcher binding is missing")
-        candidate_path = Path(registration.path)
         # Registration proves identity, not watcher permission. Revalidate the
         # candidate at the adoption seam immediately before changing roots.
-        from app.vault.manager import VaultManager
-
-        manager = VaultManager()
-        context = manager.validate_vault(candidate_path)
-        if context.status != "selected":
-            raise RegistryError(
-                "settings rebind candidate watcher root is not a selected vault"
-            )
-        if not manager.permissions_for_context(context).enable_vault_watcher:
-            raise RegistryError(
-                "settings rebind candidate watcher root is disabled by local settings"
-            )
-        return candidate_path
+        return validate_settings_rebind_candidate_root(Path(registration.path))
 
     def _receipt_path(self, record: SettingsRebindRecord) -> Path:
         return settings_rebind_watcher_receipt_path(

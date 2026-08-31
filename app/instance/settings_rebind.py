@@ -322,6 +322,24 @@ class SettingsRebindStore:
         )
 
 
+def validate_settings_rebind_candidate_root(candidate_root: Path) -> Path:
+    """Validate the candidate vault before any watcher adoption receipt."""
+
+    from app.vault.manager import VaultManager
+
+    manager = VaultManager()
+    context = manager.validate_vault(candidate_root)
+    if context.status != "selected":
+        raise RegistryError(
+            "settings rebind candidate watcher root is not a selected vault"
+        )
+    if not manager.permissions_for_context(context).enable_vault_watcher:
+        raise RegistryError(
+            "settings rebind candidate watcher root is disabled by local settings"
+        )
+    return candidate_root
+
+
 def _activation_fault_point(stage: str) -> None:
     """Test seam for foreground crash recovery; production is a no-op."""
 
@@ -345,12 +363,14 @@ class SettingsRebindActivation:
         *,
         watcher_state_dir: Path | None = None,
         watcher_enabled: bool | None = None,
+        watcher_requested: bool | None = None,
         wait_timeout_seconds: float | None = None,
         poll_seconds: float = 0.05,
     ) -> None:
         self.store = SettingsRebindStore(registry)
         self._watcher_state_dir = watcher_state_dir
         self._watcher_enabled_override = watcher_enabled
+        self._watcher_requested_override = watcher_requested
         self._wait_timeout_seconds = (
             wait_timeout_seconds
             if wait_timeout_seconds is not None
@@ -364,8 +384,14 @@ class SettingsRebindActivation:
         state_dir = Path(state_dir_raw).expanduser() if state_dir_raw else None
         enabled_raw = os.getenv("WATCHER_ENABLE", "").strip().lower()
         watcher_path = os.getenv("WATCHER_VAULT_PATH", "").strip()
-        enabled = enabled_raw in {"1", "true", "yes", "on"} and bool(watcher_path)
-        return cls(registry, watcher_state_dir=state_dir, watcher_enabled=enabled)
+        requested = enabled_raw in {"1", "true", "yes", "on"}
+        enabled = requested and bool(watcher_path)
+        return cls(
+            registry,
+            watcher_state_dir=state_dir,
+            watcher_enabled=enabled,
+            watcher_requested=requested,
+        )
 
     def activate(
         self,
@@ -415,6 +441,8 @@ class SettingsRebindActivation:
             _activation_fault_point("acknowledge")
             self._wait_for_stage(prepared, required_stage="acknowledged")
         else:
+            if self.watcher_requested:
+                validate_settings_rebind_candidate_root(candidate_root)
             _activation_fault_point("acknowledge")
             prepared = self.store.acknowledge_no_lifecycle(
                 desired_revision=prepared.desired_revision
@@ -496,6 +524,12 @@ class SettingsRebindActivation:
         if self._watcher_enabled_override is not None:
             return self._watcher_enabled_override
         return bool(os.getenv("WATCHER_VAULT_PATH", "").strip())
+
+    @property
+    def watcher_requested(self) -> bool:
+        if self._watcher_requested_override is not None:
+            return self._watcher_requested_override
+        return self.watcher_enabled
 
     def _wait_for_stage(
         self,

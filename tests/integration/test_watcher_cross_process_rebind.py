@@ -872,6 +872,30 @@ def test_enabled_idle_watcher_adopts_first_durable_selection(
     assert runtime.open_settings_rebind_store().read().phase == "no_lifecycle"
 
 
+def test_idle_enabled_watcher_rejects_disabled_first_candidate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The idle-enabled API path validates watcher policy before no_lifecycle commit."""
+    from app.vault.manager import VaultManager
+
+    runtime, _vault_a, vault_b, _config_path = _fixture(
+        tmp_path, monkeypatch, enabled=False
+    )
+    monkeypatch.setenv("WATCHER_ENABLE", "1")
+    monkeypatch.delenv("WATCHER_VAULT_PATH")
+    local_path = vault_b / "settings" / "local.md"
+    settings_store = MarkdownSettingsStore()
+    local_doc = settings_store.read(local_path)
+    frontmatter = dict(local_doc.frontmatter)
+    frontmatter["enableVaultWatcher"] = False
+    settings_store.write_frontmatter(local_path, frontmatter, body=local_doc.body)
+
+    with pytest.raises(RegistryError, match="disabled by local settings"):
+        VaultManager().select_vault(vault_b)
+
+    assert runtime.open_settings_rebind_store().read().phase == "prepared"
+
+
 def test_candidate_watcher_permission_is_revalidated_at_adoption(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
