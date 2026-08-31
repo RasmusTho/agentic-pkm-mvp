@@ -12,6 +12,7 @@ from app.instance._storage_boundary import (
     RegistryError,
     _StorageMutationCapability,
 )
+from app.settings.env_defaults import env_str
 
 if TYPE_CHECKING:
     from app.instance.vault_registry import KnownVaultRef, VaultRegistryStore
@@ -382,7 +383,7 @@ class SettingsRebindActivation:
     def from_environment(cls, registry: VaultRegistryStore) -> "SettingsRebindActivation":
         state_dir_raw = os.getenv("WATCHER_STATE_DIR", "").strip()
         state_dir = Path(state_dir_raw).expanduser() if state_dir_raw else None
-        enabled_raw = os.getenv("WATCHER_ENABLE", "").strip().lower()
+        enabled_raw = env_str("WATCHER_ENABLE").strip().lower()
         watcher_path = os.getenv("WATCHER_VAULT_PATH", "").strip()
         requested = enabled_raw in {"1", "true", "yes", "on"}
         enabled = requested and bool(watcher_path)

@@ -1,6 +1,6 @@
 """Watcher runtime configuration.
 
-HTTP-vs-background binding rationale (#2476, #3119, SETTINGS-05C)
+HTTP-vs-background split rationale (#2476, #3119, SETTINGS-05C)
 -----------------------------------------------------------------
 The watcher remains a separately deployed process and ``WATCHER_VAULT_PATH``
 remains its bootstrap adapter.  The old "document the split, do not converge"
