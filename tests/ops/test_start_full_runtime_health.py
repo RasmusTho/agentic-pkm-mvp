@@ -416,7 +416,7 @@ def test_dev_channel_alias_returns_zero_with_deferred_index_rebuild(tmp_path: Pa
     assert "runtime verified: true" in result.stdout
 
 
-def test_no_vault_startup_entrypoint_records_durable_no_lifecycle(tmp_path: Path) -> None:
+def test_no_vault_rebind_rejects_existing_watcher_before_acknowledgement(tmp_path: Path) -> None:
     health = _deferred_index_health()
     health["ok"] = True
     health["required_ok"] = True
@@ -471,6 +471,16 @@ def test_no_vault_startup_entrypoint_records_durable_no_lifecycle(tmp_path: Path
     assert record.desired_revision == record.applied_revision == 1
     progress = Path(env["STARTUP_HARNESS_PROGRESS_PATH"]).read_text(encoding="utf-8")
     assert "settings-rebind-no-lifecycle" in progress
+    progress_lines = progress.splitlines()
+    watcher_stop_index = next(
+        index for index, line in enumerate(progress_lines) if " stop watcher" in line
+    )
+    acknowledgement_index = next(
+        index
+        for index, line in enumerate(progress_lines)
+        if "settings-rebind-no-lifecycle" in line
+    )
+    assert watcher_stop_index < acknowledgement_index
 
 
 def test_prod_start_full_rejects_deferred_index_rebuild(tmp_path: Path) -> None:

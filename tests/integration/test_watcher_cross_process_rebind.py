@@ -321,6 +321,7 @@ def test_dormant_reconciler_failure_matrix_preserves_old_root_observation(
         resumed.write_text("resume scan\n", encoding="utf-8")
 
     registry.run_registry_forever(config_path, max_ticks=1)
+    registry.run_registry_forever(config_path, max_ticks=1)
     completed = load_settings_rebind_watcher_receipt(
         _revision_receipt_path(tmp_path, 1)
     )
@@ -335,8 +336,11 @@ def test_dormant_reconciler_failure_matrix_preserves_old_root_observation(
     event_paths = _event_paths(tmp_path)
     assert str(before) in event_paths
     assert str(between) in event_paths
-    assert str(candidate) not in event_paths
-    assert all(path.startswith(str(vault_a)) for path in event_paths)
+    assert candidate.name not in buffered
+    if fault_stage == "resume":
+        assert str(candidate) in event_paths
+    else:
+        assert all(path.startswith(str(vault_a)) for path in event_paths)
 
 
 @pytest.mark.parametrize("scan_blocker", ["kill_switch", "missing_scope"])
@@ -401,7 +405,7 @@ def test_prepare_ack_refuses_incomplete_registry_scan(
     assert not _revision_receipt_path(tmp_path, 1).exists()
 
 
-def test_rebind_waits_for_budgeted_scan_before_ack_or_completion(
+def test_drained_rebind_requires_resumed_old_root_scan_before_completion(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -453,6 +457,23 @@ def test_rebind_waits_for_budgeted_scan_before_ack_or_completion(
     assert completed.stage == "completed"
 
 
+def test_partial_scan_cannot_acknowledge_prepare(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An incomplete old-root scan must not produce a prepare acknowledgement."""
+    runtime, vault_a, _vault_b, config_path = _fixture(tmp_path, monkeypatch)
+    for index in range(8):
+        (vault_a / f"partial-{index}.md").write_text("partial\n", encoding="utf-8")
+
+    monkeypatch.setenv("WATCHER_MAX_SCANNED_FILES_PER_TICK", "1")
+    with pytest.raises(RegistryError, match="settings rebind watcher scan was incomplete"):
+        registry.run_registry_once(config_path)
+
+    assert runtime.open_settings_rebind_store().read().phase == "prepared"
+    assert not _revision_receipt_path(tmp_path, 1).exists()
+
+
 def test_rebind_receipt_buffer_is_bounded_to_current_revision_observation_window(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -493,6 +514,7 @@ def test_reconciler_uses_revision_bound_receipts_for_monotonic_reconciliation(
 
     registry.run_registry_once(config_path)
     _commit(runtime)
+    registry.run_registry_once(config_path)
     registry.run_registry_once(config_path)
 
     _prepare(runtime, desired_revision=2, applied_revision=1)
@@ -611,6 +633,7 @@ def test_prepare_drains_and_final_scans_old_binding_writes(
     between.write_text("between\n", encoding="utf-8")
 
     registry.run_registry_forever(config_path, max_ticks=1)
+    registry.run_registry_forever(config_path, max_ticks=1)
 
     receipt = load_settings_rebind_watcher_receipt(_revision_receipt_path(tmp_path, 1))
     assert receipt.stage == "completed"
@@ -632,6 +655,7 @@ def test_direct_filesystem_write_between_scan_and_commit_is_receipted_under_old_
     candidate = vault_b / "must-not-be-seen.md"
     candidate.write_text("candidate\n", encoding="utf-8")
 
+    registry.run_registry_forever(config_path, max_ticks=1)
     registry.run_registry_forever(config_path, max_ticks=1)
 
     receipt = load_settings_rebind_watcher_receipt(_revision_receipt_path(tmp_path, 1))
@@ -802,6 +826,7 @@ def test_committed_revision_survives_event_loss_and_process_restart(
     runtime, vault_a, vault_b, config_path = _fixture(tmp_path, monkeypatch)
     registry.run_registry_forever(config_path, max_ticks=1)
     _commit(runtime)
+    registry.run_registry_forever(config_path, max_ticks=1)
     registry.run_registry_forever(config_path, max_ticks=1)
 
     restarted = _runtime(tmp_path)
