@@ -212,14 +212,26 @@ unpublished candidate head (or `none`), changed files, current validation, curre
 evidence bound to an observed time or head, budget state, blockers, residual risk, and exactly one
 next authorized action.
 
-The successor must re-read and authenticate the live Issue labels and claim receipt, worktree
-registration, branch/PR head, unpublished candidate head, and current review/receipt evidence before
-posting its acknowledgment. Only that acknowledgment transfers authority. The former lifecycle
-owner is then read-only and must not edit, push, publish, merge, close, or mutate lifecycle state.
-Conflicting owners or writable worktrees, an omitted or contradictory candidate head, or newer
-blocking review evidence fail closed: no replacement, publication, merge, or closure may proceed
-until the current owner or the normal issue-maintenance/owner-authority path reconciles one owner,
-one current candidate head, and one next authorized action.
+After all non-worktree readbacks agree, the current owner must release its active worktree
+registration with
+`python3 scripts/agent_worktree.py --cwd <repo> release --worktree <absolute-worktree> --owner <current-session>`
+and re-read it as non-active. The named successor must then register the sole receipt-named worktree
+(or the receipt-named replacement path) with
+`python3 scripts/agent_worktree.py --cwd <repo> register --worktree <absolute-worktree> --owner <successor-session>`
+and re-read its own owner, branch, and generation. A connector-only transfer may instead declare and
+re-authenticate `writable_worktree: none`; it must not fabricate a local registration.
+
+Only after that release → successor registration → live readback sequence (or the authenticated
+connector-only `none` case) may the successor post its acknowledgment. That acknowledgment transfers
+authority, and the former lifecycle owner is then read-only and must not edit, push, publish, merge,
+close, or mutate lifecycle state. If release succeeds but successor registration, readback, or
+acknowledgment fails, authority does not transfer: the current owner remains the lifecycle owner but
+has no writable worktree and may only restore its own registration or route reconciliation; neither
+side may publish, merge, or close. Conflicting owners or writable worktrees, an omitted or
+contradictory candidate head, or newer blocking review evidence fail closed: no replacement,
+publication, merge, or closure may proceed until the current owner or the normal
+issue-maintenance/owner-authority path reconciles one owner, one current candidate head, and one next
+authorized action.
 
 ## Lifecycle rules during execution
 
