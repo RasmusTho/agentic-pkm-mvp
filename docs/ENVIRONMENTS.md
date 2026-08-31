@@ -175,15 +175,15 @@ Writing the host path into the container's `VAULT_ROOT` is what made `resolve_va
 
 A **third** independent binding slot exists alongside the two above, and it is the one most likely to silently diverge from the human's expectation: the **watcher/worker's own boot-time binding**, governed by `WATCHER_VAULT_PATH` (`app/watcher/config.py`), not by `VAULT_ROOT` and not by the API process's in-process `VaultManager` selection.
 
-This split is **deliberate, documented architecture**, not a bug: the watcher is a background daemon with an independent lifecycle, and converging it onto the HTTP process's in-memory `VaultManager` singleton would couple a background daemon to an HTTP runtime boundary it must not own (`app/watcher/config.py` module docstring, #2476 — "document the split, do not converge"). Three binding slots, three sources:
+The watcher is still a separately deployed daemon and `WATCHER_VAULT_PATH` is still its bootstrap adapter. The former #2476 posture ("document the split, do not converge") is superseded for the one compatibility lifecycle by SETTINGS-05C: the picker and watcher do not share the HTTP process's in-memory `VaultManager`, but they do converge through the protected, checksummed `settings_rebind.v1` transaction. Three inputs remain distinct:
 
 - **API vault selection** — `VaultManager` in-process state (`app/vault/manager.py`), set by `POST /api/companion/vault/select` / `/vault/initialize`. This is what "vault selected through the Companion UI" means.
 - **`VAULT_ROOT` runtime binding** — the API process's own env/boot pointer (§Vault terminology above), read by `resolve_vault_root()` / `resolve_optional_vault_root()`.
-- **Watcher/worker ingest binding** — `WATCHER_VAULT_PATH`, read once at watcher boot (`RegistryConfig.from_env` / `WatcherConfig.from_env`) and frozen for the process lifetime; there is no live rebind on a later API-side selection.
+- **Watcher/worker ingest binding** — `WATCHER_VAULT_PATH` at boot, then the durable SETTINGS-05C candidate after prepare, old-root acknowledgement, commit, drain, and resume. The watcher changes its in-memory root only after the committed receipt; this is one compatibility lifecycle, not multi-active support.
 
-**The gap this creates.** A vault chosen or initialized entirely through the Companion UI picker (the primary new-user path, #3102) — with no prior `VAULT_HOST_ROOT`/`WATCHER_VAULT_PATH` binding — sets only the first of these three. The watcher/worker continue watching whatever (if anything) `WATCHER_VAULT_PATH` pointed to at container boot. A capture can therefore write successfully to disk while remaining permanently invisible to ingest/embed/retrieval, with no error surfaced anywhere (#3119).
+**The pre-SETTINGS-05C gap.** A vault chosen or initialized entirely through the Companion UI picker (the primary new-user path, #3102) could set only the first slot. That was the #3119 failure: capture could write successfully while remaining invisible to ingest/embed/retrieval. The activated path now holds compatibility mutation ingress closed during the handoff and returns success only after the durable commit.
 
-**Resolution: make the divergence visible, not silently self-healing.** Rather than restructuring the watcher's boot-time-frozen config/tick loop to support live rebind (a materially larger change to an intentionally independent daemon), the API compares its selected vault path against the path the watcher last self-reported via its heartbeat file (`app/watcher/heartbeat.py :: write_registry_heartbeat`, which already carries a `vault_path` field every tick). This comparison lives in `app.api.routes.ingest_binding.ingest_binding_status()` and reports one of four states:
+**Resolution: durable rebind plus visible phase truth.** The API writes the protected transaction; the separate watcher consumes it and reports its root through the heartbeat. `app.api.routes.ingest_binding.ingest_binding_status()` compares the heartbeat to the selected path and also exposes the rebind schema, phase, desired/applied revisions, lifecycle posture, and failure posture. It reports one of four binding states:
 
 - `"bound"` — the watcher's fresh heartbeat confirms the same vault path.
 - `"diverged"` — the watcher is alive but bound to a *different* vault.
@@ -192,7 +192,7 @@ This split is **deliberate, documented architecture**, not a bug: the watcher is
 
 This status is surfaced on two paths: `GET /api/companion/workspace`'s `runtime.ingest` block (consumed by the Companion UI shell as an `workspace-ingest-unbound-banner`, independent of the existing vault-unreachable banner), and `POST /api/companion/capture`'s `ingest_warning` field (an advisory string alongside the `written` acknowledgement — the write itself is never gated or delayed by this check). Both degrade to a visible warning rather than raising, so a heartbeat-read failure cannot itself become a new outage.
 
-Full live propagation (watcher automatically rebinding without restart) remains out of scope here — see #2143 (multi-vault registry) for where that would eventually live.
+The watcher may continue in its current process after a completed handoff, but only one compatibility root is active at a time. Generic multi-vault request/session selection and multi-active background lifecycle remain out of scope; MVR-06B owns the later supervisor handoff.
 
 ### Full-host access for in-process vault selection (#2310)
 

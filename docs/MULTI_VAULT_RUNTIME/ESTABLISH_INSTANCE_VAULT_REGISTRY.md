@@ -261,6 +261,37 @@ creating a new identity. A parse-corrupt provably pre-MVR/empty payload selected
 is backed up and reseeded; a populated current-schema payload restores its verified snapshot or
 fails closed, and an ambiguous migration reports the file/error and remains untouched.
 
+## Legacy owner root namespace authority
+
+**Decision (2026-08-30, owner-authorized through #4539):** choose host-side validation (Option B).
+The host-side legacy-owner producer is the authority for resolving, materializing, and validating
+each owner root because the roots exist in the host namespace. It emits a private, bound,
+verifiable legacy-owner receipt for the deployment consumer. `deployment-finish` validates that
+receipt and its identity proof; it does not resolve a host-only root or use `root.is_dir()` as a
+second authority check inside `instance-state-init`.
+
+The receipt must preserve the existing ownership semantics: complete source evidence, canonical
+filesystem identity and ancestor identity material, cross-domain collision/overlap rejection, and
+binding to the deployment nonce, controller identity, post-quiescence inventory digest, and receipt
+digest. A host path may remain only as non-authoritative host-local diagnostic context if the
+implementation needs it; container-side validation and failure output must use the opaque proof and
+must not expose or re-resolve the raw path.
+
+**Rejected alternative (Option A):** mounting `/Users`, `/Volumes`, or equivalent broad host roots
+into `instance-state-init` so its existing `root.is_dir()` check can succeed. That would widen the
+filesystem exposure of the deployment-authority one-shot and make mount topology, rather than the
+host producer's already-fenced proof, the authority for this check. It is rejected for this repair;
+the one-shot's intentionally small mount set remains unchanged.
+
+**Current-state boundary:** the bounded receipt handoff repair shipped in PR #5244 for #5235.
+The host producer now emits the bound proof, and the deployment consumer validates that proof
+without materializing host-only roots inside `instance-state-init`; invalid or unbound evidence
+still fails closed. #5235 owns only this receipt handoff repair; the future Mac Vault Service,
+multi-vault Settings control plane, and write queue remain separate architecture-study work.
+
+**Traceability:** #4539 owns this decision and its docs writeback; #5235 is the bounded executable
+implementation issue for the selected host-side receipt approach.
+
 ## Why This Matters
 
 Request/session selection cannot be trustworthy if its binding catalogue is hidden behind a

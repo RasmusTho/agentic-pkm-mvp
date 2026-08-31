@@ -432,6 +432,34 @@ def test_populated_registry_finalization_migrates_authenticated_v1_ledger(tmp_pa
     assert migrated.legacy_bootstrap_complete
 
 
+def test_mount_blind_finalization_migrates_authenticated_v1_ledger_with_receipt_identity(
+    tmp_path,
+) -> None:
+    layout = InstanceStateLayout.for_channel(tmp_path / "instance-state", "prod")
+    runtime = runtime_module.InstanceRegistryRuntime.for_paths(
+        layout, tmp_path / "host-global"
+    )
+    root = tmp_path / "vault"
+    root.mkdir()
+    runtime.bootstrap_env_binding(vault_root=root, watcher_vault_path=root)
+    proof, owner_inventory = establish_authority_window(runtime, tmp_path / "window")
+    _rewrite_ledger_as_authenticated_v1(runtime.ledger, root)
+
+    result = runtime_module._finish_instance_state_deployment(
+        channel="prod",
+        instance_state_root=runtime.layout.root.parent,
+        host_global_root=runtime.ledger.root,
+        legacy_path=tmp_path / "missing-legacy.md",
+        inventory_path=owner_inventory,
+        backup_root=tmp_path / "backup",
+        restore_root=None,
+        quiescence_proof=proof,
+    )
+
+    assert result["restart_fence_cleared"] is True
+    assert runtime.ledger.require_existing().legacy_bootstrap_complete
+
+
 def test_authenticated_v1_rotation_journal_is_converged_and_consumed(tmp_path) -> None:
     ownership_root = tmp_path / "host-global"
     ownership_root.mkdir(mode=0o700)

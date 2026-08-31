@@ -6,9 +6,13 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+import threading
+import time
 
 import pytest
 
+from app.settings.ingestion import SettingsIngestionState
+from app.vault.markdown_settings import MarkdownSettingsStore
 from app.instance._storage_boundary import RegistryError
 from app.instance.instance_state import InstanceStateLayout
 from app.instance.runtime import InstanceRegistryRuntime
@@ -17,8 +21,11 @@ from app.instance.settings_rebind import (
     _install_dormant_settings_rebind,
 )
 from app.instance.vault_registry import VaultRegistration
+from app.instance.vault_registry import KnownVaultRef
+from app.api.routes.ingest_binding import ingest_binding_status
 from app.watcher import registry
 from app.watcher.settings_rebind import (
+    DormantSettingsRebindReconciler,
     _write_receipt,
     SettingsRebindWatcherReceipt,
     load_settings_rebind_watcher_receipt,
@@ -28,6 +35,19 @@ from tests.helpers.instance_storage_capability import STORAGE_MUTATION_CAPABILIT
 from tests.helpers.vault_settings import initialize_test_vault
 
 pytestmark = pytest.mark.not_pg
+
+
+def _successful_reload(**kwargs: object) -> SettingsIngestionState:
+    del kwargs
+    return SettingsIngestionState(state="ok", source="vault")
+
+
+def _record_reload(reloads: list[Path]):
+    def callback(**kwargs: object) -> SettingsIngestionState:
+        reloads.append(Path(kwargs["vault_root"]))
+        return _successful_reload()
+
+    return callback
 
 
 def _runtime(root: Path) -> InstanceRegistryRuntime:
@@ -149,6 +169,7 @@ def _fixture(
     monkeypatch: pytest.MonkeyPatch,
     *,
     enabled: bool = True,
+    prepare: bool = True,
 ) -> tuple[InstanceRegistryRuntime, Path, Path, Path]:
     vault_a = tmp_path / "vault-a"
     vault_b = tmp_path / "vault-b"
@@ -177,7 +198,8 @@ def _fixture(
     outbox_path = tmp_path / "index-outbox.jsonl"
     if outbox_path.exists():
         outbox_path.unlink()
-    _prepare(runtime)
+    if prepare:
+        _prepare(runtime)
     return runtime, vault_a, vault_b, config_path
 
 
@@ -570,3 +592,568 @@ def test_dormant_no_lifecycle_reconciles_without_unsealing_picker(
     )
     assert "settings-rebind-initiate" not in picker_sources
     assert "set_settings_rebind_state(" not in picker_sources
+
+
+def test_prepare_drains_and_final_scans_old_binding_writes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime, vault_a, _vault_b, config_path = _fixture(tmp_path, monkeypatch)
+    before = vault_a / "before-final-scan.md"
+    between = vault_a / "between-final-scans.md"
+    before.write_text("before\n", encoding="utf-8")
+    registry.run_registry_forever(config_path, max_ticks=1)
+    _commit(runtime)
+    between.write_text("between\n", encoding="utf-8")
+
+    registry.run_registry_forever(config_path, max_ticks=1)
+
+    receipt = load_settings_rebind_watcher_receipt(_revision_receipt_path(tmp_path, 1))
+    assert receipt.stage == "completed"
+    assert {item.relative_path for item in receipt.buffer} >= {
+        "before-final-scan.md",
+        "between-final-scans.md",
+    }
+
+
+def test_direct_filesystem_write_between_scan_and_commit_is_receipted_under_old_binding(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime, vault_a, vault_b, config_path = _fixture(tmp_path, monkeypatch)
+    registry.run_registry_forever(config_path, max_ticks=1)
+    between = vault_a / "direct-between-scan-and-commit.md"
+    between.write_text("old root remains authoritative\n", encoding="utf-8")
+    _commit(runtime)
+    candidate = vault_b / "must-not-be-seen.md"
+    candidate.write_text("candidate\n", encoding="utf-8")
+
+    registry.run_registry_forever(config_path, max_ticks=1)
+
+    receipt = load_settings_rebind_watcher_receipt(_revision_receipt_path(tmp_path, 1))
+    assert receipt.stage == "completed"
+    assert any(item.relative_path == between.name for item in receipt.buffer)
+    assert candidate.name not in {item.relative_path for item in receipt.buffer}
+    assert all(path.startswith(str(vault_a)) for path in _event_paths(tmp_path))
+
+
+@pytest.mark.parametrize("fault_stage", ["prepare", "commit", "reload", "reload_complete"])
+def test_prepare_commit_resume_is_failure_atomic(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    fault_stage: str,
+) -> None:
+    from app.instance.settings_rebind import SettingsRebindActivation
+
+    vault_a = tmp_path / "vault-a"
+    vault_b = tmp_path / "vault-b"
+    initialize_test_vault(vault_a)
+    initialize_test_vault(vault_b)
+    runtime = _runtime(tmp_path)
+    _register(runtime, binding_id="binding-a", vault_root=vault_a)
+    _register(runtime, binding_id="binding-b", vault_root=vault_b)
+    _install_dormant_settings_rebind(
+        runtime.registry,
+        binding_id="binding-a",
+        _capability=STORAGE_MUTATION_CAPABILITY,
+    )
+    monkeypatch.setenv("WATCHER_ENABLE", "0")
+    tripped = False
+    reloads: list[Path] = []
+    monkeypatch.setattr(
+        "app.settings.ingestion.ingest_settings",
+        _record_reload(reloads),
+    )
+
+    def fail_once(stage: str) -> None:
+        nonlocal tripped
+        if stage == fault_stage and not tripped:
+            tripped = True
+            raise RuntimeError(f"injected {stage} fault")
+
+    monkeypatch.setattr("app.instance.settings_rebind._activation_fault_point", fail_once)
+    registration = runtime.registry.load().registrations["binding-b"]
+    selection = KnownVaultRef(
+        ref=registration.ref,
+        path=registration.path,
+        vault_id=registration.vault_id,
+        vault_name=registration.vault_name,
+        local_instance_id=registration.local_instance_id,
+        last_opened_at="2026-08-30T00:00:00Z",
+    )
+    activation = SettingsRebindActivation.from_environment(runtime.registry)
+    with pytest.raises(RuntimeError, match=f"injected {fault_stage} fault"):
+        activation.activate(
+            selection=selection,
+            candidate_binding_id="binding-b",
+            candidate_root=vault_b,
+        )
+
+    record = runtime.open_settings_rebind_store().read()
+    if fault_stage == "prepare":
+        assert record.candidate_binding_id == "binding-a"
+        assert runtime.registry.load().last_active_vault_ref is None
+        assert record.phase == "dormant"
+    else:
+        assert record.candidate_binding_id == "binding-b"
+        assert runtime.registry.load().last_active_vault_ref == registration.ref
+        assert record.phase == "no_lifecycle"
+        if fault_stage == "reload_complete":
+            assert record.reload_revision == 1
+            assert reloads == [vault_b]
+        else:
+            assert record.reload_revision == 0
+            activation.activate(
+                selection=selection,
+                candidate_binding_id="binding-b",
+                candidate_root=vault_b,
+            )
+            assert reloads == [vault_b]
+            assert runtime.open_settings_rebind_store().read().reload_revision == 1
+        activation.activate(
+            selection=selection,
+            candidate_binding_id="binding-b",
+            candidate_root=vault_b,
+        )
+        assert reloads == [vault_b]
+
+
+def test_reload_callback_success_before_marker_allows_one_idempotent_replay(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A marker-write crash replays once, then durable completion suppresses retries."""
+    from app.instance.settings_rebind import SettingsRebindActivation
+
+    vault_a = tmp_path / "vault-a"
+    vault_b = tmp_path / "vault-b"
+    initialize_test_vault(vault_a)
+    initialize_test_vault(vault_b)
+    runtime = _runtime(tmp_path)
+    _register(runtime, binding_id="binding-a", vault_root=vault_a)
+    _register(runtime, binding_id="binding-b", vault_root=vault_b)
+    _install_dormant_settings_rebind(
+        runtime.registry,
+        binding_id="binding-a",
+        _capability=STORAGE_MUTATION_CAPABILITY,
+    )
+    monkeypatch.setenv("WATCHER_ENABLE", "0")
+    reloads: list[Path] = []
+    monkeypatch.setattr(
+        "app.settings.ingestion.ingest_settings",
+        _record_reload(reloads),
+    )
+    registration = runtime.registry.load().registrations["binding-b"]
+    selection = KnownVaultRef(
+        ref=registration.ref,
+        path=registration.path,
+        vault_id=registration.vault_id,
+        vault_name=registration.vault_name,
+        local_instance_id=registration.local_instance_id,
+        last_opened_at="2026-08-30T00:00:00Z",
+    )
+    activation = SettingsRebindActivation.from_environment(runtime.registry)
+    original_write_locked = runtime.registry._write_locked
+    tripped = False
+
+    def fail_marker_write(snapshot: object) -> None:
+        nonlocal tripped
+        payload = getattr(snapshot, "settings_rebind", None)
+        if isinstance(payload, dict) and payload.get("reloadRevision") == 1 and not tripped:
+            tripped = True
+            raise RuntimeError("simulated marker write crash")
+        original_write_locked(snapshot)
+
+    monkeypatch.setattr(runtime.registry, "_write_locked", fail_marker_write)
+    with pytest.raises(RuntimeError, match="simulated marker write crash"):
+        activation.activate(
+            selection=selection,
+            candidate_binding_id="binding-b",
+            candidate_root=vault_b,
+        )
+    assert reloads == [vault_b]
+    assert runtime.open_settings_rebind_store().read().reload_revision == 0
+
+    monkeypatch.setattr(runtime.registry, "_write_locked", original_write_locked)
+    activation.activate(
+        selection=selection,
+        candidate_binding_id="binding-b",
+        candidate_root=vault_b,
+    )
+    assert reloads == [vault_b, vault_b]
+    assert runtime.open_settings_rebind_store().read().reload_revision == 1
+
+    activation.activate(
+        selection=selection,
+        candidate_binding_id="binding-b",
+        candidate_root=vault_b,
+    )
+    assert reloads == [vault_b, vault_b]
+
+
+def test_committed_revision_survives_event_loss_and_process_restart(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime, vault_a, vault_b, config_path = _fixture(tmp_path, monkeypatch)
+    registry.run_registry_forever(config_path, max_ticks=1)
+    _commit(runtime)
+    registry.run_registry_forever(config_path, max_ticks=1)
+
+    restarted = _runtime(tmp_path)
+    assert restarted.open_settings_rebind_store().read().phase == "committed"
+    assert load_settings_rebind_watcher_receipt(_revision_receipt_path(tmp_path, 1)).stage == "completed"
+
+    after_restart = vault_b / "after-restart.md"
+    after_restart.write_text("candidate remains authoritative after restart\n", encoding="utf-8")
+    process_env = os.environ.copy()
+    repo_root = Path(__file__).resolve().parents[2]
+    existing_pythonpath = process_env.get("PYTHONPATH")
+    process_env["PYTHONPATH"] = os.pathsep.join(
+        part for part in (str(repo_root), existing_pythonpath) if part
+    )
+    process_env["PYTHONDONTWRITEBYTECODE"] = "1"
+    process = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "app.cli",
+            "watcher",
+            "run",
+            "--config",
+            str(config_path),
+            "--max-ticks",
+            "1",
+        ],
+        cwd=repo_root,
+        env=process_env,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert process.returncode == 0, process.stdout + process.stderr
+    assert str(after_restart) in _event_paths(tmp_path)
+    assert all(path == "" or path.startswith(str(vault_b)) for path in _event_paths(tmp_path))
+    assert str(vault_a) not in _event_paths(tmp_path)
+
+
+def test_disabled_watcher_is_durable_no_lifecycle(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime, _vault_a, _vault_b, config_path = _fixture(
+        tmp_path, monkeypatch, enabled=False
+    )
+    registry.run_registry_once(config_path)
+    record = runtime.open_settings_rebind_store().read()
+    assert record.phase == "no_lifecycle"
+    assert record.desired_revision == record.applied_revision == 1
+
+
+def test_enabled_idle_watcher_adopts_first_durable_selection(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """WATCHER_ENABLE=1 without a path idles, then adopts the first selection."""
+    from app.vault.manager import VaultManager
+
+    runtime, _vault_a, vault_b, config_path = _fixture(
+        tmp_path, monkeypatch, enabled=False
+    )
+    monkeypatch.setenv("WATCHER_ENABLE", "1")
+    monkeypatch.delenv("WATCHER_VAULT_PATH")
+    VaultManager().select_vault(vault_b)
+
+    registry.run_registry_once(config_path)
+
+    heartbeat = json.loads(
+        (tmp_path / "watcher-heartbeat.json").read_text(encoding="utf-8")
+    )
+    assert heartbeat["vault_path"] == str(vault_b)
+    assert runtime.open_settings_rebind_store().read().phase == "no_lifecycle"
+
+
+def test_idle_enabled_watcher_rejects_disabled_first_candidate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The idle-enabled API path validates watcher policy before no_lifecycle commit."""
+    from app.vault.manager import VaultManager
+
+    runtime, _vault_a, vault_b, _config_path = _fixture(
+        tmp_path, monkeypatch, enabled=False
+    )
+    monkeypatch.setenv("WATCHER_ENABLE", "1")
+    monkeypatch.delenv("WATCHER_VAULT_PATH")
+    local_path = vault_b / "settings" / "local.md"
+    settings_store = MarkdownSettingsStore()
+    local_doc = settings_store.read(local_path)
+    frontmatter = dict(local_doc.frontmatter)
+    frontmatter["enableVaultWatcher"] = False
+    settings_store.write_frontmatter(local_path, frontmatter, body=local_doc.body)
+
+    with pytest.raises(RegistryError, match="disabled by local settings"):
+        VaultManager().select_vault(vault_b)
+
+    assert runtime.open_settings_rebind_store().read().phase == "prepared"
+
+
+def test_candidate_watcher_permission_is_revalidated_at_adoption(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A registered candidate with watcher disabled cannot become a scan root."""
+    runtime, _vault_a, vault_b, _config_path = _fixture(
+        tmp_path, monkeypatch, enabled=False, prepare=False
+    )
+    local_path = vault_b / "settings" / "local.md"
+    settings_store = MarkdownSettingsStore()
+    local_doc = settings_store.read(local_path)
+    frontmatter = dict(local_doc.frontmatter)
+    frontmatter["enableVaultWatcher"] = False
+    settings_store.write_frontmatter(local_path, frontmatter, body=local_doc.body)
+    record = _commit(runtime)
+    reconciler = DormantSettingsRebindReconciler(
+        registry_path=runtime.registry.path,
+        state_dir=tmp_path / "watcher-state",
+    )
+
+    with pytest.raises(RegistryError, match="disabled by local settings"):
+        reconciler.candidate_vault_path(record)
+
+
+def test_disabled_candidate_cannot_complete_api_rebind(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Candidate policy failure leaves the API transition prepared, not complete."""
+    from app.instance.settings_rebind import SettingsRebindActivation
+
+    runtime, _vault_a, vault_b, config_path = _fixture(
+        tmp_path, monkeypatch, enabled=True, prepare=False
+    )
+    local_path = vault_b / "settings" / "local.md"
+    settings_store = MarkdownSettingsStore()
+    local_doc = settings_store.read(local_path)
+    frontmatter = dict(local_doc.frontmatter)
+    frontmatter["enableVaultWatcher"] = False
+    settings_store.write_frontmatter(local_path, frontmatter, body=local_doc.body)
+    registration = runtime.registry.load().registrations["binding-b"]
+    selection = KnownVaultRef(
+        ref=registration.ref,
+        path=registration.path,
+        vault_id=registration.vault_id,
+        vault_name=registration.vault_name,
+        local_instance_id=registration.local_instance_id,
+        last_opened_at="2026-08-30T00:00:00Z",
+    )
+
+    def run_watcher_for_ack(
+        _activation: SettingsRebindActivation,
+        _record: SettingsRebindRecord,
+        *,
+        required_stage: str,
+    ) -> None:
+        assert required_stage == "acknowledged"
+        registry.run_registry_once(config_path)
+
+    monkeypatch.setattr(SettingsRebindActivation, "_wait_for_stage", run_watcher_for_ack)
+    with pytest.raises(RegistryError, match="disabled by local settings"):
+        SettingsRebindActivation(
+            runtime.registry,
+            watcher_state_dir=tmp_path / "watcher-state",
+            watcher_enabled=True,
+        ).activate(
+            selection=selection,
+            candidate_binding_id="binding-b",
+            candidate_root=vault_b,
+        )
+
+    assert runtime.open_settings_rebind_store().read().phase == "prepared"
+    assert not (tmp_path / "watcher-state" / "settings-rebind-watcher-r1.json").exists()
+
+
+def test_same_target_prepared_selection_finishes_durable_commit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A picker racing an existing prepared target must not bypass activation."""
+    from app.vault.manager import VaultManager
+
+    runtime, _vault_a, vault_b, _config_path = _fixture(tmp_path, monkeypatch)
+    monkeypatch.setenv("WATCHER_ENABLE", "0")
+    reloads: list[Path] = []
+    monkeypatch.setattr(
+        "app.settings.ingestion.ingest_settings",
+        _record_reload(reloads),
+    )
+
+    selected = VaultManager().select_vault(vault_b)
+
+    record = runtime.open_settings_rebind_store().read()
+    assert selected.active_vault_path == str(vault_b)
+    assert record.phase == "no_lifecycle"
+    assert record.candidate_binding_id == "binding-b"
+    assert record.desired_revision == record.applied_revision == 1
+
+
+def test_concurrent_same_target_callers_wait_for_commit_and_resume(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Both same-target callers remain blocked until the protected transition resumes."""
+    from app.instance.settings_rebind import SettingsRebindActivation
+
+    runtime, _vault_a, vault_b, _config_path = _fixture(
+        tmp_path,
+        monkeypatch,
+        prepare=False,
+    )
+    reloads: list[Path] = []
+    monkeypatch.setattr(
+        "app.settings.ingestion.ingest_settings",
+        _record_reload(reloads),
+    )
+    registration = runtime.registry.load().registrations["binding-b"]
+    selection = KnownVaultRef(
+        ref=registration.ref,
+        path=registration.path,
+        vault_id=registration.vault_id,
+        vault_name=registration.vault_name,
+        local_instance_id=registration.local_instance_id,
+        last_opened_at="2026-08-30T00:00:00Z",
+    )
+    acknowledge_barrier = threading.Barrier(2)
+    resume_event = threading.Event()
+    results: list[SettingsRebindRecord] = []
+    errors: list[BaseException] = []
+
+    def wait_for_stage(
+        _activation: SettingsRebindActivation,
+        _record: SettingsRebindRecord,
+        *,
+        required_stage: str,
+    ) -> None:
+        if required_stage == "acknowledged":
+            acknowledge_barrier.wait(timeout=5)
+        else:
+            assert resume_event.wait(timeout=5)
+
+    monkeypatch.setattr(SettingsRebindActivation, "_wait_for_stage", wait_for_stage)
+
+    def run_activation() -> None:
+        try:
+            result = SettingsRebindActivation(
+                runtime.registry,
+                watcher_state_dir=tmp_path / "watcher-state",
+                watcher_enabled=True,
+            ).activate(
+                selection=selection,
+                candidate_binding_id="binding-b",
+                candidate_root=vault_b,
+            )
+            results.append(result)
+        except BaseException as exc:  # pragma: no cover - asserted below
+            errors.append(exc)
+
+    threads = [threading.Thread(target=run_activation) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    try:
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            if runtime.open_settings_rebind_store().read().phase == "committed":
+                break
+            time.sleep(0.01)
+        assert runtime.open_settings_rebind_store().read().phase == "committed"
+        assert results == []
+    finally:
+        resume_event.set()
+        for thread in threads:
+            thread.join(timeout=5)
+
+    assert not errors
+    assert len(results) == 2
+    assert {result.phase for result in results} == {"committed"}
+    assert reloads == [vault_b]
+
+
+def test_settings05_parent_acceptance(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The production API seam and the separate watcher converge end-to-end."""
+    from app.vault.manager import VaultManager
+
+    runtime, _vault_a, vault_b, config_path = _fixture(
+        tmp_path,
+        monkeypatch,
+        prepare=False,
+    )
+    # This acceptance test exercises the production picker as the prepare
+    # producer, so begin from the durable A binding rather than the prepared
+    # B revision used by the watcher-only scenarios above.
+    monkeypatch.setenv(
+        "WATCHER_STATE_DIR",
+        str(tmp_path / "acceptance-watcher-state"),
+    )
+    monkeypatch.setenv("SETTINGS_REBIND_WAIT_TIMEOUT_SECONDS", "15")
+    monkeypatch.setenv("WATCHER_TICK_SLEEP_SECONDS", "0.05")
+    monkeypatch.setattr(
+        "app.settings.ingestion.ingest_settings",
+        _successful_reload,
+    )
+    process_env = os.environ.copy()
+    repo_root = Path(__file__).resolve().parents[2]
+    existing_pythonpath = process_env.get("PYTHONPATH")
+    process_env["PYTHONPATH"] = os.pathsep.join(
+        part for part in (str(repo_root), existing_pythonpath) if part
+    )
+    process_env["PYTHONDONTWRITEBYTECODE"] = "1"
+    process = subprocess.Popen(
+        [
+            sys.executable,
+            "-m",
+            "app.cli",
+            "watcher",
+            "run",
+            "--config",
+            str(config_path),
+            "--max-ticks",
+            "600",
+        ],
+        cwd=repo_root,
+        env=process_env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    stdout = stderr = ""
+    try:
+        selected = VaultManager().select_vault(vault_b)
+        assert selected.active_vault_path == str(vault_b)
+        post_commit = vault_b / "post-commit.md"
+        post_commit.write_text("visible after the durable commit\n", encoding="utf-8")
+        deadline = time.monotonic() + 20
+        while time.monotonic() < deadline:
+            record = runtime.open_settings_rebind_store().read()
+            if record.phase == "committed" and str(post_commit) in _event_paths(tmp_path):
+                break
+            time.sleep(0.05)
+        if process.poll() is None:
+            process.terminate()
+        stdout, stderr = process.communicate(timeout=30)
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.communicate(timeout=5)
+    # The long-lived child is intentionally terminated after the durable
+    # commit/event observation; a naturally exhausted max-ticks run is also
+    # accepted.
+    assert process.returncode in {0, -15}, stdout + stderr
+    record = runtime.open_settings_rebind_store().read()
+    assert record.phase == "committed"
+    assert record.desired_revision == record.applied_revision == 1
+    assert str(post_commit) in _event_paths(tmp_path)
+    status = ingest_binding_status(
+        selected_vault_path=str(vault_b),
+        heartbeat_path=tmp_path / "watcher-heartbeat.json",
+    )
+    assert status.rebind_phase == "committed"
+    assert status.rebind_desired_revision == status.rebind_applied_revision == 1

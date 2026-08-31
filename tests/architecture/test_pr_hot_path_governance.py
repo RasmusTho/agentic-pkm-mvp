@@ -243,12 +243,23 @@ def test_pr_template_includes_builderops_routing_receipt() -> None:
 
 
 def test_publication_surfaces_require_governing_issue_identity() -> None:
-    template = _read(".github/pull_request_template.md")
-    publish_skill = _read(".codex/skills/publish-pr/SKILL.md")
+    publication_adapter = _read("app/builderops/publication.py")
 
-    assert "Governing-Issue: #" in template
-    assert "Governing-Issue: #<ISSUE_NUMBER>" in publish_skill
-    assert "Fixes #<ISSUE_NUMBER>" in publish_skill
+    assert 'plan.add_argument("--governing-issue", type=int, required=True)' in publication_adapter
+    assert 'values.get("issue_number") != request.governing_issue' in publication_adapter
+    assert 'argv.extend(["--issue-number", str(values["issue_number"])])' in publication_adapter
+
+
+def test_pr_hot_path_names_canonical_full_path_publication_owner() -> None:
+    hot_path = _read("docs/development/PR_HOT_PATH.md")
+    publish_skill = _read(".codex/skills/publish-pr/SKILL.md")
+    full_path = _read(".codex/skills/publish-pr/FULL_PATH.md")
+
+    citation = ".codex/skills/publish-pr/FULL_PATH.md :: Procedure"
+    assert citation in hot_path
+    assert citation in publish_skill
+    assert "## Procedure" in full_path
+    assert "canonical full-path publication owner" in hot_path
 
 
 def test_canonical_agent_rules_allow_open_multi_issue_governor() -> None:

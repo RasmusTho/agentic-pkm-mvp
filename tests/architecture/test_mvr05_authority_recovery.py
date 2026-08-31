@@ -45,6 +45,9 @@ def _owner_inventory(owners: list[dict[str, str]]) -> dict[str, object]:
                 "channel_id": owner["channel_id"],
                 "root": owner["root"],
                 "identity": f"inode:{metadata.st_dev}:{metadata.st_ino}",
+                "ancestor_identities": sorted(
+                    f"path:{ancestor}" for ancestor in Path(owner["root"]).resolve().parents
+                ),
             }
         )
     evidence = {"docker": [], "config": [], "owners": owners, "owner_identities": identities}

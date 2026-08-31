@@ -115,6 +115,9 @@ def deployment_authority(runtime: InstanceRegistryRuntime, legacy_path: Path):
                 "channel_id": owner["channel_id"],
                 "root": owner["root"],
                 "identity": f"inode:{metadata.st_dev}:{metadata.st_ino}",
+                "ancestor_identities": sorted(
+                    f"path:{ancestor}" for ancestor in Path(owner["root"]).resolve().parents
+                ),
             }
         )
     source_evidence = {
