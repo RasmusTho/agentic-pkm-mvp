@@ -72,6 +72,22 @@ Then read the two context hints, if they exist:
 - The linked Issue/PR, only if the branch maps to one and the network is up
   (`gh pr view`, `gh issue view`). Never block recovery on network.
 
+Before another session replaces an Issue's lifecycle owner, authenticate the live claim and the
+latest durable `lifecycle_handoff_receipt.v1` from the Issue or PR. The receipt must name the current
+lifecycle owner and session, the sole writable worktree, branch and base, the unpublished candidate
+head (or `none`), changed files, current validation plus current review/receipt evidence, blockers and
+residual risk, the successor, and exactly one next authorized action. Re-read the live Issue labels
+and claim receipt, worktree registration, branch/PR head, and review/receipt timestamps or head
+bindings; local scratch and a former owner's assertion are context only.
+
+A handoff becomes effective only when the named successor records an acknowledgment after those
+readbacks agree. From that acknowledgment onward the former lifecycle owner is read-only: it may
+report evidence, but it must not edit, push, publish, merge, close, or mutate lifecycle state. If two
+owners or writable worktrees are asserted, the unpublished candidate head is omitted or disagrees,
+or current review/receipt evidence contains newer blocking review evidence, classify the recovery as
+situation 4 and fail closed. Do not publish or close until the current owner reconciles the record or
+the normal issue-maintenance/owner-authority path establishes one owner and one current head.
+
 From that, classify into one of the four situations and act.
 
 ### Rescue-stash contract gate
@@ -163,6 +179,8 @@ while work is unfinished. Progressive and opportunistic — not a report after e
   Last test:  <command + pass/fail/last result>
   ```
 
+- This scratch note never replaces or authorizes a lifecycle-owner change. A replacement still
+  requires the durable authenticated `lifecycle_handoff_receipt.v1` above.
 - Do this without asking the user. It is cheap insurance, not a checkpoint system.
 - BuilderOps Vault is available and this is `AgentWorklog` material (`app/builderops/cli.py ::
   create-worklog`). The file stays the always-on default; never block recovery on the Vault.
