@@ -37,6 +37,15 @@ def test_handoff_requires_authenticated_owner_and_current_evidence() -> None:
     assert "former lifecycle owner is then read-only" in issue_to_code
     assert "newer blocking review evidence fail closed" in issue_to_code
 
+    release = resume_work.index("release --worktree")
+    successor_registration = resume_work.index("register --worktree")
+    acknowledgment = resume_work.index("then records its\nacknowledgment")
+    assert release < successor_registration < acknowledgment
+    assert "release → successor registration → live readback sequence" in resume_work
+    assert "writable_worktree: none" in resume_work
+    assert "authority does not\ntransfer" in resume_work
+    assert "neither side may publish or close" in resume_work
+
     assert "former lifecycle owner is read-only" in verification
     assert "Newer blocking review evidence" in verification
     assert "fail closed" in verification
