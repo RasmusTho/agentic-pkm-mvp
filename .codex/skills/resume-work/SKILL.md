@@ -80,9 +80,22 @@ residual risk, the successor, and exactly one next authorized action. Re-read th
 and claim receipt, worktree registration, branch/PR head, and review/receipt timestamps or head
 bindings; local scratch and a former owner's assertion are context only.
 
-A handoff becomes effective only when the named successor records an acknowledgment after those
-readbacks agree. From that acknowledgment onward the former lifecycle owner is read-only: it may
-report evidence, but it must not edit, push, publish, merge, close, or mutate lifecycle state. If two
+After those readbacks agree, transfer any registered writable worktree before acknowledging the
+successor. The current owner releases its active registration with
+`python3 scripts/agent_worktree.py --cwd <repo> release --worktree <absolute-worktree> --owner <current-session>`
+and re-reads it as non-active. The named successor then registers the sole receipt-named worktree
+(or the receipt-named replacement path) with
+`python3 scripts/agent_worktree.py --cwd <repo> register --worktree <absolute-worktree> --owner <successor-session>`
+and re-reads the owner, branch, and generation. A connector-only handoff may instead declare and
+re-authenticate `writable_worktree: none`; it must not fabricate a local registration.
+
+A handoff becomes effective only after that release → successor registration → live readback sequence
+(or the authenticated connector-only `none` case) and when the named successor then records its
+acknowledgment. From that acknowledgment onward the former lifecycle owner is read-only: it may
+report evidence, but it must not edit, push, publish, merge, close, or mutate lifecycle state. If the
+release succeeds but successor registration, readback, or acknowledgment fails, authority does not
+transfer: the current owner remains the lifecycle owner but has no writable worktree and may only
+restore its own registration or route reconciliation; neither side may publish or close. If two
 owners or writable worktrees are asserted, the unpublished candidate head is omitted or disagrees,
 or current review/receipt evidence contains newer blocking review evidence, classify the recovery as
 situation 4 and fail closed. Do not publish or close until the current owner reconciles the record or
