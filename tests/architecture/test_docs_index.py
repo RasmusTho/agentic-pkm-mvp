@@ -139,6 +139,9 @@ def test_builder_carrier_documentation_is_codex_only() -> None:
         DOCS_ROOT / "development" / "AGENT_INSTRUCTION_GOVERNANCE.md"
     ).read_text(encoding="utf-8")
     claude_pointer = (REPO_ROOT / "CLAUDE.md").read_text(encoding="utf-8")
+    delivery_skill_text = (
+        REPO_ROOT / ".codex" / "skills" / "deliver-issue-set" / "SKILL.md"
+    ).read_text(encoding="utf-8")
 
     assert "| CLAUDE.md | Non-operational Claude compatibility/provenance pointer |" in index_text
     assert "Codex is the only active Builder worker carrier" in index_text
@@ -149,6 +152,10 @@ def test_builder_carrier_documentation_is_codex_only() -> None:
     assert "thin, non-operational compatibility/provenance pointer" in governance_text
     assert "The current Builder System worker carrier is Codex." in claude_pointer
     assert "must not launch Claude" in claude_pointer
+    assert "runtime-neutral dry-run dispatch helper" not in delivery_skill_text
+    assert "minimal Codex/Claude worker context" not in delivery_skill_text
+    assert "Codex-only dry-run dispatch helper" in delivery_skill_text
+    assert "minimal Codex worker context\n  packs" in delivery_skill_text
 
 def _heading_to_anchor(heading: str) -> str:
     """Convert a Markdown heading text to a GitHub-style anchor slug."""
