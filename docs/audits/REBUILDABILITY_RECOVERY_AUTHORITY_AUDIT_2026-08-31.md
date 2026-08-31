@@ -1,8 +1,8 @@
-State: Advisory audit snapshot (2026-08-31). Bound to `origin/main` and detached `HEAD` at `41b706be44fff71a85f4f4f87d8e39e91ab17fe9`, read at `2026-08-31T17:22:54Z`. Subordinate to owner contracts and live GitHub authority.
+State: Advisory audit snapshot (2026-08-31) with an accepted owner-decision addendum in section 8. Bound to `origin/main` and detached `HEAD` at `41b706be44fff71a85f4f4f87d8e39e91ab17fe9`, read at `2026-08-31T17:22:54Z`. Subordinate to owner contracts and live GitHub authority.
 Doc role: Reference (architecture audit)
 Authority: Evidence-based structural analysis only. This artifact creates no implementation, contract, issue, PR, merge, deployment, backup, restore, or destructive authority.
 Owner: Architecture / CES boundary, with HKA, SIP, GOV, PDM, DRI, and BuilderOps owner contracts retaining their existing authority.
-Temporal class: Point-in-time audit; refresh after owner-contract, runtime, or lifecycle changes.
+Temporal class: Point-in-time evidence plus accepted decision addendum; refresh after owner-contract, runtime, or lifecycle changes.
 Source of truth: Human-authored/accepted artifacts and governance receipts are durable; machine projections and operational state are classified below.
 
 # Rebuildability and Recovery Authority Audit
@@ -23,10 +23,11 @@ The pass used four bounded, read-only evidence lanes against the same snapshot:
 | Archival | HKA recovery, derivative disposition, raw-media exception, GAF status | `docs/contracts/GOVERNED_ARCHIVAL_FLOW.md`; `docs/GOVERNED_ARCHIVAL_FLOW/README.md`; `docs/audits/GOVERNED_ARCHIVAL_FLOW_2026-08-22.md` |
 | Operations | Instance state, BuilderOps recovery state, backup/runbook claims, live issue/PR state | `docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md`; `app/instance/instance_state.py`; `app/builderops/control_plane/migrations/0002_recovery_state.sql`; Issues #5062/#5067/#5068; PR #5094 |
 
-Evidence classes used here are **established** (directly stated by current owner docs/code/live
-GitHub), **interpretation** (classification against the owner's rebuildability direction), and
-**unknown** (requires an owner decision or live operational proof). No runtime host was modified or
-treated as proof of deployment/recovery readiness.
+Evidence classes used at the captured snapshot were **established** (directly stated by current
+owner docs/code/live GitHub), **interpretation** (classification against the owner's rebuildability
+direction), and **unknown** (then requiring an owner decision or live operational proof). Section 8
+records the later accepted policy decision; it does not manufacture live operational proof. No
+runtime host was modified or treated as proof of deployment/recovery readiness.
 
 ## 2. Executive result
 
@@ -38,17 +39,18 @@ The semantic authority model is coherent and largely conforms to the stated dire
   state are not independent semantic authority; and
 - a database representation must be reconstructible from the durable source set.
 
-The main unresolved boundary is operational safety state. The current code and owner docs include
-crash-recoverable journals, host ownership/lease state, protected instance-state backups, and a
-BuilderOps recovery fence containing `recovery_id` and `restored_lsn`. These do not claim Product
-meaning, but several are not demonstrably reconstructible after total loss from human documents
-alone. They therefore cannot be silently relabeled as disposable, and they cannot be silently
-promoted to a second source of truth.
+The snapshot exposed one decision boundary in operational safety state. The current code and owner
+docs include crash-recoverable journals, host ownership/lease state, protected instance-state
+backups, and a BuilderOps recovery fence containing `recovery_id` and `restored_lsn`. These do not
+claim Product meaning, but several are not demonstrably reconstructible after total loss from human
+documents alone. They therefore cannot be silently relabeled as disposable or promoted to a second
+source of truth.
 
-The correct disposition is an owner decision about a narrow operational exception: either make each
-such state rebuild-safe and fail closed after loss, or explicitly retain its recovery/accountability
-record on a document-/receipt-backed surface. No implementation should begin from the historical
-HKA recovery proposal until that boundary and the owner-native recovery profile are selected.
+Section 8 records the accepted disposition: lineage loss starts a new inactive fenced epoch,
+rebuilds or reads back only named authority, and activates only after convergence. Explicit
+document-backed receipts keep their class-specific accountability role. This settles the policy
+needed for the filed specification chain; it does not make the historical HKA recovery proposal
+current authority or claim that owner-native runtime recovery has shipped.
 
 ## 3. Anchored findings
 
@@ -203,9 +205,9 @@ property, `GATE` is a CI/validation property, and `DOCTOR` is a read-only reconc
   retained append-only source or explicit source event log; verify duplicate/replay behavior and
   that no JSONL diagnostic line is treated as a canonical worker-queue row.
 - **REBUILD-GATE-04 — Operational-loss fixture.** Remove instance/BuilderOps recovery metadata
-  while preserving source docs and external authority; verify the selected owner policy (rebuild or
-  retained receipt) and a fenced, readback-based reconciliation path. This gate remains undefined
-  until F5/F6 owner decisions are made.
+  while preserving source docs and external authority; verify the accepted fresh-epoch policy,
+  class-specific document-backed receipts, and a fenced, readback-based reconciliation path. The
+  fixture remains target-state until its bounded MVR and BuilderOps child contracts are delivered.
 
 ### DOCTOR
 
@@ -227,7 +229,9 @@ Human-authored/accepted knowledge, companions, and governance receipts are the d
 set. Machine DB representations, indexes, embeddings, caches, search/graph projections, and context
 bundles are rebuildable support. Runtime/session/workflow/UI state is discardable unless a governed
 transition makes a receipt or durable artifact. Instance ownership/lease/journal and BuilderOps
-recovery metadata are operational safety state and remain unresolved exceptions, not semantic truth.
+recovery metadata are operational safety state, not semantic truth. Under the accepted section 8
+policy, missing lineage creates a new inactive fenced epoch and requires owner-native or GitHub
+readback before activation; explicit document-backed receipts remain class-specific authority.
 
 ### RQ2 — Where do backup, restore, archive, or durable-journal requirements occur?
 
@@ -239,17 +243,19 @@ They occur in four distinct forms:
 4. BuilderOps recovery fencing metadata plus operational forensic/diagnostic dump watchers.
 
 The historical BCP WAL/DR plan is superseded. GAF's operation binding and staged recovery
-descriptor are target-state contract material, not shipped generalized HKA recovery; they need an
-owner-native profile and durable-state decision before #5067 can proceed.
+descriptor are target-state contract material, not shipped generalized HKA recovery. Section 8
+settles their class boundary: they carry authority only as explicit document-backed receipts. #5067
+still requires its own owner-native profile and independently governed delivery contract.
 
 ### RQ3 — What conforms, is justified, or is drift/obsolete?
 
 Conforming: HKA/source authority, document-backed receipts, rebuildable mirrors, and explicit
-raw-evidence class separation. Justified but unresolved: MVR safety state and BuilderOps recovery
-fence, because they protect partial failure and external-effect reconciliation. Drift: the
-`INDEX_OUTBOX_PATH` backup wording and the boundary between nightly diagnostic dumps and no-scheduled-
-DR language. Obsolete: the July BCP-INV-07 full-backup/WAL cutover proposal. Target-state, not
-current truth: GAF HKA recovery/operation-journal implementation.
+raw-evidence class separation. Justified operational state with a resolved target policy: MVR safety
+state and the BuilderOps recovery fence protect partial failure and external-effect reconciliation;
+missing lineage must follow the accepted fresh-epoch/readback path, whose implementation remains
+target state. Drift: the `INDEX_OUTBOX_PATH` backup wording and the boundary between nightly
+diagnostic dumps and no-scheduled-DR language. Obsolete: the July BCP-INV-07 full-backup/WAL cutover
+proposal. Target-state, not current truth: GAF HKA recovery/operation-journal implementation.
 
 ### RQ4 — What minimum invariants must be testable?
 
@@ -259,15 +265,16 @@ system rebuilt or fenced truthfully without silently using a mirror.”
 
 ### RQ5 — What is the bounded dependency-ordered path?
 
-1. Resolve the owner policy for MVR safety state, BuilderOps recovery metadata, and GAF operation
-   binding/staged recovery descriptors. This is the only current decision gate.
-2. Reconcile the owner documents and retire/supersede stale backup/WAL wording; clarify diagnostic
+The prerequisite owner-policy decision is complete and recorded in section 8. The remaining bounded
+delivery path is:
+
+1. Reconcile the owner documents and retire/supersede stale backup/WAL wording; clarify diagnostic
    dump and JSONL retention semantics. No runtime mutation is needed for the audit result.
-3. Build the loss/corruption fixture and read-only doctor kernel against current producers,
+2. Build the loss/corruption fixture and read-only doctor kernel against current producers,
    migrations, bootstrap, and projection rebuild paths.
-4. Only after the operational boundary is explicit, decide whether any GAF/#5067 recovery slice is
-   still needed. PR #5094's closed, unmerged head is not an implementation authority.
-5. Re-run the audit at current head and promote only the smallest accepted invariants into their
+3. Keep any GAF/#5067 recovery slice on its independent owner-native authority path; PR #5094's
+   closed, unmerged head is not implementation authority.
+4. Re-run the audit at current head and promote only the smallest accepted invariants into their
    existing owner docs/tests. No new central registry, archive store, DB backup authority, or SBS
    subsystem is warranted by this audit.
 
@@ -332,4 +339,4 @@ the filed child contracts.
 - External reads: GitHub Issues #5062, #5067, #5068 and PR #5094; read-only
 - Mutations: audit file and its `DOCS_INDEX.md` row only
 - Validation status: `python3 scripts/docs_guard.py --language-only` OK; `tests/architecture/test_docs_index.py` 5 passed; `tests/architecture/test_semantic_boundary_fitness.py tests/architecture/test_sbs_fitness_rules.py` 9 passed with one pre-existing dependency deprecation warning
-- `tcd_plan`: cheap read-only parallel evidence collection; no live host, DB, deployment, or external mutation; defer expensive proof until the owner decision resolves the operational-state classification
+- `tcd_plan`: cheap read-only parallel evidence collection; no live host, DB, deployment, or external mutation. At snapshot time the proof was deferred pending the owner decision; section 8 records the later accepted disposition and releases only the filed specification/child path.
