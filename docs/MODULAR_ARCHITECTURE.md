@@ -37,6 +37,11 @@ Mimer is read as a stable cognitive kernel with a replaceable extension fabric a
 
 The kernel is the structural commitment surface. Changes here are architecture-level decisions, not feature work.
 
+Canonical routing and enforcement metadata are owned by
+`docs/DESIGN_PRINCIPLES.md :: System Design Principles`. This architecture summary references
+`DP-01`, `DP-02`, `DP-02A`, `DP-02B`, `DP-03`, `DP-04`, `DP-05`, `DP-06`, `DP-07`, `DP-08`,
+`DP-09`, `DP-10`, and `DP-11` as a projection only; it is not a second principle registry.
+
 - **Human-first authority.** The human is the durable author and the final authority over meaning. Agents propose; the human (or a human-authorized rule) decides. Authority lives with the human and with explicit governance, not with whichever runtime component happened to write a value.
 - **Vault-first durable surface.** Human-readable Markdown/vault artifacts (vault notes plus system-owned companion notes) are the durable continuity set. Databases, indexes, workers, agents, APIs, and UIs are mirrors, adapters, or execution services on top of that durable surface; runtime DB/index state must be rebuildable from the vault + companion set.
 - **Provenance, receipts, and write guards.** Every system-originated change to the durable surface must carry provenance, must produce a human-legible receipt, and must respect write-safety gates (idempotency, optimistic guards, per-note opt-outs, governed APPLY paths). This is not optional decoration; it is the trust contract.
