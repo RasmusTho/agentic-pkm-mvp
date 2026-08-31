@@ -1,4 +1,4 @@
-State: Accepted target-state capability specification; no total-loss recovery capability is shipped by this document. Shared validation epic: pending filing.
+State: Filed target-state capability specification; no total-loss recovery capability is shipped by this document. Shared validation epic: #5258 (`agent:blocked`).
 Doc role: Capability specification
 Authority: Defines bounded delivery for reconstructing machine state from retained human authority and for fencing operational state whose lineage is absent.
 Owner: Architecture / CES boundary, with HKA, SIP, GOV, PDM, DRI, WSP/MVR, Builder System, and Platform/Ops retaining local authority.

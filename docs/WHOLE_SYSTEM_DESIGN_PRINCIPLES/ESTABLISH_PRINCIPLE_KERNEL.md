@@ -2,7 +2,7 @@
 name: Establish the Principle Kernel
 description: Give existing whole-system principles stable identities and exact routing metadata without creating a second authority.
 task_id: DSP-01
-github_issue:
+github_issue: 5260
 source_anchor: "docs/DESIGN_PRINCIPLES.md :: System Design Principles"
 parent_capability: Whole-System Design Principle Routing
 prerequisites: []
@@ -65,4 +65,4 @@ both make design behavior hard to verify and easy to drift.
 
 ## Related GitHub Issues
 
-Shared parent epic: pending filing.
+Shared parent epic: #5258.

@@ -1,4 +1,4 @@
-State: Accepted target-state capability specification; no runtime or Builder enforcement is shipped by this document. Shared validation epic: pending filing.
+State: Filed target-state capability specification; no runtime or Builder enforcement is shipped by this document. Shared validation epic: #5258 (`agent:blocked`).
 Doc role: Capability specification
 Authority: Defines the bounded delivery needed to make existing whole-system principles selectable and enforceable without transferring their ownership to Builder System.
 Owner: Architecture / CES, with local Product, Builder, and Platform/Ops owner contracts retaining their authority.
@@ -41,7 +41,7 @@ increase abstraction. The rule prevents both hidden effect authority and generic
 
 ## Implementation Tasks And Execution Order
 
-1. [Establish the Principle Kernel](ESTABLISH_PRINCIPLE_KERNEL.md) — DSP-01. Assign stable IDs and
+1. [Establish the Principle Kernel](ESTABLISH_PRINCIPLE_KERNEL.md) — DSP-01, issue #5260. Assign stable IDs and
    selection metadata to the existing canonical principles and their compact projections.
 2. [Resolve Minimal Design Packets](RESOLVE_MINIMAL_DESIGN_PACKETS.md) — DSP-02. Depends on DSP-01;
    implement deterministic, read-only selection and typed refusal.

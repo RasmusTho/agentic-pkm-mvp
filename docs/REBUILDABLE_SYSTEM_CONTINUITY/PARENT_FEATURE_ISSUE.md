@@ -1,6 +1,6 @@
 # Shared epic linkage — Rebuildable System Continuity
 
-State: Pending live filing. The full shared validation-hub contract is
+State: Filed live shared validation hub #5258 (`agent:blocked`). The full shared validation-hub contract is
 `docs/WHOLE_SYSTEM_DESIGN_PRINCIPLES/PARENT_FEATURE_ISSUE.md`; this file owns the continuity child
 ledger and terminal acceptance writeback only.
 

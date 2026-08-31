@@ -1,7 +1,7 @@
 # Shared parent epic — whole-system design routing and rebuildable continuity
 
-State: Pending live filing. This file is the repo-side contract for one shared blocked validation
-hub; the hub is never direct pickup work and claims no shipped capability.
+State: Filed live shared validation hub #5258 (`agent:blocked`). The hub is never direct pickup work
+and claims no shipped capability.
 
 ## Context
 
@@ -64,7 +64,8 @@ integrated total-loss proof.
 
 ## Implementation Tasks
 
-See the ordered ledgers in both capability READMEs. Initially only DSP-01 is pickup-ready. Later
+See the ordered ledgers in both capability READMEs. DSP-01 / #5260 is the only initially
+pickup-ready child. Later
 children are filed after their prerequisite receipt is live; existing overlapping Issues retain
 their own lifecycle authority.
 
