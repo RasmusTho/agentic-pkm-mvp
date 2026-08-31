@@ -5,7 +5,7 @@ Owner: Builder System governance
 Temporal class: operational
 Review cadence: event-driven
 Source of truth: observed repo files and read-only GitHub command output cited inline
-Last reviewed: 2026-08-29
+Last reviewed: 2026-08-31
 
 # Builder System Process Map
 
@@ -39,6 +39,17 @@ evidence returns to planning or process governance. Product operation remains Pr
 authority. The Builder System observes it and may propose or deliver changes through the normal
 repo path; it cannot silently convert observations, BuilderOps records, chat, or projections into
 Product truth.
+
+### Current active Builder carrier
+
+Codex is the only active Builder worker carrier. The executable instruction and adapter path is
+`AGENTS.md` → `.codex/skills/README.md :: Skill routing` → the selected `.codex/skills/**`
+workflow and active `.codex/agents/**` role adapter.
+
+`CLAUDE.md` and retained Claude execution-role references are non-operational compatibility and
+provenance material only. They do not authorize launching Claude, reading Anthropic credentials,
+or selecting a provider/model target. Any future non-Codex carrier requires a separately governed
+contract and current authority readback before becoming operational.
 
 ### L0 root — Governed Builder System Delivery & Operations System
 

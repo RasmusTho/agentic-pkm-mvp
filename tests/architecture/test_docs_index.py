@@ -128,6 +128,28 @@ def test_ysnv2_owner_doc_delivery_state_matches_index() -> None:
     assert "YSNV2-06 delivered" in index_row
 
 
+
+def test_builder_carrier_documentation_is_codex_only() -> None:
+    index_text = DOCS_INDEX.read_text(encoding="utf-8")
+    status_text = (DOCS_ROOT / "STATUS.md").read_text(encoding="utf-8")
+    process_text = (
+        DOCS_ROOT / "development" / "BUILDER_SYSTEM_PROCESS_MAP.md"
+    ).read_text(encoding="utf-8")
+    governance_text = (
+        DOCS_ROOT / "development" / "AGENT_INSTRUCTION_GOVERNANCE.md"
+    ).read_text(encoding="utf-8")
+    claude_pointer = (REPO_ROOT / "CLAUDE.md").read_text(encoding="utf-8")
+
+    assert "| CLAUDE.md | Non-operational Claude compatibility/provenance pointer |" in index_text
+    assert "Codex is the only active Builder worker carrier" in index_text
+    assert "runtime-neutral Codex/Claude dispatch context packs" not in status_text
+    assert "active Codex dispatch context packs" in status_text
+    assert "Codex is the only active Builder worker carrier." in process_text
+    assert "non-operational compatibility and\nprovenance material only" in process_text
+    assert "thin, non-operational compatibility/provenance pointer" in governance_text
+    assert "The current Builder System worker carrier is Codex." in claude_pointer
+    assert "must not launch Claude" in claude_pointer
+
 def _heading_to_anchor(heading: str) -> str:
     """Convert a Markdown heading text to a GitHub-style anchor slug."""
     slug = heading.strip().lower()

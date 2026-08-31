@@ -965,8 +965,8 @@ Illustrative example/template content — not individually indexed. The followin
 ## Agents / Codex Guidance
 | Path | Scope | Review status | Last reviewed | Notes |
 | --- | --- | --- | --- | --- |
-| .codex/AGENTS.md | Codex compatibility pointer | Aligned (forward line v5.x) | 2026-03-29 | Non-canonical entrypoint redirecting Codex-style discovery to the root `AGENTS.md`. |
-| CLAUDE.md | Claude Code entrypoint | Aligned (forward line v5.x) | 2026-03-29 | Minimal Claude compatibility entrypoint; defers to the root `AGENTS.md`. |
+| .codex/AGENTS.md | Codex compatibility pointer | Aligned (Codex-only active carrier) | 2026-08-31 | Non-canonical Codex discovery entrypoint redirecting to the canonical root `AGENTS.md`; Codex is the only active Builder worker carrier. |
+| CLAUDE.md | Non-operational Claude compatibility/provenance pointer | Aligned (Codex-only active carrier) | 2026-08-31 | Retained only for compatibility and provenance; defers to `AGENTS.md` and does not authorize Claude launch, Anthropic credential access, or provider/model selection. |
 
 ## ADRs
 | Path | Scope | Review status | Last reviewed | Notes |
