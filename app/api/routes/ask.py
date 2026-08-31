@@ -13,7 +13,7 @@ from app.agents.ask.utils import get_ask_settings
 from app.components.llm.fabric import LLMBackendTimeout
 from app.events.models import new_trace_id
 from app.observability.status_service import record_ask_error, record_ask_query
-from app.orientation.projection import is_return_orientation_question
+from app.agents.ask.orientation import is_return_orientation_question
 from app.retrieval.hybrid import get_store as get_hybrid_store
 from app.retrieval.hybrid import rebuild_from_durable_index
 from app.tts.config import load_tts_config

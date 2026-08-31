@@ -36,7 +36,7 @@ from app.agents.ask.utils import build_ask_context, get_ask_settings, llm_answer
 from app.config.environment import active_environment
 from app.config.paths import VaultRootMisconfiguredError, resolve_optional_vault_root
 from app.components.rerankers import get_reranker
-from app.orientation.projection import (
+from app.agents.ask.orientation import (
     derive_orientation_signals,
     is_return_orientation_question,
 )
