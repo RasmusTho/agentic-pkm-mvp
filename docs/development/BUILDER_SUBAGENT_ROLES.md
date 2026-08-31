@@ -116,13 +116,22 @@ owner and session, named successor, branch and base, sole writable worktree, unp
 head (or `none`), changed files, current validation and current review/receipt evidence with head or
 time binding, blockers, residual risk, and exactly one next authorized action.
 
-The successor must authenticate those fields against live GitHub and Git/worktree evidence and post
-an acknowledgment before acting. The acknowledgment fences the former lifecycle owner into a
-read-only role: the former owner may supply evidence but may no longer edit, push, publish, merge,
-close, or mutate lifecycle state. Contradictory owners, writable worktrees, candidate heads, or
-review evidence fail closed; newer blocking review evidence supersedes an older publish or closure
-recommendation. Coordination resumes only after the current owner or the normal maintenance/owner
-authority path reconciles one owner, one current candidate head, and one next authorized action.
+After all non-worktree readbacks agree, the current owner must release its active registration and
+re-read it as non-active. The named successor must then register the sole receipt-named worktree (or
+receipt-named replacement), and re-read its own owner, branch, and generation. Only after this
+release → successor registration → live readback sequence may the successor post its acknowledgment.
+A connector-only transfer may instead authenticate `writable_worktree: none`, but must not fabricate
+a local registration. If release succeeds but successor registration, readback, or acknowledgment
+fails, authority does not transfer; the current owner remains the lifecycle owner without a writable
+worktree and may only restore its own registration or route reconciliation. Neither side may publish,
+merge, or close in that intermediate state.
+
+The acknowledgment fences the former lifecycle owner into a read-only role: the former owner may
+supply evidence but may no longer edit, push, publish, merge, close, or mutate lifecycle state.
+Contradictory owners, writable worktrees, candidate heads, or review evidence fail closed; newer
+blocking review evidence supersedes an older publish or closure recommendation. Coordination resumes
+only after the current owner or the normal maintenance/owner authority path reconciles one owner, one
+current candidate head, and one next authorized action.
 
 ```yaml
 lifecycle_handoff_receipt.v1:
@@ -131,7 +140,7 @@ lifecycle_handoff_receipt.v1:
   successor:                    # agent + session proposed to receive authority
   branch:                       # publication branch
   base:                         # base ref/SHA used by the candidate
-  writable_worktree:            # sole absolute writable worktree
+  writable_worktree:            # sole absolute writable worktree, or none for connector-only work
   unpublished_candidate_head:   # exact commit SHA or none
   changed_files:                # bounded intended file set
   current_validation:           # commands/results bound to the candidate head
@@ -139,7 +148,7 @@ lifecycle_handoff_receipt.v1:
   blockers:                     # active blockers or none
   residual_risk:                # remaining risk
   next_authorized_action:       # exactly one action
-  successor_acknowledgment:     # live-readback result; absent until transfer is effective
+  successor_acknowledgment:     # absent until release/register/readback makes transfer effective
 ```
 
 The dry-run helper for generating these packets is:
