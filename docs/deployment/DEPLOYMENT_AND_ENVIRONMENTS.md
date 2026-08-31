@@ -5,9 +5,9 @@ Doc role: Core SoT (deployment)
 Authority: Canonical deployment + environment-separation contract. `docs/ENVIRONMENTS.md` owns environment *selection* and *path scoping* (what data/config each channel touches); `docs/RELEASE_CHANNELS/README.md` owns *channel identity, per-channel DB isolation, promotion-plan contract, migration reversibility classification, and rollback semantics*. `docs/YGGDRASIL_PLATFORM_AND_OPERATIONS_SYSTEM/README.md` owns the target ecosystem boundary for the operational platform; it does not replace this current deployment contract. This document owns *how a deploy physically happens*: image build/promote, managed gateways, deploy/rollback runbook, health gates, and the proxy-trust topology. Operations, runbooks, and component docs should reference this document instead of restating deployment procedure.
 Temporal class: operational
 Review cadence: as deployment topology, build pipeline, or channel ports change
-Last reviewed: 2026-08-29
+Last reviewed: 2026-08-31
 Last live runtime verification: 2026-08-22 (new-host topology; no authoritative SSH/deploy path was available from this workstation)
-Last verified against: `docker-compose.yaml`, `docker-compose.{dev,test,prod}.yml`, `docker-compose.{full-host-vault,legacy-vault,test-vault}.yml`, `Makefile`, `Dockerfile`, `scripts/lib/companion_ui_startup.sh`, `scripts/lib/instance_ownership_host_state.sh`, `companion-ui/companion-app/companion_ui/workspace/serve_dev_page.py`, `serve_production_page.py`, `app/auth.py`, `app/version.py`, `app/api/routes/health_contract.py`, `app/activation/ask_synthesis.py`
+Last verified against: `docker-compose.yaml`, `docker-compose.{dev,test,prod}.yml`, `docker-compose.{full-host-vault,legacy-vault,test-vault}.yml`, `Makefile`, `Dockerfile`, `scripts/lib/companion_ui_startup.sh`, `scripts/lib/instance_ownership_host_state.sh`, `companion-ui/companion-app/companion_ui/workspace/serve_dev_page.py`, `serve_production_page.py`, `app/auth.py`, `app/version.py`, `app/api/routes/health_contract.py`, `app/activation/ask_synthesis.py`, `config/platform/product_tars_channel_topology.v1.schema.json`, `app/ops/product_tars_channel_topology.py`, `docs/deployment/profiles/TARS_PROXMOX.md`
 
 ## Why this document exists
 
@@ -57,10 +57,29 @@ The first inventory receipt is produced and validated only through the linked ow
 [`devsystem_vm102_component_inventory.v1` executable boundary](../BUILDEROPS_CONTROL_PLANE/README.md#vm-102-evidence-and-receipt-contract);
 this deployment contract does not collect host evidence or duplicate its schema.
 
+## Product Runtime channel placement
+
+The intended Product Runtime placement for all three channels (`dev`, `test`, and `prod`) is the
+TARS-hosted Linux VM topology selected by the TARS deployment profile. This is a placement contract,
+not a live residency or deployment claim. The exact channel VM, Docker engine, source/image, ingress,
+health/version, data, backup, and rollback identities must come from a fresh,
+redaction-safe `product_tars_channel_topology.v1` qualification input; unknown values remain explicit
+gaps and do not authorize a channel operation.
+
+Demerzel/Mac mini is a control, development, client, and operator computer only for Product Runtime
+placement purposes. It is not the `dev`, `test`, or `prod` Product Runtime host; local Compose/Colima
+is an explicitly non-authoritative development fallback. VM 102 (`builder-system`) is the separate
+complete Builder System / Dev System target and must not be used as a Product Runtime channel VM or
+engine. BuilderOps and Product Runtime placement therefore remain separate authority boundaries.
+
+Provider and model selection is resolved by capability configuration. Neither this placement profile
+nor the topology qualification input encodes a provider, model, or Codex-only runtime architecture.
+
 ## Current live runtime posture
 
-The intended live split is now: a dedicated Ollama host for Ollama only, and the product runtime on isolated Linux
-hosts reached through Tailscale. On 2026-08-22, `ygg-dev` served API `:18001` and UI `:8111`,
+The intended live split is now: a dedicated Ollama host for Ollama only, and the Product Runtime
+channels on the TARS-hosted isolated Linux VM topology reached through private ingress. On 2026-08-22,
+`ygg-dev` served API `:18001` and UI `:8111`,
 `ygg-prod` served API liveness on `:18000` while its UI `:8113` was unavailable, and no `ygg-test`
 host or endpoint was available. Dev and prod both reported `git_sha=unknown`; prod functional health
 was failing because the watcher was stale/paused and the worker had no heartbeat. These observations

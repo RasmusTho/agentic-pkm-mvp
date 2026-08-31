@@ -18,16 +18,16 @@ Doc role: Core SoT for the release-channels capability
 Owner: `docs/ROADMAP.md`
 Temporal class: strategic
 Review cadence: biweekly
-Last reviewed: 2026-08-29
+Last reviewed: 2026-08-31
 Last live runtime verification: 2026-08-22 (new-host topology; `ygg-test` unavailable)
-Last verified against: docs/ENVIRONMENTS.md, docs/ARCHITECTURE.md, docs/STATUS.md, docs/OPERATIONS.md, docs/DB_SCHEMA.md, docs/DEV_TEST_PROD_STARTUP_REDESIGN/README.md, app/release_channels/promotion_receipt.py, docs/adr/ADR-0040-prod-promotion-ref-main-interim.md
+Last verified against: docs/ENVIRONMENTS.md, docs/ARCHITECTURE.md, docs/STATUS.md, docs/OPERATIONS.md, docs/DB_SCHEMA.md, docs/DEV_TEST_PROD_STARTUP_REDESIGN/README.md, docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md, config/platform/product_tars_channel_topology.v1.schema.json, app/ops/product_tars_channel_topology.py, app/release_channels/promotion_receipt.py, docs/adr/ADR-0040-prod-promotion-ref-main-interim.md
 
 # Release Channels Specification
 
 ## Current live posture
 
-The operator's current topology is a dedicated Ollama host only; the product runtime belongs on the new
-Linux/Tailscale hosts. The live baseline is incomplete: `ygg-dev` answers on API `:18001` and UI
+The operator's current topology is a dedicated Ollama host only; the Product Runtime channels belong
+on the TARS-hosted Linux/Tailscale VM topology. The live baseline is incomplete: `ygg-dev` answers on API `:18001` and UI
 `:8111` but is degraded and uses the `mock` LLM provider; `ygg-test` is not available; `ygg-prod`
 answers API liveness on `:18000` but fails functional health and has no reachable UI on `:8113`.
 Both live APIs report an unknown build identity. The old single-host Compose model described in this
@@ -36,6 +36,17 @@ specification is therefore a local fallback/reference model, not current live to
 The promotion chain remains `dev → test → prod`, but it cannot start until the candidate identity is
 immutable and observable, the new-host deployment handoff is authoritative, `test` is reachable, and
 test verification produces a durable PASS receipt. A liveness response alone is not a promotion gate.
+
+Channel placement is separate from channel identity and promotion. Each `dev`, `test`, and `prod`
+channel is intended to run on its qualified TARS-hosted Linux VM; exact VM/engine, source/image,
+ingress/auth, health/version, data, backup, and rollback identities come from the redaction-safe
+`product_tars_channel_topology.v1` input. Demerzel/Mac mini is control/development/client/operator
+infrastructure, local Compose/Colima is a non-authoritative development fallback, and VM 102
+(`builder-system`) is the separate Builder System / Dev System target. This specification does not
+claim any of those live qualification or deployment facts.
+
+Provider/model choice remains capability- and configuration-resolved; release-channel placement
+does not encode a named provider, model, or Codex-only architecture.
 
 This directory specifies the capability that lets a **stable build run in prod against the real vault** while **new feature work continues in dev across the same governed runtime fleet**, without dev churn destabilizing prod and without prod freeze blocking dev.
 

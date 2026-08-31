@@ -8,6 +8,11 @@ implemented as a remote-host deployment path; `ygg-test` and immutable live arti
 gates before staged promotion.
 Doc role: Capability specification directory (Product/Runtime + Builder System release boundary)
 Owning SoT: `docs/ENVIRONMENTS.md`, `docs/RELEASE_CHANNELS/README.md`, and `docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md`
+Temporal class: strategic
+Review cadence: event-driven
+Source of truth: `docs/ENVIRONMENTS.md`, `docs/RELEASE_CHANNELS/README.md`, and `docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md`
+Last reviewed: 2026-08-31
+Last verified against: #5237 repository contract and the startup chain documents
 
 # Dev/Test/Prod Startup Redesign
 
@@ -19,9 +24,24 @@ Define the small, deterministic startup and promotion kernel needed to recover s
 
 The redesign has two explicit delivery modes: `local-source` for dev/local-test, and immutable `promotion` for promotion-test and prod. Compose remains the topology mechanism; the only new control components are a deterministic manifest resolver, operation journal, and receipt validator. It does not add a service mesh, orchestration service, hosted deployment, or a second authority system.
 
+## TARS channel-placement reconciliation gate
+
+Before the operator-gated STARTUP-05 cutover in #4918, repository implementation and rehearsal must
+consume the #5237 Product Runtime placement contract. That contract names the TARS-hosted Linux VM
+topology as the intended home for `dev`, `test`, and `prod`, keeps Demerzel/Mac mini as
+control/development/client/operator infrastructure, keeps VM 102 (`builder-system`) as the separate
+Builder System / Dev System target, and leaves exact channel identities as explicit qualification
+inputs and gaps. The sequence is therefore: #5237 repository reconciliation → exact redaction-safe
+qualification input → rehearsal/backup/rollback prerequisites → operator authorization for #4918.
+
+#4899 is retained only for an explicitly chosen local Colima development fallback. It is not a TARS
+Product Runtime prerequisite and cannot substitute for channel qualification, rehearsal, or operator
+acceptance. #4913 remains the validation hub for the startup chain; this reconciliation does not
+authorize host access, deployment, promotion, restart, migration, or cutover.
+
 ## Implementation tasks
 
-P0 is deliberately not a child task: the live Colima persistent-substrate recovery is already tracked by #4899 and remains a hard prerequisite for any channel mutation.
+P0 is deliberately not a child task: the live Colima persistent-substrate recovery is already tracked by #4899 and remains a hard prerequisite only for the explicitly selected local Colima fallback's channel mutation.
 
 1. [Freeze Channel Manifest And Operation Contract](FREEZE_CHANNEL_MANIFEST_AND_OPERATION_CONTRACT.md) — P1, implemented by #4914
 2. [Build Immutable Artifact Graph](BUILD_IMMUTABLE_ARTIFACT_GRAPH.md) — P2, implemented by #4915
@@ -204,4 +224,7 @@ P1 is proven by the static contract test and fixture in `tests/architecture/test
 
 ## Relationship to GitHub issues
 
-Parent validation hub: #4913. The execution chain is #4914 (P1) → #4915 (P2) → #4916 (P3) → #4917 (P4) → #4918 (P5, operator-gated) → #4919 (P6). P0 recovery remains #4899 and blocks host Docker/Colima recovery and any cutover.
+Parent validation hub: #4913. Product Runtime placement reconciliation is #5237 and precedes the
+execution chain: #4914 (P1) → #4915 (P2) → #4916 (P3) → #4917 (P4) → #4918 (P5, operator-gated) →
+#4919 (P6). P0 recovery remains #4899 for the deliberate local Colima fallback only; it does not
+qualify or authorize a TARS Product Runtime channel.

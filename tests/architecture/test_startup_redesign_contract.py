@@ -29,6 +29,22 @@ def test_kernel_contract_names_every_invariant() -> None:
         ), f"K{invariant} must have a structured enforcement phase"
 
 
+def test_tars_reconciliation_precedes_live_cutover() -> None:
+    startup = README
+    reconciliation = startup.index("## TARS channel-placement reconciliation gate")
+    cutover = startup.index("operator authorization for #4918", reconciliation)
+    qualification = startup.index("exact redaction-safe", reconciliation)
+    rehearsal = startup.index("rehearsal/backup/rollback prerequisites", reconciliation)
+    authorization = startup.index("operator authorization for #4918", reconciliation)
+
+    assert reconciliation < qualification < rehearsal < authorization
+    assert cutover > reconciliation
+    assert "#5237" in startup[reconciliation:cutover]
+    assert "#4899" in startup[reconciliation:]
+    assert "not a TARS" in startup[reconciliation:]
+    assert "hard prerequisite for any channel mutation" not in startup
+
+
 SENSITIVE_FIELD = re.compile(
     r"(?:secret|password|token|credential|private[_-]?key|api[_-]?key|access[_-]?key|client[_-]?secret)",
     re.IGNORECASE,
