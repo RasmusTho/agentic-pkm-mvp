@@ -5,7 +5,7 @@ task_id: RSC-06
 github_issue:
 source_anchor: "docs/REBUILDABLE_SYSTEM_CONTINUITY/SPECIFY_MVR_NEW_BOOTSTRAP.md :: Acceptance Criteria"
 parent_capability: Rebuildable System Continuity
-prerequisites: [RSC-05, live MVR dependency reconciliation]
+prerequisites: [RSC-05]
 depends_on: [SPECIFY_MVR_NEW_BOOTSTRAP.md]
 can_parallelize_with: []
 ---
