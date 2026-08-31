@@ -64,7 +64,7 @@ def _heartbeat(path: Path, vault: Path) -> None:
     )
 
 
-def test_from_environment_uses_registered_watcher_default(
+def test_from_environment_preserves_deliberate_unset_distinction(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     vault_a = tmp_path / "vault-a"
@@ -79,8 +79,14 @@ def test_from_environment_uses_registered_watcher_default(
 
     activation = SettingsRebindActivation.from_environment(registry)
 
-    assert activation.watcher_requested is True
-    assert activation.watcher_enabled is True
+    assert activation.watcher_requested is False
+    assert activation.watcher_enabled is False
+
+    monkeypatch.setenv("WATCHER_ENABLE", "1")
+    enabled_activation = SettingsRebindActivation.from_environment(registry)
+
+    assert enabled_activation.watcher_requested is True
+    assert enabled_activation.watcher_enabled is True
 
     monkeypatch.delenv("WATCHER_VAULT_PATH", raising=False)
     idle_activation = SettingsRebindActivation.from_environment(registry)
