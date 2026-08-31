@@ -895,6 +895,56 @@ def test_candidate_watcher_permission_is_revalidated_at_adoption(
         reconciler.candidate_vault_path(record)
 
 
+def test_disabled_candidate_cannot_complete_api_rebind(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Candidate policy failure leaves the API transition prepared, not complete."""
+    from app.instance.settings_rebind import SettingsRebindActivation
+
+    runtime, _vault_a, vault_b, config_path = _fixture(
+        tmp_path, monkeypatch, enabled=True, prepare=False
+    )
+    local_path = vault_b / "settings" / "local.md"
+    settings_store = MarkdownSettingsStore()
+    local_doc = settings_store.read(local_path)
+    frontmatter = dict(local_doc.frontmatter)
+    frontmatter["enableVaultWatcher"] = False
+    settings_store.write_frontmatter(local_path, frontmatter, body=local_doc.body)
+    registration = runtime.registry.load().registrations["binding-b"]
+    selection = KnownVaultRef(
+        ref=registration.ref,
+        path=registration.path,
+        vault_id=registration.vault_id,
+        vault_name=registration.vault_name,
+        local_instance_id=registration.local_instance_id,
+        last_opened_at="2026-08-30T00:00:00Z",
+    )
+
+    def run_watcher_for_ack(
+        _activation: SettingsRebindActivation,
+        _record: SettingsRebindRecord,
+        *,
+        required_stage: str,
+    ) -> None:
+        assert required_stage == "acknowledged"
+        registry.run_registry_once(config_path)
+
+    monkeypatch.setattr(SettingsRebindActivation, "_wait_for_stage", run_watcher_for_ack)
+    with pytest.raises(RegistryError, match="disabled by local settings"):
+        SettingsRebindActivation(
+            runtime.registry,
+            watcher_state_dir=tmp_path / "watcher-state",
+            watcher_enabled=True,
+        ).activate(
+            selection=selection,
+            candidate_binding_id="binding-b",
+            candidate_root=vault_b,
+        )
+
+    assert runtime.open_settings_rebind_store().read().phase == "prepared"
+    assert not (tmp_path / "watcher-state" / "settings-rebind-watcher-r1.json").exists()
+
+
 def test_same_target_prepared_selection_finishes_durable_commit(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

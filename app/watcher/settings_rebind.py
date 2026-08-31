@@ -410,6 +410,10 @@ class DormantSettingsRebindReconciler:
         if cycle.mode not in {"prepared", "committed"}:
             return cycle.receipt
         self._assert_scan_success(summaries)
+        # Validate policy before acknowledging or completing the handoff. A
+        # completed receipt is an API-visible resume authority, so it must not
+        # be written for a candidate the watcher is forbidden to adopt.
+        self.candidate_vault_path(cycle.record)
         observations = self._observations(
             summaries,
             states=states,
