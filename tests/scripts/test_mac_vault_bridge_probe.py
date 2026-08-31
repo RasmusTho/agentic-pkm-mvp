@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -111,6 +112,20 @@ def test_probe_rejects_invalid_or_escaping_targets(tmp_path: Path) -> None:
     non_directory = _run(regular_file)
     assert non_directory.returncode != 0
     assert _report(non_directory)["root"]["reason"] == "root_not_directory"
+
+    no_marker = tmp_path / "no-marker"
+    no_marker.mkdir()
+    (no_marker / "note.md").write_text("local", encoding="utf-8")
+    custom_without_marker = _run(no_marker, "note.md")
+    assert custom_without_marker.returncode != 0
+    assert _report(custom_without_marker)["marker"]["status"] == "missing"
+
+    if hasattr(os, "mkfifo"):
+        special = vault / "pipe"
+        os.mkfifo(special)
+        special_result = _run(vault, "pipe")
+        assert special_result.returncode != 0
+        assert _report(special_result)["observations"][0]["reason"] == "unsupported_special_file"
 
     root_link = tmp_path / "root-link"
     root_link.symlink_to(vault, target_is_directory=True)

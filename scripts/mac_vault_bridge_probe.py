@@ -138,8 +138,16 @@ def _open_relative(root_fd: int, relative_path: str) -> tuple[int, os.stat_resul
             if not final:
                 flags |= getattr(os, "O_DIRECTORY", 0)
             try:
-                if stat.S_ISLNK(os.lstat(component, dir_fd=current_fd).st_mode):
+                entry_metadata = os.lstat(component, dir_fd=current_fd)
+                if stat.S_ISLNK(entry_metadata.st_mode):
                     raise ProbeAccessError("symlink_component_rejected")
+                if final and not (
+                    stat.S_ISREG(entry_metadata.st_mode)
+                    or stat.S_ISDIR(entry_metadata.st_mode)
+                ):
+                    raise ProbeAccessError("unsupported_special_file")
+                if not final and not stat.S_ISDIR(entry_metadata.st_mode):
+                    raise ProbeAccessError("target_not_directory")
                 next_fd = os.open(component, flags, dir_fd=current_fd)
             except ProbeAccessError:
                 raise
@@ -322,6 +330,7 @@ def main(argv: list[str] | None = None) -> int:
     return (
         0
         if report["root"]["valid"]
+        and report["marker"]["status"] == "present"
         and all(item["status"] == "observed" for item in report["observations"])
         else 2
     )
