@@ -200,6 +200,7 @@ deliveries precisely because production initiation stays fail-closed until C.
 ### SETTINGS-05B validation
 
 - `RUN_INTEGRATED_RUNTIME_UAT=1 pytest -q tests/integration/test_watcher_cross_process_rebind.py -k "dormant or reconciler"`
+- A regression must prove that no-lifecycle acknowledgement stops or proves absent an existing watcher before acknowledgement; traversal errors leave the scan incomplete; and a `drained` receipt remains non-terminal until a fresh resumed old-root scan succeeds.
 - Verify the production picker/API remains capability-sealed.
 
 ### SETTINGS-05C validation
