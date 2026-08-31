@@ -802,6 +802,31 @@ def load_registry_config(config_path: Path) -> RegistryConfig:
     return RegistryConfig.from_env(specs, config_path=config_path)
 
 
+def _adopt_idle_selected_binding(
+    cfg: RegistryConfig,
+    reconciler: DormantSettingsRebindReconciler | None,
+) -> None:
+    """Start an explicitly enabled watcher after its initial idle selection.
+
+    ``WATCHER_ENABLE=1`` with no bootstrap path is a supported running-idle
+    posture. The first picker selection is committed as ``no_lifecycle``
+    because no old root exists to bracket; the long-lived watcher then adopts
+    that durable candidate. ``WATCHER_ENABLE=0`` remains disabled.
+    """
+
+    if cfg.enable or reconciler is None:
+        return
+    if not _as_bool(env_str("WATCHER_ENABLE")):
+        return
+    if (os.getenv("WATCHER_VAULT_PATH") or "").strip():
+        return
+    record = reconciler.current_record()
+    if record.phase != "no_lifecycle" or record.candidate_binding_id is None:
+        return
+    cfg.vault_path = reconciler.candidate_vault_path(record)
+    cfg.enable = True
+
+
 def _state_path(state_dir: Path, name: str) -> Path:
     safe = "".join([c if c.isalnum() or c in {"-", "_"} else "_" for c in name])
     return state_dir / f"watcher_state_{safe}.json"
@@ -2355,6 +2380,7 @@ def run_registry_once(
 ) -> dict[str, dict[str, object]]:
     cfg = _loaded_config or load_registry_config(config_path)
     reconciler = DormantSettingsRebindReconciler.from_config(cfg)
+    _adopt_idle_selected_binding(cfg, reconciler)
     rebind_cycle = reconciler.begin_cycle(cfg) if reconciler is not None else None
     if rebind_cycle is not None and rebind_cycle.mode == "stable":
         cfg.vault_path = reconciler.candidate_vault_path(rebind_cycle.record)
@@ -2421,6 +2447,7 @@ def run_registry_forever(
 ) -> None:
     cfg = _loaded_config or load_registry_config(config_path)
     reconciler = DormantSettingsRebindReconciler.from_config(cfg)
+    _adopt_idle_selected_binding(cfg, reconciler)
     startup_rebind_cycle = reconciler.begin_cycle(cfg) if reconciler is not None else None
     if startup_rebind_cycle is not None and startup_rebind_cycle.mode == "stable":
         # A fresh watcher process may still boot from the old environment
@@ -2448,6 +2475,8 @@ def run_registry_forever(
 
     tick = 0
     while True:
+        if tick != 0:
+            _adopt_idle_selected_binding(cfg, reconciler)
         rebind_cycle = (
             startup_rebind_cycle
             if tick == 0

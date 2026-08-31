@@ -9,8 +9,11 @@ the picker writes a protected ``settings_rebind.v1`` prepare, the watcher
 acknowledges a healthy old-root scan, and only the locked commit lets the
 watcher adopt the candidate binding.  This avoids sharing the HTTP process's
 in-memory ``VaultManager`` state while making the two processes follow one
-durable binding.  The watcher changes its in-memory root only after its
-post-commit drain/resume receipt; no multi-active lifecycle is implied.
+ durable binding.  The watcher changes its in-memory root only after its
+ post-commit drain/resume receipt; an explicitly enabled watcher with no
+ bootstrap path remains idle until the picker commits its first durable
+ candidate, which it then adopts after revalidating the candidate vault's
+ local watcher permission. No multi-active lifecycle is implied.
 
 Health reads the durable phase/revision and heartbeat together.  A missing,
 invalid, or incomplete handoff remains visibly degraded; a display-only

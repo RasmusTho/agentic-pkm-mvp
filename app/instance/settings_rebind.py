@@ -211,7 +211,13 @@ class SettingsRebindStore:
                 return current
             raise RegistryError("settings rebind already has a prepared revision")
         if current.phase == "committed":
-            raise RegistryError("settings rebind committed revision is awaiting watcher completion")
+            if current.reload_revision != current.desired_revision:
+                raise RegistryError(
+                    "settings rebind committed revision is awaiting reload completion"
+                )
+            # The activation owner checks the watcher receipt before starting
+            # the next transition. Once the foreground reload marker is
+            # durable, a later selection may prepare the next revision.
         prior = current.candidate_binding_id
         if prior == candidate_binding_id:
             return current
@@ -378,6 +384,12 @@ class SettingsRebindActivation:
                 self._wait_for_completed_if_enabled(current)
                 return self._reload_if_needed(current, candidate_root)
 
+        if current.phase == "committed":
+            # A completed committed record is the normal steady state while the
+            # watcher remains deployed. Quiesce that prior transition before
+            # allowing a new candidate to replace it.
+            self._wait_for_completed_if_enabled(current)
+
         _activation_fault_point("prepare")
         try:
             prepared = self.store.prepare(candidate_binding_id=candidate_binding_id)
@@ -457,16 +469,24 @@ class SettingsRebindActivation:
         # This is deliberately the existing production SETTINGS-01 call site,
         # not a second settings loader.  The registry lock serializes this
         # side effect with same-target callers and records completion durably.
-        from app.settings.ingestion import ingest_settings
+        from app.settings.ingestion import STATE_OK, ingest_settings
+
+        def reload_selected_settings() -> None:
+            state = ingest_settings(
+                reason="vault_selection_rebind",
+                vault_root=candidate_root,
+                publish_signal=False,
+            )
+            if state.state != STATE_OK:
+                raise RegistryError(
+                    "SETTINGS-01 reload did not complete successfully: "
+                    f"state={state.state} error={state.error or 'unknown'}"
+                )
 
         _activation_fault_point("reload")
         completed = self.store.reload_once(
             desired_revision=record.desired_revision,
-            reload_callback=lambda: ingest_settings(
-                reason="vault_selection_rebind",
-                vault_root=candidate_root,
-                publish_signal=False,
-            ),
+            reload_callback=reload_selected_settings,
         )
         _activation_fault_point("reload_complete")
         return completed

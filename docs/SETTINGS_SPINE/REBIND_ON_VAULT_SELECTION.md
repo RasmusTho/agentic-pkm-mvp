@@ -77,6 +77,13 @@ GET  /api/health -> watcher.ingest_binding.status == "bound"
 # a new file under the committed binding is ingested without a container restart
 ```
 
+When the watcher is explicitly enabled but has no bootstrap path, it stays
+running-idle until the picker commits the first selection. That initial
+selection is allowed to use the durable `no_lifecycle` posture because there
+is no old root to bracket; the watcher then adopts the committed candidate
+from the protected registry and revalidates the candidate vault's local
+watcher permission at the adoption seam.
+
 ## Why This Matters
 
 Selection can be the compatibility source of truth only when the independently deployed watcher

@@ -11,6 +11,8 @@ import time
 
 import pytest
 
+from app.settings.ingestion import SettingsIngestionState
+from app.vault.markdown_settings import MarkdownSettingsStore
 from app.instance._storage_boundary import RegistryError
 from app.instance.instance_state import InstanceStateLayout
 from app.instance.runtime import InstanceRegistryRuntime
@@ -23,6 +25,7 @@ from app.instance.vault_registry import KnownVaultRef
 from app.api.routes.ingest_binding import ingest_binding_status
 from app.watcher import registry
 from app.watcher.settings_rebind import (
+    DormantSettingsRebindReconciler,
     _write_receipt,
     SettingsRebindWatcherReceipt,
     load_settings_rebind_watcher_receipt,
@@ -32,6 +35,19 @@ from tests.helpers.instance_storage_capability import STORAGE_MUTATION_CAPABILIT
 from tests.helpers.vault_settings import initialize_test_vault
 
 pytestmark = pytest.mark.not_pg
+
+
+def _successful_reload(**kwargs: object) -> SettingsIngestionState:
+    del kwargs
+    return SettingsIngestionState(state="ok", source="vault")
+
+
+def _record_reload(reloads: list[Path]):
+    def callback(**kwargs: object) -> SettingsIngestionState:
+        reloads.append(Path(kwargs["vault_root"]))
+        return _successful_reload()
+
+    return callback
 
 
 def _runtime(root: Path) -> InstanceRegistryRuntime:
@@ -646,7 +662,7 @@ def test_prepare_commit_resume_is_failure_atomic(
     reloads: list[Path] = []
     monkeypatch.setattr(
         "app.settings.ingestion.ingest_settings",
-        lambda **kwargs: reloads.append(Path(kwargs["vault_root"])),
+        _record_reload(reloads),
     )
 
     def fail_once(stage: str) -> None:
@@ -725,7 +741,7 @@ def test_reload_callback_success_before_marker_allows_one_idempotent_replay(
     reloads: list[Path] = []
     monkeypatch.setattr(
         "app.settings.ingestion.ingest_settings",
-        lambda **kwargs: reloads.append(Path(kwargs["vault_root"])),
+        _record_reload(reloads),
     )
     registration = runtime.registry.load().registrations["binding-b"]
     selection = KnownVaultRef(
@@ -834,6 +850,51 @@ def test_disabled_watcher_is_durable_no_lifecycle(
     assert record.desired_revision == record.applied_revision == 1
 
 
+def test_enabled_idle_watcher_adopts_first_durable_selection(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """WATCHER_ENABLE=1 without a path idles, then adopts the first selection."""
+    from app.vault.manager import VaultManager
+
+    runtime, _vault_a, vault_b, config_path = _fixture(
+        tmp_path, monkeypatch, enabled=False
+    )
+    monkeypatch.setenv("WATCHER_ENABLE", "1")
+    monkeypatch.delenv("WATCHER_VAULT_PATH")
+    VaultManager().select_vault(vault_b)
+
+    registry.run_registry_once(config_path)
+
+    heartbeat = json.loads(
+        (tmp_path / "watcher-heartbeat.json").read_text(encoding="utf-8")
+    )
+    assert heartbeat["vault_path"] == str(vault_b)
+    assert runtime.open_settings_rebind_store().read().phase == "no_lifecycle"
+
+
+def test_candidate_watcher_permission_is_revalidated_at_adoption(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A registered candidate with watcher disabled cannot become a scan root."""
+    runtime, _vault_a, vault_b, _config_path = _fixture(
+        tmp_path, monkeypatch, enabled=False, prepare=False
+    )
+    local_path = vault_b / "settings" / "local.md"
+    settings_store = MarkdownSettingsStore()
+    local_doc = settings_store.read(local_path)
+    frontmatter = dict(local_doc.frontmatter)
+    frontmatter["enableVaultWatcher"] = False
+    settings_store.write_frontmatter(local_path, frontmatter, body=local_doc.body)
+    record = _commit(runtime)
+    reconciler = DormantSettingsRebindReconciler(
+        registry_path=runtime.registry.path,
+        state_dir=tmp_path / "watcher-state",
+    )
+
+    with pytest.raises(RegistryError, match="disabled by local settings"):
+        reconciler.candidate_vault_path(record)
+
+
 def test_same_target_prepared_selection_finishes_durable_commit(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -846,7 +907,7 @@ def test_same_target_prepared_selection_finishes_durable_commit(
     reloads: list[Path] = []
     monkeypatch.setattr(
         "app.settings.ingestion.ingest_settings",
-        lambda **kwargs: reloads.append(Path(kwargs["vault_root"])),
+        _record_reload(reloads),
     )
 
     selected = VaultManager().select_vault(vault_b)
@@ -873,7 +934,7 @@ def test_concurrent_same_target_callers_wait_for_commit_and_resume(
     reloads: list[Path] = []
     monkeypatch.setattr(
         "app.settings.ingestion.ingest_settings",
-        lambda **kwargs: reloads.append(Path(kwargs["vault_root"])),
+        _record_reload(reloads),
     )
     registration = runtime.registry.load().registrations["binding-b"]
     selection = KnownVaultRef(
@@ -962,7 +1023,7 @@ def test_settings05_parent_acceptance(
     monkeypatch.setenv("WATCHER_TICK_SLEEP_SECONDS", "0.05")
     monkeypatch.setattr(
         "app.settings.ingestion.ingest_settings",
-        lambda **_kwargs: None,
+        _successful_reload,
     )
     process_env = os.environ.copy()
     repo_root = Path(__file__).resolve().parents[2]

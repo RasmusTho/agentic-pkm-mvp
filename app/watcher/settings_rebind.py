@@ -335,6 +335,11 @@ class DormantSettingsRebindReconciler:
         self._store = SettingsRebindStore(self._registry)
         self.state_dir = state_dir
 
+    def current_record(self) -> SettingsRebindRecord:
+        """Read the current durable rebind authority for loop reconciliation."""
+
+        return self._store.read()
+
     @classmethod
     def from_config(
         cls,
@@ -498,7 +503,22 @@ class DormantSettingsRebindReconciler:
         registration = self._registry.load().registrations.get(candidate)
         if registration is None:
             raise RegistryError("settings rebind candidate watcher binding is missing")
-        return Path(registration.path)
+        candidate_path = Path(registration.path)
+        # Registration proves identity, not watcher permission. Revalidate the
+        # candidate at the adoption seam immediately before changing roots.
+        from app.vault.manager import VaultManager
+
+        manager = VaultManager()
+        context = manager.validate_vault(candidate_path)
+        if context.status != "selected":
+            raise RegistryError(
+                "settings rebind candidate watcher root is not a selected vault"
+            )
+        if not manager.permissions_for_context(context).enable_vault_watcher:
+            raise RegistryError(
+                "settings rebind candidate watcher root is disabled by local settings"
+            )
+        return candidate_path
 
     def _receipt_path(self, record: SettingsRebindRecord) -> Path:
         return settings_rebind_watcher_receipt_path(
