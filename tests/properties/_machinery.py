@@ -499,12 +499,12 @@ WRITE_FRONTMATTER_SITE_CLASSIFICATION: dict[tuple[str, int], str] = {
 # closed so moving a write from ``write_frontmatter`` cannot make it disappear
 # from the WriteGuard inventory.
 WRITE_MISSING_SITE_CLASSIFICATION: dict[tuple[str, int], str] = {
-    ("app/vault/manager.py", 704): (
+    ("app/vault/manager.py", 714): (
         "bootstrap: VaultManager.initialize_vault is the explicit human/operator "
         "pre-selection initialization transition; O_EXCL preserves existing owner files. "
-        "Line drifted 496 -> 621 -> 623 -> 704 (site unchanged) when #3164 added the "
-        "nested canonical prompt seed and #3452 added "
-        "conflict-quarantine receipt policy above the manager."
+        "Line drifted 496 -> 621 -> 623 -> 704 -> 714 (site unchanged) when #3164 added the "
+        "nested canonical prompt seed, #3452 added conflict-quarantine receipt policy, and "
+        "SETTINGS-05C added the activation seam above the manager."
     ),
     ("app/vault/settings_service.py", 696): (
         "guarded: _scaffold_missing_settings_file asserts DEFAULT_WRITE_GUARD."
