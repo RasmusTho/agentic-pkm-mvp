@@ -248,7 +248,15 @@ class ModelInquiryRunner:
                     )
                     terminal_trace = self.service.trace(inquiry_id)
                     if _single_target_mode(trace):
-                        target = sanitized_adapter_identity(adapters[roles[0]])
+                        # Keep the terminal's effective-target projection stable for
+                        # provenance consumers. The request/turn identity retains
+                        # the resolver-selected capability fields, while this
+                        # historical terminal shape names only the effective target.
+                        target_identity = sanitized_adapter_identity(adapters[roles[0]])
+                        target = {
+                            field: target_identity[field]
+                            for field in ("adapter_id", "provider", "model")
+                        }
                         fingerprint = canonical_hash(target)
                         return self._terminate(
                             inquiry_id,
