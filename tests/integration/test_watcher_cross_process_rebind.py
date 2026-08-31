@@ -443,9 +443,13 @@ def test_rebind_waits_for_budgeted_scan_before_ack_or_completion(
 
     monkeypatch.setenv("WATCHER_MAX_SCANNED_FILES_PER_TICK", "500")
     registry.run_registry_once(config_path)
-    completed = load_settings_rebind_watcher_receipt(
+    drained = load_settings_rebind_watcher_receipt(
         _revision_receipt_path(tmp_path, 1)
     )
+    assert drained.stage == "drained"
+
+    registry.run_registry_once(config_path)
+    completed = load_settings_rebind_watcher_receipt(_revision_receipt_path(tmp_path, 1))
     assert completed.stage == "completed"
 
 

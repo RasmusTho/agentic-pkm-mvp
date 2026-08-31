@@ -143,10 +143,17 @@ def _scan_markdown_many(
     if summary is None:
         summary = {}
     seen: set[Path] = set()
-    for scan_root in scan_roots:
-        for path in iter_vault_markdown_files(
-            vault_root, subtree_root=scan_root, include_settings=True
-        ):
+
+    def _iter_paths() -> Iterable[Path]:
+        for scan_root in scan_roots:
+            try:
+                yield from iter_vault_markdown_files(
+                    vault_root, subtree_root=scan_root, include_settings=True
+                )
+            except OSError:
+                _mark_scan_incomplete(summary, reason="traversal")
+
+    for path in _iter_paths():
             try:
                 rel = path.relative_to(vault_root)
             except Exception:
