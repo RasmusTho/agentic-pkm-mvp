@@ -1,6 +1,11 @@
-State: Specification directory for the Settings Spine capability (owner-ruled Option B, 2026-07-07). Executable form of `docs/audits/SETTINGS_ARCHITECTURE_2026-07-07.md` §5-§6 (audit PR #3153). Parent feature issue FILED: #3156 (validation hub); children #3159-#3166 (see `PARENT_FEATURE_ISSUE.md` for the live map).
-Doc role: Specification (system-level source of truth for what needs to be built)
-Authority: Owns the task decomposition, acceptance criteria, and cross-task invariants for the settings-architecture consolidation. Subordinate to owner docs for shipped behavior; the audit remains advisory evidence. Where a task here conflicts with a Product owner doc, the owner doc wins and the conflict is raised as an issue.
+State: Delivered Settings Spine capability and acceptance map (owner-ruled Option B, 2026-07-07).
+The implementation children and SETTINGS-08 owner-doc handoff are delivered; live GitHub issue
+#3156 is the final validation/closure receipt.
+Doc role: Specification and delivered acceptance record
+Authority: Owns the task decomposition, acceptance criteria, and cross-task invariants for the
+settings-architecture consolidation. `docs/SETTINGS.md` owns shipped settings mechanism; the audit
+remains advisory evidence. Where this directory conflicts with a Product owner doc, the owner doc
+wins and the conflict is raised as an issue.
 
 # Settings Spine
 
@@ -44,23 +49,23 @@ child posts a receipt to #3156 before the next child is readied.
 
 ## Capability acceptance criteria
 
-- [ ] A setting edited as vault markdown takes effect in every consuming service without a manual
+- [x] A setting edited as vault markdown takes effect in every consuming service without a manual
       CLI step or restart, or the service visibly reports degraded-settings state.
       Verify: `tests/settings/test_ingestion_startup.py` (task 1) + integrated-runtime UAT receipt on the parent issue.
-- [ ] Exactly one canonical vault settings location exists; a CI gate blocks new locations.
+- [x] Exactly one canonical vault settings location exists; a CI gate blocks new locations.
       Verify: `tests/architecture/test_settings_single_location.py` (task 3).
-- [ ] Every mutation of a settings file, by any writer, has a durable actor-tagged receipt.
+- [x] Every mutation of a settings file, by any writer, has a durable actor-tagged receipt.
       Verify: `tests/vault/test_settings_receipt_durable.py` extended per task 4.
-- [ ] Pre-vault boot consumes only instance-scope settings; `no_vault` behavior unchanged (#2005).
+- [x] Pre-vault boot consumes only instance-scope settings; `no_vault` behavior unchanged (#2005).
       Verify: `tests/settings/test_health_settings_no_vault.py`, `tests/settings/test_watcher_settings_no_vault.py` stay green through every task.
-- [ ] Vault selection through the UI rebinds the watcher ingest path (the real rebind #3119's
+- [x] Vault selection through the UI rebinds the watcher ingest path (the real rebind #3119's
       closing fix deliberately deferred; supersedes #2476's "do not converge" per owner ruling).
       Verify: `tests/integration/test_watcher_cross_process_rebind.py::test_settings05_parent_acceptance`
       + runtime receipt on #3163 (task 5C).
-- [ ] `settings explain` names the origin (registry default / instance / vault-shared / vault-local
+- [x] `settings explain` names the origin (registry default / instance / vault-shared / vault-local
       / runtime override) of every effective key migrated in tasks 6-7.
       Verify: `tests/cli/test_settings_explain_cli.py` extended per tasks 6-7.
-- [ ] One owner doc owns settings; no doc names a retired location as canonical.
+- [x] One owner doc owns settings; no doc names a retired location as canonical.
       Verify: doc writeback at `docs/SETTINGS.md :: Authority` + `docs/DOCS_INDEX.md` row (task 8).
 
 ## Cross-Task Invariants / Interaction Safety
@@ -112,16 +117,17 @@ Shared/hot-path tasks (1, 3, 5C, 7) run the full `not pg` suite plus
 
 The parent feature issue is the live validation hub: each merged child posts a validation receipt
 there before the next dependent child is picked up. Capability acceptance = all checklist items
-above verified + one integrated-runtime receipt (edit a setting in Obsidian on the dev channel,
-observe live effect + receipt). Owner-doc promotion (task 8 rewrites `docs/SETTINGS.md` as the
-single owner) is the final child and carries the parent-closure handoff.
+above verified + the integrated-runtime receipt `settings.parent.v1` (edit a setting in Obsidian on
+the dev channel, observe live effect + receipt). Owner-doc promotion (task 8 rewrites
+`docs/SETTINGS.md` as the single owner) is the final child and carries the parent-closure handoff;
+the live parent issue and its final closure receipt remain authoritative for lifecycle state.
 
 ## Relationship to GitHub issues
 
-Parent feature issue #3156; children #3159 (01), #3160 (02), #3161 (03), #3162 (04), #3163
-(SETTINGS-05 blocked validation hub; three serial implementation children are extracted from its
-stable decomposition after this repair), #3164 (06), #3165 (07 validation hub), #4796 (07A),
-#4797 (07B), #4798 (07C), and #3166 (08) — live map and
+Parent feature issue #3156; delivered children #3159 (01), #3160 (02), #3161 (03), #3162 (04), #3163
+(SETTINGS-05 delivered validation hub; its three serial implementation children are delivered),
+#3164 (06), #3165 (07 validation hub), #4796 (07A),
+#4797 (07B), #4798 (07C), and #3166 (08) — delivered map and
 lifecycle rules in `PARENT_FEATURE_ISSUE.md`.
 Reconciliation (do not duplicate): task 5 builds the live rebind that #3119's closing fix
 (PR #3126, visible-warning only) deliberately deferred, superseding #2476's "do not converge"

@@ -28,8 +28,9 @@ simultaneously delivered and unmet.
 - `docs/CONCEPTS/VAULT_AND_SETTINGS_CONTEXT.md` stays the concept contract and defers to
   `docs/SETTINGS.md` for mechanism; the mutual-authority contradiction with `docs/ENVIRONMENTS.md`
   is resolved by explicit pointers.
-- Deletes `docs/schema/system-settings.schema.json`; `schemas/README.md` and any references point
-  only at the wired schema.
+- Deletes the orphan schema under `docs/schema/`; `schemas/README.md` and operational references
+  point only at the wired schema. The audit and this task spec retain the removed path only as
+  historical provenance for F6 and are excluded from the operational-reference check.
 - Marks the superseded rows in `docs/implementation/vault-settings-roadmap.md` (external-edits →
   SETTINGS-01, hardcoded extraction → SETTINGS-07, central service → the spine) with delivery
   pointers, resolving its internal delivered-vs-unmet contradiction.
@@ -42,7 +43,8 @@ simultaneously delivered and unmet.
 ## Concretely
 
 ```
-$ grep -rn "docs/schema/system-settings" docs/ app/ schemas/   # no hits
+$ rg -n "docs/schema/system-settings" docs/ app/ schemas/ \
+    -g '!docs/audits/**' -g '!docs/SETTINGS_SPINE/CONSOLIDATE_SETTINGS_OWNER_DOCS.md'  # no hits
 $ head -5 docs/SETTINGS.md    # State: owner doc for the settings spine (two scopes, one spine)
 ```
 
@@ -53,15 +55,15 @@ schema regrows F2/F6 within a quarter.
 
 ## Acceptance Criteria
 
-- [ ] `docs/SETTINGS.md` is the single owner doc; ENVIRONMENTS/VAULT_AND_SETTINGS_CONTEXT defer
+- [x] `docs/SETTINGS.md` is the single owner doc; ENVIRONMENTS/VAULT_AND_SETTINGS_CONTEXT defer
       to it for mechanism and name the same canonical location.
   - Verify: doc writeback at `docs/SETTINGS.md :: Authority` + `docs/DOCS_INDEX.md` owner row
-- [ ] `docs/schema/system-settings.schema.json` is deleted with zero remaining references.
+- [x] The orphan system-settings schema is deleted with zero remaining operational references.
   - Verify: `tests/architecture` docs-reference checks green + repo grep in PR evidence
-- [ ] Roadmap supersessions are marked with delivery pointers (no silently stale "remaining" rows
+- [x] Roadmap supersessions are marked with delivery pointers (no silently stale "remaining" rows
       for delivered spine work).
   - Verify: doc writeback at `docs/implementation/vault-settings-roadmap.md :: Migration Notes`
-- [ ] Parent feature issue closed with the capability acceptance checklist verified and the final
+- [x] Parent feature issue closed with the capability acceptance checklist verified and the final
       receipt posted; local `PARENT_FEATURE_ISSUE.md` and `README.md` reconciled to closed state.
   - Verify: closure receipt on the parent issue + doc writeback at
     `docs/SETTINGS_SPINE/PARENT_FEATURE_ISSUE.md :: State`

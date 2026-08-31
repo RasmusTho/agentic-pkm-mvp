@@ -39,6 +39,7 @@ Prereqs:
 - **Worker consumes DB outbox** and runs ingest/panel/promotion side-effects.
 - **PanelAgent wiring is settings-backed** (catalog + mappings) and emits observable intent/execution events.
 - **Health spine** (`/api/health` + `/healthz` contract + heartbeats + write guard + incident log) provides deterministic operator signals.
+- **Settings Spine** uses two scopes through one resolution service, a canonical `<vault>/settings/` root, watcher-fed reload with visible degradation, durable write receipts, and a protected one-watcher rebind transaction. `docs/SETTINGS.md` is the owner document.
 - **CI fitness gates** parse `CI SUMMARY …` lines and fail merges when `GATES.ok != true`.
 
 ## Core Invariants

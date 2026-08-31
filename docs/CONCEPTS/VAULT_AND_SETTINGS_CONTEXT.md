@@ -1,6 +1,10 @@
-State: Target architecture plus first implementation contract for the vault selector and scoped Markdown settings foundation. Current code implements the foundation only; follow-up issues own full Companion UI editing, complete settings extraction, and multi-vault runtime mounting.
+State: Concept contract for vault context and settings scopes; the delivered settings mechanism is
+owned by `docs/SETTINGS.md` and the Settings Spine implementation evidence.
 Doc role: Concept contract / architecture
-Authority: Governs the vault-context and settings-scope model introduced for Design Handoff and Companion UI startup. Current runtime truth remains with `docs/ARCHITECTURE.md` and implementation evidence.
+Authority: Governs the vault-context and settings-scope concepts introduced for Design Handoff and
+Companion UI startup. `docs/SETTINGS.md` is the sole owner of settings mechanism, resolution,
+canonical location, ingestion, and degradation semantics; current runtime truth remains with
+`docs/ARCHITECTURE.md` and implementation evidence.
 Owner: Runtime / Companion UI / configuration
 Temporal class: strategic
 Review cadence: event-driven
@@ -99,6 +103,10 @@ the rollback gateway and cutover guards. The dormant registry cannot grant conte
 a second production binding, relocate, transfer, or remove an active binding by itself.
 
 ## Settings Scopes
+
+The settings mechanism described by these scopes is owned by [`docs/SETTINGS.md`](../SETTINGS.md).
+This document defines the meaning of instance, vault-shared, vault-local, and runtime/session
+scopes; it does not create a competing settings owner or resolution algorithm.
 
 Settings precedence is:
 
