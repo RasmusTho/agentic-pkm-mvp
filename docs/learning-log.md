@@ -252,3 +252,9 @@ Resolution note (2026-05-06): verified `app/orchestrator/v2_runtime.py` now cont
 **Diverged:** The initial implementation emitted inode-bound ancestor evidence while the existing ownership lease mechanism is path-bound, causing established multi-channel receipt validation to fail.
 **Upstream artifact:** `.codex/skills/issue-to-code/SKILL.md` and the issue/PR verification receipt contract
 **Compatibility fallback:** BuilderOps LearningSignal write unavailable: local CLI import failed because the `lingua` dependency is absent; convert this entry to a `LearningSignal` when the acknowledged BuilderOps store is reachable.
+
+## 2026-08-31 — #5253 (read-only Mac vault bridge qualification)
+**Source:** capture-learning after publish-pr gate invocation
+**Diverged:** The existing-PR review-before-CI gate was invoked without its required publication-mode flag, and the following shell command continued because the block lacked hard-exit behavior.
+**Upstream artifact:** `.codex/skills/publish-pr/SKILL.md :: Publication workflow`
+**Compatibility fallback:** BuilderOps LearningSignal write unavailable: local CLI import failed because the `lingua` dependency is absent; convert this entry to a `LearningSignal` when the acknowledged BuilderOps store is reachable.
