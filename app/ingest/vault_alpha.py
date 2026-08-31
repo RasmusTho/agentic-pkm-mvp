@@ -481,6 +481,18 @@ def _ingest_single(path: Path, *, vault_root: Path, trace_id: str, raw_text: str
     stripped_text = stripped_body.strip()
     ingest_fingerprint = _compute_ingest_fingerprint(stripped_text, path)
     text_sha256 = str(ingest_fingerprint.get("text_sha256") or "")
+    producer_fields = {
+        key: frontmatter[key]
+        for key in (
+            "zone",
+            "commitment_state",
+            "target_ref",
+            "active_context_ref",
+            "leave_point_artifact_uuid",
+            "evidence_role",
+        )
+        if key in frontmatter and frontmatter[key] is not None
+    }
 
     fingerprint_uuid = ""
     if not frontmatter_uuid and not companion_uuid:
@@ -556,6 +568,7 @@ def _ingest_single(path: Path, *, vault_root: Path, trace_id: str, raw_text: str
         # 'unbound' on the next cold rebuild.
         "episode_ref": episode_ref_from_frontmatter(frontmatter),
         "vault_uuid": note_uuid,
+        **producer_fields,
     }
 
     obj = DomainObject(
@@ -597,6 +610,7 @@ def _ingest_single(path: Path, *, vault_root: Path, trace_id: str, raw_text: str
         # the DB projection so a reingest never blind-drops a stamped binding (round-2 Finding 1).
         "episode_ref": episode_ref_from_frontmatter(frontmatter),
         "vault_uuid": note_uuid,
+        **producer_fields,
     }
 
     try:

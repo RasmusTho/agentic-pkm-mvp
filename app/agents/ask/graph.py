@@ -36,6 +36,10 @@ from app.agents.ask.utils import build_ask_context, get_ask_settings, llm_answer
 from app.config.environment import active_environment
 from app.config.paths import VaultRootMisconfiguredError, resolve_optional_vault_root
 from app.components.rerankers import get_reranker
+from app.orientation.projection import (
+    derive_orientation_signals,
+    is_return_orientation_question,
+)
 from app.retrieval.capability import RetrievalRequest, retrieve
 from app.vault.manager import get_vault_manager
 
@@ -105,6 +109,31 @@ def _retrieve_node(state: AgentState, *, k: int, ask_settings) -> AgentState:
     # scope-level, so later rerank/truncation of hits must never drop them. getattr keeps
     # compatibility with test fakes that return a hits-only response.
     state.denials = [d.to_dict() for d in (getattr(response, "denials", ()) or ())]
+    return state
+
+
+def _orientation_node(state: AgentState) -> AgentState:
+    """Attach request-time signals and filter background before ranking/context limits."""
+
+    candidates = [hit.model_dump() for hit in state.hits]
+    signals = derive_orientation_signals(candidates)
+    annotated: list[RetrievedHit] = []
+    for hit in state.hits:
+        signal = signals.get(hit.object_id) or signals.get(hit.path or "")
+        if signal is None:
+            annotated.append(hit)
+            continue
+        projected = hit.model_copy(
+            update={
+                "orientation": signal.state,
+                "orientation_provenance": signal.provenance,
+                "orientation_degradation": signal.degradation,
+            }
+        )
+        if is_return_orientation_question(state.query) and signal.state == "background":
+            continue
+        annotated.append(projected)
+    state.hits = annotated
     return state
 
 
@@ -601,12 +630,14 @@ def build_ask_graph(ask_settings=None):
     graph.add_node(
         "retrieve", lambda s: _retrieve_node(s, k=TOP_K_INITIAL, ask_settings=ask_settings)
     )
+    graph.add_node("orientation", _orientation_node)
     graph.add_node("rerank", lambda s: _rerank_node(s, ask_settings=ask_settings))
     graph.add_node("recall", lambda s: _recall_node(s, ask_settings=ask_settings))
     graph.add_node("answer", lambda s: _answer_node(s, ask_settings=ask_settings))
 
     graph.add_edge(START, "retrieve")
-    graph.add_edge("retrieve", "rerank")
+    graph.add_edge("retrieve", "orientation")
+    graph.add_edge("orientation", "rerank")
     graph.add_edge("rerank", "recall")
     graph.add_edge("recall", "answer")
     graph.add_edge("answer", END)

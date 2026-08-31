@@ -1,11 +1,12 @@
 ---
 title: Orientation signal projection contract
-doc_role: Target-state Product/Runtime contract
+doc_role: Product/Runtime contract
 authority: Orientation signal meaning, producer precedence, and the retrieval/ASK projection seam
-status: Contract only; no runtime projection is delivered by this document
+status: ASK projection delivered by #5228; standalone query-absent orientation and owner acceptance remain pending
 ---
 
-State: Target-state Product/Runtime contract; no runtime projection is delivered.
+State: Product/Runtime contract; the production-shaped ASK projection is delivered by #5228. The
+standalone query-absent orientation frame and owner acceptance remain pending.
 
 # Orientation Signal Projection Contract
 
@@ -20,8 +21,9 @@ The signal is distinct from `source_role`, `evidence_role`, `review_state`, `mat
 and topology zone. Those fields retain their own meanings. A request-time projection may consume
 authoritative inputs from them, but it must never relabel one of them as orientation truth.
 
-This is a target-state contract. It does not claim that the current ASK path implements these
-rules, does not authorize a note or commitment write, and does not reopen #5223 or repair #5228.
+The bounded production-shaped ASK projection implements these rules for indexed candidates and is
+capability-validated by #5228. This does not claim that the separate query-absent orientation frame
+is delivered, authorize a note or commitment write, or replace owner acceptance.
 
 ## Derived model and precedence
 
