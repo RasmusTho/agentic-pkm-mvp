@@ -1,0 +1,40 @@
+{
+  "schema_version": "product_tars_channel_topology.v1",
+  "observed_at": "2026-08-30T12:00:00Z",
+  "source_ref": "repo:docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md",
+  "channels": [
+    {
+      "channel": "dev",
+      "vm_identity": "unknown",
+      "engine_identity": "unknown",
+      "source_image_identity": "unknown",
+      "ingress_auth_class": "unknown",
+      "health_version": "unknown",
+      "data_backup_rollback_boundary": "explicit-gap",
+      "gaps": ["vm_identity", "engine_identity", "source_image_identity", "health_version", "backup"],
+      "refusals": ["deployment_not_proven", "qualification_not_proven"]
+    },
+    {
+      "channel": "test",
+      "vm_identity": "unknown",
+      "engine_identity": "unknown",
+      "source_image_identity": "unknown",
+      "ingress_auth_class": "unknown",
+      "health_version": "unknown",
+      "data_backup_rollback_boundary": "explicit-gap",
+      "gaps": ["vm_identity", "engine_identity", "source_image_identity", "health_version", "backup"],
+      "refusals": ["deployment_not_proven", "qualification_not_proven"]
+    },
+    {
+      "channel": "prod",
+      "vm_identity": "unknown",
+      "engine_identity": "unknown",
+      "source_image_identity": "unknown",
+      "ingress_auth_class": "unknown",
+      "health_version": "unknown",
+      "data_backup_rollback_boundary": "explicit-gap",
+      "gaps": ["vm_identity", "engine_identity", "source_image_identity", "health_version", "backup"],
+      "refusals": ["deployment_not_proven", "qualification_not_proven"]
+    }
+  ]
+}
