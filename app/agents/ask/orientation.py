@@ -104,7 +104,7 @@ def _is_background(item: Mapping[str, Any]) -> tuple[bool, dict[str, str]]:
         ),
         "",
     )
-    first_segment = path.replace("\\\\", "/").split("/", 1)[0].casefold() if path else ""
+    first_segment = re.split(r"[/\\\\]", path, maxsplit=1)[0].casefold() if path else ""
     if first_segment in _BACKGROUND_ZONES:
         return True, {"source": "vault_path_segment", "value": first_segment}
     return False, {}
