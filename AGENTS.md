@@ -71,7 +71,7 @@ is not an owner decision; only its explicit authority categories may create `age
   evidence instead of re-implementing.
 - Use subagents only when independent bounded work lowers TCD. The owning agent retains scope,
   writes, lifecycle, and receipt authority.
-- Run host-global suites through `scripts/run_with_host_lease.py`; Chat reservations and process census are advisory only; do not busy-poll shared resources.
+- Run host-global suites through `scripts/run_with_host_lease.py`; the lease is the only coordination authority. Chat reservations and process census are advisory diagnostics; before attributing or interrupting another task's process, require cwd or parent/lease readback—command text, PID, census, or a quiet period alone is insufficient; do not busy-poll shared resources.
 
 Cleanup, lifecycle, lease, and CI-wait mechanics live in their owning skills/shared contracts.
 
